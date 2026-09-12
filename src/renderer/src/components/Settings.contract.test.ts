@@ -576,9 +576,15 @@ describe('Settings scroll root clips sideways overflow (Win Audio / AI)', () => 
 })
 
 describe('Operator control plane lives on Cloudflare, not in Settings', () => {
-  it('exposes Operator URL, ingest secret, metadata-only privacy copy, and Open Operator', () => {
+  it('offers licence-first setup, an explicit legacy-secret replacement, and truthful privacy copy', () => {
     expect(source).toMatch(/Operator URL/)
-    expect(source).toMatch(/Ingest secret/)
+    expect(source).toMatch(/Your Métis licence securely connects this device to managed AI/)
+    expect(source).toMatch(/You do not need a personal API key or a shared connection secret/)
+    expect(source).toMatch(/Legacy administrator connection/)
+    expect(source).toMatch(/Legacy ingest secret/)
+    expect(source).toMatch(/value=\{operatorSecretDraft\}/)
+    expect(source).toMatch(/onClick=\{\(\) => void saveOperatorSecret\(\)\}/)
+    expect(source).not.toMatch(/value=\{settings\.operatorIngestSecret/)
     expect(source).not.toMatch(/Send Ask text for skill improvement/)
     expect(source).not.toMatch(/settings\.sendAskText/)
     expect(source).not.toMatch(/Only operational metadata leaves this device/)
@@ -590,7 +596,8 @@ describe('Operator control plane lives on Cloudflare, not in Settings', () => {
     expect(source).toMatch(/DEFAULT_OPERATOR_URL/)
     expect(source).toMatch(/operatorUrlConfigured/)
     expect(source).toMatch(/operatorUrlConfigured\(settings\) && <OperatorLicenseCard/)
-    expect(source).toMatch(/Empty uses the shipped Operator URL at runtime/)
+    expect(source).toMatch(/Leave empty to use \{DEFAULT_OPERATOR_URL\}/)
+    expect(source).toMatch(/Changing this address disconnects your licence; activate it again for the new service/)
     expect(source).not.toMatch(/Empty means no fleet heartbeat/)
     expect(source).not.toMatch(/metis-operator\.example\.workers\.dev/)
   })
