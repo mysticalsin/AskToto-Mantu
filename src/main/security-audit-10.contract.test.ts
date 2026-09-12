@@ -40,6 +40,7 @@ describe('AUDIT-10 — askStart never forwards Error.message to the overlay', ()
 describe('AUDIT-10 — SSO-gated listening and ask side effects', () => {
   it('listeningState requires a signed-in session before Dust prewarm or speaker reset', async () => {
     const sideEffects = {
+      acceptTransition: vi.fn(() => true),
       setListeningActive: vi.fn(),
       setTrayRecording: vi.fn(),
       setRecordingPowerSaveBlock: vi.fn(),
