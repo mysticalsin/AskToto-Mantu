@@ -34,7 +34,8 @@ describe('IdentityCard', () => {
     expect(html).toContain('Serial')
     expect(html).toContain('License')
     expect(html).toContain('Personal')
-    expect(html).toContain('Activation is not open yet')
+    expect(html).toContain('Activate your Métis licence below')
+    expect(html).not.toContain('Activation is not open yet')
     expect(html).toContain('metis-pass--static')
     expect(html).toContain('aria-label="Métis member pass. Member pending. MacBook Pro. License Personal."')
   })
@@ -55,5 +56,15 @@ describe('IdentityCard', () => {
     expect(html).not.toContain('Nº 1')
     expect(html).not.toContain('Nº 0')
     expect(html).toContain('pending')
+  })
+
+  it('MQA-304 — shows a verified managed licence instead of the legacy Personal state', () => {
+    for (const [tier, label] of [['metis', 'Métis'], ['metis-light', 'Métis Light']] as const) {
+      const html = renderToStaticMarkup(<IdentityCard snapshot={SNAP} managedTier={tier} reducedMotion />)
+      expect(html).toContain(`License ${label}.`)
+      expect(html).toContain('Managed licence verified')
+      expect(html).not.toContain('License Personal.')
+      expect(html).not.toContain('Activation is not open yet')
+    }
   })
 })
