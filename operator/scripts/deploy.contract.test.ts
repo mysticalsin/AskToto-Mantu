@@ -76,12 +76,19 @@ describe('buildMigrateArgs', () => {
 })
 
 describe('buildSmokeArgs', () => {
-  it('passes --url through', () => {
-    expect(buildSmokeArgs({ url: 'https://example.workers.dev' })).toEqual([
+  it('MQA-316 always passes the exact expected build stamp', () => {
+    expect(buildSmokeArgs({ url: 'https://example.workers.dev', expectedVersion: 'abc1234' })).toEqual([
       'operator/scripts/smoke.mjs',
       '--url',
-      'https://example.workers.dev'
+      'https://example.workers.dev',
+      '--expected-version',
+      'abc1234'
     ])
+  })
+
+  it('MQA-316 refuses to construct a deployment smoke without its expected stamp', () => {
+    expect(() => buildSmokeArgs({ url: 'https://example.workers.dev' })).toThrow(/expected.*version/i)
+    expect(() => buildSmokeArgs({ url: 'https://example.workers.dev', expectedVersion: ' ' })).toThrow(/expected.*version/i)
   })
 })
 
@@ -127,6 +134,9 @@ describe('MQA-313 local deployment executables', () => {
     expect(output).toContain('operator/scripts/migrate.mjs --remote')
     expect(output).toContain('node_modules/wrangler/bin/wrangler.js deploy --var OPERATOR_VERSION:')
     expect(output).toContain('operator/scripts/smoke.mjs --url')
+    const stamp = /OPERATOR_VERSION:([a-f\d]+)/i.exec(output)?.[1]
+    expect(stamp).toBeTruthy()
+    expect(output).toContain(`--expected-version ${stamp}`)
     expect(output).not.toMatch(/&& npx /)
   })
 })
