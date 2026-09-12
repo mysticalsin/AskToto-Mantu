@@ -1,0 +1,41 @@
+name: Windows signing identity preflight
+
+# Diagnostic only. This workflow cannot build, sign an app, upload artifacts or publish a release.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact 40-character current main commit approved for this diagnostic
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-signing-identity-preflight
+  cancel-in-progress: false
+
+jobs:
+  identity:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    timeout-minutes: 5
+    env:
+      METIS_PREFLIGHT_EXPECTED_SHA: ${{ inputs.expected_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Require exact reviewed main revision before secrets
+        run: node scripts/windows-signing-identity-preflight.mjs --check-revision
+      - name: Run dependency-free synthetic security regressions without secrets
+        run: node --test scripts/windows-signing-identity-preflight.test.mjs
+      - name: Check the configured identity without signing or publishing
+        run: node scripts/windows-signing-identity-preflight.mjs
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
