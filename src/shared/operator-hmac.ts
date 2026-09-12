@@ -4,6 +4,7 @@
  */
 
 export const OPERATOR_HMAC_SKEW_MS = 5 * 60 * 1000
+export const OPERATOR_LICENSE_HEADER = 'x-metis-license'
 export const OPERATOR_HMAC_HEADERS = {
   ts: 'x-metis-ts',
   nonce: 'x-metis-nonce',

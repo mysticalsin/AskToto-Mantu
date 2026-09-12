@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto'
-import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '@shared/operator-hmac'
+import { ingestCanonical, OPERATOR_HMAC_HEADERS, OPERATOR_LICENSE_HEADER } from '@shared/operator-hmac'
+import { isOperatorLicenseKey } from '@shared/operator-license'
 
 export function sha256HexUtf8(body: string): string {
   return createHash('sha256').update(body, 'utf8').digest('hex')
@@ -28,6 +29,7 @@ export function operatorHmacHeaders(
   const ts = String(now)
   const nonce = randomUUID()
   return {
+    ...(isOperatorLicenseKey(secret) ? { [OPERATOR_LICENSE_HEADER]: secret } : {}),
     [OPERATOR_HMAC_HEADERS.ts]: ts,
     [OPERATOR_HMAC_HEADERS.nonce]: nonce,
     [OPERATOR_HMAC_HEADERS.device]: deviceId,
