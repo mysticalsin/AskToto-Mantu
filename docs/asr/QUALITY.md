@@ -2,14 +2,15 @@
 
 Product contract for live and import ASR. Overlay chrome, island geometry, onboarding, identity card, Intelligence dashboards, and time-saved accounting are out of scope.
 
-Default is **Best**. Fast is a Settings power option, not a silent floor.
+The packaged model and the model actually running must be described accurately. A stored quality preference is not proof that a larger model is installed or running.
 
 ## Default path
 
-- `asrQuality` defaults to `best` in the settings schema, `DEFAULT_SETTINGS`, and every listen/App fallback.
-- Best uses Whisper large multilingual (`whisper-large-v3-turbo` on WebGPU) unless the user opts into Fast.
-- Fast is an explicit power option for constrained machines. The Settings control must say so.
-- If Best cannot load (model missing, no WebGPU, load failure), degrade honestly: report `qualityDegraded`, persist a Settings → Speech note, and keep the user's requested label as Best-requested / Fast-running. Never present Fast as Best.
+- Fresh setup measures total RAM: 8 GiB or less selects Parakeet; more than 8 GiB selects Whisper. Invalid or unavailable RAM information falls back to Parakeet. Existing user and managed preferences are preserved. See `preferredFreshAsrEngine` and the onboarding preference tests.
+- Packaged live Whisper uses Whisper base. The packaged Speech screen does not offer a Best/Fast switch that leaves this model unchanged.
+- The optional larger Whisper model (`whisper-large-v3-turbo`) applies to imported recordings only; it does not replace the packaged live model. Its availability and download state are shown separately.
+- `asrQuality` still defaults to `best` in the schema and listener for compatibility with existing profiles. The large-live preference is development-only in unbundled builds; it is not a customer-package model guarantee.
+- If a requested development live model cannot load, report `qualityDegraded` and a Settings → Speech note. Do not describe the running fallback as the requested larger model, and do not imply that downloading the import model changes live transcription.
 
 ## Languages
 
@@ -28,8 +29,8 @@ Default is **Best**. Fast is a Settings power option, not a silent floor.
 ## Latency
 
 - Live captions must not wait on a 6 s monologue cap. Stream a first partial once enough speech is in the buffer; replace it when the turn ends.
-- Time-to-first-caption (TTFC) is speech-onset → first non-empty caption. Best quality must not feel stuck. Measure the scheduling budget in tests / `scripts/bench-asr-ttfc.mjs` (decode time is hardware-bound and is not faked).
-- Prewarm the quality the user will start with (default Best). Do not prewarm Fast and then swap to Best on first Listen.
+- Time-to-first-caption (TTFC) is speech-onset → first non-empty caption. Measure the scheduling budget in tests / `scripts/bench-asr-ttfc.mjs`; decode time is hardware-bound and must also be measured on the actual packaged engine.
+- Prewarm the selected engine and available model. A stored `best` preference must not be presented as proof of a large live model in a package that uses Whisper base.
 
 ## Echo and empty stalls
 
@@ -45,8 +46,8 @@ Default is **Best**. Fast is a Settings power option, not a silent floor.
 
 ## How to try
 
-1. Fresh settings (or delete `asrQuality`) → Listen. Default is Best.
-2. Settings → Audio → Speech: Fast is the power option. Best stays the request even if this device degrades.
+1. Use isolated fresh profiles at the 8 GiB boundary and above it; confirm Parakeet and Whisper respectively. Reopen an existing profile and confirm its choice is preserved.
+2. Settings → Audio → Speech: confirm the packaged live model is named accurately and the optional larger model is marked for imports only. There must be no no-op packaged Best/Fast toggle.
 3. Auto language, bilingual call (e.g. French greeting then English). First pin needs two confirming probes; a later switch re-pins after the same bar.
 4. End meeting → recap stays in the spoken language(s) unless Summary language is set.
-5. Devon Mac-shows a bilingual switch + Best default before Ready-to-merge.
+5. Verify real packaged imports with both engines and no silent fallback. Separately test bilingual live capture on Mac and Windows; automated import success does not prove live microphone, loopback, or speaker-identification quality.
