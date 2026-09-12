@@ -15,14 +15,25 @@
  * pure orchestrator; `main` is the only part that touches argv, the real network, and
  * process.exit.
  *
- * Known pre-deploy gap (see plan section 9d / P4.0 verification): `/health` on the CURRENT live
- * deployment has no `version` field yet (operator/src/index.ts only returns
- * `{ ok, service, configured }`). The health check below will therefore legitimately fail
- * against the live Worker until a deploy carrying `OPERATOR_VERSION` lands — that is expected,
- * not a bug in this script.
+ * A standalone diagnostic may omit --expected-version. Deployment always supplies its exact
+ * build stamp, so a healthy response from the previous Worker cannot pass the release gate.
+ * A bounded no-cache health poll allows propagation, but a stale/missing stamp ultimately fails.
  */
+import { setTimeout as sleep } from 'node:timers/promises'
+import { fileURLToPath } from 'node:url'
+
 export const DEFAULT_TEAM_DOMAIN = 'https://tony-walteur.cloudflareaccess.com'
 const FETCH_TIMEOUT_MS = 10_000
+const VERSION_PROBE_ATTEMPTS = 5
+const VERSION_PROBE_DELAY_MS = 2000
+
+function checkedExpectedVersion(value) {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !/^[a-z\d][a-z\d._-]{0,127}$/i.test(value)) {
+    throw new Error('--expected-version requires a non-empty build version')
+  }
+  return value
+}
 
 /** Every check gets a bounded timeout so a hung connection cannot hang the whole smoke run.
  *  A fake fetch used by tests can ignore `signal` entirely; the timer is always cleared. */
@@ -43,25 +54,37 @@ function result(name, ok, detail) {
   return { name, ok, detail }
 }
 
-export async function checkHealth(fetchImpl, baseUrl) {
+export async function checkHealth(fetchImpl, baseUrl, { expectedVersion, sleepImpl = sleep } = {}) {
+  const expected = checkedExpectedVersion(expectedVersion)
   const name = 'GET /health (200, ok:true, version)'
-  try {
-    const res = await timedFetch(fetchImpl, `${baseUrl}/health`)
-    let body = null
+  const attempts = expected ? VERSION_PROBE_ATTEMPTS : 1
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      body = await res.json()
-    } catch {
-      /* non-JSON body handled below via hasVersion=false */
+      const res = await timedFetch(fetchImpl, `${baseUrl}/health`, {
+        cache: 'no-store', headers: { 'cache-control': 'no-cache' }
+      })
+      let body = null
+      try {
+        body = await res.json()
+      } catch {
+        /* non-JSON body handled below via hasVersion=false */
+      }
+      const hasVersion = Boolean(body && typeof body.version === 'string' && body.version.trim().length > 0)
+      const healthy = res.status === 200 && body?.ok === true
+      const ok = healthy && hasVersion && (!expected || body.version === expected)
+      const check = result(
+        name,
+        ok,
+        `status=${res.status} ok=${body?.ok ?? 'missing'} version=${body?.version ?? 'missing'}` +
+          (expected ? ` expected=${expected} probe=${attempt}/${attempts}` : '')
+      )
+      // Retry only an otherwise healthy response with a stale/missing version; HTTP/network or
+      // malformed health failures are not excused as version propagation.
+      if (ok || !healthy || attempt === attempts) return check
+      await sleepImpl(VERSION_PROBE_DELAY_MS)
+    } catch (err) {
+      return result(name, false, `request failed: ${err.message}`)
     }
-    const hasVersion = Boolean(body && typeof body.version === 'string' && body.version.trim().length > 0)
-    const ok = res.status === 200 && body?.ok === true && hasVersion
-    return result(
-      name,
-      ok,
-      `status=${res.status} ok=${body?.ok ?? 'missing'} version=${body?.version ?? 'missing'}`
-    )
-  } catch (err) {
-    return result(name, false, `request failed: ${err.message}`)
   }
 }
 
@@ -184,10 +207,11 @@ export async function checkIntegrationsNoHmac(fetchImpl, baseUrl) {
 
 /** Pure orchestrator: no argv, no process.exit, no console — just runs every check against the
  *  injected fetch and returns the results. Safe to unit-test with a fake fetch. */
-export async function runSmoke({ baseUrl, teamDomain = DEFAULT_TEAM_DOMAIN, fetchImpl = fetch }) {
+export async function runSmoke({ baseUrl, teamDomain = DEFAULT_TEAM_DOMAIN, fetchImpl = fetch, expectedVersion, sleepImpl = sleep }) {
+  const expected = checkedExpectedVersion(expectedVersion)
   const base = baseUrl.replace(/\/+$/, '')
   const checks = await Promise.all([
-    checkHealth(fetchImpl, base),
+    checkHealth(fetchImpl, base, { expectedVersion: expected, sleepImpl }),
     checkAssetIndexJs(fetchImpl, base),
     checkWorldSvg(fetchImpl, base),
     checkAccessRedirect(fetchImpl, base, teamDomain),
@@ -205,6 +229,7 @@ export function parseArgs(argv) {
     const a = argv[i]
     if (a === '--url') args.url = argv[++i]
     else if (a === '--team-domain') args.teamDomain = argv[++i]
+    else if (a === '--expected-version') args.expectedVersion = checkedExpectedVersion(argv[++i] ?? '')
     else if (a === '--json') args.json = true
     else if (a === '--help' || a === '-h') args.help = true
   }
@@ -212,11 +237,12 @@ export function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Usage: node operator/scripts/smoke.mjs --url <https://worker-url> [--team-domain <url>] [--json]
+  console.log(`Usage: node operator/scripts/smoke.mjs --url <https://worker-url> [--expected-version <build-stamp>] [--team-domain <url>] [--json]
 
 Read-only post-deploy smoke checks for the Métis Operator Worker. Exits non-zero if any check
 fails. Every check is a GET or an unauthenticated/unsigned request expected to be rejected — safe
-to run against the live production Worker at any time.`)
+to run against the live production Worker at any time. Deployment requires an exact expected
+version; standalone diagnostics may omit it.`)
 }
 
 function printReport({ baseUrl, checks, allOk }) {
@@ -234,7 +260,7 @@ async function main() {
     printHelp()
     process.exit(args.help ? 0 : 1)
   }
-  const report = await runSmoke({ baseUrl: args.url, teamDomain: args.teamDomain })
+  const report = await runSmoke({ baseUrl: args.url, teamDomain: args.teamDomain, expectedVersion: args.expectedVersion })
   if (args.json) {
     console.log(JSON.stringify(report, null, 2))
   } else {
@@ -243,7 +269,7 @@ async function main() {
   process.exit(report.allOk ? 0 : 1)
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
 if (isMain) {
   main().catch((err) => {
     console.error(err)

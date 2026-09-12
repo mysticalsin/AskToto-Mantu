@@ -73,10 +73,12 @@ export function buildMigrateArgs({ env }) {
   return args
 }
 
-/** Pure: builds the post-deploy smoke argv. `url` is the environment's known workers.dev URL,
- *  or (preferred, when available) the URL wrangler's own deploy output printed. */
-export function buildSmokeArgs({ url }) {
-  return [posix.join('operator', 'scripts', 'smoke.mjs'), '--url', url]
+/** A deployment smoke must prove the exact stamp just uploaded, not merely a healthy old Worker. */
+export function buildSmokeArgs({ url, expectedVersion }) {
+  if (typeof expectedVersion !== 'string' || !expectedVersion.trim()) {
+    throw new Error('Deployment smoke requires an expected version')
+  }
+  return [posix.join('operator', 'scripts', 'smoke.mjs'), '--url', url, '--expected-version', expectedVersion]
 }
 
 /** Pure: pulls the first `https://…workers.dev` URL out of `wrangler deploy`'s stdout, so the
@@ -221,7 +223,7 @@ async function main() {
   receipt.url = url
 
   // 8. Smoke.
-  const smokeArgs = buildSmokeArgs({ url })
+  const smokeArgs = buildSmokeArgs({ url, expectedVersion: version })
   res = run('post-deploy smoke', process.execPath, smokeArgs, { dryRun })
   if (!dryRun && res.status !== 0) {
     fatal(
