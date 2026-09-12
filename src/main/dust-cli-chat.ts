@@ -28,10 +28,6 @@ export interface DustChatArgvOpts {
   message: string
   agentName?: string
   projectName?: string
-  /** When true, also put --key / --workspaceId on argv (in addition to env). Default false — env is safer. */
-  passKeyOnArgv?: boolean
-  apiKey?: string
-  workspaceId?: string
 }
 
 /** Build the argv AFTER the entry script. Never includes --with-tools / -t. */
@@ -42,9 +38,6 @@ export function buildDustSpotlightChatArgv(opts: DustChatArgvOpts): string[] {
   if (name) args.push('-a', name)
   const project = (opts.projectName || '').trim()
   if (project) args.push('--projectName', project)
-  if (opts.passKeyOnArgv && opts.apiKey && opts.workspaceId) {
-    args.push('--key', opts.apiKey, '--workspaceId', opts.workspaceId)
-  }
   return args
 }
 
@@ -158,7 +151,9 @@ export function writeDustKeytarSeedScript(packageDir: string): string {
     dest,
     [
       'import keytar from "keytar"',
-      'const [token, workspace, region] = process.argv.slice(2)',
+      'const token = process.env.DUST_API_KEY',
+      'const workspace = process.env.DUST_WORKSPACE_ID',
+      'const [region] = process.argv.slice(2)',
       'if (!token || !workspace) { console.error("missing token or workspace"); process.exit(2) }',
       'await keytar.setPassword("dust-cli", "access_token", token)',
       'await keytar.setPassword("dust-cli", "workspace_sid", workspace)',
@@ -253,7 +248,9 @@ export async function runManagedDustChat(opts: {
   const nodeBin = plan.env.ELECTRON_RUN_AS_NODE ? process.execPath : plan.command
   if (existsSync(seed) && opts.apiKey && opts.workspaceId) {
     await new Promise<void>((resolve) => {
-      const child = spawn(nodeBin, [seed, opts.apiKey, opts.workspaceId, dustRegionFromBaseUrl(opts.baseUrl)], {
+      // MQA-315: process command lines are visible to process-inspection tools. The child already
+      // receives these credentials through its dedicated environment, never argv or the script file.
+      const child = spawn(nodeBin, [seed, dustRegionFromBaseUrl(opts.baseUrl)], {
         env: { ...env, ...(plan.env.ELECTRON_RUN_AS_NODE ? { ELECTRON_RUN_AS_NODE: '1' } : {}) },
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe']
