@@ -231,7 +231,7 @@ describe('Hide top-edge hover: main-process step sequence (Ultron re-check)', ()
 
   it('renderer-owned reveal becomes main-owned once the OS cursor visits the bar, then leave parks', () => {
     const visit = overlayWatchStep({ cursor: { x: 900, y: 100 }, restRect: rest, revealedRect: ASK, islandResting: false, windowVisible: true, osHoverSeen: false })
-    expect(visit).toEqual({ action: 'stay', osHoverSeen: true })
+    expect(visit).toEqual({ action: 'hover-enter', osHoverSeen: true })
     const leave = overlayWatchStep({ cursor: AWAY, restRect: rest, revealedRect: ASK, islandResting: false, windowVisible: true, osHoverSeen: visit.osHoverSeen })
     expect(leave.action).toBe('park')
   })
