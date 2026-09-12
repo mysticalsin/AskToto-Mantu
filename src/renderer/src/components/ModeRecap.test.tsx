@@ -5,6 +5,20 @@ import { modeRecapSections, ModeRecapView } from './ModeRecap'
 const render = (markdown: string, mode = 'meeting') =>
   renderToStaticMarkup(<ModeRecapView mode={mode} sections={modeRecapSections(markdown, mode)} />)
 
+describe('MQA-325 mode lookup rendering', () => {
+  it.each(['__proto__', 'constructor', 'toString'])('renders inherited property mode %s with the custom-mode fallback', (mode) => {
+    const html = render('## Overview\nThe pilot launches Friday.\n## Action items\nDeliver the proposal by Tuesday — Alex.', mode)
+    expect(html).toContain('Métis summary')
+    expect(html).toContain('The pilot launches Friday.')
+    expect(html).toContain('Deliver the proposal by Tuesday — Alex.')
+  })
+
+  it('keeps the normal built-in and custom summary labels', () => {
+    expect(render('## Outcome\nReady.', 'meeting')).toContain('Meeting summary')
+    expect(render('## Overview\nReady.', 'custom-review')).toContain('Métis summary')
+  })
+})
+
 describe('MQA-324 lossless recap display', () => {
   it('preserves every nonempty section of an imported recap in the meeting view', () => {
     const sections = ['Title', 'Tags', 'Overview', 'Topics', 'Key Q&A', 'Decisions', 'Action items', 'Next steps', 'Open questions', 'Notable quotes']

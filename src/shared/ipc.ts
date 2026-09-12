@@ -353,7 +353,7 @@ export const MODE_GROUPS: { label: string; modes: BuiltinMode[] }[] = [
 
 /** Resolve a mode id (built-in or custom) to its display label. */
 export function modeLabel(id: string, customModes: CustomMode[] = []): string {
-  if (id in BUILTIN_MODE_LABELS) return BUILTIN_MODE_LABELS[id as BuiltinMode]
+  if (Object.prototype.hasOwnProperty.call(BUILTIN_MODE_LABELS, id)) return BUILTIN_MODE_LABELS[id as BuiltinMode]
   return customModes.find((m) => m.id === id)?.label ?? id
 }
 

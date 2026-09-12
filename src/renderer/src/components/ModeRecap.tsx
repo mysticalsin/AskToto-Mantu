@@ -39,7 +39,7 @@ export function ModeRecapView({
   sections: ModeRecapSectionView[]
   title?: string
 }): JSX.Element {
-  const label = mode in BUILTIN_MODE_LABELS ? BUILTIN_MODE_LABELS[mode as BuiltinMode] : 'Métis'
+  const label = Object.prototype.hasOwnProperty.call(BUILTIN_MODE_LABELS, mode) ? BUILTIN_MODE_LABELS[mode as BuiltinMode] : 'Métis'
   const layout: readonly RecapSectionDef[] = recapLayoutFor(mode)
   const ranks = new Map(layout.map((section, index) => [section.heading.toLowerCase(), index]))
   // Known sections keep the mode's usual order. Everything else follows in source order, including

@@ -23,6 +23,11 @@ describe('MODE_RECAP_LAYOUTS', () => {
   it('unknown modes fall back to general, not sales', () => {
     expect(recapLayoutFor('custom-foo')).toBe(MODE_RECAP_LAYOUTS.general)
   })
+
+  it.each(['__proto__', 'constructor', 'toString'])('uses the general layout for inherited property mode %s (MQA-325)', (mode) => {
+    expect(recapLayoutFor(mode)).toBe(MODE_RECAP_LAYOUTS.general)
+    expect(recapLayoutHeadings(mode)).toEqual(recapLayoutHeadings('general'))
+  })
 })
 
 describe('splitRecapSections', () => {

@@ -84,7 +84,7 @@ export const MODE_RECAP_LAYOUTS: Record<BuiltinMode, readonly RecapSectionDef[]>
 }
 
 export function recapLayoutFor(mode: string): readonly RecapSectionDef[] {
-  if (mode in MODE_RECAP_LAYOUTS) return MODE_RECAP_LAYOUTS[mode as BuiltinMode]
+  if (Object.prototype.hasOwnProperty.call(MODE_RECAP_LAYOUTS, mode)) return MODE_RECAP_LAYOUTS[mode as BuiltinMode]
   return MODE_RECAP_LAYOUTS.general
 }
 
