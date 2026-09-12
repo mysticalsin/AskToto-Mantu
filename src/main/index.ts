@@ -32,6 +32,7 @@ import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, creat
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
+import { bindRendererReadiness } from './renderer-readiness'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
   IPC,
@@ -2285,16 +2286,24 @@ function createWindow(): void {
     })
   }
 
+  let rendererUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href
   if (process.env['ELECTRON_RENDERER_URL']) {
     const params = new URLSearchParams()
     if (process.env.ASKTOTO_DEMO) params.set('demo', process.env.ASKTOTO_DEMO)
     // make the overlay visible in the capture; ASKTOTO_SHOTBG=light tests legibility over a bright backdrop
     if (process.env.ASKTOTO_SHOT) params.set('shotbg', process.env.ASKTOTO_SHOTBG || 'dark')
     const qs = params.toString()
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'] + (qs ? `?${qs}` : ''))
-  } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
+    rendererUrl = process.env['ELECTRON_RENDERER_URL'] + (qs ? `?${qs}` : '')
   }
+  // MQA-318: opt-in release diagnostics only. Preserve app.started's boot semantics and never
+  // equate entering createWindow with a loaded, responsive renderer. Register before navigation.
+  if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
+    bindRendererReadiness(win.webContents, rendererUrl, () => {
+      auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+    })
+  }
+  if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(rendererUrl)
+  else win.loadFile(join(__dirname, '../renderer/index.html'))
   const overlay = win
   const revealExclusiveWhenPainted = (): void => {
     if (win !== overlay || overlay.isDestroyed() || overlay.isVisible()) return

@@ -17,12 +17,10 @@
  *
  * Usage: node scripts/check-packaged-launch.mjs <path-to-exe-or-app> [--timeout-seconds 120]
  *
- * macOS is NOT covered. The window/dialog inspection below is Win32 (PowerShell + UI Automation), and
- * the mac equivalents are all conditional on things a build host may not grant: osascript automation
- * needs a TCC prompt that an unattended build cannot answer, and electron-log writes main.log to
- * ~/Library/Logs/<product> there rather than under the userData override this gate isolates with. So
- * no mac chain in package.json calls this script, and the non-win32 branch below refuses instead of
- * exiting 0.
+ * macOS uses an opt-in renderer-ready audit signal and short survival check, without TCC Automation.
+ * The audit lives under the isolated userData override, unlike electron-log's macOS main.log.
+ * This proves responsive bridge/root readiness, not full workflows, visual correctness, or both
+ * architecture slices. The universal build still needs the two-slice verification described below.
  *
  * The specific mac failure this gate could not catch has since been removed at the source rather than
  * gated: the universal target used to ship ONE out/main/index.jsc — compiled by spawning the build
@@ -51,25 +49,11 @@ if (!existsSync(target)) {
   console.error(`[check:launch] FAIL — no such executable: ${target}`)
   process.exit(1)
 }
-// Windows-only by construction: the window/dialog inspection below is Win32. Refuse loudly rather
-// than exiting 0 elsewhere — a gate that silently passes is worse than no gate. macOS needs its own
-// equivalent before the mac release path can claim this coverage; until then, hand the maintainer the
-// manual check rather than leaving the gap silent.
 /**
- * macOS (MQA-249). The Win32 path below asserts on the real top-level window; the mac equivalents all need
- * a TCC Automation grant an unattended build cannot answer, which is why this gate refused on darwin for
- * so long. The missing piece was a portable positive signal, and there now is one: index.ts's createWindow
- * emits an unconditional `app.started` audit event, and auditLog writes to userData/logs/audit.log — a
- * path ASKTOTO_USERDATA relocates (electron-log's main.log does not, on macOS it goes to ~/Library/Logs).
- *
- * So: launch the .app against a clean temp profile, wait for that line to appear, and fail if it never
- * does. That covers the failure class that shipped DOA twice — a main process that dies before any of our
- * code runs writes nothing.
- *
- * NOT wired into any mac chain yet. It has never been executed on macOS (written on Windows), and wiring
- * an unverified gate into every mac build would trade a known gap for an unknown one. Run it by hand once
- * on a Mac; when it passes, add it to dist/dist:local/release:build:mac and MQA-207 can stop being
- * ACCEPTED. Deliberately opt-in until then rather than claimed as covered.
+ * MQA-318 replaces the pre-construction app.started false positive. The app emits app.renderer.ready
+ * only after its expected document loads and the responsive preload/root probe succeeds. Observe that
+ * signal plus three seconds without main-process exit, renderer crash, or unresponsiveness. Async
+ * polling is essential: a blocking Atomics loop cannot receive the child exit/error events it needs.
  */
 if (process.platform === 'darwin' && process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
   const appPath = target.endsWith('.app') ? target : target.replace(/(\.app)(\/.*)?$/, '$1')
@@ -77,41 +61,56 @@ if (process.platform === 'darwin' && process.env.ASKTOTO_MAC_LAUNCH_GATE === '1'
   const auditLog = join(profile, 'logs', 'audit.log')
   // Launch the executable directly rather than via `open`: `open` detaches into launchd, which loses the
   // ASKTOTO_USERDATA environment this gate depends on to find the audit trail it is about to read.
-  // Poll that trail rather than the process table — a process that exists but never reached createWindow
-  // is precisely the DOA case, and only the log distinguishes the two.
   const proc = spawn(join(appPath, 'Contents', 'MacOS', 'Metis'), [], {
     stdio: 'ignore',
     detached: true,
     env: { ...process.env, ASKTOTO_USERDATA: profile }
   })
+  let failure = null
+  proc.once('error', (error) => { failure = `could not launch: ${error.message}` })
+  proc.once('exit', (code, signal) => { failure = `process exited before verification (code ${code}, signal ${signal ?? 'none'})` })
   proc.unref()
   const deadline = Date.now() + timeoutSeconds * 1000
-  let started = false
-  while (Date.now() < deadline) {
-    if (existsSync(auditLog) && /"event"\s*:\s*"app\.started"/.test(readFileSync(auditLog, 'utf8'))) {
-      started = true
-      break
+  let readyAt = null
+  let verified = false
+  try {
+    while (Date.now() < deadline) {
+      if (proc.exitCode !== null || proc.signalCode !== null) {
+        failure = `process exited before verification (code ${proc.exitCode}, signal ${proc.signalCode ?? 'none'})`
+      }
+      if (failure) break
+      const audit = existsSync(auditLog) ? readFileSync(auditLog, 'utf8') : ''
+      if (/"event"\s*:\s*"app\.(?:crash|unresponsive)"/.test(audit)) {
+        failure = 'the app reported a crash or unresponsive renderer'
+        break
+      }
+      if (readyAt === null && /"event"\s*:\s*"app\.renderer\.ready"/.test(audit)) readyAt = Date.now()
+      if (readyAt !== null && Date.now() - readyAt >= 3000) {
+        verified = true
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100))
     }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500)
+  } catch (error) {
+    failure = `could not inspect renderer readiness: ${error.message}`
+  } finally {
+    try { if (Number.isInteger(proc.pid)) process.kill(-proc.pid, 'SIGKILL') } catch {}
+    try { rmSync(profile, { recursive: true, force: true }) } catch {}
   }
-  try { process.kill(-proc.pid, 'SIGKILL') } catch {}
-  try { rmSync(profile, { recursive: true, force: true }) } catch {}
-  if (!started) {
-    console.error(`[check:launch] FAIL — ${appPath} never wrote app.started within ${timeoutSeconds}s.`)
-    console.error('[check:launch]   A main process that dies before createWindow writes nothing — that is the')
-    console.error('[check:launch]   cachedDataRejected DOA class this gate exists to catch.')
+  if (!verified || failure) {
+    console.error(`[check:launch] FAIL — ${appPath}: ${failure || `no renderer-ready signal with 3s survival within ${timeoutSeconds}s`}.`)
     process.exit(1)
   }
-  console.log(`[check:launch] OK — ${appPath} started and wrote app.started on a clean profile.`)
+  console.log(`[check:launch] OK — ${appPath} loaded its renderer bridge/root and survived 3s on a clean profile.`)
   process.exit(0)
 }
 
 if (process.platform !== 'win32') {
   console.error(
-    `[check:launch] FAIL — this gate is Win32-only (host is ${process.platform}); there is no macOS equivalent yet.`
+    `[check:launch] FAIL — the Windows gate cannot inspect host ${process.platform}.`
   )
   if (process.platform === 'darwin') {
-    console.error('[check:launch] A darwin implementation exists but is opt-in until verified on a Mac:')
+    console.error('[check:launch] Enable the macOS renderer-readiness gate explicitly:')
     console.error('[check:launch]   ASKTOTO_MAC_LAUNCH_GATE=1 node scripts/check-packaged-launch.mjs release/mac-universal/Metis.app')
   }
   if (process.platform === 'darwin') {
