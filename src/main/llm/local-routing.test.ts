@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AskStart } from '@shared/ipc'
+import { DEFAULT_SETTINGS, type AskStart, type Settings } from '@shared/ipc'
 import type { ModelTier } from '@shared/providers'
 import type { StreamOptions, StreamHandlers } from './shared'
 
@@ -91,6 +91,7 @@ import {
   allowCrossProviderFailover
 } from './local-routing'
 import { streamLocal } from './local'
+import { importedTranscriptText, runImportedRecap } from '../import-recap'
 
 type LocalLlmSettings = {
   localLlm: {
@@ -586,7 +587,7 @@ describe('streamLocal', () => {
     expect(passed.req.transcript).toBe('Current conversation')
   })
 
-  it('bounds local summary system + transcript input while preserving security head and recent transcript tail', async () => {
+  it('bounds local summary system context while keeping an accepted transcript intact', async () => {
     const latest = 'LATEST DECISION: ship Tuesday.'
     streamLocal(
       baseOpts('summary', {
@@ -595,7 +596,7 @@ describe('streamLocal', () => {
           id: 'oversized-local-summary',
           mode: 'summary',
           prompt: '',
-          transcript: `${'old transcript '.repeat(7000)}${latest}`,
+          transcript: `EARLY DECISION: retain the original plan.\n${latest}`,
           history: []
         } as AskStart
       })
@@ -605,9 +606,136 @@ describe('streamLocal', () => {
     expect(passed.system.length).toBeLessThanOrEqual(40_000)
     expect(passed.system).toMatch(/^SECURITY:/)
     expect(passed.system).toContain('LANGUAGE: English')
-    expect(passed.req.transcript?.length).toBeLessThanOrEqual(80_000)
-    expect(passed.req.transcript).toContain('[NOTE: local summary input truncated')
-    expect(passed.req.transcript).toMatch(new RegExp(`${latest.replace('.', '\\.')}$`))
+    expect(passed.req.transcript).toBe(`EARLY DECISION: retain the original plan.\n${latest}`)
+  })
+
+  const fullTranscript = (length: number): string => {
+    const first = 'Alex: FIRST FACT: Alex owns the invoice review by Tuesday.\n'
+    const last = '\nMorgan: LAST FACT: Morgan owns the release check by Friday.'
+    return first + 'x'.repeat(length - first.length - last.length) + last
+  }
+
+  it.each([79_999, 80_000])('MQA-322 passes all %i summary characters, including first and last facts', async (length) => {
+    const transcript = fullTranscript(length)
+    const req = Object.freeze({ id: 'whole-summary', mode: 'summary', prompt: '', transcript, history: [] } as AskStart)
+    const opts = baseOpts('summary', { req })
+
+    streamLocal(opts)
+    await flush()
+
+    expect(openaiMock.streamOpenAI).toHaveBeenCalledOnce()
+    expect(openaiMock.streamOpenAI.mock.calls[0][0].req.transcript).toBe(transcript)
+    expect(req.transcript).toBe(transcript)
+    expect(opts.handlers.onError).not.toHaveBeenCalled()
+  })
+
+  it.each([80_001, 111_722])('MQA-322 rejects a %i-character summary asynchronously before any engine work', async (length) => {
+    const transcript = fullTranscript(length)
+    const req = Object.freeze({ id: 'oversized-summary', mode: 'summary', prompt: '', transcript, history: [] } as AskStart)
+    const opts = baseOpts('summary', { req })
+
+    const handle = streamLocal(opts)
+
+    expect(typeof handle.abort).toBe('function')
+    expect(opts.handlers.onError).not.toHaveBeenCalled()
+    await flush()
+
+    expect(opts.handlers.onError).toHaveBeenCalledOnce()
+    const message = vi.mocked(opts.handlers.onError).mock.calls[0][0]
+    expect(message).toMatch(/too long.*locally/i)
+    expect(message).toMatch(/earlier/i)
+    expect(message).toMatch(/Settings/)
+    expect(message).toMatch(/not.*cloud automatically/i)
+    expect(message).not.toMatch(/Nothing was sent to the cloud/i)
+    expect(message).not.toMatch(/saved|FIRST FACT|LAST FACT/)
+    expect(opts.handlers.onDone).not.toHaveBeenCalled()
+    expect(opts.handlers.onDelta).not.toHaveBeenCalled()
+    expect(fmRuntimeMock.disabledByEnv).not.toHaveBeenCalled()
+    expect(fmRuntimeMock.supported).not.toHaveBeenCalled()
+    expect(fmRuntimeMock.probeAvailability).not.toHaveBeenCalled()
+    expect(fmRuntimeMock.start).not.toHaveBeenCalled()
+    expect(localModelsMock.modelPaths).not.toHaveBeenCalled()
+    expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
+    expect(localRuntimeMock.start).not.toHaveBeenCalled()
+    expect(openaiMock.streamOpenAI).not.toHaveBeenCalled()
+    expect(req.transcript).toBe(transcript)
+  })
+
+  it('MQA-322 immediate abort suppresses the deferred oversized-summary error without starting an engine', async () => {
+    const opts = baseOpts('summary', {
+      req: { id: 'aborted-oversized-summary', mode: 'summary', prompt: '', transcript: fullTranscript(80_001), history: [] }
+    })
+
+    const handle = streamLocal(opts)
+    handle.abort()
+    handle.abort()
+    await flush()
+
+    expect(opts.handlers.onError).not.toHaveBeenCalled()
+    expect(opts.handlers.onDone).not.toHaveBeenCalled()
+    expect(opts.handlers.onDelta).not.toHaveBeenCalled()
+    expect(fmRuntimeMock.disabledByEnv).not.toHaveBeenCalled()
+    expect(localModelsMock.modelPaths).not.toHaveBeenCalled()
+    expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
+    expect(localRuntimeMock.start).not.toHaveBeenCalled()
+    expect(openaiMock.streamOpenAI).not.toHaveBeenCalled()
+  })
+
+  it.each(['suggest', 'vision', 'answer', 'recap'] as const)('MQA-322 leaves non-summary %s strategy handling unchanged', async (mode) => {
+    const transcript = fullTranscript(80_001)
+    const opts = baseOpts(mode, {
+      req: { id: 'other-mode', mode, prompt: 'Existing request', transcript, history: [] }
+    })
+
+    streamLocal(opts)
+    await flush()
+
+    expect(openaiMock.streamOpenAI).toHaveBeenCalledOnce()
+    expect(openaiMock.streamOpenAI.mock.calls[0][0].req.transcript).toBe(transcript)
+    expect(opts.handlers.onError).not.toHaveBeenCalled()
+  })
+
+  it.each(['routing', 'summary toggle'] as const)('MQA-322 a rejected local-only %s import never falls through to funded cloud', async (choice) => {
+    const settings: Settings = {
+      ...DEFAULT_SETTINGS,
+      provider: 'cloudflare',
+      routingMode: choice === 'routing' ? 'local' : 'auto',
+      localLlm: {
+        ...DEFAULT_SETTINGS.localLlm,
+        enabled: true,
+        useFor: { suggest: false, summary: choice === 'summary toggle', vision: false }
+      }
+    }
+    const lines = [{ name: 'Speaker 1', speaker: 'unknown' as const, t: 0, text: fullTranscript(80_001) }]
+    const original = importedTranscriptText(lines)
+    const createStream = vi.fn((opts: StreamOptions) => streamLocal(opts))
+    // If the old truncating branch reaches a stream, finish it normally so the regression fails
+    // on accepted partial coverage, never on a hanging mock. Native and network work stay stubbed.
+    openaiMock.streamOpenAI.mockImplementation((opts) => {
+      queueMicrotask(() => {
+        opts.handlers.onDelta('## Overview\nOnly the recent discussion was summarized.')
+        opts.handlers.onDone({}, { status: 'complete', reason: 'stop' })
+      })
+      return { abort: vi.fn() }
+    })
+
+    await expect(runImportedRecap({ jobId: 'oversized-private-import', mode: 'meeting', lines }, {
+      getSettings: () => settings,
+      getApiKey: () => '',
+      getAllowedProviders: () => null,
+      providerBaseUrl: () => '',
+      operatorFundedProviders: () => ['cloudflare'],
+      operatorAskTransport: () => ({ url: 'https://operator.test', secret: 'synthetic-license' }),
+      redactSecrets: (text) => text,
+      createStream
+    })).rejects.toThrow(/too long.*locally/i)
+
+    expect(createStream.mock.calls.map(([opts]) => opts.providerId)).toEqual(['local'])
+    expect(createStream.mock.calls[0][0].req.transcript).toBe(original)
+    expect(importedTranscriptText(lines)).toBe(original)
+    expect(openaiMock.streamOpenAI).not.toHaveBeenCalled()
+    expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
+    expect(localRuntimeMock.start).not.toHaveBeenCalled()
   })
 
   it('injects localRuntime.sessionKey() as the apiKey — never the (blank) opts.apiKey it was called with', async () => {

@@ -7,12 +7,12 @@ import { streamOpenAI } from './openai'
 import { type StreamOptions, type StreamHandle, errMsg } from './shared'
 
 // Local completions are task-shaped, not generic 4k-token chat turns. These bounds preserve the current
-// spoken-suggestion (~15–40 seconds), tight-summary, and screen-help contracts while leaving the 32768-
-// token slot enough room for the existing bounded transcript/system input. Cloud providers keep their
-// established budgets because only this strategy sets StreamOptions.maxOutputTokens.
+// spoken-suggestion (~15–40 seconds), tight-summary, and screen-help contracts. Character ceilings are
+// defensive input limits, not token-fit guarantees; the engine enforces its actual context size. Cloud
+// providers keep their established budgets because only this strategy sets StreamOptions.maxOutputTokens.
 export const LOCAL_OUTPUT_TOKEN_BUDGETS = Object.freeze({ suggest: 96, summary: 512, vision: 384 })
 const LOCAL_SYSTEM_CHAR_CAP = 40_000 // matches personas.ts contextBlock's existing imported-context cap
-const LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP = 80_000 // system + transcript stays within the existing 120k-char envelope
+const LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP = 80_000
 
 function boundedLocalSystem(system: string): string {
   if (system.length <= LOCAL_SYSTEM_CHAR_CAP) return system
@@ -20,19 +20,6 @@ function boundedLocalSystem(system: string): string {
   const contentBudget = LOCAL_SYSTEM_CHAR_CAP - marker.length
   const head = Math.ceil(contentBudget / 2)
   return system.slice(0, head) + marker + system.slice(-(contentBudget - head))
-}
-
-function boundedLocalRequest(req: StreamOptions['req']): StreamOptions['req'] {
-  const withoutHistory = req.history.length > 0 ? { ...req, history: [] } : req
-  if (withoutHistory.mode !== 'summary' || (withoutHistory.transcript?.length ?? 0) <= LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP) {
-    return withoutHistory
-  }
-  const originalLength = withoutHistory.transcript?.length ?? 0
-  const note = `[NOTE: local summary input truncated to the final ${LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP} of ${originalLength} characters.]\n`
-  return {
-    ...withoutHistory,
-    transcript: note + (withoutHistory.transcript ?? '').slice(-(LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP - note.length))
-  }
 }
 
 /**
@@ -128,6 +115,19 @@ export async function prewarmLocal(
 
 export function streamLocal(opts: StreamOptions): StreamHandle {
   let aborted = false
+  // MQA-322: a tail-only recap loses earlier decisions and owners. Reject before any engine work,
+  // leaving the full source untouched. Defer delivery so callers can register/abort the handle first.
+  if (opts.req.mode === 'summary' && (opts.req.transcript?.length ?? 0) > LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP) {
+    queueMicrotask(() => {
+      if (aborted) return
+      opts.handlers.onError(
+        'This transcript is too long to summarize locally without omitting earlier discussion. ' +
+        'Use a shorter transcript, or explicitly choose a cloud provider in Settings → AI. ' +
+        'Métis will not send this local request to the cloud automatically.'
+      )
+    })
+    return { abort: () => { aborted = true } }
+  }
   let inner: StreamHandle | null = null
   // Engine-owned release for the beginStream()/endStream() pairing (switch-kill hardening on llama;
   // idle/teardown accounting on fm). Set by whichever engine actually attaches a stream, fired exactly
@@ -144,7 +144,7 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
   // These local modes carry all current context in transcript/screenshot + prompt. Generic chat history
   // is unrelated stale input here and is unbounded at the IPC schema, so never let it consume the fixed
   // context budget — identical bounds on both engines so an engine hop never changes what the model sees.
-  const localReq = boundedLocalRequest(opts.req)
+  const localReq = opts.req.history.length > 0 ? { ...opts.req, history: [] } : opts.req
   const localSystem = boundedLocalSystem(opts.system)
   const maxOutputTokens =
     opts.maxOutputTokens ??
