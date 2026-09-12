@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { resolve } from 'node:path'
 import {
   DEPLOYED_URLS,
   buildDeployArgs,
@@ -111,5 +113,20 @@ describe('DEPLOYED_URLS', () => {
   it('matches the known production and staging workers.dev hosts', () => {
     expect(DEPLOYED_URLS.production).toBe('https://metis-operator.tony-walteur.workers.dev')
     expect(DEPLOYED_URLS.staging).toBe('https://metis-operator-staging.tony-walteur.workers.dev')
+  })
+})
+
+describe('MQA-313 local deployment executables', () => {
+  it('keeps every dry-run gate while avoiding npx resolution', () => {
+    const output = execFileSync(process.execPath, [resolve(__dirname, 'deploy.mjs'), '--dry-run', '--env', 'production'], {
+      encoding: 'utf8'
+    }).replace(/\\/g, '/')
+    expect(output).toContain('node_modules/typescript/bin/tsc --noEmit -p operator/tsconfig.json')
+    expect(output).toContain('node_modules/typescript/bin/tsc --noEmit -p operator/client/tsconfig.json')
+    expect(output).toContain('node_modules/vitest/vitest.mjs run --config operator/vitest.config.ts')
+    expect(output).toContain('operator/scripts/migrate.mjs --remote')
+    expect(output).toContain('node_modules/wrangler/bin/wrangler.js deploy --var OPERATOR_VERSION:')
+    expect(output).toContain('operator/scripts/smoke.mjs --url')
+    expect(output).not.toMatch(/&& npx /)
   })
 })

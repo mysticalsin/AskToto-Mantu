@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Applies operator/schema.sql then operator/schema-alter.sql to metis-operator D1, one statement at
- * a time, via `npx wrangler d1 execute`. Every CREATE TABLE/INDEX in both files is IF NOT EXISTS
+ * a time, via the lockfile-pinned local Wrangler CLI. Every CREATE TABLE/INDEX in both files is IF NOT EXISTS
  * (see migrate.contract.test.ts), so a statement that already applied is a no-op, not a failure; the
  * handful of bare ALTER TABLE ADD COLUMN statements in schema-alter.sql are not idempotent in SQLite
  * itself, so this runner treats "duplicate column name" (and "already exists", belt and suspenders)
@@ -20,10 +20,12 @@
  * D1 was never created) refuses to run rather than silently doing nothing against a database that
  * doesn't exist.
  */
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { commandFailureDetails, localNodeCommand } from './toolchain.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OPERATOR_ROOT = join(__dirname, '..')
@@ -121,21 +123,63 @@ export function parseStatements(sql) {
     .filter(Boolean)
 }
 
-function isSkippableError(message) {
-  const m = message.toLowerCase()
-  return m.includes('duplicate column name') || m.includes('already exists')
+const AUTH_OR_TRUST_FAILURE = /authentication|unauthori[sz]ed|forbidden|permission denied|access denied|invalid.*(?:token|credential)|\b(?:HTTP|status["']?)[\s:=]+40[13]\b|certificate|self[-_ ]signed|\b(?:CERT_|TLS_|ERR_TLS_|UNABLE_TO_VERIFY_LEAF_SIGNATURE)/i
+const SQL_FAILURE = /SQLITE_|\bD1_(?:ERROR|EXEC_ERROR)\b|syntax error|no such (?:table|column)|constraint failed/i
+
+function isSkippableError(stmt, message) {
+  if (!isRetrySafeStatement(stmt) || AUTH_OR_TRUST_FAILURE.test(message)) return false
+  if (/syntax error|no such (?:table|column)|constraint failed/i.test(message)) return false
+  return /^ALTER\s+TABLE\b/i.test(stmt.trim()) && /duplicate column name/i.test(message)
+    || /^CREATE\b/i.test(stmt.trim()) && /already exists/i.test(message)
 }
 
-function runStatement(stmt, target, databaseName, envName) {
-  const args = ['wrangler', 'd1', 'execute', databaseName, '--command', stmt, target === 'remote' ? '--remote' : '--local']
+/** The migration files contain one statement per call. Only additive/idempotent forms may be
+ * replayed after an uncertain transport result. Tier seeds are safe because tiers.id is a PK. */
+export function isRetrySafeStatement(stmt) {
+  const sql = stmt.trim()
+  if (sql.includes(';')) return false
+  return /^CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\b/i.test(sql)
+    || /^ALTER\s+TABLE\s+\w+\s+ADD\s+COLUMN\b/i.test(sql)
+    || /^INSERT\s+OR\s+IGNORE\s+INTO\s+tiers\s*\(/i.test(sql)
+}
+
+function transientTransportFailure(result) {
+  // Spawn errors, signals and unexplained exits must fail closed, not enter the retry path.
+  if (result.error || result.signal || result.status == null || result.status === 0) return false
+  const message = `${result.stdout || ''}\n${result.stderr || ''}`
+  if (AUTH_OR_TRUST_FAILURE.test(message) || SQL_FAILURE.test(message)) return false
+  // "fetch failed" alone does not distinguish a transient outage from a permanent trust error.
+  return /\b(?:EAI_AGAIN|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_SOCKET)\b|Unable to resolve Cloudflare's API hostname/i.test(message)
+}
+
+export async function runStatement(stmt, target, databaseName, envName, options = {}) {
+  const args = ['d1', 'execute', databaseName, '--command', stmt, target === 'remote' ? '--remote' : '--local']
   if (envName) args.push('--env', envName)
-  try {
-    execFileSync('npx', args, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' })
-    return { status: 'applied' }
-  } catch (err) {
-    const message = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`
-    if (isSkippableError(message)) return { status: 'skipped', message }
-    return { status: 'failed', message }
+  const command = localNodeCommand('wrangler', args)
+  const execute = options.spawn ?? spawnSync
+  const wait = options.sleep ?? sleep
+  const onRetry = options.onRetry ?? ((attempt, delayMs) => {
+    console.warn(`[retry] transient Cloudflare transport failure; attempt ${attempt}/3 after ${delayMs}ms`)
+  })
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let result
+    try {
+      result = execute(command.cmd, command.args, {
+        cwd: OPERATOR_ROOT, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8'
+      })
+    } catch (error) {
+      result = { status: null, signal: null, error }
+    }
+    const completed = result.status != null && !result.signal && !result.error
+    if (completed && result.status === 0) return { status: 'applied', attempts: attempt }
+    const message = commandFailureDetails(result)
+    if (completed && isSkippableError(stmt, message)) return { status: 'skipped', message, attempts: attempt }
+    if (attempt === 3 || !isRetrySafeStatement(stmt) || !transientTransportFailure(result)) {
+      return { status: 'failed', message, attempts: attempt }
+    }
+    const delayMs = attempt * 1000
+    onRetry(attempt + 1, delayMs)
+    await wait(delayMs)
   }
 }
 
@@ -159,16 +203,16 @@ const DEFAULT_TIER_ENTITLEMENTS = {
   'metis-light': ['ask', 'intelligence']
 }
 
-function seedDefaultTiers(target, databaseName, envName) {
+export async function seedDefaultTiers(target, databaseName, envName, execute = runStatement) {
   const now = Date.now()
   console.log('--- Seeding default tiers (metis, metis-light) ---')
   for (const [id, entitlements] of Object.entries(DEFAULT_TIER_ENTITLEMENTS)) {
     const label = id === 'metis' ? 'Métis' : 'Métis Light'
     const entitlementsJson = JSON.stringify(entitlements).replace(/'/g, "''")
     const sql = `INSERT OR IGNORE INTO tiers (id, label, entitlements_json, updated_at) VALUES ('${id}', '${label}', '${entitlementsJson}', ${now})`
-    const result = runStatement(sql, target, databaseName, envName)
+    const result = await execute(sql, target, databaseName, envName)
     console.log(`[${result.status}] tier ${id}`)
-    if (result.status === 'failed') console.error(result.message)
+    if (result.status === 'failed') throw new Error(`Default tier ${id} seed failed: ${result.message}`)
   }
 }
 
@@ -217,7 +261,7 @@ async function main() {
     console.log(`--- Applying ${file} (${statements.length} statement(s)) to ${target} (database: ${databaseName}${envName ? `, env: ${envName}` : ''}) ---`)
     const results = []
     for (const stmt of statements) {
-      const result = runStatement(stmt, target, databaseName, envName)
+      const result = await runStatement(stmt, target, databaseName, envName)
       results.push(result)
       console.log(`[${result.status}] ${shortStmt(stmt)}`)
       if (result.status === 'failed') console.error(result.message)
@@ -227,7 +271,7 @@ async function main() {
   }
 
   if (!dryRun && !anyFailed) {
-    seedDefaultTiers(target, databaseName, envName)
+    await seedDefaultTiers(target, databaseName, envName)
   }
 
   if (anyFailed) {
