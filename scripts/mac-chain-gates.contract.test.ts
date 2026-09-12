@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
  * Two things are asserted here, both about `package.json`'s mac scripts rather than about any code
  * that runs at app runtime, because that is where these defects live.
  *
- * MQA-207 — direct mac chains run the verified macOS app.started launch gate against their actual
+ * MQA-207 — direct mac chains run the macOS renderer-readiness launch gate against their actual
  * output. The Windows window inspection remains Windows-only. Unsupported hosts still fail loudly,
  * and the manual Rosetta procedure documents the additional universal slice check.
  *
@@ -157,9 +157,9 @@ describe('MQA-249 — a portable "this build came up" signal, and the macOS gate
    * path reads the real window via UI Automation, whose mac equivalents need a TCC grant an unattended
    * build cannot answer, and electron-log's main.log ignores the ASKTOTO_USERDATA override on macOS.
    *
-   * The audit trail does not ignore it. So createWindow now emits one unconditional event, and the gate
-   * reads that. Pinned here because the two halves are useless apart — an event nothing asserts on is
-   * noise, and a gate asserting on an event that stopped firing passes forever.
+   * The audit trail does not ignore it. createWindow retains its original boot event for telemetry;
+   * MQA-318 makes the gate wait for a distinct post-load renderer-ready event and process survival.
+   * Pin both contracts without treating the early boot event as renderer-readiness proof.
    */
   const indexSrc = readFileSync(join(root, 'src', 'main', 'index.ts'), 'utf8')
   const loggerSrc = readFileSync(join(root, 'src', 'main', 'logger.ts'), 'utf8')
@@ -181,9 +181,8 @@ describe('MQA-249 — a portable "this build came up" signal, and the macOS gate
 
   it('MQA-249: the darwin gate asserts on that trail, and on nothing weaker', () => {
     expect(launchGate).toMatch(/ASKTOTO_MAC_LAUNCH_GATE/)
-    expect(launchGate).toMatch(/app\\.started/)
-    // It must read the audit log, not merely observe that a process exists — a process that never reached
-    // createWindow is exactly the DOA case, and only the log distinguishes the two.
+    expect(launchGate).toMatch(/app\\.renderer\\.ready/)
+    // A process can exist without ever mounting the renderer; require its distinct readiness event.
     expect(launchGate).toMatch(/logs', 'audit\.log'|'audit\.log'/)
     expect(launchGate).toMatch(/ASKTOTO_USERDATA: profile/)
   })

@@ -201,6 +201,7 @@ export type AuditEvent =
   | 'asr.model.fetch_requested'
   | 'asr.model.removed'
   | 'app.started'
+  | 'app.renderer.ready'
   | 'app.crash'
   // The overlay renderer stopped answering Chromium (event loop wedged, not crashed). Logged so a stuck
   // island is diagnosable from the support bundle; the app does not reload or kill it on this signal.
