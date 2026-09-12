@@ -1,11 +1,24 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, afterAll, vi } from 'vitest'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
+const logFixture = vi.hoisted(() => {
+  const { mkdtempSync } = require('node:fs') as typeof import('node:fs')
+  const { tmpdir } = require('node:os') as typeof import('node:os')
+  const { join } = require('node:path') as typeof import('node:path')
+  return { root: mkdtempSync(join(tmpdir(), 'metis-logger-profile-')) }
+})
+
+// Do not clear or inspect the scratch audit file other workers are actively writing.
+vi.mock('node:os', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:os')>()),
+  tmpdir: () => logFixture.root
+}))
+
 vi.mock('electron')
 
-import { auditLog, mainLog } from './logger'
+import { auditLog, auditLogPath, mainLog } from './logger'
 
 /**
  * MQA-177 — a test run must never write into the installed app's user profile.
@@ -29,7 +42,16 @@ function installedAppLogDir(): string {
 
 const scratchLogDir = join(tmpdir(), 'asktoto-nonapp-logs')
 
+afterAll(() => rmSync(logFixture.root, { recursive: true, force: true }))
+
 describe('MQA-177 — logs written under test land nowhere near the real user profile', () => {
+  it('MQA-331 owns a unique fixture for real main and audit writes', () => {
+    expect(auditLogPath()).toBe(join(logFixture.root, 'asktoto-nonapp-logs', 'audit.log'))
+    expect(mainLog.transports.file.getFile().path).toBe(
+      resolve(join(logFixture.root, 'asktoto-nonapp-logs', 'main.log'))
+    )
+  })
+
   it('resolves main.log to the scratch dir, never the installed app log directory', () => {
     const resolved = mainLog.transports.file.getFile().path
 
