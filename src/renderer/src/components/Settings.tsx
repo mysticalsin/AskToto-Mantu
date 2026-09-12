@@ -123,6 +123,7 @@ import { PlaneMark } from './brand/PlaneMark'
 import { MetisMark } from './MetisMark'
 import { IdentitySection } from './IdentitySection'
 import { FieldHint, TextButton } from './ui'
+import { shouldUseBundledAsr } from '../lib/asr-offline'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
@@ -1787,18 +1788,55 @@ function FallbackOrderEditor({
   )
 }
 
-/**
- * MQA-247 — the high-accuracy transcription model, offered rather than assumed.
- *
- * The model cannot ship: 1.61 GB on top of a 0.77 GB installer breaches GitHub's 2 GiB per-asset limit.
- * So imports fall back to the bundled floor model, which is materially worse on non-English audio.
- * MQA-246 made that visible; this makes it fixable.
- *
- * The size is stated before the button, not after. Someone on a metered connection is agreeing to a
- * specific number of gigabytes, and a control that reveals the cost only once the transfer has started
- * is not consent.
- */
-function AsrModelRow(): JSX.Element | null {
+/** The packaged live worker cannot select the larger import model (MQA-311). */
+export function WhisperQualityRow({
+  bundled,
+  settings,
+  patch
+}: {
+  bundled: boolean | null | undefined
+  settings: Pick<PublicSettings, 'asrEngine' | 'asrQuality' | 'managedKeys'>
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element | null {
+  if (settings.asrEngine !== 'whisper') return null
+  if (!shouldUseBundledAsr(import.meta.env.PROD, bundled)) {
+    return (
+      <ToggleRow
+        label="Prefer large live Whisper (development)"
+        desc="Development preference: try GPU-accelerated Whisper large-v3-turbo when available; otherwise use Whisper base. This does not change import models."
+        on={settings.asrQuality === 'best'}
+        onChange={(v) => patch({ asrQuality: v ? 'best' : 'fast' })}
+        disabled={settings.managedKeys.includes('asrQuality')}
+      />
+    )
+  }
+  return (
+    <p className="m-0 px-1 py-2 text-[12px] leading-snug text-[color:var(--cl-muted-foreground)]">
+      Live Whisper uses the compact Whisper base model in this build. The optional larger model
+      applies to imported recordings, not live transcription.
+    </p>
+  )
+}
+
+type AsrImportModelState = { status: string; progress: number; ready: boolean; bytes: number }
+
+/** Availability and the selected import engine are separate, so an installed model is not called active. */
+export function asrImportModelDescription(state: AsrImportModelState, engine: PublicSettings['asrEngine']): string {
+  const gb = (state.bytes / 1e9).toFixed(2)
+  if (state.status === 'downloading') {
+    return `Downloading Whisper large-v3-turbo for imported recordings: ${Math.round(state.progress * 100)}% of ${gb} GB.`
+  }
+  const availability = state.ready
+    ? `Whisper large-v3-turbo import model installed (${gb} GB).`
+    : `Optional Whisper large-v3-turbo import model: ${gb} GB download. Whisper imports use the compact base model until it is available.`
+  const selection = engine === 'parakeet'
+    ? ' Parakeet is selected, so imports still use Parakeet. Select Whisper to use this model for imports.'
+    : ' Available larger models are used for Whisper imports.'
+  return `${availability}${selection} This does not upgrade live transcription.`
+}
+
+/** Optional import-only model; state its download size before the user starts the transfer. */
+function AsrModelRow({ engine }: { engine: PublicSettings['asrEngine'] }): JSX.Element | null {
   const [state, setState] = useState<{ status: string; progress: number; error?: string; ready: boolean; bytes: number } | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -1828,11 +1866,7 @@ function AsrModelRow(): JSX.Element | null {
   return (
     <div className="-mt-1 flex items-start justify-between gap-3 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
       <span>
-        {state.ready
-          ? `High-accuracy transcription model installed (${gb} GB). Imports use it instead of the compact model.`
-          : state.status === 'downloading'
-            ? `Downloading the high-accuracy transcription model: ${Math.round(state.progress * 100)}% of ${gb} GB.`
-            : `Imports use the compact transcription model. The high-accuracy one is a ${gb} GB download, noticeably better, especially on non-English audio.`}
+        {asrImportModelDescription(state, engine)}
         {state.status === 'error' && state.error ? ` ${state.error}` : ''}
       </span>
       {state.status !== 'downloading' && (
@@ -6010,12 +6044,11 @@ export function Settings({
   useLayoutEffect(() => {
     if (contentRef.current) contentRef.current.scrollTop = 0
   }, [tab])
-  // Standard installers only bundle the compact WASM model (see whisper.worker.ts) — the GPU-accelerated
-  // large model is never shipped, so "Best transcription quality" is a no-op there. Default to the
-  // no-op copy until the main process confirms otherwise, so a bundled build never overclaims.
+  // Match the worker's fail-closed source selection. A failed/absent probe cannot expose a development
+  // preference that has no effect in a production build.
   const [asrBundled, setAsrBundled] = useState(true)
   useEffect(() => {
-    void window.toto.asrBundled().then(setAsrBundled)
+    void window.toto.asrBundled().then(setAsrBundled).catch(() => setAsrBundled(true))
   }, [])
   // Parakeet native-addon health. addonError is set when the sherpa-onnx addon itself failed to load
   // (e.g. a wrong-platform build) — a different failure from missing bundled assets, so the Audio
@@ -6365,21 +6398,11 @@ export function Settings({
                     onChange={(v) => patch({ showFullTranscriptInReview: v })}
                     disabled={settings.managedKeys.includes('showFullTranscriptInReview')}
                   />
-                  <ToggleRow
-                    label="Best transcription quality"
-                    desc={
-                      asrBundled
-                        ? 'Default is Best. Fast is a power option. This installer ships the compact model. If Best cannot load, Métis runs Fast and says so below (never a silent Fast with a Best label). Download the high-accuracy model to restore Best.'
-                        : 'Default is Best (Whisper large multilingual, 60+ languages). Fast is a Settings power option for constrained machines.'
-                    }
-                    on={settings.asrQuality === 'best'}
-                    onChange={(v) => patch({ asrQuality: v ? 'best' : 'fast' })}
-                    disabled={settings.managedKeys.includes('asrQuality')}
-                  />
+                  <WhisperQualityRow bundled={asrBundled} settings={settings} patch={patch} />
                   <div className="flex flex-col gap-1.5 px-1 py-1">
                     <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
                       Transcription engine
-                      <FieldHint text="Parakeet is the default: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper handles ~99 languages; pick it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
+                      <FieldHint text="For fresh setup, 8 GB or less selects Parakeet; more than 8 GB selects Whisper. Unknown memory uses Parakeet. Existing choices and organization policy are preserved. Parakeet supports European languages; Whisper supports a wider range of languages. Apple Speech uses the macOS on-device recognizer for live meetings; imports use Whisper.">
                         <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
                       </FieldHint>
                       <ManagedChip keys={settings.managedKeys} k="asrEngine" />
@@ -6391,8 +6414,8 @@ export function Settings({
                       aria-label="Transcription engine"
                       className={'w-full ' + ctl}
                     >
-                      <option value="parakeet">Parakeet · fastest, European languages</option>
-                      <option value="whisper">Whisper · ~99 languages</option>
+                      <option value="parakeet">Parakeet · European languages</option>
+                      <option value="whisper">Whisper · multilingual</option>
                       <option value="apple">Apple Speech · on-device{isWindows ? ' (macOS only)' : ''}</option>
                     </select>
                   </div>
@@ -6440,13 +6463,12 @@ export function Settings({
                       <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
                     </div>
                   )}
-                  <AsrModelRow />
+                  <AsrModelRow engine={settings.asrEngine} />
                   {settings.asrImportTierFallbackAt != null && (
                     <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span className="min-w-0 flex-1 break-words">
-                        An imported recording was transcribed with the compact model. The
-                        higher-accuracy one is not installed. Accuracy is lower, especially on
-                        non-English audio. {new Date(settings.asrImportTierFallbackAt).toLocaleString()}.
+                        A recent imported recording used compact Whisper base because the larger
+                        import model was unavailable. {new Date(settings.asrImportTierFallbackAt).toLocaleString()}.
                       </span>
                       <TextButton onClick={() => patch({ asrImportTierFallbackAt: null })}>Dismiss</TextButton>
                     </div>
@@ -6454,8 +6476,9 @@ export function Settings({
                   {(settings as SettingsWithAsrWebgpuFallback).asrWebgpuFallbackAt != null && (
                     <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span className="min-w-0 flex-1 break-words">
-                        Best was requested but is not running on this device. Fast is active. Download
-                        the high-accuracy model below, or keep Fast as a power option.
+                        A recent live session used Whisper base instead of the requested large model.
+                        Packaged builds use Whisper base for live transcription. The optional larger
+                        download changes imported recordings only.
                       </span>
                       <TextButton
                         onClick={() =>

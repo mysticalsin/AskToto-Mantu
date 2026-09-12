@@ -379,11 +379,16 @@ const IDLE_ASR_STATUS: AsrAssetsStatus = {
 
 /** Act 3 transcription row. Never skip a missing bundle. Never tell the user to reinstall. */
 export function asrAssetsRowStatus(
-  input: AsrAssetsStatus | null | undefined
+  input: AsrAssetsStatus | null | undefined,
+  engine?: PublicSettings['asrEngine']
 ): { state: SetupRowState; detail: string; progress?: number } {
   const s = input ?? IDLE_ASR_STATUS
   if (s.ready || s.status === 'ready') {
-    return { state: 'ready', detail: 'Parakeet + Whisper ready' }
+    const selected = engine === 'parakeet' ? 'Parakeet' : engine === 'whisper' ? 'Whisper base' : engine === 'apple' ? 'Apple Speech' : null
+    return {
+      state: 'ready',
+      detail: `Parakeet + Whisper base files ready.${selected ? ` Selected for live meetings: ${selected}.` : ''}`
+    }
   }
   if (s.status === 'error') {
     return {
@@ -883,7 +888,7 @@ export function OnboardingExperience({
   const [consent, setConsent] = useState(false)
   const [asrStatus, setAsrStatus] = useState<AsrAssetsStatus>(IDLE_ASR_STATUS)
   const asrReady = asrStatusIsReady(asrStatus)
-  const asrRow = asrAssetsRowStatus(asrStatus)
+  const asrRow = asrAssetsRowStatus(asrStatus, settings?.asrEngine)
   const doneRef = useRef(false)
 
   useEffect(() => {
@@ -951,7 +956,7 @@ export function OnboardingExperience({
           setAsrStatus(asrEnsureFailureStatus(err))
         })
       const asrStatus = await window.toto.asrAssetsStatus().catch((err) => asrEnsureFailureStatus(err))
-      const asr = asrAssetsRowStatus(asrStatus)
+      const asr = asrAssetsRowStatus(asrStatus, settingsRef.current?.asrEngine)
       set('asr', asr.state, asr.detail, asr.progress)
       await delay(450)
       set('brain', 'ready', isWindows ? 'stays on this PC' : 'stays on this Mac')
@@ -1018,7 +1023,7 @@ export function OnboardingExperience({
       const local = models.find((m) => m.id === current?.localLlm.modelId)
       const lm = current ? localModelRowStatus(local, current.localLlm.enabled,
         !current.allowedProviders || current.allowedProviders.includes('local')) : { state: 'checking' as const, detail: '' }
-      const asr = asrStatusNow ? asrAssetsRowStatus(asrStatusNow) : null
+      const asr = asrStatusNow ? asrAssetsRowStatus(asrStatusNow, current?.asrEngine) : null
       setRows((rs) =>
         rs.map((r) => {
           if (r.key === 'asr' && asr) {
@@ -1050,7 +1055,7 @@ export function OnboardingExperience({
     const interval = setInterval(() => void poll(), PERMISSIONS_POLL_MS)
     const unsub = window.toto.onImportAssetsProgress?.((d) => {
       if (!live) return
-      const asr = asrAssetsRowStatus({ ...d, ready: d.status === 'ready' })
+      const asr = asrAssetsRowStatus({ ...d, ready: d.status === 'ready' }, settingsRef.current?.asrEngine)
       setRows((rs) =>
         rs.map((r) => (r.key === 'asr' ? { ...r, state: asr.state, detail: asr.detail, progress: asr.progress } : r))
       )
@@ -1065,7 +1070,7 @@ export function OnboardingExperience({
   const retryAsr = async (): Promise<void> => {
     const status = await window.toto.asrAssetsEnsure().catch((err) => asrEnsureFailureStatus(err))
     setAsrStatus(status)
-    const asr = asrAssetsRowStatus(status)
+    const asr = asrAssetsRowStatus(status, settingsRef.current?.asrEngine)
     setRows((rs) => rs.map((r) => (r.key === 'asr' ? { ...r, state: asr.state, detail: asr.detail, progress: asr.progress } : r)))
   }
 
