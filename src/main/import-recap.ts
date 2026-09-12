@@ -19,6 +19,7 @@ import { localFallbackEligibleFor, localPrimaryEligibleFor, resolveRoutingMode }
 import { resolvePortalCloudflareModel } from '@shared/ask-routing'
 import { createStream } from './llm'
 import type { ImportJob } from './import-jobs'
+import { localImportRecapProblem } from './import-recap-validation'
 
 export const IMPORT_RECAP_TIER = 'base' as const
 export const IMPORT_RECAP_MAX_ATTEMPTS = 3
@@ -239,6 +240,12 @@ export async function runImportedRecap(
               text += delta
             },
             onDone: (_usage, completion) => {
+              if (local && localImportRecapProblem(text, completion, IMPORT_RECAP_SYSTEM_PREFIX, transcript)) {
+                rejectRecap(new Error(
+                  'Local AI did not produce a complete, structured recap. Retry the summary or explicitly choose a different AI provider in Settings → AI. This local request was not sent to the cloud.'
+                ))
+                return
+              }
               if (completion?.status === 'incomplete') {
                 rejectRecap(
                   new Error(

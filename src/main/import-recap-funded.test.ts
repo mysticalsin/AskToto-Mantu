@@ -3,7 +3,8 @@ import { DEFAULT_SETTINGS, type Settings, type TranscriptLine } from '@shared/ip
 import { PORTAL_CF_DEEPSEEK_FLASH } from '@shared/ask-routing'
 import { redactSecrets } from '@shared/redact'
 import type { StreamOptions } from './llm/shared'
-import { pickImportRecapCandidates, runImportedRecap } from './import-recap'
+import { IMPORT_RECAP_SYSTEM_PREFIX, pickImportRecapCandidates, runImportedRecap } from './import-recap'
+import { ImportJobManager } from './import-jobs'
 
 const localReady = vi.hoisted(() => vi.fn(() => false))
 vi.mock('./llm/local-routing', () => ({
@@ -78,6 +79,78 @@ describe('MQA-297 automatic summaries with a Métis license', () => {
     await expect(runImportedRecap({ jobId: 'local-failure', mode: 'meeting', lines }, {
       ...gate, getSettings: () => s, redactSecrets, createStream
     })).rejects.toThrow(/Local runtime unavailable/)
+    expect(createStream.mock.calls.map(([opts]) => opts.providerId)).toEqual(['local'])
+  })
+
+  it.each(['missing metadata', 'missing sections', 'template echo'] as const)(
+    'MQA-327 rejects local %s without falling through to configured licensed cloud', async (failure) => {
+      localReady.mockReturnValue(true)
+      const s = settings({ routingMode: 'local' })
+      const valid = [...IMPORT_RECAP_SYSTEM_PREFIX.matchAll(/^## ([^:]+):/gm)]
+        .map((match) => `## ${match[1]}\nA synthetic note.`).join('\n')
+      const output = failure === 'missing sections' ? '## Overview\nAn incomplete document.'
+        : failure === 'template echo' ? IMPORT_RECAP_SYSTEM_PREFIX : valid
+      const createStream = vi.fn((opts: StreamOptions) => {
+        opts.handlers.onDelta(output)
+        opts.handlers.onDone({}, failure === 'missing metadata' ? undefined : { status: 'complete', reason: 'stop' })
+        return { abort: () => {} }
+      })
+      await expect(runImportedRecap({ jobId: 'malformed-local', mode: 'meeting', lines }, {
+        ...gate, getSettings: () => s, redactSecrets, createStream
+      })).rejects.toThrow(/local ai.*complete.*structured.*retry/i)
+      expect(createStream.mock.calls.map(([opts]) => opts.providerId)).toEqual(['local'])
+    }
+  )
+
+  it('MQA-327 accepts a complete structured local result without changing its text', async () => {
+    localReady.mockReturnValue(true)
+    const output = [...IMPORT_RECAP_SYSTEM_PREFIX.matchAll(/^## ([^:]+):/gm)]
+      .map((match) => `## ${match[1]}\nA synthetic note.`).join('\n')
+    const createStream = vi.fn((opts: StreamOptions) => {
+      opts.handlers.onDelta(output)
+      opts.handlers.onDone({}, { status: 'complete', reason: 'stop' })
+      return { abort: () => {} }
+    })
+    await expect(runImportedRecap({ jobId: 'complete-local', mode: 'meeting', lines }, {
+      ...gate, getSettings: () => settings({ routingMode: 'local' }), redactSecrets, createStream
+    })).resolves.toBe(output)
+    expect(createStream.mock.calls.map(([opts]) => opts.providerId)).toEqual(['local'])
+  })
+
+  it('MQA-327 preserves and indexes the transcript without saving or crediting a malformed local recap', async () => {
+    localReady.mockReturnValue(true)
+    const createStream = vi.fn((opts: StreamOptions) => {
+      opts.handlers.onDelta('A normally stopped but unrelated response.')
+      opts.handlers.onDone({}, { status: 'complete', reason: 'stop' })
+      return { abort: () => {} }
+    })
+    const saveMeeting = vi.fn(async () => 'synthetic-import.md')
+    const updateRecap = vi.fn(async () => {})
+    const recordMeetingSummarized = vi.fn()
+    const enqueueIngest = vi.fn()
+    const manager = new ImportJobManager({
+      store: { save: async () => {}, list: async () => [], remove: async () => {} },
+      decode: () => {}, transcribe: async () => lines[0].text,
+      saveMeeting, updateRecap, recordMeetingSummarized, enqueueIngest,
+      generateRecap: (job) => runImportedRecap(job, {
+        ...gate, getSettings: () => settings({ routingMode: 'local' }), redactSecrets, createStream
+      }),
+      now: () => 1_700_000_000_000, newId: () => 'contained-local'
+    })
+    // Real speech-shaped VAD input; the ASR adapter is synthetic, but finalization/persistence routing
+    // and local provider completion handling are production implementations.
+    const pcm = new Float32Array(25_600)
+    for (let i = 0; i < 9_600; i++) pcm[i] = 0.3 * Math.sin(2 * Math.PI * 220 * i / 16_000)
+    await manager.start({ path: '/synthetic.wav', name: 'synthetic.wav', sizeBytes: 42, mtimeMs: 1 })
+    await manager.acceptDecodedChunk('contained-local', 0, 0, pcm)
+    await manager.finishDecoding('contained-local')
+    expect(saveMeeting).toHaveBeenCalledOnce()
+    expect(saveMeeting).toHaveBeenCalledWith(expect.objectContaining({ recap: '', lines: [expect.objectContaining({ text: lines[0].text })] }))
+    expect(manager.get('contained-local')).toMatchObject({ state: 'done', file: 'synthetic-import.md', recapError: expect.stringMatching(/local ai.*structured/i) })
+    expect(manager.get('contained-local')?.recapError).not.toMatch(/transcript saved/i)
+    expect(updateRecap).not.toHaveBeenCalled()
+    expect(recordMeetingSummarized).not.toHaveBeenCalled()
+    expect(enqueueIngest).toHaveBeenCalledWith('synthetic-import.md')
     expect(createStream.mock.calls.map(([opts]) => opts.providerId)).toEqual(['local'])
   })
 })
