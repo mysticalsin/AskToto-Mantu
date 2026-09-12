@@ -1,0 +1,7 @@
+[
+  { "name": "Alex", "speaker": "unknown", "t": 0, "text": "We will launch the pilot on Friday." },
+  { "name": "Alex", "speaker": "unknown", "t": 1, "text": "I will deliver the proposal by Tuesday." },
+  { "name": "Jamie", "speaker": "unknown", "t": 2, "text": "I will confirm the tests before launch." },
+  { "name": "Alex", "speaker": "unknown", "t": 3, "text": "The budget is 3.5 million EUR." },
+  { "name": "Jamie", "speaker": "unknown", "t": 4, "text": "Weekend coverage remains an open question." }
+]
