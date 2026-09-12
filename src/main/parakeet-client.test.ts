@@ -279,7 +279,7 @@ describe('Parakeet utilityProcess client', () => {
     await expect(waiting).resolves.toBe('after timeout')
   })
 
-  it('release resolves only after the exact child exits and blocks a second recognizer generation', async () => {
+  it('MQA-042 release resolves only after the exact child exits and blocks a second recognizer generation', async () => {
     const warm = api.ensureParakeetModel()
     const warmRequest = await waitForRequest(child, 'warmup')
     child.emit('message', { type: 'result', id: warmRequest.id })
