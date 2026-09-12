@@ -62,13 +62,15 @@ describe('recall — language tags round-trip through save → recallRead', () =
     vi.restoreAllMocks()
   })
 
-  it('MQA-310 round-trips measured duration instead of deriving it from line starts', async () => {
+  it.each([false, true])('MQA-310 round-trips measured duration with encryption=%s', async (encrypted) => {
+    testSettings.encryptTranscripts = encrypted
     const saved = await saveMeeting(testSettings, {
       title: 'Synthetic duration check', mode: 'meeting', startedAt: 1_700_000_000_000,
       durationMs: 28_840, recap: '',
       lines: [{ t: 1_700_000_000_000, speaker: 'unknown', text: 'Synthetic speech.' }]
     })
-    expect(readFileSync(saved, 'utf8')).toContain('duration_ms: 28840')
+    if (encrypted) expect(isEncryptedFile(saved)).toBe(true)
+    else expect(readFileSync(saved, 'utf8')).toContain('duration_ms: 28840')
     expect((await recallRead(basename(saved))).durationMs).toBe(28_840)
     expect((await listMeetings())[0].durationMin).toBe(1)
   })
