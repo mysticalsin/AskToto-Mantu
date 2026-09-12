@@ -32,6 +32,7 @@ import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, creat
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
+import { operatorVisionModel } from '@shared/operator-vision'
 import {
   IPC,
   LiveMeetingStartedAtSchema,
@@ -559,11 +560,13 @@ import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { applyCaveman } from '@shared/caveman-ask'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
-import { isOpenAICloudCacheEligible, operatorUrlConfigured, promptCacheKey as makePromptCacheKey, resolveOperatorBaseUrl } from '@shared/operator'
+import { isOpenAICloudCacheEligible, operatorUrlConfigured, promptCacheKey as makePromptCacheKey, resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
 import { cloudflareConnectTarget } from './cloudflare-connect'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import {
   operatorAskTransport,
+  confirmOperatorLicenseConnection,
+  acceptOperatorHeartbeat,
   operatorFundedProviders,
   recordOperatorAsk,
   recordOperatorCrmSend,
@@ -1738,6 +1741,12 @@ function publicSettings(): PublicSettings {
   // allowed to answer (previously a blocked provider could show "ready" with no setup CTA, then reject
   // every ask).
   const allowed = getAllowedProviders()
+  const funded = operatorFundedProviders()
+  const managedVisionReady = (p: ProviderId): boolean =>
+    !hasApiKey(p) && funded.includes(p) && !!operatorVisionModel(p, resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'base', s.providerModelsDeep))
+  const providerVisionReady = (p: ProviderId): boolean => p === 'dust'
+    ? dustSelectedAgentVision(s.providerModels.dust)
+    : hasApiKey(p) || PROVIDERS[p].kind === 'cli' ? PROVIDERS[p].vision : managedVisionReady(p)
   const providerReady =
     ((!allowed || allowed.includes(s.provider)) &&
       (activeDef.kind === 'cli'
@@ -1777,6 +1786,10 @@ function publicSettings(): PublicSettings {
   const localFallbackReady = localReady && s.localLlm.fallback
   return {
     ...s,
+    operatorLicenseToken: '',
+    operatorIngestSecret: '',
+    operatorConfigured: operatorUrlConfigured(s) && !!resolveOperatorCredential(s),
+    operatorLegacyCredentialConfigured: !!s.operatorIngestSecret.trim(),
     hasApiKey: hasApiKey(s.provider),
     // Reflect the value actually applied to the window, not the raw stored setting — otherwise a dev
     // process running with ASKTOTO_DISABLE_CP would show "Content protection: On" in Settings while
@@ -1791,7 +1804,7 @@ function publicSettings(): PublicSettings {
     // gates screen-ask so shots never hit a non-vision model — ORs localVisionReady so a local-only setup
     // (no cloud provider configured at all) still counts as vision-ready. localFallbackReady counts too:
     // askStart's zero-config safety net routes a keyless vision ask to the on-device model.
-    visionReady: (providerReady && activeDef.vision) || localVisionReady || localFallbackReady,
+    visionReady: (providerReady && providerVisionReady(s.provider)) || localVisionReady || localFallbackReady,
     // "Some configured provider can read images" — not necessarily the ACTIVE one. Mirrors the failover
     // candidate test (~1287): a keyed/CLI-connected provider with vision. Lets the renderer route a
     // screen-ask/quick-action to capture even when the active provider (e.g. Dust) is text-only, because
@@ -1803,7 +1816,7 @@ function publicSettings(): PublicSettings {
     visionAvailable:
       (Object.keys(PROVIDERS) as ProviderId[]).some(
         (p) =>
-          (p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision) &&
+          providerVisionReady(p) &&
           (!allowed || allowed.includes(p)) &&
           (PROVIDERS[p].kind === 'cli'
             ? !!s.cliConnected[p]
@@ -1812,7 +1825,7 @@ function publicSettings(): PublicSettings {
           // supplies, so a stored METIS_PROXY_KEY with no Worker URL yet is a provider that can never be
           // reached — and advertising vision on it makes the app CAPTURE THE USER'S SCREEN, and prewarm
           // more captures, for a request that cannot be sent. Same gate providerReady already applies.
-          (!requiresUserBaseUrl(p) || !!providerBaseUrl(p, s))
+          (managedVisionReady(p) || !requiresUserBaseUrl(p) || !!providerBaseUrl(p, s))
       ) || localVisionReady || localFallbackReady,
     localReady,
     localSuggestReady,
@@ -3746,8 +3759,12 @@ let lastAppliedManagedSnapshot: string | null = null
 
 let applyOperatorCrmRetries: (ids: string[]) => Promise<void> = async () => {}
 
-function operatorRuntimeHooks(): { onCrmRetry: (ids: string[]) => Promise<void> } {
-  return { onCrmRetry: (ids) => applyOperatorCrmRetries(ids) }
+function notifySettingsChanged(): void {
+  if (win && !win.isDestroyed()) win.webContents.send(IPC.settingsChanged)
+}
+
+function operatorRuntimeHooks(): { onCrmRetry: (ids: string[]) => Promise<void>; onReadinessChanged: () => void } {
+  return { onCrmRetry: (ids) => applyOperatorCrmRetries(ids), onReadinessChanged: notifySettingsChanged }
 }
 
 function registerIpc(): void {
@@ -4006,6 +4023,18 @@ function registerIpc(): void {
       auditLog('brain.publish.consent', { granted, at: 'encryption-enabled' })
       if (!granted) delete (p as Record<string, unknown>).encryptTranscripts
     }
+    if ('operatorUrl' in p && resolveOperatorBaseUrl({ operatorUrl: p.operatorUrl }) !== resolveOperatorBaseUrl(cur)) {
+      // The renderer may choose an address, never move a stored credential to that address.
+      // Require deliberate re-entry/verification for the new service, as with managed MCP endpoints.
+      Object.assign(p, {
+        operatorLicenseToken: '', operatorLicenseJti: '', operatorLicenseLast4: '', operatorLicenseExpiresAt: null,
+        operatorIngestSecret: ''
+      })
+    }
+    if (('operatorUrl' in p && p.operatorUrl !== cur.operatorUrl) ||
+        ('operatorIngestSecret' in p && p.operatorIngestSecret !== cur.operatorIngestSecret)) {
+      Object.assign(p, { operatorTier: null, operatorEntitlements: null, operatorEntitlementsAt: 0, operatorIntegrationsVersion: 0 })
+    }
     const next = setSettingsWithSpeakerPolicy(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
     // Exclusive stage exits only here: onboardingDone false→true. Replay (true→false) re-enters it.
@@ -4109,6 +4138,7 @@ function registerIpc(): void {
     if (cur.operatorUrl !== next.operatorUrl || cur.operatorIngestSecret !== next.operatorIngestSecret) {
       startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
       startOperatorOverlayPoll(() => getSettings())
+      notifySettingsChanged()
     }
     return publicSettings()
   })
@@ -4154,44 +4184,64 @@ function registerIpc(): void {
     const url = resolveOperatorBaseUrl(getSettings())
     if (url) void shell.openExternal(url)
   })
-  // Operator seat license (METIS-OP-1) pairing, PLAN.md P2.2b #1. Local format parse only — see
-  // operator-license-activate.ts's own header for why no secret is needed here. An empty licenseKey
-  // clears a previously activated license (e.g. the user pastes nothing and saves, or explicitly wants
-  // to unpair this seat) rather than being treated as a format error.
-  ipcMain.handle(IPC.operatorLicenseActivate, (e, payload: unknown) => {
+  // A candidate licence must be verified by the service before replacing a working local credential.
+  let operatorActivationInFlight = false
+  ipcMain.handle(IPC.operatorLicenseActivate, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (operatorActivationInFlight) return { ok: false, error: 'A licence check is already in progress.' }
     const raw = payload && typeof payload === 'object' && 'licenseKey' in (payload as object) ? (payload as { licenseKey: unknown }).licenseKey : payload
     const token = typeof raw === 'string' ? raw.trim() : ''
-    if (token === '') {
+    operatorActivationInFlight = true
+    try {
+      if (token === '') {
+        setSettings({
+          operatorLicenseToken: '',
+          operatorLicenseJti: '',
+          operatorLicenseLast4: '',
+          operatorLicenseExpiresAt: null,
+          operatorTier: null,
+          operatorEntitlements: null,
+          operatorEntitlementsAt: 0
+        })
+        auditLog('operator.license.cleared', {})
+        startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
+        startOperatorOverlayPoll(() => getSettings())
+        notifySettingsChanged()
+        return { ok: true }
+      }
+      const result = activateOperatorLicenseToken(token)
+      if (!result.ok) return result
+      const candidate = {
+        ...getSettings(), operatorLicenseToken: token,
+        operatorLicenseJti: result.jti!, operatorLicenseLast4: result.last4!
+      }
+      const connection = await confirmOperatorLicenseConnection(candidate)
+      if (!connection.ok) return { ok: false, error: connection.error }
+      if (resolveOperatorBaseUrl(candidate) !== resolveOperatorBaseUrl(getSettings())) {
+        return { ok: false, error: 'The Operator address changed during verification. Please activate your licence again.' }
+      }
       setSettings({
-        operatorLicenseToken: '',
-        operatorLicenseJti: '',
-        operatorLicenseLast4: '',
-        operatorLicenseExpiresAt: null,
+        operatorLicenseToken: token,
+        operatorLicenseJti: result.jti!,
+        operatorLicenseLast4: result.last4!,
+        operatorLicenseExpiresAt: result.expiresAt!,
+        // Clear the previous grant before applying this licence's confirmed response.
         operatorTier: null,
         operatorEntitlements: null,
         operatorEntitlementsAt: 0
       })
-      auditLog('operator.license.cleared', {})
-      return { ok: true }
+      startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
+      acceptOperatorHeartbeat(connection.confirmation)
+      startOperatorOverlayPoll(() => getSettings())
+      notifySettingsChanged()
+      auditLog('operator.license.activated', { jti: result.jti })
+      return result
+    } catch {
+      return { ok: false, error: 'Métis could not save your licence. Check that its data folder is writable and try again.' }
+    } finally {
+      operatorActivationInFlight = false
     }
-    const result = activateOperatorLicenseToken(token)
-    if (!result.ok) return result
-    setSettings({
-      operatorLicenseToken: token,
-      operatorLicenseJti: result.jti!,
-      operatorLicenseLast4: result.last4!,
-      operatorLicenseExpiresAt: result.expiresAt!,
-      // A freshly activated license has not been confirmed by the Worker yet — clear any stale
-      // tier/entitlements a PREVIOUS license left behind so Settings shows "waiting for Operator"
-      // instead of the old license's last-known grant.
-      operatorTier: null,
-      operatorEntitlements: null,
-      operatorEntitlementsAt: 0
-    })
-    auditLog('operator.license.activated', { jti: result.jti })
-    return result
   })
   // Read-only Operator status snapshot for Settings (local settings + in-memory integrations state
   // only, never touches the network) — mirrors licenseStatus's own "local settings only" contract.
@@ -4210,7 +4260,8 @@ function registerIpc(): void {
     }
     const s = getSettings()
     return {
-      configured: operatorUrlConfigured(s) && !!s.operatorIngestSecret.trim(),
+      configured: operatorUrlConfigured(s) && !!resolveOperatorCredential(s),
+      fundedProviders: operatorFundedProviders(),
       tier: s.operatorTier,
       entitlements: s.operatorEntitlements,
       licenseLast4: s.operatorLicenseLast4,
@@ -5845,8 +5896,13 @@ function registerIpc(): void {
     // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
     // on the selected agent's underlying model (it uploads the shot as a content fragment), so consult the
     // per-agent capability instead of the static flag. Everything else uses PROVIDERS[p].vision.
-    const providerVisionOk = (p: ProviderId): boolean =>
-      p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision
+    const providerVisionOk = (p: ProviderId): boolean => {
+      if (p === 'dust') return dustSelectedAgentVision(s.providerModels['dust'])
+      if (!getApiKey(p) && operatorFundedProviders().includes(p)) {
+        return !!operatorVisionModel(p, resolveModelTier(p, s.providerModels, s.providerModelsThinking, routeTier(req, s.thinkingMode), s.providerModelsDeep))
+      }
+      return PROVIDERS[p].vision
+    }
 
     // MQA-228: the "can't read screenshots" advice must name a provider the user is actually ALLOWED to
     // switch to. The static "Switch to Claude or GPT" wording sent org-policy users at providers the
@@ -5935,7 +5991,7 @@ function registerIpc(): void {
           // key alone would make it eligible and the walk would hand the request to streamOpenAI with no
           // baseURL — where the SDK's own default is api.openai.com. Failing the candidate here keeps the
           // walk moving to a provider that CAN answer instead of burning the attempt on a guard error.
-          (!requiresUserBaseUrl(p) || !!providerBaseUrl(p, s)) &&
+          ((!getApiKey(p) && operatorFundedProviders().includes(p)) || !requiresUserBaseUrl(p) || !!providerBaseUrl(p, s)) &&
           (req.mode !== 'vision' || providerVisionOk(p)) &&
           // CLI providers (e.g. codex-cli) may have no configured model at all — attempt() below
           // already exempts kind==='cli' from the "no model" ineligibility check (the CLI just uses
@@ -6092,6 +6148,7 @@ function registerIpc(): void {
       if (viaOperator && provider === 'cloudflare') {
         model = portalFundedCloudflareModel(tier)
       }
+      if (viaOperator && req.image) model = operatorVisionModel(provider, model) ?? model
       // Guardrail (per Tony): CLI is Sonnet-only, Anthropic base/think are pinned to Haiku/Sonnet — both
       // regardless of what routeTier or a user's providerModels override picked. Opus stays reachable only
       // through the Graph pipeline (brain/ingest.ts, graphify.ts), which never calls this function.

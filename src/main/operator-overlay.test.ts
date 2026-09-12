@@ -9,7 +9,8 @@ import {
   setModeSkillsOverlayRoot,
   setModeSkillsRootForTests
 } from './mode-skills'
-import { applySignedSkillPack, pullOperatorSkillManifest, setOperatorOverlayFetchForTests } from './operator-overlay'
+import { applySignedSkillPack, pullOperatorSkillManifest, setOperatorOverlayFetchForTests, stopOperatorOverlayPoll } from './operator-overlay'
+import { getOperatorSkillPublicKeyRaw } from './operator-skill-key'
 import { verifyOperatorSkillPack } from './operator-skill-verify'
 import {
   generateOperatorTestKeypair,
@@ -22,8 +23,10 @@ vi.mock('electron', () => ({
 }))
 vi.mock('./license', () => ({ getMachineId: () => 'machine-test' }))
 vi.mock('./logger', () => ({ mainLog: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }))
+vi.mock('./operator-skill-key', () => ({ getOperatorSkillPublicKeyRaw: vi.fn() }))
 
 afterEach(() => {
+  stopOperatorOverlayPoll()
   setModeSkillsOverlayRoot(null)
   setModeSkillsRootForTests(null)
   clearModeSkillsCacheForTests()
@@ -32,6 +35,37 @@ afterEach(() => {
 describe('Operator skill manifest download', () => {
   afterEach(() => {
     setOperatorOverlayFetchForTests(null)
+  })
+
+  it('does not follow redirects while sending the licence credential', async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 302, headers: { location: 'https://elsewhere.test' } }))
+    setOperatorOverlayFetchForTests(fetcher as typeof fetch)
+    expect(await pullOperatorSkillManifest({ operatorUrl: 'https://operator.test', operatorLicenseToken: 'METIS-OP-1.fixture' })).toBe(0)
+    expect(fetcher).toHaveBeenCalledWith('https://operator.test/v1/skills/manifest', expect.objectContaining({
+      redirect: 'manual', headers: expect.objectContaining({ 'x-metis-license': 'METIS-OP-1.fixture' })
+    }))
+  })
+
+  it.each(['clear', 'replace'])('cannot apply an old signed manifest after licence %s', async (change) => {
+    const keys = generateOperatorTestKeypair()
+    vi.mocked(getOperatorSkillPublicKeyRaw).mockReturnValue(keys.publicKeyRaw)
+    const body = '---\nid: interview\nversion: 9.9.9\nlocked: true\n---\n\nObsolete account instructions.\n'
+    const signed = signOperatorSkillPackForTests(
+      { skillId: 'interview', version: '9.9.9', sha256: sha256HexUtf8Body(body), body }, keys.privateKeyPem
+    )
+    expect(verifyOperatorSkillPack(signed)?.version).toBe('9.9.9')
+    setModeSkillsOverlayRoot(mkdtempSync(join(tmpdir(), 'metis-overlay-stale-')))
+    let complete!: (response: Response) => void
+    const fetcher = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true, skills: [] }), { headers: { 'content-type': 'application/json' } }))
+    setOperatorOverlayFetchForTests(fetcher as typeof fetch)
+    const pending = pullOperatorSkillManifest({ operatorUrl: 'https://operator.test', operatorLicenseToken: 'METIS-OP-1.old' })
+    if (change === 'clear') stopOperatorOverlayPoll()
+    else await pullOperatorSkillManifest({ operatorUrl: 'https://operator.test', operatorLicenseToken: 'METIS-OP-1.new' })
+    complete(new Response(JSON.stringify({ ok: true, skills: [{ signed }] }), { headers: { 'content-type': 'application/json' } }))
+    expect(await pending).toBe(0)
+    expect(loadVerifiedSkill('interview').version).not.toBe('9.9.9')
   })
 
   it('does not treat Access login HTML as a skill pack', async () => {

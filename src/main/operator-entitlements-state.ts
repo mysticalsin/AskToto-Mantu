@@ -10,7 +10,7 @@
  * just the impure glue: read/write settings, expose the in-memory snapshot, and offer one `operatorGate`
  * call that every gated action in main uses.
  */
-import { operatorUrlConfigured } from '@shared/operator'
+import { operatorUrlConfigured, resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
 import {
   emptyOperatorEntitlements,
   operatorGate as pureOperatorGate,
@@ -23,10 +23,23 @@ import {
 import { getSettings, setSettings } from './store'
 
 let memorySnapshot: OperatorEntitlementSnapshot | null = null
+let memoryConnection = ''
+
+/** Drop session grants when transport identity changes; persisted offline leases remain separate. */
+export function resetOperatorEntitlementsState(): void {
+  memorySnapshot = null
+  memoryConnection = ''
+}
+
+function connectionIdentity(): string {
+  const s = getSettings()
+  return `${resolveOperatorBaseUrl(s)}\n${resolveOperatorCredential(s)}`
+}
 
 /** Test-only seam, mirrors setOperatorFetchForTests in operator-ingest.ts. */
 export function setOperatorEntitlementsSnapshotForTests(snapshot: OperatorEntitlementSnapshot | null): void {
   memorySnapshot = snapshot
+  memoryConnection = connectionIdentity()
 }
 
 function settingsToSnapshot(s: {
@@ -41,7 +54,7 @@ function settingsToSnapshot(s: {
 /** In-memory first (this session's own heartbeats), falling back to the persisted copy for the window
  *  between app launch and the first heartbeat this run. */
 function currentSnapshot(): OperatorEntitlementSnapshot | null {
-  if (memorySnapshot) return memorySnapshot
+  if (memorySnapshot && memoryConnection === connectionIdentity()) return memorySnapshot
   return settingsToSnapshot(getSettings())
 }
 
@@ -55,6 +68,7 @@ export function recordOperatorHeartbeatResult(ok: boolean, json: unknown, now: n
   if (!ok) return
   const parsed = parseOperatorHeartbeatEntitlements(json)
   memorySnapshot = { tier: parsed.tier, entitlements: parsed.entitlements, at: now }
+  memoryConnection = connectionIdentity()
   try {
     setSettings({
       operatorTier: parsed.tier,
@@ -67,8 +81,8 @@ export function recordOperatorHeartbeatResult(ok: boolean, json: unknown, now: n
   }
 }
 
-function isOperatorConfigured(s: { operatorUrl?: string; operatorIngestSecret?: string }): boolean {
-  return operatorUrlConfigured(s) && !!(s.operatorIngestSecret || '').trim()
+function isOperatorConfigured(s: { operatorUrl?: string; operatorIngestSecret?: string; operatorLicenseToken?: string }): boolean {
+  return operatorUrlConfigured(s) && !!resolveOperatorCredential(s)
 }
 
 /** The one gate every gated action in main consults. Reads live settings each call (cheap, in-memory

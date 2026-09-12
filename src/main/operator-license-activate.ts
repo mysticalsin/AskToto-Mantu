@@ -4,9 +4,8 @@
  * This is a LOCAL, format-only parse: `parseOperatorLicense` (shared/operator-license.ts) checks the
  * five-part shape and extracts jti/iat/exp, but never verifies the HMAC signature — that needs
  * OPERATOR_INGEST_SECRET, which lives on the Worker, not this device. The Worker is the actual
- * authority: it verifies the signature and, on the seat's next heartbeat, reports the real
- * tier/entitlements (or nothing, if the jti is unknown/revoked). This module only has to decide
- * "does this look like an Operator license, and is it already expired" before letting the user save it.
+ * authority: the activation handler immediately confirms the candidate with a signed heartbeat before
+ * saving it. This module only rejects malformed or expired candidates before that network request.
  *
  * Pure and Electron-free so it's trivially unit-testable; main/index.ts's IPC handler does the actual
  * settings write.

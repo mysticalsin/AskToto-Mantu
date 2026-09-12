@@ -6,6 +6,7 @@ import {
   operatorUrlConfigured,
   projectOperatorIngestMetadata,
   resolveOperatorBaseUrl,
+  resolveOperatorCredential,
   type AskLogLine,
   type StreamCacheUsage
 } from '@shared/operator'
@@ -20,8 +21,8 @@ import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { mainLog } from './logger'
 import type { OperatorCrmEvent } from './operator-crm'
 import { drainOperatorQueue, enqueueOperatorItem, type QueueSendResult } from './operator-queue'
-import { operatorEntitled, recordOperatorHeartbeatResult } from './operator-entitlements-state'
-import { maybeRefreshOperatorIntegrations } from './operator-integrations'
+import { operatorEntitled, recordOperatorHeartbeatResult, resetOperatorEntitlementsState } from './operator-entitlements-state'
+import { maybeRefreshOperatorIntegrations, resetOperatorIntegrationsState } from './operator-integrations'
 import { parseOperatorHeartbeatEntitlements } from '@shared/operator-entitlements'
 
 const HEARTBEAT_MS = 60_000
@@ -29,6 +30,7 @@ const HEARTBEAT_MS = 60_000
 export interface OperatorRuntimeSettings {
   operatorUrl?: string
   operatorIngestSecret?: string
+  operatorLicenseToken?: string
   sendAskText?: boolean
   licenseKey?: string
   /** Operator seat license (METIS-OP-1) jti/last4, once activated (operator-license-activate.ts). */
@@ -37,6 +39,7 @@ export interface OperatorRuntimeSettings {
 }
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+let runtimeGeneration = 0
 let lastAskId: string | null = null
 let fetchImpl: typeof fetch = fetch
 /** In-memory funded providers from the last heartbeat. Never a secret. Never persisted. */
@@ -47,6 +50,10 @@ export function setOperatorFetchForTests(fn: typeof fetch | null): void {
 }
 
 export function stopOperatorRuntime(): void {
+  runtimeGeneration++
+  lastFundedProviders = []
+  resetOperatorIntegrationsState()
+  resetOperatorEntitlementsState()
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer)
     heartbeatTimer = null
@@ -58,7 +65,7 @@ function resolveUrl(settings: OperatorRuntimeSettings, env = process.env): strin
 }
 
 function resolveSecret(settings: OperatorRuntimeSettings, env = process.env): string {
-  return (settings.operatorIngestSecret || env.METIS_OPERATOR_INGEST_SECRET || '').trim()
+  return resolveOperatorCredential(settings, env)
 }
 
 function osLabel(): 'darwin' | 'win' | string {
@@ -143,6 +150,7 @@ export type { OperatorCrmEvent, OperatorCrmStatus } from './operator-crm'
 
 export interface OperatorRuntimeHooks {
   onCrmRetry?: (ids: string[]) => Promise<void>
+  onReadinessChanged?: () => void
 }
 
 function deviceId(): string {
@@ -164,8 +172,14 @@ async function signedPost(
     'content-type': 'application/json',
     ...operatorHmacHeaders(secret, deviceId(), body)
   }
-  const res = await fetchImpl(`${url}${path}`, { method: 'POST', headers, body })
+  const res = await fetchImpl(`${url}${path}`, {
+    method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(15_000)
+  })
   const text = await res.text()
+  let parsed: unknown = null
+  if (res.headers.get('content-type')?.includes('application/json')) {
+    try { parsed = JSON.parse(text) } catch { /* malformed response */ }
+  }
   const inspected = inspectBundleResponse({
     status: res.status,
     contentType: res.headers.get('content-type'),
@@ -175,12 +189,11 @@ async function signedPost(
   })
   if (!inspected.ok) {
     mainLog.warn(`[operator] ${path} ${inspected.message}`)
-    return { ok: false, json: null, status: res.status }
+    return { ok: false, json: parsed, status: res.status }
   }
   if (!res.ok) {
     mainLog.warn(`[operator] ${path} ${res.status}`)
   }
-  let parsed: unknown = null
   try {
     parsed = JSON.parse(text)
   } catch {
@@ -257,11 +270,46 @@ export function operatorAskTransport(settings: OperatorRuntimeSettings): { url: 
   return { url, secret }
 }
 
+/** Confirm a candidate licence before replacing the saved credential. No outbox or local writes. */
+export async function confirmOperatorLicenseConnection(
+  settings: OperatorRuntimeSettings
+): Promise<{ ok: boolean; error?: string; confirmation?: unknown }> {
+  const transport = operatorAskTransport(settings)
+  if (!transport) return { ok: false, error: 'Set a valid Métis service address before activating.' }
+  try {
+    const result = await signedPost(transport.url, transport.secret, '/v1/heartbeat', { ...seatMeta(settings) })
+    const data = result.json && typeof result.json === 'object' ? result.json as Record<string, unknown> : {}
+    if (!result.ok || data.ok !== true) {
+      const errors: Record<string, string> = {
+        'license-invalid': 'This Métis licence is not valid. Check the licence you pasted.',
+        'license-expired': 'This Métis licence has expired. Request a renewed licence.',
+        'license-revoked': 'This Métis licence has been revoked. Contact your administrator.',
+        'license-device': 'This Métis licence is already activated on another device. Contact your administrator to transfer it.',
+        'seat-revoked': 'This device has been revoked. Contact your administrator.'
+      }
+      return { ok: false, error: errors[String(data.code)] || 'Could not confirm your Métis licence. Check your connection and try again.' }
+    }
+    if (data.approved !== true || !parseOperatorHeartbeatEntitlements(data).tier) {
+      return { ok: false, error: 'Your licence has not been approved for this device. Contact your administrator.' }
+    }
+    return { ok: true, confirmation: data }
+  } catch {
+    return { ok: false, error: 'Métis could not reach the licence service. Check your connection and try again.' }
+  }
+}
+
+/** Apply only a server-confirmed response, after the matching credential has been saved. */
+export function acceptOperatorHeartbeat(json: unknown): void {
+  lastFundedProviders = fundedProvidersFromHeartbeat(json)
+  recordOperatorHeartbeatResult(true, json)
+}
+
 export async function operatorHeartbeat(
   settings: OperatorRuntimeSettings
 ): Promise<{ ok: boolean; retry: string[] }> {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
+  const generation = runtimeGeneration
   if (!operatorUrlConfigured(settings) || !secret) return { ok: false, retry: [] }
   // Drain the durable outbox on every tick, BEFORE the heartbeat itself, so a just-flushed queue is
   // reflected in the {queued, dropped} counts this same heartbeat reports. Heartbeats are never queued.
@@ -282,6 +330,15 @@ export async function operatorHeartbeat(
       queued: queueReport.queued,
       dropped: queueReport.dropped
     })
+    if (generation !== runtimeGeneration) return { ok: false, retry: [] }
+    const body = res.json && typeof res.json === 'object' ? res.json as { ok?: unknown; approved?: unknown } : null
+    if (res.status === 401 || res.status === 403 || body?.ok === false || body?.approved === false) {
+      // An explicit rejection is not a network outage: revoke cached grants immediately.
+      lastFundedProviders = []
+      resetOperatorIntegrationsState()
+      recordOperatorHeartbeatResult(true, null)
+      return { ok: false, retry: [] }
+    }
     if (res.ok) lastFundedProviders = fundedProvidersFromHeartbeat(res.json)
     // PLAN.md P2.2b #2/#3: a failed heartbeat leaves the entitlements snapshot and integrations cache
     // untouched (recordOperatorHeartbeatResult no-ops on ok:false; the version refresh below is only
@@ -305,7 +362,10 @@ export function startOperatorRuntime(
   const settings = getSettings()
   if (!operatorUrlConfigured(settings) || !resolveSecret(settings)) return
   const tick = async (): Promise<void> => {
+    const generation = runtimeGeneration
     const beat = await operatorHeartbeat(getSettings())
+    if (generation !== runtimeGeneration) return
+    hooks?.onReadinessChanged?.()
     if (beat.retry.length && hooks?.onCrmRetry) {
       await hooks.onCrmRetry(beat.retry)
     }

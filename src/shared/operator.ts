@@ -30,6 +30,20 @@ function nodeEnv(): Record<string, string | undefined> {
   return g.process?.env ?? {}
 }
 
+/** A seat uses its own licence. Legacy managed deployments may still supply an ingest secret. */
+export function resolveOperatorCredential(
+  settings: { operatorUrl?: string; operatorLicenseToken?: string; operatorIngestSecret?: string },
+  env: Record<string, string | undefined> = nodeEnv()
+): string {
+  const saved = settings.operatorLicenseToken?.trim() || settings.operatorIngestSecret?.trim()
+  if (saved) return saved
+  // An environment credential belongs only to its configured (or shipped default) endpoint.
+  // A renderer-controlled URL override must never redirect that credential to another service.
+  return resolveOperatorBaseUrl(settings, env) === resolveOperatorBaseUrl({}, env)
+    ? env.METIS_OPERATOR_INGEST_SECRET?.trim() || ''
+    : ''
+}
+
 /** HTTPS Operator `/cloudflare/connect`. Null if the base is not https. */
 export function cloudflareConnectHref(
   settings: { operatorUrl?: string } | null | undefined = {},

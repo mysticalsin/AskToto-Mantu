@@ -566,9 +566,11 @@ export function useSettings(): {
     // refresh on launch) surface in the UI without the user having to do anything.
     const onFocus = (): void => void refresh()
     window.addEventListener('focus', onFocus)
+    const unsubscribe = window.toto.onSettingsChanged(onFocus)
     return () => {
       cancelled = true
       window.removeEventListener('focus', onFocus)
+      unsubscribe()
     }
   }, [refresh])
   const patch = useCallback(async (p: Partial<PublicSettings>) => {

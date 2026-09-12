@@ -90,7 +90,6 @@ import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT, COLD_CALL_COA
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import { transcriptStateKey } from '@shared/hash'
-import { operatorUrlConfigured } from '@shared/operator'
 import {
   emptyOperatorEntitlements,
   operatorGate,
@@ -2005,7 +2004,7 @@ export function App(): JSX.Element {
     // capture path below (MQA-285) — an allowed seat pays nothing extra, a refused one never touches the
     // mic. Only gated when Operator is actually configured; an unconfigured seat behaves exactly as
     // before this feature existed.
-    const operatorConfigured = operatorUrlConfigured(settings) && !!(settings?.operatorIngestSecret || '').trim()
+    const operatorConfigured = settings?.operatorConfigured === true
     const snapshot: OperatorEntitlementSnapshot | null = settings?.operatorEntitlementsAt
       ? {
           tier: settings.operatorTier ?? null,
@@ -2090,7 +2089,7 @@ export function App(): JSX.Element {
     settings?.playListenChime,
     settings?.showLiveTranscript,
     settings?.operatorUrl,
-    settings?.operatorIngestSecret,
+    settings?.operatorConfigured,
     settings?.operatorTier,
     settings?.operatorEntitlements,
     settings?.operatorEntitlementsAt
@@ -3167,6 +3166,7 @@ export function App(): JSX.Element {
     // Settings is self-contained (its own rounded panel) — rendered below the bar, NOT inside <Panel>.
     return (
       <Settings
+        refreshSettings={refresh}
         settings={settings}
         patch={patch}
         saveKey={saveKey}
@@ -3186,7 +3186,7 @@ export function App(): JSX.Element {
         onOpenMeeting={(file) => void openPastMeeting(file)}
       />
     )
-  }, [settings, patch, saveKey, recoverEncryptedProfile, clearKey, testKey, settingsInitialTab, settingsNotice, quitApp, logOut, openPastMeeting])
+  }, [settings, refresh, patch, saveKey, recoverEncryptedProfile, clearKey, testKey, settingsInitialTab, settingsNotice, quitApp, logOut, openPastMeeting])
   const historyBody = useMemo(
     () => (
       <RecallView

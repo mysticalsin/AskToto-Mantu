@@ -3411,9 +3411,10 @@ const OPERATOR_ENTITLEMENT_LABELS: Record<string, string> = {
  * Polls IPC.operatorStatus (local settings + in-memory state only, no network) rather than reading off
  * `settings` directly, since tier/entitlements/integrations live outside the normal settings push here.
  */
-function OperatorLicenseCard(): JSX.Element {
+function OperatorLicenseCard({ refreshSettings }: { refreshSettings: () => Promise<void> }): JSX.Element {
   const [status, setStatus] = useState<{
     configured: boolean
+    fundedProviders?: string[]
     tier: 'metis' | 'metis-light' | null
     entitlements: Record<string, boolean> | null
     licenseLast4: string
@@ -3426,25 +3427,31 @@ function OperatorLicenseCard(): JSX.Element {
   })
 
   const refresh = (): void => {
-    void window.toto.operatorStatus().then(setStatus)
+    void window.toto.operatorStatus().then(setStatus).catch(() => {
+      setState({ phase: 'error', error: 'Could not read your licence status. Try again.' })
+    })
   }
   useEffect(() => {
     refresh()
-    // Entitlements/tier arrive on the next heartbeat after activation (main confirms with the Worker,
-    // not this device) — poll rather than a one-shot fetch so "waiting for Operator" resolves on its own.
+    // Activation confirms immediately. Poll to pick up later renewals or administrator changes.
     const t = setInterval(refresh, 15_000)
     return () => clearInterval(t)
   }, [])
 
-  const activate = async (): Promise<void> => {
+  const activate = async (clear = false): Promise<void> => {
     setState({ phase: 'saving', error: null })
-    const r = await window.toto.operatorLicenseActivate({ licenseKey: input.trim() })
-    if (r.ok) {
-      setInput('')
-      setState({ phase: 'idle', error: null })
-      refresh()
-    } else {
-      setState({ phase: 'error', error: r.error || 'Could not activate this license.' })
+    try {
+      const r = await window.toto.operatorLicenseActivate({ licenseKey: clear ? '' : input.trim() })
+      if (r.ok) {
+        setInput('')
+        await refreshSettings()
+        setState({ phase: 'idle', error: null })
+        refresh()
+      } else {
+        setState({ phase: 'error', error: r.error || 'Could not activate this license.' })
+      }
+    } catch {
+      setState({ phase: 'error', error: 'Could not check your licence. Please try again.' })
     }
   }
 
@@ -3456,6 +3463,7 @@ function OperatorLicenseCard(): JSX.Element {
       <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Operator license</span>
       <div className="flex gap-2">
         <input
+          type="password"
           value={input}
           onChange={(e) => {
             setInput(e.target.value)
@@ -3473,7 +3481,7 @@ function OperatorLicenseCard(): JSX.Element {
           className={primaryBtnStyle}
         >
           {state.phase === 'saving' ? <InlineOrb kind="loading" /> : <Check size={12} />}
-          Activate
+          {state.phase === 'saving' ? 'Verifying…' : 'Activate'}
         </button>
       </div>
       {state.phase === 'error' && state.error && (
@@ -3491,7 +3499,8 @@ function OperatorLicenseCard(): JSX.Element {
             </span>
             <button
               type="button"
-              onClick={() => void window.toto.operatorLicenseActivate({ licenseKey: '' }).then(refresh)}
+              onClick={() => void activate(true)}
+              disabled={state.phase === 'saving'}
               className="no-drag cl-focus text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)]"
             >
               Clear
@@ -3505,6 +3514,11 @@ function OperatorLicenseCard(): JSX.Element {
             <>
               <span className={`w-fit ${activePillStyle}`}>
                 <CircleCheck size={12} /> {status?.tier === 'metis-light' ? 'Métis Light' : 'Métis'}
+              </span>
+              <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                {status?.fundedProviders?.length
+                  ? 'Licence active. Managed AI is ready.'
+                  : 'Licence active. Your administrator needs to enable a managed AI provider, or you can connect your own provider in AI settings.'}
               </span>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 {Object.entries(OPERATOR_ENTITLEMENT_LABELS).map(([key, label]) => {
@@ -5907,6 +5921,7 @@ export function searchSettingsTabs(query: string): ((typeof TABS)[number] & { ma
 
 export function Settings({
   settings,
+  refreshSettings,
   patch,
   saveKey,
   recoverEncryptedProfile,
@@ -5922,6 +5937,7 @@ export function Settings({
   onOpenMeeting
 }: {
   settings: PublicSettings
+  refreshSettings: () => Promise<void>
   patch: (p: Partial<PublicSettings>) => void
   saveKey: (provider: ProviderId, k: string) => Promise<void>
   recoverEncryptedProfile: () => Promise<ProfileRecoveryResult>
@@ -5947,6 +5963,21 @@ export function Settings({
   // tab label plus its real card keywords (see TABS above), so a hit always points at something that
   // actually exists on that tab.
   const [query, setQuery] = useState('')
+  const [operatorSecretDraft, setOperatorSecretDraft] = useState('')
+  const [operatorSecretSaving, setOperatorSecretSaving] = useState(false)
+  const [operatorSecretError, setOperatorSecretError] = useState<string | null>(null)
+  const saveOperatorSecret = async (): Promise<void> => {
+    setOperatorSecretSaving(true)
+    setOperatorSecretError(null)
+    try {
+      await patch({ operatorIngestSecret: operatorSecretDraft.trim() })
+      setOperatorSecretDraft('')
+    } catch {
+      setOperatorSecretError('Could not save the connection. Try again.')
+    } finally {
+      setOperatorSecretSaving(false)
+    }
+  }
   const searchMatches = useMemo(() => searchSettingsTabs(query), [query])
   const jumpTo = (id: TabId): void => {
     setTab(id)
@@ -6609,7 +6640,7 @@ export function Settings({
                 </Section>
                 <Section
                   title="Operator"
-                  desc="Point this Mac at Tony's Operator Worker. Empty uses the shipped Operator URL at runtime. Heartbeat still needs the ingest secret. This is not a local analytics page."
+                  desc="Your Métis licence securely connects this device to managed AI. You do not need a personal API key or a shared connection secret."
                   icon={Settings2}
                 >
                   <label className="flex flex-col gap-1 px-1 py-2">
@@ -6624,22 +6655,29 @@ export function Settings({
                       className={`${ctl} w-full`}
                     />
                     <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                      Leave empty to use {DEFAULT_OPERATOR_URL}. The field is not force-written. Ingest secret stays required.
+                      Leave empty to use {DEFAULT_OPERATOR_URL}. Changing this address disconnects your licence; activate it again for the new service. Only change it when instructed by your administrator.
                     </span>
                   </label>
-                  <label className="flex flex-col gap-1 px-1 py-2">
-                    <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Ingest secret</span>
+                  <details className="px-1 py-2">
+                    <summary className="text-[11px] text-[color:var(--cl-muted-foreground)]">Legacy administrator connection</summary>
+                    <label className="mt-2 flex flex-col gap-1">
+                    <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Legacy ingest secret</span>
                     <input
                       type="password"
-                      value={settings.operatorIngestSecret || ''}
+                      value={operatorSecretDraft}
                       spellCheck={false}
                       autoComplete="off"
-                      placeholder="Same value as the Worker OPERATOR_INGEST_SECRET"
-                      disabled={settings.managedKeys.includes('operatorIngestSecret')}
-                      onChange={(e) => patch({ operatorIngestSecret: e.target.value })}
+                      placeholder={settings.operatorLegacyCredentialConfigured ? 'Connection saved. Enter a replacement to change it.' : 'Administrator-provided secret (not needed with a licence)'}
+                      disabled={operatorSecretSaving || settings.managedKeys.includes('operatorIngestSecret')}
+                      onChange={(e) => setOperatorSecretDraft(e.target.value)}
                       className={`${ctl} w-full`}
                     />
-                  </label>
+                    </label>
+                    <button type="button" className={`${primaryBtnStyle} mt-2`}
+                      disabled={!operatorSecretDraft.trim() || operatorSecretSaving || settings.managedKeys.includes('operatorIngestSecret')}
+                      onClick={() => void saveOperatorSecret()}>{operatorSecretSaving ? 'Saving…' : 'Save connection'}</button>
+                    {operatorSecretError && <p role="alert" className="mt-1 text-[11px] text-[color:var(--cl-destructive)]">{operatorSecretError}</p>}
+                  </details>
                   <p className="px-1 py-2 text-[11px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
                     Operator telemetry sends only operational metadata: event types, status, timing and usage counts,
                     plus device and license health. Content is not included in telemetry. Provider inference and user-approved
@@ -6654,7 +6692,7 @@ export function Settings({
                       <ExternalLink size={12} /> Open Operator
                     </button>
                   )}
-                  {operatorUrlConfigured(settings) && <OperatorLicenseCard />}
+                  {operatorUrlConfigured(settings) && <OperatorLicenseCard refreshSettings={refreshSettings} />}
                 </Section>
               </div>
             )}

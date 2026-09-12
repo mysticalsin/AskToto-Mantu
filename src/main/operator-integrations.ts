@@ -15,6 +15,7 @@
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { getMachineId } from './license'
 import { inspectBundleResponse } from '@shared/bundle-response'
+import { resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
 import {
   parseOperatorIntegrationsResponse,
   type OperatorIntegration,
@@ -103,22 +104,34 @@ export function setOperatorIntegrationsFetchForTests(fn: typeof fetch | null): v
 let integrationsCache: OperatorIntegrationsCache = emptyOperatorIntegrationsCache()
 let mcpRegistry: Map<string, OperatorMcpRegistration> = new Map()
 let inFlight: Promise<OperatorIntegration[] | null> | null = null
+let connectionIdentity = ''
+let connectionGeneration = 0
+let inFlightAbort: AbortController | null = null
 
-export function resetOperatorIntegrationsStateForTests(): void {
+/** Discard managed credentials immediately when the user clears or changes the Operator connection. */
+export function resetOperatorIntegrationsState(): void {
+  connectionGeneration++
+  connectionIdentity = ''
+  inFlightAbort?.abort()
+  inFlightAbort = null
   integrationsCache = emptyOperatorIntegrationsCache()
   mcpRegistry = new Map()
   inFlight = null
 }
 
+export const resetOperatorIntegrationsStateForTests = resetOperatorIntegrationsState
+
 /** Best-effort tool discovery for any registered connection missing `tools` — never blocks the caller
  *  that triggered the reconcile, never throws. A connection superseded mid-discovery (a second fetch
  *  landed with a different credential/endpoint before this one returned) is left alone. */
 async function refreshOperatorMcpTools(): Promise<void> {
+  const generation = connectionGeneration
   const pending = [...mcpRegistry.entries()].filter(([, reg]) => reg.tools === undefined)
   await Promise.all(
     pending.map(async ([id, reg]) => {
       try {
         const result = await connectMcp(reg.baseUrl, reg.credential, {}, reg.label)
+        if (generation !== connectionGeneration) return
         const stillCurrent = mcpRegistry.get(id)
         if (!stillCurrent || stillCurrent.baseUrl !== reg.baseUrl || stillCurrent.credential !== reg.credential) return
         mcpRegistry.set(id, { ...stillCurrent, tools: result.ok ? result.tools ?? [] : [] })
@@ -138,6 +151,18 @@ function applyIntegrations(version: number, integrations: OperatorIntegration[],
 export interface OperatorIntegrationsSettings {
   operatorUrl?: string
   operatorIngestSecret?: string
+  operatorLicenseToken?: string
+}
+
+function useConnection(settings: OperatorIntegrationsSettings): { url: string; secret: string } | null {
+  const url = resolveOperatorBaseUrl(settings)
+  const secret = resolveOperatorCredential(settings)
+  const identity = url && secret ? `${url}\n${secret}` : ''
+  if (identity !== connectionIdentity) {
+    resetOperatorIntegrationsState()
+    connectionIdentity = identity
+  }
+  return identity ? { url, secret } : null
 }
 
 /**
@@ -151,15 +176,22 @@ export async function fetchOperatorIntegrations(
   settings: OperatorIntegrationsSettings,
   now: number = Date.now()
 ): Promise<OperatorIntegration[] | null> {
-  const url = (settings.operatorUrl || '').trim().replace(/\/$/, '')
-  const secret = (settings.operatorIngestSecret || '').trim()
-  if (!url || !secret) return null
+  const connection = useConnection(settings)
+  if (!connection) return null
   if (inFlight) return inFlight
+  const { url, secret } = connection
+  const generation = connectionGeneration
+  const abort = new AbortController()
+  inFlightAbort = abort
   const attempt = (async (): Promise<OperatorIntegration[] | null> => {
     try {
       const deviceId = hashOperatorId(getMachineId())
       const headers = operatorHmacHeaders(secret, deviceId, '')
-      const res = await fetchImpl(`${url}/v1/integrations`, { method: 'GET', headers })
+      const res = await fetchImpl(`${url}/v1/integrations`, {
+        method: 'GET', headers, redirect: 'manual',
+        signal: AbortSignal.any([abort.signal, AbortSignal.timeout(15_000)])
+      })
+      if (generation !== connectionGeneration) return null
       if (res.status === 403) {
         // Seat not entitled: an empty grant, not an error to retry hot. Clears any previously-cached
         // (now stale) integrations for a seat whose entitlement was just revoked.
@@ -167,6 +199,7 @@ export async function fetchOperatorIntegrations(
         return []
       }
       const text = await res.text()
+      if (generation !== connectionGeneration) return null
       const inspected = inspectBundleResponse({
         status: res.status,
         contentType: res.headers.get('content-type'),
@@ -189,7 +222,7 @@ export async function fetchOperatorIntegrations(
       applyIntegrations(parsed.version, parsed.integrations, now)
       return parsed.integrations
     } catch (e) {
-      mainLog.warn('[operator-integrations] fetch threw:', e)
+      if (generation === connectionGeneration) mainLog.warn('[operator-integrations] fetch threw:', e)
       return null
     }
   })()
@@ -197,7 +230,10 @@ export async function fetchOperatorIntegrations(
   try {
     return await attempt
   } finally {
-    inFlight = null
+    if (inFlight === attempt) {
+      inFlight = null
+      inFlightAbort = null
+    }
   }
 }
 
@@ -208,6 +244,7 @@ export function maybeRefreshOperatorIntegrations(
   latestVersion: number,
   now: number = Date.now()
 ): void {
+  if (!useConnection(settings)) return
   if (!shouldRefetchOperatorIntegrations(integrationsCache, latestVersion, now)) return
   void fetchOperatorIntegrations(settings, now)
 }

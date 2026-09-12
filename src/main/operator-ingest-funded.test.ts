@@ -32,6 +32,7 @@ vi.mock('./brain/intelligence-index', () => ({ lastIndexedAt: metadata.lastIndex
 
 import {
   fundedProvidersFromHeartbeat,
+  confirmOperatorLicenseConnection,
   operatorAskTransport,
   operatorFundedProviders,
   operatorHeartbeat,
@@ -65,6 +66,18 @@ describe('heartbeat fundedProviders — IDs only, never secrets', () => {
         fundedProviders: ['anthropic', 'claude-cli', 'dust', 'local', 'cloudflare-account', 'openai', 'sk-ant-secret']
       })
     ).toEqual(['anthropic', 'openai'])
+  })
+
+  it.each([401, 403])('MQA-294 clears managed readiness on authoritative denial (%s)', async (status) => {
+    setOperatorFundedProvidersForTests(['cloudflare'])
+    metadata.setSettings.mockClear()
+    setOperatorFetchForTests(async () => new Response(JSON.stringify({ ok: false, code: 'license-revoked' }), {
+      status, headers: { 'content-type': 'application/json' }
+    }))
+    const beat = await operatorHeartbeat({ operatorUrl: 'https://operator.test', operatorLicenseToken: 'METIS-OP-1.test' })
+    expect(beat.ok).toBe(false)
+    expect(operatorFundedProviders()).toEqual([])
+    expect(metadata.setSettings).toHaveBeenCalledWith(expect.objectContaining({ operatorTier: null }))
   })
 
   it('stores heartbeat IDs in RAM only and never treats a secret as a provider id', async () => {
@@ -107,5 +120,40 @@ describe('heartbeat fundedProviders — IDs only, never secrets', () => {
     })
     expect(t).toEqual({ url: 'https://operator.test', secret: 'ingest-secret' })
     expect(JSON.stringify(t)).not.toMatch(/sk-ant|sk-|ANTHROPIC/)
+  })
+
+  it('uses the pasted licence to connect without requiring a separate shared secret', () => {
+    const token = 'METIS-OP-1.abcdef0123456789.100.200.abcdefghijklmnopqrstuv'
+    expect(operatorAskTransport({ operatorUrl: 'https://operator.test', operatorLicenseToken: token })).toEqual({
+      url: 'https://operator.test', secret: token
+    })
+    expect(operatorAskTransport({ operatorUrl: 'https://operator.test', operatorLicenseToken: token, operatorIngestSecret: 'old-shared-secret' })?.secret).toBe(token)
+  })
+
+  it('confirms a licence immediately without changing local grants before the caller saves it', async () => {
+    metadata.setSettings.mockClear()
+    let requestHeaders: Headers | undefined
+    setOperatorFetchForTests(async (_url, init) => {
+      requestHeaders = new Headers(init?.headers)
+      return new Response(JSON.stringify({ ok: true, approved: true, tier: 'metis', entitlements: { operator_keys: true }, fundedProviders: ['cloudflare'] }), { headers: { 'content-type': 'application/json' } })
+    })
+    const token = 'METIS-OP-1.abcdef0123456789.100.200.abcdefghijklmnopqrstuv'
+    const result = await confirmOperatorLicenseConnection({ operatorLicenseToken: token })
+    expect(result.ok).toBe(true)
+    expect(requestHeaders?.get('x-metis-license')).toBe(token)
+    expect(metadata.setSettings).not.toHaveBeenCalled()
+    expect(operatorFundedProviders()).toEqual([])
+  })
+
+  it.each([
+    [401, { ok: false, code: 'license-invalid' }, /not valid/i],
+    [403, { ok: false, code: 'license-device' }, /another device/i],
+    [200, { ok: false }, /confirm/i],
+    [200, { ok: true, approved: false, tier: null }, /approved/i]
+  ])('refuses an unconfirmed licence (%s) with an actionable safe error', async (status, body, error) => {
+    setOperatorFetchForTests(async () => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }))
+    const result = await confirmOperatorLicenseConnection({ operatorLicenseToken: 'METIS-OP-1.test' })
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(error as RegExp)
   })
 })

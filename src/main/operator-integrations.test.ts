@@ -157,7 +157,45 @@ describe('reconcileOperatorMcpRegistry (register / replace / remove)', () => {
   })
 })
 
-describe('fetchOperatorIntegrations', () => {
+describe('MQA-295 fetchOperatorIntegrations credential isolation', () => {
+  it('never forwards a licence credential through an HTTP redirect', async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 302, headers: { location: 'https://elsewhere.test' } }))
+    setOperatorIntegrationsFetchForTests(fetcher as typeof fetch)
+    await fetchOperatorIntegrations({ ...SETTINGS, operatorLicenseToken: 'METIS-OP-1.fixture' })
+    expect(fetcher).toHaveBeenCalledWith('https://operator.test/v1/integrations', expect.objectContaining({
+      redirect: 'manual',
+      headers: expect.objectContaining({ 'x-metis-license': 'METIS-OP-1.fixture' })
+    }))
+  })
+
+  it('cannot restore credentials from a pending request after the connection is cleared', async () => {
+    let complete!: (response: Response) => void
+    setOperatorIntegrationsFetchForTests(() => new Promise((resolve) => { complete = resolve }))
+    const pending = fetchOperatorIntegrations(SETTINGS)
+    resetOperatorIntegrationsStateForTests()
+    complete(jsonResponse({ ok: true, version: 1, integrations: [customMcp] }))
+    expect(await pending).toBeNull()
+    expect(operatorIntegrationsSnapshot().integrations).toEqual([])
+    expect(registeredOperatorMcpServers()).toEqual([])
+    expect(connectMcpMock).not.toHaveBeenCalled()
+  })
+
+  it.each([200, 403])('does not let an old connection response (%s) overwrite the new connection', async (status) => {
+    let complete!: (response: Response) => void
+    const fetcher = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      .mockResolvedValueOnce(jsonResponse({ ok: true, version: 2, integrations: [plane] }))
+    setOperatorIntegrationsFetchForTests(fetcher as typeof fetch)
+    const old = fetchOperatorIntegrations(SETTINGS)
+    const replacement = fetchOperatorIntegrations({ ...SETTINGS, operatorLicenseToken: 'METIS-OP-1.replacement' })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    await replacement
+    complete(jsonResponse({ ok: true, version: 1, integrations: [customMcp] }, status))
+    expect(await old).toBeNull()
+    expect(operatorIntegrationFor('plane')?.id).toBe(plane.id)
+    expect(operatorIntegrationFor('custom-mcp')).toBeNull()
+  })
+
   it('fetches, caches, and registers custom-mcp connections', async () => {
     setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
     const result = await fetchOperatorIntegrations(SETTINGS)
@@ -240,6 +278,17 @@ describe('fetchOperatorIntegrations', () => {
 })
 
 describe('maybeRefreshOperatorIntegrations', () => {
+  it('refetches a changed connection even if its reported version matches the previous one', async () => {
+    setOperatorIntegrationsFetchForTests(async () => jsonResponse({ ok: true, version: 1, integrations: [hubspot] }))
+    await fetchOperatorIntegrations(SETTINGS, 1000)
+    const fetcher = vi.fn(async () => jsonResponse({ ok: true, version: 1, integrations: [plane] }))
+    setOperatorIntegrationsFetchForTests(fetcher as typeof fetch)
+    maybeRefreshOperatorIntegrations({ ...SETTINGS, operatorLicenseToken: 'METIS-OP-1.replacement' }, 1, 2000)
+    expect(fetcher).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(operatorIntegrationFor('plane')?.id).toBe(plane.id))
+    expect(operatorIntegrationFor('hubspot')).toBeNull()
+  })
+
   it('triggers a fetch when the version changed', async () => {
     const fn = vi.fn(async () => jsonResponse({ ok: true, version: 5, integrations: [] }))
     setOperatorIntegrationsFetchForTests(fn as unknown as typeof fetch)
