@@ -26,7 +26,9 @@ import {
   BrainAttentionResultSchema,
   appendAsrCorrection,
   TranscriptLineSchema,
-  stripProvisionalLines
+  stripProvisionalLines,
+  SaveMeetingSchema,
+  modeLabel
 } from './ipc'
 import type { TranscriptLine } from './ipc'
 
@@ -34,6 +36,23 @@ import type { TranscriptLine } from './ipc'
 function setPlatform(p: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value: p, configurable: true })
 }
+
+describe('modeLabel (MQA-325)', () => {
+  it.each(['__proto__', 'constructor', 'toString'])('treats inherited property mode %s as a custom id', (id) => {
+    expect(SaveMeetingSchema.parse({ mode: id, startedAt: 1, lines: [] }).mode).toBe(id)
+    expect(modeLabel(id)).toBe(id)
+    expect(modeLabel(id, [{ id, label: 'Custom review' }])).toBe('Custom review')
+  })
+
+  it.each([['meeting', 'Meeting'], ['general', 'General'], ['cold-call', 'Cold Calling']])('preserves the built-in label for %s', (id, label) => {
+    expect(modeLabel(id, [{ id, label: 'Custom override' }])).toBe(label)
+  })
+
+  it('preserves ordinary custom labels and unknown-id fallback', () => {
+    expect(modeLabel('custom-review', [{ id: 'custom-review', label: 'Weekly review' }])).toBe('Weekly review')
+    expect(modeLabel('unknown-mode')).toBe('unknown-mode')
+  })
+})
 
 describe('AskStartSchema', () => {
   it('accepts a valid vision payload with a small base64 PNG', () => {
