@@ -625,7 +625,7 @@ describe('useListen Stop flush ownership', () => {
     await settle()
     api = render()
     expect(drained).toHaveBeenCalledTimes(1)
-    expect(api.text()).toBe('THEM: The final paused sentence.')
+    expect(api.text()).toBe('THEM (Alice): The final paused sentence.')
   })
 
   it('keeps every repeated Stop subscriber pending until the shared active decode drains', async () => {
@@ -680,7 +680,7 @@ describe('useListen Stop flush ownership', () => {
     await settle()
     api = render()
     expect(drained).toHaveBeenCalledTimes(1)
-    expect(api.text()).toBe('THEM: First healthy window.\nTHEM: Second healthy window.')
+    expect(api.text()).toBe('THEM (Alice): First healthy window.\nTHEM (Alice): Second healthy window.')
   })
 
   it('continues a sealed native backlog through three rejections and its Whisper fallback', async () => {

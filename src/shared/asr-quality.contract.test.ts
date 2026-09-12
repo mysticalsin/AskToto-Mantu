@@ -7,7 +7,7 @@ import { LANGUAGE_NAMES } from './lang-id'
 const root = process.cwd()
 const read = (rel: string): string => readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n')
 
-describe('ASR quality ship — Best default, Fast is a power option', () => {
+describe('ASR quality ship — stored preference and truthful runtime reporting', () => {
   it('schema + DEFAULT_SETTINGS + listen/App fallbacks all default asrQuality to best', () => {
     expect(DEFAULT_SETTINGS.asrQuality).toBe('best')
     const { asrQuality: _omit, ...rest } = DEFAULT_SETTINGS
@@ -21,19 +21,25 @@ describe('ASR quality ship — Best default, Fast is a power option', () => {
     expect(read('src/renderer/src/App.tsx')).toMatch(/settings\?\.asrQuality \?\? 'best'/)
   })
 
-  it('Settings copy names Fast as a power option and never presents silent Fast as Best', () => {
+  it('Settings identifies the compact packaged live model and labels the large live preference development-only', () => {
     const settings = read('src/renderer/src/components/Settings.tsx')
-    expect(settings).toMatch(/Fast is a (Settings )?power option/)
-    expect(settings).toMatch(/never a silent Fast with a Best label|Fast is active/)
-    expect(settings).not.toMatch(/On and Off currently use the same on-device model/)
+    expect(settings).toMatch(/if \(!shouldUseBundledAsr\(import\.meta\.env\.PROD, bundled\)\)/)
+    expect(settings).toMatch(/label="Prefer large live Whisper \(development\)"/)
+    expect(settings).toMatch(/Live Whisper uses the compact Whisper base model in this build\./)
+    expect(settings).toMatch(/The optional larger model\s+applies to imported recordings, not live transcription\./)
+    expect(settings).not.toMatch(/label="Best transcription quality"/)
   })
 
-  it('Best degrade reports qualityDegraded and a Settings path', () => {
+  it('Best degrade reports qualityDegraded and discloses the live fallback without promising an import-model upgrade', () => {
     expect(read('src/renderer/src/lib/whisper.worker.ts')).toMatch(
       /qualityDegraded: requestedQuality === 'best' && engine !== 'webgpu'/
     )
     expect(read('src/renderer/src/App.tsx')).toMatch(/asrWebgpuFallbackAt/)
-    expect(read('src/renderer/src/components/Settings.tsx')).toMatch(/Download the high-accuracy model/)
+    const settings = read('src/renderer/src/components/Settings.tsx')
+    expect(settings).toMatch(/A recent live session used Whisper base instead of the requested large model\./)
+    expect(settings).toMatch(/Packaged builds use Whisper base for live transcription\./)
+    expect(settings).toMatch(/The optional larger\s+download changes imported recordings only\./)
+    expect(settings).not.toMatch(/Download the high-accuracy model/)
   })
 })
 

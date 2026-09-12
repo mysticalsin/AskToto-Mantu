@@ -275,7 +275,7 @@ describe.each(['parakeet', 'apple', 'whisper'] as const)(
       expect(api.lines).toHaveLength(1)
       expect(api.lines[0]).toMatchObject({ speaker: 'them', text: fullText, name: 'Alice' })
       expect(api.lines[0]?.provisional).toBeUndefined()
-      expect(api.text()).toBe(`THEM: ${fullText}`)
+      expect(api.text()).toBe(`THEM (Alice): ${fullText}`)
       expect(onQuestion).toHaveBeenCalledTimes(1)
       expect(onQuestion).toHaveBeenLastCalledWith(expect.objectContaining({ text: fullText }))
 
@@ -283,7 +283,7 @@ describe.each(['parakeet', 'apple', 'whisper'] as const)(
       api = render(onQuestion, engine)
 
       expect(api.lines.map((line) => line.text)).toEqual([fullText, laterText])
-      expect(api.text()).toBe(`THEM: ${fullText}\nTHEM: ${laterText}`)
+      expect(api.text()).toBe(`THEM (Alice): ${fullText}\nTHEM (Alice): ${laterText}`)
       expect(onQuestion).toHaveBeenCalledTimes(1)
     })
   }
@@ -366,7 +366,7 @@ describe.each(['parakeet', 'apple', 'whisper'] as const)('%s restart ownership',
 
     api = render(onQuestion, engine)
     expect(api.lines.map((line) => line.text)).toEqual([fullText, laterText])
-    expect(api.text()).toBe(`THEM: ${fullText}\nTHEM: ${laterText}`)
+    expect(api.text()).toBe(`THEM (Alice): ${fullText}\nTHEM (Alice): ${laterText}`)
     expect(onQuestion).toHaveBeenCalledTimes(1)
   })
 })
@@ -407,6 +407,6 @@ describe('whisper restart error ownership', () => {
     await settlePromises()
     api = render(onQuestion, 'whisper')
     expect(api.lines.map((line) => line.text)).toEqual([laterText])
-    expect(api.text()).toBe(`THEM: ${laterText}`)
+    expect(api.text()).toBe(`THEM (Alice): ${laterText}`)
   })
 })
