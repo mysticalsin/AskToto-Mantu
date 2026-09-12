@@ -32,6 +32,43 @@ describe('transcriptToText', () => {
     expect(transcriptToText(lines)).toBe('SPEAKER: Question from the recording.')
   })
 
+  it('preserves distinct named owners in live and saved-meeting recap input (MQA-307)', () => {
+    const lines: TranscriptLine[] = [
+      { ...line('them', 'I will send the report tomorrow.'), name: 'Alice' },
+      { ...line('them', 'I will review it Friday.'), name: 'Bob' },
+      { ...line('you', 'I will confirm the next meeting.'), name: 'Cahê' }
+    ]
+    expect(transcriptToText(lines)).toBe(
+      'THEM (Alice): I will send the report tomorrow.\n' +
+        'THEM (Bob): I will review it Friday.\n' +
+        'YOU (Cahê): I will confirm the next meeting.'
+    )
+  })
+
+  it('keeps imported names and unnamed voice clusters without inventing the operator', () => {
+    const lines: TranscriptLine[] = [
+      { speaker: 'unknown', name: 'Alice', text: 'The report is mine.', t: 0 },
+      { speaker: 'unknown', name: 'Speaker 2', text: 'I can help.', t: 1 },
+      { speaker: 'unknown', name: '  ', text: 'Another voice.', t: 2 }
+    ]
+    expect(transcriptToText(lines)).toBe(
+      'Alice: The report is mine.\nSpeaker 2: I can help.\nSPEAKER: Another voice.'
+    )
+  })
+
+  it('keeps speaker labels on one line and retains language boundaries and provisional filtering', () => {
+    const lines: TranscriptLine[] = [
+      { ...line('them', 'Vamos começar.'), name: '  Ana\r\n Silva\u0000 ', lang: 'Portuguese' },
+      { ...line('them', 'Unfinished draft.'), name: 'Draft name', lang: 'French', provisional: true },
+      { ...line('them', 'The report is ready.'), name: 'Ana Silva', lang: 'English' }
+    ]
+    expect(transcriptToText(lines)).toBe(
+      'THEM (Ana Silva): Vamos começar.\n' +
+        '[conversation switches to English]\n' +
+        'THEM (Ana Silva): The report is ready.'
+    )
+  })
+
   it('emits a "[conversation switches to …]" marker where the tagged language changes', () => {
     const lines: TranscriptLine[] = [
       { speaker: 'them', text: 'Então vamos ver o contrato.', t: 0, lang: 'Portuguese' },
