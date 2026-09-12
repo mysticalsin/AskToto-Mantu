@@ -26,10 +26,10 @@ const env = () => ({
   PSModulePath: RAW, HTTP_PROXY: RAW
 })
 const facts = () => ({
-  version: 1, privateKeyCount: 1, subjectMatches: true,
+  version: 2, privateKeyCount: 1, subjectMatches: true,
   notBeforeMs: NOW - 60_000, notAfterMs: NOW + 60_000,
   codeSigningEku: true, digitalSignatureUsage: true, privateKeyAvailable: true,
-  chain: 'trusted'
+  chain: 'trusted', chainStatusFlags: []
 })
 const ok = (value = facts()) => ({ status: 0, stdout: JSON.stringify(value), stderr: '' })
 const git = () => `${SHA}\n`
@@ -47,6 +47,161 @@ function privateResult(result) {
 test('accepts only a complete current, matching, explicitly code-signing trusted identity', () => {
   assert.equal(evaluateIdentityReport(facts(), NOW), 'PASS')
   assert.deepEqual(run(), { ok: true, code: 'PASS', revision: SHA })
+})
+
+// Version 2 reports carry numeric enum flags, never certificate/chain text.
+const diagnosticFacts = (override = {}) => ({ ...facts(), ...override })
+
+test('MQA-330 reconstructs sorted unique codes from combined numeric chain flags', () => {
+  const flags = [0x10020, 0x20, 0x10000]
+  const result = run({ probe: () => ok(diagnosticFacts({ chain: 'untrusted', chainStatusFlags: flags })) })
+  assert.deepEqual(result, { ok: false, code: 'CHAIN_UNTRUSTED', revision: SHA,
+    chainStatusCodes: ['PartialChain', 'UntrustedRoot'] })
+  assert.deepEqual(flags, [0x10020, 0x20, 0x10000], 'decoding must not mutate the source flags')
+  privateResult(result)
+})
+
+const publicChainFlags = [
+  [1, 'NotTimeValid'], [2, 'NotTimeNested'], [4, 'Revoked'], [8, 'NotSignatureValid'],
+  [16, 'NotValidForUsage'], [32, 'UntrustedRoot'], [64, 'RevocationStatusUnknown'], [128, 'Cyclic'],
+  [256, 'InvalidExtension'], [512, 'InvalidPolicyConstraints'], [1024, 'InvalidBasicConstraints'],
+  [2048, 'InvalidNameConstraints'], [4096, 'HasNotSupportedNameConstraint'],
+  [8192, 'HasNotDefinedNameConstraint'], [16384, 'HasNotPermittedNameConstraint'],
+  [32768, 'HasExcludedNameConstraint'], [65536, 'PartialChain'], [131072, 'CtlNotTimeValid'],
+  [262144, 'CtlNotSignatureValid'], [524288, 'CtlNotValidForUsage'], [1048576, 'HasWeakSignature'],
+  [16777216, 'OfflineRevocation'], [33554432, 'NoIssuanceChainPolicy'],
+  [67108864, 'ExplicitDistrust'], [134217728, 'HasNotSupportedCriticalExtension']
+]
+
+for (const [flag, name] of publicChainFlags) {
+  test(`MQA-330 emits the fixed public enum name ${name} without changing failure`, () => {
+    const chain = flag === 4 ? 'revoked' : [64, 16777216].includes(flag) ? 'revocation-unavailable' : 'untrusted'
+    const code = flag === 4 ? 'CERTIFICATE_REVOKED' : [64, 16777216].includes(flag) ? 'REVOCATION_UNAVAILABLE' : 'CHAIN_UNTRUSTED'
+    const result = run({ probe: () => ok(diagnosticFacts({ chain, chainStatusFlags: [flag] })) })
+    assert.equal(result.ok, false)
+    assert.equal(result.code, code)
+    assert.deepEqual(result.chainStatusCodes, [name])
+    privateResult(result)
+  })
+}
+
+for (const flags of [[0x200000], [0x80000000], [0x80000020, 0x20, 0x200000]]) {
+  test('MQA-330 reduces any unknown bits to a fixed sentinel, preserving known flags', () => {
+    const result = run({ probe: () => ok(diagnosticFacts({ chain: 'untrusted', chainStatusFlags: flags })) })
+    assert.equal(result.code, 'CHAIN_UNTRUSTED')
+    assert.equal(result.ok, false)
+    assert.deepEqual(result.chainStatusCodes, flags.some((flag) => (flag & 0x20) !== 0)
+      ? ['UNKNOWN_CHAIN_STATUS', 'UntrustedRoot'] : ['UNKNOWN_CHAIN_STATUS'])
+    privateResult(result)
+  })
+}
+
+test('MQA-330 bounds maximum diagnostic output even for every uint32 bit and 32 entries', () => {
+  const result = run({ probe: () => ok(diagnosticFacts({ chain: 'revoked',
+    chainStatusFlags: Array(32).fill(0xffffffff) })) })
+  assert.equal(result.code, 'CERTIFICATE_REVOKED')
+  assert.equal(result.ok, false)
+  assert.deepEqual(result.chainStatusCodes, [...publicChainFlags.map(([, name]) => name), 'UNKNOWN_CHAIN_STATUS'].sort())
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) < 1024)
+})
+
+for (const [chain, code, flags, expected] of [
+  ['untrusted', 'CHAIN_UNTRUSTED', [], ['NO_REPORTED_CHAIN_STATUS']],
+  ['untrusted', 'CHAIN_UNTRUSTED', [0], ['NO_REPORTED_CHAIN_STATUS']],
+  ['revoked', 'CERTIFICATE_REVOKED', [0x24], ['Revoked', 'UntrustedRoot']],
+  ['revocation-unavailable', 'REVOCATION_UNAVAILABLE', [0x1010040], ['OfflineRevocation', 'PartialChain', 'RevocationStatusUnknown']],
+  ['error', 'CHAIN_CHECK_FAILED', [], ['NO_REPORTED_CHAIN_STATUS']]
+]) {
+  test(`MQA-330 preserves ${code} and distinguishes absence of reported status`, () => {
+    const result = run({ probe: () => ok(diagnosticFacts({ chain, chainStatusFlags: flags })) })
+    assert.deepEqual(result, { ok: false, code, revision: SHA, chainStatusCodes: expected })
+    privateResult(result)
+  })
+}
+
+test('MQA-330 retains the success contract only for an unflagged version 2 trusted report', () => {
+  assert.deepEqual(run({ probe: () => ok(diagnosticFacts()) }), { ok: true, code: 'PASS', revision: SHA })
+})
+
+for (const flags of [[0], [32], [0x80000000], [4, 64]]) {
+  test('MQA-330 rejects a contradictory trusted report with reported flags', () => {
+    const result = run({ probe: () => ok(diagnosticFacts({ chainStatusFlags: flags })) })
+    assert.deepEqual(result, { ok: false, code: 'PROBE_OUTPUT_INVALID', revision: SHA })
+  })
+}
+
+for (const [chain, flags] of [
+  ['revoked', []], ['revoked', [0]], ['revoked', [32]], ['revoked', [64]],
+  ['revoked', [0x1000000]], ['revoked', [0x80000000]],
+  ['revocation-unavailable', []], ['revocation-unavailable', [0]],
+  ['revocation-unavailable', [32]], ['revocation-unavailable', [4]],
+  ['revocation-unavailable', [0x44]], ['revocation-unavailable', [0x1000004]],
+  ['revocation-unavailable', [0x80000000]],
+  ['untrusted', [4]], ['untrusted', [64]], ['untrusted', [0x1000000]], ['untrusted', [0x80000044]]
+]) {
+  test(`MQA-330 rejects a contradictory failure category ${chain}`, () => {
+    const result = run({ probe: () => ok(diagnosticFacts({ chain, chainStatusFlags: flags })) })
+    assert.deepEqual(result, { ok: false, code: 'PROBE_OUTPUT_INVALID', revision: SHA })
+    privateResult(result)
+  })
+}
+
+for (const [chain, code, flags, expected] of [
+  ['revoked', 'CERTIFICATE_REVOKED', [0x44], ['RevocationStatusUnknown', 'Revoked']],
+  ['revoked', 'CERTIFICATE_REVOKED', [0x1000004], ['OfflineRevocation', 'Revoked']],
+  ['revoked', 'CERTIFICATE_REVOKED', [4, 64, 0x1000000, 0x80000000],
+    ['OfflineRevocation', 'RevocationStatusUnknown', 'Revoked', 'UNKNOWN_CHAIN_STATUS']],
+  ['revocation-unavailable', 'REVOCATION_UNAVAILABLE', [64], ['RevocationStatusUnknown']],
+  ['revocation-unavailable', 'REVOCATION_UNAVAILABLE', [0x1000000], ['OfflineRevocation']],
+  ['revocation-unavailable', 'REVOCATION_UNAVAILABLE', [0x1000040, 32],
+    ['OfflineRevocation', 'RevocationStatusUnknown', 'UntrustedRoot']],
+  ['error', 'CHAIN_CHECK_FAILED', [0], ['NO_REPORTED_CHAIN_STATUS']],
+  ['error', 'CHAIN_CHECK_FAILED', [0x24], ['Revoked', 'UntrustedRoot']],
+  ['error', 'CHAIN_CHECK_FAILED', [64], ['RevocationStatusUnknown']]
+]) {
+  test(`MQA-330 preserves valid native category precedence and ${chain} error reports`, () => {
+    const result = run({ probe: () => ok(diagnosticFacts({ chain, chainStatusFlags: flags })) })
+    assert.deepEqual(result, { ok: false, code, revision: SHA, chainStatusCodes: expected })
+    privateResult(result)
+  })
+}
+
+for (const flags of [undefined, null, RAW, {}, [RAW], [-1], [0.5], [0x100000000],
+  [Number.MAX_SAFE_INTEGER + 1], [null], [true], Array(33).fill(32)]) {
+  test('MQA-330 rejects missing, malformed or oversized failure diagnostics without echoing them', () => {
+    const result = run({ probe: () => ok(diagnosticFacts({ chain: 'untrusted', chainStatusFlags: flags })) })
+    assert.deepEqual(result, { ok: false, code: 'PROBE_OUTPUT_INVALID', revision: SHA })
+    privateResult(result)
+  })
+}
+
+for (const report of [
+  Object.fromEntries(Object.entries({ ...facts(), version: 1 }).filter(([key]) => key !== 'chainStatusFlags')),
+  diagnosticFacts({ version: undefined }), diagnosticFacts({ version: 1 }),
+  diagnosticFacts({ version: 3 }), diagnosticFacts({ version: '2' }),
+  diagnosticFacts({ chain: 'untrusted', chainStatusFlags: [32], StatusInformation: RAW }),
+  diagnosticFacts({ chain: 'untrusted', chainStatusFlags: [32], Issuer: RAW }),
+  diagnosticFacts({ chain: 'untrusted', chainStatusFlags: [32], chainStatusCodes: [RAW] })
+]) {
+  test('MQA-330 rejects stale/missing protocol or extra native text fields without disclosure', () => {
+    const result = run({ probe: () => ok(report) })
+    assert.deepEqual(result, { ok: false, code: 'PROBE_OUTPUT_INVALID', revision: SHA })
+    privateResult(result)
+  })
+}
+
+test('MQA-330 does not attach chain diagnostics when an earlier identity check fails', () => {
+  const result = run({ probe: () => ok(diagnosticFacts({ subjectMatches: false, chain: 'untrusted', chainStatusFlags: [] })) })
+  assert.deepEqual(result, { ok: false, code: 'PUBLISHER_MISMATCH', revision: SHA })
+})
+
+test('MQA-330 native report uses only bounded numeric Status flags and the version 2 contract', () => {
+  const source = readFileSync(new URL('./windows-signing-identity-preflight.ps1', import.meta.url), 'utf8')
+  assert.match(source, /version\s*=\s*2;/)
+  assert.match(source, /chainStatusFlags\s*=\s*@\(\)/)
+  assert.match(source, /\$statuses\.Length\s*-gt\s*32/)
+  assert.match(source, /\[long\]\$status\.Status\s*-band\s*\[long\]4294967295/)
+  assert.doesNotMatch(source, /StatusInformation|\$status\.ToString\(|\$status\.Status\.ToString\(/)
 })
 
 for (const host of ['darwin', 'linux']) {
@@ -146,9 +301,9 @@ for (const [name, override, expected] of [
   ['missing code signing EKU', { codeSigningEku: false }, 'CODE_SIGNING_EKU_MISSING'],
   ['wrong key usage', { digitalSignatureUsage: false }, 'KEY_USAGE_INVALID'],
   ['private handle inaccessible', { privateKeyAvailable: false }, 'PRIVATE_KEY_UNAVAILABLE'],
-  ['self-signed/untrusted chain', { chain: 'untrusted' }, 'CHAIN_UNTRUSTED'],
-  ['revoked', { chain: 'revoked' }, 'CERTIFICATE_REVOKED'],
-  ['offline/unknown revocation', { chain: 'revocation-unavailable' }, 'REVOCATION_UNAVAILABLE'],
+  ['untrusted chain', { chain: 'untrusted' }, 'CHAIN_UNTRUSTED'],
+  ['revoked', { chain: 'revoked', chainStatusFlags: [4] }, 'CERTIFICATE_REVOKED'],
+  ['offline/unknown revocation', { chain: 'revocation-unavailable', chainStatusFlags: [64] }, 'REVOCATION_UNAVAILABLE'],
   ['chain error', { chain: 'error' }, 'CHAIN_CHECK_FAILED'],
   ['unknown chain response', { chain: RAW }, 'PROBE_OUTPUT_INVALID'],
   ['unexpected response fields', { Subject: SUBJECT }, 'PROBE_OUTPUT_INVALID']

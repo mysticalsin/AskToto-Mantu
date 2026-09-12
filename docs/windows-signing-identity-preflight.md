@@ -30,7 +30,26 @@ Each chain URL retrieval is bounded at 10 seconds, and the supervisor caps the e
 
 No signing identity is imported into a persistent certificate store, no key is exported/persisted, and no explicit trust-store changes are made. Ordinary Windows chain building may maintain public-root state or revocation caches on the disposable runner. `DisableCertificateDownloads` is enabled when the managed runtime exposes it; Windows PowerShell 5 may lack it. Consequently this is **not** a guarantee of zero OS trust-state mutation or no network use. [Microsoft AIA-download policy](https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.x509certificates.x509chainpolicy.disablecertificatedownloads), [Windows chain-engine behavior](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-certgetcertificatechain)
 
-The supervisor captures native output and emits only a fixed category, success boolean and reviewed revision. It never logs certificate values, publisher names, certificate URLs, passwords, raw subprocess output or exception messages. Secrets are passed through a minimal child environment, never arguments. There is no app build/download/signing, certificate artifact, upload or release action.
+The supervisor captures native output and emits a fixed category, success boolean and reviewed revision. Validated chain failures also include the fixed diagnostic codes described below. It never logs certificate values, publisher names, certificate URLs, passwords, raw subprocess output or exception messages. Secrets are passed through a minimal child environment, never arguments. There is no app build/download/signing, certificate artifact, upload or release action.
+
+## Safe chain diagnostics
+
+Chain failures can include a `chainStatusCodes` array containing sorted, unique names from a fixed allow-list of Microsoft's `X509ChainStatusFlags` enum. Combined flags are decoded individually, not converted to native text. For example, the following is a **synthetic** response, not a finding about the configured certificate:
+
+```json
+{"ok":false,"code":"CHAIN_UNTRUSTED","revision":"...","chainStatusCodes":["PartialChain","UntrustedRoot"]}
+```
+
+The names describe the aggregate chain status, not a particular certificate, issuer or remediation. `PartialChain` indicates an incomplete path to a root; `UntrustedRoot` indicates that a root was not trusted. Neither result alone proves the configured identity is self-signed, that its leaf certificate is expired, or that a replacement must be purchased. Multiple failures may coexist. A non-revocation failure is not proof that revocation checking succeeded. [Microsoft chain-status flags](https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.x509certificates.x509chainstatusflags?view=netframework-4.8.1)
+
+Two fixed sentinels retain uncertainty:
+
+- `UNKNOWN_CHAIN_STATUS`: one or more reported bits are outside the explicit known enum map. No native value or text is printed.
+- `NO_REPORTED_CHAIN_STATUS`: the failed check supplied no nonzero status flags. This can accompany a chain-check error and must not be read as successful trust or revocation verification.
+
+The internal version 2 report permits at most 32 unsigned 32-bit numeric flag entries within the unchanged 4 KiB pipe limit. The supervisor reconstructs at most 26 public names, including the unknown sentinel, from its own constants. `StatusInformation`, certificate fields, raw status numbers and native strings are never forwarded. Missing/stale versions, extra fields, malformed or oversized arrays, and any `trusted` report with a nonempty flag array fail closed. Earlier identity/configuration failures and successful checks do not receive chain diagnostics. Diagnostics cannot change a failure into success, and no trust/revocation policy or workflow permission is changed.
+
+Failure categories must also match the native flags: `revoked` requires `Revoked`; `revocation-unavailable` requires `RevocationStatusUnknown` or `OfflineRevocation` without `Revoked`; `untrusted` cannot contain any of those revocation flags. Contradictions return `PROBE_OUTPUT_INVALID` without diagnostics. An `error` report may retain flags captured before an exception and remains `CHAIN_CHECK_FAILED`; it is never reclassified as success. Untrusted/error reports with no nonzero flags retain the no-status sentinel.
 
 ## Authorized execution
 
@@ -46,6 +65,6 @@ An identity success is `{"ok":true,"code":"PASS","revision":"..."}` in the final
 
 ## Verification and remaining release gates
 
-Run `node --test scripts/windows-signing-identity-preflight.test.mjs` without installing app dependencies. The normal Vitest suite also invokes it through the small `.test.ts` adapter. Synthetic tests exercise the supervisor, certificate-facts policy and workflow/security contracts. On Windows an additional credential-free smoke verifies PowerShell parsing and safe rejection of deliberately invalid non-certificate bytes before the secret-bearing step. That smoke is skipped on non-Windows hosts and does not prove a valid private-key/chain path.
+Run `node --test scripts/windows-signing-identity-preflight.test.mjs` without installing app dependencies. The normal Vitest suite also invokes it through the small `.test.ts` adapter. Synthetic tests exercise the supervisor, certificate-facts policy, diagnostic decoding, malformed/contradictory report rejection and workflow/security contracts. On Windows an additional credential-free smoke verifies PowerShell parsing and safe rejection of deliberately invalid non-certificate bytes before the secret-bearing step. That smoke is skipped on non-Windows hosts and does not prove a valid private-key/chain path or native chain-status serialization.
 
 Actual configured-certificate usability remains unverified until an authorized Windows run passes. A successful preflight still does not prove a timestamp authority, timestamped installer signature, SmartScreen reputation, final app build/install, Mac Developer ID/notarization, microphone/screen capture, or physical Mac/Windows workflows. `release.yml` and its expected-publisher plus trusted-timestamp artifact verification remain unchanged and mandatory; publication remains separately gated on product QA.
