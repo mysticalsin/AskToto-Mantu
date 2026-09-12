@@ -48,6 +48,7 @@ export function IdentityCard({
   const dragging = useRef(false)
   const dragLastX = useRef(0)
   const spinningTo = useRef<number | null>(null)
+  const wakeAnimation = useRef<() => void>(() => {})
   const [, bump] = useState(0)
 
   const applyTransform = useCallback(() => {
@@ -68,15 +69,27 @@ export function IdentityCard({
     if (reduced) {
       spinningTo.current = null
       spin.current = faceFromFlip(flipped)
+      spinVel.current = 0
       tilt.current = { x: 0, y: 0 }
+      tiltVel.current = { x: 0, y: 0 }
+      tiltTarget.current = { x: 0, y: 0 }
       applyTransform()
       return
     }
     let raf = 0
+    let disposed = false
     let last = performance.now()
+    const wake = (): void => {
+      if (disposed || document.hidden || raf) return
+      last = performance.now()
+      raf = requestAnimationFrame(tick)
+    }
     const tick = (now: number): void => {
+      raf = 0
+      if (disposed || document.hidden) return
       const dt = Math.min(0.032, (now - last) / 1000)
       last = now
+      let moving = false
       if (!dragging.current) {
         const tx = spinningTo.current ?? nearestFace(spin.current)
         const s = stepSpring(spin.current, spinVel.current, tx, dt)
@@ -87,17 +100,34 @@ export function IdentityCard({
           spinVel.current = 0
           spinningTo.current = null
           setFlipped(tx === 180)
-        }
+        } else moving = true
       }
       const sx = stepSpring(tilt.current.x, tiltVel.current.x, tiltTarget.current.x, dt)
       const sy = stepSpring(tilt.current.y, tiltVel.current.y, tiltTarget.current.y, dt)
+      // Springs approach their targets asymptotically. Snap below the displayed precision so the
+      // settled card retains its last transform instead of rewriting two styles every screen refresh.
+      const xSettled = Math.abs(sx.pos - tiltTarget.current.x) < 0.01 && Math.abs(sx.vel) < 0.05
+      const ySettled = Math.abs(sy.pos - tiltTarget.current.y) < 0.01 && Math.abs(sy.vel) < 0.05
+      if (xSettled) { sx.pos = tiltTarget.current.x; sx.vel = 0 }
+      if (ySettled) { sy.pos = tiltTarget.current.y; sy.vel = 0 }
       tilt.current = { x: sx.pos, y: sy.pos }
       tiltVel.current = { x: sx.vel, y: sy.vel }
       applyTransform()
-      raf = requestAnimationFrame(tick)
+      if (moving || !xSettled || !ySettled) raf = requestAnimationFrame(tick)
     }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+    const onVisibility = (): void => {
+      if (document.hidden) { cancelAnimationFrame(raf); raf = 0 }
+      else wake()
+    }
+    wakeAnimation.current = wake
+    document.addEventListener('visibilitychange', onVisibility)
+    wake()
+    return () => {
+      disposed = true
+      cancelAnimationFrame(raf)
+      wakeAnimation.current = () => {}
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [applyTransform, flipped, reduced])
 
   const onPointerMove = (e: PointerEvent<HTMLDivElement>): void => {
@@ -114,6 +144,7 @@ export function IdentityCard({
       setFlipped(nearestFace(spin.current) === 180)
     }
     if (reduced) applyTransform()
+    else wakeAnimation.current()
   }
 
   const flip = (): void => {
@@ -126,6 +157,7 @@ export function IdentityCard({
       return
     }
     spinningTo.current = faceFromFlip(next)
+    wakeAnimation.current()
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
@@ -152,18 +184,25 @@ export function IdentityCard({
         onPointerLeave={() => {
           tiltTarget.current = { x: 0, y: 0 }
           dragging.current = false
-          if (!reduced) spinningTo.current = nearestFace(spin.current)
+          if (!reduced) {
+            spinningTo.current = nearestFace(spin.current)
+            wakeAnimation.current()
+          }
         }}
         onPointerDown={(e) => {
           dragging.current = true
           dragLastX.current = e.clientX
           spinningTo.current = null
           e.currentTarget.setPointerCapture(e.pointerId)
+          if (!reduced) wakeAnimation.current()
         }}
         onPointerUp={() => {
           if (dragging.current && reduced) flip()
           dragging.current = false
-          if (!reduced) spinningTo.current = nearestFace(spin.current)
+          if (!reduced) {
+            spinningTo.current = nearestFace(spin.current)
+            wakeAnimation.current()
+          }
         }}
         onKeyDown={onKeyDown}
       >
