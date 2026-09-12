@@ -6,10 +6,24 @@
  * operator runs — scripts/verify-audit-log.mjs is plain ESM, imported directly) proves the chain over
  * them. The tamper cases mutate the produced lines and must be DETECTED — that is the whole control.
  */
-import { readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, afterAll, vi } from 'vitest'
+
+const logFixture = vi.hoisted(() => {
+  const { mkdtempSync } = require('node:fs') as typeof import('node:fs')
+  const { tmpdir } = require('node:os') as typeof import('node:os')
+  const { join } = require('node:path') as typeof import('node:path')
+  return { root: mkdtempSync(join(tmpdir(), 'metis-audit-chain-')) }
+})
+
+// The real transport still writes real bytes, but other test workers cannot delete or append to this
+// suite's trail. Its cached seq/prev and its on-disk history must have exactly the same owner.
+vi.mock('node:os', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:os')>()),
+  tmpdir: () => logFixture.root
+}))
+
 import { auditLog, auditLogPath, auditChainTip, AUDIT_ARCHIVE_GENERATIONS } from './logger'
 // eslint-disable-next-line no-restricted-imports -- the verifier is deliberately the operator's own script
 import { verifyAuditLines } from '../../scripts/verify-audit-log.mjs'
@@ -20,14 +34,13 @@ const readLines = (): string[] =>
     .map((l) => l.replace(/\r$/, ''))
     .filter((l) => l.length > 0)
 
-beforeAll(() => {
-  // A clean trail for this run: the tmp non-app log dir is shared across local vitest runs, and a
-  // PRIOR run's tamper-case mutations would otherwise poison this run's verification.
-  const p = auditLogPath()
-  if (existsSync(p)) rmSync(p, { force: true })
-})
+afterAll(() => rmSync(logFixture.root, { recursive: true, force: true }))
 
 describe('MQA-232 — every audit record chains to the one before it', () => {
+  it('MQA-331 owns a unique audit fixture instead of deleting another worker\'s scratch trail', () => {
+    expect(auditLogPath()).toBe(join(logFixture.root, 'asktoto-nonapp-logs', 'audit.log'))
+  })
+
   it('writes seq/prev on every record and the verifier proves the chain', () => {
     auditLog('app.crash', { probe: 'chain-1' })
     auditLog('app.crash', { probe: 'chain-2' })
@@ -102,6 +115,3 @@ describe('MQA-232 — every audit record chains to the one before it', () => {
     expect(src).toMatch(/archives\.slice\(0, Math\.max\(0, archives\.length - AUDIT_ARCHIVE_GENERATIONS\)\)/)
   })
 })
-
-// tmpdir import kept referenced: the non-app log dir contract this test relies on lives there.
-void tmpdir
