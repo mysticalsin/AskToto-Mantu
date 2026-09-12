@@ -128,8 +128,8 @@ describe('MQA-056 — imported-recap falls back to the on-device model as a last
     expect(pick).toMatch(/const localFallbackReady =/)
   })
 
-  it('uses a connected API first and local only when redactSensitive or no API remains', () => {
-    expect(pick).toMatch(/if \(settings\.redactSensitive\) return localReady/)
+  it('uses a connected API first and keeps explicit local-only summaries on-device', () => {
+    expect(pick).toMatch(/if \(importRecapRequiresLocal\(settings\)\) return localReady/)
     expect(pick).toMatch(/if \(api\.length\) return api/)
     expect(pick).toMatch(/return localReady \? \(\['local'\] as ProviderId\[\]\) : \[\]/)
   })

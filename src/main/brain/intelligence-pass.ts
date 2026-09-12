@@ -6,6 +6,7 @@ import { getSettings } from '../store'
 import { auditLog } from '../logger'
 import { startBackfill, type BackfillStartResult } from './ingest'
 import { INTELLIGENCE_PASS_NO_PROVIDER, pickIntelligencePassCandidates } from './intelligence-pass-route'
+import { intelligenceNoProviderMessage } from '@shared/intelligence-pass'
 
 export type IntelligencePassStartResult = BackfillStartResult & {
   error?: string
@@ -19,11 +20,11 @@ export type IntelligencePassStartResult = BackfillStartResult & {
 export function startIntelligencePass(): IntelligencePassStartResult {
   const s = getSettings()
   if (pickIntelligencePassCandidates(s).length === 0) {
-    return { queued: 0, error: INTELLIGENCE_PASS_NO_PROVIDER }
+    return { queued: 0, error: intelligenceNoProviderMessage(s, INTELLIGENCE_PASS_NO_PROVIDER) }
   }
   const result = startBackfill(undefined, { route: 'intelligence-pass' })
   if (result.deferred === 'no-provider') {
-    return { queued: 0, error: INTELLIGENCE_PASS_NO_PROVIDER }
+    return { queued: 0, error: intelligenceNoProviderMessage(s, INTELLIGENCE_PASS_NO_PROVIDER) }
   }
   auditLog('brain.intelligencePass.start', { queued: result.queued, preparing: result.preparing === true })
   if (result.queued === 0 && !result.preparing) return { ...result, upToDate: true }

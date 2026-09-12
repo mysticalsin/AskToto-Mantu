@@ -200,6 +200,17 @@ describe('click with meetings and an empty brain queues work', () => {
     expect(r.error).toBe(NO_PROVIDER_INDEX_COPY)
     expect(r.deferred).toBe('no-provider')
   })
+
+  it('a local-only policy failure explains Local readiness instead of suggesting an API key', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'intel-idx-'))
+    const s = { ...DEFAULT_SETTINGS, meetingsFolder: folder, encryptTranscripts: false, routingMode: 'local' as const }
+    setIntelligenceIndexWork(async () => completedRun({ ran: false, queued: 0, deferred: 'no-provider' }))
+    const result = await runIntelligenceIndex('click', s)
+    expect(result.error).toMatch(/local.only.*not ready/i)
+    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
+    resetIntelligenceIndexLockForTests()
+    expect(intelligenceIndexStatus(s).lastError).toBe(result.error)
+  })
 })
 
 describe('runIntelligenceIndex coalesce and catch-up', () => {

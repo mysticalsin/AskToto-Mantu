@@ -1487,6 +1487,8 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
     getSettings,
     getApiKey,
     getAllowedProviders,
+    operatorFundedProviders,
+    operatorAskTransport,
     providerBaseUrl,
     redactSecrets,
     createStream,

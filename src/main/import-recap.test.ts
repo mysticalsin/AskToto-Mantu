@@ -59,10 +59,11 @@ describe('pickImportRecapCandidates', () => {
     getAllowedProviders: () => null
   }
 
-  it('prefers a connected API and skips local unless redact or no API', () => {
+  it('prefers a connected API unless local-only is explicit, including when redaction is enabled', () => {
     expect(pickImportRecapCandidates(settings(), gate)[0]).toBe('anthropic')
     expect(pickImportRecapCandidates(settings(), gate)).not.toContain('local')
-    expect(pickImportRecapCandidates(settings({ redactSensitive: true }), gate)).not.toContain('anthropic')
+    expect(pickImportRecapCandidates(settings({ redactSensitive: true }), gate)[0]).toBe('anthropic')
+    expect(pickImportRecapCandidates(settings({ routingMode: 'local' }), gate)).not.toContain('anthropic')
     const noApi = pickImportRecapCandidates(settings({ provider: 'openai' }), { ...gate, getApiKey: () => '' })
     expect(noApi).not.toContain('anthropic')
     expect(noApi).not.toContain('openai')
