@@ -224,8 +224,8 @@ test('native probe requires ephemeral load, ordinal identity and standard fail-c
   assert.doesNotMatch(source, /Write-(Error|Warning|Verbose|Debug|Host)|\$_\s*[|.)]|Exception\.Message/)
 })
 
-test('workflow is manual, main-only, exact-revision, read-only and has no release/sign/artifact path', () => {
-  const workflow = readFileSync(new URL('../.github/workflows/windows-signing-identity-preflight.yml', import.meta.url), 'utf8')
+function assertWorkflowContract(source) {
+  const workflow = source.replace(/\r\n/g, '\n')
   assert.match(workflow, /^on:\n  workflow_dispatch:/m)
   assert.doesNotMatch(workflow, /^\s+(push|pull_request|pull_request_target|workflow_call|schedule|workflow_run):/m)
   assert.match(workflow, /permissions:\n  contents: read/)
@@ -244,4 +244,34 @@ test('workflow is manual, main-only, exact-revision, read-only and has no releas
   const lastStep = workflow.slice(workflow.lastIndexOf('      - name:'))
   assert.match(lastStep, /secrets.WIN_CSC_LINK/)
   assert.match(lastStep, /run: node scripts\/windows-signing-identity-preflight\.mjs/)
+}
+
+const workflowSource = readFileSync(new URL('../.github/workflows/windows-signing-identity-preflight.yml', import.meta.url), 'utf8')
+
+test('workflow is manual, main-only, exact-revision, read-only and has no release/sign/artifact path', () => {
+  assertWorkflowContract(workflowSource)
 })
+
+for (const [name, lineEnding] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+  const workflow = workflowSource.replace(/\r?\n/g, lineEnding)
+
+  test(`MQA-328 accepts the complete workflow security contract with ${name} line endings`, () => {
+    assertWorkflowContract(workflow)
+  })
+
+  const unsafeChanges = [
+    ['an automatic trigger', workflow.replace('permissions:', `  push:${lineEnding}${lineEnding}permissions:`),
+      /^\s+(push|pull_request|pull_request_target|workflow_call|schedule|workflow_run):/m],
+    ['write permissions', workflow.replace('contents: read', 'contents: write'), /permissions:\n  contents: read/],
+    ['a different main-branch gate', workflow.replace('refs/heads/main', 'refs/heads/feature'), /github\.ref == 'refs\/heads\/main'/],
+    ['a missing revision check', workflow.replace('--check-revision', '--no-revision-check'), /--check-revision/]
+  ]
+
+  for (const [change, changedWorkflow, expectedGate] of unsafeChanges) {
+    test(`MQA-328 rejects ${change} under ${name} at the intended security gate`, () => {
+      assert.notEqual(changedWorkflow, workflow, 'negative fixture must change the workflow')
+      assert.throws(() => assertWorkflowContract(changedWorkflow), (error) =>
+        error.code === 'ERR_ASSERTION' && String(error.expected) === String(expectedGate))
+    })
+  }
+}
