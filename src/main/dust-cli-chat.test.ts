@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { spawnSync } from 'node:child_process'
 
 vi.mock('electron')
 
@@ -12,7 +16,8 @@ import {
   parseDustChatStdout,
   projectNameForDataAndAiAsk,
   spotlightRefMissingAgentMessage,
-  spotlightRefMissingCliMessage
+  spotlightRefMissingCliMessage,
+  writeDustKeytarSeedScript
 } from './dust-cli-chat'
 import { MANAGED_CLIS } from './cli-installer'
 
@@ -25,6 +30,40 @@ describe('managed Dust CLI install id', () => {
 })
 
 describe('Spotlight Ref dust chat argv', () => {
+  it('MQA-315 cannot opt credentials into a process command line', () => {
+    const opts = { message: 'Synthetic request', passKeyOnArgv: true, apiKey: 'qa-only-invalid-token', workspaceId: 'qa-workspace' }
+    const args = buildDustSpotlightChatArgv(opts)
+    expect(args).not.toContain(opts.apiKey)
+    expect(args).not.toContain('--key')
+    const source = readFileSync(join(__dirname, 'dust-cli-chat.ts'), 'utf8')
+    expect(source).toContain('spawn(nodeBin, [seed, dustRegionFromBaseUrl(opts.baseUrl)]')
+  })
+
+  it('MQA-315 seeds the keychain from child environment without secret argv', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-dust-seed-'))
+    try {
+      const fakeKeytar = join(dir, 'node_modules', 'keytar')
+      mkdirSync(fakeKeytar, { recursive: true })
+      writeFileSync(join(fakeKeytar, 'package.json'), JSON.stringify({ name: 'keytar', type: 'module', main: 'index.js' }))
+      writeFileSync(join(fakeKeytar, 'index.js'), 'export default { async setPassword(...args) { console.log(JSON.stringify(args)) } }')
+      const script = writeDustKeytarSeedScript(dir)
+      const token = 'qa-only-invalid-token'
+      const result = spawnSync(process.execPath, [script, 'us-central1'], {
+        env: { ...process.env, DUST_API_KEY: token, DUST_WORKSPACE_ID: 'qa-workspace' }, encoding: 'utf8'
+      })
+      expect(result.status).toBe(0)
+      const calls = result.stdout.split('\n').filter((line) => line.startsWith('[')).map((line) => JSON.parse(line))
+      expect(calls).toEqual([
+        ['dust-cli', 'access_token', token],
+        ['dust-cli', 'workspace_sid', 'qa-workspace'],
+        ['dust-cli', 'region', 'us-central1']
+      ])
+      expect(readFileSync(script, 'utf8')).not.toContain(token)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('contains --sId GOr913Zr5V and -m and never --with-tools', () => {
     const args = buildDustSpotlightChatArgv({ message: 'Data and AI projects' })
     expect(args).toContain('chat')
