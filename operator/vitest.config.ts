@@ -36,6 +36,9 @@ function stripMjsShebang() {
 
 export default defineConfig({
   plugins: [stripMjsShebang()],
+  // Cross-boundary licence tests run in the Worker suite, using the real desktop HMAC signer.
+  // Keep the Worker dependency graph out of the desktop-only test TypeScript project.
+  resolve: { alias: { '@shared': fileURLToPath(new URL('../src/shared', import.meta.url)) } },
   test: {
     root: dirname(fileURLToPath(import.meta.url)),
     environment: 'node',

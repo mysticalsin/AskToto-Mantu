@@ -10,6 +10,7 @@ import { parseUseBody } from './use'
 
 const NOW = 1_725_000_000_000
 const SECRET = 'sk-ant-api03-OPERATOR-VAULT-TEST-only-xx99'
+const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 function env(): Env {
   return {
@@ -74,7 +75,7 @@ async function addAnthropicKey(store: ReturnType<typeof memoryStore>) {
 }
 
 describe('parseUseBody', () => {
-  it('rejects vision, CLI, Dust, and image payloads', () => {
+  it('rejects missing screenshots, CLI, Dust, and image payloads hidden in text', () => {
     expect(parseUseBody(JSON.stringify({ provider: 'anthropic', model: 'claude', mode: 'vision', messages: [{ role: 'user', content: 'hi' }] })).ok).toBe(false)
     expect(parseUseBody(JSON.stringify({ provider: 'claude-cli', model: 'sonnet', messages: [{ role: 'user', content: 'hi' }] })).ok).toBe(false)
     expect(parseUseBody(JSON.stringify({ provider: 'dust', model: 'agent', messages: [{ role: 'user', content: 'hi' }] })).ok).toBe(false)
@@ -96,6 +97,42 @@ describe('parseUseBody', () => {
         })
       ).ok
     ).toBe(false)
+  })
+
+  it('accepts a bounded explicit PNG screenshot and keeps the latest user question with long history', () => {
+    const result = parseUseBody(JSON.stringify({
+      provider: 'openai', model: 'gpt-4o-mini', mode: 'vision',
+      image: { mimeType: 'image/png', data: SCREENSHOT_PNG },
+      messages: [
+        ...Array.from({ length: 25 }, (_, i) => ({ role: 'user', content: `old question ${i}` })),
+        { role: 'user', content: 'Read this screen, not an old question.' }
+      ]
+    }))
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.req).toMatchObject({ image: { mimeType: 'image/png', data: SCREENSHOT_PNG } })
+    expect(result.req.messages).toHaveLength(20)
+    expect(result.req.messages.at(-1)?.content).toBe('Read this screen, not an old question.')
+  })
+
+  it.each([
+    ['missing opt-in', { mimeType: 'image/png', data: SCREENSHOT_PNG }, undefined],
+    ['wrong mode', { mimeType: 'image/png', data: SCREENSHOT_PNG }, 'answer'],
+    ['malformed base64', { mimeType: 'image/png', data: 'not base64!' }, 'vision'],
+    ['bad padding', { mimeType: 'image/png', data: SCREENSHOT_PNG.slice(0, -1) }, 'vision'],
+    ['data URL', { mimeType: 'image/png', data: `data:image/png;base64,${SCREENSHOT_PNG}` }, 'vision'],
+    ['remote URL', { mimeType: 'image/png', data: 'https://example.test/private.png' }, 'vision'],
+    ['SVG', { mimeType: 'image/svg+xml', data: SCREENSHOT_PNG }, 'vision'],
+    ['MIME mismatch', { mimeType: 'image/jpeg', data: SCREENSHOT_PNG }, 'vision'],
+    ['invalid file', { mimeType: 'image/png', data: btoa('a text file is not a screenshot') }, 'vision'],
+    ['oversize file', { mimeType: 'image/png', data: 'A'.repeat(5_500_004) }, 'vision']
+  ])('rejects %s without returning the image content in an error', (_name, image, mode) => {
+    const result = parseUseBody(JSON.stringify({
+      provider: 'openai', model: 'gpt-4o-mini', mode, image,
+      messages: [{ role: 'user', content: 'Read this screen.' }]
+    }))
+    expect(result).toMatchObject({ ok: false, status: 400 })
+    expect(JSON.stringify(result)).not.toContain(SCREENSHOT_PNG)
   })
 })
 

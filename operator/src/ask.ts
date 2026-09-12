@@ -10,7 +10,7 @@ import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { json } from './http'
 import { providerRefusedPayload } from './redact'
 import type { OperatorStore } from './store'
-import { decryptActiveLlmSecret, parseUseBody, type UseRequest } from './use'
+import { anthropicMessages, decryptActiveLlmSecret, openaiMessages, parseUseBody, screenshotGatewayHeaders, type UseRequest } from './use'
 
 const ANTHROPIC_MESSAGES = 'https://api.anthropic.com/v1/messages'
 const ASK_FETCH_TIMEOUT_MS = 120_000
@@ -25,8 +25,9 @@ function fail(error: string, status: number, extra?: Record<string, unknown>): R
   return json({ ok: false, error, ...extra }, status)
 }
 
-async function providerRefusedResponse(upstream: Response, secrets: readonly string[]): Promise<Response> {
-  const raw = await upstream.text().catch(() => '')
+async function providerRefusedResponse(upstream: Response, secrets: readonly string[], screenshot = false): Promise<Response> {
+  const raw = screenshot ? '' : await upstream.text().catch(() => '')
+  if (screenshot) await upstream.body?.cancel().catch(() => undefined)
   const fields = providerRefusedPayload(upstream.status, raw, secrets)
   return fail(fields.error, 502, {
     upstreamStatus: fields.upstreamStatus,
@@ -48,12 +49,8 @@ function withAskTimeout(providerFetch: typeof fetch, callerSignal?: AbortSignal)
       (signal): signal is AbortSignal => Boolean(signal)
     )
     const signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals)
-    return providerFetch(input, { ...init, signal })
+    return providerFetch(input, { ...init, redirect: 'manual', signal })
   }) as typeof fetch
-}
-
-function openaiMessages(req: UseRequest): { role: string; content: string }[] {
-  return [...(req.system ? [{ role: 'system', content: req.system }] : []), ...req.messages]
 }
 
 function upstreamUrl(provider: string, accountId: string | undefined, baseUrl: string): string | { error: string; status: number } {
@@ -85,7 +82,7 @@ function upstreamInit(
         stream: true,
         ...(typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
         ...(req.system ? { system: req.system } : {}),
-        messages: req.messages
+        messages: anthropicMessages(req)
       })
     }
   }
@@ -93,7 +90,7 @@ function upstreamInit(
     'content-type': 'application/json',
     authorization: `Bearer ${secret}`
   }
-  if (provider === 'cloudflare') headers['cf-aig-gateway-id'] = 'default'
+  if (provider === 'cloudflare') Object.assign(headers, { 'cf-aig-gateway-id': 'default' }, screenshotGatewayHeaders(req))
   return {
     headers,
     body: JSON.stringify({
@@ -496,7 +493,8 @@ export async function handleAsk(
   let req = parsed.req
   if (req.provider === 'cloudflare') {
     if (req.model.startsWith('workers-ai/')) return fail('model not allowed', 400)
-    req = { ...req, model: resolvePortalCloudflareModel(req.model, 'base') }
+    // parseUseBody pins screenshots to Scout; the DeepSeek catalogue is text-only.
+    if (!req.image) req = { ...req, model: resolvePortalCloudflareModel(req.model, 'base') }
   }
   const unlocked = await decryptActiveLlmSecret(store, env.OPERATOR_VAULT_KEY, req.provider)
   if (!unlocked) return fail('Operator cannot issue a use', 503)
@@ -522,7 +520,7 @@ export async function handleAsk(
     return fail('Operator cannot issue a use', 503)
   }
   if (!upstream.ok) {
-    return providerRefusedResponse(upstream, [unlocked.secret, unlocked.row.cipher, unlocked.row.iv])
+    return providerRefusedResponse(upstream, [unlocked.secret, unlocked.row.cipher, unlocked.row.iv], !!req.image)
   }
   await store.audit(crypto.randomUUID(), now, deviceId, 'ask', null, req.provider)
   await store.insertEvent({

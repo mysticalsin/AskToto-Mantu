@@ -7,7 +7,8 @@ import {
 import { getMachineId } from '../license'
 import { hashOperatorId, operatorHmacHeaders } from '../operator-hmac-sign'
 import { mainLog } from '../logger'
-import { userText, type StreamHandle, type StreamOptions } from './shared'
+import { operatorVisionModel, parseOperatorImage, type OperatorImage } from '@shared/operator-vision'
+import { imageMime, userText, type StreamHandle, type StreamOptions } from './shared'
 
 const OPERATOR_NATURAL_STOP_REASONS = new Set(['stop', 'end_turn', 'stop_sequence'])
 
@@ -32,15 +33,37 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
     return { abort: () => ac.abort() }
   }
 
+  let image: OperatorImage | undefined
+  let model = opts.model
+  if (opts.req.image || opts.req.mode === 'vision') {
+    if (opts.req.mode !== 'vision') {
+      queueMicrotask(() => fail('A screenshot can only be sent from an explicit screen Ask.'))
+      return { abort: () => ac.abort() }
+    }
+    const parsed = parseOperatorImage({ mimeType: imageMime(opts.req.image || ''), data: opts.req.image })
+    if (!parsed.ok) {
+      queueMicrotask(() => fail(parsed.error))
+      return { abort: () => ac.abort() }
+    }
+    const visionModel = operatorVisionModel(opts.providerId, model)
+    if (!visionModel) {
+      queueMicrotask(() => fail('This managed model cannot read screenshots. Choose a supported vision model in Settings.'))
+      return { abort: () => ac.abort() }
+    }
+    image = parsed.image
+    model = visionModel
+  }
+
   const messages = [
     ...opts.req.history.map((t) => ({ role: t.role, content: t.content })),
     { role: 'user' as const, content: userText(opts.req) }
   ]
   const body = JSON.stringify({
     provider: opts.providerId,
-    model: opts.model,
+    model,
     system: opts.system,
     messages,
+    ...(image ? { mode: 'vision', image } : {}),
     temperature: opts.temperature,
     maxTokens: opts.req.mode === 'recap' ? 8192 : 4096
   })
@@ -53,7 +76,7 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
 
   void (async () => {
     try {
-      const res = await fetch(url, { method: 'POST', headers, body, signal: ac.signal })
+      const res = await fetch(url, { method: 'POST', headers, body, redirect: 'manual', signal: ac.signal })
       if (aborted) return
       const ctype = res.headers.get('content-type') || ''
       const location = res.headers.get('location')

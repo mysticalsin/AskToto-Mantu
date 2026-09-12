@@ -1,4 +1,5 @@
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '../../src/shared/providers'
+import { operatorVisionModel, parseOperatorImage, type OperatorImage } from '../../src/shared/operator-vision'
 import { ensureDefaultAiGateway } from './ai-gateway'
 import { decryptVault } from './crypto'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
@@ -11,6 +12,8 @@ const SYSTEM_CAP = 32_000
 const MSG_CAP = 16_000
 const MSG_MAX = 20
 const TEXT_CAP = 64_000
+/** Base64 image cap plus bounded system/history overhead. Enforced before JSON parsing/HMAC hashing. */
+const REQUEST_BODY_CAP_BYTES = 6_000_000
 const ANTHROPIC_MESSAGES = 'https://api.anthropic.com/v1/messages'
 /** A provider call is a single request/response, never a stream, so it is bounded hard: nothing should
  *  ever hang an isolate waiting on a provider that stopped answering. */
@@ -20,7 +23,7 @@ const PROVIDER_FETCH_TIMEOUT_MS = 60_000
  *  every call site having to remember to pass one. */
 function withProviderTimeout(providerFetch: typeof fetch): typeof fetch {
   return ((input: RequestInfo | URL, init?: RequestInit) =>
-    providerFetch(input, { ...init, signal: AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS) })) as typeof fetch
+    providerFetch(input, { ...init, redirect: 'manual', signal: AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS) })) as typeof fetch
 }
 
 
@@ -31,6 +34,7 @@ export type UseRequest = {
   model: string
   system: string
   messages: UseMessage[]
+  image?: OperatorImage
   temperature?: number
   maxTokens?: number
 }
@@ -44,8 +48,10 @@ export type UseFail = {
   upstreamSnippet?: string
 }
 
-async function providerRefused(res: Response, secrets: readonly string[]): Promise<UseFail> {
-  const raw = await res.text().catch(() => '')
+async function providerRefused(res: Response, secrets: readonly string[], screenshot = false): Promise<UseFail> {
+  // Upstream errors can echo image/prompt content. Screenshot requests expose status only.
+  const raw = screenshot ? '' : await res.text().catch(() => '')
+  if (screenshot) await res.body?.cancel().catch(() => undefined)
   const fields = providerRefusedPayload(res.status, raw, secrets)
   return {
     ok: false,
@@ -81,6 +87,34 @@ function looksLikeImagePayload(raw: string): boolean {
   )
 }
 
+export async function readUseBody(request: Request): Promise<string | null> {
+  if (Number(request.headers.get('content-length')) > REQUEST_BODY_CAP_BYTES) {
+    await request.body?.cancel().catch(() => undefined)
+    return null
+  }
+  if (!request.body) return ''
+  const reader = request.body.getReader()
+  const decoder = new TextDecoder()
+  const parts: string[] = []
+  let bytes = 0
+  try {
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      bytes += chunk.value.byteLength
+      if (bytes > REQUEST_BODY_CAP_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        return null
+      }
+      parts.push(decoder.decode(chunk.value, { stream: true }))
+    }
+    parts.push(decoder.decode())
+    return parts.join('')
+  } finally {
+    reader.releaseLock()
+  }
+}
+
 export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | UseFail {
   let parsed: unknown
   try {
@@ -103,11 +137,15 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
   ]) {
     if (body[field] != null) return { ok: false, error: 'provider not allowed', status: 400 }
   }
+  let image: OperatorImage | undefined
   if (body.image != null || body.vision === true || body.mode === 'vision') {
-    return { ok: false, error: 'screenshots are not accepted on Operator use', status: 400 }
+    if (body.mode !== 'vision') return { ok: false, error: 'A screenshot requires an explicit screen Ask.', status: 400 }
+    const parsedImage = parseOperatorImage(body.image)
+    if (!parsedImage.ok) return { ok: false, error: parsedImage.error, status: 400 }
+    image = parsedImage.image
   }
   const provider = typeof body.provider === 'string' ? body.provider.trim() : ''
-  const model = typeof body.model === 'string' ? body.model.trim() : ''
+  let model = typeof body.model === 'string' ? body.model.trim() : ''
   if (!provider || !model) return { ok: false, error: 'provider and model required', status: 400 }
   if (looksLikeSecret(provider) || looksLikeSecret(model)) {
     return { ok: false, error: 'provider not allowed', status: 400 }
@@ -118,6 +156,11 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
   if (provider !== 'cloudflare' && provider in PROVIDERS && requiresUserBaseUrl(provider as ProviderId)) {
     return { ok: false, error: 'provider not allowed', status: 400 }
   }
+  if (image) {
+    const visionModel = operatorVisionModel(provider, model)
+    if (!visionModel) return { ok: false, error: 'This managed model cannot read screenshots. Choose a supported vision model in Settings.', status: 400 }
+    model = visionModel
+  }
   const system = typeof body.system === 'string' ? clip(body.system, SYSTEM_CAP) : ''
   if (looksLikeImagePayload(system)) {
     return { ok: false, error: 'screenshots are not accepted on Operator use', status: 400 }
@@ -126,7 +169,7 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
     return { ok: false, error: 'messages required', status: 400 }
   }
   const messages: UseMessage[] = []
-  for (const item of body.messages.slice(0, MSG_MAX)) {
+  for (const item of body.messages.slice(-MSG_MAX)) {
     if (!item || typeof item !== 'object') continue
     const row = item as Record<string, unknown>
     const role = row.role === 'assistant' ? 'assistant' : row.role === 'user' ? 'user' : ''
@@ -138,9 +181,36 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
     messages.push({ role, content })
   }
   if (!messages.length) return { ok: false, error: 'messages required', status: 400 }
+  if (image && messages.at(-1)?.role !== 'user') return { ok: false, error: 'A screenshot requires a final user question.', status: 400 }
   const temperature = typeof body.temperature === 'number' && Number.isFinite(body.temperature) ? body.temperature : undefined
   const maxTokens = typeof body.maxTokens === 'number' && Number.isFinite(body.maxTokens) ? Math.min(8192, Math.max(16, Math.floor(body.maxTokens))) : undefined
-  return { ok: true, req: { provider, model, system, messages, temperature, maxTokens } }
+  return { ok: true, req: { provider, model, system, messages, ...(image ? { image } : {}), temperature, maxTokens } }
+}
+
+export function openaiMessages(req: UseRequest): unknown[] {
+  return [
+    ...(req.system ? [{ role: 'system', content: req.system }] : []),
+    ...req.messages.map((message, index) => req.image && index === req.messages.length - 1
+      ? { role: message.role, content: [
+          { type: 'text', text: message.content },
+          { type: 'image_url', image_url: { url: `data:${req.image.mimeType};base64,${req.image.data}` } }
+        ] }
+      : message)
+  ]
+}
+
+export function anthropicMessages(req: UseRequest): unknown[] {
+  return req.messages.map((message, index) => req.image && index === req.messages.length - 1
+    ? { role: message.role, content: [
+        { type: 'image', source: { type: 'base64', media_type: req.image.mimeType, data: req.image.data } },
+        { type: 'text', text: message.content }
+      ] }
+    : message)
+}
+
+/** Keep usage metadata but never retain screenshot payloads in AI Gateway logs or cache. */
+export function screenshotGatewayHeaders(req: UseRequest): Record<string, string> {
+  return req.image ? { 'cf-aig-collect-log-payload': 'false', 'cf-aig-skip-cache': 'true' } : {}
 }
 
 export async function decryptActiveLlmSecret(
@@ -217,10 +287,10 @@ async function callAnthropic(
       max_tokens: req.maxTokens ?? 4096,
       ...(typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
       ...(req.system ? { system: req.system } : {}),
-      messages: req.messages
+      messages: anthropicMessages(req)
     })
   })
-  if (!res.ok) return providerRefused(res, [secret])
+  if (!res.ok) return providerRefused(res, [secret], !!req.image)
   const parsed = anthropicText(await res.json().catch(() => null))
   if (!parsed) return { ok: false, error: 'provider returned an empty answer', status: 502 }
   return parsed
@@ -236,13 +306,14 @@ async function callCloudflareGateway(
   if (!id) return { ok: false, error: 'Operator cannot issue a use', status: 503 }
   const url = `https://api.cloudflare.com/client/v4/accounts/${id}/ai/v1/chat/completions`
   await ensureDefaultAiGateway(secret, id, providerFetch)
-  const messages = [...(req.system ? [{ role: 'system' as const, content: req.system }] : []), ...req.messages]
+  const messages = openaiMessages(req)
   const res = await providerFetch(url, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${secret}`,
-      'cf-aig-gateway-id': 'default'
+      'cf-aig-gateway-id': 'default',
+      ...screenshotGatewayHeaders(req)
     },
     body: JSON.stringify({
       model: req.model,
@@ -251,7 +322,7 @@ async function callCloudflareGateway(
       ...(req.maxTokens ? { max_tokens: req.maxTokens } : {})
     })
   })
-  if (!res.ok) return providerRefused(res, [secret])
+  if (!res.ok) return providerRefused(res, [secret], !!req.image)
   const parsed = openaiText(await res.json().catch(() => null))
   if (!parsed) return { ok: false, error: 'provider returned an empty answer', status: 502 }
   return parsed
@@ -265,7 +336,7 @@ async function callOpenAICompat(
 ): Promise<{ text: string; inputTokens?: number; outputTokens?: number } | UseFail> {
   const root = baseUrl.replace(/\/$/, '')
   const url = root.endsWith('/chat/completions') ? root : `${root}/chat/completions`
-  const messages = [...(req.system ? [{ role: 'system' as const, content: req.system }] : []), ...req.messages]
+  const messages = openaiMessages(req)
   const res = await providerFetch(url, {
     method: 'POST',
     headers: {
@@ -279,7 +350,7 @@ async function callOpenAICompat(
       ...(req.maxTokens ? { max_tokens: req.maxTokens } : {})
     })
   })
-  if (!res.ok) return providerRefused(res, [secret])
+  if (!res.ok) return providerRefused(res, [secret], !!req.image)
   const parsed = openaiText(await res.json().catch(() => null))
   if (!parsed) return { ok: false, error: 'provider returned an empty answer', status: 502 }
   return parsed
