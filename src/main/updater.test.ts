@@ -186,6 +186,38 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
     ).toBe(false)
     expect(latestReleaseHasApprovedInstallers({ tag_name: 'v1.8.4' }, '1.8.4', 'linux')).toBe(false)
   })
+
+  it.each([
+    { platform: 'darwin', assets: ['Metis-1.8.4.dmg', 'Metis-1.8.4.zip', 'latest-mac.yml'], ready: true },
+    { platform: 'darwin', assets: ['Metis-1.8.4.zip', 'latest-mac.yml'], ready: false },
+    { platform: 'darwin', assets: ['Metis-1.8.4.dmg', 'latest-mac.yml'], ready: false },
+    { platform: 'darwin', assets: ['Metis-1.8.4.dmg', 'Metis-1.8.4.zip'], ready: false },
+    { platform: 'darwin', assets: ['Metis-1.8.3.dmg', 'Metis-1.8.3.zip', 'latest-mac.yml'], ready: false },
+    { platform: 'darwin', assets: ['Metis-Setup-1.8.4.exe', 'latest.yml'], ready: false },
+    { platform: 'win32', assets: ['Metis-Setup-1.8.4.exe', 'latest.yml'], ready: true },
+    { platform: 'win32', assets: ['latest.yml'], ready: false },
+    { platform: 'win32', assets: ['Metis-Setup-1.8.4.exe'], ready: false },
+    { platform: 'win32', assets: ['Metis-Setup-1.8.3.exe', 'latest.yml'], ready: false },
+    { platform: 'win32', assets: ['Metis-1.8.4.dmg', 'Metis-1.8.4.zip', 'latest-mac.yml'], ready: false }
+  ] as const)('offers updates on $platform only when its versioned files are ready: $assets', ({ platform, assets, ready }) => {
+    const restore = pinPlatform(platform)
+    try {
+      const result = parseLatestRelease({
+        tag_name: 'v1.8.4',
+        assets: assets.map((name) => ({ name }))
+      }, '1.8.3')
+      expect(result.ok).toBe(ready)
+      if (ready) {
+        expect(result.available).toBe(true)
+        expect(result.url).toBe('https://github.com/mysticalsin/Metis-Releases/releases/latest')
+      } else {
+        expect(result.available).toBeUndefined()
+        expect(result.error).toMatch(/not yet fully published for this platform/)
+      }
+    } finally {
+      restore()
+    }
+  })
 })
 
 describe('checkForUpdateNow — never throws, always a human-readable result', () => {
@@ -280,22 +312,34 @@ describe('MQA-079 — blockedUpdateChannel guards the manual check, not just ini
     expect(r.error).toMatch(/managed by your organisation/i)
   })
 
-  it('still checks the feed on an ordinary build (guard must not disable updates for everyone)', async () => {
-    vi.mocked(net.fetch).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        tag_name: 'v99.0.0',
-        html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0',
-        assets: [
-          { name: 'Metis-99.0.0.dmg' },
-          { name: 'Metis-99.0.0.zip' },
-          { name: 'latest-mac.yml' }
-        ]
-      })
-    } as unknown as Response)
-    const r = await checkForUpdateNow()
-    expect(net.fetch).toHaveBeenCalledTimes(1)
-    expect(r.available).toBe(true)
+  it.each(['darwin', 'win32', 'linux'] as const)('still checks the feed on an ordinary %s build', async (platform) => {
+    const restore = pinPlatform(platform)
+    try {
+      vi.mocked(net.fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          tag_name: 'v99.0.0',
+          html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0',
+          assets: [
+            { name: 'Metis-99.0.0.dmg' },
+            { name: 'Metis-99.0.0.zip' },
+            { name: 'latest-mac.yml' },
+            { name: 'Metis-Setup-99.0.0.exe' },
+            { name: 'latest.yml' },
+            { name: 'Metis-Native-99.0.0.zip' }
+          ]
+        })
+      } as unknown as Response)
+      const r = await checkForUpdateNow()
+      expect(net.fetch).toHaveBeenCalledTimes(1)
+      expect(net.fetch).toHaveBeenCalledWith(
+        'https://api.github.com/repos/mysticalsin/Metis-Releases/releases/latest',
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      )
+      expect(r.available).toBe(true)
+    } finally {
+      restore()
+    }
   })
 })
 
@@ -528,7 +572,7 @@ describe('enterprise private update feed (admin managed-config `updateFeedUrl`)'
   })
 })
 
-describe('Metis-Releases feed rules — QA Latest only', () => {
+describe('MQA-292 Metis-Releases feed rules — QA Latest only', () => {
   it('the in-app check and electron-builder publish the same public owner/repo', async () => {
     const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
     const { join } = await vi.importActual<typeof import('node:path')>('node:path')

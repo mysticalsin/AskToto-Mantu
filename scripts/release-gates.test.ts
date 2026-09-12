@@ -144,6 +144,22 @@ describe('deterministic packaging toolchain', () => {
 })
 
 describe('direct release signing gates', () => {
+  it('tests the tagged source on Windows as well as Linux before packaging', () => {
+    const workflow = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8')
+    const sourceGate = workflow.slice(workflow.indexOf('  release-quality:'), workflow.indexOf('  release-macos:'))
+    expect(sourceGate).toContain('os: [ubuntu-latest, windows-latest]')
+    expect(sourceGate).toContain('fail-fast: false')
+    expect(sourceGate).toContain('npm test')
+    expect(sourceGate).toContain("runner.os == 'Linux' && '--with-deps'")
+  })
+
+  it('keeps shared Cloudflare provider credentials out of the standard public installers', () => {
+    const workflow = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8')
+    expect(workflow).not.toContain('METIS_CLOUDFLARE_API_TOKEN:')
+    expect(workflow).not.toContain('METIS_CLOUDFLARE_ACCOUNT_ID:')
+    expect(workflow).not.toContain('METIS_EMBED_CLOUDFLARE_KEY:')
+  })
+
   it('requires an explicit expected Windows signer identity', () => {
     const result = spawnSync(process.execPath, [join(__dirname, 'check-release-secrets.mjs'), 'win'], {
       encoding: 'utf8',

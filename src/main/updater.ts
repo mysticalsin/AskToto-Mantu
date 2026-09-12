@@ -150,23 +150,21 @@ export const LATEST_REQUIRED_ASSET_PATTERNS = [
   /^Metis-Native-\d+\.\d+\.\d+\.zip$/
 ] as const
 
-/** True when the GitHub Latest payload lists all three customer installers. */
+/** Require this platform's installer and update metadata before offering the release. */
 export function latestReleaseHasApprovedInstallers(
   payload: unknown,
   version: string,
   platform: NodeJS.Platform = process.platform
 ): boolean {
   const names = releaseAssetNames(payload)
-  const requirements =
-    platform === 'darwin'
-      ? [`Metis-${version}.dmg`, `Metis-${version}.zip`, 'latest-mac.yml']
-      : platform === 'win32'
-        ? [`Metis-Setup-${version}.exe`, 'latest.yml']
-        : LATEST_REQUIRED_ASSET_PATTERNS
-  if (requirements === LATEST_REQUIRED_ASSET_PATTERNS) {
-    return requirements.every((re) => names.some((n) => re.test(n)))
+  if (platform === 'darwin') {
+    return [`Metis-${version}.dmg`, `Metis-${version}.zip`, 'latest-mac.yml']
+      .every((required) => names.includes(required))
   }
-  return requirements.every((required) => names.includes(required))
+  if (platform === 'win32') {
+    return [`Metis-Setup-${version}.exe`, 'latest.yml'].every((required) => names.includes(required))
+  }
+  return LATEST_REQUIRED_ASSET_PATTERNS.every((re) => names.some((name) => re.test(name)))
 }
 
 /** Pure: turn a GitHub "latest release" API payload into an UpdateCheckResult. Exported for tests. */

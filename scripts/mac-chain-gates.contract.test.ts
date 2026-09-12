@@ -9,12 +9,9 @@ import { describe, expect, it } from 'vitest'
  * Two things are asserted here, both about `package.json`'s mac scripts rather than about any code
  * that runs at app runtime, because that is where these defects live.
  *
- * MQA-207 — the real-launch gate (scripts/check-packaged-launch.mjs) is Win32-only by construction and
- * the mac chains deliberately do NOT call it: wiring it in would hard-fail every mac build, since the
- * script refuses on a host it cannot inspect. That refusal must stay a refusal (exit 2, never 0 — a
- * gate that silently passes is worse than no gate) and must keep printing the manual procedure that
- * covers the gap, including the Rosetta run of the universal DMG's second slice. The Windows chains
- * that DO have automated coverage must keep it.
+ * MQA-207 — direct mac chains run the verified macOS app.started launch gate against their actual
+ * output. The Windows window inspection remains Windows-only. Unsupported hosts still fail loudly,
+ * and the manual Rosetta procedure documents the additional universal slice check.
  *
  * MQA-208 — every mac chain that invokes electron-builder must first stage a checksum-verified Electron
  * distribution through scripts/provision-electron-dist.mjs and point electron-builder at it. release:mas
@@ -102,11 +99,9 @@ describe('MQA-207 — the launch gate never silently covers a host it cannot ins
     }
   })
 
-  it('MQA-207: no mac chain calls the Win32-only launch gate', () => {
-    // Not an oversight to be "fixed" by wiring it in: the script exits 2 on any non-win32 host, so a
-    // mac chain that called it could never go green. macOS needs its own gate first.
-    for (const name of MAC_BUILD_CHAINS) {
-      expect(pkg.scripts[name]).not.toContain('check-packaged-launch.mjs')
+  it('MQA-207: each direct mac chain opts into its supported launch gate', () => {
+    for (const name of MAC_BUILD_CHAINS.filter((name) => name !== 'release:mas')) {
+      expect(pkg.scripts[name]).toContain('ASKTOTO_MAC_LAUNCH_GATE=1 node scripts/check-packaged-launch.mjs')
     }
   })
 
@@ -193,15 +188,13 @@ describe('MQA-249 — a portable "this build came up" signal, and the macOS gate
     expect(launchGate).toMatch(/ASKTOTO_USERDATA: profile/)
   })
 
-  it('MQA-249: it is opt-in until someone has actually run it on a Mac', () => {
-    // Written on Windows and never executed on macOS. Wiring an unverified gate into every mac build
-    // would trade a known gap for an unknown one, so the chains stay unchanged and the refusal advertises
-    // the manual command instead. When it passes on a Mac, wire it in and MQA-207 can close.
-    for (const name of MAC_BUILD_CHAINS) {
-      expect(pkg.scripts[name], `${name} must not depend on the unverified gate`).not.toContain(
-        'check-packaged-launch.mjs'
-      )
+  it('MQA-249: each direct mac chain launches its own output, including the local custom directory', () => {
+    for (const name of ['dist', 'release:build:mac']) {
+      expect(pkg.scripts[name]).toContain('check-packaged-launch.mjs release/mac-universal/Metis.app')
     }
-    expect(launchGate).toMatch(/ASKTOTO_MAC_LAUNCH_GATE=1 node scripts\/check-packaged-launch\.mjs/)
+    expect(pkg.scripts['dist:local']).toContain(
+      'check-packaged-launch.mjs /Users/tony/AI-Brain-build/asktoto-release/mac-universal/Metis.app'
+    )
+    expect(pkg.scripts['dist:local']).toContain('verify-signing.mjs /Users/tony/AI-Brain-build/asktoto-release')
   })
 })
