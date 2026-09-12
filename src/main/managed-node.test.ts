@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 
 vi.mock('electron')
 
+import { app } from 'electron'
 import {
+  MANAGED_NODE_ASSETS,
   MANAGED_NODE_VERSION,
   extractManagedNodeArchiveArgs,
   managedNodeDistUrl,
@@ -18,6 +21,19 @@ import {
 
 const builderYml = readFileSync(join(__dirname, '../../electron-builder.yml'), 'utf8')
 const packageJson = readFileSync(join(__dirname, '../../package.json'), 'utf8')
+const scratch: string[] = []
+const processDescriptors = new Map(
+  ['platform', 'arch', 'resourcesPath'].map((key) => [key, Object.getOwnPropertyDescriptor(process, key)])
+)
+
+afterEach(() => {
+  for (const [key, descriptor] of processDescriptors) {
+    if (descriptor) Object.defineProperty(process, key, descriptor)
+    else Reflect.deleteProperty(process, key)
+  }
+  vi.restoreAllMocks()
+  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
 
 function winExtraResourcesFromYml(yml: string): { from: string; to: string }[] {
   // Windows CI checkouts may rewrite LF → CRLF. `^win:\n` then misses the win: block and the
@@ -107,12 +123,64 @@ describe('Windows packaging does not require a preinstalled Node', () => {
     }
   })
 
-  it('pins official Node 22.22.3 and a quiet VC++ install', () => {
-    expect(MANAGED_NODE_VERSION).toBe('22.22.3')
-    expect(managedNodeDistUrl('node-v22.22.3-win-x64.zip')).toBe(
-      'https://nodejs.org/dist/v22.22.3/node-v22.22.3-win-x64.zip'
+  it('MQA-314: pins supported official Node 24.21.0 and a quiet VC++ install', () => {
+    expect(MANAGED_NODE_VERSION).toBe('24.21.0')
+    expect(managedNodeDistUrl('node-v24.21.0-win-x64.zip')).toBe(
+      'https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-x64.zip'
     )
     expect(managedNodePlatformKey('win32', 'x64')).toBe('win32-x64')
     expect(vcredistQuietArgs()).toEqual(['/install', '/quiet', '/norestart'])
+  })
+
+  it('satisfies the Node floor of the locked Dust SDK used by the managed Dust CLI', () => {
+    const lock = JSON.parse(readFileSync(join(__dirname, '../../package-lock.json'), 'utf8'))
+    const requirement = lock.packages['node_modules/@dust-tt/client'].engines.node
+    expect(requirement).toMatch(/^>=\d+\.\d+\.\d+$/)
+    const required = requirement.slice(2).split('.').map(Number)
+    const bundled = MANAGED_NODE_VERSION.split('.').map(Number)
+    const firstDifference = bundled.findIndex((part, index) => part !== required[index])
+    expect(firstDifference === -1 || bundled[firstDifference] > required[firstDifference]).toBe(true)
+  })
+
+  it('uses the same manifest for runtime resolution and all installer downloads', () => {
+    const manifest = JSON.parse(readFileSync(join(__dirname, '../shared/managed-node-manifest.json'), 'utf8'))
+    expect(MANAGED_NODE_VERSION).toBe(manifest.version)
+    expect(MANAGED_NODE_ASSETS).toEqual(manifest.assets)
+    const provisioner = readFileSync(join(__dirname, '../../scripts/fetch-managed-node.mjs'), 'utf8')
+    expect(provisioner).toContain('managed-node-manifest.json')
+    expect(Object.keys(manifest.assets).sort()).toEqual(['darwin-arm64', 'darwin-x64', 'win32-x64'])
+    for (const [key, value] of Object.entries(manifest.assets)) {
+      const spec = value as { file: string; sha256: string }
+      expect(spec.file).toContain(`node-v${manifest.version}-${key.replace('win32-', 'win-')}`)
+      expect(spec.sha256).toMatch(/^[a-f0-9]{64}$/)
+    }
+  })
+
+  it.each([
+    ['win32', 'x64', 'win-x64', 'node.exe'],
+    ['darwin', 'arm64', 'darwin-arm64', 'bin/node'],
+    ['darwin', 'x64', 'darwin-x64', 'bin/node']
+  ])('rejects stale or unmarked packaged Node on %s %s and accepts only the pinned runtime', (platform, arch, dir, nodeRel) => {
+    const fixture = mkdtempSync(join(tmpdir(), 'metis-managed-node-version-'))
+    scratch.push(fixture)
+    Object.defineProperty(process, 'platform', { configurable: true, value: platform })
+    Object.defineProperty(process, 'arch', { configurable: true, value: arch })
+    Object.defineProperty(process, 'resourcesPath', { configurable: true, value: join(fixture, 'resources') })
+    vi.mocked(app.getPath).mockImplementation(() => join(fixture, 'userData'))
+    const root = join(fixture, 'resources', 'managed-node', dir)
+    mkdirSync(dirname(join(root, nodeRel)), { recursive: true })
+    writeFileSync(join(root, nodeRel), 'fixture binary')
+    expect(resolveManagedNode()).toBeNull()
+    writeFileSync(join(root, '.node-version'), '22.22.3\n')
+    expect(resolveManagedNode()).toBeNull()
+    const cacheRoot = join(fixture, 'userData', 'managed-node', MANAGED_NODE_VERSION, dir)
+    mkdirSync(dirname(join(cacheRoot, nodeRel)), { recursive: true })
+    writeFileSync(join(cacheRoot, nodeRel), 'downloaded binary fixture')
+    writeFileSync(join(cacheRoot, '.node-version'), '22.22.3\n')
+    expect(resolveManagedNode()).toBeNull()
+    writeFileSync(join(cacheRoot, '.node-version'), `${MANAGED_NODE_VERSION}\n`)
+    expect(resolveManagedNode()).toMatchObject({ node: join(cacheRoot, nodeRel), source: 'userData' })
+    writeFileSync(join(root, '.node-version'), `${MANAGED_NODE_VERSION}\n`)
+    expect(resolveManagedNode()).toMatchObject({ node: join(root, nodeRel), source: 'packaged' })
   })
 })

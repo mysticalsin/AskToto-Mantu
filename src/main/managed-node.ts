@@ -5,7 +5,8 @@
  * self-contained Claude/Codex entry scripts. @dust-tt/dust-cli statically imports `keytar`, a
  * native addon compiled for official Node's NODE_MODULE_VERSION, not Electron's. Spawning Dust
  * under Electron-as-node therefore fails to load keytar. This module resolves a pinned official
- * Node (22.22.3, matching engines/.node-version) from extraResources or userData so the user
+ * Node from the shared managed-runtime manifest (compatible with Dust's engine requirement),
+ * independently of the build toolchain, from extraResources or userData so the user
  * never installs Node, Git, or VC++ themselves.
  *
  * Windows packaging copies resources/managed-node/win-x64 → extraResources. First-run / Set up
@@ -17,29 +18,10 @@ import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
+import managedNodeManifest from '@shared/managed-node-manifest.json'
 
-export const MANAGED_NODE_VERSION = '22.22.3'
-
-export const MANAGED_NODE_ASSETS = {
-  'win32-x64': {
-    file: 'node-v22.22.3-win-x64.zip',
-    sha256: '6c8d54f635feff4df76c2ca80f45332eb2ff57d25226edce36592e51a177ee33',
-    nodeRelPath: 'node.exe',
-    npmRelPath: 'npm.cmd'
-  },
-  'darwin-arm64': {
-    file: 'node-v22.22.3-darwin-arm64.tar.gz',
-    sha256: '0da7ff74ef8611328c8212f17943368713a2ad953fb7d89a8c8a0eae87c23207',
-    nodeRelPath: join('bin', 'node'),
-    npmRelPath: join('bin', 'npm')
-  },
-  'darwin-x64': {
-    file: 'node-v22.22.3-darwin-x64.tar.gz',
-    sha256: '45830ba752fa0d892c6dcd640946669801293cac820a33591ded40ac075198ec',
-    nodeRelPath: join('bin', 'node'),
-    npmRelPath: join('bin', 'npm')
-  }
-} as const
+export const MANAGED_NODE_VERSION = managedNodeManifest.version
+export const MANAGED_NODE_ASSETS = managedNodeManifest.assets
 
 export type ManagedNodePlatform = keyof typeof MANAGED_NODE_ASSETS
 
@@ -86,6 +68,7 @@ export interface ManagedNodeCommand {
 }
 
 function nodeAndNpmAt(root: string, key: ManagedNodePlatform | null): ManagedNodeCommand | null {
+  if (readManagedNodeMarker(root) !== MANAGED_NODE_VERSION) return null
   if (!key) {
     const winNode = join(root, 'node.exe')
     const macNode = join(root, 'bin', 'node')
@@ -236,7 +219,7 @@ export async function installManagedNodeFromArchive(archivePath: string, destRoo
 
 /**
  * Resolve packaged extraResources Node, or a previous userData extract, or download the official
- * Node 22.22.3 archive into userData. Never requires a preinstalled system Node.
+ * pinned Node archive into userData. Never requires a preinstalled system Node.
  * Returns null on platforms we do not vendor (Linux CI) — callers fall back to Electron-as-node.
  */
 export async function ensureManagedNode(): Promise<ManagedNodeCommand | null> {
