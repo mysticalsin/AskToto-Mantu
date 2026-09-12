@@ -3411,7 +3411,10 @@ const OPERATOR_ENTITLEMENT_LABELS: Record<string, string> = {
  * Polls IPC.operatorStatus (local settings + in-memory state only, no network) rather than reading off
  * `settings` directly, since tier/entitlements/integrations live outside the normal settings push here.
  */
-function OperatorLicenseCard({ refreshSettings }: { refreshSettings: () => Promise<void> }): JSX.Element {
+function OperatorLicenseCard({ refreshSettings, showIdentity = false }: {
+  refreshSettings: () => Promise<void>
+  showIdentity?: boolean
+}): JSX.Element {
   const [status, setStatus] = useState<{
     configured: boolean
     fundedProviders?: string[]
@@ -3459,11 +3462,17 @@ function OperatorLicenseCard({ refreshSettings }: { refreshSettings: () => Promi
   const waitingForOperator = hasLicense && !status?.tier
 
   return (
+    <>
+    {showIdentity && <IdentitySection managedTier={status?.tier ?? null} />}
     <div className="mt-2 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
-      <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Operator license</span>
+      <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Métis licence</span>
+      <p className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+        Activate the licence your administrator provided. Métis verifies this device and connects managed AI automatically; no personal API key is needed.
+      </p>
       <div className="flex gap-2">
         <input
           type="password"
+          aria-label="Métis licence key"
           value={input}
           onChange={(e) => {
             setInput(e.target.value)
@@ -3539,6 +3548,7 @@ function OperatorLicenseCard({ refreshSettings }: { refreshSettings: () => Promi
         </div>
       )}
     </div>
+    </>
   )
 }
 
@@ -6863,7 +6873,7 @@ export function Settings({
 
             {tab === 'profile' && (
               <div className="flex flex-col gap-6">
-                <IdentitySection />
+                <OperatorLicenseCard refreshSettings={refreshSettings} showIdentity />
                 <Section title="About you" desc="Used for interview and sales modes. The more detail, the better the answers." icon={User}>
                   <ProfileEditor
                     profile={settings.profile}

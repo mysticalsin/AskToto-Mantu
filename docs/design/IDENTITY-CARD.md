@@ -16,6 +16,15 @@ Taste references (not clones): Apple Wallet pass, Apple Card, Apple Account
 device card, and a 3D interactive identity card that turns in the hand.
 Never clone Vibe Island wording, pixel art, 8-bit type, or layout.
 
+## Managed activation amendment — 2026-09-12
+
+MQA-304 supersedes the phase-one activation-unavailable copy and key/import controls below.
+Settings → Identity now uses the same verified Operator licence activation as Settings → Privacy.
+The member pass receives only the confirmed tier and device identity, never the raw licence token.
+An activated managed seat displays Métis or Métis Light instead of the unrelated legacy Personal state.
+Do not restore the unavailable legacy activation form. Offline licence parsing remains a separate
+backend capability; file presence alone must never imply a verified managed seat or funded AI readiness.
+
 ## One accent
 
 The only chromatic accent is **Mantu Bright Purple** `#7F00DA`.

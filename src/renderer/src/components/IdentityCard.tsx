@@ -11,11 +11,14 @@ import {
   tiltFromPointer
 } from '../lib/identity-card-motion'
 
-export function passAriaLabel(snap: IdentitySnapshot): string {
-  return `Métis member pass. Member ${snap.memberNumberLabel}. ${snap.deviceName}. License ${licenseWord(snap)}.`
+type ManagedTier = 'metis' | 'metis-light' | null
+
+export function passAriaLabel(snap: IdentitySnapshot, managedTier: ManagedTier = null): string {
+  return `Métis member pass. Member ${snap.memberNumberLabel}. ${snap.deviceName}. License ${licenseWord(snap, managedTier)}.`
 }
 
-function licenseWord(snap: IdentitySnapshot): string {
+function licenseWord(snap: IdentitySnapshot, managedTier: ManagedTier = null): string {
+  if (managedTier) return managedTier === 'metis-light' ? 'Métis Light' : 'Métis'
   if (snap.license.state === 'licensed' || snap.license.state === 'grace') {
     if (snap.license.edition === 'enterprise') return 'Enterprise'
     if (snap.license.edition === 'pro') return 'Pro'
@@ -25,9 +28,11 @@ function licenseWord(snap: IdentitySnapshot): string {
 
 export function IdentityCard({
   snapshot,
+  managedTier = null,
   reducedMotion: reducedMotionProp
 }: {
   snapshot: IdentitySnapshot
+  managedTier?: ManagedTier
   reducedMotion?: boolean
 }): JSX.Element {
   const reduced = reducedMotionProp ?? prefersReducedMotion()
@@ -130,7 +135,7 @@ export function IdentityCard({
     }
   }
 
-  const edition = licenseWord(snapshot)
+  const edition = licenseWord(snapshot, managedTier)
   const serialLabel = snapshot.serialKind === 'hardware' ? 'Serial' : 'Install ID'
 
   return (
@@ -140,7 +145,7 @@ export function IdentityCard({
         role="button"
         tabIndex={0}
         aria-labelledby={labelId}
-        aria-label={passAriaLabel(snapshot)}
+        aria-label={passAriaLabel(snapshot, managedTier)}
         aria-pressed={flipped}
         className={`metis-pass no-drag cl-focus${reduced ? ' metis-pass--static' : ''}`}
         onPointerMove={onPointerMove}
@@ -163,7 +168,7 @@ export function IdentityCard({
         onKeyDown={onKeyDown}
       >
         <span id={labelId} className="sr-only">
-          {passAriaLabel(snapshot)}
+          {passAriaLabel(snapshot, managedTier)}
         </span>
         <div className="metis-pass-face metis-pass-front">
           <div className="metis-pass-top">
@@ -191,10 +196,12 @@ export function IdentityCard({
             <span className="metis-pass-edition">{edition}</span>
           </div>
           <p className="metis-pass-copy">
-            Activation is not open yet. A key you enter is checked, then returned unused.
+            {managedTier
+              ? 'Managed licence verified. Features and AI readiness are shown below.'
+              : 'Activate your Métis licence below to connect this device to managed AI.'}
           </p>
           {snapshot.license.managedFilePresent && (
-            <p className="metis-pass-copy metis-pass-copy--soft">A managed license file is on this device. Activation is not open yet.</p>
+            <p className="metis-pass-copy metis-pass-copy--soft">An offline licence file is on this device. Managed AI uses the Métis licence below.</p>
           )}
           {snapshot.license.seats != null && snapshot.license.state !== 'unlicensed' && (
             <p className="metis-pass-copy metis-pass-copy--soft">
