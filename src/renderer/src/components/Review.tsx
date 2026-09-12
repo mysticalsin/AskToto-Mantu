@@ -4,6 +4,7 @@ import type { TranscriptLine, MeetingSummary, McpConnection, RecapExport } from 
 import type { RecapStatus } from '@shared/recap-status'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
+import { reviewDurationSeconds } from '@shared/meeting-duration'
 import { talkStats } from '@shared/talkstats'
 import { fnv1a } from '@shared/hash'
 import { Markdown } from './Markdown'
@@ -227,6 +228,7 @@ export const Review = memo(function Review({
   maxSaveAttempts,
   saveGaveUp,
   startedAt,
+  durationMs,
   showTranscript,
   meetingMeta,
   confidential,
@@ -264,6 +266,7 @@ export const Review = memo(function Review({
   /** True once App's auto-save ladder has stopped scheduling attempts — see saveStatusLine. */
   saveGaveUp?: boolean
   startedAt?: number
+  durationMs?: number
   showTranscript?: boolean // opt-in: auto-expand the full transcript; default summary-only
   meetingMeta?: { title: string; date: string }
   /** Task MI-5 — this meeting's saved `confidential` frontmatter flag, so the toggle below reflects the
@@ -479,19 +482,9 @@ export const Review = memo(function Review({
     [speechLines]
   )
 
-  const durationSec = useMemo(() => {
-    if (lines.length > 1) {
-      const times = lines.map((l) => l.t)
-      return Math.floor((Math.max(...times) - Math.min(...times)) / 1000)
-    }
-    // A saved past meeting with a single line (e.g. a short audio import that fit one transcription
-    // window) has no measurable span — the wall-clock fallback below is only for a LIVE just-ended
-    // session whose lines haven't landed yet. 0 hides the Duration chip below. endedAtRef (mount time)
-    // is FIXED — the meeting is over, so its duration must not keep growing while the user reads this.
-    if (isPastMeeting) return 0
-    if (startedAt) return Math.max(0, Math.floor((endedAtRef.current - startedAt) / 1000))
-    return 0
-  }, [lines, startedAt, isPastMeeting])
+  const durationSec = useMemo(() => reviewDurationSeconds({
+    durationMs, lines, startedAt, isPastMeeting, endedAt: endedAtRef.current
+  }), [durationMs, lines, startedAt, isPastMeeting])
 
   const participants = useMemo(() => new Set(lines.map((l) => l.speaker)).size, [lines])
 

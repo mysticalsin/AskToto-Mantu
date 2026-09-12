@@ -446,6 +446,7 @@ export function App(): JSX.Element {
     recapStatus?: RecapStatus
     lines: TranscriptLine[]
     startedAt: number
+    durationMs?: number
     confidential: boolean
     /** MQA-092 — the meeting's saved `crm_pushed` fingerprint, so Review knows a recap that already
      *  reached the CRM in an earlier session and does not re-arm the push. */
@@ -2807,6 +2808,7 @@ export function App(): JSX.Element {
       recapStatus: r.recapStatus,
       lines: r.lines || [],
       startedAt: r.startedAt || 0,
+      durationMs: r.durationMs,
       confidential: !!r.confidential,
       crmPushedKey: r.crmPushedKey
     })
@@ -3298,6 +3300,7 @@ export function App(): JSX.Element {
         maxSaveAttempts={MAX_SAVE_RETRIES}
         saveGaveUp={pm ? false : saveGaveUp}
         startedAt={pm ? pm.startedAt : meetingStartRef.current}
+        durationMs={pm?.durationMs}
         showTranscript={settings?.showFullTranscriptInReview ?? false}
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
         confidential={pm ? pm.confidential : false}

@@ -62,6 +62,23 @@ describe('recall — language tags round-trip through save → recallRead', () =
     vi.restoreAllMocks()
   })
 
+  it('MQA-310 round-trips measured duration instead of deriving it from line starts', async () => {
+    const saved = await saveMeeting(testSettings, {
+      title: 'Synthetic duration check', mode: 'meeting', startedAt: 1_700_000_000_000,
+      durationMs: 28_840, recap: '',
+      lines: [{ t: 1_700_000_000_000, speaker: 'unknown', text: 'Synthetic speech.' }]
+    })
+    expect(readFileSync(saved, 'utf8')).toContain('duration_ms: 28840')
+    expect((await recallRead(basename(saved))).durationMs).toBe(28_840)
+    expect((await listMeetings())[0].durationMin).toBe(1)
+  })
+
+  it.each(['-1', 'NaN', 'Infinity', 'not-a-number'])('MQA-310 ignores invalid persisted duration %s', async (duration) => {
+    const file = 'invalid-duration.md'
+    writeFileSync(join(folder, file), `---\ntype: meeting-transcript\ndate: 2026-09-12T10:00:00Z\nduration_ms: ${duration}\n---\n## Full transcript\n\n**[10:00:00] Speaker:** Synthetic speech.\n`)
+    expect((await recallRead(file)).durationMs).toBeUndefined()
+  })
+
   it('re-derives lang on reparse so formatTranscript re-emits the same switch markers', async () => {
     const t0 = 1_700_000_000_000
     const meeting: SaveMeeting = {

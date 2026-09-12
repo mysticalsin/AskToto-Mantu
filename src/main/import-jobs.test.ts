@@ -6,6 +6,7 @@ import { vadWindowsFromPcm } from '@shared/vad'
 import {
   ImportJobManager,
   decoderSlotIsStale,
+  decodeSkipThrough,
   type ImportJob,
   type ImportJobStore,
   type ImportSpeakerAttempt
@@ -57,7 +58,17 @@ const source = {
   mtimeMs: 1_700_000_000_000
 }
 
-// --- MQA-235 vad-v1 PCM fixtures ------------------------------------------------------------------------
+it('MQA-309 both decoder implementations replay PCM for VAD window checkpoints', () => {
+  expect(decodeSkipThrough({ pipeline: 'vad-v2', cursor: 3 })).toBe(0)
+  expect(decodeSkipThrough({ pipeline: 'vad-v1', cursor: 3 })).toBe(0)
+  expect(decodeSkipThrough({ cursor: 3 })).toBe(3)
+  const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+  expect(index).toContain('const skipThrough = decodeSkipThrough(job)')
+  expect(index).toContain('startFfmpegDecode(ffmpeg, job.sourcePath, skipThrough,')
+  expect(index).toContain("'import-decoder:source-start', { jobId: job.jobId, skipThrough }")
+})
+
+// --- MQA-235 vad-v2 PCM fixtures ------------------------------------------------------------------------
 // vadWindowsFromPcm (src/shared/vad.ts) needs REAL speech-shaped signal to emit a window at all — plain
 // silence, and even a single loud sample, either never endpoint or get dropped by the steady-bed gate.
 // Reusing the exact technique src/shared/vad.test.ts proves works: a sine burst (real signal, not silence)
@@ -134,11 +145,41 @@ describe('ImportJobManager', () => {
     expect(job.mode).toBeUndefined()
   })
 
-  it('stamps the current decode chunk size and the vad-v1 pipeline marker into a freshly started job (MQA-235)', async () => {
+  it('stamps the current decode chunk size and the vad-v2 pipeline marker into a freshly started job (MQA-235)', async () => {
     const { manager } = createManager()
     const job = await manager.start(source)
     expect(job.chunkSec).toBe(IMPORT_CHUNK_SECONDS)
-    expect(job.pipeline).toBe('vad-v1')
+    expect(job.pipeline).toBe('vad-v2')
+  })
+
+  it.each(['transcribing', 'failed'] as const)('MQA-309 restarts %s vad-v1 checkpoints at the new pause-aware boundaries', async (state) => {
+    const { manager, store, decode, transcribe } = createManager()
+    await store.save({
+      jobId: 'job-1', sourcePath: source.path, sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes, sourceMtimeMs: source.mtimeMs,
+      title: 'Old interrupted import', state, cursor: 1, totalChunks: 2,
+      pipeline: 'vad-v1', chunkSec: IMPORT_CHUNK_SECONDS,
+      lines: [{ t: source.mtimeMs, speaker: 'unknown', text: 'old hard-cut fragment' }],
+      progressPct: 65, createdAt: 1, updatedAt: 1
+    })
+    await manager.recover()
+    if (state === 'failed') await manager.resume('job-1')
+    expect(decode).toHaveBeenCalledWith(expect.objectContaining({ pipeline: 'vad-v2', cursor: 0, lines: [] }))
+    expect(manager.get('job-1')?.progressPct).toBeUndefined()
+    const pcm = twoWindowPcm()
+    await manager.acceptDecodedChunk('job-1', 0, 0, pcm)
+    await manager.finishDecoding('job-1')
+    expect(transcribe).toHaveBeenCalledTimes(vadWindowsFromPcm(pcm, SR).length)
+    expect(manager.get('job-1')?.lines.some((line) => line.text === 'old hard-cut fragment')).toBe(false)
+  })
+
+  it('MQA-310 saves full decoded duration including the final utterance and trailing silence', async () => {
+    const { manager, saveMeeting } = createManager()
+    const pcm = concatPcm(sineBurst(1), silencePcm(2))
+    await manager.start(source)
+    await manager.acceptDecodedChunk('job-1', 0, 0, pcm)
+    await manager.finishDecoding('job-1')
+    expect(saveMeeting).toHaveBeenCalledWith(expect.objectContaining({ durationMs: 3000 }))
   })
 
   // MQA-235: phase 1 (acceptDecodedChunk) only BUFFERS decoded slabs now — no ASR, no per-chunk state
@@ -190,7 +231,7 @@ describe('ImportJobManager', () => {
     expect(lines[1].t).toBeGreaterThan(lines[0].t) // monotonic
   })
 
-  it('scales decoder progress into the vad-v1 decode-phase band (0-15%) while state is decoding, and never regresses', async () => {
+  it('scales decoder progress into the vad-v2 decode-phase band (0-15%) while state is decoding, and never regresses', async () => {
     const { manager, store } = createManager()
     await manager.start(source)
 
@@ -202,7 +243,7 @@ describe('ImportJobManager', () => {
     expect(manager.get('job-1')?.progressPct).toBe(15)
   })
 
-  it('retries one failed transcription before checkpointing the window (vad-v1)', async () => {
+  it('retries one failed transcription before checkpointing the window (vad-v2)', async () => {
     const transcribe = vi.fn().mockRejectedValueOnce(new Error('temporary ASR error')).mockResolvedValueOnce('recovered')
     const { manager } = createManager({ transcribe })
     await manager.start(source)
@@ -215,11 +256,11 @@ describe('ImportJobManager', () => {
     expect(manager.get('job-1')?.lines.map((line) => line.text)).toEqual(['recovered'])
   })
 
-  // MQA-235: a freshly-started job is always vad-v1, so "the decoder learns totalChunks only at EOF" is no
+  // MQA-235: a freshly-started job is always vad-v2, so "the decoder learns totalChunks only at EOF" is no
   // longer reachable through start() — that's now legacy-only machinery, which survives ONLY for a
   // recovered pre-MQA-235 checkpoint (see import-jobs.ts's `pipeline` field doc-comment) or past the
   // >90min overflow degrade (covered separately below, structurally). This drives that surviving path.
-  it('a recovered legacy (pre-vad-v1) checkpoint still supports a streaming decoder that learns total chunk count only at EOF', async () => {
+  it('a recovered legacy (pre-vad-v2) checkpoint still supports a streaming decoder that learns total chunk count only at EOF', async () => {
     const first = createManager()
     await first.store.save({
       jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
@@ -232,7 +273,7 @@ describe('ImportJobManager', () => {
     ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
 
     await second.manager.recover()
-    expect(second.manager.get('job-1')?.pipeline).toBeUndefined() // recover() never upgrades a legacy job onto vad-v1
+    expect(second.manager.get('job-1')?.pipeline).toBeUndefined() // recover() never upgrades a legacy job onto vad-v2
 
     await second.manager.acceptDecodedChunk('job-1', 0, 0, new Float32Array([1]))
     await second.manager.acceptDecodedChunk('job-1', 1, 0, new Float32Array([2]))
@@ -242,7 +283,7 @@ describe('ImportJobManager', () => {
     expect(second.manager.get('job-1')).toMatchObject({ state: 'done', cursor: 2, totalChunks: 2 })
   })
 
-  it('keeps a failed job resumable without discarding already checkpointed transcript lines (vad-v1)', async () => {
+  it('keeps a failed job resumable without discarding already checkpointed transcript lines (vad-v2)', async () => {
     const transcribe = vi.fn().mockResolvedValueOnce('first').mockRejectedValue(new Error('ASR unavailable'))
     const { manager } = createManager({ transcribe })
     await manager.start(source)
@@ -258,7 +299,7 @@ describe('ImportJobManager', () => {
     expect(failed.lines.map((line) => line.text)).toEqual(['first'])
   })
 
-  it('resumes mid-transcription: a decoder re-feed replays every slab, but only the un-transcribed windows call transcribe again (vad-v1)', async () => {
+  it('resumes mid-transcription: a decoder re-feed replays every slab, but only the un-transcribed windows call transcribe again (vad-v2)', async () => {
     const transcribe = vi.fn().mockResolvedValueOnce('first').mockRejectedValue(new Error('ASR unavailable'))
     const { manager, decode } = createManager({ transcribe })
     const pcm = twoWindowPcm()
@@ -635,7 +676,7 @@ describe('ImportJobManager', () => {
       await store.save({
         jobId: 'job-2', sourcePath: source.path, sourceName: 'next.wav', sourceSizeBytes: source.sizeBytes,
         sourceMtimeMs: source.mtimeMs, title: 'Next', state: 'queued', cursor: 0, totalChunks: 0,
-        chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v1', lines: [], createdAt: 2, updatedAt: 2
+        chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v2', lines: [], createdAt: 2, updatedAt: 2
       })
       await manager.recover()
       await manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([0.1]))
@@ -1034,7 +1075,7 @@ describe('ImportJobManager', () => {
     })
   })
 
-  it('does not resurrect a cancelled job when transcription finishes late (vad-v1)', async () => {
+  it('does not resurrect a cancelled job when transcription finishes late (vad-v2)', async () => {
     let resolveTranscribe!: (text: string) => void
     const transcribe = vi.fn(() => new Promise<string>((resolve) => { resolveTranscribe = resolve }))
     const onIdle = vi.fn()
@@ -1140,7 +1181,7 @@ describe('ImportJobManager', () => {
     await first.store.save({
       jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
       sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'recapping', cursor: 1, totalChunks: 1,
-      pipeline: 'vad-v1',
+      pipeline: 'vad-v2',
       lines: [{ speaker: 'unknown', text: 'saved transcript', t: source.mtimeMs }], file: 'already-saved.md',
       createdAt: 1, updatedAt: 1
     })
@@ -1166,7 +1207,7 @@ describe('ImportJobManager', () => {
     await first.store.save({
       jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
       sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'failed', cursor: 1, totalChunks: 1,
-      chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v1', error: 'EPERM: operation not permitted',
+      chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v2', error: 'EPERM: operation not permitted',
       lines: [{ speaker: 'unknown', text: 'saved transcript', t: source.mtimeMs }], file: 'already-saved.md',
       createdAt: 1, updatedAt: 1
     })
@@ -1220,7 +1261,7 @@ describe('ImportJobManager', () => {
     await first.store.save({
       jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
       sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'saving', cursor: 1, totalChunks: 1,
-      chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v1',
+      chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v2',
       lines: [{ speaker: 'unknown', text: 'saved transcript', t: source.mtimeMs }], file: 'already-saved.md',
       createdAt: 1, updatedAt: 1
     })
@@ -1277,7 +1318,7 @@ describe('ImportJobManager', () => {
     expect(recordMeetingSummarized).not.toHaveBeenCalled()
   })
 
-  it('still replays the decoder when a failed import never got as far as saving its meeting (MQA-025, vad-v1)', async () => {
+  it('still replays the decoder when a failed import never got as far as saving its meeting (MQA-025, vad-v2)', async () => {
     const transcribe = vi.fn().mockRejectedValue(new Error('ASR unavailable'))
     const { manager, decode } = createManager({ transcribe })
     await manager.start(source)
@@ -1360,16 +1401,16 @@ describe('ImportJobManager', () => {
     })
   })
 
-  // MQA-235: window boundaries are recomputed deterministically on every resume, so a vad-v1 checkpoint's
+  // MQA-235: window boundaries are recomputed deterministically on every resume, so a vad-v2 checkpoint's
   // cursor/lines stay valid no matter what chunkSec says — unlike the legacy branch above, recover() must
-  // never reset a vad-v1 job on chunkSec grounds.
-  it("recover() never resets a vad-v1 checkpoint on chunkSec grounds — resume re-segments from scratch, it doesn't index by chunkSec", async () => {
+  // never reset a vad-v2 job on chunkSec grounds.
+  it("recover() never resets a vad-v2 checkpoint on chunkSec grounds — resume re-segments from scratch, it doesn't index by chunkSec", async () => {
     const first = createManager()
     await first.store.save({
       jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
       sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'transcribing', cursor: 1, totalChunks: 2,
-      chunkSec: IMPORT_CHUNK_SECONDS + 1, // deliberately mismatched — must not matter for vad-v1
-      pipeline: 'vad-v1',
+      chunkSec: IMPORT_CHUNK_SECONDS + 1, // deliberately mismatched — must not matter for vad-v2
+      pipeline: 'vad-v2',
       lines: [{ speaker: 'unknown', text: 'kept window', t: source.mtimeMs }],
       createdAt: 1, updatedAt: 1
     })
@@ -1385,7 +1426,7 @@ describe('ImportJobManager', () => {
     // 0 per slab (see pump()'s comment), so a stale non-zero value here would trip acceptDecodedChunk's
     // "decoder changed the recording chunk count" guard on the very first re-fed slab.
     expect(second.manager.get('job-1')).toMatchObject({
-      state: 'decoding', cursor: 1, totalChunks: 0, chunkSec: IMPORT_CHUNK_SECONDS + 1, pipeline: 'vad-v1',
+      state: 'decoding', cursor: 1, totalChunks: 0, chunkSec: IMPORT_CHUNK_SECONDS + 1, pipeline: 'vad-v2',
       lines: [{ speaker: 'unknown', text: 'kept window', t: source.mtimeMs }]
     })
   })
@@ -1613,7 +1654,7 @@ describe('ImportJobManager', () => {
     await store.save({
       jobId: 'job-2', sourcePath: source.path, sourceName: 'next.wav', sourceSizeBytes: source.sizeBytes,
       sourceMtimeMs: source.mtimeMs, title: 'Next', state: 'queued', cursor: 0, totalChunks: 0,
-      chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v1', lines: [], createdAt: 2, updatedAt: 2
+      chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v2', lines: [], createdAt: 2, updatedAt: 2
     })
     await manager.recover()
 

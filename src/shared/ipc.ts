@@ -419,6 +419,8 @@ export const SaveMeetingSchema = z.object({
   title: z.string().default(''),
   mode: z.string().default('general'),
   startedAt: z.number(),
+  /** Actual elapsed recording length, when measured by the capture/import pipeline. */
+  durationMs: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   lines: z.array(TranscriptLineSchema),
   recap: z.string().default(''),
   recapStatus: z.enum(RECAP_STATUSES).optional()
@@ -1937,6 +1939,7 @@ export interface RecallReadResult {
   title?: string
   mode?: string
   startedAt?: number
+  durationMs?: number
   recap?: string
   /** Absent on legacy/unspecified notes; text length is not proof of generation completion. */
   recapStatus?: RecapStatus

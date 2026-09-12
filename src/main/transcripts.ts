@@ -22,6 +22,7 @@ import { devEnv, isPackagedBuild } from './dev-env'
 import { safeMeetingBasename } from './meeting-path'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
+import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-duration'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -722,22 +723,11 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
   return file
 }
 
-/** Whole minutes of conversation for a meeting — last transcript line's offset minus start, floored at 1
- *  once any speech exists, 0 for an empty meeting. The single source of the value saveMeeting stamps into
+/** Whole minutes of recording when measured, or a legacy transcript-span estimate. The value saveMeeting stamps into
  *  the frontmatter AND the value recordMeetingSummarized credits, so the tile and the on-disk meetings
  *  can never disagree about how long a call was. */
-export function meetingDurationMin(m: { startedAt: number; lines: { t: number }[] }): number {
-  if (!m.lines.length) return 0
-  // MQA-111: the transcript's OWN span (last line minus first line), not last-line-minus-startedAt. Line
-  // `t` is documented as a ms offset in some callers (imports build lines with t starting at 0) and a
-  // wall-clock timestamp in others (the live renderer stamps Date.now()). Subtracting the absolute
-  // startedAt from an offset `t` produced a huge negative that clamped to 1, so every import (and any
-  // offset-t caller) credited a 1-minute meeting and corrupted the time-saved total. The span is correct
-  // under BOTH conventions: offsets → last-0, timestamps → last-first ≈ elapsed.
-  const ts = m.lines.map((l) => l.t).filter((t) => Number.isFinite(t))
-  if (!ts.length) return 0
-  const span = Math.max(...ts) - Math.min(...ts)
-  return Math.max(1, Math.round(span / 60000))
+export function meetingDurationMin(m: { startedAt: number; durationMs?: number; lines: { t: number }[] }): number {
+  return meetingDurationMinutes(m)
 }
 
 /** Write a meeting as Dust-readable markdown + frontmatter. Returns the file path. */
@@ -784,6 +774,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
       `title: "${yamlSafeTitle(title)}"`,
       `participants: [${participants.join(', ')}]`,
       `duration_min: ${durMin}`,
+      ...(measuredDurationMs(m.durationMs) !== undefined ? [`duration_ms: ${measuredDurationMs(m.durationMs)}`] : []),
       `lines: ${m.lines.length}`,
       ...(m.recapStatus ? [`recap_status: ${m.recapStatus}`] : []),
       ...(tags.length ? [`topics: [${tags.map((t) => yamlSafeTitle(t)).join(', ')}]`] : []),
