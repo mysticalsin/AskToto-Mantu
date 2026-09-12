@@ -30,8 +30,8 @@
  * commonly carry — so those do not break extraction of the regular files/dirs we actually need.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { delimiter, dirname, isAbsolute, join, relative } from 'node:path'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { delimiter, dirname, isAbsolute, join, parse, relative } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -95,6 +95,14 @@ class CliInstallAbortError extends Error {
   constructor() {
     super('cancelled')
     this.name = 'CliInstallAbortError'
+  }
+}
+
+/** Keep unpromoted files intact if the OS has not yet confirmed a killed child's exit. */
+class CliInstallTerminationPendingError extends Error {
+  constructor(readonly afterExit: (cleanup: () => void) => void) {
+    super('Dust CLI startup check could not confirm process termination')
+    this.name = 'CliInstallTerminationPendingError'
   }
 }
 
@@ -386,7 +394,10 @@ export async function installManagedCli(
       onProgress({ phase: 'extracting' })
       // Dust CLI's production deps include keytar — need official Node, not Electron-as-node.
       await ensureManagedNode()
+      throwIfAborted()
+      prepareManagedPackageForProduction(join(tmpDir, 'package'))
       await npmInstallProduction(join(tmpDir, 'package'), signal)
+      if (id === 'dust') await verifyManagedDustReady(entryInTmp, meta.version, signal)
     }
 
     throwIfAborted()
@@ -401,11 +412,16 @@ export async function installManagedCli(
     return { entry, version: meta.version }
   } catch (err) {
     if (tmpDir) {
-      try {
-        rmSync(tmpDir, { recursive: true, force: true })
-      } catch {
-        /* best-effort cleanup — the outer error is what matters to the caller */
+      const staging = tmpDir
+      const cleanup = (): void => {
+        try {
+          rmSync(staging, { recursive: true, force: true })
+        } catch {
+          /* best-effort cleanup — the outer error is what matters to the caller */
+        }
       }
+      if (err instanceof CliInstallTerminationPendingError) err.afterExit(cleanup)
+      else cleanup()
     }
     const cancelled = isCancellation(err, signal)
     const message = cancelled ? 'cancelled' : humanizeNpmInstallError(err)
@@ -514,6 +530,127 @@ export function sanitizedSpawnEnv(base: NodeJS.ProcessEnv = process.env): Record
     if (SPAWN_ENV_ALLOW.has(k) || SPAWN_ENV_ALLOW.has(k.toUpperCase())) out[k] = v
   }
   return out
+}
+
+/** npm omits a dependency declared in both sections as dev-only. Preserve its runtime range. */
+export function prepareManagedPackageForProduction(packageDir: string): void {
+  const path = join(packageDir, 'package.json')
+  const pkg = JSON.parse(readFileSync(path, 'utf8'))
+  const runtime = pkg.dependencies
+  const dev = pkg.devDependencies
+  if (!runtime || typeof runtime !== 'object' || !dev || typeof dev !== 'object') return
+  const duplicates = Object.keys(dev).filter((key) => Object.prototype.hasOwnProperty.call(runtime, key))
+  if (!duplicates.length) return
+  for (const key of duplicates) delete dev[key]
+  writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n', 'utf8')
+}
+
+/** A staged Dust package is not ready until its actual entry loads under the portable runtime. */
+export async function verifyManagedDustReady(entry: string, version: string, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw new CliInstallAbortError()
+  const portable = resolveManagedNode()
+  if (!portable) throw new Error('Dust CLI startup check requires the managed Node runtime')
+  const home = mkdtempSync(join(dirname(entry), '.metis-readiness-'))
+  const homeDrive = process.platform === 'win32' ? parse(home).root.replace(/[\\/]$/, '') : ''
+  const env = withNodeOnPath({
+    ...sanitizedSpawnEnv(),
+    HOME: home,
+    USERPROFILE: home,
+    HOMEDRIVE: homeDrive,
+    HOMEPATH: home.slice(homeDrive.length),
+    APPDATA: join(home, 'appdata'),
+    LOCALAPPDATA: join(home, 'localappdata'),
+    XDG_CONFIG_HOME: join(home, 'config'),
+    XDG_DATA_HOME: join(home, 'data'),
+    XDG_CACHE_HOME: join(home, 'cache'),
+    CI: '1',
+    NO_UPDATE_NOTIFIER: '1'
+  }, portable.node)
+  let cleanupDeferred = false
+  const cleanupHome = (): void => {
+    try { rmSync(home, { recursive: true, force: true }) } catch { /* temporary, credential-free profile */ }
+  }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(portable.node, [entry, '--version'], {
+        cwd: dirname(entry), env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore']
+      })
+      let output = ''
+      let settled = false
+      let exitConfirmed = false
+      let terminationError: Error | undefined
+      let killTimer: ReturnType<typeof setTimeout> | undefined
+      let terminationTimer: ReturnType<typeof setTimeout> | undefined
+      const finish = (error?: Error): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        clearTimeout(killTimer)
+        clearTimeout(terminationTimer)
+        signal?.removeEventListener('abort', onAbort)
+        if (error) reject(error)
+        else resolve()
+      }
+      const afterExit = (cleanup: () => void): void => {
+        if (exitConfirmed) { cleanup(); return }
+        const run = (): void => {
+          child.removeListener('exit', run)
+          child.removeListener('close', run)
+          cleanup()
+        }
+        child.once('exit', run)
+        child.once('close', run)
+      }
+      const kill = (signal: NodeJS.Signals): void => {
+        try { child.kill(signal) } catch { /* escalation still runs; never assume kill means exited */ }
+      }
+      const stop = (error: Error): void => {
+        if (settled || terminationError) return
+        terminationError = error
+        if (exitConfirmed) { finish(error); return }
+        clearTimeout(timer)
+        kill('SIGTERM')
+        killTimer = setTimeout(() => {
+          kill('SIGKILL')
+          terminationTimer = setTimeout(() => {
+            cleanupDeferred = true
+            afterExit(cleanupHome)
+            finish(new CliInstallTerminationPendingError(afterExit))
+          }, 1000)
+        }, 1000)
+      }
+      const onAbort = (): void => stop(new CliInstallAbortError())
+      const timer = setTimeout(() => stop(new Error('Dust CLI startup check timed out after 30 seconds')), 30_000)
+      child.stdout?.on('data', (chunk: Buffer) => {
+        if (settled || terminationError) return
+        if (chunk.byteLength > 1024 - output.length) {
+          stop(new Error('Dust CLI startup check returned unexpected output'))
+          return
+        }
+        output += chunk.toString('utf8')
+      })
+      child.once('error', (error) => {
+        const failure = new Error(`Dust CLI startup check failed: ${error.message}`)
+        if (child.pid && !exitConfirmed) stop(failure)
+        else finish(failure)
+      })
+      child.once('exit', () => {
+        exitConfirmed = true
+        if (terminationError) finish(terminationError)
+      })
+      child.once('close', (code) => {
+        exitConfirmed = true
+        if (terminationError) finish(terminationError)
+        else if (code !== 0) finish(new Error(`Dust CLI startup check failed (exit ${code ?? 'unknown'})`))
+        else if (output.trim() !== `Dust CLI v${version}`) finish(new Error('Dust CLI startup check returned the wrong version'))
+        else finish()
+      })
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (signal?.aborted) onAbort()
+    })
+  } finally {
+    if (!cleanupDeferred) cleanupHome()
+  }
 }
 
 /** Official Node: win32 `node.exe` sits next to `node_modules/npm`; darwin/linux `bin/node` uses `../lib`. */
