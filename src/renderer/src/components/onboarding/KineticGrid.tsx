@@ -1,6 +1,6 @@
 /**
  * Full-bleed KineticGrid under the exclusive tour UI after the lady+universe beat.
- * pointer-events: none. One rAF. DPR cap 2. Tiles warp; the stage does not slide.
+ * pointer-events: none. One demand-driven rAF. DPR cap 2. Tiles warp; the stage does not slide.
  */
 import { useEffect, useRef } from 'react'
 import {
@@ -51,6 +51,10 @@ export function KineticGrid(): JSX.Element {
     const [ar, ag, ab] = hexRgb(KINETIC_COLORS.lineActive)
     const [nr, ng, nb] = hexRgb(KINETIC_COLORS.nodeActive)
 
+    const requestPaint = (): void => {
+      if (!disposed && !document.hidden && !raf) raf = requestAnimationFrame(paint)
+    }
+
     const resize = (): void => {
       cssW = wrap.clientWidth || window.innerWidth
       cssH = wrap.clientHeight || window.innerHeight
@@ -60,22 +64,32 @@ export function KineticGrid(): JSX.Element {
       canvas.style.width = `${cssW}px`
       canvas.style.height = `${cssH}px`
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      requestPaint()
     }
 
     const onPointerMove = (e: PointerEvent): void => {
+      if (reduced) return
       pointer.x = e.clientX
       pointer.y = e.clientY
+      requestPaint()
     }
     const onPointerDown = (e: PointerEvent): void => {
+      if (reduced) return
       pointer.x = e.clientX
       pointer.y = e.clientY
-      if (!reduced) ripples.push({ x: e.clientX, y: e.clientY, born: performance.now() })
+      ripples.push({ x: e.clientX, y: e.clientY, born: performance.now() })
+      requestPaint()
     }
 
     const paint = (now: number): void => {
+      raf = 0
       if (disposed) return
       if (!document.hidden) {
         mouse = lerp2(mouse, pointer, reduced ? 1 : KINETIC_MOUSE_LERP)
+        // Lerp approaches its target asymptotically. Snap below a tenth of a CSS
+        // pixel so a stationary pointer cannot keep a full-window canvas busy.
+        const moving = Math.abs(mouse.x - pointer.x) > 0.1 || Math.abs(mouse.y - pointer.y) > 0.1
+        if (!moving) mouse = { ...pointer }
         ctx.fillStyle = KINETIC_COLORS.bg
         ctx.fillRect(0, 0, cssW, cssH)
         const wash = ctx.createRadialGradient(cssW * 0.5, cssH * 0.35, 40, cssW * 0.5, cssH * 0.4, Math.max(cssW, cssH) * 0.7)
@@ -122,8 +136,8 @@ export function KineticGrid(): JSX.Element {
             }
           }
         }
+        if (!reduced && (moving || liveRipples.length > 0)) requestPaint()
       }
-      if (!document.hidden) raf = requestAnimationFrame(paint)
     }
 
     const onVisibility = (): void => {
@@ -131,9 +145,7 @@ export function KineticGrid(): JSX.Element {
       if (document.hidden) {
         cancelAnimationFrame(raf)
         raf = 0
-      } else if (!raf) {
-        raf = requestAnimationFrame(paint)
-      }
+      } else requestPaint()
     }
 
     resize()
@@ -141,7 +153,6 @@ export function KineticGrid(): JSX.Element {
     window.addEventListener('pointerdown', onPointerDown, { passive: true })
     window.addEventListener('resize', resize)
     document.addEventListener('visibilitychange', onVisibility)
-    raf = requestAnimationFrame(paint)
 
     return () => {
       disposed = true

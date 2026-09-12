@@ -44,6 +44,8 @@ export function overlayWatchNeedsRestore(input: {
 
 /** Poll while hide/island is resting. 16–32ms — one frame-ish, no Accessibility tap. */
 export const CURSOR_WATCH_INTERVAL_MS = 24
+/** Same 150ms intentional-hover threshold as the renderer peek. Native polling must dwell too. */
+export const CURSOR_REVEAL_DWELL_MS = 150
 /** Extra pixels around the revealed bar before we treat the pointer as gone. */
 export const CURSOR_LEAVE_GRACE_PX = 8
 /**
@@ -70,14 +72,14 @@ export function overlayWatchShouldParkOnLeave(input: {
   return input.decision === 'hide' && !input.islandResting && input.osHoverSeen
 }
 
-export type OverlayWatchAction = 'restore' | 'stay' | 'park' | 'leave-ignored'
+export type OverlayWatchAction = 'restore' | 'hover-enter' | 'stay' | 'park' | 'leave-ignored'
 
 /**
  * One cursor-watch tick as a pure step. `osHoverSeen` is main's latch: true once
  * the OS cursor has been inside the strip or the revealed bar since the last
  * park; it is what makes leave → park legitimate. `restore` = restoreBarWidth +
- * hover-true; `park` = hover-false + schedule the OVERLAY_LEAVE_PARK_MS park;
- * `stay` / `leave-ignored` never touch bounds.
+ * hover-true; `hover-enter` = cancel leave + hover-true without changing bounds;
+ * `park` = hover-false + schedule the OVERLAY_LEAVE_PARK_MS park.
  */
 export function overlayWatchStep(input: {
   cursor: { x: number; y: number }
@@ -107,6 +109,9 @@ export function overlayWatchStep(input: {
     return { action: 'restore', osHoverSeen: true }
   }
   if (decision !== 'hide') {
+    // Reentry through the menu-bar strip may never deliver a DOM pointer-enter. Cancel both
+    // leave timers before they collapse under the pointer, without resizing a settled answer.
+    if (revealed && !input.osHoverSeen) return { action: 'hover-enter', osHoverSeen: true }
     // Revealed + 'stay' means the OS cursor is in the strip or on the bar: latch it.
     return { action: 'stay', osHoverSeen: input.osHoverSeen || revealed }
   }

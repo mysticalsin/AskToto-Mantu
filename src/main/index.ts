@@ -199,6 +199,7 @@ import {
 } from '@shared/settings-bounds'
 import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 import {
+  CURSOR_REVEAL_DWELL_MS,
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
   decideCursorWatch,
@@ -957,6 +958,7 @@ let islandResting = false
 // Settings is a full surface, not Hide 8×2 / Island peek. Cursor watch and park must not crush it.
 let settingsSurfaceOpen = false
 let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
+let overlayCursorWatchEnteredAt: number | null = null
 let overlayCursorWatchHovering = false
 let overlayLeaveParkTimer: ReturnType<typeof setTimeout> | null = null
 const streams = new Map<string, { abort: () => void }>()
@@ -2436,6 +2438,7 @@ function stopOverlayCursorWatch(): void {
     overlayCursorWatchTimer = null
   }
   overlayCursorWatchHovering = false
+  overlayCursorWatchEnteredAt = null
   cancelOverlayLeavePark()
 }
 
@@ -2455,7 +2458,10 @@ function tickOverlayCursorWatch(): void {
   // pointer is in the top-edge strip, fall through: that pointer is a hover, so
   // reveal instead of stalling on the ghost until the mouse leaves.
   if (healHideGhostSlab()) return
-  if (settingsSurfaceOpen) return
+  if (settingsSurfaceOpen) {
+    overlayCursorWatchEnteredAt = null
+    return
+  }
   const display = screen.getDisplayMatching(win.getBounds())
   const m = getDisplayMetrics(display)
   const layout = liveOverlayLayout()
@@ -2474,6 +2480,15 @@ function tickOverlayCursorWatch(): void {
     osHoverSeen: overlayCursorWatchHovering,
     hugStub: isIncompleteAskReveal(bounds)
   })
+  // Polling previously bypassed the renderer's 150ms dwell and sent reveal-now on the first tick.
+  // A quick menu-bar crossing therefore flashed the whole bar open. Measure continuous native
+  // hover before latching it; a leave resets this below. Already-visible reentry stays immediate.
+  if (step.action === 'restore' && (islandResting || !windowVisible)) {
+    const now = performance.now()
+    overlayCursorWatchEnteredAt ??= now
+    if (now - overlayCursorWatchEnteredAt < CURSOR_REVEAL_DWELL_MS) return
+  }
+  overlayCursorWatchEnteredAt = null
   overlayCursorWatchHovering = step.osHoverSeen
   if (step.action === 'restore') {
     cancelOverlayLeavePark()
@@ -2486,6 +2501,9 @@ function tickOverlayCursorWatch(): void {
         `[overlay-watch] reveal cursor=(${cursor.x},${cursor.y}) from=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) to=${after.width}x${after.height}@(${after.x},${after.y}) visible=${windowVisible}`
       )
     }
+  } else if (step.action === 'hover-enter') {
+    cancelOverlayLeavePark()
+    notifyOverlayCursorHover(true)
   } else if (step.action === 'park') {
     // Renderer spring may park first. Main parks at OVERLAY_LEAVE_PARK_MS so a
     // missed overlayParkAfterHide cannot leave 880×120 up (Ultron c74e389).
