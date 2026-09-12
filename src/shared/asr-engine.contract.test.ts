@@ -2,11 +2,12 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, IPC, SettingsSchema } from './ipc'
+import { preferredFreshAsrEngine } from './asr-hardware-preference'
 
 const root = process.cwd()
 const read = (rel: string): string => readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n')
 
-describe('ASR engine ship — Parakeet is the default', () => {
+describe('ASR engine fallback and fresh-setup contracts', () => {
   it('schema + DEFAULT_SETTINGS + listen/App fallbacks all default asrEngine to parakeet', () => {
     expect(DEFAULT_SETTINGS.asrEngine).toBe('parakeet')
     const { asrEngine: _omit, ...rest } = DEFAULT_SETTINGS
@@ -33,8 +34,11 @@ describe('ASR engine ship — Parakeet is the default', () => {
     expect(IPC.asrAssetsEnsure).toBe('asr:assets-ensure')
   })
 
-  it('Settings names Parakeet as the default without restyling overlay chrome', () => {
-    const settings = read('src/renderer/src/components/Settings.tsx')
-    expect(settings).toMatch(/Parakeet is the default/)
+  it('accepts RAM-specific fresh choices without changing the conservative legacy fallback', () => {
+    const { asrEngine: _omit, ...legacy } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(legacy).asrEngine).toBe('parakeet')
+    expect(SettingsSchema.parse({ ...legacy, asrEngine: preferredFreshAsrEngine(8 * 1024 ** 3) }).asrEngine).toBe('parakeet')
+    expect(SettingsSchema.parse({ ...legacy, asrEngine: preferredFreshAsrEngine(16 * 1024 ** 3) }).asrEngine).toBe('whisper')
+    // Settings.speech-models.test.tsx renders the real Speech UI and checks both device classes.
   })
 })

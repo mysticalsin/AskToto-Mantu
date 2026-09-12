@@ -341,10 +341,10 @@ describe('Act 3 — transcription files never skip', () => {
     state
   })
 
-  it('marks Parakeet + Whisper ready when assets are present', () => {
+  it('marks Parakeet + Whisper base files ready when assets are present', () => {
     expect(asrAssetsRowStatus({ ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' })).toEqual({
       state: 'ready',
-      detail: 'Parakeet + Whisper ready'
+      detail: 'Parakeet + Whisper base files ready.'
     })
   })
 
