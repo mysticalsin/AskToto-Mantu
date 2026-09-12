@@ -79,6 +79,7 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 
 const api = {
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
+  onSettingsChanged: (cb: () => void): Unsub => sub(IPC.settingsChanged, cb),
   /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */
   dismissFailoverNotice: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.dismissFailoverNotice),
   getPermissions: (): Promise<PlatformPermissions> => ipcRenderer.invoke(IPC.permissionsGet),
@@ -462,6 +463,7 @@ const api = {
     ipcRenderer.invoke(IPC.operatorLicenseActivate, payload),
   operatorStatus: (): Promise<{
     configured: boolean
+    fundedProviders?: string[]
     tier: 'metis' | 'metis-light' | null
     entitlements: Record<string, boolean> | null
     licenseLast4: string

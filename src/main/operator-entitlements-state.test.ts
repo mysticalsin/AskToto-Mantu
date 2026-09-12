@@ -49,6 +49,27 @@ describe('operatorGate (unconfigured seat)', () => {
 })
 
 describe('operatorGate (configured seat)', () => {
+  it('MQA-294 does not restore an earlier in-memory grant after resetting a connection', async () => {
+    const mod = await importFresh()
+    mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: { operator_keys: true }, integrationsVersion: 0 })
+    mockSettings = { ...BASE_SETTINGS }
+    mod.resetOperatorEntitlementsState()
+    expect(mod.operatorGate('operator_keys').allowed).toBe(false)
+  })
+  it('requires confirmed entitlements for a licence-only seat', async () => {
+    const mod = await importFresh()
+    mockSettings = { ...BASE_SETTINGS, operatorIngestSecret: '', operatorLicenseToken: 'METIS-OP-1.licensed-seat' }
+    expect(mod.operatorGate('operator_keys').allowed).toBe(false)
+    mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: { operator_keys: true }, integrationsVersion: 0 })
+    expect(mod.operatorGate('operator_keys').allowed).toBe(true)
+  })
+
+  it('does not carry a previous licence grant into a new licence', async () => {
+    const mod = await importFresh()
+    mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: { operator_keys: true }, integrationsVersion: 0 })
+    mockSettings = { ...BASE_SETTINGS, operatorLicenseToken: 'METIS-OP-1.replacement' }
+    expect(mod.operatorGate('operator_keys').allowed).toBe(false)
+  })
   it('is ask-only before the first successful heartbeat', async () => {
     const mod = await importFresh()
     expect(mod.operatorGate('ask').allowed).toBe(true)

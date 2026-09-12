@@ -47,6 +47,7 @@ void _providerIdParity
 /** Single source of truth for every IPC channel name. */
 export const IPC = {
   settingsGet: 'settings:get',
+  settingsChanged: 'settings:changed',
   settingsSet: 'settings:set',
   settingsRecoverProfile: 'settings:recoverProfile',
   setApiKey: 'settings:setApiKey',
@@ -1387,8 +1388,9 @@ export const BaseSettingsSchema = z.object({
   // Operator-issued seat license (METIS-OP-1, PLAN.md P2.2b). The pasted token is stored verbatim — it
   // rides in the same settings.json blob as operatorIngestSecret above, so it gets the same at-rest
   // encryption (store.ts's ATKENC2/safeStorage backend) without a bespoke secret store. Only the jti
-  // (licenseId) and last4 ever leave the device, via buildSeatMeta in every heartbeat/ingest — never
-  // this raw token. Empty token = no license activated.
+  // (licenseId) and last4 are telemetry. The token authenticates HTTPS requests to the Operator in a
+  // dedicated credential header; it must never appear in telemetry, renderer settings, or logs.
+  // Empty token = no license activated.
   operatorLicenseToken: z.string().max(OPERATOR_LICENSE_MAX).default(''),
   /** Parsed from operatorLicenseToken at activation time (format-only; the Worker verifies the
    *  signature). 16 lowercase hex chars, or '' when no license is activated. */
@@ -1434,6 +1436,9 @@ export type Settings = z.infer<typeof BaseSettingsSchema>
 /** What the renderer receives (never raw keys). */
 export const PublicSettingsSchema = BaseSettingsSchema.extend({
   hasApiKey: z.boolean(),
+  /** Non-secret transport readiness. Raw Operator credentials never reach the renderer. */
+  operatorConfigured: z.boolean().optional(),
+  operatorLegacyCredentialConfigured: z.boolean().optional(),
   /** Active provider is actually usable (key present AND any provider-specific setup done) — drives the
    *  "add your key" CTA so it only shows when the app genuinely can't answer yet. */
   /** MQA-261: this build shipped a Cloudflare key, so a user who removed theirs can get it back.
