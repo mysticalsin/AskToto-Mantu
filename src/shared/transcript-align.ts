@@ -84,6 +84,10 @@ const MATCH_WINDOW_MS = 45_000
 
 /** Minimum normalized token-overlap (Jaccard) for a candidate to count as a real match. */
 const MATCH_THRESHOLD = 0.5
+// One- or two-word acknowledgements recur across speakers and are not identity evidence, even when
+// their overlap is perfect. Repeated words count once, just as they do in the overlap score.
+const MIN_MATCH_TOKENS = 3
+const CLUSTER_LABEL_RE = /^Speaker \d+$/
 
 /** Lowercased, punctuation-stripped word set. Unicode-aware (\p{L}/\p{N}) because Métis transcribes any
  *  spoken language, not just English (see ipc.ts's outputLanguage setting). */
@@ -92,11 +96,12 @@ function tokenize(text: string): Set<string> {
   return new Set(cleaned.split(/\s+/).filter(Boolean))
 }
 
-/** Jaccard similarity (intersection / union) of two token sets. 0 when either side is empty. */
-function jaccard(a: Set<string>, b: Set<string>): number {
+/** Jaccard similarity, but no qualifying identity match without enough shared distinct words. */
+function matchScore(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 || b.size === 0) return 0
   let intersection = 0
   for (const t of a) if (b.has(t)) intersection++
+  if (intersection < MIN_MATCH_TOKENS) return 0
   const union = a.size + b.size - intersection
   return union === 0 ? 0 : intersection / union
 }
@@ -108,15 +113,17 @@ function jaccard(a: Set<string>, b: Set<string>): number {
  * trustworthy (assigned live from which audio channel captured the line) and comes back exactly as
  * given. `name` is purely additive:
  *
- *  - A 'you' line gets `opts.operatorName` directly, with no text matching at all, whenever it's
- *    provided (the signed-in account's own display name — see main/auth.ts's authStatus().name). Métis
- *    already knows with certainty which lines are the operator's, so there is nothing to infer, and a
- *    known-good name always beats a fuzzy guess.
+ *  - An existing non-cluster name is preserved. Automatic matching must not overwrite an established
+ *    identity or a user's correction; the transcript does not currently store naming provenance.
+ *  - An unnamed 'you' line gets `opts.operatorName` directly, with no text matching at all, whenever it's
+ *    provided (the signed-in account's own display name — see main/auth.ts's authStatus().name). This
+ *    retains the existing microphone/operator convention; it is not voice verification and cannot
+ *    override an already named person.
  *  - Every other line (and 'you' lines when no operatorName was given) is matched against `entries` by
  *    normalized-token overlap within a generous time window (see MATCH_WINDOW_MS/MATCH_THRESHOLD above).
- *    The highest-scoring candidate at or above the threshold wins. A cue with an empty/blank name (no
- *    <v> tag in the VTT — see parseTeamsVtt) can still be considered a candidate for scoring purposes but
- *    never actually assigns a name, since there is nothing informative to add.
+ *    A match requires at least three shared distinct words, and all qualifying cues must agree on one
+ *    name. Competing names fail closed, regardless of cue order or a slightly higher overlap score.
+ *    A cue with an empty/blank name never assigns a name, since there is nothing informative to add.
  *  - A line with no qualifying candidate is returned completely untouched — not even a `name: undefined`
  *    key is added — which is the common case for a line whose Teams counterpart wasn't transcribed, or
  *    for a meeting that has no Teams transcript at all (entries === []).
@@ -134,24 +141,28 @@ export function applySpeakerNames(
   const tokenizedEntries = entries.map((e) => ({ entry: e, tokens: tokenize(e.text) }))
 
   const result = lines.map((line) => {
+    const existingName = line.name?.trim()
+    if (existingName && !CLUSTER_LABEL_RE.test(existingName)) return line
+
     if (line.speaker === 'you' && operatorName) {
       named++
       return { ...line, name: operatorName }
     }
 
-    let best: { name: string; score: number } | null = null
+    let matchedName: string | null = null
     const lineTokens = tokenize(line.text)
     for (const { entry, tokens } of tokenizedEntries) {
       if (Math.abs(entry.tSec * 1000 - line.t) > MATCH_WINDOW_MS) continue
       const name = entry.name.trim()
       if (!name) continue // nothing informative to assign even on a perfect text match
-      const score = jaccard(lineTokens, tokens)
+      const score = matchScore(lineTokens, tokens)
       if (score < MATCH_THRESHOLD) continue
-      if (!best || score > best.score) best = { name, score }
+      if (matchedName && name !== matchedName) return line
+      matchedName = name
     }
-    if (!best) return line
+    if (!matchedName) return line
     named++
-    return { ...line, name: best.name }
+    return { ...line, name: matchedName }
   })
 
   return { lines: result, named }
@@ -170,15 +181,14 @@ export function applySpeakerNames(
  * Pure and index-aligned: `before`/`after` must be the SAME lines array before/after an applySpeakerNames
  * call (same length, same order — applySpeakerNames never reorders or drops lines). Restricted to
  * `speaker === 'them'`: 'you' lines get the operator's name directly (no clustering ever happened for
- * them), so a 'you' line's pre-existing name is never a cluster label. Deduplicated by clusterLabel
- * (first resolved name wins) so a cluster mentioned across many lines contributes exactly one pairing.
+ * them), so a 'you' line's pre-existing name is never a cluster label. A cluster contributes one pairing
+ * only when all resolved names agree. Conflicting evidence must never become a permanent voiceprint.
  */
 export function clusterNamePairsFromAlignment(
   before: readonly TranscriptLine[],
   after: readonly TranscriptLine[]
 ): { clusterLabel: string; name: string }[] {
-  const CLUSTER_LABEL_RE = /^Speaker \d+$/
-  const resolved = new Map<string, string>()
+  const resolved = new Map<string, string | null>()
   const len = Math.min(before.length, after.length)
   for (let i = 0; i < len; i++) {
     const prior = before[i]
@@ -186,8 +196,10 @@ export function clusterNamePairsFromAlignment(
     if (prior.speaker !== 'them') continue
     const priorLabel = prior.name
     if (!priorLabel || !CLUSTER_LABEL_RE.test(priorLabel)) continue
-    if (!next.name || next.name === priorLabel) continue
-    if (!resolved.has(priorLabel)) resolved.set(priorLabel, next.name)
+    const name = next.name?.trim()
+    if (!name || CLUSTER_LABEL_RE.test(name)) continue
+    if (!resolved.has(priorLabel)) resolved.set(priorLabel, name)
+    else if (resolved.get(priorLabel) !== name) resolved.set(priorLabel, null)
   }
-  return Array.from(resolved, ([clusterLabel, name]) => ({ clusterLabel, name }))
+  return Array.from(resolved).flatMap(([clusterLabel, name]) => (name ? [{ clusterLabel, name }] : []))
 }

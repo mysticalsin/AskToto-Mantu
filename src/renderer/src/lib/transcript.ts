@@ -3,8 +3,8 @@ import type { RecapStatus } from '@shared/recap-status'
 
 // Shared by the live recap path (listen.ts's text()) and the saved-meeting recap path (App.tsx's
 // generateSavedRecap, fed either an import's returned lines or a reopened past meeting's lines) — one
-// joiner so the recap prompt always sees the identical THEM/YOU transcript format no matter which lines
-// array it was built from.
+// joiner so recap prompts retain the same established speaker names and channel labels whether the
+// lines came from a live meeting or a saved one. Channel-only labels remain the unnamed fallback.
 //
 // Mixed-language meetings: when the tagged language changes between lines (see TranscriptLine.lang,
 // tagged conservatively by commitLine), a "[conversation switches to …]" marker line is emitted so the
@@ -21,7 +21,12 @@ export function transcriptToText(lines: TranscriptLine[]): string {
     if (l.provisional) continue
     if (l.lang && prevLang && l.lang !== prevLang) out.push(`[conversation switches to ${l.lang}]`)
     if (l.lang) prevLang = l.lang
-    out.push(`${l.speaker === 'them' ? 'THEM' : l.speaker === 'you' ? 'YOU' : 'SPEAKER'}: ${l.text}`)
+    // Names may come from a Teams display name. Keep the label on one line, without dropping the
+    // identity that distinguishes two remote participants' commitments (MQA-307).
+    const name = l.name?.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim()
+    const channel = l.speaker === 'them' ? 'THEM' : l.speaker === 'you' ? 'YOU' : 'SPEAKER'
+    const label = name ? (l.speaker === 'unknown' ? name : `${channel} (${name})`) : channel
+    out.push(`${label}: ${l.text}`)
   }
   return out.join('\n')
 }

@@ -80,6 +80,57 @@ describe('applySpeakerNames', () => {
     const lines = [line('them', 'hello', 0)]
     expect(applySpeakerNames(lines, [])).toEqual({ lines, named: 0 })
   })
+
+  it.each(['you', 'them', 'unknown'] as const)(
+    'preserves an established %s name over automatic account or VTT suggestions (MQA-308)',
+    (speaker) => {
+      const lines = [{ ...line(speaker, 'I will send the report tomorrow', 10), name: 'Confirmed person' }]
+      const entries = [entry('Other person', 'I will send the report tomorrow', 10)]
+      const result = applySpeakerNames(lines, entries, { operatorName: 'Account owner' })
+      expect(result).toEqual({ lines, named: 0 })
+      expect(result.lines[0]).toBe(lines[0])
+    }
+  )
+
+  it.each(['Yes.', 'Thank you.', 'Oui oui oui.'])(
+    'does not infer an identity from the short acknowledgement %s',
+    (text) => {
+      const lines = [{ ...line('them', text, 10), name: 'Speaker 1' }]
+      expect(applySpeakerNames(lines, [entry('Alice', text, 10)])).toEqual({ lines, named: 0 })
+    }
+  )
+
+  it('rejects equal matches from different people regardless of cue ordering', () => {
+    const lines = [{ ...line('them', 'We should send the report tomorrow', 10), name: 'Speaker 1' }]
+    const entries = [
+      entry('Alice', 'We should send the report tomorrow', 9),
+      entry('Bob', 'We should send the report tomorrow', 11)
+    ]
+    expect(applySpeakerNames(lines, entries)).toEqual({ lines, named: 0 })
+    expect(applySpeakerNames(lines, [...entries].reverse())).toEqual({ lines, named: 0 })
+  })
+
+  it('rejects competing qualifying names instead of choosing the slightly better text match', () => {
+    const lines = [line('them', 'We should send the report tomorrow', 10)]
+    const entries = [
+      entry('Alice', 'We should send the report tomorrow', 9),
+      entry('Bob', 'We should send the report today', 11)
+    ]
+    expect(applySpeakerNames(lines, entries)).toEqual({ lines, named: 0 })
+  })
+
+  it('resolves an anonymous cluster when repeated qualifying cues agree on one person', () => {
+    const lines = [{ ...line('them', 'We should send the report tomorrow', 10), name: 'Speaker 1' }]
+    const entries = [
+      entry('Alice', 'We should send the report tomorrow', 9),
+      entry('Alice', 'We should send the report', 11),
+      entry('Bob', 'The client meeting has ended', 12)
+    ]
+    expect(applySpeakerNames(lines, entries)).toEqual({
+      lines: [{ ...lines[0], name: 'Alice' }],
+      named: 1
+    })
+  })
 })
 
 // Speaker Intelligence P2 (§3.4) — the pure diff behind the Teams-VTT auto-enrollment flywheel.
@@ -117,7 +168,7 @@ describe('clusterNamePairsFromAlignment', () => {
     expect(clusterNamePairsFromAlignment(before, after)).toEqual([])
   })
 
-  it('deduplicates by cluster label — first resolved name wins across many lines', () => {
+  it('deduplicates by cluster label when resolved names agree across many lines', () => {
     const before = [
       withName(line('them', 'first', 0), 'Speaker 1'),
       withName(line('them', 'second', 1), 'Speaker 1'),
@@ -130,6 +181,33 @@ describe('clusterNamePairsFromAlignment', () => {
     ]
     expect(clusterNamePairsFromAlignment(before, after)).toEqual([{ clusterLabel: 'Speaker 1', name: 'Alice Johnson' }])
   })
+
+  it('rejects conflicted clusters without discarding an independent unambiguous cluster', () => {
+    const before = [
+      withName(line('them', 'First utterance', 0), 'Speaker 1'),
+      withName(line('them', 'Second utterance', 1), 'Speaker 1'),
+      withName(line('them', 'Third utterance', 2), 'Speaker 1'),
+      withName(line('them', 'Independent utterance', 3), 'Speaker 2')
+    ]
+    const after = [
+      withName(before[0], 'Alice'),
+      withName(before[1], 'Bob'),
+      withName(before[2], 'Alice'),
+      withName(before[3], 'Cahê')
+    ]
+    expect(clusterNamePairsFromAlignment(before, after)).toEqual([{ clusterLabel: 'Speaker 2', name: 'Cahê' }])
+    expect(clusterNamePairsFromAlignment([...before].reverse(), [...after].reverse())).toEqual([
+      { clusterLabel: 'Speaker 2', name: 'Cahê' }
+    ])
+  })
+
+  it.each([' ', 'Speaker 2'])(
+    'never enrolls a blank or still-anonymous resolved label (%s) as a real person',
+    (name) => {
+      const before = [withName(line('them', 'An utterance', 0), 'Speaker 1')]
+      expect(clusterNamePairsFromAlignment(before, [withName(before[0], name)])).toEqual([])
+    }
+  )
 
   it('handles multiple distinct clusters resolved in the same meeting', () => {
     const before = [withName(line('them', 'a', 0), 'Speaker 1'), withName(line('them', 'b', 1), 'Speaker 2')]
