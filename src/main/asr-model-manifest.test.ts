@@ -78,7 +78,9 @@ describe('MQA-247 — the fetch is reachable and explicit', () => {
     expect(read('src/shared/ipc.ts')).toMatch(/asrModelFetch: 'asrModel:fetch'/)
     expect(read('src/main/index.ts')).toMatch(/ipcMain\.handle\(IPC\.asrModelFetch/)
     expect(read('src/preload/index.ts')).toMatch(/asrModelFetch: \(\)/)
-    expect(read('src/renderer/src/components/Settings.tsx')).toMatch(/<AsrModelRow \/>/)
+    expect(read('src/renderer/src/components/Settings.tsx')).toMatch(
+      /<AsrModelRow engine=\{settings\.asrEngine\} \/>/
+    )
   })
 
   it('never starts on its own — no timer, no first-import trigger', () => {
