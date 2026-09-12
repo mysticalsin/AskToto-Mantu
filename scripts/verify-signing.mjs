@@ -15,9 +15,16 @@
 // and vice-versa. Exits non-zero on a genuine signature failure.
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir, platform } from 'node:os'
+import { platform } from 'node:os'
+import {
+  assertSigningHost,
+  selectSigningDirectory,
+  windowsSignatureCommand,
+  windowsSignatureProblem,
+  windowsPowerShell
+} from './lib/signing-policy.mjs'
 
 const ALLOW_ADHOC_MAC = String(process.env.ASKTOTO_ALLOW_ADHOC_MAC || '').trim() === '1'
 const REQUIRE_NOTARIZED = process.argv.includes('--require-notarized') && !ALLOW_ADHOC_MAC
@@ -25,18 +32,7 @@ if (process.argv.includes('--require-notarized') && ALLOW_ADHOC_MAC) {
   console.log('[verify:signing] ASKTOTO_ALLOW_ADHOC_MAC=1 — skipping notarization gate (ADHOC / not Gatekeeper-notarized)')
 }
 const argDir = process.argv.slice(2).find((a) => !a.startsWith('--'))
-const CANDIDATE_DIRS = [
-  argDir,
-  process.env.ASKTOTO_ARTIFACTS_DIR,
-  join(homedir(), 'AI-Brain-build', 'asktoto-release'),
-  'release',
-  'dist',
-].filter(Boolean)
-
-function findDir() {
-  for (const d of CANDIDATE_DIRS) if (existsSync(d)) return d
-  return null
-}
+const { directory: dir, candidates } = selectSigningDirectory(argDir)
 function sh(cmd, args) {
   const result = spawnSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   const stdout = result.stdout || ''
@@ -70,10 +66,13 @@ function walk(dir, test, depth = 4) {
 
 const fails = []
 const notes = []
-const dir = findDir()
 if (!dir) {
   console.error('[verify:signing] No artifacts dir found. Build first, or pass a path / set ASKTOTO_ARTIFACTS_DIR.')
-  console.error('  looked in: ' + CANDIDATE_DIRS.join(', '))
+  console.error('  looked in: ' + candidates.join(', '))
+  process.exit(2)
+}
+try { assertSigningHost(platform()) } catch (error) {
+  console.error(`[verify:signing] ${error.message}`)
   process.exit(2)
 }
 console.log(`[verify:signing] artifacts dir: ${dir}`)
@@ -118,28 +117,25 @@ if (platform() === 'win32') {
   const exes = walk(dir, (n) => n.endsWith('.exe'), 2)
   if (!exes.length) fails.push('no .exe found to verify on this Windows run')
   for (const exe of exes) {
-    const quotedExe = exe.replace(/'/g, "''")
-    const command = `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $s=Get-AuthenticodeSignature -LiteralPath '${quotedExe}'; $cn=''; if ($s.SignerCertificate) { $cn=$s.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,$false) }; [PSCustomObject]@{Status=[string]$s.Status;Subject=[string]$s.SignerCertificate.Subject;CommonName=[string]$cn} | ConvertTo-Json -Compress`
-    const r = sh('powershell', ['-NoProfile', '-Command', command])
+    const command = windowsSignatureCommand(exe)
+    const r = sh(windowsPowerShell(), ['-NoProfile', '-NonInteractive', '-Command', command])
     let signature = {}
     try {
       signature = JSON.parse(r.stdout.trim())
     } catch {
       // The status check below reports the command/output as a signing failure.
     }
-    const status = String(signature.Status || '')
     const subject = String(signature.Subject || '').trim()
     const commonName = String(signature.CommonName || '').trim()
-    if (!r.ok || !/^Valid$/i.test(status)) {
-      fails.push(`Authenticode ${status || 'UNSIGNED'}: ${exe}`)
-      console.error(`  ✗ Authenticode ${status || 'UNSIGNED'}: ${exe}`)
+    const problem = !r.ok ? 'Authenticode verification command failed' : windowsSignatureProblem(signature, expectedSigner)
+    if (problem) {
+      fails.push(`${problem}: ${exe}`)
+      console.error(`  ✗ ${problem}: ${exe}`)
       if (r.out.trim()) console.error(`    ${r.out.trim()}`)
-    } else if (!expectedSigner || (subject !== expectedSigner && commonName !== expectedSigner)) {
-      fails.push(`Authenticode signer does not exactly match WIN_CSC_EXPECTED_SUBJECT: ${exe} (subject=${subject || 'none'}, CN=${commonName || 'none'})`)
-      console.error(`  ✗ unexpected Authenticode signer: ${exe}`)
     } else {
       console.log(`  ✓ Authenticode Valid: ${exe}`)
       console.log(`    identity: ${subject} (CN=${commonName})`)
+      console.log(`    timestamp: ${signature.TimeStamperSubject}`)
     }
   }
   if (apps.length || dmgs.length) notes.push('skipped macOS artifacts (codesign can only be checked on macOS)')

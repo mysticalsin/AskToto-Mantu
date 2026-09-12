@@ -60,7 +60,7 @@ function printInstallHelp(files) {
   const installers = files.filter((name) => /\.(dmg|exe|appx|msix|pkg)$/i.test(name))
   console.log('\nInstallers created:')
   if (!installers.length) {
-    console.log('  No installable artifacts found in release/. Check the electron-builder output above.')
+    console.log(`  No installable artifacts found in ${outDir}. Check the electron-builder output above.`)
     return
   }
   for (const name of installers) console.log(`  ${join(outDir, name)}`)
@@ -79,31 +79,44 @@ function printInstallHelp(files) {
 }
 
 const requestedTargets = targetsFor(target)
+const verifyWindowsSignature = process.env.ASKTOTO_SIGN_INSTALLER === '1' || Boolean(
+  process.env.WIN_CSC_LINK || process.env.CSC_LINK
+)
 
 if (target === 'all' && platform() !== 'darwin' && platform() !== 'win32') {
   console.error('Cross-platform installer builds should run on macOS or Windows, or use GitHub Actions.')
   process.exit(2)
 }
 
-if (target === 'all' && platform() === 'win32') {
-  console.warn('Windows can build Windows installers locally. Build macOS installers on a macOS runner.')
-}
-if (target === 'all' && platform() === 'darwin') {
-  console.warn('macOS can build macOS installers locally. Windows installer builds may require Wine; GitHub Actions is safer.')
+// Do this before clearing output or downloading models. Main-process bytecode and native launch
+// checks require the target host; the GitHub release workflow builds both platforms on their hosts.
+for (const t of requestedTargets) run('node', ['scripts/check-build-host.mjs', t])
+if (requestedTargets.includes('win') && verifyWindowsSignature && !process.env.WIN_CSC_EXPECTED_SUBJECT?.trim()) {
+  console.error('Signed Windows installers require WIN_CSC_EXPECTED_SUBJECT to verify the publisher identity.')
+  process.exit(2)
 }
 
 if (existsSync(outDir)) rmSync(outDir, { recursive: true, force: true })
 
 run('node', ['scripts/check-no-dynamic-import.mjs'])
+run('node', ['scripts/embed-cloudflare-key.mjs'])
+run('node', ['scripts/check-cloudflare-key-valid.mjs'])
 if (requestedTargets.includes('mac')) run('node', ['scripts/check-xcode-tools.mjs'])
 for (const target of requestedTargets) {
-  run('node', ['scripts/check-ffmpeg-sidecar.mjs', target, target === 'mac' ? 'arm64' : 'x64'])
+  for (const arch of target === 'mac' ? ['arm64', 'x64'] : ['x64']) {
+    run('node', ['scripts/check-ffmpeg-sidecar.mjs', target, arch])
+  }
 }
+if (requestedTargets.includes('mac')) run('node', ['scripts/provision-mac-natives.mjs'])
 for (const target of requestedTargets) {
-  run('node', ['scripts/check-sherpa-platform.mjs', target, target === 'mac' ? 'arm64' : 'x64'])
+  for (const arch of target === 'mac' ? ['arm64', 'x64'] : ['x64']) {
+    run('node', ['scripts/check-sherpa-platform.mjs', target, arch])
+  }
 }
+if (requestedTargets.includes('mac')) run('node', ['scripts/provision-electron-dist.mjs'])
 for (const target of requestedTargets) run('node', ['scripts/fetch-llama-server.mjs', target])
 for (const target of requestedTargets) run('node', ['scripts/check-llama-sidecar.mjs', target])
+for (const target of requestedTargets) run('node', ['scripts/fetch-managed-node.mjs', target])
 // metis-mac-helper Swift sidecar — must exist before a mac package or electron-builder only WARNS about
 // the missing extraResources dir and ships a silently degraded app (no Vision OCR, no frontmost watcher).
 if (requestedTargets.includes('mac')) {
@@ -112,21 +125,32 @@ if (requestedTargets.includes('mac')) {
 }
 run('node', ['scripts/fetch-local-model.mjs'])
 run('node', ['scripts/check-local-model.mjs'])
+run('node', ['scripts/fetch-speaker-model.mjs'])
 run('node', ['scripts/fetch-models.mjs'])
 run('npm', ['run', 'build:intelligence'])
-run('npm', ['run', 'build'])
+run('npm', ['run', 'build'], requestedTargets.includes('mac') ? {
+  env: { ...process.env, ASKTOTO_MAC_UNIVERSAL: '1' }
+} : {})
 
 for (const t of requestedTargets) {
   if (t === 'mac') {
-    const args = withOutputDir(['electron-builder', '--mac', '--arm64', '--publish', 'never'])
-    const options = {}
+    const args = withOutputDir([
+      'electron-builder', '--mac', '--universal', '-c.npmRebuild=false',
+      '-c.electronDist=resources/electron-dist', '--publish', 'never'
+    ])
+    const options = { env: { ...process.env, ASKTOTO_MAC_ARCHES: 'arm64,x64' } }
     if (process.env.ASKTOTO_SIGN_INSTALLER !== '1') {
       args.push('-c.mac.identity=null')
-      options.env = { ...process.env, ASKTOTO_ADHOC_SIGN: '1' }
+      options.env.ASKTOTO_ADHOC_SIGN = '1'
     }
     run('npx', args, options)
-    run('node', ['scripts/check-packaged-runtime.mjs', 'mac', join(outDir, 'mac-arm64', 'Metis.app', 'Contents', 'Resources'), '--post-sign'])
+    const appDir = join(outDir, 'mac-universal', 'Metis.app')
+    run('node', ['scripts/check-packaged-runtime.mjs', 'mac', join(appDir, 'Contents', 'Resources'), '--arches=arm64,x64', '--macho-arches=arm64,x64', '--post-sign'])
     run('node', ['scripts/check-update-metadata.mjs', join(outDir, 'latest-mac.yml')])
+    run('node', ['scripts/verify-signing.mjs', outDir, ...(process.env.ASKTOTO_SIGN_INSTALLER === '1' ? ['--require-notarized'] : [])])
+    run('node', ['scripts/check-packaged-launch.mjs', appDir], {
+      env: { ...process.env, ASKTOTO_MAC_LAUNCH_GATE: '1' }
+    })
   }
   if (t === 'win') {
     run('npx', withOutputDir([
@@ -140,7 +164,13 @@ for (const t of requestedTargets) {
     ]))
     run('node', ['scripts/check-packaged-runtime.mjs', 'win', join(outDir, 'win-unpacked', 'resources'), '--post-sign'])
     run('node', ['scripts/check-update-metadata.mjs', join(outDir, 'latest.yml')])
+    if (verifyWindowsSignature) run('node', ['scripts/verify-signing.mjs', outDir])
+    const executable = join(outDir, 'win-unpacked', 'Metis.exe')
+    run('node', ['scripts/check-packaged-launch.mjs', executable])
+    run('node', ['scripts/check-packaged-asr.mjs', executable])
   }
 }
 
+run('node', ['scripts/check-embedded-cloudflare-key.mjs', outDir])
+run('node', ['scripts/check-release.mjs'], { env: { ...process.env, ASKTOTO_ARTIFACTS_DIR: outDir } })
 printInstallHelp(artifactFiles())

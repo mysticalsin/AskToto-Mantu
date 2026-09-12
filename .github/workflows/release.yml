@@ -25,14 +25,19 @@ concurrency:
 
 jobs:
   release-quality:
-    name: Release source gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    name: Release source gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Require the tagged commit to be current main
+        shell: bash
         run: |
           git fetch --no-tags origin main
           if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
@@ -47,7 +52,7 @@ jobs:
       - run: npm run typecheck
       # Same reason as build.yml quality: bar-toolbar.layout.test.ts needs Chromium on the runner.
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - run: npm test
       - run: npm run build
       - run: npm audit --audit-level=critical
@@ -208,12 +213,8 @@ jobs:
           ASKTOTO_ADHOC_SIGN: ${{ steps.mac-sign.outputs.mode == 'adhoc' && '1' || '' }}
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.mac-sign.outputs.mode == 'adhoc' && 'false' || '' }}
           ASKTOTO_MAC_BUILDER_EXTRA: ${{ steps.mac-sign.outputs.mode == 'adhoc' && '-c.mac.identity=null' || '' }}
-          # Embed the default Cloudflare account credential (encrypted at rest) so a fresh install answers
-          # with no key to paste. Both are read only from the environment; only ciphertext ships. If the
-          # token secret is unset the embed step is a clean no-op (a normal keyless build).
-          METIS_CLOUDFLARE_API_TOKEN: ${{ secrets.METIS_CLOUDFLARE_API_TOKEN }}
-          METIS_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.METIS_CLOUDFLARE_ACCOUNT_ID }}
-          METIS_EMBED_CLOUDFLARE_KEY: '1'
+          # Standard installers use the licensed operator relay. Provider credentials remain on the
+          # server; encrypted blobs in an installer are extractable and must not contain a shared key.
       # Hard size gate before anything is published.
       - run: npm run check:release
         env:
@@ -362,12 +363,8 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
-          # Embed the default Cloudflare account credential (encrypted at rest) so a fresh install answers
-          # with no key to paste. Both are read only from the environment; only ciphertext ships. If the
-          # token secret is unset the embed step is a clean no-op (a normal keyless build).
-          METIS_CLOUDFLARE_API_TOKEN: ${{ secrets.METIS_CLOUDFLARE_API_TOKEN }}
-          METIS_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.METIS_CLOUDFLARE_ACCOUNT_ID }}
-          METIS_EMBED_CLOUDFLARE_KEY: '1'
+          # Standard installers authenticate through the licensed operator relay; no shared provider
+          # API credential is passed into this build or embedded in its artifacts.
       # Same pre-publication size gate as release-macos.
       - run: npm run check:release
         env:
