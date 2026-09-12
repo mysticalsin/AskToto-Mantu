@@ -18,19 +18,25 @@ Both executables embed the on-device ASR models (~2.2 GB) — no first-run downl
 
 ## Required egress
 
-Transcription needs none of this — the ASR models are in the executable (above). One capability does
-reach the network on first launch:
+Transcription needs none of this — the ASR models are in the executable (above). The **Qwen3.5 0.8B
+default is bundled** with its projector (**763,759,712 bytes**) and llama-server, so supported local text
+and screenshot inference can be enabled offline without a model download. Local AI is off by default;
+existing selections are preserved and RAM does not silently select a larger model. The packaged default
+is size- and SHA-256-verified; missing or corrupt files require a repaired installer.
+
+**Optional Qwen3.5 4B** requires an explicit selection and first-use download (or explicit Retry):
 
 | Host | When | Why | If blocked |
 |---|---|---|---|
-| `huggingface.co` and the CDN host it redirects to | Once, on first launch, per user profile | Fetches the Métis Local weights into `%APPDATA%\Métis\local-llm\models\<model-id>\`. Which model is chosen depends on the machine: Métis picks the largest registered model whose RAM floor the host meets, so any machine with 8 GB or more takes **Qwen3.5 4B — 3,584,533,344 bytes (3.58 GB)**, not the 0.8B (763,759,712 bytes / 0.76 GB). Size egress and per-user disk for 3.58 GB. They are deliberately **not** in the installer: a universal package carrying them would exceed GitHub's 2 GB per-asset release limit. The URL is pinned to an immutable upstream commit and the files are size- and SHA-256-verified before use. | Métis Local stays unavailable and the app falls back to the configured cloud/CLI provider. Settings → AI → Local AI reports the failed download and the next launch retries. Transcription and everything else are unaffected. |
+| `huggingface.co` and the CDN host it redirects to | On first use of an explicitly selected optional 4B model, per user profile; enabled selections retry on later launches | Fetches **3,584,533,344 bytes (3.58 GB)** into `local-llm\models\qwen3.5-4b\` beneath the app's userData directory. Size optional egress and per-user disk for that GGUF/projector pair. Its URL is pinned to an immutable upstream commit and both files are size- and SHA-256-verified before use. The compact default does not need this request. | The selected 4B remains unavailable and Local AI reports the failed download. The user can explicitly choose the bundled compact model instead. Transcription is unaffected. |
 
 The request goes through the machine's configured proxy (`HTTP(S)_PROXY`, the Windows system proxy, or a
 PAC script), so a proxy-only fleet works as long as the host is allowed.
 
-To roll out without that egress: pre-place `model.gguf` and `mmproj.gguf` in the path above via your
-deployment tooling (sizes and hashes must match `src/main/llm/local-models.ts`), or have users turn
-**Settings → AI → Local AI → Enable Métis Local** off, which skips the download entirely.
+To roll out without model-download egress, retain the bundled compact default. For an offline 4B
+deployment, pre-place `model.gguf` and `mmproj.gguf` in the optional model's profile path via deployment
+tooling (sizes and hashes must match `src/main/llm/local-models.ts`). Disabling Local AI suppresses
+automatic optional-model provisioning; an explicit Download/Retry remains a user-requested action.
 
 ## Signing model (current state)
 

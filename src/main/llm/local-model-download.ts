@@ -9,19 +9,17 @@ import {
   assertRoomFor,
   getModel,
   modelPaths,
+  modelSource,
+  verifyIntegrity,
   type LocalModelDownloadState,
   type LocalModelFile
 } from './local-models'
 
 /**
- * First-run downloader for the Métis Local weights.
- *
- * The weights used to ship inside the installer. They no longer do: at ~728 MB they dominated the
- * download, and a universal (Intel + Apple Silicon) package carrying them would exceed GitHub's 2 GB
- * per-asset release limit. So the app fetches them once, into the writable per-user model directory.
- *
- * This is the ONLY place installed application code reaches the network for model weights, and the
- * integrity rules here are what replace the build-time supply-chain gate that bundling gave us:
+ * Provisioning for optional Métis Local models. The installed compact model is verified in place and
+ * never downloaded or modified. Explicit larger-model selections and unbundled development runs use
+ * the writable per-user directory. Provisioning is triggered by Local AI opt-in or an explicit Retry.
+ * This is the ONLY place installed application code reaches the network for optional model weights:
  *
  *   - the URL is an immutable upstream revision (commit hash in the path), never a branch;
  *   - Content-Length must equal the pinned byte count BEFORE a single byte is written;
@@ -39,7 +37,7 @@ import {
  *
  * Failure is non-fatal by design. Métis Local is one route among several — a machine that is offline,
  * behind a blocked proxy, or short on disk simply keeps using the cloud/CLI routes, and the next launch
- * retries. Nothing here is allowed to block or crash app startup. It is no longer SILENT, though: the
+ * retries while opted in. Nothing here is allowed to block or crash app startup. It is no longer SILENT, though: the
  * state below is what Settings reads, so an in-flight or failed fetch reads as itself instead of as a
  * damaged install (MQA-186/187).
  */
@@ -66,15 +64,13 @@ export function localModelDownloadState(): LocalModelDownloadState {
 /**
  * Whether this machine should fetch the on-device weights at all.
  *
- * Weights are not in the installer (~730 MB+); the app starts the download whenever it opens so the
- * model is ready the moment the user turns Local AI on. Local AI `enabled` only controls ROUTING —
- * never whether bytes are fetched. One remaining reason not to fetch:
- *   - The machine is under the model's RAM floor. assertRamOk refuses every load below it, so the bytes
- *     could never be used; listModels() already reported such a machine `insufficient-ram`.
+ * Installed compact weights never need a fetch. Downloads must also meet the RAM floor, since bytes
+ * below it cannot be used. The separate provisioning policy owns opt-in and organization restrictions.
  */
 export function shouldFetchWeights(modelId: string): boolean {
   try {
     assertRamOk(modelId)
+    if (modelSource(modelId) === 'bundled') return false
   } catch {
     return false
   }
@@ -224,6 +220,18 @@ async function run(modelId: string): Promise<boolean> {
     return false
   }
   const paths = modelPaths(modelId)
+  // Do this before constructing download destinations or touching any filesystem mutation. A damaged
+  // signed/read-only bundle needs repair/reinstall, never deletion, fallback, or an in-app download.
+  if (modelSource(modelId) === 'bundled') {
+    try {
+      await verifyIntegrity(modelId)
+      state = IDLE
+      return true
+    } catch (err) {
+      state = { modelId, status: 'failed', progress: 0, error: err instanceof Error ? err.message : String(err) }
+      return false
+    }
+  }
   const files = [
     { key: 'gguf' as const, spec: entry.gguf, dest: paths.gguf },
     { key: 'mmproj' as const, spec: entry.mmproj, dest: paths.mmproj }

@@ -126,22 +126,21 @@ describe('bundled local model runtime', () => {
       })
     })
 
-    it('stays in userData when packaged — never inside the signed bundle', () => {
+    it('reads the included compact model from packaged resources, without changing optional model paths', () => {
       const resourcesPath = join(userData, 'packaged-resources')
       Object.defineProperty(app, 'isPackaged', { configurable: true, value: true })
       Object.defineProperty(process, 'resourcesPath', { configurable: true, value: resourcesPath })
 
-      // The weights are downloaded, so they must land somewhere writable. Writing into the .app would
-      // fail on a read-only volume and break the bundle's code signature where it did not.
+      // Runtime reads the installed compact payload. Its downloader must never write into the bundle.
       expect(modelPaths('qwen3.5-0.8b')).toEqual({
-        dir: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b'),
-        gguf: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b', 'model.gguf'),
-        mmproj: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b', 'mmproj.gguf'),
+        dir: join(resourcesPath, 'local-llm', 'models', 'qwen3.5-0.8b'),
+        gguf: join(resourcesPath, 'local-llm', 'models', 'qwen3.5-0.8b', 'model.gguf'),
+        mmproj: join(resourcesPath, 'local-llm', 'models', 'qwen3.5-0.8b', 'mmproj.gguf'),
         ctxSize: expect.any(Number),
         parallel: expect.any(Number),
         gpuLayers: expect.any(Number)
       })
-      expect(modelPaths('qwen3.5-0.8b').dir).not.toContain(resourcesPath)
+      expect(modelPaths('qwen3.5-4b').dir).toBe(join(userData, 'local-llm', 'models', 'qwen3.5-4b'))
     })
 
     it('rejects the removed 2B model id', () => {
@@ -198,6 +197,7 @@ describe('bundled local model runtime', () => {
           label: model.label,
           minTotalRamGB: model.minTotalRamGB,
           ready: false,
+          source: 'download',
           // MQA-187/191: "missing files" was rendered as a damaged install. With no download state to
           // fold in, a never-attempted fetch is exactly that and nothing stronger.
           unavailableReason: 'not-downloaded',
@@ -220,6 +220,7 @@ describe('bundled local model runtime', () => {
           label: model.label,
           minTotalRamGB: model.minTotalRamGB,
           ready: true,
+          source: 'download',
           unavailableReason: null,
           downloadProgress: 0,
           downloadError: null

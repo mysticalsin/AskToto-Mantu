@@ -1,4 +1,4 @@
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -13,9 +13,9 @@ export const LOCAL_MODEL_LICENSE = Object.freeze({
 })
 
 // Build-time supply-chain manifest. The upstream revision, byte length, and SHA-256 are all immutable
-// supply-chain gates. Keep them identical to the entry in src/main/llm/local-models.ts, which is the
-// copy that ships and that the first-run downloader verifies against: this manifest's only job is to
-// let check-local-model.mjs re-hash the real file and prove those pins before a release goes out.
+// supply-chain gates. Keep them identical to src/main/llm/local-models.ts. Build-input and packaged
+// inventory verification both hash the compact model against these pins; runtime verifies the same
+// packaged bytes before inference. Development/unbundled downloads retain these checks too.
 export const LOCAL_MODEL_ASSETS = Object.freeze([
   Object.freeze({
     file: 'model.gguf',
@@ -31,4 +31,18 @@ export const LOCAL_MODEL_ASSETS = Object.freeze([
     bytes: 204_987_232,
     sha256: '56e4c6cfe73b0c82e3e82bc518d7591997e61d81f723fc41a586f4fa69ea2453'
   })
+])
+
+/** Complete immutable local-llm inventory, relative to its resource root. No cache/extra models. */
+export const LOCAL_MODEL_PAYLOAD = Object.freeze([
+  Object.freeze({
+    path: basename(LOCAL_MODEL_LICENSE.path),
+    bytes: LOCAL_MODEL_LICENSE.bytes,
+    sha256: LOCAL_MODEL_LICENSE.sha256
+  }),
+  ...LOCAL_MODEL_ASSETS.map((asset) => Object.freeze({
+    path: `models/${LOCAL_MODEL_ID}/${asset.file}`,
+    bytes: asset.bytes,
+    sha256: asset.sha256
+  }))
 ])

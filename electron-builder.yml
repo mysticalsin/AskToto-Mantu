@@ -80,14 +80,18 @@ extraResources:
     to: graphify_runner.py
   - from: THIRD_PARTY_NOTICES.md
     to: THIRD_PARTY_NOTICES.md
-  # The Qwen WEIGHTS are deliberately NOT packaged. At ~728 MB they dominated the installer, and a
-  # universal (Intel + Apple Silicon) package carrying them would exceed GitHub's 2 GB per-asset
-  # release limit. src/main/llm/local-model-download.ts fetches them once on first run into userData,
-  # from a pinned immutable upstream revision, and rejects anything whose size or sha256 does not match
-  # the values in local-models.ts. The licence text still ships — it is an Apache-2.0 obligation that
-  # does not depend on when the weights arrive.
+  # The existing compact Local AI default ships ready for offline opt-in. Copy only its reviewed
+  # model/projector pair, never another model, a partial download or a build cache. The post-package
+  # gate verifies this exact inventory and every immutable byte/hash, including after signing.
+  # Larger user-selected models remain optional downloads. Actual installers must still pass the
+  # unchanged 1.9 GiB release gate; no size estimate exempts a build from that check.
   - from: resources/local-llm/LICENSE.QWEN3.5-APACHE-2.0.txt
     to: local-llm/LICENSE.QWEN3.5-APACHE-2.0.txt
+  - from: resources/local-llm/models
+    to: local-llm/models
+    filter:
+      - qwen3.5-0.8b/model.gguf
+      - qwen3.5-0.8b/mmproj.gguf
   # Bundled ASR model weights — served via asr-model:// protocol (zero runtime download).
   # Populated by `npm run fetch-models` before packaging.
   - from: resources/models

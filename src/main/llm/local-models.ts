@@ -8,14 +8,10 @@ import { auditLog, type AuditEvent } from '../logger'
 /**
  * Code-reviewed metadata for the Métis Local model payload.
  *
- * These weights are NO LONGER embedded in the installer. At ~728 MB they dominated the download, and
- * a universal (Intel + Apple Silicon) package cannot carry them and still fit GitHub's 2 GB per-asset
- * release limit. They are fetched once, on first run, by local-model-download.ts.
- *
- * That moves a supply-chain step from build time to run time, so the pins below are what keep it safe
- * and are NOT advisory: `url` points at an IMMUTABLE upstream revision (a commit hash in the path, not
- * a branch), and a downloaded file must match `bytes` and `sha256` exactly or it is deleted instead of
- * used. Never relax these to a mutable ref or a size-only check.
+ * The compact 0.8B model and projector ship in the installer. Explicit larger-model selections and
+ * unbundled development runs use local-model-download.ts and the writable user-data directory.
+ * Both sources must pass the same byte-size and SHA-256 pins before a cold start. Download URLs point
+ * at IMMUTABLE upstream revisions, never a branch. Never relax these to mutable refs or size-only checks.
  */
 export interface LocalModelFile {
   bytes: number
@@ -200,6 +196,20 @@ export class ChecksumMismatchError extends Error {
   }
 }
 
+export class InvalidBundledModelError extends Error {
+  constructor(public readonly modelId: string) {
+    super(
+      `The bundled local model "${modelId}" is missing or failed its integrity check. ` +
+        'Repair or reinstall Métis from the latest official installer. The installed model files will not be modified.'
+    )
+    this.name = 'InvalidBundledModelError'
+  }
+}
+
+// A size-correct file must not become "ready" again after a failed SHA check merely because Settings
+// polls its size. Re-verification clears the failure; reinstall/relaunch starts with a fresh map.
+const bundledIntegrityFailures = new Map<string, string>()
+
 type LocalModelAuditEvent = Extract<AuditEvent, `local.model.${string}`>
 function localAudit(event: LocalModelAuditEvent, detail: Record<string, unknown>): void {
   auditLog(event, detail)
@@ -267,6 +277,9 @@ export function volumeFreeBytes(dir: string): number | null {
  */
 export function diskShortageFor(id: string): string | null {
   const entry = getModel(id)
+  // An installed model needs no second copy in userData. Disk pressure cannot be repaired by fetching
+  // into signed/read-only resources, even when the bundle is incomplete.
+  if (modelSource(id) === 'bundled') return null
   const needed = entry.gguf.bytes + entry.mmproj.bytes + DISK_HEADROOM_BYTES
   let free = volumeFreeBytes(modelPaths(id).dir)
   if (free === null) {
@@ -308,17 +321,24 @@ export interface LocalModelPaths {
 }
 
 /**
- * Always userData, packaged or not: the weights are downloaded on first run, and the .app bundle is
- * read-only and code-signed — writing into process.resourcesPath would break its seal.
+ * Writable root for optional downloads only. Never use it to repair installed app resources.
  */
 export function modelsRoot(): string {
   return join(app.getPath('userData'), 'local-llm', 'models')
 }
 
-/** Main-process-only paths, under the writable per-user model directory. */
+/** Only the reviewed compact payload is included. Preserve explicit larger-model selections. */
+export function modelSource(id: string): 'bundled' | 'download' {
+  getModel(id)
+  return app.isPackaged && id === 'qwen3.5-0.8b' ? 'bundled' : 'download'
+}
+
+/** Main-process-only paths. Missing packaged files stay on the bundle path and fail closed. */
 export function modelPaths(id: string): LocalModelPaths {
   const entry = getModel(id)
-  const dir = join(modelsRoot(), id)
+  const dir = modelSource(id) === 'bundled'
+    ? join(process.resourcesPath, 'local-llm', 'models', id)
+    : join(modelsRoot(), id)
   const profile = spawnProfileFor(entry)
   return {
     dir,
@@ -340,12 +360,13 @@ function fileMatches(path: string, expectedBytes: number): boolean {
 
 /**
  * Kept under its existing internal name because local routing already consumes it.
- * Means "both weight files are on disk with their pinned sizes" - they arrive over the network on first
- * run (local-model-download.ts), they are never in the installer.
+ * Means both weight files have their pinned sizes, with no known bundled-integrity failure. The cold
+ * start additionally verifies both hashes, regardless of whether these files were installed or fetched.
  */
 export function isDownloaded(id: string): boolean {
   const entry = getModel(id)
   const paths = modelPaths(id)
+  if (modelSource(id) === 'bundled' && bundledIntegrityFailures.has(paths.dir)) return false
   return fileMatches(paths.gguf, entry.gguf.bytes) && fileMatches(paths.mmproj, entry.mmproj.bytes)
 }
 
@@ -365,6 +386,7 @@ export interface LocalModelDownloadState {
 }
 
 export type LocalModelUnavailableReason =
+  | 'invalid-bundle'
   | 'insufficient-ram'
   | 'insufficient-disk'
   | 'downloading'
@@ -376,6 +398,7 @@ export interface LocalModelSummary {
   label: string
   minTotalRamGB: number
   ready: boolean
+  source?: 'bundled' | 'download'
   unavailableReason: LocalModelUnavailableReason | null
   /** 0..1 while `unavailableReason === 'downloading'`, 0 otherwise. */
   downloadProgress: number
@@ -385,34 +408,43 @@ export interface LocalModelSummary {
 
 export function listModels(download?: LocalModelDownloadState): LocalModelSummary[] {
   return LOCAL_MODELS.map((model) => {
+    const source = modelSource(model.id)
     const filesPresent = isDownloaded(model.id)
     const enoughRam = advertisedRamGB() >= model.minTotalRamGB
     const dl = download && download.modelId === model.id ? download : undefined
-    const diskError = filesPresent ? null : diskShortageFor(model.id)
-    // RAM then disk, both independent of download state: a skipped fetch (boot never called
-    // ensureLocalModel, or assertRoomFor refused before net.fetch) must not read as idle `not-downloaded`.
+    const bundleError = source === 'bundled' && !filesPresent
+      ? bundledIntegrityFailures.get(modelPaths(model.id).dir) ?? new InvalidBundledModelError(model.id).message
+      : null
+    const diskError = filesPresent || source === 'bundled' ? null : diskShortageFor(model.id)
+    // Missing/damaged installed resources need repair, not disk space or a download. For optional
+    // models, preserve RAM/disk eligibility and the observable download states.
     const reason: LocalModelUnavailableReason | null = !enoughRam
       ? 'insufficient-ram'
-      : filesPresent
-        ? null
-        : dl?.status === 'downloading'
-          ? 'downloading'
-          : diskError || (dl?.status === 'failed' && /not enough free disk/i.test(dl.error ?? ''))
-            ? 'insufficient-disk'
-            : dl?.status === 'failed'
-              ? 'download-failed'
-              : 'not-downloaded'
+      : bundleError
+        ? 'invalid-bundle'
+        : filesPresent
+          ? null
+          : dl?.status === 'downloading'
+            ? 'downloading'
+            : diskError || (dl?.status === 'failed' && /not enough free disk/i.test(dl.error ?? ''))
+              ? 'insufficient-disk'
+              : dl?.status === 'failed'
+                ? 'download-failed'
+                : 'not-downloaded'
     return {
       id: model.id,
       label: model.label,
       minTotalRamGB: model.minTotalRamGB,
       ready: filesPresent && enoughRam,
+      source,
       unavailableReason: reason,
       downloadProgress: reason === 'downloading' ? (dl?.progress ?? 0) : 0,
       downloadError:
-        reason === 'download-failed' || reason === 'insufficient-disk'
-          ? (dl?.error ?? diskError ?? null)
-          : null
+        reason === 'invalid-bundle'
+          ? bundleError
+          : reason === 'download-failed' || reason === 'insufficient-disk'
+            ? (dl?.error ?? diskError ?? null)
+            : null
     }
   })
 }
@@ -447,14 +479,26 @@ export async function verifyIntegrity(id: string): Promise<void> {
   assertRamOk(id)
   const entry = getModel(id)
   const paths = modelPaths(id)
+  const bundled = modelSource(id) === 'bundled'
   for (const file of ['gguf', 'mmproj'] as const) {
     const path = paths[file]
-    if (!existsSync(path)) {
-      throw new Error(
-        `Local model "${id}" (${file}) is not downloaded yet. Métis fetches it automatically on first run; ` +
-          `check the connection if this persists.`
-      )
+    try {
+      if (!existsSync(path)) {
+        throw new Error(
+          `Local model "${id}" (${file}) is not downloaded yet. Enable Local AI or select Retry in Settings to download it.`
+        )
+      }
+      if (bundled && !fileMatches(path, entry[file].bytes)) throw new InvalidBundledModelError(id)
+      await verifyFileChecksum(id, file, path, entry[file])
+      if (!fileMatches(path, entry[file].bytes)) {
+        throw new Error(`Local model "${id}" (${file}) has an incorrect size. Select Retry in Settings to download it again.`)
+      }
+    } catch (error) {
+      if (!bundled) throw error
+      const failure = new InvalidBundledModelError(id)
+      bundledIntegrityFailures.set(paths.dir, failure.message)
+      throw failure
     }
-    await verifyFileChecksum(id, file, path, entry[file])
   }
+  if (bundled) bundledIntegrityFailures.delete(paths.dir)
 }
