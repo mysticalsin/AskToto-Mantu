@@ -5,6 +5,7 @@ import type { RecapStatus } from '@shared/recap-status'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
 import { reviewDurationSeconds } from '@shared/meeting-duration'
+import { reviewSpeakerLabel } from '@shared/speaker-summary'
 import { talkStats } from '@shared/talkstats'
 import { fnv1a } from '@shared/hash'
 import { Markdown } from './Markdown'
@@ -486,7 +487,7 @@ export const Review = memo(function Review({
     durationMs, lines, startedAt, isPastMeeting, endedAt: endedAtRef.current
   }), [durationMs, lines, startedAt, isPastMeeting])
 
-  const participants = useMemo(() => new Set(lines.map((l) => l.speaker)).size, [lines])
+  const speakerCountLabel = useMemo(() => reviewSpeakerLabel(speechLines), [speechLines])
 
   const [copyError, setCopyError] = useState<string | null>(null)
 
@@ -962,7 +963,7 @@ export const Review = memo(function Review({
             <span className="rounded-full bg-white/[0.06] px-2 py-0.5">Duration {formatDuration(durationSec)}</span>
           )}
           <span className="rounded-full bg-white/[0.06] px-2 py-0.5">
-            {participants} participant{participants === 1 ? '' : 's'}
+            {speakerCountLabel}
           </span>
           {/* Talk ratio — word share over real speech lines. Amber past 70%: in a client meeting,
               the one selling should not be the one talking. Details on hover. */}
