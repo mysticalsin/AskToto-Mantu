@@ -1258,6 +1258,11 @@ describe('copy-forward: pre-rebrand "AskToto Meetings" sibling folder (T7 7c)', 
 // The old last-minus-startedAt formula turned an offset t into a huge negative that clamped to 1 minute,
 // corrupting conversationMinutes and the time-saved total for every import.
 describe('meetingDurationMin — span is correct under both timestamp conventions (MQA-111)', () => {
+  it('MQA-310 prefers measured recording duration over sparse transcript timestamps', () => {
+    expect(meetingDurationMin({ startedAt: 1, durationMs: 150_000, lines: [{ t: 1 }] })).toBe(3)
+    expect(meetingDurationMin({ startedAt: 1, durationMs: 0, lines: [{ t: 1 }] })).toBe(0)
+  })
+
   it('offset-based t (0-based, the import convention) gives the real span, not 1', () => {
     const startedAt = Date.now()
     const m = { startedAt, lines: [{ t: 0 }, { t: 30_000 }, { t: 25 * 60_000 }] } // 25-minute span

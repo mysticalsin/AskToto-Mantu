@@ -1,6 +1,7 @@
 import { vadWindowsFromPcm } from '@shared/vad'
 import { IMPORT_CHUNK_SECONDS, type SaveMeeting, type TranscriptLine } from '@shared/ipc'
 import { estimateNoteTakingMinutes, wordsFromTexts } from '@shared/time-saved-events'
+import { meetingDurationMinutes } from '@shared/meeting-duration'
 
 /**
  * Main-process import queue. It deliberately persists text checkpoints, not decoded PCM: raw audio is
@@ -55,9 +56,11 @@ export interface ImportJob {
    *  field existed, which recover() also treats as a mismatch. */
   chunkSec?: number
   /** MQA-235: which transcription pipeline this job's cursor/lines were checkpointed against.
-   *  'vad-v1' = the utterance pipeline (cursor counts VAD windows; resume re-decodes+re-segments —
+   *  'vad-v2' = the utterance pipeline (cursor counts VAD windows; resume re-decodes+re-segments —
    *  deterministic — and skips windows < cursor). Absent = the legacy fixed-slab pipeline. */
-  pipeline?: 'vad-v1'
+  pipeline?: 'vad-v1' | 'vad-v2'
+  /** Recording length measured from decoded PCM, not the start time of its last utterance. */
+  durationMs?: number
   createdAt: number
   updatedAt: number
 }
@@ -134,7 +137,7 @@ const CHUNK_MS = IMPORT_CHUNK_SECONDS * 1_000
 const SAMPLE_RATE = 16_000
 /** Whole-recording PCM is buffered in memory for VAD segmentation. 90 minutes at 16kHz f32 is ~345MB —
  *  acceptable for a desktop import; past it the job degrades to the legacy fixed-slab pipeline rather
- *  than risking an OOM (`vad-v1` is dropped and the buffered slabs are transcribed as-is). */
+ *  than risking an OOM (`vad-v2` is dropped and the buffered slabs are transcribed as-is). */
 const VAD_MAX_SAMPLES = SAMPLE_RATE * 60 * 90
 /** Majority-vote sample points across the recording's windows. Five spread probes beat the old single
  *  window-0 probe because window 0 is disproportionately a greeting in the OTHER language ("Hello" on a
@@ -159,6 +162,11 @@ export function decoderSlotIsStale(state: ImportJobState | undefined): boolean {
   return state !== 'decoding'
 }
 
+/** VAD cursors count utterance windows, not decoder slabs. Both decoders must replay all PCM. */
+export function decodeSkipThrough(job: Pick<ImportJob, 'pipeline' | 'cursor'>): number {
+  return job.pipeline === 'vad-v1' || job.pipeline === 'vad-v2' ? 0 : job.cursor
+}
+
 function titleFromSource(name: string): string {
   const base = name.replace(/\.[^./\\]+$/, '')
   const words = base.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim()
@@ -181,7 +189,7 @@ function copy<T>(value: T): T {
 export class ImportJobManager {
   private readonly jobs = new Map<string, ImportJob>()
   private readonly queue: string[] = []
-  /** In-memory only: decoded PCM slabs per in-flight vad-v1 job (never persisted; resume re-decodes). */
+  /** In-memory only: decoded PCM slabs per in-flight vad-v2 job (never persisted; resume re-decodes). */
   private readonly pcmByJob = new Map<string, { slabs: Float32Array[]; samples: number }>()
   /** Jobs that occupy the decoded-audio admission slot. Recap never belongs here. */
   private readonly decodeSlotIds = new Set<string>()
@@ -223,7 +231,7 @@ export class ImportJobManager {
         totalChunks: 0,
         lines: [],
         chunkSec: IMPORT_CHUNK_SECONDS,
-        pipeline: 'vad-v1',
+        pipeline: 'vad-v2',
         ...(this.deps.personaMode ? { mode: this.deps.personaMode() } : {}),
         createdAt: now,
         updatedAt: now
@@ -235,6 +243,22 @@ export class ImportJobManager {
     }
     await this.pump()
     return started.map((id) => copy(this.requireJob(id)))
+  }
+
+  /** Discard incompatible window checkpoints before admitting a fresh decode attempt. */
+  private prepareCheckpoint(job: ImportJob): void {
+    const oldVad = job.pipeline === 'vad-v1'
+    const oldSlabs = !job.pipeline && job.chunkSec !== IMPORT_CHUNK_SECONDS
+    if (!oldVad && !oldSlabs) return
+    // MQA-309: pause-aware segmentation changes window indices. Never apply a vad-v1 cursor to v2.
+    // Already-saved meetings are handled before this boundary and must not be imported twice.
+    if (oldVad) job.pipeline = 'vad-v2'
+    job.cursor = 0
+    job.lines = []
+    job.totalChunks = 0
+    job.progressPct = undefined
+    job.durationMs = undefined
+    job.chunkSec = IMPORT_CHUNK_SECONDS
   }
 
   /** Reloads unfinished jobs after an app restart. The caller verifies source identity before decoding. */
@@ -265,17 +289,7 @@ export class ImportJobManager {
         // wrong line timestamps at best, a rejected "decoder changed the recording chunk count" failure at
         // worst (the browser-fallback decoder recomputes totalChunks from the new chunk size on its very
         // first submitted chunk). Re-transcribing the whole file from scratch is slower but correct.
-        if (job.pipeline === 'vad-v1') {
-          // Window boundaries are recomputed from the SAME deterministic VAD on resume, so cursor/lines
-          // stay valid regardless of slab size. A resume always re-decodes from 0 (decode is seconds of
-          // ffmpeg; the expensive part is ASR, which the window cursor skips).
-        } else if (job.chunkSec !== IMPORT_CHUNK_SECONDS) {
-          job.cursor = 0
-          job.lines = []
-          job.totalChunks = 0
-          job.progressPct = undefined
-          job.chunkSec = IMPORT_CHUNK_SECONDS
-        }
+        this.prepareCheckpoint(job)
         job.state = 'queued'
         job.error = undefined
         await this.persist(job)
@@ -301,10 +315,10 @@ export class ImportJobManager {
     if (!this.attemptAccepts(this.speakerAttempts.get(jobId))) return
     if (terminal(job.state)) return
     let normalized = Number.isFinite(pct) ? Math.max(0, Math.min(99, Math.round(pct))) : 0
-    // vad-v1: the decoder's 0-99 covers only phase 1 (decode+segment, seconds); phase 2 (ASR, minutes)
+    // vad-v2: the decoder's 0-99 covers only phase 1 (decode+segment, seconds); phase 2 (ASR, minutes)
     // owns 15..99 via the window loop. Unscaled, the bar would jump to 99 and sit there for the whole
     // transcription.
-    if (job.pipeline === 'vad-v1' && job.state === 'decoding') normalized = Math.round(normalized * 0.15)
+    if (job.pipeline === 'vad-v2' && job.state === 'decoding') normalized = Math.round(normalized * 0.15)
     const next = Math.max(job.progressPct ?? 0, normalized)
     if (job.progressPct !== undefined && next === job.progressPct) return
     job.progressPct = next
@@ -328,6 +342,7 @@ export class ImportJobManager {
       await this.removeCheckpoint(job.jobId)
       return copy(this.requireJob(jobId))
     }
+    this.prepareCheckpoint(job)
     job.state = 'queued'
     job.error = undefined
     job.recapError = undefined
@@ -403,9 +418,9 @@ export class ImportJobManager {
     }
     // A window should never exceed one decode chunk plus a few seconds of slack for FFmpeg/decoder jitter.
     if (samples.length > 16_000 * (IMPORT_CHUNK_SECONDS + 5)) throw new Error('Decoded audio chunk is too large.')
-    // vad-v1: cursor counts WINDOWS (phase 2), not slabs — order is enforced against the count of
+    // vad-v2: cursor counts WINDOWS (phase 2), not slabs — order is enforced against the count of
     // slabs already buffered instead. Legacy keeps the original cursor-based replay/order contract.
-    const expectedSeq = job.pipeline === 'vad-v1' ? this.pcmOf(job.jobId).slabs.length : job.cursor
+    const expectedSeq = job.pipeline === 'vad-v2' ? this.pcmOf(job.jobId).slabs.length : job.cursor
     if (seq < expectedSeq) return // replay during resume: this checkpoint already exists
     if (seq !== expectedSeq) {
       await this.fail(job, `Decoded audio arrived out of order (expected chunk ${expectedSeq + 1}).`)
@@ -418,12 +433,12 @@ export class ImportJobManager {
 
     if (totalChunks > 0) job.totalChunks = totalChunks
 
-    // MQA-235 (vad-v1): phase 1 only BUFFERS — segmentation and ASR happen in finishDecoding, where the
+    // MQA-235 (vad-v2): phase 1 only BUFFERS — segmentation and ASR happen in finishDecoding, where the
     // whole recording is known. Past the memory cap the job degrades to the legacy slab pipeline: the
     // backlog is transcribed slab-by-slab right here, then this and every later slab take the legacy
     // branch below.
     let drainBufferedPcm = false
-    if (job.pipeline === 'vad-v1') {
+    if (job.pipeline === 'vad-v2') {
       const buf = this.pcmOf(job.jobId)
       if (buf.samples + samples.length <= VAD_MAX_SAMPLES) {
         // Own copy: the decoder reuses its buffer across chunks.
@@ -493,6 +508,9 @@ export class ImportJobManager {
       job.lines.push({ speaker: 'unknown', text: text.trim(), t: job.sourceMtimeMs + seq * CHUNK_MS })
     }
     job.cursor = seq + 1
+    // Slabs before seq are fixed-length; the last slab may be partial. Assignment (not accumulation)
+    // makes retries idempotent and also covers the bounded-memory legacy overflow path.
+    job.durationMs = seq * CHUNK_MS + Math.round(samples.length * 1000 / SAMPLE_RATE)
     await this.persist(job)
     return this.attemptAccepts(attempt)
   }
@@ -506,7 +524,7 @@ export class ImportJobManager {
     return buf
   }
 
-  /** Hand back and clear the buffered PCM for one vad-v1 job. */
+  /** Hand back and clear the buffered PCM for one vad-v2 job. */
   private takePcm(jobId: string): Float32Array[] {
     const buf = this.pcmByJob.get(jobId)
     this.pcmByJob.delete(jobId)
@@ -550,7 +568,7 @@ export class ImportJobManager {
       await this.releaseDecodeSlot(jobId)
       return
     }
-    if (job.pipeline === 'vad-v1') {
+    if (job.pipeline === 'vad-v2') {
       this.retainedPcmConsumerIds.add(job.jobId)
       let readyToFinalize = false
       try {
@@ -603,7 +621,7 @@ export class ImportJobManager {
   }
 
   /**
-   * MQA-235: phase 2 of the vad-v1 pipeline. The whole recording is buffered; segment it with the SAME
+   * MQA-235: phase 2 of the vad-v2 pipeline. The whole recording is buffered; segment it with the SAME
    * VAD the live path runs (utterance windows instead of arbitrary 12s slabs), majority-vote the
    * recording's language across spread probe windows (window 0 is disproportionately a greeting in the
    * other language — the documented 2026-08-05 mis-pin translated a whole meeting), then transcribe
@@ -613,6 +631,7 @@ export class ImportJobManager {
   private async consumeVadPcm(job: ImportJob, attempt: SpeakerAttemptState | undefined): Promise<boolean> {
     const slabs = this.takePcm(job.jobId)
     const total = slabs.reduce((n, s2) => n + s2.length, 0)
+    job.durationMs = Math.round(total * 1000 / SAMPLE_RATE)
     const pcm = new Float32Array(total)
     let off = 0
     for (const slab of slabs) {
@@ -756,6 +775,7 @@ export class ImportJobManager {
         title: job.title,
         mode: 'meeting',
         startedAt: job.sourceMtimeMs,
+        durationMs: job.durationMs,
         lines: [...job.lines].sort((a, b) => a.t - b.t),
         recap: ''
       })
@@ -805,11 +825,9 @@ export class ImportJobManager {
 
       // The user summarized a meeting via import — credit the durable time-saved counters ONCE, now that
       // the file is committed and past every cancel gate (the live-meeting path credits itself in the
-      // saveTranscript IPC handler). MQA-111: use the transcript's own span (last line minus first),
-      // which is correct for the import path's 0-based offset timestamps AND matches what
-      // transcripts.meetingDurationMin now stamps into the frontmatter, so the counter and the meeting agree.
-      const ts = job.lines.map((l) => l.t).filter((t) => Number.isFinite(t))
-      const durMin = ts.length ? Math.max(1, Math.round((Math.max(...ts) - Math.min(...ts)) / 60000)) : 0
+      // saveTranscript IPC handler). MQA-310: the decoded duration includes the last utterance and
+      // silence; sparse line-start timestamps are only a fallback for old checkpoints.
+      const durMin = meetingDurationMinutes(job)
       if (recapPersisted) this.deps.recordMeetingSummarized?.(durMin)
       {
         const words = wordsFromTexts(...job.lines.map((l) => l.text))
@@ -884,14 +902,14 @@ export class ImportJobManager {
       const job = this.jobs.get(jobId)
       if (!job || terminal(job.state)) continue
       this.takePcm(jobId) // leftover buffers from a prior attempt at THIS job must not mix with a resume
-      // A vad-v1 job that failed mid-transcription already had `totalChunks` overwritten to the WINDOW
+      // A vad-v2 job that failed mid-transcription already had `totalChunks` overwritten to the WINDOW
       // count by consumeVadPcm (phase 2). A resume always re-decodes from scratch (phase 1), whose
       // real decoder (index.ts's ffmpeg onChunk) always reports totalChunks 0 per slab — left un-reset,
       // that stale window count would trip acceptDecodedChunk's "decoder changed the recording chunk
       // count" guard on the very first re-fed slab, permanently breaking resume for any job that failed
-      // past segmentation. Legacy (non-vad-v1) jobs are untouched: their totalChunks IS the real slab
+      // past segmentation. Legacy (non-vad-v2) jobs are untouched: their totalChunks IS the real slab
       // count and resuming from a non-zero cursor legitimately depends on it staying put.
-      if (job.pipeline === 'vad-v1') job.totalChunks = 0
+      if (job.pipeline === 'vad-v2') job.totalChunks = 0
       this.decodeSlotIds.add(jobId)
       this.activeJobIds.add(jobId)
       const attempt = this.createAttempt(job)
@@ -947,7 +965,7 @@ export class ImportJobManager {
   }
 
   private admitSpeakers(job: ImportJob, attempt: SpeakerAttemptState): void {
-    if (job.pipeline === 'vad-v1' && job.cursor === 0 && this.deps.beginSpeakers) {
+    if (job.pipeline === 'vad-v2' && job.cursor === 0 && this.deps.beginSpeakers) {
       try {
         attempt.speakerOwned = this.deps.beginSpeakers(attempt.identity) === true
       } catch {

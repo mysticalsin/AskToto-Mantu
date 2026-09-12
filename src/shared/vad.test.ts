@@ -279,13 +279,13 @@ describe('vadWindowsFromPcm — batch VAD windowing', () => {
     expect(windows[1].start / SR).toBeLessThan(1.6)
   })
 
-  it('a burst longer than maxWindowSec splits at the cap', () => {
+  it('a burst longer than maxWindowSec splits at the last short pause before the cap', () => {
     // A continuous unmodulated tone reads as a steady non-speech bed to isSpeechLikeWindow (no envelope
     // spread), same as real hold music would — so this needs an actually speech-shaped signal: the same
     // syllabic burst/gap rhythm as the ported "does NOT cut a sentence on short inter-word gaps" makeVad
     // test above (0.5s speech / 0.3s gap, gap well under the 0.6s endpoint so the VAD never naturally
-    // closes), just repeated long enough to run past the 15s cap. Only the hard cap can split this — same
-    // one long "sentence" the live worklet would force-cut at its 6s cap.
+    // closes), just repeated long enough to run past the 15s cap. The batch cap can use a short pause;
+    // the live worklet still force-cuts at its own unchanged 6s cap.
     const units = Array.from({ length: 24 }, () => [
       { rms: SPEECH, sec: 0.5 },
       { rms: SILENCE, sec: 0.3 }
@@ -293,11 +293,11 @@ describe('vadWindowsFromPcm — batch VAD windowing', () => {
     const pcm = envelope([...units, { rms: SILENCE, sec: 1.0 }]) // trailing silence closes out the remainder
     const windows = vadWindowsFromPcm(pcm, SR, { maxWindowSec: 15 })
     expect(windows.length).toBeGreaterThanOrEqual(2)
-    // The split lands at (approximately) the 15s cap — up to one 8ms quantum past it, since the cap only
-    // fires once accumulated fill reaches it — and the two halves never overlap.
-    expect(windows[0].end / SR).toBeGreaterThan(14.5)
-    expect(windows[0].end / SR).toBeLessThanOrEqual(15.05)
+    // The final complete pause before the cap is 14.1–14.4s. Preserve speech on both sides of its midpoint.
+    expect(windows[0].end).toBe(14.25 * SR)
+    expect(Math.max(...windows.map((window) => window.end - window.start))).toBeLessThanOrEqual(15 * SR)
     expect(windows[1].start).toBeGreaterThanOrEqual(windows[0].end)
+    expectSpeechCoveredOnce(pcm, windows)
   })
 
   it('applies pre/post padding around an isolated burst', () => {
@@ -324,5 +324,96 @@ describe('vadWindowsFromPcm — batch VAD windowing', () => {
       { rms: SILENCE, sec: 1.0 }
     ])
     expect(emits).toHaveLength(1)
+  })
+})
+
+/** Syllabically modulated speech with NO silence: even its quieter frames remain above the trim floor. */
+function continuousSpeech(sec: number): Float32Array {
+  const pcm = new Float32Array(Math.round(sec * SR))
+  for (let i = 0; i < pcm.length; i++) {
+    const amplitude = Math.floor(i / (SR * 0.1)) % 2 === 0 ? SPEECH : 0.02
+    pcm[i] = i % 2 === 0 ? amplitude : -amplitude
+  }
+  return pcm
+}
+
+function expectSpeechCoveredOnce(pcm: Float32Array, windows: Array<{ start: number; end: number }>): void {
+  const visits = new Uint8Array(pcm.length)
+  for (const window of windows) {
+    for (let i = window.start; i < window.end; i++) visits[i] += 1
+  }
+  let missing = 0
+  let repeated = 0
+  for (let i = 0; i < pcm.length; i++) {
+    if (Math.abs(pcm[i]) >= 0.005 && visits[i] === 0) missing += 1
+    if (visits[i] > 1) repeated += 1
+  }
+  expect({ missing, repeated }).toEqual({ missing: 0, repeated: 0 })
+}
+
+describe('MQA-309 batch caps preserve speech at observed pauses', () => {
+  it('keeps a continuous near-cap word/number span intact by splitting at the preceding genuine pause', () => {
+    // Mirrors physical QA timing: a 240ms pause around 13.2s precedes a phrase crossing the old 15s cap.
+    // The test models audio, not the words or a guessed textual correction.
+    const phraseStart = Math.round(13.34 * SR)
+    const phraseEnd = Math.round(15.34 * SR)
+    const pcm = concat(continuousSpeech(13.1), silence(0.24), continuousSpeech(4), silence(1))
+    const windows = vadWindowsFromPcm(pcm, SR)
+    expect(windows.some((window) => window.start <= phraseStart && window.end >= phraseEnd)).toBe(true)
+    expect(windows[0].end / SR).toBeGreaterThanOrEqual(13.1)
+    expect(windows[0].end / SR).toBeLessThanOrEqual(13.34)
+    expect(windows[1].start).toBe(windows[0].end)
+    expectSpeechCoveredOnce(pcm, windows)
+  })
+
+  it('prefers the latest qualifying pause, not an earlier one or a near-cap 40ms dip', () => {
+    const pcm = concat(
+      continuousSpeech(12.1), silence(0.2), continuousSpeech(1), silence(0.2),
+      continuousSpeech(1.2), silence(0.04), continuousSpeech(2), silence(1)
+    )
+    const windows = vadWindowsFromPcm(pcm, SR)
+    expect(windows[0].end / SR).toBeGreaterThanOrEqual(13.3)
+    expect(windows[0].end / SR).toBeLessThanOrEqual(13.5)
+    expectSpeechCoveredOnce(pcm, windows)
+  })
+
+  it('retains exact bounded hard cuts when sustained speech has no qualifying pause', () => {
+    const pcm = continuousSpeech(34)
+    const windows = vadWindowsFromPcm(pcm, SR)
+    expect(windows).toHaveLength(3)
+    expect(windows[0]).toEqual({ start: 0, end: SR * 15 })
+    expect(windows[1]).toEqual({ start: SR * 15, end: SR * 30 })
+    expectSpeechCoveredOnce(pcm, windows)
+  })
+
+  it('never exceeds a non-quantum-aligned cap through quantum rounding, merging or padding', () => {
+    const maxWindowSec = 0.703
+    const maxSamples = Math.round(SR * maxWindowSec)
+    const pcm = concat(silence(0.11), continuousSpeech(4), silence(0.37))
+    const windows = vadWindowsFromPcm(pcm, SR, { maxWindowSec })
+    expect(windows.length).toBeGreaterThan(1)
+    expect(Math.max(...windows.map((window) => window.end - window.start))).toBeLessThanOrEqual(maxSamples)
+    expectSpeechCoveredOnce(pcm, windows)
+  })
+
+  it('does not reuse a very old pause outside the bounded lookback', () => {
+    const pcm = concat(continuousSpeech(10), silence(0.2), continuousSpeech(7), silence(1))
+    const windows = vadWindowsFromPcm(pcm, SR)
+    expect(windows[0].end).toBe(SR * 15)
+    expectSpeechCoveredOnce(pcm, windows)
+  })
+
+  it('produces identical integer offsets and immutable PCM for replay/resume', () => {
+    const pcm = concat(continuousSpeech(13.1), silence(0.24), continuousSpeech(18), silence(1))
+    const before = pcm.slice()
+    const windows = vadWindowsFromPcm(pcm, SR)
+    expect(vadWindowsFromPcm(pcm, SR)).toEqual(windows)
+    expect(Buffer.from(pcm.buffer).equals(Buffer.from(before.buffer))).toBe(true)
+    for (const [index, window] of windows.entries()) {
+      expect(Number.isInteger(window.start) && Number.isInteger(window.end)).toBe(true)
+      expect(window.end - window.start).toBeLessThanOrEqual(SR * 15)
+      if (index) expect(window.start).toBeGreaterThanOrEqual(windows[index - 1].end)
+    }
+    expectSpeechCoveredOnce(pcm, windows)
   })
 })

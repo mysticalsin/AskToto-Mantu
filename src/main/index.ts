@@ -616,6 +616,7 @@ import {
   ImportJobManager,
   MAX_CONCURRENT_DECODES,
   decoderSlotIsStale,
+  decodeSkipThrough,
   type ImportJob,
   type ImportSpeakerAttempt
 } from './import-jobs'
@@ -1222,6 +1223,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
   if (stat.size !== job.sourceSizeBytes || stat.mtimeMs !== job.sourceMtimeMs) {
     throw new Error('The selected recording changed after import started. Choose it again to restart.')
   }
+  const skipThrough = decodeSkipThrough(job)
   const ffmpeg = bundledImportFfmpeg()
   if (ffmpeg) {
     // A transcription failure inside acceptDecodedChunk marks the job terminal and pumps the next FIFO
@@ -1237,9 +1239,8 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
       }
     }
     if (ffmpegDecoders.size >= MAX_CONCURRENT_DECODES) throw new Error('Another audio decoder is already active.')
-    // vad-v1 jobs: cursor counts WINDOWS (phase 2); a resume re-decodes the whole file (seconds of
+    // vad-v2 jobs: cursor counts WINDOWS (phase 2); a resume re-decodes the whole file (seconds of
     // ffmpeg) and the deterministic re-segmentation + window cursor skip the already-transcribed part.
-    const skipThrough = job.pipeline === 'vad-v1' ? 0 : job.cursor
     const decoder = startFfmpegDecode(ffmpeg, job.sourcePath, skipThrough, {
       onChunk: async (seq, samples) => {
         await importJobs?.acceptDecodedChunk(job.jobId, seq, 0, samples)
@@ -1334,7 +1335,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
     else await active.loadFile(join(__dirname, '../renderer/decoder.html'))
     if (active.isDestroyed() || decoderWin !== active) throw new Error('Import decoder closed before it started.')
     await ready
-    active.webContents.send('import-decoder:source-start', { jobId: job.jobId, skipThrough: job.cursor })
+    active.webContents.send('import-decoder:source-start', { jobId: job.jobId, skipThrough })
     await streamSourceToDecoder(job)
   } catch (error) {
     closeImportDecoder(job.jobId)

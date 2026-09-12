@@ -5,6 +5,7 @@ import { safeMeetingBasename } from './meeting-path'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved, formatTranscript, DEBRIEF_HEADING, readSavedFile } from './transcripts'
 import { getSettings } from './store'
 import { detectLanguage } from '@shared/lang-id'
+import { measuredDurationMs } from '@shared/meeting-duration'
 import { readRecapStatus, recapStatusValidationError, type RecapStatus } from '@shared/recap-status'
 import type { MeetingSummary, RecallHit, RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
 
@@ -327,6 +328,7 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
     title: fm.title || safeName.replace(/\.md$/, ''),
     mode: fm.mode || 'general',
     startedAt,
+    durationMs: fm.duration_ms ? measuredDurationMs(Number(fm.duration_ms)) : undefined,
     recap,
     recapStatus: readRecapStatus(fm.recap_status),
     lines,

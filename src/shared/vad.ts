@@ -145,7 +145,7 @@ export interface VadWindow {
 }
 
 // Raw window before trim/pad/merge — carries whether it was force-closed by the hard cap, because that
-// boundary must never be re-merged (see the merge step below) even though it has zero silence gap.
+// boundary must never be re-merged (see the merge step below), including a short selected pause.
 interface RawWindow extends VadWindow {
   capped: boolean
 }
@@ -155,19 +155,21 @@ interface RawWindow extends VadWindow {
  * in one call, for the main-process import path (a decoded file, not a live mic stream) instead of one
  * AudioWorklet quantum at a time.
  *
- * Quantum walk is deliberately byte-for-byte what the worklet does (`whisper-worklet-src.ts`): 128-sample
- * quanta (one Web Audio render quantum), RMS fed to `vad.step`, a hard-cap counter independent of VAD state,
- * and the same two post-hoc gates (`EMIT_RMS` whole-window floor, `isSpeechLikeWindow` envelope gate) before
- * a window is kept — so a batch run and a live run of the same audio endpoint identically.
+ * Uses the live VAD's RMS endpointing and the same two post-hoc gates (`EMIT_RMS` whole-window floor,
+ * `isSpeechLikeWindow` envelope gate). Batch-only cap placement, trimming and padding do not alter
+ * makeVad or the live worklet's latency.
  *
- * Two differences, both deliberate for batch:
+ * Differences, all deliberate for batch:
  *  - `maxWindowSec` defaults to 15s, not the live 6s. The live cap exists to bound turn-detection latency —
  *    never make a caption wait behind a long monologue. Batch has no latency budget, so a bigger cap trades
  *    that away for fewer boundaries: every boundary is a place a batch ASR model can lose sentence context,
  *    and batch models (unlike the realtime path) comfortably transcribe a 15s utterance in one pass.
- *  - Each kept window gets a small pre/post pad (default 0.15s) and windows within `mergeGap` (default
- *    0.3s = 2× the pad) of trimmed silence are merged, so two padded windows can never overlap by
- *    construction — see the pad step below. The live path has no such step: it hands the worklet's raw,
+ *  - MQA-309: before a hard cap, a bounded lookahead prefers a genuine short pause to cutting active
+ *    speech mid-word/number. No qualifying pause means the exact hard limit. This changes batch window
+ *    indices: callers must version durable checkpoints rather than reusing old window cursors.
+ *  - Each kept window gets a small pre/post pad (default 0.15s), and nearby natural windows are merged
+ *    only when their combined length stays under the cap. Padding shares each gap at one midpoint, so
+ *    padded windows never overlap. The live path has no such step: it hands the worklet's raw,
  *    unpadded, unmerged buffer straight to the ASR because it only ever sees one window at a time and can't
  *    look ahead to a future one to merge with.
  */
@@ -179,14 +181,17 @@ export function vadWindowsFromPcm(
   const QUANTUM = 128 // one Web Audio render quantum — identical granularity to the live worklet
   const EMIT_RMS = 0.005 // whole-window energy floor below which Whisper hallucinates (same as the worklet)
   const PAD_SEC = 0.15 // pre/post pad so consonant onsets/codas aren't clipped at a trimmed endpoint boundary
-  const MERGE_GAP_SEC = 0.3 // trimmed silence below this merges rather than staying split (== 2×PAD_SEC, so
-  // two windows kept apart can never end up with overlapping pads — see the clamp in the pad step)
+  const MERGE_GAP_SEC = 0.3 // nearby natural windows may merge if their combined length stays under the cap
   const TRIM_FRAME_SEC = 0.01 // 10ms scan step for trimming each kept window down to its real speech extent
+  const PAUSE_RMS = 0.003 // stricter than the trim floor: quiet, not merely a softer syllable
+  const MIN_PAUSE_SEC = 0.12 // ignore brief stop-consonant/inter-syllable dips
   const maxWindowSec = opts?.maxWindowSec ?? 15
   const maxSamples = Math.max(1, Math.round(sampleRate * maxWindowSec))
   const pad = Math.round(sampleRate * PAD_SEC)
   const mergeGap = Math.round(sampleRate * MERGE_GAP_SEC)
   const trimFrame = Math.max(1, Math.round(sampleRate * TRIM_FRAME_SEC))
+  const minPause = Math.max(1, Math.round(sampleRate * MIN_PAUSE_SEC))
+  const lookback = Math.min(Math.round(sampleRate * 3), Math.floor(maxSamples / 4))
 
   const frameRms = (start: number, end: number): number => {
     let sq = 0
@@ -197,11 +202,34 @@ export function vadWindowsFromPcm(
     return Math.sqrt(sq / Math.max(1, end - start))
   }
 
+  const pauseBeforeCap = (hardEnd: number): number => {
+    let quietStart: number | null = null
+    let preferred = hardEnd
+    const keepPause = (end: number): void => {
+      if (quietStart !== null && end - quietStart >= minPause) {
+        preferred = Math.floor((quietStart + end) / 2)
+      }
+    }
+    for (let start = hardEnd - lookback; start < hardEnd; start += trimFrame) {
+      const end = Math.min(start + trimFrame, hardEnd)
+      if (frameRms(start, end) < PAUSE_RMS) {
+        if (quietStart === null) quietStart = start
+      } else {
+        keepPause(start)
+        quietStart = null
+      }
+    }
+    keepPause(hardEnd)
+    return preferred
+  }
+
   // --- 1. Walk the buffer one quantum at a time, driving the same VAD used live, and collect raw windows.
   const vad = makeVad()
   const raw: RawWindow[] = []
   let winStart = 0
   let fill = 0
+  let capEnd = Math.min(maxSamples, pcm.length)
+  let capChosen = capEnd === pcm.length
 
   const emitRaw = (capped: boolean): void => {
     const n = fill
@@ -209,6 +237,8 @@ export function vadWindowsFromPcm(
     fill = 0
     winStart = start + n
     vad.reset()
+    capEnd = Math.min(winStart + maxSamples, pcm.length)
+    capChosen = capEnd === pcm.length
     if (n === 0) return
     if (frameRms(start, start + n) < EMIT_RMS) return // silent window — drop, same floor as the worklet
     if (!isSpeechLikeWindow(pcm.subarray(start, start + n), n)) return // steady non-speech bed — drop
@@ -217,12 +247,19 @@ export function vadWindowsFromPcm(
 
   let offset = 0
   while (offset < pcm.length) {
-    const take = Math.min(QUANTUM, pcm.length - offset)
+    // Do the small lookahead only for utterances that actually approach the cap. Short natural turns
+    // pay no extra PCM scan. Choose before consuming this tail: no rewind or duplicated samples.
+    if (!capChosen && offset >= capEnd - lookback) {
+      capEnd = pauseBeforeCap(capEnd)
+      capChosen = true
+    }
+    const take = Math.min(QUANTUM, capEnd - offset, capChosen ? Infinity : capEnd - lookback - offset)
     const rms = frameRms(offset, offset + take)
     fill += take
     offset += take
-    if (fill >= maxSamples) emitRaw(true) // hard cap — independent of VAD state, exactly like the worklet
-    if (vad.step(rms, take)) emitRaw(false) // natural endpoint
+    const endpoint = vad.step(rms, take)
+    if (offset === capEnd) emitRaw(offset < pcm.length || fill >= maxSamples)
+    else if (endpoint) emitRaw(false)
   }
   emitRaw(false) // flush whatever's left, same as the worklet's 'flush' message on stop()
 
@@ -240,12 +277,12 @@ export function vadWindowsFromPcm(
   })
 
   // --- 3. Merge windows separated by only a short trimmed silence gap — EXCEPT across a hard-cap boundary,
-  // which must stay split (that's the whole point of maxWindowSec) even though its gap is zero.
+  // which must stay split (that's the whole point of maxWindowSec), even across a short selected pause.
   const core: RawWindow[] = [trimmed[0]]
   for (let i = 1; i < trimmed.length; i++) {
     const prev = core[core.length - 1]
     const cur = trimmed[i]
-    if (!prev.capped && cur.start - prev.end <= mergeGap) {
+    if (!prev.capped && cur.start - prev.end <= mergeGap && cur.end - prev.start <= maxSamples) {
       prev.end = cur.end
       prev.capped = cur.capped
     } else {
@@ -253,15 +290,20 @@ export function vadWindowsFromPcm(
     }
   }
 
-  // --- 4. Pad each surviving window, clamped to the buffer and to its neighbors' un-padded edges so two
-  // windows can never overlap (their gap is always > mergeGap == 2×pad by construction from step 3, except
-  // at a preserved hard-cap boundary, which naturally clamps to zero pad on that one touching side).
+  // --- 4. Divide a short gap at ONE shared midpoint. A pause-aware cap can preserve a gap shorter than
+  // 2×pad; independently padding toward each neighbor's raw edge would overlap and duplicate audio.
+  // Padding may use only the space left under maxSamples, never truncate the speech core to make room.
   return core.map((w, i) => {
-    const leftBound = i === 0 ? 0 : core[i - 1].end
-    const rightBound = i === core.length - 1 ? pcm.length : core[i + 1].start
+    const leftBound = i === 0 ? 0 : Math.floor((core[i - 1].end + w.start) / 2)
+    const rightBound = i === core.length - 1 ? pcm.length : Math.floor((w.end + core[i + 1].start) / 2)
+    const wantBefore = Math.min(pad, w.start - leftBound)
+    const wantAfter = Math.min(pad, rightBound - w.end)
+    const room = maxSamples - (w.end - w.start)
+    const after = Math.min(wantAfter, room - Math.min(wantBefore, Math.floor(room / 2)))
+    const before = Math.min(wantBefore, room - after)
     return {
-      start: Math.max(leftBound, w.start - pad, 0),
-      end: Math.min(rightBound, w.end + pad, pcm.length)
+      start: w.start - before,
+      end: w.end + after
     }
   })
 }
