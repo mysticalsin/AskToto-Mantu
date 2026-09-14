@@ -214,11 +214,17 @@ function OnboardingHeroVideo({
 }): JSX.Element | null {
   const [failed, setFailed] = useState(false)
   useEffect(() => {
-    // Act 1 visible only — never from App boot parse. Soft idle hint; <video> owns decode.
-    if (!prefersReducedMotion()) preloadOnboardingHeroVideo()
+    // Act 1 visible only — never from App boot parse (that fight with WebGL made first paint lag).
+    if (prefersReducedMotion()) return
+    preloadOnboardingHeroVideo()
+    const el = typeof videoRef === 'object' && videoRef ? videoRef.current : null
+    if (el) {
+      el.load()
+      void el.play().catch(() => {})
+    }
     return () => {
-      const el = typeof videoRef === 'object' && videoRef ? videoRef.current : null
-      el?.pause()
+      const v = typeof videoRef === 'object' && videoRef ? videoRef.current : null
+      v?.pause()
     }
   }, [videoRef])
   if (prefersReducedMotion() || failed) return null
@@ -230,7 +236,7 @@ function OnboardingHeroVideo({
         loop
         playsInline
         autoPlay
-        preload="metadata"
+        preload="auto"
         src={ONBOARDING_HERO_VIDEO_SRC}
         onError={() => setFailed(true)}
       />

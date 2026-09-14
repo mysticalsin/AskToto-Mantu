@@ -22,7 +22,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(experience).toMatch(/muted/)
     expect(experience).toMatch(/loop/)
     expect(experience).toMatch(/autoPlay/)
-    expect(experience).toMatch(/preload="metadata"/)
+    expect(experience).toMatch(/preload="auto"/)
     expect(experience).toMatch(/OnboardingHeroVideo/)
     expect(experience).toMatch(/prefersReducedMotion\(\) \|\| failed/)
     expect(css).toMatch(/\.onboard-hero-video\s*\{/)
@@ -38,7 +38,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
 
   it('unmounts the hero video after Act 1 so it is not compositing later', () => {
     expect(experience).toMatch(/\{scene === 'hero' && <OnboardingHeroVideo/)
-    expect(experience).toMatch(/el\?\.pause\(\)/)
+    expect(experience).toMatch(/v\?\.pause\(\)/)
     const videoRule = css.slice(css.indexOf('.onboard-hero-video video'))
     const videoBlock = videoRule.slice(0, videoRule.indexOf('}', 8) + 1)
     expect(videoBlock).not.toMatch(/filter:/)
@@ -103,7 +103,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(src).toMatch(/const playing = el\.play\(\)[\s\S]*?if \(opts\.restart\) el\.currentTime = 0/)
     expect(src).toMatch(/const audioPlay = audio\?\.play\(\)[\s\S]*?const videoPlay = video\?\.play\(\)/)
     expect(src).not.toMatch(/currentTime = 0\s*\n\s*void el\.play/)
-    expect(src).toMatch(/preloadOnboardingHeroVideo[\s\S]*?no-op/)
+    expect(src).toMatch(/document\.head\.appendChild/)
     expect(src).not.toMatch(/await el\.play|queueMicrotask|requestAnimationFrame/)
     expect(src).not.toMatch(/function playOnboardingVideo[\s\S]*?setTimeout\(/)
 
@@ -127,13 +127,15 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(media).not.toMatch(/https:\s/)
   })
 
-  it('does not eager-preload CloudFront from App boot; Act 1 owns metadata load', () => {
+  it('does not eager-preload CloudFront from App boot; Act 1 owns auto load', () => {
     const appSrc = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
     const heroSrc = readFileSync(join(__dirname, './onboarding-hero-video.ts'), 'utf8')
     expect(appSrc).not.toMatch(/preloadOnboardingHeroVideo/)
-    expect(experience).toMatch(/preload="metadata"|preload="auto"/)
-    expect(heroSrc).toMatch(/Intentionally a no-op|no-op/)
-    expect(heroSrc).not.toMatch(/document\.head\.appendChild/)
+    expect(experience).toMatch(/preload="auto"/)
+    expect(experience).toMatch(/preloadOnboardingHeroVideo\(\)/)
+    expect(experience).toMatch(/el\.load\(\)/)
+    expect(heroSrc).toMatch(/document\.head\.appendChild/)
+    expect(heroSrc).toMatch(/link\.rel = 'preload'/)
   })
 
 })
