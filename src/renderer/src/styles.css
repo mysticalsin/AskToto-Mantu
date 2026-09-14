@@ -907,15 +907,21 @@ input::placeholder {
   transform: none;
 }
 /* FITO-185-P: fade-up/scene-enter use animation-fill:both from opacity:0 — stalled GPU leaves
-   Act 1 / post-Next copy invisible forever (Tony: Next loads forever, no animation). */
+   Act 1 / post-Next copy invisible forever (Tony: Next loads forever, no animation).
+   FITO-185-U: also unlock Next / onboard-cta and any remaining invisible selectors under portal-open. */
 .onboard-stage.onboard-stage--portal-open .scene-enter,
 .onboard-stage.onboard-stage--portal-open .fade-up,
 .onboard-stage.onboard-stage--portal-open .hero-wordmark,
 .onboard-stage.onboard-stage--portal-open .hero-tagline,
-.onboard-stage.onboard-stage--portal-open .hero-byline {
+.onboard-stage.onboard-stage--portal-open .hero-byline,
+.onboard-stage.onboard-stage--portal-open .onboard-cta,
+.onboard-stage.onboard-stage--portal-open .hero-welcome,
+.onboard-stage.onboard-stage--portal-open .hero-welcome button,
+.onboard-stage.onboard-stage--portal-open button.onboard-cta {
   animation: none !important;
   opacity: 1 !important;
   transform: none !important;
+  visibility: visible !important;
 }
 
 /* Liquid glass — backdrop blur, inset highlight, gradient-border ::before. Technique only. */

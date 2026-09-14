@@ -224,3 +224,31 @@ describe('FITO-185-T exclusive Act 1 visible without forever Loading', () => {
   })
 })
 
+
+
+describe('FITO-185-U exclusive Act 1 capturable + DOM probe', () => {
+  it('contentProtectionOn forces false while exclusive', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const body = index.slice(
+      index.indexOf('function contentProtectionOn(): boolean {'),
+      index.indexOf('function privateViewOn(): boolean {')
+    )
+    expect(body).toMatch(/onboardingExclusiveLive\(\)/)
+    expect(body).toMatch(/FITO-185-U/)
+    expect(body).toMatch(/return false/)
+  })
+
+  it('createWindow binds act1 DOM probe and keeps exclusiveOnboarding=1', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+    expect(create).toMatch(/bindAct1DomProbe\(/)
+    expect(create).toMatch(/act1-dom\.json/)
+    expect(create).toMatch(/params\.set\('exclusiveOnboarding', '1'\)/)
+  })
+
+  it('portal-open CSS unlock includes onboard-cta / Next (FITO-185-U)', () => {
+    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open[\s\S]*\.onboard-cta/)
+    expect(css).toMatch(/FITO-185-U/)
+  })
+})

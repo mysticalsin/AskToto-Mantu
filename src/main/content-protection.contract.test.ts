@@ -186,14 +186,19 @@ const unpackagedDevEnv: DevEnv = (name) => process.env[name]
 describe('MQA-176 — contentProtectionOn() is the single decision, and it is honest in both directions', () => {
   /** Lift contentProtectionOn's real body out of index.ts and run it. index.ts boots Electron at import
    *  time, so this is the established pattern here (dev-env-gates.contract.test.ts et al). */
-  const contentProtectionOn = (devEnv: DevEnv, contentProtection: boolean): boolean => {
+  const contentProtectionOn = (
+    devEnv: DevEnv,
+    contentProtection: boolean,
+    exclusiveLive = false
+  ): boolean => {
     const src = sliceBetween(indexSrc, 'function contentProtectionOn(): boolean {', '\n}')
     const body = src.slice(src.indexOf('{') + 1)
-    const lifted = new Function('devEnv', 'getSettings', body) as (
+    const lifted = new Function('devEnv', 'getSettings', 'onboardingExclusiveLive', body) as (
       devEnv: DevEnv,
-      getSettings: () => { contentProtection: boolean }
+      getSettings: () => { contentProtection: boolean },
+      onboardingExclusiveLive: () => boolean
     ) => boolean
-    return lifted(devEnv, () => ({ contentProtection }))
+    return lifted(devEnv, () => ({ contentProtection }), () => exclusiveLive)
   }
 
   afterEach(() => {
@@ -216,6 +221,24 @@ describe('MQA-176 — contentProtectionOn() is the single decision, and it is ho
   it('MQA-176 — turning the toggle OFF really returns false, so the overlay can be seen again', () => {
     // The other half of the promise: Private View defaults ON, so nothing may make it un-turn-off-able.
     expect(contentProtectionOn(packagedDevEnv, false)).toBe(false)
+  })
+
+  it('FITO-185-U — exclusive onboarding forces contentProtection OFF even when settings say ON', () => {
+    // Exclusive Act 1 must be visible to the user AND capturable for QA (screencapture / CGWindow).
+    // Do not wait for settings.contentProtection during exclusive.
+    expect(contentProtectionOn(packagedDevEnv, true, true)).toBe(false)
+    expect(contentProtectionOn(packagedDevEnv, false, true)).toBe(false)
+  })
+
+  it('FITO-185-U — after exclusive exits, settings.contentProtection resumes control', () => {
+    expect(contentProtectionOn(packagedDevEnv, true, false)).toBe(true)
+    expect(contentProtectionOn(packagedDevEnv, false, false)).toBe(false)
+  })
+
+  it('FITO-185-U — contentProtectionOn body mentions onboardingExclusiveLive', () => {
+    const src = sliceBetween(indexSrc, 'function contentProtectionOn(): boolean {', '\n}')
+    expect(src).toMatch(/onboardingExclusiveLive\(\)/)
+    expect(src).toMatch(/FITO-185-U/)
   })
 
   it('MQA-176 — a rebuilt overlay re-applies the decision at construction', () => {
