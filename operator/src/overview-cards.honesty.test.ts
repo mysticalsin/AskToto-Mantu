@@ -14,4 +14,10 @@ describe('overview-cards COST_METERING honesty', () => {
     expect(src).toMatch(/cost7d \?\? 'not reported'/)
     expect(src).not.toMatch(/cost7d \?\? '0'/)
   })
+
+  it('surfaces usage completeness chip (missing tokens stay not reported)', () => {
+    expect(src).toMatch(/Usage completeness/)
+    expect(src).toMatch(/asksWithTokens/)
+    expect(src).toMatch(/asksMissingTokens/)
+  })
 })

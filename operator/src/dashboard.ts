@@ -104,6 +104,10 @@ export interface DashboardOps {
   crmFailRate: number | null
   durationMs: number | null
   meetings: number
+  /** Asks in the 7d window with at least one reported token field (COST_METERING completeness). */
+  asksWithTokens: number
+  /** Asks in the 7d window with no token fields — unknown, never treated as 0 tokens. */
+  asksMissingTokens: number
 }
 
 export interface DashboardPayload {
@@ -633,6 +637,12 @@ function buildOverviewOps(args: {
     if (!CLI_ASK_PROVIDERS.has(provider) && fundedProviders.has(provider)) operatorAsks++
     else cliAsks++
   }
+  let asksWithTokens = 0
+  let asksMissingTokens = 0
+  for (const a of weekAsks) {
+    if (askTokenTotal(a) == null) asksMissingTokens++
+    else asksWithTokens++
+  }
   return {
     uniqueSessions: wau,
     uniqueSeries: dailyUnique,
@@ -663,7 +673,9 @@ function buildOverviewOps(args: {
     portalDirect: portalPathSpend(weekAsks, 'portal-direct'),
     crmFailRate,
     durationMs: averageDurationMs(weekAsks),
-    meetings: recapEvents.length
+    meetings: recapEvents.length,
+    asksWithTokens,
+    asksMissingTokens
   }
 }
 

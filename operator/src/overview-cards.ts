@@ -224,7 +224,14 @@ export function renderOverviewMini10(data: DashboardPayload): string {
     chip('Meetings', formatCompact(ops.meetings)),
     chip('Live · 30 min', formatCompact(ops.live30)),
     chip('CLI asks', formatCompact(cli)),
-    chip('Operator-key asks', formatCompact(op))
+    chip('Operator-key asks', formatCompact(op)),
+    chip(
+      'Usage completeness',
+      ops.apiCalls === 0
+        ? 'no asks'
+        : `${ops.asksWithTokens}/${ops.apiCalls} with tokens` +
+          (ops.asksMissingTokens ? ` · ${ops.asksMissingTokens} not reported` : '')
+    )
   ].join('')
   return `<div class="ov-10" data-overview-cards="10">${cards.join('')}</div>
     <div class="ov-chips">${chips}</div>`
