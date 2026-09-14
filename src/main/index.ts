@@ -182,6 +182,7 @@ import {
   refitToDisplay as islandRefitToDisplay,
   exclusiveOnboardingBounds,
   exclusiveMayUseSimpleFullScreen,
+  exclusiveOsFullscreenAllowed,
   EXCLUSIVE_ONBOARDING_BACKGROUND,
   firstPaintOverlayBounds,
   overlayWindowChrome,
@@ -2003,13 +2004,15 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   } catch {
     /* headless / already destroyed */
   }
-  // FITO-185-R: OS simpleFullScreen stays OPT-IN (ASKTOTO_ALLOW_SFS=1). Tony eye FAIL on e404460:
-  // SFS materializes the CGWindow then dies after renderer.ready with empty Crashpad (same as O).
-  // Window visibility comes from show:true + immediate showInactive/moveTop (below), not SFS.
+  // FITO-185-S: never OS simpleFullScreen/kiosk on Electron 43+ (Tony FAIL e404460). Product path is
+  // opaque bounds + show:true + showInactive/moveTop (FITO-185-R). ASKTOTO_ALLOW_SFS only on Electron <=39.
   const mayOsExclusive =
     exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
-    !process.env.ASKTOTO_SHOT &&
-    process.env.ASKTOTO_ALLOW_SFS === '1'
+    exclusiveOsFullscreenAllowed({
+      electronVersion: process.versions.electron,
+      allowSfsEnv: process.env.ASKTOTO_ALLOW_SFS,
+      shotEnv: process.env.ASKTOTO_SHOT
+    })
   try {
     if (mayOsExclusive && process.platform === 'darwin' && typeof w.setSimpleFullScreen === 'function') {
       if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true)

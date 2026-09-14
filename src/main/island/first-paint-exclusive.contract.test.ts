@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   exclusiveMayUseSimpleFullScreen,
+  exclusiveOsFullscreenAllowed,
   exclusiveOnboardingBounds,
   EXCLUSIVE_ONBOARDING_BACKGROUND,
   firstPaintOverlayBounds,
@@ -84,6 +85,19 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(live.fullscreenable).toBe(true)
     expect(live.roundedCorners).toBe(false)
     expect(exclusiveMayUseSimpleFullScreen(live.transparent)).toBe(true)
+    // FITO-185-S: Electron 43+ never OS SFS even with ASKTOTO_ALLOW_SFS
+    expect(
+      exclusiveOsFullscreenAllowed({ electronVersion: '43.6.0', allowSfsEnv: '1' })
+    ).toBe(false)
+    expect(
+      exclusiveOsFullscreenAllowed({ electronVersion: '39.8.10', allowSfsEnv: '1' })
+    ).toBe(true)
+    expect(
+      exclusiveOsFullscreenAllowed({ electronVersion: '39.8.10', allowSfsEnv: undefined })
+    ).toBe(false)
+    expect(
+      exclusiveOsFullscreenAllowed({ electronVersion: '39.8.10', allowSfsEnv: '1', shotEnv: '1' })
+    ).toBe(false)
   })
 
   it('after onboardingDone the overlay window is transparent again', () => {
@@ -116,10 +130,10 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     )
     expect(apply).toMatch(/if \(overlayWindowTransparent\) \{\s*recreateOverlayWindow\(\)/)
     expect(apply).toMatch(/exclusiveMayUseSimpleFullScreen\(overlayWindowTransparent\)/)
+    expect(apply).toMatch(/exclusiveOsFullscreenAllowed\(/)
+    expect(apply).toMatch(/process\.versions\.electron/)
     expect(apply).toMatch(/setSimpleFullScreen\(true\)/)
-    expect(apply.indexOf('exclusiveMayUseSimpleFullScreen(overlayWindowTransparent)')).toBeLessThan(
-      apply.indexOf('setSimpleFullScreen(true)')
-    )
+    expect(apply.indexOf('exclusiveOsFullscreenAllowed(')).toBeLessThan(apply.indexOf('setSimpleFullScreen(true)'))
     expect(apply).toMatch(/setBackgroundColor\(EXCLUSIVE_ONBOARDING_BACKGROUND\)/)
 
     const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function createWindow'))
