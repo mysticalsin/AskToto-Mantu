@@ -4,10 +4,9 @@
  * (WorldMap.tsx, shared/MapCanvas.tsx, shared/ZoomPan.tsx, demo-shoey-0c94a954/CountryMap.tsx)
  * faithfully: same Mercator constants, same greedy clustering, same choropleth formula.
  *
- * Spec change (Tony, voice note, after the initial port): the realtime map drops the count
- * pill badges entirely. Seats render as solid pulsing dots instead; `clusterPins` stays as a
- * pure, tested helper (useful for tooltip aggregation and for any future badge UI) but its
- * output is no longer drawn on the map.
+ * Realtime uplift (Tony 2026-09-13): dark ocean + subtle grid, country flag pills
+ * (`{Country} · {seats} seats · {places} places`), city labels beside pulsing dots.
+ * `clusterPins` still drives badge placement distance; country rollups supply pill text.
  */
 import { CENTROIDS_1152, CENTROIDS_520, WORLD_1152, WORLD_520 } from './paths.generated'
 import { MAP_DIMENSIONS, MERCATOR_VARIANTS, projectPoint, type MapVariant } from './mercator'
@@ -35,8 +34,8 @@ export function countryName(code: string): string {
 }
 
 // ---------------------------------------------------------------------------------------
-// Clustering (ported from WorldMap.tsx). Kept as a pure, tested helper for tooltip
-// aggregation; the realtime map itself no longer draws badge pills from this output.
+// Clustering (ported from WorldMap.tsx). Used for tooltip aggregation and to space
+// country pills when several countries are on the map.
 // ---------------------------------------------------------------------------------------
 
 export interface ClusterPoint {
@@ -132,8 +131,14 @@ export function clusterLabel(cluster: Cluster): string {
 
 export type Theme = 'light' | 'dark'
 
-const LAND_FILL: Record<Theme, string> = { light: 'rgb(240,240,240)', dark: '#2a2a2e' }
-const LAND_STROKE: Record<Theme, string> = { light: 'rgb(153,153,153)', dark: '#3f3f46' }
+const LAND_FILL: Record<Theme, string> = { light: 'rgb(240,240,240)', dark: '#1f1830' }
+const LAND_STROKE: Record<Theme, string> = { light: 'rgb(153,153,153)', dark: '#3a2f52' }
+const OCEAN_FILL: Record<Theme, string> = { light: '#ffffff', dark: '#120e1c' }
+const GRID_STROKE: Record<Theme, string> = { light: 'rgba(23, 8, 38, 0.08)', dark: 'rgba(37, 29, 54, 0.85)' }
+const LABEL_FILL: Record<Theme, string> = { light: '#170826', dark: '#f3eefb' }
+const PILL_BG: Record<Theme, string> = { light: 'rgba(255,255,255,0.92)', dark: 'rgba(26, 21, 38, 0.92)' }
+const PILL_BORDER: Record<Theme, string> = { light: 'rgba(23, 8, 38, 0.12)', dark: 'rgba(255,255,255,0.14)' }
+const PILL_FG: Record<Theme, string> = { light: '#170826', dark: '#fafafa' }
 
 function escapeXml(s: string): string {
   return String(s ?? '')
@@ -154,6 +159,26 @@ function landPaths(entries: { id: string; alpha2: string; d: string }[], theme: 
     .join('')
 }
 
+/** Subtle lon/lat grid behind land — Mission Control density without clutter. */
+function oceanGrid(theme: Theme, width: number, height: number): string {
+  const stroke = GRID_STROKE[theme]
+  const lines: string[] = []
+  for (let lon = -180; lon <= 180; lon += 30) {
+    const [x] = projectPoint(0, lon, '1152')
+    lines.push(
+      `<line class="rt-map-grid" x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${height}" stroke="${stroke}" stroke-width="0.6" />`
+    )
+  }
+  for (let lat = -60; lat <= 80; lat += 30) {
+    const [, y] = projectPoint(lat, 0, '1152')
+    lines.push(
+      `<line class="rt-map-grid" x1="0" y1="${y.toFixed(1)}" x2="${width}" y2="${y.toFixed(1)}" stroke="${stroke}" stroke-width="0.6" />`
+    )
+  }
+  return `<rect class="world-ocean" width="${width}" height="${height}" fill="${OCEAN_FILL[theme]}" />
+    <g class="rt-map-grid-layer" aria-hidden="true">${lines.join('')}</g>`
+}
+
 export interface RealtimeMapPoint {
   country: string
   city: string
@@ -166,9 +191,17 @@ export interface RealtimeMapPoint {
   asks?: number
 }
 
+/** Optional country rollup (from dashboard map.countries) so pill seat totals stay honest
+ * when fleet device counts are known separately from dots. */
+export interface RealtimeCountryRollup {
+  iso: string
+  devices: number
+}
+
 export interface RealtimeMapOptions {
   points: RealtimeMapPoint[]
   theme?: Theme
+  countries?: RealtimeCountryRollup[]
 }
 
 const PULSE_STYLE = `
@@ -182,6 +215,43 @@ const PULSE_STYLE = `
       animation: metis-rt-pulse 1.8s ease-out infinite;
     }
     .rt-pin-dot { fill: #10b981; stroke: #ffffff; stroke-width: 1.5; }
+    .rt-pin-label {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      pointer-events: none;
+      user-select: none;
+    }
+    .rt-country-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px 4px 8px;
+      border-radius: 999px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.2;
+      white-space: nowrap;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.28);
+      pointer-events: none;
+      user-select: none;
+    }
+    .rt-country-pill img {
+      width: 16px;
+      height: 12px;
+      border-radius: 2px;
+      display: block;
+      flex: 0 0 auto;
+    }
+    .rt-country-pill .rt-pill-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #3f3f46;
+      flex: 0 0 auto;
+    }
     @keyframes metis-rt-pulse {
       0% { r: 4.5; opacity: 0.6; }
       100% { r: 14; opacity: 0; }
@@ -191,36 +261,165 @@ const PULSE_STYLE = `
     }
   `
 
-function renderPin(point: RealtimeMapPoint, variant: MapVariant): string {
+const MAX_LABEL_CHARS = 22
+
+function truncateLabel(raw: string): string {
+  const s = String(raw || '').trim()
+  if (s.length <= MAX_LABEL_CHARS) return s
+  return `${s.slice(0, MAX_LABEL_CHARS - 1)}...`
+}
+
+/** City label lines for a pin. Multi-line when the city string uses " / " or newlines. */
+function cityLabelLines(city: string, country: string): string[] {
+  const raw = (city || '').trim()
+  if (!raw) return [countryName(country)]
+  const parts = raw.split(/\s*\/\s*|\n+/).map((p) => p.trim()).filter(Boolean)
+  return parts.length ? parts : [raw]
+}
+
+function renderPin(point: RealtimeMapPoint, variant: MapVariant, theme: Theme): string {
   const [x, y] = projectPoint(point.lat, point.lon, variant)
   const dotRadius = point.count > 1 ? 6.5 : 4.5
   const label = point.city || countryName(point.country)
   const asksAttr = point.asks == null ? '' : ` data-asks="${point.asks}"`
+  const lines = cityLabelLines(point.city, point.country)
+  const fullTitle = lines.join(' / ')
+  const labelFill = LABEL_FILL[theme]
+  const tspans = lines
+    .map((line, i) => {
+      const dy = i === 0 ? '0.35em' : '1.15em'
+      return `<tspan x="10" dy="${dy}">${escapeXml(truncateLabel(line))}</tspan>`
+    })
+    .join('')
   return `<g class="rt-pin" data-pin tabindex="0" data-country="${escapeXml(countryName(point.country))}" data-city="${escapeXml(label)}" data-seats="${point.count}"${asksAttr} transform="translate(${x.toFixed(2)} ${y.toFixed(2)})">
       <g class="rt-pin-inner" data-pin-inner>
         <circle class="rt-pin-halo" r="4.5" />
         <circle class="rt-pin-dot" r="${dotRadius}" />
+        <text class="rt-pin-label" fill="${labelFill}" title="${escapeXml(fullTitle)}">${tspans}</text>
       </g>
     </g>`
 }
 
-/** Full realtime map SVG: land, one pulsing dot per point (no badge pills — see the module
- * doc comment), zoom/pan viewport group and +/- control buttons rendered as markup so
- * ./map-dom.ts only has to bind handlers, and a bottom gradient fade like the reference. */
+export interface CountryPill {
+  iso: string
+  name: string
+  seats: number
+  places: number
+  x: number
+  y: number
+}
+
+/** Roll points up by country for flag pills. Seat totals prefer `countries` rollup when
+ * present so the pill matches fleet device counts. */
+export function countryPillsFromPoints(
+  points: RealtimeMapPoint[],
+  countries: RealtimeCountryRollup[] = [],
+  variant: MapVariant = '1152'
+): CountryPill[] {
+  if (!points.length) return []
+  const byIso = new Map<
+    string,
+    { seats: number; places: Set<string>; xs: number[]; ys: number[] }
+  >()
+  for (const p of points) {
+    const iso = (p.country || '').toUpperCase()
+    if (!iso) continue
+    const [x, y] = projectPoint(p.lat, p.lon, variant)
+    const placeKey = `${(p.city || '').trim().toLowerCase()}|${p.lat.toFixed(2)}|${p.lon.toFixed(2)}`
+    const prev = byIso.get(iso)
+    if (prev) {
+      prev.seats += p.count
+      prev.places.add(placeKey)
+      prev.xs.push(x)
+      prev.ys.push(y)
+    } else {
+      byIso.set(iso, { seats: p.count, places: new Set([placeKey]), xs: [x], ys: [y] })
+    }
+  }
+  const deviceByIso = new Map(countries.map((c) => [c.iso.toUpperCase(), c.devices]))
+  const pills: CountryPill[] = []
+  for (const [iso, agg] of byIso) {
+    const seats = deviceByIso.get(iso) ?? agg.seats
+    const avgX = agg.xs.reduce((a, b) => a + b, 0) / agg.xs.length
+    const avgY = agg.ys.reduce((a, b) => a + b, 0) / agg.ys.length
+    const centroid = CENTROIDS_1152[iso]
+    // Prefer country centroid when available so the pill sits on land (Tony Canada pill),
+    // not on top of city labels. Fall back to mean of reporting points.
+    const x = centroid ? centroid[0] : avgX
+    const y = centroid ? centroid[1] : avgY
+    pills.push({
+      iso,
+      name: countryName(iso),
+      seats,
+      places: agg.places.size,
+      x,
+      y
+    })
+  }
+  // Space pills with the same greedy distance rule as badgeClusters.
+  const asClusters: ClusterPoint[] = pills.map((p) => ({
+    country: p.iso,
+    city: p.name,
+    count: p.seats,
+    x: p.x,
+    y: p.y
+  }))
+  const { badgeClusters } = clusterPins(asClusters, {
+    ...DEFAULT_CLUSTER_OPTIONS,
+    radiusPx: 0,
+    minBadgeDistancePx: 110,
+    maxBadges: 24
+  })
+  const keep = new Set(badgeClusters.map((c) => c.members[0]?.country))
+  // Design: country cluster pill stays for multi-place countries (Tony flag pill).
+  return pills
+    .filter((p) => keep.has(p.iso) && p.places >= 2)
+    .sort((a, b) => b.seats - a.seats)
+}
+
+function renderCountryPill(pill: CountryPill, theme: Theme): string {
+  const iso = pill.iso.toLowerCase()
+  const label = `${pill.name} · ${pill.seats} seats · ${pill.places} places`
+  const bg = PILL_BG[theme]
+  const border = PILL_BORDER[theme]
+  const fg = PILL_FG[theme]
+  // foreignObject sized generously; CSS pill shrink-wraps content.
+  const foW = Math.min(320, Math.max(160, 28 + label.length * 7.2))
+  const foH = 28
+  return `<g class="rt-country-pill-g pill-g" data-country-pill="${escapeXml(pill.iso)}" data-seats="${pill.seats}" data-places="${pill.places}" transform="translate(${pill.x.toFixed(2)} ${pill.y.toFixed(2)})">
+      <g class="rt-pill-inner" data-pin-inner>
+        <foreignObject x="${(-foW / 2).toFixed(1)}" y="${(-foH / 2).toFixed(1)}" width="${foW.toFixed(1)}" height="${foH}" requiredExtensions="http://www.w3.org/1999/xhtml">
+          <div xmlns="http://www.w3.org/1999/xhtml" class="rt-country-pill" style="background:${bg};border:1px solid ${border};color:${fg}">
+            <span class="rt-pill-dot" aria-hidden="true"></span>
+            <img src="/assets/flags/${escapeXml(iso)}.svg" width="16" height="12" alt="" />
+            <span>${escapeXml(label)}</span>
+          </div>
+        </foreignObject>
+      </g>
+    </g>`
+}
+
+/** Full realtime map SVG: dark ocean + grid, land, country flag pills, pulsing dots with
+ * city labels, zoom/pan viewport and +/- controls. */
 export function renderRealtimeMapSvg(options: RealtimeMapOptions): string {
-  const { points, theme = 'light' } = options
+  const { points, countries = [], theme = 'dark' } = options
   const variant: MapVariant = '1152'
   const { width, height } = MAP_DIMENSIONS[variant]
   const empty = points.length === 0
+  const ocean = oceanGrid(theme, width, height)
   const land = landPaths(WORLD_1152, theme)
-  const pins = empty ? '' : points.map((p) => renderPin(p, variant)).join('')
+  const pills = empty ? [] : countryPillsFromPoints(points, countries, variant)
+  const pillMarkup = pills.map((p) => renderCountryPill(p, theme)).join('')
+  const pins = empty ? '' : points.map((p) => renderPin(p, variant, theme)).join('')
   const caption = empty
     ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.</div>`
     : ''
-  const svg = `<svg class="rt-map-svg" data-map-svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Live seat locations">
+  const svg = `<svg class="rt-map-svg" data-map-svg data-map-theme="${theme}" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Live seat locations">
     <style>${PULSE_STYLE}</style>
     <g class="rt-viewport" data-viewport transform="translate(0,0) scale(1)">
+      ${ocean}
       ${land}
+      ${pillMarkup}
       ${pins}
     </g>
   </svg>`

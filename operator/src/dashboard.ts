@@ -1040,7 +1040,10 @@ export async function buildDashboard(
         return lic.includes('licensed') || lic === 'approved' || lic === 'trial' || lic === 'grace'
       }).length,
       approved: seats.filter((s) => isApprovedSeat(s)).length,
-      timeSaved: formatSavedTime(timeSavedFromMeetings(recapMeetings(storedEvents)).savedMinutes),
+      timeSaved: (() => {
+        const meetings = recapMeetings(storedEvents)
+        return meetings.length ? formatSavedTime(timeSavedFromMeetings(meetings).savedMinutes) : 'not reported'
+      })(),
       timeSavedSub: (() => {
         const n = recapMeetings(storedEvents).length
         return n ? `${n} recaps · estimate` : 'no recaps ingested'

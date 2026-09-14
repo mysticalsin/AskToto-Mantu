@@ -66,7 +66,7 @@ export function initTheme(): void {
       applyTheme(choice)
       persistTheme(choice)
       paintShoeyMap()
-  paintRealtimeMapTheme()
+      paintRealtimeMapTheme()
     })
   })
 }

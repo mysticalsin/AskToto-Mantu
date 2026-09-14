@@ -32,7 +32,7 @@ export function renderConsole(
   data: DashboardPayload,
   opts: { nonce?: string; theme?: 'light' | 'dark' | 'system' } = {}
 ): string {
-  const theme = opts.theme ?? 'light'
+  const theme = opts.theme ?? 'system'
   const ctx: RenderCtx = { now: data.now, theme }
   const nonceAttr = opts.nonce ? ` nonce="${esc(opts.nonce)}"` : ''
   const htmlThemeAttr = theme === 'system' ? '' : ` data-theme="${theme}"`
