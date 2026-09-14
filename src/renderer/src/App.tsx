@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
+/** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
+import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import {
   isOnboardingBoot,
-  provisionalOnboardingSettings,
-  ONBOARDING_BOOT_POSTER_HREF
+  provisionalOnboardingSettings
 } from './lib/onboarding-boot'
 import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
@@ -19,10 +20,6 @@ const AgendaView = lazy(() => import('./components/AgendaView').then((m) => ({ d
 const BrainView = lazy(() => import('./components/BrainView').then((m) => ({ default: m.BrainView })))
 const Answer = lazy(() => import('./components/Answer').then((m) => ({ default: m.Answer })))
 const Copilot = lazy(() => import('./components/Copilot').then((m) => ({ default: m.Copilot })))
-/** FITO-185-I: keep OnboardingExperience (+ DemoScene/Bar) off the exclusive first-paint chunk. */
-const OnboardingV2 = lazy(() =>
-  import('./components/OnboardingExperience').then((m) => ({ default: m.OnboardingV2 }))
-)
 import { AgentStatus } from './components/AgentStatus'
 import { SignInWall } from './components/SignInWall'
 import { LicenseGate } from './components/LicenseGate'
@@ -3498,33 +3495,21 @@ export function App(): JSX.Element {
         </div>
       )
     }
-    const posterFallback = (
-      <div className="onboard-hero-video" aria-hidden="true">
-        <img
-          className="onboard-hero-poster"
-          src={ONBOARDING_BOOT_POSTER_HREF}
-          alt=""
-          decoding="async"
-          fetchPriority="high"
-        />
-      </div>
-    )
+    // Poster bed is always under #boot-bed / hero; sync OnboardingV2 so Suspense never masks a stalled chunk.
     return (
       <div ref={setRoot} className="onboard-stage onboard-exclusive-lock">
-        <Suspense fallback={posterFallback}>
-          <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
-            <OnboardingV2
-              settings={onboardingSettings}
-              saveKey={saveKey}
-              recoverEncryptedProfile={recoverEncryptedProfile}
-              patch={patch}
-              onOpenAiSettings={() => openSettings('ai')}
-              onDone={() => void refresh()}
-              signedIn={auth.status?.signedIn}
-              signedInEmail={auth.status?.email}
-            />
-          </div>
-        </Suspense>
+        <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
+          <OnboardingV2
+            settings={onboardingSettings}
+            saveKey={saveKey}
+            recoverEncryptedProfile={recoverEncryptedProfile}
+            patch={patch}
+            onOpenAiSettings={() => openSettings('ai')}
+            onDone={() => void refresh()}
+            signedIn={auth.status?.signedIn}
+            signedInEmail={auth.status?.email}
+          />
+        </div>
       </div>
     )
   }
