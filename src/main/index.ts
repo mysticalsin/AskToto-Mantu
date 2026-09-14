@@ -2351,9 +2351,36 @@ function createWindow(): void {
           }
         })
     }
-    win.webContents.once('did-finish-load', () => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      require('node:fs').writeFileSync(`${shotPath}.registered.txt`, `shot-registered ${new Date().toISOString()}\n`)
+    } catch {
+      /* ignore */
+    }
+    const onLoaded = (): void => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        require('node:fs').writeFileSync(`${shotPath}.loaded.txt`, `did-finish-load ${new Date().toISOString()}\n`)
+      } catch {
+        /* ignore */
+      }
+      dumpDomAndCapture('t0')
       setTimeout(() => dumpDomAndCapture('t15'), 1500)
       setTimeout(() => dumpDomAndCapture('t45'), 4500)
+    }
+    if (!win.webContents.isLoading() && win.webContents.getURL()) {
+      onLoaded()
+    } else {
+      win.webContents.once('did-finish-load', onLoaded)
+    }
+    win.once('ready-to-show', () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        require('node:fs').writeFileSync(`${shotPath}.ready.txt`, `ready-to-show ${new Date().toISOString()}\n`)
+      } catch {
+        /* ignore */
+      }
+      dumpDomAndCapture('ready')
     })
   }
 
