@@ -836,17 +836,23 @@ input::placeholder {
 
 /* Act 1 welcome atmosphere — full viewport, under the UI. Hero hold remains if this is absent. */
 .onboard-hero-video {
-  position: fixed;
+  /* Absolute to .onboard-stage — fixed inside overflow-hidden clipped the lady bed. */
+  position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
 }
+.onboard-hero-poster,
 .onboard-hero-video video {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
   object-position: center;
+}
+.onboard-hero-video video {
   animation: onboard-hero-kenburns 28s ease-in-out infinite alternate;
   /* No CSS filter on the <video> — compositor-only motion budget. */
 }

@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  ONBOARDING_HERO_POSTER_SRC,
+  ONBOARDING_HERO_VIDEO_REMOTE_SRC,
   ONBOARDING_HERO_VIDEO_SRC,
   playOnboardingMedia,
   playOnboardingVideo
@@ -13,20 +15,19 @@ const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
 
 describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
   it('uses Tony’s first-slide clip, muted loop autoplay, object-cover, z-0 under the UI', () => {
-    expect(ONBOARDING_HERO_VIDEO_SRC).toBe(
-      'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260429_115139_0fc6bd3d-3631-4d26-ab9b-28293887dcc9.mp4'
-    )
-    expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260714_113715_c7e0daa0/)
-    expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260411_104032_69319010/)
+    expect(ONBOARDING_HERO_VIDEO_REMOTE_SRC).toMatch(/hf_20260429_115139_0fc6bd3d/)
+    expect(ONBOARDING_HERO_VIDEO_SRC).toMatch(/onboarding-hero-lady-planet/)
+    expect(ONBOARDING_HERO_POSTER_SRC).toMatch(/onboarding-hero-poster/)
+    expect(ONBOARDING_HERO_VIDEO_REMOTE_SRC).not.toMatch(/hf_20260714_113715_c7e0daa0/)
     expect(experience).toMatch(/ONBOARDING_HERO_VIDEO_SRC/)
     expect(experience).toMatch(/muted/)
     expect(experience).toMatch(/loop/)
     expect(experience).toMatch(/autoPlay/)
     expect(experience).toMatch(/preload="auto"/)
     expect(experience).toMatch(/OnboardingHeroVideo/)
-    expect(experience).toMatch(/prefersReducedMotion\(\) \|\| failed/)
+    expect(experience).toMatch(/onboard-hero-poster/)
     expect(css).toMatch(/\.onboard-hero-video\s*\{/)
-    expect(css).toMatch(/z-index:\s*0/)
+    expect(css).toMatch(/position:\s*absolute/)
     expect(css).toMatch(/object-fit:\s*cover/)
     expect(css).toMatch(/object-position:\s*center/)
     expect(css).toMatch(/onboard-hero-kenburns/)
@@ -127,15 +128,18 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(media).not.toMatch(/https:\s/)
   })
 
-  it('does not eager-preload CloudFront from App boot; Act 1 owns auto load', () => {
+  it('does not eager-preload from App boot; Act 1 owns local auto load + poster', () => {
     const appSrc = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
     const heroSrc = readFileSync(join(__dirname, './onboarding-hero-video.ts'), 'utf8')
     expect(appSrc).not.toMatch(/preloadOnboardingHeroVideo/)
     expect(experience).toMatch(/preload="auto"/)
     expect(experience).toMatch(/preloadOnboardingHeroVideo\(\)/)
     expect(experience).toMatch(/el\.load\(\)/)
+    expect(experience).toMatch(/ONBOARDING_HERO_POSTER_SRC/)
+    expect(experience).toMatch(/onboard-hero-poster/)
     expect(heroSrc).toMatch(/document\.head\.appendChild/)
-    expect(heroSrc).toMatch(/link\.rel = 'preload'/)
+    expect(heroSrc).toMatch(/onboarding-hero-lady-planet\.mp4/)
+    expect(css).toMatch(/position:\s*absolute/)
   })
 
 })
