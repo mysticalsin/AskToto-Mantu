@@ -2282,21 +2282,78 @@ function createWindow(): void {
     else win.loadFile(join(__dirname, '../renderer/index.html'))
   })
   // Dev-only: screenshot ONLY this window (no desktop) for verification. Privacy-safe.
+  // FITO-185-K: dump DOM JSON + capturePage with errors — macOS screencapture of simpleFullScreen
+  // exclusive is often pure black even when Act 1 paints; capturePage/DOM are the honest feel proof.
   if (process.env.ASKTOTO_SHOT) {
-    win.webContents.once('did-finish-load', () => {
-      setTimeout(() => {
-        win?.webContents
-          .capturePage()
-          .then((img) => {
+    const shotPath = process.env.ASKTOTO_SHOT as string
+    const dumpDomAndCapture = (label: string): void => {
+      if (!win || win.isDestroyed()) return
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const fs = require('node:fs') as typeof import('node:fs')
+      const expr =
+        "(() => { const bed = document.getElementById('boot-bed'); const root = document.getElementById('root');" +
+        ' const bedStyle = bed ? getComputedStyle(bed) : null; return {' +
+        ` label: ${JSON.stringify(label)},` +
+        ' readyState: document.readyState, hasBed: !!bed,' +
+        ' bed: bed && bedStyle ? { w: bed.offsetWidth, h: bed.offsetHeight, display: bedStyle.display,' +
+        ' opacity: bedStyle.opacity, visibility: bedStyle.visibility, bg: bedStyle.backgroundColor,' +
+        ' bgImage: bedStyle.backgroundImage.slice(0, 240) } : null,' +
+        ' rootChildren: root ? root.childElementCount : -1,' +
+        ' rootHTML: root ? root.innerHTML.slice(0, 1200) : null,' +
+        " bodyText: (document.body.innerText || '').slice(0, 800)," +
+        " starting: /Starting\\s+M/i.test(document.body.innerText || '')," +
+        " onboard: !!document.querySelector('.onboard-stage, .onboard-exclusive-lock, [class*=onboard]')," +
+        " videos: [...document.querySelectorAll('video')].map(v => ({ src: (v.currentSrc || '').slice(-120)," +
+        " poster: (v.poster || '').slice(-120), w: v.videoWidth, h: v.videoHeight, ready: v.readyState, paused: v.paused }))," +
+        ' imgs: [...document.images].slice(0, 12).map(i => ({ src: (i.currentSrc || i.src || "").slice(-120),' +
+        ' w: i.naturalWidth, h: i.naturalHeight, complete: i.complete })),' +
+        ' inner: { w: innerWidth, h: innerHeight } }; })()'
+      win.webContents
+        .executeJavaScript(expr, true)
+        .then((dom: unknown) => {
+          try {
+            fs.writeFileSync(`${shotPath}.${label}.dom.json`, JSON.stringify(dom, null, 2))
+          } catch (e) {
             try {
-              // eslint-disable-next-line @typescript-eslint/no-var-requires
-              require('node:fs').writeFileSync(process.env.ASKTOTO_SHOT as string, img.toPNG())
+              fs.writeFileSync(`${shotPath}.err.txt`, `dom-write:${label}:${String(e)}\n`, { flag: 'a' })
             } catch {
               /* ignore */
             }
-          })
-          .catch(() => {})
-      }, 4500)
+          }
+        })
+        .catch((e: unknown) => {
+          try {
+            fs.writeFileSync(`${shotPath}.err.txt`, `dom:${label}:${String(e)}\n`, { flag: 'a' })
+          } catch {
+            /* ignore */
+          }
+        })
+      win.webContents
+        .capturePage()
+        .then((img) => {
+          try {
+            const labeled = shotPath.replace(/\.png$/i, '') + `-${label}.png`
+            fs.writeFileSync(labeled, img.toPNG())
+            if (label === 't45') fs.writeFileSync(shotPath, img.toPNG())
+          } catch (e) {
+            try {
+              fs.writeFileSync(`${shotPath}.err.txt`, `write:${label}:${String(e)}\n`, { flag: 'a' })
+            } catch {
+              /* ignore */
+            }
+          }
+        })
+        .catch((e: unknown) => {
+          try {
+            fs.writeFileSync(`${shotPath}.err.txt`, `capture:${label}:${String(e)}\n`, { flag: 'a' })
+          } catch {
+            /* ignore */
+          }
+        })
+    }
+    win.webContents.once('did-finish-load', () => {
+      setTimeout(() => dumpDomAndCapture('t15'), 1500)
+      setTimeout(() => dumpDomAndCapture('t45'), 4500)
     })
   }
 
