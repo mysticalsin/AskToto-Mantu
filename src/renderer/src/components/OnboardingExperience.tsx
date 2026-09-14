@@ -903,9 +903,28 @@ export function OnboardingExperience({
   }
 
   useEffect(() => {
-    music.start()
-    playPortalOpen(music.muted)
-    music.start()
+    // FITO-185-T: do not start Goldberg until Act 1 is interactive (window focused), so music
+    // cannot play over a behind-Finder void. Main showForExclusiveOnboarding focuses first.
+    let started = false
+    let focusFallbackId: ReturnType<typeof setTimeout> | undefined
+    const kickMusic = (): void => {
+      if (started) return
+      started = true
+      if (focusFallbackId != null) clearTimeout(focusFallbackId)
+      music.start()
+      playPortalOpen(music.muted)
+      music.start()
+    }
+    const onFocus = (): void => {
+      kickMusic()
+    }
+    if (typeof document !== 'undefined' && document.hasFocus()) {
+      kickMusic()
+    } else {
+      window.addEventListener('focus', onFocus)
+      // Headless / autoplay-policy fallback — still prefer focus when main activates exclusive.
+      focusFallbackId = setTimeout(kickMusic, 2500)
+    }
     // Demo/Bar/Three chunks: never compete with Act 1 lady+planet first paint.
     const warm = (): void => {
       prefetchOnboardingDemoChunks()
@@ -922,6 +941,8 @@ export function OnboardingExperience({
       timeoutId = setTimeout(warm, 2000)
     }
     return () => {
+      window.removeEventListener('focus', onFocus)
+      if (focusFallbackId != null) clearTimeout(focusFallbackId)
       if (idleId != null) w.cancelIdleCallback?.(idleId)
       if (timeoutId != null) clearTimeout(timeoutId)
     }

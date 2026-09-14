@@ -2168,12 +2168,11 @@ function createWindow(): void {
   }
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   applyOverlayAlwaysOnTop(win)
-  // FITO-185-R: do not wait for ready-to-show — force an on-screen exclusive CGWindow now.
+  // FITO-185-T: without SFS (185-S), showInactive+moveTop leaves Act 1 behind Finder
+  // (Tony FAIL cf2f67d: music + Loading, desktop visible, no lady+planet). Activate like FITO-185-P.
   if (onboardingLive) {
     try {
-      win.setOpacity(1)
-      win.showInactive()
-      win.moveTop()
+      showForExclusiveOnboarding(win)
     } catch {
       /* headless */
     }
@@ -2185,7 +2184,8 @@ function createWindow(): void {
   // only on the virtual desktop it was created on.
   if (process.platform !== 'win32') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.setContentProtection(contentProtectionOn())
-  win.setHiddenInMissionControl?.(true)
+  // Island/bar overlay stays out of Mission Control; exclusive Act 1 must remain findable.
+  win.setHiddenInMissionControl?.(!onboardingLive)
   // Windows: the constructor's skipTaskbar:true is not durable — Electron/Windows re-adds the taskbar
   // button after certain show/restore/focus transitions (long-standing upstream quirk). Re-assert on
   // every transition that can resurrect it so the overlay NEVER appears in the taskbar (Tony, 2026-07-16:
@@ -2288,6 +2288,11 @@ function createWindow(): void {
     isMinimized = false
     if (onboardingExclusiveLive() && win && !win.isDestroyed()) {
       applyExclusiveOnboardingStage(win)
+      try {
+        showForExclusiveOnboarding(win)
+      } catch {
+        /* headless */
+      }
     } else {
       currentWidth = BAR_WIDTH
     }
@@ -2336,17 +2341,10 @@ function createWindow(): void {
   const revealExclusiveWhenPainted = (): void => {
     if (win !== overlay || overlay.isDestroyed()) return
     if (!onboardingExclusiveLive()) return
-    // FITO-185-Q: 1.8.9 path — showInactive after SFS/bounds. show()+focus fought exclusive and
-    // was unnecessary once simpleFullScreen materializes the CGWindow.
+    // FITO-185-T: Electron 43+ never SFS (185-S). showInactive left Act 1 behind Finder while
+    // Goldberg played (Tony FAIL cf2f67d). Re-assert activating show from FITO-185-P.
     try {
-      applyOverlayAlwaysOnTop(overlay)
-      overlay.setOpacity(1)
-      overlay.showInactive()
-      try {
-        overlay.moveTop()
-      } catch {
-        /* headless */
-      }
+      showForExclusiveOnboarding(overlay)
     } catch {
       /* headless */
     }
@@ -2897,8 +2895,9 @@ function showForAsk(w: BrowserWindow): void {
 }
 
 /**
- * FITO-185-P: first-run exclusive tour must activate. Bounds-only exclusive (no SFS) on macOS 27
- * stayed behind other apps with showInactive — Tony: "window doesn't open". Allowed second
+ * FITO-185-P / FITO-185-T: first-run exclusive tour must activate. Bounds-only exclusive
+ * (no SFS on Electron 43+, FITO-185-S) stayed behind Finder with showInactive — Tony FAIL
+ * cf2f67d: music + forever Loading, desktop visible, no lady+planet. Allowed second
  * exception beside showForAsk; enforced by no-show-steals-focus.contract.test.ts.
  */
 function showForExclusiveOnboarding(w: BrowserWindow): void {
@@ -4138,6 +4137,11 @@ function registerIpc(): void {
     }
     else if (cur.onboardingDone && !next.onboardingDone && win && !win.isDestroyed()) {
       applyExclusiveOnboardingStage(win)
+      try {
+        showForExclusiveOnboarding(win)
+      } catch {
+        /* headless */
+      }
     }
     if (next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
       const layout = parseOverlayLayout(next.overlayLayout)
