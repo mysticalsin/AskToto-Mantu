@@ -100,6 +100,7 @@
     "openai": "^6.45.0",
     "sherpa-onnx-node": "^1.13.3",
     "undici": "^7.29.0",
+    "ws": "^8.21.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {

@@ -615,7 +615,9 @@ export function useListen(
   // Managed enterprise-live profile (CLOUD_ONLY blocks local Whisper/Parakeet/Apple with an honest error).
   enterpriseLive?: EnterpriseLiveProfile,
   /** Settings.cloudSttProvider — Nova-3 / Soniox selection for managed cloud Listen. */
-  cloudSttProvider?: string
+  cloudSttProvider?: string,
+  /** Settings.profile.name for mic-side cloud speaker labels. */
+  micProfileName?: string
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
@@ -655,6 +657,10 @@ export function useListen(
   enterpriseLiveRef.current = enterpriseLive
   const cloudSttProviderRef = useRef<string | undefined>(cloudSttProvider)
   cloudSttProviderRef.current = cloudSttProvider
+  const micProfileNameRef = useRef<string | undefined>(micProfileName)
+  micProfileNameRef.current = micProfileName
+  const cloudSttUnsubRef = useRef<(() => void) | null>(null)
+
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
   // a remote model fetch. `false` is returned deliberately by the main process only for an unprovisioned
@@ -941,6 +947,11 @@ export function useListen(
             asrLanguageRef.current,
             next.pinnedLang
           )
+          if (engineRef.current === 'cloud') {
+            void window.toto
+              .cloudSttUpdateLang(asrLanguageRef.current, next.pinnedLang)
+              .catch(() => {})
+          }
           workerRef.current?.postMessage({ type: 'pinLanguage', language: next.pinnedLang })
         }
       })
@@ -950,7 +961,16 @@ export function useListen(
   }, [])
 
   const pump = useCallback((): void => {
-    if (engineRef.current === 'cloud') return // cloud path: PCM streamed by adapter when attached; no local decode
+    if (engineRef.current === 'cloud') {
+      // Live cloud WS: drain capture queue into main-side Nova/Soniox PCM stream (no local decode).
+      if (!readyRef.current || queue.current.length === 0) return
+      while (queue.current.length > 0) {
+        const job = queue.current.shift() as LiveAudioWindow
+        if (!job?.audio?.length) continue
+        void window.toto.cloudSttPush(job.audio, job.speaker === 'them' ? 'them' : 'you').catch(() => {})
+      }
+      return
+    }
 
     if (!readyRef.current || busy.current || queue.current.length === 0) return
     const job = queue.current.shift() as LiveAudioWindow
@@ -1929,15 +1949,14 @@ export function useListen(
 
         void (async () => {
           if (engine === 'cloud') {
-            // Cloud STT: capture stays local; inference is the approved cloud adapter (Nova-3 / Soniox).
-            // Do not boot Whisper/Parakeet/Apple. Live WebSocket attach is main/cloud-stt; this path
-            // keeps Listen honest under CLOUD_ONLY (ready + capture) without local model fallback.
+            // Cloud STT: capture stays local; inference is live Nova-3 / Soniox WS in main.
+            // Do not boot Whisper/Parakeet/Apple. CLOUD_ONLY never falls back locally.
             if (workerRef.current) {
               workerRef.current.terminate()
               workerRef.current = null
             }
             loadedQualityRef.current = null
-            readyRef.current = true
+            readyRef.current = false
             engineRef.current = 'cloud'
             const provider = effectiveCloudSttProvider(
               enterpriseLiveRef.current ?? {},
@@ -1953,7 +1972,66 @@ export function useListen(
               'pinnedLang=',
               pinnedLangRef.current
             )
-            setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
+            setState((s) => ({ ...s, loading: true, loadingPct: null }))
+            // Tear prior subscriptions
+            cloudSttUnsubRef.current?.()
+            cloudSttUnsubRef.current = null
+            const offFinal = window.toto.onCloudSttFinal((line) => {
+              if (!liveRef.current || sessionEpochRef.current !== myEpoch) return
+              commitLine(line.text, line.speaker, line.name)
+            })
+            const offErr = window.toto.onCloudSttError((message) => {
+              if (!liveRef.current || sessionEpochRef.current !== myEpoch) return
+              setState((s) => ({ ...s, error: message || s.error }))
+            })
+            cloudSttUnsubRef.current = () => {
+              offFinal()
+              offErr()
+            }
+            try {
+              const started = await window.toto.cloudSttStart({
+                provider,
+                asrLanguage: language,
+                pinnedLang: pinnedLangRef.current,
+                profileName: micProfileNameRef.current,
+                meetingId: startedAt ? String(startedAt) : undefined
+              })
+              if (!captureAdmissionIsOpen(myEpoch)) return
+              if (!started?.ok) {
+                console.warn('[listen] cloud STT start failed:', started?.error || started?.code)
+                liveRef.current = false
+                cloudSttUnsubRef.current?.()
+                cloudSttUnsubRef.current = null
+                setState((s) => ({
+                  ...s,
+                  listening: false,
+                  capturing: false,
+                  loading: false,
+                  ready: false,
+                  error: started?.error || 'Cloud STT is not configured.'
+                }))
+                void window.toto.setListeningState(false).catch(() => {})
+                return
+              }
+              readyRef.current = true
+              setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
+              if (readyRef.current) pump() // drain windows captured while WS connected
+            } catch (e) {
+              if (!captureAdmissionIsOpen(myEpoch)) return
+              const msg = e instanceof Error ? e.message : String(e)
+              liveRef.current = false
+              cloudSttUnsubRef.current?.()
+              cloudSttUnsubRef.current = null
+              setState((s) => ({
+                ...s,
+                listening: false,
+                capturing: false,
+                loading: false,
+                ready: false,
+                error: msg || 'Cloud STT failed to start.'
+              }))
+              void window.toto.setListeningState(false).catch(() => {})
+            }
             return
           }
           if (engine === 'parakeet') {
@@ -2373,6 +2451,11 @@ export function useListen(
         themRunRef.current = ''
         closeChannel('you')
         closeChannel('them')
+        if (engineRef.current === 'cloud') {
+          cloudSttUnsubRef.current?.()
+          cloudSttUnsubRef.current = null
+          void window.toto.cloudSttStop().catch(() => {})
+        }
         if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
         setState((s) => {
           const warnings = [

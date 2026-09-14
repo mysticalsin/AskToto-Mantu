@@ -4,7 +4,7 @@
  * Device capture stays local; inference is cloud. Under CLOUD_ONLY, local Whisper/
  * Parakeet/Apple must not boot as fallback — callers get an honest BLOCKED error.
  * Provider credentials stay server-side (Operator/gateway); this module is the
- * client contract + message normalizers only — not a live WebSocket client.
+ * client contract + message normalizers + URL/start builders. Live WS attach: live-session.ts.
  *
  * Approved providers (skill ref 05): Soniox (cost-first benchmark) and
  * Cloudflare Nova-3 `@cf/deepgram/nova-3` (consolidated-vendor comparator).

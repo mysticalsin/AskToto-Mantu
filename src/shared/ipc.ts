@@ -87,6 +87,14 @@ export const IPC = {
   // No status/ensure/progress channels: unlike Parakeet there is no bundled model to download: the
   // helper binary either transcribes or the call resolves to '' (see main/apple-speech.ts).
   appleSpeechFeed: 'apple-speech:feed',
+  // Cloud STT live WebSocket (Nova-3 / Soniox) — main holds credentials; renderer streams PCM.
+  cloudSttStart: 'cloud-stt:start',
+  cloudSttStop: 'cloud-stt:stop',
+  cloudSttPush: 'cloud-stt:push',
+  cloudSttUpdateLang: 'cloud-stt:update-lang',
+  cloudSttFinal: 'cloud-stt:final',
+  cloudSttError: 'cloud-stt:error',
+  cloudSttInterim: 'cloud-stt:interim',
   // Speaker Intelligence — Whisper's speaker-embedding tap. echo:true means operator loopback bleed.
   speakerEmbed: 'speaker:embed',
   askStart: 'ask:start',
