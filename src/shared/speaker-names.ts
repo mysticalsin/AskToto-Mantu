@@ -73,14 +73,48 @@ export function isOverlapSpeakerLabel(name: string | undefined | null): boolean 
 }
 
 /**
+ * Mic-side ("you") label from the Métis user profile (name filled in onboarding/settings).
+ * Honest fallback when empty — never invent a person name.
+ */
+export function micSpeakerLabel(
+  profile?: { name?: string | null; role?: string | null } | null
+): string {
+  const name = profile?.name?.trim() ?? ''
+  if (name) return name
+  return 'You'
+}
+
+/**
+ * Map a cloud diarization cluster id to a session label ("Speaker N").
+ * Provider ids are opaque clusters, not people — never invent a confirmed name here.
+ * Numeric ids are shown 1-based (Deepgram 0 → Speaker 1; Soniox 1 → Speaker 2) so 0- and
+ * 1-based providers never collide when both appear in one meeting timeline.
+ */
+export function sessionLabelFromCloudCluster(cluster: string | null | undefined): string {
+  const raw = (cluster ?? '').trim()
+  if (!raw || raw.toLowerCase() === 'unknown') return unknownSpeakerLabel(1)
+  if (isSessionSpeakerLabel(raw) || isUnknownSpeakerLabel(raw) || isOverlapSpeakerLabel(raw)) {
+    return raw
+  }
+  if (/^\d+$/.test(raw)) {
+    const n = parseInt(raw, 10)
+    return `Speaker ${n + 1}`
+  }
+  // Opaque non-numeric cluster — keep honest session shape, do not treat as a person.
+  return `Speaker ${raw}`
+}
+
+/**
  * Primary visible label for a transcript line.
  * Confirmed name wins; session cluster stays "Speaker N"; unknown/overlap stay honest;
  * bare you/them roles are never invented as person names.
+ * Optional youLabel (from micSpeakerLabel / profile) replaces generic "You" when set.
  */
 export function transcriptDisplayName(
   line: Pick<{ name?: string; speaker: string; overlap?: boolean }, 'name' | 'speaker'> & {
     overlap?: boolean
-  }
+  },
+  opts?: { youLabel?: string | null }
 ): string {
   if (line.overlap || isOverlapSpeakerLabel(line.name)) return OVERLAP_SPEAKER_LABEL
   const name = line.name?.trim()
@@ -90,7 +124,10 @@ export function transcriptDisplayName(
     }
     return name
   }
-  if (line.speaker === 'you') return 'You'
+  if (line.speaker === 'you') {
+    const you = opts?.youLabel?.trim()
+    return you || 'You'
+  }
   if (line.speaker === 'them') return 'Them'
   return unknownSpeakerLabel(1)
 }

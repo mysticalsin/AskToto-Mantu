@@ -109,6 +109,7 @@ import {
   spotlightRefUnavailableMessage,
   transcriptHasContent
 } from '@shared/quick-actions'
+import { micSpeakerLabel } from '@shared/speaker-names'
 
 function recapWriteKey(ownerId: string, runId: string): string {
   return `${ownerId}\u0000${runId}`
@@ -3260,11 +3261,12 @@ export function App(): JSX.Element {
         captureNotice={captureError}
         autosaveWarning={autosaveWarn}
         showTranscript={transcriptShown}
+        youLabel={micSpeakerLabel(settings?.profile)}
         onEnd={endReview}
       />
     ),
     // autosaveWarn was MISSING from the old shared dep array — a latent stale-warning bug the split fixes.
-    [listen.lines, suggest.answer, showSpec, speculative.answer, mode, listen.listening, listen.loading, listen.loadingPct, listen.error, captureError, autosaveWarn, settings?.showLiveTranscript, endReview, transcriptShown]
+    [listen.lines, suggest.answer, showSpec, speculative.answer, mode, listen.listening, listen.loading, listen.loadingPct, listen.error, captureError, autosaveWarn, settings?.showLiveTranscript, settings?.profile, endReview, transcriptShown]
   )
   const reviewBody = useMemo(() => {
     // Two sources: a just-ended live session (ask.answer recap + live lines), or a past meeting opened

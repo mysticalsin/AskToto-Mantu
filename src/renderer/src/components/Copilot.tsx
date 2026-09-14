@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Eye, EyeOff, AudioLines, Copy, Check, AlertTriangle } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
+import { transcriptDisplayName } from '@shared/speaker-names'
 import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
@@ -19,7 +20,14 @@ const TRANSCRIPT_RENDER_LIMIT = 150
  *  "…" placeholder gets swapped for the real committed line (listen.ts's clearProvisional/commitLine), and
  *  a Speaker Intelligence name can attach to an already-committed 'them' line slightly later (listen.ts's
  *  attachSpeakerName, Whisper-engine only). */
-const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLine }): JSX.Element {
+const TranscriptRow = memo(function TranscriptRow({
+  line,
+  youLabel
+}: {
+  line: TranscriptLine
+  youLabel?: string | null
+}): JSX.Element {
+  const label = transcriptDisplayName(line, { youLabel })
   return (
     <div className={line.speaker === 'you' ? 'flex justify-end' : 'flex justify-start'}>
       <div
@@ -36,7 +44,7 @@ const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLi
         ].join(' ')}
       >
         <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">
-          {line.speaker === 'you' ? 'You' : line.speaker === 'them' ? 'Them' : 'Speaker'}
+          {label}
         </span>
         {line.text}
       </div>
@@ -54,6 +62,7 @@ export const Copilot = memo(function Copilot({
   captureNotice,
   autosaveWarning,
   showTranscript,
+  youLabel,
   onEnd: _onEnd
 }: {
   lines: TranscriptLine[]
@@ -63,6 +72,8 @@ export const Copilot = memo(function Copilot({
   loading: boolean
   loadingPct: number | null
   error: string | null
+  /** Mic-side label from profile.name when set; honest "You" fallback when empty. */
+  youLabel?: string | null
   /** Non-terminal notice that screen capture failed (Private View on, permission revoked) while the
    *  suggestion STILL streams from the transcript — shown as an amber strip above the card, not in place
    *  of the answer (mirrors Answer.tsx's captureNotice). */
@@ -95,7 +106,7 @@ export const Copilot = memo(function Copilot({
     // row's key as the render-limit window slides forward, defeating TranscriptRow's memoization and
     // remounting the whole visible slice on every new line. `start + i` never changes for an
     // already-committed line, so React skips re-rendering every row whose `line` prop is unchanged.
-    return visible.map((l, i) => <TranscriptRow key={`${l.t}-${start + i}`} line={l} />)
+    return visible.map((l, i) => <TranscriptRow key={`${l.t}-${start + i}`} line={l} youLabel={youLabel} />)
   }, [lines])
 
   // Transcript is hidden during the call; the bar's "Transcript" button drives showTranscript on demand.

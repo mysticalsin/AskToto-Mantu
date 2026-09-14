@@ -14,7 +14,9 @@ import {
 } from '@shared/cloud-stt-provider'
 import {
   resolveNova3LanguageQuery,
+  resolveNova3LanguageQueryPinned,
   resolveSonioxLanguageConfig,
+  resolveSonioxLanguageConfigPinned,
   type Nova3LanguageQuery,
   type SonioxLanguageConfig
 } from '@shared/cloud-stt-language'
@@ -30,16 +32,22 @@ const SR = 16000
  * Build Nova-3 / Soniox language opts for a Listen cloud STT session from Settings.asrLanguage.
  * Used by session authorize / URL builders; Keep in sync with start()/setLanguage refs.
  */
-export function cloudSttLanguageForListen(asrLanguage: string | undefined | null): {
+export function cloudSttLanguageForListen(
+  asrLanguage: string | undefined | null,
+  pinnedLang?: string | null
+): {
   asrLanguage: string
+  pinnedLang: string | null
   nova: ReturnType<typeof resolveNova3LanguageQuery>
   soniox: ReturnType<typeof resolveSonioxLanguageConfig>
 } {
   const lang = (asrLanguage ?? 'auto').trim() || 'auto'
+  const pin = (pinnedLang ?? '').trim() || null
   return {
     asrLanguage: lang,
-    nova: resolveNova3LanguageQuery(lang),
-    soniox: resolveSonioxLanguageConfig(lang)
+    pinnedLang: pin,
+    nova: resolveNova3LanguageQueryPinned(lang, pin),
+    soniox: resolveSonioxLanguageConfigPinned(lang, pin)
   }
 }
 
@@ -924,6 +932,15 @@ export function useListen(
         if (next.shouldPin && next.pinnedLang) {
           probePinnedRef.current = true
           pinnedLangRef.current = next.pinnedLang
+          // Sticky + mid-meeting switch for cloud Nova/Soniox path (applies when WS attaches).
+          cloudSttNovaLangRef.current = resolveNova3LanguageQueryPinned(
+            asrLanguageRef.current,
+            next.pinnedLang
+          )
+          cloudSttSonioxLangRef.current = resolveSonioxLanguageConfigPinned(
+            asrLanguageRef.current,
+            next.pinnedLang
+          )
           workerRef.current?.postMessage({ type: 'pinLanguage', language: next.pinnedLang })
         }
       })
@@ -1331,6 +1348,19 @@ export function useListen(
   const pushAudio = useCallback(
     (sp: Speaker, audio: Float32Array, partial = false, startedAt?: number): void => {
       if (!liveRef.current || pausedRef.current) return
+      // Cloud STT: pump() does not locally decode, but sticky language still needs the same
+      // whisper/parakeet probe cadence so Nova/Soniox refs pin + follow mid-meeting switches
+      // before / when the live WS attaches.
+      if (
+        engineRef.current === 'cloud' &&
+        asrLanguageRef.current === 'auto' &&
+        !partial
+      ) {
+        probeWindowCountRef.current += 1
+        if (shouldProbeLanguageWindow(probeWindowCountRef.current, probePinnedRef.current)) {
+          probeLanguageWindow(audio, sp, startedAt)
+        }
+      }
       queue.current.push({ audio, speaker: sp, partial, startedAt })
       if (queue.current.length > MAX_QUEUE) {
         const before = queue.current.length
@@ -1346,7 +1376,7 @@ export function useListen(
       }
       pump()
     },
-    [pump]
+    [pump, probeLanguageWindow]
   )
 
   // Arms (or re-arms) the 'them'-silence watchdog: if no 'them' window has been emitted within
@@ -1919,7 +1949,9 @@ export function useListen(
               'novaLang=',
               cloudSttNovaLangRef.current,
               'sonioxLang=',
-              cloudSttSonioxLangRef.current
+              cloudSttSonioxLangRef.current,
+              'pinnedLang=',
+              pinnedLangRef.current
             )
             setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
             return

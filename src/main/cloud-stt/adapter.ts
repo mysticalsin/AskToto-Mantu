@@ -20,7 +20,9 @@ import {
 } from '../../shared/enterprise-live-profile'
 import {
   resolveNova3LanguageQuery,
+  resolveNova3LanguageQueryPinned,
   resolveSonioxLanguageConfig,
+  resolveSonioxLanguageConfigPinned,
   type Nova3LanguageQuery,
   type SonioxLanguageConfig
 } from '../../shared/cloud-stt-language'
@@ -184,6 +186,8 @@ export function buildNova3GatewayWsUrl(opts: {
    * Omitted / auto → language=multi + detect_language=true (never silent English default).
    */
   asrLanguage?: string | null
+  /** Mid-meeting sticky pin; applied when Settings is auto. */
+  pinnedLang?: string | null
   /** Override resolved language tag (tests / advanced). */
   language?: string
   /** Override detect_language flag. */
@@ -196,7 +200,7 @@ export function buildNova3GatewayWsUrl(opts: {
   const sampleRate = opts.sampleRate ?? 16000
   const interim = opts.interimResults !== false
   const diarize = opts.diarize !== false
-  const resolved = resolveNova3LanguageQuery(opts.asrLanguage)
+  const resolved = resolveNova3LanguageQueryPinned(opts.asrLanguage, opts.pinnedLang)
   const language = (opts.language ?? resolved.language).trim() || 'multi'
   const detectLanguage =
     opts.detectLanguage != null ? opts.detectLanguage : resolved.detect_language
@@ -211,6 +215,32 @@ export function buildNova3GatewayWsUrl(opts: {
   // Always emit detect_language explicitly so callers never inherit Deepgram's en default silently.
   q.set('detect_language', detectLanguage ? 'true' : 'false')
   return `wss://gateway.ai.cloudflare.com/v1/${encodeURIComponent(accountId)}/${encodeURIComponent(gatewayId)}/workers-ai?${q.toString()}`
+}
+
+/**
+ * Soniox realtime start-config builder (language hints + speaker diarization).
+ * Credentials stay out of this payload — caller authenticates the WS separately.
+ * enable_speaker_diarization defaults ON so multi-party remote audio is not a single "them" blob.
+ * Sticky pin (pinnedLang) applies when Settings.asrLanguage is auto.
+ */
+export type SonioxStartConfig = {
+  language_hints: string[]
+  enable_speaker_diarization: boolean
+  autoDetect: boolean
+}
+
+export function buildSonioxStartConfig(opts: {
+  asrLanguage?: string | null
+  /** Mid-meeting sticky pin (display name or BCP-47); ignored when Settings is explicit. */
+  pinnedLang?: string | null
+  enableSpeakerDiarization?: boolean
+}): SonioxStartConfig {
+  const lang = resolveSonioxLanguageConfigPinned(opts.asrLanguage, opts.pinnedLang)
+  return {
+    language_hints: lang.language_hints,
+    enable_speaker_diarization: opts.enableSpeakerDiarization !== false,
+    autoDetect: lang.autoDetect
+  }
 }
 
 /**
@@ -428,7 +458,9 @@ export { resolveCloudSttProvider } from '../../shared/cloud-stt-provider'
 export type { CloudSttProviderId } from '../../shared/cloud-stt-provider'
 export {
   resolveNova3LanguageQuery,
-  resolveSonioxLanguageConfig
+  resolveNova3LanguageQueryPinned,
+  resolveSonioxLanguageConfig,
+  resolveSonioxLanguageConfigPinned
 } from '../../shared/cloud-stt-language'
 export type { Nova3LanguageQuery, SonioxLanguageConfig } from '../../shared/cloud-stt-language'
 
