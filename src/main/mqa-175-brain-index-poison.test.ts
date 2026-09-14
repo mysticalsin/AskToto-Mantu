@@ -195,4 +195,52 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     expect(source).toMatch(/bootPowerSaveBlockerId/)
     expect(source).toMatch(/powerSaveBlocker\.start\('prevent-app-suspension'\)/)
   })
+
+  it('FITO-185-E: 15s boot callback clears watch in finally even if brain resume throws', () => {
+    // Hardprove left boot-incomplete.json stuck when resumeBackfillIfPending (or a sibling) threw —
+    // the clear sat after the brain work with no finally. Contract: try/finally around the 15s body,
+    // per-step try/catch on each brain call, and audit app.boot.watch_cleared beside the clear.
+    const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const resume = source.indexOf('resumeBackfillIfPending()')
+    expect(resume).toBeGreaterThan(-1)
+    // Walk back to the setTimeout that owns this resume (the 15s MQA-175 timer).
+    const timer = source.lastIndexOf('setTimeout(() => {', resume)
+    expect(timer).toBeGreaterThan(-1)
+    const slice = source.slice(timer, source.indexOf('}, 15_000)', resume) + '}, 15_000)'.length)
+    expect(slice).toMatch(/try\s*\{/)
+    expect(slice).toMatch(/finally\s*\{/)
+    const finallyIdx = slice.indexOf('finally')
+    const finallyBody = slice.slice(finallyIdx)
+    expect(finallyBody).toMatch(/setBootPowerSaveBlock\(false\)/)
+    expect(finallyBody).toMatch(/endBootWatch\(app\.getPath\('userData'\)\)/)
+    expect(finallyBody).toMatch(/auditLog\('app\.boot\.watch_cleared',\s*\{\s*earlyDeath:\s*Boolean\(earlyDeath\)\s*\}\)/)
+    // Power-save stop + sentinel clear live in finally (after any resume throw path), not only the happy path.
+    expect(finallyBody.indexOf('setBootPowerSaveBlock(false)')).toBeLessThan(finallyBody.indexOf('endBootWatch('))
+    // Per-step isolation around the brain resume calls (sync throws must not skip finally or siblings).
+    for (const step of [
+      'resumeBackfillIfPending',
+      'reconcileMeetingsInBackground',
+      'wireIntelligenceIndexWork',
+      'catchUpIntelligenceIndexIfNeeded',
+      'scheduleIntelligenceIndex',
+      'runConsolidationIfDue'
+    ]) {
+      expect(slice, step).toMatch(new RegExp(`try\\s*\\{[\\s\\S]*?${step}`))
+    }
+    // earlyDeath safe-start skip preserved (MQA-175).
+    expect(slice).toMatch(/if \(earlyDeath\)/)
+    expect(slice).toMatch(/safe start/)
+  })
+
+  it('FITO-185-F: createTray audits success/failure and always sets a darwin title', () => {
+    const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const start = source.indexOf('function createTray(): void {')
+    expect(start).toBeGreaterThan(-1)
+    const body = source.slice(start, source.indexOf('\nfunction rebuildTrayMenu(', start))
+    expect(body).toMatch(/auditLog\('tray\.created',\s*\{\s*emptyIcon\s*\}\)/)
+    expect(body).toMatch(/auditLog\('tray\.failed',\s*\{\s*message:/)
+    // No silent empty catch — failure must carry a message into the audit trail.
+    expect(body).not.toMatch(/catch\s*\{\s*\/\*\s*tray optional\s*\*\//)
+    expect(body).toMatch(/process\.platform === 'darwin'\)\s*tray\.setTitle\(' ◉ Métis'\)/)
+  })
 })
