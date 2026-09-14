@@ -2003,10 +2003,15 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   } catch {
     /* headless / already destroyed */
   }
-  // FITO-185-M: ASKTOTO_SHOT capturePage/CDP hang under darwin simpleFullScreen — keep exclusive
-  // via setBounds + opaque chrome only so feel dumps can finish.
+  // FITO-185-M/O: exclusive paint is setBounds + opaque chrome. OS simpleFullScreen/kiosk is
+  // OPT-IN only (ASKTOTO_ALLOW_SFS=1). Default off because:
+  // - ASKTOTO_SHOT capturePage/CDP hangs under darwin SFS
+  // - Totos-Mac macOS 27 (26A5421a): Tony feel Loading then process dies with no crashpad dump
+  //   after renderer.ready when SFS is armed — bounds-only exclusive stays alive.
   const mayOsExclusive =
-    exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) && !process.env.ASKTOTO_SHOT
+    exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
+    !process.env.ASKTOTO_SHOT &&
+    process.env.ASKTOTO_ALLOW_SFS === '1'
   try {
     if (mayOsExclusive && process.platform === 'darwin' && typeof w.setSimpleFullScreen === 'function') {
       if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true)
