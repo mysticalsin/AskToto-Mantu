@@ -217,9 +217,31 @@ function OnboardingHeroVideo({
   videoRef: Ref<HTMLVideoElement>
 }): JSX.Element {
   const [videoFailed, setVideoFailed] = useState(false)
+  // Poster paints immediately. Defer <video> mount so a decoding black frame cannot cover the lady.
+  const [allowVideo, setAllowVideo] = useState(false)
+  const [videoReady, setVideoReady] = useState(false)
   useEffect(() => {
     // Act 1 visible only — never from App boot parse (that fight with WebGL made first paint lag).
     if (prefersReducedMotion()) return
+    const start = (): void => setAllowVideo(true)
+    let idleId: number | undefined
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      cancelIdleCallback?: (id: number) => void
+    }
+    if (typeof w.requestIdleCallback === 'function') {
+      idleId = w.requestIdleCallback(start, { timeout: 1500 })
+    } else {
+      timeoutId = setTimeout(start, 1200)
+    }
+    return () => {
+      if (idleId != null) w.cancelIdleCallback?.(idleId)
+      if (timeoutId != null) clearTimeout(timeoutId)
+    }
+  }, [])
+  useEffect(() => {
+    if (!allowVideo || prefersReducedMotion()) return
     preloadOnboardingHeroVideo()
     const el = typeof videoRef === 'object' && videoRef ? videoRef.current : null
     if (el) {
@@ -230,11 +252,11 @@ function OnboardingHeroVideo({
       const v = typeof videoRef === 'object' && videoRef ? videoRef.current : null
       v?.pause()
     }
-  }, [videoRef])
+  }, [allowVideo, videoRef])
   return (
     <div className="onboard-hero-video" aria-hidden="true">
-      <img className="onboard-hero-poster" src={ONBOARDING_HERO_POSTER_SRC} alt="" />
-      {!prefersReducedMotion() && !videoFailed && (
+      <img className="onboard-hero-poster" src={ONBOARDING_HERO_POSTER_SRC} alt="" decoding="async" fetchPriority="high" />
+      {allowVideo && !prefersReducedMotion() && !videoFailed && (
         <video
           ref={videoRef}
           muted
@@ -244,6 +266,9 @@ function OnboardingHeroVideo({
           preload="auto"
           poster={ONBOARDING_HERO_POSTER_SRC}
           src={ONBOARDING_HERO_VIDEO_SRC}
+          className={videoReady ? 'onboard-hero-video--ready' : 'onboard-hero-video--pending'}
+          onLoadedData={() => setVideoReady(true)}
+          onPlaying={() => setVideoReady(true)}
           onError={() => setVideoFailed(true)}
         />
       )}
@@ -885,10 +910,38 @@ export function OnboardingExperience({
   }
 
   useEffect(() => {
-    prefetchOnboardingDemoChunks()
     music.start()
     playPortalOpen(music.muted)
     music.start()
+    // Demo/Bar/Three chunks: never compete with Act 1 lady+planet first paint.
+    const warm = (): void => {
+      prefetchOnboardingDemoChunks()
+    }
+    let idleId: number | undefined
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      cancelIdleCallback?: (id: number) => void
+    }
+    if (typeof w.requestIdleCallback === 'function') {
+      idleId = w.requestIdleCallback(warm, { timeout: 2500 })
+    } else {
+      timeoutId = setTimeout(warm, 2000)
+    }
+    return () => {
+      if (idleId != null) w.cancelIdleCallback?.(idleId)
+      if (timeoutId != null) clearTimeout(timeoutId)
+    }
+  }, [])
+
+  // Force portal mask fully open after the open animation so a stuck compositor cannot leave Act 1 black.
+  useEffect(() => {
+    const stage = document.querySelector('.onboard-stage')
+    if (!stage) return
+    const t = window.setTimeout(() => {
+      stage.classList.add('onboard-stage--portal-open')
+    }, 1400)
+    return () => clearTimeout(t)
   }, [])
   const [scene, setScene] = useState<Scene>('hero')
   const [rows, setRows] = useState<SetupRow[]>([])
