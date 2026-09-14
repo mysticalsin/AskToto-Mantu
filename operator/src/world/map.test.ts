@@ -165,7 +165,7 @@ describe('renderRealtimeMapSvg', () => {
     expect(svg).toContain('rt-country-pill')
     expect(svg).toContain('data-country-pill="CA"')
     expect(svg).toContain('/assets/flags/ca.svg')
-    expect(svg).toContain('Canada · 12 seats · 2 places')
+    expect(svg).toContain('Canada · 12 devices · 2 places')
     expect(svg).toContain('rt-pin-label')
     expect(svg).toContain('Longueuil')
     expect(svg).toContain('Montreal')

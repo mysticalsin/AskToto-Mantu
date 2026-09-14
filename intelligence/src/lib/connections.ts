@@ -168,8 +168,9 @@ export function buildMeetingConnections(data: ConnectionsInput, limit = 100): Me
     topic: 3
   }
   out.sort((x, y) => {
-    const xd = Math.max(x.a.date, x.b.date)
-    const yd = Math.max(y.a.date, y.b.date)
+    // ISO date strings — lexicographic max is chronological max.
+    const xd = x.a.date >= x.b.date ? x.a.date : x.b.date
+    const yd = y.a.date >= y.b.date ? y.a.date : y.b.date
     if (xd !== yd) return yd < xd ? -1 : 1
     if (kindRank[x.kind] !== kindRank[y.kind]) return kindRank[x.kind] - kindRank[y.kind]
     return x.via.localeCompare(y.via) || x.id.localeCompare(y.id)

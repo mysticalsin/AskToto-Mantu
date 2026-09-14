@@ -5,7 +5,7 @@
  * faithfully: same Mercator constants, same greedy clustering, same choropleth formula.
  *
  * Realtime uplift (Tony 2026-09-13): dark ocean + subtle grid, country flag pills
- * (`{Country} · {seats} seats · {places} places`), city labels beside pulsing dots.
+ * (`{Country} · {N} devices · {places} places` = fleet geo, not Live), city labels beside pulsing dots.
  * `clusterPins` still drives badge placement distance; country rollups supply pill text.
  */
 import { CENTROIDS_1152, CENTROIDS_520, WORLD_1152, WORLD_520 } from './paths.generated'
@@ -379,7 +379,8 @@ export function countryPillsFromPoints(
 
 function renderCountryPill(pill: CountryPill, theme: Theme): string {
   const iso = pill.iso.toLowerCase()
-  const label = `${pill.name} · ${pill.seats} seats · ${pill.places} places`
+  // Fleet device count (dashboard country rollup), not Live seats.
+  const label = `${pill.name} · ${pill.seats} devices · ${pill.places} places`
   const bg = PILL_BG[theme]
   const border = PILL_BORDER[theme]
   const fg = PILL_FG[theme]
