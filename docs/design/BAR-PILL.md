@@ -63,7 +63,7 @@ Tests: at production overlay width, toolbar children `getBoundingClientRect` mus
 The real `ThinkingOrb` from `thinking-orbs`. One 2D canvas, package size 64, 2x backing (128), visible CSS 41×41, theme `dark`, speed `1`. Transparent around the dots. No painted caption, no playground play button, no copy under the canvas.
 
 1. **Package orb.** Dotted 2D canvas. Monochrome light ink. State from the map below. Do not wrap it in WebGL. Do not add a magenta core, bloom, or specular kiss. Do not clip the canvas with `border-radius`.
-2. **Circular host.** Square box, `border-radius: 50%`, `background: transparent`. The Bar is the Métis glass. Never a lozenge. Dragging does not squash the orb.
+2. **Circular host.** Square box, `border-radius: 50%`, filled disc `#050508` (same as Jarvis). Dots paint on top — never a hollow outline. Never a lozenge. Dragging does not squash the orb.
 3. **No rec-dot on this circle.** Listen is the `listening` state (waveform in the rings). A second red disc fights that state. The Bar Listen control may keep its own rec-dot; this circle does not.
 4. **No Fit Studio.** No `#b266e9` / `#e15cff` / `#8a00f8` core on this control. Product chrome elsewhere may still use `#7F00DA`.
 

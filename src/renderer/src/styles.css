@@ -2446,10 +2446,12 @@ html.metis-bar-land .aw-widget {
   flex-shrink: 0;
   padding: 0;
   margin: 0;
-  overflow: visible;
+  /* FITO-185 / Ultron: Tony hollow-outline fail — fill the 41 circle (same disc as Jarvis).
+     thinking-orbs dots paint on top; transparent host read as empty ring left of Ask. */
+  overflow: hidden;
   border: none;
   border-radius: 50%;
-  background: transparent;
+  background: #050508;
   box-shadow: none;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;

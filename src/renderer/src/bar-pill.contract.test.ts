@@ -91,7 +91,7 @@ describe('BAR-PILL contract', () => {
     expect(css).toMatch(/\.aw-orb \{[\s\S]*?width:\s*41px/)
     expect(css).toMatch(/\.aw-orb \{[\s\S]*?height:\s*41px/)
     expect(css).toMatch(/\.aw-orb \{[\s\S]*?border-radius:\s*50%/)
-    expect(css).toMatch(/\.aw-orb \{[\s\S]*?background:\s*transparent/)
+    expect(css).toMatch(/\.aw-orb \{[\s\S]*?background:\s*#050508/)
     expect(css).toMatch(/\.aw-orb__host \{[\s\S]*?width:\s*64px/)
     expect(css).toMatch(/\.aw-orb__host \{[\s\S]*?height:\s*64px/)
     expect(css).toMatch(/\.aw-orb__host \{[\s\S]*?scale\(calc\(41 \/ 64\)\)/)
