@@ -110,7 +110,10 @@ import {
   archiveEncryptedProfile,
   listDustAgents,
   dustSelectedAgentVision,
-  recordMeetingSummarized
+  recordMeetingSummarized,
+  getSonioxApiKey,
+  setSonioxApiKey,
+  clearSonioxApiKey
 } from './store'
 import { createStream } from './llm'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
@@ -614,7 +617,7 @@ import {
   pushCloudSttPcm,
   updateCloudSttLiveLanguage
 } from './cloud-stt/live-session'
-import { resolveCloudSttGatewayId, resolveSonioxApiKey } from './cloud-stt/credentials'
+import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { effectiveCloudSttProvider } from '../shared/cloud-stt-provider'
 
@@ -5680,8 +5683,9 @@ function registerIpc(): void {
         meetingId: p.meetingId,
         cloudflareToken: getApiKey('cloudflare'),
         cloudflareBaseUrl: settings.cloudflareBaseUrl,
-        gatewayId: resolveCloudSttGatewayId(),
-        sonioxApiKey: resolveSonioxApiKey()
+        cloudflareAccountId: settings.cloudflareAccountId,
+        gatewayId: resolveCloudSttGatewayId(settings.cfAiGatewayId),
+        sonioxApiKey: getSonioxApiKey() || null
       },
       {
         onFinal: (line) => {
@@ -5715,6 +5719,21 @@ function registerIpc(): void {
     assertMainWindow(e)
     const p = (payload ?? {}) as { asrLanguage?: string; pinnedLang?: string | null }
     updateCloudSttLiveLanguage(p.asrLanguage, p.pinnedLang)
+  })
+  ipcMain.handle(IPC.cloudSttSetSonioxKey, (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { hasKeys: hasKeysMap() }
+    const key = typeof payload === 'string' ? payload : typeof (payload as { key?: unknown })?.key === 'string' ? (payload as { key: string }).key : ''
+    setSonioxApiKey(key)
+    auditLog(key.trim() ? 'key.set' : 'key.removed', { provider: 'soniox' })
+    return { hasKeys: hasKeysMap() }
+  })
+  ipcMain.handle(IPC.cloudSttClearSonioxKey, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { hasKeys: hasKeysMap() }
+    clearSonioxApiKey()
+    auditLog('key.removed', { provider: 'soniox' })
+    return { hasKeys: hasKeysMap() }
   })
 
   // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3) — the Whisper engine's speaker-embedding tap.

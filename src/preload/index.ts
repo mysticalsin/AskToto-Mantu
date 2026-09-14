@@ -221,6 +221,10 @@ const api = {
   ): Promise<void> => ipcRenderer.invoke(IPC.cloudSttPush, { samples, speaker }),
   cloudSttUpdateLang: (asrLanguage: string, pinnedLang?: string | null): Promise<void> =>
     ipcRenderer.invoke(IPC.cloudSttUpdateLang, { asrLanguage, pinnedLang }),
+  cloudSttSetSonioxKey: (key: string): Promise<{ hasKeys: Record<string, boolean> }> =>
+    ipcRenderer.invoke(IPC.cloudSttSetSonioxKey, { key }),
+  cloudSttClearSonioxKey: (): Promise<{ hasKeys: Record<string, boolean> }> =>
+    ipcRenderer.invoke(IPC.cloudSttClearSonioxKey),
   onCloudSttFinal: (
     cb: (line: {
       speaker: 'you' | 'them'
