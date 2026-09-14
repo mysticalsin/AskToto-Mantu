@@ -8,6 +8,12 @@ import {
   resolveEnterpriseLiveProfile,
   type EnterpriseLiveProfile
 } from '@shared/enterprise-live-profile'
+import {
+  resolveNova3LanguageQuery,
+  resolveSonioxLanguageConfig,
+  type Nova3LanguageQuery,
+  type SonioxLanguageConfig
+} from '@shared/cloud-stt-language'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
@@ -15,6 +21,24 @@ import { transcriptToText } from './transcript'
 import { shouldUseBundledAsr } from './asr-offline'
 
 const SR = 16000
+
+/**
+ * Build Nova-3 / Soniox language opts for a Listen cloud STT session from Settings.asrLanguage.
+ * Used by session authorize / URL builders; Keep in sync with start()/setLanguage refs.
+ */
+export function cloudSttLanguageForListen(asrLanguage: string | undefined | null): {
+  asrLanguage: string
+  nova: ReturnType<typeof resolveNova3LanguageQuery>
+  soniox: ReturnType<typeof resolveSonioxLanguageConfig>
+} {
+  const lang = (asrLanguage ?? 'auto').trim() || 'auto'
+  return {
+    asrLanguage: lang,
+    nova: resolveNova3LanguageQuery(lang),
+    soniox: resolveSonioxLanguageConfig(lang)
+  }
+}
+
 
 // The AudioWorklet module is loaded from an inlined Blob URL (created once, reused) so it resolves in
 // both the Vite dev server and the packaged Electron build. See whisper-worklet-src.ts for the why.
@@ -608,6 +632,9 @@ export function useListen(
   // through a ref for the same reason as requestedQualityRef: fallback/retry re-inits fire long after
   // start() returned and must re-send the language the session was started with.
   const asrLanguageRef = useRef<string>('auto')
+  // Cloud STT (Nova-3 / Soniox) language query derived from Settings — never leave Deepgram on en default.
+  const cloudSttNovaLangRef = useRef<Nova3LanguageQuery>(resolveNova3LanguageQuery('auto'))
+  const cloudSttSonioxLangRef = useRef<SonioxLanguageConfig>(resolveSonioxLanguageConfig('auto'))
   const engineRef = useRef<'whisper' | 'parakeet' | 'apple'>('parakeet') // active ASR engine for this session
   // Trusted managed profile from Settings — ref so mid-session CLOUD_ONLY checks (fallback) see latest policy.
   const enterpriseLiveRef = useRef<EnterpriseLiveProfile | undefined>(enterpriseLive)
@@ -1778,6 +1805,10 @@ export function useListen(
         // the whole lifetime of a Parakeet session.
         requestedQualityRef.current = quality
         asrLanguageRef.current = language
+        // CLOUD_ONLY / enterprise Nova-3+Soniox: pin language from Settings (auto→multi+detect; French→fr-CA).
+        // URL builders / session authorize must read these refs — never omit language (Deepgram defaults to en).
+        cloudSttNovaLangRef.current = resolveNova3LanguageQuery(language)
+        cloudSttSonioxLangRef.current = resolveSonioxLanguageConfig(language)
         if (workerIdleTimer.current) {
           clearTimeout(workerIdleTimer.current)
           workerIdleTimer.current = null
@@ -2459,6 +2490,8 @@ export function useListen(
     async (language: string): Promise<void> => {
       if (asrLanguageRef.current === language) return
       asrLanguageRef.current = language
+      cloudSttNovaLangRef.current = resolveNova3LanguageQuery(language)
+      cloudSttSonioxLangRef.current = resolveSonioxLanguageConfig(language)
       // A real language change abandons any in-progress Parakeet probe/pin from the previous setting —
       // mirrors whisper-import.ts's applyInitLanguage delta-reset (and whisper.worker.ts's own
       // resetLanguageFollow, triggered below by the 'init' message reaching an unchanged-quality warm
