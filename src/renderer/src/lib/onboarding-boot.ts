@@ -9,6 +9,7 @@
  * settings replace them when IPC lands.
  */
 import { DEFAULT_SETTINGS, PublicSettingsSchema, type PublicSettings } from '@shared/ipc'
+import bootPosterUrl from '../assets/onboarding-hero-poster.jpg'
 
 /** True when the boot UI should be onboarding (exclusive Act 1), including settings still null. */
 export function isOnboardingBoot(settings: PublicSettings | null | undefined): boolean {
@@ -32,5 +33,9 @@ export function provisionalOnboardingSettings(): PublicSettings {
   })
 }
 
-/** Packaged + Vite public URL for the no-JS / Suspense poster bed (see src/renderer/public/). */
-export const ONBOARDING_BOOT_POSTER_HREF = '/onboarding-hero-poster.jpg'
+/**
+ * Vite-hashed relative asset URL (same pattern as onboarding-hero-video.ts).
+ * Never a leading-slash public path — under Electron file:// that becomes
+ * file:///onboarding-hero-poster.jpg and fails.
+ */
+export const ONBOARDING_BOOT_POSTER_HREF = bootPosterUrl

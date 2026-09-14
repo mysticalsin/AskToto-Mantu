@@ -711,8 +711,8 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
 
   it('App fills the stage — OnboardingV2 is not wrapped in the overlapping Panel card', () => {
     const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
-    const gate = app.slice(app.indexOf("settings && !settings.onboardingDone && DEMO == null"))
-    const block = gate.slice(0, gate.indexOf('const panelOpen'))
+    const gateStart = app.indexOf('onboardingBoot && DEMO == null')
+    const block = app.slice(gateStart, app.indexOf('Post-onboarding only:', gateStart))
     expect(block).toMatch(/<OnboardingV2/)
     expect(block).not.toMatch(/<Panel>/)
     expect(block).toMatch(/onboard-stage/)
