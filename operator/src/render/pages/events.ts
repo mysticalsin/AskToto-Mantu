@@ -31,6 +31,7 @@ export function renderEvents(data: DashboardPayload, _ctx: RenderCtx): string {
       <p class="eyebrow">Events</p>
       <input class="search-bar" id="events-search" type="search" placeholder="Search events, computers, SSO, country…" autocomplete="off">
       <table id="events-table"><thead><tr><th>Created at</th><th>Name</th><th>Profile</th><th>City</th><th>Device</th><th>OS</th></tr></thead><tbody>${eventRows}</tbody></table>
+      <div class="empty" id="events-empty" hidden>No matching events.</div>
       ${
         eventRows
           ? '<div class="sub muted pad-b8">Real HMAC ingest only. Token-shaped values are dropped. Empty search shows every row.</div>'

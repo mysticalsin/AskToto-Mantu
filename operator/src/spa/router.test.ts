@@ -167,6 +167,7 @@ describe('hashed SPA router (#104)', () => {
     expect(SPA_JS).toContain('SameSite=Lax')
     expect(SPA_JS).toContain('localStorage.setItem("metis-operator-theme", choice)')
     expect(SPA_JS).toContain('events-empty')
+    expect(SPA_JS).toContain('#events-table tbody tr[data-q]')
     expect(SPA_JS).toContain('function applyEventsFilter')
     expect(SPA_JS).toContain('evSearch.addEventListener("search", applyEventsFilter)')
     expect(SPA_JS).toContain('e.key === "Enter"')
@@ -230,7 +231,7 @@ describe('hashed SPA router (#104)', () => {
         }
       },
       querySelectorAll(sel: string) {
-        if (sel === '#events-list .event[data-q]') return rows
+        if (sel === '#events-table tbody tr[data-q]') return rows
         return []
       },
       querySelector(sel: string) {
