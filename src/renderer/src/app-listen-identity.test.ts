@@ -26,6 +26,9 @@ describe('actual App Listen identity arguments', () => {
     const context = vm.createContext({
       meetingStartRef: { current: 8e15 }, nextMeetingStart,
       settings: { audioSource: 'both', asrQuality: 'fast', asrEngine: 'parakeet', asrLanguage: 'English' },
+      // startListen now gates engine via useCloud (CLOUD_ONLY / cloudSttProvider). This contract
+      // only asserts meeting-start identity — keep on-device so the expected engine stays parakeet.
+      useCloud: false,
       listen: { start }, Date: { now: () => 42 }
     })
     const code = ts.transpileModule(boundaries.map(node => `${node.getText(source)};`).join('\n'), {
