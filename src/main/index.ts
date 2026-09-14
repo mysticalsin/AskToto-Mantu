@@ -569,7 +569,7 @@ import {
   confirmOperatorLicenseConnection,
   acceptOperatorHeartbeat,
   operatorFundedProviders,
-  recordOperatorAsk,
+  recordOperatorAsk, pathTagForSeatProvider,
   recordOperatorCrmSend,
   recordOperatorRating,
   startOperatorRuntime
@@ -6626,7 +6626,8 @@ function registerIpc(): void {
                 // Closed-taxonomy label, computed here on the seat. Ships as a metric with every Ask so the
                 // Operator "Question types" panel works even when Ask text is off. Never throws.
                 questionType: classifyQuestionType(req.prompt, { vision: req.mode === 'vision' }),
-                vision: req.mode === 'vision'
+                vision: req.mode === 'vision',
+                pathTag: pathTagForSeatProvider(provider, viaOperator)
               })
             }
             // The winning leg's success is the whole race's terminal outcome — drop the combined abort
