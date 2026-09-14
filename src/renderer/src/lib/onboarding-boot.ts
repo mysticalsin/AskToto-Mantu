@@ -11,8 +11,31 @@
 import { DEFAULT_SETTINGS, PublicSettingsSchema, type PublicSettings } from '@shared/ipc'
 import bootPosterUrl from '../assets/onboarding-hero-poster.jpg'
 
+/**
+ * FITO-185-N: main stamps ?exclusiveOnboarding=1 on the renderer URL while
+ * onboardingExclusiveLive(). Fail-closed Act 1 even if async getSettings briefly
+ * (or wrongly) looks "done" — that path used to paint the glass Loading strip
+ * Tony still calls "Starting Métis".
+ * While the flag is present, Act 1 wins even if settings claim done (stale/wrong profile).
+ * Post-complete recreate loads without the flag so the Loading strip / bar can resume.
+ */
+export function exclusiveOnboardingFlag(
+  search: string = typeof location !== 'undefined' ? location.search : ''
+): boolean {
+  try {
+    return new URLSearchParams(search).get('exclusiveOnboarding') === '1'
+  } catch {
+    return false
+  }
+}
+
 /** True when the boot UI should be onboarding (exclusive Act 1), including settings still null. */
-export function isOnboardingBoot(settings: PublicSettings | null | undefined): boolean {
+export function isOnboardingBoot(
+  settings: PublicSettings | null | undefined,
+  search: string = typeof location !== 'undefined' ? location.search : ''
+): boolean {
+  if (settings?.onboardingDone === true && !exclusiveOnboardingFlag(search)) return false
+  if (exclusiveOnboardingFlag(search)) return true
   return settings == null || settings.onboardingDone !== true
 }
 

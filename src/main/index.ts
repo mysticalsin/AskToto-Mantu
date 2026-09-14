@@ -2281,13 +2281,21 @@ function createWindow(): void {
   // FITO-185-L: ASKTOTO_SHOT binds AFTER rendererUrl is known (see below) — never dump on
   // about:blank / ready-to-show / early isLoading races (FITO-185-K / K2).
   let rendererUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href
-  if (process.env['ELECTRON_RENDERER_URL']) {
+  {
+    // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
+    // Packaged builds previously never got query params (only the ELECTRON_RENDERER_URL branch did),
+    // so the renderer could not fail-closed to Act 1 when getSettings raced the Loading strip.
     const params = new URLSearchParams()
+    if (onboardingExclusiveLive()) params.set('exclusiveOnboarding', '1')
     if (process.env.ASKTOTO_DEMO) params.set('demo', process.env.ASKTOTO_DEMO)
     // make the overlay visible in the capture; ASKTOTO_SHOTBG=light tests legibility over a bright backdrop
     if (process.env.ASKTOTO_SHOT) params.set('shotbg', process.env.ASKTOTO_SHOTBG || 'dark')
     const qs = params.toString()
-    rendererUrl = process.env['ELECTRON_RENDERER_URL'] + (qs ? `?${qs}` : '')
+    if (process.env['ELECTRON_RENDERER_URL']) {
+      rendererUrl = process.env['ELECTRON_RENDERER_URL'] + (qs ? `?${qs}` : '')
+    } else if (qs) {
+      rendererUrl = `${rendererUrl}?${qs}`
+    }
   }
   // FITO-185-L: optional feel shot — only after did-finish-load of the real index.html,
   // delay ≥2s, then capturePage + DOM. Never blocks or replaces loadURL below.
