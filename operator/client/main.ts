@@ -20,6 +20,7 @@ import { api } from './api'
 import { initRouter } from './router'
 import { initTheme } from './theme'
 import { initGeoCountryFilter, paintShoeyMap } from './map'
+import { initRealtimeMap, paintRealtimeMapTheme } from './realtime-map'
 import {
   initVolumeTabs,
   initVolumeSearch,
@@ -54,7 +55,7 @@ var PAGES = [
   'settings'
 ]
 
-var PAGE_RENDERERS: Record<string, (data: DashboardPayload, ctx: { now: number; theme: 'light' }) => string> = {
+var PAGE_RENDERERS: Record<string, (data: DashboardPayload, ctx: { now: number; theme: 'light' | 'dark' | 'system' }) => string> = {
   overview: renderOverview,
   realtime: renderRealtime,
   events: renderEvents,
@@ -81,7 +82,8 @@ function reinitPage(page: string): void {
   }
   if (page === 'realtime') {
     initGeoCountryFilter()
-    paintShoeyMap()
+    initRealtimeMap()
+    paintRealtimeMapTheme()
   }
   if (page === 'events') {
     initEventsFilters()
@@ -124,7 +126,10 @@ export async function rerender(page: string): Promise<void> {
     toast({ kind: 'error', text: 'Could not refresh this page. Reopen it to see the latest.' })
     return
   }
-  section.innerHTML = renderer(data as DashboardPayload, { now: Date.now(), theme: 'light' })
+  var themeAttr = document.documentElement.getAttribute('data-theme')
+  var theme: 'light' | 'dark' | 'system' =
+    themeAttr === 'light' || themeAttr === 'dark' ? themeAttr : 'system'
+  section.innerHTML = renderer(data as DashboardPayload, { now: Date.now(), theme: theme })
   reinitPage(page)
   bindMotion(section)
   PAGE_INIT[page]?.(section, data as DashboardPayload)

@@ -257,10 +257,10 @@ export const SHOEY_LAND_SVG = shoeyLandSvg()
 /** Realtime map: full-bleed Mercator land, one pulsing green dot per reporting location (no
  * count-pill badges — dropped per spec), zoom/pan controls. Faithful port via
  * ./world/map.ts (renderRealtimeMapSvg) of WorldMap.tsx / shared/MapCanvas.tsx. */
-export function shoeyWorld(countries: MapCountry[], dots: MapDot[]): string {
+export function shoeyWorld(countries: MapCountry[], dots: MapDot[], theme: 'light' | 'dark' = 'light'): string {
   const empty = countries.length === 0 && dots.length === 0
   const points = empty ? [] : groupDotsToPoints(dots)
-  return renderRealtimeMapSvg({ points, theme: 'light' })
+  return renderRealtimeMapSvg({ points, theme })
 }
 
 /** Seats sharing a country, city, and lat/lon (to 2 decimals, ~1km) render as one dot whose

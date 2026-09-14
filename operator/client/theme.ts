@@ -9,6 +9,7 @@
  * segmented control's `aria-pressed` state always agrees with what is on screen.
  */
 import { paintShoeyMap } from './map'
+import { paintRealtimeMapTheme } from './realtime-map'
 
 export type ThemeChoice = 'system' | 'light' | 'dark'
 
@@ -57,6 +58,7 @@ function readStoredTheme(): ThemeChoice {
 export function initTheme(): void {
   applyTheme(readStoredTheme())
   paintShoeyMap()
+  paintRealtimeMapTheme()
   document.querySelectorAll<HTMLElement>('[data-theme-choice]').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var choice = btn.getAttribute('data-theme-choice')
@@ -64,6 +66,7 @@ export function initTheme(): void {
       applyTheme(choice)
       persistTheme(choice)
       paintShoeyMap()
+  paintRealtimeMapTheme()
     })
   })
 }
