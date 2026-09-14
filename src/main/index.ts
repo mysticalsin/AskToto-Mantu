@@ -3628,14 +3628,18 @@ function createTray(): void {
       : join(__dirname, '../../build/icon.png')
     let img = nativeImage.createFromPath(iconPath)
     if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
-    tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img)
-    if (process.platform === 'darwin' && img.isEmpty()) tray.setTitle(' ◉ Métis')
+    const emptyIcon = img.isEmpty()
+    tray = new Tray(emptyIcon ? nativeImage.createEmpty() : img)
+    // FITO-185-F: always give AXExtrasMenuBar a title on darwin (empty-icon fallback used to be the
+    // only path; hardprove saw kAXErrorCannotComplete with a title-less LSUIElement status item).
+    if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
     tray.setToolTip('Métis')
     tray.setContextMenu(buildTrayMenu())
     // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
     tray.on('click', () => sendHotkey('settings'))
-  } catch {
-    /* tray optional */
+    auditLog('tray.created', { emptyIcon })
+  } catch (e) {
+    auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
   }
 }
 
@@ -8348,30 +8352,60 @@ if (!app.requestSingleInstanceLock()) {
     // launch that decrypts index.json. When the previous run died before boot completed, this launch
     // deliberately does not walk back into it: the brain resume and its reconcile interval are skipped
     // for this session only, so the user reaches a working app instead of a sixth silent vanish. The
-    // watch is cleared at the end of this callback either way, so the very next launch is normal again.
-    if (earlyDeath) {
-      mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${describeEarlyDeath(earlyDeath)}`)
-      auditLog('app.crash', { kind: 'safe_start', consecutive: earlyDeath.consecutive })
-    } else {
-      resumeBackfillIfPending()
-      reconcileMeetingsInBackground()
-      // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
-      // not just the single resume — the reconcile tick reads the same index.json.
-      trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
-      // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
-      // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
-      wireIntelligenceIndexWork()
-      void catchUpIntelligenceIndexIfNeeded().catch((e) =>
-        mainLog.error('[intelligence-index] launch catch-up failed:', e)
-      )
-      scheduleIntelligenceIndex(trackTimer)
-      // Hourly consolidation is demoted: the named slots own the extract pass. The helper stays
-      // imported so existing settings/tests keep compiling, and a manual budget check still no-ops
-      // when the feature is off.
-      void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
+    // watch is cleared in `finally` either way (FITO-185-E), so a throw from any brain step cannot leave
+    // boot-incomplete.json stuck for the next launch.
+    try {
+      if (earlyDeath) {
+        mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${describeEarlyDeath(earlyDeath)}`)
+        auditLog('app.crash', { kind: 'safe_start', consecutive: earlyDeath.consecutive })
+      } else {
+        // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
+        try {
+          resumeBackfillIfPending()
+        } catch (e) {
+          mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
+        }
+        try {
+          reconcileMeetingsInBackground()
+        } catch (e) {
+          mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
+        }
+        // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
+        // not just the single resume — the reconcile tick reads the same index.json.
+        trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
+        // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
+        // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
+        try {
+          wireIntelligenceIndexWork()
+        } catch (e) {
+          mainLog.warn('[boot] wireIntelligenceIndexWork failed:', e)
+        }
+        try {
+          void catchUpIntelligenceIndexIfNeeded().catch((e) =>
+            mainLog.error('[intelligence-index] launch catch-up failed:', e)
+          )
+        } catch (e) {
+          mainLog.warn('[boot] catchUpIntelligenceIndexIfNeeded failed:', e)
+        }
+        try {
+          scheduleIntelligenceIndex(trackTimer)
+        } catch (e) {
+          mainLog.warn('[boot] scheduleIntelligenceIndex failed:', e)
+        }
+        // Hourly consolidation is demoted: the named slots own the extract pass. The helper stays
+        // imported so existing settings/tests keep compiling, and a manual budget check still no-ops
+        // when the feature is off.
+        try {
+          void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
+        } catch (e) {
+          mainLog.warn('[boot] runConsolidationIfDue failed:', e)
+        }
+      }
+    } finally {
+      setBootPowerSaveBlock(false)
+      endBootWatch(app.getPath('userData'))
+      auditLog('app.boot.watch_cleared', { earlyDeath: Boolean(earlyDeath) })
     }
-    setBootPowerSaveBlock(false)
-    endBootWatch(app.getPath('userData'))
   }, 15_000)
 
   app.on('activate', () => {
