@@ -74,7 +74,12 @@ function auditWindows(files: { file: string; source: string }[]): WindowAudit {
       const target = match[1]
       windows.push(`${file}: ${target}`)
       const open = source.indexOf('{', (match.index ?? 0) + match[0].length - 1)
-      const options = open === -1 ? '' : braceBlock(source, open)
+      const optionsRaw = open === -1 ? '' : braceBlock(source, open)
+      // Strip // line comments and /* */ block comments so prose like "show:false" in
+      // FITO notes cannot false-clear a visible window as a hidden worker (MQA-176).
+      const options = optionsRaw
+        .replace(/\/\/[^\n]*/g, '')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
       if (/\bshow:\s*false\b/.test(options)) continue
       // Search from the construction site FORWARD only. A setContentProtection() that appears EARLIER in
       // the module belongs to a re-sync helper (syncIntelContentProtection), and that helper only runs on
