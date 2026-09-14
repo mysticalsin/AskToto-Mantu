@@ -88,6 +88,7 @@ export function paintRealtimeMapTheme(): void {
   root.querySelectorAll<SVGPathElement>('path.world-land').forEach(function (p) {
     p.setAttribute('fill', land)
     p.setAttribute('stroke', stroke)
+    p.setAttribute('stroke-width', '0.5')
   })
   root.querySelectorAll<SVGTextElement>('text.rt-pin-label').forEach(function (t) {
     t.setAttribute('fill', label)

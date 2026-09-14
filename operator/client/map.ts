@@ -35,6 +35,10 @@ export function ensureShoeyLand(root: HTMLElement): void {
 export function paintShoeyMap(): void {
   var root = document.getElementById('map-root')
   if (!root) return
+  // Realtime owns #map-root with renderRealtimeMapSvg. Shoey restyle here paints low-contrast
+  // light land (#E5E7EB on white) and reads as sparse jagged outlines — Tony Mission Control
+  // regression. Overview choropleth does not use #map-root.
+  if (root.querySelector('svg.rt-map-svg')) return
   ensureShoeyLand(root)
   var dark = document.documentElement.getAttribute('data-theme') === 'dark'
   var land = dark ? '#3f3f46' : '#E5E7EB'
