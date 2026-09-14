@@ -39,10 +39,18 @@
         z-index: 0;
         pointer-events: none;
         background-color: #05010A;
-        background-image: url('onboarding-hero-poster.jpg');
-        background-position: center;
-        background-size: cover;
-        background-repeat: no-repeat;
+        overflow: hidden;
+      }
+      /* Real <img> so a failed CSS background cannot leave a solid #05010A slab. */
+      #boot-bed-img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: center;
+        opacity: 1;
+        z-index: 1;
       }
       #root {
         position: relative;
@@ -52,7 +60,9 @@
     </style>
   </head>
   <body>
-    <div id="boot-bed" aria-hidden="true"></div>
+    <div id="boot-bed" aria-hidden="true">
+      <img id="boot-bed-img" src="onboarding-hero-poster.jpg" alt="" decoding="async" fetchpriority="high" />
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

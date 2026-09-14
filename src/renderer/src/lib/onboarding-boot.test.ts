@@ -58,9 +58,10 @@ describe('FITO-185-I App boot gate (source contract)', () => {
   it('index.html ships a no-JS exclusive bed so force-show is never pure black', () => {
     expect(indexHtml).toMatch(/#05010A/)
     expect(indexHtml).toMatch(/id="boot-bed"/)
-    // Relative public asset — leading slash becomes file:///… under Electron file://
-    expect(indexHtml).toMatch(/url\(['"]onboarding-hero-poster\.jpg['"]\)/)
-    expect(indexHtml).not.toMatch(/url\(['"]\/onboarding-hero-poster\.jpg['"]\)/)
+    // Real <img> (not only CSS background) — relative public asset under Electron file://
+    expect(indexHtml).toMatch(/id="boot-bed-img"/)
+    expect(indexHtml).toMatch(/src=['"]onboarding-hero-poster\.jpg['"]/)
+    expect(indexHtml).not.toMatch(/src=['"]\/onboarding-hero-poster\.jpg['"]/)
     expect(ONBOARDING_BOOT_POSTER_HREF).toMatch(/onboarding-hero-poster/)
     // Vite may emit /src/... in unit tests; packaged build hashes under assets/. Never the public root path.
     expect(ONBOARDING_BOOT_POSTER_HREF).not.toBe('/onboarding-hero-poster.jpg')

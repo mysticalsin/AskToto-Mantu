@@ -3497,7 +3497,7 @@ export function App(): JSX.Element {
     }
     // Poster bed is always under #boot-bed / hero; sync OnboardingV2 so Suspense never masks a stalled chunk.
     return (
-      <div ref={setRoot} className="onboard-stage onboard-exclusive-lock">
+      <div ref={setRoot} className="onboard-stage onboard-stage--portal-open onboard-exclusive-lock">
         <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
           <OnboardingV2
             settings={onboardingSettings}
