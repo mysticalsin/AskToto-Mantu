@@ -14,6 +14,9 @@ import { writeFileSync } from 'node:fs'
 /** Minimum settle after a real renderer did-finish-load before capturePage/DOM dump. */
 export const ASKTOTO_SHOT_DELAY_MS = 2000
 
+/** Hard cap so hung capturePage/executeJavaScript under exclusive cannot pin main forever. */
+export const ASKTOTO_SHOT_TIMEOUT_MS = 4000
+
 export interface AskTotoShotTarget {
   on(event: string, listener: (...args: unknown[]) => void): unknown
   once(event: string, listener: (...args: unknown[]) => void): unknown
@@ -71,13 +74,35 @@ function appendErr(write: typeof writeFileSync, shotPath: string, line: string):
   }
 }
 
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`timeout:${label}:${ms}ms`)), ms)
+    p.then(
+      (v) => {
+        clearTimeout(t)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(t)
+        reject(e)
+      }
+    )
+  })
+}
+
 function dumpDomAndCapture(
   target: AskTotoShotTarget,
   shotPath: string,
   label: string,
-  write: typeof writeFileSync
+  write: typeof writeFileSync,
+  timeoutMs = ASKTOTO_SHOT_TIMEOUT_MS
 ): void {
   if (target.isDestroyed()) return
+  try {
+    write(`${shotPath}.${label}.started.txt`, `dump-started ${new Date().toISOString()}\n`)
+  } catch {
+    /* ignore */
+  }
   const expr =
     "(() => { const bed = document.getElementById('boot-bed'); const bedImg = document.getElementById('boot-bed-img');" +
     " const root = document.getElementById('root');" +
@@ -93,6 +118,7 @@ function dumpDomAndCapture(
     ' rootHTML: root ? root.innerHTML.slice(0, 1200) : null,' +
     " bodyText: (document.body.innerText || '').slice(0, 800)," +
     " starting: /Starting\\s+M/i.test(document.body.innerText || '')," +
+    " loadingCaption: /\\bLoading\\b/i.test(document.body.innerText || '')," +
     " onboard: !!document.querySelector('.onboard-stage, .onboard-exclusive-lock, [class*=onboard]')," +
     " portalOpen: !!document.querySelector('.onboard-stage--portal-open')," +
     " videos: [...document.querySelectorAll('video')].map(v => ({ src: (v.currentSrc || '').slice(-120)," +
@@ -100,8 +126,7 @@ function dumpDomAndCapture(
     ' imgs: [...document.images].slice(0, 12).map(i => ({ src: (i.currentSrc || i.src || "").slice(-120),' +
     ' w: i.naturalWidth, h: i.naturalHeight, complete: i.complete })),' +
     ' inner: { w: innerWidth, h: innerHeight } }; })()'
-  void target
-    .executeJavaScript(expr, true)
+  void withTimeout(target.executeJavaScript(expr, true), timeoutMs, `dom:${label}`)
     .then((dom: unknown) => {
       try {
         write(`${shotPath}.${label}.dom.json`, JSON.stringify(dom, null, 2))
@@ -112,8 +137,7 @@ function dumpDomAndCapture(
     .catch((e: unknown) => {
       appendErr(write, shotPath, `dom:${label}:${String(e)}`)
     })
-  void target
-    .capturePage()
+  void withTimeout(target.capturePage(), timeoutMs, `capture:${label}`)
     .then((img) => {
       try {
         const labeled = shotPath.replace(/\.png$/i, '') + `-${label}.png`

@@ -2003,18 +2003,14 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   } catch {
     /* headless / already destroyed */
   }
+  // FITO-185-M: ASKTOTO_SHOT capturePage/CDP hang under darwin simpleFullScreen — keep exclusive
+  // via setBounds + opaque chrome only so feel dumps can finish.
+  const mayOsExclusive =
+    exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) && !process.env.ASKTOTO_SHOT
   try {
-    if (
-      exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
-      process.platform === 'darwin' &&
-      typeof w.setSimpleFullScreen === 'function'
-    ) {
+    if (mayOsExclusive && process.platform === 'darwin' && typeof w.setSimpleFullScreen === 'function') {
       if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true)
-    } else if (
-      exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
-      process.platform === 'win32' &&
-      typeof w.setKiosk === 'function'
-    ) {
+    } else if (mayOsExclusive && process.platform === 'win32' && typeof w.setKiosk === 'function') {
       if (!w.isKiosk()) w.setKiosk(true)
     }
   } catch {

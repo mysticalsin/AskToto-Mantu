@@ -890,11 +890,21 @@ input::placeholder {
   transition: opacity 280ms ease;
 }
 
-/* If the portal mask animation stalls on a busy GPU, force the slit fully open. */
+/* FITO-185-M: busy GPU can stall BOTH mask open and content fade-in (animation-fill:both from opacity:0).
+   Force the slit fully open AND content visible; clear mask so compositor cannot leave a 120×36 hairline.
+   Stage fill stays transparent so #boot-bed poster remains visible under the hero until video/poster paint. */
 .onboard-stage.onboard-stage--portal-open {
   animation: none;
-  -webkit-mask-size: 280vmax 180vmax;
-  mask-size: 280vmax 180vmax;
+  -webkit-mask-image: none;
+  mask-image: none;
+  -webkit-mask-size: auto;
+  mask-size: auto;
+  background: transparent;
+}
+.onboard-stage.onboard-stage--portal-open .onboard-portal-content {
+  animation: none;
+  opacity: 1;
+  transform: none;
 }
 
 /* Liquid glass — backdrop blur, inset highlight, gradient-border ::before. Technique only. */

@@ -56,6 +56,10 @@ describe('onboarding portal pill + Ready-only finish', () => {
     expect(css).toMatch(/cubic-bezier\(0\.4,\s*0,\s*0\.2,\s*1\)/)
     expect(css).toMatch(/mask-size:\s*120px 36px/)
     expect(css).toMatch(/\.onboard-stage--portal-close/)
+    // FITO-185-M: portal-open must clear mask + force content opacity (no stalled fade-in void)
+    expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open[\s\S]*?-webkit-mask-image:\s*none/)
+    expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open \.onboard-portal-content[\s\S]*?opacity:\s*1/)
+
     expect(css).toMatch(/\.onboard-portal-content/)
     expect(css).toMatch(/translateY\(8px\)/)
     expect(css).toMatch(
