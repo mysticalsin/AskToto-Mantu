@@ -2322,10 +2322,11 @@ function createWindow(): void {
   win.loadURL(rendererUrl)
   const overlay = win
   const revealExclusiveWhenPainted = (): void => {
-    if (win !== overlay || overlay.isDestroyed() || overlay.isVisible()) return
+    if (win !== overlay || overlay.isDestroyed()) return
     if (!onboardingExclusiveLive()) return
+    // FITO-185-P: always re-assert exclusive visibility (isVisible alone left a behind-apps window).
     try {
-      overlay.showInactive()
+      showForExclusiveOnboarding(overlay)
     } catch {
       /* headless */
     }
@@ -2871,6 +2872,23 @@ function ensureWindow(): BrowserWindow | null {
  * for bare `.show()` calls and fails on any occurrence outside this function.
  */
 function showForAsk(w: BrowserWindow): void {
+  w.show()
+  w.focus()
+}
+
+/**
+ * FITO-185-P: first-run exclusive tour must activate. Bounds-only exclusive (no SFS) on macOS 27
+ * stayed behind other apps with showInactive — Tony: "window doesn't open". Allowed second
+ * exception beside showForAsk; enforced by no-show-steals-focus.contract.test.ts.
+ */
+function showForExclusiveOnboarding(w: BrowserWindow): void {
+  applyOverlayAlwaysOnTop(w)
+  try {
+    w.setOpacity(1)
+    w.moveTop()
+  } catch {
+    /* headless */
+  }
   w.show()
   w.focus()
 }

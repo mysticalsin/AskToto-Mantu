@@ -222,27 +222,13 @@ function OnboardingHeroVideo({
 }): JSX.Element {
   const [videoFailed, setVideoFailed] = useState(false)
   // Poster paints immediately. Defer <video> mount so a decoding black frame cannot cover the lady.
-  const [allowVideo, setAllowVideo] = useState(false)
+  // FITO-185-P: mount video on first paint (poster already visible). Idle defer left Act 1 static
+  // and felt like "no animation" on Totos-Mac exclusive.
+  const [allowVideo, setAllowVideo] = useState(() => !prefersReducedMotion())
   const [videoReady, setVideoReady] = useState(false)
   useEffect(() => {
-    // Act 1 visible only — never from App boot parse (that fight with WebGL made first paint lag).
     if (prefersReducedMotion()) return
-    const start = (): void => setAllowVideo(true)
-    let idleId: number | undefined
-    let timeoutId: ReturnType<typeof setTimeout> | undefined
-    const w = window as unknown as {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
-      cancelIdleCallback?: (id: number) => void
-    }
-    if (typeof w.requestIdleCallback === 'function') {
-      idleId = w.requestIdleCallback(start, { timeout: 1500 })
-    } else {
-      timeoutId = setTimeout(start, 1200)
-    }
-    return () => {
-      if (idleId != null) w.cancelIdleCallback?.(idleId)
-      if (timeoutId != null) clearTimeout(timeoutId)
-    }
+    setAllowVideo(true)
   }, [])
   useEffect(() => {
     if (!allowVideo || prefersReducedMotion()) return
@@ -1200,7 +1186,10 @@ export function OnboardingExperience({
 
   return (
     <>
-      {scene === 'hero' && <OnboardingHeroVideo videoRef={heroVideoRef} />}
+      {/* FITO-185-P: keep lady bed through problem/reveal — unmounting on Next killed atmosphere. */}
+      {(scene === 'hero' || scene === 'problem' || scene === 'reveal') && (
+        <OnboardingHeroVideo videoRef={heroVideoRef} />
+      )}
       <div
       className="onboard-root relative z-10 flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
       onPointerDown={music.start}
@@ -1222,7 +1211,7 @@ export function OnboardingExperience({
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
-            music.start()
+            void Promise.resolve(music.start()).catch(() => {})
             setScene('problem')
           }}
         />
