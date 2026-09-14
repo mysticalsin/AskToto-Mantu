@@ -25,8 +25,8 @@ function showPinTooltip(pin: HTMLElement, ev: MouseEvent): void {
   var seats = pin.getAttribute('data-seats') || '0'
   var places = city || country
   tip.textContent = country && city && city !== country
-    ? country + ' · ' + seats + ' seats · ' + places
-    : (city || country) + ' · ' + seats + ' seats'
+    ? country + ' · ' + seats + ' devices · ' + places
+    : (city || country) + ' · ' + seats + ' devices'
   tip.hidden = false
   tip.style.left = Math.round(ev.clientX + 12) + 'px'
   tip.style.top = Math.round(ev.clientY + 12) + 'px'
