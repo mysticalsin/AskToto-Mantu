@@ -25,7 +25,11 @@ describe('Mac-show tour stay-visible + quieter bar land', () => {
   })
 
   it('problem Continue is present at t=0 and lines stay with both', () => {
-    const problem = experience.slice(experience.indexOf("scene === 'problem'"), experience.indexOf("scene === 'reveal'"))
+    // FITO-185-P keeps lady bed mounted on hero|problem|reveal — do not slice from the first
+    // "scene === 'problem'" occurrence (that is the video keep-alive ternary).
+    const problemSceneAt = experience.indexOf("scene === 'problem' && (")
+    const revealSceneAt = experience.indexOf("scene === 'reveal' && (", problemSceneAt + 1)
+    const problem = experience.slice(problemSceneAt, revealSceneAt > 0 ? revealSceneAt : undefined)
     expect(problem).toMatch(/>\s*Continue\s*</)
     expect(problem).not.toMatch(/PROBLEM_STORY\.length \* 1100/)
     expect(problem).toMatch(/animationFillMode: 'both'/)
