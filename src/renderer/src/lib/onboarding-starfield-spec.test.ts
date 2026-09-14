@@ -133,8 +133,8 @@ describe('Starfield Close — local three, no CDN', () => {
 })
 
 describe('Starfield Close — leftover engine must not slide the stage', () => {
-  it('hero video is lady-only; leftover engine has no ndc camera parallax', () => {
-    expect(experienceSrc).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
+  it('hero video keep-alive through problem/reveal; leftover engine has no ndc camera parallax', () => {
+    expect(experienceSrc).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
     expect(engineSrc).not.toMatch(/ndc\.x \* CONFIG\.parallax/)
     expect(engineSrc).toMatch(/camera\.position\.set\(0, 0, 5 - scroll \* CONFIG\.scrollPush\)/)
     expect(engineSrc).toMatch(/setClearColor\(0x05010a/)

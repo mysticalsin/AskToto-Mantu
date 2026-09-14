@@ -83,7 +83,8 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
     expect(hero.indexOf('scene-enter')).toBeLessThan(hero.indexOf('onboard-cta'))
     expect(hero.lastIndexOf('</div>', hero.indexOf('onboard-cta'))).toBeGreaterThan(hero.indexOf('scene-enter'))
 
-    const problem = actSlice(experience, "scene === 'problem'", "scene === 'reveal'")
+    // FITO-185-P keep-alive: slice problem scene block, not the video ternary.
+    const problem = actSlice(experience, "scene === 'problem' && (", "scene === 'reveal' && (")
     expect(problem).toMatch(/scene-enter/)
     expect(problem.search(/>\s*Continue\s*</)).toBeGreaterThan(problem.lastIndexOf('scene-enter'))
 
@@ -95,8 +96,8 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
     expect(nextBlock).not.toMatch(/\{hasNext && \(/)
   })
 
-  it('portal video is hero-only; starfield is purple/black after Next; recap drops the bed', () => {
-    expect(experience).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
+  it('portal video keep-alive on hero|problem|reveal; starfield purple/black after Next', () => {
+    expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
     expect(engine).toMatch(/canvas\.style\.opacity = '0'/)
     expect(engine).toMatch(/setClearColor\(0x05010a/)
     expect(css).toMatch(/\.onboard-starfield canvas \{[\s\S]*?opacity:\s*0/)
