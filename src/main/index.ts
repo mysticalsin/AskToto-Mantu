@@ -2003,15 +2003,14 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   } catch {
     /* headless / already destroyed */
   }
-  // FITO-185-M/O: exclusive paint is setBounds + opaque chrome. OS simpleFullScreen/kiosk is
-  // OPT-IN only (ASKTOTO_ALLOW_SFS=1). Default off because:
-  // - ASKTOTO_SHOT capturePage/CDP hangs under darwin SFS
-  // - Totos-Mac macOS 27 (26A5421a): Tony feel Loading then process dies with no crashpad dump
-  //   after renderer.ready when SFS is armed — bounds-only exclusive stays alive.
+  // FITO-185-Q: restore 1.8.9 exclusive OS fullscreen by default. Bounds-only (FITO-185-O)
+  // left Electron 43 with ZERO CGWindow on Totos-Mac — Tony "window doesn't open". Live prove:
+  // ASKTOTO_ALLOW_SFS=1 on tip 5946184 → 1800×1169 on-screen window, alive 60s+. Still skip SFS
+  // under ASKTOTO_SHOT (capturePage hang). ASKTOTO_DISABLE_SFS=1 remains an escape hatch.
   const mayOsExclusive =
     exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
     !process.env.ASKTOTO_SHOT &&
-    process.env.ASKTOTO_ALLOW_SFS === '1'
+    process.env.ASKTOTO_DISABLE_SFS !== '1'
   try {
     if (mayOsExclusive && process.platform === 'darwin' && typeof w.setSimpleFullScreen === 'function') {
       if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true)
@@ -2324,9 +2323,17 @@ function createWindow(): void {
   const revealExclusiveWhenPainted = (): void => {
     if (win !== overlay || overlay.isDestroyed()) return
     if (!onboardingExclusiveLive()) return
-    // FITO-185-P: always re-assert exclusive visibility (isVisible alone left a behind-apps window).
+    // FITO-185-Q: 1.8.9 path — showInactive after SFS/bounds. show()+focus fought exclusive and
+    // was unnecessary once simpleFullScreen materializes the CGWindow.
     try {
-      showForExclusiveOnboarding(overlay)
+      applyOverlayAlwaysOnTop(overlay)
+      overlay.setOpacity(1)
+      overlay.showInactive()
+      try {
+        overlay.moveTop()
+      } catch {
+        /* headless */
+      }
     } catch {
       /* headless */
     }
