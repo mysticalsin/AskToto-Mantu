@@ -171,4 +171,28 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     expect(resume).toBeGreaterThan(guard) // the resume sits inside the early-death branch
     expect(clear).toBeGreaterThan(resume) // ...and the watch closes only after it survived
   })
+
+  it('FITO-185-B: boot holds prevent-app-suspension from beginBootWatch until endBootWatch', () => {
+    const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const begin = source.indexOf('const earlyDeath = beginBootWatch(')
+    expect(begin).toBeGreaterThan(-1)
+    const start = source.indexOf('setBootPowerSaveBlock(true)', begin)
+    expect(start).toBeGreaterThan(begin)
+    // Power-save must arm before createWindow so exclusive hidden first-paint is not App-Napped.
+    const create = source.indexOf("runStep('createWindow', createWindow)", begin)
+    expect(create).toBeGreaterThan(start)
+    const resume = source.indexOf('resumeBackfillIfPending()')
+    const clear = source.indexOf('endBootWatch(', resume)
+    const stop = source.lastIndexOf('setBootPowerSaveBlock(false)', clear)
+    expect(stop).toBeGreaterThan(resume)
+    expect(stop).toBeLessThan(clear) // stop with the clear, still after the brain resume guard
+    // Sentinel clear still after resume (MQA-175 order unchanged).
+    expect(clear).toBeGreaterThan(resume)
+    const willQuit = source.indexOf("app.on('will-quit'")
+    const willSlice = source.slice(willQuit, willQuit + 900)
+    expect(willSlice).toMatch(/setBootPowerSaveBlock\(false\)/)
+    expect(willSlice).toMatch(/endBootWatch\(/)
+    expect(source).toMatch(/bootPowerSaveBlockerId/)
+    expect(source).toMatch(/powerSaveBlocker\.start\('prevent-app-suspension'\)/)
+  })
 })

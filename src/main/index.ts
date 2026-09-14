@@ -2315,8 +2315,9 @@ function createWindow(): void {
       auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
     })
   }
-  if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(rendererUrl)
-  else win.loadFile(join(__dirname, '../renderer/index.html'))
+  // FITO-185-B: always loadURL(rendererUrl) — same string bindRendererReadiness expects — so packaged
+  // asar file:// getURL() cannot miss the strict equality check that loadFile alone can mismatch.
+  win.loadURL(rendererUrl)
   const overlay = win
   const revealExclusiveWhenPainted = (): void => {
     if (win !== overlay || overlay.isDestroyed() || overlay.isVisible()) return
@@ -3659,6 +3660,20 @@ function rebuildTrayMenu(): void {
 // power-save blocker for the duration of a meeting keeps the process at normal priority regardless of
 // window visibility. Module-level id: only one meeting can be active at a time.
 let recordingPowerSaveBlockerId: number | null = null
+// FITO-185-B: hold prevent-app-suspension from beginBootWatch until endBootWatch so the 15s MQA-175
+// clear (and exclusive hidden-window first paint) is not deferred by App Nap while boot-incomplete.json
+// stays stuck. Separate id from the meeting blocker — boot ends long before a meeting starts.
+let bootPowerSaveBlockerId: number | null = null
+function setBootPowerSaveBlock(on: boolean): void {
+  if (on) {
+    if (bootPowerSaveBlockerId === null || !powerSaveBlocker.isStarted(bootPowerSaveBlockerId)) {
+      bootPowerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension')
+    }
+  } else if (bootPowerSaveBlockerId !== null) {
+    if (powerSaveBlocker.isStarted(bootPowerSaveBlockerId)) powerSaveBlocker.stop(bootPowerSaveBlockerId)
+    bootPowerSaveBlockerId = null
+  }
+}
 // Guards the before-quit meeting-flush handler below from re-entering when it re-issues app.quit()
 // itself, and lets the IPC.windowQuit handler (whose caller, App.tsx's quitApp(), already AWAITS a
 // flush before invoking it) skip the redundant flush-and-wait entirely.
@@ -7949,6 +7964,8 @@ if (!app.requestSingleInstanceLock()) {
   // this process ever runs again: no crash-*.log, no audit line, no window, no dialog. Only the NEXT
   // launch can report it, and only if this one left a mark before doing the dangerous work.
   const earlyDeath = beginBootWatch(app.getPath('userData'), app.getVersion())
+  // FITO-185-B: keep the process unsuspended until the 15s endBootWatch / will-quit clear runs.
+  setBootPowerSaveBlock(true)
   if (earlyDeath) persistCrash('boot-early-death', describeEarlyDeath(earlyDeath), 'previous launch died before boot completed')
   // Never let an unhandled error crash the overlay silently — log to file, audit, write a crash dump, and
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
@@ -8353,6 +8370,7 @@ if (!app.requestSingleInstanceLock()) {
       // when the feature is off.
       void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
     }
+    setBootPowerSaveBlock(false)
     endBootWatch(app.getPath('userData'))
   }, 15_000)
 
@@ -8412,6 +8430,7 @@ app.on('will-quit', () => {
   // clear it here so the next launch is not pushed into safe start by a user who simply quit fast.
   // Own try, like every other step below: a failure here must never skip the sidecar kill.
   try {
+    setBootPowerSaveBlock(false)
     endBootWatch(app.getPath('userData'))
   } catch (e) {
     mainLog.warn('[will-quit] endBootWatch failed', e)
