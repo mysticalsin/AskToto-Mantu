@@ -1,10 +1,21 @@
 /**
  * Act 1 only: lady looking at space (April 29). The only space shot.
- * Unmount after Next. Exclusive hero hold (`#05010A`) is the fallback if CloudFront
- * fails or prefers-reduced-motion is on. Never a purple stripe wash.
+ * Local bundle is the production bed so exclusive onboarding never depends on CloudFront
+ * at first paint. Remote URL kept as a documented mirror / future refresh source.
+ * Exclusive hero hold (`#05010A`) is last-resort only — poster + local mp4 must show first.
  */
-export const ONBOARDING_HERO_VIDEO_SRC =
+import localHeroUrl from '../assets/onboarding-hero-lady-planet.mp4'
+import localPosterUrl from '../assets/onboarding-hero-poster.jpg'
+
+/** Documented CloudFront mirror of the same April 29 clip (not the runtime default). */
+export const ONBOARDING_HERO_VIDEO_REMOTE_SRC =
   'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260429_115139_0fc6bd3d-3631-4d26-ab9b-28293887dcc9.mp4'
+
+/** Runtime Act 1 bed — packaged local asset (lady + planet). */
+export const ONBOARDING_HERO_VIDEO_SRC = localHeroUrl
+
+/** Still frame behind / instead of the video so the lady is visible before decode. */
+export const ONBOARDING_HERO_POSTER_SRC = localPosterUrl
 
 /**
  * Act-1-mount preload only. Do NOT call from App boot — that contended with WebGL

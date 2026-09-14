@@ -102,7 +102,11 @@ import {
   TELL_THE_ROOM_TITLE,
   TELL_THE_ROOM_WHY
 } from '../lib/onboarding-tell-the-room'
-import { ONBOARDING_HERO_VIDEO_SRC, preloadOnboardingHeroVideo } from '../lib/onboarding-hero-video'
+import {
+  ONBOARDING_HERO_POSTER_SRC,
+  ONBOARDING_HERO_VIDEO_SRC,
+  preloadOnboardingHeroVideo
+} from '../lib/onboarding-hero-video'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -211,8 +215,8 @@ function OnboardingHeroVideo({
   videoRef
 }: {
   videoRef: Ref<HTMLVideoElement>
-}): JSX.Element | null {
-  const [failed, setFailed] = useState(false)
+}): JSX.Element {
+  const [videoFailed, setVideoFailed] = useState(false)
   useEffect(() => {
     // Act 1 visible only — never from App boot parse (that fight with WebGL made first paint lag).
     if (prefersReducedMotion()) return
@@ -227,19 +231,22 @@ function OnboardingHeroVideo({
       v?.pause()
     }
   }, [videoRef])
-  if (prefersReducedMotion() || failed) return null
   return (
     <div className="onboard-hero-video" aria-hidden="true">
-      <video
-        ref={videoRef}
-        muted
-        loop
-        playsInline
-        autoPlay
-        preload="auto"
-        src={ONBOARDING_HERO_VIDEO_SRC}
-        onError={() => setFailed(true)}
-      />
+      <img className="onboard-hero-poster" src={ONBOARDING_HERO_POSTER_SRC} alt="" />
+      {!prefersReducedMotion() && !videoFailed && (
+        <video
+          ref={videoRef}
+          muted
+          loop
+          playsInline
+          autoPlay
+          preload="auto"
+          poster={ONBOARDING_HERO_POSTER_SRC}
+          src={ONBOARDING_HERO_VIDEO_SRC}
+          onError={() => setVideoFailed(true)}
+        />
+      )}
       <div className="onboard-hero-video-tint" />
     </div>
   )
@@ -1136,11 +1143,12 @@ export function OnboardingExperience({
   const asrBlocksContinue = setupAsrBlocksContinue(rows, asrStatus)
 
   return (
-    <div
-      className="onboard-tour relative z-10 flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
+    <>
+      {scene === 'hero' && <OnboardingHeroVideo videoRef={heroVideoRef} />}
+      <div
+      className="onboard-root relative z-10 flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
       onPointerDown={music.start}
     >
-      {scene === 'hero' && <OnboardingHeroVideo videoRef={heroVideoRef} />}
       {shouldMountKineticGrid(scene) && <KineticGrid />}
       <button
         type="button"
@@ -1499,13 +1507,10 @@ export function OnboardingExperience({
 
       </div>
     </div>
+    </>
   )
 }
 
-/**
- * First-run flow. Finishes onboarding only at Ready Get started.
- * There is no Skip. Does not mount Onboarding.tsx.
- */
 export function OnboardingV2({
   settings,
   patch,
