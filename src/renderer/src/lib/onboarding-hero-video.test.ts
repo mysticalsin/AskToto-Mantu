@@ -22,7 +22,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(experience).toMatch(/muted/)
     expect(experience).toMatch(/loop/)
     expect(experience).toMatch(/autoPlay/)
-    expect(experience).toMatch(/preload="auto"/)
+    expect(experience).toMatch(/preload="metadata"/)
     expect(experience).toMatch(/OnboardingHeroVideo/)
     expect(experience).toMatch(/prefersReducedMotion\(\) \|\| failed/)
     expect(css).toMatch(/\.onboard-hero-video\s*\{/)
@@ -103,7 +103,9 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(src).toMatch(/const playing = el\.play\(\)[\s\S]*?if \(opts\.restart\) el\.currentTime = 0/)
     expect(src).toMatch(/const audioPlay = audio\?\.play\(\)[\s\S]*?const videoPlay = video\?\.play\(\)/)
     expect(src).not.toMatch(/currentTime = 0\s*\n\s*void el\.play/)
-    expect(src).not.toMatch(/await el\.play|setTimeout\(|queueMicrotask|requestAnimationFrame/)
+    expect(src).toMatch(/preloadOnboardingHeroVideo[\s\S]*?no-op/)
+    expect(src).not.toMatch(/await el\.play|queueMicrotask|requestAnimationFrame/)
+    expect(src).not.toMatch(/function playOnboardingVideo[\s\S]*?setTimeout\(/)
 
     expect(experience).toMatch(/onBegin=\{\(\) => \{\s*music\.start\(\)/)
     expect(experience).toMatch(/setScene\('problem'\)/)
@@ -124,4 +126,14 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(media).toMatch(/d8j0ntlcm91z4\.cloudfront\.net/)
     expect(media).not.toMatch(/https:\s/)
   })
+
+  it('does not eager-preload CloudFront from App boot; Act 1 owns metadata load', () => {
+    const appSrc = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
+    const heroSrc = readFileSync(join(__dirname, './onboarding-hero-video.ts'), 'utf8')
+    expect(appSrc).not.toMatch(/preloadOnboardingHeroVideo/)
+    expect(experience).toMatch(/preload="metadata"|preload="auto"/)
+    expect(heroSrc).toMatch(/Intentionally a no-op|no-op/)
+    expect(heroSrc).not.toMatch(/document\.head\.appendChild/)
+  })
+
 })

@@ -32,7 +32,7 @@ function actSlice(src: string, start: string, end: string): string {
 
 describe('Apple-grade quality bar — PR 66 re-pass', () => {
   it('starfield is 60fps-class on Retina: pixel cap, seed dt, moving frame 1', () => {
-    expect(STARFIELD_PIXEL_RATIO_CAP).toBe(1.5)
+    expect(STARFIELD_PIXEL_RATIO_CAP).toBe(1.25)
     expect(STARFIELD_SEED_DT).toBeCloseTo(1 / 60, 10)
     expect(breathScrollTarget(0, false)).toBeCloseTo(0.56, 8)
     expect(appearOpacity(0)).toBe(APPEAR_OPACITY_FLOOR)

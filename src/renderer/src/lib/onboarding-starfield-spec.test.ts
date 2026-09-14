@@ -127,7 +127,8 @@ describe('Starfield Close — local three, no CDN', () => {
     expect(slice).not.toMatch(/https?:\/\/[^'"\s]*three/i)
     expect(html).not.toMatch(/unpkg\.com\/three/)
     expect(engineSrc).toMatch(/WebGL1Renderer/)
-    expect(engineSrc).toMatch(/VSMShadowMap/)
+    expect(engineSrc).not.toMatch(/VSMShadowMap/)
+    expect(engineSrc).toMatch(/No lights in this bed/)
   })
 })
 

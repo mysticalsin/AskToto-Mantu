@@ -32,14 +32,14 @@ export const LAYERS = {
   ENTIRE_SCENE: 3
 } as const
 
-export const STAR_COUNT = 4200
+export const STAR_COUNT = 2200
 export const STAR_DEPTH = 30
 export const APPEAR_DELAY_MS = 0
 export const APPEAR_FADE_MS = 480
 /** First WebGL frame is already a field. Ramps 1.15 → 2 so frame 1 is never empty. */
 export const APPEAR_OPACITY_FLOOR = 1.15
 /** Retina × 3 composers × 2 blooms hitch at 2×. Cap keeps 60fps-class on a 2x Mac. */
-export const STARFIELD_PIXEL_RATIO_CAP = 1.5
+export const STARFIELD_PIXEL_RATIO_CAP = 1.25
 /** First paint uses a 60fps dt so dive/drift/spin are already moving, not a still. */
 export const STARFIELD_SEED_DT = 1 / 60
 export const NEXT_BUMP = 0.16
