@@ -2142,8 +2142,8 @@ function createWindow(): void {
     // Hide park is at bounds.y (0 on primary). Without this, darwin clamps
     // setBounds into workArea.y≈39 — the visible purple 8×2 hairline.
     enableLargerThanScreen: true,
-    // FITO-185-R: exclusive must show immediately. show:false + no-SFS = zero CGWindows on
-    // Electron 43/macOS 27; show:false + SFS = window then silent death after renderer.ready.
+    // FITO-185-R: exclusive must show immediately. Hidden ctor (show false) + no-SFS = zero CGWindows on
+    // Electron 43/macOS 27; hidden ctor + SFS = window then silent death after renderer.ready.
     // Hero hold `#05010A` is the first frame; Act 1 paints over it.
     show: true,
     backgroundColor: chrome.backgroundColor,
