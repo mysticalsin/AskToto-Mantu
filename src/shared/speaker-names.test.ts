@@ -4,8 +4,10 @@ import {
   isOverlapSpeakerLabel,
   isSessionSpeakerLabel,
   isUnknownSpeakerLabel,
+  micSpeakerLabel,
   OVERLAP_SPEAKER_LABEL,
   remapTranscriptSpeakerNames,
+  sessionLabelFromCloudCluster,
   sessionSpeakerLabels,
   transcriptDisplayName,
   unknownSpeakerLabel
@@ -81,5 +83,34 @@ describe('applyConfirmedSpeakerNames', () => {
     ]
     const out = applyConfirmedSpeakerNames(lines, { 'Speaker 1': 'Ada' })
     expect(out.map((l) => l.name)).toEqual(['Ada', 'Unknown speaker 1', 'Ada', OVERLAP_SPEAKER_LABEL])
+  })
+})
+
+describe('micSpeakerLabel / profile you label', () => {
+  it('uses profile display name when filled', () => {
+    expect(micSpeakerLabel({ name: 'Tony Walteur', role: 'CEO' })).toBe('Tony Walteur')
+    expect(micSpeakerLabel({ name: '  Ada  ' })).toBe('Ada')
+  })
+  it('honest fallback to You when name empty', () => {
+    expect(micSpeakerLabel({ name: '', role: 'Engineer' })).toBe('You')
+    expect(micSpeakerLabel({ name: '   ' })).toBe('You')
+    expect(micSpeakerLabel(null)).toBe('You')
+    expect(micSpeakerLabel(undefined)).toBe('You')
+  })
+  it('transcriptDisplayName prefers youLabel over generic You', () => {
+    expect(transcriptDisplayName({ speaker: 'you' }, { youLabel: 'Tony Walteur' })).toBe('Tony Walteur')
+    expect(transcriptDisplayName({ speaker: 'you' }, { youLabel: '' })).toBe('You')
+    expect(transcriptDisplayName({ speaker: 'you', name: 'Override' }, { youLabel: 'Tony' })).toBe(
+      'Override'
+    )
+  })
+})
+
+describe('sessionLabelFromCloudCluster', () => {
+  it('maps numeric provider clusters to Speaker N without inventing people', () => {
+    expect(sessionLabelFromCloudCluster('0')).toBe('Speaker 1')
+    expect(sessionLabelFromCloudCluster('1')).toBe('Speaker 2')
+    expect(sessionLabelFromCloudCluster('unknown')).toBe(unknownSpeakerLabel(1))
+    expect(sessionLabelFromCloudCluster('Speaker 3')).toBe('Speaker 3')
   })
 })

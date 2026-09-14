@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   allowLocalSttFallback,
   buildNova3GatewayWsUrl,
+  buildSonioxStartConfig,
   CLOUDFLARE_NOVA3_MODEL,
   normalizeCloudSttTokens,
   normalizeNova3ResultsMessage,
@@ -40,7 +41,7 @@ describe('planCloudSttSession', () => {
       expect(r.modelId).toBe(CLOUDFLARE_NOVA3_MODEL)
       expect(r.asrLanguage).toBe('auto')
       expect(r.novaLanguage).toEqual({ language: 'multi', detect_language: true })
-      expect(r.sonioxLanguage.language_hints).toEqual(['fr', 'en'])
+      expect(r.sonioxLanguage.language_hints).toEqual(['fr', 'en', 'es', 'pt', 'it'])
     }
   })
 
@@ -231,7 +232,7 @@ describe('resolveNova3LanguageQuery / resolveSonioxLanguageConfig', () => {
     expect(resolveNova3LanguageQuery('')).toEqual({ language: 'multi', detect_language: true })
     const s = resolveSonioxLanguageConfig('auto')
     expect(s.autoDetect).toBe(true)
-    expect(s.language_hints).toEqual(['fr', 'en'])
+    expect(s.language_hints).toEqual(['fr', 'en', 'es', 'pt', 'it'])
     expect(s.language_hints).not.toEqual(['en'])
   })
 
@@ -279,9 +280,52 @@ describe('buildNova3GatewayWsUrl', () => {
     expect(url).not.toContain('language=multi')
   })
 
+  it('sticky pin on auto narrows Nova language (mid-meeting follow)', () => {
+    const url = buildNova3GatewayWsUrl({
+      accountId: 'acc',
+      gatewayId: 'gw',
+      asrLanguage: 'auto',
+      pinnedLang: 'Spanish'
+    })
+    expect(url).toContain('language=es')
+    expect(url).toContain('detect_language=false')
+    expect(url).toContain('diarize=true')
+  })
+
   it('accepts raw fr-CA and FR fixture language tag', () => {
     // scripts/qa/asr-fixtures fr clips use lang "fr" — bare fr normalizes to fr-CA.
     const url = buildNova3GatewayWsUrl({ accountId: 'acc', gatewayId: 'gw', asrLanguage: 'fr' })
     expect(url).toContain('language=fr-CA')
+  })
+})
+
+describe('buildSonioxStartConfig', () => {
+  it('auto → core multilingual hints + speaker diarization on', () => {
+    const c = buildSonioxStartConfig({ asrLanguage: 'auto' })
+    expect(c.language_hints).toEqual(['fr', 'en', 'es', 'pt', 'it'])
+    expect(c.enable_speaker_diarization).toBe(true)
+    expect(c.autoDetect).toBe(true)
+  })
+
+  it('sticky pin on auto narrows hints; explicit French ignores pin', () => {
+    expect(buildSonioxStartConfig({ asrLanguage: 'auto', pinnedLang: 'Spanish' })).toEqual({
+      language_hints: ['es'],
+      enable_speaker_diarization: true,
+      autoDetect: false
+    })
+    expect(buildSonioxStartConfig({ asrLanguage: 'French', pinnedLang: 'Spanish' }).language_hints).toEqual([
+      'fr'
+    ])
+  })
+
+  it('maps EN/ES/PT/IT explicit Settings', () => {
+    for (const [name, code] of [
+      ['English', 'en'],
+      ['Spanish', 'es'],
+      ['Portuguese', 'pt'],
+      ['Italian', 'it']
+    ] as const) {
+      expect(buildSonioxStartConfig({ asrLanguage: name }).language_hints).toEqual([code])
+    }
   })
 })

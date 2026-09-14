@@ -1,23 +1,34 @@
 /**
  * Cloud STT language mapping (Nova-3 / Soniox) from Settings.asrLanguage.
- * Shared so main adapter + renderer Listen can pin FR/auto without importing node:crypto.
+ * Shared so main adapter + renderer Listen can pin multilingual auto without importing node:crypto.
+ *
+ * Product bar (Métis ~60 countries): Auto/multi must cover at least French, English, Spanish,
+ * Portuguese, Italian — not French-special-cased only. Explicit Spoken language Settings still win.
  */
 
 /**
  * Nova-3 / Deepgram language query from Settings.asrLanguage.
  *
- * Deepgram defaults `language=en` when omitted — French speech then yields empty/weak transcripts,
+ * Deepgram defaults `language=en` when omitted — non-English speech then yields empty/weak transcripts,
  * and under CLOUD_ONLY there is no Whisper/Parakeet adaptive follow to recover.
  *
- * - auto / empty → `language=multi` + `detect_language=true` (Nova multilingual codeswitch; cheap detect)
+ * - auto / empty → `language=multi` + `detect_language=true` (Nova multilingual codeswitch)
  * - explicit French → `fr-CA` (Ultron / Québec preference; explicit Settings still wins over auto)
- * - other LANGUAGE_NAMES → primary BCP-47 subtag from APPLE_LOCALES (en, es, de, …)
- * - raw BCP-47 (fr, fr-CA, fr-FR, …) passed through with region preserved when present
+ * - other LANGUAGE_NAMES → primary BCP-47 subtag (en, es, pt, it, …)
+ * - raw BCP-47 (fr, fr-CA, es, pt-BR, …) passed through with region preserved when present
+ * - sticky pin (mid-meeting follow): when Settings is auto and a pin is set, resolve the pin as
+ *   an explicit language (detect_language=false) until a switch re-pins
  */
 export type Nova3LanguageQuery = {
   language: string
   detect_language: boolean
 }
+
+/**
+ * Core language hints for Soniox auto/multi — company languages that must never be FR-only.
+ * Explicit Settings still send a single ISO code.
+ */
+export const CORE_SONIOX_AUTO_HINTS: readonly string[] = ['fr', 'en', 'es', 'pt', 'it'] as const
 
 /** Settings display name → Deepgram/Nova language tag. French prefers fr-CA (Québec). */
 const NOVA3_LANGUAGE_BY_NAME: Record<string, string> = {
@@ -125,8 +136,25 @@ export function resolveNova3LanguageQuery(asrLanguage?: string | null): Nova3Lan
 }
 
 /**
+ * Sticky pin for cloud Nova path: when Settings is auto and a mid-meeting pin exists
+ * (from whisper/parakeet-style probes or provider language tags), resolve the pin as explicit.
+ * Explicit Spoken language Settings always win over the pin.
+ */
+export function resolveNova3LanguageQueryPinned(
+  asrLanguage?: string | null,
+  pinnedLang?: string | null
+): Nova3LanguageQuery {
+  const settings = (asrLanguage ?? 'auto').trim() || 'auto'
+  const pin = (pinnedLang ?? '').trim()
+  if (pin && (!settings || settings.toLowerCase() === 'auto' || settings.toLowerCase() === 'same')) {
+    return resolveNova3LanguageQuery(pin)
+  }
+  return resolveNova3LanguageQuery(asrLanguage)
+}
+
+/**
  * Soniox websocket start config language_hints from Settings.asrLanguage.
- * Auto → [fr, en] bias (Québec-friendly multilingual); explicit → single ISO code.
+ * Auto → core multilingual hints (fr/en/es/pt/it); explicit → single ISO code.
  */
 export type SonioxLanguageConfig = {
   language_hints: string[]
@@ -137,10 +165,22 @@ export type SonioxLanguageConfig = {
 export function resolveSonioxLanguageConfig(asrLanguage?: string | null): SonioxLanguageConfig {
   const nova = resolveNova3LanguageQuery(asrLanguage)
   if (nova.detect_language || nova.language === 'multi') {
-    // Cost-first multilingual: prefer French (fr-CA → fr) alongside English; never English-only.
-    return { language_hints: ['fr', 'en'], autoDetect: true }
+    // Cost-first multilingual bias across company languages — never English-only, never FR-only.
+    return { language_hints: [...CORE_SONIOX_AUTO_HINTS], autoDetect: true }
   }
   const primary = nova.language.split('-')[0]!.toLowerCase()
   return { language_hints: [primary], autoDetect: false }
 }
 
+/** Sticky pin for Soniox: same rules as Nova pin helper. */
+export function resolveSonioxLanguageConfigPinned(
+  asrLanguage?: string | null,
+  pinnedLang?: string | null
+): SonioxLanguageConfig {
+  const settings = (asrLanguage ?? 'auto').trim() || 'auto'
+  const pin = (pinnedLang ?? '').trim()
+  if (pin && (!settings || settings.toLowerCase() === 'auto' || settings.toLowerCase() === 'same')) {
+    return resolveSonioxLanguageConfig(pin)
+  }
+  return resolveSonioxLanguageConfig(asrLanguage)
+}
