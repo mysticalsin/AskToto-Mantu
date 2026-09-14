@@ -6425,7 +6425,7 @@ export function Settings({
                   <div className="flex flex-col gap-1.5 px-1 py-1">
                     <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
                       Spoken language
-                      <FieldHint text="The language your meetings usually start in. Whisper decodes in this language and follows automatically if the conversation switches mid-meeting; Apple Speech uses it as its recognizer language; Parakeet always auto-detects. Applies immediately, even during a live meeting. Auto = detect from speech.">
+                      <FieldHint text="The language your meetings usually start in. Whisper decodes in this language and follows automatically if the conversation switches mid-meeting; Apple Speech uses it as its recognizer language; Parakeet always auto-detects; cloud STT (Nova-3 / Soniox) maps Auto to multilingual detect and French to fr-CA (Québec). Applies immediately, even during a live meeting. Auto = detect from speech.">
                         <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
                       </FieldHint>
                       <ManagedChip keys={settings.managedKeys} k="asrLanguage" />

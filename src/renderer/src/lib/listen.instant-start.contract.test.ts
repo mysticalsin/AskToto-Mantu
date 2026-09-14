@@ -117,3 +117,17 @@ describe('enterprise-live CLOUD_ONLY — local ASR start gate', () => {
     expect(fb).toMatch(/CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED/)
   })
 })
+
+describe('enterprise-live cloud STT language (FR Listen)', () => {
+  it('wires Settings asrLanguage into Nova/Soniox resolvers at start and setLanguage', () => {
+    expect(SRC).toMatch(/resolveNova3LanguageQuery/)
+    expect(SRC).toMatch(/resolveSonioxLanguageConfig/)
+    expect(SRC).toMatch(/cloudSttLanguageForListen/)
+    expect(startBody).toMatch(/resolveNova3LanguageQuery\(language\)/)
+    expect(startBody).toMatch(/resolveSonioxLanguageConfig\(language\)/)
+  })
+
+  it('does not hardcode English-only for cloud STT language', () => {
+    expect(SRC).toMatch(/export function cloudSttLanguageForListen/)
+  })
+})

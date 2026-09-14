@@ -18,6 +18,12 @@ import {
   type EnterpriseLiveProfile,
   resolveEnterpriseLiveProfile
 } from '../../shared/enterprise-live-profile'
+import {
+  resolveNova3LanguageQuery,
+  resolveSonioxLanguageConfig,
+  type Nova3LanguageQuery,
+  type SonioxLanguageConfig
+} from '../../shared/cloud-stt-language'
 
 export type CloudSttProviderId = 'cloudflare-nova3' | 'soniox' | 'unconfigured'
 
@@ -42,6 +48,11 @@ export type CloudSttSessionConfig = {
   track?: string
   /** When true, managed profile refuses local ASR fallback. */
   profile?: EnterpriseLiveProfile
+  /**
+   * Settings.asrLanguage — 'auto' or a LANGUAGE_NAMES display name (e.g. 'French').
+   * Wired into Nova-3 / Soniox so CLOUD_ONLY Listen is not stuck on Deepgram's English default.
+   */
+  asrLanguage?: string
 }
 
 export type CloudSttWord = {
@@ -116,7 +127,15 @@ function segmentId(scope: CloudSttScope, messageSequence: string | number, index
 export function planCloudSttSession(
   config: CloudSttSessionConfig
 ):
-  | { ok: true; provider: CloudSttProviderId; cloudOnly: boolean; modelId?: string }
+  | {
+      ok: true
+      provider: CloudSttProviderId
+      cloudOnly: boolean
+      modelId?: string
+      asrLanguage: string
+      novaLanguage: Nova3LanguageQuery
+      sonioxLanguage: SonioxLanguageConfig
+    }
   | { ok: false; error: string; code: 'CLOUD_ONLY' | 'UNCONFIGURED' } {
   const profile = config.profile ?? resolveEnterpriseLiveProfile({})
   const cloudOnly = isCloudOnlyProfile(profile)
@@ -127,10 +146,15 @@ export function planCloudSttSession(
   if (config.provider === 'unconfigured') {
     return { ok: false, error: CLOUD_STT_UNCONFIGURED, code: 'UNCONFIGURED' }
   }
+  const novaLang = resolveNova3LanguageQuery(config.asrLanguage)
+  const sonioxLang = resolveSonioxLanguageConfig(config.asrLanguage)
   return {
     ok: true,
     provider: config.provider,
     cloudOnly,
+    asrLanguage: (config.asrLanguage ?? 'auto').trim() || 'auto',
+    novaLanguage: novaLang,
+    sonioxLanguage: sonioxLang,
     ...(config.provider === 'cloudflare-nova3' ? { modelId: CLOUDFLARE_NOVA3_MODEL } : {})
   }
 }
@@ -148,6 +172,7 @@ export function allowLocalSttFallback(
   return { allowed: true }
 }
 
+
 /**
  * Gateway WebSocket URL builder for Nova-3 via Cloudflare AI Gateway.
  * Credentials are NOT embedded — caller supplies account/gateway ids from trusted config.
@@ -160,6 +185,15 @@ export function buildNova3GatewayWsUrl(opts: {
   sampleRate?: number
   interimResults?: boolean
   diarize?: boolean
+  /**
+   * Settings.asrLanguage ('auto' | 'French' | …) or raw BCP-47.
+   * Omitted / auto → language=multi + detect_language=true (never silent English default).
+   */
+  asrLanguage?: string | null
+  /** Override resolved language tag (tests / advanced). */
+  language?: string
+  /** Override detect_language flag. */
+  detectLanguage?: boolean
 }): string | null {
   const accountId = (opts.accountId || '').trim()
   const gatewayId = (opts.gatewayId || '').trim()
@@ -168,13 +202,20 @@ export function buildNova3GatewayWsUrl(opts: {
   const sampleRate = opts.sampleRate ?? 16000
   const interim = opts.interimResults !== false
   const diarize = opts.diarize !== false
+  const resolved = resolveNova3LanguageQuery(opts.asrLanguage)
+  const language = (opts.language ?? resolved.language).trim() || 'multi'
+  const detectLanguage =
+    opts.detectLanguage != null ? opts.detectLanguage : resolved.detect_language
   const q = new URLSearchParams({
     model: CLOUDFLARE_NOVA3_MODEL,
     encoding,
     sample_rate: String(sampleRate),
     interim_results: interim ? 'true' : 'false',
-    diarize: diarize ? 'true' : 'false'
+    diarize: diarize ? 'true' : 'false',
+    language
   })
+  // Always emit detect_language explicitly so callers never inherit Deepgram's en default silently.
+  q.set('detect_language', detectLanguage ? 'true' : 'false')
   return `wss://gateway.ai.cloudflare.com/v1/${encodeURIComponent(accountId)}/${encodeURIComponent(gatewayId)}/workers-ai?${q.toString()}`
 }
 
@@ -388,5 +429,11 @@ export function normalizeNova3ResultsMessage(
   }
   return normalized
 }
+
+export {
+  resolveNova3LanguageQuery,
+  resolveSonioxLanguageConfig
+} from '../../shared/cloud-stt-language'
+export type { Nova3LanguageQuery, SonioxLanguageConfig } from '../../shared/cloud-stt-language'
 
 export { CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED }

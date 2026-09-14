@@ -7,6 +7,8 @@ import {
   normalizeNova3ResultsMessage,
   normalizeSonioxMessage,
   planCloudSttSession,
+  resolveNova3LanguageQuery,
+  resolveSonioxLanguageConfig,
   CloudSttError,
   CLOUD_STT_UNCONFIGURED,
   CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED
@@ -31,17 +33,31 @@ describe('planCloudSttSession', () => {
 
   it('accepts configured Nova-3 under CLOUD_ONLY and surfaces model id', () => {
     const r = planCloudSttSession({ provider: 'cloudflare-nova3', profile: cloudOnly })
-    expect(r).toEqual({
-      ok: true,
-      provider: 'cloudflare-nova3',
-      cloudOnly: true,
-      modelId: CLOUDFLARE_NOVA3_MODEL
-    })
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.provider).toBe('cloudflare-nova3')
+      expect(r.cloudOnly).toBe(true)
+      expect(r.modelId).toBe(CLOUDFLARE_NOVA3_MODEL)
+      expect(r.asrLanguage).toBe('auto')
+      expect(r.novaLanguage).toEqual({ language: 'multi', detect_language: true })
+      expect(r.sonioxLanguage.language_hints).toEqual(['fr', 'en'])
+    }
   })
 
   it('accepts Soniox under CLOUD_ONLY without inventing a CF model id', () => {
-    const r = planCloudSttSession({ provider: 'soniox', profile: cloudOnly })
-    expect(r).toEqual({ ok: true, provider: 'soniox', cloudOnly: true })
+    const r = planCloudSttSession({ provider: 'soniox', profile: cloudOnly, asrLanguage: 'French' })
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r).toMatchObject({
+        ok: true,
+        provider: 'soniox',
+        cloudOnly: true,
+        asrLanguage: 'French',
+        novaLanguage: { language: 'fr-CA', detect_language: false },
+        sonioxLanguage: { language_hints: ['fr'], autoDetect: false }
+      })
+      expect(r.modelId).toBeUndefined()
+    }
   })
 })
 
@@ -208,18 +224,64 @@ describe('normalizeNova3ResultsMessage', () => {
   })
 })
 
+describe('resolveNova3LanguageQuery / resolveSonioxLanguageConfig', () => {
+  it('auto → multi + detect_language (never English-only hardcode)', () => {
+    expect(resolveNova3LanguageQuery('auto')).toEqual({ language: 'multi', detect_language: true })
+    expect(resolveNova3LanguageQuery(undefined)).toEqual({ language: 'multi', detect_language: true })
+    expect(resolveNova3LanguageQuery('')).toEqual({ language: 'multi', detect_language: true })
+    const s = resolveSonioxLanguageConfig('auto')
+    expect(s.autoDetect).toBe(true)
+    expect(s.language_hints).toEqual(['fr', 'en'])
+    expect(s.language_hints).not.toEqual(['en'])
+  })
+
+  it('French / fr → fr-CA (Québec preference); explicit Settings win', () => {
+    expect(resolveNova3LanguageQuery('French')).toEqual({ language: 'fr-CA', detect_language: false })
+    expect(resolveNova3LanguageQuery('fr')).toEqual({ language: 'fr-CA', detect_language: false })
+    expect(resolveNova3LanguageQuery('fr-CA')).toEqual({ language: 'fr-CA', detect_language: false })
+    expect(resolveNova3LanguageQuery('fr-FR')).toEqual({ language: 'fr-FR', detect_language: false })
+    expect(resolveSonioxLanguageConfig('French')).toEqual({ language_hints: ['fr'], autoDetect: false })
+  })
+
+  it('maps other Settings display names without inventing en', () => {
+    expect(resolveNova3LanguageQuery('Spanish').language).toBe('es')
+    expect(resolveNova3LanguageQuery('German').language).toBe('de')
+  })
+})
+
 describe('buildNova3GatewayWsUrl', () => {
   it('returns null when account or gateway missing', () => {
     expect(buildNova3GatewayWsUrl({})).toBeNull()
     expect(buildNova3GatewayWsUrl({ accountId: 'a' })).toBeNull()
   })
 
-  it('builds AI Gateway workers-ai WS URL with Nova-3 model', () => {
+  it('builds AI Gateway workers-ai WS URL with Nova-3 model + auto multilingual (not en)', () => {
     const url = buildNova3GatewayWsUrl({ accountId: 'acc', gatewayId: 'gw' })
     expect(url).toContain('wss://gateway.ai.cloudflare.com/v1/acc/gw/workers-ai?')
     expect(url).toContain(`model=${encodeURIComponent(CLOUDFLARE_NOVA3_MODEL)}`)
     expect(url).toContain('encoding=linear16')
     expect(url).toContain('sample_rate=16000')
     expect(url).toContain('diarize=true')
+    expect(url).toContain('language=multi')
+    expect(url).toContain('detect_language=true')
+    expect(url).not.toMatch(/language=en(?!-)/)
+  })
+
+  it('pins French Settings / fr-CA on the WS query (FR Listen wiring)', () => {
+    const url = buildNova3GatewayWsUrl({
+      accountId: 'acc',
+      gatewayId: 'gw',
+      asrLanguage: 'French'
+    })
+    expect(url).toContain('language=fr-CA')
+    expect(url).toContain('detect_language=false')
+    expect(url).not.toContain('language=en')
+    expect(url).not.toContain('language=multi')
+  })
+
+  it('accepts raw fr-CA and FR fixture language tag', () => {
+    // scripts/qa/asr-fixtures fr clips use lang "fr" — bare fr normalizes to fr-CA.
+    const url = buildNova3GatewayWsUrl({ accountId: 'acc', gatewayId: 'gw', asrLanguage: 'fr' })
+    expect(url).toContain('language=fr-CA')
   })
 })
