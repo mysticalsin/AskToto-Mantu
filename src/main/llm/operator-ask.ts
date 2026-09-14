@@ -70,6 +70,8 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
     messages,
     ...(image ? { mode: 'vision', image } : {}),
     tier: askTier,
+    // Stable id for Operator metering — matches seat AskStart.id so D1 does not double-count.
+    ...(typeof opts.req.id === 'string' && opts.req.id.trim() ? { clientAskId: opts.req.id.trim() } : {}),
     temperature: opts.temperature,
     maxTokens: opts.req.mode === 'recap' ? 8192 : 4096
   })
@@ -132,7 +134,15 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
           if (!trimmed.startsWith('data:')) continue
           const payload = trimmed.slice(5).trim()
           if (!payload) continue
-          let parsed: { t?: string; text?: string; message?: string; finishReason?: string; status?: string }
+          let parsed: {
+            t?: string
+            text?: string
+            message?: string
+            finishReason?: string
+            status?: string
+            inputTokens?: number
+            outputTokens?: number
+          }
           try {
             parsed = JSON.parse(payload) as {
               t?: string
@@ -140,6 +150,8 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
               message?: string
               finishReason?: string
               status?: string
+              inputTokens?: number
+              outputTokens?: number
             }
           } catch {
             continue
@@ -160,7 +172,17 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
             const naturalStop = !!suppliedReason && OPERATOR_NATURAL_STOP_REASONS.has(suppliedReason)
             const completeStatus = !suppliedStatus || suppliedStatus === 'complete'
             const complete = completeStatus && (legacyDone || naturalStop)
-            opts.handlers.onDone({}, {
+            // Enterprise-live F10: carry SSE usage into onDone. Missing stays absent (never invent 0).
+            const usage: { inputTokens?: number; outputTokens?: number; cacheStatus: 'not-reported' } = {
+              cacheStatus: 'not-reported'
+            }
+            if (typeof parsed.inputTokens === 'number' && Number.isFinite(parsed.inputTokens) && parsed.inputTokens >= 0) {
+              usage.inputTokens = parsed.inputTokens
+            }
+            if (typeof parsed.outputTokens === 'number' && Number.isFinite(parsed.outputTokens) && parsed.outputTokens >= 0) {
+              usage.outputTokens = parsed.outputTokens
+            }
+            opts.handlers.onDone(usage, {
               status: complete ? 'complete' : 'incomplete',
               reason: suppliedReason || 'done'
             })

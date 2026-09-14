@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyConfirmedSpeakerNames,
+  isOverlapSpeakerLabel,
   isSessionSpeakerLabel,
+  isUnknownSpeakerLabel,
+  OVERLAP_SPEAKER_LABEL,
   remapTranscriptSpeakerNames,
-  sessionSpeakerLabels
+  sessionSpeakerLabels,
+  transcriptDisplayName,
+  unknownSpeakerLabel
 } from './speaker-names'
 
 describe('isSessionSpeakerLabel', () => {
@@ -47,5 +53,33 @@ describe('sessionSpeakerLabels', () => {
         {}
       ])
     ).toEqual(['Speaker 2', 'Speaker 10'])
+  })
+})
+
+describe('transcriptDisplayName / unknown / overlap', () => {
+  it('keeps confirmed names primary', () => {
+    expect(transcriptDisplayName({ speaker: 'them', name: 'Ada Lovelace' })).toBe('Ada Lovelace')
+  })
+  it('keeps Speaker N and Unknown honest', () => {
+    expect(transcriptDisplayName({ speaker: 'unknown', name: 'Speaker 2' })).toBe('Speaker 2')
+    expect(transcriptDisplayName({ speaker: 'unknown' })).toBe('Unknown speaker 1')
+    expect(isUnknownSpeakerLabel(unknownSpeakerLabel(3))).toBe(true)
+  })
+  it('marks overlap explicitly', () => {
+    expect(transcriptDisplayName({ speaker: 'them', overlap: true })).toBe(OVERLAP_SPEAKER_LABEL)
+    expect(isOverlapSpeakerLabel(OVERLAP_SPEAKER_LABEL)).toBe(true)
+  })
+})
+
+describe('applyConfirmedSpeakerNames', () => {
+  it('maps clusters to people and leaves unmapped as Unknown speaker N', () => {
+    const lines = [
+      { speaker: 'them' as const, name: 'Speaker 1', text: 'a', t: 1 },
+      { speaker: 'them' as const, name: 'Speaker 2', text: 'b', t: 2 },
+      { speaker: 'them' as const, name: 'Speaker 1', text: 'c', t: 3 },
+      { speaker: 'them' as const, overlap: true, text: 'd', t: 4 }
+    ]
+    const out = applyConfirmedSpeakerNames(lines, { 'Speaker 1': 'Ada' })
+    expect(out.map((l) => l.name)).toEqual(['Ada', 'Unknown speaker 1', 'Ada', OVERLAP_SPEAKER_LABEL])
   })
 })

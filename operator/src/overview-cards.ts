@@ -15,20 +15,21 @@ function formatCompact(n: number): string {
 }
 
 function reported(value: string | number | null | undefined): string {
-  if (value == null) return '0'
+  // COST_METERING / F10: missing usage must stay "not reported", never invent 0.
+  if (value == null) return 'not reported'
   if (typeof value === 'number') return formatCompact(value)
   return value
 }
 
 function formatDuration(ms: number | null): string {
-  if (ms == null) return '0'
+  if (ms == null) return 'not reported'
   if (ms < 1000) return `${Math.round(ms)}ms`
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`
   return `${Math.round(ms / 60_000)}m`
 }
 
 function formatPct(n: number | null): string {
-  if (n == null) return '0%'
+  if (n == null) return 'not reported'
   return `${n}%`
 }
 
@@ -213,7 +214,7 @@ export function renderOverviewMini10(data: DashboardPayload): string {
       chart: `<div class="stat-choro-wrap">${choroplethMini(countries)}</div>`
     })
   ]
-  const cost = data.kpis.cost7d ?? '0'
+  const cost = data.kpis.cost7d ?? 'not reported'
   const chips = [
     chip('Mac vs Windows', data.scale.os.map((o) => `${o.label} ${o.value}`).join(' · ') || '0'),
     chip('Cost by provider', cost),

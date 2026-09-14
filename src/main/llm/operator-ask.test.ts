@@ -96,7 +96,10 @@ describe('streamOperatorAsk', () => {
     })
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(h.onDelta).toHaveBeenCalledWith('hi')
-    expect(h.onDone).toHaveBeenCalledWith({}, { status: 'complete', reason: 'done' })
+    expect(h.onDone).toHaveBeenCalledWith(
+      { cacheStatus: 'not-reported' },
+      { status: 'complete', reason: 'done' }
+    )
   })
 
   it('refuses redirects instead of forwarding the licence and conversation to another origin', async () => {
@@ -172,7 +175,10 @@ describe('streamOperatorAsk', () => {
     })
 
     await vi.waitFor(() =>
-      expect(h.onDone).toHaveBeenCalledWith({}, { status: 'incomplete', reason: 'length' })
+      expect(h.onDone).toHaveBeenCalledWith(
+        { cacheStatus: 'not-reported' },
+        { status: 'incomplete', reason: 'length' }
+      )
     )
     expect(h.onError).not.toHaveBeenCalled()
   })
@@ -208,7 +214,10 @@ describe('streamOperatorAsk', () => {
       })
 
       await vi.waitFor(() =>
-        expect(h.onDone).toHaveBeenCalledWith({}, { status: 'incomplete', reason: finishReason })
+        expect(h.onDone).toHaveBeenCalledWith(
+          { cacheStatus: 'not-reported' },
+          { status: 'incomplete', reason: finishReason }
+        )
       )
       expect(h.onError).not.toHaveBeenCalled()
     }
@@ -261,5 +270,37 @@ describe('streamOperatorAsk', () => {
     })
     expect(onError).toHaveBeenCalled()
     expect(String(onError.mock.calls[0]?.[0])).toMatch(/Operator is not reachable/)
+  })
+})
+
+
+describe('enterprise-live F10 usage propagation', () => {
+  it('propagates inputTokens/outputTokens from SSE done into onDone', async () => {
+    const h = handlers()
+    const body =
+      'data: {"t":"delta","text":"ok"}\n\n' +
+      'data: {"t":"done","status":"complete","finishReason":"stop","inputTokens":12,"outputTokens":34}\n\n'
+    const fetcher = vi.fn(async () => new Response(body, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' }
+    }))
+    vi.stubGlobal('fetch', fetcher)
+    streamOperatorAsk({
+      providerId: 'cloudflare',
+      kind: 'openai',
+      apiKey: '',
+      viaOperator: true,
+      operatorTransport: { url: 'https://operator.test', secret: 'METIS-OP-1.fixture' },
+      model: '@cf/deepseek-ai/deepseek-v4-flash-0731',
+      temperature: 0.2,
+      system: 'sys',
+      req,
+      handlers: h
+    })
+    await vi.waitFor(() => expect(h.onDone).toHaveBeenCalled())
+    expect(h.onDone).toHaveBeenCalledWith(
+      { inputTokens: 12, outputTokens: 34, cacheStatus: 'not-reported' },
+      { status: 'complete', reason: 'stop' }
+    )
   })
 })

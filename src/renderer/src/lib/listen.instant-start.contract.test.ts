@@ -97,3 +97,23 @@ describe('MQA-285 — recap/write after stop does not block the click', () => {
     expect(prewarmAt).toBeLessThan(stopAt)
   })
 })
+
+describe('enterprise-live CLOUD_ONLY — local ASR start gate', () => {
+  it('asserts cloud-only before local whisper/parakeet/apple start and surfaces CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED', () => {
+    expect(startBody).toMatch(/assertCloudOnlyAllowsEngine/)
+    expect(startBody).toMatch(/CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED/)
+    const assertAt = startBody.search(/assertCloudOnlyAllowsEngine/)
+    const parakeetAt = startBody.search(/engine === 'parakeet'/)
+    const whisperAt = startBody.search(/engineRef\.current === 'whisper'/)
+    expect(assertAt).toBeGreaterThan(-1)
+    expect(parakeetAt).toBeGreaterThan(-1)
+    expect(assertAt).toBeLessThan(parakeetAt)
+    if (whisperAt > -1) expect(assertAt).toBeLessThan(whisperAt)
+  })
+
+  it('blocks silent Parakeet→Whisper fallback under CLOUD_ONLY', () => {
+    const fb = codeOnly(blockBetween(SRC, 'const fallBackToWhisper = useCallback', 'const networkRetryCleanupRef'))
+    expect(fb).toMatch(/assertCloudOnlyAllowsEngine/)
+    expect(fb).toMatch(/CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED/)
+  })
+})
