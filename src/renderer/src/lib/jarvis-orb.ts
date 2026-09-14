@@ -27,13 +27,18 @@ import {
 } from 'three'
 
 export const JARVIS_ORB_COLOR = 0x4ca8e8
-export {
+import {
   JARVIS_ORB_STATES,
   isJarvisOrbState,
   resolveJarvisOrbState,
   type JarvisOrbState
 } from './jarvis-orb-state'
-import type { JarvisOrbState } from './jarvis-orb-state'
+export {
+  JARVIS_ORB_STATES,
+  isJarvisOrbState,
+  resolveJarvisOrbState,
+  type JarvisOrbState
+}
 
 /** orb.ts fullscreen count. The 41 pill must thin this. Never crop 2000 into 41px. */
 export const JARVIS_PARTICLE_COUNT = 2000

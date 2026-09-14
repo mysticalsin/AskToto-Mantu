@@ -2,8 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useWindowDrag } from '../lib/window-drag'
 import { BAR_PILL_VISIBLE_PX, runOrbPillActivate, type OrbMood } from '../lib/bar-pill-orb'
 import { resolveJarvisOrbState } from '../lib/jarvis-orb-state'
-
-type JarvisOrbHandle = { setState: (state: string) => void; dispose: () => void }
+import type { JarvisOrbHandle } from '../lib/jarvis-orb'
 
 /**
  * Jarvis circle. Real tonys-jarvis / jarvis2.0 particle cloud, sized to the 41 pill.
@@ -59,12 +58,13 @@ export function ObsidianOrb({
     // Dynamic import keeps three.js out of the exclusive-onboarding first-paint chunk.
     void import('../lib/jarvis-orb').then(({ createJarvisOrb }) => {
       if (cancelled || !canvasRef.current) return
-      handleRef.current = createJarvisOrb(canvasRef.current, {
+      const handle = createJarvisOrb(canvasRef.current, {
         reducedMotion: !animate,
         state: latestStateRef.current,
         hostPx: BAR_PILL_VISIBLE_PX
       })
-      handleRef.current.setState(latestStateRef.current)
+      handleRef.current = handle
+      handle?.setState(latestStateRef.current)
     })
     return () => {
       cancelled = true
