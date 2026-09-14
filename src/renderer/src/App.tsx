@@ -342,7 +342,8 @@ export function App(): JSX.Element {
     settings?.asrEngine,
     settings?.asrQuality ?? 'best',
     settings?.enterpriseLive,
-    settings?.cloudSttProvider
+    settings?.cloudSttProvider,
+    settings?.profile?.name
   )
   // Surface a best-quality ASR downgrade (listen.qualityDegraded — WebGPU/large model unavailable) to Settings, mirroring the
   // onEngineFallback → asrLastFallbackAt wiring just above. Patches exactly once per transition to true —

@@ -608,6 +608,16 @@ import {
 } from './parakeet'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
+import {
+  startCloudSttLive,
+  stopCloudSttLive,
+  pushCloudSttPcm,
+  updateCloudSttLiveLanguage
+} from './cloud-stt/live-session'
+import { resolveCloudSttGatewayId, resolveSonioxApiKey } from './cloud-stt/credentials'
+import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
+import { effectiveCloudSttProvider } from '../shared/cloud-stt-provider'
+
 import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscribe, stopWhisperHost } from './whisper-import'
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
@@ -5642,6 +5652,69 @@ function registerIpc(): void {
       await observeOperatorAudio(p.samples, speakerKey)
     }
     return { text }
+  })
+
+
+  // --- Cloud STT live WebSocket (Nova-3 / Soniox) ---
+  // Main holds Operator/CF credentials; renderer only streams Float32 PCM + receives finals.
+  ipcMain.handle(IPC.cloudSttStart, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Not signed in', code: 'AUTH' }
+    const p = (payload ?? {}) as {
+      provider?: string
+      asrLanguage?: string
+      pinnedLang?: string | null
+      profileName?: string
+      meetingId?: string
+    }
+    const settings = getSettings()
+    const profile = resolveEnterpriseLiveProfile(settings.enterpriseLive ?? {})
+    const provider = effectiveCloudSttProvider(profile, p.provider ?? settings.cloudSttProvider)
+    stopCloudSttLive()
+    const result = await startCloudSttLive(
+      {
+        provider,
+        asrLanguage: p.asrLanguage ?? settings.asrLanguage,
+        pinnedLang: p.pinnedLang,
+        profile: { name: p.profileName ?? settings.profile?.name },
+        meetingId: p.meetingId,
+        cloudflareToken: getApiKey('cloudflare'),
+        cloudflareBaseUrl: settings.cloudflareBaseUrl,
+        gatewayId: resolveCloudSttGatewayId(),
+        sonioxApiKey: resolveSonioxApiKey()
+      },
+      {
+        onFinal: (line) => {
+          win?.webContents.send(IPC.cloudSttFinal, line)
+        },
+        onInterim: (channel, text) => {
+          win?.webContents.send(IPC.cloudSttInterim, { channel, text })
+        },
+        onError: (message) => {
+          win?.webContents.send(IPC.cloudSttError, { message })
+        }
+      }
+    )
+    return result
+  })
+  ipcMain.handle(IPC.cloudSttStop, (e) => {
+    assertMainWindow(e)
+    stopCloudSttLive()
+  })
+  ipcMain.handle(IPC.cloudSttPush, (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return
+    if (!takeHotPath('asr-feed')) return
+    const p = payload as { samples?: unknown; speaker?: unknown }
+    if (!(p?.samples instanceof Float32Array)) return
+    if (p.samples.length > 16_000 * 30) return
+    if (p.speaker !== 'you' && p.speaker !== 'them') return
+    pushCloudSttPcm(p.speaker, p.samples)
+  })
+  ipcMain.handle(IPC.cloudSttUpdateLang, (e, payload: unknown) => {
+    assertMainWindow(e)
+    const p = (payload ?? {}) as { asrLanguage?: string; pinnedLang?: string | null }
+    updateCloudSttLiveLanguage(p.asrLanguage, p.pinnedLang)
   })
 
   // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3) — the Whisper engine's speaker-embedding tap.
