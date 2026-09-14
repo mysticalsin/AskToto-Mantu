@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
+import type WebSocket from 'ws'
 import { CloudSttLiveSession } from './live-session'
 import { CLOUD_STT_CREDENTIALS_MISSING } from './credentials'
 import { mapCloudFinalsToLines } from '../../shared/cloud-stt-line-map'
@@ -44,7 +45,7 @@ describe('CloudSttLiveSession', () => {
         cloudflareToken: '',
         cloudflareBaseUrl: 'https://metis-ai.example.workers.dev/v1',
         gatewayId: null,
-        WebSocketImpl: MockWs as unknown as typeof import('ws')
+        WebSocketImpl: MockWs as unknown as typeof WebSocket
       },
       { onFinal }
     )
@@ -68,7 +69,7 @@ describe('CloudSttLiveSession', () => {
         cloudflareBaseUrl:
           'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
         gatewayId: 'gw1',
-        WebSocketImpl: MockWs as unknown as typeof import('ws')
+        WebSocketImpl: MockWs as unknown as typeof WebSocket
       },
       { onFinal: (l) => finals.push(l) }
     )
