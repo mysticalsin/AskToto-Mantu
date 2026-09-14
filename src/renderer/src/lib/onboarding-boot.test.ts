@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   isOnboardingBoot,
+  exclusiveOnboardingFlag,
   provisionalOnboardingSettings,
   ONBOARDING_BOOT_POSTER_HREF
 } from './onboarding-boot'
@@ -80,5 +81,31 @@ describe('FITO-185-J electron file paths', () => {
     const geo = readFileSync(join(__dirname, '../../../main/island/geometry.ts'), 'utf8')
     expect(geo).toMatch(/EXCLUSIVE_ONBOARDING_BACKGROUND = '#05010A'/)
     expect(geo).toMatch(/if \(onboardingLive\)[\s\S]*?transparent: false/)
+  })
+})
+
+describe('FITO-185-N exclusiveOnboarding flag', () => {
+  it('reads exclusiveOnboarding=1 from search', () => {
+    expect(exclusiveOnboardingFlag('?exclusiveOnboarding=1')).toBe(true)
+    expect(exclusiveOnboardingFlag('?shotbg=dark')).toBe(false)
+    expect(exclusiveOnboardingFlag('')).toBe(false)
+  })
+
+  it('forces Act 1 while exclusive flag set even if settings claim done', () => {
+    const done = { ...provisionalOnboardingSettings(), onboardingDone: true }
+    expect(isOnboardingBoot(done, '?exclusiveOnboarding=1')).toBe(true)
+  })
+
+  it('releases Act 1 when done and flag absent (post-recreate)', () => {
+    const done = { ...provisionalOnboardingSettings(), onboardingDone: true }
+    expect(isOnboardingBoot(done, '')).toBe(false)
+  })
+
+  it('main createWindow stamps exclusiveOnboarding on packaged file URL too', () => {
+    const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
+    expect(main).toMatch(/exclusiveOnboarding/)
+    expect(main).toMatch(/onboardingExclusiveLive\(\)\) params\.set\('exclusiveOnboarding'/)
+    // Must not be gated only inside ELECTRON_RENDERER_URL branch.
+    expect(main).toMatch(/else if \(qs\)/)
   })
 })

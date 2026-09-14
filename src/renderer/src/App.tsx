@@ -3516,6 +3516,7 @@ export function App(): JSX.Element {
 
   // Post-onboarding only: until auth (and optional license) resolve, slim loading strip — never an
   // interactive bar. DEMO bypasses so screenshots still work. Exclusive Act 1 never reaches here.
+  // FITO-185-N: isOnboardingBoot already ORs ?exclusiveOnboarding=1 from main — belt keep strip off.
   if (DEMO == null && !isOnboardingBoot(settings) && (auth.status == null || licenseGatePending)) {
     // Boot load exhausted its retries without ever resolving (persistent getSettings/authStatus failure).
     // Show an actionable card with a Reload instead of spinning forever.
