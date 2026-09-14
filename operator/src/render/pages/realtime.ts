@@ -15,7 +15,6 @@ function renderPeopleStrip(rows: ProfileRow[], liveCount: number): string {
     return '<div class="empty">No seats yet. A heartbeat writes city from request.cf and lands here.</div>'
   }
   const body = rows
-    .slice(0, 12)
     .map((r) => {
       return `<div class="people-row" data-people-row data-live="${r.live ? '1' : '0'}" data-city="${esc(r.city || '')}">
         ${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}
@@ -53,10 +52,11 @@ function renderEvents(events: ConsoleEvent[], now: number): string {
     .join('')
 }
 
-function renderWorldMap(data: DashboardPayload): string {
+function renderWorldMap(data: DashboardPayload, theme: 'light' | 'dark' | 'system'): string {
+  const mapTheme = theme === 'dark' ? 'dark' : 'light'
   return `<article class="card rt-world" data-world-map>
     <div class="kpi-top"><p class="eyebrow">WorldMap</p><span class="live" data-world-live>LIVE ${data.roi.liveSeats}</span></div>
-    <div id="map-root" data-geo-widget>${shoeyWorld(data.map.countries, data.map.dots)}</div>
+    <div id="map-root" data-geo-widget>${shoeyWorld(data.map.countries, data.map.dots, mapTheme)}</div>
   </article>`
 }
 
@@ -119,11 +119,11 @@ function renderRealtimeGeo(data: DashboardPayload): string {
   </article>`
 }
 
-export function renderRealtime(data: DashboardPayload, _ctx: RenderCtx): string {
+export function renderRealtime(data: DashboardPayload, ctx: RenderCtx): string {
   const k = data.kpis
   const liveSeats = data.profiles.filter((p) => p.live)
-  return `${pageHeader({ title: 'Realtime', subtitle: 'Live seats, events and the world map, refreshed continuously.' })}
-    ${renderWorldMap(data)}
+  return `${pageHeader({ title: 'Realtime', subtitle: 'Live seats, the world map and events, refreshed every 5 seconds.' })}
+    ${renderWorldMap(data, ctx.theme)}
     <div class="rt-live" data-rt-live-strip>
       ${kpiCard({ title: 'Seats 30m', value: String(data.roi.seats30m), sub: 'unique seats last 30 min', spark: sparklineLine(k.liveSeries) })}
       ${kpiCard({ title: 'Live', value: String(data.roi.liveSeats), sub: 'seats online now · heartbeat &lt; 2 min', pill: '<span class="live">live</span>', spark: '' })}
@@ -138,13 +138,11 @@ export function renderRealtime(data: DashboardPayload, _ctx: RenderCtx): string 
     </div>
     ${renderRealtimeGeo(data)}
     <article class="card pad-b10" data-live-presence>
-      <p class="eyebrow">${liveSeats.length ? 'Live people' : 'People'}</p>
+      <p class="eyebrow">People · ${data.profiles.length} seats${liveSeats.length ? ` · ${liveSeats.length} live` : ''}</p>
       ${
-        liveSeats.length
-          ? renderPeopleStrip(liveSeats, liveSeats.length)
-          : data.profiles.length
-            ? renderPeopleStrip(data.profiles, 0)
-            : '<div class="empty">No seats yet. Heartbeat writes city from request.cf.</div>'
+        data.profiles.length
+          ? renderPeopleStrip(data.profiles, liveSeats.length)
+          : '<div class="empty">No seats yet. Heartbeat writes city from request.cf.</div>'
       }
     </article>`
 }

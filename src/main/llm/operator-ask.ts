@@ -58,12 +58,18 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
     ...opts.req.history.map((t) => ({ role: t.role, content: t.content })),
     { role: 'user' as const, content: userText(opts.req) }
   ]
+  // Enterprise-live F01: pass Portal tier so Worker does not hard-remap Pro→Flash.
+  const askTier =
+    (!image && (model.includes('deepseek-v4-pro') || (opts as { deep?: boolean }).deep === true))
+      ? 'deep'
+      : 'base'
   const body = JSON.stringify({
     provider: opts.providerId,
     model,
     system: opts.system,
     messages,
     ...(image ? { mode: 'vision', image } : {}),
+    tier: askTier,
     temperature: opts.temperature,
     maxTokens: opts.req.mode === 'recap' ? 8192 : 4096
   })
