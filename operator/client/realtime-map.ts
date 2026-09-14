@@ -58,20 +58,45 @@ export function initRealtimeMap(): void {
   })
 }
 
-/** Theme restyle for realtime land without swapping in shoey-world SVG. */
+/** Theme restyle for realtime ocean/land/grid/labels without swapping SVG. */
 export function paintRealtimeMapTheme(): void {
   var root = document.getElementById('map-root')
   if (!root) return
   if (!root.querySelector('svg.rt-map-svg')) return
-  var dark =
-    document.documentElement.getAttribute('data-theme') === 'dark' ||
-    (document.documentElement.getAttribute('data-theme') == null &&
-      window.matchMedia &&
-      window.matchMedia('(prefers-color-scheme: dark)').matches)
-  var land = dark ? '#2a2a2e' : 'rgb(240,240,240)'
-  var stroke = dark ? '#3f3f46' : 'rgb(153,153,153)'
+  var mapThemeAttr = root.getAttribute('data-map-theme') || ''
+  var docTheme = document.documentElement.getAttribute('data-theme')
+  var prefersDark =
+    !window.matchMedia || window.matchMedia('(prefers-color-scheme: dark)').matches
+  var dark = true
+  if (docTheme === 'light' || mapThemeAttr === 'light') dark = false
+  else if (docTheme === 'dark' || mapThemeAttr === 'dark') dark = true
+  else dark = prefersDark // system / unset: follow OS, default dark when unknown
+  var land = dark ? '#1f1830' : 'rgb(240,240,240)'
+  var stroke = dark ? '#3a2f52' : 'rgb(153,153,153)'
+  var ocean = dark ? '#120e1c' : '#ffffff'
+  var grid = dark ? 'rgba(37, 29, 54, 0.85)' : 'rgba(23, 8, 38, 0.08)'
+  var label = dark ? '#f3eefb' : '#170826'
+  var pillBg = dark ? 'rgba(26, 21, 38, 0.92)' : 'rgba(255,255,255,0.92)'
+  var pillBorder = dark ? 'rgba(255,255,255,0.14)' : 'rgba(23, 8, 38, 0.12)'
+  var pillFg = dark ? '#fafafa' : '#170826'
+  root.querySelectorAll<SVGRectElement>('rect.world-ocean').forEach(function (r) {
+    r.setAttribute('fill', ocean)
+  })
+  root.querySelectorAll<SVGLineElement>('line.rt-map-grid').forEach(function (l) {
+    l.setAttribute('stroke', grid)
+  })
   root.querySelectorAll<SVGPathElement>('path.world-land').forEach(function (p) {
     p.setAttribute('fill', land)
     p.setAttribute('stroke', stroke)
   })
+  root.querySelectorAll<SVGTextElement>('text.rt-pin-label').forEach(function (t) {
+    t.setAttribute('fill', label)
+  })
+  root.querySelectorAll<HTMLElement>('.rt-country-pill').forEach(function (el) {
+    el.style.background = pillBg
+    el.style.borderColor = pillBorder
+    el.style.color = pillFg
+  })
+  var svg = root.querySelector('svg.rt-map-svg')
+  if (svg) svg.setAttribute('data-map-theme', dark ? 'dark' : 'light')
 }

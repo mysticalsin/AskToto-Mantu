@@ -7,6 +7,7 @@ import { shoeyWorld, sparklineLine } from '../../charts'
 import type { ConsoleEvent, DashboardPayload, ProfileRow } from '../../dashboard'
 import { looksLikeSecret } from '../../redact'
 import { formatAvgDuration, geoCountryRollup } from '../../realtime-geo'
+import { isFreshLiveEvent, resolveMapTheme } from '../../theme-preference'
 import { esc, pageHeader, relativeTime as ago, type RenderCtx } from '../index'
 import { field, geoBar, kpiCard, MISSING } from './_shared'
 
@@ -53,11 +54,19 @@ function renderEvents(events: ConsoleEvent[], now: number): string {
 }
 
 function renderWorldMap(data: DashboardPayload, theme: 'light' | 'dark' | 'system'): string {
-  const mapTheme = theme === 'dark' ? 'dark' : 'light'
-  return `<article class="card rt-world" data-world-map>
+  // SSR land: dark for dark + system (never flash light land on a Dark card). Client
+  // paintRealtimeMapTheme still honors prefers-color-scheme when data-map-theme=system.
+  const mapTheme = resolveMapTheme(theme)
+  const mapThemeAttr = theme === 'system' ? 'system' : mapTheme
+  return `<article class="card rt-world" data-world-map data-map-theme="${mapThemeAttr}">
     <div class="kpi-top"><p class="eyebrow">WorldMap</p><span class="live" data-world-live>LIVE ${data.roi.liveSeats}</span></div>
-    <div id="map-root" data-geo-widget>${shoeyWorld(data.map.countries, data.map.dots, mapTheme)}</div>
+    <div id="map-root" data-geo-widget data-map-theme="${mapThemeAttr}">${shoeyWorld(data.map.countries, data.map.dots, mapTheme)}</div>
   </article>`
+}
+
+/** Fresh heartbeats and asks for the LIVE EVENTS strip only. Stale rows stay on Events. */
+export function liveStripEvents(events: ConsoleEvent[], now: number): ConsoleEvent[] {
+  return events.filter((e) => isFreshLiveEvent(e.ts, now)).slice(0, 30)
 }
 
 function renderRealtimeGeo(data: DashboardPayload): string {
@@ -122,18 +131,18 @@ function renderRealtimeGeo(data: DashboardPayload): string {
 export function renderRealtime(data: DashboardPayload, ctx: RenderCtx): string {
   const k = data.kpis
   const liveSeats = data.profiles.filter((p) => p.live)
+  const freshEvents = liveStripEvents(data.events, data.now)
+  const liveEventsBody = freshEvents.length
+    ? `<div id="rt-stream">${renderEvents(freshEvents, data.now)}</div>`
+    : '<div class="empty">No live events in the last 30 min. A fresh heartbeat lands here.</div>'
   return `${pageHeader({ title: 'Realtime', subtitle: 'Live seats, the world map and events, refreshed every 5 seconds.' })}
     ${renderWorldMap(data, ctx.theme)}
     <div class="rt-live" data-rt-live-strip>
       ${kpiCard({ title: 'Seats 30m', value: String(data.roi.seats30m), sub: 'unique seats last 30 min', spark: sparklineLine(k.liveSeries) })}
       ${kpiCard({ title: 'Live', value: String(data.roi.liveSeats), sub: 'seats online now · heartbeat &lt; 2 min', pill: '<span class="live">live</span>', spark: '' })}
       <article class="card activity-feed pad-b10" data-live-feed>
-        <p class="eyebrow">Live events</p>
-        ${
-          data.events.length
-            ? `<div id="rt-stream">${renderEvents(data.events.slice(0, 30), data.now)}</div>`
-            : '<div class="empty">No live events yet. A heartbeat writes city and lands here.</div>'
-        }
+        <p class="eyebrow">Live events · ${freshEvents.length}</p>
+        ${liveEventsBody}
       </article>
     </div>
     ${renderRealtimeGeo(data)}
