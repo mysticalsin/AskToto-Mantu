@@ -56,7 +56,7 @@ describe('KineticGrid release checklist', () => {
   it('2 exclusive onboarding cannot be dragged off-screen', () => {
     const gateStart = app.indexOf('onboardingBoot && DEMO == null')
     const gate = app.slice(gateStart, app.indexOf('Post-onboarding only:', gateStart))
-    expect(gate).toMatch(/onboard-stage onboard-exclusive-lock/)
+    expect(gate).toMatch(/onboard-stage(?:\s+onboard-stage--portal-open)?\s+onboard-exclusive-lock/)
     expect(gate).not.toMatch(/windowDrag/)
     expect(index).toMatch(/movable: !onboardingLive/)
     expect(index).toMatch(/function moveBy[\s\S]{0,200}if \(onboardingExclusiveLive\(\)\) return/)

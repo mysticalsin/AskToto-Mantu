@@ -143,3 +143,12 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
   })
 
 })
+
+describe('FITO-185-L poster paint contracts', () => {
+  it('ONBOARDING_HERO_POSTER_SRC is a Vite asset import; poster img always in OnboardingHeroVideo', () => {
+    const heroSrc = readFileSync(join(__dirname, './onboarding-hero-video.ts'), 'utf8')
+    expect(heroSrc).toMatch(/import localPosterUrl from '\.\.\/assets\/onboarding-hero-poster\.jpg'/)
+    expect(heroSrc).toMatch(/export const ONBOARDING_HERO_POSTER_SRC = localPosterUrl/)
+    expect(experience).toMatch(/<img className="onboard-hero-poster" src=\{ONBOARDING_HERO_POSTER_SRC\}/)
+  })
+})

@@ -32,7 +32,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useCallback, useEffect, useId, useRef, useState, lazy, Suspense, type Ref } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, lazy, Suspense, type Ref, useLayoutEffect } from 'react'
 import { bundleFailureUserMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
@@ -97,7 +97,7 @@ import {
   type OnboardingCompletionState
 } from '../lib/onboarding-completion'
 import { createOnboardingMusicBed, haltAllOnboardingAudio, lockOnboardingAudio } from '../lib/onboarding-music'
-import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
+import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand, requestOnboardingPortalOpen } from '../lib/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
   TELL_THE_ROOM_LEAD,
@@ -282,6 +282,9 @@ function OnboardingHeroVideo({
 }
 
 function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
+  useLayoutEffect(() => {
+    requestOnboardingPortalOpen()
+  }, [])
   return (
     <>
       <div className="hero-welcome relative z-10 flex flex-col items-center gap-5">
@@ -938,14 +941,10 @@ export function OnboardingExperience({
     }
   }, [])
 
-  // Force portal mask fully open after the open animation so a stuck compositor cannot leave Act 1 black.
-  useEffect(() => {
-    const stage = document.querySelector('.onboard-stage')
-    if (!stage) return
-    const t = window.setTimeout(() => {
-      stage.classList.add('onboard-stage--portal-open')
-    }, 1400)
-    return () => clearTimeout(t)
+  // FITO-185-L: force portal mask open on Act 1 mount immediately — a closed 120×36 slit
+  // masks the lady+planet to invisible until animation completes (or stalls forever).
+  useLayoutEffect(() => {
+    requestOnboardingPortalOpen()
   }, [])
   const [scene, setScene] = useState<Scene>('hero')
   const [rows, setRows] = useState<SetupRow[]>([])

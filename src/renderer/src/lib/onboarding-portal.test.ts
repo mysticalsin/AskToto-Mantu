@@ -13,7 +13,8 @@ import {
   PORTAL_CLOSE_SAMPLES,
   PORTAL_OPEN_SAMPLES,
   closeOnboardingPortal,
-  onboardingPortalWaitMs
+  onboardingPortalWaitMs,
+  requestOnboardingPortalOpen
 } from './onboarding-portal'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
@@ -88,5 +89,27 @@ describe('closeOnboardingPortal call order', () => {
     const start = Date.now()
     await closeOnboardingPortal(true, true)
     expect(Date.now() - start).toBeLessThan(50)
+  })
+})
+
+describe('FITO-185-L portal-open on Act 1 first paint', () => {
+  it('App exclusive stage ships portal-open so the mask cannot hide the lady', () => {
+    const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
+    expect(app).toMatch(/onboard-stage onboard-stage--portal-open onboard-exclusive-lock/)
+    expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open/)
+    expect(css).toMatch(/mask-size:\s*280vmax 180vmax/)
+  })
+
+  it('HeroWelcome + Act1 mount call requestOnboardingPortalOpen immediately (no 1400ms race)', () => {
+    expect(experience).toMatch(/requestOnboardingPortalOpen/)
+    expect(experience).toMatch(/function HeroWelcome[\s\S]*?useLayoutEffect\(\(\) => \{[\s\S]*?requestOnboardingPortalOpen\(\)/)
+    expect(experience).not.toMatch(/setTimeout\([\s\S]*?onboard-stage--portal-open[\s\S]*?1400\)/)
+    expect(portalSrc).toMatch(/export function requestOnboardingPortalOpen/)
+    expect(requestOnboardingPortalOpen).toBeTypeOf('function')
+  })
+
+  it('hero poster stays opacity 1 above the #05010A stage slab', () => {
+    expect(css).toMatch(/\.onboard-hero-poster\s*\{[\s\S]*?opacity:\s*1/)
+    expect(css).toMatch(/\.onboard-hero-poster\s*\{[\s\S]*?z-index:\s*1/)
   })
 })

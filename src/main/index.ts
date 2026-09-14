@@ -34,6 +34,7 @@ const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindRendererReadiness } from './renderer-readiness'
+import { bindAskTotoShot } from './asktoto-shot'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
   IPC,
@@ -2281,109 +2282,8 @@ function createWindow(): void {
     if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
     else win.loadFile(join(__dirname, '../renderer/index.html'))
   })
-  // Dev-only: screenshot ONLY this window (no desktop) for verification. Privacy-safe.
-  // FITO-185-K: dump DOM JSON + capturePage with errors — macOS screencapture of simpleFullScreen
-  // exclusive is often pure black even when Act 1 paints; capturePage/DOM are the honest feel proof.
-  if (process.env.ASKTOTO_SHOT) {
-    const shotPath = process.env.ASKTOTO_SHOT as string
-    const dumpDomAndCapture = (label: string): void => {
-      if (!win || win.isDestroyed()) return
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const fs = require('node:fs') as typeof import('node:fs')
-      const expr =
-        "(() => { const bed = document.getElementById('boot-bed'); const root = document.getElementById('root');" +
-        ' const bedStyle = bed ? getComputedStyle(bed) : null; return {' +
-        ` label: ${JSON.stringify(label)},` +
-        ' readyState: document.readyState, hasBed: !!bed,' +
-        ' bed: bed && bedStyle ? { w: bed.offsetWidth, h: bed.offsetHeight, display: bedStyle.display,' +
-        ' opacity: bedStyle.opacity, visibility: bedStyle.visibility, bg: bedStyle.backgroundColor,' +
-        ' bgImage: bedStyle.backgroundImage.slice(0, 240) } : null,' +
-        ' rootChildren: root ? root.childElementCount : -1,' +
-        ' rootHTML: root ? root.innerHTML.slice(0, 1200) : null,' +
-        " bodyText: (document.body.innerText || '').slice(0, 800)," +
-        " starting: /Starting\\s+M/i.test(document.body.innerText || '')," +
-        " onboard: !!document.querySelector('.onboard-stage, .onboard-exclusive-lock, [class*=onboard]')," +
-        " videos: [...document.querySelectorAll('video')].map(v => ({ src: (v.currentSrc || '').slice(-120)," +
-        " poster: (v.poster || '').slice(-120), w: v.videoWidth, h: v.videoHeight, ready: v.readyState, paused: v.paused }))," +
-        ' imgs: [...document.images].slice(0, 12).map(i => ({ src: (i.currentSrc || i.src || "").slice(-120),' +
-        ' w: i.naturalWidth, h: i.naturalHeight, complete: i.complete })),' +
-        ' inner: { w: innerWidth, h: innerHeight } }; })()'
-      win.webContents
-        .executeJavaScript(expr, true)
-        .then((dom: unknown) => {
-          try {
-            fs.writeFileSync(`${shotPath}.${label}.dom.json`, JSON.stringify(dom, null, 2))
-          } catch (e) {
-            try {
-              fs.writeFileSync(`${shotPath}.err.txt`, `dom-write:${label}:${String(e)}\n`, { flag: 'a' })
-            } catch {
-              /* ignore */
-            }
-          }
-        })
-        .catch((e: unknown) => {
-          try {
-            fs.writeFileSync(`${shotPath}.err.txt`, `dom:${label}:${String(e)}\n`, { flag: 'a' })
-          } catch {
-            /* ignore */
-          }
-        })
-      win.webContents
-        .capturePage()
-        .then((img) => {
-          try {
-            const labeled = shotPath.replace(/\.png$/i, '') + `-${label}.png`
-            fs.writeFileSync(labeled, img.toPNG())
-            if (label === 't45') fs.writeFileSync(shotPath, img.toPNG())
-          } catch (e) {
-            try {
-              fs.writeFileSync(`${shotPath}.err.txt`, `write:${label}:${String(e)}\n`, { flag: 'a' })
-            } catch {
-              /* ignore */
-            }
-          }
-        })
-        .catch((e: unknown) => {
-          try {
-            fs.writeFileSync(`${shotPath}.err.txt`, `capture:${label}:${String(e)}\n`, { flag: 'a' })
-          } catch {
-            /* ignore */
-          }
-        })
-    }
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      require('node:fs').writeFileSync(`${shotPath}.registered.txt`, `shot-registered ${new Date().toISOString()}\n`)
-    } catch {
-      /* ignore */
-    }
-    const onLoaded = (): void => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        require('node:fs').writeFileSync(`${shotPath}.loaded.txt`, `did-finish-load ${new Date().toISOString()}\n`)
-      } catch {
-        /* ignore */
-      }
-      dumpDomAndCapture('t0')
-      setTimeout(() => dumpDomAndCapture('t15'), 1500)
-      setTimeout(() => dumpDomAndCapture('t45'), 4500)
-    }
-    if (!win.webContents.isLoading() && win.webContents.getURL()) {
-      onLoaded()
-    } else {
-      win.webContents.once('did-finish-load', onLoaded)
-    }
-    win.once('ready-to-show', () => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        require('node:fs').writeFileSync(`${shotPath}.ready.txt`, `ready-to-show ${new Date().toISOString()}\n`)
-      } catch {
-        /* ignore */
-      }
-      dumpDomAndCapture('ready')
-    })
-  }
-
+  // FITO-185-L: ASKTOTO_SHOT binds AFTER rendererUrl is known (see below) — never dump on
+  // about:blank / ready-to-show / early isLoading races (FITO-185-K / K2).
   let rendererUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href
   if (process.env['ELECTRON_RENDERER_URL']) {
     const params = new URLSearchParams()
@@ -2392,6 +2292,14 @@ function createWindow(): void {
     if (process.env.ASKTOTO_SHOT) params.set('shotbg', process.env.ASKTOTO_SHOTBG || 'dark')
     const qs = params.toString()
     rendererUrl = process.env['ELECTRON_RENDERER_URL'] + (qs ? `?${qs}` : '')
+  }
+  // FITO-185-L: optional feel shot — only after did-finish-load of the real index.html,
+  // delay ≥2s, then capturePage + DOM. Never blocks or replaces loadURL below.
+  if (process.env.ASKTOTO_SHOT) {
+    bindAskTotoShot(win.webContents, {
+      shotPath: process.env.ASKTOTO_SHOT,
+      expectedUrl: rendererUrl
+    })
   }
   // MQA-318: opt-in release diagnostics only. Preserve app.started's boot semantics and never
   // equate entering createWindow with a loaded, responsive renderer. Register before navigation.

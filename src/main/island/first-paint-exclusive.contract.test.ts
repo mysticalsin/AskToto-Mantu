@@ -140,7 +140,7 @@ describe('exclusive onboarding cannot be dragged off-screen', () => {
       app.indexOf('Onboarding gate FIRST'),
       app.indexOf('Post-onboarding only:')
     )
-    expect(gate).toMatch(/className="onboard-stage onboard-exclusive-lock"/)
+    expect(gate).toMatch(/className="onboard-stage(?:\s+onboard-stage--portal-open)?\s+onboard-exclusive-lock"/)
     expect(gate).toMatch(/onboard-exclusive-lock/)
     expect(gate).not.toMatch(/windowDrag/)
     expect(gate).not.toMatch(/onPointerDown/)

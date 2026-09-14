@@ -852,6 +852,14 @@ input::placeholder {
   object-fit: cover;
   object-position: center;
 }
+/* Poster must sit above the #05010A stage slab; never invisible under a closed portal alone. */
+.onboard-hero-poster {
+  z-index: 1;
+  opacity: 1;
+}
+.onboard-hero-video video {
+  z-index: 2;
+}
 .onboard-hero-video video {
   animation: onboard-hero-kenburns 28s ease-in-out infinite alternate;
   /* No CSS filter on the <video> — compositor-only motion budget. */

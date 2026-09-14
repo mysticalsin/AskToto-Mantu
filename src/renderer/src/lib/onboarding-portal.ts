@@ -145,6 +145,11 @@ export function requestBarLand(): void {
   }, ONBOARDING_BAR_LAND_MS + 80)
 }
 
+export function requestOnboardingPortalOpen(): void {
+  if (typeof document === 'undefined') return
+  document.querySelector('.onboard-stage')?.classList.add('onboard-stage--portal-open')
+}
+
 export function requestOnboardingPortalClose(): void {
   if (typeof document === 'undefined') return
   document.querySelector('.onboard-stage')?.classList.add('onboard-stage--portal-close')
