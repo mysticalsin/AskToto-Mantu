@@ -9,7 +9,6 @@
  * DPR is at least 2. Soft disc sprites, not square pixels. No gray box. No Métis M.
  */
 
-import type { OrbMood } from './bar-pill-orb'
 import {
   AdditiveBlending,
   BufferAttribute,
@@ -28,8 +27,13 @@ import {
 } from 'three'
 
 export const JARVIS_ORB_COLOR = 0x4ca8e8
-export const JARVIS_ORB_STATES = ['idle', 'listening', 'thinking', 'speaking'] as const
-export type JarvisOrbState = (typeof JARVIS_ORB_STATES)[number]
+export {
+  JARVIS_ORB_STATES,
+  isJarvisOrbState,
+  resolveJarvisOrbState,
+  type JarvisOrbState
+} from './jarvis-orb-state'
+import type { JarvisOrbState } from './jarvis-orb-state'
 
 /** orb.ts fullscreen count. The 41 pill must thin this. Never crop 2000 into 41px. */
 export const JARVIS_PARTICLE_COUNT = 2000
@@ -64,17 +68,6 @@ export const JARVIS_STATE_TARGET: Record<JarvisOrbState, JarvisStateTarget> = {
   speaking: { radius: 18, speed: 0.2, bright: 0.7, size: 0.4, lineAmount: 0.8, electronRate: 0 }
 }
 
-export function isJarvisOrbState(v: unknown): v is JarvisOrbState {
-  return v === 'idle' || v === 'listening' || v === 'thinking' || v === 'speaking'
-}
-
-export function resolveJarvisOrbState(input: { mood: OrbMood; listening?: boolean }): JarvisOrbState {
-  if (input.listening) return 'listening'
-  if (input.mood === 'thinking' || input.mood === 'factcheck' || input.mood === 'connecting') {
-    return 'thinking'
-  }
-  return 'idle'
-}
 
 /** orb.ts seed: random spherical cloud, not a fibonacci cage. */
 export function seedJarvisCloud(

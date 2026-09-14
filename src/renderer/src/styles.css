@@ -873,6 +873,22 @@ input::placeholder {
   background: radial-gradient(1200px 700px at 50% 40%, transparent 42%, rgba(5, 1, 10, 0.42) 100%);
 }
 
+/* Act 1: keep poster visible until the bed has a decoded frame (no black video cover). */
+.onboard-hero-video video.onboard-hero-video--pending {
+  opacity: 0;
+}
+.onboard-hero-video video.onboard-hero-video--ready {
+  opacity: 1;
+  transition: opacity 280ms ease;
+}
+
+/* If the portal mask animation stalls on a busy GPU, force the slit fully open. */
+.onboard-stage.onboard-stage--portal-open {
+  animation: none;
+  -webkit-mask-size: 280vmax 180vmax;
+  mask-size: 280vmax 180vmax;
+}
+
 /* Liquid glass — backdrop blur, inset highlight, gradient-border ::before. Technique only. */
 .onboard-glass {
   position: relative;
