@@ -67,6 +67,8 @@ import {
   type OverlaySpring
 } from './lib/overlay-motion'
 import { useListen, playListenChime } from './lib/listen'
+import { shouldUseCloudSttEngine } from '@shared/cloud-stt-provider'
+import { resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { transcriptToText, recapPersistAction, type RecapPersistTarget } from './lib/transcript'
 import {
   OwnedOperationGate,
@@ -338,7 +340,8 @@ export function App(): JSX.Element {
     // MQA-270 (B7): lets the whisper prewarm skip itself on parakeet/apple installs — see useListen.
     settings?.asrEngine,
     settings?.asrQuality ?? 'best',
-    settings?.enterpriseLive
+    settings?.enterpriseLive,
+    settings?.cloudSttProvider
   )
   // Surface a best-quality ASR downgrade (listen.qualityDegraded — WebGPU/large model unavailable) to Settings, mirroring the
   // onEngineFallback → asrLastFallbackAt wiring just above. Patches exactly once per transition to true —
@@ -2067,13 +2070,17 @@ export function App(): JSX.Element {
     // (see that state's own comment for why: it's a saved preference, not per-session state).
     setTranscriptShown(settings?.showLiveTranscript ?? false)
     if (settings?.playListenChime ?? true) playListenChime()
-    void listen.start(
-      settings?.audioSource ?? 'both',
-      settings?.asrQuality ?? 'best',
-      settings?.asrEngine ?? 'parakeet',
-      settings?.asrLanguage ?? 'auto',
-      meetingStartRef.current
-    )
+    {
+      const profile = resolveEnterpriseLiveProfile(settings?.enterpriseLive)
+      const useCloud = shouldUseCloudSttEngine(profile, settings?.cloudSttProvider)
+      void listen.start(
+        settings?.audioSource ?? 'both',
+        settings?.asrQuality ?? 'best',
+        useCloud ? 'cloud' : (settings?.asrEngine ?? 'parakeet'),
+        settings?.asrLanguage ?? 'auto',
+        meetingStartRef.current
+      )
+    }
   }, [
     listen.listening,
     listen.lines,
@@ -2088,6 +2095,8 @@ export function App(): JSX.Element {
     settings?.asrQuality,
     settings?.asrEngine,
     settings?.asrLanguage,
+    settings?.enterpriseLive,
+    settings?.cloudSttProvider,
     settings?.playListenChime,
     settings?.showLiveTranscript,
     settings?.operatorUrl,

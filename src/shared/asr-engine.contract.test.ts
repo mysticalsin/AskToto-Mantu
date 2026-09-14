@@ -14,10 +14,10 @@ describe('ASR engine fallback and fresh-setup contracts', () => {
     expect(SettingsSchema.parse(rest).asrEngine).toBe('parakeet')
     expect(read('src/renderer/src/App.tsx')).toMatch(/settings\?\.asrEngine \?\? 'parakeet'/)
     expect(read('src/renderer/src/lib/listen.ts')).toMatch(
-      /useRef<'whisper' \| 'parakeet' \| 'apple'>\('parakeet'\)/
+      /useRef<'whisper' \| 'parakeet' \| 'apple' \| 'cloud'>\('parakeet'\)/
     )
     expect(read('src/renderer/src/lib/listen.ts')).toMatch(
-      /engine: 'whisper' \| 'parakeet' \| 'apple' = 'parakeet'/
+      /engine: 'whisper' \| 'parakeet' \| 'apple' \| 'cloud' = 'parakeet'/
     )
   })
 

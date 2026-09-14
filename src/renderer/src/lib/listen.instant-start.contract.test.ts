@@ -131,3 +131,14 @@ describe('enterprise-live cloud STT language (FR Listen)', () => {
     expect(SRC).toMatch(/export function cloudSttLanguageForListen/)
   })
 })
+
+
+describe('enterprise-live cloud engine path', () => {
+  it('starts a cloud engine branch without booting Whisper/Parakeet', () => {
+    expect(startBody).toMatch(/if \(engine === 'cloud'\)/)
+    expect(startBody).toMatch(/cloud STT session planned/)
+    expect(startBody).toMatch(/shouldUseCloudSttEngine/)
+    expect(APP).toMatch(/shouldUseCloudSttEngine/)
+    expect(APP).toMatch(/useCloud \? 'cloud'/)
+  })
+})

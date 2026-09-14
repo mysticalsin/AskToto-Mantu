@@ -1134,6 +1134,13 @@ export const BaseSettingsSchema = z.object({
       summaryOnly: z.boolean().default(false)
     })
     .default({ managed: false, inferenceMode: 'legacy', summaryOnly: false }),
+  /**
+   * Cloud speech provider for managed enterprise-live Listen.
+   * Under CLOUD_ONLY, Settings + Listen treat unconfigured as Cloudflare Nova-3
+   * (see shared/cloud-stt-provider.ts). Soniox is selectable when approved.
+   * Legacy profiles keep on-device asrEngine; this field stays unconfigured.
+   */
+  cloudSttProvider: z.enum(['cloudflare-nova3', 'soniox', 'unconfigured']).default('unconfigured'),
   // Spoken-language hint for transcription: 'auto' (per-window detect) or a language display name from
   // Settings' LANGUAGE_OPTIONS ('Portuguese', …). Pins Whisper's decoder and Apple Speech's recognizer
   // locale; Parakeet always auto-detects. Exists because per-window auto-detect on the compact bundled
@@ -1645,6 +1652,7 @@ export const DEFAULT_SETTINGS: Settings = {
   asrQuality: 'best',
   asrEngine: 'parakeet',
   enterpriseLive: { managed: false, inferenceMode: 'legacy', summaryOnly: false },
+  cloudSttProvider: 'unconfigured',
   asrLanguage: 'auto',
   asrLastFallbackAt: null,
   asrWebgpuFallbackAt: null,
