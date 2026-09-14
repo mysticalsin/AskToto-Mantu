@@ -38,6 +38,9 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     expect(SPA_JS).toMatch(/data-iso=\\?"CA\\?"/)
     expect(SPA_JS).toMatch(/world-ocean/)
     expect(SPA_JS).toContain('ensureShoeyLand')
+    // Realtime Mission Control (#map-root svg.rt-map-svg) must skip paintShoeyMap.
+    expect(SPA_JS).toContain('svg.rt-map-svg')
+    expect(SPA_JS).toContain('initRealtimeMap')
     expect(SPA_WORLD_SVG).toContain('data-iso="CA"')
     expect(SPA_WORLD_SVG).toContain('path class="world-land"')
     expect((SPA_WORLD_SVG.match(/data-iso="/g) || []).length).toBeGreaterThan(50)

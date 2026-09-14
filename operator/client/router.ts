@@ -64,6 +64,8 @@ export function route(to?: string): void {
     initRealtimeMap()
     paintRealtimeMapTheme()
   } else if (id === 'overview') {
+    // Overview corner choropleth is not #map-root. paintShoeyMap no-ops when Realtime
+    // Mission Control svg.rt-map-svg owns #map-root (see client/map.ts).
     paintShoeyMap()
   }
   if (id === 'events') applyEventsFilter()
