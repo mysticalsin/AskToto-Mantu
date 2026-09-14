@@ -105,6 +105,7 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(create).toMatch(/show: !onboardingLive/)
     expect(create).toMatch(/overlay\.once\('ready-to-show'/)
     expect(create).toMatch(/revealExclusiveWhenPainted/)
+    expect(create).toContain('}, 2000)') // FITO-185-G-SHOW hard reveal
     expect(create).not.toMatch(/transparent:\s*true/)
     expect(create).not.toMatch(/backgroundColor: onboardingLive \? '#3A0B6B'/)
 

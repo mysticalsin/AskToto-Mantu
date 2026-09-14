@@ -17,6 +17,7 @@ import {
   Notification,
   clipboard,
   powerSaveBlocker,
+  powerMonitor,
   systemPreferences
 } from 'electron'
 import { join, basename, dirname, resolve } from 'node:path'
@@ -2330,6 +2331,18 @@ function createWindow(): void {
   }
   overlay.once('ready-to-show', revealExclusiveWhenPainted)
   overlay.webContents.once('did-finish-load', revealExclusiveWhenPainted)
+  // FITO-185-G-SHOW: if ready-to-show/did-finish-load never paint-reveal, hard-show at 2s so the
+  // user is not stuck staring at a forever-hidden exclusive window / Starting Métis strip.
+  if (onboardingLive) {
+    const revealTimer = setTimeout(() => {
+      try {
+        revealExclusiveWhenPainted()
+      } catch {
+        /* headless */
+      }
+    }, 2000)
+    revealTimer.unref?.()
+  }
   startOverlayCursorWatch()
   applyHideClickThrough()
   applyOverlaySurfaceChrome()
@@ -7970,6 +7983,20 @@ if (!app.requestSingleInstanceLock()) {
   const earlyDeath = beginBootWatch(app.getPath('userData'), app.getVersion())
   // FITO-185-B: keep the process unsuspended until the 15s endBootWatch / will-quit clear runs.
   setBootPowerSaveBlock(true)
+  // FITO-185-G-SHOW / G-TIMER: idempotent sentinel clear. Purpose of boot-incomplete is early death
+  // BEFORE ready; once createWindow+registerIpc completed we are past the kill zone. Brain work stays
+  // on the 15s timer (power-save still held until then). Multiple callers race safely.
+  let bootWatchClosed = false
+  const clearBootWatchOnce = (reason: string): void => {
+    if (bootWatchClosed) return
+    bootWatchClosed = true
+    try {
+      endBootWatch(app.getPath('userData'))
+      auditLog('app.boot.watch_cleared', { earlyDeath: Boolean(earlyDeath), reason })
+    } catch (e) {
+      mainLog.warn('[boot] clearBootWatchOnce failed:', e)
+    }
+  }
   if (earlyDeath) persistCrash('boot-early-death', describeEarlyDeath(earlyDeath), 'previous launch died before boot completed')
   // Never let an unhandled error crash the overlay silently — log to file, audit, write a crash dump, and
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
@@ -8298,6 +8325,8 @@ if (!app.requestSingleInstanceLock()) {
   runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   runStep('createWindow', createWindow)
+  // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
+  clearBootWatchOnce('createWindow')
   // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
   // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
   // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow: the
@@ -8312,6 +8341,15 @@ if (!app.requestSingleInstanceLock()) {
   runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
   runStep('initializeImportJobs', initializeImportJobs)
   runStep('registerIpc', registerIpc)
+  // FITO-185-G-TIMER: sync clear after registerIpc (past kill zone). Also setImmediate + unlock-screen
+  // so App Nap / locked-screen cannot leave boot-incomplete stuck when the 15s timer is deferred.
+  clearBootWatchOnce('registerIpc')
+  setImmediate(() => clearBootWatchOnce('setImmediate'))
+  try {
+    powerMonitor.on('unlock-screen', () => clearBootWatchOnce('unlock-screen'))
+  } catch (e) {
+    mainLog.warn('[boot] powerMonitor unlock-screen hook failed:', e)
+  }
   startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
   startOperatorOverlayPoll(() => getSettings())
   // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
@@ -8402,9 +8440,10 @@ if (!app.requestSingleInstanceLock()) {
         }
       }
     } finally {
+      // Power-save stays until here so the 15s brain step is not App-Napped; sentinel may already
+      // have been cleared earlier (G-SHOW/G-TIMER) — clearBootWatchOnce is idempotent.
       setBootPowerSaveBlock(false)
-      endBootWatch(app.getPath('userData'))
-      auditLog('app.boot.watch_cleared', { earlyDeath: Boolean(earlyDeath) })
+      clearBootWatchOnce('mqa-175')
     }
   }, 15_000)
 

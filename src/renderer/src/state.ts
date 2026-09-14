@@ -508,6 +508,28 @@ export function useAsk(): {
   )
 }
 
+
+/** Bound a boot IPC so a hung invoke (never settles) advances retries instead of spinning forever. */
+export const BOOT_IPC_TIMEOUT_MS = 2000
+/** Wall-clock budget for first-paint getSettings/authStatus before surfacing bootError. */
+export const BOOT_DEADLINE_MS = 15_000
+
+export function withBootIpcTimeout<T>(promise: Promise<T>, label: string, ms = BOOT_IPC_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        clearTimeout(timer)
+        reject(err)
+      }
+    )
+  })
+}
+
 export function useSettings(): {
   settings: PublicSettings | null
   bootError: string | null
@@ -542,23 +564,27 @@ export function useSettings(): {
     // "Starting Métis…" strip until `settings` is non-null, and the overlay is usually already
     // focused so the focus-refetch below never fires — without a retry a single boot reject strands
     // the app on that strip indefinitely. Retry with backoff until it resolves.
+    // FITO-185-G-TIMEOUT: also bound each invoke (~2s) so a HUNG IPC (never settles) advances
+    // retries, and stop by 15s wall so bootError surfaces instead of spinning forever.
     let cancelled = false
+    const deadline = Date.now() + BOOT_DEADLINE_MS
     void (async () => {
       for (let attempt = 0; !cancelled; attempt++) {
         try {
-          const s = await window.toto.getSettings()
+          const s = await withBootIpcTimeout(window.toto.getSettings(), 'getSettings')
           if (!cancelled) {
             setSettings(s)
             setBootError(null)
           }
           return
         } catch (e) {
-          if (attempt >= 20) {
+          if (attempt >= 20 || Date.now() >= deadline) {
             console.error('[boot] getSettings failed after retries; app cannot start', e)
             if (!cancelled) setBootError(e instanceof Error ? e.message : String(e))
             return
           }
-          await new Promise((r) => setTimeout(r, Math.min(150 * (attempt + 1), 1500)))
+          const wait = Math.min(150 * (attempt + 1), 1500, Math.max(0, deadline - Date.now()))
+          await new Promise((r) => setTimeout(r, wait))
         }
       }
     })()
@@ -650,23 +676,26 @@ export function useAuth(): {
     // (boot-order race); the ongoing poll only re-fires every AUTH_POLL_MS (5 min), so a single boot
     // reject would strand the app on the "Starting Métis…" strip (which waits for auth.status != null)
     // for minutes. Retry fast until it resolves, then hand off to the poll loop for freshness.
+    // FITO-185-G-TIMEOUT: race each invoke (~2s) + 15s wall so a hung authStatus cannot strand boot.
     let cancelled = false
+    const deadline = Date.now() + BOOT_DEADLINE_MS
     void (async () => {
       for (let attempt = 0; !cancelled; attempt++) {
         try {
-          const st = await window.toto.authStatus()
+          const st = await withBootIpcTimeout(window.toto.authStatus(), 'authStatus')
           if (!cancelled) {
             setStatus(st)
             setBootError(null)
           }
           return
         } catch (e) {
-          if (attempt >= 20) {
+          if (attempt >= 20 || Date.now() >= deadline) {
             console.error('[boot] authStatus failed after retries', e)
             if (!cancelled) setBootError(e instanceof Error ? e.message : String(e))
             return
           }
-          await new Promise((r) => setTimeout(r, Math.min(150 * (attempt + 1), 1500)))
+          const wait = Math.min(150 * (attempt + 1), 1500, Math.max(0, deadline - Date.now()))
+          await new Promise((r) => setTimeout(r, wait))
         }
       }
     })()
