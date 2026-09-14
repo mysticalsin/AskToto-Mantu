@@ -37,8 +37,10 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(css).toMatch(/#7f00da/)
   })
 
-  it('unmounts the hero video after Act 1 so it is not compositing later', () => {
-    expect(experience).toMatch(/\{scene === 'hero' && <OnboardingHeroVideo/)
+  it('keeps the hero video mounted through problem/reveal (FITO-185-P keep-alive)', () => {
+    // Unmounting on Next killed atmosphere — lady bed stays through problem|reveal.
+    expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
+    expect(experience).toMatch(/FITO-185-P: keep lady bed through problem\/reveal/)
     expect(experience).toMatch(/v\?\.pause\(\)/)
     const videoRule = css.slice(css.indexOf('.onboard-hero-video video'))
     const videoBlock = videoRule.slice(0, videoRule.indexOf('}', 8) + 1)
@@ -108,7 +110,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(src).not.toMatch(/await el\.play|queueMicrotask|requestAnimationFrame/)
     expect(src).not.toMatch(/function playOnboardingVideo[\s\S]*?setTimeout\(/)
 
-    expect(experience).toMatch(/onBegin=\{\(\) => \{\s*music\.start\(\)/)
+    expect(experience).toMatch(/onBegin=\{\(\) => \{[\s\S]*?music\.start\(\)/)
     expect(experience).toMatch(/setScene\('problem'\)/)
     expect(experience).toMatch(/onboard-mute/)
     expect(experience).not.toMatch(/prefersReducedMotion\(\)[\s\S]{0,80}onboard-mute/)

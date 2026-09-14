@@ -35,7 +35,7 @@ describe('KineticGrid release checklist', () => {
     expect(kinetic).toMatch(/shouldMountKineticGrid/)
     expect(kinetic).toMatch(/'problem'/)
     expect(experience).toMatch(/shouldMountKineticGrid\(scene\) && <KineticGrid/)
-    expect(experience).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
+    expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
     expect(experience).not.toMatch(/Skip the tour/)
     expect(flow).toMatch(/input\.scene === 'ready' && input\.asrReady && input\.consent/)
     expect(app).not.toMatch(/onboard-stripes/)

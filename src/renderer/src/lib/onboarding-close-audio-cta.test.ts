@@ -197,7 +197,10 @@ describe('closing onboarding hard-stops the Goldberg Aria', () => {
 
 describe('post-lady Continue is visible without hover', () => {
   it('problem Continue is opacity 1 above the starfield, not pointer-events-only', () => {
-    const problem = experience.slice(experience.indexOf("scene === 'problem'"), experience.indexOf("scene === 'reveal'"))
+    // FITO-185-P keep-alive: do not slice from first scene === 'problem' (video ternary).
+    const problemSceneAt = experience.indexOf("scene === 'problem' && (")
+    const revealSceneAt = experience.indexOf("scene === 'reveal' && (", problemSceneAt + 1)
+    const problem = experience.slice(problemSceneAt, revealSceneAt > 0 ? revealSceneAt : undefined)
     expect(problem).toMatch(/onboard-post-lady/)
     expect(problem).toMatch(/className="onboard-cta no-drag focus-ring"/)
     expect(problem.search(/>\s*Continue\s*</)).toBeGreaterThan(-1)

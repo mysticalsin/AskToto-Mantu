@@ -86,12 +86,13 @@ describe('KineticGrid file + Mantu colors + pointer-events none + no stage slide
 })
 
 describe('starfield is not mounted after the lady beat', () => {
-  it('April 29 lady+universe is hero only; KineticGrid owns the rest', () => {
+  it('April 29 lady+universe keep-alive through problem/reveal; KineticGrid owns post-lady acts', () => {
     // Runtime bed is the packaged local lady+planet asset; CloudFront id stays on the remote mirror.
+    // FITO-185-P: video stays mounted on hero|problem|reveal (not hero-only).
     expect(ONBOARDING_HERO_VIDEO_SRC).toMatch(/onboarding-hero-lady-planet/)
     expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260319_055001/)
     expect(ONBOARDING_HERO_VIDEO_REMOTE_SRC).toMatch(/hf_20260429_115139_0fc6bd3d/)
-    expect(experience).toMatch(/\{scene === 'hero' && <OnboardingHeroVideo/)
+    expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
     expect(KINETIC_GRID_SCENES).toEqual([
       'problem',
       'reveal',
@@ -193,7 +194,10 @@ describe('10-pass tour walk — one scene, KineticGrid after lady, Continue visi
     expect(experience).toMatch(/scene === 'license'/)
     expect(experience).toMatch(/scene === 'appearance'/)
     expect(experience).toMatch(/scene === 'ready'/)
-    const problem = experience.slice(experience.indexOf("scene === 'problem'"), experience.indexOf("scene === 'reveal'"))
+    // FITO-185-P keep-alive: slice problem scene block, not the video ternary.
+    const problemSceneAt = experience.indexOf("scene === 'problem' && (")
+    const revealSceneAt = experience.indexOf("scene === 'reveal' && (", problemSceneAt + 1)
+    const problem = experience.slice(problemSceneAt, revealSceneAt > 0 ? revealSceneAt : undefined)
     expect(problem).toMatch(/onboard-cta no-drag focus-ring/)
     expect(problem.search(/>\s*Continue\s*</)).toBeGreaterThan(-1)
     expect(experience).toMatch(/showAsrRetry=\{asrRowNeedsRetry\(asrRow\)\}/)
