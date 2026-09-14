@@ -166,7 +166,9 @@ describe('product sidebar (#105)', () => {
     expect(css).not.toContain('#2563EB')
     expect(html).toContain('data-install-works')
     expect(html).toContain('data-access-solid')
-    expect(html).toContain('data-theme="light"')
+    // Default theme is system (no data-theme attr) so Realtime never SSR-forces light land.
+    expect(html).not.toContain('data-theme="light"')
+    expect(html).toContain('data-map-theme="system"')
     const overview = html.slice(html.indexOf('data-page="overview"'), html.indexOf('data-page="realtime"'))
     expect(overview).toContain('data-overview-toplists')
     expect(overview).toContain('data-device-card')
