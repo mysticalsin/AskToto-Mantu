@@ -68,6 +68,23 @@ describe('resolveCloudSttCredentials', () => {
     })
   })
 
+  it("defaults gateway to 'default' when token+account present and gateway blank", () => {
+    const r = resolveCloudSttCredentials({
+      provider: 'cloudflare-nova3',
+      cloudflareToken: 'cf-token',
+      cloudflareBaseUrl:
+        'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
+      gatewayId: null
+    })
+    expect(r).toEqual({
+      ok: true,
+      provider: 'cloudflare-nova3',
+      token: 'cf-token',
+      accountId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      gatewayId: 'default'
+    })
+  })
+
   it('reads gateway id from env helper', () => {
     expect(resolveCloudSttGatewayId({ CF_AI_GATEWAY_ID: ' from-cf ' } as NodeJS.ProcessEnv)).toBe(
       'from-cf'
@@ -75,5 +92,7 @@ describe('resolveCloudSttCredentials', () => {
     expect(
       resolveCloudSttGatewayId({ METIS_CF_AI_GATEWAY_ID: 'from-metis' } as NodeJS.ProcessEnv)
     ).toBe('from-metis')
+    expect(resolveCloudSttGatewayId({} as NodeJS.ProcessEnv)).toBe('default')
+    expect(resolveCloudSttGatewayId({} as NodeJS.ProcessEnv, ' seated-gw ')).toBe('seated-gw')
   })
 })
