@@ -32,7 +32,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, lazy, Suspense, type Ref } from 'react'
 import { bundleFailureUserMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
@@ -70,7 +70,11 @@ import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
-import { OnboardingDemoScene, prefetchOnboardingDemoChunks } from './OnboardingDemoScene'
+import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
+/** Act 2 only — keep DemoScene/Bar off Act 1 first-paint parse in this chunk. */
+const OnboardingDemoScene = lazy(() =>
+  import('./OnboardingDemoScene').then((m) => ({ default: m.OnboardingDemoScene }))
+)
 import { OnboardingAppearance } from './OnboardingAppearance'
 import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
@@ -1256,15 +1260,17 @@ export function OnboardingExperience({
       )}
 
       {scene === 'reveal' && (
-        <OnboardingDemoScene
-          mode={mode}
-          onSetMode={setMode}
-          onContinue={() => {
-            playHero()
-            setScene(sceneAfterReveal())
-          }}
-          onPlayVideo={() => playHero()}
-        />
+        <Suspense fallback={null}>
+          <OnboardingDemoScene
+            mode={mode}
+            onSetMode={setMode}
+            onContinue={() => {
+              playHero()
+              setScene(sceneAfterReveal())
+            }}
+            onPlayVideo={() => playHero()}
+          />
+        </Suspense>
       )}
 
       {scene === 'setup' && (

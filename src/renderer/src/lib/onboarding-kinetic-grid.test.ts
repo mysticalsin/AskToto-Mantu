@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { overlayWindowChrome } from '../../../main/island/geometry'
 import { canMarkOnboardingDone } from './onboarding-flow'
-import { ONBOARDING_HERO_VIDEO_SRC } from './onboarding-hero-video'
+import { ONBOARDING_HERO_VIDEO_SRC, ONBOARDING_HERO_VIDEO_REMOTE_SRC } from './onboarding-hero-video'
 import {
   KINETIC_COLORS,
   KINETIC_DPR_CAP,
@@ -87,8 +87,10 @@ describe('KineticGrid file + Mantu colors + pointer-events none + no stage slide
 
 describe('starfield is not mounted after the lady beat', () => {
   it('April 29 lady+universe is hero only; KineticGrid owns the rest', () => {
-    expect(ONBOARDING_HERO_VIDEO_SRC).toMatch(/hf_20260429_115139_0fc6bd3d/)
+    // Runtime bed is the packaged local lady+planet asset; CloudFront id stays on the remote mirror.
+    expect(ONBOARDING_HERO_VIDEO_SRC).toMatch(/onboarding-hero-lady-planet/)
     expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260319_055001/)
+    expect(ONBOARDING_HERO_VIDEO_REMOTE_SRC).toMatch(/hf_20260429_115139_0fc6bd3d/)
     expect(experience).toMatch(/\{scene === 'hero' && <OnboardingHeroVideo/)
     expect(KINETIC_GRID_SCENES).toEqual([
       'problem',

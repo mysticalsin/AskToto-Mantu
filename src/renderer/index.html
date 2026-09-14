@@ -27,8 +27,32 @@
       content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'; frame-src 'none'; img-src 'self' data: blob:; media-src 'self' blob: data: https://d8j0ntlcm91z4.cloudfront.net; connect-src 'self' blob: asr-model: https://api.anthropic.com https://api.openai.com/v1 https://api.moonshot.ai/v1 https://integrate.api.nvidia.com/v1 https://api.deepseek.com/v1 https://dashscope-intl.aliyuncs.com/compatible-mode/v1 https://api.minimax.io/v1 https://openrouter.ai/api/v1 https://api.groq.com/openai/v1 https://api.together.xyz/v1 https://api.fireworks.ai/inference/v1 https://api.mistral.ai/v1 https://dust.tt https://*.dust.tt https://huggingface.co https://cdn.jsdelivr.net https://*.hf.co; script-src 'self' 'wasm-unsafe-eval' blob: asr-model:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:;"
     />
     <title>Métis</title>
+    <!--
+      FITO-185-I: no-JS exclusive bed. createWindow may force-show before React/IPC hydrate;
+      never leave Tony on pure black. styles.css sets html/body transparent for the overlay —
+      this inline bed wins until App removes #boot-bed after onboardingDone.
+    -->
+    <style>
+      #boot-bed {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        background-color: #05010A;
+        background-image: url('/onboarding-hero-poster.jpg');
+        background-position: center;
+        background-size: cover;
+        background-repeat: no-repeat;
+      }
+      #root {
+        position: relative;
+        z-index: 1;
+        min-height: 100%;
+      }
+    </style>
   </head>
   <body>
+    <div id="boot-bed" aria-hidden="true"></div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -3,7 +3,11 @@ import { Bar } from './components/Bar'
 import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
-import { OnboardingV2 } from './components/OnboardingExperience'
+import {
+  isOnboardingBoot,
+  provisionalOnboardingSettings,
+  ONBOARDING_BOOT_POSTER_HREF
+} from './lib/onboarding-boot'
 import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
 // Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
@@ -15,6 +19,10 @@ const AgendaView = lazy(() => import('./components/AgendaView').then((m) => ({ d
 const BrainView = lazy(() => import('./components/BrainView').then((m) => ({ default: m.BrainView })))
 const Answer = lazy(() => import('./components/Answer').then((m) => ({ default: m.Answer })))
 const Copilot = lazy(() => import('./components/Copilot').then((m) => ({ default: m.Copilot })))
+/** FITO-185-I: keep OnboardingExperience (+ DemoScene/Bar) off the exclusive first-paint chunk. */
+const OnboardingV2 = lazy(() =>
+  import('./components/OnboardingExperience').then((m) => ({ default: m.OnboardingV2 }))
+)
 import { AgentStatus } from './components/AgentStatus'
 import { SignInWall } from './components/SignInWall'
 import { LicenseGate } from './components/LicenseGate'
@@ -494,6 +502,12 @@ export function App(): JSX.Element {
   useEffect(() => {
     installOnboardingAudioLockHooks()
     if (settings?.onboardingDone) lockOnboardingAudio()
+  }, [settings?.onboardingDone])
+  // FITO-185-I: remove no-JS exclusive poster bed after onboarding finishes so it cannot show
+  // through the transparent overlay.
+  useEffect(() => {
+    if (!settings?.onboardingDone) return
+    document.getElementById('boot-bed')?.remove()
   }, [settings?.onboardingDone])
   useEffect(() => {
     if (settings?.onboardingDone && !onboardingDoneAt) {
@@ -3454,13 +3468,72 @@ export function App(): JSX.Element {
   // wait for the common case of an unlicensed build.
   const licenseGatePending = licenseEnforced && licenseGate == null
 
-  // Until settings AND auth resolve, render only a slim loading strip — never an interactive surface.
-  // This closes the first-run flash and the auth-gate-fail-open window: the SSO and onboarding gates
-  // below are skipped while their state is null, which would otherwise paint a usable bar before sign-in
-  // is enforced and before the no-key CTA can render. (DEMO bypasses this so screenshots still work.)
-  if (DEMO == null && (settings == null || auth.status == null || licenseGatePending)) {
+  // FITO-185-I: exclusive first-run must paint Act 1 (or at least the poster bed) WITHOUT waiting for
+  // settings/auth IPC. Missing settings ≡ onboarding not done (same fail-closed as main's
+  // onboardingExclusiveLive). Live settings replace provisional defaults when getSettings lands.
+  const onboardingBoot = isOnboardingBoot(settings)
+  const onboardingSettings = settings ?? provisionalOnboardingSettings()
+
+  // License gate — outranks SSO and onboarding below: a revoked or unlicensed device must learn that
+  // before it ever burns an SSO sign-in round trip (or sits behind onboarding). Only ever renders when
+  // the gate is on (settings.licenseGateEnabled) AND the verdict says this device isn't allowed to run.
+  if (DEMO == null && licenseEnforced && licenseGate && !licenseGate.allowed) {
+    return (
+      <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
+        <Panel>
+          <LicenseGate settings={settings} reason={licenseGate.reason} onRecheck={recheckLicenseGate} />
+        </Panel>
+      </div>
+    )
+  }
+
+  // Onboarding gate FIRST (before the loading strip). Do not block Act 1 on settings==null / auth.
+  if (onboardingBoot && DEMO == null) {
+    if (view === 'settings' && settings) {
+      return (
+        <div ref={setRoot} className="onboard-exclusive-lock flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
+          <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
+            {settingsBody}
+          </Suspense>
+        </div>
+      )
+    }
+    const posterFallback = (
+      <div className="onboard-hero-video" aria-hidden="true">
+        <img
+          className="onboard-hero-poster"
+          src={ONBOARDING_BOOT_POSTER_HREF}
+          alt=""
+          decoding="async"
+          fetchPriority="high"
+        />
+      </div>
+    )
+    return (
+      <div ref={setRoot} className="onboard-stage onboard-exclusive-lock">
+        <Suspense fallback={posterFallback}>
+          <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
+            <OnboardingV2
+              settings={onboardingSettings}
+              saveKey={saveKey}
+              recoverEncryptedProfile={recoverEncryptedProfile}
+              patch={patch}
+              onOpenAiSettings={() => openSettings('ai')}
+              onDone={() => void refresh()}
+              signedIn={auth.status?.signedIn}
+              signedInEmail={auth.status?.email}
+            />
+          </div>
+        </Suspense>
+      </div>
+    )
+  }
+
+  // Post-onboarding only: until auth (and optional license) resolve, slim loading strip — never an
+  // interactive bar. DEMO bypasses so screenshots still work. Exclusive Act 1 never reaches here.
+  if (DEMO == null && !isOnboardingBoot(settings) && (auth.status == null || licenseGatePending)) {
     // Boot load exhausted its retries without ever resolving (persistent getSettings/authStatus failure).
-    // Show an actionable card with a Reload instead of spinning "Starting Métis…" forever.
+    // Show an actionable card with a Reload instead of spinning forever.
     if (bootError) {
       return (
         <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
@@ -3493,26 +3566,13 @@ export function App(): JSX.Element {
     )
   }
 
-  // License gate — outranks SSO and onboarding below: a revoked or unlicensed device must learn that
-  // before it ever burns an SSO sign-in round trip (or sits behind onboarding). Only ever renders when
-  // the gate is on (settings.licenseGateEnabled) AND the verdict says this device isn't allowed to run.
-  if (DEMO == null && licenseEnforced && licenseGate && !licenseGate.allowed) {
-    return (
-      <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
-        <Panel>
-          <LicenseGate settings={settings} reason={licenseGate.reason} onRecheck={recheckLicenseGate} />
-        </Panel>
-      </div>
-    )
-  }
-
   // Azure AD gate — blocks all use when SSO is configured OR enforced (managed-config/env requireAuth,
   // sticky-configured — see AuthStatus.enforced) and the user isn't signed in. Gating on `configured`
   // alone let this wall be skipped whenever auth was enforced but not yet "configured" in the narrow
   // sense, even though privileged IPC was already blocked underneath — `enforced` is optional and treated
   // as false until the main process reports it.
   if ((auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn && DEMO == null) {
-    // MQA-066: mirror the onboarding gate's escape 15 lines below, which exists for the identical reason
+    // MQA-066: mirror the onboarding gate's escape, which exists for the identical reason
     // — a fix-link that dead-ends because the gate above it is an unconditional early return. Here the
     // dead end is worse: when enforcement is on but no tenant is configured anywhere, the wall's own
     // message tells the user to enter the Entra IDs in Settings → Calendar, and no route to Settings
@@ -3537,40 +3597,6 @@ export function App(): JSX.Element {
             openSettings('calendar', 'Enter your organization’s Microsoft sign-in IDs here, then sign in.')
           }
         />
-      </div>
-    )
-  }
-
-  // Onboarding gate (first run). Step 6's "Open Settings → AI" fix-link calls onOpenAiSettings, which
-  // just sets `view` to 'settings' — but this whole block is an early return keyed only on
-  // onboardingDone, so once onboarding starts the `view === 'settings'` branch further down that
-  // normally renders <Settings> never runs, and the click did nothing. Handle 'settings' here too so
-  // Settings opens as its own self-contained panel over the gate; closing it (onClose → setView('answer'))
-  // lands back on this same check, which is still true, so it re-renders Onboarding underneath.
-  if (settings && !settings.onboardingDone && DEMO == null) {
-    if (view === 'settings') {
-      return (
-        <div ref={setRoot} className="onboard-exclusive-lock flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
-          <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
-            {settingsBody}
-          </Suspense>
-        </div>
-      )
-    }
-    return (
-      <div ref={setRoot} className="onboard-stage onboard-exclusive-lock">
-        <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
-          <OnboardingV2
-            settings={settings}
-            saveKey={saveKey}
-            recoverEncryptedProfile={recoverEncryptedProfile}
-            patch={patch}
-            onOpenAiSettings={() => openSettings('ai')}
-            onDone={() => void refresh()}
-            signedIn={auth.status?.signedIn}
-            signedInEmail={auth.status?.email}
-          />
-        </div>
       </div>
     )
   }
