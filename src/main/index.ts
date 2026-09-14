@@ -35,6 +35,7 @@ import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindRendererReadiness } from './renderer-readiness'
 import { bindAskTotoShot } from './asktoto-shot'
+import { bindAct1DomProbe } from './act1-dom-probe'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
   IPC,
@@ -934,9 +935,15 @@ const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so i
 
 /** Content protection hides the window from screen capture. Disable via env for dev/screenshots ONLY —
  *  devEnv() gates it to unpackaged builds so a packaged process can never have capture protection
- *  stripped by `setx ASKTOTO_DISABLE_CP 1` + relaunch (see dev-env.ts). */
+ *  stripped by `setx ASKTOTO_DISABLE_CP 1` + relaunch (see dev-env.ts).
+ *
+ * FITO-185-U: while onboardingExclusiveLive(), force OFF. Exclusive Act 1 must be visible to the
+ * user AND capturable for QA (screencapture / CGWindow proofs). Do not wait for or apply
+ * settings.contentProtection during exclusive; once onboardingDone, settings resume control. */
 function contentProtectionOn(): boolean {
   if (devEnv('ASKTOTO_DISABLE_CP')) return false
+  // FITO-185-U: exclusive Act1 capturable — ignore stored contentProtection until exit exclusive.
+  if (onboardingExclusiveLive()) return false
   return getSettings().contentProtection
 }
 
@@ -2183,6 +2190,7 @@ function createWindow(): void {
   // interface via a native addon, which this app doesn't ship); on Windows the overlay stays visible
   // only on the virtual desktop it was created on.
   if (process.platform !== 'win32') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  // FITO-185-U: contentProtectionOn() returns false while exclusive (capturable Act 1).
   win.setContentProtection(contentProtectionOn())
   // Island/bar overlay stays out of Mission Control; exclusive Act 1 must remain findable.
   win.setHiddenInMissionControl?.(!onboardingLive)
@@ -2332,6 +2340,14 @@ function createWindow(): void {
   if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
     bindRendererReadiness(win.webContents, rendererUrl, () => {
       auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+    })
+  }
+  // FITO-185-U: live DOM prove — LAUNCH_GATE or always while exclusive. Writes userData/logs/act1-dom.json.
+  if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1' || onboardingExclusiveLive()) {
+    bindAct1DomProbe(win.webContents, {
+      expectedUrl: rendererUrl,
+      outPath: join(app.getPath('userData'), 'logs', 'act1-dom.json'),
+      audit: (summary) => auditLog('app.act1.dom', summary)
     })
   }
   // FITO-185-B: always loadURL(rendererUrl) — same string bindRendererReadiness expects — so packaged
