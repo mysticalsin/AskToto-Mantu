@@ -8327,19 +8327,10 @@ if (!app.requestSingleInstanceLock()) {
   runStep('createWindow', createWindow)
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
-  // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
-  // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
-  // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow: the
-  // eligibility read drags in the local-model trust probe, which must not sit on the first-paint path; and
-  // ahead of registerIpc so the renderer's first getSettings() already sees the reconciled readiness flag.
-  // Silent on macOS by construction: eligibility now requires the Screen Recording grant to ALREADY exist
-  // (screenCaptureGranted above), so this reconcile can never be what raises the TCC prompt (MQA-209).
-  runStep('refreshScreenPreprocess', refreshScreenPreprocess)
-  // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
-  // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
-  // first use), so it no longer sits ahead of createWindow on the boot path.
-  runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
-  runStep('initializeImportJobs', initializeImportJobs)
+  // FITO-185-H: registerIpc IMMEDIATELY after createWindow. First paint needs IPC (getSettings /
+  // settings.json) more than the preprocess readiness flag — audit showed watch_cleared reason=
+  // createWindow only when preprocess/meetings/import sat ahead of registerIpc and GPU thrashed
+  // exclusive stage before handlers existed.
   runStep('registerIpc', registerIpc)
   // FITO-185-G-TIMER: sync clear after registerIpc (past kill zone). Also setImmediate + unlock-screen
   // so App Nap / locked-screen cannot leave boot-incomplete stuck when the 15s timer is deferred.
@@ -8350,6 +8341,19 @@ if (!app.requestSingleInstanceLock()) {
   } catch (e) {
     mainLog.warn('[boot] powerMonitor unlock-screen hook failed:', e)
   }
+  // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
+  // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
+  // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow+registerIpc:
+  // the eligibility read drags in the local-model trust probe, which must not sit on the first-paint path;
+  // IPC must be live first so the renderer's getSettings() is not blocked waiting on preprocess.
+  // Silent on macOS by construction: eligibility now requires the Screen Recording grant to ALREADY exist
+  // (screenCaptureGranted above), so this reconcile can never be what raises the TCC prompt (MQA-209).
+  runStep('refreshScreenPreprocess', refreshScreenPreprocess)
+  // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
+  // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
+  // first use), so it no longer sits ahead of createWindow on the boot path.
+  runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
+  runStep('initializeImportJobs', initializeImportJobs)
   startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
   startOperatorOverlayPoll(() => getSettings())
   // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
