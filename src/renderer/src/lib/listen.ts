@@ -256,7 +256,7 @@ export function probeResultIsStale(
   dispatchEpoch: number,
   currentEpoch: number,
   live: boolean,
-  engine: 'whisper' | 'parakeet' | 'apple',
+  engine: 'whisper' | 'parakeet' | 'apple' | 'cloud',
   language: string
 ): boolean {
   return dispatchEpoch !== currentEpoch || !live || engine !== 'whisper' || language !== 'auto'
@@ -488,7 +488,7 @@ export interface ListenApi {
   start: (
     source: AudioSource,
     quality?: 'best' | 'fast',
-    engine?: 'whisper' | 'parakeet' | 'apple',
+    engine?: 'whisper' | 'parakeet' | 'apple' | 'cloud',
     language?: string,
     startedAt?: number
   ) => Promise<void>
