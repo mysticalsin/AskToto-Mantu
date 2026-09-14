@@ -24,8 +24,7 @@ import {
   type Nova3LanguageQuery,
   type SonioxLanguageConfig
 } from '../../shared/cloud-stt-language'
-
-export type CloudSttProviderId = 'cloudflare-nova3' | 'soniox' | 'unconfigured'
+import type { CloudSttProviderId } from '../../shared/cloud-stt-provider'
 
 /** Cloudflare Workers AI model id for Nova-3 (Deepgram). */
 export const CLOUDFLARE_NOVA3_MODEL = '@cf/deepgram/nova-3'
@@ -92,11 +91,6 @@ export class CloudSttError extends Error {
     this.name = 'CloudSttError'
     this.code = code
   }
-}
-
-export function resolveCloudSttProvider(raw: unknown): CloudSttProviderId {
-  if (raw === 'cloudflare-nova3' || raw === 'soniox') return raw
-  return 'unconfigured'
 }
 
 function nonNegative(n: unknown, code = 'INVALID_STT_TIME'): number {
@@ -430,6 +424,8 @@ export function normalizeNova3ResultsMessage(
   return normalized
 }
 
+export { resolveCloudSttProvider } from '../../shared/cloud-stt-provider'
+export type { CloudSttProviderId } from '../../shared/cloud-stt-provider'
 export {
   resolveNova3LanguageQuery,
   resolveSonioxLanguageConfig

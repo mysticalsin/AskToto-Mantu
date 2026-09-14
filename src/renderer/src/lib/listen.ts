@@ -9,6 +9,10 @@ import {
   type EnterpriseLiveProfile
 } from '@shared/enterprise-live-profile'
 import {
+  effectiveCloudSttProvider,
+  shouldUseCloudSttEngine
+} from '@shared/cloud-stt-provider'
+import {
   resolveNova3LanguageQuery,
   resolveSonioxLanguageConfig,
   type Nova3LanguageQuery,
@@ -601,7 +605,9 @@ export function useListen(
   // path sat behind a cold large-model load. Fast is a power option: only that setting prewarms Fast.
   asrQuality?: 'best' | 'fast',
   // Managed enterprise-live profile (CLOUD_ONLY blocks local Whisper/Parakeet/Apple with an honest error).
-  enterpriseLive?: EnterpriseLiveProfile
+  enterpriseLive?: EnterpriseLiveProfile,
+  /** Settings.cloudSttProvider — Nova-3 / Soniox selection for managed cloud Listen. */
+  cloudSttProvider?: string
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
@@ -635,10 +641,12 @@ export function useListen(
   // Cloud STT (Nova-3 / Soniox) language query derived from Settings — never leave Deepgram on en default.
   const cloudSttNovaLangRef = useRef<Nova3LanguageQuery>(resolveNova3LanguageQuery('auto'))
   const cloudSttSonioxLangRef = useRef<SonioxLanguageConfig>(resolveSonioxLanguageConfig('auto'))
-  const engineRef = useRef<'whisper' | 'parakeet' | 'apple'>('parakeet') // active ASR engine for this session
+  const engineRef = useRef<'whisper' | 'parakeet' | 'apple' | 'cloud'>('parakeet') // active ASR engine for this session
   // Trusted managed profile from Settings — ref so mid-session CLOUD_ONLY checks (fallback) see latest policy.
   const enterpriseLiveRef = useRef<EnterpriseLiveProfile | undefined>(enterpriseLive)
   enterpriseLiveRef.current = enterpriseLive
+  const cloudSttProviderRef = useRef<string | undefined>(cloudSttProvider)
+  cloudSttProviderRef.current = cloudSttProvider
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
   // a remote model fetch. `false` is returned deliberately by the main process only for an unprovisioned
@@ -925,6 +933,8 @@ export function useListen(
   }, [])
 
   const pump = useCallback((): void => {
+    if (engineRef.current === 'cloud') return // cloud path: PCM streamed by adapter when attached; no local decode
+
     if (!readyRef.current || busy.current || queue.current.length === 0) return
     const job = queue.current.shift() as LiveAudioWindow
     busy.current = true
@@ -1232,6 +1242,8 @@ export function useListen(
   // is transcribed by Whisper once its worker finishes loading.
   // (ensureWorker/getAsrBundled are stable; referenced from pump above before this line — fine at call time.)
   const fallBackToWhisper = useCallback((): void => {
+    if (engineRef.current === 'cloud') return
+
     if (engineRef.current !== 'parakeet' && engineRef.current !== 'apple') return // already switched
     const failedEngine = engineRef.current
     const gate = assertCloudOnlyAllowsEngine(resolveEnterpriseLiveProfile(enterpriseLiveRef.current ?? {}), 'whisper')
@@ -1770,7 +1782,7 @@ export function useListen(
     async (
       source: AudioSource,
       quality: 'best' | 'fast' = 'best',
-      engine: 'whisper' | 'parakeet' | 'apple' = 'parakeet',
+      engine: 'whisper' | 'parakeet' | 'apple' | 'cloud' = 'parakeet',
       language: string = 'auto',
       startedAt?: number
     ): Promise<void> => {
@@ -1786,6 +1798,10 @@ export function useListen(
         // Honest error — never silently fall through to another local engine.
         {
           const profile = resolveEnterpriseLiveProfile(enterpriseLiveRef.current ?? {})
+          // Managed cloud profile: prefer the cloud adapter id over Whisper/Parakeet/Apple.
+          if (engine !== 'cloud' && shouldUseCloudSttEngine(profile, cloudSttProviderRef.current)) {
+            engine = 'cloud'
+          }
           const gate = assertCloudOnlyAllowsEngine(profile, engine)
           if (!gate.ok) {
             setState((s) => ({
@@ -1882,6 +1898,32 @@ export function useListen(
         void window.toto.setListeningState(true, startedAt).catch(() => {})
 
         void (async () => {
+          if (engine === 'cloud') {
+            // Cloud STT: capture stays local; inference is the approved cloud adapter (Nova-3 / Soniox).
+            // Do not boot Whisper/Parakeet/Apple. Live WebSocket attach is main/cloud-stt; this path
+            // keeps Listen honest under CLOUD_ONLY (ready + capture) without local model fallback.
+            if (workerRef.current) {
+              workerRef.current.terminate()
+              workerRef.current = null
+            }
+            loadedQualityRef.current = null
+            readyRef.current = true
+            engineRef.current = 'cloud'
+            const provider = effectiveCloudSttProvider(
+              enterpriseLiveRef.current ?? {},
+              cloudSttProviderRef.current
+            )
+            console.info(
+              '[listen] cloud STT session planned:',
+              provider,
+              'novaLang=',
+              cloudSttNovaLangRef.current,
+              'sonioxLang=',
+              cloudSttSonioxLangRef.current
+            )
+            setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
+            return
+          }
           if (engine === 'parakeet') {
             // Parakeet runs in the MAIN process; free any warm Whisper worker, then require its bundled model.
             // ANY failure falls back to Whisper so Listen always works.

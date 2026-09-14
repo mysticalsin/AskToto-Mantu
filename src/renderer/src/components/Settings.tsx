@@ -116,6 +116,8 @@ import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { modeSkillLock } from '@shared/mode-skills'
 import { DEFAULT_OPERATOR_URL, operatorUrlConfigured } from '@shared/operator'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
+import { isCloudOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
+import { effectiveCloudSttProvider, type CloudSttProviderId } from '@shared/cloud-stt-provider'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
 import { ClickUpMark } from './brand/ClickUpMark'
@@ -6401,27 +6403,65 @@ export function Settings({
                     onChange={(v) => patch({ showFullTranscriptInReview: v })}
                     disabled={settings.managedKeys.includes('showFullTranscriptInReview')}
                   />
-                  <WhisperQualityRow bundled={asrBundled} settings={settings} patch={patch} />
-                  <div className="flex flex-col gap-1.5 px-1 py-1">
-                    <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
-                      Transcription engine
-                      <FieldHint text="For fresh setup, 8 GB or less selects Parakeet; more than 8 GB selects Whisper. Unknown memory uses Parakeet. Existing choices and organization policy are preserved. Parakeet supports European languages; Whisper supports a wider range of languages. Apple Speech uses the macOS on-device recognizer for live meetings; imports use Whisper.">
-                        <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
-                      </FieldHint>
-                      <ManagedChip keys={settings.managedKeys} k="asrEngine" />
-                    </label>
-                    <select
-                      value={settings.asrEngine}
-                      onChange={(e) => patch({ asrEngine: e.target.value as 'parakeet' | 'whisper' | 'apple' })}
-                      disabled={settings.managedKeys.includes('asrEngine')}
-                      aria-label="Transcription engine"
-                      className={'w-full ' + ctl}
-                    >
-                      <option value="parakeet">Parakeet · European languages</option>
-                      <option value="whisper">Whisper · multilingual</option>
-                      <option value="apple">Apple Speech · on-device{isWindows ? ' (macOS only)' : ''}</option>
-                    </select>
-                  </div>
+                  {!isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive)) && (
+                    <WhisperQualityRow bundled={asrBundled} settings={settings} patch={patch} />
+                  )}
+                  {(() => {
+                    const liveProfile = resolveEnterpriseLiveProfile(settings.enterpriseLive)
+                    const cloudOnly = isCloudOnlyProfile(liveProfile)
+                    const cloudProvider = effectiveCloudSttProvider(liveProfile, settings.cloudSttProvider)
+                    if (cloudOnly) {
+                      return (
+                        <div className="flex flex-col gap-1.5 px-1 py-1">
+                          <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
+                            Transcript source
+                            <FieldHint text="This organization profile sends meeting audio to approved cloud speech recognition. Cloudflare Nova-3 is the default. Soniox is available when your organization has approved it. On-device Whisper, Parakeet, and Apple Speech stay off for this profile, including when cloud speech fails.">
+                              <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
+                            </FieldHint>
+                            <ManagedChip keys={settings.managedKeys} k="cloudSttProvider" />
+                          </label>
+                          <select
+                            value={cloudProvider}
+                            onChange={(e) =>
+                              patch({ cloudSttProvider: e.target.value as CloudSttProviderId })
+                            }
+                            disabled={settings.managedKeys.includes('cloudSttProvider')}
+                            aria-label="Transcript source"
+                            className={'w-full ' + ctl}
+                          >
+                            <option value="cloudflare-nova3">Cloudflare Nova-3 · cloud speech</option>
+                            <option value="soniox">Soniox · cloud speech (when approved)</option>
+                          </select>
+                          <p className="pl-0.5 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                            Live captions use cloud speech. Audio capture stays on this device; transcripts are
+                            transient. Summaries and actions are what get saved.
+                          </p>
+                        </div>
+                      )
+                    }
+                    return (
+                      <div className="flex flex-col gap-1.5 px-1 py-1">
+                        <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
+                          Transcription engine
+                          <FieldHint text="For fresh setup, 8 GB or less selects Parakeet; more than 8 GB selects Whisper. Unknown memory uses Parakeet. Existing choices and organization policy are preserved. Parakeet supports European languages; Whisper supports a wider range of languages. Apple Speech uses the macOS on-device recognizer for live meetings; imports use Whisper. Managed cloud profiles hide these on-device engines and use Cloudflare Nova-3 or Soniox instead.">
+                            <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
+                          </FieldHint>
+                          <ManagedChip keys={settings.managedKeys} k="asrEngine" />
+                        </label>
+                        <select
+                          value={settings.asrEngine}
+                          onChange={(e) => patch({ asrEngine: e.target.value as 'parakeet' | 'whisper' | 'apple' })}
+                          disabled={settings.managedKeys.includes('asrEngine')}
+                          aria-label="Transcription engine"
+                          className={'w-full ' + ctl}
+                        >
+                          <option value="parakeet">Parakeet · European languages</option>
+                          <option value="whisper">Whisper · multilingual</option>
+                          <option value="apple">Apple Speech · on-device{isWindows ? ' (macOS only)' : ''}</option>
+                        </select>
+                      </div>
+                    )
+                  })()}
                   <div className="flex flex-col gap-1.5 px-1 py-1">
                     <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
                       Spoken language
@@ -6466,7 +6506,9 @@ export function Settings({
                       <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
                     </div>
                   )}
-                  <AsrModelRow engine={settings.asrEngine} />
+                  {!isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive)) && (
+                    <AsrModelRow engine={settings.asrEngine} />
+                  )}
                   {settings.asrImportTierFallbackAt != null && (
                     <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span className="min-w-0 flex-1 break-words">
