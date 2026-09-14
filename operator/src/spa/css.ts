@@ -567,11 +567,13 @@ button.danger { color: var(--danger); }
   display: grid; grid-template-columns: 1fr 56px 64px; gap: 8px; align-items: center;
   padding: 5px 8px; position: relative; font-size: 11px;
 }
-.vol-bar {
+.vol-bar, .geo-bar {
   position: absolute; inset: 2px auto 2px 0; background: var(--def-200); border-radius: 4px; z-index: 0;
+  pointer-events: none; max-height: calc(100% - 4px);
 }
 .vol-bar.blue { background: var(--data-track); }
 .vol-row > * { position: relative; z-index: 1; }
+[data-geo-table] td:first-child { position: relative; }
 .table-card .tabs { margin: 0 0 8px; }
 .table-search {
   width: 100%; border: 1px solid var(--hair); border-radius: var(--radius-control); padding: 6px 10px;
@@ -671,6 +673,8 @@ textarea { min-height: 120px; }
 .page[hidden] { display: none !important; }
 .event[hidden],
 .event.is-hidden,
+#events-table tbody tr[hidden],
+#events-table tbody tr.is-hidden,
 .vol-row[hidden],
 .seat-row[hidden],
 .sess-row[hidden],

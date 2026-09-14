@@ -58,7 +58,7 @@ export function kpiCard(opts: {
  */
 export function percentBar(pct: number, className: string): string {
   const clamped = Math.max(0, Math.min(100, Math.round(pct * 100) / 100))
-  return `<svg class="${esc(className)}" width="${clamped}%" height="100%" aria-hidden="true"></svg>`
+  return `<svg class="${esc(className)}" width="${clamped}%" height="14" aria-hidden="true"></svg>`
 }
 
 /** Overview/Realtime geo tables: a full-row proportional bar behind the label. */

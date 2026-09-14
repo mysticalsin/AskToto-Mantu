@@ -551,28 +551,42 @@ function askTokenTotal(a: {
   return (a.cache_read ?? 0) + (a.cache_write ?? 0) + (a.cache_uncached ?? 0) + (a.output_tokens ?? 0)
 }
 
+/** Match portal spend lines: explicit path_tag, or legacy untagged rows by provider. */
+function matchesPortalPath(a: AskRow, tag: 'portal-cf' | 'portal-direct'): boolean {
+  if (a.path_tag === tag) return true
+  if (a.path_tag != null) return false
+  if (tag === 'portal-cf') return (a.provider || '') === 'cloudflare'
+  return (a.provider || '') === 'deepseek'
+}
+
+/** Fleet aggregate for one portal path. Tokens sum across licenses/devices.
+ *  Never paint `N tok · not reported` — valued metrics stay valued; missing stays alone. */
 function portalPathSpend(asks: AskRow[], tag: 'portal-cf' | 'portal-direct'): string {
-  const rows = asks.filter((a) => a.path_tag === tag)
+  const rows = asks.filter((a) => matchesPortalPath(a, tag))
   if (!rows.length) return 'not reported'
   let usd = 0
   let anyCost = false
   let tokens = 0
   let anyTok = false
   for (const a of rows) {
-    const inTok = a.input_tokens
-    const outTok = a.output_tokens
-    if (inTok != null || outTok != null) {
+    const t = askTokenTotal(a)
+    if (t != null) {
       anyTok = true
-      tokens += (inTok ?? 0) + (outTok ?? 0)
+      tokens += t
     }
     const est = estimateListPrice(a.model || '', a.input_tokens, a.output_tokens, a.cache_read)
     if (!est) continue
     anyCost = true
     usd += est.usd
   }
-  const tok = anyTok ? `${tokens} tok` : 'tokens not reported'
-  if (!anyCost) return `${tok} · not reported`
-  return `${tok} · ${formatUsdEstimate(usd)} · estimate, list price`
+  const parts: string[] = []
+  if (anyTok) parts.push(`${tokens} tok`)
+  if (anyCost) {
+    parts.push(formatUsdEstimate(usd))
+    parts.push('estimate, list price')
+  }
+  if (!parts.length) return 'not reported'
+  return parts.join(' · ')
 }
 
 function tokensReported(asks: AskRow[]): number | null {

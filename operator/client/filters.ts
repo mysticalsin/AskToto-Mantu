@@ -44,7 +44,7 @@ let evSearchCached: HTMLInputElement | null = null
 export function applyEventsFilter(): void {
   var input = (document.getElementById('events-search') as HTMLInputElement | null) || evSearchCached
   var q = String((input && input.value) || '').trim().toLowerCase()
-  document.querySelectorAll<HTMLElement>('#events-list .event[data-q]').forEach(function (row) {
+  document.querySelectorAll<HTMLElement>('#events-table tbody tr[data-q]').forEach(function (row) {
     var hay = (row.getAttribute('data-q') || '').toLowerCase()
     var hit = !q || hay.indexOf(q) >= 0
     row.hidden = !hit
@@ -53,7 +53,7 @@ export function applyEventsFilter(): void {
     if (!hit && row.setAttribute) row.setAttribute('hidden', 'hidden')
     if (hit && row.removeAttribute) row.removeAttribute('hidden')
   })
-  syncEmpty('#events-list .event[data-q]', 'events-empty')
+  syncEmpty('#events-table tbody tr[data-q]', 'events-empty')
 }
 
 export function initEventsFilters(): void {

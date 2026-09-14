@@ -12,3 +12,15 @@ describe('dashboard askTokenTotal F10', () => {
     expect(src).toMatch(/estimateListPrice\(a\.model/)
   })
 })
+
+describe('portalPathSpend honesty (#182 / #112)', () => {
+  const src = readFileSync(resolve(__dirname, 'dashboard.ts'), 'utf8')
+  it('never concatenates tok · not reported', () => {
+    expect(src).not.toMatch(/\$\{tok\} · not reported/)
+    expect(src).toMatch(/matchesPortalPath/)
+    expect(src).toMatch(/parts\.join\(' · '\)/)
+  })
+  it('sums askTokenTotal for portal path tokens', () => {
+    expect(src).toMatch(/const t = askTokenTotal\(a\)/)
+  })
+})
