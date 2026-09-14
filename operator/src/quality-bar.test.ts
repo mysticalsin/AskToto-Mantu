@@ -296,9 +296,10 @@ describe('quality bar: keys last4 and Cloudflare fail-loud', () => {
     expect(html).toContain('Connect Cloudflare (login) on Keys.')
     expect(html).toContain('data-install-works')
     expect(html).toContain('Install → works')
-    // Light is the primary theme (Shoey reference is light-only); dark is the derived second
-    // theme, chosen only by cookie or client toggle, never the server default.
-    expect(html).toContain('data-theme="light"')
+    // Default theme is system (no data-theme attr) so Realtime never SSR-forces light land.
+    // Align with ui.console.test.ts / beff0b0.
+    expect(html).not.toContain('data-theme="light"')
+    expect(html).toContain('data-map-theme="system"')
     expect(html).not.toContain('Cloudflare token missing')
     expect(html).toContain('data-page="keys"')
     expect(html).not.toMatch(tokenPatternForTests())
