@@ -2003,14 +2003,13 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   } catch {
     /* headless / already destroyed */
   }
-  // FITO-185-Q: restore 1.8.9 exclusive OS fullscreen by default. Bounds-only (FITO-185-O)
-  // left Electron 43 with ZERO CGWindow on Totos-Mac — Tony "window doesn't open". Live prove:
-  // ASKTOTO_ALLOW_SFS=1 on tip 5946184 → 1800×1169 on-screen window, alive 60s+. Still skip SFS
-  // under ASKTOTO_SHOT (capturePage hang). ASKTOTO_DISABLE_SFS=1 remains an escape hatch.
+  // FITO-185-R: OS simpleFullScreen stays OPT-IN (ASKTOTO_ALLOW_SFS=1). Tony eye FAIL on e404460:
+  // SFS materializes the CGWindow then dies after renderer.ready with empty Crashpad (same as O).
+  // Window visibility comes from show:true + immediate showInactive/moveTop (below), not SFS.
   const mayOsExclusive =
     exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
     !process.env.ASKTOTO_SHOT &&
-    process.env.ASKTOTO_DISABLE_SFS !== '1'
+    process.env.ASKTOTO_ALLOW_SFS === '1'
   try {
     if (mayOsExclusive && process.platform === 'darwin' && typeof w.setSimpleFullScreen === 'function') {
       if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true)
@@ -2140,9 +2139,10 @@ function createWindow(): void {
     // Hide park is at bounds.y (0 on primary). Without this, darwin clamps
     // setBounds into workArea.y≈39 — the visible purple 8×2 hairline.
     enableLargerThanScreen: true,
-    // Exclusive: hidden until ready-to-show so constructor chrome is never the first
-    // visible frame. Hero-matching hold (`#05010A`) is the window color if paint lags.
-    show: !onboardingLive,
+    // FITO-185-R: exclusive must show immediately. show:false + no-SFS = zero CGWindows on
+    // Electron 43/macOS 27; show:false + SFS = window then silent death after renderer.ready.
+    // Hero hold `#05010A` is the first frame; Act 1 paints over it.
+    show: true,
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2165,6 +2165,16 @@ function createWindow(): void {
   }
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   applyOverlayAlwaysOnTop(win)
+  // FITO-185-R: do not wait for ready-to-show — force an on-screen exclusive CGWindow now.
+  if (onboardingLive) {
+    try {
+      win.setOpacity(1)
+      win.showInactive()
+      win.moveTop()
+    } catch {
+      /* headless */
+    }
+  }
   // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
   // Windows") — gate the call so it isn't dead code there. Windows has no public API for pinning a
   // window across Task View virtual desktops (that needs the native IVirtualDesktopManager COM
