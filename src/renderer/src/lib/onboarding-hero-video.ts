@@ -7,12 +7,18 @@ export const ONBOARDING_HERO_VIDEO_SRC =
   'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260429_115139_0fc6bd3d-3631-4d26-ab9b-28293887dcc9.mp4'
 
 /**
- * Kept for call-site compatibility. Intentionally a no-op: preloading the multi-MB CloudFront
- * hero on exclusive-onboarding mount contended with WebGL starfield and made first paint laggy.
- * Act 1 <video preload="auto"> loads on demand when the hero mounts.
+ * Act-1-mount preload only. Do NOT call from App boot — that contended with WebGL
+ * starfield and made exclusive first paint laggy. OnboardingHeroVideo owns the call.
  */
 export function preloadOnboardingHeroVideo(): void {
-  /* no-op — see module note */
+  if (typeof document === 'undefined') return
+  if (document.querySelector('link[data-onboarding-hero-preload]')) return
+  const link = document.createElement('link')
+  link.rel = 'preload'
+  link.as = 'video'
+  link.href = ONBOARDING_HERO_VIDEO_SRC
+  link.setAttribute('data-onboarding-hero-preload', '1')
+  document.head.appendChild(link)
 }
 
 /**
