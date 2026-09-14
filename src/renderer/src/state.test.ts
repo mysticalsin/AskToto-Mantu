@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AUTH_POLL_MS, PERMISSIONS_POLL_MS, startAuthRefreshLoop, startPermissionRefreshLoop } from './state'
+import { AUTH_POLL_MS, BOOT_IPC_TIMEOUT_MS, PERMISSIONS_POLL_MS, startAuthRefreshLoop, startPermissionRefreshLoop, withBootIpcTimeout } from './state'
 
 describe('startPermissionRefreshLoop', () => {
   it('refreshes immediately, polls every PERMISSIONS_POLL_MS, refreshes on focus/visibility, and cleans up', () => {
@@ -81,6 +81,26 @@ describe('startAuthRefreshLoop', () => {
       vi.advanceTimersByTime(AUTH_POLL_MS * 2)
       windowListeners.get('focus')?.()
       expect(refresh).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+
+describe('FITO-185-G-TIMEOUT withBootIpcTimeout', () => {
+  it('resolves when the promise settles before the timeout', async () => {
+    await expect(withBootIpcTimeout(Promise.resolve('ok'), 'getSettings', 50)).resolves.toBe('ok')
+  })
+
+  it('rejects when the promise hangs past the timeout', async () => {
+    vi.useFakeTimers()
+    try {
+      const hung = new Promise<string>(() => {})
+      const pending = withBootIpcTimeout(hung, 'getSettings', BOOT_IPC_TIMEOUT_MS)
+      const assertion = expect(pending).rejects.toThrow(/getSettings timed out after 2000ms/)
+      await vi.advanceTimersByTimeAsync(BOOT_IPC_TIMEOUT_MS)
+      await assertion
     } finally {
       vi.useRealTimers()
     }
