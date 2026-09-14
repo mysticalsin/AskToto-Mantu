@@ -1,10 +1,16 @@
 /**
- * Cloud STT adapter scaffold (Métis 1.9.1 enterprise-live).
+ * Cloud STT adapter (Métis 1.9.1 enterprise-live).
  *
  * Device capture stays local; inference is cloud. Under CLOUD_ONLY, local Whisper/
  * Parakeet/Apple must not boot as fallback — callers get an honest BLOCKED error.
- * Provider credentials stay server-side; this module is the client contract only.
+ * Provider credentials stay server-side (Operator/gateway); this module is the
+ * client contract + message normalizers only — not a live WebSocket client.
+ *
+ * Approved providers (skill ref 05): Soniox (cost-first benchmark) and
+ * Cloudflare Nova-3 `@cf/deepgram/nova-3` (consolidated-vendor comparator).
+ * No production default switch without approval + representative tests.
  */
+import { createHash } from 'node:crypto'
 import {
   assertCloudOnlyAllowsEngine,
   CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED,
@@ -15,6 +21,17 @@ import {
 
 export type CloudSttProviderId = 'cloudflare-nova3' | 'soniox' | 'unconfigured'
 
+/** Cloudflare Workers AI model id for Nova-3 (Deepgram). */
+export const CLOUDFLARE_NOVA3_MODEL = '@cf/deepgram/nova-3'
+
+export type CloudSttScope = {
+  tenantId?: string
+  meetingId?: string
+  captureId?: string
+  epoch?: string
+  track?: string
+}
+
 export type CloudSttSessionConfig = {
   provider: CloudSttProviderId
   /** Meeting/capture scope for diarization cluster binding (not a voiceprint). */
@@ -22,6 +39,7 @@ export type CloudSttSessionConfig = {
   meetingId?: string
   captureId?: string
   epoch?: string
+  track?: string
   /** When true, managed profile refuses local ASR fallback. */
   profile?: EnterpriseLiveProfile
 }
@@ -36,15 +54,19 @@ export type CloudSttWord = {
   cluster?: string
 }
 
+export type CloudSttFinalSegment = {
+  id: string
+  text: string
+  startMs: number
+  endMs: number
+  cluster: string
+  language: string
+  isFinal: true
+  revision: number
+}
+
 export type CloudSttNormalizeResult = {
-  finals: Array<{
-    text: string
-    startMs: number
-    endMs: number
-    cluster: string
-    language: string
-    isFinal: true
-  }>
+  finals: CloudSttFinalSegment[]
   interimText: string
   finished: boolean
 }
@@ -52,9 +74,39 @@ export type CloudSttNormalizeResult = {
 export const CLOUD_STT_UNCONFIGURED =
   'Cloud STT is not configured. Set an approved provider (Cloudflare Nova-3 or Soniox) for this managed profile.'
 
+export class CloudSttError extends Error {
+  readonly code: string
+  constructor(code: string, message?: string) {
+    super(message || code)
+    this.name = 'CloudSttError'
+    this.code = code
+  }
+}
+
 export function resolveCloudSttProvider(raw: unknown): CloudSttProviderId {
   if (raw === 'cloudflare-nova3' || raw === 'soniox') return raw
   return 'unconfigured'
+}
+
+function nonNegative(n: unknown, code = 'INVALID_STT_TIME'): number {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) {
+    throw new CloudSttError(code)
+  }
+  return n
+}
+
+function clusterId(raw: unknown): string {
+  if (raw == null) return 'unknown'
+  const s = String(raw).trim()
+  if (!s) return 'unknown'
+  if (s.length > 64) throw new CloudSttError('INVALID_CLUSTER')
+  return s
+}
+
+function segmentId(scope: CloudSttScope, messageSequence: string | number, index: number): string {
+  return createHash('sha256')
+    .update(JSON.stringify([scope, String(messageSequence), index]))
+    .digest('hex')
 }
 
 /**
@@ -63,31 +115,33 @@ export function resolveCloudSttProvider(raw: unknown): CloudSttProviderId {
  */
 export function planCloudSttSession(
   config: CloudSttSessionConfig
-): { ok: true; provider: CloudSttProviderId; cloudOnly: boolean } | { ok: false; error: string; code: 'CLOUD_ONLY' | 'UNCONFIGURED' } {
+):
+  | { ok: true; provider: CloudSttProviderId; cloudOnly: boolean; modelId?: string }
+  | { ok: false; error: string; code: 'CLOUD_ONLY' | 'UNCONFIGURED' } {
   const profile = config.profile ?? resolveEnterpriseLiveProfile({})
   const cloudOnly = isCloudOnlyProfile(profile)
   if (cloudOnly) {
     // Explicitly refuse any accidental local engine selection.
-    const local = assertCloudOnlyAllowsEngine(profile, 'parakeet')
-    if (!local.ok) {
-      /* profile is cloud-only — continue to require a cloud provider */
-    }
+    assertCloudOnlyAllowsEngine(profile, 'parakeet')
   }
   if (config.provider === 'unconfigured') {
-    if (cloudOnly) {
-      return { ok: false, error: CLOUD_STT_UNCONFIGURED, code: 'UNCONFIGURED' }
-    }
-    // Legacy profiles may still use local ASR when cloud is unset.
     return { ok: false, error: CLOUD_STT_UNCONFIGURED, code: 'UNCONFIGURED' }
   }
-  return { ok: true, provider: config.provider, cloudOnly }
+  return {
+    ok: true,
+    provider: config.provider,
+    cloudOnly,
+    ...(config.provider === 'cloudflare-nova3' ? { modelId: CLOUDFLARE_NOVA3_MODEL } : {})
+  }
 }
 
 /**
  * When cloud STT fails mid-session, decide whether local fallback is allowed.
  * CLOUD_ONLY → never; legacy → caller may fall back to existing engines.
  */
-export function allowLocalSttFallback(profile: EnterpriseLiveProfile): { allowed: true } | { allowed: false; error: string } {
+export function allowLocalSttFallback(
+  profile: EnterpriseLiveProfile
+): { allowed: true } | { allowed: false; error: string } {
   if (isCloudOnlyProfile(profile)) {
     return { allowed: false, error: CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED }
   }
@@ -95,26 +149,59 @@ export function allowLocalSttFallback(profile: EnterpriseLiveProfile): { allowed
 }
 
 /**
- * Minimal token normalizer scaffold — groups consecutive same-cluster finals.
- * Not a live WebSocket client; host wires transport separately.
+ * Gateway WebSocket URL builder for Nova-3 via Cloudflare AI Gateway.
+ * Credentials are NOT embedded — caller supplies account/gateway ids from trusted config.
+ * Returns null when required pieces are missing (honest unconfigured).
+ */
+export function buildNova3GatewayWsUrl(opts: {
+  accountId?: string
+  gatewayId?: string
+  encoding?: string
+  sampleRate?: number
+  interimResults?: boolean
+  diarize?: boolean
+}): string | null {
+  const accountId = (opts.accountId || '').trim()
+  const gatewayId = (opts.gatewayId || '').trim()
+  if (!accountId || !gatewayId) return null
+  const encoding = opts.encoding || 'linear16'
+  const sampleRate = opts.sampleRate ?? 16000
+  const interim = opts.interimResults !== false
+  const diarize = opts.diarize !== false
+  const q = new URLSearchParams({
+    model: CLOUDFLARE_NOVA3_MODEL,
+    encoding,
+    sample_rate: String(sampleRate),
+    interim_results: interim ? 'true' : 'false',
+    diarize: diarize ? 'true' : 'false'
+  })
+  return `wss://gateway.ai.cloudflare.com/v1/${encodeURIComponent(accountId)}/${encodeURIComponent(gatewayId)}/workers-ai?${q.toString()}`
+}
+
+/**
+ * Minimal token normalizer — groups consecutive same-cluster finals.
+ * Prefer provider-specific normalizers (Soniox / Nova-3) when the wire shape is known.
  */
 export function normalizeCloudSttTokens(
   tokens: CloudSttWord[],
-  opts: { defaultCluster?: string } = {}
+  opts: { defaultCluster?: string; scope?: CloudSttScope; messageSequence?: string | number } = {}
 ): CloudSttNormalizeResult {
-  const finals: CloudSttNormalizeResult['finals'] = []
+  const finals: CloudSttFinalSegment[] = []
   const partial: string[] = []
-  let group: { cluster: string; language: string; startMs: number; endMs: number; text: string } | null = null
+  let group: { cluster: string; language: string; startMs: number; endMs: number; text: string } | null =
+    null
   const flush = (): void => {
     if (!group) return
     if (group.text.trim()) {
       finals.push({
+        id: segmentId(opts.scope ?? {}, opts.messageSequence ?? finals.length, finals.length),
         text: group.text,
         startMs: group.startMs,
         endMs: group.endMs,
         cluster: group.cluster,
         language: group.language,
-        isFinal: true
+        isFinal: true,
+        revision: 1
       })
     }
     group = null
@@ -137,6 +224,169 @@ export function normalizeCloudSttTokens(
   }
   flush()
   return { finals, interimText: partial.join(''), finished: false }
+}
+
+type SonioxToken = {
+  text?: unknown
+  is_final?: unknown
+  start_ms?: unknown
+  end_ms?: unknown
+  speaker?: unknown
+  language?: unknown
+  translation_status?: unknown
+}
+
+/**
+ * Soniox streaming message normalizer (ported from enterprise-live reference-core).
+ * Structured tokens only — not a WebSocket client. Translations never invent timestamps.
+ */
+export function normalizeSonioxMessage(
+  message: { tokens?: unknown; finished?: unknown; error_code?: unknown; error_message?: unknown },
+  opts: { scope: CloudSttScope; messageSequence: string | number; streamOffsetMs?: number }
+): CloudSttNormalizeResult {
+  if (message?.error_code != null) {
+    throw new CloudSttError('STT_UPSTREAM_ERROR')
+  }
+  if (!Array.isArray(message?.tokens) || message.tokens.length > 10_000) {
+    throw new CloudSttError('INVALID_STT_MESSAGE')
+  }
+  const streamOffsetMs = opts.streamOffsetMs ?? 0
+  nonNegative(streamOffsetMs, 'INVALID_STREAM_OFFSET')
+  const finals: CloudSttFinalSegment[] = []
+  const partial: string[] = []
+  let group: { cluster: string; language: string; startMs: number; endMs: number; text: string } | null =
+    null
+  const flush = (): void => {
+    if (!group) return
+    if (group.text.trim()) {
+      finals.push({
+        id: segmentId(opts.scope, opts.messageSequence, finals.length),
+        text: group.text,
+        startMs: group.startMs,
+        endMs: group.endMs,
+        cluster: group.cluster,
+        language: group.language,
+        isFinal: true,
+        revision: 1
+      })
+    }
+    group = null
+  }
+  for (const raw of message.tokens as SonioxToken[]) {
+    if (!raw || typeof raw.text !== 'string' || typeof raw.is_final !== 'boolean') {
+      throw new CloudSttError('INVALID_STT_TOKEN')
+    }
+    if (raw.translation_status === 'translation') continue
+    if (raw.text === '<end>' || raw.text === '<fin>') {
+      flush()
+      continue
+    }
+    if (!raw.is_final) {
+      partial.push(raw.text)
+      continue
+    }
+    const start = nonNegative(raw.start_ms) + streamOffsetMs
+    const end = nonNegative(raw.end_ms) + streamOffsetMs
+    if (end < start) throw new CloudSttError('INVALID_STT_TIME')
+    const cluster = clusterId(raw.speaker)
+    const language = typeof raw.language === 'string' && raw.language ? raw.language : 'und'
+    if (!group || group.cluster !== cluster || group.language !== language) {
+      flush()
+      group = { cluster, language, startMs: start, endMs: end, text: raw.text }
+    } else {
+      group.text += raw.text
+      group.startMs = Math.min(group.startMs, start)
+      group.endMs = Math.max(group.endMs, end)
+    }
+  }
+  flush()
+  return { finals, interimText: partial.join(''), finished: message.finished === true }
+}
+
+type Nova3Word = {
+  word?: unknown
+  punctuated_word?: unknown
+  start?: unknown
+  end?: unknown
+  speaker?: unknown
+  language?: unknown
+}
+
+/**
+ * Cloudflare Nova-3 / Deepgram `Results` WebSocket message → CloudStt segments.
+ * Expects seconds on word start/end (Deepgram wire); converts to ms + optional stream offset.
+ * Diarization speaker numbers become clusters — never person names.
+ */
+export function normalizeNova3ResultsMessage(
+  message: {
+    type?: unknown
+    is_final?: unknown
+    speech_final?: unknown
+    channel?: { alternatives?: Array<{ transcript?: unknown; words?: Nova3Word[] }> }
+  },
+  opts: { scope: CloudSttScope; messageSequence: string | number; streamOffsetMs?: number }
+): CloudSttNormalizeResult {
+  if (message?.type != null && message.type !== 'Results') {
+    // Metadata / UtteranceEnd / SpeechStarted — not transcript; empty normalize.
+    return { finals: [], interimText: '', finished: false }
+  }
+  const alt = message?.channel?.alternatives?.[0]
+  const words = Array.isArray(alt?.words) ? alt.words : []
+  const isFinal = message?.is_final === true || message?.speech_final === true
+  const streamOffsetMs = opts.streamOffsetMs ?? 0
+  nonNegative(streamOffsetMs, 'INVALID_STREAM_OFFSET')
+
+  if (!words.length) {
+    const transcript = typeof alt?.transcript === 'string' ? alt.transcript : ''
+    if (!isFinal) {
+      return { finals: [], interimText: transcript, finished: false }
+    }
+    if (!transcript.trim()) {
+      return { finals: [], interimText: '', finished: false }
+    }
+    // Final without word timings — keep text, refuse invented precise attribution.
+    throw new CloudSttError('INVALID_STT_TIME')
+  }
+
+  const tokens: CloudSttWord[] = []
+  for (const w of words) {
+    const text =
+      typeof w.punctuated_word === 'string' && w.punctuated_word
+        ? w.punctuated_word
+        : typeof w.word === 'string'
+          ? w.word
+          : ''
+    if (!text) continue
+    const startSec = nonNegative(w.start)
+    const endSec = nonNegative(w.end)
+    if (endSec < startSec) throw new CloudSttError('INVALID_STT_TIME')
+    tokens.push({
+      text: text.endsWith(' ') ? text : `${text} `,
+      startMs: Math.round(startSec * 1000) + streamOffsetMs,
+      endMs: Math.round(endSec * 1000) + streamOffsetMs,
+      isFinal,
+      cluster: clusterId(w.speaker),
+      language: typeof w.language === 'string' && w.language ? w.language : 'und'
+    })
+  }
+
+  if (!isFinal) {
+    return {
+      finals: [],
+      interimText: tokens.map((t) => t.text).join('').trimEnd(),
+      finished: false
+    }
+  }
+
+  const normalized = normalizeCloudSttTokens(tokens, {
+    scope: opts.scope,
+    messageSequence: opts.messageSequence
+  })
+  // Trim trailing spaces introduced for word joining.
+  for (const f of normalized.finals) {
+    f.text = f.text.replace(/\s+/g, ' ').trim()
+  }
+  return normalized
 }
 
 export { CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED }
