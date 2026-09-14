@@ -44,11 +44,8 @@ import { ModeRecapView, modeRecapSections } from './ModeRecap'
 const Answer = lazy(() => import('./Answer').then((m) => ({ default: m.Answer })))
 const Copilot = lazy(() => import('./Copilot').then((m) => ({ default: m.Copilot })))
 
-/** Prefetch Markdown+shiki during Act 1 so the first Next does not compile on the click. */
-export function prefetchOnboardingDemoChunks(): void {
-  void import('./Answer')
-  void import('./Copilot')
-}
+/** @deprecated Prefer lib/onboarding-demo-prefetch — kept as re-export for older imports. */
+export { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
 
 /** Transcript / frame React commits — not every rAF. Cursor is DOM-driven. */
 export const DEMO_COMMIT_MS = 100

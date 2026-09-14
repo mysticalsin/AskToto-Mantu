@@ -137,8 +137,8 @@ describe('exclusive onboarding cannot be dragged off-screen', () => {
     const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
     const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
     const gate = app.slice(
-      app.indexOf("settings && !settings.onboardingDone && DEMO == null"),
-      app.indexOf('const panelOpen')
+      app.indexOf('Onboarding gate FIRST'),
+      app.indexOf('Post-onboarding only:')
     )
     expect(gate).toMatch(/className="onboard-stage onboard-exclusive-lock"/)
     expect(gate).toMatch(/onboard-exclusive-lock/)
