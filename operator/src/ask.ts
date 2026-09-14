@@ -3,7 +3,7 @@
  * Same seat + vault rules as /v1/use. SSE to the seat. Never returns a vault secret.
  */
 import { PROVIDERS, type ProviderId } from '../../src/shared/providers'
-import { resolvePortalCloudflareModel } from '../../src/shared/ask-routing'
+import { PORTAL_CF_DEEPSEEK_PRO, resolvePortalCloudflareModel } from '../../src/shared/ask-routing'
 import { persistProxyAsk } from './ask-meter'
 import { ensureDefaultAiGateway } from './ai-gateway'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
@@ -494,7 +494,19 @@ export async function handleAsk(
   if (req.provider === 'cloudflare') {
     if (req.model.startsWith('workers-ai/')) return fail('model not allowed', 400)
     // parseUseBody pins screenshots to Scout; the DeepSeek catalogue is text-only.
-    if (!req.image) req = { ...req, model: resolvePortalCloudflareModel(req.model, 'base') }
+    // Enterprise-live F01: authorized deep → Pro; legacy/default → Flash. Never silently remap Pro→Flash when tier=deep.
+    if (!req.image) {
+      const tier = req.tier === 'deep' ? 'deep' : 'base'
+      if (tier === 'deep') {
+        req = {
+          ...req,
+          tier: 'deep',
+          model: resolvePortalCloudflareModel(PORTAL_CF_DEEPSEEK_PRO, 'deep')
+        }
+      } else {
+        req = { ...req, tier: 'base', model: resolvePortalCloudflareModel(req.model, 'base') }
+      }
+    }
   }
   const unlocked = await decryptActiveLlmSecret(store, env.OPERATOR_VAULT_KEY, req.provider)
   if (!unlocked) return fail('Operator cannot issue a use', 503)

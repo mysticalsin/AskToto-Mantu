@@ -17,6 +17,7 @@ import { mintOperatorLicense } from '../licenses/generate'
 import { renderConsole } from '../ui'
 import { defineRoute } from './registry'
 import { auditLog, cloudflareForDashboard, keyFlags, param, safeAuditText, stripSecrets, type AdminCtx } from './admin-ctx'
+import { readThemeCookie } from '../theme-preference'
 import { readOperatorSettings } from './settings-store'
 import { projectAskTelemetry } from '../privacy'
 
@@ -216,10 +217,10 @@ export function registerAdminCoreRoutes(): void {
     method: 'GET',
     pattern: consoleShellPattern(),
     auth: 'admin',
-    handler: async (_request, ctx) => {
+    handler: async (request, ctx) => {
       const nonce = newCspNonce()
       const dash = await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now), await valueSettings(ctx))
-      return html(renderConsole(dash), { nonce })
+      return html(renderConsole(dash, { theme: readThemeCookie(request) }), { nonce })
     }
   })
   defineRoute<AdminCtx>({

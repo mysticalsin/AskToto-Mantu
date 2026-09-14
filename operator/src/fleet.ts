@@ -40,8 +40,11 @@ export function isRealSeat(row: FleetSeat): boolean {
   const id = (row.device_id || '').trim().toLowerCase()
   if (!id) return false
   if (id.startsWith('usage-')) return false
+  if (id.startsWith('metis-prove-') || id.startsWith('metis-seat-prove-') || id.startsWith('prove-')) return false
   const ver = (row.app_version || '').trim().toLowerCase()
-  if (ver === 'usage-import') return false
+  if (ver === 'usage-import' || ver === 'rf-prove') return false
+  const host = (row.hostname || '').trim().toLowerCase()
+  if (host === 'prove') return false
   const os = (row.os || '').trim().toLowerCase()
   if (os === 'unknown' && !row.hostname && !row.sso_email) return false
   return true

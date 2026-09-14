@@ -110,7 +110,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.roi.costToday).not.toBe('$0')
     expect(dash.gateway.rows.some((r) => r.provider === 'anthropic')).toBe(true)
     expect(dash.roi.approved).toBe(1)
-    expect(dash.roi.timeSaved).toBe('0 min')
+    expect(dash.roi.timeSaved).toBe('not reported')
     expect(dash.roi.timeSavedSub).toBe('no recaps ingested')
     expect(dash.roi.value).not.toBe('$0')
     // Events table shows stored events only now (section 10): a bare upsertSeat with no real
@@ -178,7 +178,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.roi.liveSeats).toBe(0)
     expect(dash.roi.seats30m).toBe(0)
     expect(dash.licenses.empty).toBe(true)
-    expect(dash.roi.timeSaved).toBe('0 min')
+    expect(dash.roi.timeSaved).toBe('not reported')
     expect(dash.roi.value).toBe('not reported')
     expect(dash.roi.portalCf).toBe('not reported')
     expect(dash.roi.portalDirect).toBe('not reported')

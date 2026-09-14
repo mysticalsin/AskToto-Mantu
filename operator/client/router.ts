@@ -5,6 +5,7 @@
  * navigation directly.
  */
 import { paintShoeyMap } from './map'
+import { initRealtimeMap, paintRealtimeMapTheme } from './realtime-map'
 import { applyEventsFilter } from './filters'
 
 /** Mirrors operator/src/render/shell.ts's `railActionFor()` exactly (plan P0.4: "the rail shows
@@ -59,7 +60,12 @@ export function route(to?: string): void {
   })
   var t = document.getElementById('page-title')
   if (t) t.textContent = titles[id]
-  if (id === 'realtime') paintShoeyMap()
+  if (id === 'realtime') {
+    initRealtimeMap()
+    paintRealtimeMapTheme()
+  } else if (id === 'overview') {
+    paintShoeyMap()
+  }
   if (id === 'events') applyEventsFilter()
 }
 
