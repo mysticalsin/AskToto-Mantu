@@ -102,7 +102,7 @@ import {
   TELL_THE_ROOM_TITLE,
   TELL_THE_ROOM_WHY
 } from '../lib/onboarding-tell-the-room'
-import { ONBOARDING_HERO_VIDEO_SRC } from '../lib/onboarding-hero-video'
+import { ONBOARDING_HERO_VIDEO_SRC, preloadOnboardingHeroVideo } from '../lib/onboarding-hero-video'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -214,6 +214,8 @@ function OnboardingHeroVideo({
 }): JSX.Element | null {
   const [failed, setFailed] = useState(false)
   useEffect(() => {
+    // Act 1 visible only — never from App boot parse. Soft idle hint; <video> owns decode.
+    if (!prefersReducedMotion()) preloadOnboardingHeroVideo()
     return () => {
       const el = typeof videoRef === 'object' && videoRef ? videoRef.current : null
       el?.pause()
@@ -228,7 +230,7 @@ function OnboardingHeroVideo({
         loop
         playsInline
         autoPlay
-        preload="auto"
+        preload="metadata"
         src={ONBOARDING_HERO_VIDEO_SRC}
         onError={() => setFailed(true)}
       />
