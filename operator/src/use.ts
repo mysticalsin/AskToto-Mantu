@@ -33,7 +33,9 @@ export type UseRequest = {
   provider: string
   model: string
   /** Managed Portal CF intent. Server authorizes deep; client cannot self-entitle. */
-  tier?: 'base' | 'deep' 
+  tier?: 'base' | 'deep'
+  /** Seat AskStart.id — stable metering key (F10 dedupe). */
+  clientAskId?: string 
   system: string
   messages: UseMessage[]
   image?: OperatorImage
@@ -191,7 +193,12 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
     const t = String((body as { tier: string }).tier).trim()
     if (t === 'deep' || t === 'base') tier = t
   }
-  return { ok: true, req: { provider, model, system, messages, ...(image ? { image } : {}), ...(tier ? { tier } : {}), temperature, maxTokens } }
+  let clientAskId: string | undefined
+  if (typeof (body as { clientAskId?: unknown }).clientAskId === 'string') {
+    const id = String((body as { clientAskId: string }).clientAskId).trim()
+    if (id.length >= 8 && id.length <= 128) clientAskId = id
+  }
+  return { ok: true, req: { provider, model, system, messages, ...(image ? { image } : {}), ...(tier ? { tier } : {}), ...(clientAskId ? { clientAskId } : {}), temperature, maxTokens } }
 }
 
 export function openaiMessages(req: UseRequest): unknown[] {

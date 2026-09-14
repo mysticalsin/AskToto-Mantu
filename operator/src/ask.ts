@@ -224,7 +224,8 @@ function sseResponse(
         model: req.model,
         inputTokens,
         outputTokens,
-        outcome
+        outcome,
+        askId: req.clientAskId
       })
     } catch {
       /* metering must never fail the seat stream */

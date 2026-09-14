@@ -2,6 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TranscriptLine } from '@shared/ipc'
 import { collapseRepeatedPhrase, isNonSpeechLine, repeatKey } from '@shared/transcript-filter'
 import { detectLanguage, detectLanguages } from '@shared/lang-id'
+import {
+  assertCloudOnlyAllowsEngine,
+  CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED,
+  resolveEnterpriseLiveProfile,
+  type EnterpriseLiveProfile
+} from '@shared/enterprise-live-profile'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
@@ -569,7 +575,9 @@ export function useListen(
   // docs/asr/QUALITY.md — prewarm the quality the user will actually start with (default Best). A Fast
   // prewarm + Best start() used to terminate the warm worker and reload, so first Listen on the default
   // path sat behind a cold large-model load. Fast is a power option: only that setting prewarms Fast.
-  asrQuality?: 'best' | 'fast'
+  asrQuality?: 'best' | 'fast',
+  // Managed enterprise-live profile (CLOUD_ONLY blocks local Whisper/Parakeet/Apple with an honest error).
+  enterpriseLive?: EnterpriseLiveProfile
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
@@ -601,6 +609,9 @@ export function useListen(
   // start() returned and must re-send the language the session was started with.
   const asrLanguageRef = useRef<string>('auto')
   const engineRef = useRef<'whisper' | 'parakeet' | 'apple'>('parakeet') // active ASR engine for this session
+  // Trusted managed profile from Settings — ref so mid-session CLOUD_ONLY checks (fallback) see latest policy.
+  const enterpriseLiveRef = useRef<EnterpriseLiveProfile | undefined>(enterpriseLive)
+  enterpriseLiveRef.current = enterpriseLive
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
   // a remote model fetch. `false` is returned deliberately by the main process only for an unprovisioned
@@ -1196,6 +1207,22 @@ export function useListen(
   const fallBackToWhisper = useCallback((): void => {
     if (engineRef.current !== 'parakeet' && engineRef.current !== 'apple') return // already switched
     const failedEngine = engineRef.current
+    const gate = assertCloudOnlyAllowsEngine(resolveEnterpriseLiveProfile(enterpriseLiveRef.current ?? {}), 'whisper')
+    if (!gate.ok) {
+      // CLOUD_ONLY: never silently swap to local Whisper — surface the honest refusal.
+      console.warn('[listen] CLOUD_ONLY blocked local Whisper fallback')
+      liveRef.current = false
+      setState((s) => ({
+        ...s,
+        listening: false,
+        capturing: false,
+        loading: false,
+        ready: false,
+        error: gate.error || CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED
+      }))
+      void window.toto.setListeningState(false).catch(() => {})
+      return
+    }
     console.warn(`[listen] ${failedEngine} failing repeatedly — switching to Whisper for the rest of this session`)
     engineRef.current = 'whisper'
     readyRef.current = false
@@ -1728,6 +1755,23 @@ export function useListen(
       if (startingRef.current) return
       startingRef.current = true
       try {
+        // Enterprise-live CLOUD_ONLY: refuse local Whisper/Parakeet/Apple before any host/worker boots.
+        // Honest error — never silently fall through to another local engine.
+        {
+          const profile = resolveEnterpriseLiveProfile(enterpriseLiveRef.current ?? {})
+          const gate = assertCloudOnlyAllowsEngine(profile, engine)
+          if (!gate.ok) {
+            setState((s) => ({
+              ...s,
+              listening: false,
+              capturing: false,
+              loading: false,
+              ready: false,
+              error: gate.error || CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED
+            }))
+            return
+          }
+        }
         // Capture the caller's requested quality up front, unconditional of which engine ends up running
         // this session — fallBackToWhisper and armNetworkRetry's retry() (both able to fire well after this
         // start() call returns) read requestedQualityRef instead of loadedQualityRef, which stays null for
@@ -1835,6 +1879,24 @@ export function useListen(
               pump()
             } catch (e) {
               if (!captureAdmissionIsOpen(myEpoch)) return
+              const whisperGate = assertCloudOnlyAllowsEngine(
+                resolveEnterpriseLiveProfile(enterpriseLiveRef.current ?? {}),
+                'whisper'
+              )
+              if (!whisperGate.ok) {
+                console.warn('[listen] parakeet unavailable; CLOUD_ONLY blocks Whisper fallback')
+                liveRef.current = false
+                setState((s) => ({
+                  ...s,
+                  listening: false,
+                  capturing: false,
+                  loading: false,
+                  ready: false,
+                  error: whisperGate.error || CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED
+                }))
+                void window.toto.setListeningState(false).catch(() => {})
+                return
+              }
               console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
               engineRef.current = 'whisper'
             }
@@ -2361,6 +2423,8 @@ export function useListen(
   // at boot. The idle-release half applies only to the deliberately prewarmed concrete Whisper choice.
   useEffect(() => {
     if (asrEngine !== 'whisper') return
+    // CLOUD_ONLY managed profiles must not boot a local Whisper worker even for prewarm.
+    if (!assertCloudOnlyAllowsEngine(resolveEnterpriseLiveProfile(enterpriseLive ?? {}), 'whisper').ok) return
     let cancelled = false
     let warmed = false
     const warm = async (): Promise<void> => {
@@ -2386,7 +2450,7 @@ export function useListen(
     return () => {
       cancelled = true
     }
-  }, [ensureWorker, getAsrBundled, asrEngine, asrQuality])
+  }, [ensureWorker, getAsrBundled, asrEngine, asrQuality, enterpriseLive])
 
   // Mid-session spoken-language change (Settings → Audio while listening). The ref update covers every
   // engine's future reads; only a live Whisper worker needs an explicit nudge — a warm re-init whose

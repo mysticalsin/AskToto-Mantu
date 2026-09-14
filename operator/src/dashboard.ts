@@ -352,6 +352,7 @@ function askLine(a: {
 
 function costForAsks(
   asks: {
+    input_tokens?: number | null
     cache_read: number | null
     cache_write: number | null
     cache_uncached: number | null
@@ -377,9 +378,13 @@ function costForAsks(
       a.model || '',
       a.provider || undefined
     )
-    if (est) {
+    const list = est
+      ? null
+      : estimateListPrice(a.model || '', a.input_tokens, a.output_tokens, a.cache_read)
+    const hit = est ?? list
+    if (hit) {
       any = true
-      usd += est.usd
+      usd += hit.usd
     }
   }
   return any ? formatUsdEstimate(usd) : null
@@ -523,15 +528,22 @@ function countPerBucket(events: EventRow[], kind: string, starts: number[], step
   })
 }
 
-/** Reported token total for one ask (input side from the cache breakdown, plus output). Null when the
- *  provider reported nothing, so the caller can tell "0 tokens" apart from "not reported". */
+/** Reported token total for one ask. Prefer explicit input+output; fall back to cache breakdown + output.
+ *  Null when the provider reported nothing — never invent 0. */
 function askTokenTotal(a: {
+  input_tokens?: number | null
   cache_read: number | null
   cache_write: number | null
   cache_uncached: number | null
   output_tokens: number | null
 }): number | null {
-  if (a.cache_read == null && a.cache_write == null && a.cache_uncached == null && a.output_tokens == null) return null
+  const hasInput = a.input_tokens != null
+  const hasOut = a.output_tokens != null
+  const hasCache = a.cache_read != null || a.cache_write != null || a.cache_uncached != null
+  if (!hasInput && !hasOut && !hasCache) return null
+  if (hasInput || hasOut) {
+    return (a.input_tokens ?? 0) + (a.output_tokens ?? 0)
+  }
   return (a.cache_read ?? 0) + (a.cache_write ?? 0) + (a.cache_uncached ?? 0) + (a.output_tokens ?? 0)
 }
 

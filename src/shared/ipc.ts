@@ -1123,6 +1123,17 @@ export const BaseSettingsSchema = z.object({
   // NOTE: this zod default is effectively dead — store.ts layers DEFAULT_SETTINGS under the user file
   // before parsing, so the key is always present. Keep both declarations identical so neither lies.
   asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('parakeet'),
+  /**
+   * Managed enterprise-live profile (1.9.1). Trusted via managed-config defaults / org policy.
+   * CLOUD_ONLY disables local STT fallback; summaryOnly omits fresh Full transcript sections.
+   */
+  enterpriseLive: z
+    .object({
+      managed: z.boolean().default(false),
+      inferenceMode: z.enum(['legacy', 'cloud-only']).default('legacy'),
+      summaryOnly: z.boolean().default(false)
+    })
+    .default({ managed: false, inferenceMode: 'legacy', summaryOnly: false }),
   // Spoken-language hint for transcription: 'auto' (per-window detect) or a language display name from
   // Settings' LANGUAGE_OPTIONS ('Portuguese', …). Pins Whisper's decoder and Apple Speech's recognizer
   // locale; Parakeet always auto-detects. Exists because per-window auto-detect on the compact bundled
@@ -1633,6 +1644,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'parakeet',
+  enterpriseLive: { managed: false, inferenceMode: 'legacy', summaryOnly: false },
   asrLanguage: 'auto',
   asrLastFallbackAt: null,
   asrWebgpuFallbackAt: null,

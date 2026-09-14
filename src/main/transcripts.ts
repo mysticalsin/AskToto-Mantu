@@ -15,6 +15,7 @@ import { join, basename, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
+import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
 import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
 import { mainLog, auditLog } from './logger'
@@ -762,12 +763,14 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   const durMin = meetingDurationMin(m)
   const participants = Array.from(new Set(m.lines.map((l) => speakerLabel(l.speaker))))
 
-  const transcript = formatTranscript(m.lines)
+  // Enterprise-live SUMMARY_ONLY: omit fresh Full transcript section. Never rewrite/delete older files.
+  const summaryOnly = isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings))
+  const transcript = summaryOnly ? '' : formatTranscript(m.lines)
 
   const frontmatter =
     [
       '---',
-      'type: meeting-transcript',
+      summaryOnly ? 'type: meeting-summary' : 'type: meeting-transcript',
       'source: Métis',
       `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
       `date: ${new Date(started).toISOString()}`,
@@ -775,9 +778,10 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
       `participants: [${participants.join(', ')}]`,
       `duration_min: ${durMin}`,
       ...(measuredDurationMs(m.durationMs) !== undefined ? [`duration_ms: ${measuredDurationMs(m.durationMs)}`] : []),
-      `lines: ${m.lines.length}`,
+      `lines: ${summaryOnly ? 0 : m.lines.length}`,
       ...(m.recapStatus ? [`recap_status: ${m.recapStatus}`] : []),
       ...(tags.length ? [`topics: [${tags.map((t) => yamlSafeTitle(t)).join(', ')}]`] : []),
+      ...(summaryOnly ? ['retention: summary-only'] : []),
       'status: ready-for-followup',
       '---',
       ''
@@ -786,7 +790,9 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   const body =
     `# ${title}\n\n_${new Date(started).toLocaleString()} · ${m.mode} · ${durMin} min · Métis_\n\n` +
     (m.recap ? `## Notes & follow-ups\n\n${m.recap}\n\n` : '') +
-    `## Full transcript\n\n${transcript || '_No speech captured._'}\n`
+    (summaryOnly
+      ? `## Retention\n\n_Summary/action record — full transcript not retained under managed enterprise profile._\n`
+      : `## Full transcript\n\n${transcript || '_No speech captured._'}\n`)
 
   await writeSaved(file, frontmatter + body, settings.encryptTranscripts) // atomic; encrypted at rest when on
 
