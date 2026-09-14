@@ -337,7 +337,8 @@ function LazyInput({
   placeholder,
   disabled,
   id,
-  list
+  list,
+  'aria-label': ariaLabel
 }: {
   value: string
   onCommit: (v: string) => void
@@ -348,6 +349,7 @@ function LazyInput({
   /** Id of a sibling <datalist> — without it the model fields would lose their suggestion list when
    *  they moved onto this debounced input. */
   list?: string
+  'aria-label'?: string
 }): JSX.Element {
   const { local, onChange, onBlur } = useLazyText(value, onCommit)
   return (
@@ -357,6 +359,7 @@ function LazyInput({
       value={local}
       disabled={disabled}
       placeholder={placeholder}
+      aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}
       className={className}
@@ -777,6 +780,93 @@ export function detectHint(
 
 function isProfileUnlockError(message: string): boolean {
   return /keychain|encrypted profile|secret.?key/i.test(message)
+}
+
+
+/** Seat Soniox API key for cloud STT (optional; Nova is the default transcript source). */
+function SonioxKeySeat({
+  hasKey,
+  envLocked,
+  onSaved
+}: {
+  hasKey: boolean
+  envLocked: boolean
+  onSaved: () => void
+}): JSX.Element {
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const save = async (): Promise<void> => {
+    const trimmed = key.trim()
+    if (!trimmed) {
+      setMsg('Paste a Soniox API key first.')
+      return
+    }
+    setBusy(true)
+    setMsg(null)
+    try {
+      await window.toto.cloudSttSetSonioxKey(trimmed)
+      setKey('')
+      setMsg('Soniox key saved on this device.')
+      onSaved()
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Could not save Soniox key.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const clear = async (): Promise<void> => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      await window.toto.cloudSttClearSonioxKey()
+      setMsg('Soniox key removed.')
+      onSaved()
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Could not remove Soniox key.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="mt-1 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-2.5">
+      <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+        Soniox runs only when selected here and a key is seated (or SONIOX_API_KEY is set). Nova stays
+        the default transcript source.
+        {envLocked ? ' SONIOX_API_KEY env is active for this seat.' : hasKey ? ' A Soniox key is seated.' : ' No Soniox key seated yet.'}
+      </p>
+      <input
+        type="password"
+        value={key}
+        disabled={envLocked || busy}
+        onChange={(e) => setKey(e.target.value)}
+        placeholder={hasKey && !envLocked ? '•••••• saved (paste to replace)' : 'Soniox API key'}
+        aria-label="Soniox API key"
+        className={'w-full ' + ctl}
+      />
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={envLocked || busy}
+          onClick={() => void save()}
+          className="no-drag cl-focus rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+        >
+          Save Soniox key
+        </button>
+        {hasKey && !envLocked && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void clear()}
+            className="no-drag cl-focus rounded-[8px] border border-[var(--cl-input)] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.06] disabled:opacity-50"
+          >
+            Remove
+          </button>
+        )}
+      </div>
+      {msg && <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">{msg}</p>}
+    </div>
+  )
 }
 
 function AiSection({
@@ -1443,6 +1533,41 @@ function AiSection({
           {restoreMsg && (
             <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>
           )}
+          <div className="mt-3 flex flex-col gap-2 border-t border-[var(--cl-input)] pt-3">
+            <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              Nova live speech uses the same vault shape as Operator Keys: a Cloudflare account API token
+              (seated above or via Operator), an account id, and an optional AI Gateway id. Blank gateway
+              uses default (same as Operator ensureDefaultAiGateway).
+            </p>
+            <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              Cloudflare account id
+              <ManagedChip keys={settings.managedKeys} k="cloudflareAccountId" />
+              <LazyInput
+                value={settings.cloudflareAccountId ?? ''}
+                disabled={settings.managedKeys.includes('cloudflareAccountId')}
+                onCommit={(v) => patch({ cloudflareAccountId: v.trim() })}
+                placeholder="32 hex characters"
+                aria-label="Cloudflare account id"
+                className={['w-full', ctl, settings.managedKeys.includes('cloudflareAccountId') ? 'opacity-60' : ''].join(' ')}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              CF AI Gateway id
+              <ManagedChip keys={settings.managedKeys} k="cfAiGatewayId" />
+              <LazyInput
+                value={settings.cfAiGatewayId ?? ''}
+                disabled={settings.managedKeys.includes('cfAiGatewayId')}
+                onCommit={(v) => patch({ cfAiGatewayId: v.trim() })}
+                placeholder="default"
+                aria-label="CF AI Gateway id"
+                className={['w-full', ctl, settings.managedKeys.includes('cfAiGatewayId') ? 'opacity-60' : ''].join(' ')}
+              />
+            </label>
+            <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              Account-scoped base URL (.../accounts/&lt;id&gt;/ai/v1) also works; when the Worker proxy URL has
+              no account path, set the account id here.
+            </p>
+          </div>
         </Section>
       )}
 
@@ -5859,7 +5984,7 @@ const TABS: {
       'thinking mode', 'model', 'other providers', 'model provider', 'cli integration',
       'fallback', 'indexing fallback', 'offline indexing',
       'backups & limits', 'nvidia', 'nim', 'race a backup provider', 'hedge',
-      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key', 'oauth', 'connect',
+      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key', 'oauth', 'connect', 'cloudflare account id', 'cf ai gateway id',
       'routing mode', 'routing', 'local', 'api', 'auto'
     ]
   },
@@ -5872,7 +5997,8 @@ const TABS: {
     desc: 'What Métis listens to, and how it hears you.',
     keywords: [
       'audio', 'speech', 'microphone', 'listen to', 'in meetings', 'vocabulary corrections',
-      'transcription', 'asr', 'parakeet', 'whisper', 'apple speech', 'speaker identification'
+      'transcription', 'asr', 'parakeet', 'whisper', 'apple speech', 'speaker identification',
+      'transcript source', 'nova', 'soniox', 'cf ai gateway', 'cloudflare account id'
     ]
   },
   {
@@ -6436,6 +6562,46 @@ export function Settings({
                             Live captions use cloud speech. Audio capture stays on this device; transcripts are
                             transient. Summaries and actions are what get saved.
                           </p>
+                          {cloudProvider === 'cloudflare-nova3' && (
+                            <div className="mt-1 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-2.5">
+                              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                                Nova needs a Cloudflare account token (Settings → AI / Keys), plus account id or
+                                an account-scoped base URL. Gateway id is optional (blank uses default).
+                                {settings.hasKeys?.cloudflare
+                                  ? ' Cloudflare token is seated.'
+                                  : ' Cloudflare token is not seated yet.'}
+                              </p>
+                              <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                                Cloudflare account id
+                                <LazyInput
+                                  value={settings.cloudflareAccountId ?? ''}
+                                  disabled={settings.managedKeys.includes('cloudflareAccountId')}
+                                  onCommit={(v) => patch({ cloudflareAccountId: v.trim() })}
+                                  placeholder="32 hex characters"
+                                  aria-label="Cloudflare account id for Nova"
+                                  className={'w-full ' + ctl}
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                                CF AI Gateway id
+                                <LazyInput
+                                  value={settings.cfAiGatewayId ?? ''}
+                                  disabled={settings.managedKeys.includes('cfAiGatewayId')}
+                                  onCommit={(v) => patch({ cfAiGatewayId: v.trim() })}
+                                  placeholder="default"
+                                  aria-label="CF AI Gateway id for Nova"
+                                  className={'w-full ' + ctl}
+                                />
+                              </label>
+                            </div>
+                          )}
+                          {cloudProvider === 'soniox' && (
+                            <SonioxKeySeat
+                              hasKey={!!settings.hasKeys?.soniox}
+                              envLocked={settings.envKeys.includes('soniox')}
+                              onSaved={() => void refreshSettings()}
+                            />
+                          )}
                         </div>
                       )
                     }

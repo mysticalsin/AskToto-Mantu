@@ -70,4 +70,28 @@ describe('enterprise-live Speech: cloud transcript source', () => {
     expect(html.includes('aria-label="Transcript source"')).toBe(true)
     expect(html.includes('value="soniox"')).toBe(true)
   })
+
+  it('CLOUD_ONLY Nova shows account id and gateway seat fields', () => {
+    const html = renderSpeech({
+      enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: true },
+      cloudSttProvider: 'cloudflare-nova3',
+      cloudflareAccountId: '',
+      cfAiGatewayId: ''
+    })
+    expect(html.includes('aria-label="Cloudflare account id for Nova"')).toBe(true)
+    expect(html.includes('aria-label="CF AI Gateway id for Nova"')).toBe(true)
+    expect(html.includes('—')).toBe(false)
+  })
+
+  it('CLOUD_ONLY Soniox shows Soniox key seat', () => {
+    const html = renderSpeech({
+      enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: false },
+      cloudSttProvider: 'soniox',
+      hasKeys: { soniox: false }
+    })
+    expect(html.includes('aria-label="Soniox API key"')).toBe(true)
+    expect(html.includes('Save Soniox key')).toBe(true)
+    expect(html.includes('—')).toBe(false)
+  })
+
 })

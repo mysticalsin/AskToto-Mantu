@@ -131,4 +131,26 @@ describe('CloudSttLiveSession', () => {
     const you = mapCloudFinalsToLines(norm.finals, 'you', { profile: { name: 'Ada' } })
     expect(you[0]).toMatchObject({ speaker: 'you', name: 'Ada', text: 'Salut' })
   })
+
+  it('opens Nova WS using seated accountId when base URL is Worker proxy; gateway defaults', async () => {
+    const session = new CloudSttLiveSession(
+      {
+        provider: 'cloudflare-nova3',
+        cloudflareToken: 'tok',
+        cloudflareBaseUrl: 'https://metis-ai.example.workers.dev/v1',
+        cloudflareAccountId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        gatewayId: null,
+        WebSocketImpl: MockWs as unknown as typeof WebSocket
+      },
+      { onFinal: () => {} }
+    )
+    const r = await session.start()
+    expect(r).toEqual({ ok: true })
+    const tracks = (session as unknown as { tracks: Map<string, { ws: MockWs }> }).tracks
+    const you = tracks.get('you')!
+    expect(you.ws.url).toContain('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+    expect(you.ws.url).toContain('/default/')
+    session.close()
+  })
+
 })

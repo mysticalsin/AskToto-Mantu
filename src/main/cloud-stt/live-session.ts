@@ -40,6 +40,7 @@ export type CloudSttLiveStartOpts = {
   captureId?: string
   cloudflareToken?: string | null
   cloudflareBaseUrl?: string | null
+  cloudflareAccountId?: string | null
   gatewayId?: string | null
   sonioxApiKey?: string | null
   /** Injected WebSocket ctor for tests (`ws`-compatible). */
@@ -87,6 +88,7 @@ export class CloudSttLiveSession {
       provider: this.opts.provider,
       cloudflareToken: this.opts.cloudflareToken,
       cloudflareBaseUrl: this.opts.cloudflareBaseUrl,
+      cloudflareAccountId: this.opts.cloudflareAccountId,
       gatewayId: this.opts.gatewayId,
       sonioxApiKey: this.opts.sonioxApiKey
     })

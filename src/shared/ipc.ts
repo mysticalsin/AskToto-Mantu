@@ -95,6 +95,8 @@ export const IPC = {
   cloudSttFinal: 'cloud-stt:final',
   cloudSttError: 'cloud-stt:error',
   cloudSttInterim: 'cloud-stt:interim',
+  cloudSttSetSonioxKey: 'cloud-stt:set-soniox-key',
+  cloudSttClearSonioxKey: 'cloud-stt:clear-soniox-key',
   // Speaker Intelligence — Whisper's speaker-embedding tap. echo:true means operator loopback bleed.
   speakerEmbed: 'speaker:embed',
   askStart: 'ask:start',
@@ -1149,6 +1151,23 @@ export const BaseSettingsSchema = z.object({
    * Legacy profiles keep on-device asrEngine; this field stays unconfigured.
    */
   cloudSttProvider: z.enum(['cloudflare-nova3', 'soniox', 'unconfigured']).default('unconfigured'),
+  /**
+   * Cloudflare AI Gateway id for Nova-3 live WS (Operator ensureDefaultAiGateway uses `default`).
+   * Blank → resolveCloudSttGatewayId falls through env then `default`. Not a secret.
+   */
+  cfAiGatewayId: z.string().max(128).default(''),
+  /**
+   * Cloudflare account id (32 hex) when cloudflareBaseUrl is a Worker proxy without /accounts/<id>/.
+   * Same honesty as Operator / Portal Keys paste (token + accountId). Not a secret.
+   */
+  cloudflareAccountId: z
+    .string()
+    .max(64)
+    .default('')
+    .refine(
+      (v) => v === '' || /^[a-f0-9]{32}$/i.test(v.trim()),
+      'Cloudflare account id must be 32 hex characters'
+    ),
   // Spoken-language hint for transcription: 'auto' (per-window detect) or a language display name from
   // Settings' LANGUAGE_OPTIONS ('Portuguese', …). Pins Whisper's decoder and Apple Speech's recognizer
   // locale; Parakeet always auto-detects. Exists because per-window auto-detect on the compact bundled
@@ -1661,6 +1680,8 @@ export const DEFAULT_SETTINGS: Settings = {
   asrEngine: 'parakeet',
   enterpriseLive: { managed: false, inferenceMode: 'legacy', summaryOnly: false },
   cloudSttProvider: 'unconfigured',
+  cfAiGatewayId: '',
+  cloudflareAccountId: '',
   asrLanguage: 'auto',
   asrLastFallbackAt: null,
   asrWebgpuFallbackAt: null,
