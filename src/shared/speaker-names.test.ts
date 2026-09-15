@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyConfirmedSpeakerNames,
+  canUpgradeSpeakerLabel,
   isOverlapSpeakerLabel,
   isSessionSpeakerLabel,
   isUnknownSpeakerLabel,
@@ -86,10 +87,28 @@ describe('applyConfirmedSpeakerNames', () => {
   })
 })
 
+describe('canUpgradeSpeakerLabel', () => {
+  it('allows empty, Speaker N, and Unknown speaker N', () => {
+    expect(canUpgradeSpeakerLabel(undefined)).toBe(true)
+    expect(canUpgradeSpeakerLabel(null)).toBe(true)
+    expect(canUpgradeSpeakerLabel('')).toBe(true)
+    expect(canUpgradeSpeakerLabel('Speaker 3')).toBe(true)
+    expect(canUpgradeSpeakerLabel('Unknown speaker 2')).toBe(true)
+  })
+  it('never upgrades a confirmed person name', () => {
+    expect(canUpgradeSpeakerLabel('Ada Lovelace')).toBe(false)
+    expect(canUpgradeSpeakerLabel('Tony Walteur')).toBe(false)
+  })
+})
+
 describe('micSpeakerLabel / profile you label', () => {
   it('uses profile display name when filled', () => {
-    expect(micSpeakerLabel({ name: 'Tony Walteur', role: 'CEO' })).toBe('Tony Walteur')
     expect(micSpeakerLabel({ name: '  Ada  ' })).toBe('Ada')
+  })
+  it('appends role (or title) as Name · role when present', () => {
+    expect(micSpeakerLabel({ name: 'Tony Walteur', role: 'CEO' })).toBe('Tony Walteur · CEO')
+    expect(micSpeakerLabel({ name: 'Ada', title: 'Engineer' })).toBe('Ada · Engineer')
+    expect(micSpeakerLabel({ name: 'Ada', role: 'CEO', title: 'ignored' })).toBe('Ada · CEO')
   })
   it('honest fallback to You when name empty', () => {
     expect(micSpeakerLabel({ name: '', role: 'Engineer' })).toBe('You')

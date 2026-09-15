@@ -20,6 +20,7 @@ import {
   type Nova3LanguageQuery,
   type SonioxLanguageConfig
 } from '@shared/cloud-stt-language'
+import { canUpgradeSpeakerLabel } from '@shared/speaker-names'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
@@ -763,6 +764,13 @@ export function useListen(
   // transcript (liveRef is true again). Same class as the Parakeet/Apple jobEpoch guards in pump().
   const pendingWhisperEpochRef = useRef(0)
   const pendingWhisperStartedAtRef = useRef<number | undefined>(undefined)
+  // Cloud STT: last 'them' window audio kept so onCloudSttFinal can voiceprint after commit
+  // (mapCloudFinalToLine already stamps Speaker N / Unknown — attachSpeakerName upgrades it).
+  const lastThemEmbedRef = useRef<{
+    audio: Float32Array
+    startedAt?: number
+    epoch: number
+  } | null>(null)
   // Trailing run of consecutive 'them' speech (joined) since the last 'you' turn or last auto-answer fire.
   // The auto-answer endpoints on this COALESCED turn rather than a single VAD window, so a question split
   // across windows by a mid-sentence hesitation pause (more likely now the endpoint is a snappy 0.6s) still
@@ -808,12 +816,14 @@ export function useListen(
     linesRef.current = next
     setLines(next)
   }, [])
-  // Speaker Intelligence (1C.2) — attaches a name resolved AFTER the fact (the Whisper speakerEmbed round
-  // trip finishes after the line already committed) to the specific line it belongs to, identified by the
-  // `t` timestamp commitLine returned when it committed. Guarded on `!l.name` so a slow/duplicate resolve
-  // can never clobber a name the line already has.
+  // Speaker Intelligence (1C.2) — attaches a name resolved AFTER the fact (Whisper / cloud speakerEmbed
+  // round trip finishes after the line already committed) to the specific line it belongs to, identified
+  // by the `t` timestamp commitLine returned when it committed. Upgrades empty / session ("Speaker N") /
+  // unknown placeholders; never overwrites a confirmed person name.
   const attachSpeakerName = useCallback((t: number, name: string): void => {
-    const idx = linesRef.current.findIndex((l) => l.t === t && l.speaker === 'them' && !l.name)
+    const idx = linesRef.current.findIndex(
+      (l) => l.t === t && l.speaker === 'them' && canUpgradeSpeakerLabel(l.name)
+    )
     if (idx < 0) return
     const next = linesRef.current.slice()
     next[idx] = { ...next[idx], name }
@@ -967,6 +977,14 @@ export function useListen(
       while (queue.current.length > 0) {
         const job = queue.current.shift() as LiveAudioWindow
         if (!job?.audio?.length) continue
+        // Mirror Whisper: keep a copy of the latest 'them' window for post-final speakerEmbed.
+        if (job.speaker === 'them') {
+          lastThemEmbedRef.current = {
+            audio: job.audio.slice(),
+            startedAt: job.startedAt,
+            epoch: sessionEpochRef.current
+          }
+        }
         void window.toto.cloudSttPush(job.audio, job.speaker === 'them' ? 'them' : 'you').catch(() => {})
       }
       return
@@ -1175,6 +1193,7 @@ export function useListen(
         clearProvisional() // this window has settled (with an error) — the placeholder's job is done
         pendingWhisperEmbedRef.current = null
         pendingWhisperStartedAtRef.current = undefined
+        lastThemEmbedRef.current = null
         busy.current = false
         pump()
       } else if (m.type === 'text') {
@@ -1978,7 +1997,32 @@ export function useListen(
             cloudSttUnsubRef.current = null
             const offFinal = window.toto.onCloudSttFinal((line) => {
               if (!liveRef.current || sessionEpochRef.current !== myEpoch) return
-              commitLine(line.text, line.speaker, line.name)
+              const committedAt = commitLine(line.text, line.speaker, line.name)
+              // Cloud finals already carry Speaker N / Unknown from mapCloudFinalToLine — voiceprint
+              // upgrade mirrors Whisper echo handling so enrolled names replace session placeholders.
+              if (
+                committedAt !== null &&
+                line.speaker === 'them' &&
+                canUpgradeSpeakerLabel(line.name)
+              ) {
+                const emb = lastThemEmbedRef.current
+                if (emb?.audio?.length && !speakerEmbedResultIsStale(emb.epoch, sessionEpochRef.current)) {
+                  const speakerEpoch = emb.epoch
+                  void window.toto
+                    .speakerEmbed(emb.audio, 'them', emb.startedAt)
+                    .then((res) => {
+                      if (speakerEmbedResultIsStale(speakerEpoch, sessionEpochRef.current)) return
+                      if (res?.echo) {
+                        const next = linesRef.current.filter((row) => row.t !== committedAt)
+                        linesRef.current = next
+                        setLines(next)
+                        return
+                      }
+                      if (res?.name) attachSpeakerName(committedAt, res.name)
+                    })
+                    .catch(() => {})
+                }
+              }
             })
             const offErr = window.toto.onCloudSttError((message) => {
               if (!liveRef.current || sessionEpochRef.current !== myEpoch) return

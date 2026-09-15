@@ -73,15 +73,27 @@ export function isOverlapSpeakerLabel(name: string | undefined | null): boolean 
 }
 
 /**
+ * Whether a live line name is still unresolved and may be upgraded by voiceprint / embed.
+ * Confirmed person names must never be overwritten; session/unknown placeholders may.
+ */
+export function canUpgradeSpeakerLabel(name: string | undefined | null): boolean {
+  if (!name?.trim()) return true
+  return isSessionSpeakerLabel(name) || isUnknownSpeakerLabel(name)
+}
+
+/**
  * Mic-side ("you") label from the Métis user profile (name filled in onboarding/settings).
- * Honest fallback when empty — never invent a person name.
+ * Name stays primary; when role (or title) is set, append as `Name · role`. Honest fallback
+ * when empty — never invent a person name.
  */
 export function micSpeakerLabel(
-  profile?: { name?: string | null; role?: string | null } | null
+  profile?: { name?: string | null; role?: string | null; title?: string | null } | null
 ): string {
   const name = profile?.name?.trim() ?? ''
-  if (name) return name
-  return 'You'
+  if (!name) return 'You'
+  const role = (profile?.role ?? profile?.title)?.trim() ?? ''
+  if (role) return `${name} · ${role}`
+  return name
 }
 
 /**

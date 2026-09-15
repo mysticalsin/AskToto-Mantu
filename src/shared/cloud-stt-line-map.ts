@@ -38,7 +38,7 @@ export type CloudSttMappedLine = {
 export function mapCloudFinalToLine(
   final: CloudSttFinalLike,
   channel: CloudSttLineSpeaker,
-  opts?: { profile?: { name?: string | null } | null }
+  opts?: { profile?: { name?: string | null; role?: string | null; title?: string | null } | null }
 ): CloudSttMappedLine | null {
   const text = (final.text || '').replace(/\s+/g, ' ').trim()
   if (!text) return null
@@ -69,7 +69,7 @@ export function mapCloudFinalToLine(
 export function mapCloudFinalsToLines(
   finals: readonly CloudSttFinalLike[],
   channel: CloudSttLineSpeaker,
-  opts?: { profile?: { name?: string | null } | null }
+  opts?: { profile?: { name?: string | null; role?: string | null; title?: string | null } | null }
 ): CloudSttMappedLine[] {
   const out: CloudSttMappedLine[] = []
   for (const f of finals) {

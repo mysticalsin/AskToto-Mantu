@@ -32,6 +32,13 @@ describe('mapCloudFinalToLine', () => {
     expect(mapCloudFinalToLine({ ...base, cluster: 'unknown' }, 'them')?.name).toMatch(/^Unknown speaker/)
   })
 
+
+  it('appends mic role onto profile name when present', () => {
+    expect(mapCloudFinalToLine(base, 'you', { profile: { name: 'Tony', role: 'CEO' } })?.name).toBe(
+      'Tony · CEO'
+    )
+  })
+
   it('drops empty / whitespace-only finals', () => {
     expect(mapCloudFinalToLine({ ...base, text: '   ' }, 'you')).toBeNull()
   })
