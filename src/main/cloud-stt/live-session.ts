@@ -35,7 +35,7 @@ export type CloudSttLiveStartOpts = {
   asrLanguage?: string | null
   pinnedLang?: string | null
   /** Mic profile for "you" labels. */
-  profile?: { name?: string | null } | null
+  profile?: { name?: string | null; role?: string | null; title?: string | null } | null
   meetingId?: string
   captureId?: string
   cloudflareToken?: string | null
