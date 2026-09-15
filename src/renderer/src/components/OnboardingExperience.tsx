@@ -1266,14 +1266,12 @@ export function OnboardingExperience({
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
-            // FITO-185-AA: advance scene first — never let music/video block Act 2.
+            // FITO-185-AA: keep Next in the user-gesture tick. Call play() first
+            // (autoplay unlock), then advance the scene in the SAME sync handler —
+            // never await music/video before the scene change, or Act 2 looks stuck.
+            music.start()
+            playOnboardingVideo(heroVideoRef.current)
             setScene('problem')
-            void Promise.resolve(music.start()).catch(() => {})
-            try {
-              playOnboardingVideo(heroVideoRef.current)
-            } catch {
-              /* ignore */
-            }
           }}
         />
       )}
