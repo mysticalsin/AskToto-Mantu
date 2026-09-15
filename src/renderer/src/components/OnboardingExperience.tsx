@@ -110,7 +110,8 @@ import {
   ONBOARDING_HERO_POSTER_SRC,
   ONBOARDING_HERO_VIDEO_SRC,
   playOnboardingVideo,
-  preloadOnboardingHeroVideo
+  preloadOnboardingHeroVideo,
+  resolveOnboardingHeroVideoSrc
 } from '../lib/onboarding-hero-video'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
@@ -264,7 +265,7 @@ function OnboardingHeroVideo({
           autoPlay
           preload="auto"
           poster={ONBOARDING_HERO_POSTER_SRC}
-          src={ONBOARDING_HERO_VIDEO_SRC}
+          src={resolveOnboardingHeroVideoSrc(ONBOARDING_HERO_VIDEO_SRC)}
           className={videoReady ? 'onboard-hero-video--ready' : 'onboard-hero-video--pending'}
           onLoadedData={markReady}
           onCanPlay={markReady}

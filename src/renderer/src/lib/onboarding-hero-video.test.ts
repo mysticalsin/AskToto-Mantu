@@ -6,7 +6,8 @@ import {
   ONBOARDING_HERO_VIDEO_REMOTE_SRC,
   ONBOARDING_HERO_VIDEO_SRC,
   playOnboardingMedia,
-  playOnboardingVideo
+  playOnboardingVideo,
+  resolveOnboardingHeroVideoSrc
 } from './onboarding-hero-video'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
@@ -172,3 +173,31 @@ describe('FITO-185-V hero video ready promotion', () => {
   })
 })
 
+describe('FITO-185-W packaged hero mp4 plays outside asar', () => {
+  it('rewrites app.asar media URLs to app.asar.unpacked for Chromium decode', () => {
+    const asarBase = 'file:///Applications/Metis.app/Contents/Resources/app.asar/out/renderer/index.html'
+    const viteSrc = './assets/onboarding-hero-lady-planet-CpyqQ-62.mp4'
+    expect(resolveOnboardingHeroVideoSrc(viteSrc, asarBase)).toBe(
+      'file:///Applications/Metis.app/Contents/Resources/app.asar.unpacked/out/renderer/assets/onboarding-hero-lady-planet-CpyqQ-62.mp4'
+    )
+    // Already unpacked — leave alone
+    const unpacked = 'file:///Applications/Metis.app/Contents/Resources/app.asar.unpacked/out/renderer/assets/x.mp4'
+    expect(resolveOnboardingHeroVideoSrc(unpacked, asarBase)).toBe(unpacked)
+    // Dev server — leave relative / return absolute http
+    expect(resolveOnboardingHeroVideoSrc(viteSrc, 'http://localhost:5173/')).toMatch(/onboarding-hero-lady-planet/)
+    expect(resolveOnboardingHeroVideoSrc(viteSrc, undefined)).toBe(viteSrc)
+  })
+
+  it('Experience uses resolveOnboardingHeroVideoSrc; builder unpacks **/*.mp4; CTA stays hittable', () => {
+    expect(experience).toMatch(/resolveOnboardingHeroVideoSrc\(ONBOARDING_HERO_VIDEO_SRC\)/)
+    const builder = readFileSync(join(__dirname, '../../../../electron-builder.yml'), 'utf8')
+    const unpack = builder.slice(builder.indexOf('asarUnpack:'), builder.indexOf('extraResources:'))
+    expect(unpack).toMatch(/\*\*\/\*\.mp4/)
+    expect(css).toMatch(/FITO-185-W: kenburns on poster/)
+    expect(css).toMatch(/pointer-events:\s*auto\s*!important/)
+    expect(css).toMatch(/\.hero-welcome \.onboard-cta/)
+    expect(experience).toMatch(
+      /onBegin=\{\(\) => \{[\s\S]*?playOnboardingVideo\(heroVideoRef\.current\)[\s\S]*?setScene\('problem'\)/
+    )
+  })
+})

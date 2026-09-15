@@ -828,7 +828,8 @@ input::placeholder {
   .onboard-stage .fade-up {
     animation: none;
   }
-  .onboard-hero-video video {
+  .onboard-hero-video video,
+  .onboard-hero-poster {
     animation: none;
     transform: none;
   }
@@ -871,6 +872,8 @@ input::placeholder {
 .onboard-hero-poster {
   z-index: 1;
   opacity: 1;
+  /* FITO-185-W: kenburns on poster so Act 1 still moves if <video> stays pending (asar decode). */
+  animation: onboard-hero-kenburns 28s ease-in-out infinite alternate;
 }
 .onboard-hero-video video {
   z-index: 2;
@@ -888,6 +891,9 @@ input::placeholder {
   }
 }
 .hero-welcome {
+  position: relative;
+  z-index: 5;
+  pointer-events: auto;
   transform: translateY(-16vh);
 }
 .onboard-hero-video-tint {
@@ -1213,9 +1219,16 @@ input::placeholder {
   cursor: pointer;
   box-shadow: 0 2px 16px rgba(244, 244, 245, 0.16);
   position: relative;
-  z-index: 3;
+  z-index: 5;
   opacity: 1;
-  pointer-events: auto;
+  /* FITO-185-W: real user clicks must reach Next; never inherit a parent pointer-events:none. */
+  pointer-events: auto !important;
+  -webkit-app-region: no-drag;
+}
+.hero-welcome .onboard-cta,
+button.onboard-cta {
+  pointer-events: auto !important;
+  z-index: 6;
 }
 .onboard-mute {
   position: absolute;
