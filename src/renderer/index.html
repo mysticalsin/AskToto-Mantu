@@ -32,13 +32,19 @@
       never leave Tony on pure black. styles.css sets html/body transparent for the overlay —
       this inline bed wins until App removes #boot-bed after onboardingDone.
     -->
+    <link rel="preload" as="image" href="onboarding-hero-poster.jpg" fetchpriority="high" />
     <style>
+      /* FITO-185-Y: first compositor frame is Act1 (poster + wordmark + Next), never a black void.
+         BrowserWindow stays hidden until this chrome + poster are painted. */
       #boot-bed {
         position: fixed;
         inset: 0;
         z-index: 0;
         pointer-events: none;
         background-color: #05010A;
+        background-image: url("onboarding-hero-poster.jpg");
+        background-size: cover;
+        background-position: center;
         overflow: hidden;
       }
       /* Real <img> so a failed CSS background cannot leave a solid #05010A slab. */
@@ -52,6 +58,44 @@
         opacity: 1;
         z-index: 1;
       }
+      #act1-boot-chrome {
+        position: fixed;
+        inset: 0;
+        z-index: 2;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        transform: translateY(-16vh);
+      }
+      #act1-boot-wordmark {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        font-weight: 650;
+        font-size: 30px;
+        letter-spacing: 0.01em;
+        color: #f4f4f5;
+        line-height: 1.2em;
+      }
+      #act1-boot-next {
+        pointer-events: auto;
+        margin-top: 20px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 52px;
+        min-width: 220px;
+        padding: 0 28px;
+        border: none;
+        border-radius: 999px;
+        background: #f4f4f5;
+        color: #09090b;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        -webkit-app-region: no-drag;
+      }
       #root {
         position: relative;
         z-index: 1;
@@ -61,9 +105,14 @@
   </head>
   <body>
     <div id="boot-bed" aria-hidden="true">
-      <img id="boot-bed-img" src="onboarding-hero-poster.jpg" alt="" decoding="async" fetchpriority="high" />
+      <img id="boot-bed-img" src="onboarding-hero-poster.jpg" alt="" decoding="sync" fetchpriority="high" />
+    </div>
+    <div id="act1-boot-chrome">
+      <h1 id="act1-boot-wordmark">Métis</h1>
+      <button type="button" id="act1-boot-next" class="onboard-cta">Next</button>
     </div>
     <div id="root"></div>
+    <script src="./act1-boot.js" defer></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

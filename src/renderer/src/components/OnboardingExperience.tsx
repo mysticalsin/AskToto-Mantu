@@ -223,15 +223,16 @@ function OnboardingHeroVideo({
   videoRef: Ref<HTMLVideoElement>
 }): JSX.Element {
   const [videoFailed, setVideoFailed] = useState(false)
-  // Poster paints immediately. Defer <video> mount so a decoding black frame cannot cover the lady.
-  // FITO-185-P: mount video on first paint (poster already visible). Idle defer left Act 1 static
-  // and felt like "no animation" on Totos-Mac exclusive.
-  const [allowVideo, setAllowVideo] = useState(() => !prefersReducedMotion())
+  // FITO-185-Y: poster/UI first. The 8.9MB hero mp4 must not contend for first paint.
+  // Video mounts after a short idle; pending <video> stays opacity 0 until a decoded frame.
+  const [allowVideo, setAllowVideo] = useState(false)
   const [videoReady, setVideoReady] = useState(false)
   const markReady = useCallback(() => setVideoReady(true), [])
   useEffect(() => {
     if (prefersReducedMotion()) return
-    setAllowVideo(true)
+    const start = (): void => setAllowVideo(true)
+    const t = window.setTimeout(start, 480)
+    return () => window.clearTimeout(t)
   }, [])
   useEffect(() => {
     if (!allowVideo || prefersReducedMotion()) return
@@ -255,7 +256,7 @@ function OnboardingHeroVideo({
   }, [allowVideo, videoRef])
   return (
     <div className="onboard-hero-video" aria-hidden="true">
-      <img className="onboard-hero-poster" src={ONBOARDING_HERO_POSTER_SRC} alt="" decoding="async" fetchPriority="high" />
+      <img className="onboard-hero-poster" src={ONBOARDING_HERO_POSTER_SRC} alt="" decoding="sync" fetchPriority="high" />
       {allowVideo && !prefersReducedMotion() && !videoFailed && (
         <video
           ref={videoRef}
@@ -280,8 +281,22 @@ function OnboardingHeroVideo({
 }
 
 function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
+  const onBeginRef = useRef(onBegin)
+  onBeginRef.current = onBegin
   useLayoutEffect(() => {
     requestOnboardingPortalOpen()
+    document.getElementById('act1-boot-chrome')?.setAttribute('hidden', '')
+    const w = window as Window & { __act1BootNextQueued?: boolean }
+    if (w.__act1BootNextQueued) {
+      w.__act1BootNextQueued = false
+      onBeginRef.current()
+    }
+    const onQueued = (): void => {
+      w.__act1BootNextQueued = false
+      onBeginRef.current()
+    }
+    window.addEventListener('act1-boot-next', onQueued)
+    return () => window.removeEventListener('act1-boot-next', onQueued)
   }, [])
   return (
     <>

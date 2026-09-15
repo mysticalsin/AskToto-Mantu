@@ -116,8 +116,10 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(create).toMatch(/overlayWindowChrome\(onboardingLive\)/)
     expect(create).toMatch(/transparent: chrome\.transparent/)
     expect(create).toMatch(/backgroundColor: chrome\.backgroundColor/)
-    expect(create).toMatch(/show:\s*true/)
-    // FITO-185-R: exclusive shows immediately (no hidden-first)
+    expect(create).toMatch(/show:\s*!onboardingLive/)
+    // FITO-185-Y: exclusive hidden until Act1 first paint (never #05010A void)
+    expect(create).toMatch(/act1-first-paint/)
+    expect(create).toMatch(/pollAct1Paint/)
     expect(create).toMatch(/overlay\.once\('ready-to-show'/)
     expect(create).toMatch(/revealExclusiveWhenPainted/)
     expect(create).toContain('}, 2000)') // FITO-185-G-SHOW hard reveal
@@ -191,24 +193,21 @@ describe('exclusive onboarding cannot be dragged off-screen', () => {
 })
 
 describe('FITO-185-T exclusive Act 1 visible without forever Loading', () => {
-  it('createWindow activates exclusive via showForExclusiveOnboarding, not showInactive-only', () => {
+  it('createWindow activates exclusive via showForExclusiveOnboarding after Act1 paint', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
     expect(create).toMatch(/showForExclusiveOnboarding\(win\)/)
     expect(create).toMatch(/showForExclusiveOnboarding\(overlay\)/)
-    // Immediate + painted reveal must not regress to showInactive-only (Tony FAIL cf2f67d).
-    const immediate = create.slice(
-      create.indexOf('FITO-185-T: without SFS'),
-      create.indexOf('setVisibleOnAllWorkspaces')
-    )
-    expect(immediate).toMatch(/showForExclusiveOnboarding\(win\)/)
-    expect(immediate).not.toMatch(/showInactive\(\)/)
+    // FITO-185-Y: ctor must not show exclusive on the empty `#05010A` hold.
+    expect(create).toMatch(/do NOT show exclusive here/)
     const reveal = create.slice(
       create.indexOf('const revealExclusiveWhenPainted'),
-      create.indexOf('overlay.once(')
+      create.indexOf('overlay.webContents.on(')
     )
     expect(reveal).toMatch(/showForExclusiveOnboarding\(overlay\)/)
     expect(reveal).not.toMatch(/showInactive\(\)/)
+    expect(create).toMatch(/pollAct1Paint/)
+    expect(create).toMatch(/act1-first-paint/)
   })
 
   it('FITO-185-S still hard-disables SFS on Electron 43+', () => {

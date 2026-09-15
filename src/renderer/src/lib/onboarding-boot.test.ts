@@ -70,6 +70,53 @@ describe('FITO-185-I App boot gate (source contract)', () => {
   })
 })
 
+describe('FITO-185-Y instant Act1 first paint', () => {
+  const indexHtml = readFileSync(join(__dirname, '../../index.html'), 'utf8')
+  const bootJs = readFileSync(join(__dirname, '../../public/act1-boot.js'), 'utf8')
+  const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+  const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
+
+  it('no-JS shell is poster + Métis wordmark + Next (never waits on video)', () => {
+    expect(indexHtml).toMatch(/rel="preload"[^>]*onboarding-hero-poster\.jpg/)
+    expect(indexHtml).toMatch(/background-image:\s*url\("onboarding-hero-poster\.jpg"\)/)
+    expect(indexHtml).toMatch(/decoding="sync"/)
+    expect(indexHtml).not.toMatch(/decoding="async"/)
+    expect(indexHtml).toMatch(/id="act1-boot-chrome"/)
+    expect(indexHtml).toMatch(/id="act1-boot-wordmark"/)
+    expect(indexHtml).toMatch(/Métis/)
+    expect(indexHtml).toMatch(/id="act1-boot-next"/)
+    expect(indexHtml).toMatch(/act1-boot\.js/)
+    expect(indexHtml).not.toMatch(/onboarding-hero-lady-planet/)
+  })
+
+  it('act1-boot marks first paint and queues Next without touching the mp4', () => {
+    expect(bootJs).toMatch(/act1-first-paint/)
+    expect(bootJs).toMatch(/__act1BootNextQueued/)
+    expect(bootJs).toMatch(/act1-boot-next/)
+    expect(bootJs).not.toMatch(/\.mp4/)
+  })
+
+  it('React consumes queued Next and hides the no-JS chrome', () => {
+    expect(experience).toMatch(/act1-boot-chrome/)
+    expect(experience).toMatch(/act1-boot-next/)
+    expect(experience).toMatch(/__act1BootNextQueued/)
+  })
+
+  it('exclusive BrowserWindow stays hidden until Act1 paint', () => {
+    expect(main).toMatch(/show:\s*!onboardingLive/)
+    expect(main).toMatch(/FITO-185-Y/)
+    expect(main).toMatch(/pollAct1Paint/)
+    expect(main).toMatch(/act1-first-paint/)
+    expect(main).not.toMatch(/Hero hold `#05010A` is the first frame/)
+  })
+
+  it('hero video is deferred off the first-paint path', () => {
+    expect(experience).toMatch(/FITO-185-Y: poster\/UI first/)
+    expect(experience).toMatch(/setTimeout\(start, 480\)/)
+    expect(experience).toMatch(/decoding="sync"/)
+  })
+})
+
 describe('FITO-185-J electron file paths', () => {
   it('boot poster uses Vite asset import, not a leading-slash public path', () => {
     const bootSrc = readFileSync(join(__dirname, './onboarding-boot.ts'), 'utf8')
@@ -130,7 +177,7 @@ describe('FITO-185-T exclusive Act 1 music after interactive', () => {
 
   it('main exclusive reveal uses showForExclusiveOnboarding under FITO-185-S (no SFS)', () => {
     const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
-    expect(main).toMatch(/FITO-185-T: without SFS/)
+    expect(main).toMatch(/FITO-185-T: Electron 43\+ never SFS/)
     expect(main).toMatch(/showForExclusiveOnboarding\(win\)/)
     expect(main).toMatch(/showForExclusiveOnboarding\(overlay\)/)
     expect(main).toMatch(/exclusiveOsFullscreenAllowed/)
