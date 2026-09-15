@@ -17,7 +17,7 @@ class ProbeTarget extends EventEmitter {
   getURL = (): string => this.url
   isDestroyed = (): boolean => this.destroyed
   executeJavaScript = vi.fn(
-    (): Promise<unknown> =>
+    (_source: string, _userGesture?: boolean): Promise<unknown> =>
       Promise.resolve({
         search: '?exclusiveOnboarding=1',
         exclusiveOnboarding: true,
