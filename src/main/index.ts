@@ -5812,7 +5812,7 @@ function registerIpc(): void {
         provider,
         asrLanguage: p.asrLanguage ?? settings.asrLanguage,
         pinnedLang: p.pinnedLang,
-        profile: { name: p.profileName ?? settings.profile?.name },
+        profile: { name: p.profileName ?? settings.profile?.name, role: settings.profile?.role },
         meetingId: p.meetingId,
         cloudflareToken: getApiKey('cloudflare'),
         cloudflareBaseUrl: settings.cloudflareBaseUrl,

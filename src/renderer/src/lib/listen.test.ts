@@ -640,3 +640,28 @@ describe('speakerEmbedResultIsStale — late Whisper labels stay in their meetin
     )
   })
 })
+
+describe('cloud them named WHO — attach upgrades + embed after final', () => {
+  it('attachSpeakerName upgrades session/unknown placeholders via canUpgradeSpeakerLabel', () => {
+    expect(listenSrc).toMatch(
+      /l\.t === t && l\.speaker === 'them' && canUpgradeSpeakerLabel\(l\.name\)/
+    )
+    expect(listenSrc).toMatch(/import \{ canUpgradeSpeakerLabel \} from '@shared\/speaker-names'/)
+  })
+
+  it('cloud pump stashes lastThemEmbedRef for them windows', () => {
+    expect(listenSrc).toMatch(/lastThemEmbedRef\.current = \{\s*audio: job\.audio\.slice\(\)/)
+    expect(listenSrc).toMatch(/cloudSttPush\(job\.audio, job\.speaker === 'them' \? 'them' : 'you'\)/)
+  })
+
+  it('onCloudSttFinal voiceprints them session/unknown lines then attachSpeakerName', () => {
+    expect(listenSrc).toMatch(
+      /const committedAt = commitLine\(line\.text, line\.speaker, line\.name\)/
+    )
+    expect(listenSrc).toMatch(/\.speakerEmbed\(emb\.audio, 'them', emb\.startedAt\)/)
+    expect(listenSrc).toMatch(/if \(res\?\.name\) attachSpeakerName\(committedAt, res\.name\)/)
+    expect(listenSrc).toMatch(
+      /canUpgradeSpeakerLabel\(line\.name\)[\s\S]{0,800}?speakerEmbed\(emb\.audio, 'them', emb\.startedAt\)/
+    )
+  })
+})
