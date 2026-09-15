@@ -40,9 +40,12 @@ export const ACT1_DOM_PROBE_EXPR =
   " const portal = document.querySelector('.onboard-portal-content');" +
   " const wordmark = document.querySelector('.hero-wordmark');" +
   " const nextBtn = [...document.querySelectorAll('button')].find(b => /\\bNext\\b/i.test((b.textContent || '').trim()));" +
+  " const video = document.querySelector('.onboard-hero-video video');" +
   " const bodyText = (document.body && document.body.innerText) || '';" +
   " const portalStyle = portal ? getComputedStyle(portal) : null;" +
+  " const nextStyle = nextBtn ? getComputedStyle(nextBtn) : null;" +
   " const params = new URLSearchParams(location.search);" +
+  " const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;" +
   " return {" +
   "  ts: new Date().toISOString()," +
   "  href: location.href," +
@@ -55,13 +58,24 @@ export const ACT1_DOM_PROBE_EXPR =
   "  heroWordmarkText: wordmark ? (wordmark.textContent || '').trim().slice(0, 80) : null," +
   "  nextButtonText: nextBtn ? (nextBtn.textContent || '').trim().slice(0, 40) : null," +
   "  hasNextButton: !!nextBtn," +
+  "  nextPointerEvents: nextStyle ? nextStyle.pointerEvents : null," +
+  "  nextZIndex: nextStyle ? nextStyle.zIndex : null," +
+  "  prefersReducedMotion: !!reduced," +
+  "  hasHeroVideo: !!video," +
+  "  videoSrc: video ? String(video.currentSrc || video.getAttribute('src') || '').slice(0, 240) : null," +
+  "  videoReadyState: video ? video.readyState : null," +
+  "  videoNetworkState: video ? video.networkState : null," +
+  "  videoCurrentTime: video ? video.currentTime : null," +
+  "  videoPaused: video ? video.paused : null," +
+  "  videoClassName: video ? video.className : null," +
+  "  videoError: video && video.error ? String(video.error.code) + ':' + String(video.error.message || '') : null," +
   "  loadingCaption: /\\bLoading\\b/i.test(bodyText)," +
   "  agentStatusCaption: /AgentStatus|Starting\\s+M/i.test(bodyText)," +
   "  bodyTextHead: bodyText.slice(0, 400)," +
   "  portalContentOpacity: portalStyle ? portalStyle.opacity : null," +
   "  portalContentVisibility: portalStyle ? portalStyle.visibility : null," +
   "  wordmarkOpacity: wordmark ? getComputedStyle(wordmark).opacity : null," +
-  "  nextOpacity: nextBtn ? getComputedStyle(nextBtn).opacity : null" +
+  "  nextOpacity: nextStyle ? nextStyle.opacity : null" +
   " };" +
   "})()"
 
@@ -93,6 +107,13 @@ export function summarizeAct1Dom(dom: Record<string, unknown>): Record<string, u
     portalContentOpacity: dom.portalContentOpacity ?? null,
     wordmarkOpacity: dom.wordmarkOpacity ?? null,
     nextOpacity: dom.nextOpacity ?? null,
+    nextPointerEvents: dom.nextPointerEvents ?? null,
+    prefersReducedMotion: dom.prefersReducedMotion === true,
+    hasHeroVideo: dom.hasHeroVideo === true,
+    videoReadyState: typeof dom.videoReadyState === 'number' ? dom.videoReadyState : null,
+    videoPaused: typeof dom.videoPaused === 'boolean' ? dom.videoPaused : null,
+    videoSrcHead: typeof dom.videoSrc === 'string' ? dom.videoSrc.slice(0, 120) : null,
+    videoError: typeof dom.videoError === 'string' ? dom.videoError : null,
     rootChildCount: typeof dom.rootChildCount === 'number' ? dom.rootChildCount : -1,
     search: typeof dom.search === 'string' ? dom.search : ''
   }

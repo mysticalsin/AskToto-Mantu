@@ -11,11 +11,33 @@ import localPosterUrl from '../assets/onboarding-hero-poster.jpg'
 export const ONBOARDING_HERO_VIDEO_REMOTE_SRC =
   'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260429_115139_0fc6bd3d-3631-4d26-ab9b-28293887dcc9.mp4'
 
-/** Runtime Act 1 bed — packaged local asset (lady + planet). */
+/** Runtime Act 1 bed — packaged local asset (lady + planet). Vite-relative until resolved. */
 export const ONBOARDING_HERO_VIDEO_SRC = localHeroUrl
 
 /** Still frame behind / instead of the video so the lady is visible before decode. */
 export const ONBOARDING_HERO_POSTER_SRC = localPosterUrl
+
+/**
+ * FITO-185-W: Chromium's media pipeline opens media via OS file APIs and cannot decode
+ * from inside app.asar. electron-builder asarUnpack places every .mp4 under app.asar.unpacked;
+ * rewrite the absolute file URL so <video src> hits the real file on disk.
+ * Dev (electron-vite http://) and non-asar file:// paths are unchanged.
+ */
+export function resolveOnboardingHeroVideoSrc(
+  viteSrc: string = ONBOARDING_HERO_VIDEO_SRC,
+  baseHref: string | undefined = typeof window !== 'undefined' ? window.location?.href : undefined
+): string {
+  if (!baseHref) return viteSrc
+  try {
+    const abs = new URL(viteSrc, baseHref).href
+    if (abs.includes('/app.asar/') && !abs.includes('/app.asar.unpacked/')) {
+      return abs.replace('/app.asar/', '/app.asar.unpacked/')
+    }
+    return abs.startsWith('file:') || abs.startsWith('http') ? abs : viteSrc
+  } catch {
+    return viteSrc
+  }
+}
 
 /**
  * Act-1-mount preload only. Do NOT call from App boot — that contended with WebGL
@@ -27,7 +49,7 @@ export function preloadOnboardingHeroVideo(): void {
   const link = document.createElement('link')
   link.rel = 'preload'
   link.as = 'video'
-  link.href = ONBOARDING_HERO_VIDEO_SRC
+  link.href = resolveOnboardingHeroVideoSrc(ONBOARDING_HERO_VIDEO_SRC)
   link.setAttribute('data-onboarding-hero-preload', '1')
   document.head.appendChild(link)
 }
