@@ -35,7 +35,7 @@ describe('KineticGrid release checklist', () => {
     expect(kinetic).toMatch(/shouldMountKineticGrid/)
     expect(kinetic).toMatch(/'problem'/)
     expect(experience).toMatch(/shouldMountKineticGrid\(scene\) && <KineticGrid/)
-    expect(experience).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
+    expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
     expect(experience).not.toMatch(/Skip the tour/)
     expect(flow).toMatch(/input\.scene === 'ready' && input\.asrReady && input\.consent/)
     expect(app).not.toMatch(/onboard-stripes/)
@@ -54,11 +54,9 @@ describe('KineticGrid release checklist', () => {
   })
 
   it('2 exclusive onboarding cannot be dragged off-screen', () => {
-    const gate = app.slice(
-      app.indexOf("settings && !settings.onboardingDone && DEMO == null"),
-      app.indexOf('const panelOpen')
-    )
-    expect(gate).toMatch(/onboard-stage onboard-exclusive-lock/)
+    const gateStart = app.indexOf('onboardingBoot && DEMO == null')
+    const gate = app.slice(gateStart, app.indexOf('Post-onboarding only:', gateStart))
+    expect(gate).toMatch(/onboard-stage(?:\s+onboard-stage--portal-open)?\s+onboard-exclusive-lock/)
     expect(gate).not.toMatch(/windowDrag/)
     expect(index).toMatch(/movable: !onboardingLive/)
     expect(index).toMatch(/function moveBy[\s\S]{0,200}if \(onboardingExclusiveLive\(\)\) return/)

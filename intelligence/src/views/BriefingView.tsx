@@ -5,6 +5,7 @@ import type { Commitment, DashboardData, GoingColdRow } from '../types/data'
 import { bandDistribution, ledgerTotals, agingBuckets, type AgeBucketLabel } from '../lib/ledgerstats'
 import { COOLING_DAYS } from '../lib/goingCold'
 import { StatTile } from '../components/charts'
+import { EmptyState } from '../components/EmptyState'
 
 // framer-motion wrapper around the router Link, so the attention rows animate in like every other
 // list on this page while still navigating through HashRouter (raw hash anchors are reserved for
@@ -162,6 +163,26 @@ export function BriefingView({ data }: Props) {
     // "No open commitments 30+ days old" can't read as an all-clear while undated promises sit open.
     return { rows, undated: bucketed.undated.length }
   }, [owned, now])
+
+  const brainLooksEmpty =
+    (data.people?.length ?? 0) === 0 &&
+    (data.deals?.length ?? 0) === 0 &&
+    (data.accounts?.length ?? 0) === 0
+  if (brainLooksEmpty) {
+    const meetingCount = data.meetings_feed?.length ?? data.status?.meetings ?? 0
+    const meetingHint =
+      meetingCount > 0
+        ? 'Meetings are on disk, but people/accounts/deals were not extracted yet. Click Update Intelligence, then check provider readiness.'
+        : 'Connect your organizational OneDrive/meetings brain and capture or import meetings. Then click Update Intelligence.'
+    return (
+      <EmptyState
+        title="Today"
+        standfirst="What needs your attention this morning, ranked by real signals already sitting in your data."
+        headline="No people, deals, or accounts in Mantu Intelligence yet."
+        body={meetingHint}
+      />
+    )
+  }
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">

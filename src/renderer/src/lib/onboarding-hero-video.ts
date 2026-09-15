@@ -1,19 +1,55 @@
 /**
  * Act 1 only: lady looking at space (April 29). The only space shot.
- * Unmount after Next. Exclusive hero hold (`#05010A`) is the fallback if CloudFront
- * fails or prefers-reduced-motion is on. Never a purple stripe wash.
+ * Local bundle is the production bed so exclusive onboarding never depends on CloudFront
+ * at first paint. Remote URL kept as a documented mirror / future refresh source.
+ * Exclusive hero hold (`#05010A`) is last-resort only — poster + local mp4 must show first.
  */
-export const ONBOARDING_HERO_VIDEO_SRC =
+import localHeroUrl from '../assets/onboarding-hero-lady-planet.mp4'
+import localPosterUrl from '../assets/onboarding-hero-poster.jpg'
+
+/** Documented CloudFront mirror of the same April 29 clip (not the runtime default). */
+export const ONBOARDING_HERO_VIDEO_REMOTE_SRC =
   'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260429_115139_0fc6bd3d-3631-4d26-ab9b-28293887dcc9.mp4'
 
-/** Start the lady clip as soon as the renderer parses, before React paints the stage. */
+/** Runtime Act 1 bed — packaged local asset (lady + planet). Vite-relative until resolved. */
+export const ONBOARDING_HERO_VIDEO_SRC = localHeroUrl
+
+/** Still frame behind / instead of the video so the lady is visible before decode. */
+export const ONBOARDING_HERO_POSTER_SRC = localPosterUrl
+
+/**
+ * FITO-185-W: Chromium's media pipeline opens media via OS file APIs and cannot decode
+ * from inside app.asar. electron-builder asarUnpack places every .mp4 under app.asar.unpacked;
+ * rewrite the absolute file URL so <video src> hits the real file on disk.
+ * Dev (electron-vite http://) and non-asar file:// paths are unchanged.
+ */
+export function resolveOnboardingHeroVideoSrc(
+  viteSrc: string = ONBOARDING_HERO_VIDEO_SRC,
+  baseHref: string | undefined = typeof window !== 'undefined' ? window.location?.href : undefined
+): string {
+  if (!baseHref) return viteSrc
+  try {
+    const abs = new URL(viteSrc, baseHref).href
+    if (abs.includes('/app.asar/') && !abs.includes('/app.asar.unpacked/')) {
+      return abs.replace('/app.asar/', '/app.asar.unpacked/')
+    }
+    return abs.startsWith('file:') || abs.startsWith('http') ? abs : viteSrc
+  } catch {
+    return viteSrc
+  }
+}
+
+/**
+ * Act-1-mount preload only. Do NOT call from App boot — that contended with WebGL
+ * starfield and made exclusive first paint laggy. OnboardingHeroVideo owns the call.
+ */
 export function preloadOnboardingHeroVideo(): void {
   if (typeof document === 'undefined') return
   if (document.querySelector('link[data-onboarding-hero-preload]')) return
   const link = document.createElement('link')
   link.rel = 'preload'
   link.as = 'video'
-  link.href = ONBOARDING_HERO_VIDEO_SRC
+  link.href = resolveOnboardingHeroVideoSrc(ONBOARDING_HERO_VIDEO_SRC)
   link.setAttribute('data-onboarding-hero-preload', '1')
   document.head.appendChild(link)
 }

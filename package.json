@@ -1,6 +1,6 @@
 {
   "name": "asktoto",
-  "version": "1.8.10",
+  "version": "1.9.1",
   "description": "Métis - AI desktop overlay assistant",
   "author": "Tony Walteur <tony.walteur@gmail.com>",
   "license": "MIT",
@@ -100,6 +100,7 @@
     "openai": "^6.45.0",
     "sherpa-onnx-node": "^1.13.3",
     "undici": "^7.29.0",
+    "ws": "^8.21.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -110,6 +111,7 @@
     "@types/node": "^22.5.0",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.3.1",
     "@vitest/coverage-v8": "^4.1.11",
     "electron": "43.6.0",

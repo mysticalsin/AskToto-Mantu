@@ -26,8 +26,8 @@ export function EmptyState({ title, standfirst, headline, body }: Props) {
       <h1 className="text-2xl font-semibold text-white/95">{title}</h1>
       <p className="mt-1 text-sm text-white/50">{standfirst}</p>
 
-      <div className="mt-6 max-w-2xl rounded-xl border border-white/10 bg-white/[0.03] px-5 py-6" role="status">
-        <p className="text-sm font-medium text-white/80">{headline}</p>
+      <div className="mt-6 max-w-2xl rounded-xl border border-amber-400/40 bg-amber-400/5 px-5 py-6" role="status">
+        <p className="text-sm font-semibold text-amber-100">{headline}</p>
         <p className="mt-2 text-sm leading-relaxed text-white/50">{body}</p>
       </div>
     </div>

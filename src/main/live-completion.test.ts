@@ -14,6 +14,7 @@ import { ThinkStripper } from './llm/think-strip'
 import { classifyExhaustion } from './llm/exhaustion'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import type { StreamHandle, StreamHandlers, StreamOptions } from './llm/shared'
+import { pathTagForSeatProvider } from './operator-ingest'
 
 const source = ts.createSourceFile('index.ts', readFileSync(join(__dirname, 'index.ts'), 'utf8'), ts.ScriptTarget.Latest, true)
 let attemptBody: ts.Block | undefined
@@ -66,7 +67,7 @@ function setup(options: {
     win: { webContents: { send } },
     IPC: { streamDelta: 'delta', streamError: 'error', streamDone: 'done', streamMeta: 'meta' },
     createStream: (opts: StreamOptions) => { handlers = opts.handlers; return handle },
-    auditLog: audit, recordOperatorAsk: record, noteQualifyingUse: qualifying,
+    auditLog: audit, recordOperatorAsk: record, pathTagForSeatProvider, noteQualifyingUse: qualifying,
     recordSuccess: vi.fn(), recordRateLimited: vi.fn(), recordExhausted: vi.fn(), recordAuthFailure: vi.fn(),
     isDustAuthError: () => false, isAuthFailure: () => false, retireCli: vi.fn(),
     mainLog: { warn: vi.fn() },
@@ -143,6 +144,9 @@ describe('actual live completion outcomes', () => {
     expect(f.events('done')).toEqual([['done', { id, ...usage }]])
     expect(f.qualifying).toHaveBeenCalledTimes(1)
     expect(f.record).toHaveBeenCalledTimes(['answer', 'vision'].includes(mode) ? 1 : 0)
+    if (['answer', 'vision'].includes(mode)) {
+      expect(f.record.mock.calls[0][1]).toMatchObject({ pathTag: 'seat-local' })
+    }
     expect(f.streams.has(id)).toBe(false)
   })
   it('deliberately preserves legacy onDone without metadata, not a verified-completeness claim', () => {

@@ -3,6 +3,7 @@ import {
   clusterLabel,
   clusterPins,
   countryName,
+  countryPillsFromPoints,
   DEFAULT_CLUSTER_OPTIONS,
   projectPoint,
   renderCornerMapSvg,
@@ -151,18 +152,54 @@ describe('renderRealtimeMapSvg', () => {
     expect(svg).not.toContain('class="empty')
   })
 
-  it('drops the count-pill badges entirely (spec change): no foreignObject, no badge markup', () => {
+  it('draws country pills and a city label for every distinct place (Tony uplift)', () => {
     const svg = renderRealtimeMapSvg({
-      points: REFERENCE_COORDINATES.slice(0, 20).map((c) => ({
-        country: c.country,
-        city: c.city,
-        lat: c.lat,
-        lon: c.long,
-        count: c.count
-      }))
+      points: [
+        { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 6 },
+        { country: 'CA', city: 'Montreal', lat: 45.5, lon: -73.57, count: 6 }
+      ],
+      countries: [{ iso: 'CA', devices: 12 }],
+      theme: 'dark'
     })
-    expect(svg).not.toContain('foreignObject')
-    expect(svg).not.toMatch(/class="[^"]*badge/)
+    expect(svg).toContain('foreignObject')
+    expect(svg).toContain('rt-country-pill')
+    expect(svg).toContain('data-country-pill="CA"')
+    expect(svg).toContain('/assets/flags/ca.svg')
+    expect(svg).toContain('Canada · 12 devices · 2 places')
+    expect(svg).toContain('rt-pin-label')
+    expect(svg).toContain('Longueuil')
+    expect(svg).toContain('Montreal')
+    expect(svg).toContain('world-ocean')
+    expect(svg).toContain('rt-map-grid')
+    expect((svg.match(/class="rt-pin"/g) || []).length).toBe(2)
+  })
+
+  it('skips country pills when a country has only one place', () => {
+    const svg = renderRealtimeMapSvg({
+      points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 }],
+      theme: 'dark'
+    })
+    expect(svg).not.toContain('data-country-pill')
+    expect(svg).toContain('Longueuil')
+  })
+
+  it('defaults to dark theme when theme is unspecified', () => {
+    const svg = renderRealtimeMapSvg({
+      points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 }]
+    })
+    expect(svg).toContain('data-map-theme="dark"')
+    expect(svg).toContain('#120e1c')
+    expect(svg).toContain('#1f1830')
+  })
+
+  it('supports multi-line city labels split on slash', () => {
+    const svg = renderRealtimeMapSvg({
+      points: [{ country: 'CA', city: 'Longueuil / Montréal', lat: 45.53, lon: -73.52, count: 1 }],
+      theme: 'dark'
+    })
+    expect(svg).toContain('Longueuil')
+    expect(svg).toContain('Montréal')
+    expect(svg).toContain('<tspan')
   })
 
   it('a single seat renders a clearly visible dot (r=4.5); several seats at one point render larger (r=6.5)', () => {
@@ -233,5 +270,22 @@ describe('renderCornerMapSvg', () => {
     const svg = renderCornerMapSvg({ countries: [] })
     expect(svg).toContain('data-iso=')
     expect(svg).not.toContain('data-pin')
+  })
+})
+
+describe('countryPillsFromPoints', () => {
+  it('rolls seats and places by country and prefers countries rollup for seat totals', () => {
+    const pills = countryPillsFromPoints(
+      [
+        { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 2 },
+        { country: 'CA', city: 'Montréal', lat: 45.5, lon: -73.57, count: 3 }
+      ],
+      [{ iso: 'CA', devices: 12 }]
+    )
+    expect(pills).toHaveLength(1)
+    expect(pills[0].iso).toBe('CA')
+    expect(pills[0].seats).toBe(12)
+    expect(pills[0].places).toBe(2)
+    expect(pills[0].name).toBe('Canada')
   })
 })

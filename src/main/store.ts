@@ -8,8 +8,7 @@ import {
   renameSync,
   statSync,
   readdirSync,
-  mkdtempSync
-} from 'node:fs'
+  mkdtempSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { totalmem as physicalTotalMemory } from 'node:os'
 import {
@@ -325,7 +324,9 @@ export function getAllowedProviders(): string[] | null {
 /** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a
  *  no-op (the env still resolves), so the UI shows a 'set via environment variable' chip instead. */
 export function getEnvKeyProviders(): string[] {
-  return PROVIDER_IDS.filter((p) => !!process.env[ENV_VAR[p]])
+  const ids: string[] = PROVIDER_IDS.filter((p) => !!process.env[ENV_VAR[p]])
+  if ((process.env.SONIOX_API_KEY || '').trim()) ids.push('soniox')
+  return ids
 }
 
 // Sensitive user data (context docs = pasted reference material, profile = resume/JD/notes) lives in
@@ -1279,5 +1280,87 @@ export function clearDustRefreshToken(): boolean {
 export function hasKeysMap(): Record<string, boolean> {
   const m: Record<string, boolean> = {}
   for (const p of PROVIDER_IDS) m[p] = hasApiKey(p)
+  // Synthetic: Soniox is STT-only (not a ProviderId). Surfaced so Settings → Speech can show seated state.
+  m.soniox = hasSonioxApiKey()
   return m
+}
+
+// ─── Soniox STT key (not a ProviderId) — same encryption backend as setApiKey, dedicated file ───
+const sonioxKeyPath = () => join(dir(), 'key-soniox.bin')
+let _sonioxKeyCache: string | null | undefined
+
+export function setSonioxApiKey(key: string): void {
+  ensureDir()
+  const trimmed = key.trim()
+  const path = sonioxKeyPath()
+  _sonioxKeyCache = undefined
+  if (!trimmed) {
+    clearSonioxApiKey()
+    return
+  }
+  let blob: Buffer
+  if (useFileBackend()) {
+    prepareFileKeyForWrite()
+    blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(trimmed)])
+  } else {
+    prepareFileKeyForWrite()
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('Encryption is unavailable on this machine. Metis cannot safely store your Soniox key.')
+    }
+    blob = safeStorage.encryptString(trimmed)
+  }
+  const tmp = `${path}.tmp`
+  writeFileSync(tmp, blob, { mode: 0o600 })
+  renameSync(tmp, path)
+  _sonioxKeyCache = trimmed
+}
+
+export function clearSonioxApiKey(): void {
+  _sonioxKeyCache = ''
+  const path = sonioxKeyPath()
+  try {
+    if (existsSync(path)) unlinkSync(path)
+  } catch {
+    /* ignore */
+  }
+  try {
+    const tmp = `${path}.tmp`
+    if (existsSync(tmp)) unlinkSync(tmp)
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getSonioxApiKeyStored(): string {
+  if (_sonioxKeyCache !== undefined && _sonioxKeyCache !== null) return _sonioxKeyCache
+  let key = ''
+  try {
+    const path = sonioxKeyPath()
+    if (!existsSync(path)) {
+      _sonioxKeyCache = ''
+      return ''
+    }
+    const buf = readFileSync(path)
+    if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
+      key = decryptSecret(buf.subarray(AES_KEY_MARKER.length))
+    } else if (safeStorage.isEncryptionAvailable()) {
+      key = safeStorage.decryptString(buf)
+    }
+  } catch (e) {
+    mainLog.warn('[store] soniox key undecryptable', e)
+    key = ''
+  }
+  _sonioxKeyCache = key
+  return key
+}
+
+/** Seated Soniox key from Settings, or SONIOX_API_KEY env. Env wins (same honesty as getApiKey). */
+export function getSonioxApiKey(): string {
+  const env = (process.env.SONIOX_API_KEY || '').trim()
+  if (env) return env
+  return getSonioxApiKeyStored()
+}
+
+export function hasSonioxApiKey(): boolean {
+  return getSonioxApiKey().length > 0
 }

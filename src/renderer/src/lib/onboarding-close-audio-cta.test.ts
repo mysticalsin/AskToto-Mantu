@@ -15,7 +15,7 @@ import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
 const settings = readFileSync(join(__dirname, '../components/Settings.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readFileSync(join(__dirname, '../styles.css'), 'utf8').replace(/\r\n/g, '\n')
 const production = readFileSync(join(__dirname, './onboarding-music.ts'), 'utf8')
 
 function FakeAudio(this: {
@@ -197,7 +197,10 @@ describe('closing onboarding hard-stops the Goldberg Aria', () => {
 
 describe('post-lady Continue is visible without hover', () => {
   it('problem Continue is opacity 1 above the starfield, not pointer-events-only', () => {
-    const problem = experience.slice(experience.indexOf("scene === 'problem'"), experience.indexOf("scene === 'reveal'"))
+    // FITO-185-P keep-alive: do not slice from first scene === 'problem' (video ternary).
+    const problemSceneAt = experience.indexOf("scene === 'problem' && (")
+    const revealSceneAt = experience.indexOf("scene === 'reveal' && (", problemSceneAt + 1)
+    const problem = experience.slice(problemSceneAt, revealSceneAt > 0 ? revealSceneAt : undefined)
     expect(problem).toMatch(/onboard-post-lady/)
     expect(problem).toMatch(/className="onboard-cta no-drag focus-ring"/)
     expect(problem.search(/>\s*Continue\s*</)).toBeGreaterThan(-1)
@@ -206,11 +209,14 @@ describe('post-lady Continue is visible without hover', () => {
     expect(problem).not.toMatch(/group-hover/)
     expect(problem).not.toMatch(/initial:\s*\{[^}]*opacity:\s*0/)
 
-    const cta = css.slice(css.indexOf('.onboard-cta {'), css.indexOf('.onboard-mute {'))
+    // Anchor exclusive-stage .onboard-cta rule (not button.onboard-cta in reduced-motion).
+    const ctaStart = css.indexOf('.onboard-cta {\n  display: inline-flex')
+    expect(ctaStart).toBeGreaterThan(0)
+    const cta = css.slice(ctaStart, css.indexOf('.onboard-mute {', ctaStart))
     expect(cta).toMatch(/opacity:\s*1/)
     expect(cta).toMatch(/pointer-events:\s*auto/)
     expect(cta).toMatch(/position:\s*relative/)
-    expect(cta).toMatch(/z-index:\s*3/)
+    expect(cta).toMatch(/z-index:\s*5/)
     expect(cta).not.toMatch(/opacity:\s*0/)
 
     const hover = css.slice(css.indexOf('.onboard-cta:hover:not(:disabled) {'), css.indexOf('.onboard-cta:disabled'))
@@ -218,8 +224,8 @@ describe('post-lady Continue is visible without hover', () => {
     expect(hover).not.toMatch(/opacity/)
     expect(hover).not.toMatch(/pointer-events:\s*none/)
 
-    expect(css).toMatch(/\.onboard-tour-slot,\s*\n\s*\.onboard-tour-chrome \{\s*position:\s*relative;\s*z-index:\s*2/)
-    expect(css).toMatch(/\.onboard-post-lady,\s*\n\s*\.onboard-post-lady \.onboard-cta \{[\s\S]*?opacity:\s*1/)
+    expect(css).toMatch(/\.onboard-tour-slot,\s*\.onboard-tour-chrome \{\s*position:\s*relative;\s*z-index:\s*2/)
+    expect(css).toMatch(/\.onboard-post-lady,\s*\.onboard-post-lady \.onboard-cta \{[\s\S]*?opacity:\s*1/)
     expect(css).toMatch(/\.onboard-kinetic-grid \{\s*[\s\S]*?z-index:\s*0/)
     expect(experience).toMatch(/onboard-tour-chrome/)
   })

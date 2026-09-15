@@ -31,4 +31,11 @@ describe('renderOverview (QA fixture)', () => {
     expect(data.profiles.length).toBeGreaterThan(0)
     expect(html).toContain('data-people-row')
   })
+
+  it('labels Devices with the real seat count from profiles', async () => {
+    const data = await fixtureDashboard()
+    const html = renderOverview(data, CTX)
+    expect(html).toContain(`Devices · ${data.profiles.length} seats`)
+    expect(html).toContain('data-toplist-device')
+  })
 })

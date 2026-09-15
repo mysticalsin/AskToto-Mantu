@@ -97,3 +97,55 @@ describe('MQA-285 — recap/write after stop does not block the click', () => {
     expect(prewarmAt).toBeLessThan(stopAt)
   })
 })
+
+describe('enterprise-live CLOUD_ONLY — local ASR start gate', () => {
+  it('asserts cloud-only before local whisper/parakeet/apple start and surfaces CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED', () => {
+    expect(startBody).toMatch(/assertCloudOnlyAllowsEngine/)
+    expect(startBody).toMatch(/CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED/)
+    const assertAt = startBody.search(/assertCloudOnlyAllowsEngine/)
+    const parakeetAt = startBody.search(/engine === 'parakeet'/)
+    const whisperAt = startBody.search(/engineRef\.current === 'whisper'/)
+    expect(assertAt).toBeGreaterThan(-1)
+    expect(parakeetAt).toBeGreaterThan(-1)
+    expect(assertAt).toBeLessThan(parakeetAt)
+    if (whisperAt > -1) expect(assertAt).toBeLessThan(whisperAt)
+  })
+
+  it('blocks silent Parakeet→Whisper fallback under CLOUD_ONLY', () => {
+    const fb = codeOnly(blockBetween(SRC, 'const fallBackToWhisper = useCallback', 'const networkRetryCleanupRef'))
+    expect(fb).toMatch(/assertCloudOnlyAllowsEngine/)
+    expect(fb).toMatch(/CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED/)
+  })
+})
+
+describe('enterprise-live cloud STT language (FR Listen)', () => {
+  it('wires Settings asrLanguage into Nova/Soniox resolvers at start and setLanguage', () => {
+    expect(SRC).toMatch(/resolveNova3LanguageQuery/)
+    expect(SRC).toMatch(/resolveSonioxLanguageConfig/)
+    expect(SRC).toMatch(/cloudSttLanguageForListen/)
+    expect(startBody).toMatch(/resolveNova3LanguageQuery\(language\)/)
+    expect(startBody).toMatch(/resolveSonioxLanguageConfig\(language\)/)
+  })
+
+  it('does not hardcode English-only for cloud STT language', () => {
+    expect(SRC).toMatch(/export function cloudSttLanguageForListen/)
+  })
+})
+
+
+describe('enterprise-live cloud engine path', () => {
+  it('starts a cloud engine branch without booting Whisper/Parakeet', () => {
+    expect(startBody).toMatch(/if \(engine === 'cloud'\)/)
+    expect(startBody).toMatch(/cloud STT session planned/)
+    expect(startBody).toMatch(/shouldUseCloudSttEngine/)
+    expect(APP).toMatch(/shouldUseCloudSttEngine/)
+    expect(APP).toMatch(/useCloud \? 'cloud'/)
+  })
+
+  it('attaches live cloud WS (cloudSttStart) and streams PCM (cloudSttPush)', () => {
+    expect(startBody).toMatch(/cloudSttStart/)
+    expect(SRC).toMatch(/cloudSttPush/)
+    expect(SRC).toMatch(/cloudSttStop/)
+    expect(startBody).toMatch(/onCloudSttFinal/)
+  })
+})

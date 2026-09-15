@@ -221,7 +221,7 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
   const el = new Audio(ONBOARDING_MUSIC_SRC)
   knownOnboardingBeds.add(el)
   el.loop = true
-  el.preload = 'auto'
+  el.preload = 'metadata'
   el.autoplay = true
   el.setAttribute('playsinline', '')
   el.volume = ONBOARDING_MUSIC_GAIN

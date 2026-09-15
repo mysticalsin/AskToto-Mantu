@@ -77,6 +77,7 @@ export default defineConfig({
   },
   renderer: {
     root: 'src/renderer',
+    assetsInclude: ['**/*.mp4'],
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src/renderer/src'),

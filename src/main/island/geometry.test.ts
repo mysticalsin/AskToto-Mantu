@@ -18,6 +18,7 @@ import {
   hoverRestHeight,
   hoverWatchRestRect,
   exclusiveMayUseSimpleFullScreen,
+  exclusiveOsFullscreenAllowed,
   exclusiveOnboardingBounds,
   EXCLUSIVE_ONBOARDING_BACKGROUND,
   onboardingFitsWorkArea,
@@ -682,7 +683,9 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(index).toMatch(/function exitExclusiveOnboardingStage/)
     expect(index).toMatch(/exclusiveOnboardingBounds/)
     expect(index).toMatch(/exclusiveMayUseSimpleFullScreen\(overlayWindowTransparent\)/)
+    expect(index).toMatch(/exclusiveOsFullscreenAllowed\(/)
     expect(index).toMatch(/setSimpleFullScreen\(true\)/)
+    expect(index.indexOf('exclusiveOsFullscreenAllowed(')).toBeLessThan(index.indexOf('setSimpleFullScreen(true)'))
     expect(index).toMatch(/!cur\.onboardingDone && next\.onboardingDone/)
     expect(index).toMatch(/exitExclusiveOnboardingStage\(\)/)
     const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')
@@ -711,8 +714,8 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
 
   it('App fills the stage — OnboardingV2 is not wrapped in the overlapping Panel card', () => {
     const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
-    const gate = app.slice(app.indexOf("settings && !settings.onboardingDone && DEMO == null"))
-    const block = gate.slice(0, gate.indexOf('const panelOpen'))
+    const gateStart = app.indexOf('onboardingBoot && DEMO == null')
+    const block = app.slice(gateStart, app.indexOf('Post-onboarding only:', gateStart))
     expect(block).toMatch(/<OnboardingV2/)
     expect(block).not.toMatch(/<Panel>/)
     expect(block).toMatch(/onboard-stage/)
@@ -790,6 +793,9 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     })
     expect(exclusiveMayUseSimpleFullScreen(true)).toBe(false)
     expect(exclusiveMayUseSimpleFullScreen(false)).toBe(true)
+    expect(exclusiveOsFullscreenAllowed({ electronVersion: '43.6.0', allowSfsEnv: '1' })).toBe(false)
+    expect(exclusiveOsFullscreenAllowed({ electronVersion: '39.8.10', allowSfsEnv: '1' })).toBe(true)
+    expect(exclusiveOsFullscreenAllowed({ electronVersion: '39.8.10' })).toBe(false)
     expect(index).toMatch(/overlayWindowChrome\(onboardingLive\)/)
     expect(index).toMatch(/transparent: chrome\.transparent/)
     expect(index).toMatch(/backgroundColor: chrome\.backgroundColor/)

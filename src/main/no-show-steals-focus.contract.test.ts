@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest'
  *
  * The overlay's non-activating contract: `BrowserWindow#show()` (unlike `#showInactive()`) grabs OS
  * focus on both macOS and Windows, stealing it from whatever app the user was in. The island must never
- * do that except the ONE deliberate case — the user explicitly asked to type (`showForAsk`, see its doc
+ * do that except deliberate cases — ask typing (`showForAsk`) and first-run exclusive (`showForExclusiveOnboarding`), see doc
  * comment in index.ts). This test greps the shipped source for every `win.show()`/`w.show()` call (the
  * two identifiers index.ts uses for its BrowserWindow reference) and fails if any sit outside
  * `showForAsk`'s own body — so a future PR that reaches for `.show()` on a reveal path fails loudly here
@@ -49,17 +49,22 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
     expect(doc).toContain('no-show-steals-focus.contract.test.ts')
   })
 
-  it('every win.show()/w.show() call site in index.ts sits inside showForAsk', () => {
-    const { start: showForAskStart, end: showForAskEnd } = functionBody('showForAsk')
+  it('every win.show()/w.show() call site in index.ts sits inside showForAsk or showForExclusiveOnboarding', () => {
+    const ask = functionBody('showForAsk')
+    const exclusive = functionBody('showForExclusiveOnboarding')
     const showCall = /\b(?:win|w)\??\.show\(\)/g
     const offenders: number[] = []
     let m: RegExpExecArray | null
     while ((m = showCall.exec(indexSrc))) {
-      const insideShowForAsk = m.index >= showForAskStart && m.index < showForAskEnd
-      if (!insideShowForAsk) offenders.push(m.index)
+      const insideAsk = m.index >= ask.start && m.index < ask.end
+      const insideExclusive = m.index >= exclusive.start && m.index < exclusive.end
+      if (!insideAsk && !insideExclusive) offenders.push(m.index)
     }
     const lines = offenders.map((idx) => indexSrc.slice(0, idx).split('\n').length)
-    expect(offenders, `win.show()/w.show() found outside showForAsk at index.ts line(s): ${lines.join(', ')}`).toEqual([])
+    expect(
+      offenders,
+      `win.show()/w.show() found outside allowed exceptions at index.ts line(s): ${lines.join(', ')}`
+    ).toEqual([])
   })
 
   it('sanity: the sweep pattern actually matches something (a silently-broken regex is worse than no test)', () => {

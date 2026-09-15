@@ -65,6 +65,9 @@ asarUnpack:
   - '**/node_modules/onnxruntime-node/**'
   - '**/node_modules/sharp/**'
   - '**/node_modules/@img/**'
+  # FITO-185-W: Chromium media pipeline cannot decode <video>/<audio> from inside app.asar
+  # (OS open). Unpack Vite-emitted Act 1 hero mp4 so file:// can play after asar→unpacked rewrite.
+  - '**/*.mp4'
 extraResources:
   # Mantu Intelligence dashboard — static build of the intelligence/ workspace, loaded in its own
   # window (src/main/intelligence.ts). Populated by `npm run build:intelligence` before packaging.

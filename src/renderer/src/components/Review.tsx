@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { transcriptDisplayName } from '@shared/speaker-names'
 import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles, Trash2, Lock, PhoneCall } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary, McpConnection, RecapExport } from '@shared/ipc'
 import type { RecapStatus } from '@shared/recap-status'
@@ -27,10 +28,10 @@ function clock(t: number): string {
   }
 }
 
-/** Display label for a transcript line's speaker: the resolved name once Speaker Intelligence has one
- *  (see @shared/transcript-align.ts), else the generic Them/You/Speaker side label. */
-function speakerDisplay(l: TranscriptLine): string {
-  return l.name || (l.speaker === 'them' ? 'Them' : l.speaker === 'you' ? 'You' : 'Speaker')
+/** Display label for a transcript line's speaker: confirmed/cluster name wins; mic side uses
+ *  profile youLabel when provided; else honest You/Them/Unknown (never invent people). */
+function speakerDisplay(l: TranscriptLine, youLabel?: string | null): string {
+  return transcriptDisplayName(l, { youLabel })
 }
 
 function formatDuration(sec: number): string {

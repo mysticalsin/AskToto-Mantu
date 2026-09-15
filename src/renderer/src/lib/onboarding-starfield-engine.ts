@@ -18,7 +18,6 @@ import {
   ShaderMaterial,
   Vector2,
   Vector3,
-  VSMShadowMap,
   WebGL1Renderer
 } from 'three'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
@@ -86,17 +85,17 @@ export function createStarfieldBed(
   try {
     renderer = new WebGL1Renderer({
       canvas,
-      antialias: true,
+      antialias: false,
       alpha: false,
-      powerPreference: 'high-performance'
+      powerPreference: 'default'
     })
     if (!renderer.getContext()) return null
   } catch {
     return null
   }
 
-  renderer.shadowMap.enabled = true
-  renderer.shadowMap.type = VSMShadowMap
+  // No lights in this bed — VSM shadow maps were pure GPU tax on exclusive onboarding.
+  renderer.shadowMap.enabled = false
   renderer.setClearColor(0x05010a, 1)
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
   renderer.setPixelRatio(Math.min(dpr, STARFIELD_PIXEL_RATIO_CAP))
@@ -243,11 +242,14 @@ export function createStarfieldBed(
 
   const tick = (): void => {
     if (disposed) return
-    raf = requestAnimationFrame(tick)
+    // Reduced-motion: one composed field, then stop. Background: freeze until visible.
+    if (reducedMotion && !firstFrame) return
     if (typeof document !== 'undefined' && document.hidden) {
       lastTick = nowFn()
+      raf = requestAnimationFrame(tick)
       return
     }
+    raf = requestAnimationFrame(tick)
     const now = nowFn()
     const rawDt = Math.min(0.05, Math.max(0, (now - lastTick) / 1000))
     const dt = firstFrame ? STARFIELD_SEED_DT : rawDt
@@ -290,16 +292,25 @@ export function createStarfieldBed(
     group.rotation.z += dt * (spinBase + scroll * CONFIG.scrollSpin)
 
     camera.layers.set(LAYERS.TORUS_SCENE)
-    torusComposer.render()
-    camera.layers.set(LAYERS.BLOOM_SCENE)
-    bloomComposer.render()
-    camera.layers.set(LAYERS.ENTIRE_SCENE)
+    // Perf: bloom stack is multiple full-scene passes. Skip on reduced-motion or when the
+    // prior frame already missed ~30fps so exclusive onboarding stays interactive.
+    const skipBloom = reducedMotion || rawDt > 0.033
+    if (!skipBloom) {
+      torusComposer.render()
+      camera.layers.set(LAYERS.BLOOM_SCENE)
+      bloomComposer.render()
+      camera.layers.set(LAYERS.ENTIRE_SCENE)
+    }
     finalComposer.render()
 
     if (firstFrame) {
       firstFrame = false
       canvas.style.opacity = '1'
       opts.onFirstFrame?.()
+      if (reducedMotion) {
+        cancelAnimationFrame(raf)
+        raf = 0
+      }
     }
   }
 

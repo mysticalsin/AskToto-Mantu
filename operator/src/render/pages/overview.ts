@@ -195,7 +195,7 @@ function renderTopLists(data: DashboardPayload): string {
       const bn = byDevice.get(b.hostname || b.email || b.device) ?? 0
       return bn - an || b.lastSeen - a.lastSeen
     })
-    .slice(0, 8)
+    .slice(0, 40)
   const kinds = new Map<string, number>()
   for (const e of data.events) {
     const name = looksLikeSecret(e.name) ? 'event' : e.name
@@ -244,7 +244,7 @@ function renderTopLists(data: DashboardPayload): string {
     .join('')
   return `<div class="ov-pair" data-overview-toplists>
     <article class="card pad-b10" data-device-card>
-      <p class="eyebrow">Devices</p>
+      <p class="eyebrow">Devices · ${data.profiles.length} seats</p>
       <div class="tabs" data-device-tabs>
         <button class="tab on" data-device-tab="devices" type="button">Devices</button>
         <button class="tab" data-device-tab="os" type="button">OS</button>

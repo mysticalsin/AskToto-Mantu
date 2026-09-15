@@ -161,14 +161,112 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
   it('MQA-175: the boot sequence routes the brain resume through the early-death check and clears the watch after it', () => {
     // Source contract (same pattern as crash-capture.test.ts): the 15s timer that calls
     // resumeBackfillIfPending IS the step the poisoned .brain kills, so it must be skipped after an
-    // early death — and the watch must only close once that step has actually survived.
+    // early death. FITO-185-G-TIMER: sentinel may also clear earlier (past createWindow/registerIpc
+    // kill zone); the 15s finally still backstops via clearBootWatchOnce('mqa-175').
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
     expect(source).toMatch(/const earlyDeath = beginBootWatch\(/)
     const resume = source.indexOf('resumeBackfillIfPending()')
     const guard = source.lastIndexOf('if (earlyDeath)', resume)
-    const clear = source.indexOf('endBootWatch(', resume)
     expect(guard).toBeGreaterThan(-1)
     expect(resume).toBeGreaterThan(guard) // the resume sits inside the early-death branch
-    expect(clear).toBeGreaterThan(resume) // ...and the watch closes only after it survived
+    const timer = source.lastIndexOf('setTimeout(() => {', resume)
+    const slice = source.slice(timer, source.indexOf('}, 15_000)', resume) + '}, 15_000)'.length)
+    expect(slice).toMatch(/clearBootWatchOnce\('mqa-175'\)/)
+  })
+
+  it('FITO-185-B: boot holds prevent-app-suspension from beginBootWatch until 15s brain clear', () => {
+    const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const begin = source.indexOf('const earlyDeath = beginBootWatch(')
+    expect(begin).toBeGreaterThan(-1)
+    const start = source.indexOf('setBootPowerSaveBlock(true)', begin)
+    expect(start).toBeGreaterThan(begin)
+    // Power-save must arm before createWindow so exclusive hidden first-paint is not App-Napped.
+    const create = source.indexOf("runStep('createWindow', createWindow)", begin)
+    expect(create).toBeGreaterThan(start)
+    const resume = source.indexOf('resumeBackfillIfPending()')
+    const timer = source.lastIndexOf('setTimeout(() => {', resume)
+    const slice = source.slice(timer, source.indexOf('}, 15_000)', resume) + '}, 15_000)'.length)
+    const stop = slice.indexOf('setBootPowerSaveBlock(false)')
+    const clear = slice.indexOf("clearBootWatchOnce('mqa-175')")
+    expect(stop).toBeGreaterThan(-1)
+    expect(clear).toBeGreaterThan(stop) // stop power-save with the 15s backstop clear
+    // Brain resume still inside the 15s timer (MQA-175).
+    expect(slice.indexOf('resumeBackfillIfPending()')).toBeGreaterThan(-1)
+    const willQuit = source.indexOf("app.on('will-quit'")
+    const willSlice = source.slice(willQuit, willQuit + 900)
+    expect(willSlice).toMatch(/setBootPowerSaveBlock\(false\)/)
+    expect(willSlice).toMatch(/endBootWatch\(/)
+    expect(source).toMatch(/bootPowerSaveBlockerId/)
+    expect(source).toMatch(/powerSaveBlocker\.start\('prevent-app-suspension'\)/)
+  })
+
+  it('FITO-185-E: 15s boot callback clears watch in finally even if brain resume throws', () => {
+    // Hardprove left boot-incomplete.json stuck when resumeBackfillIfPending (or a sibling) threw —
+    // the clear sat after the brain work with no finally. Contract: try/finally around the 15s body,
+    // per-step try/catch on each brain call, and clearBootWatchOnce('mqa-175') in finally (audits inside).
+    const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const resume = source.indexOf('resumeBackfillIfPending()')
+    expect(resume).toBeGreaterThan(-1)
+    // Walk back to the setTimeout that owns this resume (the 15s MQA-175 timer).
+    const timer = source.lastIndexOf('setTimeout(() => {', resume)
+    expect(timer).toBeGreaterThan(-1)
+    const slice = source.slice(timer, source.indexOf('}, 15_000)', resume) + '}, 15_000)'.length)
+    expect(slice).toMatch(/try\s*\{/)
+    expect(slice).toMatch(/finally\s*\{/)
+    const finallyIdx = slice.indexOf('finally')
+    const finallyBody = slice.slice(finallyIdx)
+    expect(finallyBody).toMatch(/setBootPowerSaveBlock\(false\)/)
+    expect(finallyBody).toMatch(/clearBootWatchOnce\('mqa-175'\)/)
+    // Power-save stop + sentinel clear live in finally (after any resume throw path), not only the happy path.
+    expect(finallyBody.indexOf('setBootPowerSaveBlock(false)')).toBeLessThan(finallyBody.indexOf("clearBootWatchOnce('mqa-175')"))
+    // Per-step isolation around the brain resume calls (sync throws must not skip finally or siblings).
+    for (const step of [
+      'resumeBackfillIfPending',
+      'reconcileMeetingsInBackground',
+      'wireIntelligenceIndexWork',
+      'catchUpIntelligenceIndexIfNeeded',
+      'scheduleIntelligenceIndex',
+      'runConsolidationIfDue'
+    ]) {
+      expect(slice, step).toMatch(new RegExp(`try\\s*\\{[\\s\\S]*?${step}`))
+    }
+    // earlyDeath safe-start skip preserved (MQA-175).
+    expect(slice).toMatch(/if \(earlyDeath\)/)
+    expect(slice).toMatch(/safe start/)
+  })
+
+  it('FITO-185-G-SHOW+G-TIMER: early sentinel clear past kill zone + exclusive 2s reveal', () => {
+    const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    expect(source).toMatch(/const clearBootWatchOnce = \(reason: string\): void =>/)
+    expect(source).toMatch(/auditLog\('app\.boot\.watch_cleared',\s*\{\s*earlyDeath:\s*Boolean\(earlyDeath\),\s*reason\s*\}\)/)
+    expect(source).toMatch(/clearBootWatchOnce\('createWindow'\)/)
+    expect(source).toMatch(/clearBootWatchOnce\('registerIpc'\)/)
+    // FITO-185-X: IPC handlers before loadURL
+    const ipcStep = source.indexOf("runStep('registerIpc', registerIpc)")
+    const winStep = source.indexOf("runStep('createWindow', createWindow)")
+    expect(ipcStep).toBeGreaterThan(-1)
+    expect(winStep).toBeGreaterThan(ipcStep)
+    expect(source).toMatch(/setImmediate\(\(\) => clearBootWatchOnce\('setImmediate'\)\)/)
+    expect(source).toMatch(/powerMonitor\.on\('unlock-screen'/)
+    // Exclusive hard reveal at 2s
+    const create = source.slice(source.indexOf('function createWindow'), source.indexOf('function resizeTo'))
+    expect(create).toMatch(/revealExclusiveWhenPainted/)
+    expect(create).toContain('}, 2000)') // FITO-185-G-SHOW hard reveal
+    // Brain work still only on 15s timer (not moved earlier)
+    const resume = source.indexOf('resumeBackfillIfPending()')
+    const fifteen = source.indexOf('}, 15_000)', resume)
+    expect(fifteen).toBeGreaterThan(resume)
+  })
+
+  it('FITO-185-F: createTray audits success/failure and always sets a darwin title', () => {
+    const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const start = source.indexOf('function createTray(): void {')
+    expect(start).toBeGreaterThan(-1)
+    const body = source.slice(start, source.indexOf('\nfunction rebuildTrayMenu(', start))
+    expect(body).toMatch(/auditLog\('tray\.created',\s*\{\s*emptyIcon\s*\}\)/)
+    expect(body).toMatch(/auditLog\('tray\.failed',\s*\{\s*message:/)
+    // No silent empty catch — failure must carry a message into the audit trail.
+    expect(body).not.toMatch(/catch\s*\{\s*\/\*\s*tray optional\s*\*\//)
+    expect(body).toMatch(/process\.platform === 'darwin'\)\s*tray\.setTitle\(' ◉ Métis'\)/)
   })
 })

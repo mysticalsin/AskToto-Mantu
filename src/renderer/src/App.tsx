@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
+/** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
+import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
-import { OnboardingV2 } from './components/OnboardingExperience'
-import { preloadOnboardingHeroVideo } from './lib/onboarding-hero-video'
+import {
+  isOnboardingBoot,
+  provisionalOnboardingSettings
+} from './lib/onboarding-boot'
 import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
 // Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
@@ -67,6 +71,8 @@ import {
   type OverlaySpring
 } from './lib/overlay-motion'
 import { useListen, playListenChime } from './lib/listen'
+import { shouldUseCloudSttEngine } from '@shared/cloud-stt-provider'
+import { resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { transcriptToText, recapPersistAction, type RecapPersistTarget } from './lib/transcript'
 import {
   OwnedOperationGate,
@@ -107,6 +113,7 @@ import {
   spotlightRefUnavailableMessage,
   transcriptHasContent
 } from '@shared/quick-actions'
+import { micSpeakerLabel } from '@shared/speaker-names'
 
 function recapWriteKey(ownerId: string, runId: string): string {
   return `${ownerId}\u0000${runId}`
@@ -253,6 +260,8 @@ export function App(): JSX.Element {
   const stealthLocked = settings?.managedKeys?.includes('contentProtection') ?? false
   const auth = useAuth() // Azure AD gate (only enforces when configured)
   const bootError = settingsBootError ?? auth.bootError
+  // FITO-185-X: mid-wait escape on the post-onboarding Loading strip (Tony: never forever Loading).
+  const [bootSlow, setBootSlow] = useState(false)
 
   // ── License enforcement master switch ──────────────────────────────────────────────────────────
   // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
@@ -274,11 +283,26 @@ export function App(): JSX.Element {
       return
     }
     let cancelled = false
-    void window.toto.licenseGate().then((v) => {
-      if (!cancelled) setLicenseGate(v)
+    // FITO-185-X: bound license:gate — a hung invoke must not pin the post-boot Loading strip forever.
+    // Fail-open (allowed:true) on timeout/reject so Reload/bar can paint; LicenseGate still shows when
+    // a real verdict says !allowed.
+    const failOpen: LicenseGateVerdict = { gateEnabled: true, allowed: true }
+    const timer = window.setTimeout(() => {
+      if (!cancelled) setLicenseGate(failOpen)
+    }, 5000)
+    void window.toto.licenseGate().then(
+      (v) => {
+        if (!cancelled) setLicenseGate(v)
+      },
+      () => {
+        if (!cancelled) setLicenseGate(failOpen)
+      }
+    ).finally(() => {
+      window.clearTimeout(timer)
     })
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [licenseEnforced])
   // Re-fetches the verdict AND the underlying settings (a successful activation changes both
@@ -288,6 +312,19 @@ export function App(): JSX.Element {
     const [verdict] = await Promise.all([window.toto.licenseGate(), refresh()])
     setLicenseGate(verdict)
   }, [refresh])
+
+  // FITO-185-X: mid-wait Reload on post-onboarding Loading strip (hooks must stay above early returns).
+  useEffect(() => {
+    const pendingLicense = licenseEnforced && licenseGate == null
+    const onStrip =
+      DEMO == null && !isOnboardingBoot(settings) && (auth.status == null || pendingLicense) && !bootError
+    if (!onStrip) {
+      setBootSlow(false)
+      return
+    }
+    const t = window.setTimeout(() => setBootSlow(true), 5000)
+    return () => window.clearTimeout(t)
+  }, [settings, auth.status, licenseEnforced, licenseGate, bootError])
 
   const ask = useAsk() // answer view + recap
   const suggest = useAsk() // live copilot card
@@ -337,7 +374,10 @@ export function App(): JSX.Element {
     settings?.asrEntityBias ? entityNames : undefined,
     // MQA-270 (B7): lets the whisper prewarm skip itself on parakeet/apple installs — see useListen.
     settings?.asrEngine,
-    settings?.asrQuality ?? 'best'
+    settings?.asrQuality ?? 'best',
+    settings?.enterpriseLive,
+    settings?.cloudSttProvider,
+    settings?.profile?.name
   )
   // Surface a best-quality ASR downgrade (listen.qualityDegraded — WebGPU/large model unavailable) to Settings, mirroring the
   // onEngineFallback → asrLastFallbackAt wiring just above. Patches exactly once per transition to true —
@@ -489,6 +529,12 @@ export function App(): JSX.Element {
   useEffect(() => {
     installOnboardingAudioLockHooks()
     if (settings?.onboardingDone) lockOnboardingAudio()
+  }, [settings?.onboardingDone])
+  // FITO-185-I: remove no-JS exclusive poster bed after onboarding finishes so it cannot show
+  // through the transparent overlay.
+  useEffect(() => {
+    if (!settings?.onboardingDone) return
+    document.getElementById('boot-bed')?.remove()
   }, [settings?.onboardingDone])
   useEffect(() => {
     if (settings?.onboardingDone && !onboardingDoneAt) {
@@ -2066,13 +2112,17 @@ export function App(): JSX.Element {
     // (see that state's own comment for why: it's a saved preference, not per-session state).
     setTranscriptShown(settings?.showLiveTranscript ?? false)
     if (settings?.playListenChime ?? true) playListenChime()
-    void listen.start(
-      settings?.audioSource ?? 'both',
-      settings?.asrQuality ?? 'best',
-      settings?.asrEngine ?? 'parakeet',
-      settings?.asrLanguage ?? 'auto',
-      meetingStartRef.current
-    )
+    {
+      const profile = resolveEnterpriseLiveProfile(settings?.enterpriseLive)
+      const useCloud = shouldUseCloudSttEngine(profile, settings?.cloudSttProvider)
+      void listen.start(
+        settings?.audioSource ?? 'both',
+        settings?.asrQuality ?? 'best',
+        useCloud ? 'cloud' : (settings?.asrEngine ?? 'parakeet'),
+        settings?.asrLanguage ?? 'auto',
+        meetingStartRef.current
+      )
+    }
   }, [
     listen.listening,
     listen.lines,
@@ -2087,6 +2137,8 @@ export function App(): JSX.Element {
     settings?.asrQuality,
     settings?.asrEngine,
     settings?.asrLanguage,
+    settings?.enterpriseLive,
+    settings?.cloudSttProvider,
     settings?.playListenChime,
     settings?.showLiveTranscript,
     settings?.operatorUrl,
@@ -3250,11 +3302,12 @@ export function App(): JSX.Element {
         captureNotice={captureError}
         autosaveWarning={autosaveWarn}
         showTranscript={transcriptShown}
+        youLabel={micSpeakerLabel(settings?.profile)}
         onEnd={endReview}
       />
     ),
     // autosaveWarn was MISSING from the old shared dep array — a latent stale-warning bug the split fixes.
-    [listen.lines, suggest.answer, showSpec, speculative.answer, mode, listen.listening, listen.loading, listen.loadingPct, listen.error, captureError, autosaveWarn, settings?.showLiveTranscript, endReview, transcriptShown]
+    [listen.lines, suggest.answer, showSpec, speculative.answer, mode, listen.listening, listen.loading, listen.loadingPct, listen.error, captureError, autosaveWarn, settings?.showLiveTranscript, settings?.profile, endReview, transcriptShown]
   )
   const reviewBody = useMemo(() => {
     // Two sources: a just-ended live session (ask.answer recap + live lines), or a past meeting opened
@@ -3442,13 +3495,61 @@ export function App(): JSX.Element {
   // wait for the common case of an unlicensed build.
   const licenseGatePending = licenseEnforced && licenseGate == null
 
-  // Until settings AND auth resolve, render only a slim loading strip — never an interactive surface.
-  // This closes the first-run flash and the auth-gate-fail-open window: the SSO and onboarding gates
-  // below are skipped while their state is null, which would otherwise paint a usable bar before sign-in
-  // is enforced and before the no-key CTA can render. (DEMO bypasses this so screenshots still work.)
-  if (DEMO == null && (settings == null || auth.status == null || licenseGatePending)) {
+  // FITO-185-I: exclusive first-run must paint Act 1 (or at least the poster bed) WITHOUT waiting for
+  // settings/auth IPC. Missing settings ≡ onboarding not done (same fail-closed as main's
+  // onboardingExclusiveLive). Live settings replace provisional defaults when getSettings lands.
+  const onboardingBoot = isOnboardingBoot(settings)
+  const onboardingSettings = settings ?? provisionalOnboardingSettings()
+
+  // License gate — outranks SSO and onboarding below: a revoked or unlicensed device must learn that
+  // before it ever burns an SSO sign-in round trip (or sits behind onboarding). Only ever renders when
+  // the gate is on (settings.licenseGateEnabled) AND the verdict says this device isn't allowed to run.
+  if (DEMO == null && licenseEnforced && licenseGate && !licenseGate.allowed) {
+    return (
+      <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
+        <Panel>
+          <LicenseGate settings={settings} reason={licenseGate.reason} onRecheck={recheckLicenseGate} />
+        </Panel>
+      </div>
+    )
+  }
+
+  // Onboarding gate FIRST (before the loading strip). Do not block Act 1 on settings==null / auth.
+  if (onboardingBoot && DEMO == null) {
+    if (view === 'settings' && settings) {
+      return (
+        <div ref={setRoot} className="onboard-exclusive-lock flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
+          <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
+            {settingsBody}
+          </Suspense>
+        </div>
+      )
+    }
+    // Poster bed is always under #boot-bed / hero; sync OnboardingV2 so Suspense never masks a stalled chunk.
+    return (
+      <div ref={setRoot} className="onboard-stage onboard-stage--portal-open onboard-exclusive-lock">
+        <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
+          <OnboardingV2
+            settings={onboardingSettings}
+            saveKey={saveKey}
+            recoverEncryptedProfile={recoverEncryptedProfile}
+            patch={patch}
+            onOpenAiSettings={() => openSettings('ai')}
+            onDone={() => void refresh()}
+            signedIn={auth.status?.signedIn}
+            signedInEmail={auth.status?.email}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // Post-onboarding only: until auth (and optional license) resolve, slim loading strip — never an
+  // interactive bar. DEMO bypasses so screenshots still work. Exclusive Act 1 never reaches here.
+  // FITO-185-N: isOnboardingBoot already ORs ?exclusiveOnboarding=1 from main — belt keep strip off.
+  if (DEMO == null && !isOnboardingBoot(settings) && (auth.status == null || licenseGatePending)) {
     // Boot load exhausted its retries without ever resolving (persistent getSettings/authStatus failure).
-    // Show an actionable card with a Reload instead of spinning "Starting Métis…" forever.
+    // Show an actionable card with a Reload instead of spinning forever.
     if (bootError) {
       return (
         <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
@@ -3472,24 +3573,27 @@ export function App(): JSX.Element {
         </div>
       )
     }
+    if (bootSlow) {
+      return (
+        <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
+          <div className="glass flex w-full items-center gap-2 rounded-full px-4 py-2">
+            <AgentStatus kind="loading" size="inline" caption />
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="no-drag focus-ring ml-auto rounded-lg bg-[var(--color-accent)] px-3 py-1 text-[12px] font-medium text-white hover:brightness-110"
+            >
+              Reload
+            </button>
+          </div>
+        </div>
+      )
+    }
     return (
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
         <div className="glass flex h-[38px] w-full items-center rounded-full px-4">
           <AgentStatus kind="loading" size="inline" caption />
         </div>
-      </div>
-    )
-  }
-
-  // License gate — outranks SSO and onboarding below: a revoked or unlicensed device must learn that
-  // before it ever burns an SSO sign-in round trip (or sits behind onboarding). Only ever renders when
-  // the gate is on (settings.licenseGateEnabled) AND the verdict says this device isn't allowed to run.
-  if (DEMO == null && licenseEnforced && licenseGate && !licenseGate.allowed) {
-    return (
-      <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
-        <Panel>
-          <LicenseGate settings={settings} reason={licenseGate.reason} onRecheck={recheckLicenseGate} />
-        </Panel>
       </div>
     )
   }
@@ -3500,7 +3604,7 @@ export function App(): JSX.Element {
   // sense, even though privileged IPC was already blocked underneath — `enforced` is optional and treated
   // as false until the main process reports it.
   if ((auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn && DEMO == null) {
-    // MQA-066: mirror the onboarding gate's escape 15 lines below, which exists for the identical reason
+    // MQA-066: mirror the onboarding gate's escape, which exists for the identical reason
     // — a fix-link that dead-ends because the gate above it is an unconditional early return. Here the
     // dead end is worse: when enforcement is on but no tenant is configured anywhere, the wall's own
     // message tells the user to enter the Entra IDs in Settings → Calendar, and no route to Settings
@@ -3525,41 +3629,6 @@ export function App(): JSX.Element {
             openSettings('calendar', 'Enter your organization’s Microsoft sign-in IDs here, then sign in.')
           }
         />
-      </div>
-    )
-  }
-
-  // Onboarding gate (first run). Step 6's "Open Settings → AI" fix-link calls onOpenAiSettings, which
-  // just sets `view` to 'settings' — but this whole block is an early return keyed only on
-  // onboardingDone, so once onboarding starts the `view === 'settings'` branch further down that
-  // normally renders <Settings> never runs, and the click did nothing. Handle 'settings' here too so
-  // Settings opens as its own self-contained panel over the gate; closing it (onClose → setView('answer'))
-  // lands back on this same check, which is still true, so it re-renders Onboarding underneath.
-  if (settings && !settings.onboardingDone && DEMO == null) {
-    if (view === 'settings') {
-      return (
-        <div ref={setRoot} className="onboard-exclusive-lock flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
-          <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
-            {settingsBody}
-          </Suspense>
-        </div>
-      )
-    }
-    preloadOnboardingHeroVideo()
-    return (
-      <div ref={setRoot} className="onboard-stage onboard-exclusive-lock">
-        <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
-          <OnboardingV2
-            settings={settings}
-            saveKey={saveKey}
-            recoverEncryptedProfile={recoverEncryptedProfile}
-            patch={patch}
-            onOpenAiSettings={() => openSettings('ai')}
-            onDone={() => void refresh()}
-            signedIn={auth.status?.signedIn}
-            signedInEmail={auth.status?.email}
-          />
-        </div>
       </div>
     )
   }

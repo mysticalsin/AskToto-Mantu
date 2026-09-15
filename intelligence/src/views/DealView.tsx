@@ -13,6 +13,7 @@ import {
 } from '../lib/format'
 import { ledgerTotals } from '../lib/ledgerstats'
 import { slug } from '../lib/slug'
+import { EmptyState } from '../components/EmptyState'
 import { Timeline } from '../components/Timeline'
 import { AcceptSuggestion } from '../components/AcceptSuggestion'
 
@@ -158,7 +159,12 @@ export function DealView({ data }: Props) {
       )
     }
     return (
-      <div className="mx-auto max-w-7xl px-6 py-8 text-sm text-white/50">No deals available.</div>
+      <EmptyState
+        title="Deals"
+        standfirst="Pipeline and deal psychology from meetings you already captured."
+        headline="No deals mapped yet."
+        body="Deals appear here after Métis extracts them from meeting summaries. Record or import meetings that mention opportunities, then click Update Intelligence. An empty list is not fake demo data."
+      />
     )
   }
 
