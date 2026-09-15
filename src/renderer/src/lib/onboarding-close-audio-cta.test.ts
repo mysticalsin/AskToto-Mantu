@@ -15,7 +15,7 @@ import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
 const settings = readFileSync(join(__dirname, '../components/Settings.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readFileSync(join(__dirname, '../styles.css'), 'utf8').replace(/\r\n/g, '\n')
 const production = readFileSync(join(__dirname, './onboarding-music.ts'), 'utf8')
 
 function FakeAudio(this: {
@@ -224,8 +224,8 @@ describe('post-lady Continue is visible without hover', () => {
     expect(hover).not.toMatch(/opacity/)
     expect(hover).not.toMatch(/pointer-events:\s*none/)
 
-    expect(css).toMatch(/\.onboard-tour-slot,\s*\n\s*\.onboard-tour-chrome \{\s*position:\s*relative;\s*z-index:\s*2/)
-    expect(css).toMatch(/\.onboard-post-lady,\s*\n\s*\.onboard-post-lady \.onboard-cta \{[\s\S]*?opacity:\s*1/)
+    expect(css).toMatch(/\.onboard-tour-slot,\s*\.onboard-tour-chrome \{\s*position:\s*relative;\s*z-index:\s*2/)
+    expect(css).toMatch(/\.onboard-post-lady,\s*\.onboard-post-lady \.onboard-cta \{[\s\S]*?opacity:\s*1/)
     expect(css).toMatch(/\.onboard-kinetic-grid \{\s*[\s\S]*?z-index:\s*0/)
     expect(experience).toMatch(/onboard-tour-chrome/)
   })
