@@ -513,6 +513,8 @@ export function useAsk(): {
 export const BOOT_IPC_TIMEOUT_MS = 2000
 /** Wall-clock budget for first-paint getSettings/authStatus before surfacing bootError. */
 export const BOOT_DEADLINE_MS = 15_000
+/** FITO-185-X: show Reload on the Loading strip after this wait — never spin with zero escape. */
+export const BOOT_SOFT_RETRY_MS = 5_000
 
 export function withBootIpcTimeout<T>(promise: Promise<T>, label: string, ms = BOOT_IPC_TIMEOUT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {

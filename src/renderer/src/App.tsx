@@ -260,6 +260,8 @@ export function App(): JSX.Element {
   const stealthLocked = settings?.managedKeys?.includes('contentProtection') ?? false
   const auth = useAuth() // Azure AD gate (only enforces when configured)
   const bootError = settingsBootError ?? auth.bootError
+  // FITO-185-X: mid-wait escape on the post-onboarding Loading strip (Tony: never forever Loading).
+  const [bootSlow, setBootSlow] = useState(false)
 
   // ── License enforcement master switch ──────────────────────────────────────────────────────────
   // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
@@ -281,11 +283,26 @@ export function App(): JSX.Element {
       return
     }
     let cancelled = false
-    void window.toto.licenseGate().then((v) => {
-      if (!cancelled) setLicenseGate(v)
+    // FITO-185-X: bound license:gate — a hung invoke must not pin the post-boot Loading strip forever.
+    // Fail-open (allowed:true) on timeout/reject so Reload/bar can paint; LicenseGate still shows when
+    // a real verdict says !allowed.
+    const failOpen: LicenseGateVerdict = { gateEnabled: true, allowed: true }
+    const timer = window.setTimeout(() => {
+      if (!cancelled) setLicenseGate(failOpen)
+    }, 5000)
+    void window.toto.licenseGate().then(
+      (v) => {
+        if (!cancelled) setLicenseGate(v)
+      },
+      () => {
+        if (!cancelled) setLicenseGate(failOpen)
+      }
+    ).finally(() => {
+      window.clearTimeout(timer)
     })
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [licenseEnforced])
   // Re-fetches the verdict AND the underlying settings (a successful activation changes both
@@ -295,6 +312,19 @@ export function App(): JSX.Element {
     const [verdict] = await Promise.all([window.toto.licenseGate(), refresh()])
     setLicenseGate(verdict)
   }, [refresh])
+
+  // FITO-185-X: mid-wait Reload on post-onboarding Loading strip (hooks must stay above early returns).
+  useEffect(() => {
+    const pendingLicense = licenseEnforced && licenseGate == null
+    const onStrip =
+      DEMO == null && !isOnboardingBoot(settings) && (auth.status == null || pendingLicense) && !bootError
+    if (!onStrip) {
+      setBootSlow(false)
+      return
+    }
+    const t = window.setTimeout(() => setBootSlow(true), 5000)
+    return () => window.clearTimeout(t)
+  }, [settings, auth.status, licenseEnforced, licenseGate, bootError])
 
   const ask = useAsk() // answer view + recap
   const suggest = useAsk() // live copilot card
@@ -3536,6 +3566,22 @@ export function App(): JSX.Element {
               type="button"
               onClick={() => window.location.reload()}
               className="no-drag focus-ring mx-auto mt-0.5 rounded-lg bg-[var(--color-accent)] px-3.5 py-1.5 text-[12px] font-medium text-white hover:brightness-110"
+            >
+              Reload
+            </button>
+          </div>
+        </div>
+      )
+    }
+    if (bootSlow) {
+      return (
+        <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
+          <div className="glass flex w-full items-center gap-2 rounded-full px-4 py-2">
+            <AgentStatus kind="loading" size="inline" caption />
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="no-drag focus-ring ml-auto rounded-lg bg-[var(--color-accent)] px-3 py-1 text-[12px] font-medium text-white hover:brightness-110"
             >
               Reload
             </button>

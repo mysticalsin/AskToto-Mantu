@@ -137,3 +137,28 @@ describe('FITO-185-T exclusive Act 1 music after interactive', () => {
   })
 })
 
+
+describe('FITO-185-X post-boot Loading never forever', () => {
+  const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8').replace(/\r\n/g, '\n')
+  const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
+  const state = readFileSync(join(__dirname, '../state.ts'), 'utf8')
+
+  it('Loading strip offers Reload after soft wait and on bootError', () => {
+    expect(app).toMatch(/bootSlow/)
+    expect(app).toMatch(/FITO-185-X: mid-wait Reload/)
+    expect(state).toMatch(/BOOT_SOFT_RETRY_MS = 5_000/)
+    expect(app).toMatch(/Métis couldn’t start/)
+  })
+
+  it('registerIpc runs before createWindow so settings IPC exists pre-loadURL', () => {
+    const ipc = main.indexOf("runStep('registerIpc', registerIpc)")
+    const win = main.indexOf("runStep('createWindow', createWindow)")
+    expect(ipc).toBeGreaterThan(-1)
+    expect(win).toBeGreaterThan(ipc)
+  })
+
+  it('licenseGate boot fetch fails open on timeout', () => {
+    expect(app).toMatch(/FITO-185-X: bound license:gate/)
+    expect(app).toMatch(/failOpen/)
+  })
+})

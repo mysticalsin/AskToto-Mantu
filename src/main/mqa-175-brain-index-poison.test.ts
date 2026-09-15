@@ -241,6 +241,11 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     expect(source).toMatch(/auditLog\('app\.boot\.watch_cleared',\s*\{\s*earlyDeath:\s*Boolean\(earlyDeath\),\s*reason\s*\}\)/)
     expect(source).toMatch(/clearBootWatchOnce\('createWindow'\)/)
     expect(source).toMatch(/clearBootWatchOnce\('registerIpc'\)/)
+    // FITO-185-X: IPC handlers before loadURL
+    const ipcStep = source.indexOf("runStep('registerIpc', registerIpc)")
+    const winStep = source.indexOf("runStep('createWindow', createWindow)")
+    expect(ipcStep).toBeGreaterThan(-1)
+    expect(winStep).toBeGreaterThan(ipcStep)
     expect(source).toMatch(/setImmediate\(\(\) => clearBootWatchOnce\('setImmediate'\)\)/)
     expect(source).toMatch(/powerMonitor\.on\('unlock-screen'/)
     // Exclusive hard reveal at 2s

@@ -150,3 +150,43 @@ describe('FITO-185-U wiring in createWindow', () => {
     expect(create).toMatch(/FITO-185-N/)
   })
 })
+
+describe('FITO-185-X act1-dom miss artifact', () => {
+  it('exports a miss budget and bind writes never-armed when load never matches', async () => {
+    const { ACT1_DOM_PROBE_MISS_MS, bindAct1DomProbe } = await import('./act1-dom-probe')
+    expect(ACT1_DOM_PROBE_MISS_MS).toBeGreaterThanOrEqual(5000)
+    const writes: string[] = []
+    const listeners: Record<string, Array<(...a: unknown[]) => void>> = {}
+    const target = {
+      on(event: string, listener: (...args: unknown[]) => void) {
+        ;(listeners[event] ??= []).push(listener)
+      },
+      getURL: () => 'about:blank',
+      isDestroyed: () => false,
+      executeJavaScript: async () => ({})
+    }
+    let now = 0
+    const timers: Array<{ ms: number; fn: () => void }> = []
+    bindAct1DomProbe(target, {
+      expectedUrl: 'file:///fixture/renderer/index.html?exclusiveOnboarding=1',
+      outPath: '/tmp/act1-dom-miss-test.json',
+      delayMs: 10,
+      timeoutMs: 20,
+      writeFile: ((path: string, data: string | NodeJS.ArrayBufferView) => {
+        writes.push(String(data))
+      }) as typeof import('node:fs').writeFileSync,
+      mkdir: (() => undefined) as typeof import('node:fs').mkdirSync,
+      setTimer: ((fn: () => void, ms: number) => {
+        timers.push({ ms, fn: fn as () => void })
+        return 1 as unknown as NodeJS.Timeout
+      }) as typeof setTimeout,
+      now: () => new Date('2026-09-15T21:00:00.000Z')
+    })
+    // Fire blank load (should not arm) then advance miss timer
+    for (const l of listeners['did-finish-load'] ?? []) l()
+    const miss = timers.find((t) => t.ms >= 5000) ?? timers.sort((a, b) => b.ms - a.ms)[0]
+    expect(miss).toBeTruthy()
+    miss!.fn()
+    expect(writes.some((w) => w.includes('act1-dom-miss: never-armed'))).toBe(true)
+  })
+})
