@@ -8375,25 +8375,22 @@ if (!app.requestSingleInstanceLock()) {
   // Catch the case where encryption was already on (managed-config or a previous run) with a stale
   // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
   runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
-  // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above) — but
-  // registerIpc has no such dependency: every ipcMain.handle closure inside it reads `win`/`tray` lazily
-  // at INVOCATION time (assertMainWindow etc.), never at registration time, and the renderer can't issue
-  // its first IPC call before its own <script> has executed anyway. Moving it after createWindow lets the
-  // OS start loading/compositing the renderer a little earlier instead of waiting behind ~60 synchronous
-  // ipcMain.handle registrations first.
+  // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above).
+  // FITO-185-X: registerIpc also stays ahead of createWindow — handlers read win/tray lazily at
+  // invocation time, and first paint must not race loadURL before settings/auth IPC exists.
   runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
+  // FITO-185-X: registerIpc BEFORE createWindow/loadURL so getSettings/authStatus/licenseGate
+  // handlers exist before the renderer can invoke. FITO-185-H put IPC immediately after createWindow
+  // (ahead of preprocess) but loadURL still raced first paint — that strand is the post-boot
+  // "Loading" strip Tony still hits when exclusive exits or settings IPC is late.
+  runStep('registerIpc', registerIpc)
+  clearBootWatchOnce('registerIpc')
   runStep('createWindow', createWindow)
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
-  // FITO-185-H: registerIpc IMMEDIATELY after createWindow. First paint needs IPC (getSettings /
-  // settings.json) more than the preprocess readiness flag — audit showed watch_cleared reason=
-  // createWindow only when preprocess/meetings/import sat ahead of registerIpc and GPU thrashed
-  // exclusive stage before handlers existed.
-  runStep('registerIpc', registerIpc)
-  // FITO-185-G-TIMER: sync clear after registerIpc (past kill zone). Also setImmediate + unlock-screen
-  // so App Nap / locked-screen cannot leave boot-incomplete stuck when the 15s timer is deferred.
-  clearBootWatchOnce('registerIpc')
+  // FITO-185-G-TIMER: also setImmediate + unlock-screen so App Nap / locked-screen cannot leave
+  // boot-incomplete stuck when the 15s timer is deferred.
   setImmediate(() => clearBootWatchOnce('setImmediate'))
   try {
     powerMonitor.on('unlock-screen', () => clearBootWatchOnce('unlock-screen'))

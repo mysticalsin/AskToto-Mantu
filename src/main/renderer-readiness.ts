@@ -1,3 +1,5 @@
+import { isRealRendererShotUrl } from './asktoto-shot'
+
 /** MQA-318: a read-only, bounded probe of our loaded document, not workflow or visual QA. */
 export const RENDERER_READY_PROBE = `(() => new Promise((resolve) => {
   const deadline = Date.now() + 10000;
@@ -43,7 +45,7 @@ export function bindRendererReadiness(
   }
   const loaded = (): void => {
     cancel()
-    if (target.isDestroyed() || target.getURL() !== expectedUrl) return
+    if (target.isDestroyed() || !isRealRendererShotUrl(target.getURL(), expectedUrl)) return
     const current = generation
     // A wedged renderer may never execute even the probe's own timeout. Bound the main-side wait too.
     const cancelled = new Promise<false>((resolve) => {
@@ -52,12 +54,12 @@ export function bindRendererReadiness(
     })
     void Promise.race([
       Promise.resolve().then(() => {
-        if (current !== generation || target.isDestroyed() || target.getURL() !== expectedUrl) return false
+        if (current !== generation || target.isDestroyed() || !isRealRendererShotUrl(target.getURL(), expectedUrl)) return false
         return target.executeJavaScript(RENDERER_READY_PROBE)
       }),
       cancelled
     ]).then((result) => {
-      if (result !== true || current !== generation || target.isDestroyed() || target.getURL() !== expectedUrl) return
+      if (result !== true || current !== generation || target.isDestroyed() || !isRealRendererShotUrl(target.getURL(), expectedUrl)) return
       dispose()
       ready()
     }).catch(() => {

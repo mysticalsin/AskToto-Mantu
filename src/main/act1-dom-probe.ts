@@ -12,6 +12,8 @@ import { isRealRendererShotUrl } from './asktoto-shot'
 
 export const ACT1_DOM_PROBE_DELAY_MS = 2000
 export const ACT1_DOM_PROBE_TIMEOUT_MS = 4000
+/** FITO-185-X: if did-finish-load never arms the probe, still write a miss artifact. */
+export const ACT1_DOM_PROBE_MISS_MS = 5000
 
 export interface Act1DomProbeTarget {
   on(event: string, listener: (...args: unknown[]) => void): unknown
@@ -181,4 +183,28 @@ export function bindAct1DomProbe(target: Act1DomProbeTarget, opts: BindAct1DomPr
   }
 
   target.on('did-finish-load', onLoaded)
+
+  // FITO-185-X: silent miss left installer-prove with renderer.ready and no act1-dom.json.
+  const missMs = Math.max(ACT1_DOM_PROBE_MISS_MS, delayMs + 1000)
+  const missTimer = setTimer(() => {
+    if (armed || target.isDestroyed()) return
+    const miss = {
+      ts: (opts.now ?? (() => new Date()))().toISOString(),
+      error: 'act1-dom-miss: never-armed',
+      expectedUrl,
+      liveUrl: target.isDestroyed() ? null : target.getURL()
+    }
+    try {
+      mkdir(dirname(outPath), { recursive: true })
+      write(outPath, JSON.stringify(miss, null, 2), { mode: 0o600 })
+    } catch {
+      /* ignore */
+    }
+    try {
+      opts.audit?.({ error: miss.error, search: '' })
+    } catch {
+      /* ignore */
+    }
+  }, missMs)
+  ;(missTimer as NodeJS.Timeout).unref?.()
 }
