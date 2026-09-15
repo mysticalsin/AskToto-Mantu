@@ -246,9 +246,9 @@ describe('FITO-185-U exclusive Act 1 capturable + DOM probe', () => {
     expect(create).toMatch(/params\.set\('exclusiveOnboarding', '1'\)/)
   })
 
-  it('portal-open CSS unlock includes onboard-cta / Next (FITO-185-U)', () => {
+  it('portal-open CSS unlock includes onboard-cta / Next (FITO-185-V)', () => {
     const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
     expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open[\s\S]*\.onboard-cta/)
-    expect(css).toMatch(/FITO-185-U/)
+    expect(css).toMatch(/FITO-185-V/)
   })
 })

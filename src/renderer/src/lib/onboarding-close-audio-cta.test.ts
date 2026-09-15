@@ -209,11 +209,14 @@ describe('post-lady Continue is visible without hover', () => {
     expect(problem).not.toMatch(/group-hover/)
     expect(problem).not.toMatch(/initial:\s*\{[^}]*opacity:\s*0/)
 
-    const cta = css.slice(css.indexOf('.onboard-cta {'), css.indexOf('.onboard-mute {'))
+    // Anchor exclusive-stage .onboard-cta rule (not button.onboard-cta in reduced-motion).
+    const ctaStart = css.indexOf('.onboard-cta {\n  display: inline-flex')
+    expect(ctaStart).toBeGreaterThan(0)
+    const cta = css.slice(ctaStart, css.indexOf('.onboard-mute {', ctaStart))
     expect(cta).toMatch(/opacity:\s*1/)
     expect(cta).toMatch(/pointer-events:\s*auto/)
     expect(cta).toMatch(/position:\s*relative/)
-    expect(cta).toMatch(/z-index:\s*3/)
+    expect(cta).toMatch(/z-index:\s*5/)
     expect(cta).not.toMatch(/opacity:\s*0/)
 
     const hover = css.slice(css.indexOf('.onboard-cta:hover:not(:disabled) {'), css.indexOf('.onboard-cta:disabled'))
