@@ -61,7 +61,21 @@ export function isRealRendererShotUrl(url: string, expectedUrl: string): boolean
   // expected is a substring prefix of url or vice versa for same document.
   if (url.includes('index.html') && expectedUrl.includes('index.html')) {
     const strip = (u: string): string => u.split('#')[0] ?? u
-    return strip(url) === strip(expectedUrl)
+    if (strip(url) === strip(expectedUrl)) return true
+    // FITO-185-U: packaged file:// asar paths can differ in encoding while still the same document.
+    try {
+      const a = new URL(url)
+      const b = new URL(expectedUrl)
+      if (a.pathname.endsWith('/index.html') && b.pathname.endsWith('/index.html')) {
+        if (!b.search) return true
+        const want = new URLSearchParams(b.search)
+        const got = new URLSearchParams(a.search)
+        if (want.get('exclusiveOnboarding') === '1') return got.get('exclusiveOnboarding') === '1'
+        return true
+      }
+    } catch {
+      /* ignore */
+    }
   }
   return false
 }

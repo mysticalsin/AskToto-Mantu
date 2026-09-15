@@ -118,7 +118,10 @@ export function bindAct1DomProbe(target: Act1DomProbeTarget, opts: BindAct1DomPr
     armed = true
     const timer = setTimer(() => {
       if (target.isDestroyed()) return
-      if (!isRealRendererShotUrl(target.getURL(), expectedUrl)) return
+      // FITO-185-U: after arming on a real load, do not drop the probe if getURL() drifts
+      // (query encoding / trailing slash). Still skip about:blank.
+      const live = target.getURL()
+      if (!live || live.startsWith('about:')) return
       void withTimeout(target.executeJavaScript(ACT1_DOM_PROBE_EXPR, true), timeoutMs, 'act1-dom')
         .then((raw: unknown) => {
           const dom =
