@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   exclusiveMayUseSimpleFullScreen,
+  exclusiveOsFullscreenAllowed,
   exclusiveOnboardingBounds,
   EXCLUSIVE_ONBOARDING_BACKGROUND,
   firstPaintOverlayBounds,
@@ -84,6 +85,19 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(live.fullscreenable).toBe(true)
     expect(live.roundedCorners).toBe(false)
     expect(exclusiveMayUseSimpleFullScreen(live.transparent)).toBe(true)
+    // FITO-185-S: Electron 43+ never OS SFS even with ASKTOTO_ALLOW_SFS
+    expect(
+      exclusiveOsFullscreenAllowed({ electronVersion: '43.6.0', allowSfsEnv: '1' })
+    ).toBe(false)
+    expect(
+      exclusiveOsFullscreenAllowed({ electronVersion: '39.8.10', allowSfsEnv: '1' })
+    ).toBe(true)
+    expect(
+      exclusiveOsFullscreenAllowed({ electronVersion: '39.8.10', allowSfsEnv: undefined })
+    ).toBe(false)
+    expect(
+      exclusiveOsFullscreenAllowed({ electronVersion: '39.8.10', allowSfsEnv: '1', shotEnv: '1' })
+    ).toBe(false)
   })
 
   it('after onboardingDone the overlay window is transparent again', () => {
@@ -102,9 +116,19 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(create).toMatch(/overlayWindowChrome\(onboardingLive\)/)
     expect(create).toMatch(/transparent: chrome\.transparent/)
     expect(create).toMatch(/backgroundColor: chrome\.backgroundColor/)
-    expect(create).toMatch(/show: !onboardingLive/)
+    // FITO-185-Z: exclusive shows immediately (never show:!onboardingLive hide-for-seconds)
+    expect(create).toMatch(/show:\s*true/)
+    expect(create).not.toMatch(/show:\s*!onboardingLive/)
+    expect(create).toMatch(/FITO-185-Z/)
+    expect(create).toMatch(/pollAct1Paint/)
     expect(create).toMatch(/overlay\.once\('ready-to-show'/)
     expect(create).toMatch(/revealExclusiveWhenPainted/)
+    expect(create).toContain('}, 2000)') // FITO-185-G-SHOW hard reassert
+    // FITO-185-T: without SFS, activating show is required (showInactive left Act 1 behind Finder)
+    expect(create).toMatch(/showForExclusiveOnboarding\(win\)/)
+    expect(create).toMatch(/showForExclusiveOnboarding\(overlay\)/)
+    expect(create).toMatch(/setHiddenInMissionControl\?\.\(!onboardingLive\)/)
+    expect(create).not.toMatch(/win\.setHiddenInMissionControl\?\.\(true\)/)
     expect(create).not.toMatch(/transparent:\s*true/)
     expect(create).not.toMatch(/backgroundColor: onboardingLive \? '#3A0B6B'/)
 
@@ -114,10 +138,10 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     )
     expect(apply).toMatch(/if \(overlayWindowTransparent\) \{\s*recreateOverlayWindow\(\)/)
     expect(apply).toMatch(/exclusiveMayUseSimpleFullScreen\(overlayWindowTransparent\)/)
+    expect(apply).toMatch(/exclusiveOsFullscreenAllowed\(/)
+    expect(apply).toMatch(/process\.versions\.electron/)
     expect(apply).toMatch(/setSimpleFullScreen\(true\)/)
-    expect(apply.indexOf('exclusiveMayUseSimpleFullScreen(overlayWindowTransparent)')).toBeLessThan(
-      apply.indexOf('setSimpleFullScreen(true)')
-    )
+    expect(apply.indexOf('exclusiveOsFullscreenAllowed(')).toBeLessThan(apply.indexOf('setSimpleFullScreen(true)'))
     expect(apply).toMatch(/setBackgroundColor\(EXCLUSIVE_ONBOARDING_BACKGROUND\)/)
 
     const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function createWindow'))
@@ -136,10 +160,10 @@ describe('exclusive onboarding cannot be dragged off-screen', () => {
     const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
     const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
     const gate = app.slice(
-      app.indexOf("settings && !settings.onboardingDone && DEMO == null"),
-      app.indexOf('const panelOpen')
+      app.indexOf('Onboarding gate FIRST'),
+      app.indexOf('Post-onboarding only:')
     )
-    expect(gate).toMatch(/className="onboard-stage onboard-exclusive-lock"/)
+    expect(gate).toMatch(/className="onboard-stage(?:\s+onboard-stage--portal-open)?\s+onboard-exclusive-lock"/)
     expect(gate).toMatch(/onboard-exclusive-lock/)
     expect(gate).not.toMatch(/windowDrag/)
     expect(gate).not.toMatch(/onPointerDown/)
@@ -166,5 +190,66 @@ describe('exclusive onboarding cannot be dragged off-screen', () => {
     expect(index).toMatch(
       /ipcMain\.handle\(IPC\.windowMoveBy[\s\S]{0,240}if \(onboardingExclusiveLive\(\)\) return/
     )
+  })
+})
+
+describe('FITO-185-T exclusive Act 1 visible without forever Loading', () => {
+  it('createWindow activates exclusive via showForExclusiveOnboarding immediately (FITO-185-Z)', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+    expect(create).toMatch(/showForExclusiveOnboarding\(win\)/)
+    expect(create).toMatch(/showForExclusiveOnboarding\(overlay\)/)
+    // FITO-185-Z: ctor-time exclusive show — no hide-until-paint.
+    expect(create).toMatch(/FITO-185-Z: show exclusive NOW/)
+    expect(create).not.toMatch(/do NOT show exclusive here/)
+    const reveal = create.slice(
+      create.indexOf('const revealExclusiveWhenPainted'),
+      create.indexOf('overlay.webContents.on(')
+    )
+    expect(reveal).toMatch(/showForExclusiveOnboarding\(overlay\)/)
+    expect(reveal).not.toMatch(/showInactive\(\)/)
+    expect(create).toMatch(/pollAct1Paint/)
+    expect(create).toMatch(/ACT1_SHELL_READY/)
+  })
+
+  it('FITO-185-S still hard-disables SFS on Electron 43+', () => {
+    expect(
+      exclusiveOsFullscreenAllowed({ electronVersion: '43.6.0', allowSfsEnv: '1' })
+    ).toBe(false)
+    const apply = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const body = apply.slice(
+      apply.indexOf('function applyExclusiveOnboardingStage'),
+      apply.indexOf('function exitExclusiveOnboardingStage')
+    )
+    expect(body).toMatch(/exclusiveOsFullscreenAllowed\(/)
+  })
+})
+
+
+
+describe('FITO-185-U exclusive Act 1 capturable + DOM probe', () => {
+  it('contentProtectionOn forces false while exclusive', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const body = index.slice(
+      index.indexOf('function contentProtectionOn(): boolean {'),
+      index.indexOf('function privateViewOn(): boolean {')
+    )
+    expect(body).toMatch(/onboardingExclusiveLive\(\)/)
+    expect(body).toMatch(/FITO-185-U/)
+    expect(body).toMatch(/return false/)
+  })
+
+  it('createWindow binds act1 DOM probe and keeps exclusiveOnboarding=1', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+    expect(create).toMatch(/bindAct1DomProbe\(/)
+    expect(create).toMatch(/act1-dom\.json/)
+    expect(create).toMatch(/params\.set\('exclusiveOnboarding', '1'\)/)
+  })
+
+  it('portal-open CSS unlock includes onboard-cta / Next (FITO-185-V)', () => {
+    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open[\s\S]*\.onboard-cta/)
+    expect(css).toMatch(/FITO-185-V/)
   })
 })

@@ -254,13 +254,14 @@ export function shoeyLandSvg(cls = 'world shoey-world'): string {
 
 export const SHOEY_LAND_SVG = shoeyLandSvg()
 
-/** Realtime map: full-bleed Mercator land, one pulsing green dot per reporting location (no
- * count-pill badges — dropped per spec), zoom/pan controls. Faithful port via
- * ./world/map.ts (renderRealtimeMapSvg) of WorldMap.tsx / shared/MapCanvas.tsx. */
-export function shoeyWorld(countries: MapCountry[], dots: MapDot[]): string {
+/** Realtime map: dark ocean + grid, country flag pills, pulsing dots with city labels,
+ * zoom/pan. Faithful port via ./world/map.ts (renderRealtimeMapSvg). Country rollups feed
+ * pill seat totals so fleet device counts stay honest. Default theme is dark (Realtime). */
+export function shoeyWorld(countries: MapCountry[], dots: MapDot[], theme: 'light' | 'dark' = 'dark'): string {
   const empty = countries.length === 0 && dots.length === 0
   const points = empty ? [] : groupDotsToPoints(dots)
-  return renderRealtimeMapSvg({ points, theme: 'light' })
+  const rollup = countries.map((c) => ({ iso: c.iso, devices: c.devices }))
+  return renderRealtimeMapSvg({ points, theme, countries: rollup })
 }
 
 /** Seats sharing a country, city, and lat/lon (to 2 decimals, ~1km) render as one dot whose

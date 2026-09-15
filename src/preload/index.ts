@@ -205,6 +205,53 @@ const api = {
     startedAt?: number
   ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
     ipcRenderer.invoke(IPC.appleSpeechFeed, { samples, speaker, startedAt }),
+  // Cloud STT live WS (main-side Nova-3 / Soniox). Credentials never enter the renderer.
+  cloudSttStart: (opts: {
+    provider: string
+    asrLanguage?: string
+    pinnedLang?: string | null
+    profileName?: string
+    meetingId?: string
+  }): Promise<{ ok: boolean; error?: string; code?: string }> =>
+    ipcRenderer.invoke(IPC.cloudSttStart, opts),
+  cloudSttStop: (): Promise<void> => ipcRenderer.invoke(IPC.cloudSttStop),
+  cloudSttPush: (
+    samples: Float32Array,
+    speaker: 'you' | 'them'
+  ): Promise<void> => ipcRenderer.invoke(IPC.cloudSttPush, { samples, speaker }),
+  cloudSttUpdateLang: (asrLanguage: string, pinnedLang?: string | null): Promise<void> =>
+    ipcRenderer.invoke(IPC.cloudSttUpdateLang, { asrLanguage, pinnedLang }),
+  cloudSttSetSonioxKey: (key: string): Promise<{ hasKeys: Record<string, boolean> }> =>
+    ipcRenderer.invoke(IPC.cloudSttSetSonioxKey, { key }),
+  cloudSttClearSonioxKey: (): Promise<{ hasKeys: Record<string, boolean> }> =>
+    ipcRenderer.invoke(IPC.cloudSttClearSonioxKey),
+  onCloudSttFinal: (
+    cb: (line: {
+      speaker: 'you' | 'them'
+      text: string
+      name: string
+      language?: string
+      id: string
+    }) => void
+  ): (() => void) => {
+    const h = (_e: unknown, line: Parameters<typeof cb>[0]): void => cb(line)
+    ipcRenderer.on(IPC.cloudSttFinal, h)
+    return () => ipcRenderer.removeListener(IPC.cloudSttFinal, h)
+  },
+  onCloudSttError: (cb: (message: string) => void): (() => void) => {
+    const h = (_e: unknown, d: { message?: string } | string): void =>
+      cb(typeof d === 'string' ? d : d?.message || 'Cloud STT error')
+    ipcRenderer.on(IPC.cloudSttError, h)
+    return () => ipcRenderer.removeListener(IPC.cloudSttError, h)
+  },
+  onCloudSttInterim: (
+    cb: (channel: 'you' | 'them', text: string) => void
+  ): (() => void) => {
+    const h = (_e: unknown, d: { channel: 'you' | 'them'; text: string }): void =>
+      cb(d.channel, d.text)
+    ipcRenderer.on(IPC.cloudSttInterim, h)
+    return () => ipcRenderer.removeListener(IPC.cloudSttInterim, h)
+  },
   // Speaker Intelligence's engine-independent embedding tap (see IPC.speakerEmbed's own comment) — the
   // Whisper path's equivalent of the label ride-along parakeetFeed/appleSpeechFeed carry for free.
   // echo:true → renderer drops the already-committed THEM line (operator loopback bleed).

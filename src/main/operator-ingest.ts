@@ -403,6 +403,25 @@ export interface OperatorAskEvent extends StreamCacheUsage {
   questionType?: QuestionType
   /** True for a screenshot Ask. Only used to derive questionType when the caller did not pass one. */
   vision?: boolean
+  /**
+   * Portal path tag for Keys/Overview spend lines (portal-cf / portal-direct / cli / seat-local).
+   * Optional: server persistProxyAsk already tags Worker-metered rows; seat ingest should tag too
+   * so REPLACE keeps path_tag when the client row wins the race.
+   */
+  pathTag?: 'portal-cf' | 'portal-direct' | 'cli' | 'seat-local'
+}
+
+/** Map seat provider → Ask path tag for Operator Keys Portal CF / Portal direct lines. */
+export function pathTagForSeatProvider(
+  provider: string | undefined,
+  viaOperator: boolean
+): 'portal-cf' | 'portal-direct' | 'cli' | 'seat-local' | undefined {
+  if (!provider) return undefined
+  if (viaOperator) {
+    return provider === 'cloudflare' ? 'portal-cf' : 'portal-direct'
+  }
+  if (provider === 'claude-cli' || provider === 'codex-cli' || provider === 'gemini-cli') return 'cli'
+  return 'seat-local'
 }
 
 /** Resolve the wire value: caller's label wins; otherwise classify locally; never absent, never free-form. */
@@ -443,6 +462,9 @@ export async function recordOperatorAsk(
   }
   if (event.outcome === 'error' && event.error) {
     payload.error = event.error.slice(0, 64)
+  }
+  if (event.pathTag) {
+    payload.pathTag = event.pathTag
   }
   await postIngestWithQueue(url, secret, payload)
 }

@@ -104,6 +104,10 @@ export interface DashboardOps {
   crmFailRate: number | null
   durationMs: number | null
   meetings: number
+  /** Asks in the 7d window with at least one reported token field (COST_METERING completeness). */
+  asksWithTokens: number
+  /** Asks in the 7d window with no token fields — unknown, never treated as 0 tokens. */
+  asksMissingTokens: number
 }
 
 export interface DashboardPayload {
@@ -352,6 +356,7 @@ function askLine(a: {
 
 function costForAsks(
   asks: {
+    input_tokens?: number | null
     cache_read: number | null
     cache_write: number | null
     cache_uncached: number | null
@@ -377,9 +382,13 @@ function costForAsks(
       a.model || '',
       a.provider || undefined
     )
-    if (est) {
+    const list = est
+      ? null
+      : estimateListPrice(a.model || '', a.input_tokens, a.output_tokens, a.cache_read)
+    const hit = est ?? list
+    if (hit) {
       any = true
-      usd += est.usd
+      usd += hit.usd
     }
   }
   return any ? formatUsdEstimate(usd) : null
@@ -523,40 +532,61 @@ function countPerBucket(events: EventRow[], kind: string, starts: number[], step
   })
 }
 
-/** Reported token total for one ask (input side from the cache breakdown, plus output). Null when the
- *  provider reported nothing, so the caller can tell "0 tokens" apart from "not reported". */
+/** Reported token total for one ask. Prefer explicit input+output; fall back to cache breakdown + output.
+ *  Null when the provider reported nothing — never invent 0. */
 function askTokenTotal(a: {
+  input_tokens?: number | null
   cache_read: number | null
   cache_write: number | null
   cache_uncached: number | null
   output_tokens: number | null
 }): number | null {
-  if (a.cache_read == null && a.cache_write == null && a.cache_uncached == null && a.output_tokens == null) return null
+  const hasInput = a.input_tokens != null
+  const hasOut = a.output_tokens != null
+  const hasCache = a.cache_read != null || a.cache_write != null || a.cache_uncached != null
+  if (!hasInput && !hasOut && !hasCache) return null
+  if (hasInput || hasOut) {
+    return (a.input_tokens ?? 0) + (a.output_tokens ?? 0)
+  }
   return (a.cache_read ?? 0) + (a.cache_write ?? 0) + (a.cache_uncached ?? 0) + (a.output_tokens ?? 0)
 }
 
+/** Match portal spend lines: explicit path_tag, or legacy untagged rows by provider. */
+function matchesPortalPath(a: AskRow, tag: 'portal-cf' | 'portal-direct'): boolean {
+  if (a.path_tag === tag) return true
+  if (a.path_tag != null) return false
+  if (tag === 'portal-cf') return (a.provider || '') === 'cloudflare'
+  return (a.provider || '') === 'deepseek'
+}
+
+/** Fleet aggregate for one portal path. Tokens sum across licenses/devices.
+ *  Never paint `N tok · not reported` — valued metrics stay valued; missing stays alone. */
 function portalPathSpend(asks: AskRow[], tag: 'portal-cf' | 'portal-direct'): string {
-  const rows = asks.filter((a) => a.path_tag === tag)
+  const rows = asks.filter((a) => matchesPortalPath(a, tag))
   if (!rows.length) return 'not reported'
   let usd = 0
   let anyCost = false
   let tokens = 0
   let anyTok = false
   for (const a of rows) {
-    const inTok = a.input_tokens
-    const outTok = a.output_tokens
-    if (inTok != null || outTok != null) {
+    const t = askTokenTotal(a)
+    if (t != null) {
       anyTok = true
-      tokens += (inTok ?? 0) + (outTok ?? 0)
+      tokens += t
     }
     const est = estimateListPrice(a.model || '', a.input_tokens, a.output_tokens, a.cache_read)
     if (!est) continue
     anyCost = true
     usd += est.usd
   }
-  const tok = anyTok ? `${tokens} tok` : 'tokens not reported'
-  if (!anyCost) return `${tok} · not reported`
-  return `${tok} · ${formatUsdEstimate(usd)} · estimate, list price`
+  const parts: string[] = []
+  if (anyTok) parts.push(`${tokens} tok`)
+  if (anyCost) {
+    parts.push(formatUsdEstimate(usd))
+    parts.push('estimate, list price')
+  }
+  if (!parts.length) return 'not reported'
+  return parts.join(' · ')
 }
 
 function tokensReported(asks: AskRow[]): number | null {
@@ -621,6 +651,12 @@ function buildOverviewOps(args: {
     if (!CLI_ASK_PROVIDERS.has(provider) && fundedProviders.has(provider)) operatorAsks++
     else cliAsks++
   }
+  let asksWithTokens = 0
+  let asksMissingTokens = 0
+  for (const a of weekAsks) {
+    if (askTokenTotal(a) == null) asksMissingTokens++
+    else asksWithTokens++
+  }
   return {
     uniqueSessions: wau,
     uniqueSeries: dailyUnique,
@@ -651,7 +687,9 @@ function buildOverviewOps(args: {
     portalDirect: portalPathSpend(weekAsks, 'portal-direct'),
     crmFailRate,
     durationMs: averageDurationMs(weekAsks),
-    meetings: recapEvents.length
+    meetings: recapEvents.length,
+    asksWithTokens,
+    asksMissingTokens
   }
 }
 
@@ -1040,7 +1078,10 @@ export async function buildDashboard(
         return lic.includes('licensed') || lic === 'approved' || lic === 'trial' || lic === 'grace'
       }).length,
       approved: seats.filter((s) => isApprovedSeat(s)).length,
-      timeSaved: formatSavedTime(timeSavedFromMeetings(recapMeetings(storedEvents)).savedMinutes),
+      timeSaved: (() => {
+        const meetings = recapMeetings(storedEvents)
+        return meetings.length ? formatSavedTime(timeSavedFromMeetings(meetings).savedMinutes) : 'not reported'
+      })(),
       timeSavedSub: (() => {
         const n = recapMeetings(storedEvents).length
         return n ? `${n} recaps · estimate` : 'no recaps ingested'

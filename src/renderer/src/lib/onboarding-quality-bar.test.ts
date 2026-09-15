@@ -32,7 +32,7 @@ function actSlice(src: string, start: string, end: string): string {
 
 describe('Apple-grade quality bar — PR 66 re-pass', () => {
   it('starfield is 60fps-class on Retina: pixel cap, seed dt, moving frame 1', () => {
-    expect(STARFIELD_PIXEL_RATIO_CAP).toBe(1.5)
+    expect(STARFIELD_PIXEL_RATIO_CAP).toBe(1.25)
     expect(STARFIELD_SEED_DT).toBeCloseTo(1 / 60, 10)
     expect(breathScrollTarget(0, false)).toBeCloseTo(0.56, 8)
     expect(appearOpacity(0)).toBe(APPEAR_OPACITY_FLOOR)
@@ -83,7 +83,8 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
     expect(hero.indexOf('scene-enter')).toBeLessThan(hero.indexOf('onboard-cta'))
     expect(hero.lastIndexOf('</div>', hero.indexOf('onboard-cta'))).toBeGreaterThan(hero.indexOf('scene-enter'))
 
-    const problem = actSlice(experience, "scene === 'problem'", "scene === 'reveal'")
+    // FITO-185-P keep-alive: slice problem scene block, not the video ternary.
+    const problem = actSlice(experience, "scene === 'problem' && (", "scene === 'reveal' && (")
     expect(problem).toMatch(/scene-enter/)
     expect(problem.search(/>\s*Continue\s*</)).toBeGreaterThan(problem.lastIndexOf('scene-enter'))
 
@@ -95,8 +96,8 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
     expect(nextBlock).not.toMatch(/\{hasNext && \(/)
   })
 
-  it('portal video is hero-only; starfield is purple/black after Next; recap drops the bed', () => {
-    expect(experience).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
+  it('portal video keep-alive on hero|problem|reveal; starfield purple/black after Next', () => {
+    expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
     expect(engine).toMatch(/canvas\.style\.opacity = '0'/)
     expect(engine).toMatch(/setClearColor\(0x05010a/)
     expect(css).toMatch(/\.onboard-starfield canvas \{[\s\S]*?opacity:\s*0/)

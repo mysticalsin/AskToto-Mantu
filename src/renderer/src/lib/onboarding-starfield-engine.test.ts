@@ -37,12 +37,15 @@ describe('Starfield Close engine — dispose, fail, reduced-motion, no fetch', (
     expect(engineSrc).toMatch(/removeEventListener\('resize'/)
   })
 
-  it('pauses while hidden and still runs drift + spin every visible frame', () => {
+  it('pauses while hidden, skips bloom when hitching/RM, hard-stops rAF after RM first frame', () => {
     expect(engineSrc).toMatch(/document\.hidden/)
     expect(engineSrc).toMatch(/uDrift/)
     expect(engineSrc).toMatch(/group\.rotation\.z \+= dt/)
     expect(engineSrc).toMatch(/breathScrollTarget\(t, reducedMotion\)/)
     expect(engineSrc).toMatch(/reducedMotion \? CONFIG\.drift \* REDUCED_MOTION_SCALE/)
+    expect(engineSrc).toMatch(/const skipBloom = reducedMotion \|\| rawDt > 0\.033/)
+    expect(engineSrc).toMatch(/reducedMotion && !firstFrame/)
+    expect(engineSrc).toMatch(/shadowMap\.enabled = false/)
     expect(engineSrc).not.toMatch(/scrollY|pageYOffset|wheel|scrollTo/)
     expect(engineSrc).not.toMatch(/unpkg|jsdelivr/)
   })
@@ -50,8 +53,9 @@ describe('Starfield Close engine — dispose, fail, reduced-motion, no fetch', (
   it('caps pixel ratio, seeds the dive, and composes frame 1 before the next rAF', () => {
     expect(engineSrc).toMatch(/STARFIELD_PIXEL_RATIO_CAP/)
     expect(engineSrc).toMatch(/STARFIELD_SEED_DT/)
-    expect(engineSrc).toMatch(/powerPreference: 'high-performance'/)
+    expect(engineSrc).toMatch(/powerPreference: 'default'/)
     expect(engineSrc).toMatch(/alpha: false/)
+    expect(engineSrc).toMatch(/antialias: false/)
     expect(engineSrc).toMatch(/breathScrollTarget\(0, reducedMotion\)/)
     expect(engineSrc).toMatch(/const dt = firstFrame \? STARFIELD_SEED_DT : rawDt/)
     expect(engineSrc).toMatch(/opts\.onFirstFrame\?\.\(\)/)
@@ -62,6 +66,8 @@ describe('Starfield Close engine — dispose, fail, reduced-motion, no fetch', (
     expect(engineSrc).toMatch(/torusComposer\.renderToScreen = false/)
     expect(engineSrc).toMatch(/bloomComposer\.renderToScreen = false/)
     expect(engineSrc).toMatch(/UnrealBloomPass\(bloomSize, 0\.22, 0\.2, 0\)/)
+    expect(engineSrc).toMatch(/skipBloom/)
+    expect(engineSrc).toMatch(/rawDt > 0\.033/)
     expect(engineSrc).toMatch(/UnrealBloomPass\(new Vector2\(w, h\), 0\.4, 0\.55, 0\)/)
     expect(engineSrc).toMatch(/layers\.set\(LAYERS\.ENTIRE_SCENE\)/)
     expect(engineSrc).toMatch(/layers\.set\(LAYERS\.TORUS_SCENE\)/)

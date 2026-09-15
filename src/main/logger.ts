@@ -202,7 +202,14 @@ export type AuditEvent =
   | 'asr.model.removed'
   | 'app.started'
   | 'app.renderer.ready'
+  // FITO-185-U: live Act1 DOM probe summary (userData/logs/act1-dom.json).
+  | 'app.act1.dom'
   | 'app.crash'
+  // FITO-185-E: 15s MQA-175 callback closed the boot watch (finally), whether brain resume ran or threw.
+  | 'app.boot.watch_cleared'
+  // FITO-185-F: menu-bar Tray create succeeded/failed — hardprove AXExtrasMenuBar needs a diagnosable trail.
+  | 'tray.created'
+  | 'tray.failed'
   // The overlay renderer stopped answering Chromium (event loop wedged, not crashed). Logged so a stuck
   // island is diagnosable from the support bundle; the app does not reload or kill it on this signal.
   | 'app.unresponsive'

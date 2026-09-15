@@ -32,7 +32,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, lazy, Suspense, type Ref, useLayoutEffect } from 'react'
 import { bundleFailureUserMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
@@ -70,7 +70,11 @@ import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
-import { OnboardingDemoScene, prefetchOnboardingDemoChunks } from './OnboardingDemoScene'
+import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
+/** Act 2 only — keep DemoScene/Bar off Act 1 first-paint parse in this chunk. */
+const OnboardingDemoScene = lazy(() =>
+  import('./OnboardingDemoScene').then((m) => ({ default: m.OnboardingDemoScene }))
+)
 import { OnboardingAppearance } from './OnboardingAppearance'
 import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
@@ -93,7 +97,7 @@ import {
   type OnboardingCompletionState
 } from '../lib/onboarding-completion'
 import { createOnboardingMusicBed, haltAllOnboardingAudio, lockOnboardingAudio } from '../lib/onboarding-music'
-import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
+import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand, requestOnboardingPortalOpen } from '../lib/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
   TELL_THE_ROOM_LEAD,
@@ -102,7 +106,13 @@ import {
   TELL_THE_ROOM_TITLE,
   TELL_THE_ROOM_WHY
 } from '../lib/onboarding-tell-the-room'
-import { ONBOARDING_HERO_VIDEO_SRC } from '../lib/onboarding-hero-video'
+import {
+  ONBOARDING_HERO_POSTER_SRC,
+  ONBOARDING_HERO_VIDEO_SRC,
+  playOnboardingVideo,
+  preloadOnboardingHeroVideo,
+  resolveOnboardingHeroVideoSrc
+} from '../lib/onboarding-hero-video'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -211,33 +221,88 @@ function OnboardingHeroVideo({
   videoRef
 }: {
   videoRef: Ref<HTMLVideoElement>
-}): JSX.Element | null {
-  const [failed, setFailed] = useState(false)
+}): JSX.Element {
+  const [videoFailed, setVideoFailed] = useState(false)
+  // FITO-185-Y: poster/UI first. The 8.9MB hero mp4 must not contend for first paint.
+  // Video mounts after a short idle; pending <video> stays opacity 0 until a decoded frame.
+  const [allowVideo, setAllowVideo] = useState(false)
+  const [videoReady, setVideoReady] = useState(false)
+  const markReady = useCallback(() => setVideoReady(true), [])
   useEffect(() => {
-    return () => {
-      const el = typeof videoRef === 'object' && videoRef ? videoRef.current : null
-      el?.pause()
+    if (prefersReducedMotion()) return
+    const start = (): void => setAllowVideo(true)
+    const t = window.setTimeout(start, 480)
+    return () => window.clearTimeout(t)
+  }, [])
+  useEffect(() => {
+    if (!allowVideo || prefersReducedMotion()) return
+    preloadOnboardingHeroVideo()
+    const el = typeof videoRef === 'object' && videoRef ? videoRef.current : null
+    if (el) {
+      el.load()
+      void el.play().catch(() => {})
     }
-  }, [videoRef])
-  if (prefersReducedMotion() || failed) return null
+    // FITO-185-V: exclusive can decode without firing loadeddata; promote once frames advance.
+    const fallbackId = window.setTimeout(() => {
+      const v = typeof videoRef === 'object' && videoRef ? videoRef.current : null
+      if (!v) return
+      if (v.currentTime > 0 || v.readyState >= 2) setVideoReady(true)
+    }, 800)
+    return () => {
+      window.clearTimeout(fallbackId)
+      const v = typeof videoRef === 'object' && videoRef ? videoRef.current : null
+      v?.pause()
+    }
+  }, [allowVideo, videoRef])
   return (
     <div className="onboard-hero-video" aria-hidden="true">
-      <video
-        ref={videoRef}
-        muted
-        loop
-        playsInline
-        autoPlay
-        preload="auto"
-        src={ONBOARDING_HERO_VIDEO_SRC}
-        onError={() => setFailed(true)}
-      />
+      <img className="onboard-hero-poster" src={ONBOARDING_HERO_POSTER_SRC} alt="" decoding="sync" fetchPriority="high" />
+      {allowVideo && !prefersReducedMotion() && !videoFailed && (
+        <video
+          ref={videoRef}
+          muted
+          loop
+          playsInline
+          autoPlay
+          preload="auto"
+          poster={ONBOARDING_HERO_POSTER_SRC}
+          src={resolveOnboardingHeroVideoSrc(ONBOARDING_HERO_VIDEO_SRC)}
+          className={videoReady ? 'onboard-hero-video--ready' : 'onboard-hero-video--pending'}
+          onLoadedData={markReady}
+          onCanPlay={markReady}
+          onPlaying={markReady}
+          onTimeUpdate={markReady}
+          onError={() => setVideoFailed(true)}
+        />
+      )}
       <div className="onboard-hero-video-tint" />
     </div>
   )
 }
 
 function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
+  const onBeginRef = useRef(onBegin)
+  onBeginRef.current = onBegin
+  useLayoutEffect(() => {
+    requestOnboardingPortalOpen()
+    const boot = document.getElementById('act1-boot-chrome')
+    if (boot) {
+      boot.setAttribute('hidden', '')
+      boot.style.display = 'none'
+      boot.style.pointerEvents = 'none'
+    }
+    const w = window as Window & { __act1BootNextQueued?: boolean }
+    if (w.__act1BootNextQueued) {
+      w.__act1BootNextQueued = false
+      onBeginRef.current()
+    }
+    const onQueued = (): void => {
+      w.__act1BootNextQueued = false
+      onBeginRef.current()
+    }
+    window.addEventListener('act1-boot-next', onQueued)
+    return () => window.removeEventListener('act1-boot-next', onQueued)
+  }, [])
   return (
     <>
       <div className="hero-welcome relative z-10 flex flex-col items-center gap-5">
@@ -867,13 +932,60 @@ export function OnboardingExperience({
   const heroVideoRef = useRef<HTMLVideoElement>(null)
   const playHero = (): void => {
     music.start()
+    // FITO-185-V: user gesture / Next retry — unmute autoplay policy and promote ready via playing.
+    playOnboardingVideo(heroVideoRef.current)
   }
 
   useEffect(() => {
-    prefetchOnboardingDemoChunks()
-    music.start()
-    playPortalOpen(music.muted)
-    music.start()
+    // FITO-185-T: do not start Goldberg until Act 1 is interactive (window focused), so music
+    // cannot play over a behind-Finder void. Main showForExclusiveOnboarding focuses first.
+    let started = false
+    let focusFallbackId: ReturnType<typeof setTimeout> | undefined
+    const kickMusic = (): void => {
+      if (started) return
+      started = true
+      if (focusFallbackId != null) clearTimeout(focusFallbackId)
+      music.start()
+      playPortalOpen(music.muted)
+      music.start()
+    }
+    const onFocus = (): void => {
+      kickMusic()
+    }
+    if (typeof document !== 'undefined' && document.hasFocus()) {
+      kickMusic()
+    } else {
+      window.addEventListener('focus', onFocus)
+      // Headless / autoplay-policy fallback — still prefer focus when main activates exclusive.
+      focusFallbackId = setTimeout(kickMusic, 2500)
+    }
+    // Demo/Bar/Three chunks: never compete with Act 1 lady+planet first paint.
+    const warm = (): void => {
+      prefetchOnboardingDemoChunks()
+    }
+    let idleId: number | undefined
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      cancelIdleCallback?: (id: number) => void
+    }
+    if (typeof w.requestIdleCallback === 'function') {
+      idleId = w.requestIdleCallback(warm, { timeout: 2500 })
+    } else {
+      timeoutId = setTimeout(warm, 2000)
+    }
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      if (focusFallbackId != null) clearTimeout(focusFallbackId)
+      if (idleId != null) w.cancelIdleCallback?.(idleId)
+      if (timeoutId != null) clearTimeout(timeoutId)
+    }
+  }, [])
+
+  // FITO-185-L: force portal mask open on Act 1 mount immediately — a closed 120×36 slit
+  // masks the lady+planet to invisible until animation completes (or stalls forever).
+  useLayoutEffect(() => {
+    requestOnboardingPortalOpen()
   }, [])
   const [scene, setScene] = useState<Scene>('hero')
   const [rows, setRows] = useState<SetupRow[]>([])
@@ -1128,11 +1240,15 @@ export function OnboardingExperience({
   const asrBlocksContinue = setupAsrBlocksContinue(rows, asrStatus)
 
   return (
-    <div
-      className="onboard-tour relative z-10 flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
+    <>
+      {/* FITO-185-P: keep lady bed through problem/reveal — unmounting on Next killed atmosphere. */}
+      {(scene === 'hero' || scene === 'problem' || scene === 'reveal') && (
+        <OnboardingHeroVideo videoRef={heroVideoRef} />
+      )}
+      <div
+      className="onboard-root relative z-10 flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
       onPointerDown={music.start}
     >
-      {scene === 'hero' && <OnboardingHeroVideo videoRef={heroVideoRef} />}
       {shouldMountKineticGrid(scene) && <KineticGrid />}
       <button
         type="button"
@@ -1150,7 +1266,9 @@ export function OnboardingExperience({
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
+            // FITO-185-AA: music/play first in this sync tick (CI 280-char window), then scene.
             music.start()
+            playOnboardingVideo(heroVideoRef.current)
             setScene('problem')
           }}
         />
@@ -1187,15 +1305,17 @@ export function OnboardingExperience({
       )}
 
       {scene === 'reveal' && (
-        <OnboardingDemoScene
-          mode={mode}
-          onSetMode={setMode}
-          onContinue={() => {
-            playHero()
-            setScene(sceneAfterReveal())
-          }}
-          onPlayVideo={() => playHero()}
-        />
+        <Suspense fallback={null}>
+          <OnboardingDemoScene
+            mode={mode}
+            onSetMode={setMode}
+            onContinue={() => {
+              playHero()
+              setScene(sceneAfterReveal())
+            }}
+            onPlayVideo={() => playHero()}
+          />
+        </Suspense>
       )}
 
       {scene === 'setup' && (
@@ -1491,13 +1611,10 @@ export function OnboardingExperience({
 
       </div>
     </div>
+    </>
   )
 }
 
-/**
- * First-run flow. Finishes onboarding only at Ready Get started.
- * There is no Skip. Does not mount Onboarding.tsx.
- */
 export function OnboardingV2({
   settings,
   patch,

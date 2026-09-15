@@ -122,10 +122,15 @@ describe('MQA-318 real renderer readiness signal', () => {
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
     const body = source.slice(source.indexOf('function createWindow(): void {'), source.indexOf('\nfunction resizeTo('))
     const bind = body.indexOf('bindRendererReadiness(')
+    const load = body.indexOf('win.loadURL(rendererUrl)', bind)
     expect(bind).toBeGreaterThan(body.indexOf('win = new BrowserWindow('))
-    expect(bind).toBeLessThan(body.indexOf('win.loadURL(rendererUrl)'))
-    expect(bind).toBeLessThan(body.indexOf("win.loadFile(join(__dirname, '../renderer/index.html'))", bind))
+    expect(load).toBeGreaterThan(bind)
+    // FITO-185-B: createWindow navigates with loadURL(rendererUrl) only (same string as the bind),
+    // not loadFile — so packaged asar getURL() matches expectedUrl. Recovery may still loadFile.
+    expect(body.slice(bind, load + 'win.loadURL(rendererUrl)'.length)).toMatch(/win\.loadURL\(rendererUrl\)/)
+    expect(body.slice(bind, load + 80)).not.toMatch(/else win\.loadFile\(join\(__dirname, '\.\.\/renderer\/index\.html'\)\)/)
     expect(body).toContain("auditLog('app.started'")
     expect(body).toContain("auditLog('app.renderer.ready'")
+    expect(body).toContain("ASKTOTO_MAC_LAUNCH_GATE === '1'")
   })
 })

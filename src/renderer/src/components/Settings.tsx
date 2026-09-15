@@ -116,6 +116,8 @@ import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { modeSkillLock } from '@shared/mode-skills'
 import { DEFAULT_OPERATOR_URL, operatorUrlConfigured } from '@shared/operator'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
+import { isCloudOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
+import { effectiveCloudSttProvider, type CloudSttProviderId } from '@shared/cloud-stt-provider'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
 import { ClickUpMark } from './brand/ClickUpMark'
@@ -335,7 +337,8 @@ function LazyInput({
   placeholder,
   disabled,
   id,
-  list
+  list,
+  'aria-label': ariaLabel
 }: {
   value: string
   onCommit: (v: string) => void
@@ -346,6 +349,7 @@ function LazyInput({
   /** Id of a sibling <datalist> — without it the model fields would lose their suggestion list when
    *  they moved onto this debounced input. */
   list?: string
+  'aria-label'?: string
 }): JSX.Element {
   const { local, onChange, onBlur } = useLazyText(value, onCommit)
   return (
@@ -355,6 +359,7 @@ function LazyInput({
       value={local}
       disabled={disabled}
       placeholder={placeholder}
+      aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}
       className={className}
@@ -775,6 +780,93 @@ export function detectHint(
 
 function isProfileUnlockError(message: string): boolean {
   return /keychain|encrypted profile|secret.?key/i.test(message)
+}
+
+
+/** Seat Soniox API key for cloud STT (optional; Nova is the default transcript source). */
+function SonioxKeySeat({
+  hasKey,
+  envLocked,
+  onSaved
+}: {
+  hasKey: boolean
+  envLocked: boolean
+  onSaved: () => void
+}): JSX.Element {
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const save = async (): Promise<void> => {
+    const trimmed = key.trim()
+    if (!trimmed) {
+      setMsg('Paste a Soniox API key first.')
+      return
+    }
+    setBusy(true)
+    setMsg(null)
+    try {
+      await window.toto.cloudSttSetSonioxKey(trimmed)
+      setKey('')
+      setMsg('Soniox key saved on this device.')
+      onSaved()
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Could not save Soniox key.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const clear = async (): Promise<void> => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      await window.toto.cloudSttClearSonioxKey()
+      setMsg('Soniox key removed.')
+      onSaved()
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Could not remove Soniox key.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="mt-1 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-2.5">
+      <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+        Soniox runs only when selected here and a key is seated (or SONIOX_API_KEY is set). Nova stays
+        the default transcript source.
+        {envLocked ? ' SONIOX_API_KEY env is active for this seat.' : hasKey ? ' A Soniox key is seated.' : ' No Soniox key seated yet.'}
+      </p>
+      <input
+        type="password"
+        value={key}
+        disabled={envLocked || busy}
+        onChange={(e) => setKey(e.target.value)}
+        placeholder={hasKey && !envLocked ? '•••••• saved (paste to replace)' : 'Soniox API key'}
+        aria-label="Soniox API key"
+        className={'w-full ' + ctl}
+      />
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={envLocked || busy}
+          onClick={() => void save()}
+          className="no-drag cl-focus rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+        >
+          Save Soniox key
+        </button>
+        {hasKey && !envLocked && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void clear()}
+            className="no-drag cl-focus rounded-[8px] border border-[var(--cl-input)] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.06] disabled:opacity-50"
+          >
+            Remove
+          </button>
+        )}
+      </div>
+      {msg && <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">{msg}</p>}
+    </div>
+  )
 }
 
 function AiSection({
@@ -1441,6 +1533,41 @@ function AiSection({
           {restoreMsg && (
             <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>
           )}
+          <div className="mt-3 flex flex-col gap-2 border-t border-[var(--cl-input)] pt-3">
+            <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              Nova live speech uses the same vault shape as Operator Keys: a Cloudflare account API token
+              (seated above or via Operator), an account id, and an optional AI Gateway id. Blank gateway
+              uses default (same as Operator ensureDefaultAiGateway).
+            </p>
+            <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              Cloudflare account id
+              <ManagedChip keys={settings.managedKeys} k="cloudflareAccountId" />
+              <LazyInput
+                value={settings.cloudflareAccountId ?? ''}
+                disabled={settings.managedKeys.includes('cloudflareAccountId')}
+                onCommit={(v) => patch({ cloudflareAccountId: v.trim() })}
+                placeholder="32 hex characters"
+                aria-label="Cloudflare account id"
+                className={['w-full', ctl, settings.managedKeys.includes('cloudflareAccountId') ? 'opacity-60' : ''].join(' ')}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              CF AI Gateway id
+              <ManagedChip keys={settings.managedKeys} k="cfAiGatewayId" />
+              <LazyInput
+                value={settings.cfAiGatewayId ?? ''}
+                disabled={settings.managedKeys.includes('cfAiGatewayId')}
+                onCommit={(v) => patch({ cfAiGatewayId: v.trim() })}
+                placeholder="default"
+                aria-label="CF AI Gateway id"
+                className={['w-full', ctl, settings.managedKeys.includes('cfAiGatewayId') ? 'opacity-60' : ''].join(' ')}
+              />
+            </label>
+            <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              Account-scoped base URL (.../accounts/&lt;id&gt;/ai/v1) also works; when the Worker proxy URL has
+              no account path, set the account id here.
+            </p>
+          </div>
         </Section>
       )}
 
@@ -5857,7 +5984,7 @@ const TABS: {
       'thinking mode', 'model', 'other providers', 'model provider', 'cli integration',
       'fallback', 'indexing fallback', 'offline indexing',
       'backups & limits', 'nvidia', 'nim', 'race a backup provider', 'hedge',
-      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key', 'oauth', 'connect',
+      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key', 'oauth', 'connect', 'cloudflare account id', 'cf ai gateway id',
       'routing mode', 'routing', 'local', 'api', 'auto'
     ]
   },
@@ -5870,7 +5997,8 @@ const TABS: {
     desc: 'What Métis listens to, and how it hears you.',
     keywords: [
       'audio', 'speech', 'microphone', 'listen to', 'in meetings', 'vocabulary corrections',
-      'transcription', 'asr', 'parakeet', 'whisper', 'apple speech', 'speaker identification'
+      'transcription', 'asr', 'parakeet', 'whisper', 'apple speech', 'speaker identification',
+      'transcript source', 'nova', 'soniox', 'cf ai gateway', 'cloudflare account id'
     ]
   },
   {
@@ -6401,31 +6529,109 @@ export function Settings({
                     onChange={(v) => patch({ showFullTranscriptInReview: v })}
                     disabled={settings.managedKeys.includes('showFullTranscriptInReview')}
                   />
-                  <WhisperQualityRow bundled={asrBundled} settings={settings} patch={patch} />
-                  <div className="flex flex-col gap-1.5 px-1 py-1">
-                    <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
-                      Transcription engine
-                      <FieldHint text="For fresh setup, 8 GB or less selects Parakeet; more than 8 GB selects Whisper. Unknown memory uses Parakeet. Existing choices and organization policy are preserved. Parakeet supports European languages; Whisper supports a wider range of languages. Apple Speech uses the macOS on-device recognizer for live meetings; imports use Whisper.">
-                        <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
-                      </FieldHint>
-                      <ManagedChip keys={settings.managedKeys} k="asrEngine" />
-                    </label>
-                    <select
-                      value={settings.asrEngine}
-                      onChange={(e) => patch({ asrEngine: e.target.value as 'parakeet' | 'whisper' | 'apple' })}
-                      disabled={settings.managedKeys.includes('asrEngine')}
-                      aria-label="Transcription engine"
-                      className={'w-full ' + ctl}
-                    >
-                      <option value="parakeet">Parakeet · European languages</option>
-                      <option value="whisper">Whisper · multilingual</option>
-                      <option value="apple">Apple Speech · on-device{isWindows ? ' (macOS only)' : ''}</option>
-                    </select>
-                  </div>
+                  {!isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive)) && (
+                    <WhisperQualityRow bundled={asrBundled} settings={settings} patch={patch} />
+                  )}
+                  {(() => {
+                    const liveProfile = resolveEnterpriseLiveProfile(settings.enterpriseLive)
+                    const cloudOnly = isCloudOnlyProfile(liveProfile)
+                    const cloudProvider = effectiveCloudSttProvider(liveProfile, settings.cloudSttProvider)
+                    if (cloudOnly) {
+                      return (
+                        <div className="flex flex-col gap-1.5 px-1 py-1">
+                          <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
+                            Transcript source
+                            <FieldHint text="This organization profile sends meeting audio to approved cloud speech recognition. Cloudflare Nova-3 is the default. Soniox is available when your organization has approved it. On-device Whisper, Parakeet, and Apple Speech stay off for this profile, including when cloud speech fails.">
+                              <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
+                            </FieldHint>
+                            <ManagedChip keys={settings.managedKeys} k="cloudSttProvider" />
+                          </label>
+                          <select
+                            value={cloudProvider}
+                            onChange={(e) =>
+                              patch({ cloudSttProvider: e.target.value as CloudSttProviderId })
+                            }
+                            disabled={settings.managedKeys.includes('cloudSttProvider')}
+                            aria-label="Transcript source"
+                            className={'w-full ' + ctl}
+                          >
+                            <option value="cloudflare-nova3">Cloudflare Nova-3 · cloud speech</option>
+                            <option value="soniox">Soniox · cloud speech (when approved)</option>
+                          </select>
+                          <p className="pl-0.5 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                            Live captions use cloud speech. Audio capture stays on this device; transcripts are
+                            transient. Summaries and actions are what get saved.
+                          </p>
+                          {cloudProvider === 'cloudflare-nova3' && (
+                            <div className="mt-1 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-2.5">
+                              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                                Nova needs a Cloudflare account token (Settings → AI / Keys), plus account id or
+                                an account-scoped base URL. Gateway id is optional (blank uses default).
+                                {settings.hasKeys?.cloudflare
+                                  ? ' Cloudflare token is seated.'
+                                  : ' Cloudflare token is not seated yet.'}
+                              </p>
+                              <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                                Cloudflare account id
+                                <LazyInput
+                                  value={settings.cloudflareAccountId ?? ''}
+                                  disabled={settings.managedKeys.includes('cloudflareAccountId')}
+                                  onCommit={(v) => patch({ cloudflareAccountId: v.trim() })}
+                                  placeholder="32 hex characters"
+                                  aria-label="Cloudflare account id for Nova"
+                                  className={'w-full ' + ctl}
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                                CF AI Gateway id
+                                <LazyInput
+                                  value={settings.cfAiGatewayId ?? ''}
+                                  disabled={settings.managedKeys.includes('cfAiGatewayId')}
+                                  onCommit={(v) => patch({ cfAiGatewayId: v.trim() })}
+                                  placeholder="default"
+                                  aria-label="CF AI Gateway id for Nova"
+                                  className={'w-full ' + ctl}
+                                />
+                              </label>
+                            </div>
+                          )}
+                          {cloudProvider === 'soniox' && (
+                            <SonioxKeySeat
+                              hasKey={!!settings.hasKeys?.soniox}
+                              envLocked={settings.envKeys.includes('soniox')}
+                              onSaved={() => void refreshSettings()}
+                            />
+                          )}
+                        </div>
+                      )
+                    }
+                    return (
+                      <div className="flex flex-col gap-1.5 px-1 py-1">
+                        <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
+                          Transcription engine
+                          <FieldHint text="For fresh setup, 8 GB or less selects Parakeet; more than 8 GB selects Whisper. Unknown memory uses Parakeet. Existing choices and organization policy are preserved. Parakeet supports European languages; Whisper supports a wider range of languages. Apple Speech uses the macOS on-device recognizer for live meetings; imports use Whisper. Managed cloud profiles hide these on-device engines and use Cloudflare Nova-3 or Soniox instead.">
+                            <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
+                          </FieldHint>
+                          <ManagedChip keys={settings.managedKeys} k="asrEngine" />
+                        </label>
+                        <select
+                          value={settings.asrEngine}
+                          onChange={(e) => patch({ asrEngine: e.target.value as 'parakeet' | 'whisper' | 'apple' })}
+                          disabled={settings.managedKeys.includes('asrEngine')}
+                          aria-label="Transcription engine"
+                          className={'w-full ' + ctl}
+                        >
+                          <option value="parakeet">Parakeet · European languages</option>
+                          <option value="whisper">Whisper · multilingual</option>
+                          <option value="apple">Apple Speech · on-device{isWindows ? ' (macOS only)' : ''}</option>
+                        </select>
+                      </div>
+                    )
+                  })()}
                   <div className="flex flex-col gap-1.5 px-1 py-1">
                     <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
                       Spoken language
-                      <FieldHint text="The language your meetings usually start in. Whisper decodes in this language and follows automatically if the conversation switches mid-meeting; Apple Speech uses it as its recognizer language; Parakeet always auto-detects. Applies immediately, even during a live meeting. Auto = detect from speech.">
+                      <FieldHint text="The language your meetings usually start in. Whisper decodes in this language and follows automatically if the conversation switches mid-meeting; Apple Speech uses it as its recognizer language; Parakeet always auto-detects; cloud STT (Nova-3 / Soniox) maps Auto to multilingual detect for French, English, Spanish, Portuguese, and Italian (and more), pins sticky when speech settles, and follows mid-meeting switches. Explicit French still prefers fr-CA. Applies immediately, even during a live meeting. Auto = detect from speech.">
                         <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
                       </FieldHint>
                       <ManagedChip keys={settings.managedKeys} k="asrLanguage" />
@@ -6466,7 +6672,9 @@ export function Settings({
                       <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
                     </div>
                   )}
-                  <AsrModelRow engine={settings.asrEngine} />
+                  {!isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive)) && (
+                    <AsrModelRow engine={settings.asrEngine} />
+                  )}
                   {settings.asrImportTierFallbackAt != null && (
                     <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span className="min-w-0 flex-1 break-words">

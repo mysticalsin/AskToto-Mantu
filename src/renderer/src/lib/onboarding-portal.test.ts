@@ -13,7 +13,8 @@ import {
   PORTAL_CLOSE_SAMPLES,
   PORTAL_OPEN_SAMPLES,
   closeOnboardingPortal,
-  onboardingPortalWaitMs
+  onboardingPortalWaitMs,
+  requestOnboardingPortalOpen
 } from './onboarding-portal'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
@@ -55,6 +56,12 @@ describe('onboarding portal pill + Ready-only finish', () => {
     expect(css).toMatch(/cubic-bezier\(0\.4,\s*0,\s*0\.2,\s*1\)/)
     expect(css).toMatch(/mask-size:\s*120px 36px/)
     expect(css).toMatch(/\.onboard-stage--portal-close/)
+    // FITO-185-M: portal-open must clear mask + force content opacity (no stalled fade-in void)
+    expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open[\s\S]*?-webkit-mask-image:\s*none/)
+    expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open \.onboard-portal-content[\s\S]*?opacity:\s*1/)
+    // FITO-185-P
+    expect(css).toMatch(/onboard-stage--portal-open \.fade-up/)
+
     expect(css).toMatch(/\.onboard-portal-content/)
     expect(css).toMatch(/translateY\(8px\)/)
     expect(css).toMatch(
@@ -90,3 +97,49 @@ describe('closeOnboardingPortal call order', () => {
     expect(Date.now() - start).toBeLessThan(50)
   })
 })
+
+describe('FITO-185-L portal-open on Act 1 first paint', () => {
+  it('App exclusive stage ships portal-open so the mask cannot hide the lady', () => {
+    const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
+    expect(app).toMatch(/onboard-stage onboard-stage--portal-open onboard-exclusive-lock/)
+    expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open/)
+    expect(css).toMatch(/mask-size:\s*280vmax 180vmax/)
+  })
+
+  it('HeroWelcome + Act1 mount call requestOnboardingPortalOpen immediately (no 1400ms race)', () => {
+    expect(experience).toMatch(/requestOnboardingPortalOpen/)
+    expect(experience).toMatch(/function HeroWelcome[\s\S]*?useLayoutEffect\(\(\) => \{[\s\S]*?requestOnboardingPortalOpen\(\)/)
+    expect(experience).not.toMatch(/setTimeout\([\s\S]*?onboard-stage--portal-open[\s\S]*?1400\)/)
+    expect(portalSrc).toMatch(/export function requestOnboardingPortalOpen/)
+    expect(requestOnboardingPortalOpen).toBeTypeOf('function')
+  })
+
+  it('hero poster stays opacity 1 above the #05010A stage slab', () => {
+    expect(css).toMatch(/\.onboard-hero-poster\s*\{[\s\S]*?opacity:\s*1/)
+    expect(css).toMatch(/\.onboard-hero-poster\s*\{[\s\S]*?z-index:\s*1/)
+  })
+})
+
+describe('FITO-185-V portal-open keeps entrance animations', () => {
+  it('unlocks opacity/visibility under portal-open without animation:none (except reduced-motion)', () => {
+    const unlock = css.slice(
+      css.indexOf('FITO-185-V: keep opacity'),
+      css.indexOf('/* Liquid glass')
+    )
+    const ruleBody = unlock.slice(unlock.indexOf('{'), unlock.lastIndexOf('}') + 1)
+    expect(ruleBody).toMatch(/opacity:\s*1\s*!important/)
+    expect(ruleBody).toMatch(/visibility:\s*visible\s*!important/)
+    expect(ruleBody).not.toMatch(/animation:\s*none/)
+    expect(ruleBody).not.toMatch(/transform:\s*none/)
+    expect(css).toMatch(/onboard-hero-kenburns/)
+    // Kenburns must not be killed under portal-open
+    expect(css).not.toMatch(
+      /onboard-stage--portal-open[\s\S]{0,400}onboard-hero-video video[\s\S]{0,80}animation:\s*none/
+    )
+    const prm = css.slice(css.indexOf('FITO-185-V: reduced-motion portal-open'))
+    const prmBlock = prm.slice(0, prm.indexOf('/* Act 1 welcome atmosphere'))
+    expect(prmBlock).toMatch(/FITO-185-V: reduced-motion portal-open/)
+    expect(prmBlock).toMatch(/animation:\s*none\s*!important/)
+  })
+})
+

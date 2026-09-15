@@ -1,11 +1,15 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useWindowDrag } from '../lib/window-drag'
 import { BAR_PILL_VISIBLE_PX, runOrbPillActivate, type OrbMood } from '../lib/bar-pill-orb'
-import { createJarvisOrb, resolveJarvisOrbState, type JarvisOrbHandle } from '../lib/jarvis-orb'
+import { resolveJarvisOrbState } from '../lib/jarvis-orb-state'
+import type { JarvisOrbHandle } from '../lib/jarvis-orb'
 
 /**
  * Jarvis circle. Real tonys-jarvis / jarvis2.0 particle cloud, sized to the 41 pill.
  * Not CSS rings. Not a gray box. Not a static Métis M.
+ *
+ * Three.js loads only when this orb mounts (dynamic import) — exclusive Act 1 must not
+ * pay WebGL parse/compile before the lady+planet poster paints.
  */
 export function ObsidianOrb({
   onActivate,
@@ -34,7 +38,8 @@ export function ObsidianOrb({
   const handleRef = useRef<JarvisOrbHandle | null>(null)
   const dragMovedRef = useRef(false)
   const orbState = resolveJarvisOrbState({ mood: orbMood, listening })
-  const startStateRef = useRef(orbState)
+  const latestStateRef = useRef(orbState)
+  latestStateRef.current = orbState
   const drag = useWindowDrag(
     () => {
       dragMovedRef.current = true
@@ -45,16 +50,24 @@ export function ObsidianOrb({
   useLayoutEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+    let cancelled = false
     // Brand chrome: always animate on the live Bar. Windows "Show animations" off
     // maps to prefers-reduced-motion and was freezing the Jarvis pill to one frame.
     // Settings picker freezes the non-selected card (animate=false) so Circle+Jarvis
     // never run two live rAF/WebGL loops side by side.
-    handleRef.current = createJarvisOrb(canvas, {
-      reducedMotion: !animate,
-      state: startStateRef.current,
-      hostPx: BAR_PILL_VISIBLE_PX
+    // Dynamic import keeps three.js out of the exclusive-onboarding first-paint chunk.
+    void import('../lib/jarvis-orb').then(({ createJarvisOrb }) => {
+      if (cancelled || !canvasRef.current) return
+      const handle = createJarvisOrb(canvasRef.current, {
+        reducedMotion: !animate,
+        state: latestStateRef.current,
+        hostPx: BAR_PILL_VISIBLE_PX
+      })
+      handleRef.current = handle
+      handle?.setState(latestStateRef.current)
     })
     return () => {
+      cancelled = true
       handleRef.current?.dispose()
       handleRef.current = null
     }

@@ -29,10 +29,18 @@ export async function persistProxyAsk(
     inputTokens?: number
     outputTokens?: number
     outcome: string
+    /** Seat request id when available — stable across server+client so Overview does not double-count. */
+    askId?: string
   }
 ): Promise<void> {
+  // Prefer seat AskStart.id so client ingest + server persistProxyAsk REPLACE the same D1 row
+  // (COST_METERING: one Ask must not inflate Overview apiCalls).
+  const id =
+    typeof input.askId === 'string' && input.askId.trim().length >= 8
+      ? input.askId.trim()
+      : crypto.randomUUID()
   const row: AskRow = {
-    id: crypto.randomUUID(),
+    id,
     device_id: input.deviceId,
     ts: input.now,
     mode: 'operator',

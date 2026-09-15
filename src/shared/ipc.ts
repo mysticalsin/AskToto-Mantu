@@ -87,6 +87,16 @@ export const IPC = {
   // No status/ensure/progress channels: unlike Parakeet there is no bundled model to download: the
   // helper binary either transcribes or the call resolves to '' (see main/apple-speech.ts).
   appleSpeechFeed: 'apple-speech:feed',
+  // Cloud STT live WebSocket (Nova-3 / Soniox) — main holds credentials; renderer streams PCM.
+  cloudSttStart: 'cloud-stt:start',
+  cloudSttStop: 'cloud-stt:stop',
+  cloudSttPush: 'cloud-stt:push',
+  cloudSttUpdateLang: 'cloud-stt:update-lang',
+  cloudSttFinal: 'cloud-stt:final',
+  cloudSttError: 'cloud-stt:error',
+  cloudSttInterim: 'cloud-stt:interim',
+  cloudSttSetSonioxKey: 'cloud-stt:set-soniox-key',
+  cloudSttClearSonioxKey: 'cloud-stt:clear-soniox-key',
   // Speaker Intelligence — Whisper's speaker-embedding tap. echo:true means operator loopback bleed.
   speakerEmbed: 'speaker:embed',
   askStart: 'ask:start',
@@ -1123,6 +1133,41 @@ export const BaseSettingsSchema = z.object({
   // NOTE: this zod default is effectively dead — store.ts layers DEFAULT_SETTINGS under the user file
   // before parsing, so the key is always present. Keep both declarations identical so neither lies.
   asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('parakeet'),
+  /**
+   * Managed enterprise-live profile (1.9.1). Trusted via managed-config defaults / org policy.
+   * CLOUD_ONLY disables local STT fallback; summaryOnly omits fresh Full transcript sections.
+   */
+  enterpriseLive: z
+    .object({
+      managed: z.boolean().default(false),
+      inferenceMode: z.enum(['legacy', 'cloud-only']).default('legacy'),
+      summaryOnly: z.boolean().default(false)
+    })
+    .default({ managed: false, inferenceMode: 'legacy', summaryOnly: false }),
+  /**
+   * Cloud speech provider for managed enterprise-live Listen.
+   * Under CLOUD_ONLY, Settings + Listen treat unconfigured as Cloudflare Nova-3
+   * (see shared/cloud-stt-provider.ts). Soniox is selectable when approved.
+   * Legacy profiles keep on-device asrEngine; this field stays unconfigured.
+   */
+  cloudSttProvider: z.enum(['cloudflare-nova3', 'soniox', 'unconfigured']).default('unconfigured'),
+  /**
+   * Cloudflare AI Gateway id for Nova-3 live WS (Operator ensureDefaultAiGateway uses `default`).
+   * Blank → resolveCloudSttGatewayId falls through env then `default`. Not a secret.
+   */
+  cfAiGatewayId: z.string().max(128).default(''),
+  /**
+   * Cloudflare account id (32 hex) when cloudflareBaseUrl is a Worker proxy without /accounts/<id>/.
+   * Same honesty as Operator / Portal Keys paste (token + accountId). Not a secret.
+   */
+  cloudflareAccountId: z
+    .string()
+    .max(64)
+    .default('')
+    .refine(
+      (v) => v === '' || /^[a-f0-9]{32}$/i.test(v.trim()),
+      'Cloudflare account id must be 32 hex characters'
+    ),
   // Spoken-language hint for transcription: 'auto' (per-window detect) or a language display name from
   // Settings' LANGUAGE_OPTIONS ('Portuguese', …). Pins Whisper's decoder and Apple Speech's recognizer
   // locale; Parakeet always auto-detects. Exists because per-window auto-detect on the compact bundled
@@ -1633,6 +1678,10 @@ export const DEFAULT_SETTINGS: Settings = {
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'parakeet',
+  enterpriseLive: { managed: false, inferenceMode: 'legacy', summaryOnly: false },
+  cloudSttProvider: 'unconfigured',
+  cfAiGatewayId: '',
+  cloudflareAccountId: '',
   asrLanguage: 'auto',
   asrLastFallbackAt: null,
   asrWebgpuFallbackAt: null,

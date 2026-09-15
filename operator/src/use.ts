@@ -32,6 +32,10 @@ export type UseMessage = { role: 'user' | 'assistant'; content: string }
 export type UseRequest = {
   provider: string
   model: string
+  /** Managed Portal CF intent. Server authorizes deep; client cannot self-entitle. */
+  tier?: 'base' | 'deep'
+  /** Seat AskStart.id — stable metering key (F10 dedupe). */
+  clientAskId?: string 
   system: string
   messages: UseMessage[]
   image?: OperatorImage
@@ -184,7 +188,17 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
   if (image && messages.at(-1)?.role !== 'user') return { ok: false, error: 'A screenshot requires a final user question.', status: 400 }
   const temperature = typeof body.temperature === 'number' && Number.isFinite(body.temperature) ? body.temperature : undefined
   const maxTokens = typeof body.maxTokens === 'number' && Number.isFinite(body.maxTokens) ? Math.min(8192, Math.max(16, Math.floor(body.maxTokens))) : undefined
-  return { ok: true, req: { provider, model, system, messages, ...(image ? { image } : {}), temperature, maxTokens } }
+  let tier: 'base' | 'deep' | undefined
+  if (typeof (body as { tier?: unknown }).tier === 'string') {
+    const t = String((body as { tier: string }).tier).trim()
+    if (t === 'deep' || t === 'base') tier = t
+  }
+  let clientAskId: string | undefined
+  if (typeof (body as { clientAskId?: unknown }).clientAskId === 'string') {
+    const id = String((body as { clientAskId: string }).clientAskId).trim()
+    if (id.length >= 8 && id.length <= 128) clientAskId = id
+  }
+  return { ok: true, req: { provider, model, system, messages, ...(image ? { image } : {}), ...(tier ? { tier } : {}), ...(clientAskId ? { clientAskId } : {}), temperature, maxTokens } }
 }
 
 export function openaiMessages(req: UseRequest): unknown[] {
@@ -208,9 +222,11 @@ export function anthropicMessages(req: UseRequest): unknown[] {
     : message)
 }
 
-/** Keep usage metadata but never retain screenshot payloads in AI Gateway logs or cache. */
+/** Keep usage metadata but never retain screenshot OR meeting-text payloads in AI Gateway logs/cache. */
 export function screenshotGatewayHeaders(req: UseRequest): Record<string, string> {
-  return req.image ? { 'cf-aig-collect-log-payload': 'false', 'cf-aig-skip-cache': 'true' } : {}
+  // Enterprise-live F05: text asks are also sensitive; suppress payload logs + cache for all managed uses.
+  void req
+  return { 'cf-aig-collect-log-payload': 'false', 'cf-aig-skip-cache': 'true' }
 }
 
 export async function decryptActiveLlmSecret(

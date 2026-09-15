@@ -110,7 +110,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.roi.costToday).not.toBe('$0')
     expect(dash.gateway.rows.some((r) => r.provider === 'anthropic')).toBe(true)
     expect(dash.roi.approved).toBe(1)
-    expect(dash.roi.timeSaved).toBe('0 min')
+    expect(dash.roi.timeSaved).toBe('not reported')
     expect(dash.roi.timeSavedSub).toBe('no recaps ingested')
     expect(dash.roi.value).not.toBe('$0')
     // Events table shows stored events only now (section 10): a bare upsertSeat with no real
@@ -178,7 +178,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.roi.liveSeats).toBe(0)
     expect(dash.roi.seats30m).toBe(0)
     expect(dash.licenses.empty).toBe(true)
-    expect(dash.roi.timeSaved).toBe('0 min')
+    expect(dash.roi.timeSaved).toBe('not reported')
     expect(dash.roi.value).toBe('not reported')
     expect(dash.roi.portalCf).toBe('not reported')
     expect(dash.roi.portalDirect).toBe('not reported')
@@ -226,6 +226,88 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.roi.portalDirect).toMatch(/estimate, list price/)
     expect(dash.roi.portalDirect).not.toBe('$0')
     expect(dash.roi.portalCf).not.toEqual(dash.roi.portalDirect)
+  })
+
+  it('sums portal-direct tokens across devices/licenses (500+500=1000) and never tok · not reported', async () => {
+    const store = memoryStore()
+    await store.insertAsk(
+      ask({
+        id: 'lic-a-ask',
+        device_id: 'device-license-a',
+        provider: 'deepseek',
+        mode: 'operator',
+        model: 'no-list-price-model',
+        input_tokens: 500,
+        output_tokens: 0,
+        cache_read: null,
+        cache_write: null,
+        cache_uncached: null,
+        cache_status: null,
+        path_tag: 'portal-direct'
+      })
+    )
+    await store.insertAsk(
+      ask({
+        id: 'lic-b-ask',
+        device_id: 'device-license-b',
+        provider: 'deepseek',
+        mode: 'operator',
+        model: 'no-list-price-model',
+        input_tokens: 500,
+        output_tokens: 0,
+        cache_read: null,
+        cache_write: null,
+        cache_uncached: null,
+        cache_status: null,
+        path_tag: 'portal-direct'
+      })
+    )
+    const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    expect(dash.roi.portalDirect).toBe('1000 tok')
+    expect(dash.roi.portalDirect).not.toMatch(/tok · not reported/)
+    expect(dash.roi.portalDirect).not.toContain('not reported')
+    expect(dash.ops.tokens).toBe(1000)
+    expect(dash.ops.apiCalls).toBe(2)
+  })
+
+  it('infers portal path from provider when path_tag is missing (legacy fleet rows)', async () => {
+    const store = memoryStore()
+    await store.insertAsk(
+      ask({
+        id: 'legacy-cf',
+        provider: 'cloudflare',
+        mode: 'operator',
+        model: '@cf/deepseek-ai/deepseek-v4-flash-0731',
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_read: null,
+        cache_write: null,
+        cache_uncached: null,
+        cache_status: null,
+        path_tag: null
+      })
+    )
+    await store.insertAsk(
+      ask({
+        id: 'legacy-ds',
+        provider: 'deepseek',
+        mode: 'operator',
+        model: 'deepseek-v4-flash',
+        input_tokens: 200,
+        output_tokens: 25,
+        cache_read: null,
+        cache_write: null,
+        cache_uncached: null,
+        cache_status: null,
+        path_tag: null
+      })
+    )
+    const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    expect(dash.roi.portalCf).toMatch(/150 tok/)
+    expect(dash.roi.portalDirect).toMatch(/225 tok/)
+    expect(dash.roi.portalCf).not.toMatch(/tok · not reported/)
+    expect(dash.roi.portalDirect).not.toMatch(/tok · not reported/)
+    expect(dash.ops.tokens).toBe(375)
   })
 
   it('credits time saved from recap minutes and keeps value from asks', async () => {

@@ -59,7 +59,7 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
     const body = await toJs(
       sliceBetween(
         "win.webContents.on('render-process-gone', (_e, details) => {",
-        '// Dev-only: screenshot ONLY this window'
+        '// FITO-185-L: ASKTOTO_SHOT binds AFTER rendererUrl is known'
       )
     )
     const preamble = [

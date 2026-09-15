@@ -2,6 +2,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TranscriptLine } from '@shared/ipc'
 import { collapseRepeatedPhrase, isNonSpeechLine, repeatKey } from '@shared/transcript-filter'
 import { detectLanguage, detectLanguages } from '@shared/lang-id'
+import {
+  assertCloudOnlyAllowsEngine,
+  CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED,
+  resolveEnterpriseLiveProfile,
+  type EnterpriseLiveProfile
+} from '@shared/enterprise-live-profile'
+import {
+  effectiveCloudSttProvider,
+  shouldUseCloudSttEngine
+} from '@shared/cloud-stt-provider'
+import {
+  resolveNova3LanguageQuery,
+  resolveNova3LanguageQueryPinned,
+  resolveSonioxLanguageConfig,
+  resolveSonioxLanguageConfigPinned,
+  type Nova3LanguageQuery,
+  type SonioxLanguageConfig
+} from '@shared/cloud-stt-language'
+import { canUpgradeSpeakerLabel } from '@shared/speaker-names'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
@@ -9,6 +28,30 @@ import { transcriptToText } from './transcript'
 import { shouldUseBundledAsr } from './asr-offline'
 
 const SR = 16000
+
+/**
+ * Build Nova-3 / Soniox language opts for a Listen cloud STT session from Settings.asrLanguage.
+ * Used by session authorize / URL builders; Keep in sync with start()/setLanguage refs.
+ */
+export function cloudSttLanguageForListen(
+  asrLanguage: string | undefined | null,
+  pinnedLang?: string | null
+): {
+  asrLanguage: string
+  pinnedLang: string | null
+  nova: ReturnType<typeof resolveNova3LanguageQuery>
+  soniox: ReturnType<typeof resolveSonioxLanguageConfig>
+} {
+  const lang = (asrLanguage ?? 'auto').trim() || 'auto'
+  const pin = (pinnedLang ?? '').trim() || null
+  return {
+    asrLanguage: lang,
+    pinnedLang: pin,
+    nova: resolveNova3LanguageQueryPinned(lang, pin),
+    soniox: resolveSonioxLanguageConfigPinned(lang, pin)
+  }
+}
+
 
 // The AudioWorklet module is loaded from an inlined Blob URL (created once, reused) so it resolves in
 // both the Vite dev server and the packaged Electron build. See whisper-worklet-src.ts for the why.
@@ -222,7 +265,7 @@ export function probeResultIsStale(
   dispatchEpoch: number,
   currentEpoch: number,
   live: boolean,
-  engine: 'whisper' | 'parakeet' | 'apple',
+  engine: 'whisper' | 'parakeet' | 'apple' | 'cloud',
   language: string
 ): boolean {
   return dispatchEpoch !== currentEpoch || !live || engine !== 'whisper' || language !== 'auto'
@@ -454,7 +497,7 @@ export interface ListenApi {
   start: (
     source: AudioSource,
     quality?: 'best' | 'fast',
-    engine?: 'whisper' | 'parakeet' | 'apple',
+    engine?: 'whisper' | 'parakeet' | 'apple' | 'cloud',
     language?: string,
     startedAt?: number
   ) => Promise<void>
@@ -569,7 +612,13 @@ export function useListen(
   // docs/asr/QUALITY.md — prewarm the quality the user will actually start with (default Best). A Fast
   // prewarm + Best start() used to terminate the warm worker and reload, so first Listen on the default
   // path sat behind a cold large-model load. Fast is a power option: only that setting prewarms Fast.
-  asrQuality?: 'best' | 'fast'
+  asrQuality?: 'best' | 'fast',
+  // Managed enterprise-live profile (CLOUD_ONLY blocks local Whisper/Parakeet/Apple with an honest error).
+  enterpriseLive?: EnterpriseLiveProfile,
+  /** Settings.cloudSttProvider — Nova-3 / Soniox selection for managed cloud Listen. */
+  cloudSttProvider?: string,
+  /** Settings.profile.name for mic-side cloud speaker labels. */
+  micProfileName?: string
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
@@ -600,7 +649,19 @@ export function useListen(
   // through a ref for the same reason as requestedQualityRef: fallback/retry re-inits fire long after
   // start() returned and must re-send the language the session was started with.
   const asrLanguageRef = useRef<string>('auto')
-  const engineRef = useRef<'whisper' | 'parakeet' | 'apple'>('parakeet') // active ASR engine for this session
+  // Cloud STT (Nova-3 / Soniox) language query derived from Settings — never leave Deepgram on en default.
+  const cloudSttNovaLangRef = useRef<Nova3LanguageQuery>(resolveNova3LanguageQuery('auto'))
+  const cloudSttSonioxLangRef = useRef<SonioxLanguageConfig>(resolveSonioxLanguageConfig('auto'))
+  const engineRef = useRef<'whisper' | 'parakeet' | 'apple' | 'cloud'>('parakeet') // active ASR engine for this session
+  // Trusted managed profile from Settings — ref so mid-session CLOUD_ONLY checks (fallback) see latest policy.
+  const enterpriseLiveRef = useRef<EnterpriseLiveProfile | undefined>(enterpriseLive)
+  enterpriseLiveRef.current = enterpriseLive
+  const cloudSttProviderRef = useRef<string | undefined>(cloudSttProvider)
+  cloudSttProviderRef.current = cloudSttProvider
+  const micProfileNameRef = useRef<string | undefined>(micProfileName)
+  micProfileNameRef.current = micProfileName
+  const cloudSttUnsubRef = useRef<(() => void) | null>(null)
+
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
   // a remote model fetch. `false` is returned deliberately by the main process only for an unprovisioned
@@ -703,6 +764,13 @@ export function useListen(
   // transcript (liveRef is true again). Same class as the Parakeet/Apple jobEpoch guards in pump().
   const pendingWhisperEpochRef = useRef(0)
   const pendingWhisperStartedAtRef = useRef<number | undefined>(undefined)
+  // Cloud STT: last 'them' window audio kept so onCloudSttFinal can voiceprint after commit
+  // (mapCloudFinalToLine already stamps Speaker N / Unknown — attachSpeakerName upgrades it).
+  const lastThemEmbedRef = useRef<{
+    audio: Float32Array
+    startedAt?: number
+    epoch: number
+  } | null>(null)
   // Trailing run of consecutive 'them' speech (joined) since the last 'you' turn or last auto-answer fire.
   // The auto-answer endpoints on this COALESCED turn rather than a single VAD window, so a question split
   // across windows by a mid-sentence hesitation pause (more likely now the endpoint is a snappy 0.6s) still
@@ -748,12 +816,14 @@ export function useListen(
     linesRef.current = next
     setLines(next)
   }, [])
-  // Speaker Intelligence (1C.2) — attaches a name resolved AFTER the fact (the Whisper speakerEmbed round
-  // trip finishes after the line already committed) to the specific line it belongs to, identified by the
-  // `t` timestamp commitLine returned when it committed. Guarded on `!l.name` so a slow/duplicate resolve
-  // can never clobber a name the line already has.
+  // Speaker Intelligence (1C.2) — attaches a name resolved AFTER the fact (Whisper / cloud speakerEmbed
+  // round trip finishes after the line already committed) to the specific line it belongs to, identified
+  // by the `t` timestamp commitLine returned when it committed. Upgrades empty / session ("Speaker N") /
+  // unknown placeholders; never overwrites a confirmed person name.
   const attachSpeakerName = useCallback((t: number, name: string): void => {
-    const idx = linesRef.current.findIndex((l) => l.t === t && l.speaker === 'them' && !l.name)
+    const idx = linesRef.current.findIndex(
+      (l) => l.t === t && l.speaker === 'them' && canUpgradeSpeakerLabel(l.name)
+    )
     if (idx < 0) return
     const next = linesRef.current.slice()
     next[idx] = { ...next[idx], name }
@@ -878,6 +948,20 @@ export function useListen(
         if (next.shouldPin && next.pinnedLang) {
           probePinnedRef.current = true
           pinnedLangRef.current = next.pinnedLang
+          // Sticky + mid-meeting switch for cloud Nova/Soniox path (applies when WS attaches).
+          cloudSttNovaLangRef.current = resolveNova3LanguageQueryPinned(
+            asrLanguageRef.current,
+            next.pinnedLang
+          )
+          cloudSttSonioxLangRef.current = resolveSonioxLanguageConfigPinned(
+            asrLanguageRef.current,
+            next.pinnedLang
+          )
+          if (engineRef.current === 'cloud') {
+            void window.toto
+              .cloudSttUpdateLang(asrLanguageRef.current, next.pinnedLang)
+              .catch(() => {})
+          }
           workerRef.current?.postMessage({ type: 'pinLanguage', language: next.pinnedLang })
         }
       })
@@ -887,6 +971,25 @@ export function useListen(
   }, [])
 
   const pump = useCallback((): void => {
+    if (engineRef.current === 'cloud') {
+      // Live cloud WS: drain capture queue into main-side Nova/Soniox PCM stream (no local decode).
+      if (!readyRef.current || queue.current.length === 0) return
+      while (queue.current.length > 0) {
+        const job = queue.current.shift() as LiveAudioWindow
+        if (!job?.audio?.length) continue
+        // Mirror Whisper: keep a copy of the latest 'them' window for post-final speakerEmbed.
+        if (job.speaker === 'them') {
+          lastThemEmbedRef.current = {
+            audio: job.audio.slice(),
+            startedAt: job.startedAt,
+            epoch: sessionEpochRef.current
+          }
+        }
+        void window.toto.cloudSttPush(job.audio, job.speaker === 'them' ? 'them' : 'you').catch(() => {})
+      }
+      return
+    }
+
     if (!readyRef.current || busy.current || queue.current.length === 0) return
     const job = queue.current.shift() as LiveAudioWindow
     busy.current = true
@@ -1090,6 +1193,7 @@ export function useListen(
         clearProvisional() // this window has settled (with an error) — the placeholder's job is done
         pendingWhisperEmbedRef.current = null
         pendingWhisperStartedAtRef.current = undefined
+        lastThemEmbedRef.current = null
         busy.current = false
         pump()
       } else if (m.type === 'text') {
@@ -1194,8 +1298,26 @@ export function useListen(
   // is transcribed by Whisper once its worker finishes loading.
   // (ensureWorker/getAsrBundled are stable; referenced from pump above before this line — fine at call time.)
   const fallBackToWhisper = useCallback((): void => {
+    if (engineRef.current === 'cloud') return
+
     if (engineRef.current !== 'parakeet' && engineRef.current !== 'apple') return // already switched
     const failedEngine = engineRef.current
+    const gate = assertCloudOnlyAllowsEngine(resolveEnterpriseLiveProfile(enterpriseLiveRef.current ?? {}), 'whisper')
+    if (!gate.ok) {
+      // CLOUD_ONLY: never silently swap to local Whisper — surface the honest refusal.
+      console.warn('[listen] CLOUD_ONLY blocked local Whisper fallback')
+      liveRef.current = false
+      setState((s) => ({
+        ...s,
+        listening: false,
+        capturing: false,
+        loading: false,
+        ready: false,
+        error: gate.error || CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED
+      }))
+      void window.toto.setListeningState(false).catch(() => {})
+      return
+    }
     console.warn(`[listen] ${failedEngine} failing repeatedly — switching to Whisper for the rest of this session`)
     engineRef.current = 'whisper'
     readyRef.current = false
@@ -1265,6 +1387,19 @@ export function useListen(
   const pushAudio = useCallback(
     (sp: Speaker, audio: Float32Array, partial = false, startedAt?: number): void => {
       if (!liveRef.current || pausedRef.current) return
+      // Cloud STT: pump() does not locally decode, but sticky language still needs the same
+      // whisper/parakeet probe cadence so Nova/Soniox refs pin + follow mid-meeting switches
+      // before / when the live WS attaches.
+      if (
+        engineRef.current === 'cloud' &&
+        asrLanguageRef.current === 'auto' &&
+        !partial
+      ) {
+        probeWindowCountRef.current += 1
+        if (shouldProbeLanguageWindow(probeWindowCountRef.current, probePinnedRef.current)) {
+          probeLanguageWindow(audio, sp, startedAt)
+        }
+      }
       queue.current.push({ audio, speaker: sp, partial, startedAt })
       if (queue.current.length > MAX_QUEUE) {
         const before = queue.current.length
@@ -1280,7 +1415,7 @@ export function useListen(
       }
       pump()
     },
-    [pump]
+    [pump, probeLanguageWindow]
   )
 
   // Arms (or re-arms) the 'them'-silence watchdog: if no 'them' window has been emitted within
@@ -1716,7 +1851,7 @@ export function useListen(
     async (
       source: AudioSource,
       quality: 'best' | 'fast' = 'best',
-      engine: 'whisper' | 'parakeet' | 'apple' = 'parakeet',
+      engine: 'whisper' | 'parakeet' | 'apple' | 'cloud' = 'parakeet',
       language: string = 'auto',
       startedAt?: number
     ): Promise<void> => {
@@ -1728,12 +1863,37 @@ export function useListen(
       if (startingRef.current) return
       startingRef.current = true
       try {
+        // Enterprise-live CLOUD_ONLY: refuse local Whisper/Parakeet/Apple before any host/worker boots.
+        // Honest error — never silently fall through to another local engine.
+        {
+          const profile = resolveEnterpriseLiveProfile(enterpriseLiveRef.current ?? {})
+          // Managed cloud profile: prefer the cloud adapter id over Whisper/Parakeet/Apple.
+          if (engine !== 'cloud' && shouldUseCloudSttEngine(profile, cloudSttProviderRef.current)) {
+            engine = 'cloud'
+          }
+          const gate = assertCloudOnlyAllowsEngine(profile, engine)
+          if (!gate.ok) {
+            setState((s) => ({
+              ...s,
+              listening: false,
+              capturing: false,
+              loading: false,
+              ready: false,
+              error: gate.error || CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED
+            }))
+            return
+          }
+        }
         // Capture the caller's requested quality up front, unconditional of which engine ends up running
         // this session — fallBackToWhisper and armNetworkRetry's retry() (both able to fire well after this
         // start() call returns) read requestedQualityRef instead of loadedQualityRef, which stays null for
         // the whole lifetime of a Parakeet session.
         requestedQualityRef.current = quality
         asrLanguageRef.current = language
+        // CLOUD_ONLY / enterprise Nova-3+Soniox: pin language from Settings (auto→multi+detect; French→fr-CA).
+        // URL builders / session authorize must read these refs — never omit language (Deepgram defaults to en).
+        cloudSttNovaLangRef.current = resolveNova3LanguageQuery(language)
+        cloudSttSonioxLangRef.current = resolveSonioxLanguageConfig(language)
         if (workerIdleTimer.current) {
           clearTimeout(workerIdleTimer.current)
           workerIdleTimer.current = null
@@ -1807,6 +1967,117 @@ export function useListen(
         void window.toto.setListeningState(true, startedAt).catch(() => {})
 
         void (async () => {
+          if (engine === 'cloud') {
+            // Cloud STT: capture stays local; inference is live Nova-3 / Soniox WS in main.
+            // Do not boot Whisper/Parakeet/Apple. CLOUD_ONLY never falls back locally.
+            if (workerRef.current) {
+              workerRef.current.terminate()
+              workerRef.current = null
+            }
+            loadedQualityRef.current = null
+            readyRef.current = false
+            engineRef.current = 'cloud'
+            const provider = effectiveCloudSttProvider(
+              enterpriseLiveRef.current ?? {},
+              cloudSttProviderRef.current
+            )
+            console.info(
+              '[listen] cloud STT session planned:',
+              provider,
+              'novaLang=',
+              cloudSttNovaLangRef.current,
+              'sonioxLang=',
+              cloudSttSonioxLangRef.current,
+              'pinnedLang=',
+              pinnedLangRef.current
+            )
+            setState((s) => ({ ...s, loading: true, loadingPct: null }))
+            // Tear prior subscriptions
+            cloudSttUnsubRef.current?.()
+            cloudSttUnsubRef.current = null
+            const offFinal = window.toto.onCloudSttFinal((line) => {
+              if (!liveRef.current || sessionEpochRef.current !== myEpoch) return
+              const committedAt = commitLine(line.text, line.speaker, line.name)
+              // Cloud finals already carry Speaker N / Unknown from mapCloudFinalToLine — voiceprint
+              // upgrade mirrors Whisper echo handling so enrolled names replace session placeholders.
+              if (
+                committedAt !== null &&
+                line.speaker === 'them' &&
+                canUpgradeSpeakerLabel(line.name)
+              ) {
+                const emb = lastThemEmbedRef.current
+                if (emb?.audio?.length && !speakerEmbedResultIsStale(emb.epoch, sessionEpochRef.current)) {
+                  const speakerEpoch = emb.epoch
+                  void window.toto
+                    .speakerEmbed(emb.audio, 'them', emb.startedAt)
+                    .then((res) => {
+                      if (speakerEmbedResultIsStale(speakerEpoch, sessionEpochRef.current)) return
+                      if (res?.echo) {
+                        const next = linesRef.current.filter((row) => row.t !== committedAt)
+                        linesRef.current = next
+                        setLines(next)
+                        return
+                      }
+                      if (res?.name) attachSpeakerName(committedAt, res.name)
+                    })
+                    .catch(() => {})
+                }
+              }
+            })
+            const offErr = window.toto.onCloudSttError((message) => {
+              if (!liveRef.current || sessionEpochRef.current !== myEpoch) return
+              setState((s) => ({ ...s, error: message || s.error }))
+            })
+            cloudSttUnsubRef.current = () => {
+              offFinal()
+              offErr()
+            }
+            try {
+              const started = await window.toto.cloudSttStart({
+                provider,
+                asrLanguage: language,
+                pinnedLang: pinnedLangRef.current,
+                profileName: micProfileNameRef.current,
+                meetingId: startedAt ? String(startedAt) : undefined
+              })
+              if (!captureAdmissionIsOpen(myEpoch)) return
+              if (!started?.ok) {
+                console.warn('[listen] cloud STT start failed:', started?.error || started?.code)
+                liveRef.current = false
+                cloudSttUnsubRef.current?.()
+                cloudSttUnsubRef.current = null
+                setState((s) => ({
+                  ...s,
+                  listening: false,
+                  capturing: false,
+                  loading: false,
+                  ready: false,
+                  error: started?.error || 'Cloud STT is not configured.'
+                }))
+                void window.toto.setListeningState(false).catch(() => {})
+                return
+              }
+              readyRef.current = true
+              setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
+              if (readyRef.current) pump() // drain windows captured while WS connected
+            } catch (e) {
+              if (!captureAdmissionIsOpen(myEpoch)) return
+              const msg = e instanceof Error ? e.message : String(e)
+              liveRef.current = false
+              cloudSttUnsubRef.current?.()
+              cloudSttUnsubRef.current = null
+              setState((s) => ({
+                ...s,
+                listening: false,
+                capturing: false,
+                loading: false,
+                ready: false,
+                error: msg || 'Cloud STT failed to start.'
+              }))
+              void window.toto.setListeningState(false).catch(() => {})
+            }
+            return
+          }
           if (engine === 'parakeet') {
             // Parakeet runs in the MAIN process; free any warm Whisper worker, then require its bundled model.
             // ANY failure falls back to Whisper so Listen always works.
@@ -1835,6 +2106,24 @@ export function useListen(
               pump()
             } catch (e) {
               if (!captureAdmissionIsOpen(myEpoch)) return
+              const whisperGate = assertCloudOnlyAllowsEngine(
+                resolveEnterpriseLiveProfile(enterpriseLiveRef.current ?? {}),
+                'whisper'
+              )
+              if (!whisperGate.ok) {
+                console.warn('[listen] parakeet unavailable; CLOUD_ONLY blocks Whisper fallback')
+                liveRef.current = false
+                setState((s) => ({
+                  ...s,
+                  listening: false,
+                  capturing: false,
+                  loading: false,
+                  ready: false,
+                  error: whisperGate.error || CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED
+                }))
+                void window.toto.setListeningState(false).catch(() => {})
+                return
+              }
               console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
               engineRef.current = 'whisper'
             }
@@ -2206,6 +2495,11 @@ export function useListen(
         themRunRef.current = ''
         closeChannel('you')
         closeChannel('them')
+        if (engineRef.current === 'cloud') {
+          cloudSttUnsubRef.current?.()
+          cloudSttUnsubRef.current = null
+          void window.toto.cloudSttStop().catch(() => {})
+        }
         if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
         setState((s) => {
           const warnings = [
@@ -2361,6 +2655,8 @@ export function useListen(
   // at boot. The idle-release half applies only to the deliberately prewarmed concrete Whisper choice.
   useEffect(() => {
     if (asrEngine !== 'whisper') return
+    // CLOUD_ONLY managed profiles must not boot a local Whisper worker even for prewarm.
+    if (!assertCloudOnlyAllowsEngine(resolveEnterpriseLiveProfile(enterpriseLive ?? {}), 'whisper').ok) return
     let cancelled = false
     let warmed = false
     const warm = async (): Promise<void> => {
@@ -2386,7 +2682,7 @@ export function useListen(
     return () => {
       cancelled = true
     }
-  }, [ensureWorker, getAsrBundled, asrEngine, asrQuality])
+  }, [ensureWorker, getAsrBundled, asrEngine, asrQuality, enterpriseLive])
 
   // Mid-session spoken-language change (Settings → Audio while listening). The ref update covers every
   // engine's future reads; only a live Whisper worker needs an explicit nudge — a warm re-init whose
@@ -2395,6 +2691,8 @@ export function useListen(
     async (language: string): Promise<void> => {
       if (asrLanguageRef.current === language) return
       asrLanguageRef.current = language
+      cloudSttNovaLangRef.current = resolveNova3LanguageQuery(language)
+      cloudSttSonioxLangRef.current = resolveSonioxLanguageConfig(language)
       // A real language change abandons any in-progress Parakeet probe/pin from the previous setting —
       // mirrors whisper-import.ts's applyInitLanguage delta-reset (and whisper.worker.ts's own
       // resetLanguageFollow, triggered below by the 'init' message reaching an unchanged-quality warm

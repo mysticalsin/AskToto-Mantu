@@ -17,6 +17,7 @@ import {
   Notification,
   clipboard,
   powerSaveBlocker,
+  powerMonitor,
   systemPreferences
 } from 'electron'
 import { join, basename, dirname, resolve } from 'node:path'
@@ -33,6 +34,8 @@ const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindRendererReadiness } from './renderer-readiness'
+import { bindAskTotoShot } from './asktoto-shot'
+import { bindAct1DomProbe } from './act1-dom-probe'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
   IPC,
@@ -110,7 +113,10 @@ import {
   archiveEncryptedProfile,
   listDustAgents,
   dustSelectedAgentVision,
-  recordMeetingSummarized
+  recordMeetingSummarized,
+  getSonioxApiKey,
+  setSonioxApiKey,
+  clearSonioxApiKey
 } from './store'
 import { createStream } from './llm'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
@@ -177,6 +183,7 @@ import {
   refitToDisplay as islandRefitToDisplay,
   exclusiveOnboardingBounds,
   exclusiveMayUseSimpleFullScreen,
+  exclusiveOsFullscreenAllowed,
   EXCLUSIVE_ONBOARDING_BACKGROUND,
   firstPaintOverlayBounds,
   overlayWindowChrome,
@@ -569,7 +576,7 @@ import {
   confirmOperatorLicenseConnection,
   acceptOperatorHeartbeat,
   operatorFundedProviders,
-  recordOperatorAsk,
+  recordOperatorAsk, pathTagForSeatProvider,
   recordOperatorCrmSend,
   recordOperatorRating,
   startOperatorRuntime
@@ -608,6 +615,16 @@ import {
 } from './parakeet'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
+import {
+  startCloudSttLive,
+  stopCloudSttLive,
+  pushCloudSttPcm,
+  updateCloudSttLiveLanguage
+} from './cloud-stt/live-session'
+import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
+import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
+import { effectiveCloudSttProvider } from '../shared/cloud-stt-provider'
+
 import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscribe, stopWhisperHost } from './whisper-import'
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
@@ -918,9 +935,15 @@ const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so i
 
 /** Content protection hides the window from screen capture. Disable via env for dev/screenshots ONLY —
  *  devEnv() gates it to unpackaged builds so a packaged process can never have capture protection
- *  stripped by `setx ASKTOTO_DISABLE_CP 1` + relaunch (see dev-env.ts). */
+ *  stripped by `setx ASKTOTO_DISABLE_CP 1` + relaunch (see dev-env.ts).
+ *
+ * FITO-185-U: while onboardingExclusiveLive(), force OFF. Exclusive Act 1 must be visible to the
+ * user AND capturable for QA (screencapture / CGWindow proofs). Do not wait for or apply
+ * settings.contentProtection during exclusive; once onboardingDone, settings resume control. */
 function contentProtectionOn(): boolean {
   if (devEnv('ASKTOTO_DISABLE_CP')) return false
+  // FITO-185-U: exclusive Act1 capturable — ignore stored contentProtection until exit exclusive.
+  if (onboardingExclusiveLive()) return false
   return getSettings().contentProtection
 }
 
@@ -1988,18 +2011,19 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   } catch {
     /* headless / already destroyed */
   }
+  // FITO-185-S: never OS simpleFullScreen/kiosk on Electron 43+ (Tony FAIL e404460). Product path is
+  // opaque bounds + show after Act1 first paint (FITO-185-Y). ASKTOTO_ALLOW_SFS only on Electron <=39.
+  const mayOsExclusive =
+    exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
+    exclusiveOsFullscreenAllowed({
+      electronVersion: process.versions.electron,
+      allowSfsEnv: process.env.ASKTOTO_ALLOW_SFS,
+      shotEnv: process.env.ASKTOTO_SHOT
+    })
   try {
-    if (
-      exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
-      process.platform === 'darwin' &&
-      typeof w.setSimpleFullScreen === 'function'
-    ) {
+    if (mayOsExclusive && process.platform === 'darwin' && typeof w.setSimpleFullScreen === 'function') {
       if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true)
-    } else if (
-      exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
-      process.platform === 'win32' &&
-      typeof w.setKiosk === 'function'
-    ) {
+    } else if (mayOsExclusive && process.platform === 'win32' && typeof w.setKiosk === 'function') {
       if (!w.isKiosk()) w.setKiosk(true)
     }
   } catch {
@@ -2125,9 +2149,11 @@ function createWindow(): void {
     // Hide park is at bounds.y (0 on primary). Without this, darwin clamps
     // setBounds into workArea.y≈39 — the visible purple 8×2 hairline.
     enableLargerThanScreen: true,
-    // Exclusive: hidden until ready-to-show so constructor chrome is never the first
-    // visible frame. Hero-matching hold (`#05010A`) is the window color if paint lags.
-    show: !onboardingLive,
+    // FITO-185-Z: exclusive MUST show immediately with the no-JS Act1 shell in index.html.
+    // 185-Y hid exclusive until paint (ctor show gated off while onboarding live) and left
+    // the window off-screen ~5s (WINDOW_AT≈5s) — Ultron stamp bar FAIL: Act1 ≤300ms from
+    // PROCESS START. Shell (CSS poster + Métis + Next) is in first HTML parse; never wait.
+    show: true,
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2150,14 +2176,26 @@ function createWindow(): void {
   }
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   applyOverlayAlwaysOnTop(win)
+  // FITO-185-Z: show exclusive NOW (ctor show:true + activating show). The no-JS Act1
+  // shell (poster CSS + Métis + Next) is in index.html — never hide-for-seconds.
+  // FITO-185-T: activating show (not showInactive) so Act 1 is not behind Finder.
+  if (onboardingLive) {
+    try {
+      showForExclusiveOnboarding(win)
+    } catch {
+      /* headless */
+    }
+  }
   // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
   // Windows") — gate the call so it isn't dead code there. Windows has no public API for pinning a
   // window across Task View virtual desktops (that needs the native IVirtualDesktopManager COM
   // interface via a native addon, which this app doesn't ship); on Windows the overlay stays visible
   // only on the virtual desktop it was created on.
   if (process.platform !== 'win32') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  // FITO-185-U: contentProtectionOn() returns false while exclusive (capturable Act 1).
   win.setContentProtection(contentProtectionOn())
-  win.setHiddenInMissionControl?.(true)
+  // Island/bar overlay stays out of Mission Control; exclusive Act 1 must remain findable.
+  win.setHiddenInMissionControl?.(!onboardingLive)
   // Windows: the constructor's skipTaskbar:true is not durable — Electron/Windows re-adds the taskbar
   // button after certain show/restore/focus transitions (long-standing upstream quirk). Re-assert on
   // every transition that can resurrect it so the overlay NEVER appears in the taskbar (Tony, 2026-07-16:
@@ -2260,6 +2298,11 @@ function createWindow(): void {
     isMinimized = false
     if (onboardingExclusiveLive() && win && !win.isDestroyed()) {
       applyExclusiveOnboardingStage(win)
+      try {
+        showForExclusiveOnboarding(win)
+      } catch {
+        /* headless */
+      }
     } else {
       currentWidth = BAR_WIDTH
     }
@@ -2267,33 +2310,32 @@ function createWindow(): void {
     if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
     else win.loadFile(join(__dirname, '../renderer/index.html'))
   })
-  // Dev-only: screenshot ONLY this window (no desktop) for verification. Privacy-safe.
-  if (process.env.ASKTOTO_SHOT) {
-    win.webContents.once('did-finish-load', () => {
-      setTimeout(() => {
-        win?.webContents
-          .capturePage()
-          .then((img) => {
-            try {
-              // eslint-disable-next-line @typescript-eslint/no-var-requires
-              require('node:fs').writeFileSync(process.env.ASKTOTO_SHOT as string, img.toPNG())
-            } catch {
-              /* ignore */
-            }
-          })
-          .catch(() => {})
-      }, 4500)
-    })
-  }
-
+  // FITO-185-L: ASKTOTO_SHOT binds AFTER rendererUrl is known (see below) — never dump on
+  // about:blank / ready-to-show / early isLoading races (FITO-185-K / K2).
   let rendererUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href
-  if (process.env['ELECTRON_RENDERER_URL']) {
+  {
+    // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
+    // Packaged builds previously never got query params (only the ELECTRON_RENDERER_URL branch did),
+    // so the renderer could not fail-closed to Act 1 when getSettings raced the Loading strip.
     const params = new URLSearchParams()
+    if (onboardingExclusiveLive()) params.set('exclusiveOnboarding', '1')
     if (process.env.ASKTOTO_DEMO) params.set('demo', process.env.ASKTOTO_DEMO)
     // make the overlay visible in the capture; ASKTOTO_SHOTBG=light tests legibility over a bright backdrop
     if (process.env.ASKTOTO_SHOT) params.set('shotbg', process.env.ASKTOTO_SHOTBG || 'dark')
     const qs = params.toString()
-    rendererUrl = process.env['ELECTRON_RENDERER_URL'] + (qs ? `?${qs}` : '')
+    if (process.env['ELECTRON_RENDERER_URL']) {
+      rendererUrl = process.env['ELECTRON_RENDERER_URL'] + (qs ? `?${qs}` : '')
+    } else if (qs) {
+      rendererUrl = `${rendererUrl}?${qs}`
+    }
+  }
+  // FITO-185-L: optional feel shot — only after did-finish-load of the real index.html,
+  // delay ≥2s, then capturePage + DOM. Never blocks or replaces loadURL below.
+  if (process.env.ASKTOTO_SHOT) {
+    bindAskTotoShot(win.webContents, {
+      shotPath: process.env.ASKTOTO_SHOT,
+      expectedUrl: rendererUrl
+    })
   }
   // MQA-318: opt-in release diagnostics only. Preserve app.started's boot semantics and never
   // equate entering createWindow with a loaded, responsive renderer. Register before navigation.
@@ -2302,20 +2344,72 @@ function createWindow(): void {
       auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
     })
   }
-  if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(rendererUrl)
-  else win.loadFile(join(__dirname, '../renderer/index.html'))
+  // FITO-185-U: live DOM prove — LAUNCH_GATE or always while exclusive. Writes userData/logs/act1-dom.json.
+  if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1' || onboardingExclusiveLive()) {
+    bindAct1DomProbe(win.webContents, {
+      expectedUrl: rendererUrl,
+      outPath: join(app.getPath('userData'), 'logs', 'act1-dom.json'),
+      audit: (summary) => auditLog('app.act1.dom', summary)
+    })
+  }
+  // FITO-185-B: always loadURL(rendererUrl) — same string bindRendererReadiness expects — so packaged
+  // asar file:// getURL() cannot miss the strict equality check that loadFile alone can mismatch.
+  win.loadURL(rendererUrl)
   const overlay = win
+  let exclusiveRevealed = false
   const revealExclusiveWhenPainted = (): void => {
-    if (win !== overlay || overlay.isDestroyed() || overlay.isVisible()) return
+    if (win !== overlay || overlay.isDestroyed()) return
     if (!onboardingExclusiveLive()) return
+    if (exclusiveRevealed) return
+    exclusiveRevealed = true
+    // FITO-185-T: Electron 43+ never SFS (185-S). showInactive left Act 1 behind Finder while
+    // Goldberg played (Tony FAIL cf2f67d). Re-assert activating show from FITO-185-P.
     try {
-      overlay.showInactive()
+      showForExclusiveOnboarding(overlay)
     } catch {
       /* headless */
     }
   }
-  overlay.once('ready-to-show', revealExclusiveWhenPainted)
-  overlay.webContents.once('did-finish-load', revealExclusiveWhenPainted)
+  // FITO-185-Z: reassert activating show on ready-to-show / dom-ready / did-finish-load.
+  // Do NOT gate on poster decode or act1-first-paint — that was 185-Y's ~5s hide FAIL.
+  // Shell chrome (Métis + Next) is enough; poster CSS paints with first HTML frame.
+  const ACT1_SHELL_READY = `(() => {
+    try {
+      if (document.documentElement.classList.contains('act1-first-paint')) return true
+      const chrome = document.getElementById('act1-boot-chrome')
+      const next = document.getElementById('act1-boot-next') || document.querySelector('button.onboard-cta')
+      const word = document.getElementById('act1-boot-wordmark') || document.querySelector('.hero-wordmark')
+      return !!(chrome || next || word)
+    } catch {
+      return false
+    }
+  })()`
+  const pollAct1Paint = (): void => {
+    if (exclusiveRevealed || win !== overlay || overlay.isDestroyed()) return
+    // Always reassert show for exclusive — never wait on img.complete.
+    revealExclusiveWhenPainted()
+    void overlay.webContents
+      .executeJavaScript(ACT1_SHELL_READY, true)
+      .catch(() => {
+        /* about:blank / destroyed */
+      })
+  }
+  overlay.webContents.on('dom-ready', () => {
+    pollAct1Paint()
+  })
+  overlay.once('ready-to-show', pollAct1Paint)
+  overlay.webContents.once('did-finish-load', pollAct1Paint)
+  // FITO-185-G-SHOW: hard reassert at 2s (already shown; belt-and-suspenders).
+  if (onboardingLive) {
+    const revealTimer = setTimeout(() => {
+      try {
+        revealExclusiveWhenPainted()
+      } catch {
+        /* headless */
+      }
+    }, 2000)
+    revealTimer.unref?.()
+  }
   startOverlayCursorWatch()
   applyHideClickThrough()
   applyOverlaySurfaceChrome()
@@ -2843,6 +2937,24 @@ function ensureWindow(): BrowserWindow | null {
  * for bare `.show()` calls and fails on any occurrence outside this function.
  */
 function showForAsk(w: BrowserWindow): void {
+  w.show()
+  w.focus()
+}
+
+/**
+ * FITO-185-P / FITO-185-T: first-run exclusive tour must activate. Bounds-only exclusive
+ * (no SFS on Electron 43+, FITO-185-S) stayed behind Finder with showInactive — Tony FAIL
+ * cf2f67d: music + forever Loading, desktop visible, no lady+planet. Allowed second
+ * exception beside showForAsk; enforced by no-show-steals-focus.contract.test.ts.
+ */
+function showForExclusiveOnboarding(w: BrowserWindow): void {
+  applyOverlayAlwaysOnTop(w)
+  try {
+    w.setOpacity(1)
+    w.moveTop()
+  } catch {
+    /* headless */
+  }
   w.show()
   w.focus()
 }
@@ -3608,20 +3720,28 @@ function buildTrayMenu(): Menu {
 }
 
 function createTray(): void {
+  // FITO-185-AB: idempotent, same contract as createWindow. The exclusive-onboarding hoist runs
+  // createTray before the boot awaits and boot's own runStep('createTray') runs it again — without
+  // this the second call adds a duplicate menu-bar item and orphans the first Tray.
+  if (tray && !tray.isDestroyed()) return
   try {
     const iconPath = app.isPackaged
       ? join(process.resourcesPath, 'icon.png')
       : join(__dirname, '../../build/icon.png')
     let img = nativeImage.createFromPath(iconPath)
     if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
-    tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img)
-    if (process.platform === 'darwin' && img.isEmpty()) tray.setTitle(' ◉ Métis')
+    const emptyIcon = img.isEmpty()
+    tray = new Tray(emptyIcon ? nativeImage.createEmpty() : img)
+    // FITO-185-F: always give AXExtrasMenuBar a title on darwin (empty-icon fallback used to be the
+    // only path; hardprove saw kAXErrorCannotComplete with a title-less LSUIElement status item).
+    if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
     tray.setToolTip('Métis')
     tray.setContextMenu(buildTrayMenu())
     // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
     tray.on('click', () => sendHotkey('settings'))
-  } catch {
-    /* tray optional */
+    auditLog('tray.created', { emptyIcon })
+  } catch (e) {
+    auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
   }
 }
 
@@ -3646,6 +3766,20 @@ function rebuildTrayMenu(): void {
 // power-save blocker for the duration of a meeting keeps the process at normal priority regardless of
 // window visibility. Module-level id: only one meeting can be active at a time.
 let recordingPowerSaveBlockerId: number | null = null
+// FITO-185-B: hold prevent-app-suspension from beginBootWatch until endBootWatch so the 15s MQA-175
+// clear (and exclusive hidden-window first paint) is not deferred by App Nap while boot-incomplete.json
+// stays stuck. Separate id from the meeting blocker — boot ends long before a meeting starts.
+let bootPowerSaveBlockerId: number | null = null
+function setBootPowerSaveBlock(on: boolean): void {
+  if (on) {
+    if (bootPowerSaveBlockerId === null || !powerSaveBlocker.isStarted(bootPowerSaveBlockerId)) {
+      bootPowerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension')
+    }
+  } else if (bootPowerSaveBlockerId !== null) {
+    if (powerSaveBlocker.isStarted(bootPowerSaveBlockerId)) powerSaveBlocker.stop(bootPowerSaveBlockerId)
+    bootPowerSaveBlockerId = null
+  }
+}
 // Guards the before-quit meeting-flush handler below from re-entering when it re-issues app.quit()
 // itself, and lets the IPC.windowQuit handler (whose caller, App.tsx's quitApp(), already AWAITS a
 // flush before invoking it) skip the redundant flush-and-wait entirely.
@@ -3777,7 +3911,14 @@ function operatorRuntimeHooks(): { onCrmRetry: (ids: string[]) => Promise<void>;
   return { onCrmRetry: (ids) => applyOperatorCrmRetries(ids), onReadinessChanged: notifySettingsChanged }
 }
 
+/** FITO-185-AB: set once registerIpc has installed its handlers, so the exclusive-onboarding
+ *  hoist and boot's own runStep('registerIpc') can both call it. ipcMain.handle throws on a
+ *  duplicate channel, which would abort the rest of the second registration mid-way. */
+let ipcRegistered = false
+
 function registerIpc(): void {
+  if (ipcRegistered) return
+  ipcRegistered = true
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
@@ -4054,6 +4195,11 @@ function registerIpc(): void {
     }
     else if (cur.onboardingDone && !next.onboardingDone && win && !win.isDestroyed()) {
       applyExclusiveOnboardingStage(win)
+      try {
+        showForExclusiveOnboarding(win)
+      } catch {
+        /* headless */
+      }
     }
     if (next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
       const layout = parseOverlayLayout(next.overlayLayout)
@@ -5644,6 +5790,85 @@ function registerIpc(): void {
     return { text }
   })
 
+
+  // --- Cloud STT live WebSocket (Nova-3 / Soniox) ---
+  // Main holds Operator/CF credentials; renderer only streams Float32 PCM + receives finals.
+  ipcMain.handle(IPC.cloudSttStart, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Not signed in', code: 'AUTH' }
+    const p = (payload ?? {}) as {
+      provider?: string
+      asrLanguage?: string
+      pinnedLang?: string | null
+      profileName?: string
+      meetingId?: string
+    }
+    const settings = getSettings()
+    const profile = resolveEnterpriseLiveProfile(settings.enterpriseLive ?? {})
+    const provider = effectiveCloudSttProvider(profile, p.provider ?? settings.cloudSttProvider)
+    stopCloudSttLive()
+    const result = await startCloudSttLive(
+      {
+        provider,
+        asrLanguage: p.asrLanguage ?? settings.asrLanguage,
+        pinnedLang: p.pinnedLang,
+        profile: { name: p.profileName ?? settings.profile?.name, role: settings.profile?.role },
+        meetingId: p.meetingId,
+        cloudflareToken: getApiKey('cloudflare'),
+        cloudflareBaseUrl: settings.cloudflareBaseUrl,
+        cloudflareAccountId: settings.cloudflareAccountId,
+        gatewayId: resolveCloudSttGatewayId(settings.cfAiGatewayId),
+        sonioxApiKey: getSonioxApiKey() || null
+      },
+      {
+        onFinal: (line) => {
+          win?.webContents.send(IPC.cloudSttFinal, line)
+        },
+        onInterim: (channel, text) => {
+          win?.webContents.send(IPC.cloudSttInterim, { channel, text })
+        },
+        onError: (message) => {
+          win?.webContents.send(IPC.cloudSttError, { message })
+        }
+      }
+    )
+    return result
+  })
+  ipcMain.handle(IPC.cloudSttStop, (e) => {
+    assertMainWindow(e)
+    stopCloudSttLive()
+  })
+  ipcMain.handle(IPC.cloudSttPush, (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return
+    if (!takeHotPath('asr-feed')) return
+    const p = payload as { samples?: unknown; speaker?: unknown }
+    if (!(p?.samples instanceof Float32Array)) return
+    if (p.samples.length > 16_000 * 30) return
+    if (p.speaker !== 'you' && p.speaker !== 'them') return
+    pushCloudSttPcm(p.speaker, p.samples)
+  })
+  ipcMain.handle(IPC.cloudSttUpdateLang, (e, payload: unknown) => {
+    assertMainWindow(e)
+    const p = (payload ?? {}) as { asrLanguage?: string; pinnedLang?: string | null }
+    updateCloudSttLiveLanguage(p.asrLanguage, p.pinnedLang)
+  })
+  ipcMain.handle(IPC.cloudSttSetSonioxKey, (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { hasKeys: hasKeysMap() }
+    const key = typeof payload === 'string' ? payload : typeof (payload as { key?: unknown })?.key === 'string' ? (payload as { key: string }).key : ''
+    setSonioxApiKey(key)
+    auditLog(key.trim() ? 'key.set' : 'key.removed', { provider: 'soniox' })
+    return { hasKeys: hasKeysMap() }
+  })
+  ipcMain.handle(IPC.cloudSttClearSonioxKey, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { hasKeys: hasKeysMap() }
+    clearSonioxApiKey()
+    auditLog('key.removed', { provider: 'soniox' })
+    return { hasKeys: hasKeysMap() }
+  })
+
   // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3) — the Whisper engine's speaker-embedding tap.
   // Whisper runs entirely in a renderer Worker with no main-process round trip of its own (unlike
   // Parakeet/Apple, which already ride the label along on parakeetFeed/appleSpeechFeed above), so
@@ -6626,7 +6851,8 @@ function registerIpc(): void {
                 // Closed-taxonomy label, computed here on the seat. Ships as a metric with every Ask so the
                 // Operator "Question types" panel works even when Ask text is off. Never throws.
                 questionType: classifyQuestionType(req.prompt, { vision: req.mode === 'vision' }),
-                vision: req.mode === 'vision'
+                vision: req.mode === 'vision',
+                pathTag: pathTagForSeatProvider(provider, viaOperator)
               })
             }
             // The winning leg's success is the whole race's terminal outcome — drop the combined abort
@@ -7741,6 +7967,20 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
+  // proxy/CLI/key seeding before first paint — hoist tray+IPC+window for wiped-profile exclusive.
+  // Call createTray/registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared
+  // later in this whenReady callback — using them here fails CI typecheck "used before declaration").
+  // Later boot still runs createWindow idempotently (early return if win exists).
+  if (onboardingExclusiveLive()) {
+    try {
+      createTray()
+      registerIpc()
+      createWindow()
+    } catch (e) {
+      mainLog.warn('[boot] FITO-185-Z early exclusive window failed:', e)
+    }
+  }
   await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
   // Managed egressAllowlist (docs/NETWORK-EGRESS.md): when IT names the hosts this seat may reach, refuse
   // every other host on both network stacks. Best-effort like the proxy install: a failure here must not
@@ -7856,6 +8096,22 @@ if (!app.requestSingleInstanceLock()) {
   // this process ever runs again: no crash-*.log, no audit line, no window, no dialog. Only the NEXT
   // launch can report it, and only if this one left a mark before doing the dangerous work.
   const earlyDeath = beginBootWatch(app.getPath('userData'), app.getVersion())
+  // FITO-185-B: keep the process unsuspended until the 15s endBootWatch / will-quit clear runs.
+  setBootPowerSaveBlock(true)
+  // FITO-185-G-SHOW / G-TIMER: idempotent sentinel clear. Purpose of boot-incomplete is early death
+  // BEFORE ready; once createWindow+registerIpc completed we are past the kill zone. Brain work stays
+  // on the 15s timer (power-save still held until then). Multiple callers race safely.
+  let bootWatchClosed = false
+  const clearBootWatchOnce = (reason: string): void => {
+    if (bootWatchClosed) return
+    bootWatchClosed = true
+    try {
+      endBootWatch(app.getPath('userData'))
+      auditLog('app.boot.watch_cleared', { earlyDeath: Boolean(earlyDeath), reason })
+    } catch (e) {
+      mainLog.warn('[boot] clearBootWatchOnce failed:', e)
+    }
+  }
   if (earlyDeath) persistCrash('boot-early-death', describeEarlyDeath(earlyDeath), 'previous launch died before boot completed')
   // Never let an unhandled error crash the overlay silently — log to file, audit, write a crash dump, and
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
@@ -8175,20 +8431,33 @@ if (!app.requestSingleInstanceLock()) {
   // Catch the case where encryption was already on (managed-config or a previous run) with a stale
   // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
   runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
-  // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above) — but
-  // registerIpc has no such dependency: every ipcMain.handle closure inside it reads `win`/`tray` lazily
-  // at INVOCATION time (assertMainWindow etc.), never at registration time, and the renderer can't issue
-  // its first IPC call before its own <script> has executed anyway. Moving it after createWindow lets the
-  // OS start loading/compositing the renderer a little earlier instead of waiting behind ~60 synchronous
-  // ipcMain.handle registrations first.
+  // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above).
+  // FITO-185-X: registerIpc also stays ahead of createWindow — handlers read win/tray lazily at
+  // invocation time, and first paint must not race loadURL before settings/auth IPC exists.
   runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
+  // FITO-185-X: registerIpc BEFORE createWindow/loadURL so getSettings/authStatus/licenseGate
+  // handlers exist before the renderer can invoke. FITO-185-H put IPC immediately after createWindow
+  // (ahead of preprocess) but loadURL still raced first paint — that strand is the post-boot
+  // "Loading" strip Tony still hits when exclusive exits or settings IPC is late.
+  runStep('registerIpc', registerIpc)
+  clearBootWatchOnce('registerIpc')
   runStep('createWindow', createWindow)
+  // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
+  clearBootWatchOnce('createWindow')
+  // FITO-185-G-TIMER: also setImmediate + unlock-screen so App Nap / locked-screen cannot leave
+  // boot-incomplete stuck when the 15s timer is deferred.
+  setImmediate(() => clearBootWatchOnce('setImmediate'))
+  try {
+    powerMonitor.on('unlock-screen', () => clearBootWatchOnce('unlock-screen'))
+  } catch (e) {
+    mainLog.warn('[boot] powerMonitor unlock-screen hook failed:', e)
+  }
   // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
   // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
-  // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow: the
-  // eligibility read drags in the local-model trust probe, which must not sit on the first-paint path; and
-  // ahead of registerIpc so the renderer's first getSettings() already sees the reconciled readiness flag.
+  // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow+registerIpc:
+  // the eligibility read drags in the local-model trust probe, which must not sit on the first-paint path;
+  // IPC must be live first so the renderer's getSettings() is not blocked waiting on preprocess.
   // Silent on macOS by construction: eligibility now requires the Screen Recording grant to ALREADY exist
   // (screenCaptureGranted above), so this reconcile can never be what raises the TCC prompt (MQA-209).
   runStep('refreshScreenPreprocess', refreshScreenPreprocess)
@@ -8197,7 +8466,6 @@ if (!app.requestSingleInstanceLock()) {
   // first use), so it no longer sits ahead of createWindow on the boot path.
   runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
   runStep('initializeImportJobs', initializeImportJobs)
-  runStep('registerIpc', registerIpc)
   startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
   startOperatorOverlayPoll(() => getSettings())
   // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
@@ -8238,29 +8506,61 @@ if (!app.requestSingleInstanceLock()) {
     // launch that decrypts index.json. When the previous run died before boot completed, this launch
     // deliberately does not walk back into it: the brain resume and its reconcile interval are skipped
     // for this session only, so the user reaches a working app instead of a sixth silent vanish. The
-    // watch is cleared at the end of this callback either way, so the very next launch is normal again.
-    if (earlyDeath) {
-      mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${describeEarlyDeath(earlyDeath)}`)
-      auditLog('app.crash', { kind: 'safe_start', consecutive: earlyDeath.consecutive })
-    } else {
-      resumeBackfillIfPending()
-      reconcileMeetingsInBackground()
-      // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
-      // not just the single resume — the reconcile tick reads the same index.json.
-      trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
-      // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
-      // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
-      wireIntelligenceIndexWork()
-      void catchUpIntelligenceIndexIfNeeded().catch((e) =>
-        mainLog.error('[intelligence-index] launch catch-up failed:', e)
-      )
-      scheduleIntelligenceIndex(trackTimer)
-      // Hourly consolidation is demoted: the named slots own the extract pass. The helper stays
-      // imported so existing settings/tests keep compiling, and a manual budget check still no-ops
-      // when the feature is off.
-      void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
+    // watch is cleared in `finally` either way (FITO-185-E), so a throw from any brain step cannot leave
+    // boot-incomplete.json stuck for the next launch.
+    try {
+      if (earlyDeath) {
+        mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${describeEarlyDeath(earlyDeath)}`)
+        auditLog('app.crash', { kind: 'safe_start', consecutive: earlyDeath.consecutive })
+      } else {
+        // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
+        try {
+          resumeBackfillIfPending()
+        } catch (e) {
+          mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
+        }
+        try {
+          reconcileMeetingsInBackground()
+        } catch (e) {
+          mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
+        }
+        // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
+        // not just the single resume — the reconcile tick reads the same index.json.
+        trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
+        // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
+        // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
+        try {
+          wireIntelligenceIndexWork()
+        } catch (e) {
+          mainLog.warn('[boot] wireIntelligenceIndexWork failed:', e)
+        }
+        try {
+          void catchUpIntelligenceIndexIfNeeded().catch((e) =>
+            mainLog.error('[intelligence-index] launch catch-up failed:', e)
+          )
+        } catch (e) {
+          mainLog.warn('[boot] catchUpIntelligenceIndexIfNeeded failed:', e)
+        }
+        try {
+          scheduleIntelligenceIndex(trackTimer)
+        } catch (e) {
+          mainLog.warn('[boot] scheduleIntelligenceIndex failed:', e)
+        }
+        // Hourly consolidation is demoted: the named slots own the extract pass. The helper stays
+        // imported so existing settings/tests keep compiling, and a manual budget check still no-ops
+        // when the feature is off.
+        try {
+          void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
+        } catch (e) {
+          mainLog.warn('[boot] runConsolidationIfDue failed:', e)
+        }
+      }
+    } finally {
+      // Power-save stays until here so the 15s brain step is not App-Napped; sentinel may already
+      // have been cleared earlier (G-SHOW/G-TIMER) — clearBootWatchOnce is idempotent.
+      setBootPowerSaveBlock(false)
+      clearBootWatchOnce('mqa-175')
     }
-    endBootWatch(app.getPath('userData'))
   }, 15_000)
 
   app.on('activate', () => {
@@ -8319,6 +8619,7 @@ app.on('will-quit', () => {
   // clear it here so the next launch is not pushed into safe start by a user who simply quit fast.
   // Own try, like every other step below: a failure here must never skip the sidecar kill.
   try {
+    setBootPowerSaveBlock(false)
     endBootWatch(app.getPath('userData'))
   } catch (e) {
     mainLog.warn('[will-quit] endBootWatch failed', e)
