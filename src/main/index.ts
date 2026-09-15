@@ -3720,6 +3720,10 @@ function buildTrayMenu(): Menu {
 }
 
 function createTray(): void {
+  // FITO-185-AB: idempotent, same contract as createWindow. The exclusive-onboarding hoist runs
+  // createTray before the boot awaits and boot's own runStep('createTray') runs it again — without
+  // this the second call adds a duplicate menu-bar item and orphans the first Tray.
+  if (tray && !tray.isDestroyed()) return
   try {
     const iconPath = app.isPackaged
       ? join(process.resourcesPath, 'icon.png')
@@ -3907,7 +3911,14 @@ function operatorRuntimeHooks(): { onCrmRetry: (ids: string[]) => Promise<void>;
   return { onCrmRetry: (ids) => applyOperatorCrmRetries(ids), onReadinessChanged: notifySettingsChanged }
 }
 
+/** FITO-185-AB: set once registerIpc has installed its handlers, so the exclusive-onboarding
+ *  hoist and boot's own runStep('registerIpc') can both call it. ipcMain.handle throws on a
+ *  duplicate channel, which would abort the rest of the second registration mid-way. */
+let ipcRegistered = false
+
 function registerIpc(): void {
+  if (ipcRegistered) return
+  ipcRegistered = true
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
