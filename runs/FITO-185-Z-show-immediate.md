@@ -20,3 +20,13 @@ Stamp bar gate is **Act1 visible ≤300ms from PROCESS START**, not from first s
 ## Constraint
 
 No Latest. No merge. Leave final QA open for Tony.
+
+
+## Landed tip
+`d2aa49a6a3b95d109674da84f526f8842672fe21` (`d2aa49a`) on `origin/release/1.9.1`.
+
+## Mac prove (2026-09-15 ~5:47pm ET)
+QA: `/Users/tony/Applications/Metis-d2aa49a-qa.app` left open.
+Best WINDOW_AT from process start: **0.744s** (83902a4 was 5.015s).
+Shots Act1 not black: `proof/instant-d2aa49a-t{0p0,0p3,0p5,1p0}.png`.
+See `/Users/tony/agent-tools/metis-191/proof/fito-185-z-landed.md`.
