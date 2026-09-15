@@ -7956,16 +7956,16 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
-  // FITO-185-Z: exclusive Act1 must appear ≤300ms from process start. Do not await proxy/
-  // CLI/key seeding before first paint — hoist tray+IPC+window for wiped-profile exclusive.
+  // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
+  // proxy/CLI/key seeding before first paint — hoist tray+IPC+window for wiped-profile exclusive.
+  // Call createTray/registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared
+  // later in this whenReady callback — using them here fails CI typecheck "used before declaration").
   // Later boot still runs createWindow idempotently (early return if win exists).
   if (onboardingExclusiveLive()) {
     try {
-      runStep('createTray', createTray)
-      runStep('registerIpc', registerIpc)
-      clearBootWatchOnce('registerIpc')
-      runStep('createWindow', createWindow)
-      clearBootWatchOnce('createWindow')
+      createTray()
+      registerIpc()
+      createWindow()
     } catch (e) {
       mainLog.warn('[boot] FITO-185-Z early exclusive window failed:', e)
     }
