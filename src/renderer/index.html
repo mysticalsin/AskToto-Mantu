@@ -34,8 +34,8 @@
     -->
     <link rel="preload" as="image" href="onboarding-hero-poster.jpg" fetchpriority="high" />
     <style>
-      /* FITO-185-Y: first compositor frame is Act1 (poster + wordmark + Next), never a black void.
-         BrowserWindow stays hidden until this chrome + poster are painted. */
+      /* FITO-185-Z: first compositor frame is Act1 (poster + wordmark + Next), never a black void.
+         Window shows immediately — shell is in HTML; never hide-for-seconds. */
       #boot-bed {
         position: fixed;
         inset: 0;

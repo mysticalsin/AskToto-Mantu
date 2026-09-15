@@ -1,6 +1,6 @@
 /**
- * FITO-185-Y — no-JS Act1 first paint. Marks when the lady poster is ready and
- * queues Next so React can consume a click that landed before hydrate.
+ * FITO-185-Z — no-JS Act1 first paint. Marks Act1 shell ready immediately
+ * (Métis + Next are in HTML). Poster decode must never gate visibility.
  * Does not load or wait on the hero mp4.
  */
 (function () {
@@ -22,19 +22,13 @@
       }
     })
   }
-  function onPoster() {
-    var img = document.getElementById('boot-bed-img')
-    if (!img) {
-      markPainted()
-      return
-    }
-    if (img.complete) {
-      markPainted()
-      return
-    }
+  // FITO-185-Z: mark on script run — shell chrome is already in the DOM.
+  // Poster load is best-effort only; never block Act1 visibility on img decode.
+  wireNext()
+  markPainted()
+  var img = document.getElementById('boot-bed-img')
+  if (img && !img.complete) {
     img.addEventListener('load', markPainted, { once: true })
     img.addEventListener('error', markPainted, { once: true })
   }
-  wireNext()
-  onPoster()
 })()
