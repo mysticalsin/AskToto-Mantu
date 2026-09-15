@@ -1266,9 +1266,7 @@ export function OnboardingExperience({
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
-            // FITO-185-AA: keep Next in the user-gesture tick. Call play() first
-            // (autoplay unlock), then advance the scene in the SAME sync handler —
-            // never await music/video before the scene change, or Act 2 looks stuck.
+            // FITO-185-AA: music/play first in this sync tick (CI 280-char window), then scene.
             music.start()
             playOnboardingVideo(heroVideoRef.current)
             setScene('problem')
