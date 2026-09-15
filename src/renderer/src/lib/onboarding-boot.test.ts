@@ -70,7 +70,7 @@ describe('FITO-185-I App boot gate (source contract)', () => {
   })
 })
 
-describe('FITO-185-Y instant Act1 first paint', () => {
+describe('FITO-185-Z instant Act1 show (no hide-for-seconds)', () => {
   const indexHtml = readFileSync(join(__dirname, '../../index.html'), 'utf8')
   const bootJs = readFileSync(join(__dirname, '../../public/act1-boot.js'), 'utf8')
   const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
@@ -102,11 +102,12 @@ describe('FITO-185-Y instant Act1 first paint', () => {
     expect(experience).toMatch(/__act1BootNextQueued/)
   })
 
-  it('exclusive BrowserWindow stays hidden until Act1 paint', () => {
-    expect(main).toMatch(/show:\s*!onboardingLive/)
-    expect(main).toMatch(/FITO-185-Y/)
+  it('exclusive BrowserWindow shows immediately with Act1 shell (FITO-185-Z)', () => {
+    expect(main).toMatch(/show:\s*true/)
+    expect(main).not.toMatch(/show:\s*!onboardingLive/)
+    expect(main).toMatch(/FITO-185-Z/)
     expect(main).toMatch(/pollAct1Paint/)
-    expect(main).toMatch(/act1-first-paint/)
+    expect(main).toMatch(/ACT1_SHELL_READY/)
     expect(main).not.toMatch(/Hero hold `#05010A` is the first frame/)
   })
 

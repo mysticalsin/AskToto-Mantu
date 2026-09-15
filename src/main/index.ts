@@ -2149,10 +2149,11 @@ function createWindow(): void {
     // Hide park is at bounds.y (0 on primary). Without this, darwin clamps
     // setBounds into workArea.y≈39 — the visible purple 8×2 hairline.
     enableLargerThanScreen: true,
-    // FITO-185-Y: exclusive stays hidden until Act1 (poster + wordmark + Next) is painted.
-    // show:true first-framed the BrowserWindow `#05010A` hold — Tony's solid black at t≈0.5s.
-    // Overlay (post-onboarding) still shows immediately. 2s fallback still hard-reveals.
-    show: !onboardingLive,
+    // FITO-185-Z: exclusive MUST show immediately with the no-JS Act1 shell in index.html.
+    // 185-Y hid exclusive until paint (ctor show gated off while onboarding live) and left
+    // the window off-screen ~5s (WINDOW_AT≈5s) — Ultron stamp bar FAIL: Act1 ≤300ms from
+    // PROCESS START. Shell (CSS poster + Métis + Next) is in first HTML parse; never wait.
+    show: true,
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2175,10 +2176,16 @@ function createWindow(): void {
   }
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   applyOverlayAlwaysOnTop(win)
-  // FITO-185-Y: do NOT show exclusive here — ctor-time show painted a black `#05010A` void
-  // before index.html / poster / Act1 chrome existed. Reveal after first Act1 paint below.
-  // FITO-185-T still applies at reveal: activating show (not showInactive) so Act 1 is not
-  // behind Finder (Tony FAIL cf2f67d).
+  // FITO-185-Z: show exclusive NOW (ctor show:true + activating show). The no-JS Act1
+  // shell (poster CSS + Métis + Next) is in index.html — never hide-for-seconds.
+  // FITO-185-T: activating show (not showInactive) so Act 1 is not behind Finder.
+  if (onboardingLive) {
+    try {
+      showForExclusiveOnboarding(win)
+    } catch {
+      /* headless */
+    }
+  }
   // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
   // Windows") — gate the call so it isn't dead code there. Windows has no public API for pinning a
   // window across Task View virtual desktops (that needs the native IVirtualDesktopManager COM
@@ -2363,44 +2370,36 @@ function createWindow(): void {
       /* headless */
     }
   }
-  // FITO-185-Y: reveal only once the no-JS Act1 shell (poster + wordmark + Next) is painted.
-  // ready-to-show alone can fire on the `#05010A` hold before the poster decodes.
-  const ACT1_PAINT_READY = `(() => {
+  // FITO-185-Z: reassert activating show on ready-to-show / dom-ready / did-finish-load.
+  // Do NOT gate on poster decode or act1-first-paint — that was 185-Y's ~5s hide FAIL.
+  // Shell chrome (Métis + Next) is enough; poster CSS paints with first HTML frame.
+  const ACT1_SHELL_READY = `(() => {
     try {
       if (document.documentElement.classList.contains('act1-first-paint')) return true
-      const img = document.getElementById('boot-bed-img')
       const chrome = document.getElementById('act1-boot-chrome')
       const next = document.getElementById('act1-boot-next') || document.querySelector('button.onboard-cta')
       const word = document.getElementById('act1-boot-wordmark') || document.querySelector('.hero-wordmark')
-      const imgOk = !img || img.complete
-      return !!(imgOk && (chrome || next) && word)
+      return !!(chrome || next || word)
     } catch {
       return false
     }
   })()`
   const pollAct1Paint = (): void => {
     if (exclusiveRevealed || win !== overlay || overlay.isDestroyed()) return
+    // Always reassert show for exclusive — never wait on img.complete.
+    revealExclusiveWhenPainted()
     void overlay.webContents
-      .executeJavaScript(ACT1_PAINT_READY, true)
-      .then((ok) => {
-        if (ok) revealExclusiveWhenPainted()
-      })
+      .executeJavaScript(ACT1_SHELL_READY, true)
       .catch(() => {
         /* about:blank / destroyed */
       })
   }
   overlay.webContents.on('dom-ready', () => {
     pollAct1Paint()
-    const iv = setInterval(pollAct1Paint, 16)
-    const stop = (): void => clearInterval(iv)
-    overlay.once('closed', stop)
-    const stopTimer = setTimeout(stop, 2500)
-    stopTimer.unref?.()
   })
   overlay.once('ready-to-show', pollAct1Paint)
   overlay.webContents.once('did-finish-load', pollAct1Paint)
-  // FITO-185-G-SHOW: if paint-ready never lands, hard-show at 2s so the user is not stuck
-  // staring at a forever-hidden exclusive window / Starting Métis strip.
+  // FITO-185-G-SHOW: hard reassert at 2s (already shown; belt-and-suspenders).
   if (onboardingLive) {
     const revealTimer = setTimeout(() => {
       try {

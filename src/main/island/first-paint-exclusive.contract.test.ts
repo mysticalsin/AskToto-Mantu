@@ -116,13 +116,14 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(create).toMatch(/overlayWindowChrome\(onboardingLive\)/)
     expect(create).toMatch(/transparent: chrome\.transparent/)
     expect(create).toMatch(/backgroundColor: chrome\.backgroundColor/)
-    expect(create).toMatch(/show:\s*!onboardingLive/)
-    // FITO-185-Y: exclusive hidden until Act1 first paint (never #05010A void)
-    expect(create).toMatch(/act1-first-paint/)
+    // FITO-185-Z: exclusive shows immediately (never show:!onboardingLive hide-for-seconds)
+    expect(create).toMatch(/show:\s*true/)
+    expect(create).not.toMatch(/show:\s*!onboardingLive/)
+    expect(create).toMatch(/FITO-185-Z/)
     expect(create).toMatch(/pollAct1Paint/)
     expect(create).toMatch(/overlay\.once\('ready-to-show'/)
     expect(create).toMatch(/revealExclusiveWhenPainted/)
-    expect(create).toContain('}, 2000)') // FITO-185-G-SHOW hard reveal
+    expect(create).toContain('}, 2000)') // FITO-185-G-SHOW hard reassert
     // FITO-185-T: without SFS, activating show is required (showInactive left Act 1 behind Finder)
     expect(create).toMatch(/showForExclusiveOnboarding\(win\)/)
     expect(create).toMatch(/showForExclusiveOnboarding\(overlay\)/)
@@ -193,13 +194,14 @@ describe('exclusive onboarding cannot be dragged off-screen', () => {
 })
 
 describe('FITO-185-T exclusive Act 1 visible without forever Loading', () => {
-  it('createWindow activates exclusive via showForExclusiveOnboarding after Act1 paint', () => {
+  it('createWindow activates exclusive via showForExclusiveOnboarding immediately (FITO-185-Z)', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
     expect(create).toMatch(/showForExclusiveOnboarding\(win\)/)
     expect(create).toMatch(/showForExclusiveOnboarding\(overlay\)/)
-    // FITO-185-Y: ctor must not show exclusive on the empty `#05010A` hold.
-    expect(create).toMatch(/do NOT show exclusive here/)
+    // FITO-185-Z: ctor-time exclusive show — no hide-until-paint.
+    expect(create).toMatch(/FITO-185-Z: show exclusive NOW/)
+    expect(create).not.toMatch(/do NOT show exclusive here/)
     const reveal = create.slice(
       create.indexOf('const revealExclusiveWhenPainted'),
       create.indexOf('overlay.webContents.on(')
@@ -207,7 +209,7 @@ describe('FITO-185-T exclusive Act 1 visible without forever Loading', () => {
     expect(reveal).toMatch(/showForExclusiveOnboarding\(overlay\)/)
     expect(reveal).not.toMatch(/showInactive\(\)/)
     expect(create).toMatch(/pollAct1Paint/)
-    expect(create).toMatch(/act1-first-paint/)
+    expect(create).toMatch(/ACT1_SHELL_READY/)
   })
 
   it('FITO-185-S still hard-disables SFS on Electron 43+', () => {
