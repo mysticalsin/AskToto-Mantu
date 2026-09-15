@@ -285,7 +285,12 @@ function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
   onBeginRef.current = onBegin
   useLayoutEffect(() => {
     requestOnboardingPortalOpen()
-    document.getElementById('act1-boot-chrome')?.setAttribute('hidden', '')
+    const boot = document.getElementById('act1-boot-chrome')
+    if (boot) {
+      boot.setAttribute('hidden', '')
+      boot.style.display = 'none'
+      boot.style.pointerEvents = 'none'
+    }
     const w = window as Window & { __act1BootNextQueued?: boolean }
     if (w.__act1BootNextQueued) {
       w.__act1BootNextQueued = false
@@ -1261,9 +1266,14 @@ export function OnboardingExperience({
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
-            void Promise.resolve(music.start()).catch(() => {})
-            playOnboardingVideo(heroVideoRef.current)
+            // FITO-185-AA: advance scene first — never let music/video block Act 2.
             setScene('problem')
+            void Promise.resolve(music.start()).catch(() => {})
+            try {
+              playOnboardingVideo(heroVideoRef.current)
+            } catch {
+              /* ignore */
+            }
           }}
         />
       )}

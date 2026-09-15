@@ -69,6 +69,19 @@
         pointer-events: none;
         transform: translateY(-16vh);
       }
+      /* FITO-185-AA: id display:flex was overriding UA [hidden]{display:none}, so
+         HeroWelcome's setAttribute('hidden') left static Métis+Next covering React forever
+         (Tony: click Next → nothing / forever Loading). */
+      #act1-boot-chrome[hidden] {
+        display: none !important;
+        pointer-events: none !important;
+        visibility: hidden !important;
+      }
+      #root {
+        position: relative;
+        z-index: 3;
+        min-height: 100%;
+      }
       #act1-boot-wordmark {
         margin: 0;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -96,11 +109,7 @@
         cursor: pointer;
         -webkit-app-region: no-drag;
       }
-      #root {
-        position: relative;
-        z-index: 1;
-        min-height: 100%;
-      }
+
     </style>
   </head>
   <body>
