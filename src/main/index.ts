@@ -2012,7 +2012,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
     /* headless / already destroyed */
   }
   // FITO-185-S: never OS simpleFullScreen/kiosk on Electron 43+ (Tony FAIL e404460). Product path is
-  // opaque bounds + show:true + showInactive/moveTop (FITO-185-R). ASKTOTO_ALLOW_SFS only on Electron <=39.
+  // opaque bounds + show after Act1 first paint (FITO-185-Y). ASKTOTO_ALLOW_SFS only on Electron <=39.
   const mayOsExclusive =
     exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
     exclusiveOsFullscreenAllowed({
@@ -2149,10 +2149,10 @@ function createWindow(): void {
     // Hide park is at bounds.y (0 on primary). Without this, darwin clamps
     // setBounds into workArea.y≈39 — the visible purple 8×2 hairline.
     enableLargerThanScreen: true,
-    // FITO-185-R: exclusive must show immediately. Hidden ctor (show false) + no-SFS = zero CGWindows on
-    // Electron 43/macOS 27; hidden ctor + SFS = window then silent death after renderer.ready.
-    // Hero hold `#05010A` is the first frame; Act 1 paints over it.
-    show: true,
+    // FITO-185-Y: exclusive stays hidden until Act1 (poster + wordmark + Next) is painted.
+    // show:true first-framed the BrowserWindow `#05010A` hold — Tony's solid black at t≈0.5s.
+    // Overlay (post-onboarding) still shows immediately. 2s fallback still hard-reveals.
+    show: !onboardingLive,
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2175,15 +2175,10 @@ function createWindow(): void {
   }
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   applyOverlayAlwaysOnTop(win)
-  // FITO-185-T: without SFS (185-S), showInactive+moveTop leaves Act 1 behind Finder
-  // (Tony FAIL cf2f67d: music + Loading, desktop visible, no lady+planet). Activate like FITO-185-P.
-  if (onboardingLive) {
-    try {
-      showForExclusiveOnboarding(win)
-    } catch {
-      /* headless */
-    }
-  }
+  // FITO-185-Y: do NOT show exclusive here — ctor-time show painted a black `#05010A` void
+  // before index.html / poster / Act1 chrome existed. Reveal after first Act1 paint below.
+  // FITO-185-T still applies at reveal: activating show (not showInactive) so Act 1 is not
+  // behind Finder (Tony FAIL cf2f67d).
   // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
   // Windows") — gate the call so it isn't dead code there. Windows has no public API for pinning a
   // window across Task View virtual desktops (that needs the native IVirtualDesktopManager COM
@@ -2354,9 +2349,12 @@ function createWindow(): void {
   // asar file:// getURL() cannot miss the strict equality check that loadFile alone can mismatch.
   win.loadURL(rendererUrl)
   const overlay = win
+  let exclusiveRevealed = false
   const revealExclusiveWhenPainted = (): void => {
     if (win !== overlay || overlay.isDestroyed()) return
     if (!onboardingExclusiveLive()) return
+    if (exclusiveRevealed) return
+    exclusiveRevealed = true
     // FITO-185-T: Electron 43+ never SFS (185-S). showInactive left Act 1 behind Finder while
     // Goldberg played (Tony FAIL cf2f67d). Re-assert activating show from FITO-185-P.
     try {
@@ -2365,10 +2363,44 @@ function createWindow(): void {
       /* headless */
     }
   }
-  overlay.once('ready-to-show', revealExclusiveWhenPainted)
-  overlay.webContents.once('did-finish-load', revealExclusiveWhenPainted)
-  // FITO-185-G-SHOW: if ready-to-show/did-finish-load never paint-reveal, hard-show at 2s so the
-  // user is not stuck staring at a forever-hidden exclusive window / Starting Métis strip.
+  // FITO-185-Y: reveal only once the no-JS Act1 shell (poster + wordmark + Next) is painted.
+  // ready-to-show alone can fire on the `#05010A` hold before the poster decodes.
+  const ACT1_PAINT_READY = `(() => {
+    try {
+      if (document.documentElement.classList.contains('act1-first-paint')) return true
+      const img = document.getElementById('boot-bed-img')
+      const chrome = document.getElementById('act1-boot-chrome')
+      const next = document.getElementById('act1-boot-next') || document.querySelector('button.onboard-cta')
+      const word = document.getElementById('act1-boot-wordmark') || document.querySelector('.hero-wordmark')
+      const imgOk = !img || img.complete
+      return !!(imgOk && (chrome || next) && word)
+    } catch {
+      return false
+    }
+  })()`
+  const pollAct1Paint = (): void => {
+    if (exclusiveRevealed || win !== overlay || overlay.isDestroyed()) return
+    void overlay.webContents
+      .executeJavaScript(ACT1_PAINT_READY, true)
+      .then((ok) => {
+        if (ok) revealExclusiveWhenPainted()
+      })
+      .catch(() => {
+        /* about:blank / destroyed */
+      })
+  }
+  overlay.webContents.on('dom-ready', () => {
+    pollAct1Paint()
+    const iv = setInterval(pollAct1Paint, 16)
+    const stop = (): void => clearInterval(iv)
+    overlay.once('closed', stop)
+    const stopTimer = setTimeout(stop, 2500)
+    stopTimer.unref?.()
+  })
+  overlay.once('ready-to-show', pollAct1Paint)
+  overlay.webContents.once('did-finish-load', pollAct1Paint)
+  // FITO-185-G-SHOW: if paint-ready never lands, hard-show at 2s so the user is not stuck
+  // staring at a forever-hidden exclusive window / Starting Métis strip.
   if (onboardingLive) {
     const revealTimer = setTimeout(() => {
       try {

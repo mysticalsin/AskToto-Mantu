@@ -329,7 +329,7 @@ export function exclusiveMayUseSimpleFullScreen(transparent: boolean): boolean {
  * FITO-185-S: Electron 43+ `setSimpleFullScreen` on darwin exclusive onboarding materializes the
  * CGWindow then silently kills the process after `app.renderer.ready` (empty Crashpad, no
  * DiagnosticReports) — Tony FAIL on e404460 / FITO-185-Q. Bounds-only opaque exclusive +
- * `show:true` (FITO-185-R) is the product path. `ASKTOTO_ALLOW_SFS=1` remains a debug opt-in
+ * Exclusive reveals after Act1 first paint (FITO-185-Y). `ASKTOTO_ALLOW_SFS=1` remains a debug opt-in
  * only on Electron major <= 39 (the 1.8.9-era runtime); never on 43+.
  */
 export function exclusiveOsFullscreenAllowed(opts: {
