@@ -832,6 +832,21 @@ input::placeholder {
     animation: none;
     transform: none;
   }
+  /* FITO-185-V: reduced-motion portal-open — still unlock opacity, kill motion only here */
+  .onboard-stage.onboard-stage--portal-open .scene-enter,
+  .onboard-stage.onboard-stage--portal-open .fade-up,
+  .onboard-stage.onboard-stage--portal-open .hero-wordmark,
+  .onboard-stage.onboard-stage--portal-open .hero-tagline,
+  .onboard-stage.onboard-stage--portal-open .hero-byline,
+  .onboard-stage.onboard-stage--portal-open .onboard-cta,
+  .onboard-stage.onboard-stage--portal-open .hero-welcome,
+  .onboard-stage.onboard-stage--portal-open .hero-welcome button,
+  .onboard-stage.onboard-stage--portal-open button.onboard-cta {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    visibility: visible !important;
+  }
 }
 
 /* Act 1 welcome atmosphere — full viewport, under the UI. Hero hold remains if this is absent. */
@@ -906,9 +921,11 @@ input::placeholder {
   opacity: 1;
   transform: none;
 }
-/* FITO-185-P: fade-up/scene-enter use animation-fill:both from opacity:0 — stalled GPU leaves
-   Act 1 / post-Next copy invisible forever (Tony: Next loads forever, no animation).
-   FITO-185-U: also unlock Next / onboard-cta and any remaining invisible selectors under portal-open. */
+/* FITO-185-V: keep opacity/visibility unlock so stalled GPU cannot leave Act 1 invisible,
+   but restore short entrance animations (fade-up / scene-enter / mark-land). Do NOT set
+   animation:none or transform:none here — that froze the lady bed + CTA (Tony FAIL tip 1e038a5).
+   animation:none stays only under prefers-reduced-motion (media query above). Kenburns on
+   .onboard-hero-video video is intentionally untouched. */
 .onboard-stage.onboard-stage--portal-open .scene-enter,
 .onboard-stage.onboard-stage--portal-open .fade-up,
 .onboard-stage.onboard-stage--portal-open .hero-wordmark,
@@ -918,9 +935,7 @@ input::placeholder {
 .onboard-stage.onboard-stage--portal-open .hero-welcome,
 .onboard-stage.onboard-stage--portal-open .hero-welcome button,
 .onboard-stage.onboard-stage--portal-open button.onboard-cta {
-  animation: none !important;
   opacity: 1 !important;
-  transform: none !important;
   visibility: visible !important;
 }
 
