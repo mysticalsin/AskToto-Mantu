@@ -109,6 +109,7 @@ import {
 import {
   ONBOARDING_HERO_POSTER_SRC,
   ONBOARDING_HERO_VIDEO_SRC,
+  playOnboardingVideo,
   preloadOnboardingHeroVideo
 } from '../lib/onboarding-hero-video'
 
@@ -226,6 +227,7 @@ function OnboardingHeroVideo({
   // and felt like "no animation" on Totos-Mac exclusive.
   const [allowVideo, setAllowVideo] = useState(() => !prefersReducedMotion())
   const [videoReady, setVideoReady] = useState(false)
+  const markReady = useCallback(() => setVideoReady(true), [])
   useEffect(() => {
     if (prefersReducedMotion()) return
     setAllowVideo(true)
@@ -238,7 +240,14 @@ function OnboardingHeroVideo({
       el.load()
       void el.play().catch(() => {})
     }
+    // FITO-185-V: exclusive can decode without firing loadeddata; promote once frames advance.
+    const fallbackId = window.setTimeout(() => {
+      const v = typeof videoRef === 'object' && videoRef ? videoRef.current : null
+      if (!v) return
+      if (v.currentTime > 0 || v.readyState >= 2) setVideoReady(true)
+    }, 800)
     return () => {
+      window.clearTimeout(fallbackId)
       const v = typeof videoRef === 'object' && videoRef ? videoRef.current : null
       v?.pause()
     }
@@ -257,8 +266,10 @@ function OnboardingHeroVideo({
           poster={ONBOARDING_HERO_POSTER_SRC}
           src={ONBOARDING_HERO_VIDEO_SRC}
           className={videoReady ? 'onboard-hero-video--ready' : 'onboard-hero-video--pending'}
-          onLoadedData={() => setVideoReady(true)}
-          onPlaying={() => setVideoReady(true)}
+          onLoadedData={markReady}
+          onCanPlay={markReady}
+          onPlaying={markReady}
+          onTimeUpdate={markReady}
           onError={() => setVideoFailed(true)}
         />
       )}
@@ -900,6 +911,8 @@ export function OnboardingExperience({
   const heroVideoRef = useRef<HTMLVideoElement>(null)
   const playHero = (): void => {
     music.start()
+    // FITO-185-V: user gesture / Next retry — unmute autoplay policy and promote ready via playing.
+    playOnboardingVideo(heroVideoRef.current)
   }
 
   useEffect(() => {
@@ -1233,6 +1246,7 @@ export function OnboardingExperience({
         <HeroWelcome
           onBegin={() => {
             void Promise.resolve(music.start()).catch(() => {})
+            playOnboardingVideo(heroVideoRef.current)
             setScene('problem')
           }}
         />

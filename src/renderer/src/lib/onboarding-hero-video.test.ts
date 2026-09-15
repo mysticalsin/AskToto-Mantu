@@ -154,3 +154,21 @@ describe('FITO-185-L poster paint contracts', () => {
     expect(experience).toMatch(/<img className="onboard-hero-poster" src=\{ONBOARDING_HERO_POSTER_SRC\}/)
   })
 })
+
+describe('FITO-185-V hero video ready promotion', () => {
+  it('marks ready on canplay/timeupdate/playing and 800ms decode fallback', () => {
+    expect(experience).toMatch(/onCanPlay=\{markReady\}/)
+    expect(experience).toMatch(/onTimeUpdate=\{markReady\}/)
+    expect(experience).toMatch(/onPlaying=\{markReady\}/)
+    expect(experience).toMatch(/onLoadedData=\{markReady\}/)
+    expect(experience).toMatch(/readyState >= 2/)
+    expect(experience).toMatch(/currentTime > 0/)
+    expect(experience).toMatch(/setTimeout\([\s\S]*?800\)/)
+    expect(experience).toMatch(/playOnboardingVideo\(heroVideoRef\.current\)/)
+    // Next still advances hero → problem
+    expect(experience).toMatch(
+      /onBegin=\{\(\) => \{[\s\S]*?playOnboardingVideo\(heroVideoRef\.current\)[\s\S]*?setScene\('problem'\)/
+    )
+  })
+})
+
