@@ -5,7 +5,7 @@
 #     cd native-app && xcodegen generate
 #     open Metis.xcodeproj         # run on a Mac, or an iOS/iPad simulator/device
 #
-# Release artifact (pure Mac native, NOT the Electron DMG):
+# Local QA artifact (pure Mac native, NOT the Electron DMG):
 #     node scripts/build-native-mac.mjs
 #     → release/Metis-Native-<version>.zip  (contains Metis.app)
 #
@@ -26,9 +26,9 @@ packages:
 targets:
   Metis:
     type: application
-    # Release packaging (scripts/build-native-mac.mjs) builds the macOS destination only and zips
-    # Metis.app as Metis-Native-<version>.zip — that is the pure Apple-native download, distinct from
-    # the Electron Metis-<version>.dmg. iOS remains a supported destination for local Xcode runs.
+    # Local packaging (scripts/build-native-mac.mjs) builds the macOS destination only and zips
+    # Metis.app as Metis-Native-<version>.zip. It is not a public release asset until it has its own
+    # Developer ID signing and notarization lane. iOS remains a supported destination for local Xcode runs.
     supportedDestinations: [macOS, iOS]
     sources:
       - App

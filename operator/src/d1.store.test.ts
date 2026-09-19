@@ -148,6 +148,22 @@ describe('listAsks with since', () => {
     expect((await store.listAsks(10)).map((a) => a.id).sort()).toEqual(['new', 'old'])
     expect((await store.listAsks(10, 4000)).map((a) => a.id)).toEqual(['new'])
   })
+
+  it('does not let a second device replace an ask id, but lets its owner retry it', async () => {
+    await store.insertAsk(ask({ id: 'ask-owned', device_id: 'device-a', model: 'first-model' }))
+    await store.insertAsk(ask({ id: 'ask-owned', device_id: 'device-b', model: 'foreign-model' }))
+
+    expect(await store.getAsk('ask-owned')).toMatchObject({
+      device_id: 'device-a',
+      model: 'first-model'
+    })
+
+    await store.insertAsk(ask({ id: 'ask-owned', device_id: 'device-a', model: 'retry-model' }))
+    expect(await store.getAsk('ask-owned')).toMatchObject({
+      device_id: 'device-a',
+      model: 'retry-model'
+    })
+  })
 })
 
 describe('listEvents overload', () => {

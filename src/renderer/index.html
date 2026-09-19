@@ -27,6 +27,7 @@
       content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'; frame-src 'none'; img-src 'self' data: blob:; media-src 'self' blob: data: https://d8j0ntlcm91z4.cloudfront.net; connect-src 'self' blob: asr-model: https://api.anthropic.com https://api.openai.com/v1 https://api.moonshot.ai/v1 https://integrate.api.nvidia.com/v1 https://api.deepseek.com/v1 https://dashscope-intl.aliyuncs.com/compatible-mode/v1 https://api.minimax.io/v1 https://openrouter.ai/api/v1 https://api.groq.com/openai/v1 https://api.together.xyz/v1 https://api.fireworks.ai/inference/v1 https://api.mistral.ai/v1 https://dust.tt https://*.dust.tt https://huggingface.co https://cdn.jsdelivr.net https://*.hf.co; script-src 'self' 'wasm-unsafe-eval' blob: asr-model:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:;"
     />
     <title>Métis</title>
+    <script src="./onboarding-boot-gate.js"></script>
     <!--
       FITO-185-I: no-JS exclusive bed. createWindow may force-show before React/IPC hydrate;
       never leave Tony on pure black. styles.css sets html/body transparent for the overlay —
@@ -36,7 +37,11 @@
     <style>
       /* FITO-185-Z: first compositor frame is Act1 (poster + wordmark + Next), never a black void.
          Window shows immediately — shell is in HTML; never hide-for-seconds. */
-      #boot-bed {
+      #boot-bed,
+      #act1-boot-chrome {
+        display: none;
+      }
+      html.exclusive-onboarding-boot #boot-bed {
         position: fixed;
         inset: 0;
         z-index: 0;
@@ -58,7 +63,7 @@
         opacity: 1;
         z-index: 1;
       }
-      #act1-boot-chrome {
+      html.exclusive-onboarding-boot #act1-boot-chrome {
         position: fixed;
         inset: 0;
         z-index: 2;

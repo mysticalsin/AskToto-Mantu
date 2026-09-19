@@ -45,14 +45,14 @@ consent tied to the bundle id) and the electron-updater continuity for existing 
 Grab the installer for your OS from the [Métis releases page](https://github.com/mysticalsin/Metis-Releases/releases):
 
 - **macOS Electron** — `Metis-<version>.dmg` (cross-platform overlay).
-- **macOS native** — `Metis-Native-<version>.zip` (SwiftUI / Apple Intelligence; unzip → `Metis.app`).
 - **Windows x64** — `Metis-Setup-<version>.exe` (installer) or `Metis-Portable-<version>.exe`
   (no-install; the portable build never auto-updates because electron-updater has no portable-EXE
   support).
 
-Tagged public releases are published only after both native builds pass the signing, package-integrity,
-and size gates. If no current release is listed, the external signing/release gates have not completed;
-do not substitute an unsigned local build for customer distribution.
+Tagged public releases are published only after the notarized macOS Electron and signed Windows builds
+pass their integrity gates. The SwiftUI native prototype is local-only until it has an independent
+Developer ID signing and notarization pipeline. If no current release is listed, do not substitute an
+unsigned local build for customer distribution.
 
 All transcription runs on-device; models are bundled (no first-run download).
 
@@ -124,7 +124,7 @@ Every script in `package.json`, one line each:
 | `dist:win:appx` | ffmpeg + sherpa checks (win), then package a Windows APPX (no publish) |
 | `prepack` | Fetch models (runs automatically before electron-builder packs) |
 | `release` | Build signed/notarized macOS Electron release artifacts (no independent publish; tag CI performs final verification) |
-| `release:native-mac` | Build pure SwiftUI Mac app → `release/Metis-Native-<version>.zip` (needs Xcode + xcodegen) |
+| `package:native-mac:local` | Build a local-only SwiftUI Mac QA ZIP → `release/Metis-Native-<version>.zip` (needs Xcode + xcodegen; never public) |
 | `release:win` | Build Windows release artifacts after credential/package gates (no independent publish; tag CI verifies the signer) |
 | `release:mas` | Mac App Store build (provisioning profile via `MAS_PROVISIONING_PROFILE`), no publish |
 | `release:win:store` | Windows Store (APPX) build gate, no publish |

@@ -1,22 +1,13 @@
 name: Release
 
-# Publishes builds to this repository's public GitHub Releases page on a version tag push (v1.2.3).
-# macOS Electron: Developer ID + notarized when CSC_/APPLE_* secrets are present. When those Apple
-# secrets are absent, ship an ADHOC / non-notarized DMG (Tony lock 2026-09-06; same unsigned/ad-hoc
-# pattern as Metis-Releases v1.8.3/v1.8.4). Windows signing stays required — unsigned public
-# installers break enterprise trust and can be blocked by SmartScreen.
-#
-# An adhoc macOS build no longer demotes the whole release to a pre-release (Tony, 2026-09-07).
-# It did until now, and the cost was that NOTHING shipped: /releases/latest skips pre-releases, so
-# every installed client — Windows included — kept resolving to v1.6.6 and Settings → About kept
-# saying "You're on the latest version". Windows is Authenticode-signed and its in-app update works,
-# so one platform's interim signing state must not block the other's. The release notes below name
-# the adhoc macOS DMG explicitly, and updater.ts refuses the in-app path on darwin until Developer ID
-# lands, so nobody is misled about what they are getting.
+# Publishes only verified customer installers to this repository's public GitHub Releases page on a
+# version tag push (v1.2.3). macOS requires Developer ID signing plus notarization and Windows requires
+# trusted Authenticode signing. Missing signing inputs fail the workflow before artifacts can reach the
+# public draft/publish stage; local ad-hoc builds remain a separate, non-public developer workflow.
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 # A retry for the same tag must never race another run while both mutate the same draft release.
 concurrency:
@@ -61,8 +52,6 @@ jobs:
     name: macOS release
     needs: release-quality
     runs-on: macos-latest
-    outputs:
-      signing_mode: ${{ steps.mac-sign.outputs.mode }}
     # Notarization blocks on Apple's queue, which is usually minutes but has had documented multi-hour
     # degradations; 45 min was tight enough that a slow queue killed the job with no partial-progress
     # recovery (retry re-downloads/rebuilds from scratch). 90 min gives the notarization wait real room
@@ -155,28 +144,8 @@ jobs:
             echo "::error::Adding it to a release that already exists: gh release upload ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-x64 --clobber --repo $GITHUB_REPOSITORY"
             exit 1
           fi
-      # Dual path (Tony lock 2026-09-06): Developer ID + notarize when Apple secrets exist;
-      # otherwise ADHOC / not Gatekeeper-notarized (do not hard-fail). GH_TOKEN is still required.
-      - name: Resolve macOS signing mode
-        id: mac-sign
-        run: |
-          missing_apple=()
-          [ -z "$CSC_LINK" ] && missing_apple+=(CSC_LINK)
-          [ -z "$CSC_KEY_PASSWORD" ] && missing_apple+=(CSC_KEY_PASSWORD)
-          [ -z "$APPLE_ID" ] && missing_apple+=(APPLE_ID)
-          [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && missing_apple+=(APPLE_APP_SPECIFIC_PASSWORD)
-          [ -z "$APPLE_TEAM_ID" ] && missing_apple+=(APPLE_TEAM_ID)
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::Missing release secret: GH_TOKEN. See docs/SIGNING.md / scripts/ship-setup.sh."
-            exit 1
-          fi
-          if [ ${#missing_apple[@]} -gt 0 ]; then
-            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
-            echo "::warning::Apple Developer ID secrets missing (${missing_apple[*]}). Shipping ADHOC / not Gatekeeper-notarized macOS DMG (Tony lock 2026-09-06; matches Metis-Releases v1.8.3/v1.8.4 unsigned/ad-hoc)."
-          else
-            echo "mode=developer-id" >> "$GITHUB_OUTPUT"
-            echo "Apple Developer ID secrets present — notarized Developer ID path."
-          fi
+      - name: Require Developer ID signing and notarization secrets before releasing
+        run: node scripts/check-release-secrets.mjs mac
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -209,27 +178,14 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          ASKTOTO_ALLOW_ADHOC_MAC: ${{ steps.mac-sign.outputs.mode == 'adhoc' && '1' || '' }}
-          ASKTOTO_ADHOC_SIGN: ${{ steps.mac-sign.outputs.mode == 'adhoc' && '1' || '' }}
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.mac-sign.outputs.mode == 'adhoc' && 'false' || '' }}
-          ASKTOTO_MAC_BUILDER_EXTRA: ${{ steps.mac-sign.outputs.mode == 'adhoc' && '-c.mac.identity=null' || '' }}
           # Standard installers use the licensed operator relay. Provider credentials remain on the
           # server; encrypted blobs in an installer are extractable and must not contain a shared key.
       # Hard size gate before anything is published.
       - run: npm run check:release
         env:
           ASKTOTO_ARTIFACTS_DIR: release
-      # Developer ID path requires notarization. Adhoc path verifies codesign only (no Gatekeeper staple).
       - name: Verify macOS signing
-        env:
-          ASKTOTO_ALLOW_ADHOC_MAC: ${{ steps.mac-sign.outputs.mode == 'adhoc' && '1' || '' }}
-        run: |
-          if [ "${{ steps.mac-sign.outputs.mode }}" = "adhoc" ]; then
-            echo "ADHOC / not Gatekeeper-notarized — skipping --require-notarized (Tony lock 2026-09-06)."
-            node scripts/verify-signing.mjs
-          else
-            node scripts/verify-signing.mjs --require-notarized
-          fi
+        run: node scripts/verify-signing.mjs --require-notarized
       - uses: actions/upload-artifact@v4
         with:
           name: metis-release-macos
@@ -241,40 +197,6 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest-mac.yml
-
-  # Pure SwiftUI Mac app (native-app/) — NOT the Electron DMG. Ships Metis-Native-<ver>.zip.
-  release-macos-native:
-    name: macOS native (SwiftUI)
-    needs: release-quality
-    runs-on: macos-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - name: Verify tag matches package.json version
-        run: node scripts/check-version-parity.mjs
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.22.3
-      - name: Install xcodegen
-        run: brew install xcodegen
-      - name: Build Metis-Native zip
-        run: npm run release:native-mac
-      - name: Require Metis-Native zip
-        run: |
-          version=$(node -p "require('./package.json').version")
-          test -f "release/Metis-Native-${version}.zip" || {
-            echo "::error::Missing release/Metis-Native-${version}.zip"
-            exit 1
-          }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: metis-release-macos-native
-          retention-days: 1
-          if-no-files-found: error
-          compression-level: 0
-          path: release/Metis-Native-*.zip
 
   release-windows:
     name: Windows release
@@ -383,12 +305,12 @@ jobs:
             release/*.blockmap
             release/latest.yml
 
-  # Publish only after Electron Mac + Windows AND the pure SwiftUI Mac native zip all pass.
+  # Publish only after notarized Electron macOS + signed Windows installers both pass.
   # Assets first land on an invisible draft; the draft becomes public only after the complete set
   # is verified in that same release.
   release-verify:
     name: Publish verified Mac + Windows release
-    needs: [release-macos, release-macos-native, release-windows]
+    needs: [release-macos, release-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -397,10 +319,6 @@ jobs:
         with:
           name: metis-release-macos
           path: release-bundle/macos
-      - uses: actions/download-artifact@v4
-        with:
-          name: metis-release-macos-native
-          path: release-bundle/macos-native
       - uses: actions/download-artifact@v4
         with:
           name: metis-release-windows
@@ -422,16 +340,11 @@ jobs:
           version="${tag#v}"
           shopt -s nullglob
 
-          # Flatten the SwiftUI native zip next to the Electron Mac assets for a single upload set.
-          mv release-bundle/macos-native/Metis-Native-${version}.zip release-bundle/macos/
-          rmdir release-bundle/macos-native
-
           required_files=(
             "release-bundle/macos/Metis-${version}.dmg"
             "release-bundle/macos/Metis-${version}.dmg.blockmap"
             "release-bundle/macos/Metis-${version}.zip"
             "release-bundle/macos/Metis-${version}.zip.blockmap"
-            "release-bundle/macos/Metis-Native-${version}.zip"
             "release-bundle/macos/latest-mac.yml"
             "release-bundle/windows/Metis-Setup-${version}.exe"
             "release-bundle/windows/Metis-Setup-${version}.exe.blockmap"
@@ -487,11 +400,7 @@ jobs:
             exit 1
           fi
 
-          notes="Signed Métis desktop installers for macOS Apple Silicon and Windows x64."
-          if [ "${{ needs.release-macos.outputs.signing_mode }}" = "adhoc" ]; then
-            echo "::warning::Publishing ADHOC / not Gatekeeper-notarized macOS DMG plus signed Windows EXE (unsigned / ad-hoc; matches v1.8.3/v1.8.4)."
-            notes="Métis $tag — Windows Authenticode-signed. macOS Electron DMG is ADHOC / not Gatekeeper-notarized (interim; same unsigned/ad-hoc pattern as v1.8.3/v1.8.4)."
-          fi
+          notes="Métis desktop installers: Developer ID-signed and notarized macOS, plus Authenticode-signed Windows."
           gh release create "$tag" --repo "$repo" --draft --title "Métis $tag" --notes "$notes"
 
           # Recheck immediately before both remote mutations. Tag-scoped workflow concurrency prevents

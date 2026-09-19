@@ -227,24 +227,27 @@ describe('FITO-185-T exclusive Act 1 visible without forever Loading', () => {
 
 
 
-describe('FITO-185-U exclusive Act 1 capturable + DOM probe', () => {
-  it('contentProtectionOn forces false while exclusive', () => {
+describe('MQA-338 exclusive Act 1 privacy + bounded diagnostics', () => {
+  it('contentProtectionOn preserves the existing privacy decision while exclusive', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     const body = index.slice(
       index.indexOf('function contentProtectionOn(): boolean {'),
       index.indexOf('function privateViewOn(): boolean {')
     )
-    expect(body).toMatch(/onboardingExclusiveLive\(\)/)
-    expect(body).toMatch(/FITO-185-U/)
-    expect(body).toMatch(/return false/)
+    expect(body).not.toMatch(/onboardingExclusiveLive\(\)/)
+    expect(body).not.toMatch(/FITO-185-U/)
+    expect(body).toMatch(/return getSettings\(\)\.contentProtection/)
   })
 
-  it('createWindow binds act1 DOM probe and keeps exclusiveOnboarding=1', () => {
+  it('createWindow binds Act 1 diagnostics only for the explicit launch gate and keeps exclusiveOnboarding=1', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
     expect(create).toMatch(/bindAct1DomProbe\(/)
     expect(create).toMatch(/act1-dom\.json/)
-    expect(create).toMatch(/params\.set\('exclusiveOnboarding', '1'\)/)
+    expect(create).toMatch(/if \(process\.env\.ASKTOTO_MAC_LAUNCH_GATE === '1'\)/)
+    expect(create).not.toMatch(/ASKTOTO_MAC_LAUNCH_GATE === '1' \|\| onboardingExclusiveLive\(\)/)
+    expect(index).toMatch(/function overlayRendererUrl\(\): string/)
+    expect(index).toMatch(/if \(onboardingExclusiveLive\(\)\) params\.set\('exclusiveOnboarding', '1'\)/)
   })
 
   it('portal-open CSS unlock includes onboard-cta / Next (FITO-185-V)', () => {

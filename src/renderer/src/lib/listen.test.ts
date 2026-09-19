@@ -651,7 +651,9 @@ describe('cloud them named WHO — attach upgrades + embed after final', () => {
 
   it('cloud pump stashes lastThemEmbedRef for them windows', () => {
     expect(listenSrc).toMatch(/lastThemEmbedRef\.current = \{\s*audio: job\.audio\.slice\(\)/)
-    expect(listenSrc).toMatch(/cloudSttPush\(job\.audio, job\.speaker === 'them' \? 'them' : 'you'\)/)
+    expect(listenSrc).toMatch(
+      /cloudSttPush\(job\.audio, job\.speaker === 'them' \? 'them' : 'you', cloudCaptureId\)/
+    )
   })
 
   it('onCloudSttFinal voiceprints them session/unknown lines then attachSpeakerName', () => {

@@ -48,13 +48,35 @@ describe('summarizeAct1Dom', () => {
       portalContentOpacity: '1',
       wordmarkOpacity: '1',
       nextOpacity: '1',
-      rootChildCount: 2,
-      search: '?exclusiveOnboarding=1'
+      rootChildCount: 2
     })
     expect(s.exclusiveOnboarding).toBe(true)
     expect(s.hasNextButton).toBe(true)
     expect(s.portalContentOpacity).toBe('1')
-    expect(s.search).toBe('?exclusiveOnboarding=1')
+    expect(s.rootChildCount).toBe(2)
+  })
+
+  it('keeps only structural verdicts, not renderer text, URLs, HTML, or asset paths', () => {
+    const privateMarker = 'private-meeting-content-must-not-leave-renderer'
+    const s = summarizeAct1Dom({
+      exclusiveOnboarding: true,
+      hasOnboardStage: true,
+      portalOpen: true,
+      hasHeroWordmark: true,
+      hasNextButton: true,
+      href: `file:///private/${privateMarker}`,
+      bodyTextHead: privateMarker,
+      rootHTML: `<article>${privateMarker}</article>`,
+      wordmarkText: privateMarker,
+      nextButtonText: privateMarker,
+      videoSrc: `https://example.test/${privateMarker}.mp4`,
+      videoError: privateMarker,
+      search: `?token=${privateMarker}`
+    })
+    expect(JSON.stringify(s)).not.toContain(privateMarker)
+    expect(s).not.toHaveProperty('search')
+    expect(s).not.toHaveProperty('videoSrcHead')
+    expect(s).not.toHaveProperty('videoError')
   })
 })
 
@@ -126,6 +148,40 @@ describe('bindAct1DomProbe', () => {
     await vi.advanceTimersByTimeAsync(ACT1_DOM_PROBE_DELAY_MS + 50)
     expect(target.executeJavaScript).toHaveBeenCalledOnce()
   })
+
+  it('writes only a sanitized structural summary when the renderer returns private strings', async () => {
+    const privateMarker = 'private-meeting-content-must-not-leave-renderer'
+    const target = new ProbeTarget()
+    target.executeJavaScript.mockResolvedValue({
+      exclusiveOnboarding: true,
+      hasOnboardStage: true,
+      portalOpen: true,
+      hasHeroWordmark: true,
+      hasNextButton: true,
+      href: `file:///private/${privateMarker}`,
+      bodyTextHead: privateMarker,
+      rootHTML: `<article>${privateMarker}</article>`,
+      videoSrc: `https://example.test/${privateMarker}.mp4`,
+      videoError: privateMarker
+    })
+    const writes: string[] = []
+    bindAct1DomProbe(target, {
+      expectedUrl,
+      outPath: '/tmp/act1-dom.json',
+      writeFile: ((_path: string, data: string | NodeJS.ArrayBufferView) => {
+        writes.push(typeof data === 'string' ? data : Buffer.from(data as Buffer).toString('utf8'))
+      }) as typeof import('node:fs').writeFileSync,
+      mkdir: (() => undefined) as typeof import('node:fs').mkdirSync,
+      setTimer: setTimeout
+    })
+    target.url = expectedUrl
+    target.emit('did-finish-load')
+    await vi.advanceTimersByTimeAsync(ACT1_DOM_PROBE_DELAY_MS)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).not.toContain(privateMarker)
+  })
 })
 
 describe('FITO-185-U wiring in createWindow', () => {
@@ -135,7 +191,8 @@ describe('FITO-185-U wiring in createWindow', () => {
   it('registers bindAct1DomProbe under LAUNCH_GATE or exclusive', () => {
     expect(index).toMatch(/import \{ bindAct1DomProbe \} from '\.\/act1-dom-probe'/)
     expect(create).toMatch(/bindAct1DomProbe\(/)
-    expect(create).toMatch(/ASKTOTO_MAC_LAUNCH_GATE === '1' \|\| onboardingExclusiveLive\(\)/)
+    expect(create).toMatch(/if \(process\.env\.ASKTOTO_MAC_LAUNCH_GATE === '1'\)/)
+    expect(create).not.toMatch(/ASKTOTO_MAC_LAUNCH_GATE === '1' \|\| onboardingExclusiveLive\(\)/)
     expect(create).toMatch(/act1-dom\.json/)
     expect(create).toMatch(/auditLog\('app\.act1\.dom'/)
   })
@@ -146,7 +203,10 @@ describe('FITO-185-U wiring in createWindow', () => {
   })
 
   it('keeps FITO-185-N exclusiveOnboarding=1 on packaged loadURL', () => {
-    expect(create).toMatch(/params\.set\('exclusiveOnboarding', '1'\)/)
+    // URL construction is shared with renderer-crash recovery. Keeping it outside createWindow prevents
+    // the recovery path from silently dropping the parser-time onboarding shell flag.
+    expect(index).toMatch(/function overlayRendererUrl\(\): string/)
+    expect(index).toMatch(/if \(onboardingExclusiveLive\(\)\) params\.set\('exclusiveOnboarding', '1'\)/)
     expect(create).toMatch(/FITO-185-N/)
   })
 })
@@ -168,7 +228,7 @@ describe('FITO-185-X act1-dom miss artifact', () => {
     let now = 0
     const timers: Array<{ ms: number; fn: () => void }> = []
     bindAct1DomProbe(target, {
-      expectedUrl: 'file:///fixture/renderer/index.html?exclusiveOnboarding=1',
+      expectedUrl: 'file:///private/meeting-content?token=must-not-be-exported',
       outPath: '/tmp/act1-dom-miss-test.json',
       delayMs: 10,
       timeoutMs: 20,
@@ -188,5 +248,22 @@ describe('FITO-185-X act1-dom miss artifact', () => {
     expect(miss).toBeTruthy()
     miss!.fn()
     expect(writes.some((w) => w.includes('act1-dom-miss: never-armed'))).toBe(true)
+    expect(writes.join('\n')).not.toContain('private/meeting-content')
+    expect(writes.join('\n')).not.toContain('must-not-be-exported')
+  })
+})
+
+describe('MQA-338 — Act 1 diagnostics are evidence-only, never renderer-content export', () => {
+  const source = readFileSync(join(__dirname, 'act1-dom-probe.ts'), 'utf8')
+
+  it('does not inspect or serialize document text, markup, URLs, or media locations', () => {
+    expect(source).not.toMatch(/document\.body\.innerText/)
+    expect(source).not.toMatch(/location\.href/)
+    expect(source).not.toMatch(/rootHTML/)
+    expect(source).not.toMatch(/bodyTextHead/)
+    expect(source).not.toMatch(/videoSrc/)
+    expect(source).not.toMatch(/videoError/)
+    expect(source).not.toMatch(/expectedUrl,\s*liveUrl/)
+    expect(source).not.toMatch(/liveUrl:/)
   })
 })

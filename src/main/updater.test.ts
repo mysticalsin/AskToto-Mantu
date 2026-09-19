@@ -159,15 +159,14 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
     expect(parseLatestRelease({ tag_name: 'v9.9.9', prerelease: true }, '1.2.0').error).toMatch(/QA-approved/)
   })
 
-  it('full board Latest carries EXE + DMG + Native, not a partial upload', () => {
+  it('full board Latest carries the supported EXE + DMG installers, not a partial upload', () => {
     expect(
       latestReleaseHasApprovedInstallers(
         {
           tag_name: 'v1.8.4',
           assets: [
             { name: 'Metis-1.8.4.dmg' },
-            { name: 'Metis-Setup-1.8.4.exe' },
-            { name: 'Metis-Native-1.8.4.zip' }
+            { name: 'Metis-Setup-1.8.4.exe' }
           ]
         },
         '1.8.4',
@@ -343,10 +342,8 @@ describe('MQA-079 — blockedUpdateChannel guards the manual check, not just ini
   })
 })
 
-/** updater.ts refuses the in-app install on darwin — Squirrel.Mac cannot replace an ad-hoc-signed
- *  bundle — so any suite asserting the download path must pin a non-darwin platform. Without this the
- *  suite passes on CI's ubuntu/windows runners and fails on a maintainer's Mac. 'linux' rather than
- *  'win32' so the PORTABLE_EXECUTABLE_FILE branch stays out of the way too. */
+/** Pin platform-sensitive updater cases explicitly; use linux by default so the portable Windows branch
+ *  stays out of the way. */
 function pinPlatform(value: NodeJS.Platform): () => void {
   const original = Object.getOwnPropertyDescriptor(process, 'platform')
   Object.defineProperty(process, 'platform', { value, configurable: true })
@@ -369,20 +366,38 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
     restorePlatform()
   })
 
-  it('sends macOS to the DMG instead of a download that Squirrel.Mac could never install', async () => {
+  it('starts an in-app macOS download only after the notarized release feed confirms complete Mac assets', async () => {
     const electronApp = app as unknown as { isPackaged?: boolean }
     electronApp.isPackaged = true
     const restore = pinPlatform('darwin')
-    vi.mocked(net.fetch).mockClear() // earlier suites in this file exercise the feed
+    vi.mocked(net.fetch).mockClear()
+    vi.mocked(net.fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v99.0.0',
+        draft: false,
+        prerelease: false,
+        assets: [
+          { name: 'Metis-99.0.0.dmg' },
+          { name: 'Metis-99.0.0.zip' },
+          { name: 'latest-mac.yml' }
+        ]
+      })
+    } as unknown as Response)
+    const fake = new FakeAutoUpdater()
+    fake.checkForUpdates.mockResolvedValue({ downloadPromise: Promise.resolve() })
+    const moduleId = require.resolve('electron-updater')
+    const previous = require.cache[moduleId]
+    require.cache[moduleId] = { id: moduleId, filename: moduleId, loaded: true, exports: { autoUpdater: fake } } as never
     try {
       const r = await startUpdateDownload()
-      expect(r.started).toBe(false)
-      expect(r.reason).toMatch(/\.dmg/i)
-      // The refusal must be free: no feed round-trip for an install we are going to decline anyway,
-      // so an offline Mac still gets the right message instead of a network error.
-      expect(net.fetch).not.toHaveBeenCalled()
+      expect(r).toEqual({ started: true })
+      expect(net.fetch).toHaveBeenCalledTimes(1)
+      expect(fake.checkForUpdates).toHaveBeenCalledTimes(1)
     } finally {
       restore()
+      if (previous) require.cache[moduleId] = previous
+      else delete require.cache[moduleId]
       delete electronApp.isPackaged
     }
   })
@@ -588,13 +603,13 @@ describe('MQA-292 Metis-Releases feed rules — QA Latest only', () => {
     expect(src).toMatch(/allowDowngrade = false/)
   })
 
-  it('release.yml does not undraft Latest until EXE + DMG + Native are in the bundle', async () => {
+  it('release.yml does not undraft Latest until the signed EXE + notarized DMG are in the bundle', async () => {
     const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
     const { join } = await vi.importActual<typeof import('node:path')>('node:path')
     const workflow = readFileSync(join(__dirname, '../../.github/workflows/release.yml'), 'utf8')
     expect(workflow).toContain('Metis-${version}.dmg')
     expect(workflow).toContain('Metis-Setup-${version}.exe')
-    expect(workflow).toContain('Metis-Native-${version}.zip')
+    expect(workflow).not.toContain('Metis-Native-${version}.zip')
     expect(workflow).toMatch(/gh release create .* --draft/)
     expect(workflow).toMatch(/gh release edit .* --draft=false/)
     const create = workflow.indexOf('gh release create')

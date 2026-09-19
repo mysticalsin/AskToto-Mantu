@@ -9,7 +9,7 @@ import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { parseUseBody } from './use'
-import { PORTAL_CF_DEEPSEEK_FLASH } from '../../src/shared/ask-routing'
+import { PORTAL_CF_DEEPSEEK_FLASH, PORTAL_CF_DEEPSEEK_PRO } from '../../src/shared/ask-routing'
 
 const NOW = 1_725_000_000_000
 const SECRET = 'sk-cf-OPERATOR-VAULT-TEST-only-xx99'
@@ -378,6 +378,41 @@ describe('G5 POST /v1/ask SSE', () => {
     const json = (await res.json()) as { error?: string }
     expect(json.error).toMatch(/not approved/)
     expect(JSON.stringify(json)).not.toContain(SECRET)
+  })
+
+  it.each([
+    { label: 'an explicit deep Cloudflare request', provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_PRO, tier: 'deep' },
+    { label: 'a legacy Portal Pro Cloudflare request', provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_PRO },
+    { label: 'a base Flash Cloudflare request', provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_FLASH, tier: 'base' },
+    { label: 'a base Anthropic request', provider: 'anthropic', model: 'claude-haiku-4-5-20251001', tier: 'base' }
+  ] as const)('refuses $label when the server-side tier lacks operator_keys', async ({ provider, model, tier }) => {
+    const store = memoryStore()
+    if (provider === 'cloudflare') await addCloudflareKey(store)
+    else await addProviderKey(store, 'anthropic', ANTHROPIC_SECRET)
+    await approveDevice(store)
+    await store.putTier({
+      id: 'metis',
+      label: 'Métis',
+      entitlements_json: JSON.stringify(['ask']),
+      updated_at: NOW
+    })
+    const providerFetch = vi.fn(sseUpstream('unexpected upstream call'))
+    const body = JSON.stringify({
+      provider,
+      model,
+      ...(tier ? { tier } : {}),
+      messages: [{ role: 'user', content: 'Use the Operator-funded vault key.' }]
+    })
+
+    const res = await handleRequest(await signedRequest('/v1/ask', body, 'ask-not-entitled'), env(), {}, {
+      store,
+      now: NOW,
+      providerFetch
+    })
+
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ ok: false, code: 'not-entitled' })
+    expect(providerFetch).not.toHaveBeenCalled()
   })
 
   it('streams CF REST through SSE and never returns the vault secret', async () => {

@@ -2,8 +2,10 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { IMPORT_CHUNK_SECONDS, type TranscriptLine } from '@shared/ipc'
+import { VAD_V2_MIN_FREE_MEMORY_BYTES } from '@shared/asr-hardware-preference'
 import { vadWindowsFromPcm } from '@shared/vad'
 import {
+  assembleVadPcmAndRelease,
   ImportJobManager,
   decoderSlotIsStale,
   decodeSkipThrough,
@@ -44,6 +46,7 @@ function createManager(overrides: Partial<ConstructorParameters<typeof ImportJob
     enqueueIngest,
     generateRecap,
     updateRecap,
+    freeMemoryBytes: () => 2 * VAD_V2_MIN_FREE_MEMORY_BYTES,
     now: () => 1_700_000_000_000,
     newId: () => 'job-1',
     ...overrides
@@ -150,6 +153,30 @@ describe('ImportJobManager', () => {
     const job = await manager.start(source)
     expect(job.chunkSec).toBe(IMPORT_CHUNK_SECONDS)
     expect(job.pipeline).toBe('vad-v2')
+  })
+
+  it('uses the bounded legacy slab pipeline when free memory cannot safely admit whole-recording VAD', async () => {
+    const { manager, transcribe } = createManager({
+      freeMemoryBytes: () => VAD_V2_MIN_FREE_MEMORY_BYTES - 1
+    })
+
+    const job = await manager.start(source)
+    expect(job.pipeline).toBeUndefined()
+
+    await manager.acceptDecodedChunk('job-1', 0, 1, oneWindowPcm())
+    // Legacy transcribes each bounded decoder slab immediately rather than retaining all slabs for VAD.
+    expect(transcribe).toHaveBeenCalledTimes(1)
+    await manager.finishDecoding('job-1', 1)
+    expect(manager.get('job-1')?.state).toBe('done')
+  })
+
+  it('drops decoder slab references as soon as the contiguous VAD input has been assembled', () => {
+    const slabs = [new Float32Array([1, 2]), new Float32Array([3, 4])]
+
+    const pcm = assembleVadPcmAndRelease(slabs)
+
+    expect([...pcm]).toEqual([1, 2, 3, 4])
+    expect(slabs).toHaveLength(0)
   })
 
   it.each(['transcribing', 'failed'] as const)('MQA-309 restarts %s vad-v1 checkpoints at the new pause-aware boundaries', async (state) => {

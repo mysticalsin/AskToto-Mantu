@@ -6,6 +6,7 @@ import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { looksLikeSecret, providerRefusedPayload } from './redact'
 import type { OperatorStore, VaultKeyRow } from './store'
 import { persistProxyAsk } from './ask-meter'
+import { seatHasEntitlement } from './tiers'
 import { decodeVaultPlaintext, isForbiddenVaultProvider, isVaultLlmProvider } from './vault'
 
 const SYSTEM_CAP = 32_000
@@ -35,7 +36,7 @@ export type UseRequest = {
   /** Managed Portal CF intent. Server authorizes deep; client cannot self-entitle. */
   tier?: 'base' | 'deep'
   /** Seat AskStart.id — stable metering key (F10 dedupe). */
-  clientAskId?: string 
+  clientAskId?: string
   system: string
   messages: UseMessage[]
   image?: OperatorImage
@@ -51,6 +52,8 @@ export type UseFail = {
   upstreamStatus?: number
   upstreamSnippet?: string
 }
+
+export const OPERATOR_KEYS_NOT_ENTITLED = 'This seat is not entitled to use Operator-funded providers.'
 
 async function providerRefused(res: Response, secrets: readonly string[], screenshot = false): Promise<UseFail> {
   // Upstream errors can echo image/prompt content. Screenshot requests expose status only.
@@ -73,8 +76,8 @@ function json(data: unknown, status = 200): Response {
   })
 }
 
-function fail(error: string, status: number): Response {
-  return json({ ok: false, error }, status)
+function fail(error: string, status: number, extra?: Record<string, unknown>): Response {
+  return json({ ok: false, error, ...extra }, status)
 }
 
 function clip(raw: string, cap: number): string {
@@ -385,6 +388,9 @@ export async function handleUse(
   if (!seat || !(await seatAuthorizedForKeys(store, seat, now))) return fail(SEAT_NOT_APPROVED, 403)
   const parsed = parseUseBody(bodyText)
   if (!parsed.ok) return fail(parsed.error, parsed.status)
+  if (!(await seatHasEntitlement(store, seat, now, 'operator_keys'))) {
+    return fail(OPERATOR_KEYS_NOT_ENTITLED, 403, { code: 'not-entitled' })
+  }
   const unlocked = await decryptActiveLlmSecret(store, env.OPERATOR_VAULT_KEY, parsed.req.provider)
   if (!unlocked) return fail('Operator cannot issue a use', 503)
   const def = parsed.req.provider in PROVIDERS ? PROVIDERS[parsed.req.provider as ProviderId] : null

@@ -212,15 +212,18 @@ const api = {
     pinnedLang?: string | null
     profileName?: string
     meetingId?: string
+    captureId?: string
   }): Promise<{ ok: boolean; error?: string; code?: string }> =>
     ipcRenderer.invoke(IPC.cloudSttStart, opts),
-  cloudSttStop: (): Promise<void> => ipcRenderer.invoke(IPC.cloudSttStop),
+  cloudSttStop: (opts?: { force?: boolean; captureId?: string }): Promise<{ timedOut: boolean }> =>
+    ipcRenderer.invoke(IPC.cloudSttStop, opts),
   cloudSttPush: (
     samples: Float32Array,
-    speaker: 'you' | 'them'
-  ): Promise<void> => ipcRenderer.invoke(IPC.cloudSttPush, { samples, speaker }),
-  cloudSttUpdateLang: (asrLanguage: string, pinnedLang?: string | null): Promise<void> =>
-    ipcRenderer.invoke(IPC.cloudSttUpdateLang, { asrLanguage, pinnedLang }),
+    speaker: 'you' | 'them',
+    captureId?: string
+  ): Promise<void> => ipcRenderer.invoke(IPC.cloudSttPush, { samples, speaker, captureId }),
+  cloudSttUpdateLang: (asrLanguage: string, pinnedLang?: string | null, captureId?: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.cloudSttUpdateLang, { asrLanguage, pinnedLang, captureId }),
   cloudSttSetSonioxKey: (key: string): Promise<{ hasKeys: Record<string, boolean> }> =>
     ipcRenderer.invoke(IPC.cloudSttSetSonioxKey, { key }),
   cloudSttClearSonioxKey: (): Promise<{ hasKeys: Record<string, boolean> }> =>

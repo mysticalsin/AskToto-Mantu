@@ -39,3 +39,14 @@ export async function resolveTierAndEntitlements(
   }
   return { tier, entitlements: DEFAULT_TIER_ENTITLEMENTS[tier] ?? [] }
 }
+
+/** Server-side entitlement check for a specific seat. The desktop request can state intent, but only
+ *  this resolved tier configuration authorizes a capability. */
+export async function seatHasEntitlement(
+  store: Pick<OperatorStore, 'getIssuedLicense' | 'listTiers'>,
+  seat: Pick<SeatRow, 'approval' | 'license' | 'license_jti'>,
+  now: number,
+  entitlement: string
+): Promise<boolean> {
+  return (await resolveTierAndEntitlements(store, seat, now)).entitlements.includes(entitlement)
+}

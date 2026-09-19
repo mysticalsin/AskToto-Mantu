@@ -172,6 +172,10 @@ describe('index.ts — one revoke covers the whole privileged surface', () => {
     expect(revokeBody()).toContain('closeIntelligenceWindow()')
   })
 
+  it('closes live cloud-speech sockets on every sign-out and expiry path', () => {
+    expect(revokeBody()).toContain('invalidateCloudSttOwner()')
+  })
+
   it('MQA-154 — the revoke is registered on auth\'s session-cleared hook, not on one IPC handler', () => {
     expect(indexSrc).toMatch(/setSessionClearedHandler\(revokePrivilegedSurface\)/)
   })

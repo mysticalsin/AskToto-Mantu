@@ -450,11 +450,13 @@ describe('bounded close and successful-save receipt join', () => {
       setTrayRecording: vi.fn(),
       setRecordingPowerSaveBlock: vi.fn(),
       discardActiveLiveSpeakerSession: api.discardActiveLiveSpeakerSession,
+      invalidateCloudSttOwner: vi.fn(),
       isMinimized: true,
       onboardingExclusiveLive: () => false,
       currentWidth: 1,
       BAR_WIDTH: 600,
       win: null,
+      self: { webContents: { id: 1 } },
       process: { env: {} },
       join
     })

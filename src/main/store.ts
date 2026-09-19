@@ -1316,19 +1316,31 @@ export function setSonioxApiKey(key: string): void {
 }
 
 export function clearSonioxApiKey(): void {
-  _sonioxKeyCache = ''
   const path = sonioxKeyPath()
-  try {
-    if (existsSync(path)) unlinkSync(path)
-  } catch {
-    /* ignore */
+  const unlinkIfPresent = (target: string): void => {
+    try {
+      unlinkSync(target)
+    } catch (e) {
+      // A concurrent clear already achieved the intended state. Any other error means encrypted
+      // material remains and must reach the caller instead of becoming a false "removed" result.
+      if ((e as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') throw e
+    }
   }
   try {
-    const tmp = `${path}.tmp`
-    if (existsSync(tmp)) unlinkSync(tmp)
-  } catch {
-    /* ignore */
+    // Remove a possible interrupted-write blob first. If that is locked, leave the active key in
+    // place rather than creating a partial clear whose cache cannot truthfully describe the disk.
+    unlinkIfPresent(`${path}.tmp`)
+    unlinkIfPresent(path)
+  } catch (e) {
+    // Do not cache an invented empty value. A subsequent read must inspect the surviving encrypted
+    // file so callers retain an honest "key still seated" state after an AV/backup/ACL failure.
+    _sonioxKeyCache = undefined
+    mainLog.warn('[store] clearSonioxApiKey: could not delete encrypted key file', e)
+    throw new Error(
+      "Couldn't remove your Soniox key. Métis could not delete its encrypted key file. Check that the data folder is writable and the file is not in use."
+    )
   }
+  _sonioxKeyCache = ''
 }
 
 export function getSonioxApiKeyStored(): string {

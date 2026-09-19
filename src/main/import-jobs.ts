@@ -1,3 +1,5 @@
+import { freemem } from 'node:os'
+import { hasVadV2MemoryHeadroom } from '@shared/asr-hardware-preference'
 import { vadWindowsFromPcm } from '@shared/vad'
 import { IMPORT_CHUNK_SECONDS, type SaveMeeting, type TranscriptLine } from '@shared/ipc'
 import { estimateNoteTakingMinutes, wordsFromTexts } from '@shared/time-saved-events'
@@ -121,6 +123,8 @@ export interface ImportJobManagerDeps {
   onCancel?: (jobId: string) => void | Promise<void>
   /** Current persona (settings.mode), snapshotted into the job at start() — see ImportJob.mode. */
   personaMode?: () => string
+  /** Current OS free memory in bytes. Injected by tests; production reads node:os freemem() at admission. */
+  freeMemoryBytes?: () => number
   now?: () => number
   newId?: () => string
   /** How many recordings may occupy the decoded-audio admission slot at once. ASR stays mutexed. The
@@ -182,6 +186,26 @@ function copy<T>(value: T): T {
 }
 
 /**
+ * Assemble the one contiguous VAD input, then explicitly drop the slab references before VAD/ASR runs.
+ * The copy itself necessarily overlaps both representations; retaining the slab array through the
+ * long language, speaker, and transcription phases does not.
+ */
+export function assembleVadPcmAndRelease(slabs: Float32Array[]): Float32Array {
+  try {
+    const total = slabs.reduce((n, slab) => n + slab.length, 0)
+    const pcm = new Float32Array(total)
+    let offset = 0
+    for (const slab of slabs) {
+      pcm.set(slab, offset)
+      offset += slab.length
+    }
+    return pcm
+  } finally {
+    slabs.length = 0
+  }
+}
+
+/**
  * Decoded-audio admission is 1. Each success checkpoint is durable before the decoder may submit the
  * next chunk, so closing the overlay can never discard already-recognized speech. ASR calls are mutexed
  * so Parakeet / the Whisper host stay single-threaded. Recap runs after PCM admission is released.
@@ -219,6 +243,7 @@ export class ImportJobManager {
     const started: string[] = []
     for (const source of sources) {
       const now = this.now()
+      const pipeline = this.selectFreshPipeline()
       const job: ImportJob = {
         jobId: this.newId(),
         sourcePath: source.path,
@@ -231,7 +256,7 @@ export class ImportJobManager {
         totalChunks: 0,
         lines: [],
         chunkSec: IMPORT_CHUNK_SECONDS,
-        pipeline: 'vad-v2',
+        ...(pipeline ? { pipeline } : {}),
         ...(this.deps.personaMode ? { mode: this.deps.personaMode() } : {}),
         createdAt: now,
         updatedAt: now
@@ -629,15 +654,9 @@ export class ImportJobManager {
    * window's real offset into the recording. A final polish pass (fail-open) cleans stutters before save.
    */
   private async consumeVadPcm(job: ImportJob, attempt: SpeakerAttemptState | undefined): Promise<boolean> {
-    const slabs = this.takePcm(job.jobId)
-    const total = slabs.reduce((n, s2) => n + s2.length, 0)
+    const pcm = assembleVadPcmAndRelease(this.takePcm(job.jobId))
+    const total = pcm.length
     job.durationMs = Math.round(total * 1000 / SAMPLE_RATE)
-    const pcm = new Float32Array(total)
-    let off = 0
-    for (const slab of slabs) {
-      pcm.set(slab, off)
-      off += slab.length
-    }
     const windows = vadWindowsFromPcm(pcm, SAMPLE_RATE)
     if (windows.length === 0) {
       await this.fail(job, 'No speech was recognized in this recording.')
@@ -1065,6 +1084,16 @@ export class ImportJobManager {
 
   private newId(): string {
     return this.deps.newId?.() ?? crypto.randomUUID()
+  }
+
+  /** Select once for a fresh job. Low/unknown memory uses the existing fixed-slab, bounded pipeline. */
+  private selectFreshPipeline(): 'vad-v2' | undefined {
+    try {
+      const available = this.deps.freeMemoryBytes ? this.deps.freeMemoryBytes() : freemem()
+      return hasVadV2MemoryHeadroom(available) ? 'vad-v2' : undefined
+    } catch {
+      return undefined
+    }
   }
 }
 

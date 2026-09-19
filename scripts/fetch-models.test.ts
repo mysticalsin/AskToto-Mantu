@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 
-import { download } from './fetch-models.mjs'
+import { download, requiredParakeetPaths } from './fetch-models.mjs'
 import { decompressBzip2, extractUstarBuffer, extractTarBz2Windows } from './tar-bz2-extract.mjs'
 
 async function startServer(listener: RequestListener) {
@@ -68,6 +68,22 @@ describe('ASR model downloader', () => {
     const ensure = readFileSync(new URL('./ensure-asr-assets.mjs', import.meta.url), 'utf8')
     expect(ensure).toMatch(/encoder\.int8\.onnx/)
     expect(ensure).toMatch(/fetch-models\.mjs/)
+  })
+
+  it('requires the bundled smoke WAVs as well as the Parakeet model files', () => {
+    const paths = requiredParakeetPaths('/tmp/metis-asr-fixture')
+
+    expect(paths).toHaveLength(8)
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        join('/tmp/metis-asr-fixture', 'asr', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8', 'test_wavs', 'en.wav'),
+        join('/tmp/metis-asr-fixture', 'asr', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8', 'test_wavs', 'fr.wav'),
+        join('/tmp/metis-asr-fixture', 'asr', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8', 'test_wavs', 'es.wav'),
+        join('/tmp/metis-asr-fixture', 'asr', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8', 'test_wavs', 'de.wav')
+      ])
+    )
+    const source = readFileSync(new URL('./fetch-models.mjs', import.meta.url), 'utf8')
+    expect(source).toMatch(/const requiredFiles = requiredParakeetPaths\(\)/)
   })
 
   it('bounds a connection that never sends response headers and retries clearly', async () => {

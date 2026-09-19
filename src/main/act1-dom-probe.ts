@@ -1,10 +1,10 @@
 /**
  * FITO-185-U: live Act 1 DOM prove helper.
  *
- * After did-finish-load of the real renderer URL + ~2s settle, executeJavaScript collects
- * exclusive/Act1 visibility signals and writes userData/logs/act1-dom.json. Also audits
- * app.act1.dom. Bound when ASKTOTO_MAC_LAUNCH_GATE=1 or while exclusive onboarding is live.
- * Never navigates; never blocks loadURL.
+ * After did-finish-load of the real renderer URL + ~2s settle, executeJavaScript collects only
+ * structural Act 1 readiness signals and writes userData/logs/act1-dom.json. The release launch gate
+ * may bind it; normal onboarding never does. It never reads text, markup, media locations, screenshots,
+ * or arbitrary renderer URLs, and never blocks loadURL.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -34,46 +34,37 @@ export interface BindAct1DomProbeOptions {
   now?: () => Date
 }
 
-/** Compact probe expression — location.search, exclusive flag, Act1 DOM, Loading captions, opacity. */
+/** Compact metadata-only probe expression — booleans, counts, and visual readiness values only. */
 export const ACT1_DOM_PROBE_EXPR =
   "(() => {" +
   " const root = document.getElementById('root');" +
   " const stage = document.querySelector('.onboard-stage');" +
   " const portal = document.querySelector('.onboard-portal-content');" +
   " const wordmark = document.querySelector('.hero-wordmark');" +
-  " const nextBtn = [...document.querySelectorAll('button')].find(b => /\\bNext\\b/i.test((b.textContent || '').trim()));" +
+  " const nextBtn = document.querySelector('button.onboard-cta');" +
   " const video = document.querySelector('.onboard-hero-video video');" +
-  " const bodyText = (document.body && document.body.innerText) || '';" +
   " const portalStyle = portal ? getComputedStyle(portal) : null;" +
   " const nextStyle = nextBtn ? getComputedStyle(nextBtn) : null;" +
   " const params = new URLSearchParams(location.search);" +
   " const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;" +
   " return {" +
   "  ts: new Date().toISOString()," +
-  "  href: location.href," +
-  "  search: location.search," +
   "  exclusiveOnboarding: params.get('exclusiveOnboarding') === '1'," +
   "  rootChildCount: root ? root.childElementCount : -1," +
   "  hasOnboardStage: !!stage," +
   "  portalOpen: !!(stage && stage.classList.contains('onboard-stage--portal-open'))," +
   "  hasHeroWordmark: !!wordmark," +
-  "  heroWordmarkText: wordmark ? (wordmark.textContent || '').trim().slice(0, 80) : null," +
-  "  nextButtonText: nextBtn ? (nextBtn.textContent || '').trim().slice(0, 40) : null," +
   "  hasNextButton: !!nextBtn," +
   "  nextPointerEvents: nextStyle ? nextStyle.pointerEvents : null," +
   "  nextZIndex: nextStyle ? nextStyle.zIndex : null," +
   "  prefersReducedMotion: !!reduced," +
   "  hasHeroVideo: !!video," +
-  "  videoSrc: video ? String(video.currentSrc || video.getAttribute('src') || '').slice(0, 240) : null," +
   "  videoReadyState: video ? video.readyState : null," +
   "  videoNetworkState: video ? video.networkState : null," +
   "  videoCurrentTime: video ? video.currentTime : null," +
   "  videoPaused: video ? video.paused : null," +
-  "  videoClassName: video ? video.className : null," +
-  "  videoError: video && video.error ? String(video.error.code) + ':' + String(video.error.message || '') : null," +
-  "  loadingCaption: /\\bLoading\\b/i.test(bodyText)," +
-  "  agentStatusCaption: /AgentStatus|Starting\\s+M/i.test(bodyText)," +
-  "  bodyTextHead: bodyText.slice(0, 400)," +
+  "  loadingCaption: !!document.querySelector('[data-agent-status=\"loading\"]')," +
+  "  agentStatusCaption: !!document.querySelector('[data-agent-status]')," +
   "  portalContentOpacity: portalStyle ? portalStyle.opacity : null," +
   "  portalContentVisibility: portalStyle ? portalStyle.visibility : null," +
   "  wordmarkOpacity: wordmark ? getComputedStyle(wordmark).opacity : null," +
@@ -113,11 +104,10 @@ export function summarizeAct1Dom(dom: Record<string, unknown>): Record<string, u
     prefersReducedMotion: dom.prefersReducedMotion === true,
     hasHeroVideo: dom.hasHeroVideo === true,
     videoReadyState: typeof dom.videoReadyState === 'number' ? dom.videoReadyState : null,
+    videoNetworkState: typeof dom.videoNetworkState === 'number' ? dom.videoNetworkState : null,
+    videoCurrentTime: typeof dom.videoCurrentTime === 'number' ? dom.videoCurrentTime : null,
     videoPaused: typeof dom.videoPaused === 'boolean' ? dom.videoPaused : null,
-    videoSrcHead: typeof dom.videoSrc === 'string' ? dom.videoSrc.slice(0, 120) : null,
-    videoError: typeof dom.videoError === 'string' ? dom.videoError : null,
-    rootChildCount: typeof dom.rootChildCount === 'number' ? dom.rootChildCount : -1,
-    search: typeof dom.search === 'string' ? dom.search : ''
+    rootChildCount: typeof dom.rootChildCount === 'number' ? dom.rootChildCount : -1
   }
 }
 
@@ -148,23 +138,24 @@ export function bindAct1DomProbe(target: Act1DomProbeTarget, opts: BindAct1DomPr
       void withTimeout(target.executeJavaScript(ACT1_DOM_PROBE_EXPR, true), timeoutMs, 'act1-dom')
         .then((raw: unknown) => {
           const dom =
-            raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : { error: 'non-object', raw: String(raw) }
+            raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : { error: 'non-object' }
+          const summary = summarizeAct1Dom(dom)
           try {
             mkdir(dirname(outPath), { recursive: true })
-            write(outPath, JSON.stringify(dom, null, 2), { mode: 0o600 })
+            write(outPath, JSON.stringify(summary, null, 2), { mode: 0o600 })
           } catch {
             /* best-effort */
           }
           try {
-            opts.audit?.(summarizeAct1Dom(dom))
+            opts.audit?.(summary)
           } catch {
             /* best-effort */
           }
         })
-        .catch((e: unknown) => {
+        .catch(() => {
           const fail = {
             ts: (opts.now ?? (() => new Date()))().toISOString(),
-            error: String(e)
+            error: 'act1-dom-probe-failed'
           }
           try {
             mkdir(dirname(outPath), { recursive: true })
@@ -173,7 +164,7 @@ export function bindAct1DomProbe(target: Act1DomProbeTarget, opts: BindAct1DomPr
             /* ignore */
           }
           try {
-            opts.audit?.({ error: String(e) })
+            opts.audit?.({ error: 'act1-dom-probe-failed' })
           } catch {
             /* ignore */
           }
@@ -190,9 +181,7 @@ export function bindAct1DomProbe(target: Act1DomProbeTarget, opts: BindAct1DomPr
     if (armed || target.isDestroyed()) return
     const miss = {
       ts: (opts.now ?? (() => new Date()))().toISOString(),
-      error: 'act1-dom-miss: never-armed',
-      expectedUrl,
-      liveUrl: target.isDestroyed() ? null : target.getURL()
+      error: 'act1-dom-miss: never-armed'
     }
     try {
       mkdir(dirname(outPath), { recursive: true })
@@ -201,7 +190,7 @@ export function bindAct1DomProbe(target: Act1DomProbeTarget, opts: BindAct1DomPr
       /* ignore */
     }
     try {
-      opts.audit?.({ error: miss.error, search: '' })
+      opts.audit?.({ error: miss.error })
     } catch {
       /* ignore */
     }

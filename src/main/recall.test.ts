@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, renameSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { saveMeeting, isEncryptedFile } from './transcripts'
-import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk } from './recall'
+import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk, meetingTextNeedsRecap } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 
 /**
@@ -104,6 +104,57 @@ describe('recall — language tags round-trip through save → recallRead', () =
     // The exact rewrite the Speaker Intelligence backfill performs: formatTranscript over reparsed lines.
     const { formatTranscript } = await import('./transcripts')
     expect(formatTranscript(r.lines ?? [])).toContain('_[conversation switches to English]_')
+  })
+})
+
+describe('recall — managed summary-only meetings', () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-summary-only-'))
+    testSettings = {
+      meetingsFolder: folder,
+      encryptTranscripts: false,
+      enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: true }
+    } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('lists, searches, reads, edits, and erases a retained summary without retaining a transcript', async () => {
+    const recap = '## Overview:\n\nConfirm the processing region.\n\n## Actions:\n\n- [ ] Confirm region'
+    const saved = await saveMeeting(testSettings, {
+      title: 'Processing region',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      durationMs: 60_000,
+      lines: [{ speaker: 'them', text: 'VERBATIM_MUST_NOT_SURVIVE', t: 1_700_000_000_000 }],
+      recap,
+      recapStatus: 'complete'
+    })
+    const file = basename(saved)
+
+    expect((await listMeetings()).map((meeting) => meeting.file)).toContain(file)
+    expect((await searchMeetings('processing region')).map((meeting) => meeting.file)).toContain(file)
+    expect(readFileSync(saved, 'utf8')).not.toContain('VERBATIM_MUST_NOT_SURVIVE')
+
+    const firstRead = await recallRead(file)
+    expect(firstRead).toMatchObject({ ok: true, recap, recapStatus: 'complete', lines: [] })
+
+    const edited = '## Overview:\n\nProcess in the approved region.\n\n## Actions:\n\n- [ ] Confirm retention'
+    await expect(updateMeetingRecap(testSettings, file, edited, 'complete')).resolves.toEqual({ ok: true })
+    expect(readFileSync(saved, 'utf8')).toContain('## Retention')
+    expect(await recallRead(file)).toMatchObject({ ok: true, recap: edited, lines: [] })
+
+    // A user may rename a file outside Métis. Ownership must still recognize the summary frontmatter
+    // during Delete all, rather than leaving the retained meeting behind indefinitely.
+    const renamed = join(folder, 'hand-renamed-summary.md')
+    renameSync(saved, renamed)
+    await expect(deleteAllMeetings()).resolves.toMatchObject({ ok: true, deleted: 1 })
+    expect(existsSync(renamed)).toBe(false)
   })
 })
 
@@ -397,6 +448,19 @@ describe('recall — updateMeetingRecap', () => {
       expect(linesOf(read)[1]).toMatchObject({ speaker: 'you', text: 'Agreed, ship Q3' })
       expect(read.title).toBe('Q3 planning sync') // frontmatter untouched by a recap edit
     }
+  })
+
+  it('preserves a transcript recap that uses a Retention heading', async () => {
+    const recap = '## Retention\n\nKeep the approved decision record for two years.\n\n## Action items:\n- Confirm policy owner'
+    const file = await saveMeeting(testSettings, { ...meeting, recap })
+    const raw = readFileSync(file, 'utf8')
+
+    expect(meetingTextNeedsRecap(raw)).toBe(false)
+    await expect(recallRead(file)).resolves.toMatchObject({ ok: true, recap })
+
+    const edited = '## Retention\n\nKeep the final record for one year.\n\n## Action items:\n- Confirm policy owner'
+    await expect(updateMeetingRecap(testSettings, file, edited)).resolves.toEqual({ ok: true })
+    await expect(recallRead(file)).resolves.toMatchObject({ ok: true, recap: edited })
   })
 
   it('accepts a bare basename (what the renderer sends)', async () => {

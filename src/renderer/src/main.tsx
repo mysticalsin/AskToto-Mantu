@@ -74,13 +74,6 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
-// Screenshot/dev aid: ?shotbg=dark paints a solid backdrop so the otherwise-transparent overlay
-// is visible in a captured PNG (white-on-white is invisible). No-op in normal use.
-if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('shotbg')) {
-  const sb = new URLSearchParams(location.search).get('shotbg')
-  document.documentElement.classList.add(sb === 'light' ? 'shot-bg-light' : 'shot-bg')
-}
-
 createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <ErrorBoundary>

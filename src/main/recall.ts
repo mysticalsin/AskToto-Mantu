@@ -36,6 +36,25 @@ function frontmatter(text: string): Record<string, string> {
   return out
 }
 
+// `meeting-summary` is a first-class saved meeting under managed summary-only retention. Keep the accepted
+// document kinds and recap boundaries in one place: History, search, recap editing, and erasure must never
+// disagree about whether that privacy-preserving meeting exists.
+const MEETING_DOCUMENT_TYPES = new Set(['meeting-transcript', 'meeting-summary'])
+const FULL_TRANSCRIPT_HEADING_RE = /^## Full transcript\b/m
+const RETENTION_HEADING_RE = /^## Retention\b/m
+
+function isMeetingDocumentType(type: string | undefined): boolean {
+  return !type || MEETING_DOCUMENT_TYPES.has(type)
+}
+
+function recapSectionEndRe(type: string | undefined): RegExp {
+  return type === 'meeting-summary' ? RETENTION_HEADING_RE : FULL_TRANSCRIPT_HEADING_RE
+}
+
+function recapSectionEndIndex(afterNotesHeading: string, type: string | undefined): number {
+  return afterNotesHeading.search(recapSectionEndRe(type))
+}
+
 async function meetingFiles(folder: string): Promise<string[]> {
   try {
     const entries = await readdir(folder, { withFileTypes: true })
@@ -115,7 +134,7 @@ const READ_CACHE_MAX = 2000
  *  to a value nothing invalidates and the meeting would stay invisible until the app restarts. */
 const UNREADABLE = Symbol('unreadable')
 
-/** Read + decode one file (async), parse its frontmatter. Null if it isn't a meeting transcript.
+/** Read + decode one file (async), parse its frontmatter. Null if it isn't a saved meeting.
  *  Served from readCache when the file is unchanged since the last read. */
 async function readMeeting(folder: string, file: string): Promise<Read | null> {
   const path = join(folder, file)
@@ -167,7 +186,7 @@ async function readMeetingUncached(path: string, file: string): Promise<Read | n
       return stub ? { text: '', sum: stub } : null
     }
     const fm = frontmatter(text)
-    if (fm.type && fm.type !== 'meeting-transcript') return null
+    if (!isMeetingDocumentType(fm.type)) return null
     const topics = (fm.topics || '').split(',').map((s) => s.trim()).filter(Boolean)
     return {
       text,
@@ -194,7 +213,7 @@ export function meetingTextNeedsRecap(text: string): boolean {
   const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)
   if (!startMatch) return true
   const afterStart = text.slice(startMatch.index! + startMatch[0].length)
-  const endIdx = afterStart.search(/^## Full transcript/m)
+  const endIdx = recapSectionEndIndex(afterStart, frontmatter(text).type)
   const recap = (endIdx === -1 ? afterStart : afterStart.slice(0, endIdx)).trim()
   return recap.length === 0
 }
@@ -246,6 +265,9 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 
   const fm = frontmatter(text)
+  if (!isMeetingDocumentType(fm.type)) {
+    return { ok: false, error: 'This does not look like a meeting file.' }
+  }
 
   // Recover startedAt from the frontmatter `date` field (ISO string written by saveMeeting).
   let startedAt: number | undefined
@@ -254,8 +276,10 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
     if (!isNaN(ms)) startedAt = ms
   }
 
-  // Extract the recap section (## Notes & follow-ups … up to ## Full transcript, saveMeeting's only
-  // other top-level section). The recap markdown itself starts with its own "## Overview:" heading
+  // Extract the recap section (## Notes & follow-ups … up to its document type's sibling, Full transcript
+  // for a transcript or Retention for a managed summary-only meeting). A transcript recap may legitimately
+  // contain a user-authored “## Retention” subsection, so that heading is never a generic boundary. The
+  // recap markdown itself starts with its own "## Overview:" heading
   // (RECAP_PROMPT's format), so stopping at any "## " would match that nested heading immediately and
   // capture nothing — the end must target the real sibling section specifically. Done as a plain slice +
   // a second, END-only regex rather than one combined lookahead: with the /m flag (needed for the "^"
@@ -265,7 +289,7 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
   const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)
   if (startMatch) {
     const afterStart = text.slice(startMatch.index! + startMatch[0].length)
-    const endIdx = afterStart.search(/^## Full transcript/m)
+    const endIdx = recapSectionEndIndex(afterStart, fm.type)
     recap = (endIdx === -1 ? afterStart : afterStart.slice(0, endIdx)).trim()
   }
 
@@ -495,13 +519,15 @@ function sanitizeRecap(s: string): string {
 /**
  * Rewrite ONLY the recap section of a saved meeting after the fact (fix a mis-heard name, tick an action
  * item, annotate). Replaces the body of the "## Notes & follow-ups" section — the exact span recallRead
- * parses, bounded before the sibling "## Full transcript" heading — with the edited markdown, leaving the
- * frontmatter, the H1, the meta line, and the entire "## Full transcript" section untouched, except for
+ * parses, bounded before the sibling heading for the document type — "## Full transcript" for a transcript
+ * or "## Retention" for a managed summary-only meeting — with the edited
+ * markdown, leaving the frontmatter, the H1, the meta line, and the sibling section untouched, except for
  * an explicitly supplied recapStatus. An omitted status preserves the existing outcome (manual edits
  * are not evidence that an interrupted generation completed). The FILE is
  * never renamed. If the meeting was saved with an empty recap (saveMeeting omits the heading entirely in
- * that case), the section is INSERTED immediately before "## Full transcript" so it parses identically to a
- * normally-saved recap. Same basename guard as renameMeeting/deleteMeeting (no traversal, no index/README).
+ * that case), the section is INSERTED immediately before its transcript/retention sibling so it parses
+ * identically to a normally-saved recap. Same basename guard as renameMeeting/deleteMeeting (no traversal,
+ * no index/README).
  *
  * Encryption is preserved exactly as found: isEncryptedFile (not the live `encryptTranscripts` toggle, which
  * may differ from when this file was saved) decides decrypt-edit-re-encrypt vs. edit-plaintext-in-place, so
@@ -527,12 +553,6 @@ export async function updateMeetingRecap(
 
   const recap = sanitizeRecap(newRecap)
   const body = recap.trim()
-  // Guard the one string that would corrupt the round-trip: recallRead ends the recap at the FIRST line
-  // beginning "## Full transcript". If the edited notes contained that heading, re-reading would swallow
-  // everything after it into the transcript. Reject rather than silently mangle the user's own text.
-  if (/^## Full transcript/m.test(body)) {
-    return { ok: false, error: 'The "## Full transcript" heading is reserved. Please rename it in your notes.' }
-  }
   const fullPath = join(folder, safeName)
   let raw: Buffer
   try {
@@ -546,32 +566,40 @@ export async function updateMeetingRecap(
   const wasEncrypted = isEncryptedFile(fullPath)
   const text = decodeSaved(raw)
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
+  const type = frontmatter(text).type
+  const recapEndRe = recapSectionEndRe(type)
+  // Guard only the actual sibling heading for this document type. A legacy/full transcript recap may use
+  // “## Retention” as an ordinary user-authored subsection and must round-trip without truncation.
+  if (recapEndRe.test(body)) {
+    const heading = type === 'meeting-summary' ? '## Retention' : '## Full transcript'
+    return { ok: false, error: `The "${heading}" heading is reserved. Please rename it in your notes.` }
+  }
 
   let updated: string
   const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)
   if (startMatch) {
     // Existing section: replace its body only. `head` runs up to and including the heading + the newlines
-    // saveMeeting wrote after it; `tail` is the untouched remainder from "## Full transcript" onward (or
+    // saveMeeting wrote after it; `tail` is the untouched transcript/retention sibling remainder (or
     // '' when, defensively, no such section exists). The rebuilt "\n\n" restores the single blank line
     // before the next section so the markdown — and recallRead's slice — stay well-formed.
     const bodyStart = startMatch.index! + startMatch[0].length
     const afterStart = text.slice(bodyStart)
-    const endIdx = afterStart.search(/^## Full transcript/m)
+    const endIdx = recapSectionEndIndex(afterStart, type)
     const head = text.slice(0, bodyStart)
     const tail = endIdx === -1 ? '' : afterStart.slice(endIdx)
     updated = tail
       ? `${head}${body}${body ? '\n\n' : ''}${tail}`
       : `${head}${body}${body ? '\n' : ''}`
   } else {
-    // No notes section yet (meeting saved with an empty recap). Insert one immediately before the
-    // "## Full transcript" heading so recallRead parses it exactly as it would a normally-saved recap.
-    const txMatch = text.match(/^## Full transcript/m)
-    if (!txMatch) return { ok: false, error: 'This does not look like a meeting file.' }
+    // No notes section yet (meeting saved with an empty recap). Insert one immediately before its
+    // transcript/retention sibling so recallRead parses it exactly as it would a normally-saved recap.
+    const sectionMatch = text.match(recapEndRe)
+    if (!sectionMatch) return { ok: false, error: 'This does not look like a meeting file.' }
     if (!body) {
       if (recapStatus === undefined) return { ok: true }
       updated = text // An empty failed attempt still has a durable outcome, without an empty section.
     } else {
-      const at = txMatch.index!
+      const at = sectionMatch.index!
       updated = `${text.slice(0, at)}## Notes & follow-ups\n\n${body}\n\n${text.slice(at)}`
     }
   }
@@ -793,7 +821,7 @@ export function isMeetingConfidentialOnDisk(settings: Settings, file: string): b
 // saveMeeting / saveNote / saveDraftTranscript in transcripts.ts). Used as the ownership check for a
 // file whose NAME no longer matches Métis's own shape (a transcript the user renamed by hand), so an
 // erasure request still erases it.
-const OWNED_FRONTMATTER_TYPES = new Set(['meeting-transcript', 'meeting-transcript-draft', 'note'])
+const OWNED_FRONTMATTER_TYPES = new Set(['meeting-transcript', 'meeting-summary', 'meeting-transcript-draft', 'note'])
 
 /**
  * Tri-state ownership verdict for a file in the meetings folder. The meetings folder is an arbitrary

@@ -247,18 +247,14 @@ async function fetchWhisperLargeV3Turbo() {
 }
 
 // ─── 3. Parakeet TDT 0.6b v3 int8 ───────────────────────────────────────────
+const PARAKEET_SMOKE_WAVS = ['en.wav', 'fr.wav', 'es.wav', 'de.wav']
+
 async function fetchParakeet() {
   console.log('\n[3/4] sherpa-onnx Parakeet TDT 0.6b v3 int8')
   const MODEL_NAME = 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'
   const MODEL_URL = `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${MODEL_NAME}.tar.bz2`
   const destDir = join(RES, 'asr')
-  const modelDir = join(destDir, MODEL_NAME)
-  const requiredFiles = [
-    join(modelDir, 'encoder.int8.onnx'),
-    join(modelDir, 'decoder.int8.onnx'),
-    join(modelDir, 'joiner.int8.onnx'),
-    join(modelDir, 'tokens.txt')
-  ]
+  const requiredFiles = requiredParakeetPaths()
   const archive = join(destDir, `${MODEL_NAME}.tar.bz2`)
   if (requiredFiles.every(filePresent)) {
     // Sweep a stranded archive on the skip path too, not just after a fresh extract below. The download
@@ -289,7 +285,7 @@ async function fetchParakeet() {
   console.log('  [ok] parakeet model extracted')
 }
 
-/** Hard fail naming the four Parakeet files (and Whisper floor) a pack must ship. */
+/** Hard fail naming the Parakeet model, bundled smoke WAVs, and Whisper floor a pack must ship. */
 export function assertRequiredAsrFiles(paths, headline) {
   const missing = paths.filter((p) => !filePresent(p))
   if (!missing.length) return
@@ -304,7 +300,8 @@ export function requiredParakeetPaths(res = RES) {
     join(modelDir, 'encoder.int8.onnx'),
     join(modelDir, 'decoder.int8.onnx'),
     join(modelDir, 'joiner.int8.onnx'),
-    join(modelDir, 'tokens.txt')
+    join(modelDir, 'tokens.txt'),
+    ...PARAKEET_SMOKE_WAVS.map((name) => join(modelDir, 'test_wavs', name))
   ]
 }
 

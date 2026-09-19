@@ -112,8 +112,7 @@ describe('finding 9: renderer crash recovery on the main overlay window', () => 
     expect(body).toMatch(/mainLog\.error\(/)
     expect(body).toMatch(/auditLog\('app\.crash', \{ kind: 'render-process-gone'/)
     expect(body).toMatch(/win\.isDestroyed\(\)/)
-    expect(body).toMatch(/win\.loadURL\(process\.env\['ELECTRON_RENDERER_URL'\]\)/)
-    expect(body).toMatch(/win\.loadFile\(join\(__dirname, '\.\.\/renderer\/index\.html'\)\)/)
+    expect(body).toMatch(/win\.loadURL\(overlayRendererUrl\(\)\)/)
   })
 })
 
