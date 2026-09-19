@@ -23,12 +23,10 @@ The repo can enforce build gates and package shapes. It cannot create Tony's cer
 | Mac App Store | `MAS_PROVISIONING_PROFILE=/path/profile.provisionprofile npm run release:mas` | `CSC_LINK`, `CSC_KEY_PASSWORD`, existing `MAS_PROVISIONING_PROFILE` file |
 | Microsoft Store | `npm run release:win:store` | AppX package builds locally; Microsoft signs Store-submitted packages after upload |
 
-The tag workflow mirrors the direct-release gates, with one interim exception: when Apple
-`CSC_*` / `APPLE_*` secrets are absent, a tagged release still publishes an **ADHOC / not
-Gatekeeper-notarized** Electron DMG (Tony lock 2026-09-06; same unsigned/ad-hoc pattern as
-Metis-Releases v1.8.3/v1.8.4). Set `ASKTOTO_ALLOW_ADHOC_MAC=1` for a local adhoc
-`release:build:mac`. This is not public Gatekeeper-clean — restore Developer ID + notarization
-when those secrets exist. Windows `WIN_CSC_*` remains a hard fail.
+The tag workflow mirrors the direct-release gates with no ad-hoc exception: missing Apple
+`CSC_*` / `APPLE_*` secrets fail the macOS job before it builds or uploads an artifact. The public
+release accepts only Developer ID-signed, notarized macOS artifacts; Windows `WIN_CSC_*` remains a
+hard fail. Local ad-hoc packages are QA-only and must never be uploaded to the public release feed.
 
 Every command above also runs two native-binary provisioning gates first: `scripts/check-ffmpeg-sidecar.mjs`
 (the LGPL decoder sidecar) and `scripts/check-sherpa-platform.mjs` (the Parakeet on-device ASR addon for

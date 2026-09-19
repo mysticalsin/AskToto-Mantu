@@ -78,7 +78,7 @@ describe('MQA-037 — the retry idle cap is a network diagnostic and must not sh
 
 describe('MQA-038 — a renderer crash re-syncs the renderer-owned meeting state', () => {
   const handler = (): string =>
-    sliceBetween("win.webContents.on('render-process-gone', (_e, details) => {", '// FITO-185-L: ASKTOTO_SHOT binds AFTER rendererUrl is known')
+    sliceBetween("win.webContents.on('render-process-gone', (_e, details) => {", 'const rendererUrl = overlayRendererUrl()')
 
   it('resets the fresh-question boundary so a later plain ask cannot inherit the dead meeting', () => {
     const body = handler()

@@ -10,7 +10,16 @@ import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { json } from './http'
 import { providerRefusedPayload } from './redact'
 import type { OperatorStore } from './store'
-import { anthropicMessages, decryptActiveLlmSecret, openaiMessages, parseUseBody, screenshotGatewayHeaders, type UseRequest } from './use'
+import { seatHasEntitlement } from './tiers'
+import {
+  anthropicMessages,
+  decryptActiveLlmSecret,
+  openaiMessages,
+  OPERATOR_KEYS_NOT_ENTITLED,
+  parseUseBody,
+  screenshotGatewayHeaders,
+  type UseRequest
+} from './use'
 
 const ANTHROPIC_MESSAGES = 'https://api.anthropic.com/v1/messages'
 const ASK_FETCH_TIMEOUT_MS = 120_000
@@ -491,6 +500,9 @@ export async function handleAsk(
   if (!seat || !(await seatAuthorizedForKeys(store, seat, now))) return fail(SEAT_NOT_APPROVED, 403)
   const parsed = parseUseBody(bodyText)
   if (!parsed.ok) return fail(parsed.error, parsed.status)
+  if (!(await seatHasEntitlement(store, seat, now, 'operator_keys'))) {
+    return fail(OPERATOR_KEYS_NOT_ENTITLED, 403, { code: 'not-entitled' })
+  }
   let req = parsed.req
   if (req.provider === 'cloudflare') {
     if (req.model.startsWith('workers-ai/')) return fail('model not allowed', 400)

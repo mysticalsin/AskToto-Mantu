@@ -44,6 +44,40 @@ const NONCE_TTL_MS = 10 * 60 * 1000
 const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
 const SESSION_GAP_MS = 2 * 60 * 1000
 
+const ASK_BASE_COLUMNS = [
+  'id',
+  'device_id',
+  'ts',
+  'mode',
+  'skill_id',
+  'skill_version',
+  'provider',
+  'model',
+  'ttft_ms',
+  'total_ms',
+  'input_tokens',
+  'output_tokens',
+  'cache_read',
+  'cache_write',
+  'cache_uncached',
+  'cache_status',
+  'cache_ttl',
+  'outcome',
+  'rating',
+  'prompt_cipher',
+  'prompt_iv',
+  'preview'
+] as const
+
+/** An Ask id is device-owned. Same-device retries update their row; a different device gets no write,
+ *  even if two Worker requests race past any application-level read. */
+function ownedAskUpsertSql(columns: readonly string[]): string {
+  const updateColumns = columns.filter((column) => column !== 'id' && column !== 'device_id')
+  return `INSERT INTO asks (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})
+    ON CONFLICT(id) DO UPDATE SET ${updateColumns.map((column) => `${column} = excluded.${column}`).join(', ')}
+    WHERE device_id = excluded.device_id`
+}
+
 /** Isolate-wide: once the live D1 proves it lacks asks.question_type, stop paying a failed insert per Ask. */
 let askInsertLegacy = false
 /** Isolate-wide: once the live D1 proves it lacks asks.path_tag, skip that column on later inserts. */
@@ -314,12 +348,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         try {
           await db
             .prepare(
-              `INSERT OR REPLACE INTO asks (
-                id, device_id, ts, mode, skill_id, skill_version, provider, model,
-                ttft_ms, total_ms, input_tokens, output_tokens, cache_read, cache_write,
-                cache_uncached, cache_status, cache_ttl, outcome, rating, prompt_cipher, prompt_iv, preview,
-                question_type, path_tag
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              ownedAskUpsertSql([...ASK_BASE_COLUMNS, 'question_type', 'path_tag'])
             )
             .bind(...base, row.question_type, row.path_tag ?? null)
             .run()
@@ -344,12 +373,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         try {
           await db
             .prepare(
-              `INSERT OR REPLACE INTO asks (
-                id, device_id, ts, mode, skill_id, skill_version, provider, model,
-                ttft_ms, total_ms, input_tokens, output_tokens, cache_read, cache_write,
-                cache_uncached, cache_status, cache_ttl, outcome, rating, prompt_cipher, prompt_iv, preview,
-                question_type
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              ownedAskUpsertSql([...ASK_BASE_COLUMNS, 'question_type'])
             )
             .bind(...base, row.question_type)
             .run()
@@ -364,11 +388,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       }
       await db
         .prepare(
-          `INSERT OR REPLACE INTO asks (
-            id, device_id, ts, mode, skill_id, skill_version, provider, model,
-            ttft_ms, total_ms, input_tokens, output_tokens, cache_read, cache_write,
-            cache_uncached, cache_status, cache_ttl, outcome, rating, prompt_cipher, prompt_iv, preview
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ownedAskUpsertSql(ASK_BASE_COLUMNS)
         )
         .bind(...base)
         .run()

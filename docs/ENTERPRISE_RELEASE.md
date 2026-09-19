@@ -1,12 +1,12 @@
 # Enterprise Release Checklist - Métis
 
-**1.8.9 cut ready; release secrets enrolled 2026-09-07 — tagging unblocked.**
+**A public tag is blocked until both production signing lanes pass.**
 
-`GH_TOKEN`, `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` and `WIN_CSC_EXPECTED_SUBJECT` are present on the repo, so `.github/workflows/release.yml` may run on a `v1.8.9` tag. Windows stays Authenticode-signed. The Apple Developer ID secrets are still incomplete — `CSC_KEY_PASSWORD` and `APPLE_APP_SPECIFIC_PASSWORD` are enrolled, `CSC_LINK` / `APPLE_ID` / `APPLE_TEAM_ID` are not — so the macOS DMG ships ADHOC / not Gatekeeper-notarized. It is all five or none: `release.yml` selects `mode=adhoc` if any one is missing, which then forces `-c.mac.identity=null` and discards whatever signature you did have. Pack is EXE + DMG + native via that workflow only. OAuth stays last. This repo does not contain signing material and a merged version bump is not a published release.
-
-An adhoc macOS build no longer marks the release as a GitHub pre-release (Tony, 2026-09-07 — supersedes the 2026-09-06 lock). It did, and the cost was that nothing shipped at all: `/releases/latest` skips pre-releases, so every installed client including Windows kept resolving to v1.6.6. Windows in-app update works and must not be blocked by macOS's interim signing state. `src/main/updater.ts` refuses the in-app path on darwin until Developer ID lands, so a Mac user is sent to the DMG rather than a dead "Restart & install" button.
-
-`v1.8.7` cannot be re-released: it is already a published public release on `mysticalsin/Metis-Releases`, and `scripts/check-version-parity.mjs` refuses to overwrite one. Its asset set is complete except for `Metis-Native-1.8.7.zip` — that single omission is itself proof it was hand-published, since `release.yml` makes that asset mandatory. `v1.8.8` is likewise spent: the tag exists on both remotes but its release run failed in the Windows job, and tags are never force-moved. Ship 1.8.9.
+`.github/workflows/release.yml` requires the full Apple Developer ID and notarization secret set for
+the macOS Electron DMG and a trusted Authenticode identity for Windows. It does not publish an ad-hoc
+macOS artifact. The native SwiftUI ZIP is excluded from public releases until it has its own verified
+Developer ID signing and notarization pipeline. This repository holds no signing material, and a merged
+version bump is not a published release.
 
 Use this before any customer build or public tag.
 
@@ -20,8 +20,8 @@ none of the gates below execute. See `docs/MANTU-IT-REQUEST.md` for the recorded
 - Direct macOS updates publish through GitHub Releases in `electron-builder.yml`.
 - Direct Windows updates publish through the same feed.
 - Windows tagged release scripts fail if `WIN_CSC_*` signing inputs are missing. macOS tagged
-  release uses Developer ID + notarization when Apple secrets are present, or an interim ADHOC /
-  non-notarized DMG when they are absent (Tony lock 2026-09-06; not Gatekeeper-clean).
+  release fails unless Developer ID + notarization inputs are present, then verifies Gatekeeper
+  acceptance before the public publish job can run.
 - `scripts/verify-signing.mjs` checks the produced artifacts on the current platform.
 - Machine-wide managed config can lock SSO, license server, license gate, provider policy, encryption, redaction, and retention.
 - The license server supports activation, heartbeat, revocation, expiry, and seat caps.
@@ -141,8 +141,8 @@ no manual seeding step for this one, unlike the ffmpeg sidecar above.
   electron-builder would publish onto/overwrite an existing release instead of creating a new one.
 - `release-verify` (needs both `release-macos` and `release-windows`) checks that the resulting GitHub
   release actually has both platforms' installers + `latest*.yml` metadata, and marks it draft if not —
-  a single-platform failure must never leave a half-published release live. A notarized Mac artifact
-  is not required: a signed Windows EXE + ADHOC Electron DMG + native zip is a complete publish set.
+  a single-platform failure must never leave a half-published release live. The macOS artifact must be
+  Developer ID-signed and notarized; the unsigned native SwiftUI ZIP is not a public release asset.
 
 ## Direct Release Commands
 

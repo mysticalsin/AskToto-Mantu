@@ -34,7 +34,6 @@ const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindRendererReadiness } from './renderer-readiness'
-import { bindAskTotoShot } from './asktoto-shot'
 import { bindAct1DomProbe } from './act1-dom-probe'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
@@ -621,6 +620,7 @@ import {
   pushCloudSttPcm,
   updateCloudSttLiveLanguage
 } from './cloud-stt/live-session'
+import { cloudSttRequestBelongsToOwner, replaceCloudSttSessionIfCurrent } from './cloud-stt/session-replacement'
 import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { effectiveCloudSttProvider } from '../shared/cloud-stt-provider'
@@ -933,17 +933,13 @@ const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control
 const BAR_COLLAPSED_MAX_HEIGHT = 160
 const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so it isn't a wide click-trap)
 
-/** Content protection hides the window from screen capture. Disable via env for dev/screenshots ONLY —
+/** Content protection hides the window from screen capture. Disable via env for dev-only inspection ONLY —
  *  devEnv() gates it to unpackaged builds so a packaged process can never have capture protection
  *  stripped by `setx ASKTOTO_DISABLE_CP 1` + relaunch (see dev-env.ts).
- *
- * FITO-185-U: while onboardingExclusiveLive(), force OFF. Exclusive Act 1 must be visible to the
- * user AND capturable for QA (screencapture / CGWindow proofs). Do not wait for or apply
- * settings.contentProtection during exclusive; once onboardingDone, settings resume control. */
+ * Onboarding is part of the user-visible app and receives the same protection decision; release
+ * diagnostics prove readiness from bounded metadata rather than by making setup capturable. */
 function contentProtectionOn(): boolean {
   if (devEnv('ASKTOTO_DISABLE_CP')) return false
-  // FITO-185-U: exclusive Act1 capturable — ignore stored contentProtection until exit exclusive.
-  if (onboardingExclusiveLive()) return false
   return getSettings().contentProtection
 }
 
@@ -963,6 +959,30 @@ function privateViewOn(): boolean {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
+type CloudSttIpcOwner = { webContentsId: number; generation: number; captureId?: string }
+let cloudSttIpcGeneration = 0
+let cloudSttIpcOwner: CloudSttIpcOwner | null = null
+
+/** Only the renderer that opened the current live-STT session may receive its tail callbacks. */
+function isCurrentCloudSttOwner(
+  owner: CloudSttIpcOwner,
+  sender: { id: number; isDestroyed: () => boolean }
+): boolean {
+  return (
+    cloudSttIpcOwner === owner &&
+    win?.webContents === sender &&
+    !sender.isDestroyed() &&
+    owner.webContentsId === sender.id
+  )
+}
+
+/** Renderer replacement/close is a hard boundary: never leave cloud sockets or old callbacks alive. */
+function invalidateCloudSttOwner(webContentsId?: number): void {
+  if (webContentsId !== undefined && cloudSttIpcOwner?.webContentsId !== webContentsId) return
+  cloudSttIpcGeneration += 1
+  cloudSttIpcOwner = null
+  void stopCloudSttLive()
+}
 // Fresh-question boundary state (written by IPC.listeningState / IPC.askResetContext / IPC.askStart, all
 // registered below). Module-level rather than closed over the IPC registration so the render-process-gone
 // recovery can re-sync it: main can never observe the listeningState(false) a dead renderer owed it, and a
@@ -1893,6 +1913,25 @@ function onboardingExclusiveLive(): boolean {
 }
 
 /**
+ * Build the trusted overlay URL for both first navigation and renderer-crash recovery. Re-evaluate
+ * onboarding at each navigation: a renderer can die during the exclusive tour, while completing the
+ * tour before a later crash must still return to the ordinary overlay.
+ */
+function overlayRendererUrl(): string {
+  let rendererUrl = process.env['ELECTRON_RENDERER_URL'] ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
+  const params = new URLSearchParams()
+  if (onboardingExclusiveLive()) params.set('exclusiveOnboarding', '1')
+  const demo = devEnv('ASKTOTO_DEMO')
+  if (demo) params.set('demo', demo)
+  if (!params.size) return rendererUrl
+
+  const url = new URL(rendererUrl)
+  for (const [key, value] of params) url.searchParams.set(key, value)
+  rendererUrl = url.href
+  return rendererUrl
+}
+
+/**
  * Constructor `transparent` cannot be flipped later (Electron 39). Exclusive must be created
  * opaque; overlay after onboardingDone must be created transparent. Recreate when they disagree.
  */
@@ -2018,7 +2057,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
     exclusiveOsFullscreenAllowed({
       electronVersion: process.versions.electron,
       allowSfsEnv: process.env.ASKTOTO_ALLOW_SFS,
-      shotEnv: process.env.ASKTOTO_SHOT
+      shotEnv: devEnv('ASKTOTO_SHOT')
     })
   try {
     if (mayOsExclusive && process.platform === 'darwin' && typeof w.setSimpleFullScreen === 'function') {
@@ -2192,7 +2231,7 @@ function createWindow(): void {
   // interface via a native addon, which this app doesn't ship); on Windows the overlay stays visible
   // only on the virtual desktop it was created on.
   if (process.platform !== 'win32') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  // FITO-185-U: contentProtectionOn() returns false while exclusive (capturable Act 1).
+  // Apply the same capture-protection decision during onboarding and normal overlay use.
   win.setContentProtection(contentProtectionOn())
   // Island/bar overlay stays out of Mission Control; exclusive Act 1 must remain findable.
   win.setHiddenInMissionControl?.(!onboardingLive)
@@ -2231,6 +2270,7 @@ function createWindow(): void {
     // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
     streams.forEach((s) => s.abort())
     streams.clear()
+    invalidateCloudSttOwner(self.webContents.id)
     // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
     // a selected recording. Their checkpointed state resumes even if the entire app exits.
     if (win === self) {
@@ -2276,6 +2316,9 @@ function createWindow(): void {
   win.webContents.on('render-process-gone', (_e, details) => {
     mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
     auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
+    // A dead/reloading renderer cannot receive final STT messages or issue Stop. Force-close the live
+    // socket before reload so provider callbacks cannot bleed into the new renderer session.
+    invalidateCloudSttOwner(self.webContents.id)
     // MQA-038: recovery reloads the SAME window, so createWindow()'s crash/recovery guard above never
     // runs and the renderer-OWNED module state survives the renderer that set it. The remounted renderer
     // starts idle and never sends the listeningState(false) it owed us, so `listeningActive` would stay
@@ -2307,36 +2350,11 @@ function createWindow(): void {
       currentWidth = BAR_WIDTH
     }
     if (!win || win.isDestroyed()) return
-    if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
-    else win.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadURL(overlayRendererUrl())
   })
-  // FITO-185-L: ASKTOTO_SHOT binds AFTER rendererUrl is known (see below) — never dump on
-  // about:blank / ready-to-show / early isLoading races (FITO-185-K / K2).
-  let rendererUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href
-  {
-    // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
-    // Packaged builds previously never got query params (only the ELECTRON_RENDERER_URL branch did),
-    // so the renderer could not fail-closed to Act 1 when getSettings raced the Loading strip.
-    const params = new URLSearchParams()
-    if (onboardingExclusiveLive()) params.set('exclusiveOnboarding', '1')
-    if (process.env.ASKTOTO_DEMO) params.set('demo', process.env.ASKTOTO_DEMO)
-    // make the overlay visible in the capture; ASKTOTO_SHOTBG=light tests legibility over a bright backdrop
-    if (process.env.ASKTOTO_SHOT) params.set('shotbg', process.env.ASKTOTO_SHOTBG || 'dark')
-    const qs = params.toString()
-    if (process.env['ELECTRON_RENDERER_URL']) {
-      rendererUrl = process.env['ELECTRON_RENDERER_URL'] + (qs ? `?${qs}` : '')
-    } else if (qs) {
-      rendererUrl = `${rendererUrl}?${qs}`
-    }
-  }
-  // FITO-185-L: optional feel shot — only after did-finish-load of the real index.html,
-  // delay ≥2s, then capturePage + DOM. Never blocks or replaces loadURL below.
-  if (process.env.ASKTOTO_SHOT) {
-    bindAskTotoShot(win.webContents, {
-      shotPath: process.env.ASKTOTO_SHOT,
-      expectedUrl: rendererUrl
-    })
-  }
+  // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
+  // The same helper is used by crash recovery, so the parser-time Act 1 shell cannot disappear there.
+  const rendererUrl = overlayRendererUrl()
   // MQA-318: opt-in release diagnostics only. Preserve app.started's boot semantics and never
   // equate entering createWindow with a loaded, responsive renderer. Register before navigation.
   if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
@@ -2344,8 +2362,8 @@ function createWindow(): void {
       auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
     })
   }
-  // FITO-185-U: live DOM prove — LAUNCH_GATE or always while exclusive. Writes userData/logs/act1-dom.json.
-  if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1' || onboardingExclusiveLive()) {
+  // Bounded launch evidence only. Normal onboarding never serializes renderer state to disk.
+  if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
     bindAct1DomProbe(win.webContents, {
       expectedUrl: rendererUrl,
       outPath: join(app.getPath('userData'), 'logs', 'act1-dom.json'),
@@ -3368,6 +3386,7 @@ function refreshScreenPreprocess(): void {
  */
 function revokePrivilegedSurface(): void {
   refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
+  invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
   if (!requireAuth()) closeIntelligenceWindow()
 }
 setSessionClearedHandler(revokePrivilegedSurface)
@@ -5802,47 +5821,85 @@ function registerIpc(): void {
       pinnedLang?: string | null
       profileName?: string
       meetingId?: string
+      captureId?: string
     }
     const settings = getSettings()
     const profile = resolveEnterpriseLiveProfile(settings.enterpriseLive ?? {})
-    const provider = effectiveCloudSttProvider(profile, p.provider ?? settings.cloudSttProvider)
-    stopCloudSttLive()
-    const result = await startCloudSttLive(
-      {
-        provider,
-        asrLanguage: p.asrLanguage ?? settings.asrLanguage,
-        pinnedLang: p.pinnedLang,
-        profile: { name: p.profileName ?? settings.profile?.name, role: settings.profile?.role },
-        meetingId: p.meetingId,
-        cloudflareToken: getApiKey('cloudflare'),
-        cloudflareBaseUrl: settings.cloudflareBaseUrl,
-        cloudflareAccountId: settings.cloudflareAccountId,
-        gatewayId: resolveCloudSttGatewayId(settings.cfAiGatewayId),
-        sonioxApiKey: getSonioxApiKey() || null
-      },
-      {
-        onFinal: (line) => {
-          win?.webContents.send(IPC.cloudSttFinal, line)
-        },
-        onInterim: (channel, text) => {
-          win?.webContents.send(IPC.cloudSttInterim, { channel, text })
-        },
-        onError: (message) => {
-          win?.webContents.send(IPC.cloudSttError, { message })
-        }
-      }
-    )
+    // Provider authority is settings/profile only. The renderer may report its UI selection but cannot
+    // redirect a live audio stream to another backend by supplying `payload.provider`.
+    const provider = effectiveCloudSttProvider(profile, settings.cloudSttProvider)
+    // An opaque capture identity scopes delayed force-stops to the session that requested them.
+    // Keep the bound modest because this comes from the renderer IPC boundary.
+    const captureId =
+      typeof p.captureId === 'string' && p.captureId.length > 0 && p.captureId.length <= 128
+        ? p.captureId
+        : undefined
+    const owner: CloudSttIpcOwner = {
+      webContentsId: e.sender.id,
+      generation: ++cloudSttIpcGeneration,
+      captureId
+    }
+    cloudSttIpcOwner = owner
+    // A fresh start is an explicit replacement, not a graceful end of the prior capture.
+    const result = await replaceCloudSttSessionIfCurrent({
+      stop: () => stopCloudSttLive(),
+      isCurrent: () => isCurrentCloudSttOwner(owner, e.sender),
+      stale: () => ({ ok: false as const, error: 'Cloud speech session was replaced.', code: 'STALE' }),
+      start: () =>
+        startCloudSttLive(
+          {
+            provider,
+            asrLanguage: p.asrLanguage ?? settings.asrLanguage,
+            pinnedLang: p.pinnedLang,
+            profile: { name: settings.profile?.name, role: settings.profile?.role },
+            meetingId: p.meetingId,
+            captureId,
+            cloudflareToken: getApiKey('cloudflare'),
+            cloudflareBaseUrl: settings.cloudflareBaseUrl,
+            cloudflareAccountId: settings.cloudflareAccountId,
+            gatewayId: resolveCloudSttGatewayId(settings.cfAiGatewayId),
+            sonioxApiKey: getSonioxApiKey() || null,
+            egressAllowlist: getEgressAllowlist()
+          },
+          {
+            onFinal: (line) => {
+              if (isCurrentCloudSttOwner(owner, e.sender)) e.sender.send(IPC.cloudSttFinal, line)
+            },
+            onInterim: (channel, text) => {
+              if (isCurrentCloudSttOwner(owner, e.sender)) {
+                e.sender.send(IPC.cloudSttInterim, { channel, text })
+              }
+            },
+            onError: (message) => {
+              if (isCurrentCloudSttOwner(owner, e.sender)) e.sender.send(IPC.cloudSttError, { message })
+            }
+          }
+        )
+    })
+    if (!result.ok && cloudSttIpcOwner === owner) cloudSttIpcOwner = null
     return result
   })
-  ipcMain.handle(IPC.cloudSttStop, (e) => {
+  ipcMain.handle(IPC.cloudSttStop, async (e, payload: unknown) => {
     assertMainWindow(e)
-    stopCloudSttLive()
+    const owner = cloudSttIpcOwner
+    if (!owner || !isCurrentCloudSttOwner(owner, e.sender)) return { timedOut: false }
+    const p = (payload ?? {}) as { force?: unknown; captureId?: unknown }
+    // A stale renderer continuation must never stop a newer cloud session in the same window. Legacy
+    // unscoped stops remain accepted only for a legacy owner that was started without an identity.
+    if (!cloudSttRequestBelongsToOwner(owner.captureId, p.captureId)) return { timedOut: false }
+    const force = p.force === true
+    const result = await stopCloudSttLive({ graceful: !force, timeoutMs: 5_000 })
+    if (cloudSttIpcOwner === owner) cloudSttIpcOwner = null
+    return result
   })
   ipcMain.handle(IPC.cloudSttPush, (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return
+    const owner = cloudSttIpcOwner
+    if (!owner || !isCurrentCloudSttOwner(owner, e.sender)) return
+    const p = payload as { samples?: unknown; speaker?: unknown; captureId?: unknown }
+    if (!cloudSttRequestBelongsToOwner(owner.captureId, p?.captureId)) return
     if (!takeHotPath('asr-feed')) return
-    const p = payload as { samples?: unknown; speaker?: unknown }
     if (!(p?.samples instanceof Float32Array)) return
     if (p.samples.length > 16_000 * 30) return
     if (p.speaker !== 'you' && p.speaker !== 'them') return
@@ -5850,7 +5907,10 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.cloudSttUpdateLang, (e, payload: unknown) => {
     assertMainWindow(e)
-    const p = (payload ?? {}) as { asrLanguage?: string; pinnedLang?: string | null }
+    const owner = cloudSttIpcOwner
+    if (!owner || !isCurrentCloudSttOwner(owner, e.sender)) return
+    const p = (payload ?? {}) as { asrLanguage?: string; pinnedLang?: string | null; captureId?: unknown }
+    if (!cloudSttRequestBelongsToOwner(owner.captureId, p.captureId)) return
     updateCloudSttLiveLanguage(p.asrLanguage, p.pinnedLang)
   })
   ipcMain.handle(IPC.cloudSttSetSonioxKey, (e, payload: unknown) => {
@@ -8615,6 +8675,8 @@ app.on('before-quit', (e) => {
 })
 
 app.on('will-quit', () => {
+  // The renderer may already be unavailable during shutdown; main owns the socket and must still stop it.
+  invalidateCloudSttOwner()
   // MQA-175: quitting before the boot watch closed on its own is a normal exit, not an early death —
   // clear it here so the next launch is not pushed into safe start by a user who simply quit fast.
   // Own try, like every other step below: a failure here must never skip the sidecar kill.

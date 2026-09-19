@@ -113,15 +113,16 @@ generate && open Metis.xcodeproj`. The `project.yml` spec already wraps `MetisKi
 (macOS + iOS destinations, asset-catalog icon/accent, the Speech usage key). On an Apple-Intelligence Mac
 the on-device model runs live; see `docs/QA-CHECKLIST.md` for the full on-device verification pass.
 
-Release zip for GitHub (`Metis-Native-<version>.zip`, contains `Metis.app`) — **macOS only**:
+Local QA zip (`Metis-Native-<version>.zip`, contains `Metis.app`) — **macOS only**:
 
 ```
 brew install xcodegen          # once
-npm run release:native-mac     # syncs version from package.json, xcodegen, xcodebuild, ditto zip
+npm run package:native-mac:local     # syncs version from package.json, xcodegen, xcodebuild, ditto zip
 ```
 
-That artifact is what tagged Release CI publishes alongside the Electron `.dmg` / Windows `.exe`s.
-It is not produced by electron-builder. `npm run release:native-mac` runs `xcodegen generate` for you.
+This artifact is local-only and is not published by tagged Release CI until a separate Developer ID
+signing and notarization lane exists. It is not produced by electron-builder.
+`npm run package:native-mac:local` runs `xcodegen generate` for you.
 
 ## Roadmap (next, in order)
 

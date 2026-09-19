@@ -6,15 +6,15 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ spawn: vi.fn() }))
+const mocks = vi.hoisted(() => ({ spawn: vi.fn(), managedNodePath: '' }))
 vi.mock('electron')
 vi.mock('node:child_process', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:child_process')>(),
   spawn: mocks.spawn
 }))
 vi.mock('./managed-node', () => ({
-  ensureManagedNode: vi.fn(async () => ({ node: process.execPath, npm: '', source: 'packaged' })),
-  resolveManagedNode: vi.fn(() => ({ node: process.execPath, npm: '', source: 'packaged' }))
+  ensureManagedNode: vi.fn(async () => ({ node: mocks.managedNodePath, npm: '', source: 'packaged' })),
+  resolveManagedNode: vi.fn(() => ({ node: mocks.managedNodePath, npm: '', source: 'packaged' }))
 }))
 
 import { app } from 'electron'
@@ -22,6 +22,7 @@ import { installManagedCli, managedCliEntry, prepareManagedPackageForProduction 
 
 let root: string
 let userData: string
+let managedNodePath: string
 let probe: 'success' | 'wrong-version' | 'nonzero' | 'hang'
 let killBehavior: 'close' | 'never'
 let lastChild: ReturnType<typeof childFixture>
@@ -43,6 +44,16 @@ function childFixture() {
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'metis-dust-install-test-'))
   userData = join(root, 'profile')
+  // The product deliberately runs Dust under the managed official Node runtime (native keytar ABI), not
+  // Electron-as-node. Model the minimum real Node/npm layout so this contract tests the installer instead
+  // of relying on Vitest's own bare node executable having an adjacent npm-cli.js.
+  managedNodePath = join(root, 'managed-node', 'bin', 'node')
+  const npmCli = join(root, 'managed-node', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  mkdirSync(dirname(managedNodePath), { recursive: true })
+  mkdirSync(dirname(npmCli), { recursive: true })
+  writeFileSync(managedNodePath, '')
+  writeFileSync(npmCli, '')
+  mocks.managedNodePath = managedNodePath
   probe = 'success'
   killBehavior = 'close'
   installOptions = undefined
@@ -146,7 +157,7 @@ describe('MQA-317 — Dust runtime dependencies and pre-promotion readiness', ()
     const npmCall = mocks.spawn.mock.calls.find(([, args]) => args.includes('install'))
     expect(npmCall?.[1]).toContain('--omit=dev')
     const readinessCall = mocks.spawn.mock.calls.find(([, args]) => args.includes('--version'))
-    expect(readinessCall?.[0]).toBe(process.execPath)
+    expect(readinessCall?.[0]).toBe(managedNodePath)
     expect(readinessCall?.[1]).toEqual([expect.stringContaining('.tmp-'), '--version'])
     const env = readinessCall?.[2].env as NodeJS.ProcessEnv
     expect(env.HOME).not.toBe(process.env.HOME)

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * Build the pure SwiftUI Métis Mac app (native-app/) into
+ * Build a local QA ZIP for the pure SwiftUI Métis Mac app (native-app/) into
  *   release/Metis-Native-<version>.zip
  *
- * This is NOT the Electron DMG. It is the Apple-Intelligence-native product in
- * native-app/ (MetisKit + SwiftUI shell). Requires macOS + Xcode + xcodegen.
+ * This is NOT the Electron DMG and is not a public release artifact. It is the
+ * Apple-Intelligence-native product in native-app/ (MetisKit + SwiftUI shell).
+ * Requires macOS + Xcode + xcodegen.
  *
  * Usage:
  *   node scripts/build-native-mac.mjs

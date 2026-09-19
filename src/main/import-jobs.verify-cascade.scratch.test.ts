@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { VAD_V2_MIN_FREE_MEMORY_BYTES } from '@shared/asr-hardware-preference'
 import { ImportJobManager, type ImportJob, type ImportJobStore } from './import-jobs'
 
 /**
@@ -46,7 +47,8 @@ describe('scratch: queued import cascade (vad-v1)', () => {
       saveMeeting: async () => '/meetings/a.md',
       enqueueIngest: () => {},
       generateRecap: async () => 'recap',
-      updateRecap: async () => {}
+      updateRecap: async () => {},
+      freeMemoryBytes: () => 2 * VAD_V2_MIN_FREE_MEMORY_BYTES
     })
 
     const jobA = await manager.start(source('a.m4a'))
@@ -88,7 +90,8 @@ describe('scratch: queued import cascade (vad-v1)', () => {
       saveMeeting: async () => '/meetings/a.md',
       enqueueIngest: () => {},
       generateRecap: async () => 'recap',
-      updateRecap: async () => {}
+      updateRecap: async () => {},
+      freeMemoryBytes: () => 2 * VAD_V2_MIN_FREE_MEMORY_BYTES
     })
 
     const jobA = await manager.start(source('a.m4a'))

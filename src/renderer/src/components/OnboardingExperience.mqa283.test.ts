@@ -65,6 +65,19 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).toMatch(/role="alert"/)
   })
 
+  it('keeps encrypted-profile recovery in the active Ready flow and retries only after it succeeds', () => {
+    const v2 = experienceSrc.slice(experienceSrc.indexOf('export function OnboardingV2'))
+    const ready = experienceSrc.slice(experienceSrc.indexOf('function ActReady'), experienceSrc.indexOf('function prefersReducedMotion'))
+    expect(v2).toMatch(/recoverEncryptedProfile,\s*patch/)
+    expect(v2).toMatch(/recoverEncryptedProfile=\{recoverEncryptedProfile\}/)
+    expect(experienceSrc).toMatch(/interface OnboardingExperienceProps[\s\S]*?recoverEncryptedProfile\?:/)
+    expect(experienceSrc).toMatch(/recoverEncryptedProfile=\{recoverEncryptedProfile\}/)
+    expect(ready).toMatch(/await recoverEncryptedProfile\(\)/)
+    expect(ready).toMatch(/if \(!result\.ok\)/)
+    expect(ready.indexOf('await recoverEncryptedProfile()')).toBeLessThan(ready.indexOf('await attemptFinish()'))
+    expect(ready).not.toMatch(/patch\(/)
+  })
+
   it('reopens the Ready stage when the awaited save rejects', () => {
     expect(experienceSrc).toMatch(
       /catch \(error\) \{\s*doneRef\.current = false\s*document\.querySelector\('\.onboard-stage'\)\?\.classList\.remove\('onboard-stage--portal-close'\)/
@@ -99,7 +112,7 @@ describe('MQA-283 — adding a personal AI provider from Ready is optional, neve
   it('the Get started CTA never depends on onOpenAiSettings, or on any provider state at all', () => {
     const ctaMatch = experienceSrc.match(/onClick=\{\(\) => attemptFinish\(\)\}\s*\n\s*disabled=\{blocked\}/)
     expect(ctaMatch).not.toBeNull()
-    expect(experienceSrc).toMatch(/const blocked = completion\.busy \|\| !asrReady/)
+    expect(experienceSrc).toMatch(/const blocked = completion\.busy \|\| recoveryBusy \|\| !asrReady/)
   })
 })
 

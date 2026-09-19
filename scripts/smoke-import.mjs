@@ -5,7 +5,7 @@
  * covers the hidden decoder, chunk IPC, on-device Parakeet, durable meeting save, and recap fallback.
  */
 import { _electron as electron } from 'playwright'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -20,6 +20,8 @@ if (!existsSync(fixture)) throw new Error(`Missing bundled audio fixture: ${fixt
 
 const userData = mkdtempSync(join(tmpdir(), 'asktoto-import-smoke-'))
 const meetingsFolder = join(userData, 'meetings')
+const FIRST_WINDOW_TIMEOUT_MS = 30_000
+const CONTROL_TIMEOUT_MS = 5_000
 // Electron does not honor --user-data-dir for app.getPath('userData'); the app's real isolation hook is
 // the ASKTOTO_USERDATA env var (src/main/index.ts), so isolate the smoke test's profile through that
 // instead of the flag, which would otherwise silently run against the developer's real profile.
@@ -36,6 +38,14 @@ const env = {
 let app
 const rendererDiagnostics = []
 const watchedPages = new WeakSet()
+
+function withTimeout(operation, timeoutMs, message) {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+  })
+  return Promise.race([operation, timeout]).finally(() => clearTimeout(timer))
+}
 
 function watchPage(page) {
   if (watchedPages.has(page)) return
@@ -68,10 +78,52 @@ async function reportLaunchFailure() {
   if (!app) return
   const pages = app.windows()
   const descriptions = await Promise.all(pages.map(describePage))
+  const auditPath = join(userData, 'logs', 'audit.log')
+  const knownEvents = new Set(['app.started', 'app.renderer.ready', 'app.crash', 'app.unresponsive'])
+  let auditEvents = []
+  try {
+    auditEvents = existsSync(auditPath)
+      ? readFileSync(auditPath, 'utf8')
+          .split('\n')
+          .flatMap((line) => {
+            try {
+              const event = JSON.parse(line).event
+              return typeof event === 'string' && knownEvents.has(event) ? [event] : []
+            } catch {
+              return []
+            }
+          })
+      : []
+  } catch {
+    auditEvents = []
+  }
   console.error(`[smoke-import] launch diagnostics (${pages.length} window${pages.length === 1 ? '' : 's'}):`)
   for (const description of descriptions) console.error(description)
   for (const diagnostic of rendererDiagnostics) console.error(diagnostic)
+  console.error(`[smoke-import] safe launch audit events: ${JSON.stringify(auditEvents)}`)
   console.error(`[smoke-import] isolated userData: ${userData}`)
+}
+
+async function waitForFirstWindow() {
+  return withTimeout(
+    app.firstWindow({ timeout: FIRST_WINDOW_TIMEOUT_MS }),
+    FIRST_WINDOW_TIMEOUT_MS,
+    `Playwright did not expose an Electron window within ${FIRST_WINDOW_TIMEOUT_MS}ms.`
+  )
+}
+
+async function closeSmokeApp() {
+  await withTimeout(
+    app?.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => {}),
+    CONTROL_TIMEOUT_MS,
+    'Timed out while requesting smoke-app shutdown.'
+  ).catch(() => {})
+  await withTimeout(app?.close().catch(() => {}), CONTROL_TIMEOUT_MS, 'Timed out while closing the smoke app.').catch(() => {})
+  try {
+    app?.process()?.kill('SIGKILL')
+  } catch {
+    /* process already exited */
+  }
 }
 
 try {
@@ -79,9 +131,10 @@ try {
     ? { executablePath: packagedExecutable, env }
     : { args: [root], env })
   app.on('window', watchPage)
-  const page = await app.firstWindow()
-  watchPage(page)
+  let page
   try {
+    page = await waitForFirstWindow()
+    watchPage(page)
     await page.waitForFunction(() => !!window.toto, undefined, { timeout: 30_000 })
   } catch (error) {
     await reportLaunchFailure()
@@ -131,7 +184,6 @@ try {
   // Métis keeps the process alive after its last window closes so background meeting reconciliation
   // continues for real users. Explicitly exit this disposable test process instead of leaving the
   // Playwright runner waiting on that deliberate production behavior.
-  await app?.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => {})
-  await app?.close().catch(() => {})
+  await closeSmokeApp()
   rmSync(userData, { recursive: true, force: true })
 }

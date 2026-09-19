@@ -20,7 +20,12 @@ export function readThemeCookie(request: Request): ThemePreference {
   for (const part of raw.split(';')) {
     const [k, ...rest] = part.trim().split('=')
     if (k !== THEME_COOKIE) continue
-    const v = decodeURIComponent(rest.join('=').trim())
+    let v: string
+    try {
+      v = decodeURIComponent(rest.join('=').trim())
+    } catch {
+      return 'system'
+    }
     if (v === 'light' || v === 'dark' || v === 'system') return v
   }
   return 'system'

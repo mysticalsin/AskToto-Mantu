@@ -223,11 +223,32 @@ class FakeWorker {
 
 const { useListen } = await import('./listen')
 type ListenApi = ReturnType<typeof useListen>
-type Engine = 'parakeet' | 'whisper' | 'apple'
+type Engine = 'parakeet' | 'whisper' | 'apple' | 'cloud'
+type EnterpriseLive = Parameters<typeof useListen>[7]
+
+const cloudOnlyProfile: NonNullable<EnterpriseLive> = {
+  managed: true,
+  inferenceMode: 'cloud-only',
+  summaryOnly: false
+}
+
+function renderWithEnterprise(engine: Engine, enterpriseLive?: EnterpriseLive): ListenApi {
+  host.beginRender()
+  return useListen(
+    undefined,
+    undefined,
+    undefined,
+    '',
+    undefined,
+    engine,
+    'fast',
+    enterpriseLive,
+    engine === 'cloud' ? 'cloudflare-nova3' : undefined
+  )
+}
 
 function render(engine: Engine = 'parakeet'): ListenApi {
-  host.beginRender()
-  return useListen(undefined, undefined, undefined, '', undefined, engine, 'fast')
+  return renderWithEnterprise(engine, engine === 'cloud' ? cloudOnlyProfile : undefined)
 }
 
 function renderBeforeSettingsResolve(): ListenApi {
@@ -277,6 +298,11 @@ beforeEach(() => {
       appleSpeechFeed: vi.fn(async () => ({ text: '', name: undefined })),
       asrBundled: vi.fn(async () => true),
       speakerEmbed: vi.fn(async () => ({})),
+      cloudSttStart: vi.fn(async () => ({ ok: true })),
+      cloudSttPush: vi.fn(async () => {}),
+      cloudSttStop: vi.fn(async () => ({ timedOut: false })),
+      onCloudSttFinal: vi.fn(() => () => {}),
+      onCloudSttError: vi.fn(() => () => {}),
       getPermissions: vi.fn(() => getPermissionsImpl())
     },
     addEventListener: () => {},
@@ -304,6 +330,218 @@ afterEach(() => {
 })
 
 describe('live audio transport identity', () => {
+  it('force-stops a delayed cloud start after both capture sources fail', async () => {
+    let resolveCloudStart!: (result: { ok: true }) => void
+    const offFinal = vi.fn()
+    const offError = vi.fn()
+    vi.mocked(window.toto.cloudSttStart).mockImplementation(
+      () => new Promise((resolve) => void (resolveCloudStart = resolve))
+    )
+    vi.mocked(window.toto.onCloudSttFinal).mockReturnValue(offFinal)
+    vi.mocked(window.toto.onCloudSttError).mockReturnValue(offError)
+    getUserMediaImpl = async () => {
+      throw new Error('Synthetic microphone refusal')
+    }
+    getDisplayMediaImpl = async () => {
+      throw new Error('Synthetic system-audio refusal')
+    }
+
+    let api = render('cloud')
+    await api.start('both', 'fast', 'cloud', 'English', 123)
+    await settle()
+
+    expect(window.toto.cloudSttStart).toHaveBeenCalledWith(
+      expect.objectContaining({ captureId: 'listen:1' })
+    )
+    expect(window.toto.cloudSttStop).toHaveBeenNthCalledWith(1, {
+      force: true,
+      captureId: 'listen:1'
+    })
+    expect(vi.mocked(window.toto.onCloudSttFinal)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(window.toto.onCloudSttError)).toHaveBeenCalledTimes(1)
+    expect(offFinal).toHaveBeenCalledTimes(1)
+    expect(offError).toHaveBeenCalledTimes(1)
+
+    // This is the dangerous ordering: the renderer has already failed capture, but main accepts the
+    // delayed start afterwards.  The acknowledgement must issue a second, identity-scoped close.
+    resolveCloudStart({ ok: true })
+    await settle()
+    api = render('cloud')
+
+    expect(window.toto.cloudSttStop).toHaveBeenNthCalledWith(2, {
+      force: true,
+      captureId: 'listen:1'
+    })
+    expect(vi.mocked(window.toto.setListeningState).mock.calls).toEqual([
+      [true, 123],
+      [false, 123]
+    ])
+    expect(api.listening).toBe(false)
+    expect(api.capturing).toBe(false)
+  })
+
+  it('closes opened capture channels when cloud speech fails after startup admission', async () => {
+    let resolveCloudStart!: (result: { ok: false; error: string }) => void
+    vi.mocked(window.toto.cloudSttStart).mockImplementation(
+      () => new Promise((resolve) => void (resolveCloudStart = resolve))
+    )
+
+    let api = render('cloud')
+    await api.start('both', 'fast', 'cloud', 'English', 123)
+    await settle()
+
+    const micTrack = streams.find((entry) => entry.kind === 'mic')?.track
+    const systemTrack = streams.find((entry) => entry.kind === 'system')?.track
+    if (!micTrack || !systemTrack) throw new Error('cloud startup did not open both capture channels')
+    expect(micTrack.stop).not.toHaveBeenCalled()
+    expect(systemTrack.stop).not.toHaveBeenCalled()
+
+    resolveCloudStart({ ok: false, error: 'Synthetic cloud setup rejection' })
+    await settle()
+    api = render('cloud')
+
+    expect(micTrack.stop).toHaveBeenCalledTimes(1)
+    expect(systemTrack.stop).toHaveBeenCalledTimes(1)
+    expect(window.toto.cloudSttStop).toHaveBeenCalledWith({
+      force: true,
+      captureId: 'listen:1'
+    })
+    expect(vi.mocked(window.toto.setListeningState).mock.calls).toEqual([
+      [true, 123],
+      [false, 123]
+    ])
+    expect(api.listening).toBe(false)
+    expect(api.capturing).toBe(false)
+  })
+
+  it('closes opened capture channels when cloud speech startup rejects after admission', async () => {
+    let rejectCloudStart!: (error: Error) => void
+    vi.mocked(window.toto.cloudSttStart).mockImplementation(
+      () => new Promise((_, reject) => void (rejectCloudStart = reject))
+    )
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      let api = render('cloud')
+      await api.start('both', 'fast', 'cloud', 'English', 123)
+      await settle()
+
+      const micTrack = streams.find((entry) => entry.kind === 'mic')?.track
+      const systemTrack = streams.find((entry) => entry.kind === 'system')?.track
+      if (!micTrack || !systemTrack) throw new Error('cloud startup did not open both capture channels')
+      rejectCloudStart(new Error('Synthetic cloud startup exception'))
+      await settle()
+      api = render('cloud')
+
+      expect(micTrack.stop).toHaveBeenCalledTimes(1)
+      expect(systemTrack.stop).toHaveBeenCalledTimes(1)
+      expect(window.toto.cloudSttStop).toHaveBeenCalledWith({
+        force: true,
+        captureId: 'listen:1'
+      })
+      expect(vi.mocked(window.toto.setListeningState).mock.calls).toEqual([
+        [true, 123],
+        [false, 123]
+      ])
+      expect(api.listening).toBe(false)
+      expect(api.capturing).toBe(false)
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
+  it('releases admitted media when Parakeet setup is rejected after a cloud-only policy change', async () => {
+    let resolveEnsure!: (value: Awaited<ReturnType<typeof window.toto.parakeetEnsure>>) => void
+    vi.mocked(window.toto.parakeetStatus).mockResolvedValue({ ready: false, addonError: null })
+    vi.mocked(window.toto.parakeetEnsure).mockImplementation(
+      () => new Promise((resolve) => void (resolveEnsure = resolve))
+    )
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await render('parakeet').start('both', 'fast', 'parakeet', 'English', 123)
+      await settle()
+
+      const micTrack = streams.find((entry) => entry.kind === 'mic')?.track
+      const systemTrack = streams.find((entry) => entry.kind === 'system')?.track
+      if (!micTrack || !systemTrack) throw new Error('Parakeet startup did not open both capture channels')
+
+      renderWithEnterprise('parakeet', cloudOnlyProfile)
+      resolveEnsure({ ok: false, error: 'Synthetic Parakeet setup rejection' })
+      await settle()
+      const api = renderWithEnterprise('parakeet', cloudOnlyProfile)
+
+      expect(micTrack.stop).toHaveBeenCalledTimes(1)
+      expect(systemTrack.stop).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(window.toto.setListeningState).mock.calls).toEqual([
+        [true, 123],
+        [false, 123]
+      ])
+      expect(api.listening).toBe(false)
+      expect(api.capturing).toBe(false)
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
+  it('releases admitted media when repeated Parakeet failures cannot fall back under CLOUD_ONLY', async () => {
+    vi.mocked(window.toto.parakeetFeed).mockRejectedValue(new Error('Synthetic Parakeet decode failure'))
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await render('parakeet').start('both', 'fast', 'parakeet', 'English', 123)
+      await settle()
+
+      const micTrack = streams.find((entry) => entry.kind === 'mic')?.track
+      const systemTrack = streams.find((entry) => entry.kind === 'system')?.track
+      const worklet = worklets.at(-1)
+      if (!micTrack || !systemTrack || !worklet) throw new Error('Parakeet session did not open capture channels')
+
+      renderWithEnterprise('parakeet', cloudOnlyProfile)
+      for (let failure = 0; failure < 3; failure += 1) {
+        worklet.emit({ audio: Float32Array.from([0.2]), partial: false })
+        await settle()
+      }
+      const api = renderWithEnterprise('parakeet', cloudOnlyProfile)
+
+      expect(micTrack.stop).toHaveBeenCalledTimes(1)
+      expect(systemTrack.stop).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(window.toto.setListeningState).mock.calls).toEqual([
+        [true, 123],
+        [false, 123]
+      ])
+      expect(api.listening).toBe(false)
+      expect(api.capturing).toBe(false)
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
+  it('does not bypass an already-started Stop drain when a late Parakeet failure reaches CLOUD_ONLY', async () => {
+    let rejectFeed!: (reason?: unknown) => void
+    vi.mocked(window.toto.parakeetFeed).mockImplementation(
+      () => new Promise((_, reject) => void (rejectFeed = reject))
+    )
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const api = await start('parakeet', 123)
+      const track = streams.find((entry) => entry.kind === 'system')?.track
+      const worklet = worklets.at(-1)
+      if (!track || !worklet) throw new Error('Parakeet session did not open system capture')
+
+      worklet.emit({ audio: Float32Array.from([0.2]), partial: false })
+      await settle()
+      sealMode.acknowledge = false
+      api.stop()
+      renderWithEnterprise('parakeet', cloudOnlyProfile)
+      rejectFeed(new Error('Synthetic late Parakeet decode failure'))
+      await settle()
+
+      expect(track.stop).not.toHaveBeenCalled()
+      expect(vi.mocked(window.toto.setListeningState).mock.calls).toEqual([[true, 123]])
+      expect(renderWithEnterprise('parakeet', cloudOnlyProfile).listening).toBe(true)
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
   it('uses the supplied meeting start for start and sealed Stop despite later clock changes', async () => {
     const api = await start('parakeet', 123)
     vi.setSystemTime(1_800_000_000_000)
@@ -366,6 +604,101 @@ describe('live audio transport identity', () => {
     render().stop()
     await vi.advanceTimersByTimeAsync(1)
     expect(window.toto.setListeningState).toHaveBeenLastCalledWith(false, 456)
+  })
+
+  it('cloud Stop waits for accepted PCM and keeps the final subscription through provider flush', async () => {
+    let resolvePush!: () => void
+    let resolveStop!: (value: { timedOut: boolean }) => void
+    let onFinal: ((line: { id: string; speaker: 'you' | 'them'; text: string; name: string }) => void) | null = null
+    vi.mocked(window.toto.cloudSttPush).mockImplementationOnce(
+      () => new Promise<void>((resolve) => void (resolvePush = resolve))
+    )
+    vi.mocked(window.toto.cloudSttStop).mockImplementationOnce(
+      () => new Promise<{ timedOut: boolean }>((resolve) => void (resolveStop = resolve))
+    )
+    vi.mocked(window.toto.onCloudSttFinal).mockImplementation((cb) => {
+      onFinal = cb
+      return () => void (onFinal = null)
+    })
+
+    const api = await start('cloud', 123)
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.2]), partial: false })
+    await settle()
+    expect(window.toto.cloudSttPush).toHaveBeenCalledOnce()
+    expect(window.toto.cloudSttPush).toHaveBeenCalledWith(expect.any(Float32Array), 'them', 'listen:1')
+
+    api.stop()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(window.toto.cloudSttStop).not.toHaveBeenCalled()
+
+    resolvePush()
+    await settle()
+    await vi.advanceTimersByTimeAsync(60)
+    expect(window.toto.cloudSttStop).toHaveBeenCalledWith({ captureId: 'listen:1' })
+    // The app's automatic recap is gated on `listening === false`, so it must not become eligible while
+    // the provider still owns the terminal response.
+    expect(render('cloud').listening).toBe(true)
+    expect(window.toto.setListeningState).toHaveBeenCalledTimes(1)
+
+    onFinal?.({ id: 'final-cloud-1', speaker: 'them', text: 'Final cloud words.', name: 'Guest' })
+    await settle()
+    expect(render('cloud').text()).toBe('THEM (Guest): Final cloud words.')
+
+    resolveStop({ timedOut: false })
+    await settle()
+    expect(render('cloud').listening).toBe(false)
+    expect(window.toto.setListeningState).toHaveBeenLastCalledWith(false, 123)
+  })
+
+  it('a superseded cloud push cannot hold the next meeting Stop hostage', async () => {
+    let resolveOldPush!: () => void
+    vi.mocked(window.toto.cloudSttPush).mockImplementationOnce(
+      () => new Promise<void>((resolve) => void (resolveOldPush = resolve))
+    )
+
+    const first = await start('cloud', 123)
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.2]), partial: false })
+    await settle()
+    first.stop()
+    await vi.advanceTimersByTimeAsync(60)
+    expect(window.toto.cloudSttStop).not.toHaveBeenCalled()
+
+    const second = await start('cloud', 456)
+    second.stop()
+    await vi.advanceTimersByTimeAsync(60)
+    expect(window.toto.cloudSttStop).toHaveBeenCalledWith({ captureId: 'listen:2' })
+
+    resolveOldPush()
+    await settle()
+  })
+
+  it('a local replacement force-closes an unfinished cloud finalization', async () => {
+    let resolveCloudStop!: (value: { timedOut: boolean }) => void
+    vi.mocked(window.toto.cloudSttStop).mockImplementationOnce(
+      () => new Promise<{ timedOut: boolean }>((resolve) => void (resolveCloudStop = resolve))
+    )
+
+    const first = await start('cloud', 123)
+    first.stop()
+    await vi.advanceTimersByTimeAsync(60)
+    expect(window.toto.cloudSttStop).toHaveBeenCalledOnce()
+
+    await start('parakeet', 456)
+    await settle()
+    expect(window.toto.cloudSttStop).toHaveBeenLastCalledWith({ force: true, captureId: 'listen:1' })
+
+    resolveCloudStop({ timedOut: false })
+    await settle()
+  })
+
+  it('unmount force-closes a live cloud session and detaches its subscriptions', async () => {
+    const offFinal = vi.fn()
+    vi.mocked(window.toto.onCloudSttFinal).mockReturnValue(offFinal)
+    await start('cloud', 123)
+    host.unmount()
+    await settle()
+    expect(window.toto.cloudSttStop).toHaveBeenCalledWith({ force: true, captureId: 'listen:1' })
+    expect(offFinal).toHaveBeenCalledOnce()
   })
 
   it.each(['parakeet', 'apple'] as const)('%s queues the window owner and keeps legacy ASR usable', async engine => {

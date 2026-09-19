@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { preferredFreshAsrEngine } from './asr-hardware-preference'
+import {
+  hasVadV2MemoryHeadroom,
+  preferredFreshAsrEngine,
+  VAD_V2_MIN_FREE_MEMORY_BYTES
+} from './asr-hardware-preference'
 
 const GIB = 1024 ** 3
 
@@ -18,6 +22,20 @@ describe('preferredFreshAsrEngine', () => {
     'uses conservative Parakeet for invalid or unknown physical memory %s',
     (totalMemoryBytes) => {
       expect(preferredFreshAsrEngine(totalMemoryBytes)).toBe('parakeet')
+    }
+  )
+})
+
+describe('hasVadV2MemoryHeadroom', () => {
+  it('admits whole-recording VAD only when the free-RAM floor is met', () => {
+    expect(hasVadV2MemoryHeadroom(VAD_V2_MIN_FREE_MEMORY_BYTES - 1)).toBe(false)
+    expect(hasVadV2MemoryHeadroom(VAD_V2_MIN_FREE_MEMORY_BYTES)).toBe(true)
+  })
+
+  it.each([undefined, null, NaN, Infinity, -Infinity, -1, 0, '3 GiB'])(
+    'fails closed for invalid free-memory readings: %s',
+    (freeMemoryBytes) => {
+      expect(hasVadV2MemoryHeadroom(freeMemoryBytes)).toBe(false)
     }
   )
 })

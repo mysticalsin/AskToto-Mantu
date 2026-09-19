@@ -223,22 +223,19 @@ describe('MQA-176 — contentProtectionOn() is the single decision, and it is ho
     expect(contentProtectionOn(packagedDevEnv, false)).toBe(false)
   })
 
-  it('FITO-185-U — exclusive onboarding forces contentProtection OFF even when settings say ON', () => {
-    // Exclusive Act 1 must be visible to the user AND capturable for QA (screencapture / CGWindow).
-    // Do not wait for settings.contentProtection during exclusive.
-    expect(contentProtectionOn(packagedDevEnv, true, true)).toBe(false)
+  it('MQA-338 — onboarding preserves the user-selected exclusion instead of opening a capture window', () => {
+    // Launch readiness is metadata-only. It must never buy a screenshot-able onboarding surface by
+    // overriding the privacy toggle for the duration of setup.
+    expect(contentProtectionOn(packagedDevEnv, true, true)).toBe(true)
     expect(contentProtectionOn(packagedDevEnv, false, true)).toBe(false)
-  })
-
-  it('FITO-185-U — after exclusive exits, settings.contentProtection resumes control', () => {
     expect(contentProtectionOn(packagedDevEnv, true, false)).toBe(true)
     expect(contentProtectionOn(packagedDevEnv, false, false)).toBe(false)
   })
 
-  it('FITO-185-U — contentProtectionOn body mentions onboardingExclusiveLive', () => {
+  it('MQA-338 — contentProtectionOn has no onboarding bypass', () => {
     const src = sliceBetween(indexSrc, 'function contentProtectionOn(): boolean {', '\n}')
-    expect(src).toMatch(/onboardingExclusiveLive\(\)/)
-    expect(src).toMatch(/FITO-185-U/)
+    expect(src).not.toMatch(/onboardingExclusiveLive\(\)/)
+    expect(src).not.toMatch(/FITO-185-U/)
   })
 
   it('MQA-176 — a rebuilt overlay re-applies the decision at construction', () => {

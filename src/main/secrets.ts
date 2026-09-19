@@ -37,6 +37,7 @@ import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX } from '@shared/encrypted-profile-recovery'
 
 const KEY_FILE = 'secret-key.bin'
 const ALG = 'aes-256-gcm' as const
@@ -60,7 +61,7 @@ export class KeychainKeyRecoveryError extends Error {
           ? 'the original macOS Keychain'
           : 'the original system credential store'
     super(
-      `Métis could not unlock the existing encrypted profile. Unlock or grant access to ${credentialStore}, then try again. No data was changed.`
+      `${ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX} Unlock or grant access to ${credentialStore}, then try again. No data was changed.`
     )
     this.name = 'KeychainKeyRecoveryError'
   }

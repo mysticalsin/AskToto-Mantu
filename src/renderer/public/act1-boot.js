@@ -4,6 +4,9 @@
  * Does not load or wait on the hero mp4.
  */
 (function () {
+  // The static shell exists solely for main's explicit exclusive-onboarding URL. A normal overlay
+  // starts transparent and must not run a stale shell observer before React paints its own surface.
+  if (!document.documentElement.classList.contains('exclusive-onboarding-boot')) return
   function markPainted() {
     document.documentElement.classList.add('act1-first-paint')
     document.documentElement.dataset.act1FirstPaint = '1'

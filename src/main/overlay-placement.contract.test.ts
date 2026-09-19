@@ -59,18 +59,20 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
     const body = await toJs(
       sliceBetween(
         "win.webContents.on('render-process-gone', (_e, details) => {",
-        '// FITO-185-L: ASKTOTO_SHOT binds AFTER rendererUrl is known'
+        'const rendererUrl = overlayRendererUrl()'
       )
     )
     const preamble = [
-      'const { mainLog, auditLog, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, before } = stubs',
+      'const { mainLog, auditLog, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, before } = stubs',
       `const BAR_WIDTH = ${constant('BAR_WIDTH')}`,
       'let { listeningActive, lastPlainAskAt, audioArmed, isMinimized, currentWidth } = before',
       'let handler = null',
       // isDestroyed() -> true stops the handler before the reload, which needs a real BrowserWindow. The
       // reload itself is already pinned by c-main-fixes.contract.test.ts; this is about the reset above it.
       'const win = { webContents: { on: (evt, fn) => { if (evt === "render-process-gone") handler = fn } }, isDestroyed: () => true }',
+      'const self = win',
       'const onboardingExclusiveLive = () => false',
+      'const overlayRendererUrl = () => "file:///fixture/renderer/index.html"',
       ''
     ].join('\n')
     const driver = [
@@ -87,6 +89,7 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       setTrayRecording: () => {},
       setRecordingPowerSaveBlock: () => {},
       discardActiveLiveSpeakerSession: () => {},
+      invalidateCloudSttOwner: () => {},
       before
     })
   }

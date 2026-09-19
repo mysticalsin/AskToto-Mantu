@@ -208,7 +208,9 @@ export function saveFailureReason(err: unknown): string {
 }
 
 // Dev-only visual seed for screenshots (?demo=answer|copilot|settings|onboarding|review). No-op in prod.
-const DEMO = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('demo') : null
+const DEMO = import.meta.env.DEV && typeof location !== 'undefined'
+  ? new URLSearchParams(location.search).get('demo')
+  : null
 const DEMO_ANSWER = `## Quicksort in TypeScript
 
 \`\`\`ts

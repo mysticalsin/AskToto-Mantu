@@ -93,7 +93,11 @@ import { appearanceSettingsPatch, seedOnboardingAppearance } from '../lib/onboar
 import { onboardingReadinessCopy } from '../lib/onboarding-readiness-copy'
 import {
   createOnboardingCompletionFlow,
+  ENCRYPTED_PROFILE_RECOVERY_UNCONFIRMED_MESSAGE,
+  encryptedProfileRecoveryFailureMessage,
+  isEncryptedProfileRecoveryError,
   persistOnboardingCompletion,
+  type OnboardingCompletionOutcome,
   type OnboardingCompletionState
 } from '../lib/onboarding-completion'
 import { createOnboardingMusicBed, haltAllOnboardingAudio, lockOnboardingAudio } from '../lib/onboarding-music'
@@ -146,6 +150,8 @@ export interface OnboardingExperienceProps {
   /** Required to flip `screenAsk` from the opt-out toggle. Same function OnboardingV2 already calls to
    *  persist `mode`/`recordingConsent` out of this component. */
   patch?: (p: Partial<PublicSettings>) => void
+  /** Creates a fresh local profile only after the native confirmation archives the existing encrypted one. */
+  recoverEncryptedProfile?: () => Promise<ProfileRecoveryResult>
 }
 
 /** Wave 5 — problem story (docs/ONBOARDING-EXPERIENCE.md Scene 2): staged lines, one at a time. */
@@ -753,7 +759,8 @@ function ActReady({
   asrHint,
   asrProgress,
   showAsrRetry,
-  onRetryAsr
+  onRetryAsr,
+  recoverEncryptedProfile
 }: {
   mode: ConversationMode
   onFinish: () => Promise<boolean>
@@ -764,17 +771,49 @@ function ActReady({
   asrProgress?: number
   showAsrRetry: boolean
   onRetryAsr: () => void
+  recoverEncryptedProfile?: () => Promise<ProfileRecoveryResult>
 }): JSX.Element {
   const [completion, setCompletion] = useState<OnboardingCompletionState>({ busy: false, error: null })
+  const [recoveryAvailable, setRecoveryAvailable] = useState(false)
+  const [recoveryBusy, setRecoveryBusy] = useState(false)
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null)
   const completionFlowRef = useRef<ReturnType<typeof createOnboardingCompletionFlow> | null>(null)
   if (!completionFlowRef.current) completionFlowRef.current = createOnboardingCompletionFlow(setCompletion)
   const persona = ONBOARDING_PERSONAS.find((p) => p.id === (mode as OnboardingPersonaId))
-  const blocked = completion.busy || !asrReady
+  const blocked = completion.busy || recoveryBusy || !asrReady
   const readinessCopy = onboardingReadinessCopy(asrReady, aiReady)
 
-  const attemptFinish = (afterSuccess?: () => void): void => {
-    if (!asrReady) return
-    void completionFlowRef.current?.attempt(onFinish, afterSuccess)
+  const attemptFinish = async (afterSuccess?: () => void): Promise<OnboardingCompletionOutcome> => {
+    if (!asrReady) return 'blocked'
+    return (await completionFlowRef.current?.attempt(async () => {
+      try {
+        return await onFinish()
+      } catch (error) {
+        const canRecover = !!recoverEncryptedProfile && isEncryptedProfileRecoveryError(error)
+        setRecoveryAvailable(canRecover)
+        if (canRecover) setRecoveryMessage(null)
+        throw error
+      }
+    }, afterSuccess)) ?? 'blocked'
+  }
+
+  const recoverProfileAndRetry = async (): Promise<void> => {
+    if (!recoverEncryptedProfile || recoveryBusy) return
+    setRecoveryBusy(true)
+    setRecoveryMessage(null)
+    try {
+      const result = await recoverEncryptedProfile()
+      if (!result.ok) {
+        setRecoveryMessage(encryptedProfileRecoveryFailureMessage(result))
+        return
+      }
+      const outcome = await attemptFinish()
+      if (outcome === 'completed') setRecoveryAvailable(false)
+    } catch {
+      setRecoveryMessage(ENCRYPTED_PROFILE_RECOVERY_UNCONFIRMED_MESSAGE)
+    } finally {
+      setRecoveryBusy(false)
+    }
   }
 
   return (
@@ -850,6 +889,23 @@ function ActReady({
           {completion.error}
         </p>
       )}
+      {recoveryAvailable && recoverEncryptedProfile && (
+        <div className="flex max-w-[360px] flex-col items-center gap-2 rounded-xl border border-[var(--color-accent)]/35 bg-[var(--color-accent-soft)]/35 p-3 text-[11px] leading-snug text-[color:var(--color-ink-2)]">
+          <p className="m-0">
+            Métis can archive the encrypted profile on this device and create a new local profile. Nothing is deleted.
+          </p>
+          <button
+            type="button"
+            onClick={() => void recoverProfileAndRetry()}
+            disabled={recoveryBusy}
+            className="no-drag focus-ring inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+          >
+            {recoveryBusy ? <InlineOrb kind="loading" /> : <KeyRound size={13} />}
+            {recoveryBusy ? 'Creating new local profile…' : 'Create new local profile & retry'}
+          </button>
+          {recoveryMessage && <p role="alert" className="m-0 text-[color:var(--color-danger)]">{recoveryMessage}</p>}
+        </div>
+      )}
     </div>
   )
 }
@@ -924,7 +980,8 @@ export function OnboardingExperience({
   onDone,
   onOpenAiSettings,
   settings,
-  patch
+  patch,
+  recoverEncryptedProfile
 }: OnboardingExperienceProps): JSX.Element {
   const settingsRef = useRef(settings)
   settingsRef.current = settings
@@ -1606,6 +1663,7 @@ export function OnboardingExperience({
           asrProgress={asrRow.progress}
           showAsrRetry={asrRowNeedsRetry(asrRow)}
           onRetryAsr={() => void retryAsr()}
+          recoverEncryptedProfile={recoverEncryptedProfile}
         />
       )}
 
@@ -1617,6 +1675,7 @@ export function OnboardingExperience({
 
 export function OnboardingV2({
   settings,
+  recoverEncryptedProfile,
   patch,
   onOpenAiSettings,
   onDone
@@ -1634,6 +1693,7 @@ export function OnboardingV2({
     <OnboardingExperience
       settings={settings}
       patch={patch}
+      recoverEncryptedProfile={recoverEncryptedProfile}
       onOpenAiSettings={onOpenAiSettings}
       onDone={async ({ mode, recordingConsent }) => {
         lockOnboardingAudio()

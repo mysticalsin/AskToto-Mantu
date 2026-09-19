@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
@@ -7,6 +7,7 @@ import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { parseUseBody } from './use'
+import { PORTAL_CF_DEEPSEEK_FLASH, PORTAL_CF_DEEPSEEK_PRO } from '../../src/shared/ask-routing'
 
 const NOW = 1_725_000_000_000
 const SECRET = 'sk-ant-api03-OPERATOR-VAULT-TEST-only-xx99'
@@ -66,6 +67,20 @@ async function addAnthropicKey(store: ReturnType<typeof memoryStore>) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider: 'anthropic', secret: SECRET })
+    }),
+    env(),
+    { access: tony },
+    { store, now: NOW }
+  )
+  expect(res.status).toBe(200)
+}
+
+async function addCloudflareKey(store: ReturnType<typeof memoryStore>) {
+  const res = await handleRequest(
+    new Request('https://operator.test/v1/admin/keys', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'cloudflare', secret: SECRET, accountId: 'acct-test' })
     }),
     env(),
     { access: tony },
@@ -198,6 +213,48 @@ describe('HMAC POST /v1/use', () => {
       ok: false,
       error: 'This seat is not approved. Tony must approve this device in Operator before platform keys work.'
     })
+  })
+
+  it.each([
+    { label: 'an explicit deep Cloudflare request', provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_PRO, tier: 'deep' },
+    { label: 'a legacy Portal Pro Cloudflare request', provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_PRO },
+    { label: 'a base Flash Cloudflare request', provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_FLASH, tier: 'base' },
+    { label: 'a base Anthropic request', provider: 'anthropic', model: 'claude-haiku-4-5-20251001', tier: 'base' }
+  ] as const)('refuses $label when the server-side tier lacks operator_keys', async ({ provider, model, tier }) => {
+    const store = memoryStore()
+    if (provider === 'cloudflare') await addCloudflareKey(store)
+    else await addAnthropicKey(store)
+    await approveDevice(store)
+    await store.putTier({
+      id: 'metis',
+      label: 'Métis',
+      entitlements_json: JSON.stringify(['ask']),
+      updated_at: NOW
+    })
+    const providerFetch = vi.fn(async (input) => {
+      if (String(input).includes('/ai-gateway/gateways')) {
+        return new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return provider === 'anthropic'
+        ? new Response(JSON.stringify({ content: [{ type: 'text', text: 'unexpected upstream call' }] }), { status: 200, headers: { 'content-type': 'application/json' } })
+        : new Response(JSON.stringify({ choices: [{ message: { content: 'unexpected upstream call' } }] }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const body = JSON.stringify({
+      provider,
+      model,
+      ...(tier ? { tier } : {}),
+      messages: [{ role: 'user', content: 'Use the Operator-funded vault key.' }]
+    })
+
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-not-entitled'), env(), {}, {
+      store,
+      now: NOW,
+      providerFetch
+    })
+
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ ok: false, code: 'not-entitled' })
+    expect(providerFetch).not.toHaveBeenCalled()
   })
 
   it('fails closed when the provider is not funded and never echoes the vault row', async () => {

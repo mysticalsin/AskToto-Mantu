@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import {
   isOnboardingBoot,
   exclusiveOnboardingFlag,
@@ -67,6 +68,31 @@ describe('FITO-185-I App boot gate (source contract)', () => {
     // Vite may emit /src/... in unit tests; packaged build hashes under assets/. Never the public root path.
     expect(ONBOARDING_BOOT_POSTER_HREF).not.toBe('/onboarding-hero-poster.jpg')
     expect(ONBOARDING_BOOT_POSTER_HREF).toMatch(/assets\/onboarding-hero-poster/)
+  })
+
+  it('keeps the static Act 1 shell hidden unless the exact exclusive startup flag enables it', () => {
+    const gate = readFileSync(join(__dirname, '../../public/onboarding-boot-gate.js'), 'utf8')
+    const boot = readFileSync(join(__dirname, '../../public/act1-boot.js'), 'utf8')
+    expect(indexHtml).toMatch(/#boot-bed,\s*#act1-boot-chrome\s*\{\s*display:\s*none/)
+    expect(indexHtml).toMatch(/html\.exclusive-onboarding-boot\s+#boot-bed/)
+    expect(indexHtml).toMatch(/html\.exclusive-onboarding-boot\s+#act1-boot-chrome/)
+    expect(indexHtml).toMatch(/src="\.\/onboarding-boot-gate\.js"/)
+    expect(boot).toMatch(/exclusive-onboarding-boot/)
+
+    const classAdds: string[] = []
+    runInNewContext(gate, {
+      URLSearchParams,
+      location: { search: '?demo=answer' },
+      document: { documentElement: { classList: { add: (name: string) => classAdds.push(name) } } }
+    })
+    expect(classAdds).toEqual([])
+
+    runInNewContext(gate, {
+      URLSearchParams,
+      location: { search: '?exclusiveOnboarding=1' },
+      document: { documentElement: { classList: { add: (name: string) => classAdds.push(name) } } }
+    })
+    expect(classAdds).toEqual(['exclusive-onboarding-boot'])
   })
 })
 
@@ -151,10 +177,11 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
 
   it('main createWindow stamps exclusiveOnboarding on packaged file URL too', () => {
     const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
-    expect(main).toMatch(/exclusiveOnboarding/)
+    expect(main).toMatch(/function overlayRendererUrl\(\): string/)
     expect(main).toMatch(/onboardingExclusiveLive\(\)\) params\.set\('exclusiveOnboarding'/)
-    // Must not be gated only inside ELECTRON_RENDERER_URL branch.
-    expect(main).toMatch(/else if \(qs\)/)
+    // The helper always starts from either the dev URL or the packaged file URL, then adds the flag.
+    expect(main).toMatch(/process\.env\['ELECTRON_RENDERER_URL'\] \?\? pathToFileURL/)
+    expect(main).toMatch(/win\.loadURL\(overlayRendererUrl\(\)\)/)
   })
 })
 

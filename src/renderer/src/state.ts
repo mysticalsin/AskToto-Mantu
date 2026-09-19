@@ -56,12 +56,11 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
   const roRef = useRef<ResizeObserver | null>(null)
   const moRef = useRef<MutationObserver | null>(null)
   const rafRef = useRef(0)
-  // Microtask fallback paired with rafRef. A transparent, always-on-top overlay window has its renderer
-  // frozen by the macOS compositor's page-visibility handling ~100-300 ms after load: requestAnimationFrame
-  // AND setTimeout both stop firing (verified — the packaged build's window stayed pinned at bar height and
-  // onboarding/answers were clipped off-screen because the measure was rAF-scheduled and never ran). The
-  // microtask queue keeps draining even while frozen, so we schedule the measure on BOTH — rAF keeps
-  // streaming coalesced when the renderer is live; the microtask lands the measure when it isn't.
+  // Microtask fallback paired with rafRef. A transparent, always-on-top overlay can be backgrounded by
+  // macOS page-visibility handling: requestAnimationFrame AND setTimeout then stop firing, while a queued
+  // microtask can still drain. Crucially, a microtask always runs before the next visible animation frame,
+  // so using it while visible would defeat rAF batching and force one layout/IPC resize per observer burst.
+  // Restrict the fallback to the explicit hidden signal instead.
   const microRef = useRef(false)
   const shrinkRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSentRef = useRef(0) // last height pushed to main — dedups so a stream can't pump setBounds
@@ -179,16 +178,20 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
       }
     }
     const send = (): void => {
-      // rAF is the frame-coalesced fast path (smooth resizes while the renderer is live). The microtask is
-      // the frozen-safe fallback: when the overlay's renderer is compositor-frozen, rAF never fires, but the
-      // microtask still drains and runs the measure. It checks rafRef so, when the renderer IS live, rAF has
-      // usually already run and reset rafRef to 0 — then the microtask is a no-op and coalescing is preserved.
+      // rAF is the frame-coalesced fast path. Never queue a visible-state microtask: it always drains before
+      // the next animation frame and would cancel that batch. Page Visibility is the explicit condition for
+      // the frozen-safe fallback; timers are no help there because they are frozen alongside rAF.
       if (!rafRef.current) rafRef.current = requestAnimationFrame(measureAndPush)
-      if (!microRef.current) {
+      if (
+        !microRef.current &&
+        typeof document !== 'undefined' &&
+        document.visibilityState === 'hidden'
+      ) {
         microRef.current = true
         void Promise.resolve().then(() => {
           microRef.current = false
-          if (rafRef.current) measureAndPush() // rAF still pending (frozen or not-yet-fired) → land it now
+          // If the renderer became visible before this drains, preserve its pending frame instead.
+          if (rafRef.current && document.visibilityState === 'hidden') measureAndPush()
         })
       }
     }

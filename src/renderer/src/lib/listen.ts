@@ -79,6 +79,8 @@ const NATIVE_STOP_DRAIN_NO_PROGRESS_MS = PARAKEET_FEED_TIMEOUT_MS + 1000
 const WHISPER_STOP_DRAIN_NO_PROGRESS_MS = 180_000
 const STOP_DRAIN_INCOMPLETE_MSG =
   'Transcription did not finish before Stop completed. The transcript may be incomplete.'
+const CLOUD_STT_FINALIZE_INCOMPLETE_MSG =
+  'Cloud speech did not confirm its final words before Stop completed. The transcript may be incomplete.'
 // ── Whisper 'auto' language probe (PROVEN FACT 2026-08-05, direct probe): transformers.js's whisper NEVER
 // auto-detects on an un-pinned decode — it logs "No language specified - defaulting to English" and
 // decodes ENGLISH regardless of what was actually spoken. So asrLanguage:'auto' needs a language-agnostic
@@ -391,7 +393,7 @@ interface Channel {
 interface StopDrainOperation {
   epoch: number
   requestId: string
-  phase: 'sealing' | 'draining' | 'finished'
+  phase: 'sealing' | 'draining' | 'finalizing' | 'finished'
   pendingAcks: Map<Speaker, Channel>
   callbacks: Array<() => void>
   ackTimer: ReturnType<typeof setTimeout> | null
@@ -661,6 +663,15 @@ export function useListen(
   const micProfileNameRef = useRef<string | undefined>(micProfileName)
   micProfileNameRef.current = micProfileName
   const cloudSttUnsubRef = useRef<(() => void) | null>(null)
+  // Main binds each cloud session to this opaque id. Snapshot it before every stop so a delayed stop
+  // from an older meeting cannot close the same renderer's newer cloud session.
+  const cloudCaptureIdRef = useRef<string | null>(null)
+  // `invoke()` resolves only after main accepted a PCM frame. Stop must await every accepted frame before
+  // it asks the provider to flush; otherwise an empty provider end-frame can race an IPC feed and lose tail
+  // words. Keep the bounded set per session: a never-settling push from a superseded meeting must never
+  // make the next meeting wait for its 180s no-progress ceiling before it can stop.
+  const cloudSttPushesRef = useRef(new Map<number, Set<Promise<void>>>())
+  const cloudSttFinalizingRef = useRef(false)
 
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
@@ -848,7 +859,10 @@ export function useListen(
     for (const { re, to } of correctionsRef.current) corrected = corrected.replace(re, to)
     // Entity-casing bias runs AFTER corrections so an explicit user correction always wins.
     if (entityCasingRef.current.length) corrected = applyEntityCasingCompiled(entityCasingRef.current, corrected)
-    if (!corrected || !liveRef.current) return null
+    // During a cloud provider's bounded graceful close, main may still deliver the protocol's final
+    // transcript. Accept only that explicitly marked tail window; all other stopped-session results stay
+    // rejected so an old worker cannot bleed into the next meeting.
+    if (!corrected || (!liveRef.current && !cloudSttFinalizingRef.current)) return null
     // Cross-line repetition-loop guard: same normalized line, same speaker, window after window.
     const key = repeatKey(corrected)
     const run = repeatRunRef.current
@@ -958,8 +972,9 @@ export function useListen(
             next.pinnedLang
           )
           if (engineRef.current === 'cloud') {
+            const cloudCaptureId = cloudCaptureIdRef.current ?? undefined
             void window.toto
-              .cloudSttUpdateLang(asrLanguageRef.current, next.pinnedLang)
+              .cloudSttUpdateLang(asrLanguageRef.current, next.pinnedLang, cloudCaptureId)
               .catch(() => {})
           }
           workerRef.current?.postMessage({ type: 'pinLanguage', language: next.pinnedLang })
@@ -985,7 +1000,23 @@ export function useListen(
             epoch: sessionEpochRef.current
           }
         }
-        void window.toto.cloudSttPush(job.audio, job.speaker === 'them' ? 'them' : 'you').catch(() => {})
+        const pushEpoch = sessionEpochRef.current
+        // Capture identity is part of the dispatched PCM request. The main process can then reject an
+        // old IPC delivery after this window has started a newer capture in the same webContents.
+        const cloudCaptureId = cloudCaptureIdRef.current ?? undefined
+        const pushes = cloudSttPushesRef.current.get(pushEpoch) ?? new Set<Promise<void>>()
+        cloudSttPushesRef.current.set(pushEpoch, pushes)
+        const push = window.toto
+          .cloudSttPush(job.audio, job.speaker === 'them' ? 'them' : 'you', cloudCaptureId)
+          .catch(() => {})
+        pushes.add(push)
+        void push.finally(() => {
+          // A later start can deliberately discard this epoch's set. Never recreate it when a late IPC
+          // completion lands, or it could again contaminate the newer session's stop accounting.
+          if (cloudSttPushesRef.current.get(pushEpoch) !== pushes) return
+          pushes.delete(push)
+          if (pushes.size === 0) cloudSttPushesRef.current.delete(pushEpoch)
+        })
       }
       return
     }
@@ -1306,16 +1337,7 @@ export function useListen(
     if (!gate.ok) {
       // CLOUD_ONLY: never silently swap to local Whisper — surface the honest refusal.
       console.warn('[listen] CLOUD_ONLY blocked local Whisper fallback')
-      liveRef.current = false
-      setState((s) => ({
-        ...s,
-        listening: false,
-        capturing: false,
-        loading: false,
-        ready: false,
-        error: gate.error || CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED
-      }))
-      void window.toto.setListeningState(false).catch(() => {})
+      failAdmittedCapture(gate.error || CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED)
       return
     }
     console.warn(`[listen] ${failedEngine} failing repeatedly — switching to Whisper for the rest of this session`)
@@ -1918,6 +1940,25 @@ export function useListen(
           closeChannel('you')
           closeChannel('them')
         }
+        if (cloudSttFinalizingRef.current) {
+          // A fresh session supersedes the old meeting's bounded provider close. This matters especially
+          // when the replacement is local ASR: there is no next cloud start to evict main's authenticated
+          // WebSocket, so detach its callbacks and force-close it here instead of letting it run to timeout.
+          cloudSttFinalizingRef.current = false
+          cloudSttUnsubRef.current?.()
+          cloudSttUnsubRef.current = null
+          const retiringCloudCaptureId = cloudCaptureIdRef.current
+          void window.toto
+            .cloudSttStop(
+              retiringCloudCaptureId
+                ? { force: true, captureId: retiringCloudCaptureId }
+                : { force: true }
+            )
+            .catch(() => {})
+        }
+        // Do not let an unresponsive cloud IPC from the superseded meeting hold the fresh meeting's
+        // graceful close. Each current session re-registers only its own accepted pushes in pump().
+        cloudSttPushesRef.current.clear()
         stoppingRef.current = false
         // A warm Whisper worker can be reused only when it has no decode in flight. If a replacement
         // session starts mid-decode, retire that worker so its eventual text/error callback cannot be
@@ -1930,6 +1971,11 @@ export function useListen(
           readyRef.current = false
         }
         const myEpoch = ++sessionEpochRef.current
+        // This identity lets a failed capture tear down only its own asynchronous cloud start.  A
+        // force-stop can otherwise arrive in main before cloudSttStart has installed an owner, then
+        // accidentally stop a later Listen session when the old start finally resolves.
+        const cloudCaptureId = `listen:${myEpoch}`
+        cloudCaptureIdRef.current = engine === 'cloud' ? cloudCaptureId : null
         sessionStartedAtRef.current = startedAt
         queue.current = []
         provisionalRef.current = null // fresh session — no carried-over placeholder from the previous one
@@ -1996,7 +2042,11 @@ export function useListen(
             cloudSttUnsubRef.current?.()
             cloudSttUnsubRef.current = null
             const offFinal = window.toto.onCloudSttFinal((line) => {
-              if (!liveRef.current || sessionEpochRef.current !== myEpoch) return
+              if (
+                (!liveRef.current && !cloudSttFinalizingRef.current) ||
+                sessionEpochRef.current !== myEpoch
+              )
+                return
               const committedAt = commitLine(line.text, line.speaker, line.name)
               // Cloud finals already carry Speaker N / Unknown from mapCloudFinalToLine — voiceprint
               // upgrade mirrors Whisper echo handling so enrolled names replace session placeholders.
@@ -2025,7 +2075,11 @@ export function useListen(
               }
             })
             const offErr = window.toto.onCloudSttError((message) => {
-              if (!liveRef.current || sessionEpochRef.current !== myEpoch) return
+              if (
+                (!liveRef.current && !cloudSttFinalizingRef.current) ||
+                sessionEpochRef.current !== myEpoch
+              )
+                return
               setState((s) => ({ ...s, error: message || s.error }))
             })
             cloudSttUnsubRef.current = () => {
@@ -2033,28 +2087,28 @@ export function useListen(
               offErr()
             }
             try {
+              cloudSttFinalizingRef.current = false
               const started = await window.toto.cloudSttStart({
                 provider,
                 asrLanguage: language,
                 pinnedLang: pinnedLangRef.current,
                 profileName: micProfileNameRef.current,
-                meetingId: startedAt ? String(startedAt) : undefined
+                meetingId: startedAt ? String(startedAt) : undefined,
+                captureId: cloudCaptureId
               })
-              if (!captureAdmissionIsOpen(myEpoch)) return
+              if (!captureAdmissionIsOpen(myEpoch)) {
+                // Capture may have failed while the IPC start was in flight.  Repeat the exact
+                // force-stop after the start acknowledgement: this covers Stop reaching main before
+                // it had an owner, without permitting an old start to close a newer session.
+                void window.toto.cloudSttStop({ force: true, captureId: cloudCaptureId }).catch(() => {})
+                return
+              }
               if (!started?.ok) {
                 console.warn('[listen] cloud STT start failed:', started?.error || started?.code)
-                liveRef.current = false
-                cloudSttUnsubRef.current?.()
-                cloudSttUnsubRef.current = null
-                setState((s) => ({
-                  ...s,
-                  listening: false,
-                  capturing: false,
-                  loading: false,
-                  ready: false,
-                  error: started?.error || 'Cloud STT is not configured.'
-                }))
-                void window.toto.setListeningState(false).catch(() => {})
+                failAdmittedCapture(started?.error || 'Cloud STT is not configured.', {
+                  forceCloudStop: true,
+                  cloudCaptureId
+                })
                 return
               }
               readyRef.current = true
@@ -2063,18 +2117,10 @@ export function useListen(
             } catch (e) {
               if (!captureAdmissionIsOpen(myEpoch)) return
               const msg = e instanceof Error ? e.message : String(e)
-              liveRef.current = false
-              cloudSttUnsubRef.current?.()
-              cloudSttUnsubRef.current = null
-              setState((s) => ({
-                ...s,
-                listening: false,
-                capturing: false,
-                loading: false,
-                ready: false,
-                error: msg || 'Cloud STT failed to start.'
-              }))
-              void window.toto.setListeningState(false).catch(() => {})
+              failAdmittedCapture(msg || 'Cloud STT failed to start.', {
+                forceCloudStop: true,
+                cloudCaptureId
+              })
             }
             return
           }
@@ -2112,16 +2158,7 @@ export function useListen(
               )
               if (!whisperGate.ok) {
                 console.warn('[listen] parakeet unavailable; CLOUD_ONLY blocks Whisper fallback')
-                liveRef.current = false
-                setState((s) => ({
-                  ...s,
-                  listening: false,
-                  capturing: false,
-                  loading: false,
-                  ready: false,
-                  error: whisperGate.error || CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED
-                }))
-                void window.toto.setListeningState(false).catch(() => {})
+                failAdmittedCapture(whisperGate.error || CLOUD_ONLY_LOCAL_FALLBACK_BLOCKED)
                 return
               }
               console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
@@ -2259,15 +2296,6 @@ export function useListen(
 
         if (!captureAdmissionIsOpen(myEpoch)) return
         if (!micOk && !sysOk) {
-          // Nothing came up — tear down so no half-open channel stays hot while the UI says "not listening".
-          liveRef.current = false
-          closeChannel('you')
-          closeChannel('them')
-          try {
-            await window.toto.setListeningState(false, startedAt)
-          } catch {
-            /* ignore */
-          }
           let msg: string
           if (source === 'system') {
             msg = isWindows
@@ -2280,7 +2308,12 @@ export function useListen(
               ? 'Could not start the microphone. Check that Windows microphone access is allowed for Métis and that a mic is connected.'
               : "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
           }
-          setState((s) => ({ ...s, error: msg, listening: false, capturing: false, loading: false }))
+          // Nothing came up.  A cloud start may still be in flight, so use its exact identity rather
+          // than leaving an authenticated provider session alive behind an idle UI.
+          failAdmittedCapture(msg, {
+            forceCloudStop: engineRef.current === 'cloud',
+            cloudCaptureId: engineRef.current === 'cloud' ? cloudCaptureId : undefined
+          })
           // MQA-285: a failed start must not idle-unload a hot prewarmed engine — the next Listen
           // (or a retry) should still be instant. Unmount is the only teardown of the worker.
           return
@@ -2338,6 +2371,60 @@ export function useListen(
     void ch.ctx.close().catch(() => {})
     delete channels.current[sp]
   }, [])
+
+  /**
+   * End a session that was admitted by main but then fails before a usable decoder is ready.
+   * This deliberately does not use stop(): normal Stop seals worklets, drains queued audio, and lets
+   * cloud speech deliver its terminal result. A failed start has no valid decoder to drain into, so it
+   * must instead release every capture handle immediately and send the same start identity back to main.
+   */
+  const failAdmittedCapture = useCallback(
+    (error: string, options: { forceCloudStop?: boolean; cloudCaptureId?: string } = {}): void => {
+      // A normal Stop owns its seal and drain once stoppingRef is true. A decoder rejection that lands
+      // after that boundary belongs to the retiring session and must not bypass the final-audio path.
+      if (!captureAdmissionIsOpen(sessionEpochRef.current)) return
+      const startedAt = sessionStartedAtRef.current
+      liveRef.current = false
+      pausedRef.current = false
+      readyRef.current = false
+      busy.current = false
+      queue.current = []
+      clearProvisional()
+      pendingWhisperEmbedRef.current = null
+      pendingWhisperStartedAtRef.current = undefined
+      themRunRef.current = ''
+      disarmNetworkRetry()
+      closeChannel('you')
+      closeChannel('them')
+      if (options.forceCloudStop) {
+        cloudSttFinalizingRef.current = false
+        cloudSttUnsubRef.current?.()
+        cloudSttUnsubRef.current = null
+        cloudSttPushesRef.current.clear()
+        if (options.cloudCaptureId && cloudCaptureIdRef.current === options.cloudCaptureId) {
+          cloudCaptureIdRef.current = null
+        }
+        void window.toto
+          .cloudSttStop(
+            options.cloudCaptureId
+              ? { force: true, captureId: options.cloudCaptureId }
+              : { force: true }
+          )
+          .catch(() => {})
+      }
+      void window.toto.setListeningState(false, startedAt).catch(() => {})
+      setState((s) => ({
+        ...s,
+        listening: false,
+        capturing: false,
+        paused: false,
+        loading: false,
+        ready: false,
+        error
+      }))
+    },
+    [clearProvisional, closeChannel, disarmNetworkRetry]
+  )
 
   // Suspending each open channel's AudioContext (rather than closing it) halts the worklet's audio-render
   // callback entirely — no new windows reach pushAudio — while leaving the MediaStream tracks alive. That
@@ -2439,6 +2526,7 @@ export function useListen(
     }
     stoppingRef.current = true
     const myEpoch = sessionEpochRef.current
+    const cloudCaptureId = cloudCaptureIdRef.current
     const startedAt = sessionStartedAtRef.current
     const ownedSession = liveRef.current
     const requestId = `stop:${myEpoch}:${nextStopRequestRef.current++}`
@@ -2471,7 +2559,11 @@ export function useListen(
       // 2. Once the producer frontier is sealed, drain the finite queue/busy state. Healthy serial work can
       //    take longer than one decode window in aggregate, so bound *lack of progress*, not total elapsed
       //    time. Only a strict decrease in queue + in-flight work earns a fresh engine-specific interval.
-      let leastOutstanding = queue.current.length + Number(busy.current)
+      const outstandingWork = (): number =>
+        queue.current.length +
+        Number(busy.current) +
+        (engineRef.current === 'cloud' ? (cloudSttPushesRef.current.get(myEpoch)?.size ?? 0) : 0)
+      let leastOutstanding = outstandingWork()
       let lastProgressAt = Date.now()
       let noProgressMs =
         engineRef.current === 'parakeet' || engineRef.current === 'apple'
@@ -2485,7 +2577,6 @@ export function useListen(
           operation.phase !== 'draining'
         )
           return
-        operation.phase = 'finished'
         liveRef.current = false
         disarmNetworkRetry()
         queue.current = [] // drop anything still undispatched once the bounded drain ends
@@ -2495,16 +2586,27 @@ export function useListen(
         themRunRef.current = ''
         closeChannel('you')
         closeChannel('them')
-        if (engineRef.current === 'cloud') {
+        const completeStop = (finalizeIncomplete = false): void => {
+          if (
+            sessionEpochRef.current !== myEpoch ||
+            stopDrainRef.current !== operation ||
+            (operation.phase !== 'draining' && operation.phase !== 'finalizing')
+          )
+            return
+          operation.phase = 'finished'
+          cloudSttFinalizingRef.current = false
           cloudSttUnsubRef.current?.()
           cloudSttUnsubRef.current = null
-          void window.toto.cloudSttStop().catch(() => {})
-        }
-        if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
-        setState((s) => {
+          cloudSttPushesRef.current.delete(myEpoch)
+          if (cloudCaptureId && cloudCaptureIdRef.current === cloudCaptureId) {
+            cloudCaptureIdRef.current = null
+          }
+          if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
+          setState((s) => {
           const warnings = [
             operation.flushIncomplete ? STOP_FLUSH_INCOMPLETE_MSG : null,
-            operation.drainIncomplete ? STOP_DRAIN_INCOMPLETE_MSG : null
+            operation.drainIncomplete ? STOP_DRAIN_INCOMPLETE_MSG : null,
+            finalizeIncomplete ? CLOUD_STT_FINALIZE_INCOMPLETE_MSG : null
           ].filter((warning): warning is string => warning !== null)
           let error = s.error
           for (const warning of warnings) {
@@ -2520,16 +2622,32 @@ export function useListen(
             error,
             captureDegraded: null
           }
-        })
-        drainTimerRef.current = null
-        stopDrainRef.current = null
-        stoppingRef.current = false
-        settleStopCallbacks(operation)
-        // MQA-285: keep the hot engine. Unmount still tears the worker down.
+          })
+          drainTimerRef.current = null
+          stopDrainRef.current = null
+          stoppingRef.current = false
+          settleStopCallbacks(operation)
+          // MQA-285: keep the hot engine. Unmount still tears the worker down.
+        }
+
+        if (engineRef.current !== 'cloud') {
+          completeStop()
+          return
+        }
+
+        // Keep `listening` true until main has delivered and committed the provider's terminal response.
+        // App starts its automatic recap only when that flag turns false, so ending it earlier would save a
+        // summary without the final words that this protocol close exists to preserve.
+        operation.phase = 'finalizing'
+        cloudSttFinalizingRef.current = true
+        void Promise.resolve()
+          .then(() => window.toto.cloudSttStop(cloudCaptureId ? { captureId: cloudCaptureId } : undefined))
+          .then((result) => completeStop(result.timedOut))
+          .catch(() => completeStop(true))
       }
       const waitForDrain = (): void => {
         if (sessionEpochRef.current !== myEpoch || stopDrainRef.current !== operation) return
-        const outstanding = queue.current.length + Number(busy.current)
+        const outstanding = outstandingWork()
         if (outstanding === 0) {
           finishTeardown()
           return
@@ -2623,6 +2741,8 @@ export function useListen(
       // and would keep running (and re-arm a new workerIdleTimer) after this instance is gone with nothing
       // left able to cancel it. So this bypasses stop() entirely and tears everything down directly.
       const ownedSession = liveRef.current || stopDrainRef.current !== null
+      const cloudSession = engineRef.current === 'cloud' || cloudSttFinalizingRef.current
+      const cloudCaptureId = cloudCaptureIdRef.current
       const startedAt = sessionStartedAtRef.current
       if (drainTimerRef.current) {
         clearTimeout(drainTimerRef.current)
@@ -2632,12 +2752,22 @@ export function useListen(
       if (activeStop?.ackTimer) clearTimeout(activeStop.ackTimer)
       stopDrainRef.current = null
       liveRef.current = false
+      cloudSttFinalizingRef.current = false
+      cloudSttPushesRef.current.clear()
       pendingWhisperEmbedRef.current = null
       pendingWhisperStartedAtRef.current = undefined
       if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
       disarmNetworkRetry()
       closeChannel('you')
       closeChannel('them')
+      cloudSttUnsubRef.current?.()
+      cloudSttUnsubRef.current = null
+      if (cloudCaptureIdRef.current === cloudCaptureId) cloudCaptureIdRef.current = null
+      if (cloudSession) {
+        void window.toto
+          .cloudSttStop(cloudCaptureId ? { force: true, captureId: cloudCaptureId } : { force: true })
+          .catch(() => {})
+      }
       if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
       workerRef.current?.terminate()
       workerRef.current = null

@@ -107,6 +107,20 @@ describe('d1Store.insertAsk question_type fail-safe (real SQLite underneath)', (
     expect(String(warn.mock.calls[0][0])).toContain('schema-alter.sql')
   })
 
+  it('keeps legacy-schema ask ownership on a cross-device retry', async () => {
+    const db = new DatabaseSync(':memory:')
+    db.exec(LEGACY_ASKS_TABLE)
+    const store = d1Store(sqliteD1(db))
+    await store.insertAsk(row({ id: 'owned', device_id: 'device-a', model: 'first-model' }))
+    await store.insertAsk(row({ id: 'owned', device_id: 'device-b', model: 'foreign-model' }))
+
+    const written = db.prepare('SELECT device_id, model FROM asks WHERE id = ?').get('owned') as {
+      device_id: string
+      model: string
+    }
+    expect(written).toEqual({ device_id: 'device-a', model: 'first-model' })
+  })
+
   it('any other D1 error still surfaces; the fallback is for the missing column only', async () => {
     const db: D1DatabaseLike = {
       prepare() {

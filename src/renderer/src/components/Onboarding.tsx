@@ -33,6 +33,7 @@ import { PROVIDERS, filterAllowedProviders } from '@shared/providers'
 import { MetisMark } from './MetisMark'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import { accelLabel, isWindows } from '../lib/keys'
+import { isEncryptedProfileRecoveryError } from '../lib/onboarding-completion'
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
 function MsLogo({ size = 16 }: { size?: number }): JSX.Element {
@@ -509,7 +510,7 @@ export function Onboarding({
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       setFinishErr(`Couldn't save your setup. ${message}`)
-      setRecoveryAvailable(!!recoverEncryptedProfile && /keychain|encrypted profile|secret.?key/i.test(message))
+      setRecoveryAvailable(!!recoverEncryptedProfile && isEncryptedProfileRecoveryError(e))
     }
   }
 
@@ -529,7 +530,7 @@ export function Onboarding({
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       setFinishErr(`Couldn't save your setup. ${message}`)
-      setRecoveryAvailable(/keychain|encrypted profile|secret.?key/i.test(message))
+      setRecoveryAvailable(isEncryptedProfileRecoveryError(e))
     } finally {
       setRecoveryBusy(false)
     }

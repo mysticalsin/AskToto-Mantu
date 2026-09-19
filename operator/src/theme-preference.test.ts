@@ -28,6 +28,13 @@ describe('readThemeCookie', () => {
   it('defaults to system when cookie missing', () => {
     expect(readThemeCookie(new Request('https://example.test/'))).toBe('system')
   })
+
+  it('fails closed to system when the theme cookie has malformed percent encoding', () => {
+    const req = new Request('https://example.test/', {
+      headers: { cookie: 'metis-operator-theme=%E0%A4%A' }
+    })
+    expect(readThemeCookie(req)).toBe('system')
+  })
 })
 
 describe('isFreshLiveEvent', () => {

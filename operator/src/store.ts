@@ -531,6 +531,8 @@ export function memoryStore(): OperatorStore {
       return seats.get(deviceId) ?? null
     },
     async insertAsk(row) {
+      const previous = asks.get(row.id)
+      if (previous && previous.device_id !== row.device_id) return
       asks.set(row.id, row)
     },
     async updateAskRating(id, rating) {
