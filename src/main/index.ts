@@ -591,8 +591,14 @@ import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './op
 import { initLogging, mainLog, auditLog } from './logger'
 import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
 import { safeMeetingBasename } from './meeting-path'
-import { asrModelDownloadState, ensureHighTierAsrModel, isHighTierAsrModelReady, removeHighTierAsrModel } from './asr-model-download'
+import {
+  asrModelDownloadState,
+  ensureHighTierAsrModel,
+  isHighTierAsrModelReady,
+  removeHighTierAsrModel
+} from './asr-model-download'
 import { asrModelBytes } from './asr-model-manifest'
+import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
@@ -625,7 +631,12 @@ import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { effectiveCloudSttProvider } from '../shared/cloud-stt-provider'
 
-import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscribe, stopWhisperHost } from './whisper-import'
+import {
+  resetLanguageFollow as resetImportLanguageFollow,
+  setWhisperImportTierAdmission,
+  whisperImportTranscribe,
+  stopWhisperHost
+} from './whisper-import'
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
 import type { TranscriptLine } from '@shared/ipc'
@@ -659,6 +670,7 @@ import {
   userDataAsrRoot
 } from './asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
+import { allowsSpeculativeLocalWork } from './import-memory-pressure'
 import { bundledFfmpegPath, startFfmpegDecode, type FfmpegDecoder } from './ffmpeg-decoder'
 import {
   saveMeeting,
@@ -1011,6 +1023,7 @@ let overlayCursorWatchHovering = false
 let overlayLeaveParkTimer: ReturnType<typeof setTimeout> | null = null
 const streams = new Map<string, { abort: () => void }>()
 let importJobs: ImportJobManager | null = null
+let highMemoryWhisperImportReserved = false
 let decoderWin: BrowserWindow | null = null
 let decoderJobId: string | null = null
 let decoderExpectedUrl = ''
@@ -1018,6 +1031,11 @@ let closingDecoderJobId: string | null = null
 let sourceAck: { jobId: string; resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
 let decoderReady: { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
 const ffmpegDecoders = new Map<string, FfmpegDecoder>()
+
+/** Imports retain memory ahead of all unattended local starts; active user requests stay untouched. */
+function speculativeLocalWorkAllowed(): boolean {
+  return allowsSpeculativeLocalWork(importJobs?.hasMemoryHeavyWork() === true, highMemoryWhisperImportReserved)
+}
 // "Notified once" keys. Bounded: a session that runs for days imports many files, and an unbounded Set
 // here was one of the two module-level structures that only ever grew (RAM audit, 2026-09-05).
 const notifiedImportJobs = new BoundedSet<string>(500)
@@ -1569,6 +1587,20 @@ function initializeImportJobs(): void {
   wireIntelligenceIndexWork()
   importJobs = new ImportJobManager({
     store: new EncryptedImportJobStore(getSettings),
+    onDecodeAdmission: async (_job, memory) => {
+      // This is the actual decoder-admission point, not setup or queue time. Reserve the optional tier
+      // only when its full digest verification and current hardware gate both pass; otherwise select base.
+      let highTierVerified = false
+      if (getSettings().asrEngine !== 'parakeet' && hasHighMemoryWhisperImportHeadroom(memory.totalMemoryBytes, memory.freeMemoryBytes)) {
+        try {
+          highTierVerified = await isHighTierAsrModelReady()
+        } catch {
+          // Unreadable optional files are indistinguishable from unavailable ones for admission purposes.
+        }
+      }
+      highMemoryWhisperImportReserved = highTierVerified
+      await setWhisperImportTierAdmission(memory.totalMemoryBytes, memory.freeMemoryBytes, highTierVerified)
+    },
     decode: (job) => {
       // One reset per job, at decode start — a new import must never inherit the previous one's
       // converged language (same reasoning as the live worker's session-start resetFollow).
@@ -1637,7 +1669,14 @@ function initializeImportJobs(): void {
     // Free the ASR and speaker helpers' model memory between imports; the next job spawns fresh children.
     // Import idle may start one Intelligence pass (not a BrainView mount timer).
     onIdle: () => {
-      stopWhisperHost()
+      // Keep the high-tier reservation until the killed utility process actually exits. Killing it only
+      // requests termination; clearing this marker earlier would let unattended local work overlap its
+      // still-resident 1.61 GB model.
+      void stopWhisperHost()
+        .catch((e) => mainLog.warn('[whisper-host] could not stop after import idle:', e))
+        .finally(() => {
+          highMemoryWhisperImportReserved = false
+        })
       // A live meeting may share the Parakeet helper after the import queue empties. Do not tear it
       // down out from under that owner; if listening begins during release, the generation gate makes
       // the first live request wait for the exact old child exit before starting a replacement.
@@ -3332,6 +3371,7 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   currentDisplayId: () => screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id,
   privateViewOn,
   ensureLocalRuntimeStarted,
+  allowSpeculativeLocalWork: speculativeLocalWorkAllowed,
   runtime: {
     baseURL: () => localRuntime.baseURL(),
     sessionKey: () => localRuntime.sessionKey(),
@@ -6011,13 +6051,13 @@ function registerIpc(): void {
     const s = getSettings()
     // publicSettings().providerReady is the same "can a cloud/CLI provider actually answer" test the ask
     // path uses — when it is false, local is what will serve the next suggest, so it is worth warming.
-    if (!localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) return
+    if (!speculativeLocalWorkAllowed() || !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) return
     // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
     // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
     // so any future drift between the live suggest path and what prewarm warms fails a test.
     // prewarmLocal (llm/local.ts) is engine-aware: it warms whichever engine pickLocalEngine would give
     // the next real suggest — fm serve on macOS 27+ with Apple Intelligence live, llama-server otherwise.
-    void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s))
+    void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed)
       .catch((err) => mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err)))
   })
 
@@ -6130,9 +6170,10 @@ function registerIpc(): void {
     // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
     if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
     // Overlap local sidecar start with the sync brain stamp below — when local will serve (or hedge),
-    // kicking ensure NOW hides cold-load behind Receipt Mode work instead of serializing after it.
-    if (localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) {
-      void ensureLocalRuntimeStarted(s.localLlm.modelId, req.mode === 'vision').catch((err) =>
+    // kicking ensure NOW hides cold-load behind Receipt Mode work instead of serializing after it. This
+    // overlap remains optional and defers under import pressure; the later user-requested route is ungated.
+    if (speculativeLocalWorkAllowed() && localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) {
+      void ensureLocalRuntimeStarted(s.localLlm.modelId, req.mode === 'vision', speculativeLocalWorkAllowed).catch((err) =>
         mainLog.warn('[local] early ensure failed', err instanceof Error ? err.message : String(err))
       )
     }
@@ -8094,9 +8135,10 @@ if (!app.requestSingleInstanceLock()) {
     const warmLocalIfReady = (): void => {
       try {
         const cur = getSettings()
+        if (!speculativeLocalWorkAllowed()) return
         if (!localPrewarmEligible(cur, getAllowedProviders(), publicSettings().providerReady)) return
         if (!localModelDownloaded(cur.localLlm.modelId)) return
-        void prewarmLocal(cur.localLlm.modelId, buildPrewarmMessages('warm', cur)).catch((e) =>
+        void prewarmLocal(cur.localLlm.modelId, buildPrewarmMessages('warm', cur), speculativeLocalWorkAllowed).catch((e) =>
           mainLog.warn('[boot] local prewarm failed:', e instanceof Error ? e.message : String(e))
         )
       } catch (e) {

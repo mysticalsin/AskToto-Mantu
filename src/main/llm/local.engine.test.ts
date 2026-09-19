@@ -44,12 +44,14 @@ vi.mock('./openai', () => ({ streamOpenAI: vi.fn(() => ({ abort: vi.fn() })) }))
 
 import * as localRuntime from './local-runtime'
 import * as fmRuntime from './fm-runtime'
+import * as localModels from './local-models'
 import { streamOpenAI } from './openai'
 import { streamLocal, pickLocalEngine, prewarmLocal, LOCAL_OUTPUT_TOKEN_BUDGETS } from './local'
 
 const streamOpenAIMock = vi.mocked(streamOpenAI)
 const fm = vi.mocked(fmRuntime)
 const llama = vi.mocked(localRuntime)
+const models = vi.mocked(localModels)
 
 function makeOpts(mode: AskStart['mode']): StreamOptions {
   return {
@@ -78,6 +80,7 @@ beforeEach(() => {
   fm.start.mockResolvedValue(undefined)
   llama.getState.mockReturnValue('stopped')
   llama.start.mockResolvedValue(undefined)
+  models.verifyIntegrity.mockResolvedValue(undefined)
 })
 
 describe('pickLocalEngine', () => {
@@ -218,6 +221,33 @@ describe('prewarmLocal — engine-aware', () => {
     expect(llama.prewarm).toHaveBeenCalledWith([{ role: 'user', content: 'hi' }])
     expect(fm.start).not.toHaveBeenCalled()
     expect(fm.prewarm).not.toHaveBeenCalled()
+  })
+
+  it('rechecks import pressure after async engine selection before starting fm serve', async () => {
+    let allowSpeculativeStart = true
+    fm.probeAvailability.mockImplementation(async () => {
+      allowSpeculativeStart = false
+      return { available: true, reason: null }
+    })
+
+    await prewarmLocal('qwen3.5-0.8b', [{ role: 'user', content: 'hi' }], () => allowSpeculativeStart)
+
+    expect(fm.start).not.toHaveBeenCalled()
+    expect(fm.prewarm).not.toHaveBeenCalled()
+    expect(llama.start).not.toHaveBeenCalled()
+  })
+
+  it('rechecks import pressure after llama integrity verification before starting the sidecar', async () => {
+    fm.probeAvailability.mockResolvedValue({ available: false, reason: 'appleIntelligenceNotEnabled' })
+    let allowSpeculativeStart = true
+    models.verifyIntegrity.mockImplementation(async () => {
+      allowSpeculativeStart = false
+    })
+
+    await prewarmLocal('qwen3.5-0.8b', [{ role: 'user', content: 'hi' }], () => allowSpeculativeStart)
+
+    expect(llama.start).not.toHaveBeenCalled()
+    expect(llama.prewarm).not.toHaveBeenCalled()
   })
 })
 

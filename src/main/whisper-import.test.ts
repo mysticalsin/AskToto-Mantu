@@ -9,7 +9,10 @@ import { EventEmitter } from 'node:events'
 // `stdout` stub streams (ensureHost() in whisper-import.ts subscribes to both unconditionally).
 class FakeChild extends EventEmitter {
   readonly postMessage = vi.fn()
-  readonly kill = vi.fn()
+  readonly kill = vi.fn(() => {
+    queueMicrotask(() => this.emit('exit', 0))
+    return true
+  })
   readonly stderr = new EventEmitter()
   readonly stdout = new EventEmitter()
 }
@@ -23,9 +26,19 @@ const electron = vi.hoisted(() => ({
   utilityProcess: { fork: vi.fn() }
 }))
 const logger = vi.hoisted(() => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
+const hardware = vi.hoisted(() => ({
+  totalmem: vi.fn(() => 16 * 1024 ** 3),
+  freemem: vi.fn(() => 5 * 1024 ** 3)
+}))
+const highTierFiles = vi.hoisted(() => ({ ready: vi.fn(async () => true) }))
 
 vi.mock('electron', () => electron)
+vi.mock('node:os', () => ({ totalmem: hardware.totalmem, freemem: hardware.freemem }))
 vi.mock('./logger', () => logger)
+vi.mock('./asr-model-download', () => ({
+  asrModelRoot: () => '/tmp/metis-test-fetched-models',
+  isHighTierAsrModelReady: highTierFiles.ready
+}))
 vi.mock('./asr-bundled-ensure', () => ({
   ensureWhisperFloorAssets: vi.fn(async () => undefined),
   resolveWhisperModelsRoot: () => '/tmp/metis-test-models'
@@ -39,6 +52,7 @@ import {
   probeLanguage,
   reprobeForSwitch,
   resetLanguageFollow,
+  setWhisperImportTierAdmission,
   stopWhisperHost,
   whisperImportTranscribe
 } from './whisper-import'
@@ -54,6 +68,15 @@ async function waitForRequest(child: FakeChild, type: string): Promise<{ id: num
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
   throw new Error(`fake child never received a '${type}' postMessage`)
+}
+
+async function waitForInit(child: FakeChild): Promise<Record<string, unknown>> {
+  for (let i = 0; i < 50; i++) {
+    const found = child.postMessage.mock.calls.map(([m]) => m as { type?: string }).find((m) => m.type === 'init')
+    if (found) return found
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error("fake child never received an 'init' postMessage")
 }
 
 // Mirrors the essential cases from renderer/src/lib/whisper.worker.test.ts (PR #29) against the ported
@@ -373,16 +396,20 @@ describe('whisper-import runaway-decode-loop guard (finalizeDecodedText)', () =>
 describe('whisper-import utilityProcess RPC (MQA-234: transformers isolated into its own child)', () => {
   let child: FakeChild
 
-  beforeEach(() => {
+  beforeEach(async () => {
     child = new FakeChild()
     electron.utilityProcess.fork.mockReset().mockReturnValue(child)
+    hardware.totalmem.mockReset().mockReturnValue(16 * 1024 ** 3)
+    hardware.freemem.mockReset().mockReturnValue(5 * 1024 ** 3)
+    highTierFiles.ready.mockReset().mockResolvedValue(true)
     resetLanguageFollow('auto')
+    await setWhisperImportTierAdmission(16 * 1024 ** 3, 5 * 1024 ** 3, true)
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     // Every test either resolves/rejects the one in-flight request or kills the child itself; this just
     // guarantees no live host handle leaks from a failed test into the next one's fork() call count.
-    stopWhisperHost()
+    await stopWhisperHost()
   })
 
   it("rejects with the child's reported message when it answers a transcribe request with an error", async () => {
@@ -423,11 +450,12 @@ describe('whisper-import utilityProcess RPC (MQA-234: transformers isolated into
     await expect(first).resolves.toBe('first')
     expect(electron.utilityProcess.fork).toHaveBeenCalledTimes(1)
 
-    stopWhisperHost()
+    await stopWhisperHost()
     expect(child.kill).toHaveBeenCalledTimes(1)
 
     const second = new FakeChild()
     electron.utilityProcess.fork.mockReturnValue(second)
+    await setWhisperImportTierAdmission(16 * 1024 ** 3, 5 * 1024 ** 3, true)
     const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
     const secondReq = await waitForRequest(second, 'transcribe')
 
@@ -436,5 +464,102 @@ describe('whisper-import utilityProcess RPC (MQA-234: transformers isolated into
     second.emit('message', { type: 'result', id: secondReq.id, text: 'second' })
 
     await expect(pending).resolves.toBe('second')
+  })
+
+  it.each([
+    ['below the 16 GiB device floor', 16 * 1024 ** 3 - 1, 5 * 1024 ** 3, true, false],
+    ['below the 5 GiB free-memory floor', 16 * 1024 ** 3, 5 * 1024 ** 3 - 1, true, false],
+    ['without the complete downloaded model files', 16 * 1024 ** 3, 5 * 1024 ** 3, false, false],
+    ['at both memory floors with complete downloaded files', 16 * 1024 ** 3, 5 * 1024 ** 3, true, true]
+  ] as const)(
+    'admits the optional high-memory tier at host start only %s',
+    async (_label, totalMemoryBytes, freeMemoryBytes, filesReady, expected) => {
+      hardware.totalmem.mockReturnValue(totalMemoryBytes)
+      hardware.freemem.mockReturnValue(freeMemoryBytes)
+      highTierFiles.ready.mockResolvedValue(filesReady)
+      await setWhisperImportTierAdmission(totalMemoryBytes, freeMemoryBytes, filesReady)
+
+      const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+      const init = await waitForInit(child)
+      expect(init.allowHighMemoryTier).toBe(expected)
+      expect('fetchedModelsPath' in init).toBe(expected)
+
+      const req = await waitForRequest(child, 'transcribe')
+      child.emit('message', { type: 'result', id: req.id, text: 'done' })
+      await expect(pending).resolves.toBe('done')
+    }
+  )
+
+  it('restarts a previously admitted high-memory host before a new low-memory import can use it', async () => {
+    const first = whisperImportTranscribe(new Float32Array(16), 'auto')
+    const firstInit = await waitForInit(child)
+    expect(firstInit.allowHighMemoryTier).toBe(true)
+    const firstReq = await waitForRequest(child, 'transcribe')
+    child.emit('message', { type: 'result', id: firstReq.id, text: 'first' })
+    await expect(first).resolves.toBe('first')
+
+    const second = new FakeChild()
+    electron.utilityProcess.fork.mockReturnValue(second)
+    hardware.freemem.mockReturnValue(5 * 1024 ** 3 - 1)
+    await setWhisperImportTierAdmission(16 * 1024 ** 3, 5 * 1024 ** 3 - 1, false)
+    expect(child.kill).toHaveBeenCalledTimes(1)
+
+    const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+    const secondInit = await waitForInit(second)
+    expect(secondInit.allowHighMemoryTier).toBe(false)
+    const secondReq = await waitForRequest(second, 'transcribe')
+    second.emit('message', { type: 'result', id: secondReq.id, text: 'second' })
+    await expect(pending).resolves.toBe('second')
+  })
+
+  it('waits for a stopped helper to exit before a compact replacement forks', async () => {
+    const first = whisperImportTranscribe(new Float32Array(16), 'auto')
+    const firstReq = await waitForRequest(child, 'transcribe')
+    child.emit('message', { type: 'result', id: firstReq.id, text: 'first' })
+    await expect(first).resolves.toBe('first')
+
+    child.kill.mockImplementation(() => true) // hold Electron's exit event until this test releases it
+    const stopping = stopWhisperHost()
+    const replacement = new FakeChild()
+    electron.utilityProcess.fork.mockReturnValue(replacement)
+    hardware.freemem.mockReturnValue(5 * 1024 ** 3 - 1)
+    const lowAdmission = setWhisperImportTierAdmission(16 * 1024 ** 3, 5 * 1024 ** 3 - 1, false)
+    const second = whisperImportTranscribe(new Float32Array(16), 'auto')
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(electron.utilityProcess.fork).toHaveBeenCalledTimes(1)
+
+    child.emit('exit', 0)
+    await Promise.all([stopping, lowAdmission])
+    const secondReq = await waitForRequest(replacement, 'transcribe')
+
+    replacement.emit('message', { type: 'result', id: secondReq.id, text: 'second' })
+    await expect(second).resolves.toBe('second')
+  })
+
+  it('does not upgrade a decoder admission that was denied before host-start memory recovered', async () => {
+    await setWhisperImportTierAdmission(16 * 1024 ** 3 - 1, 5 * 1024 ** 3, true)
+    hardware.totalmem.mockReturnValue(16 * 1024 ** 3)
+    hardware.freemem.mockReturnValue(5 * 1024 ** 3)
+
+    const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+    const init = await waitForInit(child)
+    expect(init.allowHighMemoryTier).toBe(false)
+
+    const req = await waitForRequest(child, 'transcribe')
+    child.emit('message', { type: 'result', id: req.id, text: 'compact' })
+    await expect(pending).resolves.toBe('compact')
+  })
+
+  it('rechecks integrity at host start after a granted decoder admission', async () => {
+    highTierFiles.ready.mockResolvedValue(false)
+
+    const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+    const init = await waitForInit(child)
+    expect(init.allowHighMemoryTier).toBe(false)
+
+    const req = await waitForRequest(child, 'transcribe')
+    child.emit('message', { type: 'result', id: req.id, text: 'compact' })
+    await expect(pending).resolves.toBe('compact')
   })
 })

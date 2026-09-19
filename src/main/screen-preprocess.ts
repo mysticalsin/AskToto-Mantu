@@ -70,7 +70,9 @@ export interface ScreenPreprocessDeps {
   /** True while Private View is on — dynamic, re-checked at every describe. */
   privateViewOn: () => boolean
   /** Spin up / confirm the local sidecar for the configured model (from llm/local.ts). */
-  ensureLocalRuntimeStarted: (modelId: string, vision?: boolean) => Promise<void>
+  ensureLocalRuntimeStarted: (modelId: string, vision?: boolean, canStartSpeculatively?: () => boolean) => Promise<void>
+  /** Optional pressure gate for unattended VLM work. On-device OCR remains eligible when this is false. */
+  allowSpeculativeLocalWork?: () => boolean
   runtime: {
     baseURL: () => string
     sessionKey: () => string
@@ -210,7 +212,10 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
   async function describeOnce(imageB64: string): Promise<string> {
     const s = deps.getSettings()
     // MQA-270 (B1): the background describe IS a vision pass — it needs the projector loaded.
-    await deps.ensureLocalRuntimeStarted(s.localLlm.modelId, true)
+    await deps.ensureLocalRuntimeStarted(s.localLlm.modelId, true, deps.allowSpeculativeLocalWork)
+    // The start helper checks before its own spawn, but the helper may have awaited an existing start.
+    // Check once more before this unattended VLM request touches the sidecar.
+    if (deps.allowSpeculativeLocalWork?.() === false) return ''
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), DESCRIBE_TIMEOUT_MS)
     deps.runtime.markActivity()
@@ -298,7 +303,7 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
         // llama endpoint). If it isn't ready, eligible() only let us in here because OCR is available —
         // OCR just came back text-poor, so there is nothing more this pass can produce. Don't call
         // describeOnce() without a ready runtime; skip this cycle instead (no cache, no crash).
-        if (!deps.localReady()) return
+        if (!deps.localReady() || deps.allowSpeculativeLocalWork?.() === false) return
         text = await describeOnce(shot.image)
       }
       if (!text) return

@@ -278,6 +278,18 @@ describe('ensureLocalRuntimeStarted', () => {
     expect(localRuntimeMock.start).not.toHaveBeenCalled()
   })
 
+  it('defers a speculative start when import pressure begins during integrity verification', async () => {
+    let allowSpeculativeStart = true
+    localModelsMock.verifyIntegrity.mockImplementation(async () => {
+      allowSpeculativeStart = false
+    })
+
+    await ensureLocalRuntimeStarted('qwen3.5-0.8b', false, () => allowSpeculativeStart)
+
+    expect(localModelsMock.verifyIntegrity).toHaveBeenCalledWith('qwen3.5-0.8b')
+    expect(localRuntimeMock.start).not.toHaveBeenCalled()
+  })
+
   it('propagates a start failure (the caller — index.ts’s handler — is what must swallow it)', async () => {
     localRuntimeMock.start.mockRejectedValue(new Error('llama-server binary missing'))
     await expect(ensureLocalRuntimeStarted('qwen3.5-0.8b')).rejects.toThrow('llama-server binary missing')

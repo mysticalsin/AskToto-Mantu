@@ -53,11 +53,20 @@ function boundedLocalSystem(system: string): string {
  * re-hash — never on every live-meeting request against an unchanged model. A mismatch throws and start()
  * is never reached, so a corrupt file never reaches llama-server.
  */
-export async function ensureLocalRuntimeStarted(modelId: string, vision = false): Promise<void> {
+export async function ensureLocalRuntimeStarted(
+  modelId: string,
+  vision = false,
+  canStartSpeculatively?: () => boolean
+): Promise<void> {
+  // Only unattended callers pass this gate. A real user request deliberately omits it, so an import
+  // cannot turn a requested local answer into a silent no-op. Check both before costly verification and
+  // again immediately before start: an import can begin while the integrity read is in flight.
+  if (canStartSpeculatively?.() === false) return
   const paths = resolveLocalModelPaths(modelId)
   if (localRuntime.getState() === 'stopped' || localRuntime.getActiveModelKey() !== paths.gguf) {
     await verifyIntegrity(modelId)
   }
+  if (canStartSpeculatively?.() === false) return
   // MQA-270 (B1): the multimodal projector loads at server START, never lazily, and costs 1.03 GB
   // whether or not vision is ever used — so text-only starts spawn with --no-mmproj. A vision request
   // against a text-only runtime fails samePaths (vision is one-way sticky there) and takes start()'s
@@ -100,16 +109,23 @@ export async function pickLocalEngine(mode: AskMode): Promise<LocalEngine> {
  */
 export async function prewarmLocal(
   modelId: string,
-  messages: Array<{ role: string; content: string }>
+  messages: Array<{ role: string; content: string }>,
+  canStartSpeculatively?: () => boolean
 ): Promise<void> {
   if ((await pickLocalEngine('suggest')) === 'apple') {
+    // Engine selection is async. Recheck after it, directly before loading fm serve, so a concurrent
+    // import can defer this best-effort warm without affecting the later user-initiated request.
+    if (canStartSpeculatively?.() === false) return
     await fmRuntime.start()
+    if (canStartSpeculatively?.() === false) return
     fmRuntime.markActivity()
     fmRuntime.prewarm(messages)
     return
   }
+  if (canStartSpeculatively?.() === false) return
   localRuntime.markActivity()
-  await ensureLocalRuntimeStarted(modelId)
+  await ensureLocalRuntimeStarted(modelId, false, canStartSpeculatively)
+  if (canStartSpeculatively?.() === false) return
   localRuntime.prewarm(messages)
 }
 
