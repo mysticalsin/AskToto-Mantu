@@ -12,12 +12,14 @@
  * Parakeet fallback, exactly as before.
  */
 import { utilityProcess, type UtilityProcess } from 'electron'
+import { freemem as physicalFreeMemory, totalmem as physicalTotalMemory } from 'node:os'
 import { join } from 'node:path'
 import { detectLanguage, LANGUAGE_NAMES } from '@shared/lang-id'
 import { collapseRepeatedPhrase } from '@shared/transcript-filter'
+import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { mainLog } from './logger'
 import { getSettings, setSettings } from './store'
-import { asrModelRoot } from './asr-model-download'
+import { asrModelRoot, isHighTierAsrModelReady } from './asr-model-download'
 import { ensureWhisperFloorAssets, resolveWhisperModelsRoot } from './asr-bundled-ensure'
 
 /** resources/models — or userData/asr-models when the floor was fetched after install. */
@@ -38,6 +40,67 @@ let host: UtilityProcess | null = null
 let hostReady = false
 let nextRequestId = 1
 const pending = new Map<number, PendingRequest>()
+/** Whether the live helper was admitted to load the optional large tier at its own start. */
+let hostAllowsHighMemoryTier = false
+/** A decoder admission has selected an import tier. No helper may start without this per-import grant. */
+let importTierAdmissionActive = false
+/** The decoder-admission grant is necessary, but never sufficient, for the optional high-memory tier. */
+let importTierAdmissionAllowsHighMemory = false
+/** Invalidates an async host-start snapshot when a newer decoder admission or idle release arrives. */
+let importTierAdmissionVersion = 0
+/** A killed utilityProcess still owns its model until Electron emits exit. */
+let stoppingHost: UtilityProcess | null = null
+let hostStopBarrier: Promise<void> | null = null
+let resolveHostStopBarrier: (() => void) | null = null
+/** Concurrent first transcribes share one host start and its integrity verification. */
+let hostStarting: Promise<UtilityProcess> | null = null
+
+/**
+ * Bind a decoder-admission decision to the next import host. The optional tier needs this explicit grant,
+ * fresh host-start memory headroom, and a second integrity verification below. A changed policy waits for
+ * an existing helper to EXIT, not merely receive kill(), before another helper may start.
+ */
+export async function setWhisperImportTierAdmission(
+  totalMemoryBytes: unknown,
+  freeMemoryBytes: unknown,
+  verifiedHighTierFiles = false
+): Promise<void> {
+  const next = verifiedHighTierFiles === true && hasHighMemoryWhisperImportHeadroom(totalMemoryBytes, freeMemoryBytes)
+  importTierAdmissionActive = true
+  importTierAdmissionAllowsHighMemory = next
+  importTierAdmissionVersion += 1
+  if (host && next !== hostAllowsHighMemoryTier) await requestHostStop()
+  else await waitForStoppedHost()
+}
+
+interface HostTierAdmission {
+  allowHighMemoryTier: boolean
+  fetchedModelsPath?: string
+}
+
+/**
+ * Snapshots memory exactly when a new utility host starts. The optional tier is permitted only when this
+ * host has the decoder's explicit grant, this fresh snapshot clears both RAM floors, and every downloaded
+ * model file still matches its pinned digest. Any failed OS/filesystem read takes the bundled whisper-base
+ * path.
+ */
+async function admitHostTierAtStart(): Promise<HostTierAdmission> {
+  if (!importTierAdmissionAllowsHighMemory) return { allowHighMemoryTier: false }
+  let hasHeadroom = false
+  try {
+    hasHeadroom = hasHighMemoryWhisperImportHeadroom(physicalTotalMemory(), physicalFreeMemory())
+  } catch {
+    return { allowHighMemoryTier: false }
+  }
+  if (!hasHeadroom) return { allowHighMemoryTier: false }
+  try {
+    if (!(await isHighTierAsrModelReady())) return { allowHighMemoryTier: false }
+    return { allowHighMemoryTier: true, fetchedModelsPath: asrModelRoot() }
+  } catch (e) {
+    mainLog.warn('[whisper-host] could not inspect the optional high-memory tier:', e)
+    return { allowHighMemoryTier: false }
+  }
+}
 
 function failAllPending(message: string): void {
   for (const [, req] of pending) {
@@ -47,8 +110,71 @@ function failAllPending(message: string): void {
   pending.clear()
 }
 
-function ensureHost(): UtilityProcess {
-  if (host) return host
+function settleHostStop(child: UtilityProcess): void {
+  if (stoppingHost !== child) return
+  const resolve = resolveHostStopBarrier
+  stoppingHost = null
+  hostStopBarrier = null
+  resolveHostStopBarrier = null
+  resolve?.()
+}
+
+function waitForStoppedHost(): Promise<void> {
+  return hostStopBarrier ?? Promise.resolve()
+}
+
+/** Request termination and return only after the exact helper has exited. */
+function requestHostStop(): Promise<void> {
+  const child = host
+  host = null
+  hostReady = false
+  hostAllowsHighMemoryTier = false
+  if (!child) return waitForStoppedHost()
+  failAllPending('Import cancelled.')
+  if (stoppingHost === child && hostStopBarrier) return hostStopBarrier
+  let resolve!: () => void
+  const stopped = new Promise<void>((done) => {
+    resolve = done
+  })
+  stoppingHost = child
+  hostStopBarrier = stopped
+  resolveHostStopBarrier = resolve
+  try {
+    child.kill()
+  } catch {
+    // UtilityProcess can throw if it already exited. Treat that as complete only when Electron has
+    // delivered the exit event; the barrier remains until then so a replacement cannot overlap it.
+  }
+  return stopped
+}
+
+async function createHost(): Promise<UtilityProcess> {
+  for (;;) {
+    await waitForStoppedHost()
+    if (host) return host
+    if (!importTierAdmissionActive) throw new Error('No import decoder admission is active for Whisper.')
+    const admissionVersion = importTierAdmissionVersion
+    const tierAdmission = await admitHostTierAtStart()
+    await waitForStoppedHost()
+    if (host) return host
+    // A newer import admission or idle release won while the model digest was being checked. Re-read the
+    // policy rather than creating a helper from a stale grant.
+    if (admissionVersion !== importTierAdmissionVersion) continue
+    if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+    return forkHost(tierAdmission)
+  }
+}
+
+function ensureHost(): Promise<UtilityProcess> {
+  if (host) return Promise.resolve(host)
+  if (hostStarting) return hostStarting
+  hostStarting = createHost().finally(() => {
+    hostStarting = null
+  })
+  return hostStarting
+}
+
+function forkHost(tierAdmission: HostTierAdmission): UtilityProcess {
   const child = utilityProcess.fork(join(__dirname, 'whisper-asr-host.js'), [], {
     serviceName: 'metis-whisper-import',
     stdio: 'pipe'
@@ -56,6 +182,9 @@ function ensureHost(): UtilityProcess {
   child.stderr?.on('data', (chunk: Buffer) => mainLog.warn('[whisper-host]', chunk.toString('utf8').trim()))
   child.stdout?.on('data', () => {})
   child.on('message', (msg: unknown) => {
+    // A killed helper can still flush a queued IPC message. It must not change fallback state or resolve
+    // a request that belongs to the replacement host for the next import.
+    if (host !== child) return
     const m = msg as { type?: string; id?: number; text?: string; message?: string; tier?: string; degraded?: boolean }
     if (m?.type === 'ready') {
       hostReady = true
@@ -63,7 +192,7 @@ function ensureHost(): UtilityProcess {
       // path already has this contract for its own engine swap (settings.asrLastFallbackAt, surfaced in
       // Settings until dismissed); imports had nothing, so a recording transcribed by the weakest model
       // looked identical to one transcribed by the best. Same after-the-fact note, never a live banner.
-      mainLog.info(`[whisper-host] transcription tier: ${m.tier ?? 'unknown'}${m.degraded ? ' (degraded — high tier not present)' : ''}`)
+      mainLog.info(`[whisper-host] transcription tier: ${m.tier ?? 'unknown'}${m.degraded ? ' (compact tier used)' : ''}`)
       if (m.degraded) {
         try {
           if (getSettings().asrImportTierFallbackAt == null) setSettings({ asrImportTierFallbackAt: Date.now() })
@@ -83,48 +212,52 @@ function ensureHost(): UtilityProcess {
     }
   })
   child.on('exit', (code) => {
+    settleHostStop(child)
     // A crashed/killed child (OOM, native fault) must fail fast, not hang the import until timeout —
     // and the NEXT transcribe call gets a fresh child rather than a dead handle.
+    if (host !== child) return
+    host = null
+    hostReady = false
+    hostAllowsHighMemoryTier = false
+    failAllPending(`The transcription helper exited unexpectedly (code ${code ?? 'unknown'}).`)
+  })
+  host = child
+  hostReady = false
+  hostAllowsHighMemoryTier = tierAdmission.allowHighMemoryTier
+  try {
+    child.postMessage({
+      type: 'init',
+      modelsPath: modelsDir(),
+      allowHighMemoryTier: tierAdmission.allowHighMemoryTier,
+      ...(tierAdmission.fetchedModelsPath ? { fetchedModelsPath: tierAdmission.fetchedModelsPath } : {})
+    })
+  } catch (e) {
     if (host === child) {
       host = null
       hostReady = false
+      hostAllowsHighMemoryTier = false
     }
-    failAllPending(`The transcription helper exited unexpectedly (code ${code ?? 'unknown'}).`)
-  })
-  // MQA-247: both roots — the packaged floor and the per-user profile the high tier is fetched into.
-  // Resolved defensively: if the profile path is unavailable for any reason, an import must still run
-  // on the bundled floor rather than fail outright. Losing the better model is a degradation; losing
-  // transcription is an outage, and this module already treats the floor as the always-available path.
-  let fetchedModelsPath: string | undefined
-  try {
-    fetchedModelsPath = asrModelRoot()
-  } catch (e) {
-    mainLog.warn('[whisper-host] no fetched-model root; the bundled floor is the only tier:', e)
-  }
-  child.postMessage({ type: 'init', modelsPath: modelsDir(), ...(fetchedModelsPath ? { fetchedModelsPath } : {}) })
-  host = child
-  hostReady = false
-  return child
-}
-
-/** Stop the helper and free its ~300MB of model memory. Called by the import pipeline at job end; the
- *  next import simply spawns a fresh child. Safe to call when no host is running. */
-export function stopWhisperHost(): void {
-  const child = host
-  host = null
-  hostReady = false
-  if (child) {
-    failAllPending('Import cancelled.')
     try {
       child.kill()
     } catch {
       /* already gone */
     }
+    throw e
   }
+  return child
 }
 
-function transcribeRemote(samples: Float32Array, language?: string, task?: string): Promise<string> {
-  const child = ensureHost()
+/** Stop the helper and free its ~300MB of model memory. Called by the import pipeline at job end; the
+ *  next import simply spawns a fresh child. Safe to call when no host is running. */
+export async function stopWhisperHost(): Promise<void> {
+  importTierAdmissionActive = false
+  importTierAdmissionAllowsHighMemory = false
+  importTierAdmissionVersion += 1
+  await requestHostStop()
+}
+
+async function transcribeRemote(samples: Float32Array, language?: string, task?: string): Promise<string> {
+  const child = await ensureHost()
   const id = nextRequestId++
   // Copy into an owned, transfer-safe buffer: `samples` may be a view over a decoder buffer the caller
   // reuses, and postMessage's structured clone must see a stable snapshot.

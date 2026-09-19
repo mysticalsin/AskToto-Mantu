@@ -90,8 +90,11 @@ async function fileIsValid(path: string, spec: AsrModelFile): Promise<boolean> {
  * cost is paid once per host start, and the alternative — trusting a path to mean a good file — is how a
  * truncated download gets adopted silently.
  */
-export async function isHighTierAsrModelReady(spec: AsrModelSpec = HIGH_TIER_ASR_MODEL): Promise<boolean> {
-  const dir = asrModelDir(spec)
+export async function isHighTierAsrModelReady(
+  spec: AsrModelSpec = HIGH_TIER_ASR_MODEL,
+  root: string = asrModelRoot()
+): Promise<boolean> {
+  const dir = join(root, ...spec.id.split('/'))
   for (const file of spec.files) {
     if (!(await fileIsValid(join(dir, ...file.path.split('/')), file))) return false
   }

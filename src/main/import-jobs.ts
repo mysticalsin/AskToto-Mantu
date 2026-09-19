@@ -1,4 +1,4 @@
-import { freemem } from 'node:os'
+import { freemem, totalmem } from 'node:os'
 import { hasVadV2MemoryHeadroom } from '@shared/asr-hardware-preference'
 import { vadWindowsFromPcm } from '@shared/vad'
 import { IMPORT_CHUNK_SECONDS, type SaveMeeting, type TranscriptLine } from '@shared/ipc'
@@ -79,6 +79,12 @@ export interface ImportSpeakerAttempt {
   readonly attemptId: number
 }
 
+/** OS memory snapshot taken exactly when a queued job claims the sole decoder admission slot. */
+export interface ImportDecodeMemoryAdmission {
+  totalMemoryBytes: unknown
+  freeMemoryBytes: unknown
+}
+
 export interface ImportJobManagerDeps {
   store: ImportJobStore
   /** Starts an isolated decoder for the selected source. It must return immediately; completion arrives through finishDecoding. */
@@ -123,8 +129,12 @@ export interface ImportJobManagerDeps {
   onCancel?: (jobId: string) => void | Promise<void>
   /** Current persona (settings.mode), snapshotted into the job at start() — see ImportJob.mode. */
   personaMode?: () => string
-  /** Current OS free memory in bytes. Injected by tests; production reads node:os freemem() at admission. */
-  freeMemoryBytes?: () => number
+  /** Current OS free memory in bytes. Injected by tests; production reads node:os freemem(). */
+  freeMemoryBytes?: () => unknown
+  /** Physical OS memory in bytes. Injected by tests; production reads node:os totalmem(). */
+  totalMemoryBytes?: () => unknown
+  /** Called at actual decoder admission, after any low-free-memory VAD downgrade. */
+  onDecodeAdmission?: (job: ImportJob, memory: ImportDecodeMemoryAdmission) => void | Promise<void>
   now?: () => number
   newId?: () => string
   /** How many recordings may occupy the decoded-audio admission slot at once. ASR stays mutexed. The
@@ -334,6 +344,18 @@ export class ImportJobManager {
     return job ? copy(job) : undefined
   }
 
+  /**
+   * True while the decoder slot owns whole-recording VAD PCM or drains its overflow backlog. A bounded
+   * slab being consumed also reports pressure conservatively, so optional local work never competes for
+   * decoded audio that has not yet been released.
+   */
+  hasMemoryHeavyWork(): boolean {
+    for (const jobId of this.decodeSlotIds) {
+      if (this.jobs.get(jobId)?.pipeline === 'vad-v2' || this.retainedPcmConsumerIds.has(jobId)) return true
+    }
+    return false
+  }
+
   /** Persist a decoder progress signal without pretending that 100% means the summary is ready. */
   async reportProgress(jobId: string, pct: number): Promise<void> {
     const job = this.requireJob(jobId)
@@ -463,26 +485,35 @@ export class ImportJobManager {
     // backlog is transcribed slab-by-slab right here, then this and every later slab take the legacy
     // branch below.
     let drainBufferedPcm = false
-    if (job.pipeline === 'vad-v2') {
-      const buf = this.pcmOf(job.jobId)
-      if (buf.samples + samples.length <= VAD_MAX_SAMPLES) {
-        // Own copy: the decoder reuses its buffer across chunks.
-        buf.slabs.push(samples.slice())
-        buf.samples += samples.length
-        return
-      }
-      job.pipeline = undefined
-      job.chunkSec = IMPORT_CHUNK_SECONDS
-      await this.persist(job)
-      if (!this.attemptAccepts(attempt)) return
-      drainBufferedPcm = true
-    }
-
-    // The legacy overflow path temporarily owns the entire buffered recording while draining it. Keep
-    // admission closed until that helper's stack has unwound; recovered legacy jobs share the same guard
-    // so cancellation cannot overlap even their bounded current slab with the next decoder.
-    this.retainedPcmConsumerIds.add(job.jobId)
+    let ownsRetainedPcm = false
     try {
+      if (job.pipeline === 'vad-v2') {
+        const buf = this.pcmOf(job.jobId)
+        if (buf.samples + samples.length <= VAD_MAX_SAMPLES) {
+          // Own copy: the decoder reuses its buffer across chunks.
+          buf.slabs.push(samples.slice())
+          buf.samples += samples.length
+          return
+        }
+        // Claim the retention marker before changing the durable pipeline or awaiting persistence. The
+        // backlog is still reachable through pcmByJob during that await, and optional local work must
+        // remain deferred until drainLegacyBacklog() releases it.
+        this.retainedPcmConsumerIds.add(job.jobId)
+        ownsRetainedPcm = true
+        job.pipeline = undefined
+        job.chunkSec = IMPORT_CHUNK_SECONDS
+        await this.persist(job)
+        if (!this.attemptAccepts(attempt)) return
+        drainBufferedPcm = true
+      }
+
+      // The legacy overflow path temporarily owns the entire buffered recording while draining it. Keep
+      // admission closed until that helper's stack has unwound; recovered legacy jobs share the same guard
+      // so cancellation cannot overlap even their bounded current slab with the next decoder.
+      if (!ownsRetainedPcm) {
+        this.retainedPcmConsumerIds.add(job.jobId)
+        ownsRetainedPcm = true
+      }
       if (drainBufferedPcm && !(await this.drainLegacyBacklog(job, attempt))) return
       if (terminal(job.state) || !this.attemptAccepts(attempt)) return
       job.state = 'transcribing'
@@ -497,7 +528,7 @@ export class ImportJobManager {
       await this.fail(job, message(error))
       throw error
     } finally {
-      this.retainedPcmConsumerIds.delete(job.jobId)
+      if (ownsRetainedPcm) this.retainedPcmConsumerIds.delete(job.jobId)
       if (terminal(job.state) || !this.attemptAccepts(attempt)) await this.releaseAdmissionSlot(job.jobId, attempt)
     }
   }
@@ -920,6 +951,15 @@ export class ImportJobManager {
       const jobId = this.queue.shift()!
       const job = this.jobs.get(jobId)
       if (!job || terminal(job.state)) continue
+      const memory = this.decodeMemoryAdmission()
+      // A queued job may wait behind a long recording. Do not let a high-memory snapshot from enqueue
+      // authorize whole-recording VAD after the OS has fallen below the bounded-path floor. A VAD
+      // checkpoint with progress cannot safely be reinterpreted as legacy slabs because its cursor
+      // counts VAD windows, so restart that unfinished import from its source on the bounded path.
+      if (job.pipeline === 'vad-v2' && !hasVadV2MemoryHeadroom(memory.freeMemoryBytes)) {
+        if (this.isFreshVadV2Admission(job)) this.downgradeToBoundedPipeline(job)
+        else this.restartVadOnBoundedPipeline(job)
+      }
       this.takePcm(jobId) // leftover buffers from a prior attempt at THIS job must not mix with a resume
       // A vad-v2 job that failed mid-transcription already had `totalChunks` overwritten to the WINDOW
       // count by consumeVadPcm (phase 2). A resume always re-decodes from scratch (phase 1), whose
@@ -934,6 +974,16 @@ export class ImportJobManager {
       const attempt = this.createAttempt(job)
       job.state = 'decoding'
       await this.persist(job)
+      if (!this.attemptAccepts(attempt)) continue
+      try {
+        // A high-tier policy can release optional model memory before the decoder begins. Treat a
+        // rejected policy step like any other pre-decode failure so the durable job gets an error and
+        // its decoder slot is reclaimed instead of remaining indefinitely in "decoding".
+        await this.deps.onDecodeAdmission?.(copy(job), memory)
+      } catch (error) {
+        if (!this.isCancelled(job)) await this.fail(job, message(error))
+        continue
+      }
       if (!this.attemptAccepts(attempt)) continue
       this.admitSpeakers(job, attempt)
       try {
@@ -1094,6 +1144,52 @@ export class ImportJobManager {
     } catch {
       return undefined
     }
+  }
+
+  /** Read the values once so VAD and Whisper-tier admission make one consistent decision for this attempt. */
+  private decodeMemoryAdmission(): ImportDecodeMemoryAdmission {
+    let freeMemoryBytes: unknown
+    let totalMemoryBytes: unknown
+    try {
+      freeMemoryBytes = this.deps.freeMemoryBytes ? this.deps.freeMemoryBytes() : freemem()
+    } catch {
+      freeMemoryBytes = undefined
+    }
+    try {
+      totalMemoryBytes = this.deps.totalMemoryBytes ? this.deps.totalMemoryBytes() : totalmem()
+    } catch {
+      totalMemoryBytes = undefined
+    }
+    return { totalMemoryBytes, freeMemoryBytes }
+  }
+
+  /** Only this empty pre-decode shape has no VAD-window checkpoint semantics to preserve. */
+  private isFreshVadV2Admission(job: ImportJob): boolean {
+    return (
+      job.pipeline === 'vad-v2' &&
+      job.cursor === 0 &&
+      job.totalChunks === 0 &&
+      job.lines.length === 0 &&
+      job.progressPct === undefined &&
+      job.durationMs === undefined &&
+      job.file === undefined
+    )
+  }
+
+  /** This runs only for a fresh job, before the decoder can retain its first PCM slab. */
+  private downgradeToBoundedPipeline(job: ImportJob): void {
+    job.pipeline = undefined
+  }
+
+  /** A VAD-window cursor cannot be applied to fixed decoder slabs. Restart safely on low memory. */
+  private restartVadOnBoundedPipeline(job: ImportJob): void {
+    job.pipeline = undefined
+    job.cursor = 0
+    job.totalChunks = 0
+    job.lines = []
+    job.progressPct = undefined
+    job.durationMs = undefined
+    job.chunkSec = IMPORT_CHUNK_SECONDS
   }
 }
 

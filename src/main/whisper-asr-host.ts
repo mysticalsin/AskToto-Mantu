@@ -27,8 +27,8 @@ import { join } from 'node:path'
 // Model tiers, best-first. large-v3-turbo is the near-Plaud-quality tier (benchmarked on this class of
 // hardware at ~1.5x realtime CPU — a VAD-trimmed 31-min meeting decodes in ~15 min) but its ~1.6GB of
 // weights only exist where the WebGPU ASR tier was provisioned (fetch-models.mjs, ASKTOTO_INCLUDE_WEBGPU_ASR
-// or a later in-app download). whisper-base is the always-bundled floor. The host picks the best tier whose
-// files are actually on disk — availability, not configuration, decides.
+// or a later in-app download). whisper-base is the always-bundled floor. A fetched high tier is usable
+// only after the main process admits the specific import against its current memory snapshot.
 const MODEL_TIERS = [
   {
     id: 'onnx-community/whisper-large-v3-turbo',
@@ -39,9 +39,7 @@ const MODEL_TIERS = [
 ]
 const MODEL_REVISION = 'main'
 
-/** The best tier whose files are actually present, else the always-bundled floor. Pure file presence, so
- *  it is answerable the moment modelsPath is known — which is what lets the `ready` message report the
- *  tier BEFORE the (lazy) model load, rather than leaving the caller to guess. */
+/** The best admitted tier whose files are actually present, else the always-bundled floor. */
 function resolveTier(dir: string | null): (typeof MODEL_TIERS)[number] {
   return tierAndRoot(dir).tier
 }
@@ -57,7 +55,15 @@ function resolveTier(dir: string | null): (typeof MODEL_TIERS)[number] {
  */
 function tierAndRoot(dir: string | null): { tier: (typeof MODEL_TIERS)[number]; root: string | null } {
   for (const tier of MODEL_TIERS) {
-    for (const root of [fetchedModelsPath, dir]) {
+    // The large tier is an optional downloaded payload. Never accept a high-tier directory in the
+    // package root: only the parent may grant the fetched root after its current host-start admission.
+    const roots =
+      tier === MODEL_TIERS[0]
+        ? allowHighMemoryTier && fetchedModelsPath
+          ? [fetchedModelsPath]
+          : []
+        : [dir, fetchedModelsPath]
+    for (const root of roots) {
       if (root && existsSync(join(root, tier.id))) return { tier, root }
     }
   }
@@ -67,6 +73,8 @@ function tierAndRoot(dir: string | null): { tier: (typeof MODEL_TIERS)[number]; 
 let modelsPath: string | null = null
 /** Per-user profile root for models fetched after install (MQA-247). */
 let fetchedModelsPath: string | null = null
+/** Set once at import decoder admission by the parent; absent/invalid input is deliberately compact. */
+let allowHighMemoryTier = false
 let transformersModule: any = undefined // undefined = unprobed, null = probed and failed
 let asr: any = null
 let loadingAsr: Promise<any> | null = null
@@ -140,6 +148,7 @@ if (port) {
       // resources directory can never hold it (1.61 GB would put the installer over GitHub's 2 GiB
       // per-asset limit), so without this the probe can only ever find the bundled floor.
       fetchedModelsPath = typeof msg.fetchedModelsPath === 'string' ? msg.fetchedModelsPath : null
+      allowHighMemoryTier = msg.allowHighMemoryTier === true
       // MQA-246: say WHICH tier resolved, and whether that is a degradation.
       const readyTier = resolveTier(modelsPath)
       port.postMessage({ type: 'ready', tier: readyTier.id, degraded: readyTier.id !== MODEL_TIERS[0].id })

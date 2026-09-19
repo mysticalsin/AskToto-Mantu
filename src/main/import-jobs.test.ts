@@ -170,6 +170,141 @@ describe('ImportJobManager', () => {
     expect(manager.get('job-1')?.state).toBe('done')
   })
 
+  it('reports memory-heavy work only while a VAD-v2 job owns decoded-audio admission', async () => {
+    const gate = deferred<string>()
+    const { manager } = createManager({ transcribe: vi.fn(() => gate.promise) })
+    await manager.start(source)
+    expect(manager.hasMemoryHeavyWork()).toBe(true)
+
+    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+    const finishing = manager.finishDecoding('job-1')
+    await vi.waitFor(() => expect(manager.hasMemoryHeavyWork()).toBe(true))
+    gate.resolve('recognized speech')
+    await finishing
+    expect(manager.hasMemoryHeavyWork()).toBe(false)
+
+    const bounded = createManager({ freeMemoryBytes: () => VAD_V2_MIN_FREE_MEMORY_BYTES - 1 })
+    await bounded.manager.start(source)
+    expect(bounded.manager.hasMemoryHeavyWork()).toBe(false)
+  })
+
+  it('keeps memory pressure asserted while a VAD overflow checkpoint is being persisted', async () => {
+    const checkpointStarted = deferred<void>()
+    const releaseCheckpoint = deferred<void>()
+    let holdOverflowCheckpoint = false
+    const durable = new Map<string, ImportJob>()
+    const store: ImportJobStore = {
+      async save(job) {
+        durable.set(job.jobId, structuredClone(job))
+        if (holdOverflowCheckpoint && job.pipeline === undefined && job.state === 'decoding') {
+          checkpointStarted.resolve()
+          await releaseCheckpoint.promise
+        }
+      },
+      async list() {
+        return [...durable.values()].map((job) => structuredClone(job))
+      },
+      async remove(jobId) {
+        durable.delete(jobId)
+      }
+    }
+    const { manager } = createManager({ store })
+    await manager.start(source)
+
+    // Reaching the real overflow transition needs a 90-minute (~345 MB) PCM fixture. Seed only the
+    // bounded counter, not 345 MB of samples, then exercise the actual overflow checkpoint ordering.
+    const internals = manager as unknown as {
+      jobs: Map<string, ImportJob>
+      pcmByJob: Map<string, { slabs: Float32Array[]; samples: number }>
+    }
+    internals.pcmByJob.set('job-1', { slabs: [], samples: 16_000 * 60 * 90 })
+    holdOverflowCheckpoint = true
+    const accepting = manager.acceptDecodedChunk('job-1', 0, 1, oneWindowPcm())
+    await checkpointStarted.promise
+
+    expect(manager.get('job-1')?.pipeline).toBeUndefined()
+    expect(manager.hasMemoryHeavyWork()).toBe(true)
+
+    releaseCheckpoint.resolve()
+    await accepting
+    expect(manager.hasMemoryHeavyWork()).toBe(false)
+  })
+
+  it('rechecks free memory at actual decoder admission, downgrading a queued VAD job to bounded slabs and reporting that snapshot', async () => {
+    const GIB = 1024 ** 3
+    let freeMemoryBytes = 2 * VAD_V2_MIN_FREE_MEMORY_BYTES
+    let nextId = 0
+    const onDecodeAdmission = vi.fn()
+    const { manager, decode } = createManager({
+      freeMemoryBytes: () => freeMemoryBytes,
+      totalMemoryBytes: () => 16 * GIB,
+      onDecodeAdmission,
+      newId: () => `job-${++nextId}`
+    })
+    const secondSource = { ...source, path: '/safe/second.mp3', name: 'second.mp3' }
+
+    await manager.startMany([source, secondSource])
+    expect(manager.get('job-2')?.state).toBe('queued')
+
+    freeMemoryBytes = VAD_V2_MIN_FREE_MEMORY_BYTES - 1
+    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+    await manager.finishDecoding('job-1')
+
+    expect(decode).toHaveBeenLastCalledWith(expect.objectContaining({ jobId: 'job-2', pipeline: undefined }))
+    expect(onDecodeAdmission).toHaveBeenLastCalledWith(
+      expect.objectContaining({ jobId: 'job-2', pipeline: undefined }),
+      { totalMemoryBytes: 16 * GIB, freeMemoryBytes }
+    )
+  })
+
+  it('restarts a durable VAD checkpoint on bounded slabs when low memory is observed at resume admission', async () => {
+    const { manager, store, decode } = createManager({
+      freeMemoryBytes: () => VAD_V2_MIN_FREE_MEMORY_BYTES - 1
+    })
+    await store.save({
+      jobId: 'job-1', sourcePath: source.path, sourceName: source.name,
+      sourceSizeBytes: source.sizeBytes, sourceMtimeMs: source.mtimeMs,
+      title: 'Interrupted VAD import', state: 'failed', cursor: 1, totalChunks: 2,
+      pipeline: 'vad-v2', chunkSec: IMPORT_CHUNK_SECONDS,
+      lines: [{ t: source.mtimeMs, speaker: 'unknown', text: 'durable VAD window' }],
+      progressPct: 60, durationMs: 24_000, createdAt: 1, updatedAt: 1
+    })
+
+    await manager.recover()
+    await manager.resume('job-1')
+
+    expect(decode).toHaveBeenLastCalledWith(expect.objectContaining({
+      jobId: 'job-1', pipeline: undefined, cursor: 0, lines: []
+    }))
+    expect(manager.get('job-1')).toMatchObject({ pipeline: undefined, cursor: 0, totalChunks: 0 })
+    expect(manager.get('job-1')?.progressPct).toBeUndefined()
+  })
+
+  it('fails and releases the decode slot when admission preparation rejects', async () => {
+    let nextId = 0
+    const decode = vi.fn()
+    const onDecodeAdmission = vi.fn(async (job: ImportJob) => {
+      if (job.jobId === 'job-1') throw new Error('optional model release failed')
+    })
+    const { manager } = createManager({
+      decode,
+      onDecodeAdmission,
+      newId: () => `job-${++nextId}`
+    })
+
+    await manager.startMany([
+      { ...source, name: 'first.m4a' },
+      { ...source, name: 'second.wav' }
+    ])
+
+    expect(manager.get('job-1')).toMatchObject({
+      state: 'failed', error: 'optional model release failed'
+    })
+    expect(manager.get('job-2')?.state).toBe('decoding')
+    expect(decode).toHaveBeenCalledTimes(1)
+    expect(decode).toHaveBeenLastCalledWith(expect.objectContaining({ jobId: 'job-2' }))
+  })
+
   it('drops decoder slab references as soon as the contiguous VAD input has been assembled', () => {
     const slabs = [new Float32Array([1, 2]), new Float32Array([3, 4])]
 

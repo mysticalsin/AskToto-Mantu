@@ -142,14 +142,30 @@ describe('MQA-246 — an import must not silently run on the floor transcription
 
 describe('MQA-247 — the fetched high tier must actually win over the bundled floor', () => {
   const hostSrc = readFileSync(join(__dirname, 'whisper-asr-host.ts'), 'utf8')
-  it('reports the high tier, not degraded, when it exists in the FETCHED root only', async () => {
+  it('uses the compact bundled floor when a fetched high tier is present but the current import was not admitted for it', async () => {
     // The whole point of the feature: the packaged resources directory can never hold this model, so if
     // the probe only ever searched that root the 1.61 GB fetch would land in a directory nothing reads.
     const fetched = mkdtempSync(join(tmpdir(), 'metis-asr-fetched-'))
     try {
       mkdirSync(join(fetched, 'onnx-community', 'whisper-large-v3-turbo'), { recursive: true })
       await loadHost()
-      port.emit('message', { data: { type: 'init', modelsPath: tempDir, fetchedModelsPath: fetched } })
+      port.emit('message', {
+        data: { type: 'init', modelsPath: tempDir, fetchedModelsPath: fetched, allowHighMemoryTier: false }
+      })
+      expect(lastMessage()).toEqual({ type: 'ready', tier: 'Xenova/whisper-base', degraded: true })
+    } finally {
+      rmSync(fetched, { recursive: true, force: true })
+    }
+  })
+
+  it('reports the fetched high tier, not degraded, only after the current import was admitted for it', async () => {
+    const fetched = mkdtempSync(join(tmpdir(), 'metis-asr-fetched-'))
+    try {
+      mkdirSync(join(fetched, 'onnx-community', 'whisper-large-v3-turbo'), { recursive: true })
+      await loadHost()
+      port.emit('message', {
+        data: { type: 'init', modelsPath: tempDir, fetchedModelsPath: fetched, allowHighMemoryTier: true }
+      })
       expect(lastMessage()).toEqual({
         type: 'ready',
         tier: 'onnx-community/whisper-large-v3-turbo',

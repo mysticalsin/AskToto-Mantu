@@ -9,6 +9,8 @@ function makeHarness(init?: {
   localReady?: boolean
   privateView?: boolean
   activeStreams?: number
+  /** A high-memory import can defer background VLM work but must not disable OCR. */
+  allowSpeculativeLocalWork?: boolean
   /** Inject the optional OCR dep (mac path). ocrText/ocrThrow on state drive its behavior per test. */
   withOcr?: boolean
   /** SSO session state — the engine's own gate, so canRun() answers for the Settings copy too. */
@@ -25,6 +27,7 @@ function makeHarness(init?: {
     localReady: init?.localReady ?? true,
     privateView: init?.privateView ?? false,
     activeStreams: init?.activeStreams ?? 0,
+    speculativeLocalWorkAllowed: init?.allowSpeculativeLocalWork ?? true,
     image: 'IMG_A',
     describeBody: 'A code editor with an error panel.' as string | null,
     ocrText: null as string | null,
@@ -52,7 +55,7 @@ function makeHarness(init?: {
     } as unknown as Response
   })
 
-  const deps: ScreenPreprocessDeps = {
+  const deps = {
     // Counted, because on macOS this call IS the permission prompt: a capture taken while the Screen
     // Recording grant is still `not-determined` is what registers the app with TCC (MQA-209).
     getScreenshot: async () => {
@@ -74,6 +77,7 @@ function makeHarness(init?: {
     authorized: () => state.authorized,
     currentDisplayId: () => state.currentDisplayId,
     privateViewOn: () => state.privateView,
+    allowSpeculativeLocalWork: () => state.speculativeLocalWorkAllowed,
     ensureLocalRuntimeStarted: ensureStarted,
     runtime: {
       baseURL: () => 'http://127.0.0.1:9999/v1',
@@ -102,7 +106,7 @@ function makeHarness(init?: {
     fetchImpl,
     now: () => clock,
     log: () => {}
-  }
+  } as ScreenPreprocessDeps & { allowSpeculativeLocalWork?: () => boolean }
 
   const sp = createScreenPreprocess(deps)
   return {
@@ -114,6 +118,9 @@ function makeHarness(init?: {
     },
     setWindow: (windowId: string) => {
       currentWin = { windowId, pid: 1, title: 't' }
+    },
+    setSpeculativeLocalWorkAllowed: (allowed: boolean) => {
+      state.speculativeLocalWorkAllowed = allowed
     },
     fetchCalls: () => fetchCalls,
     ocrCalls: () => ocrCalls,
@@ -238,6 +245,34 @@ describe('createScreenPreprocess — gating', () => {
     h.setWindow('w1')
     await h.sp._test.describeForWindow('w1')
     expect(h.fetchCalls()).toBe(0)
+  })
+
+  it('defers speculative VLM work during a memory-heavy import without disabling the screen reader itself', async () => {
+    const h = makeHarness({ allowSpeculativeLocalWork: false })
+    h.sp.refresh()
+    h.setWindow('w1')
+
+    await h.sp._test.describeForWindow('w1')
+
+    expect(h.sp.isActive()).toBe(true)
+    expect(h.ensureStarted).not.toHaveBeenCalled()
+    expect(h.fetchCalls()).toBe(0)
+    expect(h.peek()).toBeNull()
+  })
+
+  it('rechecks the speculative gate after runtime admission before sending the background VLM request', async () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    h.setWindow('w1')
+    h.ensureStarted.mockImplementationOnce(async () => {
+      h.setSpeculativeLocalWorkAllowed(false)
+    })
+
+    await h.sp._test.describeForWindow('w1')
+
+    expect(h.ensureStarted).toHaveBeenCalledWith('qwen3.5-0.8b', true, expect.any(Function))
+    expect(h.fetchCalls()).toBe(0)
+    expect(h.peek()).toBeNull()
   })
 
   it('throttles: a second describe inside the minimum interval is skipped', async () => {

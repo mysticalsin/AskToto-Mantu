@@ -1,11 +1,12 @@
 /**
  * asr-model-manifest.ts — the high-accuracy transcription model, pinned (MQA-247).
  *
- * `whisper-asr-host.ts` ranks `onnx-community/whisper-large-v3-turbo` FIRST in MODEL_TIERS and falls back
- * to the bundled `Xenova/whisper-base` floor only when the high tier's directory is absent. In a packaged
- * app it is always absent, because it cannot ship: 1.61 GB of weights on top of a 0.77 GB installer is
- * ~2.37 GB, over GitHub's hard 2 GiB per-asset limit (scripts/check-release.mjs fails at 1.9 GiB by
- * design). So every import on every platform decoded with the floor model.
+ * `whisper-asr-host.ts` considers `onnx-community/whisper-large-v3-turbo` only after the parent validates
+ * the complete fetched file set and admits that import against its current memory snapshot. The bundled
+ * `Xenova/whisper-base` floor remains the default. The large tier is always absent from bundled resources
+ * and the installer, because 1.61 GB of weights on top of a 0.77 GB installer is ~2.37 GB, over GitHub's
+ * hard 2 GiB per-asset limit (scripts/check-release.mjs fails at 1.9 GiB by design). It may be fetched
+ * later into the user's profile after explicit opt-in.
  *
  * The answer is the one MQA-146 already established for the LLM weights under the identical constraint:
  * do not ship them, fetch them once per user profile, size- and SHA-256-pinned against an immutable
