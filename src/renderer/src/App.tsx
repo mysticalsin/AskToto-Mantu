@@ -300,6 +300,7 @@ export function App(): JSX.Element {
     liveTranscript: '',
     chime: 'none'
   })
+  const [metisCommandEarStatus, setMetisCommandEarStatus] = useState<MetisCommandEarStatus>({ state: 'idle' })
   useEffect(() => {
     const unsub = window.toto.onMetisCommandState?.((state) => setMetisCommand(state))
     return () => {
@@ -307,19 +308,23 @@ export function App(): JSX.Element {
     }
   }, [])
 
-  // Cap2 always-on ear: local mic → existing Apple/Parakeet YOU feeds → main Cap2 ingest.
-  // Yields while meeting Listen owns capture; mic-denied opens Privacy settings.
+  // Cap2 always-on ear: arm whenever overlay is past exclusive onboarding (do not wait on settings race).
   useEffect(() => {
     const exclusive =
       typeof window !== 'undefined' &&
       new URLSearchParams(window.location.search).get('exclusiveOnboarding') === '1'
-    const enabled = settings?.onboardingDone === true && !exclusive
+    const enabled = !exclusive
     const stop = startMetisCommandEar({
       enabled,
       preferApple: true,
-      isMeetingListening: () => Boolean(document.documentElement.dataset.metisListening === '1'),
+      isMeetingListening: () => document.documentElement.dataset.metisListening === '1',
+      onStatus: (s) => {
+        setMetisCommandEarStatus(s)
+        if (s.state === 'heard') console.info('[cap2-ear]', s.via, s.text)
+        if (s.state === 'denied' || s.state === 'error') console.warn('[cap2-ear]', s)
+      },
       onMicDenied: () => {
-        void window.toto.openPermissionSettings?.('microphone')
+        void window.toto.openPermissionSettings('microphone')
       }
     })
     return () => stop()
@@ -3775,7 +3780,23 @@ export function App(): JSX.Element {
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
-      <div data-metis-command-pill-host="1">
+            <div data-metis-command-pill-host="1">
+        <div
+          data-metis-command-ear-chip="1"
+          className="pointer-events-none absolute left-1/2 top-1 z-[80] -translate-x-1/2 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium tracking-wide text-white/90"
+        >
+          {metisCommandEarStatus.state === 'listening'
+            ? 'Ear on · say Métis'
+            : metisCommandEarStatus.state === 'arming'
+              ? 'Ear arming…'
+              : metisCommandEarStatus.state === 'denied'
+                ? 'Mic blocked · Privacy'
+                : metisCommandEarStatus.state === 'heard'
+                  ? `Heard: ${'text' in metisCommandEarStatus ? metisCommandEarStatus.text.slice(0, 42) : ''}`
+                  : metisCommandEarStatus.state === 'error'
+                    ? 'Ear error'
+                    : null}
+        </div>
         <CommandListeningPill
           visible={metisCommand.pillVisible}
           copy={metisCommand.pillCopy}
