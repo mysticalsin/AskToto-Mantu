@@ -3869,9 +3869,9 @@ export function App(): JSX.Element {
           />
         </div>
       ) : overlayPeeked ? (
-        // Hide: 8×2 hairline (cursor watch is the sensor). Island: visible peek (hug-width).
+        // Hide: 8x2 hairline (cursor watch is the sensor). Island: top peek. Dock: edge sliver.
         <OverlayPeek
-          rest={overlayRestsHidden(overlayLayout) ? 'hide' : 'island'}
+          rest={overlayRestsHidden(overlayLayout) ? 'hide' : overlayLayout === 'dock' ? 'dock' : 'island'}
           onReveal={revealOverlay}
           stealth={settings?.contentProtection ?? true}
         />

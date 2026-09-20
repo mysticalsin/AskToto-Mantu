@@ -11,6 +11,7 @@ import {
   appearancePreviewShowsIsland,
   ONBOARDING_APPEARANCE_COPY,
   ONBOARDING_APPEARANCE_HEADING,
+  ONBOARDING_APPEARANCE_LAYOUTS,
   ONBOARDING_APPEARANCE_LEAD,
   reduceAppearancePreview,
   type AppearancePreviewPhase
@@ -128,6 +129,7 @@ export function OnboardingAppearance({
         value={value}
         locked={locked || saving}
         copy={ONBOARDING_APPEARANCE_COPY}
+        layouts={ONBOARDING_APPEARANCE_LAYOUTS}
         onChange={onChange}
       />
       <div className="flex w-full flex-col gap-2">

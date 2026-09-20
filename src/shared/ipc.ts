@@ -1128,8 +1128,12 @@ export const BaseSettingsSchema = z.object({
   // and collapse are pure content resizes of the always-on-top window — they never show/focus it, so the
   // user's foreground app keeps focus (the non-activating notch contract). Off = the bar is always shown.
   autoHideOverlay: z.boolean().default(true),
-  /** Overlay chrome: hide (default, fully hidden until top hover), island (visible peek), bar (classic). */
-  overlayLayout: z.enum(['hide', 'island', 'bar']).default('hide'),
+  /**
+   * Overlay chrome: hide (default, fully hidden until top hover), island (visible peek), bar (classic),
+   * dock (tall sidecar panel that rests as an edge sliver). Chrome is the shape; `overlayPlacement`
+   * below is where it sits, and the two axes stay independent.
+   */
+  overlayLayout: z.enum(['hide', 'island', 'bar', 'dock']).default('hide'),
   /** Bar rest look. Hide/Island ignore this. Default Circle is the Jakub thinking-orb. */
   overlayOrbStyle: z.enum(['bar', 'jakub', 'obsidian']).default('jakub'),
   /** Physical location is separate from the overlay chrome. Legacy profiles stay top-center. */

@@ -2,11 +2,18 @@ import { CIRCLE_REST_HOST_PX, CIRCLE_REST_SHADOW_PAD_PX } from './overlay-orb'
 import { SETTINGS_SURFACE_BACKGROUND, SETTINGS_WINDOW_MIN } from './settings-bounds'
 
 /**
- * Overlay chrome modes (hide / island / bar). Shared so Settings, the renderer rest surface,
+ * Overlay chrome modes (hide / island / bar / dock). Shared so Settings, the renderer rest surface,
  * and main geometry all read one enum. Default is hide-until-hover (fresh install).
+ *
+ * Chrome is the SHAPE. WHERE that shape sits is `overlayPlacement` (top-center / right-edge), and the
+ * two axes stay orthogonal: OverlayPlacementPicker.test.ts asserts the placement picker source never
+ * mentions `overlayLayout`. Dock is a tall sidecar panel resting as a slim vertical sliver, so it is
+ * the one chrome that reads naturally against a screen edge, but it still COMPOSES with placement
+ * rather than implying it — geometry resolves dock position through the same placement path every
+ * other layout uses, so a display too narrow for the right edge falls back to top-center for free.
  */
 
-export const OVERLAY_LAYOUTS = ['hide', 'island', 'bar'] as const
+export const OVERLAY_LAYOUTS = ['hide', 'island', 'bar', 'dock'] as const
 export type OverlayLayout = (typeof OVERLAY_LAYOUTS)[number]
 
 export const DEFAULT_OVERLAY_LAYOUT: OverlayLayout = 'hide'
@@ -23,27 +30,39 @@ export const OVERLAY_LAYOUT_COPY: Record<OverlayLayout, { title: string; desc: s
   bar: {
     title: 'Bar',
     desc: 'The bar stays on screen.'
+  },
+  dock: {
+    title: 'Dock',
+    desc: 'A tall panel on the edge. Hover opens it.'
   }
 }
 
 export function isOverlayLayout(v: unknown): v is OverlayLayout {
-  return v === 'hide' || v === 'island' || v === 'bar'
+  return v === 'hide' || v === 'island' || v === 'bar' || v === 'dock'
 }
 
 export function parseOverlayLayout(v: unknown): OverlayLayout {
   return isOverlayLayout(v) ? v : DEFAULT_OVERLAY_LAYOUT
 }
 
-/** Hide and island rest collapsed and reveal on hover. Bar does not. */
+/** Hide, island and dock rest collapsed and reveal on hover. Bar does not. */
 export function overlayUsesHover(layout: OverlayLayout): boolean {
-  return layout === 'hide' || layout === 'island'
+  return layout === 'hide' || layout === 'island' || layout === 'dock'
 }
 
 export function overlayRestsHidden(layout: OverlayLayout): boolean {
   return layout === 'hide'
 }
 
-/** Hide and island park at the display top (`bounds.y`) so island hover hits. Bar uses workArea + margin. */
+/** Dock rests as a visible vertical sliver on the edge, not a top-hugging capsule or a hairline. */
+export function overlayRestsAsDockSliver(layout: OverlayLayout): boolean {
+  return layout === 'dock'
+}
+
+/**
+ * Hide and island park at the display top (`bounds.y`) so island hover hits. Bar uses workArea + margin.
+ * Dock is edge-anchored and vertically centred by its placement, so the top strut does not apply.
+ */
 export function overlayUsesSafeTop(layout: OverlayLayout): boolean {
   return layout === 'hide' || layout === 'island'
 }
