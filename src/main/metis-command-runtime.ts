@@ -23,6 +23,8 @@ export type MetisCommandRuntimeHooks = {
   operatorDecideAuth?: () => { baseUrl: string; authorizationHeader: string } | null
   platform?: DesktopAdapterPlatform
   fetchImpl?: typeof fetch
+  /** Test seam only; production uses the allowlisted desktop adapter. */
+  execute?: typeof executeDesktopAction
 }
 
 export class MetisCommandRuntime {
@@ -154,7 +156,7 @@ export class MetisCommandRuntime {
       while (gen === this.generation) {
         const req = this.state.pending[0]
         if (!req) break
-        await executeDesktopAction(req, this.hooks.platform)
+        await (this.hooks.execute ?? executeDesktopAction)(req, this.hooks.platform)
         if (gen !== this.generation) break
         const next = reduceMetisCommandSession(this.state, {
           type: 'mark_committed',
@@ -164,7 +166,9 @@ export class MetisCommandRuntime {
       }
     } finally {
       this.running = false
-      if (gen === this.generation && this.state.pending.length) void this.flushPending()
+      // A prior action can finish after a replacement session starts. The old generation must not
+      // commit into that session, but it must release the runner so its new pending work can drain.
+      if (this.state.pending.length) void this.flushPending()
     }
   }
 

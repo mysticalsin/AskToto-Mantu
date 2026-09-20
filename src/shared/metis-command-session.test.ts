@@ -75,6 +75,28 @@ describe('Cap2 command session', () => {
     expect(s.phase).toBe('executing')
   })
 
+  it('keeps queued follow-ons once while an earlier action is still running', () => {
+    let s = reduceMetisCommandSession(idleMetisCommandSession(), {
+      type: 'transcript',
+      text: 'Métis open notes',
+      channel: 'command'
+    })
+    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'open Arc', channel: 'command' })
+    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'open Arc', channel: 'command' })
+    expect(s.pending.map((request) => request.id)).toEqual(['desktop.open_notes', 'desktop.open_arc'])
+  })
+
+  it('clears only queued work when the speaker negates an active command', () => {
+    let s = reduceMetisCommandSession(idleMetisCommandSession(), {
+      type: 'transcript',
+      text: 'Métis open notes',
+      channel: 'command'
+    })
+    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'open Arc', channel: 'command' })
+    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'actually do not', channel: 'command' })
+    expect(s.pending).toEqual([])
+  })
+
   it('thank you double-chimes and dismisses pill', () => {
     let s = idleMetisCommandSession()
     s = reduceMetisCommandSession(s, { type: 'transcript', text: 'Métis', channel: 'command' })

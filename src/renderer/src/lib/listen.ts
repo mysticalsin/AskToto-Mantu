@@ -1294,7 +1294,6 @@ export function useListen(
         stoppingRef.current = false
       }
       liveRef.current = false
-      document.documentElement.dataset.metisListening = '0'
       pausedRef.current = false
       queue.current = []
       provisionalRef.current = null // no decode is ever coming back to replace it now
@@ -1984,7 +1983,6 @@ export function useListen(
         pendingWhisperStartedAtRef.current = undefined
         busy.current = false
         liveRef.current = true
-        document.documentElement.dataset.metisListening = '1'
         wantsSystemRef.current = source === 'system' || source === 'both'
         sysRetryAttemptsRef.current = 0 // fresh session → no carried-over loopback-retry backoff
         sysRetryNextAtRef.current = 0
@@ -2387,7 +2385,6 @@ export function useListen(
       if (!captureAdmissionIsOpen(sessionEpochRef.current)) return
       const startedAt = sessionStartedAtRef.current
       liveRef.current = false
-      document.documentElement.dataset.metisListening = '0'
       pausedRef.current = false
       readyRef.current = false
       busy.current = false
@@ -2581,7 +2578,6 @@ export function useListen(
         )
           return
         liveRef.current = false
-      document.documentElement.dataset.metisListening = '0'
         disarmNetworkRetry()
         queue.current = [] // drop anything still undispatched once the bounded drain ends
         clearProvisional()
@@ -2756,7 +2752,6 @@ export function useListen(
       if (activeStop?.ackTimer) clearTimeout(activeStop.ackTimer)
       stopDrainRef.current = null
       liveRef.current = false
-      document.documentElement.dataset.metisListening = '0'
       cloudSttFinalizingRef.current = false
       cloudSttPushesRef.current.clear()
       pendingWhisperEmbedRef.current = null
