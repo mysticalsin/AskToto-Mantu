@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 const ROOT = resolve(process.cwd())
+const APP_EXECUTABLE = process.env.E2E_APP_EXECUTABLE ? resolve(process.env.E2E_APP_EXECUTABLE) : null
 const SHOT_DIR = process.env.E2E_SHOT_DIR || '/tmp'
 const COMPACT_ONBOARDING = { width: 1280, height: 640 }
 const OWN_PROCESS_TIMEOUT_MS = 5_000
@@ -158,6 +159,9 @@ async function selectAppearanceAndRightEdge() {
   await settingsMatch({ overlayLayout: 'bar' })
   await rightEdge.click({ timeout: 5_000 })
   await settingsMatch({ overlayPlacement: 'right-edge' })
+  // The old packaged-app regression wrote the setting, then repainted the prior card on a stale
+  // settings snapshot. Keep the check beyond that asynchronous window, not just on click.
+  await delay(1_000)
   const selected = await rightEdge.getAttribute('aria-checked')
   if (selected !== 'true') throw new Error('Right edge was written to settings but the selected control did not update.')
   const preview = win.locator('[data-placement-preview="right-edge"]').first()
@@ -310,18 +314,19 @@ async function closeOwnApp() {
 }
 
 try {
-  console.log('Launching built Métis app with isolated profile:', userDataDir)
+  console.log(`Launching ${APP_EXECUTABLE ? 'packaged' : 'built'} Métis app with isolated profile:`, userDataDir)
   app = await electron.launch({
-    // Electron's app target must be the project root. Passing out/main/index.js makes Electron treat
-    // out/main as an app root, bypassing this project's package.json and often opening its stock shell.
-    args: [ROOT],
+    // Electron's unpackaged app target must be the project root. Passing out/main/index.js makes
+    // Electron treat out/main as an app root, bypassing this project's package.json and often opening
+    // its stock shell. A packaged-app run uses the exact executable emitted by electron-builder instead.
+    ...(APP_EXECUTABLE ? { executablePath: APP_EXECUTABLE } : { args: [ROOT] }),
     env: {
       ...process.env,
       NODE_ENV: 'production',
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
       ASKTOTO_USERDATA: userDataDir,
       ASKTOTO_LOCAL_KEYSTORE: '1',
-      // devEnv() ignores this in a packaged app. It is only for screenshot automation of this unpackaged build.
+      // devEnv() ignores this in a packaged app. It is only for screenshot automation of the unpackaged run.
       ASKTOTO_DISABLE_CP: '1'
     },
     timeout: 30_000
