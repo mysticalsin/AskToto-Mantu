@@ -33,7 +33,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useCallback, useEffect, useId, useRef, useState, type Ref, useLayoutEffect } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, lazy, Suspense, type Ref, useLayoutEffect } from 'react'
 import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
@@ -74,6 +74,9 @@ import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
 import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
 /** Act 2 only — keep DemoScene/Bar off Act 1 first-paint parse in this chunk. */
+const OnboardingDemoScene = lazy(() =>
+  import('./OnboardingDemoScene').then((m) => ({ default: m.OnboardingDemoScene }))
+)
 import { OnboardingAppearance } from './OnboardingAppearance'
 import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
@@ -108,7 +111,6 @@ import {
   type OnboardingCompletionState
 } from '../lib/onboarding-completion'
 import { createOnboardingMusicBed, haltAllOnboardingAudio, lockOnboardingAudio } from '../lib/onboarding-music'
-import { OnboardingDemoScene } from './OnboardingDemoScene'
 import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand, requestOnboardingPortalOpen } from '../lib/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
@@ -535,10 +537,14 @@ export function setupAsrBlocksContinue(
   return true
 }
 
-/** First-run cannot mark onboardingDone until Ready, files are ready, and consent is given. */
+/** First-run may finish from Ready once consent is given; transcription recovery remains available in Settings. */
 export function firstRunCanFinish(input: { asrReady: boolean; consent: boolean }): boolean {
-  // P0 nuclear: ASR can finish later in Settings.
   return input.consent
+}
+
+/** An enabled setup CTA must not look disabled just because permissions need attention. */
+export function setupContinueLabel(needsPermissions: boolean): string {
+  return needsPermissions ? 'Continue anyway' : 'Continue'
 }
 
 export function asrStatusIsReady(status: AsrAssetsStatus | null | undefined): boolean {
@@ -1536,15 +1542,26 @@ export function OnboardingExperience({
       )}
 
       {scene === 'reveal' && (
-        <OnboardingDemoScene
-          mode={mode}
-          onSetMode={setMode}
-          onContinue={() => {
-            playHero()
-            setScene(sceneAfterReveal())
-          }}
-          onPlayVideo={() => playHero()}
-        />
+        <Suspense
+          fallback={
+            <div className="flex flex-col items-center gap-6">
+              <p className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">See Métis in action</p>
+              <button type="button" className="onboard-cta no-drag focus-ring" onClick={() => setScene(sceneAfterReveal())}>
+                Continue
+              </button>
+            </div>
+          }
+        >
+          <OnboardingDemoScene
+            mode={mode}
+            onSetMode={setMode}
+            onContinue={() => {
+              playHero()
+              setScene(sceneAfterReveal())
+            }}
+            onPlayVideo={() => playHero()}
+          />
+        </Suspense>
       )}
 
       {scene === 'setup' && (
@@ -1734,19 +1751,14 @@ export function OnboardingExperience({
               type="button"
               // Act 6 re-point (MQA-283): setup always advances to personalize now — license (when
               // enabled) has moved to sit between personalize and ready. See onboarding-flow.ts.
-              // Transcription files must be on disk before first-run leaves this act.
-              disabled={false}
               onClick={() => {
                 // P0 nuclear: never block Continue on ASR/access — rows stay informational.
                 playHero()
                 setScene(sceneAfterSetup())
               }}
-              className={
-                'onboard-cta no-drag focus-ring ' +
-                (needsPerms ? 'onboard-cta--muted' : '')
-              }
+              className="onboard-cta no-drag focus-ring"
             >
-              Continue
+              {setupContinueLabel(needsPerms)}
             </button>
           </div>
         </div>

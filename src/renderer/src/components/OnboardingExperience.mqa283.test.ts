@@ -39,6 +39,15 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).not.toMatch(/setScene\(settings\?\.licenseGateEnabled \? 'license' : 'personalize'\)/)
   })
 
+  it('keeps the optional demo bundle out of Act 1 while retaining a visible recovery surface', () => {
+    expect(experienceSrc).toMatch(/lazy, Suspense/)
+    expect(experienceSrc).toMatch(/const OnboardingDemoScene = lazy\(/)
+    expect(experienceSrc).not.toMatch(/import \{ OnboardingDemoScene \} from '\.\/OnboardingDemoScene'/)
+    const reveal = experienceSrc.slice(experienceSrc.indexOf("{scene === 'reveal'"), experienceSrc.indexOf("{scene === 'setup'"))
+    expect(reveal).toMatch(/<Suspense/)
+    expect(reveal).toMatch(/Continue/)
+  })
+
   it('personalize routes to license (if enabled) or straight to ready — never finishes there directly', () => {
     expect(experienceSrc).toMatch(/setScene\(sceneAfterPersonalize\(settings\?\.licenseGateEnabled\)\)/)
   })
@@ -129,8 +138,9 @@ describe('MQA-283 — adding a personal AI provider from Ready is optional, neve
   it('the Get started CTA never depends on onOpenAiSettings, or on any provider state at all', () => {
     const ctaMatch = experienceSrc.match(/onClick=\{\(\) => attemptFinish\('answer'\)\}\s*\n\s*disabled=\{blocked\}/)
     expect(ctaMatch).not.toBeNull()
-    expect(experienceSrc).toMatch(/const blocked = completion\.busy \|\| recoveryBusy \|\| !asrReady \|\| !authReady/)
-    expect(experienceSrc).toMatch(/if \(!asrReady \|\| !authReady\) return 'blocked'/)
+    expect(experienceSrc).toMatch(/const blocked = completion\.busy \|\| recoveryBusy \|\| !authReady/)
+    expect(experienceSrc).toMatch(/if \(!authReady\) return 'blocked'/)
+    expect(experienceSrc).not.toMatch(/const blocked = [^\n]*!asrReady/)
   })
 })
 

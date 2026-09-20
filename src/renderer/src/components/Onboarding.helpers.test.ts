@@ -18,6 +18,7 @@ import {
   localModelRowStatus,
   micRowStatus,
   ASR_SETUP_FAIL_OPEN_MS,
+  setupContinueLabel,
   setupAsrBlocksContinue,
   setupRowLoadingPercent,
   firstRunCanFinish,
@@ -453,6 +454,16 @@ describe('Act 3 — transcription files never skip', () => {
       })
     ).toBe(false)
     expect(ASR_SETUP_FAIL_OPEN_MS).toBeLessThanOrEqual(2_000)
+  })
+
+  it('labels an enabled setup CTA honestly when permissions still need attention', () => {
+    expect(setupContinueLabel(false)).toBe('Continue')
+    expect(setupContinueLabel(true)).toBe('Continue anyway')
+
+    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    const setupScene = src.slice(src.indexOf("{scene === 'setup'"), src.indexOf("{scene === 'personalize'"))
+    expect(setupScene).toMatch(/setupContinueLabel\(needsPerms\)/)
+    expect(setupScene).not.toMatch(/needsPerms\s*\?\s*'onboard-cta--muted'/)
   })
 
   
