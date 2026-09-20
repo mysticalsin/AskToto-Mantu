@@ -192,6 +192,7 @@ import {
   overlayRestSize,
   normalizeRightEdgeY,
   overlayPlacementPosition,
+  rightEdgeSidecarBounds,
   resolveOverlayPlacement,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
@@ -241,6 +242,7 @@ import {
   parseOverlayOrbStyle
 } from '@shared/overlay-orb'
 import { overlayDisplayKey, parseOverlayPlacement, type OverlayPlacement } from '@shared/overlay-placement'
+import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 
 // --- Speaker session ownership (Task 7-P2b) ---
 
@@ -2650,6 +2652,7 @@ function resizeTo(height: number): void {
   const display = screen.getDisplayMatching(win.getBounds())
   const layout = liveOverlayLayout()
   const placement = resolvedOverlayPlacementForDisplay(display)
+  if (placement === 'right-edge') return
   const rest = overlayRestSize(layout, getDisplayMetrics(display))
   // Hide rest is a 1–8px hairline. BAR_MIN_HEIGHT (44) must never grow it into Tony's slab.
   if (!settingsSurfaceOpen && islandResting && layout === 'hide') return
@@ -2677,19 +2680,13 @@ function resizeTo(height: number): void {
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
   if (!isMinimized && !islandResting) lastBarHeight = rememberBarContentHeight(h, lastBarHeight)
-  let x: number
-  let y: number
-  if (placement === 'right-edge') {
-    ;({ x, y } = overlayPositionForDisplay(currentWidth, h, layout, display, ISLAND_TOP_MARGIN))
-  } else {
-    // Resting hide/island stay at hoverRestTop (island hit). Revealed chrome sits at islandSafeTop
-    // (below the notch). Do not fight macOS by writing y=0 on the full bar every tick.
-    const metrics = getDisplayMetrics(display)
-    y = islandResting ? hoverRestTop(metrics) : topClamp(layout, metrics, ISLAND_TOP_MARGIN)
-    // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
-    // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
-    x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
-  }
+  // Resting hide/island stay at hoverRestTop (island hit). Revealed chrome sits at islandSafeTop
+  // (below the notch). Do not fight macOS by writing y=0 on the full bar every tick.
+  const metrics = getDisplayMetrics(display)
+  const y = islandResting ? hoverRestTop(metrics) : topClamp(layout, metrics, ISLAND_TOP_MARGIN)
+  // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
+  // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
+  const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
   win.setBounds({ x, y, width: currentWidth, height: h }, false)
 }
 
@@ -2756,7 +2753,10 @@ const TOP_CENTER_MARGIN_PX = 24
 const RESIZE_EDGE_MARGIN = 8
 
 function liveOverlayLayout(): OverlayLayout {
-  return parseOverlayLayout(getSettings().overlayLayout)
+  return resolveOverlayPresentation({
+    placement: liveOverlayPlacement(),
+    layout: parseOverlayLayout(getSettings().overlayLayout)
+  }).layout
 }
 
 /** Physical placement is separate from visual chrome. Older or malformed settings stay top-center. */
@@ -3113,6 +3113,17 @@ function restoreBarWidth(): void {
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   const layout = liveOverlayLayout()
+  const placement = resolvedOverlayPlacementForDisplay(display)
+  if (placement === 'right-edge') {
+    const sidecar = rightEdgeSidecarBounds(getDisplayMetrics(display), {
+      open: true,
+      normalizedY: rightEdgeYForDisplay(display)
+    })
+    currentWidth = sidecar.width
+    if (b.x === sidecar.x && b.y === sidecar.y && b.width === sidecar.width && b.height === sidecar.height) return
+    win.setBounds(sidecar, false)
+    return
+  }
   // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
   // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
   let revealedHeight = overlayUsesHover(layout)
@@ -3123,16 +3134,9 @@ function restoreBarWidth(): void {
   }
   const wasBarWidth = currentWidth === BAR_WIDTH
   currentWidth = BAR_WIDTH
-  const placement = resolvedOverlayPlacementForDisplay(display)
-  let position: { x: number; y: number }
-  if (placement === 'right-edge') {
-    position = overlayPositionForDisplay(BAR_WIDTH, revealedHeight, layout, display, ISLAND_TOP_MARGIN)
-  } else {
-    // Preserve the historic top-center path verbatim.
-    const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-    position = { x: wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0), y }
-  }
-  const { x, y } = position
+  // Preserve the historic top-center path verbatim.
+  const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  const x = wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
   // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
   if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
   win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
@@ -4699,7 +4703,10 @@ function registerIpc(): void {
     // Both onboarding transitions replace the window only after this handler replies: `onboarding:enter`
     // for Replay, `onboarding:exit` for Act 6. Never destroy this renderer in the middle of its invoke.
     if (next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
-      const layout = parseOverlayLayout(next.overlayLayout)
+      const layout = resolveOverlayPresentation({
+        placement: parseOverlayPlacement(next.overlayPlacement),
+        layout: parseOverlayLayout(next.overlayLayout)
+      }).layout
       const layoutChanged = cur.overlayLayout !== next.overlayLayout
       const placementChanged = cur.overlayPlacement !== next.overlayPlacement
       if (overlayUsesHover(layout)) {
@@ -8354,6 +8361,8 @@ function registerIpc(): void {
   // --- Window management ---
   ipcMain.handle(IPC.windowResize, (e, payload: { height: number; width?: number }) => {
     assertMainWindow(e)
+    const display = win ? screen.getDisplayMatching(win.getBounds()) : null
+    if (display && resolvedOverlayPlacementForDisplay(display) === 'right-edge') return
     // Hide rest stays the 1–8px hairline. The 120px hug floor and BAR_MIN_HEIGHT (44) must not
     // grow it into a visible slab.
     if (!settingsSurfaceOpen && islandResting && liveOverlayLayout() === 'hide') return
