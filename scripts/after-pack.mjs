@@ -119,11 +119,18 @@ export default async function afterPack(context) {
     // so this tracks context.arch rather than the payload arch set.
     runtimeCheckArgs.push(`--macho-arches=${arch === 'universal' ? 'arm64,x64' : arch}`)
   }
-  execFileSync(
-    process.execPath,
-    runtimeCheckArgs,
-    { cwd: REPO_ROOT, stdio: 'inherit' }
-  )
+  try {
+    execFileSync(
+      process.execPath,
+      runtimeCheckArgs,
+      { cwd: REPO_ROOT, stdio: 'inherit' }
+    )
+  } catch (error) {
+    // A failed direct Electron Builder invocation otherwise leaves a launchable but incomplete app
+    // directory behind. It must not look like a candidate someone could install or distribute.
+    rmSync(context.appOutDir, { recursive: true, force: true })
+    throw error
+  }
 
   // A local/CI macOS build intentionally has no Developer ID. Give it a complete ad-hoc signature
   // after the raw byte gate so the DMG/ZIP contains a coherently sealed, launchable app. Tagged
