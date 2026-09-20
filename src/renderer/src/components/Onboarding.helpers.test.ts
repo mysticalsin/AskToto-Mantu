@@ -426,8 +426,20 @@ describe('Act 3 — transcription files never skip', () => {
     expect(setupAsrBlocksContinue([asrRow('action')])).toBe(true)
     expect(setupAsrBlocksContinue([asrRow('checking')])).toBe(true)
     expect(setupAsrBlocksContinue([asrRow('loading')])).toBe(true)
+
+
     expect(setupAsrBlocksContinue([asrRow('ready')])).toBe(false)
     expect(setupAsrBlocksContinue([])).toBe(true)
+  })
+  it('failOpen latches Continue unlocked even while ASR still loading', () => {
+    expect(setupAsrBlocksContinue([asrRow('loading')], undefined, true)).toBe(false)
+    expect(
+      setupAsrBlocksContinue(
+        [asrRow('checking')],
+        { ready: false, status: 'loading', progress: 10, label: 'x' },
+        true
+      )
+    ).toBe(false)
   })
 
   it('fail-opens Continue when ASR ensure errors (Retry stays on the row)', () => {

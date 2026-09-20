@@ -522,8 +522,11 @@ export const ASR_SETUP_RETRY_TIMEOUT_MS = ASR_SETUP_FAIL_OPEN_MS
 
 export function setupAsrBlocksContinue(
   rows: SetupRow[],
-  asrStatus?: AsrAssetsStatus | null
+  asrStatus?: AsrAssetsStatus | null,
+  failOpen = false
 ): boolean {
+  // Latched fail-open: poll/ensure must never re-mute Continue after the timer.
+  if (failOpen) return false
   if (summarizeSetupRows(rows).allReady) return false
   if (asrStatusIsReady(asrStatus)) return false
   // Fail-open: error unlocks Continue (Retry stays on the row).
@@ -1161,6 +1164,8 @@ export function OnboardingExperience({
   // Recording-consent gate (CMO-QA #1). Finish is blocked until this checkbox is checked on Ready.
   const [consent, setConsent] = useState(false)
   const [asrStatus, setAsrStatus] = useState<AsrAssetsStatus>(IDLE_ASR_STATUS)
+  /** Once true, Continue stays unlocked even if ASR poll returns loading. */
+  const [setupAccessFailOpen, setSetupAccessFailOpen] = useState(false)
   const asrReady = asrStatusIsReady(asrStatus)
   const asrRow = asrAssetsRowStatus(asrStatus, settings?.asrEngine)
   const doneRef = useRef(false)
@@ -1174,6 +1179,7 @@ export function OnboardingExperience({
     // A stalled setup must become actionable, but must not turn the final Ready action into a trap.
     const asrSetupTimeout = setTimeout(() => {
       if (!live) return
+      setSetupAccessFailOpen(true)
       setAsrStatus((prev) => {
         if (prev.ready || prev.status === 'ready' || prev.status === 'error') return prev
         const message = 'Transcription setup needs attention. Try again to continue.'
@@ -1182,7 +1188,13 @@ export function OnboardingExperience({
     }, ASR_SETUP_FAIL_OPEN_MS)
     const poll = async (): Promise<void> => {
       const s = await window.toto.asrAssetsStatus().catch(() => null)
-      if (s) apply(s)
+      if (!s) return
+      // Never re-lock Continue: ignore non-terminal status once fail-open latched or already error.
+      setAsrStatus((prev) => {
+        if (prev.status === 'error' && s.status !== 'ready' && !s.ready) return prev
+        if (prev.ready || prev.status === 'ready') return s.ready || s.status === 'ready' ? s : prev
+        return s
+      })
     }
     const interval = setInterval(() => void poll(), PERMISSIONS_POLL_MS)
     const unsub = window.toto.onImportAssetsProgress?.((d) => {
@@ -1256,7 +1268,10 @@ export function OnboardingExperience({
             )
           )
         ])) || asrEnsureFailureStatus()
-      if (live) setAsrStatus(asrStatus)
+      if (live) {
+        if (asrStatus.status === 'error' || !asrStatus.ready) setSetupAccessFailOpen(true)
+        setAsrStatus(asrStatus)
+      }
       const asr = asrAssetsRowStatus(asrStatus, settingsRef.current?.asrEngine)
       set('asr', asr.state, asr.detail, asr.progress)
       await delay(450)
@@ -1432,7 +1447,7 @@ export function OnboardingExperience({
   const needsPerms = rows.some(
     (r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'blocked' || r.state === 'restart')
   )
-  const asrBlocksContinue = setupAsrBlocksContinue(rows, asrStatus)
+  const asrBlocksContinue = setupAsrBlocksContinue(rows, asrStatus, setupAccessFailOpen)
 
   return (
     <>
@@ -1703,7 +1718,7 @@ export function OnboardingExperience({
               // Transcription files must be on disk before first-run leaves this act.
               disabled={asrBlocksContinue}
               onClick={() => {
-                if (setupAsrBlocksContinue(rows, asrStatus)) return
+                if (setupAsrBlocksContinue(rows, asrStatus, setupAccessFailOpen)) return
                 playHero()
                 setScene(sceneAfterSetup())
               }}
