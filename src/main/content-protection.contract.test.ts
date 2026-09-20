@@ -246,10 +246,14 @@ describe('MQA-176 — contentProtectionOn() is the single decision, and it is ho
     expect(src).not.toMatch(/process\.argv/)
   })
 
-  it('QA feel — Metis-*-qa.app TIP.txt / QA_BUILD_INFO.txt may disable capture protection', () => {
+  it('MQA-176 — a packaged app cannot disable capture protection or dump UI text through resource markers', () => {
     const src = sliceBetween(indexSrc, 'function contentProtectionOn(): boolean {', '\n}')
-    expect(src).toMatch(/TIP\.txt/)
-    expect(src).toMatch(/QA_BUILD_INFO\.txt/)
+    expect(src).not.toMatch(/TIP\.txt/)
+    expect(src).not.toMatch(/QA_BUILD_INFO\.txt/)
+    expect(src).not.toMatch(/process\.resourcesPath/)
+    expect(indexSrc).not.toMatch(/bindQaDomDump/)
+    expect(indexSrc).not.toMatch(/qa-dom-dump/)
+    expect(indexSrc).not.toMatch(/bodyInnerText/)
   })
 
   it('MQA-176 — a rebuilt overlay re-applies the decision at construction', () => {
