@@ -4405,29 +4405,46 @@ function registerIpc(): void {
   // suppresses those anyway); the checklist's "Open System Settings" link stays the recovery path.
   ipcMain.handle(IPC.permissionsRequestUpfront, async (e) => {
     assertMainWindow(e)
-    if (process.platform === 'darwin') {
-      if (systemPreferences.getMediaAccessStatus('microphone') === 'not-determined') {
-        await systemPreferences.askForMediaAccess('microphone').catch(() => false)
+    // Onboarding must never hang forever on an unanswered OS dialog. Race probes ≤2s then fail-open.
+    const ONBOARD_ACCESS_FAIL_OPEN_MS = 2_000
+    const run = async (): Promise<ReturnType<typeof getPlatformPermissions>> => {
+      if (process.platform === 'darwin') {
+        if (systemPreferences.getMediaAccessStatus('microphone') === 'not-determined') {
+          await systemPreferences.askForMediaAccess('microphone').catch(() => false)
+        }
+        if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+          await probeScreenCapture()
+        }
       }
-      if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+      if (process.platform === 'win32') {
+        // Windows used to fall straight through to a bare status read, so onboarding "front-loads the
+        // permission prompts" was a macOS-only promise and a Windows user's first screenshot ask was the
+        // first time anyone discovered capture was blocked. The probe raises no prompt here — it just
+        // establishes the truth while the user is still in setup, where the checklist can act on it.
+        // Mic cannot be prompted from main on Windows (askForMediaAccess is macOS-only); the renderer's
+        // getUserMedia call is what raises that prompt, so this only reports what the OS already knows.
         await probeScreenCapture()
       }
+      // The grant just asked for here is part of the background screen reader's eligibility on macOS
+      // (MQA-209), so reconcile at the one moment it can change. Often it won't have yet: macOS applies a
+      // fresh Screen Recording grant to the NEXT launch (PermissionsSection offers that relaunch), and the
+      // boot reconcile picks it up there. This costs one no-op call to cover the case where it already did.
+      refreshScreenPreprocess()
+      return getPlatformPermissions()
     }
-    if (process.platform === 'win32') {
-      // Windows used to fall straight through to a bare status read, so onboarding "front-loads the
-      // permission prompts" was a macOS-only promise and a Windows user's first screenshot ask was the
-      // first time anyone discovered capture was blocked. The probe raises no prompt here — it just
-      // establishes the truth while the user is still in setup, where the checklist can act on it.
-      // Mic cannot be prompted from main on Windows (askForMediaAccess is macOS-only); the renderer's
-      // getUserMedia call is what raises that prompt, so this only reports what the OS already knows.
-      await probeScreenCapture()
-    }
-    // The grant just asked for here is part of the background screen reader's eligibility on macOS
-    // (MQA-209), so reconcile at the one moment it can change. Often it won't have yet: macOS applies a
-    // fresh Screen Recording grant to the NEXT launch (PermissionsSection offers that relaunch), and the
-    // boot reconcile picks it up there. This costs one no-op call to cover the case where it already did.
-    refreshScreenPreprocess()
-    return getPlatformPermissions()
+    return await Promise.race([
+      run(),
+      new Promise<ReturnType<typeof getPlatformPermissions>>((resolve) =>
+        setTimeout(() => {
+          try {
+            refreshScreenPreprocess()
+          } catch {
+            /* headless */
+          }
+          resolve(getPlatformPermissions())
+        }, ONBOARD_ACCESS_FAIL_OPEN_MS)
+      )
+    ])
   })
   // Settings / overlay self-check. First pass: existing OS probe. Second pass: real vision on local or API.
   // Isolated from askStart — the result is never painted as a chat turn and never pushed to a teammate.
