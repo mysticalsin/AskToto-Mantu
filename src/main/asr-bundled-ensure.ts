@@ -1,9 +1,9 @@
 /**
  * Ensure Parakeet + the Whisper floor exist on a runnable Métis.
  *
- * Bundled resources are first. If they are missing (dev checkout before fetch-models, or a damaged
- * installer), fetch the reviewed files into userData/asr-models and load from there. Progress is
- * reported; the user is never told to reinstall for missing weights.
+ * Installed builds use only their reviewed bundled resources. Development can
+ * fetch reviewed files into userData/asr-models when its local resources have
+ * not yet been provisioned.
  */
 import { app, net } from 'electron'
 import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync } from 'node:fs'
@@ -23,6 +23,7 @@ import {
 } from '@shared/bundle-response'
 import { mainLog } from './logger'
 import { extractParakeetArchiveWindows } from './parakeet-extract'
+import { asrManifestComplete } from './asr-manifest'
 
 const execFileAsync = promisify(execFile)
 
@@ -74,6 +75,8 @@ export async function fetchBundleResponse(
 
 export const ASR_ASSETS_MISSING =
   'Could not get the transcription files. Check your connection and try again.'
+export const ASR_PACKAGED_ASSETS_MISSING =
+  'This Métis installation is missing its built-in transcription files. Repair or reinstall the official Métis package.'
 
 export interface AsrAssetsProgress {
   status: 'idle' | 'downloading' | 'ready' | 'error'
@@ -87,6 +90,8 @@ type AsrProgressReporter = (pct: number, label?: string) => void
 export interface AsrEnsureTestHooks {
   fetchParakeet?: (destDir: string, onProgress?: AsrProgressReporter) => Promise<void>
   fetchWhisperFloor?: (destDir: string, onProgress?: AsrProgressReporter) => Promise<void>
+  /** Test-only isolation for a development checkout whose real resources may be provisioned. */
+  bundledResourceRoot?: () => string
 }
 
 interface ParakeetEnsureOperation {
@@ -115,6 +120,7 @@ export function asrAssetsProgress(): AsrAssetsProgress {
 }
 
 export function bundledResourceRoot(): string {
+  if (testHooks?.bundledResourceRoot) return testHooks.bundledResourceRoot()
   const repo = join(__dirname, '..', '..')
   return app.isPackaged ? process.resourcesPath : join(repo, 'resources')
 }
@@ -170,29 +176,42 @@ export function parakeetUserDir(): string {
   return join(userDataAsrRoot(), PARAKEET_MODEL_NAME)
 }
 
-/** Bundled copy if complete, else the userData copy (which may still be incomplete). */
+/** Installed builds never use a userData copy to mask a damaged bundled payload. */
 export function resolveParakeetDir(): string {
-  if (parakeetFilesReady(parakeetBundledDir())) return parakeetBundledDir()
+  const bundled = parakeetBundledDir()
+  if (app.isPackaged || parakeetFilesReady(bundled)) return bundled
   if (parakeetFilesReady(parakeetUserDir())) return parakeetUserDir()
-  return parakeetBundledDir()
+  return bundled
 }
 
-/** Root that contains Xenova/whisper-base. Packaged `models/` or userData `asr-models/`. */
+/** Installed builds never use a userData copy to mask a damaged bundled payload. */
 export function resolveWhisperModelsRoot(): string {
   const bundled = join(bundledResourceRoot(), 'models')
-  if (whisperFloorReady(bundled)) return bundled
+  if (app.isPackaged || whisperFloorReady(bundled)) return bundled
   if (whisperFloorReady(userDataAsrRoot())) return userDataAsrRoot()
   return bundled
 }
 
 export function importAsrAssetsReady(): boolean {
+  if (app.isPackaged) {
+    return parakeetFilesReady(parakeetBundledDir()) && asrManifestComplete(bundledResourceRoot())
+  }
   return parakeetFilesReady(resolveParakeetDir()) && whisperFloorReady(resolveWhisperModelsRoot())
 }
 
-/** Renderer-safe snapshot: bundled or userData, never a reinstall string. */
+/** Renderer-safe snapshot. An installed app must report a missing bundled payload explicitly. */
 export function asrAssetsStatusSnapshot(): AsrAssetsProgress & { ready: boolean } {
   if (importAsrAssetsReady()) {
     return { ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' }
+  }
+  if (app.isPackaged) {
+    return {
+      ready: false,
+      status: 'error',
+      progress: 0,
+      label: ASR_PACKAGED_ASSETS_MISSING,
+      error: ASR_PACKAGED_ASSETS_MISSING
+    }
   }
   const status = state.status === 'ready' ? 'idle' : state.status
   return {
@@ -373,7 +392,12 @@ function observeParakeetEnsure(operation: ParakeetEnsureOperation, onProgress?: 
 }
 
 export function ensureParakeetAssets(onProgress?: AsrProgressReporter): Promise<void> {
-  if (parakeetFilesReady(parakeetBundledDir()) || parakeetFilesReady(parakeetUserDir())) {
+  if (parakeetFilesReady(parakeetBundledDir())) {
+    onProgress?.(100)
+    return Promise.resolve()
+  }
+  if (app.isPackaged) return Promise.reject(new Error(ASR_PACKAGED_ASSETS_MISSING))
+  if (parakeetFilesReady(parakeetUserDir())) {
     onProgress?.(100)
     return Promise.resolve()
   }
@@ -408,7 +432,12 @@ export function ensureParakeetAssets(onProgress?: AsrProgressReporter): Promise<
 
 export async function ensureWhisperFloorAssets(onProgress?: AsrProgressReporter): Promise<void> {
   const bundled = join(bundledResourceRoot(), 'models')
-  if (whisperFloorReady(bundled) || whisperFloorReady(userDataAsrRoot())) {
+  if (whisperFloorReady(bundled)) {
+    onProgress?.(100)
+    return
+  }
+  if (app.isPackaged) throw new Error(ASR_PACKAGED_ASSETS_MISSING)
+  if (whisperFloorReady(userDataAsrRoot())) {
     onProgress?.(100)
     return
   }
@@ -425,6 +454,7 @@ export function ensureImportAsrAssets(onProgress?: (pct: number) => void): Promi
 }
 
 async function runEnsure(onProgress?: (pct: number) => void): Promise<void> {
+  if (app.isPackaged && !importAsrAssetsReady()) throw new Error(ASR_PACKAGED_ASSETS_MISSING)
   if (importAsrAssetsReady()) {
     publish({ status: 'ready', progress: 1, label: 'Transcription files ready' }, onProgress)
     return
@@ -448,7 +478,8 @@ async function runEnsure(onProgress?: (pct: number) => void): Promise<void> {
     mainLog.info('[asr-assets] Parakeet and Whisper floor ready')
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e)
-    const message = /reinstall/i.test(error) ? ASR_ASSETS_MISSING : bundleFailureUserMessage(error) || ASR_ASSETS_MISSING
+    const message =
+      error === ASR_PACKAGED_ASSETS_MISSING ? error : bundleFailureUserMessage(error) || ASR_ASSETS_MISSING
     publish({ status: 'error', progress: state.progress, label: message, error: message }, onProgress)
     mainLog.warn('[asr-assets] ensure failed:', message)
     throw new Error(message)

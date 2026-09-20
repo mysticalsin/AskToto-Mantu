@@ -21,7 +21,7 @@ describe('ASR engine fallback and fresh-setup contracts', () => {
     )
   })
 
-  it('onboarding provisions ASR instead of skipping a missing bundle', () => {
+  it('onboarding provisions ASR and exposes a safe recovery for a damaged immutable bundle', () => {
     const onboard = read('src/renderer/src/components/OnboardingExperience.tsx')
     expect(onboard).toMatch(/asrAssetsEnsure/)
     expect(onboard).toMatch(/asrAssetsStatus/)
@@ -29,7 +29,8 @@ describe('ASR engine fallback and fresh-setup contracts', () => {
     expect(onboard).toMatch(/firstRunCanFinish/)
     expect(onboard).toMatch(/asrAssetsEnsure\(\)/)
     expect(onboard).not.toMatch(/models missing in this build/)
-    expect(onboard).not.toMatch(/[Rr]einstall Métis/)
+    expect(onboard).toMatch(/asrRowNeedsRepair/)
+    expect(onboard).toMatch(/Reinstall Métis with the official installer, then reopen it\./)
     expect(read('src/preload/index.ts')).toMatch(/asrAssetsStatus/)
     expect(IPC.asrAssetsEnsure).toBe('asr:assets-ensure')
   })

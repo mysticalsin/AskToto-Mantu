@@ -17,6 +17,9 @@ export const BUNDLE_NOT_JS =
 
 export const BUNDLE_DISK = 'Could not save the files. Check disk space and try again.'
 
+/** A signed installation is immutable. A missing built-in payload needs a repaired installer, not a network retry. */
+export const BUNDLE_REPAIR = 'Built-in transcription files are missing or damaged. Repair or reinstall Métis from the official installer.'
+
 export type BundleKind = 'js' | 'wasm' | 'onnx' | 'archive' | 'json' | 'binary'
 
 export type BundleInspectOk = { ok: true }
@@ -126,10 +129,16 @@ export function bundleKindForUrl(url: string): BundleKind {
   return 'binary'
 }
 
+export function isRepairRequiredBundleMessage(detail: string | null | undefined): boolean {
+  const message = detail ?? ''
+  return /\b(?:repair|reinstall)\b/i.test(message) && /\b(?:métis|installation|package|built-in)\b/i.test(message)
+}
+
 export function bundleFailureUserMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err ?? '')
   const trimmed = raw.trim()
   if (!trimmed) return BUNDLE_NETWORK
+  if (isRepairRequiredBundleMessage(trimmed)) return BUNDLE_REPAIR
   if (/reinstall/i.test(trimmed)) return BUNDLE_NETWORK
   if (
     trimmed === BUNDLE_GOT_LOGIN_HTML ||
@@ -153,6 +162,7 @@ export function bundleFailureUserMessage(err: unknown): string {
 }
 
 export function isRetryableBundleMessage(detail: string | null | undefined): boolean {
+  if (isRepairRequiredBundleMessage(detail)) return false
   return /could not|try again|check your connection|login page|not javascript|not a script|disk space|access|incomplete download/i.test(
     detail ?? ''
   )

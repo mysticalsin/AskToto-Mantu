@@ -79,7 +79,8 @@ describe('finding 8: duplicate global-hotkey accelerators are surfaced, not sile
     expect(start).toBeGreaterThan(-1)
     const body = source.slice(start, end)
     expect(body).toMatch(/const claimedBy = new Map/)
-    expect(body).toMatch(/const dupeOf = claimedBy\.get\(accel\)/)
+    expect(body).toMatch(/const claimKey = shortcutClaimKey\(accel\)/)
+    expect(body).toMatch(/const dupeOf = claimedBy\.get\(claimKey\)/)
     // A duplicate must be pushed to shortcutFailures and must NOT reach globalShortcut.register (the
     // `continue` keeps the dupe branch from falling through into the register() call below it).
     const dupeStart = body.indexOf('if (dupeOf) {')
@@ -88,6 +89,26 @@ describe('finding 8: duplicate global-hotkey accelerators are surfaced, not sile
     expect(dupeEnd).toBeGreaterThan(-1)
     const dupeBlock = body.slice(dupeStart, dupeEnd)
     expect(dupeBlock).toMatch(/shortcutFailures\.push\(\{ action, accel \}\)/)
+  })
+})
+
+describe('emergency force quit remains available when the renderer is wedged', () => {
+  it('registers Ctrl+Cmd+Esc on macOS outside user-configurable shortcuts and uses the normal bounded quit path', () => {
+    expect(source).toMatch(/const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command\+Control\+Escape'/)
+    const start = source.indexOf('function registerEmergencyForceQuitShortcut(): boolean {')
+    const end = source.indexOf('\n}', start)
+    expect(start).toBeGreaterThan(-1)
+    const body = source.slice(start, end)
+    expect(body).toMatch(/process\.platform !== 'darwin'/)
+    expect(body).toMatch(/globalShortcut\.register\(EMERGENCY_FORCE_QUIT_ACCELERATOR, forceQuitMétis\)/)
+    expect(source).toMatch(/function shortcutClaimKey\(accel: string\): string/)
+    expect(source).toMatch(/const claimKey = shortcutClaimKey\(accel\)/)
+    expect(source).toMatch(/claimedBy\.set\(shortcutClaimKey\(EMERGENCY_FORCE_QUIT_ACCELERATOR\), 'emergency-force-quit'\)/)
+    // Do not use app.exit(): it bypasses before-quit and can lose an active meeting. The existing
+    // before-quit handler gives the renderer a bounded 2-second flush before the app terminates.
+    expect(source).toMatch(/function forceQuitMétis\(\): void \{[\s\S]*?app\.quit\(\)/)
+    expect(source).not.toMatch(/function forceQuitMétis\(\): void \{[\s\S]*?app\.exit\(0\)/)
+    expect(source).toMatch(/label: 'Force Quit Métis'/)
   })
 })
 

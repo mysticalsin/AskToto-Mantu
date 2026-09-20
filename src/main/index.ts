@@ -217,6 +217,7 @@ import {
   pointInRect,
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
+import { pinWindowOnAllWorkspaces } from './overlay-workspace-pinning'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import {
   ASK_REVEAL_MIN_HEIGHT_PX,
@@ -671,6 +672,7 @@ import {
   ensureImportAsrAssets,
   asrAssetsProgress,
   asrAssetsStatusSnapshot,
+  importAsrAssetsReady,
   userDataAsrRoot
 } from './asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
@@ -2292,7 +2294,7 @@ function armCompletedOnboardingExitFallback(overlay: BrowserWindow): void {
 function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
   try {
     w.setAlwaysOnTop(true, 'screen-saver')
-    if (process.platform !== 'win32') w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    pinWindowOnAllWorkspaces(w)
   } catch {
     /* headless / already destroyed */
   }
@@ -2416,12 +2418,6 @@ function createWindow(): void {
       /* headless */
     }
   }
-  // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
-  // Windows") — gate the call so it isn't dead code there. Windows has no public API for pinning a
-  // window across Task View virtual desktops (that needs the native IVirtualDesktopManager COM
-  // interface via a native addon, which this app doesn't ship); on Windows the overlay stays visible
-  // only on the virtual desktop it was created on.
-  if (process.platform !== 'win32') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   // Apply the same capture-protection decision during onboarding and normal overlay use.
   win.setContentProtection(contentProtectionOn())
   // Island/bar overlay stays out of Mission Control; exclusive Act 1 must remain findable.
@@ -3907,6 +3903,47 @@ const shortcutActions: Record<string, () => void> = {
   'scroll-right': () => moveBy(60, 0)
 }
 
+// Reserved macOS escape hatch. This intentionally stays outside Settings' configurable shortcuts:
+// it must keep its meaning even if a user imports or edits shortcut settings. It is a graceful app
+// quit, not an OS-level kill; `before-quit` below retains its bounded transcript flush. If Electron's
+// main process itself is unresponsive, macOS's native Option+Command+Escape remains the recovery path.
+const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command+Control+Escape'
+
+function forceQuitMétis(): void {
+  mainLog.warn('[lifecycle] emergency graceful quit requested')
+  app.quit()
+}
+
+function registerEmergencyForceQuitShortcut(): boolean {
+  if (process.platform !== 'darwin') return false
+  try {
+    const registered = globalShortcut.register(EMERGENCY_FORCE_QUIT_ACCELERATOR, forceQuitMétis)
+    if (!registered) mainLog.warn(`[shortcuts] failed to register emergency force quit: ${EMERGENCY_FORCE_QUIT_ACCELERATOR}`)
+    return registered
+  } catch (e) {
+    mainLog.warn(`[shortcuts] invalid emergency force-quit accelerator: ${EMERGENCY_FORCE_QUIT_ACCELERATOR}`, e)
+    return false
+  }
+}
+
+/** Electron accepts several spellings for the same macOS modifier. Claim one canonical form so a
+ * hand-edited shortcut cannot replace the reserved emergency quit callback through an alias. */
+function shortcutClaimKey(accel: string): string {
+  if (process.platform !== 'darwin') return accel
+  return accel
+    .split('+')
+    .map((part) => {
+      const token = part.trim().toLowerCase()
+      if (token === 'command' || token === 'cmd' || token === 'meta' || token === 'super' ||
+        token === 'commandorcontrol' || token === 'cmdorctrl') return 'command'
+      if (token === 'control' || token === 'ctrl') return 'control'
+      if (token === 'escape' || token === 'esc') return 'escape'
+      return token
+    })
+    .sort()
+    .join('+')
+}
+
 function resolveShortcut(action: HotkeyAction, user: Record<string, string>): string {
   return user[action] ?? DEFAULT_SHORTCUTS[action] ?? ''
 }
@@ -3926,6 +3963,9 @@ function registerShortcuts(): void {
   // which is not a register() failure and so would never reach shortcutFailures below. Track claimed
   // accelerators ourselves so the second action loses deterministically and visibly instead.
   const claimedBy = new Map<string, string>()
+  if (registerEmergencyForceQuitShortcut()) {
+    claimedBy.set(shortcutClaimKey(EMERGENCY_FORCE_QUIT_ACCELERATOR), 'emergency-force-quit')
+  }
   for (const [action, fn] of Object.entries(shortcutActions)) {
     const accel = resolveShortcut(action as HotkeyAction, user)
     if (!accel) continue
@@ -3938,7 +3978,8 @@ function registerShortcuts(): void {
       shortcutFailures.push({ action, accel })
       continue
     }
-    const dupeOf = claimedBy.get(accel)
+    const claimKey = shortcutClaimKey(accel)
+    const dupeOf = claimedBy.get(claimKey)
     if (dupeOf) {
       mainLog.warn(`[shortcuts] duplicate accelerator for ${action}: ${accel} (already bound to ${dupeOf})`)
       shortcutFailures.push({ action, accel })
@@ -3950,7 +3991,7 @@ function registerShortcuts(): void {
         mainLog.warn(`[shortcuts] failed to register ${action}: ${accel}`)
         shortcutFailures.push({ action, accel })
       } else {
-        claimedBy.set(accel, action)
+        claimedBy.set(claimKey, action)
       }
     } catch (e) {
       mainLog.warn(`[shortcuts] invalid accelerator for ${action}: ${accel}`, e)
@@ -4077,6 +4118,11 @@ function buildTrayMenu(): Menu {
     } },
     { label: label('New', 'reset'), click: () => sendHotkey('reset') },
     { type: 'separator' },
+    {
+      label: 'Force Quit Métis',
+      accelerator: process.platform === 'darwin' ? EMERGENCY_FORCE_QUIT_ACCELERATOR : undefined,
+      click: forceQuitMétis
+    },
     { label: 'Quit Métis', click: () => app.quit() }
   ])
 }
@@ -8766,7 +8812,7 @@ if (!app.requestSingleInstanceLock()) {
   // Maps asr-model://<host>/<pathname> → RES_BASE/<host>/<pathname> on disk.
   // This lets the Whisper worker (served over file://) use fetch() to load
   // bundled ONNX model weights and WASM blobs with zero network access.
-  // Each host has its own canonical subtree; downloaded model assets use their own guarded root.
+  // Installed builds serve only their canonical resources; development may use its guarded userData root.
   // FITO/Tony 2026-09-20: register ASR IPC BEFORE protocol.handle and BEFORE createWindow.
   // A protocol throw must never leave asr:assets-ensure with "No handler registered" (Your setup Continue hang).
   runStep('asrAssetsIpc', () => {
@@ -8774,7 +8820,7 @@ if (!app.requestSingleInstanceLock()) {
     const RES_BASE = app.isPackaged
       ? process.resourcesPath
       : join(REPO_ROOT, 'resources')
-    const ASR_BUNDLED = app.isPackaged || asrManifestComplete(RES_BASE)
+    const ASR_BUNDLED = app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(RES_BASE)
     const safeHandle = (channel: string, listener: (...args: any[]) => unknown): void => {
       try {
         ipcMain.removeHandler(channel)
@@ -8813,7 +8859,7 @@ if (!app.requestSingleInstanceLock()) {
       : join(REPO_ROOT, 'resources')
     protocol.handle('asr-model', createAsrModelProtocolHandler({
       resourcesRoot: RES_BASE,
-      userModelsRoot: userDataAsrRoot(),
+      userModelsRoot: app.isPackaged ? undefined : userDataAsrRoot(),
       readLocal: (url) => net.fetch(url)
     }))
   })
