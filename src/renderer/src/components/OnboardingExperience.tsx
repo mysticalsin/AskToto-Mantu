@@ -512,11 +512,13 @@ export function asrEnsureFailureStatus(err?: unknown): AsrAssetsStatus {
 }
 
 /**
- * First-run cannot leave Act 3 until transcription files are ready. If setup
- * stalls, turn it into an actionable error with Retry here instead of allowing
- * the user to reach Ready with a disabled final action.
+ * First-run prefers ready transcription files, but must never spin forever.
+ * After ASR_SETUP_FAIL_OPEN_MS (or an ensure error), Continue unlocks; Retry
+ * stays on the row. Access/OS prompts must not gate this CTA.
  */
-export const ASR_SETUP_RETRY_TIMEOUT_MS = 12_000
+export const ASR_SETUP_FAIL_OPEN_MS = 2_000
+/** @deprecated alias — prefer ASR_SETUP_FAIL_OPEN_MS */
+export const ASR_SETUP_RETRY_TIMEOUT_MS = ASR_SETUP_FAIL_OPEN_MS
 
 export function setupAsrBlocksContinue(
   rows: SetupRow[],
@@ -524,6 +526,8 @@ export function setupAsrBlocksContinue(
 ): boolean {
   if (summarizeSetupRows(rows).allReady) return false
   if (asrStatusIsReady(asrStatus)) return false
+  // Fail-open: error unlocks Continue (Retry stays on the row).
+  if (asrStatus?.status === 'error') return false
   const asr = rows.find((r) => r.key === 'asr')
   if (asr && (asr.state === 'ready' || asr.state === 'skipped')) return false
   if (!asr) return rows.length === 0
@@ -1175,7 +1179,7 @@ export function OnboardingExperience({
         const message = 'Transcription setup needs attention. Try again to continue.'
         return { ready: false, status: 'error', progress: prev.progress || 0, label: message, error: message }
       })
-    }, ASR_SETUP_RETRY_TIMEOUT_MS)
+    }, ASR_SETUP_FAIL_OPEN_MS)
     const poll = async (): Promise<void> => {
       const s = await window.toto.asrAssetsStatus().catch(() => null)
       if (s) apply(s)
@@ -1235,13 +1239,33 @@ export function OnboardingExperience({
           if (!live) return
           setAsrStatus(asrEnsureFailureStatus(err))
         })
-      const asrStatus = await window.toto.asrAssetsStatus().catch((err) => asrEnsureFailureStatus(err))
+      const asrStatus =
+        (await Promise.race([
+          window.toto.asrAssetsStatus().catch((err) => asrEnsureFailureStatus(err)),
+          new Promise<AsrAssetsStatus>((r) =>
+            setTimeout(
+              () =>
+                r({
+                  ready: false,
+                  status: 'error',
+                  progress: 0,
+                  label: 'Transcription files are still downloading. You can continue and finish them in Settings.',
+                  error: 'Transcription files are still downloading. You can continue and finish them in Settings.'
+                }),
+              ASR_SETUP_FAIL_OPEN_MS
+            )
+          )
+        ])) || asrEnsureFailureStatus()
+      if (live) setAsrStatus(asrStatus)
       const asr = asrAssetsRowStatus(asrStatus, settingsRef.current?.asrEngine)
       set('asr', asr.state, asr.detail, asr.progress)
       await delay(450)
       set('brain', 'ready', isWindows ? 'stays on this PC' : 'stays on this Mac')
       await delay(450)
-      const perms = await window.toto.getPermissions().catch(() => null)
+      const perms = await Promise.race([
+        window.toto.getPermissions().catch(() => null),
+        new Promise<null>((r) => setTimeout(() => r(null), ASR_SETUP_FAIL_OPEN_MS))
+      ])
       const mic = micRowStatus(perms?.microphone)
       set('mic', mic.state, mic.detail)
       await delay(350)
@@ -1668,7 +1692,7 @@ export function OnboardingExperience({
           )}
           {asrBlocksContinue && scanDone && (
             <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-              Continue unlocks when the transcription files are ready.
+              Transcription files are finishing. Continue unlocks in a moment, or Retry the row.
             </p>
           )}
           <div className="flex items-center gap-2">
