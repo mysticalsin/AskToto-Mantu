@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -44,5 +44,28 @@ describe('afterPack Windows runtime verification', () => {
       ],
       expect.objectContaining({ stdio: 'inherit' })
     )
+  })
+
+  it('removes a staged app directory when runtime verification fails', async () => {
+    const appOutDir = mkdtempSync(join(tmpdir(), 'metis-after-pack-failure-'))
+    temporaryDirectories.push(appOutDir)
+    const resources = join(appOutDir, 'resources')
+    mkdirSync(join(resources, 'ffmpeg', 'win32-x64'), { recursive: true })
+    mkdirSync(join(resources, 'app.asar.unpacked', 'node_modules'), { recursive: true })
+    writeFileSync(join(resources, 'ffmpeg', 'win32-x64', 'ffmpeg.exe'), 'test')
+    childProcess.execFileSync.mockImplementation(() => {
+      throw new Error('runtime payload mismatch')
+    })
+
+    await expect(
+      afterPack({
+        arch: 1,
+        electronPlatformName: 'win32',
+        appOutDir,
+        packager: { appInfo: { productFilename: 'Metis' } }
+      })
+    ).rejects.toThrow('runtime payload mismatch')
+
+    expect(existsSync(appOutDir)).toBe(false)
   })
 })

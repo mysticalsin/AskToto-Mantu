@@ -11,6 +11,8 @@ appId: com.mantu.asktoto
 # pattern already used for the Windows shortcutName. Verified 2026-07-11: ASCII "Metis Helper" → 10/10
 # clean launches on this machine; "Métis Helper" → 0/10. Do NOT revert this to "Métis".
 productName: Metis
+# Refuse an incomplete offline speech payload before Electron Builder stages an app directory.
+beforePack: scripts/before-pack.mjs
 # Strip OneDrive/Finder xattrs from the packed app before signing — codesign hard-rejects them
 # ("resource fork … detritus not allowed"); this repo lives in CloudStorage so they're everywhere.
 afterPack: scripts/after-pack.mjs
