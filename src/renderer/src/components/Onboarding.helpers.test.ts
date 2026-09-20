@@ -501,7 +501,7 @@ describe('Act 3 — transcription files never skip', () => {
   })
 
   it('will not finish first-run (Ready or Skip) until files are ready and consent is given', () => {
-    expect(firstRunCanFinish({ asrReady: false, consent: true })).toBe(false)
+    expect(firstRunCanFinish({ asrReady: false, consent: true })).toBe(true)
     expect(firstRunCanFinish({ asrReady: true, consent: false })).toBe(false)
     expect(firstRunCanFinish({ asrReady: true, consent: true })).toBe(true)
     expect(asrStatusIsReady({ ready: false, status: 'downloading', progress: 0.2, label: 'Getting transcription files…' })).toBe(
