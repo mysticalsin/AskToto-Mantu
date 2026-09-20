@@ -166,9 +166,9 @@ describe('FITO-185-V hero video ready promotion', () => {
     expect(experience).toMatch(/currentTime > 0/)
     expect(experience).toMatch(/setTimeout\([\s\S]*?800\)/)
     expect(experience).toMatch(/playOnboardingVideo\(heroVideoRef\.current\)/)
-    // Next still advances hero → problem
+    // Queue the scene first so media startup cannot hold up the visible transition.
     expect(experience).toMatch(
-      /onBegin=\{\(\) => \{[\s\S]*?playOnboardingVideo\(heroVideoRef\.current\)[\s\S]*?setScene\('problem'\)/
+      /onBegin=\{\(\) => \{[\s\S]*?setScene\('problem'\)[\s\S]*?playOnboardingVideo\(heroVideoRef\.current\)/
     )
   })
 })
@@ -197,7 +197,7 @@ describe('FITO-185-W packaged hero mp4 plays outside asar', () => {
     expect(css).toMatch(/pointer-events:\s*auto\s*!important/)
     expect(css).toMatch(/\.hero-welcome \.onboard-cta/)
     expect(experience).toMatch(
-      /onBegin=\{\(\) => \{[\s\S]*?playOnboardingVideo\(heroVideoRef\.current\)[\s\S]*?setScene\('problem'\)/
+      /onBegin=\{\(\) => \{[\s\S]*?setScene\('problem'\)[\s\S]*?playOnboardingVideo\(heroVideoRef\.current\)/
     )
   })
 })

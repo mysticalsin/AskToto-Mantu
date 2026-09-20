@@ -24,7 +24,7 @@ describe('Mac-show tour stay-visible + quieter bar land', () => {
     expect(experience).not.toMatch(/shouldMountStarfield/)
   })
 
-  it('problem Continue is present at t=0 and lines stay with both', () => {
+  it('problem Continue is present at t=0 and lines stay visible without delayed fade state', () => {
     // FITO-185-P keeps lady bed mounted on hero|problem|reveal — do not slice from the first
     // "scene === 'problem'" occurrence (that is the video keep-alive ternary).
     const problemSceneAt = experience.indexOf("scene === 'problem' && (")
@@ -32,9 +32,8 @@ describe('Mac-show tour stay-visible + quieter bar land', () => {
     const problem = experience.slice(problemSceneAt, revealSceneAt > 0 ? revealSceneAt : undefined)
     expect(problem).toMatch(/>\s*Continue\s*</)
     expect(problem).not.toMatch(/PROBLEM_STORY\.length \* 1100/)
-    expect(problem).toMatch(/animationFillMode: 'both'/)
-    expect(problem).not.toMatch(/animationFillMode: 'forwards'/)
-    expect(problem).not.toMatch(/animationFillMode: 'backwards'/)
+    expect(problem).toMatch(/style=\{\{ opacity: 1 \}\}/)
+    expect(problem).not.toMatch(/animationFillMode/)
     const continueAt = problem.indexOf('>Continue<') >= 0 ? problem.indexOf('>Continue<') : problem.search(/>\s*Continue\s*</)
     const sceneEnterAt = problem.indexOf('scene-enter')
     expect(sceneEnterAt).toBeGreaterThanOrEqual(0)

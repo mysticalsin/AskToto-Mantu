@@ -69,7 +69,7 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(onboardingMusicLoopEnvelope(1.2, 300, 2.4)).toBeLessThan(0.6)
   })
 
-  it('starts the Aria on exclusive mount and retries on Next and first click', () => {
+  it('starts the Aria on exclusive mount and queues the visible Next scene before retrying media', () => {
     // Anchor on portal-open mount (prefetch is deferred via requestIdleCallback after Act 1 paint).
     const mountIdx = experience.indexOf('playPortalOpen(music.muted)')
     expect(mountIdx).toBeGreaterThan(0)
@@ -80,11 +80,12 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(experience.indexOf('music.start()', mountIdx)).toBeGreaterThan(mountIdx) // retry after portal open
     expect(experience).toMatch(/prefetchOnboardingDemoChunks\(\)/)
     const begin = experience.slice(experience.indexOf('onBegin={() => {'))
-    const beginBlock = begin.slice(0, begin.indexOf('setScene'))
-    expect(beginBlock).toMatch(/music\.start\(\)/)
-    expect(beginBlock).toMatch(/playOnboardingVideo/)
-    expect(beginBlock.indexOf('music.start()')).toBeLessThan(beginBlock.indexOf('playOnboardingVideo'))
-    expect(beginBlock.indexOf('music.start()')).toBeLessThan(begin.indexOf("setScene('problem')") - begin.indexOf('onBegin={() => {'))
+    const sceneAt = begin.indexOf("setScene('problem')")
+    const musicAt = begin.indexOf('music.start()')
+    const videoAt = begin.indexOf('playOnboardingVideo')
+    expect(sceneAt).toBeGreaterThanOrEqual(0)
+    expect(musicAt).toBeGreaterThan(sceneAt)
+    expect(videoAt).toBeGreaterThan(musicAt)
     expect(experience).toMatch(/onPointerDown=\{music\.start\}/)
     expect(experience).toMatch(/music\.start\(\)/)
     expect(experience).not.toMatch(/playOnboardingMedia/)
