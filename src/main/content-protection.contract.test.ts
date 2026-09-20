@@ -260,6 +260,16 @@ describe('MQA-176 — contentProtectionOn() is the single decision, and it is ho
     expect(indexSrc).not.toMatch(/bodyInnerText/)
   })
 
+  it('MQA-176 — Cap3 QA_TIP force-paint is packaging-gated the same way as ASKTOTO_DISABLE_CP', () => {
+    // Cap3 tip prove may drop Resources/QA_TIP.txt into an unpackaged/dev run. A packaged build must
+    // ignore that marker — otherwise a shipped tip file would leave Intelligence capturable while
+    // Private View appears on. Gate must use isPackagedBuild() (same fail-closed helper as devEnv).
+    const intelSrc = readFileSync(join(MAIN_DIR, 'intelligence.ts'), 'utf8')
+    expect(intelSrc).toMatch(/QA_TIP\.txt/)
+    expect(intelSrc).toMatch(/isPackagedBuild\(\)/)
+    expect(intelSrc).toMatch(/!isPackagedBuild\(\)\s*&&\s*existsSync\(qaTip\)/)
+  })
+
   it('MQA-176 — a rebuilt overlay re-applies the decision at construction', () => {
     const createWindow = sliceBetween(indexSrc, 'function createWindow(): void {', 'function resizeTo(')
     expect(createWindow).toContain('win.setContentProtection(contentProtectionOn())')
@@ -397,5 +407,26 @@ describe('MQA-176 — the Intelligence dashboard is created with the CURRENT Pri
     const intel = await import('./intelligence')
     intel.openIntelligenceWindow()
     expect(built[0].setContentProtection).toHaveBeenCalledWith(true)
+  })
+
+  it('MQA-176 — packaged build keeps dashboard CP on even when Resources/QA_TIP.txt is present', async () => {
+    // Threat twin of ASKTOTO_DISABLE_CP: a tip file that rides into a shipped Resources/ must not
+    // strip capture protection on the most sensitive aggregated view.
+    writeFileSync(join(bundle, 'QA_TIP.txt'), 'cap3-security-contract\n', 'utf8')
+    const electron = await import('electron')
+    ;(electron.app as { isPackaged?: boolean }).isPackaged = true
+    const intel = await import('./intelligence')
+    intel.openIntelligenceWindow()
+    expect(built[0].setContentProtection).toHaveBeenCalledWith(true)
+    expect(built[0].setContentProtection).not.toHaveBeenCalledWith(false)
+  })
+
+  it('MQA-176 — unpackaged Cap3 prove still force-paints when Resources/QA_TIP.txt is present', async () => {
+    // Unpackaged / electron-vite prove path: tip marker may disable CP so desktop screencapture works.
+    writeFileSync(join(bundle, 'QA_TIP.txt'), 'cap3-prove\n', 'utf8')
+    // Vitest electron mock leaves isPackaged undefined → isPackagedBuild() is false (unpackaged).
+    const intel = await import('./intelligence')
+    intel.openIntelligenceWindow()
+    expect(built[0].setContentProtection).toHaveBeenCalledWith(false)
   })
 })
