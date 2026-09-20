@@ -204,6 +204,9 @@ export const IPC = {
   // exception the renderer survives, previously visible only via ASKTOTO_DEBUG_RENDERER console mirroring.
   rendererCrash: 'renderer:crash',
   hotkey: 'hotkey',
+  metisCommandState: 'metis-command:state',
+  metisCommandConfirm: 'metis-command:confirm',
+  metisCommandCancel: 'metis-command:cancel',
   shortcutFailures: 'shortcuts:failures',
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
@@ -1758,6 +1761,7 @@ export const HOTKEY_ACTIONS: HotkeyAction[] = [
   'hide',
   'reset',
   'toggle-listen',
+  'metis-command',
   'capture',
   'factcheck',
   'whatnext',
@@ -1776,6 +1780,7 @@ export type HotkeyAction =
   | 'hide'
   | 'reset'
   | 'toggle-listen'
+  | 'metis-command'
   | 'capture'
   | 'factcheck'
   // The remaining Quick Action chips (QuickActions.tsx's QuickKind) + Spotlight Ref — previously only
@@ -1806,6 +1811,7 @@ export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
   hide: 'CommandOrControl+\\',
   reset: 'CommandOrControl+Shift+R',
   'toggle-listen': 'CommandOrControl+Shift+L',
+  'metis-command': 'CommandOrControl+Shift+M',
   capture: 'CommandOrControl+Shift+S',
   factcheck: 'CommandOrControl+Shift+F',
   // Unassigned by default (no free, uncontested global combo obviously reads as "what to say next" /
@@ -1826,6 +1832,16 @@ export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
   // of HOTKEY_ACTIONS so it gets no global key / no Settings row, but typed so the tray can trigger it.
   agenda: ''
 }
+
+/** Renderer-safe command state. It intentionally excludes transcript text and action request data. */
+export type MetisCommandState =
+  | { proposalId: null }
+  | { proposalId: string; nonce: string; expiresAt: number; revision: number }
+
+export const MetisCommandConfirmationSchema = z
+  .object({ proposalId: z.string().regex(/^[a-f0-9]{32}$/), nonce: z.string().regex(/^[a-f0-9]{64}$/) })
+  .strict()
+export type MetisCommandConfirmation = z.infer<typeof MetisCommandConfirmationSchema>
 
 /** A hotkey main failed to bind (combo already held by another app, or OS-reserved) — IPC.shortcutFailures. */
 export interface ShortcutFailure {

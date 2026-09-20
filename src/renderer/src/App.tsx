@@ -2954,6 +2954,8 @@ export function App(): JSX.Element {
       void window.toto.toggle()
     } else if (a === 'reset') guardReviewNav(reset)
     else if (a === 'toggle-listen') toggleListen()
+    // Summon only surfaces the command UI. Command capture is a later, separate capability.
+    else if (a === 'metis-command') setCollapsed(false)
     // capture/factcheck/whatnext/explain/summarize/spotlight-ref all navigate the view (setView) just like
     // 'ask'/'reset' above, so they're wrapped in guardReviewNav too — previously only 'ask'/'reset'/
     // 'settings'/'agenda' were guarded, letting these six silently discard an unsaved Review recap edit.
