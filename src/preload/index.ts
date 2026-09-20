@@ -546,22 +546,6 @@ const api = {
   licenseConfig: (payload: LicenseConfigPayload): Promise<LicenseConfigResult> =>
     ipcRenderer.invoke(IPC.licenseConfig, payload),
 
-  // Métis 2.0 Cap 2 — command session pill / local stop. Transcript ingestion is main-owned.
-  metisCommandStop: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.metisCommandStop),
-  onMetisCommandState: (
-    cb: (state: {
-      phase: string
-      active: boolean
-      pillVisible: boolean
-      pillCopy: string
-      liveTranscript: string
-      chime: 'none' | 'single' | 'double'
-    }) => void
-  ): (() => void) => {
-    const listener = (_: unknown, state: Parameters<typeof cb>[0]): void => cb(state)
-    ipcRenderer.on(IPC.metisCommandState, listener)
-    return () => ipcRenderer.removeListener(IPC.metisCommandState, listener)
-  }
 }
 
 contextBridge.exposeInMainWorld('toto', api)

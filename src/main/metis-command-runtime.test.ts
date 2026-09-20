@@ -40,14 +40,47 @@ describe('Cap2 command runtime', () => {
   })
 
   it('drains a command that arrives while an earlier action is committing', async () => {
-    const rt = createMetisCommandRuntime({ onState: () => {}, platform: 'linux' })
+    let releaseFirst: () => void = () => {
+      throw new Error('first adapter action was not started')
+    }
+    let executions = 0
+    const execute: typeof import('./desktop-adapters').executeDesktopAction = async (request) => {
+      executions++
+      if (executions === 1) await new Promise<void>((resolve) => (releaseFirst = resolve))
+      return { id: request.id, ok: true, outcome: 'unknown' }
+    }
+    const rt = createMetisCommandRuntime({ onState: () => {}, platform: 'linux', execute })
     rt.ingestTranscript('Métis open notes', 'command')
+    await Promise.resolve()
     rt.ingestTranscript('open Arc', 'command')
+    expect(rt.getState().pending.map((request) => request.id)).toEqual(['desktop.open_notes', 'desktop.open_arc'])
+    releaseFirst()
     await new Promise((resolve) => setTimeout(resolve, 40))
     expect(rt.getState().committed).toEqual(
       expect.arrayContaining(['desktop.open_notes', 'desktop.open_arc'])
     )
     expect(rt.getState().pending).toEqual([])
+  })
+
+  it('drains a new command session after an old action finishes', async () => {
+    let releaseFirst: () => void = () => {
+      throw new Error('first adapter action was not started')
+    }
+    const executed: string[] = []
+    const execute: typeof import('./desktop-adapters').executeDesktopAction = async (request) => {
+      executed.push(request.id)
+      if (executed.length === 1) await new Promise<void>((resolve) => (releaseFirst = resolve))
+      return { id: request.id, ok: true, outcome: 'unknown' }
+    }
+    const rt = createMetisCommandRuntime({ onState: () => {}, execute })
+    rt.ingestTranscript('Métis open notes', 'command')
+    await Promise.resolve()
+    rt.reset('cloud_stt_replaced')
+    rt.ingestTranscript('Métis open Arc', 'command')
+    releaseFirst()
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(executed).toEqual(['desktop.open_notes', 'desktop.open_arc'])
+    expect(rt.getState().committed).toContain('desktop.open_arc')
   })
 
   it('expires command authority after local-microphone inactivity', async () => {

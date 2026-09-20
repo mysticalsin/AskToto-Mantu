@@ -3,8 +3,6 @@ import { Bar } from './components/Bar'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
-import { CommandListeningPill } from './components/CommandListeningPill'
-import { startMetisCommandEar, type MetisCommandEarStatus } from './lib/metis-command-ear'
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import {
@@ -283,52 +281,6 @@ export function App(): JSX.Element {
   const bootError = settingsBootError ?? auth.bootError
   // FITO-185-X: mid-wait escape on the post-onboarding Loading strip (Tony: never forever Loading).
   const [bootSlow, setBootSlow] = useState(false)
-
-  // Métis 2.0 Cap 2 — wake-word command pill (top-center). Meeting Listen ≠ command until wake.
-  const [metisCommand, setMetisCommand] = useState<{
-    phase: string
-    active: boolean
-    pillVisible: boolean
-    pillCopy: string
-    liveTranscript: string
-    chime: 'none' | 'single' | 'double'
-  }>({
-    phase: 'idle',
-    active: false,
-    pillVisible: false,
-    pillCopy: 'Hi Métis',
-    liveTranscript: '',
-    chime: 'none'
-  })
-  const [metisCommandEarStatus, setMetisCommandEarStatus] = useState<MetisCommandEarStatus>({ state: 'idle' })
-  useEffect(() => {
-    const unsub = window.toto.onMetisCommandState?.((state) => setMetisCommand(state))
-    return () => {
-      unsub?.()
-    }
-  }, [])
-
-  // Cap2 always-on ear: arm whenever overlay is past exclusive onboarding (do not wait on settings race).
-  useEffect(() => {
-    const exclusive =
-      typeof window !== 'undefined' &&
-      new URLSearchParams(window.location.search).get('exclusiveOnboarding') === '1'
-    const enabled = !exclusive
-    const stop = startMetisCommandEar({
-      enabled,
-      preferApple: true,
-      isMeetingListening: () => document.documentElement.dataset.metisListening === '1',
-      onStatus: (s) => {
-        setMetisCommandEarStatus(s)
-        if (s.state === 'heard') console.info('[cap2-ear]', s.via, s.text)
-        if (s.state === 'denied' || s.state === 'error') console.warn('[cap2-ear]', s)
-      },
-      onMicDenied: () => {
-        void window.toto.openPermissionSettings('microphone')
-      }
-    })
-    return () => stop()
-  }, [settings?.onboardingDone])
 
   // ── License enforcement master switch ──────────────────────────────────────────────────────────
   // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
@@ -3780,31 +3732,6 @@ export function App(): JSX.Element {
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
-            <div data-metis-command-pill-host="1">
-        <div
-          data-metis-command-ear-chip="1"
-          className="pointer-events-none absolute left-1/2 top-1 z-[80] -translate-x-1/2 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium tracking-wide text-white/90"
-        >
-          {metisCommandEarStatus.state === 'listening'
-            ? 'Ear on · say Métis'
-            : metisCommandEarStatus.state === 'arming'
-              ? 'Ear arming…'
-              : metisCommandEarStatus.state === 'denied'
-                ? 'Mic blocked · Privacy'
-                : metisCommandEarStatus.state === 'heard'
-                  ? `Heard: ${'text' in metisCommandEarStatus ? metisCommandEarStatus.text.slice(0, 42) : ''}`
-                  : metisCommandEarStatus.state === 'error'
-                    ? 'Ear error'
-                    : null}
-        </div>
-        <CommandListeningPill
-          visible={metisCommand.pillVisible}
-          copy={metisCommand.pillCopy}
-          liveTranscript={metisCommand.liveTranscript}
-          chime={metisCommand.chime}
-          onStop={() => void window.toto.metisCommandStop?.()}
-        />
-      </div>
       {(() => {
         const toasts = (
           <>
