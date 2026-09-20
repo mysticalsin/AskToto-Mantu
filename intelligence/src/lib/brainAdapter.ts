@@ -482,26 +482,53 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   // (single-threaded deals, unmapped accounts). Stamped once at adapt time.
   const cold = buildGoingCold(b, Date.now())
 
-  // Meetings are dropped from the DISPLAY graph (61 meeting nodes would drown the entity structure);
-  // their connectivity survives because people/accounts/deals were already linked during ingest.
-  const keepTypes = new Set(['account', 'person', 'deal', 'sector'])
+  // Meetings USED to be dropped from the DISPLAY graph, on the grounds that 61 meeting nodes would
+  // drown the entity structure. That is a density problem, and the answer to a density problem is a
+  // filter, not deletion: dropping them made the source of every relationship invisible, so the graph
+  // asserted that two people were connected while hiding the note that proves it. They are carried
+  // through now and GraphView owns whether they are shown (its Notes toggle).
+  const keepTypes = new Set(['account', 'person', 'deal', 'sector', 'meeting'])
   const nodes: GraphNode[] = b.graph.nodes
     .filter((n) => keepTypes.has(n.type))
     .map((n) => {
       const bare = n.id.replace(/^[a-z_]+:/, '')
       const t = cold.touch.get(n.id)
+      // A meeting node IS its own source: its ref is the file it came from, not the latest meeting of
+      // some entity. `bare` is the slugified filename ingest built the id from.
+      // Ingest mints `meeting:${slugify(file)}`, so the slug match is the real-data path. The other two
+      // cover id shapes that carry the bare filename with or without its extension: a meeting node whose
+      // source cannot be resolved would otherwise render with no date and no source file at all.
+      const meetingSelf =
+        n.type === 'meeting'
+          ? indexedMeetings.find((m) => slug(m.source_file) === bare) ??
+            indexedMeetings.find((m) => m.source_file === bare) ??
+            indexedMeetings.find((m) => slug(m.source_file.replace(/\.[^.]+$/, '')) === bare)
+          : undefined
       const entityMeetings =
         n.type === 'account' ? accountBySlug.get(bare)?.meetings
         : n.type === 'person' ? personBySlug.get(bare)?.meetings
         : n.type === 'deal' ? dealBySlug.get(bare)?.meetings
         : undefined
-      const ref = latestMeetingRef(entityMeetings)
+      const ref = meetingSelf
+        ? { file: meetingSelf.source_file, date: meetingSelf.date ?? '' }
+        : latestMeetingRef(entityMeetings)
       return {
         id: n.id,
         label: n.label,
         type: n.type as GraphNode['type'],
-        account: n.type === 'person' ? accountByPerson.get(bare) : n.type === 'account' ? n.label : undefined,
-        sector: n.type === 'account' ? sectorByAccount.get(n.label) : n.type === 'sector' ? n.label : undefined,
+        // A meeting answers to its own account, so hiding an account hides the notes belonging to it
+        // rather than leaving them floating unattached in the canvas.
+        account:
+          n.type === 'person' ? accountByPerson.get(bare)
+          : n.type === 'account' ? n.label
+          : n.type === 'meeting' ? meetingSelf?.account?.name ?? undefined
+          : undefined,
+        sector:
+          n.type === 'account' ? sectorByAccount.get(n.label)
+          : n.type === 'sector' ? n.label
+          : n.type === 'meeting' && meetingSelf?.account?.name
+            ? sectorByAccount.get(meetingSelf.account.name)
+            : undefined,
         win_likelihood_band: n.type === 'deal' ? bandByDeal.get(bare) ?? undefined : undefined,
         bid_id: n.type === 'deal' ? bare : undefined,
         degree: 0,
