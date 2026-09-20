@@ -2241,13 +2241,58 @@ button.onboard-cta {
   transform: none;
   opacity: 1;
 }
+/* Blur is disabled DURING the spring: animating backdrop-filter is the expensive path (DESIGN.md's
+   motion budget). `.aw-widget` is listed because the dock panel is built on it rather than `.glass`,
+   and without it the dock was the one surface still blurring mid-spring. */
 .overlay-spring--in .glass,
 .overlay-spring--out .glass,
 .overlay-spring--in .glass-strong,
-.overlay-spring--out .glass-strong {
+.overlay-spring--out .glass-strong,
+.overlay-spring--in .aw-widget,
+.overlay-spring--out .aw-widget,
+.overlay-spring--in.aw-widget,
+.overlay-spring--out.aw-widget {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+/* Edge-docked variant of the same spring family. The top-edge spring drops DOWN from above with a
+   top-center origin, which is the wrong direction and an unattached origin for a panel fixed to the
+   right edge: it arrived from nowhere. Here the origin is the edge it is actually attached to and the
+   surface slides in from off-edge. Duration and easing are inherited from --in/--out above, so the
+   320-380 / 280-340 budget and --ease-spring are unchanged. Transform + opacity only. */
+.overlay-spring--edge-right {
+  transform-origin: right center;
+}
+.overlay-spring--edge-right.overlay-spring--in {
+  animation-name: overlay-spring-in-right;
+}
+.overlay-spring--edge-right.overlay-spring--out {
+  animation-name: overlay-spring-out-right;
+}
+
+@keyframes overlay-spring-in-right {
+  from {
+    opacity: 0.85;
+    /* Less scale than the bar's 0.92: a tall panel scaling that hard reads as a zoom, not a slide. */
+    transform: scale(0.96) translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateX(0);
+  }
+}
+
+@keyframes overlay-spring-out-right {
+  from {
+    opacity: 1;
+    transform: scale(1) translateX(0);
+  }
+  to {
+    opacity: 0.85;
+    transform: scale(0.96) translateX(12px);
+  }
+}
+
 @keyframes overlay-spring-in {
   from {
     opacity: 0.85;

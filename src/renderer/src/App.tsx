@@ -70,6 +70,7 @@ import {
   overlaySpringAfterHide,
   overlaySpringAfterReveal,
   overlaySpringClassName,
+  type OverlayEdge,
   prefersOverlayReducedMotion,
   type CircleRestSpring,
   type OverlaySpring
@@ -691,6 +692,8 @@ export function App(): JSX.Element {
   const overlayLayout = parseOverlayLayout(settings?.overlayLayout)
   const overlayOrbStyle = parseOverlayOrbStyle(settings?.overlayOrbStyle)
   const AskSurface = overlayLayout === 'dock' ? DockPanel : Bar
+  // The dock is attached to the right edge, so it springs from there. Every other chrome hugs the top.
+  const overlaySpringEdge: OverlayEdge = overlayLayout === 'dock' ? 'right' : 'top'
   const canMinimize = overlayAllowsMinimize(overlayLayout)
   const showBarOrb = overlayShowsBarOrb(overlayLayout, minimized)
   const autoHideSetting = overlayUsesHover(overlayLayout)
@@ -3912,7 +3915,7 @@ export function App(): JSX.Element {
           {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. */}
           <div
             className={
-              overlayIdle ? overlaySpringClassName(overlaySpring) : circleRestSpringClassName(circleRestSpring)
+              overlayIdle ? overlaySpringClassName(overlaySpring, overlaySpringEdge) : circleRestSpringClassName(circleRestSpring)
             }
             onAnimationEnd={(e) => {
               if (e.target !== e.currentTarget) return

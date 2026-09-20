@@ -97,8 +97,11 @@ describe('circle-expand: click Expand Métis must not snap back', () => {
     expect(app).toMatch(/window\.toto\.minimize\(false\)\.then/)
     expect(app).toMatch(/window\.toto\.minimize\(true\)\.then/)
     expect(app).toMatch(/if \(overlayIdle\)/)
+    // overlaySpringClassName gained an edge argument so the dock can spring from the edge it is
+    // attached to instead of dropping down from above. The contract being pinned here is unchanged:
+    // an idle overlay uses the overlay spring, a circle rest uses the circle spring, never a hard cut.
     expect(app).toMatch(
-      /overlayIdle \? overlaySpringClassName\(overlaySpring\) : circleRestSpringClassName\(circleRestSpring\)/
+      /overlayIdle \? overlaySpringClassName\(overlaySpring(, overlaySpringEdge)?\) : circleRestSpringClassName\(circleRestSpring\)/
     )
   })
 
