@@ -2,7 +2,7 @@
 **When:** 20 Sep 2026 ~1:12pm ET (America/Toronto)  
 **Branch:** `metis-2.0-inventory`  
 **Base tip:** `9568d21ce7ab277d05a6ab34e79b76fc57713a2e` (Ultron Cap1 STAMP)  
-**Cap2 tip:** `bec8f20f85eb6ea57743c737bf73b02c57f1abe6` (`bec8f20`)  
+**Cap2 tip:** `8312bbab96ed85f577fc18ac70c0090a78f12840` (`8312bbab`)  
 **Push:** box has no gh auth — bundle `/workspace/metis-20-cap2.bundle` (requires `9568d21`) for Mac `gh`/`git push`  
 **Pack:** HOLD · **OAuth:** LAST · **Cap3 notch:** NOT started
 
