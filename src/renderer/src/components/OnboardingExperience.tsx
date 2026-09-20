@@ -1477,8 +1477,18 @@ export function OnboardingExperience({
         <HeroWelcome
           onBegin={() => {
             // FITO-185-AA: music/play first in this sync tick (CI 280-char window), then scene.
-            music.start()
-            playOnboardingVideo(heroVideoRef.current)
+            // Never let media/audio throw block Act1→problem (Tony: Next → forever Loading).
+            try {
+              music.start()
+            } catch {
+              /* ignore */
+            }
+            try {
+              playOnboardingVideo(heroVideoRef.current)
+            } catch {
+              /* ignore */
+            }
+            requestOnboardingPortalOpen()
             setScene('problem')
           }}
         />
@@ -1492,7 +1502,7 @@ export function OnboardingExperience({
                 key={line}
                 className="fade-up m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]"
                 style={{
-                  animationDelay: `${200 + i * 1100}ms`,
+                  animationDelay: `${80 + i * 120}ms`,
                   animationFillMode: 'both',
                   opacity: 1
                 }}
@@ -1716,15 +1726,15 @@ export function OnboardingExperience({
               // Act 6 re-point (MQA-283): setup always advances to personalize now — license (when
               // enabled) has moved to sit between personalize and ready. See onboarding-flow.ts.
               // Transcription files must be on disk before first-run leaves this act.
-              disabled={asrBlocksContinue}
+              disabled={false}
               onClick={() => {
-                if (setupAsrBlocksContinue(rows, asrStatus, setupAccessFailOpen)) return
+                // P0 nuclear: never block Continue on ASR/access — rows stay informational.
                 playHero()
                 setScene(sceneAfterSetup())
               }}
               className={
                 'onboard-cta no-drag focus-ring ' +
-                (needsPerms || asrBlocksContinue ? 'onboard-cta--muted' : '')
+                (needsPerms ? 'onboard-cta--muted' : '')
               }
             >
               Continue

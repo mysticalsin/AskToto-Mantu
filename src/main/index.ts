@@ -958,6 +958,10 @@ const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so i
  * diagnostics prove readiness from bounded metadata rather than by making setup capturable. */
 function contentProtectionOn(): boolean {
   if (devEnv('ASKTOTO_DISABLE_CP')) return false
+  // QA / CDP: never blank exclusive onboarding from capture or hang DevTools HTTP.
+  if (process.argv.some((a) => a === '--remote-debugging-port' || a.startsWith('--remote-debugging-port='))) {
+    return false
+  }
   return getSettings().contentProtection
 }
 

@@ -39,14 +39,12 @@
     btn.addEventListener('click', function (e) {
       e.preventDefault()
       window.__act1BootNextQueued = true
+      // Always drop the static shell on click — never wait on React (Tony: Next → forever Loading).
+      retireBootChrome()
       try {
         window.dispatchEvent(new CustomEvent('act1-boot-next'))
       } catch (_) {
         /* ignore */
-      }
-      // If React already mounted, drop the covering shell immediately.
-      if (document.getElementById('root') && document.getElementById('root').childElementCount > 0) {
-        retireBootChrome()
       }
     })
   }
