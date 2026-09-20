@@ -1852,6 +1852,21 @@ button.onboard-cta {
     box-shadow 160ms ease;
   animation: overlay-peek-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
+/* Invisible dock rest: paints nothing, occupies the same box, keeps its hit area. Opacity rather than
+   display:none or visibility:hidden on purpose - the element must still receive the pointer, and main
+   sets the WINDOW opacity to 0 as well, so this is the renderer half of the same bargain Hide makes. */
+.overlay-dock-peek--invisible {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.overlay-dock-peek--invisible:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
 .overlay-dock-peek:hover {
   width: 14px;
   box-shadow:

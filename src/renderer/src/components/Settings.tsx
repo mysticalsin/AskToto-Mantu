@@ -6626,6 +6626,52 @@ export function Settings({
                         {overlayPlacementSave.error}
                       </p>
                     ) : null}
+                    {settings.overlayLayout === 'dock' ? (
+                      <>
+                        <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                          Dock rest <ManagedChip keys={settings.managedKeys} k="dockRest" />
+                        </p>
+                        <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                          Applies when Overlay chrome is Dock. Invisible leaves nothing on screen until you
+                          reach the edge. It stays exactly as easy to open either way.
+                        </p>
+                        <div role="radiogroup" aria-label="Dock rest" className="flex gap-2">
+                          {(
+                            [
+                              { id: 'sliver', label: 'Sliver', desc: 'A slim marker on the edge.' },
+                              { id: 'hidden', label: 'Invisible', desc: 'Nothing until you reach the edge.' }
+                            ] as const
+                          ).map((opt) => {
+                            const on = (settings.dockRest ?? 'sliver') === opt.id
+                            const locked = settings.managedKeys.includes('dockRest')
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                role="radio"
+                                aria-checked={on}
+                                disabled={locked}
+                                onClick={() => patch({ dockRest: opt.id })}
+                                className={
+                                  'no-drag cl-focus flex-1 rounded-[10px] border px-3 py-2 text-left transition-colors ' +
+                                  (on
+                                    ? 'border-[var(--cl-ring)] bg-white/[0.06]'
+                                    : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]') +
+                                  (locked ? ' opacity-60' : '')
+                                }
+                              >
+                                <span className="block text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                                  {opt.label}
+                                </span>
+                                <span className="mt-0.5 block text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                                  {opt.desc}
+                                </span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </>
+                    ) : null}
                     {overlayShowsBarRestPicker(settings.overlayLayout) ? (
                       <>
                         <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Bar rest</p>

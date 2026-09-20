@@ -1,9 +1,11 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AudioLines,
   Brain,
+  Check,
   ChevronLeft,
   ChevronRight,
+  Copy,
   CornerDownLeft,
   Eye,
   EyeOff,
@@ -12,6 +14,7 @@ import {
   LayoutGrid,
   Pause,
   Play,
+  Plus,
   Square,
   X
 } from 'lucide-react'
@@ -110,6 +113,9 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
   // Drives the edge fade. Measured rather than assumed: masking a short answer's last line reads as a
   // rendering fault, so the mask only applies once the content genuinely overflows.
   const [overflowing, setOverflowing] = useState(false)
+  // Copy confirmation is local and self-clearing: a toast for "I copied the thing I just asked for" is
+  // more ceremony than the action deserves.
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     if (props.focusSignal > 0) inputRef.current?.focus()
@@ -130,6 +136,21 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
   }, [modeOpen])
 
   const hasAnswer = props.hasAnswer ?? !!props.body
+
+  const copyAnswer = useCallback(() => {
+    const el = bodyRef.current
+    const text = el?.innerText?.trim()
+    if (!text) return
+    void navigator.clipboard
+      ?.writeText(text)
+      .then(() => {
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1400)
+      })
+      .catch(() => {
+        /* clipboard refused (no permission, headless) - say nothing rather than a false success */
+      })
+  }, [])
   const listening = props.listening
 
   // Re-measure on every body change (a streaming answer grows line by line) and on resize. ResizeObserver
@@ -255,6 +276,16 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
             <AudioLines size={18} strokeWidth={ICON_STROKE} />
           </Tool>
         )}
+        {hasAnswer && (
+          <Tool title={copied ? 'Copied' : 'Copy answer'} onClick={copyAnswer} active={copied}>
+            {copied ? <Check size={18} strokeWidth={ICON_STROKE} /> : <Copy size={18} strokeWidth={ICON_STROKE} />}
+          </Tool>
+        )}
+        {listening && props.onNewMeeting && (
+          <Tool title="New meeting" onClick={props.onNewMeeting}>
+            <Plus size={18} strokeWidth={ICON_STROKE} />
+          </Tool>
+        )}
         <span className="flex-1" />
         <button
           type="button"
@@ -269,7 +300,7 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
       props.captureAccel, props.onCapture, props.capturing, props.onSpotlightRef, props.spotlightReady,
       props.mode, props.customModes, modeOpen, props.onToggleThinking, props.thinkingOn, props.stealth,
       props.onToggleStealth, props.stealthLocked, listening, props.onToggleListen, props.onHistory,
-      props.onTranscript
+      props.onTranscript, hasAnswer, copied, copyAnswer, props.onNewMeeting
     ]
   )
 

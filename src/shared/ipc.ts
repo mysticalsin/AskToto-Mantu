@@ -1139,6 +1139,14 @@ export const BaseSettingsSchema = z.object({
   /** Physical location is separate from the overlay chrome. Legacy profiles stay top-center. */
   overlayPlacement: z.enum(['top-center', 'right-edge']).default('top-center'),
   /**
+   * Dock rest visibility. The dock normally rests as a visible sliver, which is the affordance that
+   * says Métis is there. `hidden` parks it as a fully transparent strip instead: nothing on screen at
+   * all until the pointer reaches the edge or the hotkey fires, the same bargain Hide makes at the top
+   * edge. The hover band is unchanged either way, so an invisible dock is still reachable — it is a
+   * PAINT choice, never a reachability one. Dock-only; every other chrome ignores it.
+   */
+  dockRest: z.enum(['sliver', 'hidden']).default('sliver'),
+  /**
    * Per-display sidecar position, stored as a normalized Y (0..1), never a raw desktop coordinate.
    * It remains in the encrypted local profile and is never sent to Operator or a meeting.
    */
@@ -1696,6 +1704,7 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayLayout: 'hide',
   overlayOrbStyle: 'jakub',
   overlayPlacement: 'top-center',
+  dockRest: 'sliver',
   overlayRightEdgeYByDisplay: {},
   showFullTranscriptInReview: false,
   asrQuality: 'best',

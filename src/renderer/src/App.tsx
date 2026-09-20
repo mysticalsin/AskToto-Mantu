@@ -3753,6 +3753,9 @@ export function App(): JSX.Element {
   // and wrong for the dock: DockPanel fills its window by design, so the panel below got squeezed to
   // nothing behind a full-height slab of dark glass. Same black box as Settings, three more views.
   // Settings is the exception and keeps the sheet, because main gives it its own wide window.
+  // Dock rest paint mode. Invisible is a paint choice only: the hover band and the window are unchanged,
+  // so an invisible dock stays exactly as reachable as a visible one.
+  const dockRestHidden = settings?.dockRest === 'hidden'
   const dockSurfaceLive = overlayLayout === 'dock' && !settingsSheetOpen
   const barBody = (answerView || dockSurfaceLive) && !collapsed ? body : undefined
   const isPanelBody = body != null && !answerView && !dockSurfaceLive
@@ -3892,12 +3895,8 @@ export function App(): JSX.Element {
       ) : overlayPeeked ? (
         // Hide: 8x2 hairline (cursor watch is the sensor). Island: top peek. Dock: edge sliver.
         <OverlayPeek
-          rest={overlayRestsHidden(overlayLayout) ? 'hide' : overlayLayout === 'dock' ? 'dock' : 'island'}
-          onReveal={
-            overlayLayout === 'dock'
-              ? () => dispatchAutoHide({ type: 'reveal-now' })
-              : revealOverlay
-          }
+          rest={overlayRestsHidden(overlayLayout) ? 'hide' : overlayLayout === 'dock' ? (dockRestHidden ? 'dock-hidden' : 'dock') : 'island'}
+          onReveal={revealOverlay}
           stealth={settings?.contentProtection ?? true}
         />
       ) : overlayLayout === 'dock' ? (

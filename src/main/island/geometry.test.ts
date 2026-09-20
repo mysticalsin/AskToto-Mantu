@@ -834,7 +834,11 @@ describe('overlay chrome modes (hide / island / bar / dock)', () => {
     expect(app).toMatch(/parseOverlayLayout/)
     expect(app).toMatch(/overlayShowPeek\(/)
     expect(app).toMatch(/overlayRestsHidden\(overlayLayout\)/)
-    expect(app).toMatch(/overlayRestsHidden\(overlayLayout\) \? 'hide' : overlayLayout === 'dock' \? 'dock' : 'island'/)
+    // The dock rest now has two paint modes (see dock-invisible.test.ts). The contract pinned here is
+    // unchanged: hide is the hairline, dock is a dock rest, everything else is the island peek.
+    expect(app).toMatch(
+      /overlayRestsHidden\(overlayLayout\) \? 'hide' : overlayLayout === 'dock' \? \(dockRestHidden \? 'dock-hidden' : 'dock'\) : 'island'/
+    )
     expect(app).toMatch(/reveal-now/)
     expect(app).toMatch(/pointer-leave/)
     expect(app).toMatch(/onOverlayCursorHover/)

@@ -197,6 +197,7 @@ import {
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
   hideParkWindowOpacity,
+  type DockRest,
   settingsOpenRect,
   shouldIgnoreResizeWhilePeekResting,
   shouldParkHoverRestAfterLeavingSurface,
@@ -2166,7 +2167,7 @@ function applyOverlaySurfaceChrome(): void {
     /* headless */
   }
   try {
-    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized, liveDockRest()))
   } catch {
     /* headless */
   }
@@ -2782,6 +2783,11 @@ function liveOverlayLayout(): OverlayLayout {
 }
 
 /** Physical placement is separate from visual chrome. Older or malformed settings stay top-center. */
+/** Dock rest paint mode, read the same way every other live overlay setting is. */
+function liveDockRest(): DockRest {
+  return getSettings().dockRest === 'hidden' ? 'hidden' : 'sliver'
+}
+
 function liveOverlayPlacement(): OverlayPlacement {
   return parseOverlayPlacement(getSettings().overlayPlacement)
 }
@@ -3243,7 +3249,7 @@ function setWindowMode(): void {
     /* headless */
   }
   try {
-    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized, liveDockRest()))
   } catch {
     /* headless / lifted placement stub */
   }

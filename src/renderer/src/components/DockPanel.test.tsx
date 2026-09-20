@@ -108,6 +108,23 @@ describe('DockPanel — a sidecar, not a squeezed bar', () => {
     expect(html).toMatch(/History|Transcript/)
   })
 
+  it('offers Copy only when there is an answer to copy', () => {
+    const none = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(none).not.toContain('Copy answer')
+    const some = renderToStaticMarkup(<DockPanel {...props({ body: <p>a</p>, hasAnswer: true })} />)
+    expect(some).toContain('Copy answer')
+  })
+
+  it('offers New meeting only during a meeting, and only when the caller supports it', () => {
+    const idle = renderToStaticMarkup(<DockPanel {...props({ onNewMeeting: () => {} })} />)
+    expect(idle).not.toContain('New meeting')
+    const live = renderToStaticMarkup(<DockPanel {...props({ listening: true, onNewMeeting: () => {} })} />)
+    expect(live).toContain('New meeting')
+    // No handler means no button, rather than a control that does nothing.
+    const unsupported = renderToStaticMarkup(<DockPanel {...props({ listening: true })} />)
+    expect(unsupported).not.toContain('New meeting')
+  })
+
   it('the answer is the biggest zone and the only scroller', () => {
     const html = renderToStaticMarkup(<DockPanel {...props({ body: <p>answer</p>, hasAnswer: true })} />)
     expect(html).toContain('scroll-thin')

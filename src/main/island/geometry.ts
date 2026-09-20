@@ -17,6 +17,9 @@
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
+
+/** Dock rest paint mode — mirrors PublicSettings.dockRest (shared/ipc.ts). */
+export type DockRest = 'sliver' | 'hidden'
 import { SETTINGS_WINDOW_MIN, isFatHoverTrigger as sharedIsFatHoverTrigger } from '@shared/settings-bounds'
 
 export type { OverlayLayout }
@@ -559,8 +562,18 @@ export function isExclusivePurpleFlash(color?: string): boolean {
  * Bar, Settings, and exclusive onboarding stay 1. Cursor watch does not use
  * this window — hoverWatchRestRect still reveals.
  */
-export function hideParkWindowOpacity(layout: OverlayLayout, resting: boolean): number {
-  return layout === 'hide' && resting ? 0 : 1
+export function hideParkWindowOpacity(
+  layout: OverlayLayout,
+  resting: boolean,
+  /** Dock only. 'hidden' parks the dock invisibly, the same bargain Hide makes at the top edge. */
+  dockRest: DockRest = 'sliver'
+): number {
+  if (!resting) return 1
+  if (layout === 'hide') return 0
+  // A hidden dock is a PAINT choice only: hoverWatchRestRect still returns the full sliver band, so the
+  // window stays exactly as reachable as a visible one. Reachability must never ride on opacity.
+  if (layout === 'dock' && dockRest === 'hidden') return 0
+  return 1
 }
 
 /**
