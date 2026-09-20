@@ -16,6 +16,7 @@ import {
   asrRowNeedsRetry,
   localModelRowStatus,
   micRowStatus,
+  ASR_SETUP_FAIL_OPEN_MS,
   setupAsrBlocksContinue,
   setupRowLoadingPercent,
   firstRunCanFinish,
@@ -407,6 +408,19 @@ describe('Act 3 — transcription files never skip', () => {
     expect(setupAsrBlocksContinue([asrRow('loading')])).toBe(true)
     expect(setupAsrBlocksContinue([asrRow('ready')])).toBe(false)
     expect(setupAsrBlocksContinue([])).toBe(true)
+  })
+
+  it('fail-opens Continue when ASR ensure errors (Retry stays on the row)', () => {
+    expect(
+      setupAsrBlocksContinue([asrRow('action')], {
+        ready: false,
+        status: 'error',
+        progress: 0,
+        label: 'Could not get the transcription files.',
+        error: 'Could not get the transcription files.'
+      })
+    ).toBe(false)
+    expect(ASR_SETUP_FAIL_OPEN_MS).toBeGreaterThan(5_000)
   })
 
   it('never leaves Continue stuck when the setup list already looks complete', () => {
