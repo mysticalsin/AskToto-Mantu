@@ -148,9 +148,11 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(exit).toMatch(/if \(!overlayWindowTransparent\) \{\s*recreateOverlayWindow\(\)/)
 
     const settings = readFileSync(join(__dirname, '../../renderer/src/components/Settings.tsx'), 'utf8')
-    const replay = settings.slice(settings.indexOf('Replay onboarding from the start?'))
+    const replay = settings.slice(settings.indexOf('const replayOnboarding = async'))
+    expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeGreaterThan(-1)
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
-    expect(replay.indexOf('haltAllOnboardingAudio()')).toBeLessThan(replay.indexOf('patch({ onboardingDone: false })'))
+    expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(replay.indexOf('haltAllOnboardingAudio()'))
+    expect(replay.indexOf('haltAllOnboardingAudio()')).toBeLessThan(replay.indexOf('window.toto.onboardingEnter()'))
   })
 })
 
@@ -247,7 +249,8 @@ describe('MQA-338 exclusive Act 1 privacy + bounded diagnostics', () => {
     expect(create).toMatch(/if \(process\.env\.ASKTOTO_MAC_LAUNCH_GATE === '1'\)/)
     expect(create).not.toMatch(/ASKTOTO_MAC_LAUNCH_GATE === '1' \|\| onboardingExclusiveLive\(\)/)
     expect(index).toMatch(/function overlayRendererUrl\(\): string/)
-    expect(index).toMatch(/if \(onboardingExclusiveLive\(\)\) params\.set\('exclusiveOnboarding', '1'\)/)
+    expect(index).toMatch(/const onboardingLive = onboardingExclusiveLive\(\)/)
+    expect(index).toMatch(/if \(onboardingLive\) params\.set\('exclusiveOnboarding', '1'\)/)
   })
 
   it('portal-open CSS unlock includes onboard-cta / Next (FITO-185-V)', () => {

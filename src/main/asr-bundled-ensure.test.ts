@@ -23,6 +23,7 @@ import {
   WHISPER_FLOOR_ID,
   WHISPER_FLOOR_REQUIRED_FILES,
   ensureImportAsrAssets,
+  ensureParakeetAssets,
   fetchBundleResponse,
   importAsrAssetsReady,
   asrAssetsStatusSnapshot,
@@ -84,6 +85,81 @@ describe('asr-bundled-ensure', () => {
     expect(snap.ready).toBe(true)
     expect(snap.status).toBe('ready')
     expect(JSON.stringify(snap)).not.toMatch(/[Rr]einstall/)
+  })
+
+  it('keeps the extraction phase visible at the 69% onboarding handoff', async () => {
+    let duringExtraction: ReturnType<typeof asrAssetsStatusSnapshot> | undefined
+    setAsrEnsureTestHooks({
+      fetchParakeet: async (dest, onProgress) => {
+        // The production downloader has just completed the archive transfer and is about to extract.
+        // Until the production callback accepts its phase label, the old code surfaces this as generic
+        // "Getting transcription files…", which reads like a frozen download.
+        ;(onProgress as unknown as ((pct: number, label: string) => void) | undefined)?.(
+          92,
+          'Preparing transcription files…'
+        )
+        duringExtraction = asrAssetsStatusSnapshot()
+        mkdirSync(dest, { recursive: true })
+        for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dest, name), 'p')
+      },
+      fetchWhisperFloor: async (dest) => {
+        const dir = join(dest, ...WHISPER_FLOOR_ID.split('/'))
+        for (const rel of WHISPER_FLOOR_REQUIRED_FILES) {
+          const file = join(dir, rel)
+          mkdirSync(join(file, '..'), { recursive: true })
+          writeFileSync(file, 'w')
+        }
+      }
+    })
+
+    await ensureImportAsrAssets()
+
+    expect(duringExtraction).toMatchObject({
+      ready: false,
+      status: 'downloading',
+      label: 'Preparing transcription files…'
+    })
+    expect(duringExtraction?.progress).toBeCloseTo(0.69)
+  })
+
+  it('single-flights Parakeet recovery across direct and aggregate callers', async () => {
+    let releaseFetch!: () => void
+    let startedFetch!: () => void
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve
+    })
+    const fetchStarted = new Promise<void>((resolve) => {
+      startedFetch = resolve
+    })
+    let parakeetFetches = 0
+    setAsrEnsureTestHooks({
+      fetchParakeet: async (dest) => {
+        parakeetFetches += 1
+        startedFetch()
+        await fetchGate
+        mkdirSync(dest, { recursive: true })
+        for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dest, name), 'p')
+      },
+      fetchWhisperFloor: async (dest) => {
+        const dir = join(dest, ...WHISPER_FLOOR_ID.split('/'))
+        for (const rel of WHISPER_FLOOR_REQUIRED_FILES) {
+          const file = join(dir, rel)
+          mkdirSync(join(file, '..'), { recursive: true })
+          writeFileSync(file, 'w')
+        }
+      }
+    })
+
+    const direct = ensureParakeetAssets()
+    await fetchStarted
+    const aggregate = ensureImportAsrAssets()
+    await Promise.resolve()
+    expect(parakeetFetches).toBe(1)
+
+    releaseFetch()
+    await Promise.all([direct, aggregate])
+    expect(parakeetFetches).toBe(1)
+    expect(importAsrAssetsReady()).toBe(true)
   })
 
   it('status snapshot is not ready and never says reinstall when resources are empty', () => {

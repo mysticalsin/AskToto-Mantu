@@ -36,6 +36,9 @@ function nativeHover() {
     healHideGhostSlab: () => false,
     getDisplayMetrics: () => display,
     liveOverlayLayout: () => 'hide',
+    // The lifted native handler delegates the rest rectangle to index.ts so it can honor the selected
+    // physical placement. This fixture covers the established top-edge Hide behavior.
+    overlayHoverRestRect: (layout: 'hide') => hoverWatchRestRect(layout, display),
     hoverWatchRestRect,
     isIncompleteAskReveal,
     cancelOverlayLeavePark: () => { parkPending = false },

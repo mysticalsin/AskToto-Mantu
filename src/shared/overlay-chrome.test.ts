@@ -276,7 +276,7 @@ describe('overlay chrome modes', () => {
       index.indexOf('function parkOverlayAfterHideSpring'),
       index.indexOf('function applyHideClickThrough')
     )
-    expect(parkFn).toMatch(/parkAfterExclusiveOnboarding/)
+    expect(parkFn).toMatch(/parkedOverlayBounds/)
     expect(parkFn).not.toMatch(/ask\.clear/)
     expect(index).toMatch(/scheduleOverlayLeavePark/)
     expect(index).toMatch(/OVERLAY_LEAVE_PARK_MS/)

@@ -205,6 +205,8 @@ export type AuditEvent =
   // FITO-185-U: live Act1 DOM probe summary (userData/logs/act1-dom.json).
   | 'app.act1.dom'
   | 'app.crash'
+  // A main-process, state-checked repair completed a renderer handoff after durable setup save.
+  | 'app.recovery'
   // FITO-185-E: 15s MQA-175 callback closed the boot watch (finally), whether brain resume ran or threw.
   | 'app.boot.watch_cleared'
   // FITO-185-F: menu-bar Tray create succeeded/failed — hardprove AXExtrasMenuBar needs a diagnosable trail.

@@ -206,7 +206,10 @@ describe('FITO-185-U wiring in createWindow', () => {
     // URL construction is shared with renderer-crash recovery. Keeping it outside createWindow prevents
     // the recovery path from silently dropping the parser-time onboarding shell flag.
     expect(index).toMatch(/function overlayRendererUrl\(\): string/)
-    expect(index).toMatch(/if \(onboardingExclusiveLive\(\)\) params\.set\('exclusiveOnboarding', '1'\)/)
+    // Read once into `onboardingLive`: the same verdict also decides the post-onboarding launch route
+    // built next to it, and one URL must never be stamped from two different readings.
+    expect(index).toMatch(/const onboardingLive = onboardingExclusiveLive\(\)/)
+    expect(index).toMatch(/if \(onboardingLive\) params\.set\('exclusiveOnboarding', '1'\)/)
     expect(create).toMatch(/FITO-185-N/)
   })
 })

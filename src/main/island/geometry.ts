@@ -16,6 +16,7 @@
 
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
+import type { OverlayPlacement } from '@shared/overlay-placement'
 import { SETTINGS_WINDOW_MIN, isFatHoverTrigger as sharedIsFatHoverTrigger } from '@shared/settings-bounds'
 
 export type { OverlayLayout }
@@ -221,13 +222,111 @@ export function hoverRestWidth(m: DisplayMetrics): number {
   return Math.max(1, m.workArea.width)
 }
 
+/** Breathing room between a sidecar overlay and the usable display edge. */
+export const RIGHT_EDGE_MARGIN_PX = 12
+/** A sidecar opens high enough to be discoverable without covering meeting controls. */
+export const RIGHT_EDGE_DEFAULT_NORMALIZED_Y = 0.2
+/** The compact side target is intentionally small; cursor-watch supplies dwell and leave hysteresis. */
+export const RIGHT_EDGE_HOVER_TARGET = { width: 24, height: HOVER_ISLAND_HEIGHT_MAX_PX } as const
+
 /**
- * Logical rest rect the cursor watch hit-tests. Hide does NOT park the window here
- * (that was the visible 560×44 slab). Island keeps a smaller visible peek at the same Y.
- * Watch is the always-on top-edge approach band (work-area-wide, menu-bar-tall
- * plus the first work-area row) so Hide/Island reveal without hunting Show Métis.
+ * A sidecar must leave its edge breathing room while still fitting the full revealed Bar. The compact
+ * hide/island rest fits on much narrower displays, but using it there would reveal an inaccessible 880px
+ * bar. Those displays deliberately fall back to the established top-center path instead.
  */
-export function hoverWatchRestRect(_layout: OverlayLayout, m: DisplayMetrics): Rect {
+export function rightEdgePlacementFits(m: DisplayMetrics, margin = RIGHT_EDGE_MARGIN_PX): boolean {
+  return m.workArea.width >= OVERLAY_BAR_REST.width + margin * 2
+}
+
+/** The selected preference can safely differ from the effective placement on a constrained display. */
+export function resolveOverlayPlacement(placement: OverlayPlacement, m: DisplayMetrics): OverlayPlacement {
+  return placement === 'right-edge' && !rightEdgePlacementFits(m) ? 'top-center' : placement
+}
+
+function clampNormalized(value: number): number {
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : RIGHT_EDGE_DEFAULT_NORMALIZED_Y))
+}
+
+function rightEdgeYRange(height: number, m: DisplayMetrics, margin = RIGHT_EDGE_MARGIN_PX): { min: number; max: number } {
+  const min = clampWithMargin(m.workArea.y + margin, height, m.workArea.y, m.workArea.height, margin)
+  const max = clampWithMargin(
+    m.workArea.y + m.workArea.height - height - margin,
+    height,
+    m.workArea.y,
+    m.workArea.height,
+    margin
+  )
+  return min <= max ? { min, max } : { min: max, max: min }
+}
+
+/** Map normalized sidecar Y to the current display without retaining desktop coordinates. */
+export function rightEdgePosition(
+  width: number,
+  height: number,
+  m: DisplayMetrics,
+  normalizedY = RIGHT_EDGE_DEFAULT_NORMALIZED_Y,
+  margin = RIGHT_EDGE_MARGIN_PX
+): { x: number; y: number } {
+  const x = clampWithMargin(
+    m.workArea.x + m.workArea.width - width - margin,
+    width,
+    m.workArea.x,
+    m.workArea.width,
+    margin
+  )
+  const range = rightEdgeYRange(height, m, margin)
+  const y = Math.round(range.min + (range.max - range.min) * clampNormalized(normalizedY))
+  return { x, y }
+}
+
+/** Inverse of rightEdgePosition's vertical mapping for an explicit user drag. */
+export function normalizeRightEdgeY(
+  y: number,
+  height: number,
+  m: DisplayMetrics,
+  margin = RIGHT_EDGE_MARGIN_PX
+): number {
+  const range = rightEdgeYRange(height, m, margin)
+  if (range.max === range.min) return 0
+  return clampNormalized((y - range.min) / (range.max - range.min))
+}
+
+/** Compact side-edge target for Hide/Island that reuses the cursor-watch dwell/leave state machine. */
+export function rightEdgeHoverRestRect(normalizedY: number | undefined, m: DisplayMetrics): Rect {
+  const { y } = rightEdgePosition(
+    RIGHT_EDGE_HOVER_TARGET.width,
+    RIGHT_EDGE_HOVER_TARGET.height,
+    m,
+    normalizedY
+  )
+  const x = m.workArea.x + m.workArea.width - RIGHT_EDGE_HOVER_TARGET.width
+  return { x, y, ...RIGHT_EDGE_HOVER_TARGET }
+}
+
+/** One placement-aware bounds resolver. Top-center remains on its established path. */
+export function overlayPlacementPosition(input: {
+  placement: OverlayPlacement
+  width: number
+  height: number
+  layout: OverlayLayout
+  metrics: DisplayMetrics
+  topMargin: number
+  normalizedY?: number
+}): { x: number; y: number } {
+  if (resolveOverlayPlacement(input.placement, input.metrics) === 'right-edge') {
+    return rightEdgePosition(input.width, input.height, input.metrics, input.normalizedY)
+  }
+  return topCenterPosition(input.width, input.layout, input.metrics, input.topMargin)
+}
+
+/** Placement-aware hover rest. Top-center preserves the existing top-edge band. */
+export function hoverWatchRestRect(
+  _layout: OverlayLayout,
+  m: DisplayMetrics,
+  placement: OverlayPlacement = 'top-center',
+  normalizedY?: number
+): Rect {
+  if (resolveOverlayPlacement(placement, m) === 'right-edge') return rightEdgeHoverRestRect(normalizedY, m)
   const height = hoverRestHeight(m)
   const width = hoverRestWidth(m)
   return { x: m.workArea.x, y: hoverRestTop(m), width, height }
@@ -460,10 +559,12 @@ export function parkedHoverReanchor(
   layout: OverlayLayout,
   resting: boolean,
   nextDisplay: DisplayMetrics,
-  topMargin: number
+  topMargin: number,
+  placement: OverlayPlacement = 'top-center',
+  normalizedY?: number
 ): Rect | null {
   if (!resting || !overlayUsesHover(layout)) return null
-  return parkAfterExclusiveOnboarding(layout, nextDisplay, topMargin)
+  return parkAfterExclusiveOnboarding(layout, nextDisplay, topMargin, placement, normalizedY)
 }
 
 /** Tony live fails: 560×44 slab and 560×103 stub. Hide rest must not look like either. */
@@ -479,10 +580,16 @@ export function isVisibleHideSlab(win: Pick<Rect, 'width' | 'height'>): boolean 
 export function parkAfterExclusiveOnboarding(
   layout: OverlayLayout,
   m: DisplayMetrics,
-  topMargin: number
+  topMargin: number,
+  placement: OverlayPlacement = 'top-center',
+  normalizedY?: number
 ): Rect {
-  if (layout === 'hide') return hideParkRect(m)
+  const effectivePlacement = resolveOverlayPlacement(placement, m)
+  if (effectivePlacement === 'top-center' && layout === 'hide') return hideParkRect(m)
   const size = overlayRestSize(layout, m)
+  if (effectivePlacement === 'right-edge') {
+    return { ...rightEdgePosition(size.width, size.height, m, normalizedY), width: size.width, height: size.height }
+  }
   if (layout === 'island') {
     const x = clampAxis(
       Math.round(m.workArea.x + (m.workArea.width - size.width) / 2),
@@ -507,9 +614,17 @@ export function firstPaintOverlayBounds(input: {
   layout: OverlayLayout
   metrics: DisplayMetrics
   topMargin: number
+  placement?: OverlayPlacement
+  normalizedY?: number
 }): Rect {
   if (!input.onboardingDone) return exclusiveOnboardingBounds(input.bounds, input.workArea)
-  return parkAfterExclusiveOnboarding(input.layout, input.metrics, input.topMargin)
+  return parkAfterExclusiveOnboarding(
+    input.layout,
+    input.metrics,
+    input.topMargin,
+    input.placement,
+    input.normalizedY
+  )
 }
 
 /** Stale exclusive / card measures must not grow a hide/island park back into 880×816.

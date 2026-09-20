@@ -71,6 +71,9 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       // reload itself is already pinned by c-main-fixes.contract.test.ts; this is about the reset above it.
       'const win = { webContents: { on: (evt, fn) => { if (evt === "render-process-gone") handler = fn } }, isDestroyed: () => true }',
       'const self = win',
+      // Captured beside `const self = win` in main, outside this handler, because the real callback runs
+      // after the WebContents is gone (MQA-340).
+      'const selfWebContentsId = 1',
       'const onboardingExclusiveLive = () => false',
       'const overlayRendererUrl = () => "file:///fixture/renderer/index.html"',
       ''
@@ -182,7 +185,10 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       'const ensureWindow = () => win',
       'const onboardingExclusiveLive = () => false',
       'const islandResting = false',
+      'const settingsSurfaceOpen = false',
       'const liveOverlayLayout = () => "bar"',
+      'const resolvedOverlayPlacementForDisplay = () => "top-center"',
+      'const rightEdgeYForDisplay = () => undefined',
       'const parkedHoverReanchor = () => null',
       'const getDisplayMetrics = () => ({})',
       'const ISLAND_TOP_MARGIN = 8',
@@ -268,6 +274,7 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       'const OVERLAY_REST_BACKGROUND = "#00000000"',
       'const onboardingExclusiveLive = () => false',
       'const islandResting = false',
+      'const resolvedOverlayPlacementForDisplay = () => "top-center"',
       ''
     ].join('\n')
     const run = new Function('stubs', preamble + region + '\nsetWindowMode()\nreturn current') as (

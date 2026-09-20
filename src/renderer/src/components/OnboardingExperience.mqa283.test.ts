@@ -59,10 +59,18 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
 
   it('routes both Ready actions through one retry-safe completion path', () => {
     expect(experienceSrc).toMatch(/createOnboardingCompletionFlow/)
-    expect(experienceSrc).toMatch(/onClick=\{\(\) => attemptFinish\(\)\}/)
-    expect(experienceSrc).toMatch(/onClick=\{\(\) => attemptFinish\(onOpenAiSettings\)\}/)
+    expect(experienceSrc).toMatch(/onClick=\{\(\) => attemptFinish\('answer'\)\}/)
+    expect(experienceSrc).toMatch(/onClick=\{\(\) => attemptFinish\('settings'\)\}/)
     expect(experienceSrc).not.toMatch(/onClick=\{\(\) => void onFinish\(\)\}/)
     expect(experienceSrc).toMatch(/role="alert"/)
+  })
+
+  it('sends the post-save onboarding exit only after the durable settings invoke has resolved', () => {
+    const v2 = experienceSrc.slice(experienceSrc.indexOf('export function OnboardingV2'))
+    const save = v2.indexOf('await persistOnboardingCompletion({')
+    const exit = v2.indexOf('window.toto.onboardingExit(destination)')
+    expect(save).toBeGreaterThan(-1)
+    expect(exit).toBeGreaterThan(save)
   })
 
   it('keeps encrypted-profile recovery in the active Ready flow and retries only after it succeeds', () => {
@@ -74,14 +82,23 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).toMatch(/recoverEncryptedProfile=\{recoverEncryptedProfile\}/)
     expect(ready).toMatch(/await recoverEncryptedProfile\(\)/)
     expect(ready).toMatch(/if \(!result\.ok\)/)
-    expect(ready.indexOf('await recoverEncryptedProfile()')).toBeLessThan(ready.indexOf('await attemptFinish()'))
+    expect(ready.indexOf('await recoverEncryptedProfile()')).toBeLessThan(ready.indexOf("await attemptFinish('answer')"))
     expect(ready).not.toMatch(/patch\(/)
   })
 
   it('reopens the Ready stage when the awaited save rejects', () => {
     expect(experienceSrc).toMatch(
-      /catch \(error\) \{\s*doneRef\.current = false\s*document\.querySelector\('\.onboard-stage'\)\?\.classList\.remove\('onboard-stage--portal-close'\)/
+      /catch \(error\) \{\s*doneRef\.current = false\s*document\.querySelector\('\.onboard-stage'\)\?\.classList\.remove\('onboard-stage--portal-close'\)[\s\S]*?requestOnboardingPortalOpen\(\)/
     )
+  })
+
+  it('offers a restart recovery when a durable final save remains pending, without enabling a duplicate submit', () => {
+    expect(experienceSrc).toMatch(/ONBOARDING_COMPLETION_STALL_MS/)
+    expect(experienceSrc).toMatch(/const \[completionStalled, setCompletionStalled\] = useState\(false\)/)
+    expect(experienceSrc).toMatch(/setTimeout\(\(\) => setCompletionStalled\(true\), ONBOARDING_COMPLETION_STALL_MS\)/)
+    expect(experienceSrc).toMatch(/Don’t submit it again\. Restart Métis to check the saved result\./)
+    expect(experienceSrc).toMatch(/window\.toto\.relaunch\(\)/)
+    expect(experienceSrc).toMatch(/disabled=\{blocked\}/)
   })
 })
 
@@ -110,9 +127,10 @@ describe('MQA-283 — adding a personal AI provider from Ready is optional, neve
   })
 
   it('the Get started CTA never depends on onOpenAiSettings, or on any provider state at all', () => {
-    const ctaMatch = experienceSrc.match(/onClick=\{\(\) => attemptFinish\(\)\}\s*\n\s*disabled=\{blocked\}/)
+    const ctaMatch = experienceSrc.match(/onClick=\{\(\) => attemptFinish\('answer'\)\}\s*\n\s*disabled=\{blocked\}/)
     expect(ctaMatch).not.toBeNull()
-    expect(experienceSrc).toMatch(/const blocked = completion\.busy \|\| recoveryBusy \|\| !asrReady/)
+    expect(experienceSrc).toMatch(/const blocked = completion\.busy \|\| recoveryBusy \|\| !asrReady \|\| !authReady/)
+    expect(experienceSrc).toMatch(/if \(!asrReady \|\| !authReady\) return 'blocked'/)
   })
 })
 
@@ -122,13 +140,18 @@ describe('MQA-283 — Replay onboarding in Settings re-arms the same gate a firs
     expect(settingsSrc).toMatch(/patch\(\{ onboardingDone: false \}\)/)
   })
 
-  it('does not reset any other setting — replay must not silently wipe unrelated config', () => {
-    const idx = settingsSrc.indexOf('Replay onboarding from the start?')
-    expect(idx).toBeGreaterThan(-1)
-    const block = settingsSrc.slice(idx - 200, idx + 280)
-    expect(block).toMatch(/haltAllOnboardingAudio\(\)/)
-    expect(block.indexOf('haltAllOnboardingAudio()')).toBeLessThan(block.indexOf('patch({ onboardingDone: false })'))
-    expect(block).toMatch(/patch\(\{ onboardingDone: false \}\)/)
+  it('only enters onboarding after a confirmed save, and keeps a replay failure actionable', () => {
+    const start = settingsSrc.indexOf('const replayOnboarding = async')
+    const end = settingsSrc.indexOf('// App reuses the same Settings instance', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const block = settingsSrc.slice(start, end)
+    expect(block).toMatch(/const saved = await patch\(\{ onboardingDone: false \}\)/)
+    expect(block).toMatch(/saved\.onboardingDone !== false/)
+    expect(block.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(block.indexOf('haltAllOnboardingAudio()'))
+    expect(block.indexOf('haltAllOnboardingAudio()')).toBeLessThan(block.indexOf('window.toto.onboardingEnter()'))
+    expect(block).toMatch(/Métis couldn't start setup again\. Try again\./)
     expect(block).not.toMatch(/onboardingDoneAt/)
+    expect(settingsSrc).toMatch(/role="alert"/)
   })
 })

@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { AUTH_POLL_MS, BOOT_IPC_TIMEOUT_MS, PERMISSIONS_POLL_MS, startAuthRefreshLoop, startPermissionRefreshLoop, withBootIpcTimeout } from './state'
 
 describe('startPermissionRefreshLoop', () => {
@@ -84,6 +86,16 @@ describe('startAuthRefreshLoop', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('useAuth boot recovery contract', () => {
+  it('clears a stale boot error after a later successful auth refresh', () => {
+    const source = readFileSync(join(__dirname, 'state.ts'), 'utf8')
+    const auth = source.slice(source.indexOf('export function useAuth'), source.indexOf('export const PERMISSIONS_POLL_MS'))
+    const refresh = auth.slice(auth.indexOf('const refresh = useCallback'), auth.indexOf('useEffect(() =>'))
+    expect(refresh).toMatch(/setStatus\(await window\.toto\.authStatus\(\)\)/)
+    expect(refresh).toMatch(/setBootError\(null\)/)
   })
 })
 

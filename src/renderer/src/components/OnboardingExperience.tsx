@@ -66,6 +66,7 @@ import type {
   PublicSettings
 } from '@shared/ipc'
 import type { OverlayLayout } from '@shared/overlay-chrome'
+import type { OverlayPlacement } from '@shared/overlay-placement'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
@@ -89,13 +90,21 @@ import {
   sceneAfterSetup,
   type OnboardingScene
 } from '../lib/onboarding-flow'
-import { appearanceSettingsPatch, seedOnboardingAppearance } from '../lib/onboarding-appearance'
+import {
+  appearanceSettingsPatch,
+  placementSettingsPatch,
+  resolveOnboardingPlacementSync,
+  saveOnboardingAppearanceChoice,
+  seedOnboardingAppearance,
+  seedOnboardingPlacement
+} from '../lib/onboarding-appearance'
 import { onboardingReadinessCopy } from '../lib/onboarding-readiness-copy'
 import {
   createOnboardingCompletionFlow,
   ENCRYPTED_PROFILE_RECOVERY_UNCONFIRMED_MESSAGE,
   encryptedProfileRecoveryFailureMessage,
   isEncryptedProfileRecoveryError,
+  ONBOARDING_COMPLETION_STALL_MS,
   persistOnboardingCompletion,
   type OnboardingCompletionOutcome,
   type OnboardingCompletionState
@@ -133,11 +142,10 @@ const PERSONA_ICONS: Record<OnboardingPersonaId, typeof MessageSquare> = {
 }
 
 export interface OnboardingExperienceProps {
-  /** Act 6 (Ready, MQA-283): awaited before Ready's optional "Add your own AI provider" link opens
-   *  Settings, so the settings snapshot behind `onOpenAiSettings` always reflects a finished onboarding
-   *  (`onboardingDone: true`) rather than racing an in-flight patch. OnboardingV2 below is the only
-   *  caller and marks onboarding done inside this callback. */
-  onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void | Promise<void>
+  /** Act 6 (Ready, MQA-283): durable completion then one-way window replacement. The destination is
+   *  carried through the trusted main-process launch path so the optional AI action opens Settings in
+   *  the replacement window, not a BrowserWindow about to be destroyed. */
+  onDone: (result: { mode: ConversationMode; recordingConsent: boolean; destination: 'answer' | 'settings' }) => void | Promise<void>
   /** Unused. Skip is gone — the tour must be completed. */
   /** Ready's OPTIONAL "Add your own AI provider" link (never a gate) — opens Settings' AI tab. Omitted
    *  in contexts with no Settings surface to open (the link itself does not render without it). */
@@ -149,7 +157,9 @@ export interface OnboardingExperienceProps {
   settings?: PublicSettings
   /** Required to flip `screenAsk` from the opt-out toggle. Same function OnboardingV2 already calls to
    *  persist `mode`/`recordingConsent` out of this component. */
-  patch?: (p: Partial<PublicSettings>) => void
+  patch?: (p: Partial<PublicSettings>) => Promise<PublicSettings>
+  /** Finish controls wait for the first authorization verdict, so required SSO never has a silent save failure. */
+  authReady?: boolean
   /** Creates a fresh local profile only after the native confirmation archives the existing encrypted one. */
   recoverEncryptedProfile?: () => Promise<ProfileRecoveryResult>
 }
@@ -760,10 +770,11 @@ function ActReady({
   asrProgress,
   showAsrRetry,
   onRetryAsr,
-  recoverEncryptedProfile
+  recoverEncryptedProfile,
+  authReady = true
 }: {
   mode: ConversationMode
-  onFinish: () => Promise<boolean>
+  onFinish: (destination: 'answer' | 'settings') => Promise<boolean>
   onOpenAiSettings?: () => void
   asrReady: boolean
   aiReady: boolean
@@ -772,29 +783,40 @@ function ActReady({
   showAsrRetry: boolean
   onRetryAsr: () => void
   recoverEncryptedProfile?: () => Promise<ProfileRecoveryResult>
+  authReady?: boolean
 }): JSX.Element {
   const [completion, setCompletion] = useState<OnboardingCompletionState>({ busy: false, error: null })
+  const [completionStalled, setCompletionStalled] = useState(false)
   const [recoveryAvailable, setRecoveryAvailable] = useState(false)
   const [recoveryBusy, setRecoveryBusy] = useState(false)
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null)
   const completionFlowRef = useRef<ReturnType<typeof createOnboardingCompletionFlow> | null>(null)
   if (!completionFlowRef.current) completionFlowRef.current = createOnboardingCompletionFlow(setCompletion)
   const persona = ONBOARDING_PERSONAS.find((p) => p.id === (mode as OnboardingPersonaId))
-  const blocked = completion.busy || recoveryBusy || !asrReady
+  const blocked = completion.busy || recoveryBusy || !asrReady || !authReady
   const readinessCopy = onboardingReadinessCopy(asrReady, aiReady)
 
-  const attemptFinish = async (afterSuccess?: () => void): Promise<OnboardingCompletionOutcome> => {
-    if (!asrReady) return 'blocked'
+  useEffect(() => {
+    if (!completion.busy) {
+      setCompletionStalled(false)
+      return
+    }
+    const timer = window.setTimeout(() => setCompletionStalled(true), ONBOARDING_COMPLETION_STALL_MS)
+    return () => window.clearTimeout(timer)
+  }, [completion.busy])
+
+  const attemptFinish = async (destination: 'answer' | 'settings'): Promise<OnboardingCompletionOutcome> => {
+    if (!asrReady || !authReady) return 'blocked'
     return (await completionFlowRef.current?.attempt(async () => {
       try {
-        return await onFinish()
+        return await onFinish(destination)
       } catch (error) {
         const canRecover = !!recoverEncryptedProfile && isEncryptedProfileRecoveryError(error)
         setRecoveryAvailable(canRecover)
         if (canRecover) setRecoveryMessage(null)
         throw error
       }
-    }, afterSuccess)) ?? 'blocked'
+    })) ?? 'blocked'
   }
 
   const recoverProfileAndRetry = async (): Promise<void> => {
@@ -807,7 +829,7 @@ function ActReady({
         setRecoveryMessage(encryptedProfileRecoveryFailureMessage(result))
         return
       }
-      const outcome = await attemptFinish()
+      const outcome = await attemptFinish('answer')
       if (outcome === 'completed') setRecoveryAvailable(false)
     } catch {
       setRecoveryMessage(ENCRYPTED_PROFILE_RECOVERY_UNCONFIRMED_MESSAGE)
@@ -866,9 +888,14 @@ function ActReady({
           )}
         </div>
       )}
+      {!authReady && (
+        <p className="m-0 max-w-[360px] text-center text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+          Checking your organization access before setup can finish…
+        </p>
+      )}
       <button
         type="button"
-        onClick={() => attemptFinish()}
+        onClick={() => attemptFinish('answer')}
         disabled={blocked}
         className={'onboard-cta no-drag focus-ring' + (blocked ? ' onboard-cta--muted' : '')}
       >
@@ -877,7 +904,7 @@ function ActReady({
       {onOpenAiSettings && (
         <button
           type="button"
-          onClick={() => attemptFinish(onOpenAiSettings)}
+          onClick={() => attemptFinish('settings')}
           disabled={blocked}
           className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:opacity-50"
         >
@@ -888,6 +915,20 @@ function ActReady({
         <p role="alert" className="m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-danger)]">
           {completion.error}
         </p>
+      )}
+      {completionStalled && (
+        <div role="alert" className="flex max-w-[360px] flex-col items-center gap-2 rounded-xl border border-[var(--color-accent)]/35 bg-[var(--color-accent-soft)]/35 p-3 text-center text-[11px] leading-snug text-[color:var(--color-ink-2)]">
+          <p className="m-0">
+            Métis is still checking whether your setup was saved. Don’t submit it again. Restart Métis to check the saved result.
+          </p>
+          <button
+            type="button"
+            onClick={() => void window.toto.relaunch().catch(() => {})}
+            className="no-drag focus-ring rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
+          >
+            Restart Métis
+          </button>
+        </div>
       )}
       {recoveryAvailable && recoverEncryptedProfile && (
         <div className="flex max-w-[360px] flex-col items-center gap-2 rounded-xl border border-[var(--color-accent)]/35 bg-[var(--color-accent-soft)]/35 p-3 text-[11px] leading-snug text-[color:var(--color-ink-2)]">
@@ -981,7 +1022,8 @@ export function OnboardingExperience({
   onOpenAiSettings,
   settings,
   patch,
-  recoverEncryptedProfile
+  recoverEncryptedProfile,
+  authReady
 }: OnboardingExperienceProps): JSX.Element {
   const settingsRef = useRef(settings)
   settingsRef.current = settings
@@ -1048,11 +1090,63 @@ export function OnboardingExperience({
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
   const [appearance, setAppearance] = useState<OverlayLayout>(() => seedOnboardingAppearance(settings))
-  const pickAppearance = (id: OverlayLayout): void => {
-    setAppearance(id)
-    patch?.(appearanceSettingsPatch(id))
+  const [placement, setPlacement] = useState<OverlayPlacement>(() => seedOnboardingPlacement(settings))
+  const [appearanceSave, setAppearanceSave] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
+  const placementUserSelectedRef = useRef(false)
+  const placementManaged = Boolean(settings?.managedKeys?.includes('overlayPlacement'))
+  useEffect(() => {
+    const next = resolveOnboardingPlacementSync({
+      current: placement,
+      incoming: settings?.overlayPlacement,
+      userSelected: placementUserSelectedRef.current,
+      managed: placementManaged
+    })
+    if (next) setPlacement(next)
+  }, [placement, placementManaged, settings?.overlayPlacement])
+  const pickAppearance = async (id: OverlayLayout): Promise<void> => {
+    if (appearanceSave.busy || appearanceLocked) return
+    if (!patch) {
+      setAppearance(id)
+      return
+    }
+    setAppearanceSave({ busy: true, error: null })
+    try {
+      const saved = await saveOnboardingAppearanceChoice(
+        () => patch(appearanceSettingsPatch(id)),
+        (next) => next.overlayLayout === id
+      )
+      if (!saved) throw new Error('appearance was not saved')
+      setAppearance(id)
+    } catch {
+      setAppearanceSave({ busy: false, error: "Métis couldn't save this appearance. Try again." })
+      return
+    }
+    setAppearanceSave({ busy: false, error: null })
+  }
+  const pickPlacement = async (id: OverlayPlacement): Promise<void> => {
+    if (appearanceSave.busy || placementLocked) return
+    if (!patch) {
+      placementUserSelectedRef.current = true
+      setPlacement(id)
+      return
+    }
+    setAppearanceSave({ busy: true, error: null })
+    try {
+      const saved = await saveOnboardingAppearanceChoice(
+        () => patch(placementSettingsPatch(id)),
+        (next) => next.overlayPlacement === id
+      )
+      if (!saved) throw new Error('placement was not saved')
+      placementUserSelectedRef.current = true
+      setPlacement(id)
+    } catch {
+      setAppearanceSave({ busy: false, error: "Métis couldn't save this appearance. Try again." })
+      return
+    }
+    setAppearanceSave({ busy: false, error: null })
   }
   const appearanceLocked = Boolean(settings?.managedKeys?.includes('overlayLayout'))
+  const placementLocked = placementManaged
   // Recording-consent gate (CMO-QA #1). Finish is blocked until this checkbox is checked on Ready.
   const [consent, setConsent] = useState(false)
   const [asrStatus, setAsrStatus] = useState<AsrAssetsStatus>(IDLE_ASR_STATUS)
@@ -1265,8 +1359,8 @@ export function OnboardingExperience({
 
   // Act 6 (Ready, MQA-283): this is now the narrative's actual finish — invoked from the Ready scene's
   // CTA, not personalize's Start (which now only advances to license/appearance, see sceneAfterPersonalize).
-  // Returns a promise so Ready's optional provider link can await it before opening Settings.
-  const finish = async (): Promise<boolean> => {
+  // Returns a promise so ActReady can keep the durable save and window replacement in one retry-safe flow.
+  const finish = async (destination: 'answer' | 'settings'): Promise<boolean> => {
     if (doneRef.current || !canMarkOnboardingDone({ scene, asrReady, consent })) return false
     doneRef.current = true
     try {
@@ -1277,11 +1371,14 @@ export function OnboardingExperience({
       await closeOnboardingPortal(music.muted, prefersReducedMotion())
       playBarLand(music.muted)
       requestBarLand()
-      await onDone({ mode, recordingConsent: true })
+      await onDone({ mode, recordingConsent: true, destination })
       return true
     } catch (error) {
       doneRef.current = false
       document.querySelector('.onboard-stage')?.classList.remove('onboard-stage--portal-close')
+      // A rejected durable save must visibly reopen the same Ready screen. Removing close alone can
+      // leave the portal mask at its collapsed rest state, which reads as a frozen final step.
+      requestOnboardingPortalOpen()
       throw error
     }
   }
@@ -1643,7 +1740,12 @@ export function OnboardingExperience({
           <OnboardingAppearance
             value={appearance}
             locked={appearanceLocked}
-            onChange={pickAppearance}
+            placement={placement}
+            placementLocked={placementLocked}
+            saving={appearanceSave.busy}
+            error={appearanceSave.error}
+            onChange={(id) => void pickAppearance(id)}
+            onPlacementChange={(id) => void pickPlacement(id)}
             onContinue={() => {
               playHero()
               setScene(sceneAfterAppearance())
@@ -1664,6 +1766,7 @@ export function OnboardingExperience({
           showAsrRetry={asrRowNeedsRetry(asrRow)}
           onRetryAsr={() => void retryAsr()}
           recoverEncryptedProfile={recoverEncryptedProfile}
+          authReady={authReady}
         />
       )}
 
@@ -1678,16 +1781,16 @@ export function OnboardingV2({
   recoverEncryptedProfile,
   patch,
   onOpenAiSettings,
-  onDone
+  onDone,
+  authReady
 }: {
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
   recoverEncryptedProfile?: () => Promise<ProfileRecoveryResult>
-  patch: (p: Partial<PublicSettings>) => void | Promise<void>
+  patch: (p: Partial<PublicSettings>) => Promise<PublicSettings>
   onOpenAiSettings?: () => void
   onDone: () => void
-  signedIn?: boolean
-  signedInEmail?: string
+  authReady: boolean
 }): JSX.Element {
   return (
     <OnboardingExperience
@@ -1695,7 +1798,8 @@ export function OnboardingV2({
       patch={patch}
       recoverEncryptedProfile={recoverEncryptedProfile}
       onOpenAiSettings={onOpenAiSettings}
-      onDone={async ({ mode, recordingConsent }) => {
+      authReady={authReady}
+      onDone={async ({ mode, recordingConsent, destination }) => {
         lockOnboardingAudio()
         haltAllOnboardingAudio()
         await persistOnboardingCompletion({
@@ -1703,6 +1807,9 @@ export function OnboardingV2({
           patch,
           onCompleted: onDone
         })
+        // This is deliberately after the awaited invoke above. `onboardingExit` rebuilds the window,
+        // so issuing it before the response is received recreates the exact Act 6 Saving freeze.
+        window.toto.onboardingExit(destination)
       }}
     />
   )

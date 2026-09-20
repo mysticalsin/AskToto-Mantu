@@ -68,8 +68,11 @@ import { timeSavedFromTotals } from '@shared/time-saved'
 import { TimeSavedView } from './TimeSavedView'
 import { autoHideOverlayForLayout } from '@shared/overlay-chrome'
 import { overlayShowsBarRestPicker } from '@shared/overlay-orb'
+import type { OverlayPlacement } from '@shared/overlay-placement'
 import { OverlayChromePicker } from './OverlayChromePicker'
+import { OverlayPlacementPicker } from './OverlayPlacementPicker'
 import { OverlayOrbPicker } from './OverlayOrbPicker'
+import { persistOverlayPlacement } from '../lib/overlay-placement-save'
 import { formatResetPhrase } from '@shared/reset-time'
 import {
   DEFAULT_SHORTCUTS,
@@ -6113,7 +6116,7 @@ export function Settings({
 }: {
   settings: PublicSettings
   refreshSettings: () => Promise<void>
-  patch: (p: Partial<PublicSettings>) => void
+  patch: (p: Partial<PublicSettings>) => Promise<PublicSettings>
   saveKey: (provider: ProviderId, k: string) => Promise<void>
   recoverEncryptedProfile: () => Promise<ProfileRecoveryResult>
   clearKey: (provider: ProviderId) => Promise<void>
@@ -6141,6 +6144,12 @@ export function Settings({
   const [operatorSecretDraft, setOperatorSecretDraft] = useState('')
   const [operatorSecretSaving, setOperatorSecretSaving] = useState(false)
   const [operatorSecretError, setOperatorSecretError] = useState<string | null>(null)
+  const [replayState, setReplayState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
+  const [overlayPlacementSave, setOverlayPlacementSave] = useState<{ busy: boolean; error: string | null }>({
+    busy: false,
+    error: null
+  })
+  const overlayPlacementSaveInFlight = useRef(false)
   const saveOperatorSecret = async (): Promise<void> => {
     setOperatorSecretSaving(true)
     setOperatorSecretError(null)
@@ -6161,6 +6170,40 @@ export function Settings({
   // openMeetingsFolder resolves a non-empty string on failure (e.g. the folder was deleted/unmounted) —
   // surface it instead of silently discarding it (was `void window.toto.openMeetingsFolder()`).
   const [meetingsFolderErr, setMeetingsFolderErr] = useState<string | null>(null)
+  const replayOnboarding = async (): Promise<void> => {
+    if (replayState.busy || !window.confirm("Replay onboarding from the start? Your settings won't change.")) return
+    setReplayState({ busy: true, error: null })
+    try {
+      const saved = await patch({ onboardingDone: false })
+      // Auth/managed policy can return a valid snapshot while refusing this mutation. Never replace the
+      // current Settings window unless the reply proves the gate is actually re-armed.
+      if (saved.onboardingDone !== false) throw new Error('onboarding replay was not saved')
+      haltAllOnboardingAudio()
+      unlockOnboardingAudio()
+      window.toto.onboardingEnter()
+    } catch {
+      setReplayState({ busy: false, error: "Métis couldn't start setup again. Try again." })
+      return
+    }
+    setReplayState({ busy: false, error: null })
+  }
+  const saveOverlayPlacement = async (id: OverlayPlacement): Promise<void> => {
+    if (overlayPlacementSaveInFlight.current || settings.managedKeys.includes('overlayPlacement')) return
+    overlayPlacementSaveInFlight.current = true
+    setOverlayPlacementSave({ busy: true, error: null })
+    try {
+      const saved = await persistOverlayPlacement(id, patch)
+      // Managed policy can return an unchanged snapshot without throwing. Do not pretend a click took
+      // effect until the durable main-process reply confirms the requested position.
+      if (!saved) throw new Error('overlay placement was not saved')
+    } catch {
+      setOverlayPlacementSave({ busy: false, error: "Métis couldn't save this position. Try again." })
+      return
+    } finally {
+      overlayPlacementSaveInFlight.current = false
+    }
+    setOverlayPlacementSave({ busy: false, error: null })
+  }
   // App reuses the same Settings instance across opens (no remount), so a later requireProvider redirect
   // that passes a new initialTab (e.g. 'ai') would otherwise leave `tab` stuck on whatever tab was open
   // before — re-sync whenever the caller hands us a fresh target tab.
@@ -6389,6 +6432,27 @@ export function Settings({
                         })
                       }
                     />
+                    <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                      Overlay position <ManagedChip keys={settings.managedKeys} k="overlayPlacement" />
+                    </p>
+                    <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                      Keep Métis at the top center, or use a right-edge sidecar and drag it vertically to place it.
+                    </p>
+                    <OverlayPlacementPicker
+                      value={settings.overlayPlacement}
+                      locked={settings.managedKeys.includes('overlayPlacement') || overlayPlacementSave.busy}
+                      onChange={saveOverlayPlacement}
+                    />
+                    {overlayPlacementSave.busy ? (
+                      <p className="mt-2 mb-0 text-[11px] text-[color:var(--cl-muted-foreground)]" aria-live="polite">
+                        Saving position…
+                      </p>
+                    ) : null}
+                    {overlayPlacementSave.error ? (
+                      <p role="alert" className="mt-2 mb-0 text-[11px] text-[color:var(--cl-destructive)]">
+                        {overlayPlacementSave.error}
+                      </p>
+                    ) : null}
                     {overlayShowsBarRestPicker(settings.overlayLayout) ? (
                       <>
                         <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Bar rest</p>
@@ -7258,28 +7322,24 @@ export function Settings({
 
       {/* Footer — secondary actions left, Done right */}
       <footer className="cl-footer flex h-14 shrink-0 items-center gap-2 rounded-b-2xl px-4">
+        {replayState.error ? (
+          <p role="alert" className="m-0 mr-1 max-w-[250px] text-[11px] leading-snug text-[color:var(--cl-destructive)]">
+            {replayState.error}
+          </p>
+        ) : null}
         <button
           type="button"
           // Act 6 (Ready, MQA-283): "Replay onboarding" — re-arms the SAME gate App.tsx checks
           // (`!settings.onboardingDone`), so the very next render remounts the six-act experience fresh
           // from hero, exactly like a first run. Nothing else is touched: no other setting is cleared.
-          // App.tsx's onboarding gate special-cases `view === 'settings'` to keep showing THIS panel
-          // over the gate (so the Ready scene's "Add your own AI provider" link can open Settings
-          // without the gate stealing focus back) — so without closing Settings here too, the user
-          // would click Replay and see nothing change until they also hit Done. Call onClose so the
-          // gate is what they land on immediately, matching what "Replay" promises.
-          onClick={() => {
-            if (window.confirm("Replay onboarding from the start? Your settings won't change.")) {
-              haltAllOnboardingAudio()
-              unlockOnboardingAudio()
-              patch({ onboardingDone: false })
-              onClose?.()
-            }
-          }}
-          className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08]"
+          // The invoke must settle before main replaces this transparent BrowserWindow with the opaque
+          // onboarding stage. `onboardingEnter` is deliberately a one-way IPC after that durable write.
+          onClick={() => void replayOnboarding()}
+          disabled={replayState.busy}
+          className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08] disabled:opacity-60"
         >
           <RotateCcw size={13} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
-          Replay onboarding
+          {replayState.busy ? 'Starting setup…' : 'Replay onboarding'}
         </button>
         <button
           type="button"

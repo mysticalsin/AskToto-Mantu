@@ -22,6 +22,7 @@ import {
   looksLikeHtmlBytes
 } from '@shared/bundle-response'
 import { mainLog } from './logger'
+import { extractParakeetArchiveWindows } from './parakeet-extract'
 
 const execFileAsync = promisify(execFile)
 
@@ -81,13 +82,22 @@ export interface AsrAssetsProgress {
   error?: string
 }
 
+type AsrProgressReporter = (pct: number, label?: string) => void
+
 export interface AsrEnsureTestHooks {
-  fetchParakeet?: (destDir: string, onProgress?: (pct: number) => void) => Promise<void>
-  fetchWhisperFloor?: (destDir: string, onProgress?: (pct: number) => void) => Promise<void>
+  fetchParakeet?: (destDir: string, onProgress?: AsrProgressReporter) => Promise<void>
+  fetchWhisperFloor?: (destDir: string, onProgress?: AsrProgressReporter) => Promise<void>
+}
+
+interface ParakeetEnsureOperation {
+  promise: Promise<void>
+  progress: { pct: number; label?: string }
+  reporters: Set<AsrProgressReporter>
 }
 
 let testHooks: AsrEnsureTestHooks | null = null
 let inFlight: Promise<void> | null = null
+let parakeetInFlight: ParakeetEnsureOperation | null = null
 let state: AsrAssetsProgress = { status: 'idle', progress: 0, label: '' }
 
 export function setAsrEnsureTestHooks(hooks: AsrEnsureTestHooks | null): void {
@@ -96,6 +106,7 @@ export function setAsrEnsureTestHooks(hooks: AsrEnsureTestHooks | null): void {
 
 export function resetAsrEnsureStateForTests(): void {
   inFlight = null
+  parakeetInFlight = null
   state = { status: 'idle', progress: 0, label: '' }
 }
 
@@ -193,9 +204,9 @@ export function asrAssetsStatusSnapshot(): AsrAssetsProgress & { ready: boolean 
   }
 }
 
-function publish(next: AsrAssetsProgress, onProgress?: (pct: number) => void): void {
+function publish(next: AsrAssetsProgress, onProgress?: AsrProgressReporter): void {
   state = next
-  if (next.status === 'downloading' || next.status === 'ready') onProgress?.(Math.round(next.progress * 100))
+  if (next.status === 'downloading' || next.status === 'ready') onProgress?.(Math.round(next.progress * 100), next.label)
 }
 
 async function downloadTo(url: string, dest: string, onChunk?: (n: number, total: number) => void): Promise<void> {
@@ -263,12 +274,18 @@ async function downloadTo(url: string, dest: string, onChunk?: (n: number, total
   }
 }
 
+const EXTRACTION_TIMEOUT_MS = 10 * 60_000
+
 async function extractTarBz2(archive: string, destDir: string): Promise<void> {
   mkdirSync(destDir, { recursive: true })
-  await execFileAsync('tar', ['xjf', archive, '-C', destDir])
+  if (process.platform === 'win32') {
+    await extractParakeetArchiveWindows(archive, destDir)
+    return
+  }
+  await execFileAsync('tar', ['xjf', archive, '-C', destDir], { timeout: EXTRACTION_TIMEOUT_MS })
 }
 
-async function fetchParakeetToUserData(onProgress?: (pct: number) => void): Promise<void> {
+async function fetchParakeetToUserData(onProgress?: AsrProgressReporter): Promise<void> {
   const destDir = parakeetUserDir()
   if (parakeetFilesReady(destDir)) return
   if (testHooks?.fetchParakeet) {
@@ -278,18 +295,30 @@ async function fetchParakeetToUserData(onProgress?: (pct: number) => void): Prom
 
   mkdirSync(userDataAsrRoot(), { recursive: true })
   const archive = join(userDataAsrRoot(), `${PARAKEET_MODEL_NAME}.tar.bz2`)
+  const stagingRoot = join(userDataAsrRoot(), `.${PARAKEET_MODEL_NAME}.extracting`)
+  const stagedModelDir = join(stagingRoot, PARAKEET_MODEL_NAME)
   publish({ status: 'downloading', progress: 0.02, label: 'Getting transcription files…' }, onProgress)
   await downloadTo(PARAKEET_ARCHIVE_URL, archive, (got, total) => {
     const frac = total ? Math.min(0.9, got / total) : 0.3
     publish({ status: 'downloading', progress: frac, label: 'Getting transcription files…' }, onProgress)
   })
   publish({ status: 'downloading', progress: 0.92, label: 'Preparing transcription files…' }, onProgress)
-  await extractTarBz2(archive, userDataAsrRoot())
-  rmSync(archive, { force: true })
+  rmSync(stagingRoot, { recursive: true, force: true })
+  try {
+    await extractTarBz2(archive, stagingRoot)
+    if (!parakeetFilesReady(stagedModelDir)) throw new Error(ASR_ASSETS_MISSING)
+    // Only replace the incomplete fallback after the complete staged model passes the same readiness
+    // predicate as the live engine. A stalled/corrupt archive can never become a half-ready model.
+    rmSync(destDir, { recursive: true, force: true })
+    renameSync(stagedModelDir, destDir)
+    rmSync(archive, { force: true })
+  } finally {
+    rmSync(stagingRoot, { recursive: true, force: true })
+  }
   if (!parakeetFilesReady(destDir)) throw new Error(ASR_ASSETS_MISSING)
 }
 
-async function fetchWhisperFloorToUserData(onProgress?: (pct: number) => void): Promise<void> {
+async function fetchWhisperFloorToUserData(onProgress?: AsrProgressReporter): Promise<void> {
   const destRoot = userDataAsrRoot()
   if (whisperFloorReady(destRoot)) return
   if (testHooks?.fetchWhisperFloor) {
@@ -311,7 +340,17 @@ async function fetchWhisperFloorToUserData(onProgress?: (pct: number) => void): 
       )
       continue
     }
-    await downloadTo(`${HF_BASE}/${rel}`, dest)
+    await downloadTo(`${HF_BASE}/${rel}`, dest, (got, bytes) => {
+      const fraction = bytes > 0 ? Math.min(1, got / bytes) : 0
+      publish(
+        {
+          status: 'downloading',
+          progress: (done + fraction) / total,
+          label: `Getting transcription files… (${done + 1}/${total})`
+        },
+        onProgress
+      )
+    })
     done += 1
     publish(
       { status: 'downloading', progress: done / total, label: 'Getting transcription files…' },
@@ -321,15 +360,53 @@ async function fetchWhisperFloorToUserData(onProgress?: (pct: number) => void): 
   if (!whisperFloorReady(destRoot)) throw new Error(ASR_ASSETS_MISSING)
 }
 
-export async function ensureParakeetAssets(onProgress?: (pct: number) => void): Promise<void> {
-  if (parakeetFilesReady(parakeetBundledDir()) || parakeetFilesReady(parakeetUserDir())) {
-    onProgress?.(100)
-    return
-  }
-  await fetchParakeetToUserData(onProgress)
+function reportParakeetEnsure(operation: ParakeetEnsureOperation, pct: number, label?: string): void {
+  operation.progress = { pct, label }
+  for (const reporter of operation.reporters) reporter(pct, label)
 }
 
-export async function ensureWhisperFloorAssets(onProgress?: (pct: number) => void): Promise<void> {
+function observeParakeetEnsure(operation: ParakeetEnsureOperation, onProgress?: AsrProgressReporter): Promise<void> {
+  if (!onProgress) return operation.promise
+  operation.reporters.add(onProgress)
+  onProgress(operation.progress.pct, operation.progress.label)
+  return operation.promise.finally(() => operation.reporters.delete(onProgress))
+}
+
+export function ensureParakeetAssets(onProgress?: AsrProgressReporter): Promise<void> {
+  if (parakeetFilesReady(parakeetBundledDir()) || parakeetFilesReady(parakeetUserDir())) {
+    onProgress?.(100)
+    return Promise.resolve()
+  }
+  if (!parakeetInFlight) {
+    let resolveOperation!: () => void
+    let rejectOperation!: (error: unknown) => void
+    const operation: ParakeetEnsureOperation = {
+      promise: new Promise<void>((resolve, reject) => {
+        resolveOperation = resolve
+        rejectOperation = reject
+      }),
+      progress: { pct: 0 },
+      reporters: new Set()
+    }
+    parakeetInFlight = operation
+    const observed = observeParakeetEnsure(operation, onProgress)
+    void fetchParakeetToUserData((pct, label) => reportParakeetEnsure(operation, pct, label))
+      .then(
+        () => {
+          reportParakeetEnsure(operation, 100)
+          resolveOperation()
+        },
+        rejectOperation
+      )
+      .finally(() => {
+        if (parakeetInFlight === operation) parakeetInFlight = null
+      })
+    return observed
+  }
+  return observeParakeetEnsure(parakeetInFlight, onProgress)
+}
+
+export async function ensureWhisperFloorAssets(onProgress?: AsrProgressReporter): Promise<void> {
   const bundled = join(bundledResourceRoot(), 'models')
   if (whisperFloorReady(bundled) || whisperFloorReady(userDataAsrRoot())) {
     onProgress?.(100)
@@ -354,15 +431,15 @@ async function runEnsure(onProgress?: (pct: number) => void): Promise<void> {
   }
   try {
     publish({ status: 'downloading', progress: 0, label: 'Getting transcription files…' }, onProgress)
-    await ensureParakeetAssets((pct) => {
+    await ensureParakeetAssets((pct, label) => {
       publish(
-        { status: 'downloading', progress: (pct / 100) * 0.75, label: 'Getting transcription files…' },
+        { status: 'downloading', progress: (pct / 100) * 0.75, label: label || 'Getting transcription files…' },
         onProgress
       )
     })
-    await ensureWhisperFloorAssets((pct) => {
+    await ensureWhisperFloorAssets((pct, label) => {
       publish(
-        { status: 'downloading', progress: 0.75 + (pct / 100) * 0.25, label: 'Getting transcription files…' },
+        { status: 'downloading', progress: 0.75 + (pct / 100) * 0.25, label: label || 'Getting transcription files…' },
         onProgress
       )
     })

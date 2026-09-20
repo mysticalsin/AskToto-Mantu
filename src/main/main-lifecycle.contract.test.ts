@@ -145,9 +145,104 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
   })
 
   it("MQA-172 — the 'closed' handler only clears the module ref when it still points at that window", () => {
-    const closed = sliceBetween("const self = win\n  win.on('closed', () => {", '// Security: never let model-output')
+    const closed = sliceBetween('const self = win', '// Security: never let model-output')
     expect(closed).toMatch(/if \(win === self\)/)
     expect(closed).toMatch(/win = null/)
     expect(closed).toMatch(/stopOverlayCursorWatch/)
+  })
+
+  it('MQA-340 — a destroyed overlay never dereferences its own dead WebContents in the closed callback', () => {
+    const closed = sliceBetween('const self = win', '// Security: never let model-output')
+    expect(closed).toMatch(/const selfWebContentsId = self\.webContents\.id/)
+    expect(closed).toMatch(/invalidateCloudSttOwner\(selfWebContentsId\)/)
+    expect(closed).not.toMatch(/invalidateCloudSttOwner\(self\.webContents\.id\)/)
+  })
+})
+
+describe('MQA-340 — onboarding durable saves reply before opaque-window replacement', () => {
+  it('moves both destructive exclusive-stage transitions out of settings:set and behind separately guarded events', () => {
+    const settingsSet = sliceBetween('ipcMain.handle(IPC.settingsSet', 'ipcMain.handle(IPC.settingsRecoverProfile')
+    const completionTransition = sliceBetween(
+      'const next = setSettingsWithSpeakerPolicy(p)',
+      '// Flipping follow-up memory is itself a conversation boundary.'
+    )
+    expect(completionTransition).not.toMatch(/exitExclusiveOnboardingStage\(\)/)
+    expect(completionTransition).not.toMatch(/applyExclusiveOnboardingStage\(win\)/)
+
+    const completionEvent = sliceBetween('ipcMain.on(IPC.onboardingExit', 'ipcMain.handle(IPC.settingsSet')
+    // `ipcMain.on` is fire-and-forget; throwing from a stale/unauthorized sender would crash main.
+    expect(completionEvent).toMatch(/if \(!isMainWindowSender\(e\)\) return/)
+    expect(completionEvent).not.toMatch(/assertMainWindow\(e\)/)
+    expect(completionEvent).toMatch(/if \(onboardingExclusiveLive\(\)\) return/)
+    expect(completionEvent).toMatch(/exitExclusiveOnboardingStage\(\)/)
+
+    const replayEvent = sliceBetween('ipcMain.on(IPC.onboardingEnter', 'ipcMain.on(IPC.onboardingExit')
+    expect(replayEvent).toMatch(/if \(!isMainWindowSender\(e\)\) return/)
+    expect(replayEvent).not.toMatch(/assertMainWindow\(e\)/)
+    expect(replayEvent).toMatch(/if \(!onboardingExclusiveLive\(\)\) return/)
+    // The persisted false value makes onboardingExclusiveLive() true before the opaque replacement;
+    // `overlayWindowTransparent` is the actual stage-state guard for a replay request.
+    expect(replayEvent).toMatch(/!overlayWindowTransparent/)
+    expect(replayEvent).toMatch(/applyExclusiveOnboardingStage\(win\)/)
+  })
+
+  it('recovers a completed opaque onboarding window only when its renderer misses the normal exit handoff', () => {
+    const completionTransition = sliceBetween(
+      'const next = setSettingsWithSpeakerPolicy(p)',
+      '// Flipping follow-up memory is itself a conversation boundary.'
+    )
+    expect(completionTransition).toMatch(/cur\.onboardingDone === false\s*&&\s*next\.onboardingDone === true/)
+    expect(completionTransition).toMatch(/!overlayWindowTransparent/)
+    expect(completionTransition).toMatch(/armCompletedOnboardingExitFallback\(win\)/)
+    expect(completionTransition).not.toMatch(/exitExclusiveOnboardingStage\(\)/)
+
+    const completionEvent = sliceBetween('ipcMain.on(IPC.onboardingExit', 'ipcMain.handle(IPC.settingsSet')
+    const cancel = completionEvent.indexOf('clearCompletedOnboardingExitFallback(win)')
+    const exit = completionEvent.indexOf('exitExclusiveOnboardingStage()')
+    expect(cancel).toBeGreaterThan(-1)
+    expect(exit).toBeGreaterThan(cancel)
+
+    const closed = sliceBetween('const self = win', '// Security: never let model-output')
+    expect(closed).toMatch(/clearCompletedOnboardingExitFallback\(self\)/)
+  })
+})
+
+describe('MQA-345 — constructor swaps keep the retiring renderer trusted until it closes', () => {
+  it('defers replacement until the old BrowserWindow closes, without weakening normal IPC sender checks', () => {
+    const recreate = sliceBetween('function recreateOverlayWindow(): void {', '/** Exclusive hero hold')
+    const closeSubscription = recreate.indexOf("dying.once('closed', finishRecreate)")
+    const destroy = recreate.indexOf('dying.destroy()')
+    expect(closeSubscription).toBeGreaterThan(-1)
+    expect(destroy).toBeGreaterThan(closeSubscription)
+    expect(recreate).toMatch(/if \(win === dying\) win = null/)
+    expect(recreate).toMatch(/createWindow\(\)/)
+    expect(recreate.indexOf('rememberRetiringOverlaySender(dying)')).toBeGreaterThan(-1)
+    expect(recreate.indexOf('rememberRetiringOverlaySender(dying)')).toBeLessThan(recreate.indexOf('dying.destroy()'))
+
+    // Queued invokes from the just-retired renderer must remain subject to the same trusted-main-window
+    // boundary. Only exact, briefly-retired top-level renderer identities receive teardown-safe defaults;
+    // privileged writes still use assertMainWindow against the current live window.
+    const retired = sliceBetween('const RETIRING_OVERLAY_IPC_GRACE_MS', 'type CloudSttIpcOwner')
+    expect(retired).toMatch(/const RETIRING_OVERLAY_IPC_GRACE_MS = 5_000/)
+    expect(retired).toMatch(/new Map<number, RetiringOverlaySender>/)
+    expect(retired).toMatch(/contents: Electron\.WebContents/)
+    expect(retired).toMatch(/event\.sender !== sender\.contents/)
+    expect(retired).toMatch(/frame\.parent === null && frame\.url === sender\.url/)
+    expect(retired).toMatch(/sender\.expiresAt <= Date\.now\(\)/)
+
+    const localModels = sliceBetween('ipcMain.handle(IPC.localModelsList', '// Explicit Download/Retry')
+    const park = sliceBetween('ipcMain.handle(IPC.overlayParkAfterHide', '// Renderer ErrorBoundary')
+    const bundled = sliceBetween('ipcMain.handle(IPC.asrBundled', 'ipcMain.handle(IPC.asrAssetsStatus')
+    expect(localModels.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(localModels.indexOf('assertMainWindow(e)'))
+    expect(localModels).toMatch(/if \(isRecentlyRetiredOverlaySender\(e\)\) return \[\]/)
+    expect(park.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(park.indexOf('assertMainWindow(e)'))
+    expect(park).toMatch(/if \(isRecentlyRetiredOverlaySender\(e\)\) return/)
+    expect(bundled.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(bundled.indexOf('assertMainWindow(e)'))
+    expect(bundled).toMatch(/if \(isRecentlyRetiredOverlaySender\(e\)\) return true/)
+    expect(indexSrc.match(/isRecentlyRetiredOverlaySender\(e\)/g)).toHaveLength(3)
+
+    expect(localModels).toMatch(/assertMainWindow\(e\)/)
+    expect(park).toMatch(/assertMainWindow\(e\)/)
+    expect(bundled).toMatch(/assertMainWindow\(e\)/)
   })
 })

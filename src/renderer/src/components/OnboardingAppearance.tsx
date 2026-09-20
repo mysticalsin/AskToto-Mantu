@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { OverlayLayout } from '@shared/overlay-chrome'
+import type { OverlayPlacement } from '@shared/overlay-placement'
 import { OverlayChromePicker } from './OverlayChromePicker'
+import { OverlayPlacementPicker } from './OverlayPlacementPicker'
 import { MetisMark } from './MetisMark'
 import {
   appearancePreviewInitialPhase,
@@ -14,7 +16,7 @@ import {
   type AppearancePreviewPhase
 } from '../lib/onboarding-appearance'
 
-function AppearanceLivePreview({ layout }: { layout: OverlayLayout }): JSX.Element {
+function AppearanceLivePreview({ layout, placement }: { layout: OverlayLayout; placement: OverlayPlacement }): JSX.Element {
   const [phase, setPhase] = useState<AppearancePreviewPhase>(() => appearancePreviewInitialPhase(layout))
 
   useEffect(() => {
@@ -28,13 +30,23 @@ function AppearanceLivePreview({ layout }: { layout: OverlayLayout }): JSX.Eleme
   const showBar = appearancePreviewShowsBar(phase)
   const showIsland = appearancePreviewShowsIsland(layout, phase)
   const showHint = appearancePreviewShowsHint(layout, phase)
+  const placementLabel = placement === 'right-edge' ? 'right edge' : 'top'
   const hitLabel =
-    layout === 'hide' ? 'Click the top to open Hidden' : layout === 'island' ? 'Hover the island to open' : 'Bar stays on screen'
+    layout === 'hide'
+      ? `Click the ${placementLabel} to open Hidden`
+      : layout === 'island'
+        ? 'Hover the island to open'
+        : 'Bar stays on screen'
 
   return (
     <div
-      className={'onboard-appearance-preview' + (layout === 'bar' ? ' onboard-appearance-preview--bar' : '')}
+      className={
+        'onboard-appearance-preview' +
+        (layout === 'bar' ? ' onboard-appearance-preview--bar' : '') +
+        (placement === 'right-edge' ? ' onboard-appearance-preview--right-edge' : '')
+      }
       data-appearance-preview={layout}
+      data-placement-preview={placement}
       data-appearance-phase={phase}
     >
       <div className="onboard-appearance-preview__desktop" aria-hidden="true" />
@@ -81,14 +93,24 @@ function AppearanceLivePreview({ layout }: { layout: OverlayLayout }): JSX.Eleme
 export function OnboardingAppearance({
   value,
   locked,
+  placement,
+  placementLocked,
   compact,
+  saving = false,
+  error = null,
   onChange,
+  onPlacementChange,
   onContinue
 }: {
   value: OverlayLayout
   locked: boolean
+  placement: OverlayPlacement
+  placementLocked: boolean
   compact?: boolean
+  saving?: boolean
+  error?: string | null
   onChange: (id: OverlayLayout) => void
+  onPlacementChange: (id: OverlayPlacement) => void
   onContinue?: () => void
 }): JSX.Element {
   return (
@@ -97,20 +119,31 @@ export function OnboardingAppearance({
         'onboard-appearance flex w-full flex-col items-center gap-5' + (compact ? ' onboard-appearance--compact' : '')
       }
     >
-      <AppearanceLivePreview key={value} layout={value} />
+      <AppearanceLivePreview key={`${value}:${placement}`} layout={value} placement={placement} />
       <div className="onboard-act4-heading flex flex-col items-center gap-2">
         <h2 className="onboard-act4-title">{ONBOARDING_APPEARANCE_HEADING}</h2>
         <p className="onboard-act4-lead">{ONBOARDING_APPEARANCE_LEAD}</p>
       </div>
       <OverlayChromePicker
         value={value}
-        locked={locked}
+        locked={locked || saving}
         copy={ONBOARDING_APPEARANCE_COPY}
         onChange={onChange}
       />
+      <div className="flex w-full flex-col gap-2">
+        <p className="m-0 text-center text-[12px] font-medium text-white">Position</p>
+        <p className="m-0 text-center text-[11px] leading-snug text-white/70">
+          Right edge stays beside your meeting. Drag it up or down anytime.
+        </p>
+        <OverlayPlacementPicker value={placement} locked={placementLocked || saving} onChange={onPlacementChange} />
+      </div>
+      {saving ? (
+        <p aria-live="polite" className="m-0 text-center text-[11px] text-white/70">Saving your appearance…</p>
+      ) : null}
+      {error ? <p role="alert" className="m-0 text-center text-[11px] text-[#ffb4b4]">{error}</p> : null}
       {onContinue ? (
-        <button type="button" onClick={onContinue} className="onboard-cta no-drag focus-ring">
-          Continue
+        <button type="button" onClick={onContinue} disabled={saving} className="onboard-cta no-drag focus-ring disabled:opacity-60">
+          {saving ? 'Saving…' : 'Continue'}
         </button>
       ) : null}
     </div>

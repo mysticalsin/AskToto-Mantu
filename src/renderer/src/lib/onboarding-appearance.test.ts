@@ -11,8 +11,12 @@ import {
   ONBOARDING_APPEARANCE_COPY,
   ONBOARDING_APPEARANCE_HEADING,
   ONBOARDING_APPEARANCE_LEAD,
+  placementSettingsPatch,
   reduceAppearancePreview,
-  seedOnboardingAppearance
+  resolveOnboardingPlacementSync,
+  saveOnboardingAppearanceChoice,
+  seedOnboardingAppearance,
+  seedOnboardingPlacement
 } from './onboarding-appearance'
 import { shouldMountKineticGrid, KINETIC_GRID_SCENES } from './onboarding-kinetic-grid'
 import { shouldMountStarfield } from './onboarding-starfield-spec'
@@ -47,10 +51,52 @@ describe('onboarding appearance — persist existing overlay', () => {
     expect(appearanceSettingsPatch('bar')).toEqual({ overlayLayout: 'bar', autoHideOverlay: false })
   })
 
+  it('keeps physical placement independent and defaults it to top-center', () => {
+    expect(seedOnboardingPlacement(undefined)).toBe('top-center')
+    expect(seedOnboardingPlacement({})).toBe('top-center')
+    expect(seedOnboardingPlacement({ overlayPlacement: 'right-edge' })).toBe('right-edge')
+    expect(placementSettingsPatch('right-edge')).toEqual({ overlayPlacement: 'right-edge' })
+    expect(placementSettingsPatch('top-center')).toEqual({ overlayPlacement: 'top-center' })
+  })
+
+  it('adopts real or managed settings after boot without overwriting an in-flow choice', () => {
+    expect(resolveOnboardingPlacementSync({ current: 'top-center', incoming: 'right-edge', userSelected: false, managed: false })).toBe('right-edge')
+    expect(resolveOnboardingPlacementSync({ current: 'top-center', incoming: 'right-edge', userSelected: true, managed: false })).toBeNull()
+    expect(resolveOnboardingPlacementSync({ current: 'top-center', incoming: 'right-edge', userSelected: true, managed: true })).toBe('right-edge')
+  })
+
+  it('commits an appearance only when the trusted settings response confirms it', async () => {
+    await expect(
+      saveOnboardingAppearanceChoice(
+        async () => ({ overlayLayout: 'hide', overlayPlacement: 'top-center' }),
+        (saved) => saved.overlayPlacement === 'right-edge'
+      )
+    ).resolves.toBe(false)
+    await expect(
+      saveOnboardingAppearanceChoice(
+        async () => { throw new Error('keychain unavailable') },
+        (saved) => saved.overlayLayout === 'bar'
+      )
+    ).resolves.toBe(false)
+    await expect(
+      saveOnboardingAppearanceChoice(
+        async () => ({ overlayLayout: 'bar', overlayPlacement: 'right-edge' }),
+        (saved) => saved.overlayLayout === 'bar'
+      )
+    ).resolves.toBe(true)
+  })
+
   it('finish / onDone never writes overlayLayout', () => {
     expect(experience).toMatch(/mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
     expect(experience).not.toMatch(/onDone\(\{[\s\S]*overlayLayout/)
     expect(experience).toMatch(/appearanceSettingsPatch\(id\)/)
+    expect(experience).toMatch(/placementSettingsPatch\(id\)/)
+    expect(experience).toMatch(/saveOnboardingAppearanceChoice/)
+    expect(experience).toMatch(/resolveOnboardingPlacementSync/)
+    expect(experience).toMatch(/const placementUserSelectedRef = useRef\(false\)/)
+    expect(experience).toMatch(/placementUserSelectedRef\.current = true/)
+    expect(experience).toMatch(/incoming: settings\?\.overlayPlacement/)
+    expect(experience).toMatch(/managed: placementManaged/)
   })
 })
 

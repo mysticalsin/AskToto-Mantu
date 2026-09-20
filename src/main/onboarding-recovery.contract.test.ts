@@ -85,6 +85,9 @@ describe('exclusive onboarding renderer recovery', () => {
       currentWidth: 1,
       BAR_WIDTH: 600,
       self: { webContents: { id: 1 } },
+      // Captured beside `const self = win`, outside this handler: reading self.webContents here would
+      // throw against an already-torn-down WebContents (MQA-340).
+      selfWebContentsId: 1,
       win
     })
 
