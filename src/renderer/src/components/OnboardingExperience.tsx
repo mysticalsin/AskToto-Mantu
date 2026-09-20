@@ -539,7 +539,8 @@ export function setupAsrBlocksContinue(
 
 /** First-run cannot mark onboardingDone until Ready, files are ready, and consent is given. */
 export function firstRunCanFinish(input: { asrReady: boolean; consent: boolean }): boolean {
-  return input.asrReady && input.consent
+  // P0 nuclear: ASR can finish later in Settings.
+  return input.consent
 }
 
 export function asrStatusIsReady(status: AsrAssetsStatus | null | undefined): boolean {
@@ -807,7 +808,9 @@ function ActReady({
   const completionFlowRef = useRef<ReturnType<typeof createOnboardingCompletionFlow> | null>(null)
   if (!completionFlowRef.current) completionFlowRef.current = createOnboardingCompletionFlow(setCompletion)
   const persona = ONBOARDING_PERSONAS.find((p) => p.id === (mode as OnboardingPersonaId))
-  const blocked = completion.busy || recoveryBusy || !asrReady || !authReady
+  // P0 nuclear: ASR must never pin Get started forever — files can finish in Settings.
+  // Auth boot can still mute briefly; Ready screen shows Checking copy + Retry.
+  const blocked = completion.busy || recoveryBusy || !authReady
   const readinessCopy = onboardingReadinessCopy(asrReady, aiReady)
 
   useEffect(() => {
@@ -820,7 +823,7 @@ function ActReady({
   }, [completion.busy])
 
   const attemptFinish = async (destination: 'answer' | 'settings'): Promise<OnboardingCompletionOutcome> => {
-    if (!asrReady || !authReady) return 'blocked'
+    if (!authReady) return 'blocked'
     return (await completionFlowRef.current?.attempt(async () => {
       try {
         return await onFinish(destination)
@@ -1717,7 +1720,7 @@ export function OnboardingExperience({
           )}
           {asrBlocksContinue && scanDone && (
             <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-              Transcription files are finishing. Continue unlocks in a moment, or Retry the row.
+              Transcription files are still finishing in the background. You can Continue now and finish them in Settings.
             </p>
           )}
           <div className="flex items-center gap-2">

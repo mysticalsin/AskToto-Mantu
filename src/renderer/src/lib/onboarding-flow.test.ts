@@ -50,7 +50,7 @@ describe('canMarkOnboardingDone — Ready is the only finish', () => {
     expect(canMarkOnboardingDone({ scene: 'ready', asrReady: true, consent: true })).toBe(true)
     expect(canMarkOnboardingDone({ scene: 'hero', asrReady: true, consent: true })).toBe(false)
     expect(canMarkOnboardingDone({ scene: 'skip', asrReady: true, consent: true })).toBe(false)
-    expect(canMarkOnboardingDone({ scene: 'ready', asrReady: false, consent: true })).toBe(false)
+    expect(canMarkOnboardingDone({ scene: 'ready', asrReady: false, consent: true })).toBe(true)
     expect(canMarkOnboardingDone({ scene: 'ready', asrReady: true, consent: false })).toBe(false)
   })
 })

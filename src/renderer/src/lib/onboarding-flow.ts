@@ -25,7 +25,8 @@ export function canMarkOnboardingDone(input: {
   asrReady: boolean
   consent: boolean
 }): boolean {
-  return input.scene === 'ready' && input.asrReady && input.consent
+  // P0 nuclear: ASR readiness is informational — never block finishing onboarding.
+  return input.scene === 'ready' && input.consent
 }
 
 /** Demo Continue: ask where Métis lives before setup. */
