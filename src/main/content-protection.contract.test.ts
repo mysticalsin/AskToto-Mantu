@@ -85,8 +85,12 @@ function auditWindows(files: { file: string; source: string }[]): WindowAudit {
       // the module belongs to a re-sync helper (syncIntelContentProtection), and that helper only runs on
       // the NEXT settings save — until then the window is already on screen and capturable. Accepting it
       // would let the audit pass on the exact regression it exists to catch.
-      if (new RegExp(`(?<![\\w$])${target}\\.setContentProtection\\(`).test(source.slice(match.index ?? 0)))
-        continue
+      // ...and the call must actually TURN IT ON. A `setContentProtection(false)` satisfied this check
+      // while doing the opposite of what the audit exists to guarantee: Cap3's QA force-paint branch
+      // added exactly such a call, and from that moment deleting the real construction-time call was
+      // invisible to the audit. A literal `false` is not evidence of protection.
+      const guardRe = new RegExp(`(?<![\\w$])${target}\\.setContentProtection\\(\\s*(?!false\\s*\\))`)
+      if (guardRe.test(source.slice(match.index ?? 0))) continue
       violations.push(`${file}: ${target}`)
     }
   }
@@ -319,6 +323,12 @@ describe('MQA-176 — the Intelligence dashboard is created with the CURRENT Pri
         setContentProtection: vi.fn(),
         show: vi.fn(),
         focus: vi.fn(),
+        // raiseIntelligenceWindow un-minimises and lifts the window before showing it, so the fake has
+        // to answer those too. Without them every test that opens a dashboard died on
+        // `intelWin.isMinimized is not a function` before it reached its own assertion.
+        isMinimized: (): boolean => false,
+        restore: vi.fn(),
+        moveTop: vi.fn(),
         on: (event: string, fn: () => void): void => {
           listeners[event] = fn
         },
