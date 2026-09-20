@@ -135,7 +135,7 @@ describe('no Skip control in the live onboarding tree', () => {
 })
 
 describe('onboardingDone cannot become true without completing Ready', () => {
-  it('canMarkOnboardingDone is Ready + files + consent only', () => {
+  it('canMarkOnboardingDone is Ready + consent; ASR recovery remains available in Settings', () => {
     expect(canMarkOnboardingDone({ scene: 'ready', asrReady: true, consent: true })).toBe(true)
     expect(canMarkOnboardingDone({ scene: 'hero', asrReady: true, consent: true })).toBe(false)
     expect(canMarkOnboardingDone({ scene: 'problem', asrReady: true, consent: true })).toBe(false)
@@ -145,7 +145,7 @@ describe('onboardingDone cannot become true without completing Ready', () => {
     expect(canMarkOnboardingDone({ scene: 'license', asrReady: true, consent: true })).toBe(false)
     expect(canMarkOnboardingDone({ scene: 'appearance', asrReady: true, consent: true })).toBe(false)
     expect(canMarkOnboardingDone({ scene: 'skip', asrReady: true, consent: true })).toBe(false)
-    expect(canMarkOnboardingDone({ scene: 'ready', asrReady: false, consent: true })).toBe(false)
+    expect(canMarkOnboardingDone({ scene: 'ready', asrReady: false, consent: true })).toBe(true)
     expect(canMarkOnboardingDone({ scene: 'ready', asrReady: true, consent: false })).toBe(false)
     expect(experience).toMatch(/canMarkOnboardingDone\(\{ scene, asrReady, consent \}\)/)
     const finish = experience.slice(experience.indexOf('const finish = async'))
