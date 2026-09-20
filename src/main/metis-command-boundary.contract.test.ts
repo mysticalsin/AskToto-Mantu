@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest'
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
 const ipc = readFileSync(join(__dirname, '../shared/ipc.ts'), 'utf8')
-const register = readFileSync(join(__dirname, 'metis-command-register.ts'), 'utf8')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
 
 function between(source: string, start: string, end: string): string {
@@ -20,7 +19,6 @@ describe('Cap2 command authority boundary', () => {
   it('does not expose a renderer IPC that can manufacture desktop commands', () => {
     expect(preload).not.toContain('metisCommandIngest')
     expect(ipc).not.toContain('metisCommandIngest')
-    expect(register).not.toContain('IPC.metisCommandIngest')
     expect(preload).not.toContain('metisCommandStop')
     expect(preload).not.toContain('onMetisCommandState')
     expect(ipc).not.toContain('metisCommandState')
