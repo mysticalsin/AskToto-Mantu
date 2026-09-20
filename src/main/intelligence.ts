@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { existsSync } from 'node:fs'
 import { getSettings } from './store'
-import { devEnv, devToolsEnabled } from './dev-env'
+import { devEnv, devToolsEnabled, isPackagedBuild } from './dev-env'
 
 /** Private View (content protection) for the dashboard — mirrors the overlay's contentProtectionOn().
  *  The dashboard aggregates the most sensitive cross-meeting data (people/accounts/deals/quotes/
@@ -257,9 +257,11 @@ export function openIntelligenceWindow(avoid?: {
     }
   })
   // Cap3 QA: Private View blacks screen-capture AND can present as a blank feel window when verifying.
-  // Force paint for Cap3 tip prove when Resources/QA_TIP.txt exists; production path unchanged.
+  // Force paint for Cap3 tip prove when Resources/QA_TIP.txt exists — but ONLY in unpackaged builds.
+  // Same fail-closed packaging gate as ASKTOTO_DISABLE_CP / devEnv(): a shipped QA_TIP.txt must never
+  // leave the most sensitive aggregated view screen-capturable while Private View appears on.
   const qaTip = join(process.resourcesPath || '', 'QA_TIP.txt')
-  const cap3QaForcePaint = existsSync(qaTip)
+  const cap3QaForcePaint = !isPackagedBuild() && existsSync(qaTip)
   if (cap3QaForcePaint) {
     intelWin.setContentProtection(false)
   } else {
