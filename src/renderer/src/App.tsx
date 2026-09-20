@@ -4,7 +4,7 @@ import { Bar } from './components/Bar'
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
 import { CommandListeningPill } from './components/CommandListeningPill'
-import { startMetisCommandEar } from './lib/metis-command-ear'
+import { startMetisCommandEar, type MetisCommandEarStatus } from './lib/metis-command-ear'
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import {
