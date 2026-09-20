@@ -691,9 +691,15 @@ export function App(): JSX.Element {
   // — the non-activating notch contract. The pure state machine lives in lib/overlay-autohide.ts.
   const overlayLayout = parseOverlayLayout(settings?.overlayLayout)
   const overlayOrbStyle = parseOverlayOrbStyle(settings?.overlayOrbStyle)
-  const AskSurface = overlayLayout === 'dock' ? DockPanel : Bar
+  // Dock is a 380-wide edge sidecar that fills its own window (h-full). Settings does not open in that
+  // window: applySettingsSurface resizes to the wide centred SETTINGS_WINDOW_MIN rect and renders the
+  // sheet BELOW the ask surface. Left as DockPanel there, its h-full claimed the whole tall window and
+  // its body was empty, so Settings was squeezed to nothing behind a full-height slab of dark glass —
+  // the "big black box". At settings width the bar is the correct surface, so hand back to it.
+  const settingsSheetOpen = overlayShowsSettingsSheet(view, minimized)
+  const AskSurface = overlayLayout === 'dock' && !settingsSheetOpen ? DockPanel : Bar
   // The dock is attached to the right edge, so it springs from there. Every other chrome hugs the top.
-  const overlaySpringEdge: OverlayEdge = overlayLayout === 'dock' ? 'right' : 'top'
+  const overlaySpringEdge: OverlayEdge = overlayLayout === 'dock' && !settingsSheetOpen ? 'right' : 'top'
   const canMinimize = overlayAllowsMinimize(overlayLayout)
   const showBarOrb = overlayShowsBarOrb(overlayLayout, minimized)
   const autoHideSetting = overlayUsesHover(overlayLayout)
@@ -3742,8 +3748,14 @@ export function App(): JSX.Element {
   const answerView = view === 'answer' || view === 'copilot' || DEMO === 'answer' || DEMO === 'copilot'
   // Answer / live-copilot render INSIDE the expanded bar (one surface: big input → body → toolbar at the
   // bottom). Only the full views (settings / history / review / agenda) render as a panel below the bar.
-  const barBody = answerView && !collapsed ? body : undefined
-  const isPanelBody = body != null && !answerView
+  // The dock IS a panel, so everything it can show belongs INSIDE it. Routing History/Review/Brain/
+  // Agenda to a <Panel> below the ask surface is right for the bar (a wide strip with room underneath)
+  // and wrong for the dock: DockPanel fills its window by design, so the panel below got squeezed to
+  // nothing behind a full-height slab of dark glass. Same black box as Settings, three more views.
+  // Settings is the exception and keeps the sheet, because main gives it its own wide window.
+  const dockSurfaceLive = overlayLayout === 'dock' && !settingsSheetOpen
+  const barBody = (answerView || dockSurfaceLive) && !collapsed ? body : undefined
+  const isPanelBody = body != null && !answerView && !dockSurfaceLive
   // An actual answer/suggestion is open → the bar shows the ← back arrow + the follow-up placeholder.
   const hasAnswer =
     (view === 'answer' && (!!ask.answer || capturing)) ||

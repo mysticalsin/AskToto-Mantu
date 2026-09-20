@@ -1800,6 +1800,34 @@ button.onboard-cta {
   scroll-padding-block: 8px;
 }
 
+/* Content that continues past the fold should fade, not be guillotined by a hard edge. The mask is
+   STATIC (no transition, no animation): it costs one composite at paint and nothing per frame, which
+   keeps it inside the motion budget that bans animating filters. `mask-composite` is not needed since
+   a single linear gradient does both ends. */
+.dock-panel__scroll {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 10px,
+    #000 calc(100% - 14px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 10px,
+    #000 calc(100% - 14px),
+    transparent 100%
+  );
+}
+
+/* A short answer never reaches the fold, and fading the last line of a two-line answer reads as a
+   rendering fault rather than an affordance. Only mask once there is genuinely more to see. */
+.dock-panel__scroll:not([data-overflowing='1']) {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
 .overlay-dock-peek {
   display: inline-flex;
   align-items: center;

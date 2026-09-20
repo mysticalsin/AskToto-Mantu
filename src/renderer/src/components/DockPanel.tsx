@@ -105,7 +105,11 @@ const Tool = memo(function Tool({
 
 export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const [modeOpen, setModeOpen] = useState(false)
+  // Drives the edge fade. Measured rather than assumed: masking a short answer's last line reads as a
+  // rendering fault, so the mask only applies once the content genuinely overflows.
+  const [overflowing, setOverflowing] = useState(false)
 
   useEffect(() => {
     if (props.focusSignal > 0) inputRef.current?.focus()
@@ -127,6 +131,20 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
 
   const hasAnswer = props.hasAnswer ?? !!props.body
   const listening = props.listening
+
+  // Re-measure on every body change (a streaming answer grows line by line) and on resize. ResizeObserver
+  // rather than a scroll listener: overflow changes when the CONTENT changes, not when the reader moves.
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el) return
+    const measure = (): void => setOverflowing(el.scrollHeight > el.clientHeight + 1)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    for (const child of Array.from(el.children)) ro.observe(child)
+    return () => ro.disconnect()
+  }, [props.body])
 
   // Chrome rows are memo'd ELEMENTS, not components: `body` gets a new reference up to 60x/sec while an
   // answer streams, and without this every control in the panel reconciles on each of those frames.
@@ -301,7 +319,9 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
           the bottom of a fixed-height window instead of scrolling inside this zone. */}
       <div className="relative min-h-0 flex-1">
         <div
-          className="aw-body scroll-thin h-full overflow-y-auto px-3 py-2.5"
+          ref={bodyRef}
+          data-overflowing={overflowing ? '1' : '0'}
+          className="dock-panel__scroll aw-body scroll-thin h-full overflow-y-auto px-3 py-2.5"
           style={{ maxHeight: answerBodyMaxHeight() }}
         >
           {props.body ?? (
