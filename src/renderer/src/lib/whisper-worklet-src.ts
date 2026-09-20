@@ -20,6 +20,7 @@
  */
 import { makeVad, isSpeechLikeWindow } from './vad'
 import { FIRST_PARTIAL_SAMPLES } from '@shared/asr-latency'
+import { PCM_16K_RESAMPLER_SRC } from './pcm-format'
 
 export const WHISPER_WORKLET_SRC = `
 const SAMPLE_RATE = 16000
@@ -28,8 +29,9 @@ const PARTIAL_SAMPLES = ${FIRST_PARTIAL_SAMPLES} // first caption before the 6s 
 const EMIT_RMS = 0.005                // whole-window energy below this → drop (silence; ASR hallucinates on it)
 const makeVad = ${makeVad.toString()}
 const isSpeechLikeWindow = ${isSpeechLikeWindow.toString()}
+const Pcm16kResampler = ${PCM_16K_RESAMPLER_SRC}
 class WhisperWorklet extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super()
     // Pre-allocated window; each ~128-sample quantum copies in at \`fill\`. A per-instance VAD decides when
     // the turn has ended; we then emit one transferable copy — O(1) per quantum, zero steady-state alloc.
@@ -38,6 +40,14 @@ class WhisperWorklet extends AudioWorkletProcessor {
     this.partialSent = false
     this.sealed = false
     this.vad = makeVad()
+    // The requested AudioContext rate is not guaranteed. Use the context's actual worklet rate and
+    // reject a mismatched option rather than passing malformed PCM into the fixed 16 kHz pipeline.
+    const requestedRate = options?.processorOptions?.sourceSampleRate
+    this.sourceSampleRate = requestedRate === sampleRate ? requestedRate : sampleRate
+    this.resampler = new Pcm16kResampler(this.sourceSampleRate, SAMPLE_RATE)
+    // Normally one 128-sample Web Audio quantum, but bounded to the existing maximum window so a
+    // nonstandard offline/test render block is still converted without allocating on process().
+    this.resampled = new Float32Array(MAX_SAMPLES)
     this.port.onmessage = (e) => {
       if (e.data === 'flush') {
         this.emit() // pause(): reset the partial buffer without ending the channel
@@ -64,7 +74,7 @@ class WhisperWorklet extends AudioWorkletProcessor {
     if (!this.keepable(this.fill)) return
     this.partialSent = true
     const chunk = this.buf.slice(0, this.fill)
-    this.port.postMessage({ audio: chunk, partial: true }, [chunk.buffer])
+    this.port.postMessage({ audio: chunk, sampleRate: SAMPLE_RATE, partial: true }, [chunk.buffer])
   }
   emit() {
     const n = this.fill
@@ -73,29 +83,31 @@ class WhisperWorklet extends AudioWorkletProcessor {
     this.vad.reset()
     if (!this.keepable(n)) return
     const chunk = this.buf.slice(0, n)
-    this.port.postMessage({ audio: chunk, partial: false }, [chunk.buffer])
+    this.port.postMessage({ audio: chunk, sampleRate: SAMPLE_RATE, partial: false }, [chunk.buffer])
   }
   process(inputs) {
     if (this.sealed) return true
     const input = inputs[0]
-    if (!input || !input[0] || input[0].length === 0) return true
+    if (!input || input.length !== 1 || !input[0] || input[0].length === 0 || !this.resampler.valid) return true
     const data = input[0]
+    const n = this.resampler.write(data, this.resampled)
+    if (n === 0) return true
     // Energy of this quantum (~128 samples ≈ 8ms) → drives the VAD's speech/silence endpointing.
     let fs = 0
-    for (let i = 0; i < data.length; i++) { const v = data[i]; fs += v * v }
-    const rms = Math.sqrt(fs / data.length)
+    for (let i = 0; i < n; i++) { const v = this.resampled[i]; fs += v * v }
+    const rms = Math.sqrt(fs / n)
 
     let offset = 0
-    while (offset < data.length) {
-      const take = Math.min(MAX_SAMPLES - this.fill, data.length - offset)
-      this.buf.set(data.subarray(offset, offset + take), this.fill)
+    while (offset < n) {
+      const take = Math.min(MAX_SAMPLES - this.fill, n - offset)
+      this.buf.set(this.resampled.subarray(offset, offset + take), this.fill)
       this.fill += take
       offset += take
       if (this.fill >= MAX_SAMPLES) this.emit() // hard cap → force-cut a long monologue
     }
 
     if (!this.partialSent && this.fill >= PARTIAL_SAMPLES) this.emitPartial()
-    if (this.vad.step(rms, data.length)) this.emit() // end of turn
+    if (this.vad.step(rms, n)) this.emit() // end of turn
     return true
   }
 }
