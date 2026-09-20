@@ -247,7 +247,10 @@ export const RIGHT_EDGE_HOVER_TARGET = { width: 24, height: HOVER_ISLAND_HEIGHT_
  */
 export function rightEdgePlacementFits(
   m: DisplayMetrics,
-  revealedWidth = OVERLAY_BAR_REST.width,
+  // Annotated `number`, not left to inference: OVERLAY_BAR_REST is `as const`, so a bare default
+  // narrows this parameter to the literal 880 and passing any other revealed width — the 380 dock
+  // panel, for one — fails to compile.
+  revealedWidth: number = OVERLAY_BAR_REST.width,
   margin = RIGHT_EDGE_MARGIN_PX
 ): boolean {
   return m.workArea.width >= revealedWidth + margin * 2
@@ -257,7 +260,7 @@ export function rightEdgePlacementFits(
 export function resolveOverlayPlacement(
   placement: OverlayPlacement,
   m: DisplayMetrics,
-  revealedWidth = OVERLAY_BAR_REST.width
+  revealedWidth: number = OVERLAY_BAR_REST.width
 ): OverlayPlacement {
   return placement === 'right-edge' && !rightEdgePlacementFits(m, revealedWidth) ? 'top-center' : placement
 }

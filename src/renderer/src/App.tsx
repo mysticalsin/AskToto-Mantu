@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
+import { DockPanel } from './components/DockPanel'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
@@ -689,6 +690,7 @@ export function App(): JSX.Element {
   // — the non-activating notch contract. The pure state machine lives in lib/overlay-autohide.ts.
   const overlayLayout = parseOverlayLayout(settings?.overlayLayout)
   const overlayOrbStyle = parseOverlayOrbStyle(settings?.overlayOrbStyle)
+  const AskSurface = overlayLayout === 'dock' ? DockPanel : Bar
   const canMinimize = overlayAllowsMinimize(overlayLayout)
   const showBarOrb = overlayShowsBarOrb(overlayLayout, minimized)
   const autoHideSetting = overlayUsesHover(overlayLayout)
@@ -3926,7 +3928,10 @@ export function App(): JSX.Element {
               if (circleRestSpring === 'collapse') commitCircleRestMinimize()
             }}
           >
-          <Bar
+          {/* Dock is a 380-wide sidecar; Bar is an 880 horizontal strip whose toolbar overlap below that
+              width DESIGN.md calls a ship blocker. Same props either way (DockPanel takes BarProps), so
+              this is a surface swap, not a second wiring. */}
+          <AskSurface
             value={input}
             onChange={setInput}
             onSubmit={submit}

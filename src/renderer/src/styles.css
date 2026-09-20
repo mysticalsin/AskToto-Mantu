@@ -1779,190 +1779,25 @@ button.onboard-cta {
 .overlay-peek--stealth .overlay-peek__grip > span {
   background: rgba(219, 190, 255, 0.85);
 }
-/* Cap4 side box — CAP4-SIDEBOX-DESIGN.md (Bar DNA glass sidecar) */
-.overlay-dock-panel {
-  display: flex;
-  width: 100%;
-  min-height: 360px;
-  max-height: 560px;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 12px;
-  padding: 12px 12px 10px;
-  border-radius: 16px 0 0 16px;
-  background: var(--aw-glass-bot, rgba(20, 20, 22, 0.55));
-  -webkit-backdrop-filter: blur(24px) saturate(140%);
-  backdrop-filter: blur(24px) saturate(140%);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+/* Dock panel — the revealed sidecar surface.
+   It is attached to the screen edge, so it drops the right radius and the right border the way the
+   sliver does: a floating rounded card at a screen edge reads as misplaced, a panel that meets the
+   edge reads as docked. Same glass as .aw-widget, restated only where the edge changes it. */
+.dock-panel {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
   border-right: 0;
+  /* Light comes from inboard, so the shadow falls left rather than radiating from a floating box. */
   box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  overflow: hidden;
-  animation: overlay-dock-panel-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    0 0 0 1px rgba(127, 0, 218, 0.09),
+    -18px 0 48px -22px rgba(0, 0, 0, 0.55),
+    0 0 50px -14px var(--color-accent-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
 }
-@keyframes overlay-dock-panel-in {
-  from { opacity: 0.72; transform: translateX(8px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .overlay-dock-panel { animation: none; }
-}
-.overlay-dock-panel__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.overlay-dock-panel__brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.overlay-dock-panel__title {
-  font-size: 14px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.95);
-  letter-spacing: 0.01em;
-}
-.overlay-dock-panel__icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  border: 0;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.55);
-  cursor: pointer;
-}
-.overlay-dock-panel__icon-btn:hover {
-  color: rgba(255, 255, 255, 0.95);
-  background: rgba(255, 255, 255, 0.08);
-}
-.overlay-dock-panel__ask {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 40px;
-  padding: 0 6px 0 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(16, 16, 18, 0.45);
-}
-.overlay-dock-panel__ask-input {
-  flex: 1;
-  min-width: 0;
-  height: 38px;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.95);
-  font-size: 13px;
-}
-.overlay-dock-panel__ask-input::placeholder {
-  color: rgba(255, 255, 255, 0.4);
-}
-.overlay-dock-panel__ask-go {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.55);
-  cursor: pointer;
-}
-.overlay-dock-panel__ask-go:hover:not(:disabled) {
-  color: var(--color-accent, #7f00da);
-  background: rgba(255, 255, 255, 0.08);
-}
-.overlay-dock-panel__ask-go:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-.overlay-dock-panel__rows {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1;
-  min-height: 0;
-}
-.overlay-dock-panel__row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 40px;
-  padding: 0 12px;
-  border-radius: 12px;
-  border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.95);
-  font-size: 13px;
-  font-weight: 500;
-  text-align: left;
-  cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
-}
-.overlay-dock-panel__row:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.1);
-}
-.overlay-dock-panel__row--live {
-  background: color-mix(in srgb, var(--color-accent, #7f00da) 18%, transparent);
-  border-color: color-mix(in srgb, var(--color-accent, #7f00da) 35%, transparent);
-}
-.overlay-dock-panel__row-icon {
-  flex: 0 0 auto;
-  color: rgba(255, 255, 255, 0.55);
-}
-.overlay-dock-panel__row--live .overlay-dock-panel__row-icon {
-  color: var(--color-accent, #7f00da);
-}
-.overlay-dock-panel__row-label {
-  flex: 1;
-  min-width: 0;
-}
-.overlay-dock-panel__chip {
-  font-size: 11px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.75);
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.1);
-}
-.overlay-dock-panel__chip--busy {
-  margin-left: auto;
-}
-.overlay-dock-panel__foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-.overlay-dock-panel__settings {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-}
-.overlay-dock-panel__settings:hover {
-  color: rgba(255, 255, 255, 0.95);
-  background: rgba(255, 255, 255, 0.06);
+
+/* The scroller must not collide with the rounded corners of the zone above and below it. */
+.dock-panel .aw-body {
+  scroll-padding-block: 8px;
 }
 
 .overlay-dock-peek {
