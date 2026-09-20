@@ -7,10 +7,15 @@ const geometry = readFileSync(join(__dirname, './island/geometry.ts'), 'utf8')
 const placement = readFileSync(join(__dirname, '../shared/overlay-placement.ts'), 'utf8')
 
 function section(source: string, start: string, end: string): string {
-  const startAt = source.indexOf(start)
-  const endAt = source.indexOf(end, startAt + start.length)
+  // Windows CI checks out CRLF; markers in this file use LF. Normalize both sides.
+  const norm = (s: string): string => s.replace(/\r\n/g, '\n')
+  const src = norm(source)
+  const startKey = norm(start)
+  const endKey = norm(end)
+  const startAt = src.indexOf(startKey)
+  const endAt = src.indexOf(endKey, startAt + startKey.length)
   if (startAt < 0 || endAt < 0) throw new Error(`Could not find ${start}..${end}`)
-  return source.slice(startAt, endAt)
+  return src.slice(startAt, endAt)
 }
 
 describe('right-edge placement main-process contract', () => {
