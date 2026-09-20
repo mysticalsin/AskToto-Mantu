@@ -285,11 +285,11 @@ export function buildStandSnapshot(data: DashboardData, now = Date.now()): Stand
     } else {
       facts.push({ kind: 'count', key: 'unassigned', value: unassigned.length, label: 'Unassigned open' })
     }
-    if (aged && aged.undated > 0) {
+    if (aged && aged.undated.length > 0) {
       facts.push({
         kind: 'count',
         key: 'undatedOpen',
-        value: aged.undated,
+        value: aged.undated.length,
         label: 'Open commitments with undated due (not aged into overdue)'
       })
     }
