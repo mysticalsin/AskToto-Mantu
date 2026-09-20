@@ -8767,26 +8767,32 @@ if (!app.requestSingleInstanceLock()) {
   // This lets the Whisper worker (served over file://) use fetch() to load
   // bundled ONNX model weights and WASM blobs with zero network access.
   // Each host has its own canonical subtree; downloaded model assets use their own guarded root.
-  runStep('asrModelProtocol', () => {
+  // FITO/Tony 2026-09-20: register ASR IPC BEFORE protocol.handle and BEFORE createWindow.
+  // A protocol throw must never leave asr:assets-ensure with "No handler registered" (Your setup Continue hang).
+  runStep('asrAssetsIpc', () => {
     const REPO_ROOT = join(__dirname, '..', '..')
     const RES_BASE = app.isPackaged
       ? process.resourcesPath
       : join(REPO_ROOT, 'resources')
-
-    // A packaged app is ALWAYS offline-only, even if its installer is corrupt/incomplete. Returning true
-    // keeps the worker's remote resolver disabled so missing assets fail locally (runtime then fetches
-    // into userData) instead of silently downloading from a CDN. Development may still use its explicit remote path.
     const ASR_BUNDLED = app.isPackaged || asrManifestComplete(RES_BASE)
-    ipcMain.handle(IPC.asrBundled, (e) => {
+    const safeHandle = (channel: string, listener: (...args: any[]) => unknown): void => {
+      try {
+        ipcMain.removeHandler(channel)
+      } catch {
+        /* first registration */
+      }
+      ipcMain.handle(channel, listener as never)
+    }
+    safeHandle(IPC.asrBundled, (e) => {
       if (isRecentlyRetiredOverlaySender(e)) return true
       assertMainWindow(e)
       return ASR_BUNDLED
     })
-    ipcMain.handle(IPC.asrAssetsStatus, (e) => {
+    safeHandle(IPC.asrAssetsStatus, (e) => {
       assertMainWindow(e)
       return asrAssetsStatusSnapshot()
     })
-    ipcMain.handle(IPC.asrAssetsEnsure, async (e) => {
+    safeHandle(IPC.asrAssetsEnsure, async (e) => {
       assertMainWindow(e)
       try {
         await ensureImportAsrAssets((pct) => {
@@ -8798,7 +8804,13 @@ if (!app.requestSingleInstanceLock()) {
       }
       return asrAssetsStatusSnapshot()
     })
+  })
 
+  runStep('asrModelProtocol', () => {
+    const REPO_ROOT = join(__dirname, '..', '..')
+    const RES_BASE = app.isPackaged
+      ? process.resourcesPath
+      : join(REPO_ROOT, 'resources')
     protocol.handle('asr-model', createAsrModelProtocolHandler({
       resourcesRoot: RES_BASE,
       userModelsRoot: userDataAsrRoot(),

@@ -506,17 +506,21 @@ export function asrEnsureFailureStatus(err?: unknown): AsrAssetsStatus {
 }
 
 /**
- * First-run cannot leave Act 3 while transcription files are still missing.
- * Unlock when the setup UI already claims complete (`allReady`, including skipped)
- * or the ASR engine / row is ready. Never leave a dead muted Continue on a
- * complete-looking list.
+ * First-run prefers ready transcription files before leaving Act 3.
+ * Unlock when setup already looks complete, ASR is ready/skipped, OR ensure
+ * failed / timed out (fail-open): Continue must never stay muted forever while
+ * Retry remains available. Ultron/Tony 2026-09-20 Your-setup hang lock.
  */
+export const ASR_SETUP_FAIL_OPEN_MS = 12_000
+
 export function setupAsrBlocksContinue(
   rows: SetupRow[],
   asrStatus?: AsrAssetsStatus | null
 ): boolean {
   if (summarizeSetupRows(rows).allReady) return false
   if (asrStatusIsReady(asrStatus)) return false
+  // Fail-open: error status unlocks Continue (Retry still on the row).
+  if (asrStatus?.status === 'error') return false
   const asr = rows.find((r) => r.key === 'asr')
   if (asr && (asr.state === 'ready' || asr.state === 'skipped')) return false
   if (!asr) return rows.length === 0
@@ -1160,6 +1164,16 @@ export function OnboardingExperience({
       if (live) setAsrStatus(s)
     }
     void window.toto.asrAssetsEnsure().then(apply).catch((err) => apply(asrEnsureFailureStatus(err)))
+    // Fail-open: if ensure stalls (missing handler, slow CDN, incomplete pack), unlock Continue.
+    const failOpen = setTimeout(() => {
+      if (!live) return
+      setAsrStatus((prev) => {
+        if (prev.ready || prev.status === 'ready' || prev.status === 'error') return prev
+        const message =
+          'Transcription files are still downloading. You can continue and finish them in Settings.'
+        return { ready: false, status: 'error', progress: prev.progress || 0, label: message, error: message }
+      })
+    }, ASR_SETUP_FAIL_OPEN_MS)
     const poll = async (): Promise<void> => {
       const s = await window.toto.asrAssetsStatus().catch(() => null)
       if (s) apply(s)
@@ -1170,6 +1184,7 @@ export function OnboardingExperience({
     })
     return () => {
       live = false
+      clearTimeout(failOpen)
       clearInterval(interval)
       unsub?.()
     }
