@@ -104,4 +104,27 @@ export function bindQaDomDump(
     ;(timer as NodeJS.Timeout).unref?.()
   }
   target.on('did-finish-load', onLoaded)
+  // Keep writing snapshots so post-Next / setup hangs are visible without CDP.
+  let ticks = 0
+  const poll = setInterval(() => {
+    if (target.isDestroyed() || ticks++ > 20) {
+      clearInterval(poll)
+      return
+    }
+    void withTimeout(target.executeJavaScript(QA_DOM_EXPR, true), timeoutMs, 'qa-dom-poll')
+      .then((dom) => {
+        try {
+          mkdirSync(dirname(opts.outPath), { recursive: true })
+          const stamped = opts.outPath.replace(/\.json$/, '') + `-t${ticks}.json`
+          writeFileSync(opts.outPath, JSON.stringify(dom, null, 2), { mode: 0o600 })
+          writeFileSync(stamped, JSON.stringify(dom, null, 2), { mode: 0o600 })
+        } catch {
+          /* ignore */
+        }
+      })
+      .catch(() => {
+        /* ignore */
+      })
+  }, 2000)
+  ;(poll as NodeJS.Timeout).unref?.()
 }
