@@ -37,7 +37,9 @@ describe('KineticGrid release checklist', () => {
     expect(experience).toMatch(/shouldMountKineticGrid\(scene\) && <KineticGrid/)
     expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
     expect(experience).not.toMatch(/Skip the tour/)
-    expect(flow).toMatch(/input\.scene === 'ready' && input\.asrReady && input\.consent/)
+    // ASR recovery is available from Settings, so a Ready screen with consent must not freeze onboarding.
+    expect(flow).toMatch(/input\.scene === 'ready' && input\.consent/)
+    expect(flow).not.toMatch(/input\.scene === 'ready' && input\.asrReady/)
     expect(app).not.toMatch(/onboard-stripes/)
     expect(css).not.toMatch(/onboard-stripes/)
     expect(css).not.toMatch(/onboard-stripe-spin/)
