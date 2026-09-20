@@ -4,6 +4,7 @@ import { Bar } from './components/Bar'
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
 import { CommandListeningPill } from './components/CommandListeningPill'
+import { startMetisCommandEar } from './lib/metis-command-ear'
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import {
@@ -305,6 +306,24 @@ export function App(): JSX.Element {
       unsub?.()
     }
   }, [])
+
+  // Cap2 always-on ear: local mic → existing Apple/Parakeet YOU feeds → main Cap2 ingest.
+  // Yields while meeting Listen owns capture; mic-denied opens Privacy settings.
+  useEffect(() => {
+    const exclusive =
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('exclusiveOnboarding') === '1'
+    const enabled = settings?.onboardingDone === true && !exclusive
+    const stop = startMetisCommandEar({
+      enabled,
+      preferApple: true,
+      isMeetingListening: () => Boolean(document.documentElement.dataset.metisListening === '1'),
+      onMicDenied: () => {
+        void window.toto.openPermissionSettings?.('microphone')
+      }
+    })
+    return () => stop()
+  }, [settings?.onboardingDone])
 
   // ── License enforcement master switch ──────────────────────────────────────────────────────────
   // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of

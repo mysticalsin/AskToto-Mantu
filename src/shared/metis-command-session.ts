@@ -43,7 +43,7 @@ export function idleMetisCommandSession(): MetisCommandSessionState {
 }
 
 export type MetisCommandEvent =
-  | { type: 'transcript'; text: string; channel: 'meeting' | 'command' | 'always' }
+  | { type: 'transcript'; text: string; channel: 'meeting' | 'command' }
   | { type: 'stop' }
   | { type: 'mark_committed'; fingerprints: string[] }
   | { type: 'tick_listening_copy' }
@@ -70,12 +70,15 @@ export function reduceMetisCommandSession(
     for (const fp of event.fingerprints) {
       if (!committed.includes(fp)) committed.push(fp)
     }
+    const pending = prev.pending.filter(
+      (request) => !event.fingerprints.includes(desktopActionFingerprint(request))
+    )
     return {
       ...prev,
       committed,
-      pending: [],
+      pending,
       chime: 'none',
-      phase: prev.active ? 'listening' : prev.phase
+      phase: prev.active ? (pending.length ? 'executing' : 'listening') : prev.phase
     }
   }
 
@@ -86,9 +89,8 @@ export function reduceMetisCommandSession(
 
   // transcript
   const { text, channel } = event
-  void channel // telemetry; gate is wake-word (meeting alone without Métis must not execute)
+  if (channel === 'meeting') return prev
 
-  // Meeting audio alone must NOT execute: without wake word, stay idle.
   if (!prev.active) {
     if (!transcriptContainsWakeWord(text)) {
       return { ...prev, chime: 'none' }

@@ -50,36 +50,16 @@ export function ensureMetisCommandRuntime(opts: {
 
 export function registerMetisCommandIpc(opts: {
   assertMainWindow: (e: Electron.IpcMainInvokeEvent) => void
-  getWindow: () => BrowserWindow | null
-  getSettings: () => PublicSettings | { operatorUrl?: string; operatorLicenseToken?: string; operatorIngestSecret?: string }
-  jevEnabled?: () => boolean
 }): void {
-  const rt = () => ensureMetisCommandRuntime(opts)
-
   ipcMain.handle(IPC.metisCommandStop, (e) => {
     opts.assertMainWindow(e)
-    rt().stopLocal('escape')
-    return { ok: true as const }
-  })
-
-  ipcMain.handle(IPC.metisCommandIngest, (e, payload: unknown) => {
-    opts.assertMainWindow(e)
-    const p = payload as { text?: unknown; channel?: unknown }
-    const text = typeof p?.text === 'string' ? p.text : ''
-    const channel =
-      p?.channel === 'command' || p?.channel === 'always' || p?.channel === 'meeting'
-        ? p.channel
-        : 'meeting'
-    if (text) rt().ingestTranscript(text, channel)
+    runtime?.stopLocal('escape')
     return { ok: true as const }
   })
 }
 
-/** Feed finals from existing ASR — no new mic stack. Wake required before execute. */
-export function ingestMetisCommandFromAsr(
-  text: string,
-  channel: 'meeting' | 'command' | 'always' = 'meeting'
-): void {
+/** Feed only main-owned local-microphone ASR. Wake is required before desktop actions. */
+export function ingestMetisCommandFromAsr(text: string): void {
   if (!runtime || !text.trim()) return
-  runtime.ingestTranscript(text, channel)
+  runtime.ingestTranscript(text, 'command')
 }
