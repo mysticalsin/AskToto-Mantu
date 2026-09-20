@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { PublicSettings } from '@shared/ipc'
+import { persistOverlayPlacement } from './overlay-placement-save'
 import {
   appearancePreviewInitialPhase,
   appearancePreviewRestKind,
@@ -55,8 +57,31 @@ describe('onboarding appearance — persist existing overlay', () => {
     expect(seedOnboardingPlacement(undefined)).toBe('top-center')
     expect(seedOnboardingPlacement({})).toBe('top-center')
     expect(seedOnboardingPlacement({ overlayPlacement: 'right-edge' })).toBe('right-edge')
-    expect(placementSettingsPatch('right-edge')).toEqual({ overlayPlacement: 'right-edge' })
-    expect(placementSettingsPatch('top-center')).toEqual({ overlayPlacement: 'top-center' })
+    expect(placementSettingsPatch('right-edge', 'bar')).toEqual({
+      overlayPlacement: 'right-edge',
+      overlayLayout: 'island',
+      autoHideOverlay: true
+    })
+    expect(placementSettingsPatch('top-center', 'island')).toEqual({
+      overlayPlacement: 'top-center',
+      overlayLayout: 'island',
+      autoHideOverlay: true
+    })
+  })
+
+  it('atomically saves right-edge with Island and auto-hide', async () => {
+    const saveSettings = vi.fn(async (next: Partial<PublicSettings>) => ({
+      overlayPlacement: next.overlayPlacement ?? 'top-center',
+      overlayLayout: next.overlayLayout ?? 'hide',
+      autoHideOverlay: next.autoHideOverlay ?? true
+    }))
+
+    await expect(persistOverlayPlacement('right-edge', 'bar', saveSettings)).resolves.toBe(true)
+    expect(saveSettings).toHaveBeenCalledWith({
+      overlayPlacement: 'right-edge',
+      overlayLayout: 'island',
+      autoHideOverlay: true
+    })
   })
 
   it('adopts real or managed settings after boot without overwriting an in-flow choice', () => {
@@ -90,7 +115,7 @@ describe('onboarding appearance — persist existing overlay', () => {
     expect(experience).toMatch(/mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
     expect(experience).not.toMatch(/onDone\(\{[\s\S]*overlayLayout/)
     expect(experience).toMatch(/appearanceSettingsPatch\(id\)/)
-    expect(experience).toMatch(/placementSettingsPatch\(id\)/)
+    expect(experience).toMatch(/persistOverlayPlacement\(id, appearance, patch\)/)
     expect(experience).toMatch(/saveOnboardingAppearanceChoice/)
     expect(experience).toMatch(/resolveOnboardingPlacementSync/)
     expect(experience).toMatch(/const placementUserSelectedRef = useRef\(false\)/)
@@ -147,6 +172,10 @@ describe('onboarding appearance — live preview, no lag', () => {
 
   it('preview is CSS-only: no setBounds, Bar, Listen, orb, WebGL, or rAF', () => {
     expect(component).toMatch(/onboard-appearance-preview/)
+    expect(component).toMatch(/resolveOverlayPresentation/)
+    expect(component).toMatch(/data-edge-tab="true"/)
+    expect(component).toMatch(/data-edge-drawer="true"/)
+    expect(component.indexOf('<OverlayPlacementPicker')).toBeLessThan(component.indexOf('<OverlayChromePicker'))
     expect(component).toMatch(/overlay-spring/)
     expect(component).not.toMatch(/setBounds/)
     expect(component).not.toMatch(/from '\.\/Bar'/)

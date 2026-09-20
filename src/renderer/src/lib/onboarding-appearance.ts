@@ -10,6 +10,7 @@ import {
 } from '@shared/overlay-chrome'
 import { parseOverlayPlacement, type OverlayPlacement } from '@shared/overlay-placement'
 import type { PublicSettings } from '@shared/ipc'
+import { overlayPlacementSettingsPatch } from './overlay-placement-save'
 
 export const ONBOARDING_APPEARANCE_HEADING = 'Where should Métis live?'
 export const ONBOARDING_APPEARANCE_LEAD =
@@ -49,8 +50,11 @@ export function seedOnboardingPlacement(settings?: { overlayPlacement?: unknown 
   return parseOverlayPlacement(settings?.overlayPlacement)
 }
 
-export function placementSettingsPatch(placement: OverlayPlacement): { overlayPlacement: OverlayPlacement } {
-  return { overlayPlacement: placement }
+export function placementSettingsPatch(
+  placement: OverlayPlacement,
+  layout: OverlayLayout
+): Pick<PublicSettings, 'overlayPlacement' | 'overlayLayout' | 'autoHideOverlay'> {
+  return overlayPlacementSettingsPatch(placement, layout)
 }
 
 /** Persist one choice and report whether the trusted settings reply confirms it. UI callers may preview optimistically and roll back on false. */
