@@ -28,6 +28,9 @@ export function RightEdgeSidecar({
           aria-label="Métis command"
           className="right-edge-sidecar__drawer"
           style={{ width: RIGHT_EDGE_DRAWER_WIDTH }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') onClose()
+          }}
         >
           <div className="right-edge-sidecar__drawer-scroll">
             <div className="right-edge-sidecar__heading">Métis command</div>
