@@ -65,7 +65,9 @@ import {
   type ImportJobView,
   type LocalModelSummary,
   type ProfileRecoveryResult,
-  type ScreenCaptureCheckResult
+  type ScreenCaptureCheckResult,
+  type MetisCommandState,
+  type MetisCommandConfirmation
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
@@ -452,6 +454,12 @@ const api = {
   onError: (cb: (d: StreamError) => void): Unsub => sub(IPC.streamError, cb),
   onMeta: (cb: (d: StreamMeta) => void): Unsub => sub(IPC.streamMeta, cb),
   onHotkey: (cb: (a: HotkeyAction) => void): Unsub => sub(IPC.hotkey, cb),
+  // Command authority is main-owned. The renderer only observes sanitized state and returns its opaque pair.
+  onMetisCommandState: (cb: (state: MetisCommandState) => void): Unsub => sub(IPC.metisCommandState, cb),
+  confirmMetisCommand: (confirmation: MetisCommandConfirmation): Promise<{ ok: boolean; reason?: string; outcome?: string }> =>
+    ipcRenderer.invoke(IPC.metisCommandConfirm, confirmation),
+  cancelMetisCommand: (confirmation: MetisCommandConfirmation): Promise<{ ok: boolean; reason?: string }> =>
+    ipcRenderer.invoke(IPC.metisCommandCancel, confirmation),
 
   onUpdateReady: (cb: (d: { version?: string; notes?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
   onUpdateProgress: (cb: (d: { percent?: number }) => void): Unsub => sub(IPC.updateProgress, cb),

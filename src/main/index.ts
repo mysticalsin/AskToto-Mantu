@@ -92,7 +92,8 @@ import {
   type ScreenContextResult,
   type DiagnosticsExportResult,
   type RecallExportPlainResult,
-  ScreenCaptureCheckPayloadSchema
+  ScreenCaptureCheckPayloadSchema,
+  MetisCommandConfirmationSchema
 } from '@shared/ipc'
 import {
   getSettings,
@@ -595,6 +596,9 @@ import { activateOperatorLicenseToken } from './operator-license-activate'
 import { operatorGate } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
 import { initLogging, mainLog, auditLog } from './logger'
+import { CommandControl } from './command-control'
+import { executeDesktopAction } from './desktop-adapters'
+import { ensureMetisCommandRuntime } from './metis-command-register'
 import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
 import { safeMeetingBasename } from './meeting-path'
 import {
@@ -979,6 +983,13 @@ function privateViewOn(): boolean {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
+const commandControl = new CommandControl({
+  execute: executeDesktopAction,
+  audit: (event, metadata) => auditLog(event as Parameters<typeof auditLog>[0], metadata),
+  onState: (state) => {
+    if (win && !win.isDestroyed()) win.webContents.send(IPC.metisCommandState, state)
+  }
+})
 
 // Electron can dispatch an invoke that the retiring overlay queued just before a constructor-required
 // window swap. This is deliberately an exact, short-lived identity record — not a second trusted-window
@@ -2400,6 +2411,11 @@ function createWindow(): void {
       webSecurity: true
     }
   })
+  ensureMetisCommandRuntime({
+    getSettings,
+    commandControl,
+    getCommandOwner: () => (win && !win.isDestroyed() ? { webContentsId: win.webContents.id } : null)
+  })
 
   try {
   // Frameless transparent windows on darwin still inherit an OS min (~44). Hide park is 8×2.
@@ -2459,6 +2475,7 @@ function createWindow(): void {
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
   win.on('closed', () => {
+    commandControl.revokeForLifecycleEvent('window_closed')
     clearCompletedOnboardingExitFallback(self)
     // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
     streams.forEach((s) => s.abort())
@@ -2507,6 +2524,7 @@ function createWindow(): void {
   // Persist it like onFatal does for a main-process crash, then reload the same content so the overlay
   // recovers instead of hanging forever.
   win.webContents.on('render-process-gone', (_e, details) => {
+    commandControl.revokeForLifecycleEvent('renderer_replaced')
     mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
     auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
     // A dead/reloading renderer cannot receive final STT messages or issue Stop. Force-close the live
@@ -3889,6 +3907,7 @@ const shortcutActions: Record<string, () => void> = {
   hide: () => toggleVisible(),
   reset: () => sendHotkey('reset'),
   'toggle-listen': () => sendHotkey('toggle-listen'),
+  'metis-command': () => sendHotkey('metis-command'),
   capture: () => sendHotkey('capture'),
   factcheck: () => sendHotkey('factcheck'),
   whatnext: () => sendHotkey('whatnext'),
@@ -4432,6 +4451,18 @@ function registerIpc(): void {
   ipcMain.handle(IPC.shortcutFailures, (e) => {
     assertMainWindow(e)
     return shortcutFailures
+  })
+  ipcMain.handle(IPC.metisCommandConfirm, async (e, raw: unknown) => {
+    assertMainWindow(e)
+    const parsed = MetisCommandConfirmationSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, reason: 'invalid_confirmation' }
+    return commandControl.confirm({ ...parsed.data, webContentsId: e.sender.id })
+  })
+  ipcMain.handle(IPC.metisCommandCancel, async (e, raw: unknown) => {
+    assertMainWindow(e)
+    const parsed = MetisCommandConfirmationSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, reason: 'invalid_confirmation' }
+    return commandControl.cancel({ ...parsed.data, webContentsId: e.sender.id })
   })
   // Deep-link to the relevant macOS Privacy pane once a permission has been denied — getUserMedia never
   // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it. The
