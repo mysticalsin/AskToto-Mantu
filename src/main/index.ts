@@ -35,6 +35,7 @@ import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindRendererReadiness } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
+import { bindQaDomDump } from './qa-dom-dump'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
   IPC,
@@ -958,9 +959,16 @@ const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so i
  * diagnostics prove readiness from bounded metadata rather than by making setup capturable. */
 function contentProtectionOn(): boolean {
   if (devEnv('ASKTOTO_DISABLE_CP')) return false
-  // QA / CDP: never blank exclusive onboarding from capture or hang DevTools HTTP.
-  if (process.argv.some((a) => a === '--remote-debugging-port' || a.startsWith('--remote-debugging-port='))) {
-    return false
+  // Packaged builds ignore ASKTOTO_DISABLE_CP (MQA-176). Metis-*-qa.app feel builds stamp
+  // Resources/TIP.txt + QA_BUILD_INFO.txt — those must stay capturable for Tony eye / Ultron.
+  // Never honor a debugging launch-arg hatch here (MQA-176).
+  try {
+    const res = process.resourcesPath
+    if (existsSync(join(res, 'TIP.txt')) || existsSync(join(res, 'QA_BUILD_INFO.txt'))) {
+      return false
+    }
+  } catch {
+    /* unpackaged / missing resourcesPath */
   }
   return getSettings().contentProtection
 }
@@ -2567,6 +2575,17 @@ function createWindow(): void {
       outPath: join(app.getPath('userData'), 'logs', 'act1-dom.json'),
       audit: (summary) => auditLog('app.act1.dom', summary)
     })
+  }
+  // QA feel apps (TIP.txt): richer DOM dump for Ultron P0 without widening the release act1 probe.
+  try {
+    if (existsSync(join(process.resourcesPath, 'TIP.txt')) || existsSync(join(process.resourcesPath, 'QA_BUILD_INFO.txt'))) {
+      bindQaDomDump(win.webContents, {
+        outPath: join(app.getPath('userData'), 'logs', 'qa-dom.json'),
+        audit: (summary) => auditLog('app.qa.dom', summary)
+      })
+    }
+  } catch {
+    /* unpackaged */
   }
   // FITO-185-B: always loadURL(rendererUrl) — same string bindRendererReadiness expects — so packaged
   // asar file:// getURL() cannot miss the strict equality check that loadFile alone can mismatch.

@@ -238,6 +238,20 @@ describe('MQA-176 — contentProtectionOn() is the single decision, and it is ho
     expect(src).not.toMatch(/FITO-185-U/)
   })
 
+  it('MQA-176 — a packaged app cannot strip Private View with a debugging launch argument', () => {
+    // A user-controlled argv flag is not a safe release-only QA hatch. The isolated smoke runner uses
+    // devEnv(ASKTOTO_DISABLE_CP), which is fail-closed by app.isPackaged instead.
+    const src = sliceBetween(indexSrc, 'function contentProtectionOn(): boolean {', '\n}')
+    expect(src).not.toMatch(/remote-debugging-port/)
+    expect(src).not.toMatch(/process\.argv/)
+  })
+
+  it('QA feel — Metis-*-qa.app TIP.txt / QA_BUILD_INFO.txt may disable capture protection', () => {
+    const src = sliceBetween(indexSrc, 'function contentProtectionOn(): boolean {', '\n}')
+    expect(src).toMatch(/TIP\.txt/)
+    expect(src).toMatch(/QA_BUILD_INFO\.txt/)
+  })
+
   it('MQA-176 — a rebuilt overlay re-applies the decision at construction', () => {
     const createWindow = sliceBetween(indexSrc, 'function createWindow(): void {', 'function resizeTo(')
     expect(createWindow).toContain('win.setContentProtection(contentProtectionOn())')
