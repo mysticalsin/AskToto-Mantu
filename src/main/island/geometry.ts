@@ -357,10 +357,8 @@ export function hoverWatchRestRect(
   // 24x40 side target: a pointer arriving at the visible top or bottom of the sliver must reveal,
   // not land in a dead zone beside it.
   if (layout === 'dock' && effectivePlacement === 'right-edge') {
-    // Visual sliver stays thin; watch band is wider so edge approach actually reveals.
-    const sliver = dockSliverRect(m, normalizedY)
-    const hitW = Math.max(sliver.width, 24)
-    return { x: m.workArea.x + m.workArea.width - hitW, y: sliver.y, width: hitW, height: sliver.height }
+    // Invisible rest (#188): hover band MUST equal parked window (paint-only; same reachability).
+    return dockSliverRect(m, normalizedY)
   }
   if (effectivePlacement === 'right-edge') return rightEdgeHoverRestRect(normalizedY, m)
   const height = hoverRestHeight(m)
