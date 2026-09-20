@@ -1536,21 +1536,15 @@ export function OnboardingExperience({
       )}
 
       {scene === 'reveal' && (
-        Continue
-              </button>
-            </div>
-          }
-        >
-          <OnboardingDemoScene
-            mode={mode}
-            onSetMode={setMode}
-            onContinue={() => {
-              playHero()
-              setScene(sceneAfterReveal())
-            }}
-            onPlayVideo={() => playHero()}
-          />
-        
+        <OnboardingDemoScene
+          mode={mode}
+          onSetMode={setMode}
+          onContinue={() => {
+            playHero()
+            setScene(sceneAfterReveal())
+          }}
+          onPlayVideo={() => playHero()}
+        />
       )}
 
       {scene === 'setup' && (
