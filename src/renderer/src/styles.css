@@ -1852,6 +1852,111 @@ button.onboard-cta {
     box-shadow 160ms ease;
   animation: overlay-peek-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
+/* ── Dock motion ──────────────────────────────────────────────────────────────────────────────────
+   The panel sprang in and then everything inside it simply existed, which is what made it read as a
+   window rather than a surface. These give the CONTENTS a sense of arrival and of state change.
+
+   Rules this obeys, from DESIGN.md's motion budget: transform and opacity only, never filter, blur,
+   box-shadow or layout; --ease-spring for arrivals; the global prefers-reduced-motion rule at the
+   bottom of this file zeroes every duration here, so none of it needs its own override. Each is a
+   one-shot `both` animation, never an infinite loop (the recording dot is the only sanctioned loop). */
+
+/* Zone cascade on reveal. 3 zones, 45ms apart: enough to read as arrival, short enough that the panel
+   is fully usable inside a quarter second. Delays are declarative (no JS timers to drift or leak). */
+@keyframes dock-zone-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.dock-panel--entering .dock-zone {
+  animation: dock-zone-in 260ms var(--ease-spring) both;
+}
+.dock-panel--entering .dock-zone:nth-child(1) { animation-delay: 0ms; }
+.dock-panel--entering .dock-zone:nth-child(2) { animation-delay: 45ms; }
+.dock-panel--entering .dock-zone:nth-child(3) { animation-delay: 90ms; }
+.dock-panel--entering .dock-zone:nth-child(4) { animation-delay: 135ms; }
+
+/* The live strip is a state change, not an arrival: it drops from under the header and pushes nothing,
+   because the layout jump happens instantly underneath while only the paint animates. */
+@keyframes dock-strip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.dock-strip {
+  animation: dock-strip-in 220ms var(--ease-spring) both;
+  transform-origin: top center;
+}
+
+/* A new answer rises into place rather than replacing the previous one in a hard cut. Keyed on the
+   body's identity in React, so it plays once per answer and never on a streaming token. */
+@keyframes dock-body-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.dock-body-in {
+  animation: dock-body-in 240ms var(--ease-spring) both;
+}
+
+/* The mode sheet comes up from the bottom of the body it covers, which is where it belongs: it is a
+   drawer over the answer, not a dialog from nowhere. */
+@keyframes dock-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.dock-sheet {
+  animation: dock-sheet-in 200ms var(--ease-spring) both;
+  transform-origin: bottom center;
+}
+
+/* Confirmation pop for the copy tick. Small, once, and only on success. */
+@keyframes dock-pop {
+  0% { transform: scale(0.7); }
+  60% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+.dock-pop {
+  animation: dock-pop 260ms var(--ease-spring) both;
+}
+
+/* The jump-to-latest pill in the transcript arrives the same way it behaves: from below, out of the
+   way, offering rather than demanding. */
+@keyframes dock-pill-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+.dock-pill-in {
+  animation: dock-pill-in 200ms var(--ease-spring) both;
+}
+
 /* Invisible dock rest: paints nothing, occupies the same box, keeps its hit area. Opacity rather than
    display:none or visibility:hidden on purpose - the element must still receive the pointer, and main
    sets the WINDOW opacity to 0 as well, so this is the renderer half of the same bargain Hide makes. */

@@ -149,6 +149,26 @@ describe('DockPanel — a sidecar, not a squeezed bar', () => {
     for (const b of buttons) expect(b).toContain('no-drag')
   })
 
+  it('gives its contents an arrival, in zones, once', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toContain('dock-panel--entering')
+    // Four zones: header, body, tools, composer. The cascade is declarative (CSS nth-child delays), so
+    // there is no JS timer per zone to drift or leak.
+    expect((html.match(/dock-zone/g) ?? []).length).toBe(4)
+  })
+
+  it('the live strip and the mode sheet animate as state changes, not as arrivals', () => {
+    const live = renderToStaticMarkup(<DockPanel {...props({ listening: true })} />)
+    expect(live).toContain('dock-strip')
+    // The sheet is closed on first paint, so its class must not be present until it opens.
+    expect(live).not.toContain('dock-sheet')
+  })
+
+  it('a new answer rises once, keyed by identity so a streaming token does not replay it', () => {
+    const answered = renderToStaticMarkup(<DockPanel {...props({ body: <p>a</p>, hasAnswer: true })} />)
+    expect(answered).toContain('dock-body-in')
+  })
+
   it('every control carries an accessible name', () => {
     const html = renderToStaticMarkup(
       <DockPanel {...props({ onSpotlightRef: () => {}, onToggleThinking: () => {} })} />

@@ -7,7 +7,6 @@ import { ControlPill } from './components/ControlPill'
 import { CommandListeningPill } from './components/CommandListeningPill'
 import { startMetisCommandEar, type MetisCommandEarStatus } from './lib/metis-command-ear'
 import { OverlayPeek } from './components/OverlayPeek'
-import { DockPanel } from './components/DockPanel'
 import { Panel } from './components/Panel'
 import {
   isOnboardingBoot,
@@ -3898,28 +3897,6 @@ export function App(): JSX.Element {
           rest={overlayRestsHidden(overlayLayout) ? 'hide' : overlayLayout === 'dock' ? (dockRestHidden ? 'dock-hidden' : 'dock') : 'island'}
           onReveal={revealOverlay}
           stealth={settings?.contentProtection ?? true}
-        />
-      ) : overlayLayout === 'dock' ? (
-        <DockPanel
-          askValue={input}
-          onAskChange={setInput}
-          onAskSubmit={() => {
-            setView('answer')
-            submit()
-          }}
-          askBusy={(ask.answer?.streaming || suggest.answer?.streaming) ?? false}
-          onListen={() => toggleListen()}
-          listening={showListeningChrome}
-          onCapture={capture}
-          captureAvailable={!!(settings?.screenAsk ?? true)}
-          onOpenIntelligence={() => {
-            void window.toto.brainOpenDashboard?.()
-          }}
-          onOpenSettings={() => setView('settings')}
-          onCollapse={() => {
-            dispatchAutoHide({ type: 'collapse-now' })
-            void window.toto.parkAfterHide?.()
-          }}
         />
       ) : (
         <>

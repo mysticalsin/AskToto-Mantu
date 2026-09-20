@@ -405,7 +405,7 @@ export const Copilot = memo(function Copilot({
                 type="button"
                 onClick={jumpToLatest}
                 aria-label={`Jump to latest, ${newLinesLabel(behindBy)}`}
-                className="no-drag focus-ring glass-chip absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full px-3 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] shadow-lg transition-[background-color,transform] duration-[var(--duration-hover)] hover:brightness-110 active:scale-[0.97]"
+                className="dock-pill-in no-drag focus-ring glass-chip absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full px-3 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] shadow-lg transition-[background-color,transform] duration-[var(--duration-hover)] hover:brightness-110 active:scale-[0.97]"
               >
                 {newLinesLabel(behindBy)} ↓
               </button>

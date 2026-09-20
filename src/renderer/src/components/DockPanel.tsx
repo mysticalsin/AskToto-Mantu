@@ -116,6 +116,14 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
   // Copy confirmation is local and self-clearing: a toast for "I copied the thing I just asked for" is
   // more ceremony than the action deserves.
   const [copied, setCopied] = useState(false)
+  // The zone cascade plays ONCE, on mount, and then takes itself off. Left on, every later render would
+  // re-trigger the animation and the panel would twitch each time an answer streamed a token.
+  const [entering, setEntering] = useState(true)
+  useEffect(() => {
+    // 3 zones x 45ms + the 260ms zone duration, with margin.
+    const id = window.setTimeout(() => setEntering(false), 460)
+    return () => window.clearTimeout(id)
+  }, [])
 
   useEffect(() => {
     if (props.focusSignal > 0) inputRef.current?.focus()
@@ -169,9 +177,13 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
 
   // Chrome rows are memo'd ELEMENTS, not components: `body` gets a new reference up to 60x/sec while an
   // answer streams, and without this every control in the panel reconciles on each of those frames.
+  // Identity of the current answer, so a NEW answer plays the rise once while a streaming answer (same
+  // body identity, new text) does not replay it on every token.
+  const bodyKey = props.hasAnswer ? 'answer' : listening ? 'live' : 'idle'
+
   const header = useMemo(
     () => (
-      <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-hair-soft)] px-3 py-2.5">
+      <div className="dock-zone flex shrink-0 items-center gap-2 border-b border-[var(--color-hair-soft)] px-3 py-2.5">
         {hasAnswer && props.onBack ? (
           <button
             type="button"
@@ -219,7 +231,7 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
   const liveStrip = useMemo(
     () =>
       listening ? (
-        <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-hair-soft)] bg-[var(--color-danger-soft)] px-3 py-1.5">
+        <div className="dock-strip flex shrink-0 items-center gap-2 border-b border-[var(--color-hair-soft)] bg-[var(--color-danger-soft)] px-3 py-1.5">
           <span className={props.paused ? 'h-2 w-2 rounded-full bg-[var(--color-warn)]' : 'rec-dot'} />
           <span className="flex-1 text-[12px] font-semibold tabular-nums text-[color:var(--color-ink)]">
             <ElapsedClock startedAt={props.startedAt} paused={props.paused} />
@@ -242,7 +254,7 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
 
   const tools = useMemo(
     () => (
-      <div className="flex shrink-0 items-center gap-1 px-2 pt-2">
+      <div className="dock-zone flex shrink-0 items-center gap-1 px-2 pt-2">
         <Tool title={`Capture screen (${props.captureAccel})`} onClick={props.onCapture} active={props.capturing}>
           {props.capturing ? <InlineOrb kind="working" /> : <Image size={18} strokeWidth={ICON_STROKE} />}
         </Tool>
@@ -278,7 +290,11 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
         )}
         {hasAnswer && (
           <Tool title={copied ? 'Copied' : 'Copy answer'} onClick={copyAnswer} active={copied}>
-            {copied ? <Check size={18} strokeWidth={ICON_STROKE} /> : <Copy size={18} strokeWidth={ICON_STROKE} />}
+            {copied ? (
+              <Check size={18} strokeWidth={ICON_STROKE} className="dock-pop" />
+            ) : (
+              <Copy size={18} strokeWidth={ICON_STROKE} />
+            )}
           </Tool>
         )}
         {listening && props.onNewMeeting && (
@@ -306,7 +322,7 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
 
   const composer = useMemo(
     () => (
-      <div className="flex shrink-0 items-end gap-2 px-3 pb-3 pt-2">
+      <div className="dock-zone flex shrink-0 items-end gap-2 px-3 pb-3 pt-2">
         <input
           ref={inputRef}
           value={props.value}
@@ -342,19 +358,25 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
   )
 
   return (
-    <div className="dock-panel aw-widget flex h-full min-h-0 w-full flex-col">
+    <div
+      className={[
+        'dock-panel aw-widget flex h-full min-h-0 w-full flex-col',
+        entering ? 'dock-panel--entering' : ''
+      ].join(' ')}
+    >
       {header}
       {liveStrip}
 
       {/* The only scroller. min-h-0 is load-bearing: without it a long answer pushes the composer off
           the bottom of a fixed-height window instead of scrolling inside this zone. */}
-      <div className="relative min-h-0 flex-1">
+      <div className="dock-zone relative min-h-0 flex-1">
         <div
           ref={bodyRef}
           data-overflowing={overflowing ? '1' : '0'}
           className="dock-panel__scroll aw-body scroll-thin h-full overflow-y-auto px-3 py-2.5"
           style={{ maxHeight: answerBodyMaxHeight() }}
         >
+          <div key={bodyKey} className="dock-body-in">
           {props.body ?? (
             <p className="m-0 px-1 pt-1 text-[12px] leading-relaxed text-[color:var(--color-ink-3)]">
               {listening
@@ -362,12 +384,13 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
                 : 'Ask a question, capture the screen, or start a meeting. Answers open in this panel.'}
             </p>
           )}
+          </div>
         </div>
 
         {/* Mode opens INSIDE the panel, not as an absolutely-positioned popover: the dock window is a
             fixed size owned by main, so a popover escaping the surface would simply be clipped. */}
         {modeOpen && (
-          <div className="absolute inset-0 z-20 flex flex-col bg-[var(--glass-fill-strong)] backdrop-blur-sm">
+          <div className="dock-sheet absolute inset-0 z-20 flex flex-col bg-[var(--glass-fill-strong)] backdrop-blur-sm">
             <div className="flex items-center justify-between px-3 py-2">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">Mode</span>
               <Tool title="Close" onClick={() => setModeOpen(false)} edgeRight>
