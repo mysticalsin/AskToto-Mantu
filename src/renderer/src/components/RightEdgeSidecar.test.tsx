@@ -26,6 +26,7 @@ describe('right-edge sidecar shell', () => {
     expect(css).toMatch(/prefers-reduced-motion/)
     expect(css).toMatch(/\.right-edge-sidecar__drawer \{[\s\S]*height: 100%/)
     expect(css).toMatch(/\.right-edge-sidecar__drawer-scroll \{ height: 100%; overflow-y: auto/)
+    expect(css).toMatch(/\.right-edge-sidecar \{[^}]*position: absolute;[^}]*inset: 0/)
     expect(app).toMatch(/rightEdgePresentation \? \(\s*<RightEdgeSidecar[\s\S]*?\) : <Bar/)
     expect(sidecar).not.toMatch(/window\.toto\.resize/)
   })
