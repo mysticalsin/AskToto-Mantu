@@ -48,7 +48,9 @@ describe('KineticGrid release checklist', () => {
     expect(geometry).toMatch(/EXCLUSIVE_ONBOARDING_BACKGROUND = '#05010A'/)
     expect(geometry).not.toMatch(/EXCLUSIVE_ONBOARDING_BACKGROUND = '#3A0B6B'/)
     expect(experience).toMatch(/lockOnboardingAudio\(\)/)
-    expect(experience).toMatch(/setupAsrBlocksContinue\(rows, asrStatus\)/)
+    // The fail-open latch is part of the same setup gate: polling must not re-disable Continue after
+    // the bounded recovery path has made it actionable.
+    expect(experience).toMatch(/setupAsrBlocksContinue\(rows, asrStatus, setupAccessFailOpen\)/)
     expect(experience).toMatch(/summarizeSetupRows\(rows\)\.allReady/)
     expect(app).toMatch(/if \(settings\?\.onboardingDone\) lockOnboardingAudio\(\)/)
   })
