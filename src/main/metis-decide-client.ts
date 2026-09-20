@@ -15,6 +15,8 @@ export type DecideDisambiguateInput = {
   /** Hard deadline; Stop/Escape must not wait on this. */
   deadlineMs?: number
   fetchImpl?: typeof fetch
+  /** Session owner may revoke stale optional decision work. */
+  signal?: AbortSignal
 }
 
 export type DecideDisambiguateResult =
@@ -33,14 +35,31 @@ export async function decideActionDisambiguate(
   const deadlineMs = Math.max(250, Math.min(input.deadlineMs ?? 1500, 3000))
   const ctrl = new AbortController()
   const fetchImpl = input.fetchImpl ?? fetch
+  const abortFromOwner = () => ctrl.abort()
+  if (input.signal?.aborted) ctrl.abort()
+  else input.signal?.addEventListener('abort', abortFromOwner, { once: true })
+  let timeout: ReturnType<typeof setTimeout> | null = null
 
   try {
+    const aborted = new Promise<never>((_, reject) => {
+      if (ctrl.signal.aborted) {
+        reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+        return
+      }
+      ctrl.signal.addEventListener(
+        'abort',
+        () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+        { once: true }
+      )
+    })
     const timedOut = new Promise<never>((_, reject) => {
-      const t = setTimeout(() => {
+      timeout = setTimeout(() => {
         ctrl.abort()
         reject(Object.assign(new Error('timeout'), { name: 'AbortError' }))
       }, deadlineMs)
-      ctrl.signal.addEventListener('abort', () => clearTimeout(t))
+      ctrl.signal.addEventListener('abort', () => {
+        if (timeout) clearTimeout(timeout)
+      })
     })
     const res = await Promise.race([
       fetchImpl(`${base}/v1/decide`, {
@@ -60,7 +79,8 @@ export async function decideActionDisambiguate(
         }),
         signal: ctrl.signal
       }),
-      timedOut
+      timedOut,
+      aborted
     ])
     const json = (await res.json().catch(() => null)) as {
       ok?: boolean
@@ -82,6 +102,9 @@ export async function decideActionDisambiguate(
   } catch (e) {
     const timedOut = (e as { name?: string })?.name === 'AbortError'
     return { ok: false, error: timedOut ? 'timeout' : 'network', timedOut }
+  } finally {
+    if (timeout) clearTimeout(timeout)
+    input.signal?.removeEventListener('abort', abortFromOwner)
   }
 }
 
