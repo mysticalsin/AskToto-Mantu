@@ -35,9 +35,3 @@ export function ensureMetisCommandRuntime(opts: {
   })
   return runtime
 }
-
-/** Reserved for a future main-owned capture capability; no renderer path calls this in v1.9.5. */
-export function ingestMetisCommandFromAsr(text: string): void {
-  if (!runtime || !text.trim()) return
-  runtime.ingestTranscript(text, 'command')
-}
