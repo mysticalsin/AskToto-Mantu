@@ -2081,7 +2081,7 @@ export async function readCoreAsrAssetsStatus(
   } catch (error) {
     return coreAsrAssetsFailureStatus(error)
   } finally {
-    if (timer) clearTimeout(timer)
+    if (timer !== undefined) clearTimeout(timer)
   }
 }
 
@@ -2126,7 +2126,7 @@ export function CoreAsrAssetsRow({ initialStatus }: { initialStatus?: AsrAssetsS
   useEffect(() => {
     if (status?.status !== 'downloading') return
     const unsubscribe = window.toto.onImportAssetsProgress?.((progress) => {
-      setStatus({ ...progress, ready: progress.status === 'ready' })
+      if (live.current) setStatus({ ...progress, ready: progress.status === 'ready' })
     })
     const timer = window.setInterval(() => void refresh(), 1_000)
     return () => {
