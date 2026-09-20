@@ -290,7 +290,11 @@ export const IPC = {
   outlookCreateEvent: 'outlook:createEvent',
   mcpWriteTargets: 'mcp:writeTargets',
   /** Wave 2 — clear the one-shot last-failover chip after the user dismisses it. */
-  dismissFailoverNotice: 'settings:dismissFailoverNotice'
+  dismissFailoverNotice: 'settings:dismissFailoverNotice',
+  // Métis 2.0 Cap 2 — wake-word command session (pill + adapters). Meeting Listen ≠ command until wake.
+  metisCommandState: 'metisCommand:state',
+  metisCommandStop: 'metisCommand:stop',
+  metisCommandIngest: 'metisCommand:ingest'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals.
