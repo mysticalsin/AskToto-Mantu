@@ -40,3 +40,45 @@ describe('Cap2 decide disambiguate client', () => {
     expect(r.ok).toBe(false)
   })
 })
+
+
+import { decideIntelClassify, isJevIntelLabel } from './metis-decide-client'
+
+describe('Cap3 decide intel classify client', () => {
+  it('accepts only locked Jev labels', () => {
+    expect(isJevIntelLabel('on track')).toBe(true)
+    expect(isJevIntelLabel('needs attention')).toBe(true)
+    expect(isJevIntelLabel('blocked')).toBe(true)
+    expect(isJevIntelLabel('stale')).toBe(true)
+    expect(isJevIntelLabel('insufficient')).toBe(true)
+    expect(isJevIntelLabel('healthy')).toBe(false)
+  })
+
+  it('marks assistUnavailable on outage (never invents scores)', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('down')
+    }) as unknown as typeof fetch
+    const r = await decideIntelClassify({
+      operatorBaseUrl: 'https://metis-operator.tony-walteur.workers.dev',
+      authorizationHeader: 'Bearer test',
+      evidence: { openDeals: 3 },
+      fetchImpl
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.assistUnavailable).toBe(true)
+  })
+
+  it('rejects unknown classification labels', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true, result: { label: 'crushing it' }, confidence: 0.99 })
+    })) as unknown as typeof fetch
+    const r = await decideIntelClassify({
+      operatorBaseUrl: 'https://metis-operator.tony-walteur.workers.dev',
+      authorizationHeader: 'Bearer test',
+      evidence: { openDeals: 1 },
+      fetchImpl
+    })
+    expect(r.ok).toBe(false)
+  })
+})
