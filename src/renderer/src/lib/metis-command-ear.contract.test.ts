@@ -27,3 +27,25 @@ describe('Cap2 always-on command ear', () => {
     expect(main).toContain('ingestMetisCommandFromAsr(text)')
   })
 })
+
+describe('Cap2 Ear stays top-center (Cap4 dock must not steal it)', () => {
+  it('CommandListeningPill is fixed top-center, never dock-scoped', () => {
+    const pill = readFileSync(join(__dirname, '../components/CommandListeningPill.tsx'), 'utf8')
+    expect(pill).toContain('fixed left-1/2 top-3')
+    expect(pill).toContain('-translate-x-1/2')
+    expect(pill).not.toMatch(/dock-panel|overlay-dock/)
+  })
+
+  it('App mounts CommandListeningPill outside the AskSurface swap', () => {
+    // Cap4 swaps Bar↔DockPanel for Ask; the Ear pill must remain a sibling, not inside DockPanel.
+    expect(app).toContain('<CommandListeningPill')
+    expect(app).toContain("AskSurface = overlayLayout === 'dock'")
+    const pillIdx = app.indexOf('<CommandListeningPill')
+    const dockImportUses = app.indexOf('DockPanel')
+    expect(pillIdx).toBeGreaterThan(0)
+    // Pill markup is not nested inside DockPanel.tsx
+    const dockSrc = readFileSync(join(__dirname, '../components/DockPanel.tsx'), 'utf8')
+    expect(dockSrc).not.toContain('CommandListeningPill')
+    expect(dockSrc).not.toContain('data-metis-command-ear-chip')
+  })
+})
