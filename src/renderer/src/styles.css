@@ -1799,6 +1799,56 @@ button.onboard-cta {
     0 0 22px -10px var(--color-accent-glow);
   overflow: hidden;
 }
+
+.overlay-dock-panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.overlay-dock-panel__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-ink-1, #f5f5f7);
+  letter-spacing: 0.01em;
+}
+.overlay-dock-panel__hint {
+  font-size: 11px;
+  color: var(--color-ink-3, rgba(255,255,255,0.45));
+}
+.overlay-dock-panel__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.overlay-dock-panel__btn {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.06);
+  color: var(--color-ink-1, #f5f5f7);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.overlay-dock-panel__btn:hover {
+  background: rgba(255,255,255,0.11);
+  border-color: rgba(175, 82, 222, 0.45);
+}
+.overlay-dock-panel__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.overlay-dock-panel__btn--ghost {
+  background: transparent;
+}
 .overlay-dock-panel .bar,
 .overlay-dock-panel [data-bar] {
   width: 100%;

@@ -6,6 +6,7 @@ import { ControlPill } from './components/ControlPill'
 import { CommandListeningPill } from './components/CommandListeningPill'
 import { startMetisCommandEar, type MetisCommandEarStatus } from './lib/metis-command-ear'
 import { OverlayPeek } from './components/OverlayPeek'
+import { DockPanel } from './components/DockPanel'
 import { Panel } from './components/Panel'
 import {
   isOnboardingBoot,
@@ -3882,13 +3883,26 @@ export function App(): JSX.Element {
           }
           stealth={settings?.contentProtection ?? true}
         />
+      ) : overlayLayout === 'dock' ? (
+        <DockPanel
+          onAsk={() => {
+            setView('answer')
+            void window.toto.revealWidth?.()
+          }}
+          onListen={() => toggleListen()}
+          listening={showListeningChrome}
+          onOpenIntelligence={() => {
+            void window.toto.brainOpenDashboard?.()
+          }}
+          onOpenSettings={() => setView('settings')}
+          askBusy={(ask.answer?.streaming || suggest.answer?.streaming) ?? false}
+        />
       ) : (
         <>
-          {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. Dock: sidecar panel. */}
+          {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. */}
           <div
             className={
-              (overlayLayout === 'dock' ? 'overlay-dock-panel ' : '') +
-              (overlayIdle ? overlaySpringClassName(overlaySpring) : circleRestSpringClassName(circleRestSpring))
+              overlayIdle ? overlaySpringClassName(overlaySpring) : circleRestSpringClassName(circleRestSpring)
             }
             onAnimationEnd={(e) => {
               if (e.target !== e.currentTarget) return

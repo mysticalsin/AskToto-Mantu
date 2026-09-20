@@ -3164,8 +3164,12 @@ function restoreBarWidth(): void {
   }
   const { x, y } = position
   // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
-  if (b.x === x && b.y === y && b.width === revealWidthPx && b.height === revealedHeight) return
-  win.setBounds({ x, y, width: revealWidthPx, height: revealedHeight }, false)
+  if (!(b.x === x && b.y === y && b.width === revealWidthPx && b.height === revealedHeight)) {
+    win.setBounds({ x, y, width: revealWidthPx, height: revealedHeight }, false)
+  }
+  // Cap4: window grew but renderer stayed on OverlayPeek (Ultron e726 expanded empty).
+  // Always sync Ask/Dock chrome open after a main-owned reveal.
+  notifyOverlayCursorHover(true)
 }
 
 /**
