@@ -1,5 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { DockPanel } from './DockPanel'
 import type { BarProps } from './Bar'
 
@@ -63,9 +66,11 @@ describe('DockPanel — a sidecar, not a squeezed bar', () => {
 
   it('never renders an empty void: with no answer it says what the panel is for', () => {
     const html = renderToStaticMarkup(<DockPanel {...props()} />)
-    expect(html).toMatch(/Ask a question, capture the screen, or start a meeting/)
+    expect(html).toMatch(/Ready when you are/)
+    expect(html).toMatch(/Ask Métis, capture the screen, or start a meeting/)
     const listening = renderToStaticMarkup(<DockPanel {...props({ listening: true })} />)
-    expect(listening).toMatch(/Listening\. Ask anything about this meeting/)
+    expect(listening).toMatch(/>Listening</)
+    expect(listening).toMatch(/Ask about this meeting\. The answer opens here\./)
   })
 
   it('gives a live meeting its own strip instead of wedging it between tool icons', () => {
@@ -181,5 +186,14 @@ describe('DockPanel — a sidecar, not a squeezed bar', () => {
       const named = /aria-label=|title=/.test(attrs) || inner.replace(/<[^>]*>/g, '').trim().length > 0
       expect(named, `unnamed control: <button${attrs}>`).toBe(true)
     }
+  })
+})
+
+describe('DockPanel never-lies chrome', () => {
+  it('never stringifies undefined into Capture/Mode tool titles', () => {
+    const src = readFileSync(join(__dirname, 'DockPanel.tsx'), 'utf8')
+    expect(src).not.toMatch(/Capture screen \(\$\{props\.captureAccel\}\)/)
+    expect(src).toMatch(/props\.captureAccel/)
+    expect(src).toMatch(/props\.mode\s*\?/)
   })
 })

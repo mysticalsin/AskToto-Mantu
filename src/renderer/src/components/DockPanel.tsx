@@ -254,8 +254,16 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
 
   const tools = useMemo(
     () => (
-      <div className="dock-zone flex shrink-0 items-center gap-1 px-2 pt-2">
-        <Tool title={`Capture screen (${props.captureAccel})`} onClick={props.onCapture} active={props.capturing}>
+      <div className="dock-zone dock-tools flex shrink-0 items-center gap-0.5 px-2.5 pt-1.5">
+        <Tool
+          title={
+            props.captureAccel
+              ? `Capture screen (${accelLabel(props.captureAccel)})`
+              : 'Capture screen'
+          }
+          onClick={props.onCapture}
+          active={props.capturing}
+        >
           {props.capturing ? <InlineOrb kind="working" /> : <Image size={18} strokeWidth={ICON_STROKE} />}
         </Tool>
         {props.onSpotlightRef && (
@@ -263,7 +271,15 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
             <FileSearch size={18} strokeWidth={ICON_STROKE} />
           </Tool>
         )}
-        <Tool title={`Mode: ${modeLabel(props.mode, props.customModes)}`} onClick={() => setModeOpen((v) => !v)} active={modeOpen}>
+        <Tool
+          title={
+            props.mode
+              ? `Mode: ${modeLabel(props.mode, props.customModes)}`
+              : 'Mode'
+          }
+          onClick={() => setModeOpen((v) => !v)}
+          active={modeOpen}
+        >
           <LayoutGrid size={18} strokeWidth={ICON_STROKE} />
         </Tool>
         {props.onToggleThinking && (
@@ -322,36 +338,38 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
 
   const composer = useMemo(
     () => (
-      <div className="dock-zone flex shrink-0 items-end gap-2 px-3 pb-3 pt-2">
-        <input
-          ref={inputRef}
-          value={props.value}
-          onChange={(e) => props.onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              props.onSubmit()
-            }
-          }}
-          spellCheck={false}
-          aria-label="Ask Métis anything"
-          placeholder={listening ? 'Ask about this meeting' : hasAnswer ? 'Ask a follow-up' : 'Ask Métis anything'}
-          className="no-drag focus-ring font-body min-w-0 flex-1 rounded-[10px] border border-[var(--color-hair-soft)] bg-black/20 px-3 py-2 text-[14px] font-[450] tracking-[-0.01em] text-[color:var(--color-ink)] caret-[var(--color-accent-2)] placeholder:text-[color:var(--color-ink-3)]"
-        />
-        <button
-          type="button"
-          onClick={props.busy ? props.onStop : props.onSubmit}
-          aria-label={props.busy ? 'Stop' : 'Ask'}
-          title={props.busy ? 'Stop' : `Ask (${accelLabel('Return')})`}
-          className={[
-            'no-drag focus-ring grid h-[38px] w-[38px] shrink-0 place-items-center rounded-[10px] transition-colors duration-[var(--duration-hover)]',
-            props.busy
-              ? 'border border-[var(--color-danger)]/30 bg-[var(--color-danger-soft)] text-[color:var(--color-danger)]'
-              : 'aw-fill text-white'
-          ].join(' ')}
-        >
-          {props.busy ? <X size={17} strokeWidth={ICON_STROKE} /> : <CornerDownLeft size={17} strokeWidth={ICON_STROKE} />}
-        </button>
+      <div className="dock-zone dock-composer flex shrink-0 flex-col gap-2 px-3 pb-3 pt-1">
+        <div className="dock-ask">
+          <div className="dock-ask__shell">
+            <input
+              ref={inputRef}
+              value={props.value}
+              onChange={(e) => props.onChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  props.onSubmit()
+                }
+              }}
+              spellCheck={false}
+              aria-label="Ask Métis anything"
+              placeholder={listening ? 'Ask about this meeting' : hasAnswer ? 'Ask a follow-up' : 'Ask Métis anything'}
+              className="dock-ask__input no-drag font-body"
+            />
+            <button
+              type="button"
+              onClick={props.busy ? props.onStop : props.onSubmit}
+              aria-label={props.busy ? 'Stop' : 'Ask'}
+              title={props.busy ? 'Stop' : `Ask (${accelLabel('Return')})`}
+              className={[
+                'dock-ask__go no-drag focus-ring',
+                props.busy ? 'dock-ask__go--stop' : 'dock-ask__go--ask'
+              ].join(' ')}
+            >
+              {props.busy ? <X size={16} strokeWidth={ICON_STROKE} /> : <CornerDownLeft size={16} strokeWidth={ICON_STROKE} />}
+            </button>
+          </div>
+        </div>
       </div>
     ),
     [props.value, props.onChange, props.onSubmit, props.onStop, props.busy, listening, hasAnswer]
@@ -378,11 +396,21 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
         >
           <div key={bodyKey} className="dock-body-in">
           {props.body ?? (
-            <p className="m-0 px-1 pt-1 text-[12px] leading-relaxed text-[color:var(--color-ink-3)]">
-              {listening
-                ? 'Listening. Ask anything about this meeting and the answer lands here.'
-                : 'Ask a question, capture the screen, or start a meeting. Answers open in this panel.'}
-            </p>
+            <div className="dock-empty flex h-full min-h-[160px] flex-col items-center justify-center gap-3 px-4 text-center">
+              <span className="dock-empty__mark aw-mark-glow grid h-11 w-11 place-items-center rounded-full bg-white/[0.04] ring-1 ring-white/10">
+                <MantuMark size={22} round />
+              </span>
+              <div className="flex max-w-[240px] flex-col gap-1.5">
+                <p className="m-0 text-[13px] font-semibold tracking-[-0.01em] text-[color:var(--color-ink)]">
+                  {listening ? 'Listening' : 'Ready when you are'}
+                </p>
+                <p className="m-0 text-[12px] leading-relaxed text-[color:var(--color-ink-3)]">
+                  {listening
+                    ? 'Ask about this meeting. The answer opens here.'
+                    : 'Ask Métis, capture the screen, or start a meeting.'}
+                </p>
+              </div>
+            </div>
           )}
           </div>
         </div>
