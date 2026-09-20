@@ -584,6 +584,11 @@ import {
   recordOperatorRating,
   startOperatorRuntime
 } from './operator-ingest'
+import {
+  ensureMetisCommandRuntime,
+  ingestMetisCommandFromAsr,
+  registerMetisCommandIpc
+} from './metis-command-register'
 import { classifyQuestionType } from '@shared/question-type'
 import { BoundedSet } from './bounded-set'
 import { installEgressGuard } from './net/egress-guard'
@@ -4873,6 +4878,19 @@ function registerIpc(): void {
   })
   // Read-only Operator status snapshot for Settings (local settings + in-memory integrations state
   // only, never touches the network) — mirrors licenseStatus's own "local settings only" contract.
+  // Métis 2.0 Cap 2 — wake-word command session (deterministic with Jev off).
+  ensureMetisCommandRuntime({
+    getWindow: () => win,
+    getSettings: () => getSettings(),
+    jevEnabled: () => false // Cap1 heartbeat flag parse lands with feel E2E; deterministic path required.
+  })
+  registerMetisCommandIpc({
+    assertMainWindow,
+    getWindow: () => win,
+    getSettings: () => getSettings(),
+    jevEnabled: () => false
+  })
+
   ipcMain.handle(IPC.operatorStatus, (e) => {
     assertMainWindow(e)
     if (!requireAuth()) {
@@ -6317,10 +6335,17 @@ function registerIpc(): void {
           {
             onFinal: (line) => {
               if (isCurrentCloudSttOwner(owner, e.sender)) e.sender.send(IPC.cloudSttFinal, line)
+              const spoken = typeof line === 'string' ? line : (line as { text?: string })?.text
+              if (typeof spoken === 'string' && spoken.trim()) {
+                ingestMetisCommandFromAsr(spoken, 'meeting')
+              }
             },
             onInterim: (channel, text) => {
               if (isCurrentCloudSttOwner(owner, e.sender)) {
                 e.sender.send(IPC.cloudSttInterim, { channel, text })
+              }
+              if (typeof text === 'string' && text.trim()) {
+                ingestMetisCommandFromAsr(text, 'meeting')
               }
             },
             onError: (message) => {

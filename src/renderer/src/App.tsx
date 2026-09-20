@@ -3,6 +3,7 @@ import { Bar } from './components/Bar'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
+import { CommandListeningPill } from './components/CommandListeningPill'
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import {
@@ -281,6 +282,29 @@ export function App(): JSX.Element {
   const bootError = settingsBootError ?? auth.bootError
   // FITO-185-X: mid-wait escape on the post-onboarding Loading strip (Tony: never forever Loading).
   const [bootSlow, setBootSlow] = useState(false)
+
+  // Métis 2.0 Cap 2 — wake-word command pill (top-center). Meeting Listen ≠ command until wake.
+  const [metisCommand, setMetisCommand] = useState<{
+    phase: string
+    active: boolean
+    pillVisible: boolean
+    pillCopy: string
+    liveTranscript: string
+    chime: 'none' | 'single' | 'double'
+  }>({
+    phase: 'idle',
+    active: false,
+    pillVisible: false,
+    pillCopy: 'Hi Métis',
+    liveTranscript: '',
+    chime: 'none'
+  })
+  useEffect(() => {
+    const unsub = window.toto.onMetisCommandState?.((state) => setMetisCommand(state))
+    return () => {
+      unsub?.()
+    }
+  }, [])
 
   // ── License enforcement master switch ──────────────────────────────────────────────────────────
   // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
@@ -3732,6 +3756,15 @@ export function App(): JSX.Element {
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
+      <div data-metis-command-pill-host="1">
+        <CommandListeningPill
+          visible={metisCommand.pillVisible}
+          copy={metisCommand.pillCopy}
+          liveTranscript={metisCommand.liveTranscript}
+          chime={metisCommand.chime}
+          onStop={() => void window.toto.metisCommandStop?.()}
+        />
+      </div>
       {(() => {
         const toasts = (
           <>
