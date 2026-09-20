@@ -43,38 +43,85 @@ export function useDashboardData(): State & {
     let cancelled = false
     let requestId = 0
     let lastLoadAt = 0
+    const withTimeout = async <T,>(p: Promise<T>, ms: number, label: string): Promise<T> => {
+      let t: ReturnType<typeof setTimeout> | undefined
+      try {
+        return await Promise.race([
+          p,
+          new Promise<T>((_, reject) => {
+            t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+          })
+        ])
+      } finally {
+        if (t) clearTimeout(t)
+      }
+    }
     const fromBrain = async (): Promise<DashboardData> => {
       const { brainToDashboard } = await import('./brainAdapter')
-      return brainToDashboard(await window.intelligence!.getData())
+      // Cap3 blank dig: a hung getData left Today on forever-loading dark void (Tony FAIL).
+      const raw = await withTimeout(window.intelligence!.getData(), 8000, 'intelligence.getData')
+      return brainToDashboard(raw)
     }
-    const fromFile = async (): Promise<DashboardData> => {
-      // Inside Electron (file:// bundle) the preload MUST be present — a missing window.intelligence
-      // there is a wiring failure, and silently serving a baked-in data.json would present stale
-      // vault numbers as current. Fail loudly instead; the file path is for standalone/dev only.
-      if (window.location.protocol === 'file:') {
-        throw new Error('Live brain bridge unavailable (preload failed). Refusing to show stale bundled data.')
-      }
-      const res = await fetch(`${import.meta.env.BASE_URL}data.json`)
-      if (!res.ok) throw new Error(`Failed to load data.json (${res.status})`)
-      const json = await res.json()
-      // A data.json generated against an older schema crashes each view with an opaque TypeError
-      // deep in a useMemo. Check the top-level contract here instead, so a stale file fails once,
-      // loudly, with the fix in the message.
+    const validateDashboard = (json: unknown): DashboardData => {
+      if (!json || typeof json !== 'object') throw new Error('dashboard payload is not an object')
       for (const k of [
         'deals', 'people', 'accounts', 'meetings_feed', 'coaching_insights', 'account_graph',
         'account_summaries', 'sector_summaries', 'status', 'warnings', 'ingest_errors'
       ]) {
-        if (!(k in json)) {
-          throw new Error(`data.json is stale: missing "${k}". Rebuild it with intelligence/scripts/build-data.mjs.`)
+        if (!(k in (json as Record<string, unknown>))) {
+          throw new Error(`dashboard payload missing "${k}"`)
         }
       }
       return json as DashboardData
     }
+    const fromFile = async (): Promise<DashboardData> => {
+      // Inside Electron (file://) prefer live brain. Cap3 QA tip apps may ship data.example.json so
+      // Where-do-we-stand still paints when the bridge hangs/fails (never silent zero counts).
+      if (window.location.protocol === 'file:') {
+        const tryNames = ['data.example.json', 'data.json']
+        for (const name of tryNames) {
+          try {
+            const res = await fetch(`./${name}`)
+            if (!res.ok) continue
+            return validateDashboard(await res.json())
+          } catch {
+            /* try next */
+          }
+        }
+        throw new Error('Live brain bridge unavailable and no bundled example dashboard to show.')
+      }
+      const res = await fetch(`${import.meta.env.BASE_URL}data.json`)
+      if (!res.ok) throw new Error(`Failed to load data.json (${res.status})`)
+      return validateDashboard(await res.json())
+    }
     const load = (): void => {
       const myId = ++requestId
       lastLoadAt = Date.now()
-      ;(window.intelligence ? fromBrain() : fromFile())
+      const primary = window.intelligence
+        ? fromBrain().catch(async (err: Error) => {
+            // Cap3: never leave the window blank — fall back to bundled example on file:// after brain fail.
+            if (window.location.protocol === 'file:') {
+              try {
+                const data = await fromFile()
+                if (!cancelled && myId === requestId) {
+                  setState({
+                    data,
+                    loading: false,
+                    error: null,
+                    stale: `Brain unavailable (${err.message}). Showing bundled example for Cap3 stand prove.`
+                  })
+                }
+                return null
+              } catch {
+                /* rethrow original */
+              }
+            }
+            throw err
+          })
+        : fromFile()
+      primary
         .then((data) => {
+          if (data == null) return
           if (!cancelled && myId === requestId) setState({ data, loading: false, error: null, stale: null })
         })
         .catch((err: Error) => {
@@ -82,8 +129,6 @@ export function useDashboardData(): State & {
             setState((prev) => ({
               data: prev.data,
               loading: false,
-              // With no snapshot to fall back on this is fatal and replaces the view. With one, keep
-              // showing it and mark it stale rather than discarding the failure.
               error: prev.data ? null : err.message,
               stale: prev.data ? err.message : null
             }))
