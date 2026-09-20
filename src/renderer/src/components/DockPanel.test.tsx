@@ -79,12 +79,12 @@ describe('DockPanel — a sidecar, not a squeezed bar', () => {
     expect(html).toContain('aria-label="Stop meeting"')
     expect(html).toContain('aria-label="Pause"')
     // Start is gone while a meeting runs: one control, one meaning.
-    expect(html).not.toContain('aria-label="Start meeting"')
+    expect(html).not.toContain('aria-label="Start listening"')
   })
 
   it('offers Start only when idle', () => {
     const html = renderToStaticMarkup(<DockPanel {...props()} />)
-    expect(html).toContain('aria-label="Start meeting"')
+    expect(html).toContain('aria-label="Start listening"')
     expect(html).not.toContain('aria-label="Stop meeting"')
   })
 
@@ -102,10 +102,10 @@ describe('DockPanel — a sidecar, not a squeezed bar', () => {
     )
     for (const label of [
       'Capture screen',
-      'Spotlight reference',
-      'Mode:',
+      'Spotlight Ref',
       'Deep thinking',
       'screen share',
+      'Start listening',
       'Back'
     ]) {
       expect(html).toContain(label)
@@ -197,3 +197,16 @@ describe('DockPanel never-lies chrome', () => {
     expect(src).toMatch(/props\.mode\s*\?/)
   })
 })
+
+describe('DockPanel Bar-centralized tools', () => {
+  it('exposes Capture, Deep thinking, Listen, Mode, History like Bar', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toMatch(/Capture screen/)
+    expect(html).toMatch(/Deep thinking off/)
+    expect(html).toMatch(/Start listening/)
+    expect(html).toMatch(/History/)
+    expect(html).toMatch(/Spotlight Ref/)
+    expect(html).not.toMatch(/undefined/)
+  })
+})
+

@@ -55,6 +55,8 @@ const TOOL_HIT_PX = 32
 const Tool = memo(function Tool({
   title,
   onClick,
+  onMouseEnter,
+  onMouseDown,
   active,
   danger,
   cyanIdle,
@@ -65,6 +67,8 @@ const Tool = memo(function Tool({
 }: {
   title: string
   onClick: () => void
+  onMouseEnter?: () => void
+  onMouseDown?: () => void
   active?: boolean
   danger?: boolean
   cyanIdle?: boolean
@@ -79,6 +83,8 @@ const Tool = memo(function Tool({
       <button
         type="button"
         onClick={onClick}
+        onMouseEnter={onMouseEnter}
+        onMouseDown={onMouseDown}
         disabled={disabled}
         aria-label={title}
         style={{ width: TOOL_HIT_PX, height: TOOL_HIT_PX }}
@@ -254,85 +260,117 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
 
   const tools = useMemo(
     () => (
-      <div className="dock-zone dock-tools flex shrink-0 items-center gap-0.5 px-2.5 pt-1.5">
-        <Tool
-          title={
-            props.captureAccel
-              ? `Capture screen (${accelLabel(props.captureAccel)})`
-              : 'Capture screen'
-          }
-          onClick={props.onCapture}
-          active={props.capturing}
-        >
-          {props.capturing ? <InlineOrb kind="working" /> : <Image size={18} strokeWidth={ICON_STROKE} />}
-        </Tool>
-        {props.onSpotlightRef && (
-          <Tool title="Spotlight reference" onClick={props.onSpotlightRef} active={props.spotlightReady}>
+      <div className="dock-zone dock-tools" data-dock-tools="1">
+        <div className="dock-tools__cluster" data-bar-tools>
+          <Tool
+            title={
+              props.captureAccel
+                ? `Capture screen (${accelLabel(props.captureAccel)})`
+                : 'Capture screen'
+            }
+            onClick={props.onCapture}
+            onMouseEnter={() => {
+              if (props.canPrewarm) void window.toto.prewarmCapture()
+            }}
+            onMouseDown={() => {
+              if (props.canPrewarm) void window.toto.prewarmCapture()
+            }}
+            active={props.capturing}
+          >
+            {props.capturing ? <InlineOrb kind="working" /> : <Image size={18} strokeWidth={ICON_STROKE} />}
+          </Tool>
+          <Tool
+            title={
+              props.spotlightReady
+                ? 'Spotlight Ref'
+                : 'Spotlight Ref · Connect Dust in Settings'
+            }
+            onClick={() => props.onSpotlightRef?.()}
+            active={props.spotlightReady}
+          >
             <FileSearch size={18} strokeWidth={ICON_STROKE} />
           </Tool>
-        )}
-        <Tool
-          title={
-            props.mode
-              ? `Mode: ${modeLabel(props.mode, props.customModes)}`
-              : 'Mode'
-          }
-          onClick={() => setModeOpen((v) => !v)}
-          active={modeOpen}
-        >
-          <LayoutGrid size={18} strokeWidth={ICON_STROKE} />
-        </Tool>
-        {props.onToggleThinking && (
-          <Tool title="Deep thinking" onClick={props.onToggleThinking} active={props.thinkingOn} rainbow={props.thinkingOn}>
+          <Tool
+            title={props.mode ? modeLabel(props.mode, props.customModes) : 'Mode'}
+            onClick={() => setModeOpen((v) => !v)}
+            active={modeOpen}
+          >
+            <LayoutGrid size={18} strokeWidth={ICON_STROKE} />
+          </Tool>
+          <Tool
+            title={props.thinkingOn ? 'Deep thinking on' : 'Deep thinking off'}
+            onClick={() => props.onToggleThinking?.()}
+            active={props.thinkingOn}
+            rainbow={props.thinkingOn}
+          >
             <Brain size={18} strokeWidth={ICON_STROKE} />
           </Tool>
-        )}
-        <Tool
-          title={props.stealth ? 'Hidden from screen share' : 'Visible in screen share'}
-          onClick={props.onToggleStealth}
-          disabled={props.stealthLocked}
-          danger
-          active={props.stealth}
-        >
-          {props.stealth ? <EyeOff size={18} strokeWidth={ICON_STROKE} /> : <Eye size={18} strokeWidth={ICON_STROKE} />}
-        </Tool>
-
-        <span className="mx-0.5 h-5 w-px bg-[var(--color-hair-soft)]" />
-
-        {!listening && (
-          <Tool title="Start meeting" onClick={props.onToggleListen} cyanIdle>
-            <AudioLines size={18} strokeWidth={ICON_STROKE} />
+          <Tool
+            title={
+              props.stealthLocked
+                ? 'Hidden from screen share: managed by your organization'
+                : props.stealth
+                  ? 'Hidden from screen share. Click to make Métis visible.'
+                  : 'Visible in screen share. Click to hide Métis.'
+            }
+            onClick={props.onToggleStealth}
+            disabled={props.stealthLocked}
+            danger
+            active={!props.stealth}
+          >
+            {props.stealth ? <EyeOff size={18} strokeWidth={ICON_STROKE} /> : <Eye size={18} strokeWidth={ICON_STROKE} />}
           </Tool>
-        )}
-        {hasAnswer && (
-          <Tool title={copied ? 'Copied' : 'Copy answer'} onClick={copyAnswer} active={copied}>
-            {copied ? (
-              <Check size={18} strokeWidth={ICON_STROKE} className="dock-pop" />
+          <span className="dock-tools__rule" aria-hidden="true" />
+          <Tool
+            title={listening ? 'End meeting & get summary' : 'Start listening'}
+            onClick={props.onToggleListen}
+            active={listening}
+            danger={listening}
+            cyanIdle={!listening}
+          >
+            {listening ? (
+              <span
+                className={[
+                  'h-[12px] w-[12px] rounded-full rec-dot',
+                  props.paused
+                    ? 'bg-[color:var(--color-ink-3)] [animation-play-state:paused]'
+                    : 'bg-[var(--color-danger)] shadow-[0_0_8px_var(--color-danger)]'
+                ].join(' ')}
+              />
             ) : (
-              <Copy size={18} strokeWidth={ICON_STROKE} />
+              <AudioLines size={18} strokeWidth={ICON_STROKE} />
             )}
           </Tool>
-        )}
-        {listening && props.onNewMeeting && (
-          <Tool title="New meeting" onClick={props.onNewMeeting}>
-            <Plus size={18} strokeWidth={ICON_STROKE} />
-          </Tool>
-        )}
-        <span className="flex-1" />
+          {hasAnswer && (
+            <Tool title={copied ? 'Copied' : 'Copy answer'} onClick={copyAnswer} active={copied}>
+              {copied ? (
+                <Check size={18} strokeWidth={ICON_STROKE} className="dock-pop" />
+              ) : (
+                <Copy size={18} strokeWidth={ICON_STROKE} />
+              )}
+            </Tool>
+          )}
+          {listening && props.onNewMeeting && (
+            <Tool title="New meeting" onClick={props.onNewMeeting}>
+              <Plus size={18} strokeWidth={ICON_STROKE} />
+            </Tool>
+          )}
+        </div>
         <button
           type="button"
           onClick={props.onHistory}
-          className="no-drag focus-ring rounded-full bg-white/[0.05] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
+          className="dock-tools__history no-drag focus-ring"
         >
           {props.onTranscript && listening ? 'Transcript' : 'History'}
         </button>
       </div>
     ),
     [
-      props.captureAccel, props.onCapture, props.capturing, props.onSpotlightRef, props.spotlightReady,
-      props.mode, props.customModes, modeOpen, props.onToggleThinking, props.thinkingOn, props.stealth,
-      props.onToggleStealth, props.stealthLocked, listening, props.onToggleListen, props.onHistory,
-      props.onTranscript, hasAnswer, copied, copyAnswer, props.onNewMeeting
+      props.captureAccel, props.onCapture, props.capturing, props.canPrewarm, props.onSpotlightRef,
+      props.spotlightReady, props.mode, props.customModes, modeOpen, props.onToggleThinking,
+      props.thinkingOn, props.stealth, props.onToggleStealth, props.stealthLocked, listening,
+      props.paused, props.onToggleListen, props.onHistory, props.onTranscript, hasAnswer, copied,
+      copyAnswer, props.onNewMeeting
     ]
   )
 
