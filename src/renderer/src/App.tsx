@@ -4,6 +4,7 @@ import { Bar } from './components/Bar'
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
+import { RightEdgeSidecar } from './components/RightEdgeSidecar'
 import { Panel } from './components/Panel'
 import {
   isOnboardingBoot,
@@ -50,6 +51,8 @@ import {
   parseOverlayLayout,
   shouldForceParkOnBecameIdle
 } from '@shared/overlay-chrome'
+import { parseOverlayPlacement } from '@shared/overlay-placement'
+import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 import {
   decideCircleRestMinimize,
   parseOverlayOrbStyle,
@@ -638,7 +641,12 @@ export function App(): JSX.Element {
   // it, then reveals the full bar on hover or on an important event. Reveal/collapse are PURE content
   // resizes of the always-on-top window (never show()/focus()), so the user's foreground app keeps focus
   // — the non-activating notch contract. The pure state machine lives in lib/overlay-autohide.ts.
-  const overlayLayout = parseOverlayLayout(settings?.overlayLayout)
+  const overlayPresentation = resolveOverlayPresentation({
+    placement: parseOverlayPlacement(settings?.overlayPlacement),
+    layout: parseOverlayLayout(settings?.overlayLayout)
+  })
+  const overlayLayout = overlayPresentation.layout
+  const rightEdgePresentation = overlayPresentation.surface === 'edge-chat'
   const overlayOrbStyle = parseOverlayOrbStyle(settings?.overlayOrbStyle)
   const canMinimize = overlayAllowsMinimize(overlayLayout)
   const showBarOrb = overlayShowsBarOrb(overlayLayout, minimized)
@@ -3796,12 +3804,20 @@ export function App(): JSX.Element {
           />
         </div>
       ) : overlayPeeked ? (
+        rightEdgePresentation ? (
+          <RightEdgeSidecar
+            open={false}
+            onOpen={revealOverlay}
+            onClose={() => dispatchAutoHide({ type: 'collapse-now' })}
+          />
+        ) : (
         // Hide: 8×2 hairline (cursor watch is the sensor). Island: visible peek (hug-width).
         <OverlayPeek
           rest={overlayRestsHidden(overlayLayout) ? 'hide' : 'island'}
           onReveal={revealOverlay}
           stealth={settings?.contentProtection ?? true}
         />
+        )
       ) : (
         <>
           {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. */}
@@ -3823,7 +3839,13 @@ export function App(): JSX.Element {
               if (circleRestSpring === 'collapse') commitCircleRestMinimize()
             }}
           >
-          <Bar
+          {rightEdgePresentation ? (
+            <RightEdgeSidecar
+              open={true}
+              onOpen={revealOverlay}
+              onClose={() => dispatchAutoHide({ type: 'collapse-now' })}
+            />
+          ) : <Bar
             value={input}
             onChange={setInput}
             onSubmit={submit}
@@ -3874,7 +3896,7 @@ export function App(): JSX.Element {
             onTogglePanel={onTogglePanel}
             canTogglePanel={canTogglePanel}
             focusSignal={focusSignal}
-          />
+          />}
           </div>
           {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only
               while a meeting is actively being listened to — clean bar with nothing under it at launch
