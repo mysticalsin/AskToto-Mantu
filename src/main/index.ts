@@ -190,6 +190,7 @@ import {
   hoverRestTop,
   hoverWatchRestRect,
   overlayRestSize,
+  OVERLAY_DOCK_PANEL,
   normalizeRightEdgeY,
   overlayPlacementPosition,
   resolveOverlayPlacement,
@@ -2670,6 +2671,10 @@ function resizeTo(height: number): void {
   const rest = overlayRestSize(layout, getDisplayMetrics(display))
   // Hide rest is a 1–8px hairline. BAR_MIN_HEIGHT (44) must never grow it into Tony's slab.
   if (!settingsSurfaceOpen && islandResting && layout === 'hide') return
+  // Dock is main-sized in BOTH states — sliver when parked, fixed panel when revealed. A sidecar does not
+  // breathe with its content the way the bar does, so the renderer's measured height never drives it.
+  // Settings still opens its own full surface, which is why that check comes first.
+  if (!settingsSurfaceOpen && layout === 'dock') return
   if (!settingsSurfaceOpen && shouldIgnoreResizeWhilePeekResting(islandResting, height, rest.height)) return
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
@@ -3138,21 +3143,27 @@ function restoreBarWidth(): void {
   if (isSettingsTallHeight(revealedHeight)) {
     revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
   }
-  const wasBarWidth = currentWidth === BAR_WIDTH
-  currentWidth = BAR_WIDTH
+  // Dock is the one chrome whose reveal is taller than it is wide: a sidecar panel, not a bar. It opens
+  // to its own fixed panel size, ceilinged to the display so a short screen cannot push it off-work-area.
+  const revealWidthPx = layout === 'dock' ? OVERLAY_DOCK_PANEL.width : BAR_WIDTH
+  if (layout === 'dock') {
+    revealedHeight = Math.min(OVERLAY_DOCK_PANEL.height, Math.max(1, display.workArea.height))
+  }
+  const wasBarWidth = currentWidth === revealWidthPx
+  currentWidth = revealWidthPx
   const placement = resolvedOverlayPlacementForDisplay(display)
   let position: { x: number; y: number }
   if (placement === 'right-edge') {
-    position = overlayPositionForDisplay(BAR_WIDTH, revealedHeight, layout, display, ISLAND_TOP_MARGIN)
+    position = overlayPositionForDisplay(revealWidthPx, revealedHeight, layout, display, ISLAND_TOP_MARGIN)
   } else {
     // Preserve the historic top-center path verbatim.
     const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-    position = { x: wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0), y }
+    position = { x: wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, revealWidthPx, display.workArea, 0), y }
   }
   const { x, y } = position
   // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
-  if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
-  win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
+  if (b.x === x && b.y === y && b.width === revealWidthPx && b.height === revealedHeight) return
+  win.setBounds({ x, y, width: revealWidthPx, height: revealedHeight }, false)
 }
 
 /**

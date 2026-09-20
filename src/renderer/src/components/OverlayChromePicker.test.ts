@@ -8,8 +8,8 @@ const settings = readFileSync(join(__dirname, './Settings.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 
 describe('Settings overlay chrome cards', () => {
-  it('renders a diagram card for hide, island, and bar', () => {
-    expect(OVERLAY_LAYOUTS).toEqual(['hide', 'island', 'bar'])
+  it('renders a diagram card for hide, island, bar, and dock', () => {
+    expect(OVERLAY_LAYOUTS).toEqual(['hide', 'island', 'bar', 'dock'])
     expect(picker).toMatch(/data-chrome-diagram=\{id\}/)
     expect(picker).toMatch(/overlay-chrome-diagram--\$\{id\}/)
     for (const id of OVERLAY_LAYOUTS) {
@@ -22,6 +22,7 @@ describe('Settings overlay chrome cards', () => {
     expect(OVERLAY_LAYOUT_COPY.hide.desc).toBe('Hidden until you move to the top.')
     expect(OVERLAY_LAYOUT_COPY.island.desc).toBe('A small island stays visible. Hover opens it.')
     expect(OVERLAY_LAYOUT_COPY.bar.desc).toBe('The bar stays on screen.')
+    expect(OVERLAY_LAYOUT_COPY.dock.desc).toBe('A tall panel on the edge. Hover opens it.')
     expect(picker).toMatch(/overlay-chrome-diagram__orb/)
     expect(css).toMatch(/overlay-chrome-diagram__orb/)
   })
@@ -30,6 +31,7 @@ describe('Settings overlay chrome cards', () => {
     expect(settings).toMatch(/<OverlayChromePicker/)
     expect(settings).toMatch(/overlayLayout: id/)
     expect(settings).toMatch(/autoHideOverlay: autoHideOverlayForLayout\(id\)/)
+    expect(settings).toMatch(/overlayPlacement: 'right-edge'/)
     expect(picker).toMatch(/onClick=\{\(\) => onChange\(id\)\}/)
     expect(picker).toMatch(/overlay-chrome-card--selected/)
   })
