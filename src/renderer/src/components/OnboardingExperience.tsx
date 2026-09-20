@@ -1215,6 +1215,16 @@ export function OnboardingExperience({
   // the former needs a restart, since this process's ScreenCaptureKit handle never saw the earlier one.
   const screenGrantedRef = useRef<boolean | null>(null)
   const [restarting, setRestarting] = useState(false)
+  // P0: any post-hero scene must keep portal mask open (Tony: after Next → black).
+  useEffect(() => {
+    if (scene === 'hero') return
+    try {
+      requestOnboardingPortalOpen()
+    } catch {
+      /* ignore */
+    }
+  }, [scene])
+
   // --- Setup scene: run the REAL checks the moment the scene mounts.
   useEffect(() => {
     if (scene !== 'setup') return
@@ -1479,8 +1489,8 @@ export function OnboardingExperience({
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
-            // FITO-185-AA: music/play first in this sync tick (CI 280-char window), then scene.
-            // Never let media/audio throw block Act1→problem (Tony: Next → forever Loading).
+            // P0: paint problem FIRST — never wait on music/video/portal (Tony: after Next → black/Loading).
+            setScene('problem')
             try {
               music.start()
             } catch {
@@ -1491,8 +1501,11 @@ export function OnboardingExperience({
             } catch {
               /* ignore */
             }
-            requestOnboardingPortalOpen()
-            setScene('problem')
+            try {
+              requestOnboardingPortalOpen()
+            } catch {
+              /* ignore */
+            }
           }}
         />
       )}
@@ -1500,15 +1513,11 @@ export function OnboardingExperience({
       {scene === 'problem' && (
         <div key="problem" className="onboard-post-lady flex flex-col items-center gap-8">
           <div className="scene-enter flex max-w-[420px] flex-col gap-3 text-left">
-            {PROBLEM_STORY.map((line, i) => (
+            {PROBLEM_STORY.map((line) => (
               <p
                 key={line}
-                className="fade-up m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]"
-                style={{
-                  animationDelay: `${80 + i * 120}ms`,
-                  animationFillMode: 'both',
-                  opacity: 1
-                }}
+                className="m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]"
+                style={{ opacity: 1 }}
               >
                 {line}
               </p>
@@ -1528,7 +1537,16 @@ export function OnboardingExperience({
       )}
 
       {scene === 'reveal' && (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={
+            <div className="flex flex-col items-center gap-6">
+              <p className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">See Métis in action</p>
+              <button type="button" className="onboard-cta no-drag focus-ring" onClick={() => setScene(sceneAfterReveal())}>
+                Continue
+              </button>
+            </div>
+          }
+        >
           <OnboardingDemoScene
             mode={mode}
             onSetMode={setMode}
