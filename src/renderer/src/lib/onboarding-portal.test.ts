@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ONBOARDING_PORTAL_CLOSE_GAIN,
   ONBOARDING_PORTAL_CLOSE_MS,
@@ -14,7 +14,8 @@ import {
   PORTAL_OPEN_SAMPLES,
   closeOnboardingPortal,
   onboardingPortalWaitMs,
-  requestOnboardingPortalOpen
+  requestOnboardingPortalOpen,
+  requestOnboardingPortalClose
 } from './onboarding-portal'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
@@ -37,9 +38,9 @@ describe('onboarding portal pill + Ready-only finish', () => {
     expect(ONBOARDING_PORTAL_CLOSE_GAIN).toBeLessThan(ONBOARDING_PORTAL_OPEN_GAIN)
     expect(experience).toMatch(/playPortalOpen\(/)
     expect(experience).toMatch(/await closeOnboardingPortal\(/)
-    const finish = experience.slice(experience.indexOf('const finish = async'))
+    const finish = experience.slice(experience.indexOf('const finish = async ('))
     expect(finish.indexOf('closeOnboardingPortal')).toBeGreaterThan(-1)
-    expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true })'))
+    expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
   })
 
   it('opens as a slow soft pill, not a clip-path circle pop', () => {
@@ -89,6 +90,44 @@ describe('onboarding portal pill + Ready-only finish', () => {
 })
 
 describe('closeOnboardingPortal call order', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('removes the open state before it starts the close state', () => {
+    const classes = new Set(['onboard-stage--portal-open'])
+    const classList = {
+      add: (value: string) => classes.add(value),
+      remove: (value: string) => classes.delete(value),
+      contains: (value: string) => classes.has(value)
+    }
+    vi.stubGlobal('document', {
+      querySelector: vi.fn(() => ({ classList }))
+    })
+
+    requestOnboardingPortalClose()
+
+    expect(classList.contains('onboard-stage--portal-open')).toBe(false)
+    expect(classList.contains('onboard-stage--portal-close')).toBe(true)
+  })
+
+  it('removes a prior close state when onboarding opens again after a recoverable save failure', () => {
+    const classes = new Set(['onboard-stage--portal-close'])
+    const classList = {
+      add: (value: string) => classes.add(value),
+      remove: (value: string) => classes.delete(value),
+      contains: (value: string) => classes.has(value)
+    }
+    vi.stubGlobal('document', {
+      querySelector: vi.fn(() => ({ classList }))
+    })
+
+    requestOnboardingPortalOpen()
+
+    expect(classList.contains('onboard-stage--portal-close')).toBe(false)
+    expect(classList.contains('onboard-stage--portal-open')).toBe(true)
+  })
+
   it('requests the close class as part of the helper (exclusive exit happens after)', async () => {
     expect(portalSrc).toMatch(/playPortalClose\(muted\)\s*\n\s*requestOnboardingPortalClose\(\)/)
     expect(closeOnboardingPortal).toBeTypeOf('function')
@@ -142,4 +181,3 @@ describe('FITO-185-V portal-open keeps entrance animations', () => {
     expect(prmBlock).toMatch(/animation:\s*none\s*!important/)
   })
 })
-

@@ -457,6 +457,9 @@ describe('bounded close and successful-save receipt join', () => {
       BAR_WIDTH: 600,
       win: null,
       self: { webContents: { id: 1 } },
+      // Captured beside `const self = win`, outside this handler: the real callback runs after the
+      // WebContents is torn down (MQA-340).
+      selfWebContentsId: 1,
       process: { env: {} },
       join
     })

@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX } from '@shared/encrypted-profile-recovery'
+import type { PublicSettings } from '@shared/ipc'
 import {
   ONBOARDING_COMPLETION_ERROR,
+  ONBOARDING_COMPLETION_NOT_SAVED_ERROR,
+  ONBOARDING_COMPLETION_STALL_MS,
   createOnboardingCompletionFlow,
   ENCRYPTED_PROFILE_RECOVERY_UNCONFIRMED_MESSAGE,
   encryptedProfileRecoveryFailureMessage,
@@ -19,6 +22,9 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 describe('onboarding completion flow', () => {
+  it('uses a bounded UI recovery interval without turning a pending save into a retry', () => {
+    expect(ONBOARDING_COMPLETION_STALL_MS).toBe(12_000)
+  })
   it('offers encrypted-profile recovery only for the safe, explicit key-unlock failure class', () => {
     expect(
       isEncryptedProfileRecoveryError(
@@ -99,6 +105,7 @@ describe('onboarding completion flow', () => {
           patches.push(settingsPatch)
           if (writes === 1) throw new Error(rawFailure)
           events.push('persisted')
+          return { onboardingDone: true } as PublicSettings
         },
         onCompleted: () => events.push('completed')
       })
@@ -129,5 +136,37 @@ describe('onboarding completion flow', () => {
     expect(events).toEqual([])
     expect(await flow.attempt(async () => true, () => events.push('settings'))).toBe('completed')
     expect(events).toEqual(['settings'])
+  })
+
+  it('refuses to call completion when a guarded settings write resolves with onboarding still incomplete', async () => {
+    const events: string[] = []
+
+    await expect(
+      persistOnboardingCompletion({
+        settingsPatch: {
+          mode: 'meeting',
+          recordingConsent: true,
+          onboardingDone: true,
+          onboardingDoneAt: 123
+        },
+        patch: async () => ({ onboardingDone: false } as never),
+        onCompleted: () => events.push('completed')
+      })
+    ).rejects.toThrow(ONBOARDING_COMPLETION_NOT_SAVED_ERROR)
+
+    expect(events).toEqual([])
+  })
+
+  it('keeps the precise sign-in remedy when main confirms a completion write did not land', async () => {
+    const states: OnboardingCompletionState[] = []
+    const flow = createOnboardingCompletionFlow((state) => states.push(state))
+
+    expect(
+      await flow.attempt(async () => {
+        throw new Error(ONBOARDING_COMPLETION_NOT_SAVED_ERROR)
+      })
+    ).toBe('failed')
+
+    expect(states.at(-1)).toEqual({ busy: false, error: ONBOARDING_COMPLETION_NOT_SAVED_ERROR })
   })
 })

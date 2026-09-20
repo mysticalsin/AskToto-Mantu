@@ -208,6 +208,7 @@ describe('AUDIT-10 — no production SQL client in src/main', () => {
 describe('AUDIT-10 — IPC sender denials are audited, sampled', () => {
   it('assertMainWindow records a reason before throwing', () => {
     const body = sliceBetween('function assertMainWindow', 'function assertBrainReader')
+    expect(body).toMatch(/if \(!win \|\| win\.isDestroyed\(\)\)/)
     expect(body).toMatch(/noteIpcDenied\('no_window'\)/)
     expect(body).toMatch(/noteIpcDenied\('sender'\)/)
     expect(body).toMatch(/noteIpcDenied\('frame'\)/)

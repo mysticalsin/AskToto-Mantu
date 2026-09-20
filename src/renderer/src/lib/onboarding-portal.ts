@@ -147,12 +147,16 @@ export function requestBarLand(): void {
 
 export function requestOnboardingPortalOpen(): void {
   if (typeof document === 'undefined') return
-  document.querySelector('.onboard-stage')?.classList.add('onboard-stage--portal-open')
+  const stage = document.querySelector('.onboard-stage')
+  stage?.classList.remove('onboard-stage--portal-close')
+  stage?.classList.add('onboard-stage--portal-open')
 }
 
 export function requestOnboardingPortalClose(): void {
   if (typeof document === 'undefined') return
-  document.querySelector('.onboard-stage')?.classList.add('onboard-stage--portal-close')
+  const stage = document.querySelector('.onboard-stage')
+  stage?.classList.remove('onboard-stage--portal-open')
+  stage?.classList.add('onboard-stage--portal-close')
 }
 
 export function onboardingPortalWaitMs(reducedMotion: boolean): number {

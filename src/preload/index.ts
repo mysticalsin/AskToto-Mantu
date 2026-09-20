@@ -92,6 +92,10 @@ const api = {
     ipcRenderer.invoke(IPC.screenCaptureCheck, { pass }),
   setSettings: (patch: Partial<Settings> | import('@shared/ipc').SettingsPatch): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.settingsSet, patch),
+  /** Sent only after `setSettings({ onboardingDone: true })` resolves. Never use this as a settings write. */
+  onboardingEnter: (): void => ipcRenderer.send(IPC.onboardingEnter),
+  /** Sent only after `setSettings({ onboardingDone: true })` resolves. Never use this as a settings write. */
+  onboardingExit: (destination: 'answer' | 'settings'): void => ipcRenderer.send(IPC.onboardingExit, destination),
   recoverEncryptedProfile: (): Promise<ProfileRecoveryResult> => ipcRenderer.invoke(IPC.settingsRecoverProfile),
   setApiKey: (provider: ProviderId, key: string): Promise<{ hasKeys: Record<string, boolean> }> =>
     ipcRenderer.invoke(IPC.setApiKey, { provider, key }),

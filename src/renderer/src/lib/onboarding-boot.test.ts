@@ -57,6 +57,21 @@ describe('FITO-185-I App boot gate (source contract)', () => {
     expect(stripIdx).toBeGreaterThan(onboardIdx)
   })
 
+  it('gives an onboarding auth-timeout an explicit retry instead of leaving Ready disabled forever', () => {
+    const onboardIdx = app.indexOf('Onboarding gate FIRST')
+    const authGuardIdx = app.indexOf('if (auth.status === null && auth.bootError)', onboardIdx)
+    const retryIdx = app.indexOf('Métis needs to check access', onboardIdx)
+    const experienceIdx = app.indexOf('<OnboardingV2', onboardIdx)
+    expect(authGuardIdx).toBeGreaterThan(onboardIdx)
+    expect(retryIdx).toBeGreaterThan(onboardIdx)
+    expect(retryIdx).toBeGreaterThan(authGuardIdx)
+    expect(experienceIdx).toBeGreaterThan(retryIdx)
+    const recovery = app.slice(authGuardIdx, experienceIdx)
+    expect(recovery).toMatch(/void auth\.refresh\(\)/)
+    expect(recovery).toMatch(/window\.location\.reload\(\)/)
+    expect(recovery).not.toMatch(/\{auth\.bootError\}/)
+  })
+
   it('index.html ships a no-JS exclusive bed so force-show is never pure black', () => {
     expect(indexHtml).toMatch(/#05010A/)
     expect(indexHtml).toMatch(/id="boot-bed"/)
@@ -178,7 +193,8 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
   it('main createWindow stamps exclusiveOnboarding on packaged file URL too', () => {
     const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
     expect(main).toMatch(/function overlayRendererUrl\(\): string/)
-    expect(main).toMatch(/onboardingExclusiveLive\(\)\) params\.set\('exclusiveOnboarding'/)
+    expect(main).toMatch(/const onboardingLive = onboardingExclusiveLive\(\)/)
+    expect(main).toMatch(/if \(onboardingLive\) params\.set\('exclusiveOnboarding'/)
     // The helper always starts from either the dev URL or the packaged file URL, then adds the flag.
     expect(main).toMatch(/process\.env\['ELECTRON_RENDERER_URL'\] \?\? pathToFileURL/)
     expect(main).toMatch(/win\.loadURL\(overlayRendererUrl\(\)\)/)

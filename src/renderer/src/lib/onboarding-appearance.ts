@@ -8,6 +8,8 @@ import {
   parseOverlayLayout,
   type OverlayLayout
 } from '@shared/overlay-chrome'
+import { parseOverlayPlacement, type OverlayPlacement } from '@shared/overlay-placement'
+import type { PublicSettings } from '@shared/ipc'
 
 export const ONBOARDING_APPEARANCE_HEADING = 'Where should Métis live?'
 export const ONBOARDING_APPEARANCE_LEAD =
@@ -40,6 +42,39 @@ export function appearanceSettingsPatch(layout: OverlayLayout): {
     overlayLayout: layout,
     autoHideOverlay: autoHideOverlayForLayout(layout)
   }
+}
+
+/** Physical placement is stored independently from the selected visual chrome. */
+export function seedOnboardingPlacement(settings?: { overlayPlacement?: unknown } | null): OverlayPlacement {
+  return parseOverlayPlacement(settings?.overlayPlacement)
+}
+
+export function placementSettingsPatch(placement: OverlayPlacement): { overlayPlacement: OverlayPlacement } {
+  return { overlayPlacement: placement }
+}
+
+/** A picker must not report a selection until the trusted settings reply confirms that exact value. */
+export async function saveOnboardingAppearanceChoice(
+  patch: () => Promise<Pick<PublicSettings, 'overlayLayout' | 'overlayPlacement'>>,
+  matches: (saved: Pick<PublicSettings, 'overlayLayout' | 'overlayPlacement'>) => boolean
+): Promise<boolean> {
+  try {
+    return matches(await patch())
+  } catch {
+    return false
+  }
+}
+
+/** Adopt managed or stored placement until the person makes an in-flow choice. */
+export function resolveOnboardingPlacementSync(input: {
+  current: OverlayPlacement
+  incoming: unknown
+  userSelected: boolean
+  managed: boolean
+}): OverlayPlacement | null {
+  const next = parseOverlayPlacement(input.incoming)
+  if (next === input.current || (input.userSelected && !input.managed)) return null
+  return next
 }
 
 export type AppearancePreviewPhase = 'rest' | 'in' | 'settled' | 'out'

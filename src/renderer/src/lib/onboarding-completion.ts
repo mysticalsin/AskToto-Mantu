@@ -4,6 +4,13 @@ import { isEncryptedProfileRecoveryMessage } from '@shared/encrypted-profile-rec
 export const ONBOARDING_COMPLETION_ERROR =
   "Métis couldn't save your setup. Try again. If it keeps happening, contact support."
 
+/** A resolved IPC can still mean main deliberately refused the mutation (for example, signed-out SSO). */
+export const ONBOARDING_COMPLETION_NOT_SAVED_ERROR =
+  "Métis couldn't confirm that your setup was saved. Sign in if required, then try again."
+
+/** UI recovery only: never cancel or retry an in-flight write, which could duplicate a durable mutation. */
+export const ONBOARDING_COMPLETION_STALL_MS = 12_000
+
 /** Only the explicit fail-closed profile-key error can offer an archive-and-retry action. */
 export function isEncryptedProfileRecoveryError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
@@ -72,8 +79,13 @@ export function createOnboardingCompletionFlow(
         } else {
           outcome = 'blocked'
         }
-      } catch {
-        error = ONBOARDING_COMPLETION_ERROR
+      } catch (caught) {
+        // This exact message is produced locally only after main returned a public settings snapshot
+        // that proves the write did not land (for example, an unsigned required-SSO seat). Keep its
+        // concrete recovery route; every other native/IPC error remains sanitized.
+        error = caught instanceof Error && caught.message === ONBOARDING_COMPLETION_NOT_SAVED_ERROR
+          ? ONBOARDING_COMPLETION_NOT_SAVED_ERROR
+          : ONBOARDING_COMPLETION_ERROR
         outcome = 'failed'
       }
 
@@ -91,9 +103,10 @@ export async function persistOnboardingCompletion(input: {
     PublicSettings,
     'mode' | 'recordingConsent' | 'onboardingDone' | 'onboardingDoneAt'
   >
-  patch: (patch: Partial<PublicSettings>) => void | Promise<void>
+  patch: (patch: Partial<PublicSettings>) => Promise<PublicSettings>
   onCompleted: () => void
 }): Promise<void> {
-  await input.patch(input.settingsPatch)
+  const saved = await input.patch(input.settingsPatch)
+  if (saved && saved.onboardingDone !== true) throw new Error(ONBOARDING_COMPLETION_NOT_SAVED_ERROR)
   input.onCompleted()
 }

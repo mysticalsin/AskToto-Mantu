@@ -150,24 +150,26 @@ describe('onboardingDone cannot become true without completing Ready', () => {
     expect(experience).toMatch(/canMarkOnboardingDone\(\{ scene, asrReady, consent \}\)/)
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('canMarkOnboardingDone')).toBeGreaterThan(-1)
-    expect(finish.indexOf('canMarkOnboardingDone')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true })'))
+    expect(finish.indexOf('canMarkOnboardingDone')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
     const v2 = experience.slice(experience.indexOf('export function OnboardingV2'))
     expect(v2).toMatch(/onboardingDone: true/)
     expect(v2).not.toMatch(/scene === 'skip'/)
   })
 })
 
-describe('haltAllOnboardingAudio still before Ready and Replay', () => {
-  it('Ready finish and Settings Replay halt Goldberg first', () => {
+describe('haltAllOnboardingAudio remains correct through Ready and Replay', () => {
+  it('Ready halts first; Replay halts only after its reset is confirmed', () => {
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
-    expect(finish.indexOf('haltAllOnboardingAudio()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true })'))
-    const v2 = experience.slice(experience.indexOf('onDone={async ({ mode, recordingConsent })'))
+    expect(finish.indexOf('haltAllOnboardingAudio()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
+    const v2 = experience.slice(experience.indexOf('onDone={async ({ mode, recordingConsent, destination })'))
     expect(v2.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
     expect(v2.indexOf('haltAllOnboardingAudio()')).toBeLessThan(v2.indexOf('onboardingDone: true'))
-    const replay = settings.slice(settings.indexOf('Replay onboarding from the start?'))
+    const replay = settings.slice(settings.indexOf('const replayOnboarding = async'))
+    expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeGreaterThan(-1)
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
-    expect(replay.indexOf('haltAllOnboardingAudio()')).toBeLessThan(replay.indexOf('patch({ onboardingDone: false })'))
+    expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(replay.indexOf('haltAllOnboardingAudio()'))
+    expect(replay.indexOf('haltAllOnboardingAudio()')).toBeLessThan(replay.indexOf('window.toto.onboardingEnter()'))
   })
 })
 

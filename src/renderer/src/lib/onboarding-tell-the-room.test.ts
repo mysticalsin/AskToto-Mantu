@@ -73,7 +73,8 @@ describe('tell the room — designed consent on personalize', () => {
 
   it('Continue stays gated; finish still writes recordingConsent; Ready echoes the quote', () => {
     expect(experience).toMatch(/if \(doneRef\.current \|\| !canMarkOnboardingDone\(\{ scene, asrReady, consent \}\)\) return/)
-    expect(experience).toMatch(/onDone\(\{ mode, recordingConsent: true \}\)/)
+    // `destination` carries Ready's optional "set up AI" choice; consent stays hard-coded true here.
+    expect(experience).toMatch(/onDone\(\{ mode, recordingConsent: true, destination \}\)/)
     expect(experience).toMatch(/TELL_THE_ROOM_READY/)
     expect(experience).toMatch(/onboard-tell-quote--echo/)
     expect(experience).toMatch(/TELL_THE_ROOM_QUOTE/)

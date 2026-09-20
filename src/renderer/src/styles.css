@@ -1875,6 +1875,40 @@ button.onboard-cta {
     inset 0 0 0 1.25px rgba(255, 255, 255, 0.72),
     0 0 0 1px rgba(255, 255, 255, 0.12);
 }
+.overlay-placement-diagram {
+  position: relative;
+  height: 52px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #3a0b6b 0%, #1a0630 100%);
+}
+.overlay-placement-diagram__desktop {
+  position: absolute;
+  inset: 10px 8px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.overlay-placement-diagram__mark {
+  position: absolute;
+  z-index: 1;
+  background: rgba(214, 186, 255, 0.92);
+  box-shadow: 0 0 12px rgba(214, 186, 255, 0.22);
+}
+.overlay-placement-diagram--top-center .overlay-placement-diagram__mark {
+  top: 10px;
+  left: 50%;
+  width: 64%;
+  height: 7px;
+  border-radius: 0 0 4px 4px;
+  transform: translateX(-50%);
+}
+.overlay-placement-diagram--right-edge .overlay-placement-diagram__mark {
+  top: 19px;
+  right: 8px;
+  width: 7px;
+  height: 20px;
+  border-radius: 4px 0 0 4px;
+}
 .overlay-orb-diagram,
 .overlay-orb-diagram--jakub,
 .overlay-orb-diagram--obsidian {
@@ -2049,6 +2083,44 @@ button.onboard-cta {
   color: rgba(255, 255, 255, 0.95);
   font-size: 11px;
   font-weight: 500;
+}
+/* Physical placement preview only. It deliberately reuses the same mock and spring state as the
+   top-center preview; it does not emulate or depend on a hardware notch. */
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__hit {
+  top: 24px;
+  right: 0;
+  left: auto;
+  width: 52px;
+  height: 84px;
+  transform: none;
+}
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__hint {
+  top: 48px;
+  right: 0;
+  left: auto;
+  width: 3px;
+  height: 20px;
+  transform: none;
+  border-radius: 4px 0 0 4px;
+}
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__island {
+  top: 45px;
+  right: 0;
+  left: auto;
+  width: 18px;
+  height: 32px;
+  transform: none;
+  border-radius: 10px 0 0 10px;
+}
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__bar-slot {
+  top: 38px;
+  right: 0;
+  left: auto;
+  width: 68%;
+  transform: none;
+}
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__bar {
+  border-radius: 999px 0 0 999px;
 }
 
 @keyframes overlay-peek-in {

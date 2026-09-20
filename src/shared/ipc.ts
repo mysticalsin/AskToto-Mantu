@@ -49,6 +49,12 @@ export const IPC = {
   settingsGet: 'settings:get',
   settingsChanged: 'settings:changed',
   settingsSet: 'settings:set',
+  // One-way only: sent after settings:set has replied, so replaying onboarding cannot sever the
+  // renderer's durable-save response by replacing its transparent BrowserWindow mid-invoke.
+  onboardingEnter: 'onboarding:enter',
+  // One-way only: sent after settings:set has replied, so exiting opaque onboarding cannot sever the
+  // renderer's durable-save response by destroying its BrowserWindow mid-invoke.
+  onboardingExit: 'onboarding:exit',
   settingsRecoverProfile: 'settings:recoverProfile',
   setApiKey: 'settings:setApiKey',
   clearApiKey: 'settings:clearApiKey',
@@ -1123,6 +1129,13 @@ export const BaseSettingsSchema = z.object({
   overlayLayout: z.enum(['hide', 'island', 'bar']).default('hide'),
   /** Bar rest look. Hide/Island ignore this. Default Circle is the Jakub thinking-orb. */
   overlayOrbStyle: z.enum(['bar', 'jakub', 'obsidian']).default('jakub'),
+  /** Physical location is separate from the overlay chrome. Legacy profiles stay top-center. */
+  overlayPlacement: z.enum(['top-center', 'right-edge']).default('top-center'),
+  /**
+   * Per-display sidecar position, stored as a normalized Y (0..1), never a raw desktop coordinate.
+   * It remains in the encrypted local profile and is never sent to Operator or a meeting.
+   */
+  overlayRightEdgeYByDisplay: z.record(z.string(), z.number().finite().min(0).max(1)).default({}),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
   // parakeet = conservative schema/legacy fallback. Fresh incomplete profiles with >8 GiB physical RAM
@@ -1675,6 +1688,8 @@ export const DEFAULT_SETTINGS: Settings = {
   autoHideOverlay: true,
   overlayLayout: 'hide',
   overlayOrbStyle: 'jakub',
+  overlayPlacement: 'top-center',
+  overlayRightEdgeYByDisplay: {},
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'parakeet',

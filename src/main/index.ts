@@ -190,13 +190,15 @@ import {
   hoverRestTop,
   hoverWatchRestRect,
   overlayRestSize,
+  normalizeRightEdgeY,
+  overlayPlacementPosition,
+  resolveOverlayPlacement,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
   hideParkWindowOpacity,
   settingsOpenRect,
   shouldIgnoreResizeWhilePeekResting,
   shouldParkHoverRestAfterLeavingSurface,
-  topCenterPosition,
   topClamp
 } from './island/geometry'
 import {
@@ -237,6 +239,7 @@ import {
   overlayOrbRestIsCircle,
   parseOverlayOrbStyle
 } from '@shared/overlay-orb'
+import { overlayDisplayKey, parseOverlayPlacement, type OverlayPlacement } from '@shared/overlay-placement'
 
 // --- Speaker session ownership (Task 7-P2b) ---
 
@@ -630,6 +633,7 @@ import { cloudSttRequestBelongsToOwner, replaceCloudSttSessionIfCurrent } from '
 import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { effectiveCloudSttProvider } from '../shared/cloud-stt-provider'
+import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
 
 import {
   resetLanguageFollow as resetImportLanguageFollow,
@@ -971,6 +975,58 @@ function privateViewOn(): boolean {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
+
+// Electron can dispatch an invoke that the retiring overlay queued just before a constructor-required
+// window swap. This is deliberately an exact, short-lived identity record — not a second trusted-window
+// class. It is consumed only by three teardown-safe handlers below (no-op / capability defaults), while
+// every privileged mutation continues through assertMainWindow against the live window.
+const RETIRING_OVERLAY_IPC_GRACE_MS = 5_000
+type RetiringOverlaySender = { contents: Electron.WebContents; url: string; expiresAt: number }
+const retiringOverlaySenders = new Map<number, RetiringOverlaySender>()
+
+function rememberRetiringOverlaySender(overlay: BrowserWindow): void {
+  const now = Date.now()
+  for (const [id, sender] of retiringOverlaySenders) {
+    if (sender.expiresAt <= now) retiringOverlaySenders.delete(id)
+  }
+  try {
+    const contents = overlay.webContents
+    retiringOverlaySenders.set(contents.id, {
+      contents,
+      url: contents.getURL(),
+      expiresAt: now + RETIRING_OVERLAY_IPC_GRACE_MS
+    })
+  } catch {
+    // A browser window can be destroyed between the caller's guard and this registration. That window
+    // cannot be a valid grace sender, so the normal fail-closed IPC boundary remains in force.
+  }
+}
+
+function isRecentlyRetiredOverlaySender(event: Electron.IpcMainInvokeEvent): boolean {
+  let id: number
+  try {
+    id = event.sender.id
+  } catch {
+    return false
+  }
+  const sender = retiringOverlaySenders.get(id)
+  if (!sender) return false
+  if (sender.expiresAt <= Date.now()) {
+    retiringOverlaySenders.delete(id)
+    return false
+  }
+  // A numeric WebContents ID is normally unique for the process, but keeping the object identity closes
+  // even a theoretical ID-reuse gap: a different renderer can never inherit a retiring overlay's grace.
+  if (event.sender !== sender.contents) {
+    retiringOverlaySenders.delete(id)
+    return false
+  }
+  const frame = event.senderFrame
+  // Match the same top-frame + exact URL constraint as assertMainWindow. A stale subframe or any other
+  // WebContents cannot borrow this grace record.
+  return !!frame && frame.parent === null && frame.url === sender.url
+}
+
 type CloudSttIpcOwner = { webContentsId: number; generation: number; captureId?: string }
 let cloudSttIpcGeneration = 0
 let cloudSttIpcOwner: CloudSttIpcOwner | null = null
@@ -1008,6 +1064,9 @@ let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore o
 // bar parked near the bottom all the way to the top of the screen, 24px at a time, and it stayed there.
 // Keeping the anchor separate lets the slide be temporary — up to fit, back down when the content shrinks.
 let userAnchorY: number | null = null
+// Sidecar vertical positions are normalised per local display. Persist only once after a drag settles.
+const pendingRightEdgeYByDisplay = new Map<string, number>()
+let rightEdgeYSaveTimer: ReturnType<typeof setTimeout> | null = null
 let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
 // True while collapsed to the control mini-pill. Guards lastBarHeight below: the pill's own (much shorter)
 // content height must never overwrite the remembered full-bar height, or expanding back out would apply
@@ -1068,8 +1127,8 @@ function noteIpcDenied(reason: 'no_window' | 'sender' | 'frame'): void {
 
 /** Security: every privileged IPC handler must come from the main window's top frame.
  *  Compromised subframes, devtools, or unexpected webContents are rejected here. */
-function assertMainWindow(event: Electron.IpcMainInvokeEvent): void {
-  if (!win) {
+function assertMainWindow(event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): void {
+  if (!win || win.isDestroyed()) {
     noteIpcDenied('no_window')
     throw new Error('Main window not available')
   }
@@ -1082,6 +1141,25 @@ function assertMainWindow(event: Electron.IpcMainInvokeEvent): void {
     noteIpcDenied('frame')
     throw new Error('IPC denied: not main frame')
   }
+}
+
+// Non-throwing twin of assertMainWindow for ipcMain.on listeners. Electron does not route a synchronous
+// throw from a one-way listener back to its renderer; it becomes a main-process uncaught exception.
+function isMainWindowSender(event: Electron.IpcMainEvent): boolean {
+  if (!win || win.isDestroyed()) {
+    noteIpcDenied('no_window')
+    return false
+  }
+  if (event.sender !== win.webContents) {
+    noteIpcDenied('sender')
+    return false
+  }
+  const frame = event.senderFrame
+  if (!frame || frame.parent !== null || frame.url !== win.webContents.getURL()) {
+    noteIpcDenied('frame')
+    return false
+  }
+  return true
 }
 
 function denyIfLimited(bucket: SecurityLimitBucket): boolean {
@@ -1959,7 +2037,12 @@ function onboardingExclusiveLive(): boolean {
 function overlayRendererUrl(): string {
   let rendererUrl = process.env['ELECTRON_RENDERER_URL'] ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
   const params = new URLSearchParams()
-  if (onboardingExclusiveLive()) params.set('exclusiveOnboarding', '1')
+  const onboardingLive = onboardingExclusiveLive()
+  if (onboardingLive) params.set('exclusiveOnboarding', '1')
+  if (!onboardingLive && postOnboardingDestination === 'settings') {
+    params.set('view', 'settings')
+    params.set('tab', 'ai')
+  }
   const demo = devEnv('ASKTOTO_DEMO')
   if (demo) params.set('demo', demo)
   if (!params.size) return rendererUrl
@@ -1976,6 +2059,10 @@ function overlayRendererUrl(): string {
  */
 let overlayWindowTransparent = true
 let emittedAppStarted = false
+/** Consumed by the next transparent window created when Act 6 finishes. Never persisted. */
+let postOnboardingDestination: 'answer' | 'settings' = 'answer'
+const ONBOARDING_EXIT_FALLBACK_MS = 5_000
+let completedOnboardingExitFallback: { overlay: BrowserWindow; timer: ReturnType<typeof setTimeout> } | null = null
 
 function leaveExclusiveOsFullscreen(w: BrowserWindow): void {
   try {
@@ -2001,17 +2088,35 @@ function lockOnboardingAudioInRenderer(w: BrowserWindow | null): void {
 /** Destroy the current overlay and build one whose constructor chrome matches onboardingExclusiveLive(). */
 function recreateOverlayWindow(): void {
   const dying = win
-  win = null
-  if (dying && !dying.isDestroyed()) {
-    lockOnboardingAudioInRenderer(dying)
-    leaveExclusiveOsFullscreen(dying)
-    try {
-      dying.destroy()
-    } catch {
-      /* already gone */
-    }
+  if (!dying || dying.isDestroyed()) {
+    win = null
+    createWindow()
+    return
   }
-  createWindow()
+
+  // Keep `win` pointing at the retiring trusted renderer until its `closed` event. A few renderer
+  // invokes can already be in Electron's queue when the onboarding constructor swap starts; clearing
+  // the owner first turns those harmless, already-authorized reads into noisy IPC-denied errors. The
+  // existing `closed` listener clears `win` before this listener runs, so the replacement still starts
+  // only after the old renderer is gone and every new IPC must pass the normal sender check.
+  let recreated = false
+  const finishRecreate = (): void => {
+    if (recreated) return
+    recreated = true
+    if (win === dying) win = null
+    createWindow()
+  }
+  dying.once('closed', finishRecreate)
+  rememberRetiringOverlaySender(dying)
+  lockOnboardingAudioInRenderer(dying)
+  leaveExclusiveOsFullscreen(dying)
+  try {
+    dying.destroy()
+  } catch {
+    // BrowserWindow.destroy can report an already-closing window. Do not leave the app with no
+    // recovery path; the guarded finisher is idempotent if `closed` arrives immediately afterward.
+    finishRecreate()
+  }
 }
 
 /** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */
@@ -2130,7 +2235,13 @@ function exitExclusiveOnboardingStage(): void {
   lastBarHeight = BAR_HEIGHT
   const display = screen.getDisplayMatching(win.getBounds())
   const layout = liveOverlayLayout()
-  const park = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  const park = parkAfterExclusiveOnboarding(
+    layout,
+    getDisplayMetrics(display),
+    ISLAND_TOP_MARGIN,
+    liveOverlayPlacement(),
+    rightEdgeYForDisplay(display)
+  )
   currentWidth = park.width
   islandResting = overlayUsesHover(layout)
   userAnchorY = park.y
@@ -2138,6 +2249,44 @@ function exitExclusiveOnboardingStage(): void {
   startOverlayCursorWatch()
   applyHideClickThrough()
   applyOverlaySurfaceChrome()
+}
+
+/** Cancel only the fallback owned by this exact onboarding window. */
+function clearCompletedOnboardingExitFallback(overlay?: BrowserWindow): void {
+  const fallback = completedOnboardingExitFallback
+  if (!fallback || (overlay && fallback.overlay !== overlay)) return
+  clearTimeout(fallback.timer)
+  completedOnboardingExitFallback = null
+}
+
+/**
+ * `settings:set` replies before the renderer can send onboarding:exit. If that renderer wedges after
+ * its durable save, finish the already-authorized opaque-to-transparent handoff from main instead of
+ * leaving a completed setup screen frozen forever. Never run this recovery around live audio or STT.
+ */
+function armCompletedOnboardingExitFallback(overlay: BrowserWindow): void {
+  clearCompletedOnboardingExitFallback()
+  let fallback!: { overlay: BrowserWindow; timer: ReturnType<typeof setTimeout> }
+  const timer = setTimeout(() => {
+    if (completedOnboardingExitFallback !== fallback) return
+    completedOnboardingExitFallback = null
+    if (!shouldRecoverCompletedOnboardingExit({
+      sameOverlay: win === overlay,
+      overlayDestroyed: overlay.isDestroyed(),
+      onboardingLive: onboardingExclusiveLive(),
+      overlayTransparent: overlayWindowTransparent,
+      listeningActive,
+      audioArmed,
+      cloudSttActive: cloudSttIpcOwner !== null
+    })) return
+    postOnboardingDestination = 'answer'
+    mainLog.warn('[onboarding] renderer missed completion handoff; recovering completed setup')
+    auditLog('app.recovery', { kind: 'onboarding-completion-handoff' })
+    exitExclusiveOnboardingStage()
+  }, ONBOARDING_EXIT_FALLBACK_MS)
+  fallback = { overlay, timer }
+  completedOnboardingExitFallback = fallback
+  timer.unref?.()
 }
 
 function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
@@ -2185,6 +2334,7 @@ function createWindow(): void {
   const placementDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const onboardingLive = onboardingExclusiveLive()
   const layout = liveOverlayLayout()
+  const placement = resolvedOverlayPlacementForDisplay(placementDisplay)
   const placementMetrics = getDisplayMetrics(placementDisplay)
   const firstPaint = firstPaintOverlayBounds({
     onboardingDone: !onboardingLive,
@@ -2192,7 +2342,9 @@ function createWindow(): void {
     workArea: placementDisplay.workArea,
     layout,
     metrics: placementMetrics,
-    topMargin: ISLAND_TOP_MARGIN
+    topMargin: ISLAND_TOP_MARGIN,
+    placement,
+    normalizedY: rightEdgeYForDisplay(placementDisplay)
   })
   if (onboardingLive) {
     currentWidth = firstPaint.width
@@ -2305,11 +2457,15 @@ function createWindow(): void {
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
   // may fire). Only clear the module ref when it still points at the window that closed.
   const self = win
+  // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
+  // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
+  const selfWebContentsId = self.webContents.id
   win.on('closed', () => {
+    clearCompletedOnboardingExitFallback(self)
     // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
     streams.forEach((s) => s.abort())
     streams.clear()
-    invalidateCloudSttOwner(self.webContents.id)
+    invalidateCloudSttOwner(selfWebContentsId)
     // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
     // a selected recording. Their checkpointed state resumes even if the entire app exits.
     if (win === self) {
@@ -2357,7 +2513,7 @@ function createWindow(): void {
     auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
     // A dead/reloading renderer cannot receive final STT messages or issue Stop. Force-close the live
     // socket before reload so provider callbacks cannot bleed into the new renderer session.
-    invalidateCloudSttOwner(self.webContents.id)
+    invalidateCloudSttOwner(selfWebContentsId)
     // MQA-038: recovery reloads the SAME window, so createWindow()'s crash/recovery guard above never
     // runs and the renderer-OWNED module state survives the renderer that set it. The remounted renderer
     // starts idle and never sends the listeningState(false) it owed us, so `listeningActive` would stay
@@ -2394,6 +2550,9 @@ function createWindow(): void {
   // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
   // The same helper is used by crash recovery, so the parser-time Act 1 shell cannot disappear there.
   const rendererUrl = overlayRendererUrl()
+  // The one-time onboarding destination belongs to this replacement only. Later renderer recovery
+  // should preserve the user's current surface rather than repeatedly forcing Settings.
+  postOnboardingDestination = 'answer'
   // MQA-318: opt-in release diagnostics only. Preserve app.started's boot semantics and never
   // equate entering createWindow with a loaded, responsive renderer. Register before navigation.
   if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
@@ -2493,9 +2652,11 @@ function resizeTo(height: number): void {
     return
   }
   const display = screen.getDisplayMatching(win.getBounds())
-  const rest = overlayRestSize(liveOverlayLayout(), getDisplayMetrics(display))
+  const layout = liveOverlayLayout()
+  const placement = resolvedOverlayPlacementForDisplay(display)
+  const rest = overlayRestSize(layout, getDisplayMetrics(display))
   // Hide rest is a 1–8px hairline. BAR_MIN_HEIGHT (44) must never grow it into Tony's slab.
-  if (!settingsSurfaceOpen && islandResting && liveOverlayLayout() === 'hide') return
+  if (!settingsSurfaceOpen && islandResting && layout === 'hide') return
   if (!settingsSurfaceOpen && shouldIgnoreResizeWhilePeekResting(islandResting, height, rest.height)) return
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
@@ -2509,7 +2670,7 @@ function resizeTo(height: number): void {
     settingsOpen: settingsSurfaceOpen,
     reportedHeight: height,
     minBarHeight: ASK_REVEAL_MIN_HEIGHT_PX,
-    usesHover: overlayUsesHover(liveOverlayLayout())
+    usesHover: overlayUsesHover(layout)
   })
   const h = clampHeight(Math.round(lifted), workArea.height)
   const b = win.getBounds()
@@ -2520,13 +2681,19 @@ function resizeTo(height: number): void {
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
   if (!isMinimized && !islandResting) lastBarHeight = rememberBarContentHeight(h, lastBarHeight)
-  // Resting hide/island stay at hoverRestTop (island hit). Revealed chrome sits at islandSafeTop
-  // (below the notch). Do not fight macOS by writing y=0 on the full bar every tick.
-  const metrics = getDisplayMetrics(display)
-  const y = islandResting ? hoverRestTop(metrics) : topClamp(liveOverlayLayout(), metrics, ISLAND_TOP_MARGIN)
-  // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
-  // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
-  const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
+  let x: number
+  let y: number
+  if (placement === 'right-edge') {
+    ;({ x, y } = overlayPositionForDisplay(currentWidth, h, layout, display, ISLAND_TOP_MARGIN))
+  } else {
+    // Resting hide/island stay at hoverRestTop (island hit). Revealed chrome sits at islandSafeTop
+    // (below the notch). Do not fight macOS by writing y=0 on the full bar every tick.
+    const metrics = getDisplayMetrics(display)
+    y = islandResting ? hoverRestTop(metrics) : topClamp(layout, metrics, ISLAND_TOP_MARGIN)
+    // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
+    // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
+    x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
+  }
   win.setBounds({ x, y, width: currentWidth, height: h }, false)
 }
 
@@ -2592,11 +2759,89 @@ const TOP_CENTER_MARGIN_PX = 24
 // anchor's OWN resting position, which intentionally sits closer to y=0).
 const RESIZE_EDGE_MARGIN = 8
 
-/** Where THIS window's top-center placement should land on a display, honoring the notch clamp
- *  (island/geometry.ts's topClamp) — the single call every top-anchor site in this file routes through,
- *  so hide/island rest at bounds.y (island hover hits) and bar floats on the work area. */
 function liveOverlayLayout(): OverlayLayout {
   return parseOverlayLayout(getSettings().overlayLayout)
+}
+
+/** Physical placement is separate from visual chrome. Older or malformed settings stay top-center. */
+function liveOverlayPlacement(): OverlayPlacement {
+  return parseOverlayPlacement(getSettings().overlayPlacement)
+}
+
+/** The sidecar falls back to the established top-center behavior on a constrained display. */
+function resolvedOverlayPlacementForDisplay(display: Electron.Display): OverlayPlacement {
+  return resolveOverlayPlacement(liveOverlayPlacement(), getDisplayMetrics(display))
+}
+
+function rightEdgeYForDisplay(display: Pick<Electron.Display, 'id'>): number | undefined {
+  const key = overlayDisplayKey(display.id)
+  if (!key) return undefined
+  const value = getSettings().overlayRightEdgeYByDisplay[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/** The one main-process bridge from live Electron displays to pure placement geometry. */
+function overlayPositionForDisplay(
+  width: number,
+  height: number,
+  layout: OverlayLayout,
+  display: Electron.Display,
+  topMargin: number
+): { x: number; y: number } {
+  return overlayPlacementPosition({
+    placement: liveOverlayPlacement(),
+    width,
+    height,
+    layout,
+    metrics: getDisplayMetrics(display),
+    topMargin,
+    normalizedY: rightEdgeYForDisplay(display)
+  })
+}
+
+function parkedOverlayBounds(layout: OverlayLayout, display: Electron.Display): Electron.Rectangle {
+  return parkAfterExclusiveOnboarding(
+    layout,
+    getDisplayMetrics(display),
+    ISLAND_TOP_MARGIN,
+    liveOverlayPlacement(),
+    rightEdgeYForDisplay(display)
+  )
+}
+
+function overlayHoverRestRect(layout: OverlayLayout, display: Electron.Display): Electron.Rectangle {
+  return hoverWatchRestRect(
+    layout,
+    getDisplayMetrics(display),
+    liveOverlayPlacement(),
+    rightEdgeYForDisplay(display)
+  )
+}
+
+/** Persist only the deliberate vertical sidecar position, trailing one drag gesture. */
+function queueRightEdgeYForDisplay(display: Pick<Electron.Display, 'id'>, normalizedY: number): void {
+  if (getLockedKeys().includes('overlayRightEdgeYByDisplay')) return
+  const key = overlayDisplayKey(display.id)
+  if (!key) return
+  const bounded = Math.max(0, Math.min(1, normalizedY))
+  pendingRightEdgeYByDisplay.set(key, bounded)
+  if (rightEdgeYSaveTimer) return
+  rightEdgeYSaveTimer = setTimeout(() => {
+    rightEdgeYSaveTimer = null
+    const pending = Object.fromEntries(pendingRightEdgeYByDisplay)
+    pendingRightEdgeYByDisplay.clear()
+    if (Object.keys(pending).length === 0 || liveOverlayPlacement() !== 'right-edge') return
+    try {
+      if (getLockedKeys().includes('overlayRightEdgeYByDisplay')) return
+      const settings = getSettings()
+      setSettings({
+        overlayRightEdgeYByDisplay: { ...settings.overlayRightEdgeYByDisplay, ...pending }
+      })
+    } catch (error) {
+      mainLog.warn('[overlay-placement] could not persist right-edge position', error)
+    }
+  }, 350)
+  rightEdgeYSaveTimer.unref?.()
 }
 
 function overlayCursorWatchWanted(): boolean {
@@ -2639,9 +2884,8 @@ function tickOverlayCursorWatch(): void {
     return
   }
   const display = screen.getDisplayMatching(win.getBounds())
-  const m = getDisplayMetrics(display)
   const layout = liveOverlayLayout()
-  const rest = hoverWatchRestRect(layout, m)
+  const rest = overlayHoverRestRect(layout, display)
   const windowVisible = win.isVisible()
   const bounds = win.getBounds()
   const cursor = screen.getCursorScreenPoint()
@@ -2722,9 +2966,8 @@ function scheduleOverlayLeavePark(): void {
 function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
   if (!win || win.isDestroyed()) return false
   const display = screen.getDisplayMatching(win.getBounds())
-  const m = getDisplayMetrics(display)
   const layout = liveOverlayLayout()
-  const rest = hoverWatchRestRect(layout, m)
+  const rest = overlayHoverRestRect(layout, display)
   const cursor = screen.getCursorScreenPoint()
   if (pointInRect(cursor, rest)) return true
   // The pill window is not the bar. Expanding it must not count as "pointer in bar".
@@ -2776,7 +3019,7 @@ function parkOverlayAfterHideSpring(): boolean {
   if (!overlayUsesHover(layout)) return false
   const display = screen.getDisplayMatching(win.getBounds())
   const before = win.getBounds()
-  const park = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  const park = parkedOverlayBounds(layout, display)
   currentWidth = park.width
   islandResting = true
   userAnchorY = park.y
@@ -2820,14 +3063,8 @@ function applyHideClickThrough(): void {
   }
 }
 
-function islandTopCenter(width: number, display: Electron.Display, topMargin: number): { x: number; y: number } {
-  return topCenterPosition(width, liveOverlayLayout(), getDisplayMetrics(display), topMargin)
-}
-
-/** Pin the overlay to the top-center of the display it is currently on, and re-arm the resizeTo anchor
- *  there, so the auto-hide peek strip and the revealed bar both grow DOWNWARD from the same safe Y
- *  (below the notch). Uses getDisplayMatching(win bounds) so it stays correct on the overlay's actual
- *  display. A pure setBounds — never show()/focus(). */
+/** Pin the overlay to its selected physical placement on its current display. The historic IPC name
+ * remains for renderer compatibility; top-center preserves the existing notch-aware behavior. */
 function anchorTopCenter(): void {
   if (!win) return
   if (onboardingExclusiveLive()) {
@@ -2843,7 +3080,13 @@ function anchorTopCenter(): void {
   }
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
-  const { x, y } = islandTopCenter(b.width, display, ISLAND_TOP_MARGIN)
+  const { x, y } = overlayPositionForDisplay(
+    b.width,
+    b.height,
+    liveOverlayLayout(),
+    display,
+    ISLAND_TOP_MARGIN
+  )
   userAnchorY = y // resizeTo slides against this, so a growing bar returns to the top edge when it shrinks
   win.setBounds({ x, y, width: b.width, height: b.height }, false)
 }
@@ -2874,7 +3117,6 @@ function restoreBarWidth(): void {
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   const layout = liveOverlayLayout()
-  const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
   // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
   let revealedHeight = overlayUsesHover(layout)
@@ -2883,8 +3125,18 @@ function restoreBarWidth(): void {
   if (isSettingsTallHeight(revealedHeight)) {
     revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
   }
-  const x = currentWidth === BAR_WIDTH ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
+  const wasBarWidth = currentWidth === BAR_WIDTH
   currentWidth = BAR_WIDTH
+  const placement = resolvedOverlayPlacementForDisplay(display)
+  let position: { x: number; y: number }
+  if (placement === 'right-edge') {
+    position = overlayPositionForDisplay(BAR_WIDTH, revealedHeight, layout, display, ISLAND_TOP_MARGIN)
+  } else {
+    // Preserve the historic top-center path verbatim.
+    const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+    position = { x: wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0), y }
+  }
+  const { x, y } = position
   // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
   if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
   win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
@@ -2938,7 +3190,7 @@ function setWindowMode(): void {
   }
   if (islandResting) {
     const display = screen.getDisplayMatching(win.getBounds())
-    const park = parkAfterExclusiveOnboarding(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+    const park = parkedOverlayBounds(liveOverlayLayout(), display)
     currentWidth = park.width
     userAnchorY = park.y
     commitParkedOverlayBounds(park)
@@ -2946,9 +3198,9 @@ function setWindowMode(): void {
     applyOverlaySurfaceChrome()
     return
   }
-  const { workArea } = screen.getDisplayMatching(win.getBounds())
+  const display = screen.getDisplayMatching(win.getBounds())
+  const { workArea } = display
   const b = win.getBounds()
-  const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, 16)
   // lastBarHeight was measured on whatever display the bar was on at the time. The renderer sends
   // windowMode('bar') on every mount — including the reload after a renderer crash — which can land after
   // the overlay has moved to a shorter monitor, so re-apply that monitor's ceiling instead of restoring a
@@ -2965,7 +3217,13 @@ function setWindowMode(): void {
   } catch {
     /* headless / lifted placement stub */
   }
-  win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(height, workArea.height) }, false)
+  const nextHeight = clampHeight(height, workArea.height)
+  const placement = resolvedOverlayPlacementForDisplay(display)
+  const position =
+    placement === 'right-edge'
+      ? overlayPositionForDisplay(currentWidth, nextHeight, liveOverlayLayout(), display, ISLAND_TOP_MARGIN)
+      : { x: recenterXForWidth(b.x, b.width, currentWidth, workArea, 16), y: b.y }
+  win.setBounds({ ...position, width: currentWidth, height: nextHeight }, false)
 }
 
 /** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
@@ -3479,6 +3737,27 @@ function moveBy(dx: number, dy: number): void {
   if (!w) return
   const b = w.getBounds()
   const fromDisplayId = screen.getDisplayMatching(b).id
+  // Right edge is a vertical-only sidecar. Keeping ownership on its current display avoids a
+  // misleading cross-display drag while preserving a stable per-display normalized Y.
+  const display = screen.getDisplayMatching(b)
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+    const height = clampHeight(b.height, display.workArea.height)
+    const normalizedY = normalizeRightEdgeY(b.y + dy, height, getDisplayMetrics(display))
+    const position = overlayPlacementPosition({
+      placement: 'right-edge',
+      width: b.width,
+      height,
+      layout: liveOverlayLayout(),
+      metrics: getDisplayMetrics(display),
+      topMargin: ISLAND_TOP_MARGIN,
+      normalizedY
+    })
+    const next = { ...b, ...position, height }
+    userAnchorY = next.y
+    if (dy !== 0) queueRightEdgeYForDisplay(display, normalizedY)
+    w.setBounds(next)
+    return
+  }
   const x = b.x + dx
   const y = b.y + dy
   // Free movement anywhere that keeps the window reachable on SOME display — covers dragging clean
@@ -3521,20 +3800,44 @@ function registerScreenListeners(): void {
     // Hide at bounds.y is outside a notched workArea; that is the park, not "off-screen".
     {
       const display = screen.getDisplayMatching(win.getBounds())
+      const layout = liveOverlayLayout()
+      const placement = resolvedOverlayPlacementForDisplay(display)
       const park = parkedHoverReanchor(
-        liveOverlayLayout(),
+        layout,
         islandResting,
         getDisplayMetrics(display),
-        ISLAND_TOP_MARGIN
+        ISLAND_TOP_MARGIN,
+        placement,
+        rightEdgeYForDisplay(display)
       )
       if (park) {
         overlayCursorWatchHovering = false
-        parkOverlayAfterHideSpring()
+        if (placement === 'right-edge') {
+          currentWidth = park.width
+          userAnchorY = park.y
+          applyOverlaySurfaceChrome()
+          commitParkedOverlayBounds(park)
+          applyHideClickThrough()
+        } else {
+          parkOverlayAfterHideSpring()
+        }
         return
       }
     }
     const b = win.getBounds()
-    const { workArea: wa } = screen.getDisplayMatching(b)
+    const display = screen.getDisplayMatching(b)
+    // A sidecar owns its screen edge, so topology changes must recompute both axes from its
+    // persisted normalized Y before generic reachability logic considers a free-form position.
+    if (!settingsSurfaceOpen && resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+      const height = clampHeight(b.height, display.workArea.height)
+      const position = overlayPositionForDisplay(b.width, height, liveOverlayLayout(), display, ISLAND_TOP_MARGIN)
+      userAnchorY = position.y
+      if (b.x !== position.x || b.y !== position.y || b.height !== height) {
+        win.setBounds({ ...b, ...position, height })
+      }
+      return
+    }
+    const { workArea: wa } = display
     // Height first, and BEFORE the reachability guard below. A window grown to fit a tall display keeps
     // that height when the display is unplugged or its resolution shrinks — and in that state it is
     // normally still partly visible, so the guard would skip exactly the case that leaves the overlay
@@ -4106,6 +4409,36 @@ function registerIpc(): void {
     return result
   })
 
+  // `settings:set` must return before either onboarding transition replaces its BrowserWindow.
+  // Destroying the renderer from inside its own invoke handler can cut off the durable-save response.
+  // The renderer only sends these one-way events after that response lands.
+  ipcMain.on(IPC.onboardingEnter, (e) => {
+    if (!isMainWindowSender(e)) return
+    // This channel is exposed to the trusted renderer, but it must not be able to force a completed
+    // session back into an opaque full-screen constructor swap. A real replay has already persisted
+    // onboardingDone:false before it sends this event.
+    if (!onboardingExclusiveLive()) return
+    // The persisted setting already says onboarding is live, so it cannot identify whether this is a
+    // replay from a transparent overlay or a freshly-created opaque onboarding window. The constructor
+    // state can: only the former needs a replacement.
+    if (!win || win.isDestroyed() || !overlayWindowTransparent) return
+    applyExclusiveOnboardingStage(win)
+    try {
+      showForExclusiveOnboarding(win)
+    } catch {
+      /* headless */
+    }
+  })
+
+  ipcMain.on(IPC.onboardingExit, (e, destination: unknown) => {
+    if (!isMainWindowSender(e)) return
+    if (onboardingExclusiveLive()) return
+    if (!win || win.isDestroyed()) return
+    clearCompletedOnboardingExitFallback(win)
+    postOnboardingDestination = destination === 'settings' ? 'settings' : 'answer'
+    exitExclusiveOnboardingStage()
+  })
+
   ipcMain.handle(IPC.settingsSet, async (e, patch) => {
     assertMainWindow(e)
     // Trust boundary is main, not the renderer's SignInWall — block the mutation for an unauthenticated
@@ -4247,31 +4580,21 @@ function registerIpc(): void {
     }
     const next = setSettingsWithSpeakerPolicy(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
-    // Exclusive stage exits only here: onboardingDone false→true. Replay (true→false) re-enters it.
-    if (!cur.onboardingDone && next.onboardingDone) {
-      lockOnboardingAudioInRenderer(win)
-      exitExclusiveOnboardingStage()
-    }
-    else if (cur.onboardingDone && !next.onboardingDone && win && !win.isDestroyed()) {
-      applyExclusiveOnboardingStage(win)
-      try {
-        showForExclusiveOnboarding(win)
-      } catch {
-        /* headless */
-      }
-    }
+    // Both onboarding transitions replace the window only after this handler replies: `onboarding:enter`
+    // for Replay, `onboarding:exit` for Act 6. Never destroy this renderer in the middle of its invoke.
     if (next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
       const layout = parseOverlayLayout(next.overlayLayout)
+      const layoutChanged = cur.overlayLayout !== next.overlayLayout
+      const placementChanged = cur.overlayPlacement !== next.overlayPlacement
       if (overlayUsesHover(layout)) {
         // Re-arm on every settings write, not only a layout change. CDP setSettings(Hide)
         // while already Hide used to leave a dead watch until tray Show/Hide.
         startOverlayCursorWatch()
-        if (cur.overlayLayout !== next.overlayLayout) {
+        if (layoutChanged) {
           // Switching to Hide/Island must park. A leftover Circle pill or Settings-tall
           // ghost was Ultron 880×1017 + Expand Métis. Keep a real Settings panel open.
           isMinimized = false
           const display = screen.getDisplayMatching(win.getBounds())
-          const metrics = getDisplayMetrics(display)
           if (
             !settingsSurfaceOpen &&
             shouldParkHoverRestAfterLeavingSurface({
@@ -4280,19 +4603,46 @@ function registerIpc(): void {
             })
           ) {
             overlayCursorWatchHovering = false
-            const park = parkAfterExclusiveOnboarding(layout, metrics, ISLAND_TOP_MARGIN)
+            const park = parkedOverlayBounds(layout, display)
             currentWidth = park.width
             islandResting = true
             userAnchorY = park.y
-            win.setBounds(park, false)
+            commitParkedOverlayBounds(park)
             applyHideClickThrough()
             notifyOverlayCursorHover(false)
           }
+        } else if (placementChanged && !settingsSurfaceOpen) {
+          // Physical placement changes do not imply a chrome change. Preserve whether the overlay is
+          // parked or revealed, but move it immediately to its valid position.
+          const display = screen.getDisplayMatching(win.getBounds())
+          if (islandResting) {
+            const park = parkedOverlayBounds(layout, display)
+            currentWidth = park.width
+            userAnchorY = park.y
+            overlayCursorWatchHovering = false
+            applyOverlaySurfaceChrome()
+            commitParkedOverlayBounds(park)
+            applyHideClickThrough()
+          } else {
+            const b = win.getBounds()
+            const position = overlayPositionForDisplay(b.width, b.height, layout, display, ISLAND_TOP_MARGIN)
+            userAnchorY = position.y
+            win.setBounds({ ...b, ...position }, false)
+          }
         }
-      } else if (cur.overlayLayout !== next.overlayLayout) {
+      } else if (layoutChanged || placementChanged) {
         stopOverlayCursorWatch()
         restoreBarWidth()
       }
+    }
+    if (
+      cur.onboardingDone === false &&
+      next.onboardingDone === true &&
+      win &&
+      !win.isDestroyed() &&
+      !overlayWindowTransparent
+    ) {
+      armCompletedOnboardingExitFallback(win)
     }
     // Flipping follow-up memory is itself a conversation boundary. Without this, turning it ON would
     // retroactively inherit the Q&A recorded — and the Dust conversation created — while the user was
@@ -5999,6 +6349,7 @@ function registerIpc(): void {
   // (MQA-187). Folded into this one channel deliberately: no second push channel to keep in sync, and
   // nothing new crosses the boundary beyond a status word and a fraction.
   ipcMain.handle(IPC.localModelsList, (e) => {
+    if (isRecentlyRetiredOverlaySender(e)) return []
     assertMainWindow(e)
     return listLocalModels(localModelDownloadState())
   })
@@ -7946,6 +8297,7 @@ function registerIpc(): void {
     restoreBarWidth()
   })
   ipcMain.handle(IPC.overlayParkAfterHide, (e) => {
+    if (isRecentlyRetiredOverlaySender(e)) return
     assertMainWindow(e)
     parkOverlayAfterHideSpring()
   })
@@ -8426,6 +8778,7 @@ if (!app.requestSingleInstanceLock()) {
     // into userData) instead of silently downloading from a CDN. Development may still use its explicit remote path.
     const ASR_BUNDLED = app.isPackaged || asrManifestComplete(RES_BASE)
     ipcMain.handle(IPC.asrBundled, (e) => {
+      if (isRecentlyRetiredOverlaySender(e)) return true
       assertMainWindow(e)
       return ASR_BUNDLED
     })

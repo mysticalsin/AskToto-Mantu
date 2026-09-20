@@ -539,7 +539,7 @@ export function useSettings(): {
   settings: PublicSettings | null
   bootError: string | null
   refresh: () => Promise<void>
-  patch: (p: SettingsPatch) => Promise<void>
+  patch: (p: SettingsPatch) => Promise<PublicSettings>
   saveKey: (provider: ProviderId, k: string) => Promise<void>
   recoverEncryptedProfile: () => Promise<ProfileRecoveryResult>
   clearKey: (provider: ProviderId) => Promise<void>
@@ -605,7 +605,9 @@ export function useSettings(): {
     }
   }, [refresh])
   const patch = useCallback(async (p: Partial<PublicSettings>) => {
-    setSettings(await window.toto.setSettings(p))
+    const next = await window.toto.setSettings(p)
+    setSettings(next)
+    return next
   }, [])
   const saveKey = useCallback(
     async (provider: ProviderId, k: string) => {
@@ -672,6 +674,9 @@ export function useAuth(): {
     // Swallow post-boot poll/focus failures; the boot loader below owns first-paint recovery.
     try {
       setStatus(await window.toto.authStatus())
+      // A later successful retry means the onboarding finish gate can safely reopen; otherwise an
+      // old timeout leaves the recovery screen stuck even though main is answering again.
+      setBootError(null)
     } catch (e) {
       console.error('[auth] refresh failed', e)
     }

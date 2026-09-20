@@ -55,7 +55,7 @@ describe('Bar idle must not keep a Settings-tall ghost slab', () => {
     expect(index).toMatch(/rememberBarContentHeight/)
     expect(index).toMatch(/isSettingsTallHeight/)
     expect(index).toMatch(/BAR_IDLE_HEIGHT_PX/)
-    expect(index).toMatch(/usesHover: overlayUsesHover\(liveOverlayLayout\(\)\)/)
+    expect(index).toMatch(/usesHover: overlayUsesHover\(layout\)/)
     expect(index).toMatch(/if \(settingsSurfaceOpen\) return/)
     expect(index).toMatch(/A Settings-tall lastBarHeight was the gray box under Jarvis/)
     expect(index).toMatch(/if \(settingsSurfaceOpen && !isMinimized\)/)

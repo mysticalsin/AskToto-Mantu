@@ -6,7 +6,7 @@ import { app } from 'electron'
 import { PROVIDER_IDS } from '@shared/providers'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
-import { extractionSlug, startBackfill, whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress, extractionSlug, startBackfill, whenIndexWritesSettle } from './ingest'
 import { readIndex, readMeetingExtraction, writeIndex, writeMeetingExtraction } from './store'
 
 vi.mock('electron')
@@ -46,9 +46,10 @@ describe('team-transcript ingest', () => {
   })
 
   afterEach(async () => {
-    // The queue draining is not the same as the writes landing: the last job’s index.json record is
-    // still on ingest.ts’s serialized lane at that moment. Await it, or the stale write lands during
-    // the NEXT test (and races this rmSync — ENOTEMPTY on the Windows CI runner).
+    // Seeing the first durable ingested record is not the same as the full queue becoming idle: backfill
+    // finalization still schedules its lint/publication/index writes after that point. Wait for the real
+    // worker lifecycle first, then its serialized index tail, before deleting this profile.
+    await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
     await whenIndexWritesSettle()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
