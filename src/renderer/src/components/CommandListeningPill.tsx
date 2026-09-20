@@ -102,7 +102,8 @@ export function CommandListeningPill({
       {onStop ? (
         <button
           type="button"
-          className="shrink-0 rounded-full px-2 py-0.5 text-[11px] text-white/70 hover:bg-white/10 hover:text-white"
+          aria-label="Stop command listening"
+          className="no-drag shrink-0 rounded-full px-2 py-0.5 text-[11px] text-white/70 hover:bg-white/10 hover:text-white"
           onClick={onStop}
         >
           Esc

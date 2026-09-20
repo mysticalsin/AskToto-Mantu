@@ -18,16 +18,29 @@ describe('Cap2 command session', () => {
     expect(s.pillVisible).toBe(false)
   })
 
-  it('wake inside meeting stream activates and may execute (wake ≠ listen-only)', () => {
+  it('meeting audio cannot activate or execute even when it contains the wake word', () => {
     let s = idleMetisCommandSession()
     s = reduceMetisCommandSession(s, {
       type: 'transcript',
       text: 'Métis open notes',
       channel: 'meeting'
     })
-    expect(s.active).toBe(true)
-    expect(s.chime).toBe('single')
-    expect(s.pending.map((p) => p.id)).toEqual(['desktop.open_notes'])
+    expect(s).toEqual(idleMetisCommandSession())
+  })
+
+  it('meeting audio cannot add an action to an already trusted command session', () => {
+    let s = reduceMetisCommandSession(idleMetisCommandSession(), {
+      type: 'transcript',
+      text: 'Métis',
+      channel: 'command'
+    })
+    s = reduceMetisCommandSession(s, {
+      type: 'transcript',
+      text: 'Métis open notes',
+      channel: 'meeting'
+    })
+    expect(s.pending).toEqual([])
+    expect(s.liveTranscript).toBe('Métis')
   })
 
   it('wake word starts session with single chime + Hi Métis', () => {
@@ -35,7 +48,7 @@ describe('Cap2 command session', () => {
     s = reduceMetisCommandSession(s, {
       type: 'transcript',
       text: 'Hey Métis',
-      channel: 'always'
+      channel: 'command'
     })
     expect(s.active).toBe(true)
     expect(s.pillVisible).toBe(true)
@@ -78,7 +91,7 @@ describe('Cap2 command session', () => {
 
   it('Stop/Escape is local immediate deactivate', () => {
     let s = idleMetisCommandSession()
-    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'Métis', channel: 'always' })
+    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'Métis', channel: 'command' })
     s = reduceMetisCommandSession(s, { type: 'stop' })
     expect(s.chime).toBe('double')
     expect(s.reason).toBe('local_stop')

@@ -586,6 +586,7 @@ import {
 } from './operator-ingest'
 import {
   ensureMetisCommandRuntime,
+  getMetisCommandRuntime,
   ingestMetisCommandFromAsr,
   registerMetisCommandIpc
 } from './metis-command-register'
@@ -1037,6 +1038,7 @@ function isRecentlyRetiredOverlaySender(event: Electron.IpcMainInvokeEvent): boo
 type CloudSttIpcOwner = { webContentsId: number; generation: number; captureId?: string }
 let cloudSttIpcGeneration = 0
 let cloudSttIpcOwner: CloudSttIpcOwner | null = null
+let cloudSttCommandOwner: CloudSttIpcOwner | null = null
 
 /** Only the renderer that opened the current live-STT session may receive its tail callbacks. */
 function isCurrentCloudSttOwner(
@@ -1051,11 +1053,21 @@ function isCurrentCloudSttOwner(
   )
 }
 
+/** Commands are an opt-in privilege of the current local-microphone capture only. */
+function isCurrentCloudSttCommandOwner(
+  owner: CloudSttIpcOwner,
+  sender: { id: number; isDestroyed: () => boolean }
+): boolean {
+  return cloudSttCommandOwner === owner && isCurrentCloudSttOwner(owner, sender)
+}
+
 /** Renderer replacement/close is a hard boundary: never leave cloud sockets or old callbacks alive. */
 function invalidateCloudSttOwner(webContentsId?: number): void {
   if (webContentsId !== undefined && cloudSttIpcOwner?.webContentsId !== webContentsId) return
   cloudSttIpcGeneration += 1
   cloudSttIpcOwner = null
+  cloudSttCommandOwner = null
+  getMetisCommandRuntime()?.reset('cloud_stt_owner_invalidated')
   void stopCloudSttLive()
 }
 // Fresh-question boundary state (written by IPC.listeningState / IPC.askResetContext / IPC.askStart, all
@@ -3909,14 +3921,67 @@ const shortcutActions: Record<string, () => void> = {
 }
 
 // Reserved macOS escape hatch. This intentionally stays outside Settings' configurable shortcuts:
-// it must keep its meaning even if a user imports or edits shortcut settings. It is a graceful app
-// quit, not an OS-level kill; `before-quit` below retains its bounded transcript flush. If Electron's
-// main process itself is unresponsive, macOS's native Option+Command+Escape remains the recovery path.
+// it must keep its meaning even if a user imports or edits shortcut settings. It asks for a graceful
+// app quit first, so `before-quit` below keeps its bounded transcript flush. If Electron's main process
+// itself is unresponsive, macOS's native Option+Command+Escape remains the recovery path.
 const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command+Control+Escape'
 
+// `before-quit` gives a live meeting 2s to flush before it re-quits, so the polite path needs longer
+// than that to finish. Past it, being polite is the bug: a renderer wedged mid-onboarding never answers
+// the flush hotkey and its unresponsive window can keep the quit from completing at all — which is the
+// exact freeze this accelerator exists to escape. The user pressed the escape hatch; it must escape.
+const EMERGENCY_FORCE_QUIT_GRACE_MS = 4000
+
+let emergencyQuitWatchdog: NodeJS.Timeout | null = null
+
+/** Kill what outlives the process when it dies without `will-quit`. `app.exit()` never emits that event,
+ *  so the hard path has to repeat its sidecar teardown here: an orphaned llama-server, fm-serve loopback
+ *  or screen-watcher child outliving the app is strictly worse than the freeze the user just escaped.
+ *  Deliberately a copy rather than a shared helper — several source-contract tests pin these exact calls
+ *  inside the `will-quit` handler body, and each step keeps its own try so one throw cannot skip a kill. */
+function stopSidecarsForHardExit(): void {
+  try {
+    screenPreprocess.stop()
+  } catch (e) {
+    mainLog.warn('[force-quit] screenPreprocess.stop failed', e)
+  }
+  try {
+    localRuntime.stop()
+  } catch (e) {
+    mainLog.warn('[force-quit] localRuntime.stop failed', e)
+  }
+  try {
+    fmRuntime.stop()
+  } catch (e) {
+    mainLog.warn('[force-quit] fmRuntime.stop failed', e)
+  }
+  // A deliberate quit is a normal exit, not an early death — close the boot watch so the NEXT launch is
+  // not pushed into safe start by a user who simply escaped a hung window (mirrors `will-quit`).
+  try {
+    setBootPowerSaveBlock(false)
+    endBootWatch(app.getPath('userData'))
+  } catch (e) {
+    mainLog.warn('[force-quit] endBootWatch failed', e)
+  }
+}
+
 function forceQuitMétis(): void {
+  // Second press means the first one did not get the process down. Stop asking.
+  if (emergencyQuitWatchdog) {
+    mainLog.warn('[lifecycle] emergency quit pressed again — exiting now')
+    stopSidecarsForHardExit()
+    app.exit(0)
+    return
+  }
   mainLog.warn('[lifecycle] emergency graceful quit requested')
   app.quit()
+  emergencyQuitWatchdog = setTimeout(() => {
+    mainLog.warn('[lifecycle] graceful quit did not complete — forcing exit')
+    stopSidecarsForHardExit()
+    app.exit(0)
+  }, EMERGENCY_FORCE_QUIT_GRACE_MS)
+  // Never let the watchdog itself be the handle that keeps a quitting process alive.
+  emergencyQuitWatchdog.unref?.()
 }
 
 function registerEmergencyForceQuitShortcut(): boolean {
@@ -4885,10 +4950,7 @@ function registerIpc(): void {
     jevEnabled: () => false // Cap1 heartbeat flag parse lands with feel E2E; deterministic path required.
   })
   registerMetisCommandIpc({
-    assertMainWindow,
-    getWindow: () => win,
-    getSettings: () => getSettings(),
-    jevEnabled: () => false
+    assertMainWindow
   })
 
   ipcMain.handle(IPC.operatorStatus, (e) => {
@@ -6251,6 +6313,8 @@ function registerIpc(): void {
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
       await observeOperatorAudio(p.samples, speakerKey)
+      // Cap2: local-mic YOU track only (same trust boundary as cloud command owner).
+      if (typeof text === 'string' && text.trim()) ingestMetisCommandFromAsr(text)
     }
     return { text }
   })
@@ -6276,6 +6340,8 @@ function registerIpc(): void {
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
       await observeOperatorAudio(p.samples, speakerKey)
+      // Cap2: local-mic YOU track only (same trust boundary as cloud command owner).
+      if (typeof text === 'string' && text.trim()) ingestMetisCommandFromAsr(text)
     }
     return { text }
   })
@@ -6310,6 +6376,9 @@ function registerIpc(): void {
       generation: ++cloudSttIpcGeneration,
       captureId
     }
+    // A new capture revokes any previously armed command session before its callbacks can overlap.
+    cloudSttCommandOwner = null
+    getMetisCommandRuntime()?.reset('cloud_stt_replaced')
     cloudSttIpcOwner = owner
     // A fresh start is an explicit replacement, not a graceful end of the prior capture.
     const result = await replaceCloudSttSessionIfCurrent({
@@ -6334,18 +6403,17 @@ function registerIpc(): void {
           },
           {
             onFinal: (line) => {
-              if (isCurrentCloudSttOwner(owner, e.sender)) e.sender.send(IPC.cloudSttFinal, line)
-              const spoken = typeof line === 'string' ? line : (line as { text?: string })?.text
-              if (typeof spoken === 'string' && spoken.trim()) {
-                ingestMetisCommandFromAsr(spoken, 'meeting')
+              if (!isCurrentCloudSttOwner(owner, e.sender)) return
+              e.sender.send(IPC.cloudSttFinal, line)
+              if (isCurrentCloudSttCommandOwner(owner, e.sender) && line.speaker === 'you' && line.text.trim()) {
+                ingestMetisCommandFromAsr(line.text)
               }
             },
             onInterim: (channel, text) => {
-              if (isCurrentCloudSttOwner(owner, e.sender)) {
-                e.sender.send(IPC.cloudSttInterim, { channel, text })
-              }
-              if (typeof text === 'string' && text.trim()) {
-                ingestMetisCommandFromAsr(text, 'meeting')
+              if (!isCurrentCloudSttOwner(owner, e.sender)) return
+              e.sender.send(IPC.cloudSttInterim, { channel, text })
+              if (isCurrentCloudSttCommandOwner(owner, e.sender) && channel === 'you' && text.trim()) {
+                ingestMetisCommandFromAsr(text)
               }
             },
             onError: (message) => {
@@ -6354,7 +6422,12 @@ function registerIpc(): void {
           }
         )
     })
-    if (!result.ok && cloudSttIpcOwner === owner) cloudSttIpcOwner = null
+    if (result.ok && cloudSttIpcOwner === owner) {
+      cloudSttCommandOwner = owner
+    } else if (cloudSttIpcOwner === owner) {
+      cloudSttIpcOwner = null
+      cloudSttCommandOwner = null
+    }
     return result
   })
   ipcMain.handle(IPC.cloudSttStop, async (e, payload: unknown) => {
@@ -6366,8 +6439,14 @@ function registerIpc(): void {
     // unscoped stops remain accepted only for a legacy owner that was started without an identity.
     if (!cloudSttRequestBelongsToOwner(owner.captureId, p.captureId)) return { timedOut: false }
     const force = p.force === true
+    // Graceful provider shutdown can still emit finals; they remain transcript-only after Stop.
+    cloudSttCommandOwner = null
+    getMetisCommandRuntime()?.reset('cloud_stt_stop')
     const result = await stopCloudSttLive({ graceful: !force, timeoutMs: 5_000 })
-    if (cloudSttIpcOwner === owner) cloudSttIpcOwner = null
+    if (cloudSttIpcOwner === owner) {
+      cloudSttIpcOwner = null
+      cloudSttCommandOwner = null
+    }
     return result
   })
   ipcMain.handle(IPC.cloudSttPush, (e, payload: unknown) => {

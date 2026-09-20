@@ -546,12 +546,8 @@ const api = {
   licenseConfig: (payload: LicenseConfigPayload): Promise<LicenseConfigResult> =>
     ipcRenderer.invoke(IPC.licenseConfig, payload),
 
-  // Métis 2.0 Cap 2 — command session pill / local stop
+  // Métis 2.0 Cap 2 — command session pill / local stop. Transcript ingestion is main-owned.
   metisCommandStop: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.metisCommandStop),
-  metisCommandIngest: (payload: {
-    text: string
-    channel?: 'meeting' | 'command' | 'always'
-  }): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.metisCommandIngest, payload),
   onMetisCommandState: (
     cb: (state: {
       phase: string

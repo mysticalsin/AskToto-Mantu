@@ -17,6 +17,8 @@ describe('Cap2 CommandListeningPill contract', () => {
     expect(src).toMatch(/playChime/)
     expect(src).toMatch(/double/)
     expect(src).toMatch(/Escape/)
+    expect(src).toMatch(/aria-label="Stop command listening"/)
+    expect(src).toMatch(/className="no-drag shrink-0/)
   })
 
   it('shows live transcript after listening copy', () => {
