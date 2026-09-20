@@ -33,7 +33,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useCallback, useEffect, useId, useRef, useState, lazy, Suspense, type Ref, useLayoutEffect } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type Ref, useLayoutEffect } from 'react'
 import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
@@ -74,9 +74,6 @@ import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
 import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
 /** Act 2 only — keep DemoScene/Bar off Act 1 first-paint parse in this chunk. */
-const OnboardingDemoScene = lazy(() =>
-  import('./OnboardingDemoScene').then((m) => ({ default: m.OnboardingDemoScene }))
-)
 import { OnboardingAppearance } from './OnboardingAppearance'
 import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
@@ -111,6 +108,7 @@ import {
   type OnboardingCompletionState
 } from '../lib/onboarding-completion'
 import { createOnboardingMusicBed, haltAllOnboardingAudio, lockOnboardingAudio } from '../lib/onboarding-music'
+import { OnboardingDemoScene } from './OnboardingDemoScene'
 import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand, requestOnboardingPortalOpen } from '../lib/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
@@ -1526,8 +1524,9 @@ export function OnboardingExperience({
           <button
             type="button"
             onClick={() => {
+              // P0 Tony: reveal/demo Suspense hung black after story Continue — skip to next act.
               playHero()
-              setScene('reveal')
+              setScene(sceneAfterReveal())
             }}
             className="onboard-cta no-drag focus-ring"
           >
@@ -1537,12 +1536,7 @@ export function OnboardingExperience({
       )}
 
       {scene === 'reveal' && (
-        <Suspense
-          fallback={
-            <div className="flex flex-col items-center gap-6">
-              <p className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">See Métis in action</p>
-              <button type="button" className="onboard-cta no-drag focus-ring" onClick={() => setScene(sceneAfterReveal())}>
-                Continue
+        Continue
               </button>
             </div>
           }
@@ -1556,7 +1550,7 @@ export function OnboardingExperience({
             }}
             onPlayVideo={() => playHero()}
           />
-        </Suspense>
+        
       )}
 
       {scene === 'setup' && (
