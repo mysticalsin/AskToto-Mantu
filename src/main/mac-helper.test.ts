@@ -91,11 +91,16 @@ describe('macScreenMetricsSpawnSpec / getMacScreenMetrics (MQA-275 — island no
     }
   })
 
-  it('degrades to null (never throws) when the helper binary is absent — proven on this non-darwin CI host', async () => {
-    // This VM has no darwin helper binary at all, so macHelperPresent() is false regardless of platform
-    // mocking, and getMacScreenMetrics must resolve null rather than reject/hang.
-    const result = await getMacScreenMetrics()
-    expect(result).toBeNull()
+  it('degrades to null (never throws) when the current platform cannot have the helper', async () => {
+    // This must be controlled by the test. A valid macOS release build provisions the helper, so relying
+    // on this checkout not having one makes the test fail precisely after a successful package build.
+    const originalPlatform = process.platform
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      await expect(getMacScreenMetrics()).resolves.toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+    }
   })
 })
 
