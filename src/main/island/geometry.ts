@@ -184,7 +184,7 @@ export const OVERLAY_BAR_REST = { width: 880, height: 84 } as const
  * is deliberately narrower than the 880 bar and taller than it. Main owns this size in both states: the
  * renderer never grows the dock the way it grows the bar.
  */
-export const OVERLAY_DOCK_PANEL = { width: 300, height: 560 } as const
+export const OVERLAY_DOCK_PANEL = { width: 380, height: 560 } as const
 /**
  * Dock rest: a slim vertical sliver on the edge. Unlike Hide's 8x2 hairline this is VISIBLE and
  * clickable — it is the affordance that says Métis is there.
