@@ -29,15 +29,16 @@ export function looksLikeAccessHtml(text: string): boolean {
   return t.indexOf('<!doctype') >= 0 || t.indexOf('<html') >= 0 || t.indexOf('cf-access') >= 0
 }
 
-export async function api(path: string, body?: unknown): Promise<any> {
+export async function api(path: string, body?: unknown, method?: string): Promise<any> {
   await ensureSession()
   var r: Response
   var headers: Record<string, string> = { accept: 'application/json' }
   if (body) headers['content-type'] = 'application/json'
   if (sessionBearer) headers.authorization = 'Bearer ' + sessionBearer
+  var verb = method || (body ? 'POST' : 'GET')
   try {
     r = await fetch(path, {
-      method: body ? 'POST' : 'GET',
+      method: verb,
       credentials: 'include',
       headers: headers,
       body: body ? JSON.stringify(body) : undefined

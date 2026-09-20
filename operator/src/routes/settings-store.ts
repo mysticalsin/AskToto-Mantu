@@ -27,9 +27,22 @@ export interface OperatorSettingsValue {
   dailyTokenBudgetPerSeat: number | null
   density: SettingsDensity
   reducedMotion: SettingsReducedMotion
+  /** Portal kill switch for fleet Jev /v1/decide (Cap 1). */
+  jevEnabled: boolean
+  jevDesktop: boolean
+  jevIntel: boolean
 }
 
-export const SETTINGS_KEYS = ['hourlyRate', 'currency', 'dailyTokenBudgetPerSeat', 'density', 'reducedMotion'] as const
+export const SETTINGS_KEYS = [
+  'hourlyRate',
+  'currency',
+  'dailyTokenBudgetPerSeat',
+  'density',
+  'reducedMotion',
+  'jevEnabled',
+  'jevDesktop',
+  'jevIntel'
+] as const
 export type SettingsKey = (typeof SETTINGS_KEYS)[number]
 
 export const DEFAULT_OPERATOR_SETTINGS: OperatorSettingsValue = {
@@ -37,7 +50,10 @@ export const DEFAULT_OPERATOR_SETTINGS: OperatorSettingsValue = {
   currency: 'USD',
   dailyTokenBudgetPerSeat: null,
   density: 'comfortable',
-  reducedMotion: 'system'
+  reducedMotion: 'system',
+  jevEnabled: true,
+  jevDesktop: true,
+  jevIntel: true
 }
 
 /** Appended verbatim to `schema-alter.sql`. `CREATE TABLE IF NOT EXISTS` (migrate.mjs / migrate
@@ -84,6 +100,10 @@ export function validateSettingValue(key: SettingsKey, raw: unknown): OperatorSe
       return raw === 'comfortable' || raw === 'compact' ? raw : INVALID
     case 'reducedMotion':
       return raw === 'system' || raw === 'reduce' ? raw : INVALID
+    case 'jevEnabled':
+    case 'jevDesktop':
+    case 'jevIntel':
+      return typeof raw === 'boolean' ? raw : INVALID
     default:
       return INVALID
   }

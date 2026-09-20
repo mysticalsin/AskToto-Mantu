@@ -252,9 +252,56 @@ function wireRotateDialog(): void {
   }
 }
 
+function bindJevForms(): void {
+  var form = document.getElementById('jev-key-form') as HTMLFormElement | null
+  if (form) {
+    form.addEventListener('submit', async function (e) {
+      e.preventDefault()
+      var msg = document.getElementById('jev-key-msg')
+      var fd = new FormData(form!)
+      var j = await api('/v1/admin/keys', {
+        provider: 'typesafe_jev',
+        label: fd.get('label') || 'TypeSafe Jev',
+        secret: fd.get('secret')
+      })
+      showKey(msg, j)
+      if (j && j.ok) {
+        toast({ kind: 'ok', text: 'Jev key saved (last4 only).' })
+        rerender('keys')
+      }
+    })
+  }
+  var testBtn = document.getElementById('jev-test')
+  if (testBtn) {
+    testBtn.addEventListener('click', async function () {
+      var msg = document.getElementById('jev-key-msg')
+      var formEl = document.getElementById('jev-key-form') as HTMLFormElement | null
+      var secret = formEl ? (new FormData(formEl).get('secret') as string) || '' : ''
+      var payload: Record<string, string> = secret.trim() ? { secret: secret.trim() } : {}
+      var j = await api('/v1/admin/keys/test-jev', payload)
+      showKey(msg, j && j.ok ? { ok: true, last4: 'test-ok', status: 'reachable' } : j)
+      if (j && j.ok) toast({ kind: 'ok', text: 'TypeSafe reachable (key stays on portal).' })
+      else toast({ kind: 'error', text: (j && j.error) || 'TypeSafe test failed.' })
+    })
+  }
+  document.querySelectorAll<HTMLElement>('[data-jev-enable]').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      var enabled = b.getAttribute('data-jev-enable') === 'true'
+      var j = await api('/v1/admin/settings.json', { jevEnabled: enabled }, 'PATCH')
+      if (j && j.ok) {
+        toast({ kind: 'ok', text: enabled ? 'Jev fleet enabled.' : 'Jev fleet disabled.' })
+        rerender('keys')
+      } else {
+        toast({ kind: 'error', text: (j && j.error) || 'Could not update Jev enable.' })
+      }
+    })
+  })
+}
+
 export function initKeyForms(): void {
   bindKeyAdd(document.getElementById('key-add') as HTMLFormElement | null, 'key-msg')
   bindKeyAdd(document.getElementById('key-add-settings') as HTMLFormElement | null, 'key-msg-settings')
+  bindJevForms()
 
   wireRotateDialog()
   document.querySelectorAll<HTMLElement>('[data-rotate]').forEach(function (b) {

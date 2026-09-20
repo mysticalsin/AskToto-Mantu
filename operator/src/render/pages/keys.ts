@@ -28,6 +28,7 @@ function renderCloudflare(cf: CloudflareOverview): string {
 }
 
 export function renderKeys(data: DashboardPayload, _ctx: RenderCtx): string {
+  const jevRow = data.keys.vault.find((v) => v.provider === 'typesafe_jev' && v.status === 'active')
   const vaultRows = data.keys.vault
     .map(
       (v) => `<tr data-key="${esc(v.id)}">
@@ -93,6 +94,24 @@ export function renderKeys(data: DashboardPayload, _ctx: RenderCtx): string {
       <div class="sub muted pad-b8">Two lines. Estimate, list price when a $ is shown. Missing stays not reported. Never $0. Worker invocations above are a different KPI.</div>
       <p><a class="btn primary" id="cf-connect" data-cf-aig-connect href="/cloudflare/connect">Log in to Cloudflare</a></p>
       <p id="cf-connect-msg" class="muted pad-8-0"></p>
+      <p class="eyebrow mg-t14">TypeSafe / Jev (decision provider)</p>
+      <div class="sub muted pad-b8">Portal-managed decision provider. Seats get <code>decisionProviders.jev</code> capability only — never this key. Not a chat LLM; not in the Ask provider list.</div>
+      <form class="key-form" id="jev-key-form" autocomplete="off">
+        <input type="hidden" name="provider" value="typesafe_jev">
+        <div class="row">
+          <input name="label" type="text" placeholder="Label (Jev)" maxlength="80" value="TypeSafe Jev">
+          <input name="secret" type="password" placeholder="TypeSafe API key" required autocomplete="off">
+          <button type="button" id="jev-test">Test</button>
+          <button class="primary" type="submit">Save</button>
+        </div>
+      </form>
+      <div class="row pad-b8">
+        <span class="sub muted">${jevRow ? `Active ··${esc(jevRow.last4)}` : 'No active Jev key'}</span>
+        ${jevRow ? `<button data-rotate="${esc(jevRow.id)}">Rotate</button><button class="danger" data-revoke="${esc(jevRow.id)}">Revoke</button>` : ''}
+        <button type="button" id="jev-enable" data-jev-enable="true">Enable fleet</button>
+        <button type="button" id="jev-disable" data-jev-enable="false">Disable fleet</button>
+      </div>
+      <div id="jev-key-msg" class="muted pad-8-0"></div>
       <p class="eyebrow mg-t14">Vault</p>
       <table>
         <thead><tr><th>Provider</th><th>Label</th><th>Last4</th><th>Status</th><th>Rotate</th><th>Revoke</th></tr></thead>

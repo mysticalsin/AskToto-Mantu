@@ -33,6 +33,7 @@ import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './st
 import { resolveTierAndEntitlements } from './tiers'
 import { binaryAssetResponse, isBinaryAssetPath, isPublicAssetPath, publicAssetResponse } from './assets'
 import { handleAsk } from './ask'
+import { decisionProvidersForSeat, handleDecide, readJevPortalFlags } from './decide'
 import { parseAskPathTag } from './ask-meter'
 import { projectAskMode, projectAskModel, projectAskTelemetry } from './privacy'
 import { handleUse, readUseBody } from './use'
@@ -50,6 +51,7 @@ const RATE_LIMITS: Record<string, number> = {
   ingest: 60,
   use: 120,
   ask: 120,
+  decide: 60,
   manifest: 5,
   integrations: 10
 }
@@ -65,6 +67,7 @@ function rateBucketFor(pathname: string): { key: string; max: number } | null {
   if (pathname === '/v1/ingest') return { key: 'ingest', max: RATE_LIMITS.ingest }
   if (pathname === '/v1/use') return { key: 'use', max: RATE_LIMITS.use }
   if (pathname === '/v1/ask') return { key: 'ask', max: RATE_LIMITS.ask }
+  if (pathname === '/v1/decide') return { key: 'decide', max: RATE_LIMITS.decide }
   if (pathname === '/v1/skills/manifest') return { key: 'manifest', max: RATE_LIMITS.manifest }
   if (pathname === '/v1/integrations') return { key: 'integrations', max: RATE_LIMITS.integrations }
   return null
@@ -264,10 +267,11 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     url.pathname === '/v1/skills/manifest' ||
     url.pathname === '/v1/use' ||
     url.pathname === '/v1/ask' ||
+    url.pathname === '/v1/decide' ||
     url.pathname === '/v1/integrations'
   ) {
     const bodyText = request.method === 'GET' ? '' :
-      url.pathname === '/v1/ask' || url.pathname === '/v1/use' ? await readUseBody(request) : await request.text()
+      url.pathname === '/v1/ask' || url.pathname === '/v1/use' || url.pathname === '/v1/decide' ? await readUseBody(request) : await request.text()
     if (bodyText === null) return json({ ok: false, error: 'Request is too large. Capture a smaller region or start a new Ask.' }, 413)
     const hmac = await verifyDeviceRequest(request, bodyText, env.OPERATOR_INGEST_SECRET, store, now)
     if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
@@ -276,7 +280,7 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
       return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)
     }
     const geo = opts.geo ?? geoFromRequest(request)
-    if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now, geo, hmac.license)
+    if (url.pathname === '/v1/heartbeat') return heartbeat(store, env, hmac.deviceId, bodyText, now, geo, hmac.license)
     if (url.pathname === '/v1/skills/manifest') return manifest(store)
     if (url.pathname === '/v1/integrations') {
       if (request.method !== 'GET') return json({ ok: false, error: 'method not allowed' }, 405)
@@ -289,6 +293,10 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     if (url.pathname === '/v1/ask') {
       if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
       return handleAsk(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch, request.signal)
+    }
+    if (url.pathname === '/v1/decide') {
+      if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
+      return handleDecide(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch, request.signal)
     }
     return ingest(store, hmac.deviceId, bodyText, now, geo, hmac.license)
   }
@@ -339,7 +347,7 @@ async function adminRoute(
 }
 
 async function heartbeat(
-  store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo, license?: VerifiedDeviceLicense
+  store: OperatorStore, env: Env, deviceId: string, bodyText: string, now: number, geo: CfGeo, license?: VerifiedDeviceLicense
 ): Promise<Response> {
   const rawBody = withVerifiedLicense(bodyText ? JSON.parse(bodyText) as Record<string, unknown> : {}, license)
   const body = projectHeartbeatBody(rawBody)
@@ -379,10 +387,12 @@ async function heartbeat(
   const retries = await store.listCrmRetries(deviceId)
   const { tier, entitlements } = await resolveTierAndEntitlements(store, stored, now)
   const integrationsVersion = await computeIntegrationsVersion(store, stored, tier)
+  const jevFlags = await readJevPortalFlags(env.DB)
   return json({
     ok: true,
     retry: retries.map((r) => r.id),
     fundedProviders: await fundedProviders(store, stored, now),
+    decisionProviders: await decisionProvidersForSeat(store, stored, now, { jevEnabled: jevFlags.jevEnabled }),
     approved: await seatAuthorizedForKeys(store, stored, now),
     tier,
     entitlements,

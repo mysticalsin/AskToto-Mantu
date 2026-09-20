@@ -12,6 +12,7 @@ import { normalizeCrmRow } from '../crm'
 import { html, json, newCspNonce } from '../http'
 import type { D1DatabaseLike } from '../d1'
 import { listKeysJson, revokeVaultKey, rotateVaultKey, writeVaultKey } from '../keys'
+import { testTypesafeJev } from '../decide'
 import { LICENSES_EMPTY, parseApproval } from '../fleet'
 import { mintOperatorLicense } from '../licenses/generate'
 import { renderConsole } from '../ui'
@@ -282,6 +283,18 @@ export function registerAdminCoreRoutes(): void {
     auth: 'admin',
     handler: async (_request, ctx, match) => {
       const out = await revokeVaultKey(ctx.store, ctx.email, ctx.now, param(match, 'id'))
+      if (!out.ok) return json({ ok: false, error: out.error }, out.status)
+      return json(out)
+    }
+  })
+  defineRoute<AdminCtx>({
+    method: 'POST',
+    pattern: '/v1/admin/keys/test-jev',
+    auth: 'admin',
+    handler: async (request, ctx) => {
+      const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+      const fetchImpl = ctx.opts.providerFetch ?? ctx.opts.cfFetch ?? fetch
+      const out = await testTypesafeJev(ctx.store, ctx.env, body, fetchImpl)
       if (!out.ok) return json({ ok: false, error: out.error }, out.status)
       return json(out)
     }

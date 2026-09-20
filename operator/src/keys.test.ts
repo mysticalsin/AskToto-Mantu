@@ -71,6 +71,8 @@ describe('admin keys write / rotate / revoke', () => {
     expect(html).not.toContain(secret)
     expect(html).not.toContain('Seats keep their own keys')
     expect(html).toContain('Add an API')
+    expect(html).toContain('TypeSafe / Jev')
+    expect(html).toContain('id="jev-key-form"')
     expect(html).toContain('id="key-add"')
     expect(html).toContain('id="cf-connect"')
     expect(html).toContain('href="/cloudflare/connect"')
