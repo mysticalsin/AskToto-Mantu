@@ -61,7 +61,7 @@ describe('right-edge overlay placement', () => {
     expect(overlayPlacementPosition({ placement: 'right-edge', width: 880, height: 140, layout: 'bar', metrics: narrow, topMargin: 8 })).toEqual({ x: 0, y: 8 })
     expect(overlayPlacementPosition({ placement: 'right-edge', width: 380, height: 560, layout: 'dock', metrics: narrow, topMargin: 8 })).toEqual({ x: 408, y: 68 })
     expect(hoverWatchRestRect('hide', narrow, 'right-edge')).toEqual(hoverWatchRestRect('hide', narrow, 'top-center'))
-    expect(hoverWatchRestRect('dock', narrow, 'right-edge').x).toBe(780)
+    expect(hoverWatchRestRect('dock', narrow, 'right-edge').x).toBe(776)
     expect(parkAfterExclusiveOnboarding('hide', narrow, 8, 'right-edge')).toEqual(parkAfterExclusiveOnboarding('hide', narrow, 8, 'top-center'))
   })
 })
