@@ -174,6 +174,35 @@ describe('DockPanel — a sidecar, not a squeezed bar', () => {
     expect(answered).toContain('dock-body-in')
   })
 
+  it('connects the sliver to the panel with its own edge rail', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toContain('dock-panel__rail')
+    // Continuity, not information: it must not be announced.
+    expect(html).toMatch(/dock-panel__rail[^>]*aria-hidden="true"|aria-hidden="true"[^>]*dock-panel__rail/)
+  })
+
+  it('the header hairline is earned by scrolling, not painted by default', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props({ body: <p>a</p>, hasAnswer: true })} />)
+    expect(html).toContain('dock-panel__head')
+    expect(html).toContain('data-scrolled="0"')
+  })
+
+  it('streaming says so continuously; a finished answer does not', () => {
+    const busy = renderToStaticMarkup(<DockPanel {...props({ busy: true })} />)
+    expect(busy).toContain('shimmer')
+    const done = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(done).not.toContain('shimmer')
+    // A live meeting owns the status line, so it never competes with the streaming signal.
+    const live = renderToStaticMarkup(<DockPanel {...props({ busy: true, listening: true })} />)
+    expect(live).not.toContain('shimmer')
+  })
+
+  it('tooltips wait for hover intent but never delay keyboard focus', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toContain('group-hover:delay-[400ms]')
+    expect(html).toContain('peer-focus-visible:delay-0')
+  })
+
   it('every control carries an accessible name', () => {
     const html = renderToStaticMarkup(
       <DockPanel {...props({ onSpotlightRef: () => {}, onToggleThinking: () => {} })} />

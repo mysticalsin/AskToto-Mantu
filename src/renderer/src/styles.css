@@ -2076,6 +2076,49 @@ button.onboard-cta {
   animation: dock-pill-in 200ms var(--ease-spring) both;
 }
 
+/* Continuity from the sliver. The sliver vanished and a panel appeared, with nothing connecting the
+   two, so the dock read as two unrelated objects. This is the panel's own edge rail growing from the
+   sliver's proportion (108 of 560, ~0.2) to full height. It is a 2px element scaled on one axis, so no
+   text is ever distorted — scaling the whole panel non-uniformly to "unfurl" it would smear the type,
+   which is the usual way this effect goes wrong. */
+@keyframes dock-rail-grow {
+  from { transform: scaleY(0.2); opacity: 0.55; }
+  to   { transform: scaleY(1);   opacity: 1; }
+}
+.dock-panel__rail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 2px 0 0 2px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--color-accent-2) 18%,
+    var(--color-accent-2) 82%,
+    transparent
+  );
+  opacity: 0.5;
+  pointer-events: none;
+  transform-origin: right center;
+}
+.dock-panel--entering .dock-panel__rail {
+  animation: dock-rail-grow 320ms var(--ease-spring) both;
+}
+
+/* The header earns its hairline only once something has scrolled under it. A permanent divider on a
+   panel whose content does not fill it is a line for its own sake; appearing on scroll is the surface
+   telling you there is more above. Border-colour is a paint change on a static element, not an
+   animated layout property. */
+.dock-panel__head {
+  border-bottom: 1px solid transparent;
+  transition: border-color 160ms var(--ease-spring);
+}
+.dock-panel__head[data-scrolled='1'] {
+  border-bottom-color: var(--color-hair-soft);
+}
+
 /* Invisible dock rest: paints nothing, occupies the same box, keeps its hit area. Opacity rather than
    display:none or visibility:hidden on purpose - the element must still receive the pointer, and main
    sets the WINDOW opacity to 0 as well, so this is the renderer half of the same bargain Hide makes. */

@@ -102,7 +102,10 @@ const Tool = memo(function Tool({
       </button>
       <span
         className={[
-          'pointer-events-none absolute -top-1 z-20 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-0.5 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 peer-focus-visible:opacity-100',
+          // Hover INTENT, not hover: a cursor crossing the row to reach the composer should not set off
+          // seven tooltips in sequence. 400ms to appear, none to disappear, and keyboard focus is
+          // immediate because that is deliberate rather than incidental.
+          'pointer-events-none absolute -top-1 z-20 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-0.5 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 delay-0 group-hover:opacity-100 group-hover:delay-[400ms] peer-focus-visible:opacity-100 peer-focus-visible:delay-0',
           edgeRight ? 'right-0' : 'left-1/2 -translate-x-1/2'
         ].join(' ')}
       >
@@ -125,6 +128,9 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
   // The zone cascade plays ONCE, on mount, and then takes itself off. Left on, every later render would
   // re-trigger the animation and the panel would twitch each time an answer streamed a token.
   const [entering, setEntering] = useState(true)
+  // Whether anything has scrolled under the header. Drives its hairline, so the divider appears only
+  // when it is telling you something rather than decorating.
+  const [scrolled, setScrolled] = useState(false)
   useEffect(() => {
     // 3 zones x 45ms + the 260ms zone duration, with margin.
     const id = window.setTimeout(() => setEntering(false), 460)
@@ -189,7 +195,10 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
 
   const header = useMemo(
     () => (
-      <div className="dock-zone flex shrink-0 items-center gap-2 border-b border-[var(--color-hair-soft)] px-3 py-2.5">
+      <div
+        data-scrolled={scrolled ? '1' : '0'}
+        className="dock-panel__head dock-zone flex shrink-0 items-center gap-2 px-3 py-2.5"
+      >
         {hasAnswer && props.onBack ? (
           <button
             type="button"
@@ -214,7 +223,14 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
 
         {/* The one line that says what Métis is doing. In the bar this competed with six controls for
             horizontal room; here it owns the row. */}
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--color-ink-2)]">
+        <span
+          className={[
+            'min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--color-ink-2)]',
+            // Streaming is the one state worth a continuous signal: it says the answer is still coming
+            // rather than finished and short. Reuses the app's existing .shimmer rather than a new loop.
+            props.busy && !listening ? 'shimmer' : ''
+          ].join(' ')}
+        >
           {listening ? (props.paused ? 'Paused' : 'Listening') : props.busy ? 'Thinking' : 'Métis'}
         </span>
 
@@ -229,7 +245,7 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
         )}
       </div>
     ),
-    [hasAnswer, props.onBack, props.onSettings, listening, props.paused, props.busy, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
+    [hasAnswer, props.onBack, props.onSettings, listening, props.paused, props.busy, props.canTogglePanel, props.panelOpen, props.onTogglePanel, scrolled]
   )
 
   // Listening gets its own full-width strip rather than being wedged between toolbar icons. A meeting in
@@ -416,10 +432,13 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
   return (
     <div
       className={[
-        'dock-panel aw-widget flex h-full min-h-0 w-full flex-col',
+        'dock-panel aw-widget relative flex h-full min-h-0 w-full flex-col',
         entering ? 'dock-panel--entering' : ''
       ].join(' ')}
     >
+      {/* The panel's own edge rail, growing from the sliver's proportion. aria-hidden: it is continuity,
+          not information. */}
+      <span className="dock-panel__rail" aria-hidden="true" />
       {header}
       {liveStrip}
 
@@ -429,6 +448,10 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
         <div
           ref={bodyRef}
           data-overflowing={overflowing ? '1' : '0'}
+          onScroll={(e) => {
+            const top = e.currentTarget.scrollTop
+            setScrolled((was) => (was ? top > 2 : top > 6))
+          }}
           className="dock-panel__scroll aw-body scroll-thin h-full overflow-y-auto px-3 py-2.5"
           style={{ maxHeight: answerBodyMaxHeight() }}
         >
