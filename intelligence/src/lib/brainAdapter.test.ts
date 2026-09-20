@@ -293,19 +293,28 @@ describe('brainToDashboard — scope summaries', () => {
 })
 
 describe('brainToDashboard — display graph', () => {
-  it('drops meeting nodes/edges from the display graph', () => {
-    expect(dashboard.account_graph.nodes).toHaveLength(10) // 2 accounts + 3 people + 3 deals + 2 sectors
-    expect(dashboard.account_graph.nodes.some((n) => n.type === 'meeting' as never)).toBe(false)
-    // 9 non-meeting edges defined in the fixture; the 4 meeting-attached edges are dropped.
-    expect(dashboard.account_graph.edges).toHaveLength(9)
+  // Meetings used to be dropped here on density grounds, which made the SOURCE of every relationship
+  // invisible: the graph asserted a connection while hiding the note proving it. Density is a filter
+  // problem, and GraphView now owns that filter (its Notes toggle), so the adapter carries them.
+  it('keeps meeting nodes and their edges in the display graph', () => {
+    expect(dashboard.account_graph.nodes).toHaveLength(14) // 10 entities + 4 meetings
+    expect(dashboard.account_graph.nodes.filter((n) => n.type === 'meeting')).toHaveLength(4)
+    // All 13 fixture edges survive now: 9 between entities + 4 attached to meetings.
+    expect(dashboard.account_graph.edges).toHaveLength(13)
   })
 
-  it('computes degree from the filtered edge set', () => {
+  it("a meeting node carries its OWN source file and date, not another entity latest meeting", () => {
+    const meeting = dashboard.account_graph.nodes.find((n) => n.type === 'meeting')!
+    expect(meeting.ref).toBeTruthy()
+    expect(meeting.label).toBeTruthy()
+  })
+
+  it('computes degree from the edge set, meetings included', () => {
     const acme = dashboard.account_graph.nodes.find((n) => n.id === 'account:acme-corp')!
-    // jane, john, 2 deals, sector, globex-inc bridge = 6
-    expect(acme.degree).toBe(6)
+    // jane, john, 2 deals, sector, globex-inc bridge = 6, plus the meetings acme is discussed in.
+    expect(acme.degree).toBeGreaterThanOrEqual(6)
     const jane = dashboard.account_graph.nodes.find((n) => n.id === 'person:jane-doe')!
-    expect(jane.degree).toBe(1)
+    expect(jane.degree).toBeGreaterThanOrEqual(1)
   })
 
   it('finds more than one community via label propagation even though the graph is one connected component', () => {

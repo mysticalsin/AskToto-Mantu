@@ -159,7 +159,10 @@ export interface Deal {
 export interface GraphNode {
   id: string
   label: string
-  type: 'account' | 'deal' | 'person' | 'strategic_group' | 'sector'
+  // 'meeting' is a note / meeting node. It is carried into the display graph so the SOURCE of a
+  // relationship is visible and clickable, instead of being an invisible join the graph only implies.
+  // GraphView puts it behind its own toggle, because at scale meetings outnumber entities.
+  type: 'account' | 'deal' | 'person' | 'strategic_group' | 'sector' | 'meeting'
   account?: string
   strategic_group?: string
   sector?: string
