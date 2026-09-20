@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { placeAvoiding } from './intelligence'
+import { placeAvoiding, resolveIntelligenceWorkArea, rectFullyOnDisplays } from './intelligence'
 
 /** Overlap area in px^2 — 0 means the surfaces genuinely do not cover each other. */
 function overlap(
@@ -108,5 +108,62 @@ describe('placeAvoiding — the dashboard must not open under the always-on-top 
     expect(p.x).toBeGreaterThanOrEqual(workArea.x)
     expect(p.y).toBeGreaterThanOrEqual(workArea.y)
     expect(p.x + p.width).toBeLessThanOrEqual(workArea.x + workArea.width)
+  })
+})
+
+
+describe('resolveIntelligenceWorkArea — Cap3 off-screen overlay avoid', () => {
+  const primary = { x: 0, y: 25, width: 1728, height: 1065 }
+  const displays = [
+    { bounds: { x: 0, y: 0, width: 1728, height: 1117 }, workArea: primary }
+  ]
+
+  it('ignores off-screen avoid (Tony FAIL x=8960) and uses primary/cursor workArea', () => {
+    const deadAvoid = { x: 8960, y: 40, width: 880, height: 84 }
+    const r = resolveIntelligenceWorkArea({
+      displays,
+      primaryWorkArea: primary,
+      cursorPoint: { x: 400, y: 300 },
+      avoid: deadAvoid
+    })
+    expect(r.workArea).toEqual(primary)
+    expect(r.avoid).toBeUndefined()
+    const place = placeAvoiding({ width: 1280, height: 840, minHeight: 600 }, r.workArea, r.avoid)
+    expect(place.x).toBeGreaterThanOrEqual(primary.x)
+    expect(place.x + place.width).toBeLessThanOrEqual(primary.x + primary.width)
+    expect(place.y).toBeGreaterThanOrEqual(primary.y)
+    expect(place.y + place.height).toBeLessThanOrEqual(primary.y + primary.height)
+    expect(rectFullyOnDisplays(place, displays)).toBe(true)
+  })
+
+  it('keeps a visible secondary-monitor avoid and places on that display', () => {
+    const right = { x: 1728, y: 0, width: 1920, height: 1080 }
+    const dual = [
+      ...displays,
+      { bounds: right, workArea: { x: 1728, y: 25, width: 1920, height: 1055 } }
+    ]
+    const bar = { x: 2000, y: 40, width: 880, height: 84 }
+    const r = resolveIntelligenceWorkArea({
+      displays: dual,
+      primaryWorkArea: primary,
+      cursorPoint: { x: 100, y: 100 },
+      avoid: bar
+    })
+    expect(r.workArea.x).toBe(1728)
+    expect(r.avoid).toEqual(bar)
+  })
+
+  it('falls back to cursor display when avoid is missing', () => {
+    const rightWa = { x: 1728, y: 25, width: 1920, height: 1055 }
+    const dual = [
+      ...displays,
+      { bounds: { x: 1728, y: 0, width: 1920, height: 1080 }, workArea: rightWa }
+    ]
+    const r = resolveIntelligenceWorkArea({
+      displays: dual,
+      primaryWorkArea: primary,
+      cursorPoint: { x: 2100, y: 400 }
+    })
+    expect(r.workArea).toEqual(rightWa)
   })
 })
