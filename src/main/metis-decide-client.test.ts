@@ -2,6 +2,29 @@ import { describe, expect, it, vi } from 'vitest'
 import { decideActionDisambiguate } from './metis-decide-client'
 
 describe('Cap2 decide disambiguate client', () => {
+  it('caps remote decision transcript context at 512 characters', async () => {
+    let transcript = ''
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      transcript = JSON.parse(String(init?.body)).payload.transcript
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          result: { adapterId: 'desktop.open_notes' },
+          confidence: 0.9
+        })
+      }
+    }) as unknown as typeof fetch
+    await decideActionDisambiguate({
+      operatorBaseUrl: 'https://metis-operator.tony-walteur.workers.dev',
+      authorizationHeader: 'Bearer test',
+      transcript: 'x'.repeat(513),
+      candidates: ['desktop.open_notes'],
+      fetchImpl
+    })
+    expect(transcript).toHaveLength(512)
+  })
+
   it('times out without blocking forever', async () => {
     const fetchImpl = vi.fn(
       () =>
