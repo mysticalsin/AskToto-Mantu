@@ -47,7 +47,7 @@ vi.mock('react', () => ({
   useMemo: <T,>(fn: () => T) => fn()
 }))
 
-type WorkletMessage = { audio: Float32Array; partial?: boolean }
+type WorkletMessage = { audio: Float32Array; sampleRate?: number; partial?: boolean }
 let worklets: FakeAudioWorkletNode[] = []
 
 class FakeAudioWorkletNode {
@@ -61,7 +61,7 @@ class FakeAudioWorkletNode {
   }
 
   emit(message: WorkletMessage): void {
-    this.port.onmessage?.({ data: message } as MessageEvent<WorkletMessage>)
+    this.port.onmessage?.({ data: { sampleRate: 16000, ...message } } as MessageEvent<WorkletMessage>)
   }
 
   connect(): void {}
@@ -69,6 +69,7 @@ class FakeAudioWorkletNode {
 }
 
 class FakeAudioContext {
+  sampleRate = 16000
   state = 'running'
   destination = {}
   onstatechange: (() => void) | null = null

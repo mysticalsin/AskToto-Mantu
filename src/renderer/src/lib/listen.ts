@@ -1556,7 +1556,10 @@ export function useListen(
         // 'speakers' makes the graph itself downmix L+R to mono before process() runs, instead of the
         // worklet silently reading only input[0] and dropping the right channel.
         channelCountMode: 'explicit',
-        channelInterpretation: 'speakers'
+        channelInterpretation: 'speakers',
+        // AudioContext's requested 16 kHz is advisory. The worklet receives this actual rate and
+        // converts its reusable quantum buffer before VAD or any ASR path sees PCM.
+        processorOptions: { sourceSampleRate: ctx.sampleRate }
       })
       // 'them' (system loopback): un-AGC'd call audio is typically 2–4× quieter than mic input and
       // often never crosses the fixed VAD ON/EMIT_RMS thresholds. A GainNode lifts it into the
@@ -1584,12 +1587,21 @@ export function useListen(
       worklet.port.onmessage = (ev: MessageEvent): void => {
         // Allow the current Stop's final PCM + ACK, but never attribute a retired channel to its replacement.
         if (admissionEpoch !== sessionEpochRef.current) return
-        const data = ev.data as { type?: string; requestId?: string; audio?: Float32Array; partial?: boolean }
+        const data = ev.data as {
+          type?: string
+          requestId?: string
+          audio?: Float32Array
+          sampleRate?: number
+          partial?: boolean
+        }
         if (data.type === 'flush-ack' && typeof data.requestId === 'string') {
           stopFlushAckRef.current?.(sp, data.requestId)
           return
         }
         if (data.audio) {
+          // All VAD/ASR consumers are fixed at 16 kHz; silently drop malformed worklet output rather
+          // than letting a device's native rate corrupt timing or transcription.
+          if (data.sampleRate !== SR) return
           if (sp === 'them') {
             // Rolling proof-of-life read by armThemProbation — one boolean store, nothing else, so the
             // per-window path stays as cheap as it was before the probation existed.

@@ -244,21 +244,21 @@ describe('whisper worklet source', () => {
   })
 
   /** Instantiate the ACTUAL worklet source with the realtime globals stubbed, capturing emitted windows. */
-  function instantiateWorklet(messages: Array<{ audio?: Float32Array }>): {
+  function instantiateWorklet(messages: Array<{ audio?: Float32Array; sampleRate?: number }>, sourceRate = SR): {
     process: (inputs: Float32Array[][]) => boolean
   } {
     let Registered: (new () => { process: (inputs: Float32Array[][]) => boolean }) | null = null
     class FakeProcessor {
       port = {
         onmessage: null as ((e: MessageEvent) => void) | null,
-        postMessage: (m: { audio?: Float32Array }): void => void messages.push(m)
+        postMessage: (m: { audio?: Float32Array; sampleRate?: number }): void => void messages.push(m)
       }
     }
     new Function('AudioWorkletProcessor', 'registerProcessor', 'sampleRate', WHISPER_WORKLET_SRC)(
       FakeProcessor,
       (_name: string, cls: new () => { process: (inputs: Float32Array[][]) => boolean }): void =>
         void (Registered = cls),
-      SR
+      sourceRate
     )
     if (!Registered) throw new Error('worklet source registered no processor')
     return new Registered()
@@ -268,6 +268,13 @@ describe('whisper worklet source', () => {
     const n = Math.round(sec * SR)
     const buf = new Float32Array(n)
     for (let i = 0; i < n; i++) buf[i] = amp * Math.sin((2 * Math.PI * hz * i) / SR)
+    return buf
+  }
+
+  function toneAtRate(sec: number, amp: number, sourceRate: number, hz = 440): Float32Array {
+    const n = Math.round(sec * sourceRate)
+    const buf = new Float32Array(n)
+    for (let i = 0; i < n; i++) buf[i] = amp * Math.sin((2 * Math.PI * hz * i) / sourceRate)
     return buf
   }
 
@@ -317,6 +324,18 @@ describe('whisper worklet source', () => {
     const finals = messages.filter((m) => !(m as { partial?: boolean }).partial)
     expect(finals).toHaveLength(1)
     expect(finals[0].audio!.length).toBeGreaterThan(0)
+  })
+
+  it('converts a 48 kHz worklet quantum stream before VAD and emits explicit 16 kHz PCM', () => {
+    const messages: Array<{ audio?: Float32Array; sampleRate?: number }> = []
+    const w = instantiateWorklet(messages, 48000)
+    const silence = new Float32Array(Math.round(0.8 * 48000))
+    feed(w, concat(toneAtRate(0.6, 0.2, 48000), silence))
+
+    const final = messages.find((message) => message.audio && !(message as { partial?: boolean }).partial)
+    expect(final?.sampleRate).toBe(SR)
+    expect(final?.audio!.length).toBeGreaterThan(SR)
+    expect(final?.audio!.length).toBeLessThan(2 * SR)
   })
 })
 

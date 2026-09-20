@@ -79,6 +79,7 @@ type WorkletMessage = {
   type?: string
   requestId?: string
   audio?: Float32Array
+  sampleRate?: number
   partial?: boolean
 }
 type SealMode = {
@@ -143,7 +144,7 @@ class FakeAudioWorkletNode {
   }
 
   emit(message: WorkletMessage): void {
-    this.port.onmessage?.({ data: message } as MessageEvent<WorkletMessage>)
+    this.port.onmessage?.({ data: message.audio ? { sampleRate: 16000, ...message } : message } as MessageEvent<WorkletMessage>)
   }
 
   connect(): void {}
@@ -151,6 +152,7 @@ class FakeAudioWorkletNode {
 }
 
 class FakeAudioContext {
+  sampleRate = 16000
   state = 'running'
   destination = {}
   onstatechange: (() => void) | null = null
