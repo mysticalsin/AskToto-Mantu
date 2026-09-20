@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { pipeline, env } from '@huggingface/transformers'
 import { shouldUseBundledAsr } from './asr-offline'
+import { BUNDLE_REPAIR } from '@shared/bundle-response'
 import { detectLanguage, LANGUAGE_NAMES } from '@shared/lang-id'
 
 // Model source + offline behavior.
@@ -264,7 +265,7 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       post({
         type: 'error',
         message: bundled
-          ? 'Could not load the transcription files. Check your connection and try Listen again.'
+          ? BUNDLE_REPAIR
           : 'Could not load the transcription model. Check your internet connection and try Listen again.'
       })
     } finally {

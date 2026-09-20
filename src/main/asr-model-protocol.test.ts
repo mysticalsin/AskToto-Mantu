@@ -48,6 +48,20 @@ describe('real ASR model protocol response boundary', () => {
     expect((await handler()({ url: 'asr-model://models/Xenova/whisper-base/config.json' })).status).toBe(200)
   })
 
+  it('can restrict an installed runtime to bundled resources and ignore a stale userData model', async () => {
+    put(join(userModels, 'Xenova', 'whisper-base', 'config.json'), '{"stale":true}')
+    const installedHandler = createAsrModelProtocolHandler({
+      resourcesRoot: resources,
+      userModelsRoot: undefined,
+      readLocal
+    })
+
+    const result = await installedHandler({ url: 'asr-model://models/Xenova/whisper-base/config.json' })
+
+    expect(result.status).toBe(404)
+    expect(readLocal).not.toHaveBeenCalled()
+  })
+
   it.each(['models', 'ort'])('refuses encoded traversal from %s into a sibling app.asar', async (host) => {
     put(join(resources, 'app.asar'), 'synthetic source bytes')
     const result = await handler()({ url: `asr-model://${host}/%2e%2e%2fapp.asar` })

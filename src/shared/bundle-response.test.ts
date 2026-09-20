@@ -4,10 +4,12 @@ import {
   BUNDLE_GOT_LOGIN_HTML,
   BUNDLE_NETWORK,
   BUNDLE_NOT_JS,
+  BUNDLE_REPAIR,
   bundleFailureUserMessage,
   bundleKindForUrl,
   inspectBundleResponse,
   isHtmlContentType,
+  isRepairRequiredBundleMessage,
   isRetryableBundleMessage,
   looksLikeAccessLoginHtml,
   looksLikeAccessRedirect,
@@ -102,6 +104,14 @@ describe('bundle-response — Access HTML is never a successful bundle', () => {
       BUNDLE_NETWORK
     )
     expect(isRetryableBundleMessage('incomplete download')).toBe(true)
+  })
+
+  it('keeps a damaged built-in payload distinct from a retriable download failure', () => {
+    const missingBuiltInFiles = 'This Métis installation is missing its built-in transcription files. Repair or reinstall the official Métis package.'
+
+    expect(bundleFailureUserMessage(new Error(missingBuiltInFiles))).toBe(BUNDLE_REPAIR)
+    expect(isRepairRequiredBundleMessage(missingBuiltInFiles)).toBe(true)
+    expect(isRetryableBundleMessage(missingBuiltInFiles)).toBe(false)
   })
 
   it('only treats Cloudflare Access locations as login redirects', () => {

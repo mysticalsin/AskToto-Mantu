@@ -5,7 +5,7 @@ import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 
 export interface AsrModelProtocolOptions {
   resourcesRoot: string
-  userModelsRoot: string
+  userModelsRoot?: string
   readLocal: (fileUrl: string) => Promise<Response>
 }
 
@@ -33,7 +33,7 @@ export function createAsrModelProtocolHandler(options: AsrModelProtocolOptions):
       // encoded separators, and a parent resources-root check would permit sibling app source files.
       if (isAbsolute(rel) || /[\\:\0]/.test(rel) || rel.split('/').includes('..')) return respond(null, { status: 403 })
       const roots = url.host === 'models'
-        ? [join(options.resourcesRoot, 'models'), options.userModelsRoot]
+        ? [join(options.resourcesRoot, 'models'), ...(options.userModelsRoot ? [options.userModelsRoot] : [])]
         : [join(options.resourcesRoot, 'ort')]
       let real: string | undefined
       for (const root of roots) {

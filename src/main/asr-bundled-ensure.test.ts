@@ -3,11 +3,13 @@ import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const paths = vi.hoisted(() => ({ resources: '', userData: '' }))
+const paths = vi.hoisted(() => ({ resources: '', userData: '', isPackaged: false }))
 
 vi.mock('electron', () => ({
   app: {
-    isPackaged: true,
+    get isPackaged() {
+      return paths.isPackaged
+    },
     getPath: () => paths.userData
   },
   net: { fetch: vi.fn() }
@@ -16,10 +18,13 @@ vi.mock('./logger', () => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.
 
 import { net } from 'electron'
 import { BUNDLE_GOT_LOGIN_HTML } from '@shared/bundle-response'
+import { ASR_REQUIRED_FILES } from './asr-manifest'
 import {
   ASR_ASSETS_MISSING,
+  ASR_PACKAGED_ASSETS_MISSING,
   PARAKEET_MODEL_NAME,
   PARAKEET_REQUIRED_FILES,
+  type AsrEnsureTestHooks,
   WHISPER_FLOOR_ID,
   WHISPER_FLOOR_REQUIRED_FILES,
   ensureImportAsrAssets,
@@ -34,15 +39,20 @@ import {
   whisperFloorReady
 } from './asr-bundled-ensure'
 
+function withTestResources(hooks: Omit<AsrEnsureTestHooks, 'bundledResourceRoot'> = {}): AsrEnsureTestHooks {
+  return { ...hooks, bundledResourceRoot: () => paths.resources }
+}
+
 describe('asr-bundled-ensure', () => {
   let originalResourcesPath: PropertyDescriptor | undefined
 
   beforeEach(() => {
+    paths.isPackaged = false
     paths.resources = mkdtempSync(join(tmpdir(), 'metis-asr-res-'))
     paths.userData = mkdtempSync(join(tmpdir(), 'metis-asr-ud-'))
     originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
     Object.defineProperty(process, 'resourcesPath', { configurable: true, value: paths.resources })
-    setAsrEnsureTestHooks(null)
+    setAsrEnsureTestHooks(withTestResources())
     resetAsrEnsureStateForTests()
   })
 
@@ -57,7 +67,7 @@ describe('asr-bundled-ensure', () => {
   it('treats an empty resources dir as not ready and copies via the ensure hooks', async () => {
     expect(importAsrAssetsReady()).toBe(false)
     const progress: number[] = []
-    setAsrEnsureTestHooks({
+    setAsrEnsureTestHooks(withTestResources({
       fetchParakeet: async (dest, onProgress) => {
         mkdirSync(dest, { recursive: true })
         for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dest, name), 'p')
@@ -72,7 +82,7 @@ describe('asr-bundled-ensure', () => {
         }
         onProgress?.(100)
       }
-    })
+    }))
     await ensureImportAsrAssets((pct) => progress.push(pct))
     expect(parakeetFilesReady(join(paths.userData, 'asr-models', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'))).toBe(
       true
@@ -87,9 +97,70 @@ describe('asr-bundled-ensure', () => {
     expect(JSON.stringify(snap)).not.toMatch(/[Rr]einstall/)
   })
 
+  it('fails closed when an installed app is missing built-in ASR files, even if an old userData fallback exists', async () => {
+    paths.isPackaged = true
+    const parakeet = join(paths.userData, 'asr-models', PARAKEET_MODEL_NAME)
+    mkdirSync(parakeet, { recursive: true })
+    for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(parakeet, name), 'old-copy')
+    const whisper = join(paths.userData, 'asr-models', ...WHISPER_FLOOR_ID.split('/'))
+    for (const rel of WHISPER_FLOOR_REQUIRED_FILES) {
+      const file = join(whisper, rel)
+      mkdirSync(join(file, '..'), { recursive: true })
+      writeFileSync(file, 'old-copy')
+    }
+    const fetchParakeet = vi.fn()
+    const fetchWhisperFloor = vi.fn()
+    setAsrEnsureTestHooks(withTestResources({ fetchParakeet, fetchWhisperFloor }))
+
+    expect(importAsrAssetsReady()).toBe(false)
+    await expect(ensureImportAsrAssets()).rejects.toThrow(ASR_PACKAGED_ASSETS_MISSING)
+    expect(fetchParakeet).not.toHaveBeenCalled()
+    expect(fetchWhisperFloor).not.toHaveBeenCalled()
+    expect(net.fetch).not.toHaveBeenCalled()
+    expect(asrAssetsStatusSnapshot()).toMatchObject({
+      ready: false,
+      status: 'error',
+      error: ASR_PACKAGED_ASSETS_MISSING
+    })
+  })
+
+  it('does not report a packaged ASR bundle ready when a required runtime manifest file is missing', async () => {
+    paths.isPackaged = true
+    const parakeet = join(paths.resources, 'asr', PARAKEET_MODEL_NAME)
+    mkdirSync(parakeet, { recursive: true })
+    for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(parakeet, name), 'bundled')
+
+    for (const parts of ASR_REQUIRED_FILES) {
+      if (parts.at(-1) === 'special_tokens_map.json') continue
+      const file = join(paths.resources, ...parts)
+      mkdirSync(join(file, '..'), { recursive: true })
+      writeFileSync(file, 'bundled')
+    }
+
+    expect(importAsrAssetsReady()).toBe(false)
+    expect(asrAssetsStatusSnapshot()).toMatchObject({ ready: false, error: ASR_PACKAGED_ASSETS_MISSING })
+    await expect(ensureImportAsrAssets()).rejects.toThrow(ASR_PACKAGED_ASSETS_MISSING)
+  })
+
+  it('reports a packaged ASR bundle ready only when Parakeet and the complete runtime manifest are present', () => {
+    paths.isPackaged = true
+    const parakeet = join(paths.resources, 'asr', PARAKEET_MODEL_NAME)
+    mkdirSync(parakeet, { recursive: true })
+    for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(parakeet, name), 'bundled')
+
+    for (const parts of ASR_REQUIRED_FILES) {
+      const file = join(paths.resources, ...parts)
+      mkdirSync(join(file, '..'), { recursive: true })
+      writeFileSync(file, 'bundled')
+    }
+
+    expect(importAsrAssetsReady()).toBe(true)
+    expect(asrAssetsStatusSnapshot()).toMatchObject({ ready: true, status: 'ready' })
+  })
+
   it('keeps the extraction phase visible at the 69% onboarding handoff', async () => {
     let duringExtraction: ReturnType<typeof asrAssetsStatusSnapshot> | undefined
-    setAsrEnsureTestHooks({
+    setAsrEnsureTestHooks(withTestResources({
       fetchParakeet: async (dest, onProgress) => {
         // The production downloader has just completed the archive transfer and is about to extract.
         // Until the production callback accepts its phase label, the old code surfaces this as generic
@@ -110,7 +181,7 @@ describe('asr-bundled-ensure', () => {
           writeFileSync(file, 'w')
         }
       }
-    })
+    }))
 
     await ensureImportAsrAssets()
 
@@ -132,7 +203,7 @@ describe('asr-bundled-ensure', () => {
       startedFetch = resolve
     })
     let parakeetFetches = 0
-    setAsrEnsureTestHooks({
+    setAsrEnsureTestHooks(withTestResources({
       fetchParakeet: async (dest) => {
         parakeetFetches += 1
         startedFetch()
@@ -148,7 +219,7 @@ describe('asr-bundled-ensure', () => {
           writeFileSync(file, 'w')
         }
       }
-    })
+    }))
 
     const direct = ensureParakeetAssets()
     await fetchStarted

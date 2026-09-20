@@ -13,10 +13,11 @@ import {
   aiRowStatus,
   asrAssetsRowStatus,
   asrEnsureFailureStatus,
+  asrRowNeedsRepair,
   asrRowNeedsRetry,
   localModelRowStatus,
   micRowStatus,
-  ASR_SETUP_FAIL_OPEN_MS,
+  ASR_SETUP_RETRY_TIMEOUT_MS,
   setupAsrBlocksContinue,
   setupRowLoadingPercent,
   firstRunCanFinish,
@@ -389,6 +390,25 @@ describe('Act 3 — transcription files never skip', () => {
     expect(asrEnsureFailureStatus(new Error('fetch failed')).ready).toBe(false)
   })
 
+  it('makes a damaged packaged transcription payload actionable without pretending it can download in place', () => {
+    const row = asrAssetsRowStatus({
+      ready: false,
+      status: 'error',
+      progress: 0,
+      label: 'This Métis installation is missing its built-in transcription files. Repair or reinstall the official Métis package.',
+      error: 'This Métis installation is missing its built-in transcription files. Repair or reinstall the official Métis package.'
+    })
+
+    expect(row.state).toBe('action')
+    expect(asrRowNeedsRepair(row)).toBe(true)
+    expect(asrRowNeedsRetry(row)).toBe(false)
+
+    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    expect(src).toMatch(/Reinstall Métis with the official installer, then reopen it\./)
+    expect(src).toMatch(/window\.toto\.quit\(\)/)
+    expect(src).not.toMatch(/Repair Métis with the official installer, then check again\./)
+  })
+
   it('onboarding never swallows an ensure failure into a silent idle', () => {
     const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
     expect(src).toMatch(/asrEnsureFailureStatus/)
@@ -410,7 +430,7 @@ describe('Act 3 — transcription files never skip', () => {
     expect(setupAsrBlocksContinue([])).toBe(true)
   })
 
-  it('fail-opens Continue when ASR ensure errors (Retry stays on the row)', () => {
+  it('keeps Continue blocked when ASR ensure errors so Ready cannot become a disabled final trap', () => {
     expect(
       setupAsrBlocksContinue([asrRow('action')], {
         ready: false,
@@ -419,8 +439,8 @@ describe('Act 3 — transcription files never skip', () => {
         label: 'Could not get the transcription files.',
         error: 'Could not get the transcription files.'
       })
-    ).toBe(false)
-    expect(ASR_SETUP_FAIL_OPEN_MS).toBeGreaterThan(5_000)
+    ).toBe(true)
+    expect(ASR_SETUP_RETRY_TIMEOUT_MS).toBeGreaterThan(5_000)
   })
 
   it('never leaves Continue stuck when the setup list already looks complete', () => {

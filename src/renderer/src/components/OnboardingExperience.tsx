@@ -11,7 +11,8 @@
  *   Act 1's Métis wordmark is static. No scramble.
  * - Scene 4's checks are REAL (getPermissions / requestPermissionsUpfront / asrAssetsStatus) — a row only
  *   ever shows "ready" when it is actually true. Never fake the magic moment. Transcription files are
- *   provisioned here (bundled or fetched into userData) — never skipped, never "reinstall".
+ *   provisioned here (bundled or fetched into userData) — never skipped. A damaged immutable package
+ *   gets an explicit repair path rather than an in-place download that could not succeed.
  * - Act 2 (reveal) is the one deliberate exception to "never fake" — it drives Métis's REAL Bar/
  *   Copilot/Answer/QuickActions components with a scripted fake meeting (MQA-277), guarded so fake data
  *   can never persist and the demo can never see real data (MQA-278, @shared/demo-guard).
@@ -33,7 +34,7 @@
  *   needs comes back through onDone.
  */
 import { useCallback, useEffect, useId, useRef, useState, lazy, Suspense, type Ref, useLayoutEffect } from 'react'
-import { bundleFailureUserMessage, isRetryableBundleMessage } from '@shared/bundle-response'
+import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
   Check,
@@ -458,7 +459,7 @@ const IDLE_ASR_STATUS: AsrAssetsStatus = {
   label: 'Getting transcription files…'
 }
 
-/** Act 3 transcription row. Never skip a missing bundle. Never tell the user to reinstall. */
+/** Act 3 transcription row. Never skip a missing bundle. Immutable package failures explain how to recover. */
 export function asrAssetsRowStatus(
   input: AsrAssetsStatus | null | undefined,
   engine?: PublicSettings['asrEngine']
@@ -499,6 +500,11 @@ export function asrRowNeedsRetry(row: Pick<SetupRow, 'state' | 'detail'>): boole
   return isRetryableBundleMessage(row.detail)
 }
 
+/** A packaged app cannot alter a signed resource bundle. Let the user re-check after installing a repaired build. */
+export function asrRowNeedsRepair(row: Pick<SetupRow, 'state' | 'detail'>): boolean {
+  return row.state === 'action' && isRepairRequiredBundleMessage(row.detail)
+}
+
 /** Ensure / status IPC failure. Never idle. Always Retry. */
 export function asrEnsureFailureStatus(err?: unknown): AsrAssetsStatus {
   const message = bundleFailureUserMessage(err)
@@ -506,12 +512,11 @@ export function asrEnsureFailureStatus(err?: unknown): AsrAssetsStatus {
 }
 
 /**
- * First-run prefers ready transcription files before leaving Act 3.
- * Unlock when setup already looks complete, ASR is ready/skipped, OR ensure
- * failed / timed out (fail-open): Continue must never stay muted forever while
- * Retry remains available. Ultron/Tony 2026-09-20 Your-setup hang lock.
+ * First-run cannot leave Act 3 until transcription files are ready. If setup
+ * stalls, turn it into an actionable error with Retry here instead of allowing
+ * the user to reach Ready with a disabled final action.
  */
-export const ASR_SETUP_FAIL_OPEN_MS = 12_000
+export const ASR_SETUP_RETRY_TIMEOUT_MS = 12_000
 
 export function setupAsrBlocksContinue(
   rows: SetupRow[],
@@ -519,8 +524,6 @@ export function setupAsrBlocksContinue(
 ): boolean {
   if (summarizeSetupRows(rows).allReady) return false
   if (asrStatusIsReady(asrStatus)) return false
-  // Fail-open: error status unlocks Continue (Retry still on the row).
-  if (asrStatus?.status === 'error') return false
   const asr = rows.find((r) => r.key === 'asr')
   if (asr && (asr.state === 'ready' || asr.state === 'skipped')) return false
   if (!asr) return rows.length === 0
@@ -1164,16 +1167,15 @@ export function OnboardingExperience({
       if (live) setAsrStatus(s)
     }
     void window.toto.asrAssetsEnsure().then(apply).catch((err) => apply(asrEnsureFailureStatus(err)))
-    // Fail-open: if ensure stalls (missing handler, slow CDN, incomplete pack), unlock Continue.
-    const failOpen = setTimeout(() => {
+    // A stalled setup must become actionable, but must not turn the final Ready action into a trap.
+    const asrSetupTimeout = setTimeout(() => {
       if (!live) return
       setAsrStatus((prev) => {
         if (prev.ready || prev.status === 'ready' || prev.status === 'error') return prev
-        const message =
-          'Transcription files are still downloading. You can continue and finish them in Settings.'
+        const message = 'Transcription setup needs attention. Try again to continue.'
         return { ready: false, status: 'error', progress: prev.progress || 0, label: message, error: message }
       })
-    }, ASR_SETUP_FAIL_OPEN_MS)
+    }, ASR_SETUP_RETRY_TIMEOUT_MS)
     const poll = async (): Promise<void> => {
       const s = await window.toto.asrAssetsStatus().catch(() => null)
       if (s) apply(s)
@@ -1184,7 +1186,7 @@ export function OnboardingExperience({
     })
     return () => {
       live = false
-      clearTimeout(failOpen)
+      clearTimeout(asrSetupTimeout)
       clearInterval(interval)
       unsub?.()
     }
@@ -1431,7 +1433,7 @@ export function OnboardingExperience({
       <div className="onboard-tour-chrome flex h-9 shrink-0 items-center justify-center pt-3">
         <ActProgress scene={scene} />
       </div>
-      <div className="onboard-tour-slot flex w-full flex-1 flex-col items-center justify-center gap-6">
+      <div className="onboard-tour-slot flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
@@ -1533,6 +1535,20 @@ export function OnboardingExperience({
                         className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
                       >
                         Try again
+                      </button>
+                    </div>
+                  )}
+                  {r.key === 'asr' && asrRowNeedsRepair(r) && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                        Reinstall Métis with the official installer, then reopen it.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void window.toto.quit()}
+                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                      >
+                        Quit Métis
                       </button>
                     </div>
                   )}
@@ -1751,7 +1767,7 @@ export function OnboardingExperience({
       )}
 
       {scene === 'appearance' && (
-        <div key="appearance" className="flex w-full flex-col items-center">
+        <div key="appearance" className="onboard-appearance-scroll flex min-h-0 w-full flex-col items-center overflow-y-auto px-1 py-4">
           <OnboardingAppearance
             value={appearance}
             locked={appearanceLocked}
