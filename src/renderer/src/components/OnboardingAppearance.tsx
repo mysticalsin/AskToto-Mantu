@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
+import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 import { OverlayChromePicker } from './OverlayChromePicker'
 import { OverlayPlacementPicker } from './OverlayPlacementPicker'
 import { MetisMark } from './MetisMark'
@@ -17,24 +18,27 @@ import {
 } from '../lib/onboarding-appearance'
 
 function AppearanceLivePreview({ layout, placement }: { layout: OverlayLayout; placement: OverlayPlacement }): JSX.Element {
-  const [phase, setPhase] = useState<AppearancePreviewPhase>(() => appearancePreviewInitialPhase(layout))
+  const presentation = resolveOverlayPresentation({ layout, placement })
+  const presentationLayout = presentation.layout
+  const rightEdgePreview = presentation.surface === 'edge-chat'
+  const [phase, setPhase] = useState<AppearancePreviewPhase>(() => appearancePreviewInitialPhase(presentationLayout))
 
   useEffect(() => {
-    setPhase(appearancePreviewInitialPhase(layout))
-  }, [layout])
+    setPhase(appearancePreviewInitialPhase(presentationLayout))
+  }, [presentationLayout])
 
   const send = (event: Parameters<typeof reduceAppearancePreview>[2]): void => {
-    setPhase((current) => reduceAppearancePreview(layout, current, event))
+    setPhase((current) => reduceAppearancePreview(presentationLayout, current, event))
   }
 
-  const showBar = appearancePreviewShowsBar(phase)
-  const showIsland = appearancePreviewShowsIsland(layout, phase)
-  const showHint = appearancePreviewShowsHint(layout, phase)
+  const showBar = !rightEdgePreview && appearancePreviewShowsBar(phase)
+  const showIsland = !rightEdgePreview && appearancePreviewShowsIsland(presentationLayout, phase)
+  const showHint = !rightEdgePreview && appearancePreviewShowsHint(presentationLayout, phase)
   const placementLabel = placement === 'right-edge' ? 'right edge' : 'top'
   const hitLabel =
-    layout === 'hide'
+    presentationLayout === 'hide'
       ? `Click the ${placementLabel} to open Hidden`
-      : layout === 'island'
+      : presentationLayout === 'island'
         ? 'Hover the island to open'
         : 'Bar stays on screen'
 
@@ -42,14 +46,23 @@ function AppearanceLivePreview({ layout, placement }: { layout: OverlayLayout; p
     <div
       className={
         'onboard-appearance-preview' +
-        (layout === 'bar' ? ' onboard-appearance-preview--bar' : '') +
-        (placement === 'right-edge' ? ' onboard-appearance-preview--right-edge' : '')
+        (presentationLayout === 'bar' ? ' onboard-appearance-preview--bar' : '') +
+        (rightEdgePreview ? ' onboard-appearance-preview--right-edge' : '')
       }
-      data-appearance-preview={layout}
+      data-appearance-preview={presentationLayout}
       data-placement-preview={placement}
       data-appearance-phase={phase}
     >
       <div className="onboard-appearance-preview__desktop" aria-hidden="true" />
+      {rightEdgePreview ? (
+        <>
+          <div data-edge-drawer="true" aria-hidden="true" className="absolute top-8 right-0 z-[1] flex h-16 w-2/3 items-center gap-2 rounded-l-xl border border-white/15 bg-black/45 px-3 text-[10px] text-white/80">
+            <MetisMark size={14} />
+            <span>Command sidecar</span>
+          </div>
+          <span data-edge-tab="true" aria-hidden="true" className="absolute top-12 right-0 z-[2] h-10 w-3 rounded-l-lg bg-[#d6baff]" />
+        </>
+      ) : null}
       <button
         type="button"
         className="onboard-appearance-preview__hit no-drag"
@@ -67,7 +80,7 @@ function AppearanceLivePreview({ layout, placement }: { layout: OverlayLayout; p
           <div
             className={
               'onboard-appearance-preview__bar' +
-              (layout === 'bar' || phase === 'settled'
+              (presentationLayout === 'bar' || phase === 'settled'
                 ? ' overlay-spring overlay-spring--settled'
                 : phase === 'in'
                   ? ' overlay-spring overlay-spring--in'
@@ -124,12 +137,6 @@ export function OnboardingAppearance({
         <h2 className="onboard-act4-title">{ONBOARDING_APPEARANCE_HEADING}</h2>
         <p className="onboard-act4-lead">{ONBOARDING_APPEARANCE_LEAD}</p>
       </div>
-      <OverlayChromePicker
-        value={value}
-        locked={locked || saving}
-        copy={ONBOARDING_APPEARANCE_COPY}
-        onChange={onChange}
-      />
       <div className="flex w-full flex-col gap-2">
         <p className="m-0 text-center text-[12px] font-medium text-white">Position</p>
         <p className="m-0 text-center text-[11px] leading-snug text-white/70">
@@ -137,6 +144,13 @@ export function OnboardingAppearance({
         </p>
         <OverlayPlacementPicker value={placement} locked={placementLocked || saving} onChange={onPlacementChange} />
       </div>
+      <OverlayChromePicker
+        value={value}
+        placement={placement}
+        locked={locked || saving}
+        copy={ONBOARDING_APPEARANCE_COPY}
+        onChange={onChange}
+      />
       {saving ? (
         <p aria-live="polite" className="m-0 text-center text-[11px] text-white/70">Saving your appearance…</p>
       ) : null}

@@ -8,6 +8,18 @@ const settings = readFileSync(join(__dirname, './Settings.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 
 describe('Settings overlay chrome cards', () => {
+  it('filters Bar at right edge while preserving accessible radio navigation', () => {
+    expect(picker).toMatch(/allowedOverlayLayouts\(placement\)/)
+    expect(picker).toMatch(/resolveOverlayPresentation/)
+    expect(picker).toMatch(/placement: OverlayPlacement/)
+    expect(picker).toMatch(/role="radio"/)
+    expect(picker).toMatch(/onKeyDown/)
+    expect(picker).toMatch(/ArrowRight/)
+    expect(picker).toMatch(/min-h-11/)
+    expect(picker).toMatch(/aria-live="polite"/)
+    expect(picker).toMatch(/Bar is available only at Top center/)
+  })
+
   it('renders a diagram card for hide, island, and bar', () => {
     expect(OVERLAY_LAYOUTS).toEqual(['hide', 'island', 'bar'])
     expect(picker).toMatch(/data-chrome-diagram=\{id\}/)

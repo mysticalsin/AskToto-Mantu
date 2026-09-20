@@ -69,6 +69,7 @@ import { TimeSavedView } from './TimeSavedView'
 import { autoHideOverlayForLayout } from '@shared/overlay-chrome'
 import { overlayShowsBarRestPicker } from '@shared/overlay-orb'
 import type { OverlayPlacement } from '@shared/overlay-placement'
+import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 import { OverlayChromePicker } from './OverlayChromePicker'
 import { OverlayPlacementPicker } from './OverlayPlacementPicker'
 import { OverlayOrbPicker } from './OverlayOrbPicker'
@@ -6364,7 +6365,7 @@ export function Settings({
     overlayPlacementSaveInFlight.current = true
     setOverlayPlacementSave({ busy: true, error: null })
     try {
-      const saved = await persistOverlayPlacement(id, patch)
+      const saved = await persistOverlayPlacement(id, settings.overlayLayout, patch)
       // Managed policy can return an unchanged snapshot without throwing. Do not pretend a click took
       // effect until the durable main-process reply confirms the requested position.
       if (!saved) throw new Error('overlay placement was not saved')
@@ -6590,20 +6591,6 @@ export function Settings({
                     <span className="text-[12px] text-[color:var(--color-ink)]">This is how the overlay bar will look.</span>
                   </div>
                   <div className="mt-3 px-1">
-                    <p className="m-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Overlay chrome</p>
-                    <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                      How Métis sits on the desktop. Changes apply now, no reinstall.
-                    </p>
-                    <OverlayChromePicker
-                      value={settings.overlayLayout}
-                      locked={settings.managedKeys.includes('overlayLayout')}
-                      onChange={(id) =>
-                        patch({
-                          overlayLayout: id,
-                          autoHideOverlay: autoHideOverlayForLayout(id)
-                        })
-                      }
-                    />
                     <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">
                       Overlay position <ManagedChip keys={settings.managedKeys} k="overlayPlacement" />
                     </p>
@@ -6625,7 +6612,22 @@ export function Settings({
                         {overlayPlacementSave.error}
                       </p>
                     ) : null}
-                    {overlayShowsBarRestPicker(settings.overlayLayout) ? (
+                    <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Overlay chrome</p>
+                    <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                      How Métis sits on the desktop. Changes apply now, no reinstall.
+                    </p>
+                    <OverlayChromePicker
+                      value={settings.overlayLayout}
+                      placement={settings.overlayPlacement}
+                      locked={settings.managedKeys.includes('overlayLayout')}
+                      onChange={(id) =>
+                        patch({
+                          overlayLayout: id,
+                          autoHideOverlay: autoHideOverlayForLayout(id)
+                        })
+                      }
+                    />
+                    {overlayShowsBarRestPicker(resolveOverlayPresentation({ layout: settings.overlayLayout, placement: settings.overlayPlacement }).layout) ? (
                       <>
                         <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Bar rest</p>
                         <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
