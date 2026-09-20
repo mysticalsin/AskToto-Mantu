@@ -3781,24 +3781,27 @@ export function App(): JSX.Element {
       ].join(' ')}
     >
             <div data-metis-command-pill-host="1">
-        <div
-          data-metis-command-ear-chip="1"
-          className="pointer-events-none absolute left-1/2 top-1 z-[80] -translate-x-1/2 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium tracking-wide text-white/90"
-        >
-          {metisCommandEarStatus.state === 'listening'
-            ? 'Ear on · say Métis'
-            : metisCommandEarStatus.state === 'arming'
-              ? 'Ear arming…'
-              : metisCommandEarStatus.state === 'denied'
-                ? 'Mic blocked · Privacy'
-                : metisCommandEarStatus.state === 'heard'
-                  ? `Heard: ${'text' in metisCommandEarStatus ? metisCommandEarStatus.text.slice(0, 42) : ''}`
-                  : metisCommandEarStatus.state === 'error'
-                    ? 'Ear error'
-                    : null}
-        </div>
+        {/* Cap4: dock rest / OverlayPeek must not show Cap2 Ear chrome (Tony FAIL Ear error on notch). */}
+        {!overlayPeeked && !(overlayLayout === 'dock' && !overlayRevealed) ? (
+          <div
+            data-metis-command-ear-chip="1"
+            className="pointer-events-none absolute left-1/2 top-1 z-[80] -translate-x-1/2 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium tracking-wide text-white/90"
+          >
+            {metisCommandEarStatus.state === 'listening'
+              ? 'Ear on · say Métis'
+              : metisCommandEarStatus.state === 'arming'
+                ? 'Ear arming…'
+                : metisCommandEarStatus.state === 'denied'
+                  ? 'Mic blocked · Privacy'
+                  : metisCommandEarStatus.state === 'heard'
+                    ? `Heard: ${'text' in metisCommandEarStatus ? metisCommandEarStatus.text.slice(0, 42) : ''}`
+                    : metisCommandEarStatus.state === 'error'
+                      ? 'Ear error'
+                      : null}
+          </div>
+        ) : null}
         <CommandListeningPill
-          visible={metisCommand.pillVisible}
+          visible={!overlayPeeked && metisCommand.pillVisible}
           copy={metisCommand.pillCopy}
           liveTranscript={metisCommand.liveTranscript}
           chime={metisCommand.chime}
@@ -3872,15 +3875,20 @@ export function App(): JSX.Element {
         // Hide: 8x2 hairline (cursor watch is the sensor). Island: top peek. Dock: edge sliver.
         <OverlayPeek
           rest={overlayRestsHidden(overlayLayout) ? 'hide' : overlayLayout === 'dock' ? 'dock' : 'island'}
-          onReveal={revealOverlay}
+          onReveal={
+            overlayLayout === 'dock'
+              ? () => dispatchAutoHide({ type: 'reveal-now' })
+              : revealOverlay
+          }
           stealth={settings?.contentProtection ?? true}
         />
       ) : (
         <>
-          {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. */}
+          {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. Dock: sidecar panel. */}
           <div
             className={
-              overlayIdle ? overlaySpringClassName(overlaySpring) : circleRestSpringClassName(circleRestSpring)
+              (overlayLayout === 'dock' ? 'overlay-dock-panel ' : '') +
+              (overlayIdle ? overlaySpringClassName(overlaySpring) : circleRestSpringClassName(circleRestSpring))
             }
             onAnimationEnd={(e) => {
               if (e.target !== e.currentTarget) return

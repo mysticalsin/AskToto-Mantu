@@ -2924,7 +2924,9 @@ function tickOverlayCursorWatch(): void {
   if (step.action === 'restore' && (islandResting || !windowVisible)) {
     const now = performance.now()
     overlayCursorWatchEnteredAt ??= now
-    if (now - overlayCursorWatchEnteredAt < CURSOR_REVEAL_DWELL_MS) return
+    // Dock sliver is intentional chrome the user aims at — shorter dwell than top-edge flash guard.
+    const dwell = layout === 'dock' ? Math.min(CURSOR_REVEAL_DWELL_MS, 60) : CURSOR_REVEAL_DWELL_MS
+    if (now - overlayCursorWatchEnteredAt < dwell) return
   }
   overlayCursorWatchEnteredAt = null
   overlayCursorWatchHovering = step.osHoverSeen
