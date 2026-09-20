@@ -1,5 +1,5 @@
 /**
- * Métis 2.0 Cap 2 — optional portal /v1/decide client for action_disambiguate ONLY.
+ * Métis 2.0 Cap 2 — optional portal /v1/decide client (Cap2 action_disambiguate + Cap3 intel_rank/intel_score).
  * Deterministic parser remains authoritative when Jev off/outage/timeout.
  * Never sends photos or camera frames.
  */
@@ -82,5 +82,121 @@ export async function decideActionDisambiguate(
   } catch (e) {
     const timedOut = (e as { name?: string })?.name === 'AbortError'
     return { ok: false, error: timedOut ? 'timeout' : 'network', timedOut }
+  }
+}
+
+
+/** Cap3 Jev classification labels — portal /v1/decide intel_rank | intel_score only. */
+export const JEV_INTEL_LABELS = [
+  'on track',
+  'needs attention',
+  'blocked',
+  'stale',
+  'insufficient'
+] as const
+export type JevIntelLabel = (typeof JEV_INTEL_LABELS)[number]
+
+export function isJevIntelLabel(v: unknown): v is JevIntelLabel {
+  return typeof v === 'string' && (JEV_INTEL_LABELS as readonly string[]).includes(v)
+}
+
+export type DecideIntelInput = {
+  operatorBaseUrl: string
+  authorizationHeader: string
+  /** Narrow evidence snapshot — never photos, tokens, or raw vault keys. */
+  evidence: Record<string, unknown>
+  template?: 'intel_rank' | 'intel_score'
+  deadlineMs?: number
+  fetchImpl?: typeof fetch
+}
+
+export type DecideIntelResult =
+  | {
+      ok: true
+      label: JevIntelLabel
+      confidence: number | null
+      ranked?: Array<{ id: string; label: JevIntelLabel }>
+    }
+  | { ok: false; error: string; timedOut?: boolean; assistUnavailable: true }
+
+/**
+ * Cap3 — optional portal classify over deterministic evidence.
+ * On any failure: assistUnavailable (caller keeps deterministic layer; never invent scores).
+ */
+export async function decideIntelClassify(input: DecideIntelInput): Promise<DecideIntelResult> {
+  const base = input.operatorBaseUrl.replace(/\/$/, '')
+  if (!base || !/^https:\/\//i.test(base)) {
+    return { ok: false, error: 'operator_url_missing', assistUnavailable: true }
+  }
+  const template = input.template ?? 'intel_score'
+  const deadlineMs = Math.max(250, Math.min(input.deadlineMs ?? 2500, 5000))
+  const ctrl = new AbortController()
+  const fetchImpl = input.fetchImpl ?? fetch
+  try {
+    const timedOut = new Promise<never>((_, reject) => {
+      const t = setTimeout(() => {
+        ctrl.abort()
+        reject(Object.assign(new Error('timeout'), { name: 'AbortError' }))
+      }, deadlineMs)
+      ctrl.signal.addEventListener('abort', () => clearTimeout(t))
+    })
+    const res = await Promise.race([
+      fetchImpl(`${base}/v1/decide`, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          authorization: input.authorizationHeader
+        },
+        body: JSON.stringify({
+          template,
+          payload: { evidence: input.evidence },
+          deadlineMs
+        }),
+        signal: ctrl.signal
+      }),
+      timedOut
+    ])
+    const json = (await res.json().catch(() => null)) as {
+      ok?: boolean
+      error?: string
+      result?: { label?: unknown; ranked?: unknown }
+      confidence?: number | null
+    } | null
+    if (!res.ok || !json || json.ok !== true) {
+      return {
+        ok: false,
+        error: (json && json.error) || `http_${res.status}`,
+        assistUnavailable: true
+      }
+    }
+    const label = json.result?.label
+    if (!isJevIntelLabel(label)) {
+      return { ok: false, error: 'invalid_label', assistUnavailable: true }
+    }
+    let ranked: Array<{ id: string; label: JevIntelLabel }> | undefined
+    if (Array.isArray(json.result?.ranked)) {
+      ranked = []
+      for (const row of json.result!.ranked as Array<{ id?: unknown; label?: unknown }>) {
+        if (typeof row?.id === 'string' && isJevIntelLabel(row.label)) {
+          ranked.push({ id: row.id, label: row.label })
+        }
+      }
+      if (!ranked.length) ranked = undefined
+    }
+    return {
+      ok: true,
+      label,
+      confidence: typeof json.confidence === 'number' ? json.confidence : null,
+      ranked
+    }
+  } catch (e) {
+    const timedOut = (e as { name?: string })?.name === 'AbortError'
+    return {
+      ok: false,
+      error: timedOut ? 'timeout' : 'network',
+      timedOut,
+      assistUnavailable: true
+    }
   }
 }

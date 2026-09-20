@@ -6,6 +6,7 @@ import { bandDistribution, ledgerTotals, agingBuckets, type AgeBucketLabel } fro
 import { COOLING_DAYS } from '../lib/goingCold'
 import { StatTile } from '../components/charts'
 import { EmptyState } from '../components/EmptyState'
+import { buildStandLayers, type StandFact } from '../lib/stand-snapshot'
 
 // framer-motion wrapper around the router Link, so the attention rows animate in like every other
 // list on this page while still navigating through HashRouter (raw hash anchors are reserved for
@@ -133,6 +134,7 @@ export function BriefingView({ data }: Props) {
   const goingCold: GoingColdRow[] = data.going_cold ?? []
 
   const attention = useMemo(() => buildAttention(data, now), [data, now])
+  const stand = useMemo(() => buildStandLayers(data, now), [data, now])
 
   const nodeIds = useMemo(() => new Set(data.account_graph.nodes.map((n) => n.id)), [data.account_graph.nodes])
   const owned = useMemo(() => flattenCommitments(data, nodeIds), [data, nodeIds])
@@ -208,6 +210,56 @@ export function BriefingView({ data }: Props) {
           What needs your attention this morning, ranked by real signals already sitting in your data.
         </p>
       </motion.div>
+
+      {/* Cap3 — Where do we stand? (deterministic first; Jev classify optional) */}
+      <section className="mb-8 rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5" data-metis-stand="1">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-white/95">Where do we stand?</h2>
+            <p className="mt-1 text-sm text-white/50">
+              Deterministic facts from your brain. Jev classifies only — never invents counts.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-wide">
+            <span className="rounded-full bg-white/10 px-2.5 py-1 text-white/70">Deterministic · {stand.deterministic.deterministicHint}</span>
+            <span className={`rounded-full px-2.5 py-1 ${stand.jev.available ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-200'}`}>
+              Jev · {stand.jev.available && stand.jev.label ? stand.jev.label : 'decision assist unavailable'}
+            </span>
+            <span className="rounded-full bg-white/5 px-2.5 py-1 text-white/50">
+              Explanation · {stand.explanation.source === 'approved_llm' ? 'approved LLM' : 'pending'}
+            </span>
+          </div>
+        </div>
+        <p className="mt-2 text-[11px] text-white/40">Suggested actions require preview before run.</p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {stand.deterministic.answers.map((a) => (
+            <div key={a.question} className="rounded-lg border border-white/10 bg-black/20 p-3">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-mantu-light">{a.question}</div>
+              <p className="mt-1 text-sm text-white/85">{a.summary}</p>
+              <ul className="mt-2 space-y-1 text-xs text-white/55">
+                {a.facts.map((f: StandFact) => (
+                  <li key={f.key + f.kind}>
+                    {f.kind === 'missing' ? (
+                      <span className="text-amber-200/90">{f.label}: insufficient ({f.reason}) — not 0</span>
+                    ) : f.kind === 'count' ? (
+                      <span>{f.label}: <strong className="text-white/80">{f.value}</strong></span>
+                    ) : (
+                      <span>{f.label}: {f.items.join(', ')}{f.truncated ? ` (+${f.truncated})` : ''}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {a.evidenceLinks.map((l) => (
+                  <Link key={l.href + l.label} to={l.href} className="text-[11px] text-mantu-light underline-offset-2 hover:underline">
+                    {l.label}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         <StatTile label="Open deals" value={openDeals.length} />
