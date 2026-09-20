@@ -11,6 +11,8 @@ describe('live capture PCM handoff', () => {
     expect(WHISPER_WORKLET_SRC).toContain('this.resampler = new Pcm16kResampler(this.sourceSampleRate, SAMPLE_RATE)')
     expect(WHISPER_WORKLET_SRC).toContain('{ audio: chunk, sampleRate: SAMPLE_RATE, partial: true }')
     expect(WHISPER_WORKLET_SRC).toContain('{ audio: chunk, sampleRate: SAMPLE_RATE, partial: false }')
+    expect(WHISPER_WORKLET_SRC).not.toContain('this.resampled.subarray(')
+    expect(WHISPER_WORKLET_SRC).toContain('this.buf[this.fill + i] = this.resampled[offset + i]')
     expect(listenSrc).toMatch(/data\.sampleRate !== SR\) return/)
   })
 })

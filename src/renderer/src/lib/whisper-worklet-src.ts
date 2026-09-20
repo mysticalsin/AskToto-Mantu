@@ -45,8 +45,8 @@ class WhisperWorklet extends AudioWorkletProcessor {
     const requestedRate = options?.processorOptions?.sourceSampleRate
     this.sourceSampleRate = requestedRate === sampleRate ? requestedRate : sampleRate
     this.resampler = new Pcm16kResampler(this.sourceSampleRate, SAMPLE_RATE)
-    // Normally one 128-sample Web Audio quantum, but bounded to the existing maximum window so a
-    // nonstandard offline/test render block is still converted without allocating on process().
+    // Normally one 128-sample Web Audio quantum, with a bounded maximum window buffer so supported
+    // nonstandard offline/test blocks still convert without allocating on process().
     this.resampled = new Float32Array(MAX_SAMPLES)
     this.port.onmessage = (e) => {
       if (e.data === 'flush') {
@@ -100,7 +100,9 @@ class WhisperWorklet extends AudioWorkletProcessor {
     let offset = 0
     while (offset < n) {
       const take = Math.min(MAX_SAMPLES - this.fill, n - offset)
-      this.buf.set(this.resampled.subarray(offset, offset + take), this.fill)
+      // Do not create a subarray view per render quantum: copy the bounded range into the preallocated
+      // turn buffer directly so the realtime path remains allocation-free until an emitted window.
+      for (let i = 0; i < take; i++) this.buf[this.fill + i] = this.resampled[offset + i]
       this.fill += take
       offset += take
       if (this.fill >= MAX_SAMPLES) this.emit() // hard cap → force-cut a long monologue
