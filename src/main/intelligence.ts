@@ -147,9 +147,17 @@ export function openIntelligenceWindow(avoid?: {
       webSecurity: true
     }
   })
-  // Private View covers the dashboard too — without this the most sensitive aggregated view stayed
-  // screen-capturable even with Private View on everywhere else.
-  intelWin.setContentProtection(intelCpOn())
+  // Cap3 QA: Private View blacks screen-capture AND can present as a blank feel window when verifying.
+  // Force paint for Cap3 tip prove when Resources/QA_TIP.txt exists; production path unchanged.
+  const qaTip = join(process.resourcesPath || '', 'QA_TIP.txt')
+  const cap3QaForcePaint = existsSync(qaTip)
+  if (cap3QaForcePaint) {
+    intelWin.setContentProtection(false)
+  } else {
+    // Private View covers the dashboard too — without this the most sensitive aggregated view stayed
+    // screen-capturable even with Private View on everywhere else.
+    intelWin.setContentProtection(intelCpOn())
+  }
   intelWin.on('closed', () => {
     intelWin = null
   })
@@ -164,6 +172,15 @@ export function openIntelligenceWindow(avoid?: {
   // (will-navigate only fires for renderer-initiated navigations).
   intelWin.webContents.on('will-navigate', (e) => e.preventDefault())
   intelUrl = pathToFileURL(html).href
+  intelWin.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error('[intelligence] did-fail-load', code, desc, url)
+  })
+  intelWin.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[intelligence] render-process-gone', details)
+  })
+  intelWin.webContents.on('dom-ready', () => {
+    console.log('[intelligence] dom-ready', html, 'qaForcePaint=', cap3QaForcePaint)
+  })
   void intelWin.loadFile(html)
   return { ok: true }
 }
