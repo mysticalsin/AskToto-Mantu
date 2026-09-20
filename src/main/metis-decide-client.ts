@@ -72,7 +72,7 @@ export async function decideActionDisambiguate(
         body: JSON.stringify({
           template: 'action_disambiguate',
           payload: {
-            transcript: input.transcript.slice(0, 2000),
+            transcript: input.transcript.slice(0, 512),
             candidates: input.candidates
           },
           deadlineMs
