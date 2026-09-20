@@ -3885,17 +3885,25 @@ export function App(): JSX.Element {
         />
       ) : overlayLayout === 'dock' ? (
         <DockPanel
-          onAsk={() => {
+          askValue={input}
+          onAskChange={setInput}
+          onAskSubmit={() => {
             setView('answer')
-            void window.toto.revealWidth?.()
+            submit()
           }}
+          askBusy={(ask.answer?.streaming || suggest.answer?.streaming) ?? false}
           onListen={() => toggleListen()}
           listening={showListeningChrome}
+          onCapture={capture}
+          captureAvailable={!!(settings?.screenAsk ?? true)}
           onOpenIntelligence={() => {
             void window.toto.brainOpenDashboard?.()
           }}
           onOpenSettings={() => setView('settings')}
-          askBusy={(ask.answer?.streaming || suggest.answer?.streaming) ?? false}
+          onCollapse={() => {
+            dispatchAutoHide({ type: 'collapse-now' })
+            void window.toto.parkAfterHide?.()
+          }}
         />
       ) : (
         <>
