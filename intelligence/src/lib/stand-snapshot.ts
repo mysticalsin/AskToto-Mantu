@@ -83,7 +83,7 @@ export function buildStandSnapshot(data: DashboardData, now = Date.now()): Stand
 
   const since = weekAgoIso(now)
   const meetingsThisWeek = Array.isArray(data.meetings_feed)
-    ? data.meetings_feed.filter((m) => (m.date || '') >= since).length
+    ? data.meetings_feed.filter((m) => typeof m?.date === 'string' && m.date >= since).length
     : typeof data.status?.meetings === 'number'
       ? null // status total exists but not a week delta — missing, not 0
       : null
