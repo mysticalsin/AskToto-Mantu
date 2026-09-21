@@ -25,6 +25,7 @@ import { ElapsedClock, answerBodyMaxHeight, type BarProps } from './Bar'
 import { modeLabel } from '@shared/ipc'
 import { accelLabel } from '../lib/keys'
 import { BAR_MARK_SIZE_PX } from '../lib/bar-pill-orb'
+import { dockChatIsSquare } from '@shared/dock-chat-square'
 
 /**
  * DockPanel — the Ask surface for `dock` chrome (a tall sidecar on the screen edge).
@@ -63,6 +64,7 @@ const Tool = memo(function Tool({
   rainbow,
   disabled,
   edgeRight,
+  allowOverlayText = false,
   children
 }: {
   title: string
@@ -76,6 +78,8 @@ const Tool = memo(function Tool({
   disabled?: boolean
   /** Anchors the tooltip to the right so it cannot escape the panel's narrow column. */
   edgeRight?: boolean
+  /** Tony HARD: overlay label only when hover + squarish dock chat (never on long rectangular). */
+  allowOverlayText?: boolean
   children: React.ReactNode
 }): JSX.Element {
   return (
@@ -100,14 +104,16 @@ const Tool = memo(function Tool({
       >
         {children}
       </button>
-      <span
-        className={[
-          'pointer-events-none absolute -top-1 z-20 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-0.5 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 delay-0 group-hover:opacity-100 group-hover:delay-[400ms] peer-focus-visible:opacity-100 peer-focus-visible:delay-0',
-          edgeRight ? 'right-0' : 'left-1/2 -translate-x-1/2'
-        ].join(' ')}
-      >
-        {title}
-      </span>
+      {allowOverlayText ? (
+        <span
+          className={[
+            'pointer-events-none absolute -top-1 z-20 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-0.5 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 delay-0 group-hover:opacity-100 group-hover:delay-[400ms] peer-focus-visible:opacity-100 peer-focus-visible:delay-0',
+            edgeRight ? 'right-0' : 'left-1/2 -translate-x-1/2'
+          ].join(' ')}
+        >
+          {title}
+        </span>
+      ) : null}
     </span>
   )
 })
@@ -127,6 +133,16 @@ export type DockPanelProps = BarProps & {
 }
 
 export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Element {
+  const [dockSquare, setDockSquare] = useState(() =>
+    typeof window !== 'undefined' ? dockChatIsSquare(window.innerWidth, window.innerHeight) : true
+  )
+  useEffect(() => {
+    const sync = (): void => setDockSquare(dockChatIsSquare(window.innerWidth, window.innerHeight))
+    sync()
+    window.addEventListener('resize', sync)
+    return () => window.removeEventListener('resize', sync)
+  }, [])
+
   const inputRef = useRef<HTMLInputElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const [modeOpen, setModeOpen] = useState(false)
@@ -242,7 +258,7 @@ export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Ele
         </span>
 
         {props.canTogglePanel && (
-          <Tool title={props.panelOpen ? 'Collapse' : 'Expand'} onClick={props.onTogglePanel} edgeRight>
+          <Tool allowOverlayText={dockSquare} title={props.panelOpen ? 'Collapse' : 'Expand'} onClick={props.onTogglePanel} edgeRight>
             <ChevronRight
               size={17}
               strokeWidth={ICON_STROKE}
@@ -270,10 +286,10 @@ export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Ele
               {props.captureDegraded.side === 'them' ? 'Mic only' : 'No mic'}
             </span>
           )}
-          <Tool title={props.paused ? 'Resume' : 'Pause'} onClick={props.onTogglePause}>
+          <Tool allowOverlayText={dockSquare} title={props.paused ? 'Resume' : 'Pause'} onClick={props.onTogglePause}>
             {props.paused ? <Play size={16} strokeWidth={ICON_STROKE} /> : <Pause size={16} strokeWidth={ICON_STROKE} />}
           </Tool>
-          <Tool title="Stop meeting" onClick={props.onToggleListen} danger active edgeRight>
+          <Tool allowOverlayText={dockSquare} title="Stop meeting" onClick={props.onToggleListen} danger active edgeRight>
             <Square size={15} strokeWidth={ICON_STROKE} />
           </Tool>
         </div>
@@ -286,6 +302,7 @@ export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Ele
       <div className="dock-zone dock-tools" data-dock-tools="1">
         <div className="dock-tools__cluster" data-bar-tools>
           <Tool
+            allowOverlayText={dockSquare}
             title={
               props.captureAccel
                 ? `Capture screen (${accelLabel(props.captureAccel)})`
@@ -303,6 +320,7 @@ export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Ele
             {props.capturing ? <InlineOrb kind="working" /> : <Image size={18} strokeWidth={ICON_STROKE} />}
           </Tool>
           <Tool
+            allowOverlayText={dockSquare}
             title={
               props.spotlightReady
                 ? 'Spotlight Ref'
@@ -314,6 +332,7 @@ export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Ele
             <FileSearch size={18} strokeWidth={ICON_STROKE} />
           </Tool>
           <Tool
+            allowOverlayText={dockSquare}
             title={props.mode ? modeLabel(props.mode, props.customModes) : 'Mode'}
             onClick={() => setModeOpen((v) => !v)}
             active={modeOpen}
@@ -321,6 +340,7 @@ export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Ele
             <LayoutGrid size={18} strokeWidth={ICON_STROKE} />
           </Tool>
           <Tool
+            allowOverlayText={dockSquare}
             title={props.thinkingOn ? 'Deep thinking on' : 'Deep thinking off'}
             onClick={() => props.onToggleThinking?.()}
             active={props.thinkingOn}
@@ -329,6 +349,7 @@ export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Ele
             <Brain size={18} strokeWidth={ICON_STROKE} />
           </Tool>
           <Tool
+            allowOverlayText={dockSquare}
             title={
               props.stealthLocked
                 ? 'Hidden from screen share: managed by your organization'
@@ -345,6 +366,7 @@ export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Ele
           </Tool>
           <span className="dock-tools__rule" aria-hidden="true" />
           <Tool
+            allowOverlayText={dockSquare}
             title={listening ? 'End meeting & get summary' : 'Start listening'}
             onClick={props.onToggleListen}
             active={listening}
@@ -365,7 +387,7 @@ export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Ele
             )}
           </Tool>
           {hasAnswer && (
-            <Tool title={copied ? 'Copied' : 'Copy answer'} onClick={copyAnswer} active={copied}>
+            <Tool allowOverlayText={dockSquare} title={copied ? 'Copied' : 'Copy answer'} onClick={copyAnswer} active={copied}>
               {copied ? (
                 <Check size={18} strokeWidth={ICON_STROKE} className="dock-pop" />
               ) : (
@@ -374,7 +396,7 @@ export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Ele
             </Tool>
           )}
           {listening && props.onNewMeeting && (
-            <Tool title="New meeting" onClick={props.onNewMeeting}>
+            <Tool allowOverlayText={dockSquare} title="New meeting" onClick={props.onNewMeeting}>
               <Plus size={18} strokeWidth={ICON_STROKE} />
             </Tool>
           )}
@@ -495,7 +517,7 @@ export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Ele
           <div className="dock-sheet absolute inset-0 z-20 flex flex-col bg-[var(--glass-fill-strong)] backdrop-blur-sm">
             <div className="flex items-center justify-between px-3 py-2">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">Mode</span>
-              <Tool title="Close" onClick={() => setModeOpen(false)} edgeRight>
+              <Tool allowOverlayText={dockSquare} title="Close" onClick={() => setModeOpen(false)} edgeRight>
                 <X size={16} strokeWidth={ICON_STROKE} />
               </Tool>
             </div>

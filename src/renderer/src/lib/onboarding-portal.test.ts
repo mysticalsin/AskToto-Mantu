@@ -181,3 +181,12 @@ describe('FITO-185-V portal-open keeps entrance animations', () => {
     expect(prmBlock).toMatch(/animation:\s*none\s*!important/)
   })
 })
+
+
+describe('Act1 forever-load regression guard (Tony 2026-09-21)', () => {
+  it('never removes requestOnboardingPortalOpen from OnboardingExperience mount', () => {
+    const src = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+    expect(src).toMatch(/requestOnboardingPortalOpen\(\)/)
+    expect(src).toMatch(/useLayoutEffect\(\(\) => \{[\s\S]*?requestOnboardingPortalOpen\(\)/)
+  })
+})

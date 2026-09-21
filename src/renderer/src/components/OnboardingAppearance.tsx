@@ -201,10 +201,11 @@ function ChromeCardThumb({ id, selected }: { id: OnboardingChromeId; selected: b
       </span>
     )
   }
-  if (id === 'bar-hides') {
+  if (id === 'hidden' || id === 'bar-hides') {
+    // Invisible / hide-until-intent — empty desktop, no bar ghost as a false Pill.
     return (
       <span className="onboard-chrome-thumb onboard-chrome-thumb--bar-hides" aria-hidden="true">
-        <span className="onboard-chrome-thumb__bar onboard-chrome-thumb__bar--ghost" />
+        <span className="onboard-chrome-thumb__desktop" />
       </span>
     )
   }
