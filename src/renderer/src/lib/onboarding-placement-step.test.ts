@@ -97,4 +97,8 @@ describe('selection click stays smooth (Tony voice ~8:43pm ET)', () => {
     expect(css).toMatch(/\.overlay-chrome-card \{[\s\S]*?transition:/)
     expect(css).toMatch(/\.onboard-appearance \.overlay-chrome-card \{[\s\S]*?transition:/)
   })
+
+  it('persona border also eases on is-selected (not transform-only)', () => {
+    expect(css).toMatch(/\.onboard-persona \{[\s\S]*?border-color 200ms/)
+  })
 })

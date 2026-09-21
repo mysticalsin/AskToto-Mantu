@@ -1075,7 +1075,11 @@ input::placeholder {
   text-align: left;
   color: #f4f4f5;
   opacity: 1;
-  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease;
+  transition:
+    transform 160ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 200ms var(--ease-spring),
+    border-color 200ms var(--ease-spring),
+    box-shadow 200ms var(--ease-spring);
 }
 .onboard-persona:hover {
   background: rgba(255, 255, 255, 0.16);
@@ -2411,6 +2415,7 @@ button.onboard-cta {
 @media (prefers-reduced-motion: reduce) {
   .overlay-chrome-card,
   .onboard-appearance .overlay-chrome-card,
+  .onboard-persona,
   .onboard-appearance-preview__circle-stage,
   .onboard-appearance-preview__bar-slot,
   .onboard-appearance-preview__dock,
