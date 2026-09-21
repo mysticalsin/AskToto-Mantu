@@ -3139,8 +3139,8 @@ function revealForMetisCommandPill(): void {
   }
   const display = screen.getDisplayMatching(win.getBounds())
   const metrics = getDisplayMetrics(display)
-  const width = Math.min(560, Math.max(280, display.workArea.width - 24))
-  const height = 96
+  const width = Math.min(640, Math.max(320, display.workArea.width - 24))
+  const height = 120
   const y = topClamp('island', metrics, ISLAND_TOP_MARGIN)
   const x = Math.round(display.workArea.x + (display.workArea.width - width) / 2)
   currentWidth = width

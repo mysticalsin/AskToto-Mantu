@@ -1,10 +1,10 @@
 /**
- * Métis 2.0 Cap 2 — top-center translucent command pill (wake UX).
- * Jarvis listening orb + copy: Hi Métis → Hi Métis, I'm listening... → live transcript.
- * Does not replace Bar ControlPill / Hide / Island.
+ * Métis 2.0 Cap 2 — top-center command listen surface (wake UX).
+ * On Hey Métis: Obsidian/Jarvis particle orb APPEARS and turns (listening state).
+ * Copy rides beside; does not replace Bar ControlPill / Hide / Island.
  */
 import { useEffect, useRef } from 'react'
-import { JarvisOrbButton } from './JarvisOrbButton'
+import { ObsidianOrb } from './ObsidianOrb'
 
 export type CommandListeningPillProps = {
   visible: boolean
@@ -77,12 +77,15 @@ export function CommandListeningPill({
   return (
     <div
       data-metis-command-pill="1"
+      data-metis-command-listen-orb="1"
       role="status"
       aria-live="polite"
-      className="pointer-events-auto fixed left-1/2 top-3 z-[80] flex max-w-[min(560px,92vw)] -translate-x-1/2 items-center gap-2 rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-[13px] text-white/95 shadow-lg backdrop-blur-md"
+      className="pointer-events-auto fixed left-1/2 top-3 z-[80] flex max-w-[min(560px,92vw)] -translate-x-1/2 items-center gap-3 rounded-full border border-white/15 bg-black/55 px-4 py-2.5 text-[13px] text-white/95 shadow-lg backdrop-blur-md"
     >
-      <JarvisOrbButton
+      {/* Cap4 Jarvis particle sphere — must visibly turn in listening state (Tony HARD). */}
+      <ObsidianOrb
         listening
+        animate
         orbMood="idle"
         title="Listening"
         ariaLabel="Métis is listening"
