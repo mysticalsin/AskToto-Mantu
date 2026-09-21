@@ -1266,8 +1266,8 @@ button.onboard-cta {
 }
 
 /* Act 6 (Ready, MQA-283) - the narrative's closing ceremony. Tasteful, not a confetti cannon: one gleam
-   sweep around the Métis mark (same conic-mask trick as Act 1's `.island-capsule::before` above, so the
-   two bookend acts share a visual language) plus a handful of one-shot spark motes (positioned by
+   sweep around the Métis mark (same conic-mask trick as Act 1's `.island-capsule::before`, on a sibling
+   `.ready-mark-gleam` layer so the mark cannot be masked away) plus a handful of one-shot spark motes (positioned by
    OnboardingExperience.tsx's READY_SPARKS via plain `left`/`top`, see `.ready-spark` below). Both are
    one-shot / forwards - nothing loops, so the cost is a handful of repaints on scene mount, never an
    ongoing one. Reduced motion needs the same explicit override `.island-capsule` does for the same
@@ -1296,15 +1296,24 @@ button.onboard-cta {
   }
 }
 .ready-mark-wrap {
+  /* Tony HARD 2026-09-21: explicit box + isolation so gleam mask cannot collapse/hide MetisMark. */
   position: relative;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  flex-shrink: 0;
+  isolation: isolate;
+  z-index: 1;
 }
-.ready-mark-wrap::before {
-  content: '';
+/* Gleam lives on a sibling layer (not ::before) so -webkit-mask cannot paint over the mark. */
+.ready-mark-gleam {
   position: absolute;
   inset: -12px;
   border-radius: 999px;
   padding: 1.5px;
+  z-index: 0;
   background: conic-gradient(
     from var(--ready-gleam-angle),
     transparent 0deg,
@@ -1321,6 +1330,14 @@ button.onboard-cta {
   mask-composite: exclude;
   pointer-events: none;
   animation: ready-gleam-sweep 1400ms steps(60, end) 120ms both;
+}
+.ready-mark-wrap > img,
+.ready-mark-wrap .ready-mark {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 96px;
+  height: 96px;
 }
 @keyframes ready-spark {
   0% {
@@ -1345,7 +1362,7 @@ button.onboard-cta {
   animation: ready-spark 900ms var(--ease-spring) both;
 }
 @media (prefers-reduced-motion: reduce) {
-  .ready-mark-wrap::before {
+  .ready-mark-gleam {
     animation: none;
     opacity: 0;
   }

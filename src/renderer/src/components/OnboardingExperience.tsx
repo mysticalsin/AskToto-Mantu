@@ -864,11 +864,12 @@ function ActReady({
   return (
     <div key="ready" className="scene-enter onboard-ready-screen flex flex-col items-center">
       <div className="ready-mark-wrap" aria-hidden="true">
+        <span className="ready-mark-gleam" aria-hidden="true" />
         {READY_SPARKS.map((s, i) => (
           <span
             key={i}
             className="ready-spark"
-            style={{ left: `calc(50% + ${s.x}px)`, top: `calc(50% + ${s.y}px)`, animationDelay: `${s.delay}ms` }}
+            style={{ left: `calc(50% + ${s.x}px)`, top: `calc(50% + ${s.y}px)`, animationDelay: `${s.delay}ms`, zIndex: 1 }}
           />
         ))}
         <MetisMark size={96} />
