@@ -27,7 +27,11 @@ sentence about "the 2.0 line" is ambiguous until that is resolved — see decisi
 Verify:
 ```
 git rev-parse origin/codex/review-release-1.9.1 codex/review-release-1.9.1
-git show origin/codex/review-release-1.9.1:src/shared/overlay-chrome.ts | grep -c dock   # 0
+# The layout enum on 2.0 — three members, no dock:
+git show origin/codex/review-release-1.9.1:src/shared/overlay-chrome.ts | sed -n '9p'
+#   export const OVERLAY_LAYOUTS = ['hide', 'island', 'bar'] as const
+git show origin/codex/review-release-1.9.1:src/shared/overlay-chrome.ts | grep -c "'dock'"  # 0
+git ls-tree -r --name-only origin/codex/review-release-1.9.1 | grep -c DockPanel             # 0
 git rev-list --count 83d9d3fa..b756778a                                                   # 37
 ```
 
@@ -204,8 +208,9 @@ describing them, so 2.0 inherits working code instead of a to-do list.
 | Overlay keys undocumented for fleet policy | named in `managed-config.example.json`, with a contract test pinning both samples to the schema |
 | `BASE=HEAD~2` had drifted off the fork point | derived via `git merge-base HEAD $DOCK_LINEAGE` |
 
-Verified end to end at `04ae90d6`, which is the last commit touching code — everything after it
-changes only `docs/`, so the coverage is current: `npm run typecheck` EXIT=0 · `npm test` EXIT=0 (529 files /
+Verified end to end at `04ae90d6`. Two commits land after it: they change `docs/`, plus one
+comment-only hunk in `scripts/validate-dock-branch.sh` (`git diff 04ae90d6..HEAD -- scripts/`
+shows the comment and nothing else). No executable code changed after the evidence was captured: `npm run typecheck` EXIT=0 · `npm test` EXIT=0 (529 files /
 6412 passed / 17 skipped, proxy 28, operator 965) · licence-server 101/101 ·
 `scripts/validate-dock-branch.sh` PASS with 0 new failures against the fork point (63 → 0).
 
