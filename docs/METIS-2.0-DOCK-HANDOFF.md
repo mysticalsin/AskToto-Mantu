@@ -1,8 +1,9 @@
 # Métis 2.0 — handoff to the Integrator
 
 Date: 2026-09-20 · Visionary: Claude · Integrator: Codex · Owner: Tony
-Revision 2 — rev 1 was reviewed and returned REVISE with three blockers, all of which were
-correct. What changed is listed in §6.
+Revision 3 — rev 1 was reviewed and returned REVISE with three blockers, all of which were
+correct; rev 2 answered them (§6). Rev 3 records that four of the gaps rev 2 merely *reported*
+are now closed in the lineage itself (§7).
 
 Purpose: everything built in the right-edge dock lane, stated so 2.0 can carry it, with each
 claim checkable against the tree rather than against this document.
@@ -68,14 +69,25 @@ own try) and calls `app.exit(0)`. A second call during the grace window exits im
 
 **Content-protection audit unblinding** (PR #190) — the audit no longer reports a stub.
 
-### NOT in this lineage, despite rev 1 of this document saying so
+**Intelligence: notes are nodes** — `intelligence/src/lib/brainAdapter.ts`, `GraphView.tsx`.
+`keepTypes` now includes `'meeting'`, and the bundled `data.example.json` carries meeting notes
+so the fallback shows the feature rather than an empty board. Rev 1 claimed this while it was
+absent; rev 2 corrected the claim; it is now actually here, cherry-picked from PR #187's two
+commits (`f6b40875`, `f589b459`). Note the node type is `'meeting'`, not `'note'`.
 
-**Intelligence "notes are nodes" is NOT here.** At this HEAD, `brainAdapter.ts` has
-`keepTypes = {account, person, deal, sector}` and meeting nodes are dropped — with tests
-asserting that. The change lives only on `origin/claude/intelligence-relationship-notes`
-(PR #187), which is **not** an ancestor of the lineage, and what it adds is `'meeting'`, not
-`'note'`. Rev 1 claimed it as built and named the wrong node type. Treat PR #187 as an
-independent lane to be decided on its own.
+**QA_TIP is packaging-gated** — `src/main/intelligence.ts`. `Resources/QA_TIP.txt` can no longer
+strip content protection from the Intelligence window in a packaged build
+(`!isPackagedBuild() && existsSync(qaTip)`), which is the same fail-closed shape as
+`ASKTOTO_DISABLE_CP`. Cherry-picked from `a5eb53dc` (PR #192). This mattered: that window's
+preload can read the decrypted brain, and the old behaviour left the most sensitive aggregated
+view screen-capturable while Private View still appeared to be on.
+
+**Managed config names the overlay keys** — `build/managed-config.example.json` plus
+`src/main/managed-config-example.contract.test.ts`. `overlayPlacement`, `overlayLayout` and
+`dockRest` were always lockable, since managed config takes any top-level settings key, but the
+sample never named them. The new contract test checks both samples against the real schema in
+both directions, so a policy file can no longer name a key the app does not read — which fails
+silently, leaving a fleet unmanaged with no error.
 
 ## 3. Test state, with the evidence attached
 
@@ -84,7 +96,7 @@ status, rather than asking you to take the numbers on trust:
 
 ```
 npm run typecheck   EXIT=0    check-test-types at its 26 baseline
-npm test            EXIT=0    527 files · 6392 passed · 17 skipped
+npm test            EXIT=0    529 files · 6412 passed · 17 skipped
                               proxy 1 file · 28 passed
                               operator 91 files · 965 passed
 license-server                101 pass / 0 fail   (needs its own npm ci and real sockets)
@@ -127,14 +139,10 @@ the fork as soon as more commits landed. Override with `BASE=<sha>` or `DOCK_LIN
 - **Portal restructure** — Owner approved a portal rail plus a full IA restructure of the
   Cloudflare Worker Operator portal. Recon done; no code written. The `client.generated.ts`
   staleness gate means regenerating it in the same commit as any client change.
-- **`QA_TIP.txt`** (flagged in PR #190, deliberately NOT changed) — it disables content
-  protection with no packaged-build gate, unlike `ASKTOTO_DISABLE_CP`, which routes through
-  `devEnv()`. A shipped build carrying that file would have protection off. A decision, not a
-  cleanup, which is why it was left here.
-- **Managed config** — `dockRest` and `overlayPlacement` are lockable through the schema and
-  settings, but the managed-config docs and sample do not name the new keys, so fleet policy
-  carry-forward is undocumented.
-- **PR #187 (Intelligence)** — an independent lane, see §2.
+- **Decision 0 in §4** is still open and still blocks the rest.
+
+Closed since rev 2, and now in this lineage rather than reported as gaps: Intelligence
+notes-as-nodes, the QA_TIP packaging gate, and the managed-config overlay keys — all in §2.
 
 ## 6. What changed from rev 1
 
@@ -156,3 +164,23 @@ below was independently re-checked against the tree before being accepted; all h
 - **risk, capability_wording** — the narrow-display `top-center` fallback is now stated in §2.
 - **risk, missing_enterprise_doc** — managed-config gap added to §5.
 - **nit, topology_doc_stale** — commit count corrected (6, not 5; the doc is itself a commit).
+
+## 7. What changed in rev 3
+
+Rev 2 was an accurate document about an incomplete lineage. Rev 3 closes the gaps rather than
+describing them, so 2.0 inherits working code instead of a to-do list.
+
+| Was | Now |
+|---|---|
+| "notes are nodes" absent (rev 1 wrongly claimed it) | cherry-picked from PR #187; `keepTypes` includes `'meeting'`, example data carries notes |
+| `QA_TIP.txt` ungated — a packaged build would ship with Intelligence content protection off | gated on `!isPackagedBuild()`, cherry-picked from `a5eb53dc` (PR #192), 3 contract tests |
+| Overlay keys undocumented for fleet policy | named in `managed-config.example.json`, with a contract test pinning both samples to the schema |
+| `BASE=HEAD~2` had drifted off the fork point | derived via `git merge-base HEAD $DOCK_LINEAGE` |
+
+Verified end to end at this tip: `npm run typecheck` EXIT=0 · `npm test` EXIT=0 (529 files /
+6412 passed / 17 skipped, proxy 28, operator 965) · licence-server 101/101 ·
+`scripts/validate-dock-branch.sh` PASS with 0 new failures against the fork point (63 → 0).
+
+Two of those four were found by the Integrator's read-only review rather than by me, and the
+managed-config contract test found four more keys on its first run — all four turned out to be
+legitimate governance keys, so the samples were right and the test's first draft was wrong.

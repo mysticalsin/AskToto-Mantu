@@ -106,7 +106,8 @@ if [ -n "$BASE" ]; then
   if git worktree add --detach "$WT" "$BASE" >/dev/null 2>&1; then
     ln -snf "$REPO/node_modules" "$WT/node_modules"
     ( cd "$WT" && npx vitest run --reporter=json --outputFile="$OUT/base.json" >/dev/null 2>&1 )
-    python3 - "$OUT/root.json" "$OUT/base.json" <<'PY' || fail=1
+    base_rc=$?
+    python3 - "$OUT/root.json" "$OUT/base.json" "$base_rc" <<'PY' || fail=1
 import json, sys
 def fails(p):
     d = json.load(open(p)); s = set()
@@ -116,6 +117,20 @@ def fails(p):
                 s.add((tr['name'].split('/')[-1], a['title']))
     return s
 mine, base = fails(sys.argv[1]), fails(sys.argv[2])
+base_rc = int(sys.argv[3])
+# The branch half of this script already gates on vitest's exit code; the BASELINE half did not, and
+# it is the same trap wearing the other hat. A baseline suite that fails to load reports no failures,
+# which silently understates the baseline and makes this branch look worse than it is. Both the exit
+# code and the test totals are checked, because a baseline missing whole files is not a baseline.
+mine_total = json.load(open(sys.argv[1]))['numTotalTests']
+base_total = json.load(open(sys.argv[2]))['numTotalTests']
+if base_rc not in (0, 1):
+    print('%-52s %s' % ('baseline run', 'UNUSABLE (vitest exit %d)' % base_rc)); sys.exit(1)
+if base_total < mine_total * 0.9:
+    print('%-52s %s' % ('baseline run',
+        'SUSPECT (%d tests vs %d on this branch — a suite may not have loaded)' % (base_total, mine_total)))
+    sys.exit(1)
+print('%-52s %s' % ('baseline tests collected', '%d (branch: %d)' % (base_total, mine_total)))
 new = sorted(mine - base)
 print('%-52s %s' % ('failures at branch point', len(base)))
 print('%-52s %s' % ('failures on this branch', len(mine)))
