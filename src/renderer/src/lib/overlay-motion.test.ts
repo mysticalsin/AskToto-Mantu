@@ -44,6 +44,9 @@ describe('overlay hide/reveal spring timings', () => {
     expect(overlayShowPeek(true, false, 'rest', true)).toBe(false)
     expect(overlaySpringClassName('in')).toMatch(/overlay-spring--in/)
     expect(overlaySpringClassName('out')).toMatch(/overlay-spring--out/)
+    expect(overlaySpringClassName('in', 'right')).toMatch(/overlay-spring--edge-right/)
+    expect(overlaySpringClassName('out', 'right')).toMatch(/overlay-spring--edge-right/)
+    expect(overlaySpringClassName('settled', 'right')).toMatch(/overlay-spring--edge-right/)
   })
 
   it('Circle/Jarvis expand is a spring, not a hard cut; reduced-motion skips it', () => {
