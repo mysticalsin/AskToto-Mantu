@@ -7,12 +7,19 @@ describe('recognizer status truthfulness', () => {
       engine: 'whisper',
       model: 'whisper-base',
       languageMode: 'detecting',
-      language: null
+      language: null,
+      requestedLanguage: null
     })
   })
 
-  it('distinguishes explicit language from auto detection and a confirmed pin', () => {
-    expect(recognizerStatusFor('parakeet', null, 'French', null)).toMatchObject({ languageMode: 'explicit', language: 'French' })
+  it('distinguishes the requested language from effective engine behavior and a confirmed pin', () => {
+    // Parakeet currently detects language itself. A configured French preference must not be presented as
+    // an engine-enforced explicit language.
+    expect(recognizerStatusFor('parakeet', null, 'French', null)).toMatchObject({
+      languageMode: 'engine-auto',
+      language: null,
+      requestedLanguage: 'French'
+    })
     expect(recognizerStatusFor('whisper', 'webgpu', 'auto', 'Portuguese')).toMatchObject({
       model: 'whisper-large-v3-turbo',
       languageMode: 'pinned',

@@ -212,6 +212,7 @@ class FakeWorker {
   emit(message: {
     type: string
     qualityDegraded?: boolean
+    engine?: 'wasm' | 'webgpu'
     text?: string
     speaker?: 'you' | 'them'
     message?: string
@@ -337,6 +338,36 @@ afterEach(() => {
 })
 
 describe('live audio transport identity', () => {
+  it('publishes the ready worker fallback and live language change as actual recognizer state', async () => {
+    let api = render('whisper')
+    await api.start('mic', 'fast', 'whisper', 'French', 123)
+    await settle()
+    const worker = workers.at(-1)
+    if (!worker) throw new Error('test Whisper worker did not open')
+
+    // This is the actual worker-ready path, not the pure status mapper: wasm is the packaged fallback.
+    worker.emit({ type: 'ready', qualityDegraded: true, engine: 'wasm' })
+    await settle()
+    api = render('whisper')
+    expect(api.recognizerStatus).toEqual({
+      engine: 'whisper',
+      model: 'whisper-base',
+      languageMode: 'explicit',
+      language: 'French',
+      requestedLanguage: 'French'
+    })
+
+    await api.setLanguage('auto')
+    await settle()
+    api = render('whisper')
+    expect(api.recognizerStatus).toMatchObject({
+      model: 'whisper-base',
+      languageMode: 'detecting',
+      language: null,
+      requestedLanguage: null
+    })
+  })
+
   it('raises the bounded live-mic no-speech cue and clears it on an admitted worklet window', async () => {
     let api = render()
     await api.start('mic', 'fast', 'parakeet', 'English', 123)

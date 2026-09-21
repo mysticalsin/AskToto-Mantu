@@ -491,13 +491,13 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               // capturing. Tooltip carries the full platform-aware cause + fix (e.g. Screen Recording).
               title={
                 !props.paused
-                  ? props.captureDegraded?.note ??
-                    ([
+                  ? ([
+                      props.captureDegraded?.note ?? null,
                       props.captureHealth
                         ? `Live microphone: ${props.captureHealth.selectionOutcome}; input ${props.captureHealth.inputSampleRate ?? 'unknown'} Hz, ${props.captureHealth.inputChannelCount ?? 'unknown'} channel(s) → 16 kHz processing. Settings meter is preflight only.`
                         : null,
                       props.recognizerStatus
-                        ? `Transcription: ${props.recognizerStatus.model ?? `${props.recognizerStatus.engine} starting`}; language ${props.recognizerStatus.languageMode}${props.recognizerStatus.language ? ` (${props.recognizerStatus.language})` : ''}.`
+                        ? `Transcription: ${props.recognizerStatus.model ?? `${props.recognizerStatus.engine} starting`}; language ${props.recognizerStatus.languageMode}${props.recognizerStatus.language ? ` (${props.recognizerStatus.language})` : ''}${props.recognizerStatus.requestedLanguage ? `; requested (${props.recognizerStatus.requestedLanguage})` : ''}.`
                         : null
                     ]
                       .filter(Boolean)

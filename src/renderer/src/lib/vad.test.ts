@@ -356,6 +356,21 @@ describe('whisper worklet source', () => {
     expect(final?.audio!.length).toBeGreaterThan(SR)
     expect(final?.audio!.length).toBeLessThan(2 * SR)
   })
+
+  it('emits a bounded quiet calibrated utterance above the unchanged ASR RMS floor', () => {
+    const messages: Array<{ audio?: Float32Array; sampleRate?: number }> = []
+    const w = instantiateWorklet(messages)
+    const silence = (sec: number): Float32Array => new Float32Array(Math.round(sec * SR))
+    // Quiet speech is below the legacy VAD ON floor, but has two syllabic rises after room-tone
+    // calibration and enough bounded energy that the worklet's unchanged EMIT_RMS gate accepts it.
+    feed(w, concat(silence(0.5), tone(0.18, 0.0168), silence(0.08), tone(0.7, 0.0168), silence(0.7)))
+
+    const final = messages.find((message) => message.audio && !(message as { partial?: boolean }).partial)
+    expect(final?.audio).toBeInstanceOf(Float32Array)
+    const audio = final?.audio ?? new Float32Array()
+    const rms = Math.sqrt(audio.reduce((sum, sample) => sum + sample * sample, 0) / audio.length)
+    expect(rms).toBeGreaterThanOrEqual(0.005)
+  })
 })
 
 // Normalize CRLF → LF (same rationale as listen.test.ts): a Windows checkout would otherwise break any

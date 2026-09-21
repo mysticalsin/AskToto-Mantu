@@ -271,12 +271,25 @@ describe('Bar Heard-live chip capture degradation', () => {
       <Bar
         {...props({
           listening: true,
-          recognizerStatus: { engine: 'whisper', model: 'whisper-base', languageMode: 'detecting', language: null }
+          recognizerStatus: { engine: 'whisper', model: 'whisper-base', languageMode: 'detecting', language: null, requestedLanguage: null }
         })}
       />
     )
     expect(html).toContain('Transcription: whisper-base; language detecting.')
     expect(html).not.toContain('whisper-large-v3-turbo')
+  })
+
+  it('keeps safe recognizer details in the degraded capture tooltip', () => {
+    const html = renderToStaticMarkup(
+      <Bar
+        {...props({
+          listening: true,
+          captureDegraded: { side: 'you', note: 'Microphone unavailable.', permission: false },
+          recognizerStatus: { engine: 'whisper', model: 'whisper-base', languageMode: 'detecting', language: null, requestedLanguage: null }
+        })}
+      />
+    )
+    expect(html).toContain('Microphone unavailable. Transcription: whisper-base; language detecting.')
   })
 })
 
