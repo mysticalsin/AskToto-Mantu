@@ -89,7 +89,7 @@ import {
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
 import { applyCaveman, DEFAULT_ASK_CAVEMAN } from '@shared/caveman-ask'
-import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
+import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict, MetisCommandState } from '@shared/ipc'
 import type { RecapStatus } from '@shared/recap-status'
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
@@ -272,6 +272,10 @@ export function App(): JSX.Element {
   const windowDrag = useWindowDrag(onWindowDragStart, { noTouch: true })
 
   const { settings, bootError: settingsBootError, patch, saveKey, recoverEncryptedProfile, clearKey, testKey, refresh } = useSettings()
+  // This is deliberately an opaque main-owned capability. Until main provides a verified allowlisted
+  // consequence, the right edge lets the user cancel it but will never invite confirmation blind.
+  const [commandState, setCommandState] = useState<MetisCommandState>({ proposalId: null })
+  useEffect(() => window.toto.onMetisCommandState(setCommandState), [])
   // The live, user-rebindable Capture accelerator — Bar/Answer's tooltip must reflect an override or a
   // clear, not the shipped default, so this resolves it the same way Settings' Shortcuts panel does
   // (an explicit override, falling back to DEFAULT_SHORTCUTS) instead of a hardcoded literal. Declared
@@ -3811,6 +3815,7 @@ export function App(): JSX.Element {
             open={false}
             onOpen={revealOverlay}
             onClose={() => dispatchAutoHide({ type: 'collapse-now' })}
+            commandState={commandState}
           />
         ) : (
         // Hide: 8×2 hairline (cursor watch is the sensor). Island: visible peek (hug-width).
@@ -3846,6 +3851,7 @@ export function App(): JSX.Element {
               open={true}
               onOpen={revealOverlay}
               onClose={() => dispatchAutoHide({ type: 'collapse-now' })}
+              commandState={commandState}
             />
           ) : <Bar
             value={input}
