@@ -2904,13 +2904,15 @@ function stopOverlayCursorWatch(): void {
 
 function startOverlayCursorWatch(): void {
   stopOverlayCursorWatch()
+  // Tony HARD 2026-09-21: exclusive onboard must never arm hoverWatch/edge park (Dig left/right thrash).
+  if (onboardingExclusiveLive()) return
   if (!overlayCursorWatchWanted() || !win || win.isDestroyed()) return
   overlayCursorWatchTimer = setInterval(() => tickOverlayCursorWatch(), CURSOR_WATCH_INTERVAL_MS)
   overlayCursorWatchTimer.unref?.()
 }
 
 function tickOverlayCursorWatch(): void {
-  if (!win || win.isDestroyed() || !overlayCursorWatchWanted()) {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive() || !overlayCursorWatchWanted()) {
     stopOverlayCursorWatch()
     return
   }
@@ -2994,9 +2996,10 @@ function cancelOverlayLeavePark(): void {
 
 function scheduleOverlayLeavePark(): void {
   if (overlayLeaveParkTimer) return
+  if (onboardingExclusiveLive()) return
   overlayLeaveParkTimer = setTimeout(() => {
     overlayLeaveParkTimer = null
-    if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen) return
+    if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || onboardingExclusiveLive()) return
     if (pointerInIslandOrBar()) return
     parkOverlayAfterHideSpring()
   }, OVERLAY_LEAVE_PARK_MS)

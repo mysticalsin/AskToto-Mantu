@@ -260,3 +260,17 @@ describe('MQA-338 exclusive Act 1 privacy + bounded diagnostics', () => {
     expect(css).toMatch(/FITO-185-V/)
   })
 })
+
+describe('exclusive onboard freezes hoverWatch (Tony HARD Dig thrash)', () => {
+  it('Tony HARD 2026-09-21: exclusive onboard never arms hoverWatch / edge park', () => {
+    const index = readFileSync(join(__dirname, '..', 'index.ts'), 'utf8')
+    const start = index.slice(index.indexOf('function startOverlayCursorWatch'), index.indexOf('function tickOverlayCursorWatch'))
+    expect(start).toMatch(/if \(onboardingExclusiveLive\(\)\) return/)
+    const tick = index.slice(index.indexOf('function tickOverlayCursorWatch'), index.indexOf('function notifyOverlayCursorHover'))
+    expect(tick).toMatch(/onboardingExclusiveLive\(\)/)
+    const wanted = index.slice(index.indexOf('function overlayCursorWatchWanted'), index.indexOf('function stopOverlayCursorWatch'))
+    expect(wanted).toMatch(/if \(onboardingExclusiveLive\(\)\) return false/)
+    const sched = index.slice(index.indexOf('function scheduleOverlayLeavePark'), index.indexOf('/** Island strip or the revealed bar'))
+    expect(sched).toMatch(/if \(onboardingExclusiveLive\(\)\) return/)
+  })
+})
