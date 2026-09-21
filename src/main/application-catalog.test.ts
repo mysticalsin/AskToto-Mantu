@@ -210,6 +210,53 @@ describe('ApplicationCatalog', () => {
     }
   })
 
+  describe.each([
+    { platform: 'macOS bundle ID', value: 'com.private.browser', native: { platform: 'darwin', bundlePath: '/Applications/Browser.app', bundleId: 'com.private.browser', fingerprint: 'browser-identity' } },
+    { platform: 'Windows AUMID', value: 'PrivatePackage!Browser', native: { platform: 'win32', aumid: 'PrivatePackage!Browser', fingerprint: 'browser-identity' } }
+  ] as const)('cross-record $platform privacy', ({ value, native }) => {
+    it.each([
+      ['display name', false], ['display name', true], ['alias', false], ['alias', true]
+    ] as const)('excludes contamination through a %s (reversed order: %s)', async (field, reversed) => {
+      const contaminated = app(field === 'display name' ? { displayName: value } : { aliases: [value] })
+      const owner = app({ displayName: 'Browser', aliases: [], kind: 'browser', native })
+      const f = fixture([contaminated])
+      const oldSnapshot = await f.catalog.snapshot()
+      const oldId = oldSnapshot.applications[0].id
+      f.state.records = reversed ? [owner, contaminated] : [contaminated, owner]
+      const snapshot = await f.catalog.refresh()
+      const resolution = await f.catalog.resolve(value)
+      const revalidation = await f.catalog.revalidate(oldId, oldSnapshot)
+      expect(resolution.status).toBe('missing')
+      expect(revalidation.status).toBe('missing')
+      expect(snapshot.applications).toHaveLength(1)
+      const json = JSON.stringify([snapshot, resolution, revalidation])
+      expect(json).not.toContain(value)
+      expect(json.toLowerCase()).not.toContain(value.toLowerCase())
+    })
+
+    it.each([
+      { kind: 'invalid' }, { available: 'invalid' }, { aliases: null },
+      { displayName: '' }, { native: { ...native, fingerprint: '' } },
+      { native: { ...native, unknown: 'invalid' } }
+    ])('still excludes identifiers when owner metadata is malformed: %j', async malformed => {
+      const contaminated = app({ aliases: [value] })
+      const owner = { ...app({ displayName: 'Browser', aliases: [], kind: 'browser', native }), ...malformed }
+      for (const records of [[contaminated, owner], [owner, contaminated]]) {
+        const f = fixture([contaminated])
+        const before = await f.catalog.snapshot(), oldId = before.applications[0].id
+        f.state.records = records
+        const snapshot = await f.catalog.refresh()
+        const resolution = await f.catalog.resolve(value)
+        const revalidation = await f.catalog.revalidate(oldId, before)
+        expect(resolution.status).toBe('missing')
+        expect(revalidation.status).toBe('missing')
+        const json = JSON.stringify([snapshot, resolution, revalidation])
+        expect(json).not.toContain(value)
+        expect(json.toLowerCase()).not.toContain(value.toLowerCase())
+      }
+    })
+  })
+
   it('does not expose mutable state through snapshots or retain mutable discovery input', async () => {
     const record = app(), f = fixture([record])
     const first = await f.catalog.snapshot()
