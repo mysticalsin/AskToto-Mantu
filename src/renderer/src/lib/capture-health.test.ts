@@ -8,6 +8,15 @@ describe('live microphone capture health', () => {
     expect(micSelectionOutcome(false, false)).toBe('system-default')
   })
 
+  it('never calls a failed fallback an active fallback source', () => {
+    expect(micSelectionOutcome(true, true, true)).toBe('unavailable')
+    expect(micSelectionOutcome(false, false, true)).toBe('unavailable')
+    expect(captureHealthForTrack(null, true, 'unavailable')).toMatchObject({
+      selectionOutcome: 'unavailable',
+      trackState: 'unavailable'
+    })
+  })
+
   it('reports the actual selected capture track format without exposing its device identity', () => {
     const health = captureHealthForTrack(
       { readyState: 'live', getSettings: () => ({ sampleRate: 48000, channelCount: 2, deviceId: 'private-device-id' }) },
