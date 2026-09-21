@@ -21,14 +21,12 @@ describe('Cap2 wake word', () => {
     expect(transcriptContainsWakeWord('meeting about meta systems')).toBe(false)
   })
 
-  it('HARD: wakes on what live ASR ACTUALLY returns for the wake phrase', () => {
-    // Verbatim Parakeet output for three clean spoken readings of "Hey Métis", decoded through this
-    // build's own model (resources/asr nemo-parakeet-tdt-0.6b-v3-int8). None of these matched the
-    // old metis-only pattern, which is exactly why Tony's live mic did nothing.
+  it('HARD: ASR mis-hearings of Hey Métis still arm (greeting required)', () => {
+    // Verbatim Parakeet for spoken Hey Métis — silent aliases, not product branding.
     expect(transcriptContainsWakeWord('Hey Midas.')).toBe(true)
     expect(transcriptContainsWakeWord('Hey Metus, open notes.')).toBe(true)
     expect(transcriptContainsWakeWord('Hey meet us, open notes and Google Norbert Wiener.')).toBe(true)
-    // Tony's own report of the failing phrase, plus the near neighbours of it.
+    // Additional near-neighbour ASR spellings (silent).
     expect(transcriptContainsWakeWord('Hey Matisse')).toBe(true)
     expect(transcriptContainsWakeWord('hey matisse open notes')).toBe(true)
     expect(transcriptContainsWakeWord('hey mattis')).toBe(true)
