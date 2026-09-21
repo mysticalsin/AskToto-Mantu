@@ -53,7 +53,7 @@ export type OnboardingChromeSpec = {
   default?: boolean
 }
 
-/** Tony voice 2026-09-21: Step2 order Invisible → Pill → Orbs (Circle/Jarvis). */
+/** Top Step2 order Invisible → Pill → Orbs (Circle/Jarvis). Right uses DOCK_CHROME Invisible → Pill only. */
 const STYLE_CHROME: readonly OnboardingChromeSpec[] = [
   {
     id: 'hidden',
@@ -90,7 +90,7 @@ const STYLE_CHROME: readonly OnboardingChromeSpec[] = [
   }
 ]
 
-/** Right-edge rests + Settings seed. Onboard Step2 order: Invisible → Pill → Orbs. */
+/** Right-edge onboard + dock seed: Invisible → Pill only (Tony HARD: no Circle/Jarvis on Right). */
 const DOCK_CHROME: readonly OnboardingChromeSpec[] = [
   {
     id: 'dock-hidden',
@@ -123,21 +123,15 @@ const DOCK_CHROME: readonly OnboardingChromeSpec[] = [
 /**
  * Which styles a given edge can actually wear.
  *
- * The top takes everything: a full bar across the top of the screen is what the bar IS. The right edge
- * takes the compact rests and the dock, and deliberately not the two full-bar styles: Bar is an
- * 880-wide horizontal strip, so "full bar on the right edge" is not a placement but a combination that
- * cannot be built, and choosing one saved a top-centre chrome against a right-edge placement, which is
- * how a sliver ended up floating in the middle of the screen.
- *
- * Circle and Jarvis stay on the right on purpose: their REST is a 41px circle, which sits on an edge
- * perfectly well. That is the part of "right-edge park is a geometry duty" that holds.
+ * Top: Invisible / Pill / Circle / Jarvis (bar-family rest styles).
+ * Right: Invisible + Pill only (dock-hidden + dock). Circle/Jarvis are top/bar rests - Tony HARD
+ * 2026-09-21 ~6:01am ET: they must NOT appear when placement is Right.
  */
 export function onboardingChromeForPlacement(placement: OverlayPlacement): readonly OnboardingChromeSpec[] {
-  // HARD Tony 2026-09-21: Invisible → Pill → Orbs (Circle/Jarvis) on both edges.
   const catalog = [...STYLE_CHROME, ...DOCK_CHROME]
   const order: readonly OnboardingChromeId[] =
     placement === 'right-edge'
-      ? ['dock-hidden', 'dock', 'circle', 'jarvis']
+      ? ['dock-hidden', 'dock']
       : ['hidden', 'bar-stays', 'circle', 'jarvis']
   return order.map((id) => catalog.find((c) => c.id === id)).filter(
     (c): c is OnboardingChromeSpec => Boolean(c)
@@ -190,8 +184,12 @@ export function seedOnboardingChrome(
       ? settings.autoHideOverlay
       : autoHideOverlayForLayout(layout)
 
-  if (placement === 'right-edge' && layout === 'dock') {
-    return settings?.dockRest === 'hidden' ? 'dock-hidden' : 'dock'
+  if (placement === 'right-edge') {
+    // Tony HARD: Right onboard is Invisible+Pill only - never seed Circle/Jarvis on the edge.
+    if (layout === 'dock') {
+      return settings?.dockRest === 'hidden' ? 'dock-hidden' : 'dock'
+    }
+    return defaultChromeId(placement)
   }
   if (layout === 'hide') return 'hidden'
   if (layout === 'bar') {

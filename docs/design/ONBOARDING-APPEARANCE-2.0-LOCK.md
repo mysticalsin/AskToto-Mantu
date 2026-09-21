@@ -42,8 +42,7 @@ Island: **omit from onboarding** unless Tony re-asks (he did not name Island in 
 | Dock (panel) | `overlayLayout: dock` | Tall sidecar; hover opens. Default for right. |
 | Full bar that hides | `bar` + auto-hide on right-edge placement | Full bar on the edge; tucks away. |
 | Full bar that stays | `bar` stays on right edge | Full bar stays visible. |
-| Circle | `bar` + `jakub` | Circle rest on the edge. |
-| Jarvis circle | `bar` + `obsidian` | Jarvis rest on the edge. |
+| _(removed)_ | — | Tony HARD 2026-09-21: Circle/Jarvis are Top-only. Right onboard is Invisible + Pill only. |
 
 Exact auto-hide flags: reuse `autoHideOverlayForLayout` / existing bar minimize semantics — do not invent a third hide system. Document the chosen mapping in the tip note.
 

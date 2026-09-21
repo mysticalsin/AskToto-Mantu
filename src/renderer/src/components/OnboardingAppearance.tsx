@@ -259,8 +259,17 @@ export function OnboardingAppearance({
     if (!chromeIdProp) setChromeId(defaultChromeId(placement))
   }, [placement, chromeIdProp])
 
+  useEffect(() => {
+    const allowed = onboardingChromeForPlacement(placement)
+    if (!allowed.some((c) => c.id === chromeId)) {
+      setChromeId(defaultChromeId(placement))
+    }
+  }, [placement, chromeId])
+
   const cards = useMemo(() => onboardingChromeForPlacement(placement), [placement])
-  const active = chromeSpec(placement, chromeId)
+  // Tony HARD: never keep Circle/Jarvis selected after a Right placement pick.
+  const safeChromeId = cards.some((c) => c.id === chromeId) ? chromeId : (cards[0]?.id ?? chromeId)
+  const active = chromeSpec(placement, safeChromeId)
 
   const pickPlacement = (id: OverlayPlacement): void => {
     // Update placement + live preview on the same tick. Stay on placement so Top/Right
@@ -273,7 +282,7 @@ export function OnboardingAppearance({
   }
 
   const previewLayout = step === 'placement' ? placementDemoLayout(placement) : active.layout
-  const previewChromeId = step === 'placement' ? placementDemoChromeId(placement) : chromeId
+  const previewChromeId = step === 'placement' ? placementDemoChromeId(placement) : safeChromeId
   const previewCaption = step === 'placement' ? placementPreviewCaption(placement) : null
 
   const pickChrome = (id: OnboardingChromeId): void => {
@@ -365,7 +374,7 @@ export function OnboardingAppearance({
           </div>
           <div role="radiogroup" aria-label="Overlay chrome" className="overlay-chrome-grid">
             {cards.map((card) => {
-              const on = chromeId === card.id
+              const on = safeChromeId === card.id
               return (
                 <button
                   key={card.id}

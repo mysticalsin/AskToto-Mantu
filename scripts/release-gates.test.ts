@@ -12,6 +12,15 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
 }
 
 describe('installer branding', () => {
+  it('Mac Dig/DMG stay productName Metis with display Métis (Tony HARD package name)', () => {
+    const mac = readFileSync(join(root, 'electron-builder.yml'), 'utf8')
+    expect(mac).toMatch(/^productName:\s*Metis\s*$/m)
+    expect(mac).toContain('CFBundleDisplayName: Métis')
+    // Helper dirs stay ASCII Metis; never ship Electron.app branding.
+    expect(mac).not.toMatch(/productName:\s*Electron/)
+    expect(mac).not.toMatch(/CFBundleDisplayName:\s*Electron/)
+  })
+
   it('uses a customer-facing Métis file description without internal migration notes', () => {
     expect(pkg.description).toBe('Métis - AI desktop overlay assistant')
   })

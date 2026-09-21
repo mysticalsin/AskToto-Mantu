@@ -116,17 +116,16 @@ describe('onboarding appearance — 2.0 two-step', () => {
     expect(ONBOARDING_CHROME_HEADING).toBe('How should it look?')
     const styles = ['hidden', 'bar-stays', 'circle', 'jarvis']
     expect(onboardingChromeForPlacement('top-center').map((c) => c.id)).toEqual(styles)
-    // Tony voice 2026-09-20: same circle-picker styles on Right; dock stays Settings-only.
-    // Right-edge park is geometry (2f06669e), not "dock-only cards".
-    // The right edge drops the two FULL-bar styles: an 880-wide strip is not an edge sidecar, and
-    // choosing one saved a top-centre chrome against a right-edge placement (the mid-screen sliver).
-    // Circle and Jarvis stay, because their rest is a 41px circle that sits on an edge fine.
+    // Tony HARD 2026-09-21 ~6:01am ET: Right Appearance = Invisible + Pill only. No Circle/Jarvis.
     expect(onboardingChromeForPlacement('right-edge').map((c) => c.id)).toEqual([
       'dock-hidden',
-      'dock',
-      'circle',
-      'jarvis'
+      'dock'
     ])
+    expect(onboardingChromeForPlacement('right-edge').map((c) => c.title)).toEqual([
+      'Invisible',
+      'Pill'
+    ])
+    expect(onboardingChromeForPlacement('right-edge').map((c) => c.title).join(' ')).not.toMatch(/Circle|Jarvis/)
     expect(onboardingChromeForPlacement('top-center').map((c) => c.title)).toEqual([
       'Invisible',
       'Pill',
