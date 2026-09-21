@@ -28,6 +28,7 @@ import { transcriptToText } from './transcript'
 import { shouldUseBundledAsr } from './asr-offline'
 
 const SR = 16000
+const NO_SPEECH_WARNING_MS = 30_000
 
 /**
  * Build Nova-3 / Soniox language opts for a Listen cloud STT session from Settings.asrLanguage.
@@ -450,6 +451,21 @@ export interface CaptureHealth {
   trackState: 'connected' | 'ended' | 'unavailable'
 }
 
+export function shouldShowNoSpeechWarning(
+  currentEpoch: number,
+  eventEpoch: number,
+  captureHealth: CaptureHealth | null,
+  speechAdmitted: boolean,
+  captureDegraded: CaptureDegraded | null
+): boolean {
+  return (
+    currentEpoch === eventEpoch &&
+    captureHealth?.trackState === 'connected' &&
+    !speechAdmitted &&
+    captureDegraded === null
+  )
+}
+
 type CaptureTrack = Pick<MediaStreamTrack, 'readyState' | 'getSettings'>
 
 function safeTrackNumber(value: unknown): number | null {
@@ -576,6 +592,8 @@ export interface ListenApi {
   captureDegraded: CaptureDegraded | null
   /** Current-session microphone format/selection facts; never includes a device ID, label, or audio. */
   captureHealth: CaptureHealth | null
+  /** Low-priority current-session cue; true only after bounded live mic silence without admitted speech. */
+  noSpeechWarning: boolean
   start: (
     source: AudioSource,
     quality?: 'best' | 'fast',
@@ -740,7 +758,8 @@ export function useListen(
     loadingPct: null as number | null,
     qualityDegraded: false,
     captureDegraded: null as CaptureDegraded | null,
-    captureHealth: null as CaptureHealth | null
+    captureHealth: null as CaptureHealth | null,
+    noSpeechWarning: false
   })
   const [lines, setLines] = useState<TranscriptLine[]>([])
 
@@ -801,6 +820,8 @@ export function useListen(
   // telemetry, or persistence; public state contains only CaptureHealth's safe numeric/status fields.
   const activeMicTrackRef = useRef<MediaStreamTrack | null>(null)
   const captureHealthRef = useRef<CaptureHealth | null>(null)
+  const micSpeechAdmittedRef = useRef(false)
+  const noSpeechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Supplied by App from the persisted meeting owner; legacy callers have no speaker identity.
   const sessionStartedAtRef = useRef<number | undefined>(undefined)
   const queue = useRef<LiveAudioWindow[]>([])
@@ -821,6 +842,36 @@ export function useListen(
     captureHealthRef.current = next
     setState((current) => (sameCaptureHealth(current.captureHealth, next) ? current : { ...current, captureHealth: next }))
   }, [])
+  function clearNoSpeechWarning(): void {
+    if (noSpeechTimerRef.current) {
+      clearTimeout(noSpeechTimerRef.current)
+      noSpeechTimerRef.current = null
+    }
+    setState((current) => (current.noSpeechWarning ? { ...current, noSpeechWarning: false } : current))
+  }
+  function markMicSpeechAdmitted(): void {
+    if (micSpeechAdmittedRef.current) return
+    micSpeechAdmittedRef.current = true
+    clearNoSpeechWarning()
+  }
+  function armNoSpeechWarning(epoch: number): void {
+    clearNoSpeechWarning()
+    if (micSpeechAdmittedRef.current || captureHealthRef.current?.trackState !== 'connected') return
+    noSpeechTimerRef.current = setTimeout(() => {
+      noSpeechTimerRef.current = null
+      setState((current) =>
+        shouldShowNoSpeechWarning(
+          sessionEpochRef.current,
+          epoch,
+          captureHealthRef.current,
+          micSpeechAdmittedRef.current,
+          current.captureDegraded
+        )
+          ? { ...current, noSpeechWarning: true }
+          : current
+      )
+    }, NO_SPEECH_WARNING_MS)
+  }
   // Synchronous in-flight guard for start(): a rapid double-click/double-hotkey on Listen calls start()
   // twice before React re-renders listen.listening to true (that state update is async), so a boolean
   // ref — set synchronously at the very top of start(), before any `await` — is required; guarding on
@@ -1524,6 +1575,10 @@ export function useListen(
   const pushAudio = useCallback(
     (sp: Speaker, audio: Float32Array, partial = false, startedAt?: number): void => {
       if (!liveRef.current || pausedRef.current) return
+      // Worklet output reaches this boundary only after its VAD/window admission. This is intentionally
+      // per admitted window (never per render quantum), so a verified mic utterance clears the low-priority
+      // silent-capture cue immediately without adding audio-path state churn.
+      if (sp === 'you') markMicSpeechAdmitted()
       // Cloud STT: pump() does not locally decode, but sticky language still needs the same
       // whisper/parakeet probe cadence so Nova/Soniox refs pin + follow mid-meeting switches
       // before / when the live WS attaches.
@@ -1744,6 +1799,7 @@ export function useListen(
       if (sp === 'you' && micCapture) {
         activeMicTrackRef.current = micCapture.track
         publishCaptureHealth(admissionEpoch, micCapture.health)
+        armNoSpeechWarning(admissionEpoch)
       }
       if (gain && limiter) {
         // them: source -> boost -> limiter -> worklet. The limiter must sit AFTER the gain — it exists
@@ -1773,6 +1829,8 @@ export function useListen(
           console.warn(`[listen] ${sp} audio track ended unexpectedly (device change / sleep)`)
           closeChannel(sp)
           if (sp === 'you') {
+            micSpeechAdmittedRef.current = false
+            clearNoSpeechWarning()
             if (activeMicTrackRef.current === t && micCapture) {
               publishCaptureHealth(
                 admissionEpoch,
@@ -2151,7 +2209,9 @@ export function useListen(
         themDegradedRef.current = null // fresh session → no carried-over 'them' degradation cause
         activeMicTrackRef.current = null
         captureHealthRef.current = null
-        setState((s) => ({ ...s, error: null, captureDegraded: null, captureHealth: null, listening: true, paused: false }))
+        micSpeechAdmittedRef.current = false
+        clearNoSpeechWarning()
+        setState((s) => ({ ...s, error: null, captureDegraded: null, captureHealth: null, noSpeechWarning: false, listening: true, paused: false }))
         // MQA-285: same-turn capture. Kick getUserMedia BEFORE any await so the click gesture still
         // covers the permission prompt and the first second of audio is on the MediaStream — not lost
         // behind setListeningState / parakeetEnsure / getAsrBundled. Windows queue in pump() until
@@ -2520,6 +2580,7 @@ export function useListen(
       clearTimeout(themWatchdogRef.current)
       themWatchdogRef.current = null
     }
+    if (sp === 'you') clearNoSpeechWarning()
     ch.worklet.disconnect()
     ch.worklet.port.onmessage = null
     ch.gain?.disconnect() // disconnect the boost node if present (them channel only)
@@ -2544,6 +2605,7 @@ export function useListen(
       const startedAt = sessionStartedAtRef.current
       liveRef.current = false
       activeMicTrackRef.current = null
+      clearNoSpeechWarning()
       pausedRef.current = false
       readyRef.current = false
       busy.current = false
@@ -2593,6 +2655,7 @@ export function useListen(
   const pause = useCallback((): void => {
     if (!liveRef.current || pausedRef.current) return
     pausedRef.current = true
+    clearNoSpeechWarning()
     // The 'them' watchdog is armed once at channel-open and otherwise runs on a wall-clock timer that
     // doesn't know about pause — left ticking, an ordinary pause longer than THEM_WATCHDOG_MS (20s) fires
     // a false "not hearing the other side" note over what is actually an intentional pause with nothing
@@ -2649,6 +2712,7 @@ export function useListen(
     // THEM_WATCHDOG_MS window post-resume instead of staying permanently disarmed. No-op if 'them' isn't
     // open, or if it already emitted audio before the pause (armThemWatchdog checks themHeardRef).
     if (channels.current.them) armThemWatchdog()
+    if (captureHealthRef.current?.trackState === 'connected') armNoSpeechWarning(sessionEpochRef.current)
     setState((s) => ({ ...s, paused: false }))
   }, [])
 
@@ -2739,6 +2803,7 @@ export function useListen(
         liveRef.current = false
         activeMicTrackRef.current = null
         captureHealthRef.current = null
+        clearNoSpeechWarning()
         disarmNetworkRetry()
         queue.current = [] // drop anything still undispatched once the bounded drain ends
         clearProvisional()
