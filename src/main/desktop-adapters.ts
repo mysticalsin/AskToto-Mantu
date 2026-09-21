@@ -3,7 +3,7 @@
  * No new mic/ASR. No silent app substitution. Photo never uploaded to Jev.
  */
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { win32 } from 'node:path'
 import { promisify } from 'node:util'
 import {
@@ -125,9 +125,33 @@ async function winOpenTarget(target: WindowsShellTarget): Promise<{ ok: boolean;
 }
 
 async function winOpenNotepad(): Promise<{ ok: boolean; detail: string }> {
-  const r = await run(WINDOWS_NOTEPAD, [])
-  if (!r.ok) return { ok: false, detail: r.stderr || 'Notepad launch failed' }
-  return { ok: true, detail: 'Notepad launch request accepted' }
+  // Notepad is a persistent GUI process. A launch acknowledgement must not wait for it to exit
+  // or impose the command/script timeout used by `run`.
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (result: { ok: boolean; detail: string }) => {
+      if (settled) return
+      settled = true
+      resolve(result)
+    }
+
+    try {
+      const child = spawn(WINDOWS_NOTEPAD, [], {
+        detached: false,
+        shell: false,
+        stdio: 'ignore',
+        windowsHide: true
+      })
+      child.once('error', (error) => finish({ ok: false, detail: error.message || 'Notepad launch failed' }))
+      child.once('spawn', () => {
+        child.unref()
+        finish({ ok: true, detail: 'Notepad launch request accepted' })
+      })
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Notepad launch failed'
+      finish({ ok: false, detail })
+    }
+  })
 }
 
 function fixedDemoRequestError(req: DesktopActionRequest): string | null {
