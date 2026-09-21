@@ -230,13 +230,14 @@ describe('FITO-185-T exclusive Act 1 visible without forever Loading', () => {
 
 
 describe('MQA-338 exclusive Act 1 privacy + bounded diagnostics', () => {
-  it('contentProtectionOn preserves the existing privacy decision while exclusive', () => {
+  it('contentProtectionOn returns false while exclusive onboard (Tony HARD Dig eye)', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     const body = index.slice(
       index.indexOf('function contentProtectionOn(): boolean {'),
       index.indexOf('function privateViewOn(): boolean {')
     )
-    expect(body).not.toMatch(/onboardingExclusiveLive\(\)/)
+    // Tony HARD 2026-09-21: exclusive onboard MUST be screenshottable (Dig/Tony eye).
+    expect(body).toMatch(/onboardingExclusiveLive\(\)/)
     expect(body).not.toMatch(/FITO-185-U/)
     expect(body).toMatch(/return getSettings\(\)\.contentProtection/)
   })

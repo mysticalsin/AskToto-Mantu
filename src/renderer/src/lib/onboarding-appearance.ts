@@ -1,5 +1,5 @@
 /**
- * Onboarding appearance 2.0 — placement first, then chrome.
+ * Onboarding appearance 2.0  -  placement first, then chrome.
  * Contract: docs/design/ONBOARDING-APPEARANCE-2.0-LOCK.md
  */
 import {
@@ -16,9 +16,9 @@ export const ONBOARDING_PLACEMENT_HEADING = 'Where should Métis sit?'
 export const ONBOARDING_PLACEMENT_LEAD = 'Top along the screen, or right beside your meeting.'
 
 export const ONBOARDING_CHROME_HEADING = 'How should it look?'
-export const ONBOARDING_CHROME_LEAD = 'Watch the stage above — that is exactly how Métis will sit. Change it anytime in Settings.'
+export const ONBOARDING_CHROME_LEAD = 'Watch the stage above  -  that is exactly how Métis will sit. Change it anytime in Settings.'
 
-/** @deprecated flat three-card ask — superseded by 2.0 two-step */
+/** @deprecated flat three-card ask  -  superseded by 2.0 two-step */
 export const ONBOARDING_APPEARANCE_HEADING = ONBOARDING_PLACEMENT_HEADING
 export const ONBOARDING_APPEARANCE_LEAD = ONBOARDING_PLACEMENT_LEAD
 
@@ -204,7 +204,7 @@ export function seedOnboardingChrome(
   return defaultChromeId(placement)
 }
 
-/** @deprecated flat copy map — kept for Settings/tests that still import it */
+/** @deprecated flat copy map  -  kept for Settings/tests that still import it */
 export const ONBOARDING_APPEARANCE_COPY: Record<OverlayLayout, { title: string; desc: string }> = {
   hide: { title: 'Hidden', desc: 'Move to the top, then click to open.' },
   island: { title: 'Island', desc: 'A small island stays visible. Hover opens it.' },
@@ -327,13 +327,13 @@ export function appearancePreviewShowsDock(
   chromeId?: OnboardingChromeId
 ): boolean {
   if (layout !== 'dock') return false
-  // Invisible (dock-hidden): soft edge glow via desktop CSS only — never a dock slab.
+  // Invisible (dock-hidden): soft edge glow via desktop CSS only  -  never a dock slab.
   if (chromeId === 'dock-hidden') return false
   // Pill: slim rail at rest; open panel only while hovering / settling.
   return phase === 'settled' || phase === 'in' || phase === 'out' || phase === 'rest'
 }
 
-/** Fat open sidecar is only for Pill hover demo — never Invisible, never first paint. */
+/** Fat open sidecar is only for Pill hover demo  -  never Invisible, never first paint. */
 export function appearancePreviewDockOpen(
   chromeId: OnboardingChromeId,
   phase: AppearancePreviewPhase
