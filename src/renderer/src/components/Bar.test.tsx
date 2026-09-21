@@ -183,6 +183,57 @@ describe('Bar Heard-live chip capture degradation', () => {
     expect(html).toContain('Paused')
     expect(html).not.toContain('Mic only')
   })
+
+  it('shows bounded no-speech as a lower-priority cue and retains the real capture format in the tooltip', () => {
+    const html = renderToStaticMarkup(
+      <Bar
+        {...props({
+          listening: true,
+          noSpeechWarning: true,
+          captureHealth: {
+            requestedDevice: true,
+            selectionOutcome: 'fallback-default',
+            inputSampleRate: 48000,
+            inputChannelCount: 1,
+            processingSampleRate: 16000,
+            trackState: 'connected'
+          }
+        })}
+      />
+    )
+    expect(html).toContain('No speech detected')
+    expect(html).toContain('input 48000 Hz, 1 channel(s) → 16 kHz processing')
+    expect(html).toContain('Settings meter is preflight only')
+  })
+
+  it('keeps degraded capture ahead of the no-speech cue', () => {
+    const html = renderToStaticMarkup(
+      <Bar {...props({ listening: true, noSpeechWarning: true, captureDegraded: { side: 'them', note, permission: true } })} />
+    )
+    expect(html).toContain('Mic only')
+    expect(html).not.toContain('No speech detected')
+  })
+
+  it('keeps unavailable capture ahead of the no-speech cue', () => {
+    const html = renderToStaticMarkup(
+      <Bar
+        {...props({
+          listening: true,
+          noSpeechWarning: true,
+          captureHealth: {
+            requestedDevice: true,
+            selectionOutcome: 'unavailable',
+            inputSampleRate: null,
+            inputChannelCount: null,
+            processingSampleRate: 16000,
+            trackState: 'unavailable'
+          }
+        })}
+      />
+    )
+    expect(html).toContain('No mic')
+    expect(html).not.toContain('No speech detected')
+  })
 })
 
 // MQA-036 (docs/qa/BUG-LEDGER.md): the eye button toggles `contentProtection` — whether OTHER people can

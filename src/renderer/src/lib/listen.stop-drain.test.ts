@@ -337,6 +337,21 @@ afterEach(() => {
 })
 
 describe('live audio transport identity', () => {
+  it('raises the bounded live-mic no-speech cue and clears it on an admitted worklet window', async () => {
+    let api = render()
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    api = render()
+    expect(api.noSpeechWarning).toBe(true)
+
+    worklets.at(-1)?.emit({ audio: Float32Array.from([0.2]), partial: false })
+    await settle()
+    api = render()
+    expect(api.noSpeechWarning).toBe(false)
+  })
+
   it('reports unavailable, not fallback-default, when both selected and default microphone requests fail', async () => {
     let attempts = 0
     getUserMediaImpl = async () => {
