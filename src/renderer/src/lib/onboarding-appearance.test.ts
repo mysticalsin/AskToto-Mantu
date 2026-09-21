@@ -21,7 +21,10 @@ import {
   resolveOnboardingPlacementSync,
   saveOnboardingAppearanceChoice,
   seedOnboardingAppearance,
-  seedOnboardingPlacement
+  seedOnboardingPlacement,
+  placementDemoLayout,
+  placementDemoChromeId,
+  placementPreviewCaption
 } from './onboarding-appearance'
 import { shouldMountKineticGrid, KINETIC_GRID_SCENES } from './onboarding-kinetic-grid'
 import { shouldMountStarfield } from './onboarding-starfield-spec'
@@ -224,5 +227,35 @@ describe('onboarding appearance — overlay park and Island hover stay out', () 
     expect(appearanceLib).not.toMatch(/restoreParkAfterShow|OVERLAY_HIDE_PARK|hoverWatchRestRect/)
     expect(component).not.toMatch(/src\/main\/island/)
     expect(indexMain).not.toMatch(/from '\.\/onboarding-appearance'/)
+  })
+})
+
+
+describe('onboarding appearance — placement-step live preview (Tony FAIL 01cfd705)', () => {
+  it('forces a clear Top bar / Right dock demo instead of default Hidden', () => {
+    expect(placementDemoLayout('top-center')).toBe('bar')
+    expect(placementDemoChromeId('top-center')).toBe('bar-stays')
+    expect(placementDemoLayout('right-edge')).toBe('dock')
+    expect(placementDemoChromeId('right-edge')).toBe('dock')
+  })
+
+  it('captions placement under the preview', () => {
+    expect(placementPreviewCaption('top-center')).toBe('Along the top')
+    expect(placementPreviewCaption('right-edge')).toBe('Along the right edge')
+  })
+
+  it('CSS hugs the right edge — no mid-screen 68% pill', () => {
+    expect(css).toMatch(/\.onboard-appearance-preview--right-edge \.onboard-appearance-preview__bar-slot[^{]*\{[^}]*width:\s*min\(36%, 120px\)/)
+    expect(css).not.toMatch(/\.onboard-appearance-preview--right-edge \.onboard-appearance-preview__bar-slot[^{]*\{[^}]*width:\s*68%/)
+    expect(css).toMatch(/\.onboard-appearance-preview__dock[^{]*\{[^}]*right:\s*16px/)
+  })
+
+  it('placement step stays put on click; Continue advances (source contract)', () => {
+    expect(component).toMatch(/const continueFromPlacement/)
+    expect(component).toMatch(/data-onboard-placement-continue/)
+    expect(component).toMatch(/placementDemoLayout\(placement\)/)
+    // pickPlacement must NOT setStep('chrome') anymore
+    const pick = component.slice(component.indexOf('const pickPlacement'), component.indexOf('const continueFromPlacement'))
+    expect(pick).not.toMatch(/setStep\(['"]chrome['"]\)/)
   })
 })

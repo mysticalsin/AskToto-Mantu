@@ -123,6 +123,20 @@ export function onboardingChromeForPlacement(placement: OverlayPlacement): reado
   return placement === 'right-edge' ? RIGHT_CHROME : TOP_CHROME
 }
 
+
+/** Placement-step demo: never preview default Hidden (3px hint). Show unmistakable Top bar / Right dock. */
+export function placementDemoLayout(placement: OverlayPlacement): OverlayLayout {
+  return placement === 'right-edge' ? 'dock' : 'bar'
+}
+
+export function placementDemoChromeId(placement: OverlayPlacement): OnboardingChromeId {
+  return placement === 'right-edge' ? 'dock' : 'bar-stays'
+}
+
+export function placementPreviewCaption(placement: OverlayPlacement): string {
+  return placement === 'right-edge' ? 'Along the right edge' : 'Along the top'
+}
+
 export function defaultChromeId(placement: OverlayPlacement): OnboardingChromeId {
   const list = onboardingChromeForPlacement(placement)
   return (list.find((c) => c.default) ?? list[0]).id

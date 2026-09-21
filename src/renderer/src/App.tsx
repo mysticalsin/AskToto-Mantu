@@ -3821,7 +3821,7 @@ export function App(): JSX.Element {
           </div>
         ) : null}
         <CommandListeningPill
-          visible={!overlayPeeked && metisCommand.pillVisible}
+          visible={!onboardingBoot && !overlayPeeked && metisCommand.pillVisible}
           copy={metisCommand.pillCopy}
           liveTranscript={metisCommand.liveTranscript}
           chime={metisCommand.chime}

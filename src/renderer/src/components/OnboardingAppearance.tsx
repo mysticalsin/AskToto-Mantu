@@ -18,6 +18,9 @@ import {
   ONBOARDING_PLACEMENT_LEAD,
   ONBOARDING_PLACEMENTS,
   onboardingChromeForPlacement,
+  placementDemoChromeId,
+  placementDemoLayout,
+  placementPreviewCaption,
   reduceAppearancePreview,
   type AppearancePreviewPhase,
   type OnboardingChromeId
@@ -175,9 +178,18 @@ export function OnboardingAppearance({
   const active = chromeSpec(placement, chromeId)
 
   const pickPlacement = (id: OverlayPlacement): void => {
+    // Update placement + live preview on the same tick. Stay on placement so Top/Right
+    // never flash default Hidden (nearly invisible). Continue advances to chrome.
     onPlacementChange(id)
+  }
+
+  const continueFromPlacement = (): void => {
     setStep('chrome')
   }
+
+  const previewLayout = step === 'placement' ? placementDemoLayout(placement) : active.layout
+  const previewChromeId = step === 'placement' ? placementDemoChromeId(placement) : chromeId
+  const previewCaption = step === 'placement' ? placementPreviewCaption(placement) : null
 
   const pickChrome = (id: OnboardingChromeId): void => {
     setChromeId(id)
@@ -194,11 +206,16 @@ export function OnboardingAppearance({
       data-onboard-appearance-step={step}
     >
       <AppearanceLivePreview
-        key={`${placement}:${active.layout}:${active.overlayOrbStyle}:${chromeId}`}
-        layout={active.layout}
+        key={`${placement}:${previewLayout}:${previewChromeId}:${step}`}
+        layout={previewLayout}
         placement={placement}
-        chromeId={chromeId}
+        chromeId={previewChromeId}
       />
+      {previewCaption ? (
+        <p className="onboard-appearance-preview-caption m-0 text-center text-[12px] text-white/75" data-placement-caption={placement}>
+          {previewCaption}
+        </p>
+      ) : null}
       {step === 'placement' ? (
         <>
           <div className="onboard-act4-heading flex flex-col items-center gap-2">
@@ -240,6 +257,15 @@ export function OnboardingAppearance({
               )
             })}
           </div>
+          <button
+            type="button"
+            className="onboard-cta no-drag focus-ring disabled:opacity-60"
+            onClick={continueFromPlacement}
+            disabled={placementLocked || saving}
+            data-onboard-placement-continue="1"
+          >
+            Continue
+          </button>
         </>
       ) : (
         <>

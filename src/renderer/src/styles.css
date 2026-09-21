@@ -2465,26 +2465,29 @@ button.onboard-cta {
 .onboard-appearance-preview--dock .onboard-appearance-preview__hit {
   /* hit band along right edge of mock desktop */
 }
+/* Cap4 rest rail: hug mock desktop right edge (desktop inset 16px), never float mid. */
 .onboard-appearance-preview__dock {
   position: absolute;
   top: 18%;
-  right: 10px;
-  width: 4px;
-  height: 48%;
+  right: 16px;
+  width: 5px;
+  height: 52%;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.35);
-  transition: width 160ms var(--ease-spring), opacity 160ms var(--ease-spring);
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 0 10px rgba(214, 186, 255, 0.35);
+  transition: width 160ms var(--ease-spring), opacity 160ms var(--ease-spring), right 160ms var(--ease-spring);
 }
 .onboard-appearance-preview--right-edge .onboard-appearance-preview__dock {
-  right: 8px;
+  right: 16px;
 }
 .onboard-appearance-preview__dock--open {
-  width: 28%;
+  right: 16px;
+  width: min(34%, 120px);
   height: 64%;
   top: 12%;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.12);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  border-radius: 10px 0 0 10px;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
 }
 .onboard-appearance-preview__circle {
   width: 28px;
@@ -2555,14 +2558,27 @@ button.onboard-cta {
   border-radius: 10px 0 0 10px;
 }
 .onboard-appearance-preview--right-edge .onboard-appearance-preview__bar-slot {
-  top: 38px;
-  right: 0;
+  top: 36px;
+  right: 16px;
   left: auto;
-  width: 68%;
+  width: min(36%, 120px);
+  max-width: 120px;
   transform: none;
+  display: flex;
+  justify-content: flex-end;
 }
 .onboard-appearance-preview--right-edge .onboard-appearance-preview__bar {
   border-radius: 999px 0 0 999px;
+  width: 100%;
+}
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__circle {
+  width: 36px;
+  height: 36px;
+  max-width: 40px;
+  margin-left: auto;
+}
+.onboard-appearance-preview-caption {
+  letter-spacing: 0.01em;
 }
 
 @keyframes overlay-peek-in {

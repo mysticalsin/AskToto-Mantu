@@ -121,3 +121,19 @@ describe('the renderer half keeps the pointer affordance', () => {
     expect(rule.slice(0, 260)).not.toMatch(/visibility:\s*hidden/)
   })
 })
+
+
+describe('Cap4 dock rest hugs true right edge after exclusive onboarding (Tony FAIL)', () => {
+  it('hoverWatchRestRect(dock, right-edge) equals dockSliverRect (flush right, not mid)', () => {
+    const band = hoverWatchRestRect('dock', TOTOS_MAC, 'right-edge')
+    const sliver = dockSliverRect(TOTOS_MAC)
+    expect(band).toEqual(sliver)
+    expect(band.x + band.width).toBe(TOTOS_MAC.workArea.x + TOTOS_MAC.workArea.width)
+  })
+
+  it('parkAfterExclusiveOnboarding(dock, right-edge) parks on the sliver, not a floating pill', () => {
+    const parked = parkAfterExclusiveOnboarding('dock', TOTOS_MAC, 0, 'right-edge')
+    expect(parked).toEqual(dockSliverRect(TOTOS_MAC))
+    expect(parked.x + parked.width).toBe(TOTOS_MAC.workArea.x + TOTOS_MAC.workArea.width)
+  })
+})
