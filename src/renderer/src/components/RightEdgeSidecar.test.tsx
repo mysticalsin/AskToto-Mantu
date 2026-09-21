@@ -45,4 +45,13 @@ describe('right-edge sidecar shell', () => {
     expect(app).toContain('onMetisCommandState')
     expect(app).toContain('commandState={commandState}')
   })
+
+  it('summons a parked right-edge drawer with an immediate overlay reveal', () => {
+    const commandHotkeyAt = app.indexOf("else if (a === 'metis-command')")
+    expect(commandHotkeyAt).toBeGreaterThan(-1)
+    const commandHotkey = app.slice(commandHotkeyAt, commandHotkeyAt + 200)
+
+    expect(commandHotkey).toContain("dispatchAutoHide({ type: 'reveal-now' })")
+    expect(commandHotkey).toContain('setCollapsed(false)')
+  })
 })
