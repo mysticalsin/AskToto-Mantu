@@ -12,6 +12,7 @@ vi.mock('./logger', () => ({
 }))
 
 import { LiveMeetingStartedAtSchema } from '@shared/ipc'
+import { coerceFloat32Pcm } from './asr-feed-pcm'
 import { createListeningStateHandler } from './listening-state-ipc'
 import {
   createSpeakerId,
@@ -164,6 +165,16 @@ function feedHandler(
   transcribe: (samples: Float32Array) => Promise<string> = async () => 'transcribed'
 ): (...args: any[]) => Promise<any> {
   return actualIpcHandler(channel, {
+    // The feed handlers coerce the renderer's PCM before any speaker work, so the extracted
+    // source needs the real helper in scope — not a stub, or the test stops testing the gate.
+    coerceFloat32Pcm,
+    // Cap2 engine-availability gates and the wake tap the live feeds gained. Both engines report
+    // ready here so these tests exercise the speaker-identity path they are actually about.
+    parakeetModelReady: () => true,
+    appleSpeechAvailable: () => true,
+    logCap2EngineOnce: vi.fn(),
+    ingestMetisCommandFromAsr: vi.fn(),
+    mainLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     assertMainWindow: vi.fn(),
     requireAuth: () => true,
     takeHotPath: () => true,

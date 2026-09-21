@@ -373,10 +373,16 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
     for (const marker of ['ipcMain.handle(IPC.parakeetFeed', 'ipcMain.handle(IPC.appleSpeechFeed', 'ipcMain.handle(IPC.speakerEmbed']) {
       const start = indexSrc.indexOf(marker)
       expect(start, marker).toBeGreaterThan(-1)
-      const body = indexSrc.slice(start, start + 2500)
+      // Read to the next handler rather than a fixed byte budget: these handlers grew past 2500
+      // characters, and a window that stops short reports a missing await that is right there.
+      const next = indexSrc.indexOf('ipcMain.handle(', start + marker.length)
+      const body = indexSrc.slice(start, next === -1 ? undefined : next)
       expect(body).toMatch(/const speakerKey = captureLiveSpeakerKey\(p\.startedAt\)/)
-      expect(body).toMatch(/await labelThemAudio\(p\.samples, speakerKey, 'live'\)/)
-      expect(body).toMatch(/await observeOperatorAudio\(p\.samples, speakerKey\)/)
+      // The live feeds coerce the renderer's PCM into a Float32Array first and pass that local on;
+      // speakerEmbed still gates on p.samples directly. Either spelling satisfies the contract that
+      // matters here — the call is awaited and it is fed the payload's samples.
+      expect(body).toMatch(/await labelThemAudio\((?:p\.samples|samples), speakerKey, 'live'\)/)
+      expect(body).toMatch(/await observeOperatorAudio\((?:p\.samples|samples), speakerKey\)/)
     }
     expect(indexSrc).toMatch(
       /speakerFor:\s*async\s*\(samples,\s*attempt\)\s*=>\s*\(await labelThemAudio\(samples, captureImportSpeakerKey\(attempt\), 'import'\)\)\?\.name \?\? null/
