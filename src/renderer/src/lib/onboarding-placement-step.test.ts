@@ -10,10 +10,10 @@ import {
 /**
  * onboarding-placement-step.test.ts
  *
- * Placement step must show diagrams (not words alone). Style step is Tony voice circle picker:
- * Hidden bar | Persistent bar | Circle | Jarvis — same on Top and Right. Right-edge park stays a
- * geometry duty (2f06669e), not a reason to hide bars/circles from the board.
+ * Placement step must show diagrams (not words alone). Style step Tony HARD 2026-09-21:
+ * Invisible → Pill → Orbs (Circle/Jarvis). Top and Right both follow that order.
  */
+
 describe('the placement step shows what it is offering', () => {
   const scene = readFileSync(join(__dirname, '..', 'components', 'OnboardingAppearance.tsx'), 'utf8')
 
@@ -37,25 +37,32 @@ describe('the placement step shows what it is offering', () => {
 })
 
 describe('Tony voice circle picker — style step', () => {
-  it('Top offers every style; Right offers only what can live on an edge', () => {
+  it('Top and Right both offer Invisible → Pill → Orbs (Circle/Jarvis)', () => {
     expect(onboardingChromeForPlacement('top-center').map((s) => s.id)).toEqual([
-      'bar-hides',
+      'hidden',
       'bar-stays',
       'circle',
       'jarvis'
     ])
-    // No full bar on the edge: an 880-wide strip is not a sidecar. Circle and Jarvis rest as a 41px
-    // circle, which an edge takes fine, and the dock is edge-native.
+    expect(onboardingChromeForPlacement('top-center').map((s) => s.title)).toEqual([
+      'Invisible',
+      'Pill',
+      'Circle',
+      'Jarvis'
+    ])
+    // Right-edge: Invisible dock, Pill rail, then Orbs — never a horizontal bar peer.
     const right = onboardingChromeForPlacement('right-edge')
-    expect(right.map((s) => s.id)).toEqual(['circle', 'jarvis', 'dock', 'dock-hidden'])
+    expect(right.map((s) => s.id)).toEqual(['dock-hidden', 'dock', 'circle', 'jarvis'])
+    expect(right.map((s) => s.title)).toEqual(['Invisible', 'Pill', 'Circle', 'Jarvis'])
     expect(right.map((s) => s.id)).not.toContain('bar-hides')
     expect(right.map((s) => s.id)).not.toContain('bar-stays')
   })
 
-  it('Circle is the default and Jarvis is first-class', () => {
-    const circle = onboardingChromeForPlacement('top-center').find((s) => s.id === 'circle')
+  it('Invisible is the default; Jarvis stays first-class under Orbs', () => {
+    const invisible = onboardingChromeForPlacement('top-center').find((s) => s.id === 'hidden')
     const jarvis = onboardingChromeForPlacement('top-center').find((s) => s.id === 'jarvis')
-    expect(circle?.default).toBe(true)
+    expect(invisible?.default).toBe(true)
+    expect(invisible?.title).toBe('Invisible')
     expect(jarvis?.overlayOrbStyle).toBe('obsidian')
     expect(jarvis?.title).toMatch(/Jarvis/i)
   })

@@ -3813,11 +3813,14 @@ export function App(): JSX.Element {
         {/* Cap4 FE SoT 2026-09-21: Heard/Ear chip NEVER on pill / hide-park / dock-rest.
             Only when overlay is expanded/revealed for ask (Tony voice TONY-VOICE-FE-FIXES). */}
         {(() => {
+          // Tony HARD 2026-09-21: ZERO text over pill OR invisible/hidden (Heard + any ear labels).
           const overlayResting =
             overlayPeeked ||
             !overlayRevealed ||
+            overlayLayout === 'hide' ||
             (overlayLayout === 'bar' && minimized) ||
-            (overlayLayout === 'dock' && !overlayRevealed)
+            (overlayLayout === 'dock' && !overlayRevealed) ||
+            (overlayLayout === 'dock' && dockRestHidden)
           const earArmed =
             metisCommandEarStatus.state !== 'idle' || metisCommand.pillVisible
           return !overlayResting && earArmed

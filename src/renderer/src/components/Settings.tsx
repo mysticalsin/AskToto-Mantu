@@ -6629,23 +6629,92 @@ export function Settings({
                     {settings.overlayPlacement !== 'right-edge' ? (
                       <>
                         <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">
-                          Top chrome <ManagedChip keys={settings.managedKeys} k="overlayLayout" />
+                          Rest style <ManagedChip keys={settings.managedKeys} k="overlayLayout" />
                         </p>
                         <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                          How Métis rests at the top. Right edge dock is chosen under Overlay position.
+                          Invisible, then Pill, then Orbs — in that order. Right edge is under Overlay position.
                         </p>
-                        <OverlayChromePicker
-                          value={settings.overlayLayout === 'dock' ? 'hide' : settings.overlayLayout}
-                          locked={settings.managedKeys.includes('overlayLayout')}
-                          layouts={['hide', 'island', 'bar'] as const}
-                          onChange={(id) =>
-                            patch({
-                              overlayLayout: id,
-                              autoHideOverlay: autoHideOverlayForLayout(id),
-                              overlayPlacement: 'top-center' as OverlayPlacement
-                            })
-                          }
-                        />
+                        <div role="radiogroup" aria-label="Rest style" className="flex flex-col gap-2">
+                          {(
+                            [
+                              {
+                                id: 'invisible' as const,
+                                label: 'Invisible',
+                                desc: 'Nothing until you move to the top.',
+                                layout: 'hide' as const,
+                                orb: 'jakub' as const
+                              },
+                              {
+                                id: 'pill' as const,
+                                label: 'Pill',
+                                desc: 'A slim pill stays along the top.',
+                                layout: 'bar' as const,
+                                orb: 'bar' as const
+                              },
+                              {
+                                id: 'orbs' as const,
+                                label: 'Orbs',
+                                desc: 'Circle or Jarvis rest.',
+                                layout: 'bar' as const,
+                                orb: (settings.overlayOrbStyle === 'obsidian' ? 'obsidian' : 'jakub') as const
+                              }
+                            ]
+                          ).map((opt) => {
+                            const on =
+                              opt.id === 'invisible'
+                                ? settings.overlayLayout === 'hide'
+                                : opt.id === 'pill'
+                                  ? settings.overlayLayout === 'bar' && settings.overlayOrbStyle === 'bar'
+                                  : settings.overlayLayout === 'bar' && settings.overlayOrbStyle !== 'bar'
+                            const locked = settings.managedKeys.includes('overlayLayout')
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                role="radio"
+                                aria-checked={on}
+                                disabled={locked}
+                                onClick={() =>
+                                  patch({
+                                    overlayLayout: opt.layout,
+                                    autoHideOverlay: autoHideOverlayForLayout(opt.layout),
+                                    overlayPlacement: 'top-center' as OverlayPlacement,
+                                    overlayOrbStyle: opt.orb
+                                  })
+                                }
+                                className={
+                                  'no-drag cl-focus rounded-[10px] border px-3 py-2 text-left transition-colors ' +
+                                  (on
+                                    ? 'border-[var(--cl-ring)] bg-white/[0.06]'
+                                    : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]') +
+                                  (locked ? ' opacity-60' : '')
+                                }
+                              >
+                                <span className="block text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                                  {opt.label}
+                                </span>
+                                <span className="mt-0.5 block text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                                  {opt.desc}
+                                </span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                        {settings.overlayLayout === 'bar' && settings.overlayOrbStyle !== 'bar' ? (
+                          <>
+                            <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                              Orb
+                            </p>
+                            <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                              Circle or Jarvis under Orbs.
+                            </p>
+                            <OverlayOrbPicker
+                              value={settings.overlayOrbStyle}
+                              locked={settings.managedKeys.includes('overlayOrbStyle')}
+                              onChange={(id) => patch({ overlayOrbStyle: id })}
+                            />
+                          </>
+                        ) : null}
                       </>
                     ) : null}
                     {settings.overlayLayout === 'dock' ? (
@@ -6660,8 +6729,8 @@ export function Settings({
                         <div role="radiogroup" aria-label="Dock rest" className="flex gap-2">
                           {(
                             [
-                              { id: 'sliver', label: 'Sliver', desc: 'A slim marker on the edge.' },
-                              { id: 'hidden', label: 'Invisible', desc: 'Nothing until you reach the edge.' }
+                              { id: 'hidden', label: 'Invisible', desc: 'Nothing until you reach the edge.' },
+                              { id: 'sliver', label: 'Pill', desc: 'A slim rail on the edge; hover opens chat.' }
                             ] as const
                           ).map((opt) => {
                             const on = (settings.dockRest ?? 'sliver') === opt.id

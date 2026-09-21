@@ -112,7 +112,7 @@ describe('onboarding appearance — 2.0 two-step', () => {
   it('places Top vs Right first, then chrome without Island or em dash', () => {
     expect(ONBOARDING_PLACEMENT_HEADING).toBe('Where should Métis sit?')
     expect(ONBOARDING_CHROME_HEADING).toBe('How should it look?')
-    const styles = ['bar-hides', 'bar-stays', 'circle', 'jarvis']
+    const styles = ['hidden', 'bar-stays', 'circle', 'jarvis']
     expect(onboardingChromeForPlacement('top-center').map((c) => c.id)).toEqual(styles)
     // Tony voice 2026-09-20: same circle-picker styles on Right; dock stays Settings-only.
     // Right-edge park is geometry (2f06669e), not "dock-only cards".
@@ -120,10 +120,16 @@ describe('onboarding appearance — 2.0 two-step', () => {
     // choosing one saved a top-centre chrome against a right-edge placement (the mid-screen sliver).
     // Circle and Jarvis stay, because their rest is a 41px circle that sits on an edge fine.
     expect(onboardingChromeForPlacement('right-edge').map((c) => c.id)).toEqual([
-      'circle',
-      'jarvis',
+      'dock-hidden',
       'dock',
-      'dock-hidden'
+      'circle',
+      'jarvis'
+    ])
+    expect(onboardingChromeForPlacement('top-center').map((c) => c.title)).toEqual([
+      'Invisible',
+      'Pill',
+      'Circle',
+      'Jarvis'
     ])
     expect(onboardingChromeForPlacement('top-center').map((c) => c.title).join(' ')).not.toMatch(/Island/)
     const all = [
