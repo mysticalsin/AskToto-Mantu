@@ -124,7 +124,12 @@ describe('onboarding appearance — 2.0 two-step', () => {
       'jarvis',
       'dock',
       'dock-hidden'
-    ]),
+    ])
+    expect(onboardingChromeForPlacement('top-center').map((c) => c.title).join(' ')).not.toMatch(/Island/)
+    const all = [
+      ONBOARDING_PLACEMENT_HEADING,
+      ONBOARDING_CHROME_HEADING,
+      ...Object.values(ONBOARDING_PLACEMENT_COPY).flatMap((c) => [c.title, c.desc]),
       ...onboardingChromeForPlacement('top-center').flatMap((c) => [c.title, c.desc]),
       ...onboardingChromeForPlacement('right-edge').flatMap((c) => [c.title, c.desc])
     ].join(' ')

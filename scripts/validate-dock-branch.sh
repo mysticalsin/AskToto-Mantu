@@ -70,12 +70,18 @@ if not os.path.exists(out):
     print('%-52s %s' % (label, 'FAIL (no report; vitest exit %d)' % rc)); sys.exit(1)
 d = json.load(open(out))
 n, t = d['numFailedTests'], d['numTotalTests']
+# A file that fails to TRANSFORM reports zero failed tests, because none of them ran. The JSON report
+# alone said "0 failed" while npm test exited 1 on an unparseable suite, so vitest's exit status is
+# part of the verdict, not a detail.
+if rc != 0:
+    print('%-52s %s' % (label, 'FAIL (vitest exit %d; %d failed of %d - a suite may have failed to load)' % (rc, n, t)))
+    sys.exit(1)
 print('%-52s %s' % (label, '%d failed of %d' % (n, t)))
 PY
 }
-run root
-run proxy --config cloudflare-proxy/vitest.config.ts
-run operator --config operator/vitest.config.ts
+run root || fail=1
+run proxy --config cloudflare-proxy/vitest.config.ts || fail=1
+run operator --config operator/vitest.config.ts || fail=1
 echo
 
 echo "--- 4. Regression check: does this branch ADD failures vs its fork point? ---"
