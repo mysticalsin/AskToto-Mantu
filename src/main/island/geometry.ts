@@ -304,6 +304,33 @@ export function rightEdgePosition(
   return { x, y }
 }
 
+/**
+ * Open the dock panel around the sliver instead of re-deriving its Y from scratch.
+ *
+ * Both rects were positioned from the same normalized Y, but through a range that depends on HEIGHT:
+ * a 108px sliver at 0.2 and a 560px panel at 0.2 do not start at the same place and do not share a
+ * centre. So the resting pill visibly LEAPT the moment the panel opened, which reads as the surface
+ * losing its place rather than growing.
+ *
+ * Keeping the centres aligned makes the panel appear to grow out of the pill that was already there.
+ * Clamped to the work area, so a sliver near the top or bottom edge yields a panel that is fully on
+ * screen rather than one that honours the centre and hangs off.
+ */
+export function dockPanelRectAnchoredTo(rest: Rect, m: DisplayMetrics, margin = RIGHT_EDGE_MARGIN_PX): Rect {
+  const { width, height } = OVERLAY_DOCK_PANEL
+  const x = clampWithMargin(
+    m.workArea.x + m.workArea.width - width - margin,
+    width,
+    m.workArea.x,
+    m.workArea.width,
+    margin
+  )
+  const restCentre = rest.y + rest.height / 2
+  const range = rightEdgeYRange(height, m, margin)
+  const y = Math.round(Math.min(Math.max(restCentre - height / 2, range.min), range.max))
+  return { x, y, width, height }
+}
+
 /** Inverse of rightEdgePosition's vertical mapping for an explicit user drag. */
 export function normalizeRightEdgeY(
   y: number,

@@ -2,7 +2,15 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BaseSettingsSchema, DEFAULT_SETTINGS } from '@shared/ipc'
-import { dockSliverRect, hideParkWindowOpacity, hoverWatchRestRect, type DisplayMetrics } from './geometry'
+import {
+  OVERLAY_DOCK_PANEL,
+  dockPanelRectAnchoredTo,
+  dockSliverRect,
+  hideParkWindowOpacity,
+  hoverWatchRestRect,
+  rightEdgePosition,
+  type DisplayMetrics
+} from './geometry'
 
 /**
  * dock-invisible.test.ts
@@ -51,6 +59,53 @@ describe('an invisible dock is a PAINT choice, never a reachability one', () => 
     expect(band).toEqual(park)
     expect(band.width).toBeGreaterThan(0)
     expect(band.height).toBeGreaterThan(0)
+  })
+})
+
+describe('opening the dock must not move the pill that was already there', () => {
+  it('keeps the sliver centre exactly, wherever the panel can be centred on it', () => {
+    // A sliver in the middle of the work area: the panel fits either side of it, so the centres match
+    // and the pill does not move at all.
+    const rest = { ...dockSliverRect(TOTOS_MAC), y: 350 }
+    const panel = dockPanelRectAnchoredTo(rest, TOTOS_MAC)
+    expect(Math.abs((panel.y + panel.height / 2) - (rest.y + rest.height / 2))).toBeLessThanOrEqual(1)
+  })
+
+  it('near an edge it gets as close as the screen allows, rather than hanging off it', () => {
+    // The DEFAULT sliver sits high (normalized 0.2), so a 560 panel centred on it would run off the
+    // top. Staying on screen wins, and the residual offset is small enough to read as growth.
+    const rest = dockSliverRect(TOTOS_MAC)
+    const panel = dockPanelRectAnchoredTo(rest, TOTOS_MAC)
+    const drift = Math.abs((panel.y + panel.height / 2) - (rest.y + rest.height / 2))
+    expect(drift).toBeLessThan(60)
+    expect(panel.y).toBeGreaterThanOrEqual(TOTOS_MAC.workArea.y)
+  })
+
+  it('the OLD behaviour really did move it, which is why this exists', () => {
+    // Same normalized Y through a height-dependent range: a 108 sliver and a 560 panel do not share a
+    // centre, and the gap is large enough to read as a jump rather than a growth.
+    const rest = dockSliverRect(TOTOS_MAC)
+    const naive = rightEdgePosition(OVERLAY_DOCK_PANEL.width, OVERLAY_DOCK_PANEL.height, TOTOS_MAC)
+    const naiveCentre = naive.y + OVERLAY_DOCK_PANEL.height / 2
+    const restCentre = rest.y + rest.height / 2
+    expect(Math.abs(naiveCentre - restCentre)).toBeGreaterThan(40)
+  })
+
+  it('a sliver near the top edge still yields a panel fully on screen', () => {
+    const high = { ...dockSliverRect(TOTOS_MAC), y: TOTOS_MAC.workArea.y }
+    const panel = dockPanelRectAnchoredTo(high, TOTOS_MAC)
+    expect(panel.y).toBeGreaterThanOrEqual(TOTOS_MAC.workArea.y)
+    expect(panel.y + panel.height).toBeLessThanOrEqual(TOTOS_MAC.workArea.y + TOTOS_MAC.workArea.height)
+  })
+
+  it('and a sliver near the bottom edge does too', () => {
+    const low = {
+      ...dockSliverRect(TOTOS_MAC),
+      y: TOTOS_MAC.workArea.y + TOTOS_MAC.workArea.height - 108
+    }
+    const panel = dockPanelRectAnchoredTo(low, TOTOS_MAC)
+    expect(panel.y).toBeGreaterThanOrEqual(TOTOS_MAC.workArea.y)
+    expect(panel.y + panel.height).toBeLessThanOrEqual(TOTOS_MAC.workArea.y + TOTOS_MAC.workArea.height)
   })
 })
 
