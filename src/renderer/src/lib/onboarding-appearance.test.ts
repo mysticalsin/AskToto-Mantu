@@ -7,6 +7,8 @@ import {
   appearancePreviewShowsBar,
   appearancePreviewShowsHint,
   appearancePreviewShowsIsland,
+  appearancePreviewShowsDock,
+  appearancePreviewDockOpen,
   appearanceSettingsPatch,
   ONBOARDING_APPEARANCE_COPY,
   ONBOARDING_APPEARANCE_HEADING,
@@ -198,6 +200,22 @@ describe('onboarding appearance — live preview, no lag', () => {
     expect(reduceAppearancePreview('bar', 'settled', 'click-top')).toBe('settled')
   })
 
+  it('Tony FAIL: dock rests slim — Invisible never opens a fat panel; Pill opens only on hover', () => {
+    expect(appearancePreviewRestKind('dock')).toBe('dock')
+    expect(appearancePreviewInitialPhase('dock')).toBe('rest')
+    expect(appearancePreviewShowsDock('dock', 'rest', 'dock-hidden')).toBe(false)
+    expect(appearancePreviewDockOpen('dock-hidden', 'settled')).toBe(false)
+    expect(appearancePreviewDockOpen('dock-hidden', 'in')).toBe(false)
+    expect(appearancePreviewShowsDock('dock', 'rest', 'dock')).toBe(true)
+    expect(appearancePreviewDockOpen('dock', 'rest')).toBe(false)
+    expect(appearancePreviewDockOpen('dock', 'in')).toBe(true)
+    expect(appearancePreviewDockOpen('dock', 'settled')).toBe(true)
+    expect(reduceAppearancePreview('dock', 'rest', 'hover-enter')).toBe('in')
+    expect(css).toMatch(/Tony FAIL/)
+    expect(css).not.toMatch(/width:\s*min\(34%,\s*120px\)/)
+    expect(css).not.toMatch(/width:\s*min\(36%,\s*128px\)/)
+  })
+
   it('preview is CSS-only: no setBounds, Bar, Listen, orb, WebGL, or rAF', () => {
     expect(component).toMatch(/onboard-appearance-preview/)
     expect(component).toMatch(/overlay-spring/)
@@ -209,7 +227,7 @@ describe('onboarding appearance — live preview, no lag', () => {
     expect(component).not.toMatch(/from 'three'/)
     expect(css).toMatch(/\.onboard-appearance-preview__island/)
     expect(css).toMatch(/\.onboard-appearance-preview__bar/)
-    expect(css).not.toMatch(/\.onboard-appearance-preview[^{]*\{[^}]*backdrop-filter/)
+    expect(css).not.toMatch(/\.onboard-appearance-preview\s*\{[^}]*backdrop-filter/)
   })
 })
 

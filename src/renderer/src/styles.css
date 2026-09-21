@@ -2437,6 +2437,7 @@ button.onboard-cta {
   width: min(100%, 560px);
   height: 248px;
   margin-inline: auto;
+  /* clip stage bed; circle-stage itself is overflow:visible so orbs stay uncut inside. */
   overflow: hidden;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -2542,19 +2543,23 @@ button.onboard-cta {
 
 .onboard-appearance-preview__circle-stage {
   position: absolute;
-  inset: 16px;
+  inset: 12px;
   z-index: 3;
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  /* Tony FAIL: orbs must render fully / uncut — never clip the sphere. */
+  overflow: visible;
 }
 .onboard-appearance-preview__circle-stage .overlay-orb-diagram {
-  width: min(160px, 70%);
-  height: 96px;
+  width: min(180px, 72%);
+  height: 120px;
   margin: 0;
-  border-radius: 12px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  border-radius: 0;
+  overflow: visible;
+  box-shadow: none;
+  background: transparent;
 }
 /* Right-edge placement must NOT shove the style orb to the right — middle of the stage only. */
 .onboard-appearance-preview--right-edge .onboard-appearance-preview__circle-stage {
@@ -2583,12 +2588,27 @@ button.onboard-cta {
   height: 22px;
   margin-bottom: 2px;
 }
+/* Circle / Jarvis thumbs: full uncut sphere (Tony FAIL clipped orbs). */
+.onboard-appearance .onboard-chrome-thumb--circle,
+.onboard-appearance .onboard-chrome-thumb--jarvis {
+  min-height: 44px;
+  height: 44px;
+  overflow: visible;
+}
 .onboard-chrome-thumb .overlay-orb-diagram {
   width: 36px;
   height: 22px;
   margin: 0;
   border-radius: 6px;
   box-shadow: none;
+}
+.onboard-appearance .onboard-chrome-thumb--circle .overlay-orb-diagram,
+.onboard-appearance .onboard-chrome-thumb--jarvis .overlay-orb-diagram {
+  width: 40px;
+  height: 40px;
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
 }
 .onboard-appearance .overlay-chrome-card {
   padding: 10px 12px;
@@ -2663,7 +2683,9 @@ button.onboard-cta {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
 }
 .onboard-chrome-thumb__sidecar--open {
-  width: 42%;
+  /* Match live stage: slim rail glyph, not a fat panel. */
+  width: 14%;
+  background: rgba(24, 16, 36, 0.85);
 }
 .onboard-chrome-thumb__sidecar--ghost {
   width: 10%;
@@ -2680,11 +2702,18 @@ button.onboard-cta {
   left: auto;
   transform: none;
 }
+/* Tony FAIL 2026-09-21: hover reveal is a slim dark glass rail — never a fat whitish card. */
 .onboard-appearance-preview--right-edge .onboard-appearance-preview__dock--open {
   right: 16px;
   left: auto;
-  width: min(36%, 128px);
-  border-radius: 10px 0 0 10px;
+  width: 10px;
+  height: 58%;
+  top: 16%;
+  border-radius: 8px 0 0 8px;
+  background: rgba(24, 16, 36, 0.78);
+  box-shadow:
+    inset 0 0 0 1px rgba(214, 186, 255, 0.28),
+    0 0 14px rgba(127, 0, 218, 0.25);
   transform: none;
 }
 
@@ -2712,13 +2741,16 @@ button.onboard-cta {
   right: 16px;
 }
 .onboard-appearance-preview__dock--open {
+  /* Tony FAIL: sleek hover rail, not a fat whitish/grey box. */
   right: 16px;
-  width: min(34%, 120px);
-  height: 64%;
-  top: 12%;
-  border-radius: 10px 0 0 10px;
-  background: rgba(255, 255, 255, 0.14);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+  width: 10px;
+  height: 58%;
+  top: 16%;
+  border-radius: 8px 0 0 8px;
+  background: rgba(24, 16, 36, 0.78);
+  box-shadow:
+    inset 0 0 0 1px rgba(214, 186, 255, 0.28),
+    0 0 14px rgba(127, 0, 218, 0.25);
 }
 .onboard-appearance-preview__circle {
   width: 64px;

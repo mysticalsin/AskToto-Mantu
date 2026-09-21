@@ -299,7 +299,10 @@ export type AppearancePreviewEvent =
   | 'spring-out-end'
 
 export function appearancePreviewInitialPhase(layout: OverlayLayout): AppearancePreviewPhase {
-  if (layout === 'bar' || layout === 'dock') return 'settled'
+  // Tony FAIL 2026-09-21: dock must NOT open as a fat whitish panel on first paint.
+  // Pill rests as a slim rail; Invisible stays empty (soft edge glow). Hover opens.
+  if (layout === 'bar') return 'settled'
+  if (layout === 'dock') return 'rest'
   return 'rest'
 }
 
@@ -318,8 +321,26 @@ export function appearancePreviewShowsIsland(layout: OverlayLayout, phase: Appea
   return layout === 'island' && phase === 'rest'
 }
 
-export function appearancePreviewShowsDock(layout: OverlayLayout, phase: AppearancePreviewPhase): boolean {
-  return layout === 'dock' && (phase === 'settled' || phase === 'in' || phase === 'out' || phase === 'rest')
+export function appearancePreviewShowsDock(
+  layout: OverlayLayout,
+  phase: AppearancePreviewPhase,
+  chromeId?: OnboardingChromeId
+): boolean {
+  if (layout !== 'dock') return false
+  // Invisible (dock-hidden): soft edge glow via desktop CSS only — never a dock slab.
+  if (chromeId === 'dock-hidden') return false
+  // Pill: slim rail at rest; open panel only while hovering / settling.
+  return phase === 'settled' || phase === 'in' || phase === 'out' || phase === 'rest'
+}
+
+/** Fat open sidecar is only for Pill hover demo — never Invisible, never first paint. */
+export function appearancePreviewDockOpen(
+  chromeId: OnboardingChromeId,
+  phase: AppearancePreviewPhase
+): boolean {
+  if (chromeId === 'dock-hidden') return false
+  if (chromeId !== 'dock') return false
+  return phase === 'settled' || phase === 'in'
 }
 
 export function appearancePreviewShowsHint(layout: OverlayLayout, phase: AppearancePreviewPhase): boolean {
