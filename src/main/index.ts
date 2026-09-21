@@ -968,6 +968,10 @@ const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so i
  * diagnostics prove readiness from bounded metadata rather than by making setup capturable. */
 function contentProtectionOn(): boolean {
   if (devEnv('ASKTOTO_DISABLE_CP')) return false
+  // Tony HARD 2026-09-21 ~1:40am ET: exclusive onboarding must be screenshottable for Dig/Tony eye.
+  // Capture-protect during Act1 made screencapture show wallpaper-through and AX windows=0.
+  // Restore settings.contentProtection after onboardingDone (see recreateOverlayWindow / settingsSet).
+  if (onboardingExclusiveLive()) return false
   return getSettings().contentProtection
 }
 

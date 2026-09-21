@@ -227,19 +227,20 @@ describe('MQA-176 — contentProtectionOn() is the single decision, and it is ho
     expect(contentProtectionOn(packagedDevEnv, false)).toBe(false)
   })
 
-  it('MQA-338 — onboarding preserves the user-selected exclusion instead of opening a capture window', () => {
-    // Launch readiness is metadata-only. It must never buy a screenshot-able onboarding surface by
-    // overriding the privacy toggle for the duration of setup.
-    expect(contentProtectionOn(packagedDevEnv, true, true)).toBe(true)
+  it('MQA-338 — exclusive onboarding is screenshottable even when contentProtection defaults on', () => {
+    // Tony HARD 2026-09-21 ~1:40am ET: Dig/Tony eye must see Act1 (lady/Welcome). Capture-protect
+    // during exclusive onboard made screencapture wallpaper-through and AX windows=0.
+    expect(contentProtectionOn(packagedDevEnv, true, true)).toBe(false)
     expect(contentProtectionOn(packagedDevEnv, false, true)).toBe(false)
+    // After onboardingDone, honour the user toggle again.
     expect(contentProtectionOn(packagedDevEnv, true, false)).toBe(true)
     expect(contentProtectionOn(packagedDevEnv, false, false)).toBe(false)
   })
 
-  it('MQA-338 — contentProtectionOn has no onboarding bypass', () => {
+  it('MQA-338 — contentProtectionOn bypasses capture protect while onboardingExclusiveLive', () => {
     const src = sliceBetween(indexSrc, 'function contentProtectionOn(): boolean {', '\n}')
-    expect(src).not.toMatch(/onboardingExclusiveLive\(\)/)
-    expect(src).not.toMatch(/FITO-185-U/)
+    expect(src).toMatch(/onboardingExclusiveLive\(\)/)
+    expect(src).toMatch(/return false/)
   })
 
   it('MQA-176 — a packaged app cannot strip Private View with a debugging launch argument', () => {
