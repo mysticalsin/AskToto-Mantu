@@ -11,7 +11,7 @@ import {
  * onboarding-placement-step.test.ts
  *
  * Placement step must show diagrams (not words alone). Style step Tony HARD 2026-09-21:
- * Invisible → Pill → Orbs (Circle/Jarvis). Top and Right both follow that order.
+ * Top: Invisible → Pill → Orbs (Circle/Jarvis). Right: Invisible → Pill only (no Circle/Jarvis).
  */
 
 describe('the placement step shows what it is offering', () => {
@@ -37,7 +37,7 @@ describe('the placement step shows what it is offering', () => {
 })
 
 describe('Tony voice circle picker — style step', () => {
-  it('Top and Right both offer Invisible → Pill → Orbs (Circle/Jarvis)', () => {
+  it('Top offers Invisible → Pill → Orbs; Right is Invisible → Pill only (Tony HARD)', () => {
     expect(onboardingChromeForPlacement('top-center').map((s) => s.id)).toEqual([
       'hidden',
       'bar-stays',
@@ -50,10 +50,12 @@ describe('Tony voice circle picker — style step', () => {
       'Circle',
       'Jarvis'
     ])
-    // Right-edge: Invisible dock, Pill rail, then Orbs — never a horizontal bar peer.
+    // Tony HARD 2026-09-21: Right Appearance = Invisible + Pill only. No Circle/Jarvis.
     const right = onboardingChromeForPlacement('right-edge')
-    expect(right.map((s) => s.id)).toEqual(['dock-hidden', 'dock', 'circle', 'jarvis'])
-    expect(right.map((s) => s.title)).toEqual(['Invisible', 'Pill', 'Circle', 'Jarvis'])
+    expect(right.map((s) => s.id)).toEqual(['dock-hidden', 'dock'])
+    expect(right.map((s) => s.title)).toEqual(['Invisible', 'Pill'])
+    expect(right.map((s) => s.id)).not.toContain('circle')
+    expect(right.map((s) => s.id)).not.toContain('jarvis')
     expect(right.map((s) => s.id)).not.toContain('bar-hides')
     expect(right.map((s) => s.id)).not.toContain('bar-stays')
   })
