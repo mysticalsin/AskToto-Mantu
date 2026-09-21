@@ -97,45 +97,55 @@ function AppearanceLivePreview({
           aria-hidden="true"
         />
       ) : null}
-      {showBar ? (
+      {showCircle ? (
+        /* Optical middle of the mock desktop — never edge-hug (Tony FAIL 4898ddb2). */
+        <div
+          className={
+            'onboard-appearance-preview__circle-stage' +
+            (chromeId === 'jarvis'
+              ? ' onboard-appearance-preview__circle-stage--jarvis'
+              : ' onboard-appearance-preview__circle-stage--typical')
+          }
+          data-circle-preview={chromeId}
+          aria-hidden="true"
+        >
+          <div
+            className={
+              'overlay-orb-diagram overlay-orb-diagram--' +
+              (chromeId === 'jarvis' ? 'obsidian' : 'jakub')
+            }
+            data-orb-diagram={chromeId === 'jarvis' ? 'obsidian' : 'jakub'}
+            data-orb-diagram-animate="true"
+          >
+            {chromeId === 'jarvis' ? (
+              <ObsidianOrb preview animate onActivate={() => undefined} title="" ariaLabel="" />
+            ) : (
+              <JarvisOrbButton preview animate onActivate={() => undefined} title="" ariaLabel="" />
+            )}
+          </div>
+        </div>
+      ) : showBar ? (
         <div className="onboard-appearance-preview__bar-slot">
-          {showCircle ? (
-            <div
-              className={
-                'onboard-appearance-preview__circle-host' +
-                (chromeId === 'jarvis' ? ' onboard-appearance-preview__circle-host--jarvis' : ' onboard-appearance-preview__circle-host--typical')
-              }
-              data-circle-preview={chromeId}
-              aria-hidden="true"
-            >
-              {chromeId === 'jarvis' ? (
-                <ObsidianOrb preview animate onActivate={() => undefined} title="" ariaLabel="" />
-              ) : (
-                <JarvisOrbButton preview animate onActivate={() => undefined} title="" ariaLabel="" />
-              )}
-            </div>
-          ) : (
-            <div
-              className={
-                'onboard-appearance-preview__bar' +
-                (phase === 'settled'
-                  ? ' overlay-spring overlay-spring--settled'
-                  : phase === 'in'
-                    ? ' overlay-spring overlay-spring--in'
-                    : phase === 'out'
-                      ? ' overlay-spring overlay-spring--out'
-                      : '')
-              }
-              onAnimationEnd={(e) => {
-                if (e.target !== e.currentTarget) return
-                if (phase === 'in') send('spring-in-end')
-                if (phase === 'out') send('spring-out-end')
-              }}
-            >
-              <MetisMark size={14} />
-              <span>Métis</span>
-            </div>
-          )}
+          <div
+            className={
+              'onboard-appearance-preview__bar' +
+              (phase === 'settled'
+                ? ' overlay-spring overlay-spring--settled'
+                : phase === 'in'
+                  ? ' overlay-spring overlay-spring--in'
+                  : phase === 'out'
+                    ? ' overlay-spring overlay-spring--out'
+                    : '')
+            }
+            onAnimationEnd={(e) => {
+              if (e.target !== e.currentTarget) return
+              if (phase === 'in') send('spring-in-end')
+              if (phase === 'out') send('spring-out-end')
+            }}
+          >
+            <MetisMark size={14} />
+            <span>Métis</span>
+          </div>
         </div>
       ) : null}
     </div>
@@ -144,17 +154,21 @@ function AppearanceLivePreview({
 
 
 function ChromeCardThumb({ id, selected }: { id: OnboardingChromeId; selected: boolean }): JSX.Element {
-  if (id === 'circle') {
+  if (id === 'circle' || id === 'jarvis') {
+    const orb = id === 'jarvis' ? 'obsidian' : 'jakub'
     return (
-      <span className="onboard-chrome-thumb onboard-chrome-thumb--circle" aria-hidden="true">
-        <JarvisOrbButton preview animate={selected} onActivate={() => undefined} title="" ariaLabel="" />
-      </span>
-    )
-  }
-  if (id === 'jarvis') {
-    return (
-      <span className="onboard-chrome-thumb onboard-chrome-thumb--jarvis" aria-hidden="true">
-        <ObsidianOrb preview animate={selected} onActivate={() => undefined} title="" ariaLabel="" />
+      <span className={`onboard-chrome-thumb onboard-chrome-thumb--${id}`} aria-hidden="true">
+        <div
+          className={`overlay-orb-diagram overlay-orb-diagram--${orb}`}
+          data-orb-diagram={orb}
+          data-orb-diagram-animate={selected || undefined}
+        >
+          {id === 'jarvis' ? (
+            <ObsidianOrb preview animate={selected} onActivate={() => undefined} title="" ariaLabel="" />
+          ) : (
+            <JarvisOrbButton preview animate={selected} onActivate={() => undefined} title="" ariaLabel="" />
+          )}
+        </div>
       </span>
     )
   }

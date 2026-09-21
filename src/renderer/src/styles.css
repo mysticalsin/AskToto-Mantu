@@ -2458,49 +2458,48 @@ button.onboard-cta {
 }
 
 
-/* Tony voice circle picker — large/obvious Circle + Jarvis on the board */
-.onboard-appearance-preview__circle-host {
+/* Tony FAIL 4898ddb2 — orbs optically centered in the mock stage (not edge-clipped / weird).
+   Reuse Settings overlay-orb-diagram sizing (41 host + correct canvas) — never force 72px on the orb. */
+.onboard-appearance-preview__circle-stage {
   position: absolute;
-  top: 18px;
-  left: 50%;
+  inset: 16px;
   z-index: 3;
-  width: 72px;
-  height: 72px;
-  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   pointer-events: none;
-  display: grid;
-  place-items: center;
 }
-.onboard-appearance-preview__circle-host .aw-orb,
-.onboard-appearance-preview__circle-host .overlay-orb-diagram__jakub-host,
-.onboard-appearance-preview__circle-host .obsidian-orb {
-  width: 72px !important;
-  height: 72px !important;
-  max-width: 72px;
-  max-height: 72px;
+.onboard-appearance-preview__circle-stage .overlay-orb-diagram {
+  width: min(160px, 70%);
+  height: 96px;
+  margin: 0;
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
 }
-.onboard-appearance-preview--right-edge .onboard-appearance-preview__circle-host {
-  top: 28px;
+/* Right-edge placement must NOT shove the style orb to the right — middle of the stage only. */
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__circle-stage {
+  inset: 16px;
   right: 16px;
-  left: auto;
-  transform: none;
+  left: 16px;
+  justify-content: center;
+  align-items: center;
 }
 .onboard-chrome-thumb {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  height: 72px;
+  min-height: 80px;
   margin-bottom: 8px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  background: transparent;
   pointer-events: none;
 }
-.onboard-chrome-thumb--circle .aw-orb,
-.onboard-chrome-thumb--circle .overlay-orb-diagram__jakub-host,
-.onboard-chrome-thumb--jarvis .obsidian-orb,
-.onboard-chrome-thumb--jarvis .aw-orb {
-  width: 56px !important;
-  height: 56px !important;
+.onboard-chrome-thumb .overlay-orb-diagram {
+  width: 100%;
+  height: 80px;
+  margin: 0;
 }
 .onboard-chrome-thumb__bar {
   display: block;
