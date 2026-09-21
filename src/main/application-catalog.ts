@@ -42,9 +42,27 @@ function nativeIdentity(value: unknown): { identity: readonly string[]; fingerpr
 }
 
 function publicLabel(value: unknown, privateValues: readonly string[]): value is string {
-  return text(value, 120) && normalize(value).length > 0 &&
-    !/[\\/:]/.test(value) && !/\.(?:exe|app)\b/i.test(value) &&
-    !privateValues.some(secret => secret.length > 0 && match(value).includes(match(secret)))
+  if (!text(value, 120) || /[\\/:]/.test(value) || /\.(?:exe|app)\b/i.test(value)) return false
+  const normalized = match(value)
+  return normalized.length > 0 && !privateValues.some(secret => normalized.includes(secret))
+}
+
+/** Collect native values before validating record metadata. An invalid kind, label,
+ * fingerprint, or extra native field must not make another record's label safe.
+ * The index is local to discovery and never retained in a public view or result.
+ */
+function privateLabelValues(discovered: readonly unknown[]): readonly string[] {
+  const values = new Set<string>()
+  for (const raw of discovered) {
+    if (!record(raw) || !record(raw.native)) continue
+    for (const field of ['bundlePath', 'bundleId', 'executablePath', 'aumid', 'fingerprint']) {
+      const value = raw.native[field]
+      if (!text(value, 4096)) continue
+      const normalized = match(value)
+      if (normalized.length > 0) values.add(normalized)
+    }
+  }
+  return [...values]
 }
 
 export interface ApplicationCatalogOptions {
@@ -129,6 +147,7 @@ export class ApplicationCatalog {
     try {
       const discovered = await this.#discovery.discover()
       if (!Array.isArray(discovered) || discovered.length > 5000) throw new Error('Invalid discovery')
+      const privateValues = privateLabelValues(discovered)
       const entries = new Map<string, { view: ApplicationView; commitment: string }>()
       const conflicts = new Set<string>()
       for (const raw of discovered) {
@@ -136,7 +155,6 @@ export class ApplicationCatalog {
         const native = nativeIdentity(raw.native)
         if (!native || !KINDS.includes(raw.kind as ApplicationKind) || typeof raw.available !== 'boolean' ||
             !Array.isArray(raw.aliases) || raw.aliases.length > 32) continue
-        const privateValues = [...native.identity.slice(1), native.fingerprint]
         if (!publicLabel(raw.displayName, privateValues) || !raw.aliases.every(alias => publicLabel(alias, privateValues))) continue
         const id = `app_${this.#hash('application-identity-v1', native.identity)}`
         const kind = raw.kind as ApplicationKind, eligible = ELIGIBLE.has(kind)
