@@ -1136,14 +1136,14 @@ export function OnboardingExperience({
     setAppearance(id)
   }
   const pickChrome = async (id: OnboardingChromeId): Promise<void> => {
-    if (appearanceSave.busy || appearanceLocked) return
+    // Optimistic UI first. Never raise busy/opacity on a card click — that flashed the whole board
+    // (Tony FAIL b756778a / Cap4 Appearance 12c295e9 DNA). Persist silently; surface error only on failure.
+    if (appearanceLocked) return
     const body = chromeSettingsPatch(placement, id)
-    if (!patch) {
-      setChromeId(id)
-      setAppearance(body.overlayLayout)
-      return
-    }
-    setAppearanceSave({ busy: true, error: null })
+    setChromeId(id)
+    setAppearance(body.overlayLayout)
+    setAppearanceSave((s) => ({ ...s, error: null }))
+    if (!patch) return
     try {
       const saved = await saveOnboardingAppearanceChoice(
         () => patch(body),
@@ -1153,29 +1153,18 @@ export function OnboardingExperience({
           (next.overlayOrbStyle === undefined || next.overlayOrbStyle === body.overlayOrbStyle)
       )
       if (!saved) throw new Error('appearance was not saved')
-      setChromeId(id)
-      setAppearance(body.overlayLayout)
     } catch {
       setAppearanceSave({ busy: false, error: "Métis couldn't save this appearance. Try again." })
-      return
     }
-    setAppearanceSave({ busy: false, error: null })
   }
   const pickPlacement = async (id: OverlayPlacement): Promise<void> => {
-    if (appearanceSave.busy || placementLocked) return
-    const previousPlacement = placement
-    const previousPlacementWasUserSelected = placementUserSelectedRef.current
-    const previousChromeId = chromeId
+    // Optimistic placement + chrome seed; silent persist (no busy dim / Saving… flash).
+    if (placementLocked) return
     placementUserSelectedRef.current = true
     setPlacement(id)
-    // Picking a placement resets the style to that placement's default, because the styles on offer
-    // depend on it: the right edge has no full bar, so carrying a bar selection across would leave a
-    // choice selected that the next row no longer shows.
     setChromeId(defaultChromeId(id))
-    if (!patch) {
-      return
-    }
-    setAppearanceSave({ busy: true, error: null })
+    setAppearanceSave((s) => ({ ...s, error: null }))
+    if (!patch) return
     try {
       const saved = await saveOnboardingAppearanceChoice(
         () => patch(placementSettingsPatch(id)),
@@ -1183,15 +1172,11 @@ export function OnboardingExperience({
       )
       if (!saved) throw new Error('placement was not saved')
     } catch {
-      placementUserSelectedRef.current = previousPlacementWasUserSelected
-      setPlacement(previousPlacement)
-      setChromeId(previousChromeId)
-      setAppearanceSave({ busy: false, error: "Métis couldn't save this position. Try again." })
-      return
+      setAppearanceSave({ busy: false, error: "Métis couldn't save this appearance. Try again." })
     }
-    setAppearanceSave({ busy: false, error: null })
   }
-  const appearanceLocked = Boolean(settings?.managedKeys?.includes('overlayLayout'))
+  
+const appearanceLocked = Boolean(settings?.managedKeys?.includes('overlayLayout'))
   const placementLocked = placementManaged
   // Recording-consent gate (CMO-QA #1). Finish is blocked until this checkbox is checked on Ready.
   const [consent, setConsent] = useState(false)

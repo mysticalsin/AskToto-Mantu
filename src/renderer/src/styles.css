@@ -2492,6 +2492,30 @@ button.onboard-cta {
 
 /* Tony FAIL 4898ddb2 — orbs optically centered in the mock stage (not edge-clipped / weird).
    Reuse Settings overlay-orb-diagram sizing (41 host + correct canvas) — never force 72px on the orb. */
+/* ZERO flash: stacked chrome layers crossfade; never unmount on select (Tony FAIL b756778a). Cap4 Appearance 12c295e9 DNA. */
+.onboard-appearance-preview__circle-stage.is-on,
+.onboard-appearance-preview__bar-slot.is-on {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: none;
+  transition: opacity 160ms var(--ease-spring);
+}
+.onboard-appearance-preview__circle-stage.is-off,
+.onboard-appearance-preview__bar-slot.is-off {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 160ms var(--ease-spring), visibility 0ms linear 160ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboard-appearance-preview__circle-stage.is-on,
+  .onboard-appearance-preview__circle-stage.is-off,
+  .onboard-appearance-preview__bar-slot.is-on,
+  .onboard-appearance-preview__bar-slot.is-off {
+    transition: none;
+  }
+}
+
 .onboard-appearance-preview__circle-stage {
   position: absolute;
   inset: 16px;
@@ -2545,6 +2569,62 @@ button.onboard-cta {
 .onboard-chrome-thumb__bar--ghost {
   opacity: 0.35;
   border-style: dashed;
+}
+
+/* Right-edge command-sidecar chrome thumbs (never reuse horizontal bar art). */
+.onboard-chrome-thumb--dock .onboard-chrome-thumb__desktop {
+  position: relative;
+  display: block;
+  width: 88px;
+  height: 64px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(12, 12, 14, 0.55);
+  overflow: hidden;
+}
+.onboard-chrome-thumb__rail {
+  position: absolute;
+  top: 14%;
+  right: 0;
+  width: 4px;
+  height: 58%;
+  border-radius: 4px 0 0 4px;
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 0 8px rgba(214, 186, 255, 0.35);
+}
+.onboard-chrome-thumb__sidecar {
+  position: absolute;
+  top: 10%;
+  right: 0;
+  height: 72%;
+  border-radius: 8px 0 0 8px;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+.onboard-chrome-thumb__sidecar--open {
+  width: 42%;
+}
+.onboard-chrome-thumb__sidecar--ghost {
+  width: 10%;
+  opacity: 0.35;
+  border-style: dashed;
+}
+.onboard-chrome-thumb--dock-hidden .onboard-chrome-thumb__rail {
+  opacity: 0.25;
+}
+
+/* Cap4 right rest-rail → expand inward: flush to mock desktop edge (inset 16px), never float mid. */
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__dock {
+  right: 16px;
+  left: auto;
+  transform: none;
+}
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__dock--open {
+  right: 16px;
+  left: auto;
+  width: min(36%, 128px);
+  border-radius: 10px 0 0 10px;
+  transform: none;
 }
 
 /* Onboarding appearance 2.0 — placement two-up + dock/circle preview */

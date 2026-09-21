@@ -40,8 +40,9 @@ function AppearanceLivePreview({
   const [phase, setPhase] = useState<AppearancePreviewPhase>(() => appearancePreviewInitialPhase(layout))
 
   useEffect(() => {
+    // Chrome-only swaps (Circle ↔ Jarvis) must not reset phase — that blanked the stage.
     setPhase(appearancePreviewInitialPhase(layout))
-  }, [layout, chromeId, placement])
+  }, [layout])
 
   const send = (event: Parameters<typeof reduceAppearancePreview>[2]): void => {
     setPhase((current) => reduceAppearancePreview(layout, current, event))
@@ -97,56 +98,63 @@ function AppearanceLivePreview({
           aria-hidden="true"
         />
       ) : null}
-      {showCircle ? (
-        /* Optical middle of the mock desktop — never edge-hug (Tony FAIL 4898ddb2). */
-        <div
-          className={
-            'onboard-appearance-preview__circle-stage' +
-            (chromeId === 'jarvis'
-              ? ' onboard-appearance-preview__circle-stage--jarvis'
-              : ' onboard-appearance-preview__circle-stage--typical')
-          }
-          data-circle-preview={chromeId}
-          aria-hidden="true"
-        >
+      {/* Crossfade layers — keep previous chrome painted (Tony FAIL b756778a: zero blank-repaint). */}
+      {layout === 'bar' ? (
+        <>
           <div
             className={
-              'overlay-orb-diagram overlay-orb-diagram--' +
-              (chromeId === 'jarvis' ? 'obsidian' : 'jakub')
+              'onboard-appearance-preview__circle-stage onboard-appearance-preview__circle-stage--typical' +
+              (chromeId === 'circle' ? ' is-on' : ' is-off')
             }
-            data-orb-diagram={chromeId === 'jarvis' ? 'obsidian' : 'jakub'}
-            data-orb-diagram-animate="true"
+            data-circle-preview="circle"
+            aria-hidden="true"
           >
-            {chromeId === 'jarvis' ? (
-              <ObsidianOrb preview animate={true} onActivate={() => undefined} title="" ariaLabel="" />
-            ) : (
+            <div className="overlay-orb-diagram overlay-orb-diagram--jakub" data-orb-diagram="jakub" data-orb-diagram-animate="true">
               <JarvisOrbButton preview animate={true} onActivate={() => undefined} title="" ariaLabel="" />
-            )}
+            </div>
           </div>
-        </div>
-      ) : showBar ? (
-        <div className="onboard-appearance-preview__bar-slot">
           <div
             className={
-              'onboard-appearance-preview__bar' +
-              (phase === 'settled'
-                ? ' overlay-spring overlay-spring--settled'
-                : phase === 'in'
-                  ? ' overlay-spring overlay-spring--in'
-                  : phase === 'out'
-                    ? ' overlay-spring overlay-spring--out'
-                    : '')
+              'onboard-appearance-preview__circle-stage onboard-appearance-preview__circle-stage--jarvis' +
+              (chromeId === 'jarvis' ? ' is-on' : ' is-off')
             }
-            onAnimationEnd={(e) => {
-              if (e.target !== e.currentTarget) return
-              if (phase === 'in') send('spring-in-end')
-              if (phase === 'out') send('spring-out-end')
-            }}
+            data-circle-preview="jarvis"
+            aria-hidden="true"
           >
-            <MetisMark size={14} />
-            <span>Métis</span>
+            <div className="overlay-orb-diagram overlay-orb-diagram--obsidian" data-orb-diagram="obsidian" data-orb-diagram-animate="true">
+              <ObsidianOrb preview animate={true} onActivate={() => undefined} title="" ariaLabel="" />
+            </div>
           </div>
-        </div>
+          <div
+            className={
+              'onboard-appearance-preview__bar-slot' +
+              (showBar && !showCircle ? ' is-on' : ' is-off')
+            }
+            aria-hidden="true"
+          >
+            <div
+              className={
+                'onboard-appearance-preview__bar' +
+                (phase === 'settled'
+                  ? ' overlay-spring overlay-spring--settled'
+                  : phase === 'in'
+                    ? ' overlay-spring overlay-spring--in'
+                    : phase === 'out'
+                      ? ' overlay-spring overlay-spring--out'
+                      : '')
+              }
+              onAnimationEnd={(e) => {
+                if (e.target !== e.currentTarget) return
+                if (phase === 'in') send('spring-in-end')
+                if (phase === 'out') send('spring-out-end')
+              }}
+            >
+              <MetisMark size={14} />
+              <span>Métis</span>
+            </div>
+          </div>
+        </>
+      ) : null}
       ) : null}
     </div>
   )
@@ -169,6 +177,28 @@ function ChromeCardThumb({ id, selected }: { id: OnboardingChromeId; selected: b
             <JarvisOrbButton preview animate={true} onActivate={() => undefined} title="" ariaLabel="" />
           )}
         </div>
+      </span>
+    )
+  }
+  if (id === 'dock' || id === 'dock-hidden') {
+    // Right-edge command-sidecar thumb — rest rail + inward panel (never a horizontal bar).
+    return (
+      <span
+        className={
+          'onboard-chrome-thumb onboard-chrome-thumb--dock' +
+          (id === 'dock-hidden' ? ' onboard-chrome-thumb--dock-hidden' : '')
+        }
+        aria-hidden="true"
+      >
+        <span className="onboard-chrome-thumb__desktop">
+          <span
+            className={
+              'onboard-chrome-thumb__sidecar' +
+              (id === 'dock-hidden' ? ' onboard-chrome-thumb__sidecar--ghost' : ' onboard-chrome-thumb__sidecar--open')
+            }
+          />
+          <span className="onboard-chrome-thumb__rail" />
+        </span>
       </span>
     )
   }
@@ -247,8 +277,11 @@ export function OnboardingAppearance({
   const pickChrome = (id: OnboardingChromeId): void => {
     setChromeId(id)
     const spec = chromeSpec(placement, id)
-    onChange(spec.layout)
-    onChromeChange?.(id)
+    if (onChromeChange) {
+      onChromeChange(id)
+    } else {
+      onChange(spec.layout)
+    }
   }
 
   return (

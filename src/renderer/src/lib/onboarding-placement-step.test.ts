@@ -111,3 +111,37 @@ describe('selection click stays smooth (Tony voice ~8:43pm ET)', () => {
     expect(css).toMatch(/\.onboard-persona \{[\s\S]*?border-color 200ms/)
   })
 })
+
+
+describe('selection has zero flash (Tony FAIL b756778a / Cap4 Appearance 12c295e9 DNA)', () => {
+  const experience = readFileSync(join(__dirname, '..', 'components', 'OnboardingExperience.tsx'), 'utf8')
+  const scene = readFileSync(join(__dirname, '..', 'components', 'OnboardingAppearance.tsx'), 'utf8')
+  const css = readFileSync(join(__dirname, '..', 'styles.css'), 'utf8')
+
+  it('does not raise busy/Saving on chrome or placement pick', () => {
+    // Optimistic UI; silent persist. busy:true dimmed the whole card grid.
+    const chrome = experience.slice(experience.indexOf('const pickChrome'))
+    expect(chrome.slice(0, 900)).not.toMatch(/setAppearanceSave\(\{ busy: true/)
+    const place = experience.slice(experience.indexOf('const pickPlacement'))
+    expect(place.slice(0, 900)).not.toMatch(/setAppearanceSave\(\{ busy: true/)
+  })
+
+  it('keeps Circle and Jarvis painted and crossfades with is-on/is-off', () => {
+    expect(scene).toMatch(/circle-stage--typical/)
+    expect(scene).toMatch(/circle-stage--jarvis/)
+    expect(scene).toMatch(/is-on/)
+    expect(scene).toMatch(/is-off/)
+    expect(css).toMatch(/ZERO flash: stacked chrome layers/)
+  })
+
+  it('Right dock chrome thumbs render a vertical sidecar, not a horizontal bar', () => {
+    expect(scene).toMatch(/onboard-chrome-thumb--dock/)
+    expect(scene).toMatch(/onboard-chrome-thumb__sidecar/)
+    expect(scene).toMatch(/onboard-chrome-thumb__rail/)
+    // dock / dock-hidden must not fall through to bar-stays art
+    const thumb = scene.slice(scene.indexOf('function ChromeCardThumb'))
+    const dockBranch = thumb.slice(0, thumb.indexOf('if (id === \'bar-hides\')'))
+    expect(dockBranch).toMatch(/id === 'dock'/)
+    expect(dockBranch).not.toMatch(/bar-stays/)
+  })
+})
