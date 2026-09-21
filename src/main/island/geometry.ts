@@ -352,7 +352,16 @@ export function hoverWatchRestRect(
   normalizedY?: number
 ): Rect {
   const revealedWidth = layout === 'dock' ? OVERLAY_DOCK_PANEL.width : OVERLAY_BAR_REST.width
-  const effectivePlacement = resolveOverlayPlacement(placement, m, revealedWidth)
+  // A dock is an EDGE chrome: a vertical sliver, with no top-centre form. Resolving it through the
+  // shared path put a 20x108 sliver in the MIDDLE of the display whenever overlayPlacement happened to
+  // be top-center (choosing Dock without touching placement did exactly that), which reads as a stray
+  // pill floating over the screen rather than a dock. Dock always asks for the edge, and only falls
+  // back if its panel genuinely does not fit there.
+  const effectivePlacement = resolveOverlayPlacement(
+    layout === 'dock' ? 'right-edge' : placement,
+    m,
+    revealedWidth
+  )
   // Dock rests as a sliver the user can SEE, so its band is that sliver rather than the compact
   // 24x40 side target: a pointer arriving at the visible top or bottom of the sliver must reveal,
   // not land in a dead zone beside it.
@@ -648,7 +657,16 @@ export function parkAfterExclusiveOnboarding(
   normalizedY?: number
 ): Rect {
   const revealedWidth = layout === 'dock' ? OVERLAY_DOCK_PANEL.width : OVERLAY_BAR_REST.width
-  const effectivePlacement = resolveOverlayPlacement(placement, m, revealedWidth)
+  // A dock is an EDGE chrome: a vertical sliver, with no top-centre form. Resolving it through the
+  // shared path put a 20x108 sliver in the MIDDLE of the display whenever overlayPlacement happened to
+  // be top-center (choosing Dock without touching placement did exactly that), which reads as a stray
+  // pill floating over the screen rather than a dock. Dock always asks for the edge, and only falls
+  // back if its panel genuinely does not fit there.
+  const effectivePlacement = resolveOverlayPlacement(
+    layout === 'dock' ? 'right-edge' : placement,
+    m,
+    revealedWidth
+  )
   if (effectivePlacement === 'top-center' && layout === 'hide') return hideParkRect(m)
   // Dock's sliver hugs the edge with no outboard margin, unlike every other right-edge rest.
   if (effectivePlacement === 'right-edge' && layout === 'dock') return dockSliverRect(m, normalizedY)

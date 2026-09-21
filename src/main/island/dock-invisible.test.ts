@@ -2,7 +2,16 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BaseSettingsSchema, DEFAULT_SETTINGS } from '@shared/ipc'
-import { dockSliverRect, hideParkWindowOpacity, hoverWatchRestRect, type DisplayMetrics } from './geometry'
+import {
+  OVERLAY_DOCK_PANEL,
+  dockPanelRectAnchoredTo,
+  dockSliverRect,
+  hideParkWindowOpacity,
+  hoverWatchRestRect,
+  parkAfterExclusiveOnboarding,
+  rightEdgePosition,
+  type DisplayMetrics
+} from './geometry'
 
 /**
  * dock-invisible.test.ts
@@ -51,6 +60,28 @@ describe('an invisible dock is a PAINT choice, never a reachability one', () => 
     expect(band).toEqual(park)
     expect(band.width).toBeGreaterThan(0)
     expect(band.height).toBeGreaterThan(0)
+  })
+})
+
+describe('a dock never parks in the middle of the screen', () => {
+  it('parks on the edge even when placement says top-center', () => {
+    // Choosing Dock without touching overlayPlacement left placement at 'top-center', and the shared
+    // resolver then centred the 20x108 sliver horizontally: a stray pill floating mid-screen.
+    const park = parkAfterExclusiveOnboarding('dock', TOTOS_MAC, 8, 'top-center')
+    expect(park).toEqual(dockSliverRect(TOTOS_MAC))
+    expect(park.x + park.width).toBe(TOTOS_MAC.workArea.x + TOTOS_MAC.workArea.width)
+  })
+
+  it('its hover band follows it to the edge, so it stays reachable there', () => {
+    const band = hoverWatchRestRect('dock', TOTOS_MAC, 'top-center')
+    expect(band).toEqual(dockSliverRect(TOTOS_MAC))
+  })
+
+  it('the centred pill really was the old behaviour, which is why this is pinned', () => {
+    // Every other chrome still honours top-center; only dock overrides it.
+    const island = parkAfterExclusiveOnboarding('island', TOTOS_MAC, 8, 'top-center')
+    const rightEdge = TOTOS_MAC.workArea.x + TOTOS_MAC.workArea.width
+    expect(island.x + island.width).toBeLessThan(rightEdge - 100)
   })
 })
 
