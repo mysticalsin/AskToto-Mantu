@@ -1136,14 +1136,14 @@ export function OnboardingExperience({
     setAppearance(id)
   }
   const pickChrome = async (id: OnboardingChromeId): Promise<void> => {
-    if (appearanceSave.busy || appearanceLocked) return
+    // Optimistic UI first. Never raise busy/opacity on a card click — that flashed the whole board
+    // (Tony FAIL b756778a). Persist silently; only surface an error string if save fails.
+    if (appearanceLocked) return
     const body = chromeSettingsPatch(placement, id)
-    if (!patch) {
-      setChromeId(id)
-      setAppearance(body.overlayLayout)
-      return
-    }
-    setAppearanceSave({ busy: true, error: null })
+    setChromeId(id)
+    setAppearance(body.overlayLayout)
+    setAppearanceSave((s) => ({ ...s, error: null }))
+    if (!patch) return
     try {
       const saved = await saveOnboardingAppearanceChoice(
         () => patch(body),
@@ -1153,37 +1153,27 @@ export function OnboardingExperience({
           (next.overlayOrbStyle === undefined || next.overlayOrbStyle === body.overlayOrbStyle)
       )
       if (!saved) throw new Error('appearance was not saved')
-      setChromeId(id)
-      setAppearance(body.overlayLayout)
     } catch {
       setAppearanceSave({ busy: false, error: "Métis couldn't save this appearance. Try again." })
-      return
     }
-    setAppearanceSave({ busy: false, error: null })
   }
   const pickPlacement = async (id: OverlayPlacement): Promise<void> => {
-    if (appearanceSave.busy || placementLocked) return
-    if (!patch) {
-      placementUserSelectedRef.current = true
-      setPlacement(id)
-      setChromeId(defaultChromeId(id))
-      return
-    }
-    setAppearanceSave({ busy: true, error: null })
+    // Optimistic placement + chrome seed; silent persist (no busy dim / Saving… flash).
+    if (placementLocked) return
+    placementUserSelectedRef.current = true
+    setPlacement(id)
+    setChromeId(defaultChromeId(id))
+    setAppearanceSave((s) => ({ ...s, error: null }))
+    if (!patch) return
     try {
       const saved = await saveOnboardingAppearanceChoice(
         () => patch(placementSettingsPatch(id)),
         (next) => next.overlayPlacement === id
       )
       if (!saved) throw new Error('placement was not saved')
-      placementUserSelectedRef.current = true
-      setPlacement(id)
-      setChromeId(defaultChromeId(id))
     } catch {
       setAppearanceSave({ busy: false, error: "Métis couldn't save this appearance. Try again." })
-      return
     }
-    setAppearanceSave({ busy: false, error: null })
   }
   const appearanceLocked = Boolean(settings?.managedKeys?.includes('overlayLayout'))
   const placementLocked = placementManaged
