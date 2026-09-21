@@ -29,6 +29,25 @@ function run(segments: Array<{ rms: number; sec: number }>): Array<{ speechSec: 
 }
 
 describe('makeVad — voice-activity endpointing', () => {
+  it('admits quiet speech only after bounded quiet-room calibration', () => {
+    const emits = run([
+      { rms: 0.001, sec: 0.5 }, // calibrate a genuinely quiet room before reducing the admission floor
+      { rms: 0.008, sec: 0.18 }, // below legacy ON=0.012, but clearly above the calibrated bed
+      { rms: 0.003, sec: 0.08 }, // syllabic trough proves this is not a steady low bed
+      { rms: 0.008, sec: 0.35 },
+      { rms: SILENCE, sec: 0.8 }
+    ])
+    expect(emits).toHaveLength(1)
+  })
+
+  it('does not calibrate a cold-start noise spike into speech admission', () => {
+    const emits = run([
+      { rms: 0.008, sec: 0.15 }, // too short and arrives before calibration
+      { rms: SILENCE, sec: 1 }
+    ])
+    expect(emits).toHaveLength(0)
+  })
+
   it('emits once, ~0.6s after a real utterance ends', () => {
     const emits = run([
       { rms: SPEECH, sec: 1.2 },

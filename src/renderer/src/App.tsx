@@ -3859,6 +3859,7 @@ export function App(): JSX.Element {
             captureDegraded={listen.captureDegraded}
             captureHealth={listen.captureHealth}
             noSpeechWarning={listen.noSpeechWarning}
+            recognizerStatus={listen.recognizerStatus}
             onTogglePause={onTogglePause}
             onCapture={capture}
             capturing={capturing}
