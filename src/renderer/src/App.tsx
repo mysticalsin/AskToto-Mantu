@@ -3152,11 +3152,11 @@ export function App(): JSX.Element {
   useEffect(() => {
     void window.toto.windowMode('bar')
   }, [])
-  const prevViewRef = useRef(view)
+  const prevWindowModeViewRef = useRef(view)
   useEffect(() => {
     if (view === 'settings') void window.toto.windowMode('settings')
-    else if (prevViewRef.current === 'settings') void window.toto.windowMode('bar')
-    prevViewRef.current = view
+    else if (prevWindowModeViewRef.current === 'settings') void window.toto.windowMode('bar')
+    prevWindowModeViewRef.current = view
   }, [view])
 
   useEffect(() => {
