@@ -315,7 +315,8 @@ export function App(): JSX.Element {
     const enabled = settings?.onboardingDone === true
     const stop = startMetisCommandEar({
       enabled,
-      preferApple: true,
+      // Parakeet first — Apple helper often returns empty; feel logs proved parakeet hears.
+      preferApple: false,
       isMeetingListening: () => document.documentElement.dataset.metisListening === '1',
       onStatus: (s) => {
         setMetisCommandEarStatus(s)
@@ -3802,8 +3803,8 @@ export function App(): JSX.Element {
     >
             <div data-metis-command-pill-host="1">
         {/* Cap4: dock rest / OverlayPeek must not show Cap2 Ear chrome (Tony FAIL Ear error on notch). */}
-        {/* Cap2: keep ear chip when command pill is live; otherwise hide on dock/island park. */}
-        {metisCommand.pillVisible || (!overlayPeeked && !(overlayLayout === 'dock' && !overlayRevealed)) ? (
+        {/* Cap2: always show ear status when armed — dock park used to hide all feedback. */}
+        {metisCommandEarStatus.state !== 'idle' || metisCommand.pillVisible || (!overlayPeeked && !(overlayLayout === 'dock' && !overlayRevealed)) ? (
           <div
             data-metis-command-ear-chip="1"
             className="pointer-events-none absolute left-1/2 top-1 z-[80] -translate-x-1/2 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium tracking-wide text-white/90"

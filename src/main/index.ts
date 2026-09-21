@@ -586,6 +586,7 @@ import {
   recordOperatorRating,
   startOperatorRuntime
 } from './operator-ingest'
+import { coerceFloat32Pcm } from './asr-feed-pcm'
 import {
   ensureMetisCommandRuntime,
   getMetisCommandRuntime,
@@ -5020,6 +5021,31 @@ function registerIpc(): void {
     assertMainWindow
   })
 
+  // Dev/feel only: prove wake→pillVisible→host without mic (Ultron: no UI-only tips).
+  if (process.env.ASKTOTO_CAP2_PROVE === '1') {
+    const proveWake = () => {
+      ingestMetisCommandFromAsr('Hey Métis')
+      const st = getMetisCommandRuntime()?.getState()
+      mainLog.info(`[cap2] proveWake pillVisible=${st?.pillVisible} active=${st?.active}`)
+      return {
+        pillVisible: st?.pillVisible === true,
+        active: st?.active === true,
+        phase: st?.phase ?? null
+      }
+    }
+    ipcMain.handle('cap2:proveWake', () => proveWake())
+    setTimeout(() => {
+      try {
+        const result = proveWake()
+        const out = process.env.ASKTOTO_CAP2_PROVE_OUT
+        if (out) writeFileSync(out, `${JSON.stringify({ ...result, at: Date.now() }, null, 2)}\n`)
+        mainLog.info(`[cap2] auto-prove done pillVisible=${result.pillVisible}`)
+      } catch (e) {
+        mainLog.warn(`[cap2] auto-prove failed: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }, 4000)
+  }
+
   ipcMain.handle(IPC.operatorStatus, (e) => {
     assertMainWindow(e)
     if (!requireAuth()) {
@@ -6357,31 +6383,43 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.parakeetFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
-    if (!requireAuth()) return ''
-    if (!takeHotPath('asr-feed')) return ''
+    if (!takeHotPath('asr-feed')) {
+      mainLog.info('[cap2] parakeetFeed drop hotpath')
+      return ''
+    }
     const p = payload as { samples?: unknown; speaker?: unknown; startedAt?: unknown }
-    if (!(p?.samples instanceof Float32Array)) return ''
+    const samples = coerceFloat32Pcm(p?.samples)
+    if (!samples) {
+      mainLog.info('[cap2] parakeetFeed drop pcm')
+      return ''
+    }
     // Cap a single feed chunk generously above the renderer's real ~6s windows (WINDOW_SEC in listen.ts) at
     // 16kHz mono — every other renderer-supplied blob in this file is bounded the same way (debriefSave,
     // openMailDraft, McpArgValueSchema); without this a malicious/malfunctioning renderer could force a
     // synchronous decode of an arbitrarily large buffer and hang or OOM the whole app.
-    if (p.samples.length > 16_000 * 30) return ''
+    if (samples.length > 16_000 * 30) return ''
+    const authed = requireAuth()
+    // Cap2 local YOU mic must still ASR+wake when SSO is sticky/unsigned — otherwise Hey Métis is silent.
+    if (p.speaker !== 'you' && !authed) return ''
     const speakerKey = captureLiveSpeakerKey(p.startedAt)
-    const text = await parakeetTranscribe(p.samples)
+    const text = await parakeetTranscribe(samples)
     // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3): label THEM windows with a voice-derived name
     // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
     // being off/unprovisioned attaches no name and the line renders exactly as before.
     if (p.speaker === 'them') {
-      const label = await labelThemAudio(p.samples, speakerKey, 'live')
+      const label = await labelThemAudio(samples, speakerKey, 'live')
       // P2 echo defense: this window is the operator's OWN voice bleeding through the loopback —
       // drop the transcribed text rather than mislabel the operator's words as THEM.
       if (label?.echo) return { text: '', echo: true }
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
-      await observeOperatorAudio(p.samples, speakerKey)
-      // Cap2: local-mic YOU track only (same trust boundary as cloud command owner).
-      if (typeof text === 'string' && text.trim()) ingestMetisCommandFromAsr(text)
+      if (authed) await observeOperatorAudio(samples, speakerKey)
+      // Cap2: local-mic YOU track — wake even when auth wall is up (Tony FAIL tip b634fea9).
+      if (typeof text === 'string' && text.trim()) {
+        mainLog.info(`[cap2] you-asr parakeet ${text.slice(0, 96)}`)
+        ingestMetisCommandFromAsr(text)
+      }
     }
     return { text }
   })
@@ -6392,23 +6430,34 @@ function registerIpc(): void {
   // so unlike parakeetTranscribe this needs no try/catch around the call itself.
   ipcMain.handle(IPC.appleSpeechFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
-    if (!requireAuth()) return ''
-    if (!takeHotPath('asr-feed')) return ''
+    if (!takeHotPath('asr-feed')) {
+      mainLog.info('[cap2] appleSpeechFeed drop hotpath')
+      return ''
+    }
     const p = payload as { samples?: unknown; speaker?: unknown; startedAt?: unknown }
-    if (!(p?.samples instanceof Float32Array)) return ''
+    const samples = coerceFloat32Pcm(p?.samples)
+    if (!samples) {
+      mainLog.info('[cap2] appleSpeechFeed drop pcm')
+      return ''
+    }
     // Same defensive cap as parakeetFeed — see its own comment for why.
-    if (p.samples.length > 16_000 * 30) return ''
+    if (samples.length > 16_000 * 30) return ''
+    const authed = requireAuth()
+    if (p.speaker !== 'you' && !authed) return ''
     const speakerKey = captureLiveSpeakerKey(p.startedAt)
     // Spoken-language hint (Settings → Audio) pins the recognizer locale; 'auto' keeps system locale.
-    const text = await appleSpeechTranscribe(p.samples, appleSpeechLocale(getSettings().asrLanguage))
+    const text = await appleSpeechTranscribe(samples, appleSpeechLocale(getSettings().asrLanguage))
     if (p.speaker === 'them') {
-      const label = await labelThemAudio(p.samples, speakerKey, 'live')
+      const label = await labelThemAudio(samples, speakerKey, 'live')
       if (label?.echo) return { text: '', echo: true } // see parakeetFeed's identical echo-defense comment above
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
-      await observeOperatorAudio(p.samples, speakerKey)
-      // Cap2: local-mic YOU track only (same trust boundary as cloud command owner).
-      if (typeof text === 'string' && text.trim()) ingestMetisCommandFromAsr(text)
+      if (authed) await observeOperatorAudio(samples, speakerKey)
+      // Cap2: local-mic YOU track — wake even when auth wall is up (Tony FAIL tip b634fea9).
+      if (typeof text === 'string' && text.trim()) {
+        mainLog.info(`[cap2] you-asr apple ${text.slice(0, 96)}`)
+        ingestMetisCommandFromAsr(text)
+      }
     }
     return { text }
   })

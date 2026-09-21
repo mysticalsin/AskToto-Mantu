@@ -548,6 +548,9 @@ const api = {
 
   // Métis 2.0 Cap 2 — command session pill / local stop. Transcript ingestion is main-owned.
   metisCommandStop: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.metisCommandStop),
+  /** Feel/prove only — main registers handler when ASKTOTO_CAP2_PROVE=1. */
+  cap2ProveWake: (): Promise<{ pillVisible: boolean; active: boolean; phase: string | null }> =>
+    ipcRenderer.invoke('cap2:proveWake'),
   onMetisCommandState: (
     cb: (state: {
       phase: string
