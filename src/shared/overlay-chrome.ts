@@ -124,8 +124,10 @@ export function overlayHoverForced(input: {
   updateReady: boolean
   toast: boolean
   typedInput: boolean
+  /** Cap2 command pill: keep overlay revealed so top-center listen UI is on-screen (not peek-sized). */
+  commandPill?: boolean
 }): boolean {
-  return input.updateReady || input.toast || input.typedInput
+  return input.updateReady || input.toast || input.typedInput || Boolean(input.commandPill)
 }
 
 /**

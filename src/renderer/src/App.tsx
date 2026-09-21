@@ -715,7 +715,9 @@ export function App(): JSX.Element {
   const autoHideForced = overlayHoverForced({
     updateReady: updateReady.open,
     toast: newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError || !!operatorGateNotice,
-    typedInput: input.trim().length > 0
+    typedInput: input.trim().length > 0,
+    // Cap2: Island/Dock park must not swallow the listen pill (Tony FAIL tip 12c295e9).
+    commandPill: metisCommand.pillVisible
   })
   const [autoHide, dispatchAutoHide] = useReducer(reduceAutoHide, autoHideSetting, initialAutoHideState)
   useEffect(() => {
@@ -3821,7 +3823,7 @@ export function App(): JSX.Element {
           </div>
         ) : null}
         <CommandListeningPill
-          visible={!onboardingBoot && !overlayPeeked && metisCommand.pillVisible}
+          visible={!onboardingBoot && metisCommand.pillVisible}
           copy={metisCommand.pillCopy}
           liveTranscript={metisCommand.liveTranscript}
           chime={metisCommand.chime}

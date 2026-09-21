@@ -120,6 +120,7 @@ describe('overlay chrome modes', () => {
     expect(overlayHoverForced({ updateReady: false, toast: false, typedInput: false })).toBe(false)
     expect(overlayHoverForced({ updateReady: false, toast: false, typedInput: true })).toBe(true)
     expect(overlayHoverForced({ updateReady: true, toast: false, typedInput: false })).toBe(true)
+    expect(overlayHoverForced({ updateReady: false, toast: false, typedInput: false, commandPill: true })).toBe(true)
     expect(isShowMetisHugStub({ width: 120, height: 44 })).toBe(true)
     expect(isShowMetisHugStub({ width: 880, height: 84 })).toBe(false)
     expect(isIncompleteAskReveal({ width: 120, height: 44 })).toBe(true)

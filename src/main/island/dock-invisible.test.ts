@@ -3,13 +3,10 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BaseSettingsSchema, DEFAULT_SETTINGS } from '@shared/ipc'
 import {
-  OVERLAY_DOCK_PANEL,
-  dockPanelRectAnchoredTo,
   dockSliverRect,
   hideParkWindowOpacity,
   hoverWatchRestRect,
   parkAfterExclusiveOnboarding,
-  rightEdgePosition,
   type DisplayMetrics
 } from './geometry'
 

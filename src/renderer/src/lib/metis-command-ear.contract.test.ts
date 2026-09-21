@@ -48,4 +48,12 @@ describe('Cap2 Ear stays top-center (Cap4 dock must not steal it)', () => {
     expect(dockSrc).not.toContain('CommandListeningPill')
     expect(dockSrc).not.toContain('data-metis-command-ear-chip')
   })
+
+  it('CommandListeningPill stays visible while Island/Dock are parked (not gated on overlayPeeked)', () => {
+    // Cap2 wake must surface the pill even when Cap4 park swapped Ask → OverlayPeek.
+    expect(app).toMatch(/visible=\{\!onboardingBoot && metisCommand\.pillVisible\}/)
+    expect(app).not.toMatch(/visible=\{\!onboardingBoot && \!overlayPeeked && metisCommand\.pillVisible\}/)
+    expect(app).toMatch(/commandPill:\s*metisCommand\.pillVisible/)
+  })
+
 })
