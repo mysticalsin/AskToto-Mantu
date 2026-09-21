@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition, type ComponentType } from 'react'
 import { Bar } from './components/Bar'
-import { DockPanel } from './components/DockPanel'
+import { DockPanel, type DockPanelProps } from './components/DockPanel'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
@@ -696,7 +696,10 @@ export function App(): JSX.Element {
   // its body was empty, so Settings was squeezed to nothing behind a full-height slab of dark glass —
   // the "big black box". At settings width the bar is the correct surface, so hand back to it.
   const settingsSheetOpen = overlayShowsSettingsSheet(view, minimized)
-  const AskSurface = overlayLayout === 'dock' && !settingsSheetOpen ? DockPanel : Bar
+  // Typed as the dock's superset so the one dock-only prop passes through a single call site. Bar
+  // structurally accepts and ignores it, which makes this a widening rather than a lie.
+  const AskSurface: ComponentType<DockPanelProps> =
+    overlayLayout === 'dock' && !settingsSheetOpen ? DockPanel : (Bar as ComponentType<DockPanelProps>)
   // The dock is attached to the right edge, so it springs from there. Every other chrome hugs the top.
   const overlaySpringEdge: OverlayEdge = overlayLayout === 'dock' && !settingsSheetOpen ? 'right' : 'top'
   const canMinimize = overlayAllowsMinimize(overlayLayout)
@@ -3757,6 +3760,9 @@ export function App(): JSX.Element {
   const dockRestHidden = settings?.dockRest === 'hidden'
   const dockSurfaceLive = overlayLayout === 'dock' && !settingsSheetOpen
   const barBody = (answerView || dockSurfaceLive) && !collapsed ? body : undefined
+  // Full views inside the dock scroll themselves and need a definite-height host, not the answer
+  // scroller (DockPanelProps.bodyFills).
+  const dockBodyFills = dockSurfaceLive && !answerView && body != null
   const isPanelBody = body != null && !answerView && !dockSurfaceLive
   // An actual answer/suggestion is open → the bar shows the ← back arrow + the follow-up placeholder.
   const hasAnswer =
@@ -3940,6 +3946,7 @@ export function App(): JSX.Element {
             onSetMode={onSetMode}
             hasAnswer={hasAnswer}
             body={barBody}
+            bodyFills={dockBodyFills}
             onBack={hasAnswer ? clearAnswer : undefined}
             screenCapturedAt={ctxCapturedAt}
             onTranscript={toggleTranscript}

@@ -22,8 +22,10 @@ const app = readFileSync(join(__dirname, 'App.tsx'), 'utf8')
 describe('the dock never renders as the ask surface while Settings is open', () => {
   it('App picks DockPanel only when the settings sheet is closed', () => {
     expect(app).toMatch(/const settingsSheetOpen = overlayShowsSettingsSheet\(view, minimized\)/)
+    // The optional type annotation carries the one dock-only prop (bodyFills) through a single call
+    // site; the guarded contract - DockPanel only when the settings sheet is closed - is unchanged.
     expect(app).toMatch(
-      /const AskSurface = overlayLayout === 'dock' && !settingsSheetOpen \? DockPanel : Bar/
+      /const AskSurface(: ComponentType<DockPanelProps>)?\s*=\s*\n?\s*overlayLayout === 'dock' && !settingsSheetOpen \? DockPanel :/
     )
   })
 

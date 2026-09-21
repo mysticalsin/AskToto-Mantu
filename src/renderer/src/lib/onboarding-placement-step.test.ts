@@ -37,10 +37,19 @@ describe('the placement step shows what it is offering', () => {
 })
 
 describe('Tony voice circle picker — style step', () => {
-  it('Top and Right offer the same four styles', () => {
-    const ids = ['bar-hides', 'bar-stays', 'circle', 'jarvis']
-    expect(onboardingChromeForPlacement('top-center').map((s) => s.id)).toEqual(ids)
-    expect(onboardingChromeForPlacement('right-edge').map((s) => s.id)).toEqual(ids)
+  it('Top offers every style; Right offers only what can live on an edge', () => {
+    expect(onboardingChromeForPlacement('top-center').map((s) => s.id)).toEqual([
+      'bar-hides',
+      'bar-stays',
+      'circle',
+      'jarvis'
+    ])
+    // No full bar on the edge: an 880-wide strip is not a sidecar. Circle and Jarvis rest as a 41px
+    // circle, which an edge takes fine, and the dock is edge-native.
+    const right = onboardingChromeForPlacement('right-edge')
+    expect(right.map((s) => s.id)).toEqual(['circle', 'jarvis', 'dock', 'dock-hidden'])
+    expect(right.map((s) => s.id)).not.toContain('bar-hides')
+    expect(right.map((s) => s.id)).not.toContain('bar-stays')
   })
 
   it('Circle is the default and Jarvis is first-class', () => {

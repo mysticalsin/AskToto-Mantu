@@ -119,8 +119,27 @@ const DOCK_CHROME: readonly OnboardingChromeSpec[] = [
   }
 ]
 
-export function onboardingChromeForPlacement(_placement: OverlayPlacement): readonly OnboardingChromeSpec[] {
-  return STYLE_CHROME
+/**
+ * Which styles a given edge can actually wear.
+ *
+ * The top takes everything: a full bar across the top of the screen is what the bar IS. The right edge
+ * takes the compact rests and the dock, and deliberately not the two full-bar styles: Bar is an
+ * 880-wide horizontal strip, so "full bar on the right edge" is not a placement but a combination that
+ * cannot be built, and choosing one saved a top-centre chrome against a right-edge placement, which is
+ * how a sliver ended up floating in the middle of the screen.
+ *
+ * Circle and Jarvis stay on the right on purpose: their REST is a 41px circle, which sits on an edge
+ * perfectly well. That is the part of "right-edge park is a geometry duty" that holds.
+ */
+export function onboardingChromeForPlacement(placement: OverlayPlacement): readonly OnboardingChromeSpec[] {
+  if (placement !== 'right-edge') return STYLE_CHROME
+  // Named explicitly rather than spread from DOCK_CHROME, which also carries the TOP 'hidden' chrome:
+  // on an edge that would just duplicate 'dock-hidden' under a second name.
+  const EDGE_SAFE: readonly OnboardingChromeId[] = ['circle', 'jarvis', 'dock', 'dock-hidden']
+  const catalog = [...STYLE_CHROME, ...DOCK_CHROME]
+  return EDGE_SAFE.map((id) => catalog.find((c) => c.id === id)).filter(
+    (c): c is OnboardingChromeSpec => Boolean(c)
+  )
 }
 
 function chromeCatalog(): readonly OnboardingChromeSpec[] {

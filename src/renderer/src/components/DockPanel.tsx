@@ -112,7 +112,21 @@ const Tool = memo(function Tool({
   )
 })
 
-export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
+/**
+ * BarProps plus the one distinction only the dock has to make. Parity holds: every BarProps field is
+ * still accepted, so a capability added to the bar cannot silently go missing here.
+ */
+export type DockPanelProps = BarProps & {
+  /**
+   * True when `body` is a full view (History, Review, Brain, Agenda) rather than an answer. Those views
+   * end in `min-h-0 flex-1 overflow-y-auto`: they own their scrolling and need a parent with a DEFINITE
+   * height. Given the answer body's auto-height scroller, `flex-1` had nothing to resolve against, so
+   * the content collapsed over itself and two scrollers fought the same gesture.
+   */
+  bodyFills?: boolean
+}
+
+export const DockPanel = memo(function DockPanel(props: DockPanelProps): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const [modeOpen, setModeOpen] = useState(false)
@@ -436,6 +450,12 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
       {/* The only scroller. min-h-0 is load-bearing: without it a long answer pushes the composer off
           the bottom of a fixed-height window instead of scrolling inside this zone. */}
       <div className="dock-zone relative min-h-0 flex-1">
+        {props.bodyFills ? (
+          // A full view owns its scrolling: give it a definite-height host and stay out of its way.
+          // No maxHeight, no second scroller, and no edge mask, which would fade content against a
+          // container that never moves.
+          <div className="flex h-full min-h-0 flex-1 flex-col">{props.body}</div>
+        ) : (
         <div
           ref={bodyRef}
           data-overflowing={overflowing ? '1' : '0'}
@@ -467,6 +487,7 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
           )}
           </div>
         </div>
+        )}
 
         {/* Mode opens INSIDE the panel, not as an absolutely-positioned popover: the dock window is a
             fixed size owned by main, so a popover escaping the surface would simply be clipped. */}

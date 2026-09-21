@@ -116,12 +116,15 @@ describe('onboarding appearance — 2.0 two-step', () => {
     expect(onboardingChromeForPlacement('top-center').map((c) => c.id)).toEqual(styles)
     // Tony voice 2026-09-20: same circle-picker styles on Right; dock stays Settings-only.
     // Right-edge park is geometry (2f06669e), not "dock-only cards".
-    expect(onboardingChromeForPlacement('right-edge').map((c) => c.id)).toEqual(styles)
-    expect(onboardingChromeForPlacement('top-center').map((c) => c.title).join(' ')).not.toMatch(/Island/)
-    const all = [
-      ONBOARDING_PLACEMENT_HEADING,
-      ONBOARDING_CHROME_HEADING,
-      ...Object.values(ONBOARDING_PLACEMENT_COPY).flatMap((c) => [c.title, c.desc]),
+    // The right edge drops the two FULL-bar styles: an 880-wide strip is not an edge sidecar, and
+    // choosing one saved a top-centre chrome against a right-edge placement (the mid-screen sliver).
+    // Circle and Jarvis stay, because their rest is a 41px circle that sits on an edge fine.
+    expect(onboardingChromeForPlacement('right-edge').map((c) => c.id)).toEqual([
+      'circle',
+      'jarvis',
+      'dock',
+      'dock-hidden'
+    ]),
       ...onboardingChromeForPlacement('top-center').flatMap((c) => [c.title, c.desc]),
       ...onboardingChromeForPlacement('right-edge').flatMap((c) => [c.title, c.desc])
     ].join(' ')

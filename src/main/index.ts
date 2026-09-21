@@ -191,6 +191,7 @@ import {
   hoverWatchRestRect,
   overlayRestSize,
   OVERLAY_DOCK_PANEL,
+  dockPanelRectAnchoredTo,
   normalizeRightEdgeY,
   overlayPlacementPosition,
   resolveOverlayPlacement,
@@ -3161,7 +3162,14 @@ function restoreBarWidth(): void {
   currentWidth = revealWidthPx
   const placement = resolvedOverlayPlacementForDisplay(display)
   let position: { x: number; y: number }
-  if (placement === 'right-edge') {
+  if (placement === 'right-edge' && layout === 'dock') {
+    // Grow the panel around the sliver that is already on screen. Re-deriving a Y from the same
+    // normalized value through a height-dependent range put the two rects in different places, which
+    // made the resting pill jump the instant the dock opened.
+    const anchored = dockPanelRectAnchoredTo(b, getDisplayMetrics(display))
+    position = { x: anchored.x, y: anchored.y }
+    revealedHeight = anchored.height
+  } else if (placement === 'right-edge') {
     position = overlayPositionForDisplay(revealWidthPx, revealedHeight, layout, display, ISLAND_TOP_MARGIN)
   } else {
     // Preserve the historic top-center path verbatim.
