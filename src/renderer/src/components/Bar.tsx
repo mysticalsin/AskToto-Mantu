@@ -604,7 +604,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           )}
         </div>
     ),
-    [expanded, hasAnswer, props.onBack, props.screenCapturedAt, props.listening, props.paused, props.captureDegraded, props.value, props.onChange, props.canPrewarm, props.onSubmit, props.busy, props.onToggleListen, props.onStop]
+    [expanded, hasAnswer, props.onBack, props.screenCapturedAt, props.listening, props.paused, props.captureDegraded, props.captureHealth, props.noSpeechWarning, props.value, props.onChange, props.canPrewarm, props.onSubmit, props.busy, props.onToggleListen, props.onStop]
   )
 
   const toolbarRow = useMemo(
