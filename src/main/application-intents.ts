@@ -1,26 +1,38 @@
 import { z } from 'zod'
 import type { ApplicationKind, ApplicationView, CandidateSetVersion } from './application-catalog-view'
 
-/** Only ordinary JSON records cross this boundary. Inspect descriptors before Zod
- * reads values, so inherited fields and accessors never become typed intent data.
+/** Zod itself probes then/catch before custom validators run. Screen and copy
+ * descriptors outside every Zod entry point, including nested candidateSet data.
+ * Null-prototype copies contain only primitive values and the one allowed record.
  */
-const JsonRecordSchema = z.custom<Record<string, unknown>>((value: unknown) => {
+function screenedRecord(value: unknown, nestedKey?: 'candidateSet'): Record<string, unknown> | null {
   try {
-    if (typeof value !== 'object' || value === null || Object.getPrototypeOf(value) !== Object.prototype) return false
-    return Reflect.ownKeys(value).every(key => {
-      if (typeof key !== 'string' || ['__proto__', 'constructor', 'prototype'].includes(key)) return false
+    if (typeof value !== 'object' || value === null || Object.getPrototypeOf(value) !== Object.prototype) return null
+    const copy: Record<string, unknown> = Object.create(null)
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string' || ['__proto__', 'constructor', 'prototype'].includes(key)) return null
       const descriptor = Object.getOwnPropertyDescriptor(value, key)
-      return descriptor !== undefined && descriptor.enumerable === true && 'value' in descriptor
-    })
-  } catch { return false }
-}, 'Expected an ordinary JSON record')
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return null
+      const field: unknown = descriptor.value
+      if (key === nestedKey) {
+        const nested = screenedRecord(field)
+        if (!nested) return null
+        copy[key] = nested
+      } else {
+        if (field !== null && !['string', 'number', 'boolean', 'undefined'].includes(typeof field)) return null
+        copy[key] = field
+      }
+    }
+    return copy
+  } catch { return null }
+}
 
 // Match the existing catalog's public HMAC identity and candidate-set formats.
 const ApplicationIdSchema = z.string().regex(/^app_[a-f0-9]{64}$/) satisfies z.ZodType<ApplicationView['id']>
-export const CandidateSetVersionSchema = JsonRecordSchema.pipe(z.object({
+const CandidateSetVersionSchema = z.object({
   revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   digest: z.string().regex(/^[a-f0-9]{64}$/)
-}).strict()).readonly() satisfies z.ZodType<CandidateSetVersion, z.ZodTypeDef, unknown>
+}).strict().readonly() satisfies z.ZodType<CandidateSetVersion>
 
 const DisplayNameQuerySchema = z.string().min(1).max(120).refine(value =>
   value.trim().length > 0 &&
@@ -35,12 +47,12 @@ const target = { applicationId: ApplicationIdSchema, candidateSet: CandidateSetV
  * Future main-owned proposal/execution code must resolve and revalidate the catalog
  * binding and independently obtain any required confirmation.
  */
-export const ApplicationIntentSchema = JsonRecordSchema.pipe(z.discriminatedUnion('operation', [
+const ApplicationIntentSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('apps.list'), query: DisplayNameQuerySchema.optional() }).strict(),
   z.object({ operation: z.literal('apps.open'), ...target }).strict(),
   z.object({ operation: z.literal('apps.focus'), ...target }).strict(),
   z.object({ operation: z.literal('apps.quit'), ...target, mode: z.literal('graceful') }).strict()
-])).readonly()
+]).readonly()
 
 export type ApplicationIntent = z.infer<typeof ApplicationIntentSchema>
 export type ApplicationListIntent = Extract<ApplicationIntent, { operation: 'apps.list' }>
@@ -49,8 +61,12 @@ export type ApplicationFocusIntent = Extract<ApplicationIntent, { operation: 'ap
 export type ApplicationQuitIntent = Extract<ApplicationIntent, { operation: 'apps.quit' }>
 
 /** Untrusted input is deliberately separate from the inferred typed intent API. */
-export function parseApplicationIntent(input: unknown) {
-  return ApplicationIntentSchema.safeParse(input)
+export function parseApplicationIntent(input: unknown): z.SafeParseReturnType<unknown, ApplicationIntent> {
+  const screened = screenedRecord(input, 'candidateSet')
+  if (!screened) return { success: false, error: new z.ZodError([
+    { code: 'custom', path: [], message: 'Expected ordinary JSON intent data without accessors or native objects' }
+  ]) }
+  return ApplicationIntentSchema.safeParse(screened)
 }
 
 const capabilities = Object.freeze({

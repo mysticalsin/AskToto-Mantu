@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { ApplicationCatalog } from './application-catalog'
-import { ApplicationIntentSchema, classifyApplicationIntent, parseApplicationIntent } from './application-intents'
+import { classifyApplicationIntent, parseApplicationIntent } from './application-intents'
+import * as applicationIntents from './application-intents'
 
 vi.mock('node:child_process', () => { throw new Error('Intent contracts must not import process authority') })
 vi.mock('child_process', () => { throw new Error('Intent contracts must not import process authority') })
@@ -12,6 +13,11 @@ const candidateSet = { revision: 1, digest: 'b'.repeat(64) }
 const open = { operation: 'apps.open', applicationId, candidateSet }
 const targeted = ['apps.open', 'apps.focus', 'apps.quit'] as const
 const makeIntent = (operation: typeof targeted[number]) => ({ ...open, operation, ...(operation === 'apps.quit' ? { mode: 'graceful' } : {}) })
+const parseValid = (input: unknown) => {
+  const result = parseApplicationIntent(input)
+  if (!result.success) throw result.error
+  return result.data
+}
 
 describe('application intent input boundary', () => {
   it.each([
@@ -39,6 +45,12 @@ describe('application intent input boundary', () => {
     expect(Object.prototype).not.toHaveProperty('polluted')
   })
 
+  it('rejects object-literal prototype manipulation at either level', () => {
+    expect(parseApplicationIntent({ __proto__: { polluted: true }, operation: 'apps.list' }).success).toBe(false)
+    expect(parseApplicationIntent({ ...open, candidateSet: { __proto__: { polluted: true }, ...candidateSet } }).success).toBe(false)
+    expect(Object.prototype).not.toHaveProperty('polluted')
+  })
+
   it('rejects inherited fields, altered prototypes, symbols, accessors and non-enumerable keys without invoking getters', () => {
     const getter = vi.fn(() => 'apps.list')
     const accessor = Object.defineProperty({}, 'operation', { enumerable: true, get: getter })
@@ -47,8 +59,42 @@ describe('application intent input boundary', () => {
     const values = [Object.create(open), Object.assign(Object.create(null), open), accessor, hidden,
       { ...open, [Symbol('extra')]: true }, { ...open, candidateSet: Object.create(candidateSet) },
       { ...open, candidateSet: Object.assign(Object.create(null), candidateSet) }, { ...open, candidateSet: versionAccessor }]
-    for (const value of values) expect(ApplicationIntentSchema.safeParse(value).success).toBe(false)
+    for (const value of values) expect(parseApplicationIntent(value).success).toBe(false)
     expect(getter).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['top', 'then', false], ['top', 'then', true], ['top', 'catch', false], ['top', 'catch', true],
+    ['nested', 'then', false], ['nested', 'then', true], ['nested', 'catch', false], ['nested', 'catch', true]
+  ] as const)('rejects %s %s getters before Zod sees them (throwing=%s)', (level, key, throws) => {
+    const getter = vi.fn(() => {
+      if (throws) throw new Error('Accessor must not run')
+      return undefined
+    })
+    const record = Object.defineProperty(level === 'top' ? { operation: 'apps.list' } : { ...candidateSet }, key,
+      { enumerable: true, get: getter })
+    // Zod probes catch only when then is a function.
+    if (key === 'catch') Object.defineProperty(record, 'then', { enumerable: true, value: () => undefined })
+    const input = level === 'top' ? record : { ...open, candidateSet: record }
+    let result: ReturnType<typeof parseApplicationIntent> | undefined
+    expect(() => { result = parseApplicationIntent(input) }).not.toThrow()
+    expect(result?.success).toBe(false)
+    expect(getter).not.toHaveBeenCalled()
+  })
+
+  it('rejects nested objects masquerading as primitive fields without probing their getters', () => {
+    const getter = vi.fn(() => { throw new Error('Accessor must not run') })
+    const value = Object.defineProperty({}, 'then', { enumerable: true, get: getter })
+    for (const input of [{ operation: value }, { operation: 'apps.list', query: value },
+      { ...open, applicationId: value }, { ...open, candidateSet: { ...candidateSet, revision: value } },
+      { ...open, candidateSet: { ...candidateSet, digest: value } }]) {
+      expect(() => expect(parseApplicationIntent(input).success).toBe(false)).not.toThrow()
+    }
+    expect(getter).not.toHaveBeenCalled()
+  })
+
+  it('exports no unguarded schema or alternative raw-input entry point', () => {
+    expect(Object.keys(applicationIntents).sort()).toEqual(['classifyApplicationIntent', 'parseApplicationIntent'])
   })
 
   it.each(['Notes', 'com.apple.Notes', 'Microsoft.Notes!App', '/Applications/Notes.app', 'C:\\Notes.exe', 'notes.exe', 'https://example.com', `app_${'A'.repeat(64)}`, `app_${'a'.repeat(63)}`, `app_${'a'.repeat(65)}`, 'a'.repeat(5000)])('rejects non-catalog target %s', applicationId => {
@@ -98,7 +144,7 @@ describe('application intent input boundary', () => {
 
   it('copies and freezes accepted intent and version without freezing or mutating the caller', () => {
     const input = { ...open, candidateSet: { ...candidateSet } }
-    const parsed = ApplicationIntentSchema.parse(input)
+    const parsed = parseValid(input)
     expect(parsed).not.toBe(input)
     expect(Object.isFrozen(input)).toBe(false)
     expect(Object.isFrozen(parsed)).toBe(true)
@@ -112,19 +158,19 @@ describe('application intent input boundary', () => {
 
 describe('pure capability/risk classification', () => {
   it.each([['apps.list', 'R0', 'selection'], ['apps.open', 'R1', 'proposal'], ['apps.focus', 'R1', 'proposal'], ['apps.quit', 'R2', 'proposal']] as const)('classifies %s without granting authority', (operation, risk, stage) => {
-    const intent = ApplicationIntentSchema.parse(operation === 'apps.list' ? { operation } : makeIntent(operation))
+    const intent = parseValid(operation === 'apps.list' ? { operation } : makeIntent(operation))
     expect(classifyApplicationIntent(intent, 'notes')).toEqual({ operation, risk, stage, executable: false })
   })
 
   it.each(['terminal', 'system-admin', 'installer', 'credential-security', 'camera-media-capture', 'unknown'] as const)('refuses restricted app kind %s', kind => {
-    for (const operation of targeted) expect(classifyApplicationIntent(ApplicationIntentSchema.parse(makeIntent(operation)), kind)).toBeNull()
+    for (const operation of targeted) expect(classifyApplicationIntent(parseValid(makeIntent(operation)), kind)).toBeNull()
   })
 
   it('requires an eligible kind for targeted proposals and refuses runtime-forged generic operations', () => {
-    const intent = ApplicationIntentSchema.parse(open)
+    const intent = parseValid(open)
     expect(classifyApplicationIntent(intent)).toBeNull()
     for (const kind of ['notes', 'browser', 'document-editor'] as const) expect(classifyApplicationIntent(intent, kind)?.risk).toBe('R1')
-    expect(classifyApplicationIntent(ApplicationIntentSchema.parse({ operation: 'apps.list' }))?.risk).toBe('R0')
+    expect(classifyApplicationIntent(parseValid({ operation: 'apps.list' }))?.risk).toBe('R0')
     // Runtime callers cannot elevate a forged typed value into a capability.
     expect(classifyApplicationIntent({ operation: 'apps.execute' } as never, 'notes')).toBeNull()
     expect(classifyApplicationIntent(intent, 'toString' as never)).toBeNull()
@@ -136,7 +182,7 @@ describe('pure capability/risk classification', () => {
       native: { platform: 'darwin', bundlePath: '/Applications/Notes.app', bundleId: 'com.example.notes', fingerprint: 'build-1' }
     }] } })
     const snapshot = await catalog.snapshot()
-    const intent = ApplicationIntentSchema.parse({ operation: 'apps.open', applicationId: snapshot.applications[0].id,
+    const intent = parseValid({ operation: 'apps.open', applicationId: snapshot.applications[0].id,
       candidateSet: { revision: snapshot.revision, digest: snapshot.digest } })
     if (intent.operation === 'apps.list') throw new Error('Expected targeted intent')
     expect((await catalog.revalidate(intent.applicationId, intent.candidateSet)).status).toBe('valid')
