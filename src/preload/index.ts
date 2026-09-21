@@ -195,7 +195,7 @@ const api = {
     samples: Float32Array,
     speaker: string,
     startedAt?: number
-  ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
+  ): Promise<string | { text: string; name?: string; echo?: boolean; unavailable?: boolean }> =>
     ipcRenderer.invoke(IPC.parakeetFeed, { samples, speaker, startedAt }),
   onParakeetProgress: (cb: (pct: number) => void): (() => void) => {
     const h = (_e: unknown, d: { pct: number }): void => cb(d.pct)
@@ -207,8 +207,15 @@ const api = {
     samples: Float32Array,
     speaker: string,
     startedAt?: number
-  ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
+  ): Promise<string | { text: string; name?: string; echo?: boolean; unavailable?: boolean }> =>
     ipcRenderer.invoke(IPC.appleSpeechFeed, { samples, speaker, startedAt }),
+  // Cap2 ear pre-flight: raise the macOS mic prompt (main-side askForMediaAccess — the renderer's
+  // getUserMedia gets a stream of silence instead of an error when that grant was never made) and
+  // report which wake ASR engines can actually run, so a dead ear is visible rather than silent.
+  cap2EarPrepare: (): Promise<{
+    microphone: string
+    engines: { parakeet: boolean; apple: boolean }
+  }> => ipcRenderer.invoke(IPC.cap2EarPrepare),
   // Cloud STT live WS (main-side Nova-3 / Soniox). Credentials never enter the renderer.
   cloudSttStart: (opts: {
     provider: string
@@ -546,6 +553,26 @@ const api = {
   licenseConfig: (payload: LicenseConfigPayload): Promise<LicenseConfigResult> =>
     ipcRenderer.invoke(IPC.licenseConfig, payload),
 
+
+  // Métis 2.0 Cap 2 — command session pill / local stop. Transcript ingestion is main-owned.
+  metisCommandStop: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.metisCommandStop),
+  /** Feel/prove only — main registers handler when ASKTOTO_CAP2_PROVE=1. */
+  cap2ProveWake: (): Promise<{ pillVisible: boolean; active: boolean; phase: string | null }> =>
+    ipcRenderer.invoke('cap2:proveWake'),
+  onMetisCommandState: (
+    cb: (state: {
+      phase: string
+      active: boolean
+      pillVisible: boolean
+      pillCopy: string
+      liveTranscript: string
+      chime: 'none' | 'single' | 'double'
+    }) => void
+  ): (() => void) => {
+    const listener = (_: unknown, state: Parameters<typeof cb>[0]): void => cb(state)
+    ipcRenderer.on(IPC.metisCommandState, listener)
+    return () => ipcRenderer.removeListener(IPC.metisCommandState, listener)
+  }
 }
 
 contextBridge.exposeInMainWorld('toto', api)

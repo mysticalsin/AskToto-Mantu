@@ -3,6 +3,9 @@
  * Keeps index.ts thin. Pack HOLD. OAuth LAST.
  */
 
+import type { BrowserWindow } from 'electron'
+import { ipcMain } from 'electron'
+import { IPC } from '@shared/ipc'
 import { resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
 import { createMetisCommandRuntime, type MetisCommandRuntime } from './metis-command-runtime'
 import type { PublicSettings } from '@shared/ipc'
@@ -14,15 +17,36 @@ export function getMetisCommandRuntime(): MetisCommandRuntime | null {
 }
 
 export function ensureMetisCommandRuntime(opts: {
+  getWindow: () => BrowserWindow | null
   getSettings: () => PublicSettings | { operatorUrl?: string; operatorLicenseToken?: string; operatorIngestSecret?: string }
   /** Optional: decisionProviders.jev from last heartbeat (Cap1). Default false = deterministic only. */
   jevEnabled?: () => boolean
+  /** Main must unpark / opacity-1 / top-center host when Cap2 pill arms (dock park is invisible). */
+  onCommandSession?: (live: boolean) => void
 }): MetisCommandRuntime {
   if (runtime) return runtime
+  let wasLive = false
   runtime = createMetisCommandRuntime({
-    // There is intentionally no renderer event in v1.9.5. A future capability must supply a
-    // main-owned capture and an explicit UI confirmation boundary before this runtime is registered.
-    onState: () => {},
+    onState: (state) => {
+      const w = opts.getWindow()
+      w?.webContents.send(IPC.metisCommandState, {
+        phase: state.phase,
+        active: state.active,
+        pillVisible: state.pillVisible,
+        pillCopy: state.pillCopy,
+        liveTranscript: state.liveTranscript,
+        chime: state.chime
+      })
+      const live = state.pillVisible === true
+      if (live !== wasLive) {
+        wasLive = live
+        try {
+          opts.onCommandSession?.(live)
+        } catch {
+          /* ignore */
+        }
+      }
+    },
     jevEnabled: () => opts.jevEnabled?.() === true,
     operatorDecideAuth: () => {
       const s = opts.getSettings()
@@ -34,4 +58,20 @@ export function ensureMetisCommandRuntime(opts: {
     }
   })
   return runtime
+}
+
+export function registerMetisCommandIpc(opts: {
+  assertMainWindow: (e: Electron.IpcMainInvokeEvent) => void
+}): void {
+  ipcMain.handle(IPC.metisCommandStop, (e) => {
+    opts.assertMainWindow(e)
+    runtime?.stopLocal('escape')
+    return { ok: true as const }
+  })
+}
+
+/** Feed only main-owned local-microphone ASR. Wake is required before desktop actions. */
+export function ingestMetisCommandFromAsr(text: string): void {
+  if (!runtime || !text.trim()) return
+  runtime.ingestTranscript(text, 'command')
 }

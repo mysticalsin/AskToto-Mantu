@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
 const ipc = readFileSync(join(__dirname, '../shared/ipc.ts'), 'utf8')
-const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
+const register = readFileSync(join(__dirname, 'metis-command-register.ts'), 'utf8')
 
 function between(source: string, start: string, end: string): string {
   const from = source.indexOf(start)
@@ -19,34 +19,43 @@ describe('Cap2 command authority boundary', () => {
   it('does not expose a renderer IPC that can manufacture desktop commands', () => {
     expect(preload).not.toContain('metisCommandIngest')
     expect(ipc).not.toContain('metisCommandIngest')
-    expect(preload).not.toContain('metisCommandStop')
-    expect(preload).not.toContain('onMetisCommandState')
-    expect(ipc).not.toContain('metisCommandState')
-    expect(ipc).not.toContain('metisCommandStop')
+    expect(register).not.toContain('IPC.metisCommandIngest')
   })
 
-  it('keeps cloud STT transcript-only because renderer PCM has no hardware provenance', () => {
+  it('accepts command text only from the current local-microphone cloud-STT track', () => {
     const callbacks = between(main, 'onFinal: (line) => {', 'onError: (message) => {')
     expect(callbacks).toMatch(/if \(!isCurrentCloudSttOwner\(owner, e\.sender\)\) return/)
-    expect(callbacks).toMatch(/e\.sender\.send\(IPC\.cloudSttFinal, line\)/)
-    expect(callbacks).toMatch(/e\.sender\.send\(IPC\.cloudSttInterim, \{ channel, text \}\)/)
-    expect(callbacks).not.toContain('ingestMetisCommandFromAsr')
-    expect(main).not.toContain('ingestMetisCommandFromAsr')
+    expect(callbacks).toMatch(/line\.speaker === 'you'/)
+    expect(callbacks).toMatch(/channel === 'you'/)
+    expect(callbacks).toMatch(/isCurrentCloudSttCommandOwner\(owner, e\.sender\)/)
+    expect(callbacks).toMatch(/ingestMetisCommandFromAsr\(line\.text\)/)
+    expect(callbacks).toMatch(/ingestMetisCommandFromAsr\(text\)/)
+    expect(callbacks).not.toContain("'meeting'")
   })
 
-  it('keeps native ASR transcript-only so delayed local decodes cannot command-execute', () => {
+  it('revokes command authority before graceful stop can emit final provider audio', () => {
+    const stop = between(main, 'ipcMain.handle(IPC.cloudSttStop', 'ipcMain.handle(IPC.cloudSttPush')
+    expect(stop).toContain('cloudSttCommandOwner = null')
+    expect(stop).toContain("getMetisCommandRuntime()?.reset('cloud_stt_stop')")
+  })
+
+  it('feeds Cap2 from local-mic Parakeet/Apple YOU tracks', () => {
     const para = between(main, 'ipcMain.handle(IPC.parakeetFeed', 'ipcMain.handle(IPC.appleSpeechFeed')
     expect(para).toMatch(/p\.speaker === 'you'/)
-    expect(para).not.toContain('ingestMetisCommandFromAsr')
+    expect(para).toContain('ingestMetisCommandFromAsr(text)')
     const apple = between(main, 'ipcMain.handle(IPC.appleSpeechFeed', 'ipcMain.handle(IPC.cloudSttStart')
     expect(apple).toMatch(/p\.speaker === 'you'/)
-    expect(apple).not.toContain('ingestMetisCommandFromAsr')
+    expect(apple).toContain('ingestMetisCommandFromAsr(text)')
   })
 
-  it('does not open a second always-on microphone stream or render its competing status chip', () => {
-    expect(app).not.toContain('startMetisCommandEar')
-    expect(app).not.toContain('data-metis-command-ear-chip')
-    expect(app).not.toContain('CommandListeningPill')
-  })
+})
 
+describe('Cap2 command pill host (dock park must not hide it)', () => {
+  it('main reveals a top-center host when Cap2 session goes live', () => {
+    const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const reg = readFileSync(join(__dirname, 'metis-command-register.ts'), 'utf8')
+    expect(index).toContain('function revealForMetisCommandPill')
+    expect(index).toContain('onCommandSession:')
+    expect(reg).toContain('onCommandSession?:')
+  })
 })

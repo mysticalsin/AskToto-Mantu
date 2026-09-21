@@ -79,7 +79,8 @@ describe('Cap2 Ear stays top-center (Cap4 dock must not steal it)', () => {
   it('App mounts CommandListeningPill outside the AskSurface swap', () => {
     // Cap4 swaps Bar↔DockPanel for Ask; the Ear pill must remain a sibling, not inside DockPanel.
     expect(app).toContain('<CommandListeningPill')
-    expect(app).toContain("AskSurface = overlayLayout === 'dock'")
+    // Dock lane types AskSurface as ComponentType<DockPanelProps>; SoT used untyped.
+    expect(app).toMatch(/AskSurface[\s\S]*?overlayLayout === 'dock'/)
     const pillIdx = app.indexOf('<CommandListeningPill')
     const dockImportUses = app.indexOf('DockPanel')
     expect(pillIdx).toBeGreaterThan(0)

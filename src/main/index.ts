@@ -592,6 +592,13 @@ import { BoundedSet } from './bounded-set'
 import { installEgressGuard } from './net/egress-guard'
 import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
 import { startOperatorOverlayPoll } from './operator-overlay'
+import { coerceFloat32Pcm } from './asr-feed-pcm'
+import {
+  ensureMetisCommandRuntime,
+  getMetisCommandRuntime,
+  ingestMetisCommandFromAsr,
+  registerMetisCommandIpc
+} from './metis-command-register'
 import { activateOperatorLicenseToken } from './operator-license-activate'
 import { operatorGate } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
@@ -626,7 +633,7 @@ import {
   parakeetAddonError
 } from './parakeet'
 import { createListeningStateHandler } from './listening-state-ipc'
-import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
+import { appleSpeechAvailable, appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
 import {
   startCloudSttLive,
   stopCloudSttLive,
@@ -1035,6 +1042,7 @@ function isRecentlyRetiredOverlaySender(event: Electron.IpcMainInvokeEvent): boo
 type CloudSttIpcOwner = { webContentsId: number; generation: number; captureId?: string }
 let cloudSttIpcGeneration = 0
 let cloudSttIpcOwner: CloudSttIpcOwner | null = null
+let cloudSttCommandOwner: CloudSttIpcOwner | null = null
 
 /** Only the renderer that opened the current live-STT session may receive its tail callbacks. */
 function isCurrentCloudSttOwner(
@@ -1049,11 +1057,21 @@ function isCurrentCloudSttOwner(
   )
 }
 
+/** Commands are an opt-in privilege of the current local-microphone capture only. */
+function isCurrentCloudSttCommandOwner(
+  owner: CloudSttIpcOwner,
+  sender: { id: number; isDestroyed: () => boolean }
+): boolean {
+  return cloudSttCommandOwner === owner && isCurrentCloudSttOwner(owner, sender)
+}
+
 /** Renderer replacement/close is a hard boundary: never leave cloud sockets or old callbacks alive. */
 function invalidateCloudSttOwner(webContentsId?: number): void {
   if (webContentsId !== undefined && cloudSttIpcOwner?.webContentsId !== webContentsId) return
   cloudSttIpcGeneration += 1
   cloudSttIpcOwner = null
+  cloudSttCommandOwner = null
+  getMetisCommandRuntime()?.reset('cloud_stt_owner_invalidated')
   void stopCloudSttLive()
 }
 // Fresh-question boundary state (written by IPC.listeningState / IPC.askResetContext / IPC.askStart, all
@@ -2151,7 +2169,13 @@ function applyOverlaySurfaceChrome(): void {
     /* headless */
   }
   try {
-    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized, liveDockRest()))
+    win.setOpacity(
+      // Cap2: a parked dock/hide paints at opacity 0. While the listen pill owns the window the orb
+      // must be visible no matter which park path re-applies chrome (Tony FAIL: no orb on Hey Métis).
+      metisCommandPillLive
+        ? 1
+        : hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized, liveDockRest())
+    )
   } catch {
     /* headless */
   }
@@ -3101,6 +3125,57 @@ function anchorTopCenter(): void {
   win.setBounds({ x, y, width: b.width, height: b.height }, false)
 }
 
+/** One line per dead wake engine per launch. A deaf Cap2 ear must be findable in the log without
+ *  drowning it: the ear feeds a window a second. */
+const cap2EngineLogged = new Set<string>()
+function logCap2EngineOnce(engine: 'parakeet' | 'apple', reason: string): void {
+  if (cap2EngineLogged.has(engine)) return
+  cap2EngineLogged.add(engine)
+  mainLog.info(`[cap2] wake engine unavailable: ${engine} (${reason})`)
+}
+
+/** True while the Cap2 listen pill owns the overlay window, so park opacity must stay 1. */
+let metisCommandPillLive = false
+
+/** Cap2: dock/island park is opacity-0 or a right-edge sliver — the listen pill cannot appear there.
+ *  Unpark to a top-center host so Jarvis-style Hi Métis is on-screen (Tony FAIL 12c295e9 / b7a4b55c). */
+function revealForMetisCommandPill(): void {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
+  cancelOverlayLeavePark()
+  islandResting = false
+  isMinimized = false
+  applyHideClickThrough()
+  applyOverlaySurfaceChrome()
+  try {
+    if (!win.isVisible()) win.showInactive()
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setAlwaysOnTop(true, 'screen-saver')
+  } catch {
+    /* headless */
+  }
+  const display = screen.getDisplayMatching(win.getBounds())
+  const metrics = getDisplayMetrics(display)
+  const width = Math.min(640, Math.max(320, display.workArea.width - 24))
+  const height = 120
+  const y = topClamp('island', metrics, ISLAND_TOP_MARGIN)
+  const x = Math.round(display.workArea.x + (display.workArea.width - width) / 2)
+  currentWidth = width
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
+  const b = win.getBounds()
+  if (!(b.x === x && b.y === y && b.width === width && b.height === height)) {
+    win.setBounds({ x, y, width, height }, false)
+  }
+  notifyOverlayCursorHover(true)
+  mainLog.info(`[cap2] command pill host ${width}x${height}@(${x},${y})`)
+}
+
 /** Reveal from the auto-hide peek: widen to the full bar and grow height downward from the same
  *  safe Y. Leave collapse is the inverse (resizeTo with peek height, same Y). */
 function restoreBarWidth(): void {
@@ -3240,7 +3315,13 @@ function setWindowMode(): void {
     /* headless */
   }
   try {
-    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized, liveDockRest()))
+    win.setOpacity(
+      // Cap2: a parked dock/hide paints at opacity 0. While the listen pill owns the window the orb
+      // must be visible no matter which park path re-applies chrome (Tony FAIL: no orb on Hey Métis).
+      metisCommandPillLive
+        ? 1
+        : hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized, liveDockRest())
+    )
   } catch {
     /* headless / lifted placement stub */
   }
@@ -4955,6 +5036,62 @@ function registerIpc(): void {
       operatorActivationInFlight = false
     }
   })
+  // Métis 2.0 Cap 2 — wake-word command session (deterministic with Jev off).
+  ensureMetisCommandRuntime({
+    getWindow: () => win,
+    getSettings: () => getSettings(),
+    jevEnabled: () => false, // Cap1 heartbeat flag parse lands with feel E2E; deterministic path required.
+    onCommandSession: (live) => {
+      metisCommandPillLive = live
+      if (live) revealForMetisCommandPill()
+      else scheduleOverlayLeavePark()
+    }
+  })
+  registerMetisCommandIpc({
+    assertMainWindow
+  })
+  mainLog.info(
+    `[cap2] wake engines parakeet=${parakeetModelReady() ? 'ready' : 'missing'} apple=${appleSpeechAvailable() ? 'ready' : 'missing'}`
+  )
+  // Cap2 ear pre-flight. macOS hands a renderer getUserMedia stream of pure silence — not an error —
+  // when the mic TCC grant was never made, which is exactly the "I say Hey Métis and nothing happens"
+  // failure with no error anywhere. Ask for the grant from main (the only side that can) and tell the
+  // ear which engines can actually transcribe so it can show a deaf ear instead of failing silent.
+  ipcMain.handle(IPC.cap2EarPrepare, async (e) => {
+    assertMainWindow(e)
+    if (process.platform === 'darwin' && systemPreferences.getMediaAccessStatus('microphone') === 'not-determined') {
+      await systemPreferences.askForMediaAccess('microphone').catch(() => false)
+    }
+    const engines = { parakeet: parakeetModelReady(), apple: appleSpeechAvailable() }
+    if (!engines.parakeet && !engines.apple) mainLog.warn('[cap2] no wake ASR engine available — Hey Métis cannot be heard')
+    return { microphone: getPlatformPermissions().microphone, engines }
+  })
+
+  // Dev/feel only: prove wake→pillVisible→host without mic (Ultron: no UI-only tips).
+  if (process.env.ASKTOTO_CAP2_PROVE === '1') {
+    const proveWake = () => {
+      ingestMetisCommandFromAsr('Hey Métis')
+      const st = getMetisCommandRuntime()?.getState()
+      mainLog.info(`[cap2] proveWake pillVisible=${st?.pillVisible} active=${st?.active}`)
+      return {
+        pillVisible: st?.pillVisible === true,
+        active: st?.active === true,
+        phase: st?.phase ?? null
+      }
+    }
+    ipcMain.handle('cap2:proveWake', () => proveWake())
+    setTimeout(() => {
+      try {
+        const result = proveWake()
+        const out = process.env.ASKTOTO_CAP2_PROVE_OUT
+        if (out) writeFileSync(out, `${JSON.stringify({ ...result, at: Date.now() }, null, 2)}\n`)
+        mainLog.info(`[cap2] auto-prove done pillVisible=${result.pillVisible}`)
+      } catch (e) {
+        mainLog.warn(`[cap2] auto-prove failed: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }, 4000)
+  }
+
   // Read-only Operator status snapshot for Settings (local settings + in-memory integrations state
   // only, never touches the network) — mirrors licenseStatus's own "local settings only" contract.
   ipcMain.handle(IPC.operatorStatus, (e) => {
@@ -6294,29 +6431,57 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.parakeetFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
-    if (!requireAuth()) return ''
-    if (!takeHotPath('asr-feed')) return ''
+    if (!takeHotPath('asr-feed')) {
+      mainLog.info('[cap2] parakeetFeed drop hotpath')
+      return ''
+    }
     const p = payload as { samples?: unknown; speaker?: unknown; startedAt?: unknown }
-    if (!(p?.samples instanceof Float32Array)) return ''
+    const samples = coerceFloat32Pcm(p?.samples)
+    if (!samples) {
+      mainLog.info('[cap2] parakeetFeed drop pcm')
+      return ''
+    }
     // Cap a single feed chunk generously above the renderer's real ~6s windows (WINDOW_SEC in listen.ts) at
     // 16kHz mono — every other renderer-supplied blob in this file is bounded the same way (debriefSave,
     // openMailDraft, McpArgValueSchema); without this a malicious/malfunctioning renderer could force a
     // synchronous decode of an arbitrarily large buffer and hang or OOM the whole app.
-    if (p.samples.length > 16_000 * 30) return ''
+    if (samples.length > 16_000 * 30) return ''
+    const authed = requireAuth()
+    // Cap2 local YOU mic must still ASR+wake when SSO is sticky/unsigned — otherwise Hey Métis is silent.
+    if (p.speaker !== 'you' && !authed) return ''
+    // Tony live FAIL (tip 72c36473): the model files were absent on his Mac, so every Cap2 window
+    // rejected this invoke and the ear — which tried no other engine — heard nothing while the
+    // env-var prove path passed. Report the engine as unavailable instead of throwing: the caller
+    // then drops this engine and falls through to the next one (and the chip can say the ear is deaf).
+    if (!parakeetModelReady()) {
+      logCap2EngineOnce('parakeet', 'model files missing')
+      return { text: '', unavailable: true }
+    }
     const speakerKey = captureLiveSpeakerKey(p.startedAt)
-    const text = await parakeetTranscribe(p.samples)
+    let text: string
+    try {
+      text = await parakeetTranscribe(samples)
+    } catch (err) {
+      mainLog.warn(`[cap2] parakeet transcribe failed: ${err instanceof Error ? err.message : String(err)}`)
+      return { text: '', error: true }
+    }
     // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3): label THEM windows with a voice-derived name
     // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
     // being off/unprovisioned attaches no name and the line renders exactly as before.
     if (p.speaker === 'them') {
-      const label = await labelThemAudio(p.samples, speakerKey, 'live')
+      const label = await labelThemAudio(samples, speakerKey, 'live')
       // P2 echo defense: this window is the operator's OWN voice bleeding through the loopback —
       // drop the transcribed text rather than mislabel the operator's words as THEM.
       if (label?.echo) return { text: '', echo: true }
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
-      await observeOperatorAudio(p.samples, speakerKey)
+      if (authed) await observeOperatorAudio(samples, speakerKey)
+      // Cap2: local-mic YOU track — wake even when auth wall is up (Tony FAIL tip b634fea9).
+      if (typeof text === 'string' && text.trim()) {
+        mainLog.info(`[cap2] you-asr parakeet ${text.slice(0, 96)}`)
+        ingestMetisCommandFromAsr(text)
+      }
     }
     return { text }
   })
@@ -6327,21 +6492,40 @@ function registerIpc(): void {
   // so unlike parakeetTranscribe this needs no try/catch around the call itself.
   ipcMain.handle(IPC.appleSpeechFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
-    if (!requireAuth()) return ''
-    if (!takeHotPath('asr-feed')) return ''
+    if (!takeHotPath('asr-feed')) {
+      mainLog.info('[cap2] appleSpeechFeed drop hotpath')
+      return ''
+    }
     const p = payload as { samples?: unknown; speaker?: unknown; startedAt?: unknown }
-    if (!(p?.samples instanceof Float32Array)) return ''
+    const samples = coerceFloat32Pcm(p?.samples)
+    if (!samples) {
+      mainLog.info('[cap2] appleSpeechFeed drop pcm')
+      return ''
+    }
     // Same defensive cap as parakeetFeed — see its own comment for why.
-    if (p.samples.length > 16_000 * 30) return ''
+    if (samples.length > 16_000 * 30) return ''
+    const authed = requireAuth()
+    if (p.speaker !== 'you' && !authed) return ''
+    // Same unavailable contract as parakeetFeed: non-darwin or no mac-helper sidecar means this engine
+    // can never produce text, and the Cap2 ear must learn that once rather than per window.
+    if (!appleSpeechAvailable()) {
+      logCap2EngineOnce('apple', process.platform === 'darwin' ? 'mac-helper missing' : 'not darwin')
+      return { text: '', unavailable: true }
+    }
     const speakerKey = captureLiveSpeakerKey(p.startedAt)
     // Spoken-language hint (Settings → Audio) pins the recognizer locale; 'auto' keeps system locale.
-    const text = await appleSpeechTranscribe(p.samples, appleSpeechLocale(getSettings().asrLanguage))
+    const text = await appleSpeechTranscribe(samples, appleSpeechLocale(getSettings().asrLanguage))
     if (p.speaker === 'them') {
-      const label = await labelThemAudio(p.samples, speakerKey, 'live')
+      const label = await labelThemAudio(samples, speakerKey, 'live')
       if (label?.echo) return { text: '', echo: true } // see parakeetFeed's identical echo-defense comment above
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
-      await observeOperatorAudio(p.samples, speakerKey)
+      if (authed) await observeOperatorAudio(samples, speakerKey)
+      // Cap2: local-mic YOU track — wake even when auth wall is up (Tony FAIL tip b634fea9).
+      if (typeof text === 'string' && text.trim()) {
+        mainLog.info(`[cap2] you-asr apple ${text.slice(0, 96)}`)
+        ingestMetisCommandFromAsr(text)
+      }
     }
     return { text }
   })
@@ -6376,6 +6560,9 @@ function registerIpc(): void {
       generation: ++cloudSttIpcGeneration,
       captureId
     }
+    // A new capture revokes any previously armed command session before its callbacks can overlap.
+    cloudSttCommandOwner = null
+    getMetisCommandRuntime()?.reset('cloud_stt_replaced')
     cloudSttIpcOwner = owner
     // A fresh start is an explicit replacement, not a graceful end of the prior capture.
     const result = await replaceCloudSttSessionIfCurrent({
@@ -6402,10 +6589,16 @@ function registerIpc(): void {
             onFinal: (line) => {
               if (!isCurrentCloudSttOwner(owner, e.sender)) return
               e.sender.send(IPC.cloudSttFinal, line)
+              if (isCurrentCloudSttCommandOwner(owner, e.sender) && line.speaker === 'you' && line.text.trim()) {
+                ingestMetisCommandFromAsr(line.text)
+              }
             },
             onInterim: (channel, text) => {
               if (!isCurrentCloudSttOwner(owner, e.sender)) return
               e.sender.send(IPC.cloudSttInterim, { channel, text })
+              if (isCurrentCloudSttCommandOwner(owner, e.sender) && channel === 'you' && text.trim()) {
+                ingestMetisCommandFromAsr(text)
+              }
             },
             onError: (message) => {
               if (isCurrentCloudSttOwner(owner, e.sender)) e.sender.send(IPC.cloudSttError, { message })
@@ -6413,8 +6606,11 @@ function registerIpc(): void {
           }
         )
     })
-    if (!result.ok && cloudSttIpcOwner === owner) {
+    if (result.ok && cloudSttIpcOwner === owner) {
+      cloudSttCommandOwner = owner
+    } else if (cloudSttIpcOwner === owner) {
       cloudSttIpcOwner = null
+      cloudSttCommandOwner = null
     }
     return result
   })
@@ -6427,9 +6623,13 @@ function registerIpc(): void {
     // unscoped stops remain accepted only for a legacy owner that was started without an identity.
     if (!cloudSttRequestBelongsToOwner(owner.captureId, p.captureId)) return { timedOut: false }
     const force = p.force === true
+    // Graceful provider shutdown can still emit finals; they remain transcript-only after Stop.
+    cloudSttCommandOwner = null
+    getMetisCommandRuntime()?.reset('cloud_stt_stop')
     const result = await stopCloudSttLive({ graceful: !force, timeoutMs: 5_000 })
     if (cloudSttIpcOwner === owner) {
       cloudSttIpcOwner = null
+      cloudSttCommandOwner = null
     }
     return result
   })

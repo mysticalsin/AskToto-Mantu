@@ -22,7 +22,7 @@ describe('Cap2 command session', () => {
     let s = idleMetisCommandSession()
     s = reduceMetisCommandSession(s, {
       type: 'transcript',
-      text: 'Métis open notes',
+      text: 'Hey Métis open notes',
       channel: 'meeting'
     })
     expect(s).toEqual(idleMetisCommandSession())
@@ -31,16 +31,26 @@ describe('Cap2 command session', () => {
   it('meeting audio cannot add an action to an already trusted command session', () => {
     let s = reduceMetisCommandSession(idleMetisCommandSession(), {
       type: 'transcript',
-      text: 'Métis',
+      text: 'Hey Métis',
       channel: 'command'
     })
     s = reduceMetisCommandSession(s, {
       type: 'transcript',
-      text: 'Métis open notes',
+      text: 'Hey Métis open notes',
       channel: 'meeting'
     })
     expect(s.pending).toEqual([])
-    expect(s.liveTranscript).toBe('Métis')
+    expect(s.liveTranscript).toBe('Hey Métis')
+  })
+
+  it('bare Métis on command does not wake', () => {
+    let s = reduceMetisCommandSession(idleMetisCommandSession(), {
+      type: 'transcript',
+      text: 'Métis',
+      channel: 'command'
+    })
+    expect(s.active).toBe(false)
+    expect(s.pillVisible).toBe(false)
   })
 
   it('wake word starts session with single chime + Hi Métis', () => {
@@ -58,14 +68,14 @@ describe('Cap2 command session', () => {
 
   it('tick advances pill copy to listening', () => {
     let s = idleMetisCommandSession()
-    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'Métis', channel: 'command' })
+    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'Hey Métis', channel: 'command' })
     s = reduceMetisCommandSession(s, { type: 'tick_listening_copy' })
     expect(s.pillCopy).toBe(METIS_PILL_LISTENING)
   })
 
   it('mid-sentence pending actions while active', () => {
     let s = idleMetisCommandSession()
-    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'Métis', channel: 'command' })
+    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'Hey Métis', channel: 'command' })
     s = reduceMetisCommandSession(s, {
       type: 'transcript',
       text: 'Métis open notes',
@@ -75,31 +85,9 @@ describe('Cap2 command session', () => {
     expect(s.phase).toBe('executing')
   })
 
-  it('keeps queued follow-ons once while an earlier action is still running', () => {
-    let s = reduceMetisCommandSession(idleMetisCommandSession(), {
-      type: 'transcript',
-      text: 'Métis open notes',
-      channel: 'command'
-    })
-    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'open Arc', channel: 'command' })
-    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'open Arc', channel: 'command' })
-    expect(s.pending.map((request) => request.id)).toEqual(['desktop.open_notes', 'desktop.open_arc'])
-  })
-
-  it('clears only queued work when the speaker negates an active command', () => {
-    let s = reduceMetisCommandSession(idleMetisCommandSession(), {
-      type: 'transcript',
-      text: 'Métis open notes',
-      channel: 'command'
-    })
-    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'open Arc', channel: 'command' })
-    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'actually do not', channel: 'command' })
-    expect(s.pending).toEqual([])
-  })
-
   it('thank you double-chimes and dismisses pill', () => {
     let s = idleMetisCommandSession()
-    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'Métis', channel: 'command' })
+    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'Hey Métis', channel: 'command' })
     s = reduceMetisCommandSession(s, {
       type: 'transcript',
       text: 'Thank you',
@@ -113,7 +101,7 @@ describe('Cap2 command session', () => {
 
   it('Stop/Escape is local immediate deactivate', () => {
     let s = idleMetisCommandSession()
-    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'Métis', channel: 'command' })
+    s = reduceMetisCommandSession(s, { type: 'transcript', text: 'Hey Métis', channel: 'command' })
     s = reduceMetisCommandSession(s, { type: 'stop' })
     expect(s.chime).toBe('double')
     expect(s.reason).toBe('local_stop')

@@ -4,6 +4,8 @@ import { DockPanel, type DockPanelProps } from './components/DockPanel'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
+import { CommandListeningPill } from './components/CommandListeningPill'
+import { startMetisCommandEar, type MetisCommandEarStatus } from './lib/metis-command-ear'
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import {
@@ -283,6 +285,52 @@ export function App(): JSX.Element {
   const bootError = settingsBootError ?? auth.bootError
   // FITO-185-X: mid-wait escape on the post-onboarding Loading strip (Tony: never forever Loading).
   const [bootSlow, setBootSlow] = useState(false)
+
+  // Métis 2.0 Cap 2 — wake-word command pill (top-center). Meeting Listen ≠ command until wake.
+  const [metisCommand, setMetisCommand] = useState<{
+    phase: string
+    active: boolean
+    pillVisible: boolean
+    pillCopy: string
+    liveTranscript: string
+    chime: 'none' | 'single' | 'double'
+  }>({
+    phase: 'idle',
+    active: false,
+    pillVisible: false,
+    pillCopy: 'Hi Métis',
+    liveTranscript: '',
+    chime: 'none'
+  })
+  const [metisCommandEarStatus, setMetisCommandEarStatus] = useState<MetisCommandEarStatus>({ state: 'idle' })
+  useEffect(() => {
+    const unsub = window.toto.onMetisCommandState?.((state) => setMetisCommand(state))
+    return () => {
+      unsub?.()
+    }
+  }, [])
+
+  // Cap2 always-on ear: arm after onboardingDone (ignore sticky ?exclusiveOnboarding=1 after finish).
+  useEffect(() => {
+    const enabled = settings?.onboardingDone === true
+    const stop = startMetisCommandEar({
+      enabled,
+      // Parakeet first — feel logs proved parakeet hears — but the ear now cascades to Apple Speech
+      // per window instead of betting the whole wake path on one engine (Tony live FAIL 72c36473:
+      // Parakeet's model files were missing, so every window failed and nothing ever fell through).
+      preferApple: false,
+      isMeetingListening: () => document.documentElement.dataset.metisListening === '1',
+      onStatus: (s) => {
+        setMetisCommandEarStatus(s)
+        if (s.state === 'heard') console.info('[cap2-ear]', s.via, s.text)
+        if (s.state === 'denied' || s.state === 'error') console.warn('[cap2-ear]', s)
+      },
+      onMicDenied: () => {
+        void window.toto.openPermissionSettings('microphone')
+      }
+    })
+    return () => stop()
+  }, [settings?.onboardingDone])
 
   // ── License enforcement master switch ──────────────────────────────────────────────────────────
   // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
@@ -670,7 +718,9 @@ export function App(): JSX.Element {
   const autoHideForced = overlayHoverForced({
     updateReady: updateReady.open,
     toast: newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError || !!operatorGateNotice,
-    typedInput: input.trim().length > 0
+    typedInput: input.trim().length > 0,
+    // Cap2: Island/Dock park must not swallow the listen pill (Tony FAIL tip 12c295e9).
+    commandPill: metisCommand.pillVisible
   })
   const [autoHide, dispatchAutoHide] = useReducer(reduceAutoHide, autoHideSetting, initialAutoHideState)
   useEffect(() => {
@@ -743,6 +793,7 @@ export function App(): JSX.Element {
     overlaySpring,
     overlayRestsHidden(overlayLayout)
   )
+  const commandPillLive = metisCommand.pillVisible
   const springIdleRef = useRef(false)
   const wasRevealedRef = useRef(overlayRevealed)
   const overlayRevealedRef = useRef(overlayRevealed)
@@ -3758,6 +3809,40 @@ export function App(): JSX.Element {
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
+            <div data-metis-command-pill-host="1">
+        {/* Cap4: dock rest / OverlayPeek must not show Cap2 Ear chrome (Tony FAIL Ear error on notch). */}
+        {/* Cap2: always show ear status when armed — dock park used to hide all feedback. */}
+        {metisCommandEarStatus.state !== 'idle' || metisCommand.pillVisible || (!overlayPeeked && !(overlayLayout === 'dock' && !overlayRevealed)) ? (
+          <div
+            data-metis-command-ear-chip="1"
+            className="pointer-events-none absolute left-1/2 top-1 z-[80] -translate-x-1/2 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium tracking-wide text-white/90"
+          >
+            {metisCommandEarStatus.state === 'listening'
+              ? 'Ear on · say Hey Métis'
+              : metisCommandEarStatus.state === 'arming'
+                ? 'Ear arming…'
+                : metisCommandEarStatus.state === 'denied'
+                  ? 'Mic blocked · Privacy'
+                  : metisCommandEarStatus.state === 'heard'
+                    ? `Heard: ${'text' in metisCommandEarStatus ? metisCommandEarStatus.text.slice(0, 42) : ''}`
+                    : metisCommandEarStatus.state === 'error'
+                      ? // A deaf ear must name itself: silence with no explanation is the exact Tony FAIL.
+                        metisCommandEarStatus.reason === 'asr-engine-missing' || metisCommandEarStatus.reason === 'asr-no-text'
+                        ? 'Ear on · no ASR engine'
+                        : metisCommandEarStatus.reason === 'mic-silent'
+                          ? 'Mic silent · check input'
+                          : 'Ear error'
+                      : null}
+          </div>
+        ) : null}
+        <CommandListeningPill
+          visible={!onboardingBoot && metisCommand.pillVisible}
+          copy={metisCommand.pillCopy}
+          liveTranscript={metisCommand.liveTranscript}
+          chime={metisCommand.chime}
+          onStop={() => void window.toto.metisCommandStop?.()}
+        />
+      </div>
       {(() => {
         const toasts = (
           <>

@@ -208,6 +208,8 @@ export const IPC = {
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
   permissionsRequestUpfront: 'permissions:requestUpfront',
+  // Cap2 ear pre-flight: mic grant + live wake-ASR engine availability (see the preload comment).
+  cap2EarPrepare: 'cap2:earPrepare',
   // Settings / overlay self-check: first pass is the OS probe; second pass is a real vision ask.
   // Result stays on this device — never forwarded to a teammate, CRM, or askStart overlay chat.
   screenCaptureCheck: 'permissions:screenCaptureCheck',
@@ -296,7 +298,10 @@ export const IPC = {
   outlookCreateEvent: 'outlook:createEvent',
   mcpWriteTargets: 'mcp:writeTargets',
   /** Wave 2 — clear the one-shot last-failover chip after the user dismisses it. */
-  dismissFailoverNotice: 'settings:dismissFailoverNotice'
+  dismissFailoverNotice: 'settings:dismissFailoverNotice',
+  // Métis 2.0 Cap 2 — wake-word command session state + local Stop control.
+  metisCommandState: 'metisCommand:state',
+  metisCommandStop: 'metisCommand:stop'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals.
