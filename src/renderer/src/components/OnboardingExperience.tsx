@@ -1163,10 +1163,16 @@ export function OnboardingExperience({
   }
   const pickPlacement = async (id: OverlayPlacement): Promise<void> => {
     if (appearanceSave.busy || placementLocked) return
+    const previousPlacement = placement
+    const previousPlacementWasUserSelected = placementUserSelectedRef.current
+    const previousChromeId = chromeId
+    placementUserSelectedRef.current = true
+    setPlacement(id)
+    // Picking a placement resets the style to that placement's default, because the styles on offer
+    // depend on it: the right edge has no full bar, so carrying a bar selection across would leave a
+    // choice selected that the next row no longer shows.
+    setChromeId(defaultChromeId(id))
     if (!patch) {
-      placementUserSelectedRef.current = true
-      setPlacement(id)
-      setChromeId(defaultChromeId(id))
       return
     }
     setAppearanceSave({ busy: true, error: null })
@@ -1176,11 +1182,11 @@ export function OnboardingExperience({
         (next) => next.overlayPlacement === id
       )
       if (!saved) throw new Error('placement was not saved')
-      placementUserSelectedRef.current = true
-      setPlacement(id)
-      setChromeId(defaultChromeId(id))
     } catch {
-      setAppearanceSave({ busy: false, error: "Métis couldn't save this appearance. Try again." })
+      placementUserSelectedRef.current = previousPlacementWasUserSelected
+      setPlacement(previousPlacement)
+      setChromeId(previousChromeId)
+      setAppearanceSave({ busy: false, error: "Métis couldn't save this position. Try again." })
       return
     }
     setAppearanceSave({ busy: false, error: null })

@@ -1,148 +1,420 @@
-// Physical end-to-end smoke test: launches the REAL built Electron app (real main + preload + IPC)
-// in an isolated temp profile and drives it like a user — boot, onboarding, idle bar, minimize/expand,
-// open panels — asserting each step and screenshotting. Run: node scripts/e2e-smoke.mjs
-// Requires a prior `npm run build` (uses out/main/index.js).
+// Visual end-to-end smoke test for the built, unpackaged Métis app.
+// It deliberately starts the project root (not out/main/index.js) so Electron reads package.json's
+// `main`, uses a disposable profile, and drives the same onboarding a new user sees.
 import { _electron as electron } from 'playwright'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
+const ROOT = resolve(process.cwd())
+const APP_EXECUTABLE = process.env.E2E_APP_EXECUTABLE ? resolve(process.env.E2E_APP_EXECUTABLE) : null
 const SHOT_DIR = process.env.E2E_SHOT_DIR || '/tmp'
+const COMPACT_ONBOARDING = { width: 1280, height: 640 }
+const OWN_PROCESS_TIMEOUT_MS = 5_000
 const steps = []
-let win, app
-const ok = (name) => { steps.push({ name, ok: true }); console.log(`  ✓ ${name}`) }
-const fail = (name, e) => { steps.push({ name, ok: false, err: String(e && e.message || e) }); console.log(`  ✗ ${name} — ${e && e.message || e}`) }
-const shot = async (n) => { try { await win.screenshot({ path: join(SHOT_DIR, `e2e-${n}.png`) }) } catch {} }
-const txt = async () => { try { return (await win.locator('body').innerText()).replace(/\s+/g, ' ').trim() } catch { return '' } }
-
+const rendererDiagnostics = []
+const watchedPages = new WeakSet()
 const userDataDir = mkdtempSync(join(tmpdir(), 'metis-e2e-'))
+let app
+let win
+
+mkdirSync(SHOT_DIR, { recursive: true })
+
+const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
+const ok = (name) => { steps.push({ name, ok: true }); console.log(`  ✓ ${name}`) }
+const fail = (name, error) => {
+  const message = String(error?.message || error)
+  steps.push({ name, ok: false, err: message })
+  console.log(`  ✗ ${name} — ${message}`)
+}
+
+function withTimeout(operation, timeoutMs, message) {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+  })
+  return Promise.race([operation, timeout]).finally(() => clearTimeout(timer))
+}
+
+function watchPage(page) {
+  if (watchedPages.has(page)) return
+  watchedPages.add(page)
+  page.on('console', (message) => {
+    if (message.type() === 'error') rendererDiagnostics.push(message.text())
+  })
+  page.on('pageerror', (error) => rendererDiagnostics.push(error.stack || error.message))
+  page.on('crash', () => rendererDiagnostics.push('renderer process crashed'))
+}
+
+async function latestMétisWindow({ onboardingDone } = {}) {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const candidates = app?.windows?.() || []
+    for (const candidate of [...candidates].reverse()) {
+      watchPage(candidate)
+      try {
+        const matches = await candidate.evaluate(async (requireDone) => {
+          if (!window.toto) return false
+          if (requireDone === undefined) return true
+          return (await window.toto.getSettings()).onboardingDone === requireDone
+        }, onboardingDone)
+        if (matches) return candidate
+      } catch {
+        // This is expected while the opaque onboarding window is being replaced.
+      }
+    }
+    await delay(150)
+  }
+  throw new Error(`No ${onboardingDone === undefined ? 'Métis' : onboardingDone ? 'completed' : 'onboarding'} window appeared within 15s.`)
+}
+
+async function bodyText() {
+  try {
+    return (await win.locator('body').innerText()).replace(/\s+/g, ' ').trim()
+  } catch {
+    return ''
+  }
+}
+
+async function screenshot(name) {
+  const path = join(SHOT_DIR, `e2e-${name}.png`)
+  await win.screenshot({ path })
+  if (statSync(path).size === 0) throw new Error(`Screenshot ${name} was empty.`)
+}
+
+async function waitFor(check, message, timeoutMs = 8_000) {
+  const deadline = Date.now() + timeoutMs
+  let lastError
+  while (Date.now() < deadline) {
+    try {
+      const value = await check()
+      if (value) return value
+    } catch (error) {
+      lastError = error
+    }
+    await delay(150)
+  }
+  throw new Error(`${message}${lastError ? ` (${lastError.message || lastError})` : ''}`)
+}
+
+async function settingsMatch(expected) {
+  return waitFor(
+    async () => {
+      const settings = await win.evaluate(() => window.toto.getSettings())
+      return Object.entries(expected).every(([key, value]) => settings[key] === value)
+    },
+    `Settings did not persist ${JSON.stringify(expected)}`
+  )
+}
+
+async function setCompactOnboardingBounds() {
+  const result = await app.evaluate(({ BrowserWindow, screen }, target) => {
+    const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
+    if (!window) throw new Error('No BrowserWindow is available for compact onboarding validation.')
+    const display = screen.getDisplayMatching(window.getBounds())
+    const workArea = display.workArea
+    if (workArea.width < target.width || workArea.height < target.height) {
+      return { supported: false, workArea, target }
+    }
+    const bounds = {
+      x: Math.round(workArea.x + (workArea.width - target.width) / 2),
+      y: Math.round(workArea.y + (workArea.height - target.height) / 2),
+      ...target
+    }
+    window.setBounds(bounds)
+    return { supported: true, target, bounds: window.getBounds(), workArea }
+  }, COMPACT_ONBOARDING)
+
+  if (!result.supported) {
+    throw new Error(`The active display is ${result.workArea.width}×${result.workArea.height}; it cannot validate the required 1280×640 compact onboarding view.`)
+  }
+  if (result.bounds.width !== COMPACT_ONBOARDING.width || result.bounds.height !== COMPACT_ONBOARDING.height) {
+    throw new Error(`Electron did not apply the requested compact onboarding bounds: ${JSON.stringify(result.bounds)}`)
+  }
+  await delay(300)
+}
+
+async function selectAppearanceAndRightEdge() {
+  const rightEdge = win.getByRole('radio', { name: /^Right edge\b/i }).first()
+  await rightEdge.waitFor({ state: 'visible', timeout: 8_000 })
+  const visible = await rightEdge.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    const style = getComputedStyle(element)
+    return {
+      visible: style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0' && rect.width > 0 && rect.height > 0,
+      withinViewport: rect.top >= 0 && rect.left >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight,
+      rect: { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height },
+      viewport: { width: window.innerWidth, height: window.innerHeight }
+    }
+  })
+  if (!visible.visible || !visible.withinViewport) {
+    throw new Error(`Right edge choice is not visible in the 1280×640 onboarding viewport: ${JSON.stringify(visible)}`)
+  }
+  ok('Right edge choice stays visible on a compact onboarding viewport')
+
+  // Choose Bar before finishing so the post-onboarding overlay remains observable without weakening
+  // the app's deliberate Hide-on-hover default. This proves physical placement independently of chrome.
+  const bar = win.getByRole('radio', { name: /^Bar\b/i }).first()
+  await bar.click({ timeout: 5_000 })
+  await settingsMatch({ overlayLayout: 'bar' })
+  await rightEdge.click({ timeout: 5_000 })
+  await settingsMatch({ overlayPlacement: 'right-edge' })
+  // The old packaged-app regression wrote the setting, then repainted the prior card on a stale
+  // settings snapshot. Keep the check beyond that asynchronous window, not just on click.
+  await delay(1_000)
+  const selected = await rightEdge.getAttribute('aria-checked')
+  if (selected !== 'true') throw new Error('Right edge was written to settings but the selected control did not update.')
+  const preview = win.locator('[data-placement-preview="right-edge"]').first()
+  if (await preview.count() !== 1) throw new Error('Right-edge appearance preview did not update after selection.')
+  ok('Right edge choice persists during onboarding')
+  await screenshot('02-appearance')
+}
+
+async function finishOnboarding() {
+  const trail = []
+  let testedAppearance = false
+  for (let step = 0; step < 24; step++) {
+    const settings = await win.evaluate(() => window.toto.getSettings())
+    if (settings.onboardingDone === true) return trail
+
+    const rightEdge = win.getByRole('radio', { name: /^Right edge\b/i }).first()
+    if (!testedAppearance && await rightEdge.count()) {
+      await setCompactOnboardingBounds()
+      await selectAppearanceAndRightEdge()
+      testedAppearance = true
+      continue
+    }
+
+    const consent = win.locator('input[type="checkbox"]:not(:checked)').first()
+    if (await consent.count()) {
+      await consent.check({ timeout: 5_000 })
+      trail.push('consent')
+      await delay(350)
+      continue
+    }
+
+    // The no-JS Act 1 shell remains in the document after React takes over; its hidden Next must
+    // never win the generic walk over the visible scene's real CTA.
+    const primary = win.locator('button.onboard-cta:visible:not([disabled])').last()
+    if (!await primary.count()) {
+      throw new Error(`Onboarding has no enabled primary action after: ${trail.join(' → ') || '(start)'}`)
+    }
+    const label = ((await primary.innerText()).trim() || 'Continue').slice(0, 48)
+    await primary.click({ timeout: 5_000 })
+    trail.push(label)
+    if (/^Get started\b/i.test(label)) {
+      // A successful completion can replace the exclusive onboarding BrowserWindow. Probe every live
+      // Métis window, not only the page that received the click, so destruction of that old page does
+      // not turn a completed durable write into a false failure.
+      const completedWindow = await waitFor(
+        async () => {
+          for (const candidate of [...(app?.windows?.() || [])].reverse()) {
+            watchPage(candidate)
+            try {
+              if ((await candidate.evaluate(() => window.toto?.getSettings())).onboardingDone === true) {
+                return candidate
+              }
+            } catch {
+              // A window may be closing or opening during the deliberately asynchronous handoff.
+            }
+          }
+          return null
+        },
+        'Get started did not persist onboarding completion.',
+        12_000
+      )
+      win = completedWindow
+      return trail
+    }
+    await delay(600)
+  }
+  throw new Error(`Onboarding did not finish after: ${trail.join(' → ') || '(no actions)'}`)
+}
+
+async function verifyRightEdgeGeometry() {
+  const geometry = await waitFor(
+    () => app.evaluate(({ BrowserWindow, screen }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
+      if (!window) return null
+      const bounds = window.getBounds()
+      const workArea = screen.getDisplayMatching(bounds).workArea
+      return { bounds, workArea }
+    }),
+    'No post-onboarding window geometry was available.'
+  )
+  const expectedX = geometry.workArea.x + geometry.workArea.width - geometry.bounds.width - 12
+  const edgeGap = geometry.workArea.x + geometry.workArea.width - (geometry.bounds.x + geometry.bounds.width)
+  if (Math.abs(geometry.bounds.x - expectedX) > 2 || Math.abs(edgeGap - 12) > 2) {
+    throw new Error(`Right-edge overlay is not anchored to the work-area edge: ${JSON.stringify({ ...geometry, expectedX, edgeGap })}`)
+  }
+  if (geometry.bounds.y < geometry.workArea.y || geometry.bounds.y + geometry.bounds.height > geometry.workArea.y + geometry.workArea.height) {
+    throw new Error(`Right-edge overlay is vertically outside its work area: ${JSON.stringify(geometry)}`)
+  }
+  ok('right-edge overlay recreated after onboarding')
+}
+
+async function verifyIdlePanels() {
+  const history = win.getByRole('button', { name: /^History\b/i }).first()
+  await history.click({ timeout: 5_000 })
+  await win.getByRole('textbox', { name: 'Search past meetings' }).waitFor({ state: 'visible', timeout: 8_000 })
+  ok('History opens from the idle bar')
+
+  await win.getByRole('button', { name: 'Back' }).first().click({ timeout: 5_000 })
+  await win.getByRole('textbox', { name: 'Ask Métis anything' }).waitFor({ state: 'visible', timeout: 8_000 })
+  ok('History returns to the idle bar')
+
+  await win.getByRole('button', { name: 'Settings', exact: true }).click({ timeout: 5_000 })
+  await win.locator('[aria-label="Settings sections"]').waitFor({ state: 'visible', timeout: 8_000 })
+  const rightEdge = win.getByRole('radio', { name: /^Right edge\b/i }).first()
+  await rightEdge.waitFor({ state: 'visible', timeout: 8_000 })
+  if ((await rightEdge.getAttribute('aria-checked')) !== 'true') {
+    throw new Error('Settings did not show the Right edge choice selected after onboarding.')
+  }
+  ok('Settings preserves the selected Right edge placement')
+
+  await win.getByRole('button', { name: 'Close settings' }).click({ timeout: 5_000 })
+  await win.getByRole('textbox', { name: 'Ask Métis anything' }).waitFor({ state: 'visible', timeout: 8_000 })
+  ok('Settings returns to the idle bar')
+}
+
+function childHasExited(child) {
+  return !child || child.exitCode !== null || child.signalCode !== null
+}
+
+async function waitForChildExit(child, timeoutMs) {
+  if (childHasExited(child)) return true
+  return new Promise((resolveExit) => {
+    const timer = setTimeout(() => resolveExit(childHasExited(child)), timeoutMs)
+    child.once('exit', () => {
+      clearTimeout(timer)
+      resolveExit(true)
+    })
+  })
+}
+
+async function closeOwnApp() {
+  if (!app) return
+  const child = app.process()
+  // Métis intentionally stays alive after its last window for background reconciliation. Ask the
+  // specific test process to quit first, then only signal that known child if it did not comply.
+  await withTimeout(
+    app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => {}),
+    OWN_PROCESS_TIMEOUT_MS,
+    'Timed out while requesting the isolated test app to quit.'
+  ).catch(() => {})
+  await withTimeout(app.close().catch(() => {}), OWN_PROCESS_TIMEOUT_MS, 'Timed out while closing the isolated test app.').catch(() => {})
+  if (!childHasExited(child)) {
+    child.kill('SIGTERM')
+    await waitForChildExit(child, 3_000)
+  }
+  if (!childHasExited(child)) {
+    child.kill('SIGKILL')
+    await waitForChildExit(child, 3_000)
+  }
+}
 
 try {
-  console.log('Launching built app with isolated profile:', userDataDir)
+  console.log(`Launching ${APP_EXECUTABLE ? 'packaged' : 'built'} Métis app with isolated profile:`, userDataDir)
   app = await electron.launch({
-    args: ['out/main/index.js', `--user-data-dir=${userDataDir}`],
-    env: { ...process.env, NODE_ENV: 'production' },
-    timeout: 30000
+    // Electron's unpackaged app target must be the project root. Passing out/main/index.js makes
+    // Electron treat out/main as an app root, bypassing this project's package.json and often opening
+    // its stock shell. A packaged-app run uses the exact executable emitted by electron-builder instead.
+    ...(APP_EXECUTABLE ? { executablePath: APP_EXECUTABLE } : { args: [ROOT] }),
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
+      ASKTOTO_USERDATA: userDataDir,
+      ASKTOTO_LOCAL_KEYSTORE: '1',
+      // devEnv() ignores this in a packaged app. It is only for screenshot automation of the unpackaged run.
+      ASKTOTO_DISABLE_CP: '1'
+    },
+    timeout: 30_000
   })
-  win = await app.firstWindow({ timeout: 30000 })
+  app.on('window', watchPage)
+  win = await app.firstWindow({ timeout: 30_000 })
+  watchPage(win)
+  win = await latestMétisWindow({ onboardingDone: false })
   ok('app launched + first window')
   await win.waitForLoadState('domcontentloaded').catch(() => {})
 
-  // 1) Boot must not sit on the loader forever. Within 15s we should see either onboarding or the bar,
-  //    never a stuck "Starting Métis…".
   await win.waitForFunction(
-    () => { const t = document.body.innerText; return t && !/Starting Métis…/.test(t) && t.trim().length > 0 },
-    { timeout: 15000 }
-  ).then(() => ok('boot cleared the loading strip')).catch((e) => fail('boot cleared the loading strip (stuck loader?)', e))
-  await shot('01-boot')
-  let body = await txt()
-  console.log('   after boot:', body.slice(0, 120))
+    () => {
+      const text = document.body.innerText
+      return text && !/Starting Métis…/.test(text) && text.trim().length > 0 && typeof window.toto !== 'undefined'
+    },
+    { timeout: 15_000 }
+  ).then(() => ok('boot cleared the loading strip')).catch((error) => fail('boot cleared the loading strip (stuck loader?)', error))
+  await screenshot('01-boot')
+  const initial = await bodyText()
+  console.log('   after boot:', initial.slice(0, 120))
 
-  // 2) Onboarding (fresh profile shows it). Drive it the way a user does, to completion.
-  //
-  // Rewritten 2026-08-17. The previous version hard-coded an older wizard — a consent checkbox on the
-  // FIRST scene, then "Continue without signing in", then Next/Decide later/Get started — and failed 6
-  // of 10 steps against the shipped flow, which is: Begin → Set me up → Continue → [pick a mode AND tick
-  // the recording-consent box] → Start → provider choice → readiness → the bar. Verified by driving a
-  // real fresh profile: onboardingDone flips true and the ask input appears.
-  //
-  // Two things made the old script wrong in ways worth not repeating:
-  //   - the consent checkbox moved to the LAST scene, where it gates `Start` (`disabled={!consent}` in
-  //     OnboardingExperience.tsx) — it is a legal affirmation, not a formality, so the driver must tick
-  //     it rather than route around it;
-  //   - Playwright's actionability checks time out on this window (it renders hidden from screen share),
-  //     so `.click()`/`.check()` never fire. Dispatch through the DOM instead; React's handlers run fine.
-  // Rather than re-encode a scene list that will drift again, this walks generically: satisfy any gate
-  // (an unchecked checkbox), then click the last enabled non-destructive control, until the bar appears.
-  if (/on-device AI copilot|Your on-device|on-device meeting copilot/i.test(body)) {
-    ok('onboarding shown on first run')
-    const advance = () =>
-      win.evaluate(() => {
-        // React tracks input state internally, so a bare `.checked = true` is invisible to it — go
-        // through the native setter and dispatch, the standard workaround.
-        for (const cb of document.querySelectorAll('input[type=checkbox]')) {
-          if (!cb.checked) {
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked').set
-            setter.call(cb, true)
-            cb.dispatchEvent(new Event('click', { bubbles: true }))
-            cb.dispatchEvent(new Event('change', { bubbles: true }))
-            return 'consent'
-          }
-        }
-        const skip = /quit|reset|^back$|cancel|sign in with microsoft|skip the tour/i
-        const enabled = [...document.querySelectorAll('button')].filter(
-          (b) => (b.textContent || '').trim() && !skip.test(b.textContent) && !b.disabled
-        )
-        if (!enabled.length) return null
-        const el = enabled[enabled.length - 1] // the primary control sits last in each scene
-        const label = el.textContent.trim().slice(0, 40)
-        el.click()
-        return label
-      })
-    let finished = false
-    const trail = []
-    for (let i = 0; i < 20 && !finished; i++) {
-      finished = await win.evaluate(async () => (await window.toto.getSettings()).onboardingDone === true)
-      if (finished) break
-      const did = await advance()
-      if (!did) break
-      trail.push(did)
-      await win.waitForTimeout(900)
-    }
-    if (finished) ok(`completed the onboarding walk (${trail.length} actions: ${trail.join(' → ')})`)
-    else fail('completed onboarding walk', new Error(`stuck after: ${trail.join(' → ') || '(no actionable control)'}`))
-    await win.waitForTimeout(600)
-    await shot('02-post-onboarding')
-    body = await txt()
-  } else {
-    ok('no onboarding (profile already onboarded) — proceeding')
+  // Copy deliberately changes between onboarding scenes. The durable first-run state, not a marketing
+  // phrase from whichever scene has painted, is the authoritative signal that this is onboarding.
+  const initialSettings = await win.evaluate(() => window.toto.getSettings())
+  if (initialSettings.onboardingDone !== false) {
+    throw new Error(`A fresh isolated profile did not show onboarding (onboardingDone=${initialSettings.onboardingDone}).`)
   }
+  ok('onboarding shown on first run')
+  const trail = await finishOnboarding()
+  ok(`completed the onboarding walk (${trail.length} actions: ${trail.join(' → ')})`)
 
-  // 3) Idle bar must render — the ask input (its prompt is a placeholder, not innerText) + the toolbar.
-  await win.waitForSelector('input[placeholder*="Ask anything"], input[placeholder*="Ask a follow-up"]', { timeout: 12000 })
-    .then(() => ok('idle bar rendered (ask input present)')).catch((e) => fail('idle bar rendered', e))
-  await win.locator('button:has-text("History")').first().count()
-    .then((n) => n > 0 ? ok('toolbar rendered (History control)') : fail('toolbar rendered', new Error('no History control')))
-    .catch((e) => fail('toolbar rendered', e))
-  await shot('03-idle')
+  // Finish replaces the opaque exclusive onboarding window. Re-acquire the new overlay instead of
+  // driving a closed page handle, then re-read durable settings from the replacement renderer.
+  await delay(800)
+  win = await latestMétisWindow({ onboardingDone: true })
+  const completedSettings = await win.evaluate(() => window.toto.getSettings())
+  if (completedSettings.overlayPlacement !== 'right-edge') {
+    throw new Error(`Right edge preference did not survive onboarding completion: ${completedSettings.overlayPlacement}`)
+  }
+  ok('Right edge setting survives onboarding completion')
+  await verifyRightEdgeGeometry()
 
-  // 4) Minimize → the window must actually shrink to the small pill.
-  const before = await win.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }))
-  const minBtn = win.locator('button[aria-label="Minimize to a small pill"], button[title="Minimize to a small pill"]').first()
-  if (await minBtn.count()) {
-    await minBtn.click({ timeout: 4000 })
-    await win.waitForTimeout(1200)
-    const after = await win.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }))
-    console.log(`   window ${before.w}x${before.h} → ${after.w}x${after.h}`)
-    if (after.w < before.w && after.w <= 260) ok(`minimize shrank the window (${before.w}→${after.w}px wide)`)
-    else fail('minimize shrank the window', new Error(`width ${before.w}→${after.w} (expected ≤260)`))
-    await shot('04-minimized')
-    // 5) Expand back via the Métis mark
+  await win.waitForSelector('input[placeholder*="Ask anything"], input[placeholder*="Ask a follow-up"]', { timeout: 12_000 })
+    .then(() => ok('idle bar rendered')).catch((error) => fail('idle bar rendered', error))
+  const historyCount = await win.locator('button:has-text("History")').count()
+  if (historyCount > 0) ok('toolbar rendered')
+  else fail('toolbar rendered', new Error('No History control'))
+  const spotlightRefCount = await win.getByRole('button', { name: /^Spotlight Ref\b/i }).count()
+  if (spotlightRefCount > 0) ok('Spotlight Ref control rendered')
+  else fail('Spotlight Ref control rendered', new Error('No Spotlight Ref control'))
+  await screenshot('03-idle')
+  await verifyIdlePanels()
+
+  const before = await win.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+  const minimize = win.getByRole('button', { name: /^Minimize to the orb$/i }).first()
+  if (await minimize.count()) {
+    await minimize.click({ timeout: 5_000 })
+    await delay(900)
+    const after = await win.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+    if (after.width < before.width && after.width <= 260) ok(`minimize shrank the window (${before.width}→${after.width}px wide)`)
+    else fail('minimize shrank the window', new Error(`width ${before.width}→${after.width} (expected ≤260)`))
     const expand = win.locator('button[aria-label="Expand Métis"], button[title="Expand Métis"]').first()
     if (await expand.count()) {
-      await expand.click({ timeout: 4000 })
-      await win.waitForTimeout(1000)
-      const back = await win.evaluate(() => ({ w: window.innerWidth }))
-      if (back.w > after.w) ok(`expand restored the bar (${after.w}→${back.w}px)`)
-      else fail('expand restored the bar', new Error(`width stayed ${back.w}`))
-      await shot('05-expanded')
-    } else fail('find expand button', new Error('no Expand Métis button'))
-  } else fail('find minimize button', new Error('no "Minimize to a small pill" button'))
+      await expand.click({ timeout: 5_000 })
+      await delay(900)
+      const restored = await win.evaluate(() => ({ width: window.innerWidth }))
+      if (restored.width > after.width) ok(`expand restored the bar (${after.width}→${restored.width}px)`)
+      else fail('expand restored the bar', new Error(`width stayed ${restored.width}`))
+    } else fail('find expand button', new Error('No Expand Métis control'))
+  } else {
+    fail('find minimize button', new Error('No minimize control in Bar layout'))
+  }
 
-  // 6) Renderer console errors (excluding known dev/ASR noise).
-  const errs = []
-  win.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()) })
-  await win.waitForTimeout(500)
-  const realErrs = errs.filter((e) => !/asr-model|whisper|transformers|CORS|content-length|Failed to fetch/i.test(e))
-  if (realErrs.length === 0) ok('no unexpected renderer console errors')
-  else fail('renderer console errors', new Error(realErrs.slice(0, 3).join(' | ')))
-} catch (e) {
-  fail('fatal', e)
+  await delay(500)
+  if (rendererDiagnostics.length === 0) ok('no renderer console errors')
+  else fail('renderer console errors', new Error(rendererDiagnostics.slice(0, 3).join(' | ')))
+} catch (error) {
+  fail('fatal', error)
 } finally {
-  try { await app?.close() } catch {}
-  const passed = steps.filter((s) => s.ok).length
-  const failed = steps.filter((s) => !s.ok)
+  await closeOwnApp()
+  rmSync(userDataDir, { recursive: true, force: true })
+  const passed = steps.filter((step) => step.ok).length
+  const failed = steps.filter((step) => !step.ok)
   console.log(`\n==== E2E: ${passed}/${steps.length} passed ====`)
-  if (failed.length) { console.log('FAILURES:'); failed.forEach((f) => console.log(`  ✗ ${f.name} — ${f.err}`)) }
+  if (failed.length) {
+    console.log('FAILURES:')
+    for (const failure of failed) console.log(`  ✗ ${failure.name} — ${failure.err}`)
+  }
   process.exit(failed.length ? 1 : 0)
 }

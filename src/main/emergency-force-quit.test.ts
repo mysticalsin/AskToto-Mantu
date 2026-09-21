@@ -1,10 +1,10 @@
 /**
  * emergency-force-quit.test.ts
  *
- * Ctrl+Cmd+Esc is the last thing between a user and a frozen Métis, so pinning its source shape
- * (c-main-fixes.contract.test.ts) is not enough. This runs the ACTUAL function lifted out of index.ts
- * against stubs and a fake clock, because every property that matters here is a timing property:
- * polite first, hard later, and never so polite that a wedged renderer wins.
+ * The Ctrl+Cmd+Esc escape hatch is the last thing standing between a user and a frozen Métis, so it is
+ * not enough to pin its source shape (c-main-fixes.contract.test.ts does that). This runs the ACTUAL
+ * function out of index.ts against stubs and a fake clock, because every property that matters here is
+ * a timing property: polite first, hard later, and never so polite that a wedged renderer wins.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -29,9 +29,13 @@ function graceMs(): number {
   return Number(match?.[1])
 }
 
-type Harness = { forceQuit: () => void; calls: string[]; stopped: string[] }
+type Harness = {
+  forceQuit: () => void
+  calls: string[]
+  stopped: string[]
+}
 
-/** Run the real forceQuitMétis + its sidecar teardown with everything they touch stubbed. */
+/** Run the real forceQuitMétis + its sidecar teardown with everything it touches stubbed. */
 function harness(overrides: { localRuntimeThrows?: boolean } = {}): Harness {
   const calls: string[] = []
   const stopped: string[] = []
@@ -112,6 +116,8 @@ describe('Ctrl+Cmd+Esc escape hatch', () => {
     h.forceQuit()
     expect(h.calls).toContain('exit:0')
     expect(h.stopped).toContain('localRuntime')
+    // It did not need the watchdog to get there.
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
   })
 
   it('a throwing sidecar kill never stops the process from going down', () => {

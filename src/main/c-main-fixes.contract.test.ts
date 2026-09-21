@@ -119,6 +119,51 @@ describe('emergency force quit remains available when the renderer is wedged', (
     expect(quitFn).toMatch(/stopSidecarsForHardExit\(\)/)
     expect(source).toMatch(/label: 'Force Quit Métis'/)
   })
+
+  it("hard-exits after the graceful quit has had longer than before-quit's own flush window", () => {
+    // A wedged renderer never answers the flush hotkey and its unresponsive window can stop the quit
+    // completing at all — the freeze this accelerator exists to escape. Being polite forever is the bug,
+    // so the polite path gets a bounded grace and then the process goes down regardless.
+    const grace = source.match(/const EMERGENCY_FORCE_QUIT_GRACE_MS = (\d+)/)
+    expect(grace, 'emergency quit watchdog grace was not found').not.toBeNull()
+    // before-quit gives a live meeting 2000ms; the watchdog must outlast that or it would cut a flush
+    // that was still running normally.
+    expect(Number(grace?.[1])).toBeGreaterThan(2000)
+
+    const quitFn = source.slice(
+      source.indexOf('function forceQuitMétis(): void {'),
+      source.indexOf('\n}', source.indexOf('function forceQuitMétis(): void {'))
+    )
+    expect(quitFn).toMatch(/setTimeout\(/)
+    expect(quitFn).toMatch(/app\.exit\(0\)/)
+    // A second press is an unmistakable instruction: go down now, without waiting out the grace.
+    expect(quitFn).toMatch(/if \(emergencyQuitWatchdog\)/)
+    // The watchdog must never be the handle that keeps a quitting process alive.
+    expect(quitFn).toMatch(/emergencyQuitWatchdog\.unref\?\.\(\)/)
+  })
+
+  it('kills the sidecars on the hard path, because app.exit() never emits will-quit', () => {
+    // An orphaned llama-server, fm-serve loopback or screen-watcher child outliving the app is strictly
+    // worse than the freeze the user just escaped, and will-quit's teardown does not run on app.exit().
+    const start = source.indexOf('function stopSidecarsForHardExit(): void {')
+    expect(start, 'hard-exit sidecar teardown was not found').toBeGreaterThan(-1)
+    const body = source.slice(start, source.indexOf('\n}', start))
+    expect(body).toMatch(/screenPreprocess\.stop\(\)/)
+    expect(body).toMatch(/localRuntime\.stop\(\)/)
+    expect(body).toMatch(/fmRuntime\.stop\(\)/)
+    expect(body).toMatch(/endBootWatch\(app\.getPath\('userData'\)\)/)
+    // Each kill keeps its own try: one throw must never skip the kills after it.
+    expect(body.match(/try \{/g)?.length).toBeGreaterThanOrEqual(4)
+
+    const quitFn = source.slice(
+      source.indexOf('function forceQuitMétis(): void {'),
+      source.indexOf('\n}', source.indexOf('function forceQuitMétis(): void {'))
+    )
+    // Every app.exit(0) in the escape hatch is preceded by the teardown.
+    for (const exitIdx of [...quitFn.matchAll(/app\.exit\(0\)/g)].map((m) => m.index ?? -1)) {
+      expect(quitFn.lastIndexOf('stopSidecarsForHardExit()', exitIdx)).toBeGreaterThan(-1)
+    }
+  })
 })
 
 describe('finding 9: renderer crash recovery on the main overlay window', () => {

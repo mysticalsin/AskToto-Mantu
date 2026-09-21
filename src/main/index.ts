@@ -587,12 +587,6 @@ import {
   recordOperatorRating,
   startOperatorRuntime
 } from './operator-ingest'
-import {
-  ensureMetisCommandRuntime,
-  getMetisCommandRuntime,
-  ingestMetisCommandFromAsr,
-  registerMetisCommandIpc
-} from './metis-command-register'
 import { classifyQuestionType } from '@shared/question-type'
 import { BoundedSet } from './bounded-set'
 import { installEgressGuard } from './net/egress-guard'
@@ -1041,7 +1035,6 @@ function isRecentlyRetiredOverlaySender(event: Electron.IpcMainInvokeEvent): boo
 type CloudSttIpcOwner = { webContentsId: number; generation: number; captureId?: string }
 let cloudSttIpcGeneration = 0
 let cloudSttIpcOwner: CloudSttIpcOwner | null = null
-let cloudSttCommandOwner: CloudSttIpcOwner | null = null
 
 /** Only the renderer that opened the current live-STT session may receive its tail callbacks. */
 function isCurrentCloudSttOwner(
@@ -1056,21 +1049,11 @@ function isCurrentCloudSttOwner(
   )
 }
 
-/** Commands are an opt-in privilege of the current local-microphone capture only. */
-function isCurrentCloudSttCommandOwner(
-  owner: CloudSttIpcOwner,
-  sender: { id: number; isDestroyed: () => boolean }
-): boolean {
-  return cloudSttCommandOwner === owner && isCurrentCloudSttOwner(owner, sender)
-}
-
 /** Renderer replacement/close is a hard boundary: never leave cloud sockets or old callbacks alive. */
 function invalidateCloudSttOwner(webContentsId?: number): void {
   if (webContentsId !== undefined && cloudSttIpcOwner?.webContentsId !== webContentsId) return
   cloudSttIpcGeneration += 1
   cloudSttIpcOwner = null
-  cloudSttCommandOwner = null
-  getMetisCommandRuntime()?.reset('cloud_stt_owner_invalidated')
   void stopCloudSttLive()
 }
 // Fresh-question boundary state (written by IPC.listeningState / IPC.askResetContext / IPC.askStart, all
@@ -4974,16 +4957,6 @@ function registerIpc(): void {
   })
   // Read-only Operator status snapshot for Settings (local settings + in-memory integrations state
   // only, never touches the network) — mirrors licenseStatus's own "local settings only" contract.
-  // Métis 2.0 Cap 2 — wake-word command session (deterministic with Jev off).
-  ensureMetisCommandRuntime({
-    getWindow: () => win,
-    getSettings: () => getSettings(),
-    jevEnabled: () => false // Cap1 heartbeat flag parse lands with feel E2E; deterministic path required.
-  })
-  registerMetisCommandIpc({
-    assertMainWindow
-  })
-
   ipcMain.handle(IPC.operatorStatus, (e) => {
     assertMainWindow(e)
     if (!requireAuth()) {
@@ -6344,8 +6317,6 @@ function registerIpc(): void {
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
       await observeOperatorAudio(p.samples, speakerKey)
-      // Cap2: local-mic YOU track only (same trust boundary as cloud command owner).
-      if (typeof text === 'string' && text.trim()) ingestMetisCommandFromAsr(text)
     }
     return { text }
   })
@@ -6371,8 +6342,6 @@ function registerIpc(): void {
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
       await observeOperatorAudio(p.samples, speakerKey)
-      // Cap2: local-mic YOU track only (same trust boundary as cloud command owner).
-      if (typeof text === 'string' && text.trim()) ingestMetisCommandFromAsr(text)
     }
     return { text }
   })
@@ -6407,9 +6376,6 @@ function registerIpc(): void {
       generation: ++cloudSttIpcGeneration,
       captureId
     }
-    // A new capture revokes any previously armed command session before its callbacks can overlap.
-    cloudSttCommandOwner = null
-    getMetisCommandRuntime()?.reset('cloud_stt_replaced')
     cloudSttIpcOwner = owner
     // A fresh start is an explicit replacement, not a graceful end of the prior capture.
     const result = await replaceCloudSttSessionIfCurrent({
@@ -6436,16 +6402,10 @@ function registerIpc(): void {
             onFinal: (line) => {
               if (!isCurrentCloudSttOwner(owner, e.sender)) return
               e.sender.send(IPC.cloudSttFinal, line)
-              if (isCurrentCloudSttCommandOwner(owner, e.sender) && line.speaker === 'you' && line.text.trim()) {
-                ingestMetisCommandFromAsr(line.text)
-              }
             },
             onInterim: (channel, text) => {
               if (!isCurrentCloudSttOwner(owner, e.sender)) return
               e.sender.send(IPC.cloudSttInterim, { channel, text })
-              if (isCurrentCloudSttCommandOwner(owner, e.sender) && channel === 'you' && text.trim()) {
-                ingestMetisCommandFromAsr(text)
-              }
             },
             onError: (message) => {
               if (isCurrentCloudSttOwner(owner, e.sender)) e.sender.send(IPC.cloudSttError, { message })
@@ -6453,11 +6413,8 @@ function registerIpc(): void {
           }
         )
     })
-    if (result.ok && cloudSttIpcOwner === owner) {
-      cloudSttCommandOwner = owner
-    } else if (cloudSttIpcOwner === owner) {
+    if (!result.ok && cloudSttIpcOwner === owner) {
       cloudSttIpcOwner = null
-      cloudSttCommandOwner = null
     }
     return result
   })
@@ -6470,13 +6427,9 @@ function registerIpc(): void {
     // unscoped stops remain accepted only for a legacy owner that was started without an identity.
     if (!cloudSttRequestBelongsToOwner(owner.captureId, p.captureId)) return { timedOut: false }
     const force = p.force === true
-    // Graceful provider shutdown can still emit finals; they remain transcript-only after Stop.
-    cloudSttCommandOwner = null
-    getMetisCommandRuntime()?.reset('cloud_stt_stop')
     const result = await stopCloudSttLive({ graceful: !force, timeoutMs: 5_000 })
     if (cloudSttIpcOwner === owner) {
       cloudSttIpcOwner = null
-      cloudSttCommandOwner = null
     }
     return result
   })

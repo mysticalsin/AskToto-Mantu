@@ -253,6 +253,7 @@ export function placementSettingsPatch(placement: OverlayPlacement): { overlayPl
   return { overlayPlacement: placement }
 }
 
+/** Persist one choice and report whether the trusted settings reply confirms it. UI callers may preview optimistically and roll back on false. */
 export async function saveOnboardingAppearanceChoice(
   patch: () => Promise<
     Pick<PublicSettings, 'overlayLayout' | 'overlayPlacement'> &

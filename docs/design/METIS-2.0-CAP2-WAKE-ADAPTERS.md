@@ -6,7 +6,13 @@
 
 ## What landed
 
-Wake-word command session + video adapter allowlist on the **existing** voice/ASR path (cloud STT finals/interims feed the runtime). No new mic/ASR. `quick-actions.ts` untouched (Ask chips, not OS automation).
+Wake-word command session + video adapter allowlist design. `quick-actions.ts` remains untouched (Ask chips, not OS automation).
+
+## v1.9.5 safety decision
+
+Live transcription stays enabled, but desktop actions are deliberately **not** activated from ASR in this release. The current audio capture starts in the renderer, so PCM and its `you`/`them` label do not provide a hardware-provenance boundary against a compromised renderer. Routing that audio into OS actions would make the allowlist a privilege-escalation path.
+
+The app therefore delivers Cloudflare/local ASR only as transcript data, with no background microphone listener and no native-ASR or Cloud-STT command ingestion. A future command feature requires a main-owned capture capability or an explicit, trusted confirmation boundary before it can be enabled.
 
 ### Adapter IDs (locked)
 | ID | Mac | Win disclosure |
