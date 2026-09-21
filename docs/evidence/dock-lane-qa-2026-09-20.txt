@@ -1,0 +1,22 @@
+Metis dock lane — QA evidence (captured because a claim is not evidence)
+date:   2026-09-21T02:08:40Z
+commit: 7e7e53b87ca71ee06594622c025497ac41eb2e59
+host:   Darwin 27.0.0 arm64  node v22.22.3
+note:   exit status is recorded per command; a suite that fails to TRANSFORM reports
+        0 failed tests, so the count alone never establishes green.
+
+$ npm run typecheck
+> asktoto@1.9.5 typecheck
+> tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && node scripts/check-test-types.mjs && tsc --noEmit -p operator/tsconfig.json && tsc --noEmit -p operator/client/tsconfig.json
+
+[check:test-types] OK — 26 known type errors in test files, at the baseline (never rising).
+EXIT=0
+
+$ npm test
+ Test Files  527 passed (527)
+      Tests  6392 passed | 17 skipped (6409)
+ Test Files  1 passed (1)
+      Tests  28 passed (28)
+ Test Files  91 passed (91)
+      Tests  965 passed (965)
+EXIT=0

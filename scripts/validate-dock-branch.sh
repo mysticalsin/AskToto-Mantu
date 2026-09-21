@@ -94,8 +94,12 @@ echo "--- 4. Regression check: does this branch ADD failures vs its fork point? 
 #     (no DockPanel.tsx, no 'dock' in the chrome enum). The dock feature lives only in an unpushed
 #     local lineage, so comparing against 2.0 attributes ~36 of that lineage's commits to this branch.
 # The only honest baseline is the commit THIS branch forked from. Override with BASE=<sha> if the
-# branch is later rebased.
-BASE="${BASE:-$(git rev-parse HEAD~2 2>/dev/null || echo "")}"
+# branch is later rebased, or DOCK_LINEAGE=<ref> if the lineage moves.
+# HEAD~N is the wrong shape for this and was wrong by the third commit: the fork point is a fixed
+# commit, not a fixed distance behind HEAD. Derive it from the lineage ref instead, which stays
+# correct however many commits land on top.
+DOCK_LINEAGE="${DOCK_LINEAGE:-b756778a}"
+BASE="${BASE:-$(git merge-base HEAD "$DOCK_LINEAGE" 2>/dev/null || echo "")}"
 if [ -n "$BASE" ]; then
   WT="$OUT/base-wt"
   rm -rf "$WT"
