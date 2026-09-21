@@ -16,7 +16,12 @@ describe('persistOverlayPlacement', () => {
     })
   })
 
-  it('fails closed when a managed policy returns a mismatched layout or auto-hide setting', async () => {
+  it('fails closed when a managed policy returns any mismatched atomic receipt field', async () => {
+    const wrongPlacement = vi.fn(async () => ({
+      overlayPlacement: 'top-center' as const,
+      overlayLayout: 'island' as const,
+      autoHideOverlay: true
+    }))
     const mismatchedLayout = vi.fn(async () => ({
       overlayPlacement: 'right-edge' as const,
       overlayLayout: 'bar' as const,
@@ -27,8 +32,10 @@ describe('persistOverlayPlacement', () => {
       overlayLayout: 'island' as const,
       autoHideOverlay: false
     }))
+    await expect(persistOverlayPlacement('right-edge', 'bar', wrongPlacement)).resolves.toBe(false)
     await expect(persistOverlayPlacement('right-edge', 'bar', mismatchedLayout)).resolves.toBe(false)
     await expect(persistOverlayPlacement('right-edge', 'bar', mismatchedAutoHide)).resolves.toBe(false)
+    expect(wrongPlacement).toHaveBeenCalledOnce()
     expect(mismatchedLayout).toHaveBeenCalledOnce()
     expect(mismatchedAutoHide).toHaveBeenCalledOnce()
   })

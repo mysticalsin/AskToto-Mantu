@@ -43,10 +43,10 @@ describe('mic-only capture degradation stays visible', () => {
     expect(bar).toMatch(/props\.captureDegraded\.side === 'them' \? 'Mic only' : 'No mic'/)
     // Degradation retains priority, but the tooltip starts with its note and appends safe mic and
     // recognizer facts; paused capture intentionally omits every live-status detail.
-    expect(bar).toMatch(/!props\.paused\n {18}\? \(\[\n {22}props\.captureDegraded\?\.note \?\? null,/)
-    expect(bar).toMatch(/Live microphone: \$\{props\.captureHealth\.selectionOutcome\}/)
-    expect(bar).toMatch(/Transcription: \$\{props\.recognizerStatus\.model/)
-    expect(bar).toMatch(/: undefined\n {14}\}/)
+    const heardLiveChip = bar.slice(bar.indexOf('/* "Heard live" chip'), bar.indexOf('className={[', bar.indexOf('/* "Heard live" chip')))
+    expect(heardLiveChip).toMatch(
+      /title=\{\n\s*!props\.paused\n\s*\? \(\[\n\s*props\.captureDegraded\?\.note \?\? null,[\s\S]*?Live microphone: \$\{props\.captureHealth\.selectionOutcome\}[\s\S]*?Transcription: \$\{props\.recognizerStatus\.model[\s\S]*?\]\n\s*\.filter\(Boolean\)[\s\S]*?: undefined\n\s*\}/
+    )
     expect(bar).toMatch(/props\.captureDegraded \|\| props\.noSpeechWarning \|\| props\.captureHealth\?\.selectionOutcome === 'fallback-default'/)
     expect(app).toMatch(/captureDegraded=\{listen\.captureDegraded\}/)
   })
