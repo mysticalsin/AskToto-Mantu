@@ -15,6 +15,7 @@ describe('Cap2 wake word', () => {
     expect(transcriptContainsWakeWord('Hey Métis')).toBe(true)
     expect(transcriptContainsWakeWord('hey metis open notes')).toBe(true)
     expect(transcriptContainsWakeWord('Hey, Métis')).toBe(true)
+    expect(transcriptContainsWakeWord('Hi Métis')).toBe(true)
     expect(transcriptContainsWakeWord('Métis')).toBe(false)
     expect(transcriptContainsWakeWord('metis open notes')).toBe(false)
     expect(transcriptContainsWakeWord('meeting about meta systems')).toBe(false)

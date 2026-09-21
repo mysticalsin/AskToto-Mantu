@@ -49,3 +49,13 @@ describe('Cap2 command authority boundary', () => {
   })
 
 })
+
+describe('Cap2 command pill host (dock park must not hide it)', () => {
+  it('main reveals a top-center host when Cap2 session goes live', () => {
+    const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const reg = readFileSync(join(__dirname, 'metis-command-register.ts'), 'utf8')
+    expect(index).toContain('function revealForMetisCommandPill')
+    expect(index).toContain('onCommandSession:')
+    expect(reg).toContain('onCommandSession?:')
+  })
+})

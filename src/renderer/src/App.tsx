@@ -310,12 +310,9 @@ export function App(): JSX.Element {
     }
   }, [])
 
-  // Cap2 always-on ear: arm whenever overlay is past exclusive onboarding (do not wait on settings race).
+  // Cap2 always-on ear: arm after onboardingDone (ignore sticky ?exclusiveOnboarding=1 after finish).
   useEffect(() => {
-    const exclusive =
-      typeof window !== 'undefined' &&
-      new URLSearchParams(window.location.search).get('exclusiveOnboarding') === '1'
-    const enabled = !exclusive
+    const enabled = settings?.onboardingDone === true
     const stop = startMetisCommandEar({
       enabled,
       preferApple: true,
@@ -790,6 +787,7 @@ export function App(): JSX.Element {
     overlaySpring,
     overlayRestsHidden(overlayLayout)
   )
+  const commandPillLive = metisCommand.pillVisible
   const springIdleRef = useRef(false)
   const wasRevealedRef = useRef(overlayRevealed)
   const overlayRevealedRef = useRef(overlayRevealed)
@@ -3804,7 +3802,8 @@ export function App(): JSX.Element {
     >
             <div data-metis-command-pill-host="1">
         {/* Cap4: dock rest / OverlayPeek must not show Cap2 Ear chrome (Tony FAIL Ear error on notch). */}
-        {!overlayPeeked && !(overlayLayout === 'dock' && !overlayRevealed) ? (
+        {/* Cap2: keep ear chip when command pill is live; otherwise hide on dock/island park. */}
+        {metisCommand.pillVisible || (!overlayPeeked && !(overlayLayout === 'dock' && !overlayRevealed)) ? (
           <div
             data-metis-command-ear-chip="1"
             className="pointer-events-none absolute left-1/2 top-1 z-[80] -translate-x-1/2 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium tracking-wide text-white/90"
@@ -3893,7 +3892,7 @@ export function App(): JSX.Element {
             orbStyle={overlayOrbStyle}
           />
         </div>
-      ) : overlayPeeked ? (
+      ) : commandPillLive ? null : overlayPeeked ? (
         // Hide: 8x2 hairline (cursor watch is the sensor). Island: top peek. Dock: edge sliver.
         <OverlayPeek
           rest={overlayRestsHidden(overlayLayout) ? 'hide' : overlayLayout === 'dock' ? (dockRestHidden ? 'dock-hidden' : 'dock') : 'island'}

@@ -5,12 +5,13 @@ import { describe, expect, it } from 'vitest'
 const src = readFileSync(join(__dirname, 'CommandListeningPill.tsx'), 'utf8')
 
 describe('Cap2 CommandListeningPill contract', () => {
-  it('is top-center translucent pill with mic affordance', () => {
+  it('is top-center translucent pill with animated Jarvis listen orb', () => {
     expect(src).toMatch(/left-1\/2/)
     expect(src).toMatch(/top-3/)
     expect(src).toMatch(/backdrop-blur/)
     expect(src).toMatch(/data-metis-command-pill/)
-    expect(src).toMatch(/Microphone|mic|viewBox=\"0 0 24 24\"/i)
+    expect(src).toContain('JarvisOrbButton')
+    expect(src).toMatch(/listening/)
   })
 
   it('plays single/double chime and Escape stop', () => {

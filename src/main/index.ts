@@ -3117,6 +3117,46 @@ function anchorTopCenter(): void {
   win.setBounds({ x, y, width: b.width, height: b.height }, false)
 }
 
+
+/** Cap2: dock/island park is opacity-0 or a right-edge sliver — the listen pill cannot appear there.
+ *  Unpark to a top-center host so Jarvis-style Hi Métis is on-screen (Tony FAIL 12c295e9 / b7a4b55c). */
+function revealForMetisCommandPill(): void {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
+  cancelOverlayLeavePark()
+  islandResting = false
+  isMinimized = false
+  applyHideClickThrough()
+  applyOverlaySurfaceChrome()
+  try {
+    if (!win.isVisible()) win.showInactive()
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setAlwaysOnTop(true, 'screen-saver')
+  } catch {
+    /* headless */
+  }
+  const display = screen.getDisplayMatching(win.getBounds())
+  const metrics = getDisplayMetrics(display)
+  const width = Math.min(560, Math.max(280, display.workArea.width - 24))
+  const height = 96
+  const y = topClamp('island', metrics, ISLAND_TOP_MARGIN)
+  const x = Math.round(display.workArea.x + (display.workArea.width - width) / 2)
+  currentWidth = width
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
+  const b = win.getBounds()
+  if (!(b.x === x && b.y === y && b.width === width && b.height === height)) {
+    win.setBounds({ x, y, width, height }, false)
+  }
+  notifyOverlayCursorHover(true)
+  mainLog.info(`[cap2] command pill host ${width}x${height}@(${x},${y})`)
+}
+
 /** Reveal from the auto-hide peek: widen to the full bar and grow height downward from the same
  *  safe Y. Leave collapse is the inverse (resizeTo with peek height, same Y). */
 function restoreBarWidth(): void {
@@ -4970,7 +5010,11 @@ function registerIpc(): void {
   ensureMetisCommandRuntime({
     getWindow: () => win,
     getSettings: () => getSettings(),
-    jevEnabled: () => false // Cap1 heartbeat flag parse lands with feel E2E; deterministic path required.
+    jevEnabled: () => false, // Cap1 heartbeat flag parse lands with feel E2E; deterministic path required.
+    onCommandSession: (live) => {
+      if (live) revealForMetisCommandPill()
+      else scheduleOverlayLeavePark()
+    }
   })
   registerMetisCommandIpc({
     assertMainWindow

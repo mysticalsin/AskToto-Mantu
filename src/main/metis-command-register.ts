@@ -21,8 +21,11 @@ export function ensureMetisCommandRuntime(opts: {
   getSettings: () => PublicSettings | { operatorUrl?: string; operatorLicenseToken?: string; operatorIngestSecret?: string }
   /** Optional: decisionProviders.jev from last heartbeat (Cap1). Default false = deterministic only. */
   jevEnabled?: () => boolean
+  /** Main must unpark / opacity-1 / top-center host when Cap2 pill arms (dock park is invisible). */
+  onCommandSession?: (live: boolean) => void
 }): MetisCommandRuntime {
   if (runtime) return runtime
+  let wasLive = false
   runtime = createMetisCommandRuntime({
     onState: (state) => {
       const w = opts.getWindow()
@@ -34,6 +37,15 @@ export function ensureMetisCommandRuntime(opts: {
         liveTranscript: state.liveTranscript,
         chime: state.chime
       })
+      const live = state.pillVisible === true
+      if (live !== wasLive) {
+        wasLive = live
+        try {
+          opts.onCommandSession?.(live)
+        } catch {
+          /* ignore */
+        }
+      }
     },
     jevEnabled: () => opts.jevEnabled?.() === true,
     operatorDecideAuth: () => {

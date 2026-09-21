@@ -28,7 +28,8 @@ export function foldSpeech(text: string): string {
 }
 
 /** Require greeting + name — bare "Métis" must not arm Cap2 (Tony / Ultron HARD). */
-const WAKE_RE = /\bhey\s+metis\b/
+/** hey|hi — Apple/Parakeet often fold "Hey" → "Hi". Bare Métis still fails. */
+const WAKE_RE = /\b(hey|hi)\s+metis\b/
 const END_RE =
   /\b(thank you|thanks metis|thanks|that'll be all|that will be all|stop listening)\b/
 

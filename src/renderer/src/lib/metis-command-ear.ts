@@ -61,6 +61,7 @@ export function startMetisCommandEar(opts: MetisCommandEarOptions): () => void {
   let pending = new Float32Array(0)
   let feeding = false
   let resumeHook: (() => void) | null = null
+  let resumeTimer: ReturnType<typeof setInterval> | null = null
 
   const status = (s: MetisCommandEarStatus) => {
     try {
@@ -72,6 +73,10 @@ export function startMetisCommandEar(opts: MetisCommandEarOptions): () => void {
 
   const stop = () => {
     stopped = true
+    if (resumeTimer) {
+      clearInterval(resumeTimer)
+      resumeTimer = null
+    }
     if (resumeHook) {
       window.removeEventListener('pointerdown', resumeHook, true)
       window.removeEventListener('keydown', resumeHook, true)
@@ -196,6 +201,10 @@ export function startMetisCommandEar(opts: MetisCommandEarOptions): () => void {
     sink.connect(ctx.destination)
     status({ state: 'listening' })
     document.documentElement.dataset.metisCommandEar = '1'
+    // Parked Dock/Island often has no gesture — Chromium leaves AudioContext suspended.
+    resumeTimer = setInterval(() => {
+      if (!stopped) ensureRunning()
+    }, 750)
   })()
 
   return () => {

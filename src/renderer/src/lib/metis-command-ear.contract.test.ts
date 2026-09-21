@@ -15,9 +15,9 @@ describe('Cap2 always-on command ear', () => {
     expect(ear).not.toContain('metisCommandIngest')
   })
 
-  it('arms from App without exclusive onboarding and shows ear chip', () => {
+  it('arms from App after onboardingDone and shows ear chip', () => {
     expect(app).toContain('startMetisCommandEar')
-    expect(app).toContain("get('exclusiveOnboarding') === '1'")
+    expect(app).toContain('settings?.onboardingDone === true')
     expect(app).toContain('data-metis-command-ear-chip')
     expect(app).toContain("openPermissionSettings('microphone')")
   })

@@ -1,9 +1,10 @@
 /**
  * Métis 2.0 Cap 2 — top-center translucent command pill (wake UX).
- * Copy: Hi Métis → Hi Métis, I'm listening... → live realtime transcript.
+ * Jarvis listening orb + copy: Hi Métis → Hi Métis, I'm listening... → live transcript.
  * Does not replace Bar ControlPill / Hide / Island.
  */
 import { useEffect, useRef } from 'react'
+import { JarvisOrbButton } from './JarvisOrbButton'
 
 export type CommandListeningPillProps = {
   visible: boolean
@@ -80,17 +81,13 @@ export function CommandListeningPill({
       aria-live="polite"
       className="pointer-events-auto fixed left-1/2 top-3 z-[80] flex max-w-[min(560px,92vw)] -translate-x-1/2 items-center gap-2 rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-[13px] text-white/95 shadow-lg backdrop-blur-md"
     >
-      <span
-        aria-hidden
-        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/10"
+      <JarvisOrbButton
+        listening
+        orbMood="idle"
         title="Listening"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-          <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor" />
-          <path d="M5 11a7 7 0 0 0 14 0" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          <path d="M12 18v3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-        </svg>
-      </span>
+        ariaLabel="Métis is listening"
+        onActivate={() => onStop?.()}
+      />
       <div className="min-w-0 flex-1">
         <div className="truncate font-medium tracking-tight">{copy}</div>
         {showLive ? (
