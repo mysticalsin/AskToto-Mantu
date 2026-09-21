@@ -1172,11 +1172,10 @@ export function OnboardingExperience({
       )
       if (!saved) throw new Error('placement was not saved')
     } catch {
-      setAppearanceSave({ busy: false, error: "Métis couldn't save this appearance. Try again." })
+      setAppearanceSave({ busy: false, error: "Métis couldn't save this position. Try again." })
     }
   }
-  
-const appearanceLocked = Boolean(settings?.managedKeys?.includes('overlayLayout'))
+  const appearanceLocked = Boolean(settings?.managedKeys?.includes('overlayLayout'))
   const placementLocked = placementManaged
   // Recording-consent gate (CMO-QA #1). Finish is blocked until this checkbox is checked on Ready.
   const [consent, setConsent] = useState(false)

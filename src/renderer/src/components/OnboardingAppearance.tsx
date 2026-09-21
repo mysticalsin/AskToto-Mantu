@@ -155,7 +155,6 @@ function AppearanceLivePreview({
           </div>
         </>
       ) : null}
-      ) : null}
     </div>
   )
 }
