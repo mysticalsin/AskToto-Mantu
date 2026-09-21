@@ -1,0 +1,11 @@
+# gh pr list — captured 2026-09-21T02:34:53Z by gh version 2.99.0 (2026-09-01)
+# PR identities are not derivable from the repository; this is the artifact behind the §3 table.
+#194	claude/dock-three-fixes	-> metis-2.0-dock-lineage	Dock: pill jump, view overlap, and the bar on the right edge
+#193	claude/cap4-motion	-> release/1.9.1	Cap4: Apple-smooth dock motion (base 3d6825f9)
+#192	fix/cap3-qa-tip-cp-packaged-gate	-> codex/review-release-1.9.1	fix(metis): Cap3 QA_TIP force-paint gated to unpackaged builds
+#191	cursor/cap4-glass-sidecar	-> main	Cap4: Bar-DNA glass DockPanel (DESIGN lock)
+#190	claude/content-protection-stub	-> codex/review-release-1.9.1	Unblind the content-protection audit (6 red tests on 2.0)
+#189	claude/force-quit-contract	-> codex/review-release-1.9.1	Make the force-quit contract match the force-quit code again
+#188	claude/dock-panel-design	-> codex/review-release-1.9.1	Right-edge dock: its own panel instead of a squeezed bar (+ fixes the typecheck break)
+#187	claude/intelligence-relationship-notes	-> codex/review-release-1.9.1	Intelligence: notes are nodes in Relationships, and empty never looks broken
+#186	fix/win-quality-crlf-right-edge	-> main	fix(test): CRLF-safe right-edge placement contract

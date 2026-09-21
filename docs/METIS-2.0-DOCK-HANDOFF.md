@@ -16,7 +16,7 @@ claim checkable against the tree rather than against this document.
 origin/codex/review-release-1.9.1   83d9d3fa   NO dock: no DockPanel.tsx, no 'dock' in the enum
         └── cursor/cap4-glass-sidecar 9fb913f1  (= the LOCAL codex/review-release-1.9.1 ref)
                 └── metis-2.0-dock-lineage b756778a   37 commits ahead of 83d9d3fa
-                        └── claude/dock-three-fixes    PR #194, 12 commits ahead of b756778a at rev 3
+                        └── claude/dock-three-fixes    PR #194 — `git rev-list --count b756778a..HEAD`
 ```
 
 **Two different commits answer to the name `codex/review-release-1.9.1` in this checkout.** The
@@ -128,7 +128,8 @@ the fork as soon as more commits landed. Override with `BASE=<sha>` or `DOCK_LIN
 ### PR numbers, and what is actually checkable
 
 Branch and commit relationships are checkable from local refs. **PR *identities* are not** — the
-mapping below comes from `gh pr list`, not from the repository, so re-run that if it matters:
+mapping below comes from `gh pr list`, not from the repository. The captured output is committed at
+`docs/evidence/pr-mapping-2026-09-20.txt`, since a reviewer without network access cannot re-run it:
 
 | PR | head branch | base |
 |---|---|---|
@@ -203,7 +204,8 @@ describing them, so 2.0 inherits working code instead of a to-do list.
 | Overlay keys undocumented for fleet policy | named in `managed-config.example.json`, with a contract test pinning both samples to the schema |
 | `BASE=HEAD~2` had drifted off the fork point | derived via `git merge-base HEAD $DOCK_LINEAGE` |
 
-Verified end to end at this tip: `npm run typecheck` EXIT=0 · `npm test` EXIT=0 (529 files /
+Verified end to end at `04ae90d6`, which is the last commit touching code — everything after it
+changes only `docs/`, so the coverage is current: `npm run typecheck` EXIT=0 · `npm test` EXIT=0 (529 files /
 6412 passed / 17 skipped, proxy 28, operator 965) · licence-server 101/101 ·
 `scripts/validate-dock-branch.sh` PASS with 0 new failures against the fork point (63 → 0).
 

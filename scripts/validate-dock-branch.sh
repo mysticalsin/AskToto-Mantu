@@ -85,9 +85,10 @@ run operator --config operator/vitest.config.ts || fail=1
 echo
 
 echo "--- 4. Regression check: does this branch ADD failures vs its fork point? ---"
-# The root suite is red at HEAD for reasons that predate this work (another lane's listen.* tests).
-# The question that matters is whether THIS branch adds anything, so compare failing sets against the
-# branch point rather than against zero.
+# The root suite is GREEN at HEAD now (it was red when this script was written, from another lane's
+# listen.* tests). The comparison stays regardless: the question this section answers is whether the
+# branch ADDS failures, which needs the fork point rather than zero — and a green HEAD is exactly when
+# a silently-understated baseline would go unnoticed.
 # BASELINE CHOICE, and it took two wrong answers to get here:
 #   - merge-base is wrong: it predates tests another lane added since, so those get blamed on us.
 #   - origin/codex/review-release-1.9.1 is ALSO wrong: the pushed 2.0 branch has no dock at all
