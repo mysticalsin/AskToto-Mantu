@@ -9,6 +9,7 @@ import { join } from 'node:path'
  * through a DOM. `onboarding-flow.test.ts` covers the pure scene-transition rules these strings wire up.
  */
 const experienceSrc = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+const cssSrc = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
 
 describe('MQA-283 — the narrative experience now ends at Ready, not a legacy provider handoff', () => {
@@ -65,6 +66,15 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).toMatch(/onOpenAiSettings=\{onOpenAiSettings\}/)
     expect(experienceSrc).toMatch(/asrReady=\{asrReady\}/)
     expect(experienceSrc).toMatch(/aiReady=\{settings\?\.providerReady === true\}/)
+  })
+
+  it('Ready MetisMark stays visible above gleam (Tony HARD 2026-09-21 logo missing)', () => {
+    expect(experienceSrc).toMatch(/ready-mark-wrap/)
+    expect(experienceSrc).toMatch(/ready-mark-gleam/)
+    expect(experienceSrc).toMatch(/<MetisMark size=\{96\}/)
+    expect(cssSrc).toMatch(/\.ready-mark-gleam/)
+    expect(cssSrc).toMatch(/\.ready-mark-wrap[^{]*\{[\s\S]*?width:\s*96px/)
+    expect(cssSrc).not.toMatch(/\.ready-mark-wrap::before/)
   })
 
   it('routes both Ready actions through one retry-safe completion path', () => {

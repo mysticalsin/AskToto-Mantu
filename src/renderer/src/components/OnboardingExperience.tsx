@@ -33,7 +33,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useCallback, useEffect, useId, useRef, useState, lazy, Suspense, type Ref, useLayoutEffect } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, Suspense, type Ref, useLayoutEffect } from 'react'
 import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
@@ -73,12 +73,10 @@ import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
 import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
-/** Act 2 demo - eager import so Suspense never hangs black after problem Continue (Tony HARD 2026-09-21).
+/** Act 2 demo — eager import so Suspense never hangs black after problem Continue (Tony HARD 2026-09-21).
  *  Act 1 still lazy-splits DockPanel/Appearance elsewhere; DemoScene must not gate the story→reveal hop. */
 import { OnboardingDemoScene } from './OnboardingDemoScene'
-const OnboardingAppearance = lazy(() =>
-  import('./OnboardingAppearance').then((m) => ({ default: m.OnboardingAppearance }))
-)
+import { OnboardingAppearance } from './OnboardingAppearance'
 import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
 import { isWindows } from '../lib/keys'
@@ -866,11 +864,12 @@ function ActReady({
   return (
     <div key="ready" className="scene-enter onboard-ready-screen flex flex-col items-center">
       <div className="ready-mark-wrap" aria-hidden="true">
+        <span className="ready-mark-gleam" aria-hidden="true" />
         {READY_SPARKS.map((s, i) => (
           <span
             key={i}
             className="ready-spark"
-            style={{ left: `calc(50% + ${s.x}px)`, top: `calc(50% + ${s.y}px)`, animationDelay: `${s.delay}ms` }}
+            style={{ left: `calc(50% + ${s.x}px)`, top: `calc(50% + ${s.y}px)`, animationDelay: `${s.delay}ms`, zIndex: 1 }}
           />
         ))}
         <MetisMark size={96} />
@@ -1848,7 +1847,6 @@ export function OnboardingExperience({
 
       {scene === 'appearance' && (
         <div key="appearance" className="onboard-appearance-scroll flex min-h-0 w-full flex-col items-center overflow-y-auto px-1 py-4">
-          <Suspense fallback={null}>
           <OnboardingAppearance
             value={appearance}
             locked={appearanceLocked}
@@ -1865,7 +1863,6 @@ export function OnboardingExperience({
               setScene(sceneAfterAppearance())
             }}
           />
-          </Suspense>
         </div>
       )}
 

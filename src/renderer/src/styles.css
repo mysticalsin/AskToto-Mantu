@@ -1296,15 +1296,24 @@ button.onboard-cta {
   }
 }
 .ready-mark-wrap {
+  /* Tony HARD 2026-09-21: explicit box + isolation so gleam mask cannot collapse/hide MetisMark. */
   position: relative;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  flex-shrink: 0;
+  isolation: isolate;
+  z-index: 1;
 }
-.ready-mark-wrap::before {
-  content: '';
+/* Gleam lives on a sibling layer (not ::before) so -webkit-mask cannot paint over the mark. */
+.ready-mark-gleam {
   position: absolute;
   inset: -12px;
   border-radius: 999px;
   padding: 1.5px;
+  z-index: 0;
   background: conic-gradient(
     from var(--ready-gleam-angle),
     transparent 0deg,
@@ -1321,6 +1330,14 @@ button.onboard-cta {
   mask-composite: exclude;
   pointer-events: none;
   animation: ready-gleam-sweep 1400ms steps(60, end) 120ms both;
+}
+.ready-mark-wrap > img,
+.ready-mark-wrap .ready-mark {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 96px;
+  height: 96px;
 }
 @keyframes ready-spark {
   0% {
@@ -1345,7 +1362,7 @@ button.onboard-cta {
   animation: ready-spark 900ms var(--ease-spring) both;
 }
 @media (prefers-reduced-motion: reduce) {
-  .ready-mark-wrap::before {
+  .ready-mark-gleam {
     animation: none;
     opacity: 0;
   }
