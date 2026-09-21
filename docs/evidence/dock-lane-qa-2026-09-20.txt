@@ -1,22 +1,51 @@
-Metis dock lane — QA evidence (captured because a claim is not evidence)
-date:   2026-09-21T02:08:40Z
-commit: 7e7e53b87ca71ee06594622c025497ac41eb2e59
+Metis dock lane — QA evidence
+date:   2026-09-21T02:23:37Z
+commit: 04ae90d6ea05d2cef9890964bccbf8a7a4970589   (claude/dock-three-fixes)
 host:   Darwin 27.0.0 arm64  node v22.22.3
-note:   exit status is recorded per command; a suite that fails to TRANSFORM reports
-        0 failed tests, so the count alone never establishes green.
 
+A claim is not evidence, so every command below is recorded with its EXIT status. That
+matters more than the counts: a suite that fails to TRANSFORM reports 0 failed tests,
+because none of them ran, so a count alone can never establish green.
+
+WHAT THIS DOES NOT COVER: a packaged build, Windows or macOS visual behaviour of the dock,
+and any commit other than the one named above.
+
+==========================================================================
 $ npm run typecheck
-> asktoto@1.9.5 typecheck
 > tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && node scripts/check-test-types.mjs && tsc --noEmit -p operator/tsconfig.json && tsc --noEmit -p operator/client/tsconfig.json
 
 [check:test-types] OK — 26 known type errors in test files, at the baseline (never rising).
 EXIT=0
 
-$ npm test
- Test Files  527 passed (527)
-      Tests  6392 passed | 17 skipped (6409)
+==========================================================================
+$ npm test        # root + cloudflare-proxy + operator
+ Test Files  529 passed (529)
+      Tests  6412 passed | 17 skipped (6429)
  Test Files  1 passed (1)
       Tests  28 passed (28)
  Test Files  91 passed (91)
       Tests  965 passed (965)
+EXIT=0
+
+==========================================================================
+$ cd license-server && npm test
+# tests 101
+# pass 101
+# fail 0
+EXIT=0
+
+==========================================================================
+$ bash scripts/validate-dock-branch.sh    # regression gate vs the fork point
+--- 3. Suites ---
+root                                                 0 failed of 6429
+proxy                                                0 failed of 28
+operator                                             0 failed of 965
+
+--- 4. Regression check: does this branch ADD failures vs its fork point? ---
+baseline tests collected                             6409 (branch: 6429)
+failures at branch point                             63
+failures on this branch                              0
+NEW failures introduced                              0
+
+VERDICT: PASS — gates clean, three defects present as fixes, no new failures.
 EXIT=0

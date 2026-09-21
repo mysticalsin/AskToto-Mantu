@@ -16,7 +16,7 @@ claim checkable against the tree rather than against this document.
 origin/codex/review-release-1.9.1   83d9d3fa   NO dock: no DockPanel.tsx, no 'dock' in the enum
         └── cursor/cap4-glass-sidecar 9fb913f1  (= the LOCAL codex/review-release-1.9.1 ref)
                 └── metis-2.0-dock-lineage b756778a   37 commits ahead of 83d9d3fa
-                        └── claude/dock-three-fixes    PR #194, 6 commits ahead of b756778a
+                        └── claude/dock-three-fixes    PR #194, 12 commits ahead of b756778a at rev 3
 ```
 
 **Two different commits answer to the name `codex/review-release-1.9.1` in this checkout.** The
@@ -31,7 +31,14 @@ git show origin/codex/review-release-1.9.1:src/shared/overlay-chrome.ts | grep -
 git rev-list --count 83d9d3fa..b756778a                                                   # 37
 ```
 
-`83d9d3fa` is green on its own (6267 tests). The dock lineage arrived with 63 failures, now 0.
+The dock lineage's fork point carried **63 failing tests**; this branch carries 0. That number is
+not a recollection — `scripts/validate-dock-branch.sh` measures it on every run by checking out
+the fork point in a throwaway worktree, and its output is in the evidence file. (An earlier draft
+of this document said 65; 63 is the measured figure and the one to trust.)
+
+No claim is made here about how `83d9d3fa` scores on its own. It was green when last run, but that
+run predates this evidence file and is not re-verified in it, so it should not be cited as a
+baseline without re-running.
 
 ## 2. What was built (verified present at `claude/dock-three-fixes` HEAD)
 
@@ -102,7 +109,7 @@ npm test            EXIT=0    529 files · 6412 passed · 17 skipped
 license-server                101 pass / 0 fail   (needs its own npm ci and real sockets)
 ```
 
-The lineage went 65 → 0 failures. The largest single cause was `listen.ts` writing
+The largest single cause of the fork point's 63 failures was `listen.ts` writing
 `document.documentElement.dataset.metisListening` directly in five places with no jsdom guard;
 one `setListeningFlag()` helper cleared 56 of them.
 
@@ -117,6 +124,25 @@ tests other lanes added since) and not 2.0's tip (no dock there, so ~36 lineage 
 blamed on this branch). Its baseline is now derived as `git merge-base HEAD $DOCK_LINEAGE`
 (default `b756778a`); it previously defaulted to `HEAD~2`, which silently stopped pointing at
 the fork as soon as more commits landed. Override with `BASE=<sha>` or `DOCK_LINEAGE=<ref>`.
+
+### PR numbers, and what is actually checkable
+
+Branch and commit relationships are checkable from local refs. **PR *identities* are not** — the
+mapping below comes from `gh pr list`, not from the repository, so re-run that if it matters:
+
+| PR | head branch | base |
+|---|---|---|
+| #194 | `claude/dock-three-fixes` | `metis-2.0-dock-lineage` |
+| #193 | `claude/cap4-motion` | `release/1.9.1` |
+| #192 | `fix/cap3-qa-tip-cp-packaged-gate` | `codex/review-release-1.9.1` |
+| #191 | `cursor/cap4-glass-sidecar` | `main` |
+| #190 | `claude/content-protection-stub` | `codex/review-release-1.9.1` |
+| #189 | `claude/force-quit-contract` | `codex/review-release-1.9.1` |
+| #188 | `claude/dock-panel-design` | `codex/review-release-1.9.1` |
+| #187 | `claude/intelligence-relationship-notes` | `codex/review-release-1.9.1` |
+
+Note #193 targets `release/1.9.1` and #191 targets `main`, so "they all need one base" (§4.3) is
+about more than the four that target `codex/review-release-1.9.1`.
 
 ## 4. Decisions needed before anything downstream merges
 
@@ -184,3 +210,26 @@ Verified end to end at this tip: `npm run typecheck` EXIT=0 · `npm test` EXIT=0
 Two of those four were found by the Integrator's read-only review rather than by me, and the
 managed-config contract test found four more keys on its first run — all four turned out to be
 legitimate governance keys, so the samples were right and the test's first draft was wrong.
+
+## 8. What round 2 of the review changed
+
+The Integrator reviewed rev 2 and returned REVISE again. Four findings survived the fact that it
+was reading `cf5ac3be` while the tree had already moved on, and all four were taken:
+
+- **`83d9d3fa` is green with 6267 tests** — asserted with no artifact behind it. The claim is
+  removed rather than restated; see §1.
+- **licence-server 101/101 was not in the evidence file** — the evidence file now runs it, and the
+  regression gate, and records an EXIT line for each.
+- **63 vs 65 failures** — the document contradicted itself. 63 is the measured figure, produced by
+  the validator on every run; 65 is gone.
+- **PR identities are not checkable from the repo** — now stated as such, with the `gh pr list`
+  mapping and a pointer to re-run it.
+
+It also found the validator's remaining half-blindness: the branch run was gated on vitest's exit
+code but the **baseline** run was not, so a baseline that failed to load would have understated
+itself and made this branch look worse. Both halves are gated now, and the baseline's collected
+test total is checked against the branch's.
+
+The rest of round 2's findings were rev 2 statements that rev 3 had already overtaken —
+notes-as-nodes, the managed-config keys and the QA_TIP gate are all in the tree now, which is what
+§7 records.
