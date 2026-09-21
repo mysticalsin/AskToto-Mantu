@@ -39,6 +39,7 @@ export type OnboardingChromeId =
   | 'circle'
   | 'jarvis'
   | 'dock'
+  | 'dock-hidden'
 
 export type OnboardingChromeSpec = {
   id: OnboardingChromeId
@@ -47,6 +48,8 @@ export type OnboardingChromeSpec = {
   layout: OverlayLayout
   autoHideOverlay: boolean
   overlayOrbStyle: OverlayOrbStyle
+  /** Dock only. 'hidden' rests invisibly; the hover band is unchanged, so it stays as reachable. */
+  dockRest?: 'sliver' | 'hidden'
   default?: boolean
 }
 
@@ -105,38 +108,16 @@ const RIGHT_CHROME: readonly OnboardingChromeSpec[] = [
     default: true
   },
   {
-    id: 'bar-hides',
-    title: 'Full bar that hides',
-    desc: 'Full bar on the edge; tucks away.',
-    layout: 'bar',
-    autoHideOverlay: true,
-    overlayOrbStyle: 'bar'
-  },
-  {
-    id: 'bar-stays',
-    title: 'Full bar that stays',
-    desc: 'Full bar stays visible.',
-    layout: 'bar',
-    autoHideOverlay: false,
-    overlayOrbStyle: 'bar'
-  },
-  {
-    id: 'circle',
-    title: 'Circle',
-    desc: 'Circle rest on the edge.',
-    layout: 'bar',
-    autoHideOverlay: false,
-    overlayOrbStyle: 'jakub'
-  },
-  {
-    id: 'jarvis',
-    title: 'Jarvis circle',
-    desc: 'Jarvis rest on the edge.',
-    layout: 'bar',
-    autoHideOverlay: false,
-    overlayOrbStyle: 'obsidian'
+    id: 'dock-hidden',
+    title: 'Invisible',
+    desc: 'Nothing on screen until you reach the edge.',
+    layout: 'dock',
+    autoHideOverlay: autoHideOverlayForLayout('dock'),
+    overlayOrbStyle: 'jakub',
+    dockRest: 'hidden'
   }
 ]
+
 
 export function onboardingChromeForPlacement(placement: OverlayPlacement): readonly OnboardingChromeSpec[] {
   return placement === 'right-edge' ? RIGHT_CHROME : TOP_CHROME
@@ -213,13 +194,17 @@ export function chromeSettingsPatch(
   autoHideOverlay: boolean
   overlayOrbStyle: OverlayOrbStyle
   overlayPlacement: OverlayPlacement
+  dockRest: 'sliver' | 'hidden'
 } {
   const spec = chromeSpec(placement, id)
   return {
     overlayLayout: spec.layout,
     autoHideOverlay: spec.autoHideOverlay,
     overlayOrbStyle: spec.overlayOrbStyle,
-    overlayPlacement: placement
+    overlayPlacement: placement,
+    // Always written, never left to whatever a previous run happened to store: picking the visible
+    // Dock after the invisible one must actually bring the sliver back.
+    dockRest: spec.dockRest ?? 'sliver'
   }
 }
 

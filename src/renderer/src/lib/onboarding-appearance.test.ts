@@ -116,13 +116,10 @@ describe('onboarding appearance — 2.0 two-step', () => {
       'circle',
       'jarvis'
     ])
-    expect(onboardingChromeForPlacement('right-edge').map((c) => c.id)).toEqual([
-      'dock',
-      'bar-hides',
-      'bar-stays',
-      'circle',
-      'jarvis'
-    ])
+    // The right edge no longer offers the bar family. Bar is an 880-wide horizontal strip, so a
+    // right-edge bar is not a placement but a combination that cannot be built, and choosing one put a
+    // top-centre chrome at a right-edge placement (the sliver that appeared mid-screen).
+    expect(onboardingChromeForPlacement('right-edge').map((c) => c.id)).toEqual(['dock', 'dock-hidden'])
     expect(onboardingChromeForPlacement('top-center').map((c) => c.title).join(' ')).not.toMatch(/Island/)
     const all = [
       ONBOARDING_PLACEMENT_HEADING,

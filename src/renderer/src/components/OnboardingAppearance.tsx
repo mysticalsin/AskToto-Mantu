@@ -222,6 +222,18 @@ export function OnboardingAppearance({
                     (placementLocked || saving ? ' opacity-60' : '')
                   }
                 >
+                  {/* The placement step was title + sentence and nothing else, so choosing between
+                      "Top" and "Right" meant choosing between two words. These are the same diagrams
+                      the Settings placement picker already uses: a desktop with the surface drawn
+                      where it will actually sit. */}
+                  <span
+                    className={`overlay-placement-diagram overlay-placement-diagram--${id}`}
+                    data-placement-diagram={id}
+                    aria-hidden="true"
+                  >
+                    <span className="overlay-placement-diagram__desktop" />
+                    <span className="overlay-placement-diagram__mark" />
+                  </span>
                   <span className="overlay-chrome-card__title">{ONBOARDING_PLACEMENT_COPY[id].title}</span>
                   <span className="overlay-chrome-card__desc">{ONBOARDING_PLACEMENT_COPY[id].desc}</span>
                 </button>
