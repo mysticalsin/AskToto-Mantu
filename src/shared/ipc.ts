@@ -208,6 +208,8 @@ export const IPC = {
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
   permissionsRequestUpfront: 'permissions:requestUpfront',
+  // Cap2 ear pre-flight: mic grant + live wake-ASR engine availability (see the preload comment).
+  cap2EarPrepare: 'cap2:earPrepare',
   // Settings / overlay self-check: first pass is the OS probe; second pass is a real vision ask.
   // Result stays on this device — never forwarded to a teammate, CRM, or askStart overlay chat.
   screenCaptureCheck: 'permissions:screenCaptureCheck',

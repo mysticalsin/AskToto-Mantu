@@ -27,9 +27,22 @@ export function foldSpeech(text: string): string {
     .trim()
 }
 
+/**
+ * How live ASR actually spells the name. Parakeet does not know the product name, so it emits the
+ * nearest dictionary words instead — decoding real spoken audio through this build's own Parakeet
+ * model returns "Hey Midas.", "Hey Metus, open notes." and "Hey meet us, open notes and Google
+ * Norbert Wiener." for three clean readings of the wake phrase, and Tony reports "hey Matisse" from
+ * his own mic. The old `metis`-only pattern could not match ANY of those, which is why live Hey Métis
+ * did nothing while the text-injecting prove path passed.
+ *
+ * Widening the NAME is safe: the greeting stays mandatory, so none of these arm on their own — bare
+ * "Métis" (and bare "Meet us.", which is what Parakeet returns for it) still does not wake Cap2.
+ */
+const WAKE_NAME =
+  "(?:m[ae]tt?[aeiou]ss?e?|m[iy]das|mathis|mateus|maitis|matt?ice|(?:met|meet|mat|may|mid)\\s(?:is|iss|us|as|ass))"
 /** Require greeting + name — bare "Métis" must not arm Cap2 (Tony / Ultron HARD). */
 /** hey|hi — Apple/Parakeet often fold "Hey" → "Hi". Bare Métis still fails. */
-const WAKE_RE = /\b(hey|hi)\s+metis\b/
+const WAKE_RE = new RegExp(`\\b(hey|hi)\\s+${WAKE_NAME}\\b`)
 const END_RE =
   /\b(thank you|thanks metis|thanks|that'll be all|that will be all|stop listening)\b/
 

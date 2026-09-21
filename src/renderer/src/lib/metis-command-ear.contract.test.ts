@@ -26,6 +26,46 @@ describe('Cap2 always-on command ear', () => {
     expect(main).toContain("p.speaker === 'you'")
     expect(main).toContain('ingestMetisCommandFromAsr(text)')
   })
+
+  it('tries every engine per window — one dead engine must not mute the wake path', () => {
+    // Tony live FAIL 72c36473: Parakeet's model files were missing, every window rejected, and the ear
+    // never fell through to Apple Speech. Both feeds are reached from one cascade now.
+    expect(ear).toContain('transcribeWindow')
+    expect(ear).toMatch(/order: EngineId\[\] =[\s\S]*'parakeet', 'apple'/)
+    expect(ear).toContain('engineDead[via] = true')
+    expect(ear).toContain('feedUnavailable')
+  })
+
+  it('reports a deaf ear instead of failing silent', () => {
+    expect(ear).toContain("reportBroken('asr-engine-missing')")
+    expect(ear).toContain("reportBroken('mic-silent')")
+    expect(app).toContain('Ear on · no ASR engine')
+    expect(app).toContain('Mic silent · check input')
+  })
+
+  it('overlaps windows so a wake phrase on a boundary is still whole', () => {
+    expect(ear).toContain('HOP_SEC')
+    expect(ear).toMatch(/pending = pending\.slice\(Math\.min\(hop/)
+  })
+
+  it('main reports an unrunnable engine as unavailable rather than throwing', () => {
+    expect(main).toContain('if (!parakeetModelReady()) {')
+    expect(main).toContain('if (!appleSpeechAvailable()) {')
+    expect(main).toContain("return { text: '', unavailable: true }")
+    expect(main).toContain('[cap2] parakeet transcribe failed')
+    expect(main).toContain('[cap2] wake engines parakeet=')
+  })
+
+  it('asks for the mic grant from main before listening to silence', () => {
+    // macOS returns a live track of zeros, not an error, when the TCC grant was never made.
+    expect(ear).toContain('cap2EarPrepare')
+    expect(main).toContain("systemPreferences.askForMediaAccess('microphone')")
+  })
+
+  it('keeps the pill host opaque while the listen orb is up', () => {
+    expect(main).toContain('metisCommandPillLive = live')
+    expect(main).toMatch(/metisCommandPillLive\s*\?\s*1/)
+  })
 })
 
 describe('Cap2 Ear stays top-center (Cap4 dock must not steal it)', () => {

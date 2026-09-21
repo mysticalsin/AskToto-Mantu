@@ -195,7 +195,7 @@ const api = {
     samples: Float32Array,
     speaker: string,
     startedAt?: number
-  ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
+  ): Promise<string | { text: string; name?: string; echo?: boolean; unavailable?: boolean }> =>
     ipcRenderer.invoke(IPC.parakeetFeed, { samples, speaker, startedAt }),
   onParakeetProgress: (cb: (pct: number) => void): (() => void) => {
     const h = (_e: unknown, d: { pct: number }): void => cb(d.pct)
@@ -207,8 +207,15 @@ const api = {
     samples: Float32Array,
     speaker: string,
     startedAt?: number
-  ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
+  ): Promise<string | { text: string; name?: string; echo?: boolean; unavailable?: boolean }> =>
     ipcRenderer.invoke(IPC.appleSpeechFeed, { samples, speaker, startedAt }),
+  // Cap2 ear pre-flight: raise the macOS mic prompt (main-side askForMediaAccess — the renderer's
+  // getUserMedia gets a stream of silence instead of an error when that grant was never made) and
+  // report which wake ASR engines can actually run, so a dead ear is visible rather than silent.
+  cap2EarPrepare: (): Promise<{
+    microphone: string
+    engines: { parakeet: boolean; apple: boolean }
+  }> => ipcRenderer.invoke(IPC.cap2EarPrepare),
   // Cloud STT live WS (main-side Nova-3 / Soniox). Credentials never enter the renderer.
   cloudSttStart: (opts: {
     provider: string

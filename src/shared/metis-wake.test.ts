@@ -21,6 +21,30 @@ describe('Cap2 wake word', () => {
     expect(transcriptContainsWakeWord('meeting about meta systems')).toBe(false)
   })
 
+  it('HARD: wakes on what live ASR ACTUALLY returns for the wake phrase', () => {
+    // Verbatim Parakeet output for three clean spoken readings of "Hey Métis", decoded through this
+    // build's own model (resources/asr nemo-parakeet-tdt-0.6b-v3-int8). None of these matched the
+    // old metis-only pattern, which is exactly why Tony's live mic did nothing.
+    expect(transcriptContainsWakeWord('Hey Midas.')).toBe(true)
+    expect(transcriptContainsWakeWord('Hey Metus, open notes.')).toBe(true)
+    expect(transcriptContainsWakeWord('Hey meet us, open notes and Google Norbert Wiener.')).toBe(true)
+    // Tony's own report of the failing phrase, plus the near neighbours of it.
+    expect(transcriptContainsWakeWord('Hey Matisse')).toBe(true)
+    expect(transcriptContainsWakeWord('hey matisse open notes')).toBe(true)
+    expect(transcriptContainsWakeWord('hey mattis')).toBe(true)
+    expect(transcriptContainsWakeWord('Hi Mateus, open notes')).toBe(true)
+    expect(transcriptContainsWakeWord('hey met is')).toBe(true)
+    // …and the greeting is still mandatory for every one of them. "Meet us." is verbatim Parakeet
+    // output for a bare spoken "Métis" — the Ultron HARD rule survives the widened spelling.
+    expect(transcriptContainsWakeWord('Meet us.')).toBe(false)
+    expect(transcriptContainsWakeWord('Matisse')).toBe(false)
+    expect(transcriptContainsWakeWord('matisse open notes')).toBe(false)
+    expect(transcriptContainsWakeWord('let us meet us there')).toBe(false)
+    expect(transcriptContainsWakeWord('say hi to matthew')).toBe(false)
+    expect(transcriptContainsWakeWord('hi matt')).toBe(false)
+    expect(transcriptContainsWakeWord('hey man')).toBe(false)
+  })
+
   it('detects thank-you end phrases', () => {
     expect(transcriptContainsEndPhrase('Thank you')).toBe(true)
     expect(transcriptContainsEndPhrase('thanks Metis')).toBe(true)

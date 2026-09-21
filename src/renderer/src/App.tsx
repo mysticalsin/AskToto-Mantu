@@ -315,7 +315,9 @@ export function App(): JSX.Element {
     const enabled = settings?.onboardingDone === true
     const stop = startMetisCommandEar({
       enabled,
-      // Parakeet first — Apple helper often returns empty; feel logs proved parakeet hears.
+      // Parakeet first — feel logs proved parakeet hears — but the ear now cascades to Apple Speech
+      // per window instead of betting the whole wake path on one engine (Tony live FAIL 72c36473:
+      // Parakeet's model files were missing, so every window failed and nothing ever fell through).
       preferApple: false,
       isMeetingListening: () => document.documentElement.dataset.metisListening === '1',
       onStatus: (s) => {
@@ -3818,7 +3820,12 @@ export function App(): JSX.Element {
                   : metisCommandEarStatus.state === 'heard'
                     ? `Heard: ${'text' in metisCommandEarStatus ? metisCommandEarStatus.text.slice(0, 42) : ''}`
                     : metisCommandEarStatus.state === 'error'
-                      ? 'Ear error'
+                      ? // A deaf ear must name itself: silence with no explanation is the exact Tony FAIL.
+                        metisCommandEarStatus.reason === 'asr-engine-missing' || metisCommandEarStatus.reason === 'asr-no-text'
+                        ? 'Ear on · no ASR engine'
+                        : metisCommandEarStatus.reason === 'mic-silent'
+                          ? 'Mic silent · check input'
+                          : 'Ear error'
                       : null}
           </div>
         ) : null}

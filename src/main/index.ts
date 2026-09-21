@@ -632,7 +632,7 @@ import {
   parakeetAddonError
 } from './parakeet'
 import { createListeningStateHandler } from './listening-state-ipc'
-import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
+import { appleSpeechAvailable, appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
 import {
   startCloudSttLive,
   stopCloudSttLive,
@@ -2168,7 +2168,13 @@ function applyOverlaySurfaceChrome(): void {
     /* headless */
   }
   try {
-    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized, liveDockRest()))
+    win.setOpacity(
+      // Cap2: a parked dock/hide paints at opacity 0. While the listen pill owns the window the orb
+      // must be visible no matter which park path re-applies chrome (Tony FAIL: no orb on Hey Métis).
+      metisCommandPillLive
+        ? 1
+        : hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized, liveDockRest())
+    )
   } catch {
     /* headless */
   }
@@ -3119,6 +3125,18 @@ function anchorTopCenter(): void {
 }
 
 
+/** One line per dead wake engine per launch. A deaf Cap2 ear must be findable in the log without
+ *  drowning it: the ear feeds a window a second. */
+const cap2EngineLogged = new Set<string>()
+function logCap2EngineOnce(engine: 'parakeet' | 'apple', reason: string): void {
+  if (cap2EngineLogged.has(engine)) return
+  cap2EngineLogged.add(engine)
+  mainLog.info(`[cap2] wake engine unavailable: ${engine} (${reason})`)
+}
+
+/** True while the Cap2 listen pill owns the overlay window, so park opacity must stay 1. */
+let metisCommandPillLive = false
+
 /** Cap2: dock/island park is opacity-0 or a right-edge sliver — the listen pill cannot appear there.
  *  Unpark to a top-center host so Jarvis-style Hi Métis is on-screen (Tony FAIL 12c295e9 / b7a4b55c). */
 function revealForMetisCommandPill(): void {
@@ -3290,7 +3308,13 @@ function setWindowMode(): void {
     /* headless */
   }
   try {
-    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized, liveDockRest()))
+    win.setOpacity(
+      // Cap2: a parked dock/hide paints at opacity 0. While the listen pill owns the window the orb
+      // must be visible no matter which park path re-applies chrome (Tony FAIL: no orb on Hey Métis).
+      metisCommandPillLive
+        ? 1
+        : hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized, liveDockRest())
+    )
   } catch {
     /* headless / lifted placement stub */
   }
@@ -5013,12 +5037,29 @@ function registerIpc(): void {
     getSettings: () => getSettings(),
     jevEnabled: () => false, // Cap1 heartbeat flag parse lands with feel E2E; deterministic path required.
     onCommandSession: (live) => {
+      metisCommandPillLive = live
       if (live) revealForMetisCommandPill()
       else scheduleOverlayLeavePark()
     }
   })
   registerMetisCommandIpc({
     assertMainWindow
+  })
+  mainLog.info(
+    `[cap2] wake engines parakeet=${parakeetModelReady() ? 'ready' : 'missing'} apple=${appleSpeechAvailable() ? 'ready' : 'missing'}`
+  )
+  // Cap2 ear pre-flight. macOS hands a renderer getUserMedia stream of pure silence — not an error —
+  // when the mic TCC grant was never made, which is exactly the "I say Hey Métis and nothing happens"
+  // failure with no error anywhere. Ask for the grant from main (the only side that can) and tell the
+  // ear which engines can actually transcribe so it can show a deaf ear instead of failing silent.
+  ipcMain.handle(IPC.cap2EarPrepare, async (e) => {
+    assertMainWindow(e)
+    if (process.platform === 'darwin' && systemPreferences.getMediaAccessStatus('microphone') === 'not-determined') {
+      await systemPreferences.askForMediaAccess('microphone').catch(() => false)
+    }
+    const engines = { parakeet: parakeetModelReady(), apple: appleSpeechAvailable() }
+    if (!engines.parakeet && !engines.apple) mainLog.warn('[cap2] no wake ASR engine available — Hey Métis cannot be heard')
+    return { microphone: getPlatformPermissions().microphone, engines }
   })
 
   // Dev/feel only: prove wake→pillVisible→host without mic (Ultron: no UI-only tips).
@@ -6401,8 +6442,22 @@ function registerIpc(): void {
     const authed = requireAuth()
     // Cap2 local YOU mic must still ASR+wake when SSO is sticky/unsigned — otherwise Hey Métis is silent.
     if (p.speaker !== 'you' && !authed) return ''
+    // Tony live FAIL (tip 72c36473): the model files were absent on his Mac, so every Cap2 window
+    // rejected this invoke and the ear — which tried no other engine — heard nothing while the
+    // env-var prove path passed. Report the engine as unavailable instead of throwing: the caller
+    // then drops this engine and falls through to the next one (and the chip can say the ear is deaf).
+    if (!parakeetModelReady()) {
+      logCap2EngineOnce('parakeet', 'model files missing')
+      return { text: '', unavailable: true }
+    }
     const speakerKey = captureLiveSpeakerKey(p.startedAt)
-    const text = await parakeetTranscribe(samples)
+    let text: string
+    try {
+      text = await parakeetTranscribe(samples)
+    } catch (err) {
+      mainLog.warn(`[cap2] parakeet transcribe failed: ${err instanceof Error ? err.message : String(err)}`)
+      return { text: '', error: true }
+    }
     // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3): label THEM windows with a voice-derived name
     // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
@@ -6444,6 +6499,12 @@ function registerIpc(): void {
     if (samples.length > 16_000 * 30) return ''
     const authed = requireAuth()
     if (p.speaker !== 'you' && !authed) return ''
+    // Same unavailable contract as parakeetFeed: non-darwin or no mac-helper sidecar means this engine
+    // can never produce text, and the Cap2 ear must learn that once rather than per window.
+    if (!appleSpeechAvailable()) {
+      logCap2EngineOnce('apple', process.platform === 'darwin' ? 'mac-helper missing' : 'not darwin')
+      return { text: '', unavailable: true }
+    }
     const speakerKey = captureLiveSpeakerKey(p.startedAt)
     // Spoken-language hint (Settings → Audio) pins the recognizer locale; 'auto' keeps system locale.
     const text = await appleSpeechTranscribe(samples, appleSpeechLocale(getSettings().asrLanguage))
