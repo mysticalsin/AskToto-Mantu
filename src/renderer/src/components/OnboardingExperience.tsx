@@ -73,10 +73,9 @@ import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
 import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
-/** Act 2 only — keep DemoScene/Bar off Act 1 first-paint parse in this chunk. */
-const OnboardingDemoScene = lazy(() =>
-  import('./OnboardingDemoScene').then((m) => ({ default: m.OnboardingDemoScene }))
-)
+/** Act 2 demo - eager import so Suspense never hangs black after problem Continue (Tony HARD 2026-09-21).
+ *  Act 1 still lazy-splits DockPanel/Appearance elsewhere; DemoScene must not gate the story→reveal hop. */
+import { OnboardingDemoScene } from './OnboardingDemoScene'
 const OnboardingAppearance = lazy(() =>
   import('./OnboardingAppearance').then((m) => ({ default: m.OnboardingAppearance }))
 )
@@ -1541,9 +1540,9 @@ export function OnboardingExperience({
           <button
             type="button"
             onClick={() => {
-              // P0 Tony: reveal/demo Suspense hung black after story Continue — skip to next act.
+              // Tony HARD 2026-09-21: restore Act 2 reveal/demo (what Métis does). Never skip to appearance.
               playHero()
-              setScene(sceneAfterReveal())
+              setScene('reveal')
             }}
             className="onboard-cta no-drag focus-ring"
           >
