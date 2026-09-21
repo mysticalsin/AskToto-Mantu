@@ -118,9 +118,9 @@ function AppearanceLivePreview({
             data-orb-diagram-animate="true"
           >
             {chromeId === 'jarvis' ? (
-              <ObsidianOrb preview animate onActivate={() => undefined} title="" ariaLabel="" />
+              <ObsidianOrb preview animate={true} onActivate={() => undefined} title="" ariaLabel="" />
             ) : (
-              <JarvisOrbButton preview animate onActivate={() => undefined} title="" ariaLabel="" />
+              <JarvisOrbButton preview animate={true} onActivate={() => undefined} title="" ariaLabel="" />
             )}
           </div>
         </div>
@@ -161,12 +161,12 @@ function ChromeCardThumb({ id, selected }: { id: OnboardingChromeId; selected: b
         <div
           className={`overlay-orb-diagram overlay-orb-diagram--${orb}`}
           data-orb-diagram={orb}
-          data-orb-diagram-animate={selected || undefined}
+          data-orb-diagram-animate="true"
         >
           {id === 'jarvis' ? (
-            <ObsidianOrb preview animate={selected} onActivate={() => undefined} title="" ariaLabel="" />
+            <ObsidianOrb preview animate={true} onActivate={() => undefined} title="" ariaLabel="" />
           ) : (
-            <JarvisOrbButton preview animate={selected} onActivate={() => undefined} title="" ariaLabel="" />
+            <JarvisOrbButton preview animate={true} onActivate={() => undefined} title="" ariaLabel="" />
           )}
         </div>
       </span>
@@ -258,8 +258,8 @@ export function OnboardingAppearance({
       }
       data-onboard-appearance-step={step}
     >
+      {/* No remount key — remounting on every Top|Right / chrome click flashed the whole board. */}
       <AppearanceLivePreview
-        key={`${placement}:${previewLayout}:${previewChromeId}:${step}`}
         layout={previewLayout}
         placement={placement}
         chromeId={previewChromeId}

@@ -83,3 +83,18 @@ describe('the saved patch cannot leave a stale rest behind', () => {
     expect(patch.overlayLayout).not.toBe('dock')
   })
 })
+
+describe('selection click stays smooth (Tony voice ~8:43pm ET)', () => {
+  const scene = readFileSync(join(__dirname, '..', 'components', 'OnboardingAppearance.tsx'), 'utf8')
+  const css = readFileSync(join(__dirname, '..', 'styles.css'), 'utf8')
+
+  it('does not remount the live preview on every Top|Right / chrome click', () => {
+    // A key that includes placement/chrome/step remounts the board and flashes app-wide.
+    expect(scene).not.toMatch(/key=\{\`\$\{placement\}:\$\{previewLayout\}/)
+  })
+
+  it('cards transition border/background instead of snapping', () => {
+    expect(css).toMatch(/\.overlay-chrome-card \{[\s\S]*?transition:/)
+    expect(css).toMatch(/\.onboard-appearance \.overlay-chrome-card \{[\s\S]*?transition:/)
+  })
+})

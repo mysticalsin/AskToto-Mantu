@@ -2169,6 +2169,10 @@ button.onboard-cta {
   background: rgba(255, 255, 255, 0.02);
   text-align: left;
   cursor: pointer;
+  transition:
+    border-color 200ms var(--ease-spring),
+    background-color 200ms var(--ease-spring),
+    box-shadow 200ms var(--ease-spring);
 }
 .overlay-chrome-card:hover {
   background: rgba(255, 255, 255, 0.05);
@@ -2384,6 +2388,10 @@ button.onboard-cta {
 .onboard-appearance .overlay-chrome-card {
   border-color: rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.12);
+  transition:
+    border-color 200ms var(--ease-spring),
+    background-color 200ms var(--ease-spring),
+    box-shadow 200ms var(--ease-spring);
 }
 .onboard-appearance .overlay-chrome-card:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.16);
@@ -2391,6 +2399,25 @@ button.onboard-cta {
 .onboard-appearance .overlay-chrome-card--selected {
   border-color: rgba(244, 244, 245, 0.55);
   background: rgba(255, 255, 255, 0.2);
+}
+/* Preview chrome swaps without remount flash — opacity only. */
+.onboard-appearance-preview__circle-stage,
+.onboard-appearance-preview__bar-slot,
+.onboard-appearance-preview__dock,
+.onboard-appearance-preview__hint,
+.onboard-appearance-preview__island {
+  transition: opacity 180ms var(--ease-spring);
+}
+@media (prefers-reduced-motion: reduce) {
+  .overlay-chrome-card,
+  .onboard-appearance .overlay-chrome-card,
+  .onboard-appearance-preview__circle-stage,
+  .onboard-appearance-preview__bar-slot,
+  .onboard-appearance-preview__dock,
+  .onboard-appearance-preview__hint,
+  .onboard-appearance-preview__island {
+    transition: none;
+  }
 }
 .onboard-appearance .overlay-chrome-card__title {
   color: #fafafa;
