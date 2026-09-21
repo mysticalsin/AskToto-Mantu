@@ -1,6 +1,7 @@
 /**
  * Métis 2.0 Cap 2 — wake word + end-phrase detection (pure).
- * Spoken "Métis" starts a command session; meeting Listen alone must NOT execute.
+ * Spoken "Hey Métis" starts a command session; bare "Métis" alone does NOT.
+ * Meeting Listen alone must NOT execute.
  */
 export type MetisCommandPhase =
   | 'idle'
@@ -9,7 +10,8 @@ export type MetisCommandPhase =
   | 'executing'
   | 'deactivating'
 
-export const METIS_WAKE_WORD = 'Métis'
+/** Product wake phrase (Ultron HARD). ASR folds accents/case. */
+export const METIS_WAKE_WORD = 'Hey Métis'
 export const METIS_PILL_HI = 'Hi Métis'
 export const METIS_PILL_LISTENING = "Hi Métis, I'm listening..."
 
@@ -25,7 +27,16 @@ export function foldSpeech(text: string): string {
     .trim()
 }
 
-const WAKE_RE = /\bmetis\b/
+/**
+ * Product wake is Hey Métis / Hi Métis (HARD). On-device ASR often mis-hears the name (Midas, Metus,
+ * meet us, …). Match those spellings silently so live Hey Métis still arms. Greeting stays mandatory:
+ * bare Métis (and bare ASR forms of it) still do not wake Cap2. Not a product rename.
+ */
+const WAKE_NAME =
+  "(?:m[ae]tt?[aeiou]ss?e?|m[iy]das|mathis|mateus|maitis|matt?ice|(?:met|meet|mat|may|mid)\\s(?:is|iss|us|as|ass))"
+/** Require greeting + name — bare "Métis" must not arm Cap2 (Tony / Ultron HARD). */
+/** hey|hi — Apple/Parakeet often fold "Hey" → "Hi". Bare Métis still fails. */
+const WAKE_RE = new RegExp(`\\b(hey|hi)\\s+${WAKE_NAME}\\b`)
 const END_RE =
   /\b(thank you|thanks metis|thanks|that'll be all|that will be all|stop listening)\b/
 
@@ -37,7 +48,7 @@ export function transcriptContainsEndPhrase(text: string): boolean {
   return END_RE.test(foldSpeech(text))
 }
 
-/** Strip the wake token so command parsing starts after the name call. */
+/** Strip the wake phrase so command parsing starts after the name call. */
 export function stripWakeWord(text: string): string {
   const folded = foldSpeech(text)
   const m = folded.match(WAKE_RE)

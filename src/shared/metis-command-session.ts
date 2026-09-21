@@ -124,13 +124,7 @@ export function reduceMetisCommandSession(
   }
 
   const snap = parseMetisCommandTranscript(text, new Set(prev.committed))
-  // ASR emits incremental and final copies of the same sentence. Keep the action already being
-  // executed plus any queued follow-ons, add each new request once, and let a later negation clear
-  // only work that has not reached the OS yet.
-  const queued = new Set(prev.pending.map(desktopActionFingerprint))
-  const pending = snap.negation
-    ? []
-    : [...prev.pending, ...snap.commits.map((c) => c.request).filter((request) => !queued.has(desktopActionFingerprint(request)))]
+  const pending = snap.commits.map((c) => c.request)
   const phase: MetisCommandPhase = pending.length ? 'executing' : 'listening'
 
   return {
