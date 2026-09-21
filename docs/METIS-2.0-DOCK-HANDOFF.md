@@ -156,9 +156,12 @@ about more than the four that target `codex/review-release-1.9.1`.
    Nothing else in this list can be answered until this one is.
 1. **Which DockPanel is authoritative.** Rev 1 called this a three-way collision; checked against
    local refs, it is not. `cursor/cap4-glass-sidecar` (#191, 9fb913f1) is an **ancestor** of the
-   lineage, so it is already in. `origin/claude/cap4-motion` (#193) is 6 commits ahead of the
-   lineage with no post-`b756778a` `DockPanel.tsx` change. So the live question is narrower:
-   does #193 land on top of the lineage, or is its motion work re-applied?
+   lineage, so it is already in. `origin/claude/cap4-motion` (#193) sits ahead of the lineage
+   (`git rev-list --count b756778a..origin/claude/cap4-motion`) with no post-`b756778a`
+   `DockPanel.tsx` change — but it does touch dock-adjacent files, including `src/main/index.ts`
+   and `src/main/island/dock-invisible.test.ts`, so it is not independent of this lane. The live
+   question is narrower than a collision: does #193 land on top of the lineage, or is its motion
+   work re-applied? That ref also moves, so re-check it rather than trusting a number here.
 2. **Does 2.0 take the dock**, and by merging `metis-2.0-dock-lineage` (37 commits) or by
    cherry-picking. It cannot be assumed present, given decision 0.
 3. **PR consolidation.** #187 #188 #189 #190 target `codex/review-release-1.9.1` and predate the
@@ -208,9 +211,10 @@ describing them, so 2.0 inherits working code instead of a to-do list.
 | Overlay keys undocumented for fleet policy | named in `managed-config.example.json`, with a contract test pinning both samples to the schema |
 | `BASE=HEAD~2` had drifted off the fork point | derived via `git merge-base HEAD $DOCK_LINEAGE` |
 
-Verified end to end at `04ae90d6`. Two commits land after it: they change `docs/`, plus one
-comment-only hunk in `scripts/validate-dock-branch.sh` (`git diff 04ae90d6..HEAD -- scripts/`
-shows the comment and nothing else). No executable code changed after the evidence was captured: `npm run typecheck` EXIT=0 · `npm test` EXIT=0 (529 files /
+Verified end to end at `04ae90d6`. The commits after it change `docs/` plus one comment-only hunk
+in `scripts/validate-dock-branch.sh` — check with `git diff 04ae90d6..HEAD -- scripts/`, which
+shows the comment and nothing else, and `git log --oneline 04ae90d6..HEAD` for the list. No
+executable code changed after the evidence was captured: `npm run typecheck` EXIT=0 · `npm test` EXIT=0 (529 files /
 6412 passed / 17 skipped, proxy 28, operator 965) · licence-server 101/101 ·
 `scripts/validate-dock-branch.sh` PASS with 0 new failures against the fork point (63 → 0).
 
