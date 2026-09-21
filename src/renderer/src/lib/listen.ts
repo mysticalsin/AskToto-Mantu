@@ -33,6 +33,19 @@ const SR = 16000
  * Build Nova-3 / Soniox language opts for a Listen cloud STT session from Settings.asrLanguage.
  * Used by session authorize / URL builders; Keep in sync with start()/setLanguage refs.
  */
+/**
+ * Mirror the live-listening state onto <html data-metis-listening> for CSS to hook.
+ *
+ * Guarded because this module is exercised outside a DOM: the listen tests run in vitest's node
+ * environment, and a bare `document.` write threw ReferenceError before reaching a single assertion -
+ * 47 of them, from one CSS side effect. A renderer module that cannot be loaded without a DOM is
+ * fragile anyway; the production path is unchanged.
+ */
+function setListeningFlag(on: boolean): void {
+  if (typeof document === 'undefined') return
+  document.documentElement.dataset.metisListening = on ? '1' : '0'
+}
+
 export function cloudSttLanguageForListen(
   asrLanguage: string | undefined | null,
   pinnedLang?: string | null
@@ -1294,7 +1307,7 @@ export function useListen(
         stoppingRef.current = false
       }
       liveRef.current = false
-      document.documentElement.dataset.metisListening = '0'
+      setListeningFlag(false)
       pausedRef.current = false
       queue.current = []
       provisionalRef.current = null // no decode is ever coming back to replace it now
@@ -1984,7 +1997,7 @@ export function useListen(
         pendingWhisperStartedAtRef.current = undefined
         busy.current = false
         liveRef.current = true
-        document.documentElement.dataset.metisListening = '1'
+        setListeningFlag(true)
         wantsSystemRef.current = source === 'system' || source === 'both'
         sysRetryAttemptsRef.current = 0 // fresh session → no carried-over loopback-retry backoff
         sysRetryNextAtRef.current = 0
@@ -2387,7 +2400,7 @@ export function useListen(
       if (!captureAdmissionIsOpen(sessionEpochRef.current)) return
       const startedAt = sessionStartedAtRef.current
       liveRef.current = false
-      document.documentElement.dataset.metisListening = '0'
+      setListeningFlag(false)
       pausedRef.current = false
       readyRef.current = false
       busy.current = false
@@ -2581,7 +2594,7 @@ export function useListen(
         )
           return
         liveRef.current = false
-      document.documentElement.dataset.metisListening = '0'
+      setListeningFlag(false)
         disarmNetworkRetry()
         queue.current = [] // drop anything still undispatched once the bounded drain ends
         clearProvisional()
@@ -2756,7 +2769,7 @@ export function useListen(
       if (activeStop?.ackTimer) clearTimeout(activeStop.ackTimer)
       stopDrainRef.current = null
       liveRef.current = false
-      document.documentElement.dataset.metisListening = '0'
+      setListeningFlag(false)
       cloudSttFinalizingRef.current = false
       cloudSttPushesRef.current.clear()
       pendingWhisperEmbedRef.current = null

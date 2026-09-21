@@ -39,8 +39,11 @@ describe('MQA-221 — a failed refresh is never swallowed behind a good snapshot
 
   it('a failure with a snapshot in hand sets stale rather than discarding it', () => {
     // The exact regression: `error: prev.data ? null : err.message` with nothing else recording it.
-    const start = hook.indexOf('.catch(')
-    expect(start).toBeGreaterThan(-1)
+    // Anchor on the catch that SETS STATE, not merely the first `.catch(` in the file: a Cap3 fallback
+    // catch was later inserted ahead of it, so an index-based slice landed on the wrong handler and
+    // reported a regression in behaviour that had not changed.
+    const start = hook.indexOf('.catch((err: Error) => {')
+    expect(start, 'the state-setting catch was not found').toBeGreaterThan(-1)
     const body = hook.slice(start, start + 700)
     expect(body).toMatch(/error: prev\.data \? null : err\.message/)
     expect(body, 'the failure must survive as `stale` when a snapshot is kept').toMatch(

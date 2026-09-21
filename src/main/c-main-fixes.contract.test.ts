@@ -104,10 +104,19 @@ describe('emergency force quit remains available when the renderer is wedged', (
     expect(source).toMatch(/function shortcutClaimKey\(accel: string\): string/)
     expect(source).toMatch(/const claimKey = shortcutClaimKey\(accel\)/)
     expect(source).toMatch(/claimedBy\.set\(shortcutClaimKey\(EMERGENCY_FORCE_QUIT_ACCELERATOR\), 'emergency-force-quit'\)/)
-    // Do not use app.exit(): it bypasses before-quit and can lose an active meeting. The existing
-    // before-quit handler gives the renderer a bounded 2-second flush before the app terminates.
-    expect(source).toMatch(/function forceQuitMétis\(\): void \{[\s\S]*?app\.quit\(\)/)
-    expect(source).not.toMatch(/function forceQuitMétis\(\): void \{[\s\S]*?app\.exit\(0\)/)
+    // The FIRST press must ask politely, so before-quit keeps its bounded 2-second flush and an active
+    // meeting is not lost; app.exit must never be reachable ahead of app.quit. Past that window a
+    // wedged renderer never answers and its unresponsive window can stop the quit completing at all,
+    // which is the freeze this accelerator exists to escape, so the polite path gets a bounded grace
+    // and then the process goes down regardless.
+    const quitFn = source.slice(
+      source.indexOf('function forceQuitMétis(): void {'),
+      source.indexOf('\n}', source.indexOf('function forceQuitMétis(): void {'))
+    )
+    expect(quitFn).toMatch(/app\.quit\(\)/)
+    expect(quitFn.indexOf('app.quit()')).toBeLessThan(quitFn.indexOf('EMERGENCY_FORCE_QUIT_GRACE_MS'))
+    expect(quitFn).toMatch(/app\.exit\(0\)/)
+    expect(quitFn).toMatch(/stopSidecarsForHardExit\(\)/)
     expect(source).toMatch(/label: 'Force Quit Métis'/)
   })
 })

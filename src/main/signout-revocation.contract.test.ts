@@ -113,6 +113,10 @@ describe('intelligence.ts — the dashboard window is revocable', () => {
         show: vi.fn(),
         focus: vi.fn(),
         setContentProtection: vi.fn(),
+        // raiseIntelligenceWindow un-minimises and lifts before showing, so the fake must answer those too.
+        isMinimized: (): boolean => false,
+        restore: vi.fn(),
+        moveTop: vi.fn(),
         on: (event: string, fn: () => void): void => {
           listeners[event] = fn
         },
