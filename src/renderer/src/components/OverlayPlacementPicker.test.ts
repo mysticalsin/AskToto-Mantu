@@ -21,7 +21,8 @@ describe('overlay physical placement controls', () => {
 
   it('makes the choice available from Settings and the guided onboarding flow', () => {
     expect(settings).toMatch(/<OverlayPlacementPicker/)
-    expect(settings).toMatch(/onChange=\{saveOverlayPlacement\}/)
+    expect(settings).toMatch(/saveOverlayPlacement/)
+    expect(settings).toMatch(/void saveOverlayPlacement\(id\)/)
     expect(settings).toMatch(/persistOverlayPlacement\(id, patch\)/)
     expect(settings).toMatch(/Métis couldn't save this position\. Try again\./)
     expect(settings).toMatch(/locked=\{settings\.managedKeys\.includes\('overlayPlacement'\) \|\| overlayPlacementSave\.busy\}/)

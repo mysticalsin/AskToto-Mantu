@@ -2432,22 +2432,46 @@ button.onboard-cta {
   color: rgba(244, 244, 245, 0.72);
 }
 .onboard-appearance-preview {
+  /* Paris HARD 2026-09-21: hero "this is how it looks" stage — not a fat card. */
   position: relative;
-  width: 100%;
-  height: 148px;
+  width: min(100%, 560px);
+  height: 248px;
+  margin-inline: auto;
   overflow: hidden;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #2a084c 0%, #12041f 100%);
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(120% 80% at 50% -10%, rgba(127, 0, 218, 0.35), transparent 55%),
+    linear-gradient(165deg, #1a0a2e 0%, #0c0618 48%, #07040f 100%);
 }
 .onboard-appearance--compact .onboard-appearance-preview {
-  height: 104px;
+  height: 168px;
+  width: min(100%, 420px);
 }
 .onboard-appearance-preview__desktop {
   position: absolute;
-  inset: 28px 16px 12px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
+  inset: 36px 18px 16px;
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.02) 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
   pointer-events: none;
+}
+/* Invisible: soft edge affordance — empty elegant desktop, not a blank purple slab. */
+.onboard-appearance-preview[data-appearance-preview='hide'] .onboard-appearance-preview__desktop,
+.onboard-appearance-preview[data-chrome-preview='dock-hidden'] .onboard-appearance-preview__desktop {
+  background:
+    radial-gradient(ellipse 70% 40% at 50% 0%, rgba(214, 186, 255, 0.08), transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.015) 100%);
+}
+.onboard-appearance-preview[data-appearance-preview='hide'][data-placement-preview='right-edge'] .onboard-appearance-preview__desktop,
+.onboard-appearance-preview[data-chrome-preview='dock-hidden'] .onboard-appearance-preview__desktop {
+  background:
+    radial-gradient(ellipse 35% 70% at 100% 50%, rgba(214, 186, 255, 0.1), transparent 65%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.015) 100%);
 }
 .onboard-appearance-preview__hit {
   position: absolute;
@@ -2541,30 +2565,63 @@ button.onboard-cta {
   align-items: center;
 }
 .onboard-chrome-thumb {
+  /* Paris HARD: tiny glyph only — live stage carries the visual. */
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
-  min-height: 80px;
-  margin-bottom: 8px;
-  border-radius: 12px;
+  min-height: 28px;
+  height: 28px;
+  margin-bottom: 4px;
+  border-radius: 8px;
   overflow: hidden;
   background: transparent;
   pointer-events: none;
 }
+.onboard-appearance .onboard-chrome-thumb {
+  min-height: 22px;
+  height: 22px;
+  margin-bottom: 2px;
+}
 .onboard-chrome-thumb .overlay-orb-diagram {
-  width: 100%;
-  height: 80px;
+  width: 36px;
+  height: 22px;
   margin: 0;
+  border-radius: 6px;
+  box-shadow: none;
+}
+.onboard-appearance .overlay-chrome-card {
+  padding: 10px 12px;
+  gap: 4px;
+}
+.onboard-appearance .overlay-chrome-grid:not(.overlay-chrome-grid--two) {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-width: 560px;
+  gap: 8px;
+}
+.onboard-appearance-preview-caption {
+  letter-spacing: 0.01em;
 }
 .onboard-chrome-thumb__bar {
   display: block;
-  width: 78%;
-  height: 18px;
+  width: 70%;
+  height: 10px;
   border-radius: 999px;
   background: rgba(20, 20, 22, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.18);
-  box-shadow: 0 0 12px rgba(127, 0, 218, 0.35);
+  box-shadow: 0 0 8px rgba(127, 0, 218, 0.3);
+}
+.onboard-appearance .onboard-chrome-thumb__bar {
+  width: 64%;
+  height: 8px;
+}
+.onboard-appearance .onboard-chrome-thumb--bar-hides .onboard-chrome-thumb__desktop {
+  display: block;
+  width: 40px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
 }
 .onboard-chrome-thumb__bar--ghost {
   opacity: 0.35;
@@ -2575,12 +2632,16 @@ button.onboard-cta {
 .onboard-chrome-thumb--dock .onboard-chrome-thumb__desktop {
   position: relative;
   display: block;
-  width: 88px;
-  height: 64px;
-  border-radius: 8px;
+  width: 44px;
+  height: 22px;
+  border-radius: 5px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(12, 12, 14, 0.55);
   overflow: hidden;
+}
+.onboard-appearance .onboard-chrome-thumb--dock .onboard-chrome-thumb__desktop {
+  width: 40px;
+  height: 18px;
 }
 .onboard-chrome-thumb__rail {
   position: absolute;
@@ -2678,10 +2739,10 @@ button.onboard-cta {
 }
 .onboard-appearance-preview__bar-slot {
   position: absolute;
-  top: 8px;
+  top: 10px;
   left: 50%;
   z-index: 2;
-  width: 72%;
+  width: min(58%, 280px);
   transform: translateX(-50%);
   pointer-events: none;
 }
@@ -2691,13 +2752,15 @@ button.onboard-cta {
   justify-content: center;
   gap: 8px;
   width: 100%;
-  height: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 999px;
-  background: rgba(20, 20, 22, 0.78);
+  background: rgba(18, 16, 24, 0.82);
+  backdrop-filter: blur(12px);
   color: rgba(255, 255, 255, 0.95);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(214, 186, 255, 0.2);
 }
 /* Physical placement preview only. It deliberately reuses the same mock and spring state as the
    top-center preview; it does not emulate or depend on a hardware notch. */

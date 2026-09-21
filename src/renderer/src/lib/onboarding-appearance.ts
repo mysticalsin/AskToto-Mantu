@@ -16,7 +16,7 @@ export const ONBOARDING_PLACEMENT_HEADING = 'Where should Métis sit?'
 export const ONBOARDING_PLACEMENT_LEAD = 'Top along the screen, or right beside your meeting.'
 
 export const ONBOARDING_CHROME_HEADING = 'How should it look?'
-export const ONBOARDING_CHROME_LEAD = 'Pick the chrome for that edge. Change it anytime in Settings.'
+export const ONBOARDING_CHROME_LEAD = 'Watch the stage above — that is exactly how Métis will sit. Change it anytime in Settings.'
 
 /** @deprecated flat three-card ask — superseded by 2.0 two-step */
 export const ONBOARDING_APPEARANCE_HEADING = ONBOARDING_PLACEMENT_HEADING

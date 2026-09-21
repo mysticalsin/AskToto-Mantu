@@ -818,9 +818,11 @@ describe('overlay chrome modes (hide / island / bar / dock)', () => {
     expect(ipc).toMatch(/overlayLayout: z\.enum\(\['hide', 'island', 'bar', 'dock'\]\)\.default\('hide'\)/)
     expect(ipc).toMatch(/overlayLayout: 'hide'/)
     expect(ipc).toMatch(/overlayOrbStyle: z\.enum\(\['bar', 'jakub', 'obsidian'\]\)\.default\('jakub'\)/)
-    expect(settings).toMatch(/OverlayChromePicker/)
-    expect(settings).toMatch(/overlayLayout: id/)
-    expect(settings).toMatch(/overlayPlacement: 'right-edge'/)
+    // Tony voice 2026-09-21: Settings Rest style Invisible→Pill→Orbs (not hide|island|bar peers).
+    // OverlayChromePicker may still be imported for legacy diagrams; Rest radiogroup is the live control.
+    expect(settings).toMatch(/Rest style|Invisible/)
+    expect(settings).toMatch(/overlayLayout: opt\.layout|overlayLayout: id|overlayLayout: 'dock'/)
+    expect(settings).toMatch(/overlayPlacement: 'right-edge'|OverlayPlacementPicker/)
     expect(picker).toMatch(/OVERLAY_LAYOUTS/)
     expect(picker).toMatch(/aria-label="Overlay chrome"/)
     expect(picker).toMatch(/Default/)

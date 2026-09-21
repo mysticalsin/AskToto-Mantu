@@ -28,10 +28,12 @@ describe('Settings overlay chrome cards', () => {
   })
 
   it('switching overlayLayout patches settings immediately', () => {
-    expect(settings).toMatch(/<OverlayChromePicker/)
-    expect(settings).toMatch(/overlayLayout: id/)
-    expect(settings).toMatch(/autoHideOverlay: autoHideOverlayForLayout\(id\)/)
-    expect(settings).toMatch(/overlayPlacement: 'right-edge'/)
+    // Tony voice 2026-09-21: Settings Rest style Invisible→Pill→Orbs patches layout+orb.
+    // OverlayChromePicker remains for diagram CSS/contracts; live Settings uses Rest radiogroup.
+    expect(settings).toMatch(/Rest style|aria-label="Rest style"/)
+    expect(settings).toMatch(/overlayLayout: opt\.layout|overlayLayout: 'dock'|overlayLayout: id/)
+    expect(settings).toMatch(/autoHideOverlay: autoHideOverlayForLayout/)
+    expect(settings).toMatch(/overlayPlacement: 'right-edge'|OverlayPlacementPicker/)
     expect(picker).toMatch(/onClick=\{\(\) => onChange\(id\)\}/)
     expect(picker).toMatch(/overlay-chrome-card--selected/)
   })

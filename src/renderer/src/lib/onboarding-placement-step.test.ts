@@ -147,8 +147,10 @@ describe('selection has zero flash (Tony FAIL b756778a / Cap4 Appearance 12c295e
     expect(scene).toMatch(/onboard-chrome-thumb__rail/)
     // dock / dock-hidden must not fall through to bar-stays art
     const thumb = scene.slice(scene.indexOf('function ChromeCardThumb'))
-    const dockBranch = thumb.slice(0, thumb.indexOf('if (id === \'bar-hides\')'))
+    const dockEnd = thumb.indexOf("if (id === 'hidden'")
+    const dockBranch = thumb.slice(0, dockEnd === -1 ? thumb.length : dockEnd)
     expect(dockBranch).toMatch(/id === 'dock'/)
-    expect(dockBranch).not.toMatch(/bar-stays/)
+    expect(dockBranch).toMatch(/sidecar/)
+    expect(dockBranch).not.toMatch(/onboard-chrome-thumb--bar-stays/)
   })
 })

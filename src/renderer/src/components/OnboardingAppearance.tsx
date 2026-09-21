@@ -297,11 +297,13 @@ export function OnboardingAppearance({
         placement={placement}
         chromeId={previewChromeId}
       />
-      {previewCaption ? (
-        <p className="onboard-appearance-preview-caption m-0 text-center text-[12px] text-white/75" data-placement-caption={placement}>
-          {previewCaption}
-        </p>
-      ) : null}
+      <p
+        className="onboard-appearance-preview-caption m-0 text-center text-[12px] text-white/80"
+        data-placement-caption={placement}
+        data-paris-preview-caption="1"
+      >
+        {previewCaption ?? 'This is how it will look'}
+      </p>
       {step === 'placement' ? (
         <>
           <div className="onboard-act4-heading flex flex-col items-center gap-2">

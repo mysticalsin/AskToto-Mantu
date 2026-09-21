@@ -6632,7 +6632,7 @@ export function Settings({
                           Rest style <ManagedChip keys={settings.managedKeys} k="overlayLayout" />
                         </p>
                         <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                          Invisible, then Pill, then Orbs — in that order. Right edge is under Overlay position.
+                          Invisible, then Pill, then Orbs, in that order. Right edge is under Overlay position.
                         </p>
                         <div role="radiogroup" aria-label="Rest style" className="flex flex-col gap-2">
                           {(
