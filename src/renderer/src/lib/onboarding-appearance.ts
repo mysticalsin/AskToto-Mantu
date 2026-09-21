@@ -1,5 +1,5 @@
 /**
- * Onboarding appearance 2.0 — placement first, then chrome.
+ * Onboarding appearance 2.0  -  placement first, then chrome.
  * Contract: docs/design/ONBOARDING-APPEARANCE-2.0-LOCK.md
  */
 import {
@@ -18,7 +18,7 @@ export const ONBOARDING_PLACEMENT_LEAD = 'Top along the screen, or right beside 
 export const ONBOARDING_CHROME_HEADING = 'How should it look?'
 export const ONBOARDING_CHROME_LEAD = 'Pick the chrome for that edge. Change it anytime in Settings.'
 
-/** @deprecated flat three-card ask — superseded by 2.0 two-step */
+/** @deprecated flat three-card ask  -  superseded by 2.0 two-step */
 export const ONBOARDING_APPEARANCE_HEADING = ONBOARDING_PLACEMENT_HEADING
 export const ONBOARDING_APPEARANCE_LEAD = ONBOARDING_PLACEMENT_LEAD
 
@@ -204,7 +204,7 @@ export function seedOnboardingChrome(
   return defaultChromeId(placement)
 }
 
-/** @deprecated flat copy map — kept for Settings/tests that still import it */
+/** @deprecated flat copy map  -  kept for Settings/tests that still import it */
 export const ONBOARDING_APPEARANCE_COPY: Record<OverlayLayout, { title: string; desc: string }> = {
   hide: { title: 'Hidden', desc: 'Move to the top, then click to open.' },
   island: { title: 'Island', desc: 'A small island stays visible. Hover opens it.' },
@@ -299,7 +299,10 @@ export type AppearancePreviewEvent =
   | 'spring-out-end'
 
 export function appearancePreviewInitialPhase(layout: OverlayLayout): AppearancePreviewPhase {
-  if (layout === 'bar' || layout === 'dock') return 'settled'
+  // Tony FAIL 2026-09-21: dock must NOT open as a fat whitish panel on first paint.
+  // Pill rests as a slim rail; Invisible stays empty (soft edge glow). Hover opens.
+  if (layout === 'bar') return 'settled'
+  if (layout === 'dock') return 'rest'
   return 'rest'
 }
 
@@ -318,8 +321,26 @@ export function appearancePreviewShowsIsland(layout: OverlayLayout, phase: Appea
   return layout === 'island' && phase === 'rest'
 }
 
-export function appearancePreviewShowsDock(layout: OverlayLayout, phase: AppearancePreviewPhase): boolean {
-  return layout === 'dock' && (phase === 'settled' || phase === 'in' || phase === 'out' || phase === 'rest')
+export function appearancePreviewShowsDock(
+  layout: OverlayLayout,
+  phase: AppearancePreviewPhase,
+  chromeId?: OnboardingChromeId
+): boolean {
+  if (layout !== 'dock') return false
+  // Invisible (dock-hidden): soft edge glow via desktop CSS only - never a dock slab.
+  if (chromeId === 'dock-hidden') return false
+  // Pill: slim rail at rest; open panel only while hovering / settling.
+  return phase === 'settled' || phase === 'in' || phase === 'out' || phase === 'rest'
+}
+
+/** Fat open sidecar is only for Pill hover demo - never Invisible, never first paint. */
+export function appearancePreviewDockOpen(
+  chromeId: OnboardingChromeId,
+  phase: AppearancePreviewPhase
+): boolean {
+  if (chromeId === 'dock-hidden') return false
+  if (chromeId !== 'dock') return false
+  return phase === 'settled' || phase === 'in'
 }
 
 export function appearancePreviewShowsHint(layout: OverlayLayout, phase: AppearancePreviewPhase): boolean {

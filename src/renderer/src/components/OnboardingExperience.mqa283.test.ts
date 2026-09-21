@@ -39,10 +39,11 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).not.toMatch(/setScene\(settings\?\.licenseGateEnabled \? 'license' : 'personalize'\)/)
   })
 
-  it('keeps the optional demo bundle out of Act 1 while retaining a visible recovery surface', () => {
-    expect(experienceSrc).toMatch(/lazy, Suspense/)
-    expect(experienceSrc).toMatch(/const OnboardingDemoScene = lazy\(/)
-    expect(experienceSrc).not.toMatch(/import \{ OnboardingDemoScene \} from '\.\/OnboardingDemoScene'/)
+  it('eager DemoScene so Act 2 never Suspense-hangs; fallback Continue still present', () => {
+    // Tony HARD 2026-09-21: lazy DemoScene caused black hang after problem Continue; skip-to-appearance was the bad workaround.
+    expect(experienceSrc).toMatch(/import \{ OnboardingDemoScene \} from '\.\/OnboardingDemoScene'/)
+    expect(experienceSrc).not.toMatch(/const OnboardingDemoScene = lazy\(/)
+    expect(experienceSrc).toMatch(/setScene\('reveal'\)/)
     const reveal = experienceSrc.slice(experienceSrc.indexOf("{scene === 'reveal'"), experienceSrc.indexOf("{scene === 'setup'"))
     expect(reveal).toMatch(/<Suspense/)
     expect(reveal).toMatch(/Continue/)

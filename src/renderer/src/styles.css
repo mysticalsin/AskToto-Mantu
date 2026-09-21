@@ -1,5 +1,5 @@
 @import 'tailwindcss';
-/* streamdown styles itself with Tailwind utilities — Tailwind v4 must scan its dist to emit them */
+/* streamdown styles itself with Tailwind utilities - Tailwind v4 must scan its dist to emit them */
 @source "../../../node_modules/streamdown/dist";
 /* AskToto is always dark; streamdown's shiki colors live under the `dark:` variant.
    Make `dark:` class-based (not prefers-color-scheme) so the dark code theme always applies. */
@@ -25,15 +25,15 @@
   --font-body: 'InterVar', -apple-system, system-ui, sans-serif;
   /* Mantu brand purple (Bright Purple #7F00DA / Primary Purple #6600AE). No yellow. */
   --color-accent: #7f00da;
-  --color-accent-2: #a64dff; /* brighter purple — active toolbar icons, input cursor, chevron */
+  --color-accent-2: #a64dff; /* brighter purple - active toolbar icons, input cursor, chevron */
   /* Accent used as TEXT/icon on the dark glass. #7f00da is a fill color (~2.7:1) and fails WCAG AA as
      text; this lighter purple clears the 4.5:1 body / 3:1 large-and-graphical floors on every glass tint
      (same hue family as --color-focus, which the codebase already documents as AA-clear). */
   --color-accent-text: #b388f0;
   --color-accent-soft: rgba(127, 0, 218, 0.18);
   --color-accent-glow: rgba(127, 0, 218, 0.30);
-  --color-cyan: #22d3ee; /* Start-listening idle state — a distinct, inviting color from the muted toolbar default */
-  /* Bright text — pops on the more-transparent glass (Tony: "text can be very bright"). */
+  --color-cyan: #22d3ee; /* Start-listening idle state - a distinct, inviting color from the muted toolbar default */
+  /* Bright text - pops on the more-transparent glass (Tony: "text can be very bright"). */
   --color-ink: rgba(255, 255, 255, 1);
   --color-ink-2: rgba(255, 255, 255, 0.86);
   --color-ink-3: rgba(255, 255, 255, 0.74); /* ≥4.5:1 on the frosted glass (WCAG AA) */
@@ -47,11 +47,11 @@
   --color-danger-soft: rgba(240, 113, 122, 0.14);
   --color-success: #83c092;
   --color-success-soft: rgba(131, 192, 146, 0.12);
-  /* Was consumed in 5 components only via an inline var(--color-warn, #fac775) fallback — the token
+  /* Was consumed in 5 components only via an inline var(--color-warn, #fac775) fallback - the token
      itself was never declared. One source of truth here; the inline fallbacks can now be dropped. */
   --color-warn: #fac775;
 
-  /* Glass surfaces — neutral dark gray with a faint Mantu-purple undertone (desaturated so the bar reads
+  /* Glass surfaces - neutral dark gray with a faint Mantu-purple undertone (desaturated so the bar reads
      clearly over any desktop), still translucent but opaque enough to stay legible. Accents stay purple.
      Alpha channels multiply by --overlay-opacity-scale (Settings → Personalize → Appearance; default 1 =
      these exact values) so the user can make the overlay more or less see-through. rgb()'s slash-alpha
@@ -70,7 +70,7 @@
   --blur-panel: 42px;
   --blur-saturate: 160%;
 
-  /* Listening state — neutral gray, much more opaque so thin text stays readable behind the overlay. */
+  /* Listening state - neutral gray, much more opaque so thin text stays readable behind the overlay. */
   --glass-fill-listening: rgb(20 8 40 / calc(0.82 * var(--overlay-opacity-scale)));
   --glass-fill-strong-listening: rgb(16 6 34 / calc(0.88 * var(--overlay-opacity-scale)));
   --glass-tint-white-listening: rgba(255, 255, 255, 0.04);
@@ -85,19 +85,19 @@
   --space-5: 20px;
   --space-6: 24px;
 
-  /* Radius — concentric ladder: outer > card > control > pill */
+  /* Radius - concentric ladder: outer > card > control > pill */
   --radius-outer: 16px;   /* floating widget / window chrome */
   --radius-sm: 8px;
   --radius-md: 10px;
-  --radius-lg: 14px;      /* cards — always inner to radius-outer */
+  --radius-lg: 14px;      /* cards - always inner to radius-outer */
   --radius-xl: 18px;
   --radius-pill: 9999px;
   --radius-control: 10px; /* inputs, chips */
 
-  /* Focus ring — single shared hue (lighter purple → clears 3:1 contrast floor on dark surfaces) */
+  /* Focus ring - single shared hue (lighter purple → clears 3:1 contrast floor on dark surfaces) */
   --color-focus: #b388f0;
 
-  /* Elevation — depth + a faint Mantu-purple ambient glow for a premium, on-brand feel. */
+  /* Elevation - depth + a faint Mantu-purple ambient glow for a premium, on-brand feel. */
   --shadow-bar: 0 8px 28px rgba(0, 0, 0, 0.42), 0 2px 18px rgba(127, 0, 218, 0.12),
     inset 0 0.5px 0 var(--color-rim-light);
   --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 28px rgba(127, 0, 218, 0.12),
@@ -124,8 +124,8 @@
   /* ── Settings window theme: Cluely's two-pane layout, recolored to Mantu purple ──────────────
      Mantu palette: Bright Purple #7F00DA, Primary Purple #6600AE, Dark #1A0033, white text. No yellow.
      Used only by the Settings window (.cl-* surfaces). The overlay bar/panel use the glass system. */
-  --cl-bg: #14012a; /* app shell — solid Mantu purple-black */
-  --cl-background: #1a0033; /* content pane — Mantu Dark */
+  --cl-bg: #14012a; /* app shell - solid Mantu purple-black */
+  --cl-background: #1a0033; /* content pane - Mantu Dark */
   --cl-foreground: #ffffff;
   --cl-card: #291050; /* raised purple surface */
   --cl-muted: #291050;
@@ -249,7 +249,7 @@ body {
 
 /* NOTE: a `background` shorthand may carry at most ONE solid color (the final background-color); every
    other layer MUST be an image. So each translucent color layer is wrapped in linear-gradient(c, c) to
-   make it a valid image layer — otherwise the whole declaration is invalid and the fill never paints
+   make it a valid image layer - otherwise the whole declaration is invalid and the fill never paints
    (which left the bar a pure backdrop-blur with no grey backing, so white text washed out over bright
    desktops). Layers paint top→bottom: white tint over grey fill over the dark scrim (closest to backdrop). */
 .glass {
@@ -260,7 +260,7 @@ body {
   -webkit-backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
   backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
-  /* Outer float + a specular top rim and a soft bottom shade — the "liquid glass" depth cue. */
+  /* Outer float + a specular top rim and a soft bottom shade - the "liquid glass" depth cue. */
   box-shadow: var(--shadow-bar), inset 0 1px 0 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 0 rgba(0, 0, 0, 0.2);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
@@ -287,7 +287,7 @@ body {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 
-/* Listening state — swap purple glass for a denser neutral gray so the user can read
+/* Listening state - swap purple glass for a denser neutral gray so the user can read
    the thin text clearly while the mic is on. */
 .listening .glass {
   background:
@@ -460,10 +460,10 @@ input::placeholder {
     transform: scale(0.7);
   }
 }
-/* A one-shot expanding+fading ring layered behind the dot, so the MOMENT a meeting starts pops — the
+/* A one-shot expanding+fading ring layered behind the dot, so the MOMENT a meeting starts pops - the
    steady pulse-dot breathe continues underneath for as long as listening stays on. The ::before element
    is freshly created every time .rec-dot mounts (it only exists while listening is true), so this fires
-   automatically on every start with no JS — no "infinite", so it plays once and (with forwards) stays
+   automatically on every start with no JS - no "infinite", so it plays once and (with forwards) stays
    invisible at its end state rather than reappearing each pulse cycle. */
 @keyframes mic-burst {
   0% {
@@ -490,7 +490,7 @@ input::placeholder {
   animation: mic-burst 0.55s ease-out forwards;
 }
 
-/* Onboarding Act 4 (Vibe/personality) — the one-shot selection-delight ring on a persona card
+/* Onboarding Act 4 (Vibe/personality) - the one-shot selection-delight ring on a persona card
    (OnboardingExperience.tsx's `personalize` scene). Same "one-shot expanding+fading ring, forwards, no
    infinite" shape as `.rec-dot::before` above; the difference is that this element is keyed by `mode` in
    the component rather than by a mount/unmount boolean, so React freshly remounts it (and retriggers the
@@ -562,8 +562,8 @@ input::placeholder {
   animation: onboard-pop-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/* Onboarding act transition — each scene remounts keyed by name. Opacity + translate only
-   (~300ms ease-out). No scale-down — compositor-only motion budget (DESIGN.md). */
+/* Onboarding act transition - each scene remounts keyed by name. Opacity + translate only
+   (~300ms ease-out). No scale-down - compositor-only motion budget (DESIGN.md). */
 @keyframes scene-enter {
   from {
     opacity: 0;
@@ -578,15 +578,15 @@ input::placeholder {
   animation: scene-enter 300ms ease-out;
 }
 
-/* Act 1 (Welcome) hero — the Métis mark lands as a top-center "island" capsule (MQA-276). Three staged
+/* Act 1 (Welcome) hero - the Métis mark lands as a top-center "island" capsule (MQA-276). Three staged
    beats, each its own keyframe so they can be tuned independently:
-     1. island-descend — the capsule drops in from above and settles, like the notch capsule reference
+     1. island-descend - the capsule drops in from above and settles, like the notch capsule reference
         that inspired the FEEL of this moment (own timing/shape, not its assets or copy).
-     2. island-draw-sweep — a single comet sweeps the capsule's rim once, as if the outline is being
+     2. island-draw-sweep - a single comet sweeps the capsule's rim once, as if the outline is being
         drawn on, using the same masked-conic-gradient + stepped-timing trick as `.rainbow-ring` /
         `.aw-hidden-rainbow` above (cheap: ~24 repaints over the whole sweep, not one per frame), then
-        fades out — it never loops, so it costs nothing after the capsule has landed.
-     3. island-fill — the capsule's own background/border settle to a soft accent tint once the sweep
+        fades out - it never loops, so it costs nothing after the capsule has landed.
+     3. island-fill - the capsule's own background/border settle to a soft accent tint once the sweep
         finishes, so there is a shape for the mark to sit inside before it fades in.
    `--island-draw-angle` needs `@property` so the conic gradient's rotation is itself an interpolable,
    compositable value (same reasoning as `--cl-rainbow-angle` above). */
@@ -667,7 +667,7 @@ input::placeholder {
   display: inline-flex;
   animation: fade-up 260ms var(--ease-spring) 560ms both;
 }
-/* Static end state for anyone whose OS asks for reduced motion — see the blanket
+/* Static end state for anyone whose OS asks for reduced motion - see the blanket
    `prefers-reduced-motion` rule further down for why this needs an explicit override: that rule zeroes
    animation-duration, and a 0ms animation driving an `@property`-typed custom value is not guaranteed by
    spec to land on the keyframe's END value the way a plain opacity/transform animation reliably does. */
@@ -690,7 +690,7 @@ input::placeholder {
   }
 }
 
-/* Act 1's wordmark — the one custom-face moment in this scene (Geist, already bundled/offline, the
+/* Act 1's wordmark - the one custom-face moment in this scene (Geist, already bundled/offline, the
    app's one non-system face). Fixed min-height keeps the scramble from jittering the layout as glyph
    widths change frame to frame while it resolves; everything else in the hero (tagline, byline, CTA)
    stays on the system font stack per the "one custom face, rest system" brief. */
@@ -707,7 +707,7 @@ input::placeholder {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 }
 
-/* Welcome byline name only — system browser via target=_blank → setWindowOpenHandler → openExternal. */
+/* Welcome byline name only - system browser via target=_blank → setWindowOpenHandler → openExternal. */
 .hero-byline-link {
   display: inline-flex;
   align-items: center;
@@ -725,7 +725,7 @@ input::placeholder {
   background: color-mix(in srgb, #9a2bf0 32%, transparent);
 }
 
-/* Exclusive onboarding stage — hero/universe hold, never amber, never a purple wash, never a black void (DESIGN.md).
+/* Exclusive onboarding stage - hero/universe hold, never amber, never a purple wash, never a black void (DESIGN.md).
  Viewport-fixed so simple-fullscreen + % height cannot collapse the paint to a brand stripe. */
 .onboard-stage {
   position: fixed;
@@ -821,7 +821,7 @@ input::placeholder {
     animation: none;
     transform: none;
   }
-  /* FITO-185-V: reduced-motion portal-open — still unlock opacity, kill motion only here */
+  /* FITO-185-V: reduced-motion portal-open - still unlock opacity, kill motion only here */
   .onboard-stage.onboard-stage--portal-open .scene-enter,
   .onboard-stage.onboard-stage--portal-open .fade-up,
   .onboard-stage.onboard-stage--portal-open .hero-wordmark,
@@ -838,9 +838,9 @@ input::placeholder {
   }
 }
 
-/* Act 1 welcome atmosphere — full viewport, under the UI. Hero hold remains if this is absent. */
+/* Act 1 welcome atmosphere - full viewport, under the UI. Hero hold remains if this is absent. */
 .onboard-hero-video {
-  /* Absolute to .onboard-stage — fixed inside overflow-hidden clipped the lady bed. */
+  /* Absolute to .onboard-stage - fixed inside overflow-hidden clipped the lady bed. */
   position: absolute;
   inset: 0;
   z-index: 0;
@@ -868,7 +868,7 @@ input::placeholder {
 }
 .onboard-hero-video video {
   animation: onboard-hero-kenburns 28s ease-in-out infinite alternate;
-  /* No CSS filter on the <video> — compositor-only motion budget. */
+  /* No CSS filter on the <video> - compositor-only motion budget. */
 }
 @keyframes onboard-hero-kenburns {
   from {
@@ -917,7 +917,7 @@ input::placeholder {
 }
 /* FITO-185-V: keep opacity/visibility unlock so stalled GPU cannot leave Act 1 invisible,
    but restore short entrance animations (fade-up / scene-enter / mark-land). Do NOT set
-   animation:none or transform:none here — that froze the lady bed + CTA (Tony FAIL tip 1e038a5).
+   animation:none or transform:none here - that froze the lady bed + CTA (Tony FAIL tip 1e038a5).
    animation:none stays only under prefers-reduced-motion (media query above). Kenburns on
    .onboard-hero-video video is intentionally untouched. */
 .onboard-stage.onboard-stage--portal-open .scene-enter,
@@ -933,7 +933,7 @@ input::placeholder {
   visibility: visible !important;
 }
 
-/* Liquid glass — backdrop blur, inset highlight, gradient-border ::before. Technique only. */
+/* Liquid glass - backdrop blur, inset highlight, gradient-border ::before. Technique only. */
 .onboard-glass {
   position: relative;
   isolation: isolate;
@@ -999,7 +999,7 @@ input::placeholder {
   gap: 28px;
 }
 
-/* Act 4 on KineticGrid #05010a. Local heading light only — not a full-stage white wash. */
+/* Act 4 on KineticGrid #05010a. Local heading light only - not a full-stage white wash. */
 .onboard-act4 {
   position: relative;
   width: min(100%, 920px);
@@ -1193,7 +1193,7 @@ input::placeholder {
   z-index: 2;
 }
 
-/* Exclusive-stage primary CTAs — min 52×220, high contrast, hittable (DESIGN.md).
+/* Exclusive-stage primary CTAs - min 52×220, high contrast, hittable (DESIGN.md).
    z-index above the opaque starfield bed so Continue is visible before hover. */
 .onboard-cta {
   display: inline-flex;
@@ -1265,11 +1265,11 @@ button.onboard-cta {
   pointer-events: auto;
 }
 
-/* Act 6 (Ready, MQA-283) — the narrative's closing ceremony. Tasteful, not a confetti cannon: one gleam
+/* Act 6 (Ready, MQA-283) - the narrative's closing ceremony. Tasteful, not a confetti cannon: one gleam
    sweep around the Métis mark (same conic-mask trick as Act 1's `.island-capsule::before` above, so the
    two bookend acts share a visual language) plus a handful of one-shot spark motes (positioned by
    OnboardingExperience.tsx's READY_SPARKS via plain `left`/`top`, see `.ready-spark` below). Both are
-   one-shot / forwards — nothing loops, so the cost is a handful of repaints on scene mount, never an
+   one-shot / forwards - nothing loops, so the cost is a handful of repaints on scene mount, never an
    ongoing one. Reduced motion needs the same explicit override `.island-capsule` does for the same
    reason (an `@property`-typed angle is not guaranteed to land on its keyframe's end value at 0ms
    duration); `.ready-spark` needs no override since it only ever animates opacity/transform, which the
@@ -1351,7 +1351,7 @@ button.onboard-cta {
   }
 }
 
-/* "Develops like film" — the signature first-answer moment. When the streamed answer's first content
+/* "Develops like film" - the signature first-answer moment. When the streamed answer's first content
    replaces the skeleton, it emerges THROUGH the frosted glass (blur → sharp) rather than snapping in,
    masking the unavoidable provider TTFT (~300–750ms) so the reveal reads as the product working, not
    waiting. Runs ONCE on mount of the content container; later streamed tokens append to an already-sharp
@@ -1384,7 +1384,7 @@ button.onboard-cta {
   filter: none;
 }
 
-/* Animated rainbow contour — shown around the ask bar while the agent is working (replaces the old
+/* Animated rainbow contour - shown around the ask bar while the agent is working (replaces the old
    stop-square as the "thinking" signal). A rotating conic-gradient is masked to a thin border ring so
    only the outline is colored; the input/buttons inside stay untouched. pointer-events:none so it
    never intercepts clicks. */
@@ -1424,21 +1424,21 @@ button.onboard-cta {
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   animation: cl-rainbow-spin 2.6s linear infinite;
-  /* Stepped instead of continuous — repaints ~9x/s instead of every frame; still reads as rotating. */
+  /* Stepped instead of continuous - repaints ~9x/s instead of every frame; still reads as rotating. */
   animation-timing-function: steps(24, end);
   pointer-events: none;
   z-index: var(--z-ring);
 }
 
-/* QuickActions chips are a true `rounded-full` pill — the end-caps clamp to a tight semicircle, and at
+/* QuickActions chips are a true `rounded-full` pill - the end-caps clamp to a tight semicircle, and at
    that curvature the mask-composite cutout above is unstable in Chromium (visible as stray pixels from
    the conic-gradient's color stops, most noticeably green, flickering through). A prior attempt tried to
-   keep the ::before pseudo-element and hide it behind the chip via z-index:-1 — but `.glass-chip.rainbow-
+   keep the ::before pseudo-element and hide it behind the chip via z-index:-1 - but `.glass-chip.rainbow-
    ring` has no isolated stacking context (just `position: relative`, no `isolation`/z-index of its own),
    so that negative z-index wasn't reliably contained to this one chip; it could still peek through
    depending on paint order, which read as the same glitch. Real fix: drop the pseudo-element entirely for
    this case and paint the ring as a second `background-image` layer on the chip itself, clipped to the
-   border-box while the chip's own fill/scrim stay clipped to the padding-box — a plain multi-layer
+   border-box while the chip's own fill/scrim stay clipped to the padding-box - a plain multi-layer
    background paint has no masking, no z-index, no stacking-context ambiguity to get wrong. */
 .glass-chip.rainbow-ring::before {
   content: none;
@@ -1462,22 +1462,22 @@ button.onboard-cta {
   background-origin: padding-box, padding-box, border-box;
   background-clip: padding-box, padding-box, border-box;
   animation: cl-rainbow-spin 2.6s linear infinite;
-  /* Stepped instead of continuous — repaints ~9x/s instead of every frame; still reads as rotating. */
+  /* Stepped instead of continuous - repaints ~9x/s instead of every frame; still reads as rotating. */
   animation-timing-function: steps(24, end);
 }
 
-/* "Hidden from screen sharing" (stealth ON = contentProtection on) indicator — a multi-colour aurora
+/* "Hidden from screen sharing" (stealth ON = contentProtection on) indicator - a multi-colour aurora
    GLOW around the whole overlay so the user can see at a glance that Métis won't appear on a screen
    they share or record. Toggled by the bar's eye button. Two layers: a crisp masked conic-gradient RIM
    right on the edge, and a soft coloured HALO that spills outward past it (the "glow").
 
    Why box-shadow for the halo and not a blurred pseudo-element: .aw-widget is `overflow:hidden` (for its
-   rounded blur backdrop), which clips every child/pseudo — a ::after halo would be cut off at the edge.
+   rounded blur backdrop), which clips every child/pseudo - a ::after halo would be cut off at the edge.
    Only the element's OWN box-shadow is painted by the parent, OUTSIDE that clip, so it is the one thing
    that can spill past the widget. The overlay root adds breathing room while stealth is on (App.tsx
    `stealth-glow`) so the halo isn't clipped at the window boundary in turn.
 
-   Static, not spinning: an always-on indicator must never burn a per-frame repaint — animating the
+   Static, not spinning: an always-on indicator must never burn a per-frame repaint - animating the
    conic angle or the box-shadow every frame is exactly the paint-storm this file fights elsewhere. A
    rich static halo reads as a glow without one. */
 .aw-hidden-rainbow {
@@ -1519,7 +1519,7 @@ button.onboard-cta {
   filter: saturate(1.25);
   opacity: 1;
   /* A slow, gentle breathe so the rim reads as "alive" without a repaint storm. opacity is a
-     compositor-only property (its own layer), so this animates on the GPU — no per-frame paint,
+     compositor-only property (its own layer), so this animates on the GPU - no per-frame paint,
      unlike the conic-angle spin this indicator used to run. */
   animation: aw-hidden-breathe 4.2s ease-in-out infinite;
 }
@@ -1539,14 +1539,14 @@ button.onboard-cta {
   }
 }
 
-/* Act 2 (Demo) synthetic cursor (MQA-277) — a small drawn pointer the onboarding demo moves to (and
+/* Act 2 (Demo) synthetic cursor (MQA-277) - a small drawn pointer the onboarding demo moves to (and
    really clicks) the "What to say next" / "Fact-check" chips, so the scripted meeting reads as
    something guiding YOUR attention rather than the UI changing on its own. Position is set every rAF
    frame from JS (OnboardingDemoScene.tsx, via the pure easing in lib/synthetic-cursor.ts) as an inline
-   `transform: translate(x, y)` — no CSS transition on transform here, which would fight that per-frame
+   `transform: translate(x, y)` - no CSS transition on transform here, which would fight that per-frame
    value and lag a full frame behind the measured target. The click itself gets a one-shot expanding
    ring (same "static end-state, ::before/::after created fresh on mount" trick as .rec-dot's
-   mic-burst above), and the whole cursor is never rendered at all under prefers-reduced-motion — the
+   mic-burst above), and the whole cursor is never rendered at all under prefers-reduced-motion - the
    component checks the media query itself and skips straight to a static demo, matching Act 1's rule. */
 .demo-cursor {
   position: absolute;
@@ -1586,9 +1586,9 @@ button.onboard-cta {
   }
 }
 
-/* ── Ask widget — Cluely-style two-row overlay, Mantu purple glass ──────────────────────────
+/* ── Ask widget - Cluely-style two-row overlay, Mantu purple glass ──────────────────────────
    The hero input + ↵ on top, a slim toolbar below; answers expand inside it above the input.
-   Glass technique: same 3-layer system as .glass — white tint → translucent fill → dark scrim.
+   Glass technique: same 3-layer system as .glass - white tint → translucent fill → dark scrim.
    Shared tokens: --blur-panel/--blur-saturate/--glass-scrim-bar/--glass-fill/--glass-tint-white.
    The scrim (--glass-scrim-bar) keeps text legible over any desktop; the ~0.6 fill lets the
    backdrop blur breathe through. */
@@ -1610,7 +1610,7 @@ button.onboard-cta {
   -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
-  /* No outer black drop-shadow (was 0 30px 70px -20px rgba(0,0,0,0.74)) — it bled well past the
+  /* No outer black drop-shadow (was 0 30px 70px -20px rgba(0,0,0,0.74)) - it bled well past the
      widget's edges into the empty space around it, reading as a grey halo over a light desktop. The
      thin purple ring + ambient glow + inset specular rim-light still give it a "lifted" feel without
      smudging the background. */
@@ -1675,7 +1675,7 @@ button.onboard-cta {
   background: var(--aw-btnfill-hover);
 }
 /* the Mantu mark gets a soft brand glow ring. Kept tight (small blur, generous negative spread) since
-   the control pill's own window is hugged to its visible content — a wider glow than this gets hard-
+   the control pill's own window is hugged to its visible content - a wider glow than this gets hard-
    clipped into a flat-edged smudge at the window boundary instead of fading out naturally. */
 .aw-mark-glow {
   box-shadow:
@@ -1691,7 +1691,7 @@ button.onboard-cta {
   box-shadow: 0 12px 26px -10px rgba(0, 0, 0, 0.6);
 }
 /* floating control mini-pill (collapsed state). The window is hugged tightly to this element's own
-   width/height (see data-hug-width in state.ts) — a shadow with too much reach gets hard-clipped into
+   width/height (see data-hug-width in state.ts) - a shadow with too much reach gets hard-clipped into
    a flat-edged box at the window boundary instead of fading out, so this stays deliberately more
    contained than a typical floating-panel shadow. */
 .aw-pill {
@@ -1736,7 +1736,7 @@ button.onboard-cta {
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-top-color: rgba(255, 255, 255, 0.04);
-  border-radius: 0 0 999px 999px; /* flat top edge — it hugs the very top of the screen */
+  border-radius: 0 0 999px 999px; /* flat top edge - it hugs the very top of the screen */
   background: var(--aw-glass-bot);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   backdrop-filter: blur(18px) saturate(140%);
@@ -1769,7 +1769,7 @@ button.onboard-cta {
   border-radius: 999px;
   background: var(--color-ink-3);
 }
-/* Contained multi-colour hint while the overlay is hidden from screen capture (contentProtection on) —
+/* Contained multi-colour hint while the overlay is hidden from screen capture (contentProtection on) -
    the peek's own box can't afford the full aw-hidden-rainbow halo without the narrow hugged window
    clipping it into a flat band, so this is a tighter version that stays inside the strip. */
 .overlay-peek--stealth {
@@ -1783,7 +1783,7 @@ button.onboard-cta {
 .overlay-peek--stealth .overlay-peek__grip > span {
   background: rgba(219, 190, 255, 0.85);
 }
-/* Dock panel — the revealed sidecar surface.
+/* Dock panel - the revealed sidecar surface.
    It is attached to the screen edge, so it drops the right radius and the right border the way the
    sliver does: a floating rounded card at a screen edge reads as misplaced, a panel that meets the
    edge reads as docked. Same glass as .aw-widget, restated only where the edge changes it. */
@@ -1841,7 +1841,7 @@ button.onboard-cta {
 }
 
 
-/* Cap4 DESIGN POLISH — empty state + Bar Ask DNA composer (DESIGN.md tokens) */
+/* Cap4 DESIGN POLISH - empty state + Bar Ask DNA composer (DESIGN.md tokens) */
 .dock-empty__mark {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
@@ -2404,7 +2404,7 @@ button.onboard-cta {
   border-color: rgba(244, 244, 245, 0.55);
   background: rgba(255, 255, 255, 0.2);
 }
-/* Preview chrome swaps without remount flash — opacity only. */
+/* Preview chrome swaps without remount flash - opacity only. */
 .onboard-appearance-preview__circle-stage,
 .onboard-appearance-preview__bar-slot,
 .onboard-appearance-preview__dock,
@@ -2490,8 +2490,8 @@ button.onboard-cta {
 }
 
 
-/* Tony FAIL 4898ddb2 — orbs optically centered in the mock stage (not edge-clipped / weird).
-   Reuse Settings overlay-orb-diagram sizing (41 host + correct canvas) — never force 72px on the orb. */
+/* Tony FAIL 4898ddb2 - orbs optically centered in the mock stage (not edge-clipped / weird).
+   Reuse Settings overlay-orb-diagram sizing (41 host + correct canvas) - never force 72px on the orb. */
 /* ZERO flash: stacked chrome layers crossfade; never unmount on select (Tony FAIL b756778a). Cap4 Appearance 12c295e9 DNA. */
 .onboard-appearance-preview__circle-stage.is-on,
 .onboard-appearance-preview__bar-slot.is-on {
@@ -2518,21 +2518,25 @@ button.onboard-cta {
 
 .onboard-appearance-preview__circle-stage {
   position: absolute;
-  inset: 16px;
+  inset: 12px;
   z-index: 3;
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  /* Tony FAIL: orbs must render fully / uncut - never clip the sphere. */
+  overflow: visible;
 }
 .onboard-appearance-preview__circle-stage .overlay-orb-diagram {
-  width: min(160px, 70%);
-  height: 96px;
+  width: min(180px, 72%);
+  height: 120px;
   margin: 0;
-  border-radius: 12px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  border-radius: 0;
+  overflow: visible;
+  box-shadow: none;
+  background: transparent;
 }
-/* Right-edge placement must NOT shove the style orb to the right — middle of the stage only. */
+/* Right-edge placement must NOT shove the style orb to the right - middle of the stage only. */
 .onboard-appearance-preview--right-edge .onboard-appearance-preview__circle-stage {
   inset: 16px;
   right: 16px;
@@ -2557,6 +2561,21 @@ button.onboard-cta {
   height: 80px;
   margin: 0;
 }
+.onboard-appearance .onboard-chrome-thumb--circle,
+.onboard-appearance .onboard-chrome-thumb--jarvis {
+  min-height: 44px;
+  height: 44px;
+  overflow: visible;
+}
+.onboard-appearance .onboard-chrome-thumb--circle .overlay-orb-diagram,
+.onboard-appearance .onboard-chrome-thumb--jarvis .overlay-orb-diagram {
+  width: 40px;
+  height: 40px;
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
+}
+
 .onboard-chrome-thumb__bar {
   display: block;
   width: 78%;
@@ -2602,7 +2621,9 @@ button.onboard-cta {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
 }
 .onboard-chrome-thumb__sidecar--open {
-  width: 42%;
+  /* Match live stage: slim rail glyph, not a fat panel. */
+  width: 14%;
+  background: rgba(24, 16, 36, 0.85);
 }
 .onboard-chrome-thumb__sidecar--ghost {
   width: 10%;
@@ -2619,15 +2640,22 @@ button.onboard-cta {
   left: auto;
   transform: none;
 }
+/* Tony FAIL 2026-09-21: hover reveal is a slim dark glass rail - never a fat whitish card. */
 .onboard-appearance-preview--right-edge .onboard-appearance-preview__dock--open {
   right: 16px;
   left: auto;
-  width: min(36%, 128px);
-  border-radius: 10px 0 0 10px;
+  width: 10px;
+  height: 58%;
+  top: 16%;
+  border-radius: 8px 0 0 8px;
+  background: rgba(24, 16, 36, 0.78);
+  box-shadow:
+    inset 0 0 0 1px rgba(214, 186, 255, 0.28),
+    0 0 14px rgba(127, 0, 218, 0.25);
   transform: none;
 }
 
-/* Onboarding appearance 2.0 — placement two-up + dock/circle preview */
+/* Onboarding appearance 2.0 - placement two-up + dock/circle preview */
 .overlay-chrome-grid--two {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   max-width: 420px;
@@ -2651,13 +2679,16 @@ button.onboard-cta {
   right: 16px;
 }
 .onboard-appearance-preview__dock--open {
+  /* Tony FAIL: sleek hover rail, not a fat whitish/grey box. */
   right: 16px;
-  width: min(34%, 120px);
-  height: 64%;
-  top: 12%;
-  border-radius: 10px 0 0 10px;
-  background: rgba(255, 255, 255, 0.14);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+  width: 10px;
+  height: 58%;
+  top: 16%;
+  border-radius: 8px 0 0 8px;
+  background: rgba(24, 16, 36, 0.78);
+  box-shadow:
+    inset 0 0 0 1px rgba(214, 186, 255, 0.28),
+    0 0 14px rgba(127, 0, 218, 0.25);
 }
 .onboard-appearance-preview__circle {
   width: 64px;
@@ -2909,7 +2940,7 @@ button.onboard-cta {
   padding-left: 1.2em;
 }
 .md a {
-  color: #b388f0; /* lighter Mantu purple — clears AA on the dark surface */
+  color: #b388f0; /* lighter Mantu purple - clears AA on the dark surface */
   text-decoration: underline; /* don't rely on color alone as the only cue */
   text-underline-offset: 2px;
 }
@@ -2936,7 +2967,7 @@ button.onboard-cta {
   word-break: break-word;
 }
 
-/* Luxury agent status — caption then thinking-orbs. Isolation keeps the 2D canvas on its own
+/* Luxury agent status - caption then thinking-orbs. Isolation keeps the 2D canvas on its own
    compositor layer so the 60fps orb does not hitch the glass. The orb slot is reserved
    (--orb-size) so the first frame cannot shift the word. No CSS keyframe spinner. */
 .agent-status {
@@ -2988,13 +3019,13 @@ button.onboard-cta {
     animation-duration: 0ms !important;
     transition-duration: 0ms !important;
   }
-  /* The recording dot is a liveness + consent signal — it must keep moving, not freeze. Opacity-only
+  /* The recording dot is a liveness + consent signal - it must keep moving, not freeze. Opacity-only
      pulse (no scale) respects reduced-motion while still clearly reading as "we are live". */
   .rec-dot {
     animation: asktoto-loading-pulse 1.4s ease-in-out infinite !important;
     animation-duration: 1.4s !important;
   }
-  /* The rainbow contour signals "agent is working" — keep it alive without rotation via a gentle
+  /* The rainbow contour signals "agent is working" - keep it alive without rotation via a gentle
      opacity breathe (the static gradient still reads as the rainbow outline). */
   .rainbow-ring::before {
     animation: asktoto-loading-pulse 1.6s ease-in-out infinite !important;
@@ -3257,7 +3288,7 @@ html.metis-bar-land .aw-widget {
   flex-shrink: 0;
   padding: 0;
   margin: 0;
-  /* FITO-185 / Ultron: Tony hollow-outline fail — fill the 41 circle (same disc as Jarvis).
+  /* FITO-185 / Ultron: Tony hollow-outline fail - fill the 41 circle (same disc as Jarvis).
      thinking-orbs dots paint on top; transparent host read as empty ring left of Ask. */
   overflow: hidden;
   border: none;

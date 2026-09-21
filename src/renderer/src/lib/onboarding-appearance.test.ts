@@ -7,6 +7,8 @@ import {
   appearancePreviewShowsBar,
   appearancePreviewShowsHint,
   appearancePreviewShowsIsland,
+  appearancePreviewShowsDock,
+  appearancePreviewDockOpen,
   appearanceSettingsPatch,
   ONBOARDING_APPEARANCE_COPY,
   ONBOARDING_APPEARANCE_HEADING,
@@ -198,6 +200,16 @@ describe('onboarding appearance — live preview, no lag', () => {
     expect(reduceAppearancePreview('bar', 'settled', 'click-top')).toBe('settled')
   })
 
+  it('Tony FAIL: dock rests slim - Invisible never opens a fat panel; Pill opens only on hover', () => {
+    expect(appearancePreviewRestKind('dock')).toBe('dock')
+    expect(appearancePreviewInitialPhase('dock')).toBe('rest')
+    expect(appearancePreviewShowsDock('dock', 'rest', 'dock-hidden')).toBe(false)
+    expect(appearancePreviewDockOpen('dock-hidden', 'settled')).toBe(false)
+    expect(appearancePreviewShowsDock('dock', 'rest', 'dock')).toBe(true)
+    expect(appearancePreviewDockOpen('dock', 'rest')).toBe(false)
+    expect(appearancePreviewDockOpen('dock', 'in')).toBe(true)
+  })
+
   it('preview is CSS-only: no setBounds, Bar, Listen, orb, WebGL, or rAF', () => {
     expect(component).toMatch(/onboard-appearance-preview/)
     expect(component).toMatch(/overlay-spring/)
@@ -230,6 +242,7 @@ describe('onboarding appearance — scene hop sits after the demo', () => {
     expect(experience).toMatch(
       /GUIDED_SCENES: Scene\[\] = \['problem', 'reveal', 'appearance', 'setup', 'personalize'\]/
     )
+    expect(experience).toMatch(/setScene\('reveal'\)/)
     expect(experience).toMatch(/setScene\(sceneAfterReveal\(\)\)/)
     expect(experience).toMatch(/scene === 'appearance'/)
     expect(experience).toMatch(/<OnboardingAppearance/)

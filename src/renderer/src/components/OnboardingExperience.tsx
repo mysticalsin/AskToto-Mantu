@@ -33,7 +33,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useCallback, useEffect, useId, useRef, useState, lazy, Suspense, type Ref, useLayoutEffect } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, Suspense, type Ref, useLayoutEffect } from 'react'
 import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
@@ -73,10 +73,9 @@ import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
 import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
-/** Act 2 only — keep DemoScene/Bar off Act 1 first-paint parse in this chunk. */
-const OnboardingDemoScene = lazy(() =>
-  import('./OnboardingDemoScene').then((m) => ({ default: m.OnboardingDemoScene }))
-)
+/** Act 2 demo — eager import so Suspense never hangs black after problem Continue (Tony HARD 2026-09-21).
+ *  Act 1 still lazy-splits DockPanel/Appearance elsewhere; DemoScene must not gate the story→reveal hop. */
+import { OnboardingDemoScene } from './OnboardingDemoScene'
 import { OnboardingAppearance } from './OnboardingAppearance'
 import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
@@ -1539,9 +1538,9 @@ export function OnboardingExperience({
           <button
             type="button"
             onClick={() => {
-              // P0 Tony: reveal/demo Suspense hung black after story Continue — skip to next act.
+              // Tony HARD 2026-09-21: restore Act 2 reveal/demo (what Métis does). Never skip to appearance.
               playHero()
-              setScene(sceneAfterReveal())
+              setScene('reveal')
             }}
             className="onboard-cta no-drag focus-ring"
           >

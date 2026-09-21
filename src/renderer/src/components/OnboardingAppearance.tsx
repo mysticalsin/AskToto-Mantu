@@ -9,6 +9,7 @@ import {
   appearancePreviewShowsBar,
   appearancePreviewShowsCircle,
   appearancePreviewShowsDock,
+  appearancePreviewDockOpen,
   appearancePreviewShowsHint,
   appearancePreviewShowsIsland,
   chromeSpec,
@@ -50,7 +51,8 @@ function AppearanceLivePreview({
 
   const showBar = appearancePreviewShowsBar(phase) && layout === 'bar'
   const showIsland = appearancePreviewShowsIsland(layout, phase)
-  const showDock = appearancePreviewShowsDock(layout, phase)
+  const showDock = appearancePreviewShowsDock(layout, phase, chromeId)
+  const dockOpen = appearancePreviewDockOpen(chromeId, phase)
   const showHint = appearancePreviewShowsHint(layout, phase)
   const showCircle = appearancePreviewShowsCircle(chromeId, phase)
   const placementLabel = placement === 'right-edge' ? 'right edge' : 'top'
@@ -93,7 +95,7 @@ function AppearanceLivePreview({
         <span
           className={
             'onboard-appearance-preview__dock' +
-            (phase === 'settled' || phase === 'in' ? ' onboard-appearance-preview__dock--open' : '')
+            (dockOpen ? ' onboard-appearance-preview__dock--open' : '')
           }
           aria-hidden="true"
         />
