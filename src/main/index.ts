@@ -6490,27 +6490,52 @@ function registerIpc(): void {
   // Mirrors the parakeet:feed handler exactly (same auth gate, same Float32 check, same cap, same
   // Speaker Intelligence ride-along) — appleSpeechTranscribe never throws (resolves '' on any failure),
   // so unlike parakeetTranscribe this needs no try/catch around the call itself.
-/**
-   * Cheap silence gate for the wake ear.
+  /**
+   * Noise-floor gate for the wake ear.
    *
-   * The always-on ear feeds a window of PCM roughly once a second, and every window used to spawn a
-   * native Apple Speech process — including the overwhelming majority that are pure silence, which
-   * exit `1: No speech detected`. A dev session measured 222 such spawns in four minutes, one per
-   * second, indefinitely. That is a process-per-second treadmill that starves the main process, and a
-   * starved main process is why boot IPC (authStatus) times out and onboarding sits there loading.
+   * The always-on ear feeds a PCM window about once a second, and every window used to spawn a native
+   * Apple Speech process. Nearly all exit `1: No speech detected`, because nearly all are a quiet room
+   * rather than someone talking: one dev session logged 222 spawns in four minutes, a later one 1021,
+   * steady at ~55/minute for as long as the app stayed open. A process per second starves the main
+   * process, and a starved main process is why boot IPC times out and onboarding sits there loading.
    *
-   * RMS over the window is enough to tell "nobody is talking" from "somebody might be": speech sits
-   * orders of magnitude above the floor, so the threshold is deliberately low — this exists to skip
-   * silence, never to decide what counts as speech. Anything at or above it still goes to the engine
-   * exactly as before.
+   * A FIXED rms threshold does not work — that was the first attempt here and it never fired once. A
+   * real microphone in a real room idles well above any constant small enough to feel safe. What
+   * separates speech from a room is not absolute level, it is CONTRAST with that room, so the floor is
+   * learned: an exponential moving average of window energy, updated only by windows judged quiet, so
+   * a long sentence cannot drag the floor up behind itself and make speech look like silence.
+   *
+   * Deliberately biased toward spending a process. FLOOR_MIN stops a digitally silent input driving
+   * the floor to zero, and the margin is small. Missing a wake word is worse than an extra transcribe.
    */
-  const WAKE_SILENCE_RMS = 0.002
-  
-  function isProbablySilentPcm(samples: Float32Array, floor = WAKE_SILENCE_RMS): boolean {
-    if (samples.length === 0) return true
+  const NOISE_MARGIN = 3
+  const FLOOR_MIN = 0.0005
+  /** Rise is slow so a long sentence cannot pull the floor up to meet itself. */
+  const FLOOR_RISE = 0.002
+  let noiseFloor = FLOOR_MIN
+
+  function windowRms(samples: Float32Array): number {
+    if (samples.length === 0) return 0
     let sum = 0
     for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i]
-    return Math.sqrt(sum / samples.length) < floor
+    return Math.sqrt(sum / samples.length)
+  }
+
+  /** True when this window is indistinguishable from the room and not worth an engine process. */
+  function isRoomNoise(samples: Float32Array): boolean {
+    const rms = windowRms(samples)
+    // Track the floor DOWN instantly and UP slowly, and do it on every window. Updating only on
+    // quiet windows was self-defeating: with the floor pinned at its minimum every window read as
+    // speech, so no window was ever quiet, so the floor never learned the room. Measured: a room
+    // idles at rms 0.0034-0.0054 while the floor sat at 0.0015 and 66 of 66 windows passed.
+    // Falling to the quietest recent level and creeping up is the standard noise-floor tracker, and
+    // it is immune to speech because speech is brief next to silence.
+    noiseFloor = rms < noiseFloor ? rms : noiseFloor * (1 - FLOOR_RISE) + rms * FLOOR_RISE
+    const speaking = rms > Math.max(FLOOR_MIN, noiseFloor * NOISE_MARGIN)
+    if (process.env.WAKE_GATE_DEBUG) {
+      mainLog.info(`[cap2-gate] rms=${rms.toFixed(5)} floor=${noiseFloor.toFixed(5)} speaking=${speaking}`)
+    }
+    return !speaking
   }
   ipcMain.handle(IPC.appleSpeechFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
@@ -6526,8 +6551,9 @@ function registerIpc(): void {
     }
     // Same defensive cap as parakeetFeed — see its own comment for why.
     if (samples.length > 16_000 * 30) return ''
-    // Silence never becomes text, so it must never cost a process. See isProbablySilentPcm.
-    if (isProbablySilentPcm(samples)) return { text: '' }
+    // A window that does not stand out from the room never becomes text, so it must not cost a
+    // process. See isRoomNoise.
+    if (isRoomNoise(samples)) return { text: '' }
     const authed = requireAuth()
     if (p.speaker !== 'you' && !authed) return ''
     // Same unavailable contract as parakeetFeed: non-darwin or no mac-helper sidecar means this engine
