@@ -87,7 +87,7 @@ export function makeVad(): { step: (rms: number, n: number) => boolean; reset: (
   // but ~0.2s snappier than a conservative 0.8s — the dominant slice of perceived live-caption lag.
   const MIN_SPEECH = Math.round(SR * 0.3) // real speech needed in-window before we'll endpoint (rejects transients)
   const ON = 0.012 // per-quantum RMS to ENTER the speech state
-  const QUIET_ON = 0.006 // only after a bounded quiet-room calibration; never a global threshold reduction
+  const QUIET_ON = 0.008 // only after calibration; preserves enough energy for the unchanged emit-side ASR gate
   const OFF = 0.006 // per-quantum RMS to EXIT it (ON > OFF = hysteresis, no flicker at the boundary)
   // ON/OFF are the FLOOR of an adaptive pair, not the whole rule. Absolute alone, the exit cannot end a
   // turn on the 3.0×-boosted 'them' channel: a far-end bed (conference comfort noise, hold music, a fan)

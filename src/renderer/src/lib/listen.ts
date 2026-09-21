@@ -454,8 +454,10 @@ export interface CaptureHealth {
 export interface RecognizerStatus {
   engine: 'whisper' | 'parakeet' | 'apple' | 'cloud'
   model: 'whisper-base' | 'whisper-large-v3-turbo' | 'parakeet' | 'apple-speech' | 'cloud-stt' | null
-  languageMode: 'explicit' | 'detecting' | 'pinned'
+  /** Effective engine behavior, which can differ from the user's requested language. */
+  languageMode: 'explicit' | 'detecting' | 'pinned' | 'engine-auto'
   language: string | null
+  requestedLanguage: string | null
 }
 
 export function recognizerStatusFor(
@@ -476,11 +478,15 @@ export function recognizerStatusFor(
         : engine === 'apple'
           ? 'apple-speech'
           : 'cloud-stt'
+  const requestedLanguage = language === 'auto' ? null : language
+  // Parakeet's live recognizer auto-detects regardless of the configured preference. Keep the preference
+  // separately for supportability, but never present it as an engine-enforced language.
+  if (engine === 'parakeet') return { engine, model, languageMode: 'engine-auto', language: null, requestedLanguage }
   return language !== 'auto'
-    ? { engine, model, languageMode: 'explicit', language }
+    ? { engine, model, languageMode: 'explicit', language, requestedLanguage }
     : pinnedLanguage
-      ? { engine, model, languageMode: 'pinned', language: pinnedLanguage }
-      : { engine, model, languageMode: 'detecting', language: null }
+      ? { engine, model, languageMode: 'pinned', language: pinnedLanguage, requestedLanguage: null }
+      : { engine, model, languageMode: 'detecting', language: null, requestedLanguage: null }
 }
 
 export function shouldShowNoSpeechWarning(
@@ -1166,7 +1172,9 @@ export function useListen(
             ...state,
             recognizerStatus:
               state.recognizerStatus?.engine === engineRef.current
-                ? { ...state.recognizerStatus, languageMode: 'pinned', language: next.pinnedLang }
+                ? engineRef.current === 'parakeet'
+                  ? { ...state.recognizerStatus, languageMode: 'engine-auto', language: null, requestedLanguage: asrLanguageRef.current === 'auto' ? null : asrLanguageRef.current }
+                  : { ...state.recognizerStatus, languageMode: 'pinned', language: next.pinnedLang, requestedLanguage: null }
                 : recognizerStatusFor(engineRef.current, null, asrLanguageRef.current, next.pinnedLang)
           }))
           // Sticky + mid-meeting switch for cloud Nova/Soniox path (applies when WS attaches).
@@ -3119,7 +3127,9 @@ export function useListen(
         ...state,
         recognizerStatus:
           state.recognizerStatus?.engine === engineRef.current
-            ? { ...state.recognizerStatus, languageMode: language === 'auto' ? 'detecting' : 'explicit', language: language === 'auto' ? null : language }
+            ? engineRef.current === 'parakeet'
+              ? { ...state.recognizerStatus, languageMode: 'engine-auto', language: null, requestedLanguage: language === 'auto' ? null : language }
+              : { ...state.recognizerStatus, languageMode: language === 'auto' ? 'detecting' : 'explicit', language: language === 'auto' ? null : language, requestedLanguage: language === 'auto' ? null : language }
             : recognizerStatusFor(engineRef.current, null, language, null)
       }))
       if (engineRef.current !== 'whisper' || !workerRef.current || !liveRef.current) return
