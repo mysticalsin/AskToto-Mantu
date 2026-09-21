@@ -1490,15 +1490,17 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
   })
 
   try {
-    const decoderUrl = process.env.ELECTRON_RENDERER_URL
-      ? new URL('/decoder.html', process.env.ELECTRON_RENDERER_URL).toString()
+    // GH #197: packaged Dig must ignore stale ELECTRON_RENDERER_URL (launchctl/Vite leftover).
+    const viteDev = devEnv('ELECTRON_RENDERER_URL')
+    const decoderUrl = viteDev
+      ? new URL('/decoder.html', viteDev).toString()
       : pathToFileURL(join(__dirname, '../renderer/decoder.html')).toString()
     decoderExpectedUrl = decoderUrl
     const ready = waitForDecoderReady()
     // Observe the rejection immediately so a loadURL/loadFile failure below can't surface as an
     // unhandled rejection before `await ready` runs; the real error still propagates at that await.
     ready.catch(() => {})
-    if (process.env.ELECTRON_RENDERER_URL) await active.loadURL(decoderUrl)
+    if (viteDev) await active.loadURL(decoderUrl)
     else await active.loadFile(join(__dirname, '../renderer/decoder.html'))
     if (active.isDestroyed() || decoderWin !== active) throw new Error('Import decoder closed before it started.')
     await ready
@@ -2062,7 +2064,8 @@ function onboardingExclusiveLive(): boolean {
  * tour before a later crash must still return to the ordinary overlay.
  */
 function overlayRendererUrl(): string {
-  let rendererUrl = process.env['ELECTRON_RENDERER_URL'] ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
+  // GH #197: honor ELECTRON_RENDERER_URL only via devEnv (undefined when packaged).
+  let rendererUrl = devEnv('ELECTRON_RENDERER_URL') ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
   const params = new URLSearchParams()
   const onboardingLive = onboardingExclusiveLive()
   if (onboardingLive) params.set('exclusiveOnboarding', '1')
