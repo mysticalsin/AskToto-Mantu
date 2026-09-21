@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { transformWithEsbuild } from 'vite'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { clampAxis, clampAxisMargin, clampHeight as islandClampHeight, isReachable as islandIsReachable, recenterXForWidth, refitToDisplay as islandRefitToDisplay } from './island/geometry'
 
 /**
@@ -63,7 +63,7 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       )
     )
     const preamble = [
-      'const { mainLog, auditLog, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, before } = stubs',
+      'const { mainLog, auditLog, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, commandControl, before } = stubs',
       `const BAR_WIDTH = ${constant('BAR_WIDTH')}`,
       'let { listeningActive, lastPlainAskAt, audioArmed, isMinimized, currentWidth } = before',
       'let handler = null',
@@ -85,7 +85,8 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       'return { listeningActive, lastPlainAskAt, audioArmed, isMinimized, currentWidth }'
     ].join('\n')
     const run = new Function('stubs', preamble + body + driver) as (stubs: unknown) => OverlayState
-    return run({
+    const revokeForLifecycleEvent = vi.fn()
+    const after = run({
       mainLog: { error: () => {} },
       auditLog: () => {},
       resetDustConversation: () => {},
@@ -93,8 +94,11 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       setRecordingPowerSaveBlock: () => {},
       discardActiveLiveSpeakerSession: () => {},
       invalidateCloudSttOwner: () => {},
+      commandControl: { revokeForLifecycleEvent },
       before
     })
+    expect(revokeForLifecycleEvent).toHaveBeenCalledExactlyOnceWith('renderer_replaced')
+    return after
   }
 
   /** The overlay collapsed to the control mini-pill: isMinimized true, and currentWidth already narrowed

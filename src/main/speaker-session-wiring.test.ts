@@ -440,6 +440,7 @@ describe('bounded close and successful-save receipt join', () => {
     api.acceptLiveSpeakerTransition({ on: true, startedAt: 900 })
     for (let i = 0; i < 3; i++) await api.observeOperatorAudio(windowFor(5), 'live:900')
 
+    const revokeForLifecycleEvent = vi.fn()
     const gone = actualRendererGoneHandler({
       mainLog: { error: vi.fn() },
       auditLog: vi.fn(),
@@ -460,10 +461,13 @@ describe('bounded close and successful-save receipt join', () => {
       // Captured beside `const self = win`, outside this handler: the real callback runs after the
       // WebContents is torn down (MQA-340).
       selfWebContentsId: 1,
+      commandControl: { revokeForLifecycleEvent },
       process: { env: {} },
       join
     })
     gone({}, { reason: 'crashed', exitCode: 1 })
+
+    expect(revokeForLifecycleEvent).toHaveBeenCalledExactlyOnceWith('renderer_replaced')
 
     expect(api.captureLiveSpeakerKey(900)).toBeNull()
     api.acceptLiveSpeakerTransition({ on: true, startedAt: 901 })
