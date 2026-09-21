@@ -1,4 +1,4 @@
-import { isValidElement, cloneElement, useEffect, type ReactElement } from 'react'
+import { isValidElement, cloneElement, useEffect, useRef, type ReactElement } from 'react'
 import { Streamdown } from 'streamdown'
 import { CodeBlock, warmHighlighter } from './CodeBlock'
 import { safeHref } from '@shared/safe-url'
@@ -30,10 +30,23 @@ const components: any = {
   }
 }
 
+// A fence can arrive before its closing delimiter while an answer streams, so detect its opener
+// rather than waiting for a fully parseable block. Up to three leading spaces is valid Markdown.
+const FENCED_CODE = /(?:^|\n) {0,3}(?:`{3,}|~{3,})/u
+
+export function shouldWarmHighlighter(warmed: boolean, markdown: string): boolean {
+  return !warmed && FENCED_CODE.test(markdown)
+}
+
 export function Markdown({ children }: { children: string }): JSX.Element {
-  // MQA-270 (B3): warm shiki when markdown actually mounts — see warmHighlighter's comment for why this
-  // moved out of CodeBlock's module scope. Idempotent (hlPromise singleton), so re-mounts are free.
-  useEffect(() => warmHighlighter(), [])
+  // Plain streamed answers should not schedule Shiki. When a real fence arrives, warm once before the
+  // block renderer's debounce fires so the first code block stays responsive.
+  const warmed = useRef(false)
+  useEffect(() => {
+    if (!shouldWarmHighlighter(warmed.current, children)) return
+    warmed.current = true
+    warmHighlighter()
+  }, [children])
   return (
     <div className="md">
       <Streamdown components={components} shikiTheme={['catppuccin-mocha', 'catppuccin-mocha']}>
