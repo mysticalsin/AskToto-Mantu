@@ -24,7 +24,7 @@ import { modeLabel } from '@shared/ipc'
 import type { ConversationMode, CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
 import { accelLabel } from '../lib/keys'
-import type { CaptureDegraded, CaptureHealth } from '../lib/listen'
+import type { CaptureDegraded, CaptureHealth, RecognizerStatus } from '../lib/listen'
 import { ObsidianOrb } from './ObsidianOrb'
 import { JarvisOrbButton } from './JarvisOrbButton'
 import { BAR_MARK_SIZE_PX, type OrbMood } from '../lib/bar-pill-orb'
@@ -181,6 +181,8 @@ export interface BarProps {
   captureHealth?: CaptureHealth | null
   /** Low-priority cue after bounded connected-mic silence; capture degradation always takes precedence. */
   noSpeechWarning?: boolean
+  /** Renderer-local actual recognizer/model and safe language mode. */
+  recognizerStatus?: RecognizerStatus | null
   /** Pause suspends capture without ending the meeting; Stop (onToggleListen) ends it. Distinct actions. */
   onTogglePause: () => void
   onCapture: () => void
@@ -490,9 +492,16 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               title={
                 !props.paused
                   ? props.captureDegraded?.note ??
-                    (props.captureHealth
-                      ? `Live microphone: ${props.captureHealth.selectionOutcome}; input ${props.captureHealth.inputSampleRate ?? 'unknown'} Hz, ${props.captureHealth.inputChannelCount ?? 'unknown'} channel(s) → 16 kHz processing. Settings meter is preflight only.`
-                      : undefined)
+                    ([
+                      props.captureHealth
+                        ? `Live microphone: ${props.captureHealth.selectionOutcome}; input ${props.captureHealth.inputSampleRate ?? 'unknown'} Hz, ${props.captureHealth.inputChannelCount ?? 'unknown'} channel(s) → 16 kHz processing. Settings meter is preflight only.`
+                        : null,
+                      props.recognizerStatus
+                        ? `Transcription: ${props.recognizerStatus.model ?? `${props.recognizerStatus.engine} starting`}; language ${props.recognizerStatus.languageMode}${props.recognizerStatus.language ? ` (${props.recognizerStatus.language})` : ''}.`
+                        : null
+                    ]
+                      .filter(Boolean)
+                      .join(' ') || undefined)
                   : undefined
               }
               className={[
@@ -604,7 +613,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           )}
         </div>
     ),
-    [expanded, hasAnswer, props.onBack, props.screenCapturedAt, props.listening, props.paused, props.captureDegraded, props.captureHealth, props.noSpeechWarning, props.value, props.onChange, props.canPrewarm, props.onSubmit, props.busy, props.onToggleListen, props.onStop]
+    [expanded, hasAnswer, props.onBack, props.screenCapturedAt, props.listening, props.paused, props.captureDegraded, props.captureHealth, props.noSpeechWarning, props.recognizerStatus, props.value, props.onChange, props.canPrewarm, props.onSubmit, props.busy, props.onToggleListen, props.onStop]
   )
 
   const toolbarRow = useMemo(

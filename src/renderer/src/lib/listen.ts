@@ -451,6 +451,38 @@ export interface CaptureHealth {
   trackState: 'connected' | 'ended' | 'unavailable'
 }
 
+export interface RecognizerStatus {
+  engine: 'whisper' | 'parakeet' | 'apple' | 'cloud'
+  model: 'whisper-base' | 'whisper-large-v3-turbo' | 'parakeet' | 'apple-speech' | 'cloud-stt' | null
+  languageMode: 'explicit' | 'detecting' | 'pinned'
+  language: string | null
+}
+
+export function recognizerStatusFor(
+  engine: RecognizerStatus['engine'],
+  workerEngine: 'wasm' | 'webgpu' | null,
+  language: string,
+  pinnedLanguage: string | null
+): RecognizerStatus {
+  const model =
+    engine === 'whisper'
+      ? workerEngine === 'webgpu'
+        ? 'whisper-large-v3-turbo'
+        : workerEngine === 'wasm'
+          ? 'whisper-base'
+          : null
+      : engine === 'parakeet'
+        ? 'parakeet'
+        : engine === 'apple'
+          ? 'apple-speech'
+          : 'cloud-stt'
+  return language !== 'auto'
+    ? { engine, model, languageMode: 'explicit', language }
+    : pinnedLanguage
+      ? { engine, model, languageMode: 'pinned', language: pinnedLanguage }
+      : { engine, model, languageMode: 'detecting', language: null }
+}
+
 export function shouldShowNoSpeechWarning(
   currentEpoch: number,
   eventEpoch: number,
@@ -594,6 +626,7 @@ export interface ListenApi {
   captureHealth: CaptureHealth | null
   /** Low-priority current-session cue; true only after bounded live mic silence without admitted speech. */
   noSpeechWarning: boolean
+  recognizerStatus: RecognizerStatus | null
   start: (
     source: AudioSource,
     quality?: 'best' | 'fast',
@@ -759,7 +792,8 @@ export function useListen(
     qualityDegraded: false,
     captureDegraded: null as CaptureDegraded | null,
     captureHealth: null as CaptureHealth | null,
-    noSpeechWarning: false
+    noSpeechWarning: false,
+    recognizerStatus: null as RecognizerStatus | null
   })
   const [lines, setLines] = useState<TranscriptLine[]>([])
 
@@ -1128,6 +1162,13 @@ export function useListen(
         if (next.shouldPin && next.pinnedLang) {
           probePinnedRef.current = true
           pinnedLangRef.current = next.pinnedLang
+          setState((state) => ({
+            ...state,
+            recognizerStatus:
+              state.recognizerStatus?.engine === engineRef.current
+                ? { ...state.recognizerStatus, languageMode: 'pinned', language: next.pinnedLang }
+                : recognizerStatusFor(engineRef.current, null, asrLanguageRef.current, next.pinnedLang)
+          }))
           // Sticky + mid-meeting switch for cloud Nova/Soniox path (applies when WS attaches).
           cloudSttNovaLangRef.current = resolveNova3LanguageQueryPinned(
             asrLanguageRef.current,
@@ -1368,6 +1409,12 @@ export function useListen(
           loading: false,
           loadingPct: null,
           qualityDegraded: !!m.qualityDegraded,
+          recognizerStatus: recognizerStatusFor(
+            'whisper',
+            m.engine === 'webgpu' || m.engine === 'wasm' ? m.engine : null,
+            asrLanguageRef.current,
+            probePinnedRef.current ? pinnedLangRef.current : null
+          ),
           error: s.error === OFFLINE_MSG || s.error === RECONNECTING_MSG ? null : s.error
         }))
         pump() // drain windows captured while the model loaded
@@ -2211,7 +2258,16 @@ export function useListen(
         captureHealthRef.current = null
         micSpeechAdmittedRef.current = false
         clearNoSpeechWarning()
-        setState((s) => ({ ...s, error: null, captureDegraded: null, captureHealth: null, noSpeechWarning: false, listening: true, paused: false }))
+        setState((s) => ({
+          ...s,
+          error: null,
+          captureDegraded: null,
+          captureHealth: null,
+          noSpeechWarning: false,
+          recognizerStatus: recognizerStatusFor(engine, null, language, null),
+          listening: true,
+          paused: false
+        }))
         // MQA-285: same-turn capture. Kick getUserMedia BEFORE any await so the click gesture still
         // covers the permission prompt and the first second of audio is on the MediaStream — not lost
         // behind setListeningState / parakeetEnsure / getAsrBundled. Windows queue in pump() until
@@ -3059,6 +3115,13 @@ export function useListen(
       pinnedLangRef.current = null
       probeWindowCountRef.current = 0
       probeSwitchRunRef.current = null
+      setState((state) => ({
+        ...state,
+        recognizerStatus:
+          state.recognizerStatus?.engine === engineRef.current
+            ? { ...state.recognizerStatus, languageMode: language === 'auto' ? 'detecting' : 'explicit', language: language === 'auto' ? null : language }
+            : recognizerStatusFor(engineRef.current, null, language, null)
+      }))
       if (engineRef.current !== 'whisper' || !workerRef.current || !liveRef.current) return
       try {
         const bundled = await getAsrBundled()

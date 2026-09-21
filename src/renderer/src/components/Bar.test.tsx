@@ -263,7 +263,20 @@ describe('Bar Heard-live chip capture degradation', () => {
     expect(fallback).toContain('input 44100 Hz, 1 channel(s) → 16 kHz processing')
     // The Node renderer cannot retain a hook instance between markup passes. Pin the useMemo dependency
     // contract directly so a real renderer re-render receives every transition above.
-    expect(barSrc).toMatch(/props\.captureDegraded, props\.captureHealth, props\.noSpeechWarning, props\.value/)
+    expect(barSrc).toMatch(/props\.captureDegraded, props\.captureHealth, props\.noSpeechWarning, props\.recognizerStatus, props\.value/)
+  })
+
+  it('names the actual compact Whisper base model and language mode in live status', () => {
+    const html = renderToStaticMarkup(
+      <Bar
+        {...props({
+          listening: true,
+          recognizerStatus: { engine: 'whisper', model: 'whisper-base', languageMode: 'detecting', language: null }
+        })}
+      />
+    )
+    expect(html).toContain('Transcription: whisper-base; language detecting.')
+    expect(html).not.toContain('whisper-large-v3-turbo')
   })
 })
 
