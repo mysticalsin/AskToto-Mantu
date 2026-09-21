@@ -77,7 +77,9 @@ import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
 const OnboardingDemoScene = lazy(() =>
   import('./OnboardingDemoScene').then((m) => ({ default: m.OnboardingDemoScene }))
 )
-import { OnboardingAppearance } from './OnboardingAppearance'
+const OnboardingAppearance = lazy(() =>
+  import('./OnboardingAppearance').then((m) => ({ default: m.OnboardingAppearance }))
+)
 import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
 import { isWindows } from '../lib/keys'
@@ -1847,6 +1849,7 @@ export function OnboardingExperience({
 
       {scene === 'appearance' && (
         <div key="appearance" className="onboard-appearance-scroll flex min-h-0 w-full flex-col items-center overflow-y-auto px-1 py-4">
+          <Suspense fallback={null}>
           <OnboardingAppearance
             value={appearance}
             locked={appearanceLocked}
@@ -1863,6 +1866,7 @@ export function OnboardingExperience({
               setScene(sceneAfterAppearance())
             }}
           />
+          </Suspense>
         </div>
       )}
 

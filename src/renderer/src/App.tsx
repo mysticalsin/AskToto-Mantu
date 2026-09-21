@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition, type ComponentType } from 'react'
 import { Bar } from './components/Bar'
-import { DockPanel, type DockPanelProps } from './components/DockPanel'
-/** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
+/** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk. */
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
-import { CommandListeningPill } from './components/CommandListeningPill'
-import { startMetisCommandEar, type MetisCommandEarStatus } from './lib/metis-command-ear'
+/** P0 Tony/Ultron 2026-09-21: DockPanel + Pill + ear OFF Act1 first-paint parse (VOICE-FIX-BRIEF-0109). */
+import type { DockPanelProps } from './components/DockPanel'
+import type { MetisCommandEarStatus } from './lib/metis-command-ear'
+const DockPanel = lazy(() =>
+  import('./components/DockPanel').then((m) => ({ default: m.DockPanel }))
+)
+const CommandListeningPill = lazy(() =>
+  import('./components/CommandListeningPill').then((m) => ({ default: m.CommandListeningPill }))
+)
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import {
@@ -313,7 +319,11 @@ export function App(): JSX.Element {
   // Cap2 always-on ear: arm after onboardingDone (ignore sticky ?exclusiveOnboarding=1 after finish).
   useEffect(() => {
     const enabled = settings?.onboardingDone === true
-    const stop = startMetisCommandEar({
+    let stop: (() => void) | undefined
+    let cancelled = false
+    void import('./lib/metis-command-ear').then(({ startMetisCommandEar }) => {
+      if (cancelled) return
+      stop = startMetisCommandEar({
       enabled,
       // Parakeet first — feel logs proved parakeet hears — but the ear now cascades to Apple Speech
       // per window instead of betting the whole wake path on one engine (Tony live FAIL 72c36473:
@@ -329,7 +339,11 @@ export function App(): JSX.Element {
         void window.toto.openPermissionSettings('microphone')
       }
     })
-    return () => stop()
+    })
+    return () => {
+      cancelled = true
+      stop?.()
+    }
   }, [settings?.onboardingDone])
 
   // ── License enforcement master switch ──────────────────────────────────────────────────────────
@@ -3847,13 +3861,15 @@ export function App(): JSX.Element {
                       : null}
           </div>
         ) : null}
-        <CommandListeningPill
-          visible={!onboardingBoot && metisCommand.pillVisible}
-          copy={metisCommand.pillCopy}
-          liveTranscript={metisCommand.liveTranscript}
-          chime={metisCommand.chime}
-          onStop={() => void window.toto.metisCommandStop?.()}
-        />
+        <Suspense fallback={null}>
+          <CommandListeningPill
+            visible={!onboardingBoot && metisCommand.pillVisible}
+            copy={metisCommand.pillCopy}
+            liveTranscript={metisCommand.liveTranscript}
+            chime={metisCommand.chime}
+            onStop={() => void window.toto.metisCommandStop?.()}
+          />
+        </Suspense>
       </div>
       {(() => {
         const toasts = (
@@ -3949,6 +3965,7 @@ export function App(): JSX.Element {
           {/* Dock is a 380-wide sidecar; Bar is an 880 horizontal strip whose toolbar overlap below that
               width DESIGN.md calls a ship blocker. Same props either way (DockPanel takes BarProps), so
               this is a surface swap, not a second wiring. */}
+          <Suspense fallback={null}>
           <AskSurface
             value={input}
             onChange={setInput}
@@ -4002,6 +4019,7 @@ export function App(): JSX.Element {
             canTogglePanel={canTogglePanel}
             focusSignal={focusSignal}
           />
+          </Suspense>
           </div>
           {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only
               while a meeting is actively being listened to — clean bar with nothing under it at launch
