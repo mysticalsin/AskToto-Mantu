@@ -42,7 +42,7 @@ describe('Settings Bar rest orb cards', () => {
     expect(settings).toMatch(/<OverlayOrbPicker/)
     expect(settings).toMatch(/overlayOrbStyle: id/)
     expect(settings).toMatch(/Applies when Overlay chrome is Bar/)
-    expect(settings).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
+    expect(settings).toMatch(/overlayShowsBarRestPicker\(resolveOverlayPresentation\(\{ layout: settings\.overlayLayout, placement: settings\.overlayPlacement \}\)\.layout\)/)
     expect(css).toMatch(/\.overlay-chrome-grid--two/)
     expect(css).toMatch(/\.overlay-orb-diagram--jakub/)
     expect(css).toMatch(/\.overlay-orb-diagram,\r?\n\.overlay-orb-diagram--jakub,[\s\S]*?height:\s*72px/)

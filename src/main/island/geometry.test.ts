@@ -41,6 +41,7 @@ import {
   type DisplayMetrics,
   type Rect
 } from './geometry'
+import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 
 /**
  * geometry.test.ts — MQA-275. Pins the pure positioning math extracted from src/main/index.ts (the
@@ -806,8 +807,8 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
   })
 })
 
-describe('overlay chrome modes (hide / island / bar)', () => {
-  it('default is hide; Settings switches island and bar; hide rest + leave collapse', () => {
+describe('overlay chrome modes resolve through placement', () => {
+  it('default is hide; top-center supports Bar while right-edge normalizes it to Island', () => {
     const ipc = readFileSync(join(__dirname, '../../shared/ipc.ts'), 'utf8')
     const settings = readFileSync(join(__dirname, '../../renderer/src/components/Settings.tsx'), 'utf8')
     const picker = readFileSync(join(__dirname, '../../renderer/src/components/OverlayChromePicker.tsx'), 'utf8')
@@ -819,8 +820,9 @@ describe('overlay chrome modes (hide / island / bar)', () => {
     expect(ipc).toMatch(/overlayLayout: 'hide'/)
     expect(ipc).toMatch(/overlayOrbStyle: z\.enum\(\['bar', 'jakub', 'obsidian'\]\)\.default\('jakub'\)/)
     expect(settings).toMatch(/OverlayChromePicker/)
-    expect(settings).toMatch(/overlayLayout: id/)
-    expect(picker).toMatch(/OVERLAY_LAYOUTS/)
+    expect(settings).toMatch(/resolveOverlayPresentation/)
+    expect(picker).toMatch(/allowedOverlayLayouts\(placement\)/)
+    expect(picker).toMatch(/resolveOverlayPresentation\(\{ layout: parsedLayout, placement \}\)/)
     expect(picker).toMatch(/aria-label="Overlay chrome"/)
     expect(picker).toMatch(/Default/)
     expect(picker).toMatch(/data-chrome-diagram=\{id\}/)
@@ -843,5 +845,7 @@ describe('overlay chrome modes (hide / island / bar)', () => {
     expect(css).toMatch(/background:\s*transparent/)
     expect(css).toMatch(/\.overlay-chrome-diagram--hide/)
     expect(autohide).toMatch(/case 'pointer-leave'/)
+    expect(resolveOverlayPresentation({ placement: 'top-center', layout: 'bar' }).layout).toBe('bar')
+    expect(resolveOverlayPresentation({ placement: 'right-edge', layout: 'bar' }).layout).toBe('island')
   })
 })

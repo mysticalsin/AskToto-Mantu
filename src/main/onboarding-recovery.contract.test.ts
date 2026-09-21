@@ -61,6 +61,7 @@ describe('exclusive onboarding renderer recovery', () => {
     expect(recoveryUrl).toBe('file:///renderer/index.html?exclusiveOnboarding=1')
 
     const loadURL = vi.fn()
+    const revokeForLifecycleEvent = vi.fn()
     const win = {
       isDestroyed: () => false,
       loadURL,
@@ -88,11 +89,13 @@ describe('exclusive onboarding renderer recovery', () => {
       // Captured beside `const self = win`, outside this handler: reading self.webContents here would
       // throw against an already-torn-down WebContents (MQA-340).
       selfWebContentsId: 1,
+      commandControl: { revokeForLifecycleEvent },
       win
     })
 
     gone({}, { reason: 'crashed', exitCode: 1 })
 
     expect(loadURL).toHaveBeenCalledExactlyOnceWith(recoveryUrl)
+    expect(revokeForLifecycleEvent).toHaveBeenCalledExactlyOnceWith('renderer_replaced')
   })
 })
