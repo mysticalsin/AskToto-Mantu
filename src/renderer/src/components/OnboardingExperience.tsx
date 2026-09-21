@@ -33,7 +33,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useCallback, useEffect, useId, useRef, useState, Suspense, type Ref, useLayoutEffect } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, lazy, Suspense, type Ref, useLayoutEffect } from 'react'
 import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
@@ -76,7 +76,9 @@ import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
 /** Act 2 demo — eager import so Suspense never hangs black after problem Continue (Tony HARD 2026-09-21).
  *  Act 1 still lazy-splits DockPanel/Appearance elsewhere; DemoScene must not gate the story→reveal hop. */
 import { OnboardingDemoScene } from './OnboardingDemoScene'
-import { OnboardingAppearance } from './OnboardingAppearance'
+const OnboardingAppearance = lazy(() =>
+  import('./OnboardingAppearance').then((m) => ({ default: m.OnboardingAppearance }))
+)
 import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
 import { isWindows } from '../lib/keys'
@@ -1847,6 +1849,7 @@ export function OnboardingExperience({
 
       {scene === 'appearance' && (
         <div key="appearance" className="onboard-appearance-scroll flex min-h-0 w-full flex-col items-center overflow-y-auto px-1 py-4">
+          <Suspense fallback={null}>
           <OnboardingAppearance
             value={appearance}
             locked={appearanceLocked}
@@ -1863,6 +1866,7 @@ export function OnboardingExperience({
               setScene(sceneAfterAppearance())
             }}
           />
+          </Suspense>
         </div>
       )}
 
