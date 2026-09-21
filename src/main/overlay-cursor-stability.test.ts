@@ -32,6 +32,8 @@ function nativeHover() {
     screen: { getDisplayMatching: () => display, getCursorScreenPoint: () => cursor },
     performance: { now: () => now },
     overlayCursorWatchWanted: () => true,
+    // Exclusive onboard short-circuits the tick; tests park/reveal Hide, not exclusive.
+    onboardingExclusiveLive: () => false,
     stopOverlayCursorWatch: () => {},
     healHideGhostSlab: () => false,
     getDisplayMetrics: () => display,
