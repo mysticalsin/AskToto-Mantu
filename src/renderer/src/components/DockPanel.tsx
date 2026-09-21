@@ -102,7 +102,7 @@ const Tool = memo(function Tool({
       </button>
       <span
         className={[
-          'pointer-events-none absolute -top-1 z-20 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-0.5 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 peer-focus-visible:opacity-100',
+          'pointer-events-none absolute -top-1 z-20 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-0.5 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 delay-0 group-hover:opacity-100 group-hover:delay-[400ms] peer-focus-visible:opacity-100 peer-focus-visible:delay-0',
           edgeRight ? 'right-0' : 'left-1/2 -translate-x-1/2'
         ].join(' ')}
       >
@@ -125,9 +125,10 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
   // The zone cascade plays ONCE, on mount, and then takes itself off. Left on, every later render would
   // re-trigger the animation and the panel would twitch each time an answer streamed a token.
   const [entering, setEntering] = useState(true)
+  const [scrolled, setScrolled] = useState(false)
   useEffect(() => {
-    // 3 zones x 45ms + the 260ms zone duration, with margin.
-    const id = window.setTimeout(() => setEntering(false), 460)
+    // Cap4 MOTION: 4 zones × 32ms + 280ms zone duration, with margin.
+    const id = window.setTimeout(() => setEntering(false), 520)
     return () => window.clearTimeout(id)
   }, [])
 
@@ -189,7 +190,10 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
 
   const header = useMemo(
     () => (
-      <div className="dock-zone flex shrink-0 items-center gap-2 border-b border-[var(--color-hair-soft)] px-3 py-2.5">
+      <div
+        data-scrolled={scrolled ? '1' : '0'}
+        className="dock-panel__head dock-zone flex shrink-0 items-center gap-2 px-3 py-2.5"
+      >
         {hasAnswer && props.onBack ? (
           <button
             type="button"
@@ -214,7 +218,12 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
 
         {/* The one line that says what Métis is doing. In the bar this competed with six controls for
             horizontal room; here it owns the row. */}
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--color-ink-2)]">
+        <span
+          className={[
+            'min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--color-ink-2)]',
+            props.busy && !listening ? 'shimmer' : ''
+          ].join(' ')}
+        >
           {listening ? (props.paused ? 'Paused' : 'Listening') : props.busy ? 'Thinking' : 'Métis'}
         </span>
 
@@ -229,7 +238,7 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
         )}
       </div>
     ),
-    [hasAnswer, props.onBack, props.onSettings, listening, props.paused, props.busy, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
+    [hasAnswer, props.onBack, props.onSettings, listening, props.paused, props.busy, props.canTogglePanel, props.panelOpen, props.onTogglePanel, scrolled]
   )
 
   // Listening gets its own full-width strip rather than being wedged between toolbar icons. A meeting in
@@ -416,10 +425,11 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
   return (
     <div
       className={[
-        'dock-panel aw-widget flex h-full min-h-0 w-full flex-col',
+        'dock-panel aw-widget relative flex h-full min-h-0 w-full flex-col',
         entering ? 'dock-panel--entering' : ''
       ].join(' ')}
     >
+      <span className="dock-panel__rail" aria-hidden="true" />
       {header}
       {liveStrip}
 
@@ -431,6 +441,11 @@ export const DockPanel = memo(function DockPanel(props: BarProps): JSX.Element {
           data-overflowing={overflowing ? '1' : '0'}
           className="dock-panel__scroll aw-body scroll-thin h-full overflow-y-auto px-3 py-2.5"
           style={{ maxHeight: answerBodyMaxHeight() }}
+        
+          onScroll={(e) => {
+            const y = (e.currentTarget as HTMLDivElement).scrollTop
+            setScrolled((prev) => (y > 6 ? true : y < 2 ? false : prev))
+          }}
         >
           <div key={bodyKey} className="dock-body-in">
           {props.body ?? (

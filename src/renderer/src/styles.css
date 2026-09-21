@@ -1982,10 +1982,12 @@ button.onboard-cta {
 
 /* Zone cascade on reveal. 3 zones, 45ms apart: enough to read as arrival, short enough that the panel
    is fully usable inside a quarter second. Delays are declarative (no JS timers to drift or leak). */
+/* Cap4 MOTION LOCK: edge-anchored content arrival. translateX 16px (12–20 budget), stagger ≤40ms,
+   transform+opacity only. Panel surface spring stays on .overlay-spring--edge-right (360/320). */
 @keyframes dock-zone-in {
   from {
     opacity: 0;
-    transform: translateX(10px);
+    transform: translateX(16px);
   }
   to {
     opacity: 1;
@@ -1993,12 +1995,46 @@ button.onboard-cta {
   }
 }
 .dock-panel--entering .dock-zone {
-  animation: dock-zone-in 220ms var(--ease-spring) both;
+  animation: dock-zone-in 280ms var(--ease-spring) both;
 }
 .dock-panel--entering .dock-zone:nth-child(1) { animation-delay: 0ms; }
-.dock-panel--entering .dock-zone:nth-child(2) { animation-delay: 45ms; }
-.dock-panel--entering .dock-zone:nth-child(3) { animation-delay: 90ms; }
-.dock-panel--entering .dock-zone:nth-child(4) { animation-delay: 135ms; }
+.dock-panel--entering .dock-zone:nth-child(2) { animation-delay: 32ms; }
+.dock-panel--entering .dock-zone:nth-child(3) { animation-delay: 64ms; }
+.dock-panel--entering .dock-zone:nth-child(4) { animation-delay: 96ms; }
+
+@keyframes dock-rail-grow {
+  from { transform: scaleY(0.2); opacity: 0.55; }
+  to   { transform: scaleY(1);   opacity: 1; }
+}
+.dock-panel__rail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 2px 0 0 2px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--color-accent-2) 18%,
+    var(--color-accent-2) 82%,
+    transparent
+  );
+  opacity: 0.5;
+  pointer-events: none;
+  transform-origin: right center;
+}
+.dock-panel--entering .dock-panel__rail {
+  animation: dock-rail-grow 340ms var(--ease-spring) both;
+}
+
+.dock-panel__head {
+  border-bottom: 1px solid transparent;
+  transition: border-color 160ms var(--ease-spring);
+}
+.dock-panel__head[data-scrolled='1'] {
+  border-bottom-color: var(--color-hair-soft);
+}
 
 /* The live strip is a state change, not an arrival: it drops from under the header and pushes nothing,
    because the layout jump happens instantly underneath while only the paint animates. */
@@ -2539,9 +2575,8 @@ button.onboard-cta {
 
 @keyframes overlay-spring-in-right {
   from {
-    opacity: 0.85;
-    /* Less scale than the bar's 0.92: a tall panel scaling that hard reads as a zoom, not a slide. */
-    transform: scale(0.96) translateX(12px);
+    opacity: 0;
+    transform: scale(0.97) translateX(16px);
   }
   to {
     opacity: 1;
@@ -2555,8 +2590,8 @@ button.onboard-cta {
     transform: scale(1) translateX(0);
   }
   to {
-    opacity: 0.85;
-    transform: scale(0.96) translateX(12px);
+    opacity: 0;
+    transform: scale(0.97) translateX(16px);
   }
 }
 

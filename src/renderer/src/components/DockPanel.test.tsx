@@ -210,3 +210,11 @@ describe('DockPanel Bar-centralized tools', () => {
   })
 })
 
+describe('DockPanel Cap4 motion continuity', () => {
+  it('mounts the edge rail and entering class once', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toContain('dock-panel__rail')
+    expect(html).toContain('dock-panel--entering')
+    expect(html).toContain('dock-panel__head')
+  })
+})
