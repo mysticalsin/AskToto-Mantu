@@ -306,11 +306,20 @@ function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
   onBeginRef.current = onBegin
   useLayoutEffect(() => {
     requestOnboardingPortalOpen()
+    // GH #196: remove static boot chrome from the DOM (not just hide) so Dig cannot
+    // click zombie #act1-boot-next. Keep __act1BootNextQueued / act1-boot-next below.
     const boot = document.getElementById('act1-boot-chrome')
     if (boot) {
-      boot.setAttribute('hidden', '')
-      boot.style.display = 'none'
-      boot.style.pointerEvents = 'none'
+      const bootNext = document.getElementById('act1-boot-next')
+      if (bootNext) {
+        try {
+          ;(bootNext as HTMLButtonElement).disabled = true
+        } catch {
+          /* ignore */
+        }
+        bootNext.remove()
+      }
+      boot.remove()
     }
     const w = window as Window & { __act1BootNextQueued?: boolean }
     if (w.__act1BootNextQueued) {
@@ -1238,6 +1247,10 @@ export function OnboardingExperience({
     } catch {
       /* ignore */
     }
+    // GH #196 belt+suspenders: once past hero, any leftover static boot chrome must be gone
+    // so Dig never finds bare button.onboard-cta (#act1-boot-next) during reveal/demo.
+    const leftover = document.getElementById('act1-boot-chrome')
+    if (leftover) leftover.remove()
   }, [scene])
 
   // --- Setup scene: run the REAL checks the moment the scene mounts.

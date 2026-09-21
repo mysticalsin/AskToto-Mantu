@@ -11,14 +11,26 @@
     document.documentElement.classList.add('act1-first-paint')
     document.documentElement.dataset.act1FirstPaint = '1'
   }
-  // FITO-185-AA: once React mounts HeroWelcome it sets [hidden]; also observe and remove
-  // the static chrome so a specificity bug can never leave Next covering Act 2.
+  // FITO-185-AA / GH #196: once React mounts (or Next is clicked), remove the static chrome
+  // so Dig/CDP cannot click zombie #act1-boot-next and Act 2 actually advances.
+  // GH #196: Dig CDP click() fires on hidden nodes. Hide is not enough — REMOVE the
+  // zombie #act1-boot-next (bare class "onboard-cta") so harness hits React's real Next
+  // ("onboard-cta no-drag focus-ring") and advance()/onContinue() actually run.
   function retireBootChrome() {
     var chrome = document.getElementById('act1-boot-chrome')
     if (!chrome) return
-    chrome.setAttribute('hidden', '')
-    chrome.style.display = 'none'
-    chrome.style.pointerEvents = 'none'
+    var next = document.getElementById('act1-boot-next')
+    if (next) {
+      try { next.disabled = true } catch (_) {}
+      try {
+        if (typeof next.remove === 'function') next.remove()
+        else if (next.parentNode) next.parentNode.removeChild(next)
+      } catch (_) {}
+    }
+    try {
+      if (typeof chrome.remove === 'function') chrome.remove()
+      else if (chrome.parentNode) chrome.parentNode.removeChild(chrome)
+    } catch (_) {}
   }
   function watchReactRetire() {
     var root = document.getElementById('root')

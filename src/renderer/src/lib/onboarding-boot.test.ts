@@ -137,10 +137,40 @@ describe('FITO-185-Z instant Act1 show (no hide-for-seconds)', () => {
     expect(bootJs).not.toMatch(/\.mp4/)
   })
 
-  it('React consumes queued Next and hides the no-JS chrome', () => {
+  it('retireBootChrome REMOVES #act1-boot-chrome from the DOM (GH #196 — hide is not enough)', () => {
+    // Dig CDP click() fires on hidden nodes; zombie #act1-boot-next (bare onboard-cta) must leave the tree.
+    expect(bootJs).toMatch(/function retireBootChrome/)
+    expect(bootJs).toMatch(/getElementById\('act1-boot-next'\)/)
+    expect(bootJs).toMatch(/getElementById\('act1-boot-chrome'\)/)
+    expect(bootJs).toMatch(/\.remove\(\)|removeChild/)
+    // Must not stop at hide-only (the pre-#196 bug Dig hit).
+    const retire = bootJs.slice(bootJs.indexOf('function retireBootChrome'), bootJs.indexOf('function watchReactRetire'))
+    expect(retire).toMatch(/\.remove\(\)|removeChild/)
+    expect(retire).not.toMatch(/setAttribute\('hidden'/)
+    expect(retire).not.toMatch(/style\.display\s*=\s*'none'/)
+  })
+
+  it('React consumes queued Next and REMOVES the no-JS chrome (not just hide)', () => {
     expect(experience).toMatch(/act1-boot-chrome/)
     expect(experience).toMatch(/act1-boot-next/)
     expect(experience).toMatch(/__act1BootNextQueued/)
+    // HeroWelcome mount path must remove the node so Dig cannot find bare onboard-cta.
+    const hero = experience.slice(
+      experience.indexOf('function HeroWelcome'),
+      experience.indexOf('return (', experience.indexOf('function HeroWelcome'))
+    )
+    expect(hero).toMatch(/boot(?:Next)?\.remove\(\)/)
+    expect(hero).not.toMatch(/setAttribute\('hidden'/)
+  })
+
+  it('post-hero scenes belt+suspenders-remove leftover #act1-boot-chrome (GH #196)', () => {
+    expect(experience).toMatch(/leftover\.remove\(\)|act1-boot-chrome[\s\S]*?\.remove\(\)/)
+    // During reveal, Dig must not find a bare onboard-cta Next without no-drag.
+    expect(experience).toMatch(/scene === 'reveal'[\s\S]*?onboard-cta no-drag focus-ring/)
+    // Static HTML zombie is intentionally bare onboard-cta (no no-drag) — retire must clear it.
+    const indexHtml = readFileSync(join(__dirname, '../../index.html'), 'utf8')
+    expect(indexHtml).toMatch(/id="act1-boot-next"[^>]*class="onboard-cta"/)
+    expect(indexHtml).not.toMatch(/id="act1-boot-next"[^>]*no-drag/)
   })
 
   it('exclusive BrowserWindow shows immediately with Act1 shell (FITO-185-Z)', () => {
