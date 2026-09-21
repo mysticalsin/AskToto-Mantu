@@ -46,7 +46,9 @@ describe('Cap2 command authority boundary', () => {
     expect(main).toContain("'metis-command': () => sendHotkey('metis-command')")
     expect(app).toContain("a === 'metis-command'")
     expect(app).toMatch(/else if \(a === 'toggle-listen'\) toggleListen\(\)/)
-    expect(app).toMatch(/else if \(a === 'metis-command'\) setCollapsed\(false\)/)
+    expect(app).toMatch(
+      /else if \(a === 'metis-command'\) \{\s*dispatchAutoHide\(\{ type: 'reveal-now' \}\)\s*setCollapsed\(false\)\s*\}/
+    )
   })
 
   it('keeps cloud STT transcript-only because renderer PCM has no hardware provenance', () => {

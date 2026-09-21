@@ -2959,7 +2959,12 @@ export function App(): JSX.Element {
     } else if (a === 'reset') guardReviewNav(reset)
     else if (a === 'toggle-listen') toggleListen()
     // Summon only surfaces the command UI. Command capture is a later, separate capability.
-    else if (a === 'metis-command') setCollapsed(false)
+    // `reveal-now` is intentionally immediate: a parked right-edge sidecar must open for a keyboard
+    // summon instead of waiting for hover dwell.
+    else if (a === 'metis-command') {
+      dispatchAutoHide({ type: 'reveal-now' })
+      setCollapsed(false)
+    }
     // capture/factcheck/whatnext/explain/summarize/spotlight-ref all navigate the view (setView) just like
     // 'ask'/'reset' above, so they're wrapped in guardReviewNav too — previously only 'ask'/'reset'/
     // 'settings'/'agenda' were guarded, letting these six silently discard an unsaved Review recap edit.
@@ -3816,6 +3821,7 @@ export function App(): JSX.Element {
             onOpen={revealOverlay}
             onClose={() => dispatchAutoHide({ type: 'collapse-now' })}
             commandState={commandState}
+            meetingListening={listen.listening}
           />
         ) : (
         // Hide: 8×2 hairline (cursor watch is the sensor). Island: visible peek (hug-width).
@@ -3852,6 +3858,7 @@ export function App(): JSX.Element {
               onOpen={revealOverlay}
               onClose={() => dispatchAutoHide({ type: 'collapse-now' })}
               commandState={commandState}
+              meetingListening={listen.listening}
             />
           ) : <Bar
             value={input}

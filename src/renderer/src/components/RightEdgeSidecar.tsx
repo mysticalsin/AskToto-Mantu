@@ -9,13 +9,16 @@ export function RightEdgeSidecar({
   open,
   onOpen,
   onClose,
-  commandState = { proposalId: null }
+  commandState = { proposalId: null },
+  meetingListening = false
 }: {
   open: boolean
   onOpen: () => void
   onClose: () => void
   /** Opaque state only. Main has not supplied a verified action preview in this version. */
   commandState?: MetisCommandState
+  /** Reserves microphone access for the active meeting before its stream has finished acquiring. */
+  meetingListening?: boolean
 }): JSX.Element {
   const { status, reason, start, cancel } = useCommandMic({ maxDurationMs: 8_000 })
   const [pendingCancel, setPendingCancel] = useState<{
@@ -26,6 +29,12 @@ export function RightEdgeSidecar({
   useEffect(() => {
     if (!open && (status === 'starting' || status === 'listening')) cancel()
   }, [cancel, open, status])
+
+  // Meeting Listen sets this before getUserMedia settles. Releasing a command lease here and blocking
+  // its start path prevents a second mic acquisition without inspecting or sharing meeting audio.
+  useEffect(() => {
+    if (meetingListening && (status === 'starting' || status === 'listening')) cancel()
+  }, [cancel, meetingListening, status])
 
   const cancelPendingCommand = (): void => {
     if (!commandState.proposalId) return
@@ -43,8 +52,16 @@ export function RightEdgeSidecar({
     onClose()
   }
 
+  const commandMicUnavailable = meetingListening || status === 'starting' || status === 'listening'
+  const startCommandMic = (): void => {
+    if (commandMicUnavailable) return
+    void start()
+  }
+
   const commandMicCopy =
-    status === 'starting'
+    meetingListening
+      ? 'A meeting is currently listening, so the command microphone check is unavailable until the meeting stops.'
+      : status === 'starting'
       ? 'Opening microphone access check…'
       : status === 'listening'
         ? 'Microphone access is active for up to 8 seconds. This build does not yet interpret or save speech.'
@@ -81,6 +98,7 @@ export function RightEdgeSidecar({
           onKeyDown={(event) => {
             if (event.key === 'Escape') {
               event.preventDefault()
+              event.stopPropagation()
               close()
             }
           }}
@@ -91,8 +109,8 @@ export function RightEdgeSidecar({
             <button
               type="button"
               aria-label="Test microphone access"
-              disabled={status === 'starting' || status === 'listening'}
-              onClick={() => void start()}
+              disabled={commandMicUnavailable}
+              onClick={startCommandMic}
               className="no-drag focus-ring"
             >
               {status === 'starting' || status === 'listening' ? 'Testing microphone…' : 'Test microphone access'}
