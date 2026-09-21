@@ -253,6 +253,11 @@ function render(engine: Engine = 'parakeet'): ListenApi {
   return renderWithEnterprise(engine, engine === 'cloud' ? cloudOnlyProfile : undefined)
 }
 
+function renderWithMicDevice(deviceId: string, engine: Engine = 'parakeet'): ListenApi {
+  host.beginRender()
+  return useListen(undefined, undefined, undefined, deviceId, undefined, engine, 'fast')
+}
+
 function renderBeforeSettingsResolve(): ListenApi {
   host.beginRender()
   return useListen(undefined, undefined, undefined, '', undefined, undefined, 'fast')
@@ -332,6 +337,53 @@ afterEach(() => {
 })
 
 describe('live audio transport identity', () => {
+  it('reports unavailable, not fallback-default, when both selected and default microphone requests fail', async () => {
+    let attempts = 0
+    getUserMediaImpl = async () => {
+      attempts++
+      throw new Error('Synthetic selected and default microphone refusal')
+    }
+
+    let api = renderWithMicDevice('chosen-device')
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    api = renderWithMicDevice('chosen-device')
+
+    expect(attempts).toBe(2)
+    expect(api.captureHealth).toMatchObject({
+      requestedDevice: true,
+      selectionOutcome: 'unavailable',
+      trackState: 'unavailable',
+      inputSampleRate: null,
+      inputChannelCount: null
+    })
+  })
+
+  it('publishes unavailable after a live selected microphone ends and both recovery requests fail', async () => {
+    let api = renderWithMicDevice('chosen-device')
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    const active = streams.find((entry) => entry.kind === 'mic')
+    if (!active) throw new Error('expected an active microphone track')
+
+    let attempts = 0
+    getUserMediaImpl = async () => {
+      attempts++
+      throw new Error('Synthetic recovery microphone refusal')
+    }
+    active.track.readyState = 'ended'
+    active.track.onended?.()
+    await settle()
+    api = renderWithMicDevice('chosen-device')
+
+    expect(attempts).toBe(2)
+    expect(api.captureHealth).toMatchObject({
+      requestedDevice: true,
+      selectionOutcome: 'unavailable',
+      trackState: 'unavailable'
+    })
+  })
+
   it('force-stops a delayed cloud start after both capture sources fail', async () => {
     let resolveCloudStart!: (result: { ok: true }) => void
     const offFinal = vi.fn()

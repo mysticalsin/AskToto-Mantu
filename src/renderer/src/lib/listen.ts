@@ -428,9 +428,14 @@ export interface CaptureDegraded {
   permission: boolean
 }
 
-export type CaptureSelectionOutcome = 'system-default' | 'requested-device' | 'fallback-default'
+export type CaptureSelectionOutcome = 'system-default' | 'requested-device' | 'fallback-default' | 'unavailable'
 
-export function micSelectionOutcome(requestedDevice: boolean, usedFallback: boolean): CaptureSelectionOutcome {
+export function micSelectionOutcome(
+  requestedDevice: boolean,
+  usedFallback: boolean,
+  unavailable = false
+): CaptureSelectionOutcome {
+  if (unavailable) return 'unavailable'
   if (!requestedDevice) return 'system-default'
   return usedFallback ? 'fallback-default' : 'requested-device'
 }
@@ -1846,7 +1851,7 @@ export function useListen(
         captureHealthForTrack(
           null,
           Boolean(micDeviceIdRef.current),
-          micDeviceIdRef.current ? 'fallback-default' : 'system-default'
+          micSelectionOutcome(Boolean(micDeviceIdRef.current), false, true)
         )
       )
       // Nothing to acquire (no mic connected) — the sticky MIC_LOST_MSG stays until a device change
@@ -2385,7 +2390,7 @@ export function useListen(
               captureHealthForTrack(
                 null,
                 Boolean(micDeviceIdRef.current),
-                micDeviceIdRef.current ? 'fallback-default' : 'system-default'
+                micSelectionOutcome(Boolean(micDeviceIdRef.current), false, true)
               )
             )
             console.warn('[listen] microphone capture failed:', (e as Error)?.name, (e as Error)?.message)
@@ -2539,7 +2544,6 @@ export function useListen(
       const startedAt = sessionStartedAtRef.current
       liveRef.current = false
       activeMicTrackRef.current = null
-      captureHealthRef.current = null
       pausedRef.current = false
       readyRef.current = false
       busy.current = false
@@ -2575,8 +2579,7 @@ export function useListen(
         paused: false,
         loading: false,
         ready: false,
-        error,
-        captureHealth: null
+        error
       }))
     },
     [clearProvisional, closeChannel, disarmNetworkRetry]
