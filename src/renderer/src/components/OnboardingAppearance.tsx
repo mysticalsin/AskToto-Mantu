@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
 import { MetisMark } from './MetisMark'
+import { JarvisOrbButton } from './JarvisOrbButton'
+import { ObsidianOrb } from './ObsidianOrb'
 import {
   appearancePreviewInitialPhase,
   appearancePreviewShowsBar,
@@ -98,13 +100,20 @@ function AppearanceLivePreview({
       {showBar ? (
         <div className="onboard-appearance-preview__bar-slot">
           {showCircle ? (
-            <span
+            <div
               className={
-                'onboard-appearance-preview__circle' +
-                (chromeId === 'jarvis' ? ' onboard-appearance-preview__circle--jarvis' : '')
+                'onboard-appearance-preview__circle-host' +
+                (chromeId === 'jarvis' ? ' onboard-appearance-preview__circle-host--jarvis' : ' onboard-appearance-preview__circle-host--typical')
               }
+              data-circle-preview={chromeId}
               aria-hidden="true"
-            />
+            >
+              {chromeId === 'jarvis' ? (
+                <ObsidianOrb preview animate onActivate={() => undefined} title="" ariaLabel="" />
+              ) : (
+                <JarvisOrbButton preview animate onActivate={() => undefined} title="" ariaLabel="" />
+              )}
+            </div>
           ) : (
             <div
               className={
@@ -130,6 +139,36 @@ function AppearanceLivePreview({
         </div>
       ) : null}
     </div>
+  )
+}
+
+
+function ChromeCardThumb({ id, selected }: { id: OnboardingChromeId; selected: boolean }): JSX.Element {
+  if (id === 'circle') {
+    return (
+      <span className="onboard-chrome-thumb onboard-chrome-thumb--circle" aria-hidden="true">
+        <JarvisOrbButton preview animate={selected} onActivate={() => undefined} title="" ariaLabel="" />
+      </span>
+    )
+  }
+  if (id === 'jarvis') {
+    return (
+      <span className="onboard-chrome-thumb onboard-chrome-thumb--jarvis" aria-hidden="true">
+        <ObsidianOrb preview animate={selected} onActivate={() => undefined} title="" ariaLabel="" />
+      </span>
+    )
+  }
+  if (id === 'bar-hides') {
+    return (
+      <span className="onboard-chrome-thumb onboard-chrome-thumb--bar-hides" aria-hidden="true">
+        <span className="onboard-chrome-thumb__bar onboard-chrome-thumb__bar--ghost" />
+      </span>
+    )
+  }
+  return (
+    <span className="onboard-chrome-thumb onboard-chrome-thumb--bar-stays" aria-hidden="true">
+      <span className="onboard-chrome-thumb__bar" />
+    </span>
   )
 }
 
@@ -290,6 +329,7 @@ export function OnboardingAppearance({
                     (locked || saving ? ' opacity-60' : '')
                   }
                 >
+                  <ChromeCardThumb id={card.id} selected={on} />
                   <span className="overlay-chrome-card__title">
                     {card.title}
                     {card.default ? <span className="overlay-chrome-card__default">Default</span> : null}

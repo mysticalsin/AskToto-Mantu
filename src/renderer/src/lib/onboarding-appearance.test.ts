@@ -112,17 +112,11 @@ describe('onboarding appearance — 2.0 two-step', () => {
   it('places Top vs Right first, then chrome without Island or em dash', () => {
     expect(ONBOARDING_PLACEMENT_HEADING).toBe('Where should Métis sit?')
     expect(ONBOARDING_CHROME_HEADING).toBe('How should it look?')
-    expect(onboardingChromeForPlacement('top-center').map((c) => c.id)).toEqual([
-      'hidden',
-      'bar-hides',
-      'bar-stays',
-      'circle',
-      'jarvis'
-    ])
-    // The right edge no longer offers the bar family. Bar is an 880-wide horizontal strip, so a
-    // right-edge bar is not a placement but a combination that cannot be built, and choosing one put a
-    // top-centre chrome at a right-edge placement (the sliver that appeared mid-screen).
-    expect(onboardingChromeForPlacement('right-edge').map((c) => c.id)).toEqual(['dock', 'dock-hidden'])
+    const styles = ['bar-hides', 'bar-stays', 'circle', 'jarvis']
+    expect(onboardingChromeForPlacement('top-center').map((c) => c.id)).toEqual(styles)
+    // Tony voice 2026-09-20: same circle-picker styles on Right; dock stays Settings-only.
+    // Right-edge park is geometry (2f06669e), not "dock-only cards".
+    expect(onboardingChromeForPlacement('right-edge').map((c) => c.id)).toEqual(styles)
     expect(onboardingChromeForPlacement('top-center').map((c) => c.title).join(' ')).not.toMatch(/Island/)
     const all = [
       ONBOARDING_PLACEMENT_HEADING,
@@ -144,6 +138,16 @@ describe('onboarding appearance — 2.0 two-step', () => {
       overlayLayout: 'bar',
       overlayOrbStyle: 'obsidian',
       overlayPlacement: 'top-center'
+    })
+    expect(chromeSettingsPatch('right-edge', 'circle')).toMatchObject({
+      overlayLayout: 'bar',
+      overlayOrbStyle: 'jakub',
+      overlayPlacement: 'right-edge'
+    })
+    expect(chromeSettingsPatch('right-edge', 'jarvis')).toMatchObject({
+      overlayLayout: 'bar',
+      overlayOrbStyle: 'obsidian',
+      overlayPlacement: 'right-edge'
     })
     expect(chromeSettingsPatch('right-edge', 'dock')).toMatchObject({
       overlayLayout: 'dock',

@@ -53,19 +53,11 @@ export type OnboardingChromeSpec = {
   default?: boolean
 }
 
-const TOP_CHROME: readonly OnboardingChromeSpec[] = [
-  {
-    id: 'hidden',
-    title: 'Hidden',
-    desc: 'Move to the top, then click to open.',
-    layout: 'hide',
-    autoHideOverlay: true,
-    overlayOrbStyle: 'jakub',
-    default: true
-  },
+/** Tony voice 2026-09-20: same style set on Top and Right (circle picker). Dock stays Settings-only. */
+const STYLE_CHROME: readonly OnboardingChromeSpec[] = [
   {
     id: 'bar-hides',
-    title: 'Full bar that hides',
+    title: 'Hidden bar',
     desc: 'Full bar; tucks away when idle.',
     layout: 'bar',
     autoHideOverlay: true,
@@ -73,7 +65,7 @@ const TOP_CHROME: readonly OnboardingChromeSpec[] = [
   },
   {
     id: 'bar-stays',
-    title: 'Full bar that stays',
+    title: 'Persistent bar',
     desc: 'Full bar stays on screen.',
     layout: 'bar',
     autoHideOverlay: false,
@@ -82,30 +74,31 @@ const TOP_CHROME: readonly OnboardingChromeSpec[] = [
   {
     id: 'circle',
     title: 'Circle',
-    desc: 'Thinking orb rest.',
+    desc: 'Default thinking orb.',
     layout: 'bar',
     autoHideOverlay: false,
-    overlayOrbStyle: 'jakub'
+    overlayOrbStyle: 'jakub',
+    default: true
   },
   {
     id: 'jarvis',
     title: 'Jarvis circle',
-    desc: 'Particle sphere rest.',
+    desc: 'Particle sphere, large and obvious.',
     layout: 'bar',
     autoHideOverlay: false,
     overlayOrbStyle: 'obsidian'
   }
 ]
 
-const RIGHT_CHROME: readonly OnboardingChromeSpec[] = [
+/** Settings / seed only — not shown on the onboarding board. */
+const DOCK_CHROME: readonly OnboardingChromeSpec[] = [
   {
     id: 'dock',
     title: 'Dock',
     desc: 'Tall sidecar; hover opens.',
     layout: 'dock',
     autoHideOverlay: autoHideOverlayForLayout('dock'),
-    overlayOrbStyle: 'jakub',
-    default: true
+    overlayOrbStyle: 'jakub'
   },
   {
     id: 'dock-hidden',
@@ -115,12 +108,23 @@ const RIGHT_CHROME: readonly OnboardingChromeSpec[] = [
     autoHideOverlay: autoHideOverlayForLayout('dock'),
     overlayOrbStyle: 'jakub',
     dockRest: 'hidden'
+  },
+  {
+    id: 'hidden',
+    title: 'Hidden',
+    desc: 'Move to the top, then click to open.',
+    layout: 'hide',
+    autoHideOverlay: true,
+    overlayOrbStyle: 'jakub'
   }
 ]
 
+export function onboardingChromeForPlacement(_placement: OverlayPlacement): readonly OnboardingChromeSpec[] {
+  return STYLE_CHROME
+}
 
-export function onboardingChromeForPlacement(placement: OverlayPlacement): readonly OnboardingChromeSpec[] {
-  return placement === 'right-edge' ? RIGHT_CHROME : TOP_CHROME
+function chromeCatalog(): readonly OnboardingChromeSpec[] {
+  return [...STYLE_CHROME, ...DOCK_CHROME]
 }
 
 
@@ -143,7 +147,7 @@ export function defaultChromeId(placement: OverlayPlacement): OnboardingChromeId
 }
 
 export function chromeSpec(placement: OverlayPlacement, id: OnboardingChromeId): OnboardingChromeSpec {
-  const hit = onboardingChromeForPlacement(placement).find((c) => c.id === id)
+  const hit = chromeCatalog().find((c) => c.id === id)
   if (hit) return hit
   return onboardingChromeForPlacement(placement)[0]
 }
@@ -164,14 +168,14 @@ export function seedOnboardingChrome(
       ? settings.autoHideOverlay
       : autoHideOverlayForLayout(layout)
 
-  if (placement === 'right-edge' && layout === 'dock') return 'dock'
-  if (layout === 'hide') return 'hidden'
+  if (placement === 'right-edge' && layout === 'dock') return 'circle'
+  if (layout === 'hide') return 'bar-hides'
   if (layout === 'bar') {
     if (orb === 'obsidian') return 'jarvis'
     if (orb === 'jakub') return 'circle'
     return autoHide ? 'bar-hides' : 'bar-stays'
   }
-  if (layout === 'island') return placement === 'right-edge' ? 'dock' : 'hidden'
+  if (layout === 'island') return 'circle'
   return defaultChromeId(placement)
 }
 

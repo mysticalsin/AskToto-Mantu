@@ -10,14 +10,9 @@ import {
 /**
  * onboarding-placement-step.test.ts
  *
- * Two defects in "Where should Métis live?", both reported from the running app.
- *
- * 1. The placement step was a title and a sentence per option, so choosing between Top and Right was
- *    choosing between two words. The chrome step had diagrams; this one did not.
- * 2. The right edge still offered four bar-family options. Bar is an 880-wide horizontal strip, so
- *    "Full bar on the right edge" is not a placement, it is a combination that cannot be built — and
- *    picking one put a top-centre chrome at a right-edge placement, which is how a dock sliver ended up
- *    floating in the middle of the screen.
+ * Placement step must show diagrams (not words alone). Style step is Tony voice circle picker:
+ * Hidden bar | Persistent bar | Circle | Jarvis — same on Top and Right. Right-edge park stays a
+ * geometry duty (2f06669e), not a reason to hide bars/circles from the board.
  */
 describe('the placement step shows what it is offering', () => {
   const scene = readFileSync(join(__dirname, '..', 'components', 'OnboardingAppearance.tsx'), 'utf8')
@@ -41,44 +36,48 @@ describe('the placement step shows what it is offering', () => {
   })
 })
 
-describe('the right edge only offers chrome that can live there', () => {
-  it('never offers a bar, because a bar cannot be an edge sidecar', () => {
-    const right = onboardingChromeForPlacement('right-edge')
-    expect(right.length).toBeGreaterThan(0)
-    for (const spec of right) {
-      expect(spec.layout, spec.id).not.toBe('bar')
-    }
-    expect(right.map((s) => s.id)).not.toContain('bar-hides')
-    expect(right.map((s) => s.id)).not.toContain('bar-stays')
+describe('Tony voice circle picker — style step', () => {
+  it('Top and Right offer the same four styles', () => {
+    const ids = ['bar-hides', 'bar-stays', 'circle', 'jarvis']
+    expect(onboardingChromeForPlacement('top-center').map((s) => s.id)).toEqual(ids)
+    expect(onboardingChromeForPlacement('right-edge').map((s) => s.id)).toEqual(ids)
   })
 
-  it('offers the dock, visible or invisible', () => {
-    const ids = onboardingChromeForPlacement('right-edge').map((s) => s.id)
-    expect(ids).toContain('dock')
-    expect(ids).toContain('dock-hidden')
+  it('Circle is the default and Jarvis is first-class', () => {
+    const circle = onboardingChromeForPlacement('top-center').find((s) => s.id === 'circle')
+    const jarvis = onboardingChromeForPlacement('top-center').find((s) => s.id === 'jarvis')
+    expect(circle?.default).toBe(true)
+    expect(jarvis?.overlayOrbStyle).toBe('obsidian')
+    expect(jarvis?.title).toMatch(/Jarvis/i)
   })
 
-  it('the top keeps every chrome that genuinely works there', () => {
-    const top = onboardingChromeForPlacement('top-center').map((s) => s.layout)
-    expect(top).toContain('hide')
-    expect(top).toContain('bar')
+  it('chrome cards render large Circle + Jarvis thumbs on the board', () => {
+    const scene = readFileSync(join(__dirname, '..', 'components', 'OnboardingAppearance.tsx'), 'utf8')
+    expect(scene).toMatch(/ChromeCardThumb/)
+    expect(scene).toMatch(/JarvisOrbButton/)
+    expect(scene).toMatch(/ObsidianOrb/)
+    expect(scene).toMatch(/onboard-appearance-preview__circle-host/)
+    const css = readFileSync(join(__dirname, '..', 'styles.css'), 'utf8')
+    expect(css).toMatch(/onboard-appearance-preview__circle-host/)
+    expect(css).toMatch(/72px/)
   })
 })
 
 describe('the saved patch cannot leave a stale rest behind', () => {
-  it('writes dockRest every time, so re-picking the visible dock brings the sliver back', () => {
+  it('writes dockRest when dock is chosen from Settings/catalog', () => {
     expect(chromeSettingsPatch('right-edge', 'dock').dockRest).toBe('sliver')
     expect(chromeSettingsPatch('right-edge', 'dock-hidden').dockRest).toBe('hidden')
   })
 
-  it('a right-edge choice always saves the right-edge placement with it', () => {
-    const patch = chromeSettingsPatch('right-edge', 'dock')
+  it('a right-edge style choice always saves the right-edge placement with it', () => {
+    const patch = chromeSettingsPatch('right-edge', 'jarvis')
     expect(patch.overlayPlacement).toBe('right-edge')
-    expect(patch.overlayLayout).toBe('dock')
+    expect(patch.overlayLayout).toBe('bar')
+    expect(patch.overlayOrbStyle).toBe('obsidian')
   })
 
   it('a top choice never smuggles a dock in', () => {
-    const patch = chromeSettingsPatch('top-center', 'hidden')
+    const patch = chromeSettingsPatch('top-center', 'circle')
     expect(patch.overlayPlacement).toBe('top-center')
     expect(patch.overlayLayout).not.toBe('dock')
   })
