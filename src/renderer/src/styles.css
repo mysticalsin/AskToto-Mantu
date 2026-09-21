@@ -2322,9 +2322,10 @@ button.onboard-cta {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 72px;
+  /* Tony HARD 2026-09-21: taller stage + visible overflow so Jarvis/Circle stay uncut. */
+  height: 88px;
   border-radius: 8px;
-  overflow: hidden;
+  overflow: visible;
   background: linear-gradient(180deg, #3a0b6b 0%, #1a0630 100%);
 }
 /* Circle card: 41 host + 64 avatar scale, same as Bar .aw-orb__host. Never the 22px CSS fake disc. */
@@ -2369,7 +2370,8 @@ button.onboard-cta {
   display: block;
   width: 41px;
   height: 41px;
-  overflow: hidden;
+  /* Uncut sphere: clip-path alone; overflow visible so particles are not flat-bottomed. */
+  overflow: visible;
   border-radius: 50%;
   background: #050508;
   clip-path: circle(50% at 50% 50%);

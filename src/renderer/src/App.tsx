@@ -747,15 +747,20 @@ export function App(): JSX.Element {
     void window.toto.minimize(false)
   }, [minimized, canMinimize])
   const prevOrbStyleRef = useRef<OverlayOrbStyle>(overlayOrbStyle)
+  const prevViewRef = useRef(view)
   useEffect(() => {
     if (!canMinimize) {
       prevOrbStyleRef.current = overlayOrbStyle
+      prevViewRef.current = view
       if (!minimized) return
       setMinimized(false)
       void window.toto.minimize(false)
       return
     }
     // Preview Circle/Jarvis on the live Bar. Collapse only on Done (view leaves settings).
+    // Pill→Circle: styleChanged from 'bar', OR Settings Done onto Circle/Jarvis while still expanded.
+    const leftSettings = prevViewRef.current === 'settings' && view !== 'settings'
+    prevViewRef.current = view
     if (view === 'settings') return
     const styleChanged = prevOrbStyleRef.current !== overlayOrbStyle
     prevOrbStyleRef.current = overlayOrbStyle
@@ -763,7 +768,9 @@ export function App(): JSX.Element {
       layout: overlayLayout,
       style: overlayOrbStyle,
       minimized,
-      styleChanged
+      styleChanged:
+        styleChanged ||
+        (leftSettings && !minimized && (overlayOrbStyle === 'jakub' || overlayOrbStyle === 'obsidian'))
     })
     if (action === 'minimize') {
       setMinimized(true)

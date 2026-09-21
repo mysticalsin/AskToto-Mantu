@@ -67,11 +67,13 @@ import {
 import { timeSavedFromTotals } from '@shared/time-saved'
 import { TimeSavedView } from './TimeSavedView'
 import { autoHideOverlayForLayout } from '@shared/overlay-chrome'
-import { overlayShowsBarRestPicker } from '@shared/overlay-orb'
 import type { OverlayPlacement } from '@shared/overlay-placement'
-import { OverlayChromePicker } from './OverlayChromePicker'
 import { OverlayPlacementPicker } from './OverlayPlacementPicker'
-import { OverlayOrbPicker } from './OverlayOrbPicker'
+import {
+  chromeSettingsPatch,
+  onboardingChromeForPlacement,
+  seedOnboardingChrome
+} from '../lib/onboarding-appearance'
 import { persistOverlayPlacement } from '../lib/overlay-placement-save'
 import { formatResetPhrase } from '@shared/reset-time'
 import {
@@ -6583,7 +6585,7 @@ export function Settings({
                     />
                   </label>
                   {/* Live preview: --overlay-opacity-scale is set on <html> by App.tsx the instant patch()
-                      round-trips, and .glass-strong already reads that var — so this swatch reflects the
+                      round-trips, and .glass-strong already reads that var  -  so this swatch reflects the
                       slider with zero extra plumbing, not a simulated approximation. */}
                   <div className="glass-strong mt-1 flex items-center gap-2 rounded-[12px] px-3 py-2.5">
                     <MetisMark size={16} />
@@ -6632,56 +6634,23 @@ export function Settings({
                           Rest style <ManagedChip keys={settings.managedKeys} k="overlayLayout" />
                         </p>
                         <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                          Invisible, then Pill, then Orbs, in that order. Right edge is under Overlay position.
+                          Invisible, Pill, Circle, then Jarvis. Same as onboarding. Right edge is under Overlay position.
                         </p>
                         <div role="radiogroup" aria-label="Rest style" className="flex flex-col gap-2">
-                          {(
-                            [
-                              {
-                                id: 'invisible' as const,
-                                label: 'Invisible',
-                                desc: 'Nothing until you move to the top.',
-                                layout: 'hide' as const,
-                                orb: 'jakub' as const
-                              },
-                              {
-                                id: 'pill' as const,
-                                label: 'Pill',
-                                desc: 'A slim pill stays along the top.',
-                                layout: 'bar' as const,
-                                orb: 'bar' as const
-                              },
-                              {
-                                id: 'orbs' as const,
-                                label: 'Orbs',
-                                desc: 'Circle or Jarvis rest.',
-                                layout: 'bar' as const,
-                                orb: settings.overlayOrbStyle === 'obsidian' ? ('obsidian' as const) : ('jakub' as const)
-                              }
-                            ]
-                          ).map((opt) => {
-                            const on =
-                              opt.id === 'invisible'
-                                ? settings.overlayLayout === 'hide'
-                                : opt.id === 'pill'
-                                  ? settings.overlayLayout === 'bar' && settings.overlayOrbStyle === 'bar'
-                                  : settings.overlayLayout === 'bar' && settings.overlayOrbStyle !== 'bar'
-                            const locked = settings.managedKeys.includes('overlayLayout')
+                          {onboardingChromeForPlacement('top-center').map((card) => {
+                            const selected = seedOnboardingChrome('top-center', settings)
+                            const on = selected === card.id
+                            const locked =
+                              settings.managedKeys.includes('overlayLayout') ||
+                              settings.managedKeys.includes('overlayOrbStyle')
                             return (
                               <button
-                                key={opt.id}
+                                key={card.id}
                                 type="button"
                                 role="radio"
                                 aria-checked={on}
                                 disabled={locked}
-                                onClick={() =>
-                                  patch({
-                                    overlayLayout: opt.layout,
-                                    autoHideOverlay: autoHideOverlayForLayout(opt.layout),
-                                    overlayPlacement: 'top-center' as OverlayPlacement,
-                                    overlayOrbStyle: opt.orb
-                                  })
-                                }
+                                onClick={() => patch(chromeSettingsPatch('top-center', card.id))}
                                 className={
                                   'no-drag cl-focus rounded-[10px] border px-3 py-2 text-left transition-colors ' +
                                   (on
@@ -6691,30 +6660,20 @@ export function Settings({
                                 }
                               >
                                 <span className="block text-[12px] font-medium text-[color:var(--cl-foreground)]">
-                                  {opt.label}
+                                  {card.title}
+                                  {card.default ? (
+                                    <span className="ml-1 text-[10px] font-normal text-[color:var(--cl-muted-foreground)]">
+                                      Default
+                                    </span>
+                                  ) : null}
                                 </span>
                                 <span className="mt-0.5 block text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                                  {opt.desc}
+                                  {card.desc}
                                 </span>
                               </button>
                             )
                           })}
                         </div>
-                        {settings.overlayLayout === 'bar' && settings.overlayOrbStyle !== 'bar' ? (
-                          <>
-                            <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">
-                              Orb
-                            </p>
-                            <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                              Circle or Jarvis under Orbs.
-                            </p>
-                            <OverlayOrbPicker
-                              value={settings.overlayOrbStyle}
-                              locked={settings.managedKeys.includes('overlayOrbStyle')}
-                              onChange={(id) => patch({ overlayOrbStyle: id })}
-                            />
-                          </>
-                        ) : null}
                       </>
                     ) : null}
                     {settings.overlayLayout === 'dock' ? (
@@ -6763,19 +6722,7 @@ export function Settings({
                         </div>
                       </>
                     ) : null}
-                    {overlayShowsBarRestPicker(settings.overlayLayout) ? (
-                      <>
-                        <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Bar rest</p>
-                        <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                          Applies when Overlay chrome is Bar.
-                        </p>
-                        <OverlayOrbPicker
-                          value={settings.overlayOrbStyle}
-                          locked={settings.managedKeys.includes('overlayOrbStyle')}
-                          onChange={(id) => patch({ overlayOrbStyle: id })}
-                        />
-                      </>
-                    ) : null}
+
                   </div>
                 </Section>
                 <Section

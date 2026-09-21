@@ -39,13 +39,16 @@ describe('Settings Bar rest orb cards', () => {
     expect(orb).toMatch(/if \(preview\)/)
     expect(orb).toMatch(/data-orb-engine="jarvis-particles"/)
     expect(orb).toMatch(/createJarvisOrb/)
-    expect(settings).toMatch(/<OverlayOrbPicker/)
-    expect(settings).toMatch(/overlayOrbStyle: id/)
-    expect(settings).toMatch(/Applies when Overlay chrome is Bar/)
-    expect(settings).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
+    // Tony HARD: Settings Top rest is flat onboard chrome; OverlayOrbPicker is onboard/CSS only.
+    expect(settings).toMatch(/onboardingChromeForPlacement\('top-center'\)/)
+    expect(settings).toMatch(/chromeSettingsPatch\('top-center'/)
+    expect(settings).not.toMatch(/overlayShowsBarRestPicker/)
+    expect(settings).not.toMatch(/Bar rest/)
     expect(css).toMatch(/\.overlay-chrome-grid--two/)
     expect(css).toMatch(/\.overlay-orb-diagram--jakub/)
-    expect(css).toMatch(/\.overlay-orb-diagram,\r?\n\.overlay-orb-diagram--jakub,[\s\S]*?height:\s*72px/)
+    expect(css).toMatch(/\.overlay-orb-diagram,\r?\n\.overlay-orb-diagram--jakub,[\s\S]*?height:\s*88px/)
+    // Tony HARD: Settings orb stage must not clip Jarvis/Circle bottoms.
+    expect(css).toMatch(/\.overlay-orb-diagram,[\s\S]*?overflow:\s*visible/)
     expect(css).toMatch(
       /\.overlay-orb-diagram--jakub \.overlay-orb-diagram__jakub--live \{[\s\S]*?width:\s*41px/
     )

@@ -155,6 +155,16 @@ describe('orb selection persist + Bar-only law', () => {
         styleChanged: true
       })
     ).toBe('expand')
+
+    // Tony HARD: Pill (style bar, expanded) → Circle must minimize when styleChanged.
+    expect(
+      decideCircleRestMinimize({
+        layout: 'bar',
+        style: 'jakub',
+        minimized: false,
+        styleChanged: true
+      })
+    ).toBe('minimize')
     expect(
       decideCircleRestMinimize({
         layout: 'hide',
@@ -176,7 +186,8 @@ describe('orb selection persist + Bar-only law', () => {
     expect(app).toMatch(/setMinimized\(false\)/)
     expect(app).toMatch(/window\.toto\.minimize\(false\)/)
     expect(app).not.toMatch(/if \(view !== 'settings' && !minimized\)/)
-    expect(settings).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
+    expect(settings).toMatch(/onboardingChromeForPlacement\('top-center'\)/)
+    expect(settings).toMatch(/chromeSettingsPatch\('top-center'/)
     expect(settings).toMatch(/onClick=\{onClose\}/)
     expect(settings).toMatch(/>\s*Done\s*</)
     expect(orb).toMatch(/runOrbPillActivate/)

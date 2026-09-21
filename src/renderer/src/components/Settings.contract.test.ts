@@ -522,24 +522,23 @@ describe('Dust instant validate proves a live connection', () => {
   })
 })
 
-describe('Settings Bar rest orb picker', () => {
-  it('wires OverlayOrbPicker next to Overlay chrome only when Bar is selected', () => {
-    expect(source).toMatch(/overlayShowsBarRestPicker/)
-    expect(source).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
-    expect(source).toMatch(/OverlayOrbPicker/)
-    expect(source).toMatch(/overlayOrbStyle: id/)
-    expect(source).toMatch(/Applies when Overlay chrome is Bar/)
+describe('Settings Top rest style (Tony HARD 2026-09-21)', () => {
+  it('offers flat Invisible/Pill/Circle/Jarvis via onboard chrome, no stray Bar rest', () => {
+    expect(source).toMatch(/onboardingChromeForPlacement\('top-center'\)/)
+    expect(source).toMatch(/chromeSettingsPatch\('top-center'/)
+    expect(source).toMatch(/seedOnboardingChrome\('top-center'/)
+    expect(source).toMatch(/Invisible, Pill, Circle, then Jarvis/)
+    expect(source).not.toMatch(/overlayShowsBarRestPicker/)
+    expect(source).not.toMatch(/Bar rest/)
+    expect(source).not.toMatch(/Invisible, then Pill, then Orbs/)
     const appearance = source.slice(source.indexOf('title="Appearance"'), source.indexOf('title="Language"'))
-    expect(appearance).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
-    const barRestStart = appearance.indexOf('overlayShowsBarRestPicker(settings.overlayLayout)')
-    const orbStart = appearance.indexOf('<OverlayOrbPicker', barRestStart)
-    const gated = appearance.slice(barRestStart, appearance.indexOf(') : null}', orbStart))
-    expect(gated).toMatch(/<OverlayOrbPicker/)
-    expect(gated).toMatch(/Bar rest/)
-    const orbBlock = source.slice(source.indexOf('<OverlayOrbPicker'), source.indexOf('<OverlayOrbPicker') + 400)
-    expect(orbBlock).not.toMatch(/\u2014/)
+    expect(appearance).toMatch(/aria-label="Rest style"/)
+    expect(appearance).toMatch(/aria-label="Dock rest"/)
+    expect(appearance).not.toMatch(/OverlayOrbPicker/)
+    expect(appearance).not.toMatch(/\u2014/)
   })
 })
+
 
 describe('Settings from M scrolls the full surface', () => {
   it('fills the 880×800 window and scrolls cl-content end to end', () => {
