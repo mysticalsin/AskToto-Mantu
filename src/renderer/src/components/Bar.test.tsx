@@ -1,8 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { overlayAllowsMinimize } from '@shared/overlay-chrome'
 import { orbHostPaintsText } from '../lib/bar-pill-orb'
 import { Bar, type BarProps } from './Bar'
+
+const barSrc = readFileSync(join(__dirname, 'Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 function props(overrides: Partial<BarProps> = {}): BarProps {
   return {
@@ -233,6 +237,33 @@ describe('Bar Heard-live chip capture degradation', () => {
     )
     expect(html).toContain('No mic')
     expect(html).not.toContain('No speech detected')
+  })
+
+  it('refreshes the live chip across warning and late health transitions', () => {
+    const base = props({ listening: true })
+    const silent = renderToStaticMarkup(<Bar {...base} noSpeechWarning />)
+    const admitted = renderToStaticMarkup(<Bar {...base} noSpeechWarning={false} />)
+    const fallback = renderToStaticMarkup(
+      <Bar
+        {...base}
+        captureHealth={{
+          requestedDevice: true,
+          selectionOutcome: 'fallback-default',
+          inputSampleRate: 44100,
+          inputChannelCount: 1,
+          processingSampleRate: 16000,
+          trackState: 'connected'
+        }}
+      />
+    )
+    expect(silent).toContain('No speech detected')
+    expect(admitted).toContain('Heard live')
+    expect(admitted).not.toContain('No speech detected')
+    expect(fallback).toContain('Mic fallback')
+    expect(fallback).toContain('input 44100 Hz, 1 channel(s) → 16 kHz processing')
+    // The Node renderer cannot retain a hook instance between markup passes. Pin the useMemo dependency
+    // contract directly so a real renderer re-render receives every transition above.
+    expect(barSrc).toMatch(/props\.captureDegraded, props\.captureHealth, props\.noSpeechWarning, props\.value/)
   })
 })
 
