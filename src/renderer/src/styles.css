@@ -2636,6 +2636,15 @@ button.onboard-cta {
   max-width: 560px;
   gap: 8px;
 }
+/* Tony HARD 2026-09-21: Right Invisible+Pill pair centered (no left-aligned empty orb slots). */
+.onboard-appearance .overlay-chrome-grid--two {
+  width: min(100%, 420px);
+  max-width: 420px;
+  margin-inline: auto;
+  justify-self: center;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 10px;
+}
 .onboard-appearance-preview-caption {
   letter-spacing: 0.01em;
 }

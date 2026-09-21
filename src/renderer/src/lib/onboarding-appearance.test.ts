@@ -126,6 +126,9 @@ describe('onboarding appearance — 2.0 two-step', () => {
       'Pill'
     ])
     expect(onboardingChromeForPlacement('right-edge').map((c) => c.title).join(' ')).not.toMatch(/Circle|Jarvis/)
+    // Tony HARD 2026-09-21: two Right cards use centered --two grid (not 4-col left-aligned empties).
+    expect(component).toMatch(/cards\.length === 2 \? ' overlay-chrome-grid--two'/)
+    expect(css).toMatch(/\.onboard-appearance \.overlay-chrome-grid--two[^{]*\{[^}]*margin-inline:\s*auto/)
     expect(onboardingChromeForPlacement('top-center').map((c) => c.title)).toEqual([
       'Invisible',
       'Pill',

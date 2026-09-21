@@ -372,7 +372,14 @@ export function OnboardingAppearance({
             <h2 className="onboard-act4-title">{ONBOARDING_CHROME_HEADING}</h2>
             <p className="onboard-act4-lead">{ONBOARDING_CHROME_LEAD}</p>
           </div>
-          <div role="radiogroup" aria-label="Overlay chrome" className="overlay-chrome-grid">
+          <div
+            role="radiogroup"
+            aria-label="Overlay chrome"
+            className={
+              'overlay-chrome-grid' + (cards.length === 2 ? ' overlay-chrome-grid--two' : '')
+            }
+            data-chrome-card-count={cards.length}
+          >
             {cards.map((card) => {
               const on = safeChromeId === card.id
               return (
