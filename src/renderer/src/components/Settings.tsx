@@ -6656,7 +6656,7 @@ export function Settings({
                                 label: 'Orbs',
                                 desc: 'Circle or Jarvis rest.',
                                 layout: 'bar' as const,
-                                orb: (settings.overlayOrbStyle === 'obsidian' ? 'obsidian' : 'jakub') as const
+                                orb: settings.overlayOrbStyle === 'obsidian' ? ('obsidian' as const) : ('jakub' as const)
                               }
                             ]
                           ).map((opt) => {

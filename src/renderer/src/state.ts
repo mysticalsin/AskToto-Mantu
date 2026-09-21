@@ -516,6 +516,10 @@ export function useAsk(): {
 export const BOOT_IPC_TIMEOUT_MS = 2000
 /** Wall-clock budget for first-paint getSettings/authStatus before surfacing bootError. */
 export const BOOT_DEADLINE_MS = 15_000
+/** After the boot budget is spent, keep asking at this cadence instead of giving up. A permanently
+ *  null auth verdict blocks onboarding's Finish forever (authReady), so "stop retrying" is never a
+ *  safe terminal state — slow down, but never stop. */
+export const AUTH_BOOT_RETRY_SLOW_MS = 5_000
 /** FITO-185-X: show Reload on the Loading strip after this wait — never spin with zero escape. */
 export const BOOT_SOFT_RETRY_MS = 5_000
 
@@ -699,12 +703,20 @@ export function useAuth(): {
           }
           return
         } catch (e) {
-          if (attempt >= 20 || Date.now() >= deadline) {
-            console.error('[boot] authStatus failed after retries', e)
+          const exhausted = attempt >= 20 || Date.now() >= deadline
+          if (exhausted) {
+            // Surface the failure, but DO NOT stop trying. `status` stays null until a verdict
+            // arrives, and `authReady` (App.tsx: auth.status !== null) gates onboarding's Finish —
+            // so returning here left onboarding loading forever with no way out but the 5-minute
+            // poll, which fails too whenever the original cause is still present. The retry simply
+            // slows to RETRY_SLOW_MS so the moment main answers, status flips and onboarding
+            // unblocks on its own.
+            console.error('[boot] authStatus still failing; slowing retries', e)
             if (!cancelled) setBootError(e instanceof Error ? e.message : String(e))
-            return
           }
-          const wait = Math.min(150 * (attempt + 1), 1500, Math.max(0, deadline - Date.now()))
+          const wait = exhausted
+            ? AUTH_BOOT_RETRY_SLOW_MS
+            : Math.min(150 * (attempt + 1), 1500, Math.max(0, deadline - Date.now()))
           await new Promise((r) => setTimeout(r, wait))
         }
       }

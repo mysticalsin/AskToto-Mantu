@@ -6490,6 +6490,28 @@ function registerIpc(): void {
   // Mirrors the parakeet:feed handler exactly (same auth gate, same Float32 check, same cap, same
   // Speaker Intelligence ride-along) — appleSpeechTranscribe never throws (resolves '' on any failure),
   // so unlike parakeetTranscribe this needs no try/catch around the call itself.
+/**
+   * Cheap silence gate for the wake ear.
+   *
+   * The always-on ear feeds a window of PCM roughly once a second, and every window used to spawn a
+   * native Apple Speech process — including the overwhelming majority that are pure silence, which
+   * exit `1: No speech detected`. A dev session measured 222 such spawns in four minutes, one per
+   * second, indefinitely. That is a process-per-second treadmill that starves the main process, and a
+   * starved main process is why boot IPC (authStatus) times out and onboarding sits there loading.
+   *
+   * RMS over the window is enough to tell "nobody is talking" from "somebody might be": speech sits
+   * orders of magnitude above the floor, so the threshold is deliberately low — this exists to skip
+   * silence, never to decide what counts as speech. Anything at or above it still goes to the engine
+   * exactly as before.
+   */
+  const WAKE_SILENCE_RMS = 0.002
+  
+  function isProbablySilentPcm(samples: Float32Array, floor = WAKE_SILENCE_RMS): boolean {
+    if (samples.length === 0) return true
+    let sum = 0
+    for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i]
+    return Math.sqrt(sum / samples.length) < floor
+  }
   ipcMain.handle(IPC.appleSpeechFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!takeHotPath('asr-feed')) {
@@ -6504,6 +6526,8 @@ function registerIpc(): void {
     }
     // Same defensive cap as parakeetFeed — see its own comment for why.
     if (samples.length > 16_000 * 30) return ''
+    // Silence never becomes text, so it must never cost a process. See isProbablySilentPcm.
+    if (isProbablySilentPcm(samples)) return { text: '' }
     const authed = requireAuth()
     if (p.speaker !== 'you' && !authed) return ''
     // Same unavailable contract as parakeetFeed: non-darwin or no mac-helper sidecar means this engine
