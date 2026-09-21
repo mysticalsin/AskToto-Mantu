@@ -98,7 +98,7 @@ describe('circle-expand: click Expand Métis must not snap back', () => {
     expect(app).toMatch(/window\.toto\.minimize\(true\)\.then/)
     expect(app).toMatch(/if \(overlayIdle\)/)
     expect(app).toMatch(
-      /overlayIdle \? overlaySpringClassName\(overlaySpring\) : circleRestSpringClassName\(circleRestSpring\)/
+      /overlayIdle \? overlaySpringClassName\(overlaySpring, rightEdgePresentation \? 'right' : 'top'\) : circleRestSpringClassName\(circleRestSpring\)/
     )
   })
 

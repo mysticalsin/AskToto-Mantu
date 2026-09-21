@@ -2,23 +2,69 @@
 // It deliberately starts the project root (not out/main/index.js) so Electron reads package.json's
 // `main`, uses a disposable profile, and drives the same onboarding a new user sees.
 import { _electron as electron } from 'playwright'
-import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 const ROOT = resolve(process.cwd())
 const APP_EXECUTABLE = process.env.E2E_APP_EXECUTABLE ? resolve(process.env.E2E_APP_EXECUTABLE) : null
 const SHOT_DIR = process.env.E2E_SHOT_DIR || '/tmp'
 const COMPACT_ONBOARDING = { width: 1280, height: 640 }
 const OWN_PROCESS_TIMEOUT_MS = 5_000
+const RIGHT_EDGE_MARGIN_PX = 12
+const RIGHT_EDGE_TAB = { width: 52, height: 52 }
+const RIGHT_EDGE_DRAWER = { width: 360, height: 560 }
+const TOP_CENTER_MARGIN_PX = 8
+const TOP_CENTER_BAR_WIDTH = 880
 const steps = []
 const rendererDiagnostics = []
 const watchedPages = new WeakSet()
-const userDataDir = mkdtempSync(join(tmpdir(), 'metis-e2e-'))
+let userDataDir = mkdtempSync(join(tmpdir(), 'metis-e2e-'))
 let app
 let win
 
 mkdirSync(SHOT_DIR, { recursive: true })
+
+function builtArtifactPaths() {
+  if (!APP_EXECUTABLE) {
+    // Electron executes all three of these from the project root. Checking only the renderer made a
+    // renderer-only rebuild look fresh even when the main IPC or preload bridge under test was stale.
+    return [
+      join(ROOT, 'out', 'renderer', 'index.html'),
+      join(ROOT, 'out', 'main', 'index.js'),
+      join(ROOT, 'out', 'preload', 'index.js')
+    ]
+  }
+  // electron-builder keeps the runtime at Contents/MacOS/<name> on macOS and beside resources/ on
+  // Windows. The asar contains the renderer/main code, unlike the copied Electron executable itself.
+  return [
+    APP_EXECUTABLE.includes('/Contents/MacOS/')
+      ? resolve(dirname(APP_EXECUTABLE), '..', 'Resources', 'app.asar')
+      : resolve(dirname(APP_EXECUTABLE), 'resources', 'app.asar')
+  ]
+}
+
+function assertFreshBuild() {
+  const artifacts = builtArtifactPaths()
+  const missing = artifacts.filter((artifact) => !existsSync(artifact))
+  if (missing.length > 0) {
+    throw new Error(`Cannot verify the current build: expected ${APP_EXECUTABLE ? 'packaged app.asar' : 'renderer, main, and preload output'} at ${missing.join(', ')}.`)
+  }
+  const sources = [
+    join(ROOT, 'src', 'renderer', 'src', 'App.tsx'),
+    join(ROOT, 'src', 'renderer', 'src', 'components', 'RightEdgeSidecar.tsx'),
+    join(ROOT, 'src', 'renderer', 'src', 'lib', 'overlay-motion.ts'),
+    join(ROOT, 'src', 'renderer', 'src', 'styles.css'),
+    join(ROOT, 'src', 'main', 'index.ts'),
+    join(ROOT, 'src', 'main', 'island', 'geometry.ts'),
+    join(ROOT, 'src', 'preload', 'index.ts')
+  ]
+  const newestSource = Math.max(...sources.map((path) => statSync(path).mtimeMs))
+  const staleArtifacts = artifacts.filter((artifact) => statSync(artifact).mtimeMs < newestSource)
+  if (staleArtifacts.length > 0) {
+    throw new Error(`Refusing stale E2E evidence: ${staleArtifacts.join(', ')} predates the edited right-edge source. Rebuild/package before running this smoke test.`)
+  }
+}
 
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
 const ok = (name) => { steps.push({ name, ok: true }); console.log(`  ✓ ${name}`) }
@@ -97,6 +143,41 @@ async function waitFor(check, message, timeoutMs = 8_000) {
   throw new Error(`${message}${lastError ? ` (${lastError.message || lastError})` : ''}`)
 }
 
+async function overlayWindowGeometry() {
+  return app.evaluate(({ BrowserWindow, screen }) => {
+    const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
+    if (!window) return null
+    const bounds = window.getBounds()
+    return { bounds, workArea: screen.getDisplayMatching(bounds).workArea }
+  })
+}
+
+function rightEdgeExpectedSize(workArea, open) {
+  return open
+    ? {
+        width: RIGHT_EDGE_DRAWER.width,
+        height: Math.min(RIGHT_EDGE_DRAWER.height, Math.max(RIGHT_EDGE_TAB.height, workArea.height - RIGHT_EDGE_MARGIN_PX * 2))
+      }
+    : RIGHT_EDGE_TAB
+}
+
+async function verifyNativeRightEdgeBounds(open, phase) {
+  const geometry = await waitFor(async () => {
+    const candidate = await overlayWindowGeometry()
+    if (!candidate) return null
+    const expected = rightEdgeExpectedSize(candidate.workArea, open)
+    const edgeGap = candidate.workArea.x + candidate.workArea.width - (candidate.bounds.x + candidate.bounds.width)
+    const correctSize = candidate.bounds.width === expected.width && candidate.bounds.height === expected.height
+    const correctRightEdge = Math.abs(edgeGap - RIGHT_EDGE_MARGIN_PX) <= 2
+    const inWorkArea = candidate.bounds.y >= candidate.workArea.y && candidate.bounds.y + candidate.bounds.height <= candidate.workArea.y + candidate.workArea.height
+    return correctSize && correctRightEdge && inWorkArea ? candidate : null
+  }, `Right-edge native window did not reach its ${open ? '360px drawer' : '52px rail'} bounds after ${phase}.`)
+
+  const expected = rightEdgeExpectedSize(geometry.workArea, open)
+  ok(`right-edge native ${open ? 'drawer' : 'rail'} bounds are ${expected.width}×${expected.height} after ${phase}`)
+  return geometry
+}
+
 async function settingsMatch(expected) {
   return waitFor(
     async () => {
@@ -164,13 +245,35 @@ async function selectAppearanceAndRightEdge() {
   await delay(1_000)
   const selected = await rightEdge.getAttribute('aria-checked')
   if (selected !== 'true') throw new Error('Right edge was written to settings but the selected control did not update.')
+  if (await win.getByRole('radio', { name: /^Bar\b/i }).count()) {
+    throw new Error('Right edge still exposed the horizontal Bar choice.')
+  }
   const preview = win.locator('[data-placement-preview="right-edge"]').first()
   if (await preview.count() !== 1) throw new Error('Right-edge appearance preview did not update after selection.')
-  ok('Right edge choice persists during onboarding')
-  await screenshot('02-appearance')
+  ok('Right edge choice persists and removes the horizontal Bar choice during onboarding')
+  await screenshot('02-right-edge-appearance')
 }
 
-async function finishOnboarding() {
+async function selectAppearanceAndBar() {
+  const topCenter = win.getByRole('radio', { name: /^Top center/i }).first()
+  const bar = win.getByRole('radio', { name: /^Bar\b/i }).first()
+  await topCenter.waitFor({ state: 'visible', timeout: 8_000 })
+  await bar.waitFor({ state: 'visible', timeout: 8_000 })
+  await topCenter.click({ timeout: 5_000 })
+  await settingsMatch({ overlayPlacement: 'top-center' })
+  await bar.click({ timeout: 5_000 })
+  await settingsMatch({ overlayLayout: 'bar' })
+  if ((await topCenter.getAttribute('aria-checked')) !== 'true') {
+    throw new Error('Top center was written to settings but the selected control did not update.')
+  }
+  if ((await bar.getAttribute('aria-checked')) !== 'true') {
+    throw new Error('Bar was written to settings but the selected control did not update.')
+  }
+  ok('Top center Bar choice persists during onboarding')
+  await screenshot('02-top-center-bar-appearance')
+}
+
+async function finishOnboarding(presentation) {
   const trail = []
   let testedAppearance = false
   for (let step = 0; step < 24; step++) {
@@ -178,9 +281,13 @@ async function finishOnboarding() {
     if (settings.onboardingDone === true) return trail
 
     const rightEdge = win.getByRole('radio', { name: /^Right edge\b/i }).first()
-    if (!testedAppearance && await rightEdge.count()) {
+    // Hidden scenes remain mounted between the staged onboarding acts. A locator count alone can see
+    // the future Appearance card before its controls are actionable, so use its rendered visibility
+    // to decide when this scenario may select its presentation.
+    if (!testedAppearance && await rightEdge.isVisible().catch(() => false)) {
       await setCompactOnboardingBounds()
-      await selectAppearanceAndRightEdge()
+      if (presentation === 'right-edge') await selectAppearanceAndRightEdge()
+      else await selectAppearanceAndBar()
       testedAppearance = true
       continue
     }
@@ -232,16 +339,7 @@ async function finishOnboarding() {
 }
 
 async function verifyRightEdgeGeometry() {
-  const geometry = await waitFor(
-    () => app.evaluate(({ BrowserWindow, screen }) => {
-      const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
-      if (!window) return null
-      const bounds = window.getBounds()
-      const workArea = screen.getDisplayMatching(bounds).workArea
-      return { bounds, workArea }
-    }),
-    'No post-onboarding window geometry was available.'
-  )
+  const geometry = await verifyNativeRightEdgeBounds(false, 'onboarding completion')
   const expectedX = geometry.workArea.x + geometry.workArea.width - geometry.bounds.width - 12
   const edgeGap = geometry.workArea.x + geometry.workArea.width - (geometry.bounds.x + geometry.bounds.width)
   if (Math.abs(geometry.bounds.x - expectedX) > 2 || Math.abs(edgeGap - 12) > 2) {
@@ -253,7 +351,7 @@ async function verifyRightEdgeGeometry() {
   ok('right-edge overlay recreated after onboarding')
 }
 
-async function verifyIdlePanels() {
+async function verifyIdlePanels(expectedPlacement) {
   const history = win.getByRole('button', { name: /^History\b/i }).first()
   await history.click({ timeout: 5_000 })
   await win.getByRole('textbox', { name: 'Search past meetings' }).waitFor({ state: 'visible', timeout: 8_000 })
@@ -265,16 +363,158 @@ async function verifyIdlePanels() {
 
   await win.getByRole('button', { name: 'Settings', exact: true }).click({ timeout: 5_000 })
   await win.locator('[aria-label="Settings sections"]').waitFor({ state: 'visible', timeout: 8_000 })
-  const rightEdge = win.getByRole('radio', { name: /^Right edge\b/i }).first()
-  await rightEdge.waitFor({ state: 'visible', timeout: 8_000 })
-  if ((await rightEdge.getAttribute('aria-checked')) !== 'true') {
-    throw new Error('Settings did not show the Right edge choice selected after onboarding.')
+  if (expectedPlacement === 'Top center') {
+    if (await win.getByRole('complementary', { name: 'Métis' }).count() || await win.getByRole('button', { name: 'Open Métis' }).count()) {
+      throw new Error('Top-center Settings rendered right-edge dock chrome.')
+    }
   }
-  ok('Settings preserves the selected Right edge placement')
+  const selectedPlacement = win.getByRole('radio', { name: new RegExp(`^${expectedPlacement}`, 'i') }).first()
+  await selectedPlacement.waitFor({ state: 'visible', timeout: 8_000 })
+  if ((await selectedPlacement.getAttribute('aria-checked')) !== 'true') {
+    throw new Error(`Settings did not show the ${expectedPlacement} choice selected after onboarding.`)
+  }
+  ok(`Settings preserves the selected ${expectedPlacement} placement`)
 
   await win.getByRole('button', { name: 'Close settings' }).click({ timeout: 5_000 })
   await win.getByRole('textbox', { name: 'Ask Métis anything' }).waitFor({ state: 'visible', timeout: 8_000 })
   ok('Settings returns to the idle bar')
+}
+
+async function verifyRightEdgeSurface() {
+  const tab = win.getByRole('button', { name: 'Open Métis' }).first()
+  await tab.waitFor({ state: 'visible', timeout: 12_000 })
+  if ((await tab.getAttribute('aria-expanded')) !== 'false') {
+    throw new Error('Right-edge tab was not collapsed before opening.')
+  }
+  if (await win.getByRole('textbox', { name: 'Ask Métis anything' }).count()) {
+    throw new Error('Right-edge presentation rendered the horizontal Bar input.')
+  }
+  if (await win.getByRole('button', { name: /^History\b/i }).count()) {
+    throw new Error('Right-edge presentation rendered the horizontal Bar toolbar.')
+  }
+  ok('right-edge surface omits the horizontal Bar chrome')
+
+  await tab.click({ timeout: 5_000 })
+  await win.getByRole('complementary', { name: 'Métis' }).waitFor({ state: 'visible', timeout: 8_000 })
+  await verifyNativeRightEdgeBounds(true, 'opening the dock')
+  ok('right-edge tab opens the sidecar')
+  // The reveal has a scale spring. Let it settle before testing the painted bounds, while keeping the
+  // computed height check below as the guard against an absolute child collapsing to a notice strip.
+  await delay(250)
+
+  const expanded = await win.evaluate(() => {
+    const root = document.querySelector('.right-edge-sidecar')
+    const drawer = document.querySelector('.right-edge-sidecar__drawer')
+    if (!(root instanceof HTMLElement) || !(drawer instanceof HTMLElement)) return null
+    const rootRect = root.getBoundingClientRect()
+    const drawerRect = drawer.getBoundingClientRect()
+    const rootStyle = getComputedStyle(root)
+    const drawerStyle = getComputedStyle(drawer)
+    const parentRect = root.parentElement?.getBoundingClientRect()
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      root: {
+        className: root.className,
+        computedHeight: rootStyle.height,
+        width: rootRect.width,
+        height: rootRect.height,
+        parentHeight: parentRect?.height
+      },
+      drawer: {
+        computedHeight: drawerStyle.height,
+        width: drawerRect.width,
+        height: drawerRect.height
+      }
+    }
+  })
+  const nativeHeight = expanded && Number.parseFloat(expanded.drawer.computedHeight)
+  if (!expanded || expanded.drawer.width < 336 || nativeHeight < expanded.viewport.height - 2 || expanded.drawer.height < expanded.viewport.height * 0.95) {
+    throw new Error(`Right-edge drawer did not occupy its native surface: ${JSON.stringify(expanded)}`)
+  }
+  ok('right-edge drawer fills its native sidecar surface')
+
+  const composer = win.getByRole('textbox', { name: 'Ask Métis anything' })
+  await composer.waitFor({ state: 'visible', timeout: 8_000 })
+  await composer.fill('Draft without sending')
+  if (await composer.inputValue() !== 'Draft without sending') {
+    throw new Error('Right-edge composer did not retain typed text.')
+  }
+  if (await win.getByRole('button', { name: 'Close Métis' }).count()) {
+    throw new Error('Right-edge dock exposed a Close control while a draft keeps the overlay intentionally open.')
+  }
+  await composer.fill('')
+  ok('right-edge sidecar exposes a compact editable composer')
+  for (const label of ['Start listening', 'Capture screen', 'Mantu Intelligence', 'Spotlight Ref', 'Open settings']) {
+    await win.getByRole('button', { name: label }).waitFor({ state: 'visible', timeout: 8_000 })
+  }
+  ok('right-edge sidecar exposes its real action routes')
+  await screenshot('03-right-edge-sidecar-expanded')
+
+  await win.getByRole('button', { name: 'Open settings' }).click({ timeout: 5_000 })
+  await win.locator('[aria-label="Settings sections"]').waitFor({ state: 'visible', timeout: 8_000 })
+  if (await win.getByRole('complementary', { name: 'Métis' }).count()) {
+    throw new Error('The right-edge dock remained mounted above the full Settings surface.')
+  }
+  ok('right-edge Settings replaces the dock instead of rendering beneath it')
+  await win.getByRole('button', { name: 'Close settings' }).click({ timeout: 5_000 })
+  // Settings is a full surface. Returning to a hover-driven right edge is allowed to park at its
+  // rail; both the open drawer and the accessible rail are valid recovery states.
+  const restored = await waitFor(async () => {
+    if (await win.getByRole('complementary', { name: 'Métis' }).isVisible().catch(() => false)) return 'drawer'
+    const rail = win.getByRole('button', { name: 'Open Métis' }).first()
+    return (await rail.isVisible().catch(() => false)) && (await rail.getAttribute('aria-expanded')) === 'false' ? 'rail' : null
+  }, 'Closing Settings did not restore an accessible right-edge entry point.')
+  if (restored === 'rail') {
+    await win.getByRole('button', { name: 'Open Métis' }).first().click({ timeout: 5_000 })
+    await win.getByRole('complementary', { name: 'Métis' }).waitFor({ state: 'visible', timeout: 8_000 })
+  }
+  ok('closing Settings restores the right-edge dock or its accessible rail')
+
+  // Re-enter the drawer before testing its Close affordance. The sidecar intentionally has a short
+  // entrance spring, so this models a user moving onto the visible control rather than racing its mount.
+  const closeDock = win.getByRole('button', { name: 'Close Métis' })
+  await closeDock.hover({ timeout: 5_000 })
+  await delay(250)
+  await closeDock.click({ timeout: 5_000 })
+  await win.getByRole('complementary', { name: 'Métis' }).waitFor({ state: 'detached', timeout: 8_000 })
+  if ((await tab.getAttribute('aria-expanded')) !== 'false') {
+    throw new Error('Right-edge tab did not return to its collapsed state after Close.')
+  }
+  await verifyNativeRightEdgeBounds(false, 'closing the dock')
+  ok('right-edge sidecar closes back to its tab')
+  await screenshot('04-right-edge-rail')
+
+  // A real pointer return exercises both the renderer enter handler and the native cursor watcher.
+  // They must reopen the same drawer surface, never a 360px transparent hit target with rail-only DOM.
+  await tab.hover({ timeout: 5_000 })
+  await win.getByRole('complementary', { name: 'Métis' }).waitFor({ state: 'visible', timeout: 8_000 })
+  await verifyNativeRightEdgeBounds(true, 'hovering the parked rail')
+  ok('right-edge rail hover restores matching native and rendered drawer surfaces')
+}
+
+async function verifyBarSurface() {
+  await win.getByRole('textbox', { name: 'Ask Métis anything' }).waitFor({ state: 'visible', timeout: 12_000 })
+  if (await win.getByRole('complementary', { name: 'Métis' }).count() || await win.getByRole('button', { name: 'Open Métis' }).count()) {
+    throw new Error('Top-center presentation rendered right-edge dock chrome.')
+  }
+  const geometry = await waitFor(async () => {
+    const candidate = await overlayWindowGeometry()
+    if (!candidate) return null
+    const expectedX = Math.round(candidate.workArea.x + (candidate.workArea.width - candidate.bounds.width) / 2)
+    const expectedY = candidate.workArea.y + TOP_CENTER_MARGIN_PX
+    return candidate.bounds.width === TOP_CENTER_BAR_WIDTH && Math.abs(candidate.bounds.x - expectedX) <= 2 && Math.abs(candidate.bounds.y - expectedY) <= 2
+      ? candidate
+      : null
+  }, 'Top-center Bar did not occupy its native centered placement.')
+  ok(`top-center native Bar is centered at ${geometry.bounds.x},${geometry.bounds.y}`)
+  ok('top-center idle bar rendered')
+
+  if (await win.getByRole('button', { name: /^History\b/i }).count()) ok('top-center bar toolbar rendered')
+  else throw new Error('No History control in the top-center Bar presentation.')
+  if (await win.getByRole('button', { name: /^Spotlight Ref\b/i }).count()) ok('Spotlight Ref control rendered in the Bar')
+  else throw new Error('No Spotlight Ref control in the top-center Bar presentation.')
+  await screenshot('03-top-center-bar-idle')
+  await verifyIdlePanels('Top center')
 }
 
 function childHasExited(child) {
@@ -313,8 +553,8 @@ async function closeOwnApp() {
   }
 }
 
-try {
-  console.log(`Launching ${APP_EXECUTABLE ? 'packaged' : 'built'} Métis app with isolated profile:`, userDataDir)
+async function launchFreshProfile(presentation) {
+  console.log(`Launching ${APP_EXECUTABLE ? 'packaged' : 'built'} Métis app with isolated ${presentation} profile:`, userDataDir)
   app = await electron.launch({
     // Electron's unpackaged app target must be the project root. Passing out/main/index.js makes
     // Electron treat out/main as an app root, bypassing this project's package.json and often opening
@@ -335,7 +575,7 @@ try {
   win = await app.firstWindow({ timeout: 30_000 })
   watchPage(win)
   win = await latestMétisWindow({ onboardingDone: false })
-  ok('app launched + first window')
+  ok(`${presentation}: app launched + first window`)
   await win.waitForLoadState('domcontentloaded').catch(() => {})
 
   await win.waitForFunction(
@@ -344,42 +584,55 @@ try {
       return text && !/Starting Métis…/.test(text) && text.trim().length > 0 && typeof window.toto !== 'undefined'
     },
     { timeout: 15_000 }
-  ).then(() => ok('boot cleared the loading strip')).catch((error) => fail('boot cleared the loading strip (stuck loader?)', error))
-  await screenshot('01-boot')
+  ).then(() => ok(`${presentation}: boot cleared the loading strip`)).catch((error) => fail(`${presentation}: boot cleared the loading strip (stuck loader?)`, error))
+  await screenshot(`01-${presentation}-boot`)
   const initial = await bodyText()
-  console.log('   after boot:', initial.slice(0, 120))
+  console.log(`   ${presentation} after boot:`, initial.slice(0, 120))
 
   // Copy deliberately changes between onboarding scenes. The durable first-run state, not a marketing
   // phrase from whichever scene has painted, is the authoritative signal that this is onboarding.
   const initialSettings = await win.evaluate(() => window.toto.getSettings())
   if (initialSettings.onboardingDone !== false) {
-    throw new Error(`A fresh isolated profile did not show onboarding (onboardingDone=${initialSettings.onboardingDone}).`)
+    throw new Error(`A fresh isolated ${presentation} profile did not show onboarding (onboardingDone=${initialSettings.onboardingDone}).`)
   }
-  ok('onboarding shown on first run')
-  const trail = await finishOnboarding()
-  ok(`completed the onboarding walk (${trail.length} actions: ${trail.join(' → ')})`)
+  ok(`${presentation}: onboarding shown on first run`)
+  const trail = await finishOnboarding(presentation)
+  ok(`${presentation}: completed the onboarding walk (${trail.length} actions: ${trail.join(' → ')})`)
 
   // Finish replaces the opaque exclusive onboarding window. Re-acquire the new overlay instead of
   // driving a closed page handle, then re-read durable settings from the replacement renderer.
   await delay(800)
   win = await latestMétisWindow({ onboardingDone: true })
-  const completedSettings = await win.evaluate(() => window.toto.getSettings())
-  if (completedSettings.overlayPlacement !== 'right-edge') {
-    throw new Error(`Right edge preference did not survive onboarding completion: ${completedSettings.overlayPlacement}`)
+  return win.evaluate(() => window.toto.getSettings())
+}
+
+async function beginFreshProfile() {
+  await closeOwnApp()
+  rmSync(userDataDir, { recursive: true, force: true })
+  userDataDir = mkdtempSync(join(tmpdir(), 'metis-e2e-'))
+  rendererDiagnostics.length = 0
+}
+
+try {
+  assertFreshBuild()
+  ok('build artifact is newer than the tested right-edge source')
+  const rightEdgeSettings = await launchFreshProfile('right-edge')
+  if (rightEdgeSettings.overlayPlacement !== 'right-edge') {
+    throw new Error(`Right edge preference did not survive onboarding completion: ${rightEdgeSettings.overlayPlacement}`)
   }
   ok('Right edge setting survives onboarding completion')
   await verifyRightEdgeGeometry()
+  await verifyRightEdgeSurface()
+  if (rendererDiagnostics.length === 0) ok('right-edge: no renderer console errors')
+  else fail('right-edge: renderer console errors', new Error(rendererDiagnostics.slice(0, 3).join(' | ')))
 
-  await win.waitForSelector('input[placeholder*="Ask anything"], input[placeholder*="Ask a follow-up"]', { timeout: 12_000 })
-    .then(() => ok('idle bar rendered')).catch((error) => fail('idle bar rendered', error))
-  const historyCount = await win.locator('button:has-text("History")').count()
-  if (historyCount > 0) ok('toolbar rendered')
-  else fail('toolbar rendered', new Error('No History control'))
-  const spotlightRefCount = await win.getByRole('button', { name: /^Spotlight Ref\b/i }).count()
-  if (spotlightRefCount > 0) ok('Spotlight Ref control rendered')
-  else fail('Spotlight Ref control rendered', new Error('No Spotlight Ref control'))
-  await screenshot('03-idle')
-  await verifyIdlePanels()
+  await beginFreshProfile()
+  const topCenterSettings = await launchFreshProfile('top-center-bar')
+  if (topCenterSettings.overlayPlacement !== 'top-center' || topCenterSettings.overlayLayout !== 'bar') {
+    throw new Error(`Top-center Bar preference did not survive onboarding completion: ${JSON.stringify({ overlayPlacement: topCenterSettings.overlayPlacement, overlayLayout: topCenterSettings.overlayLayout })}`)
+  }
+  ok('Top center Bar settings survive onboarding completion')
+  await verifyBarSurface()
 
   const before = await win.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
   const minimize = win.getByRole('button', { name: /^Minimize to the orb$/i }).first()
@@ -402,8 +655,8 @@ try {
   }
 
   await delay(500)
-  if (rendererDiagnostics.length === 0) ok('no renderer console errors')
-  else fail('renderer console errors', new Error(rendererDiagnostics.slice(0, 3).join(' | ')))
+  if (rendererDiagnostics.length === 0) ok('top-center Bar: no renderer console errors')
+  else fail('top-center Bar: renderer console errors', new Error(rendererDiagnostics.slice(0, 3).join(' | ')))
 } catch (error) {
   fail('fatal', error)
 } finally {

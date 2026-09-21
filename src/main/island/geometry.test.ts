@@ -608,7 +608,7 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).not.toMatch(/overlayWatchTreatAsRevealed\(islandResting/)
     // A refused ghost heal (pointer in the strip) must fall through to the reveal step.
     expect(index).toMatch(/return parkOverlayAfterHideSpring\(\)/)
-    expect(index).toMatch(/function parkOverlayAfterHideSpring\(\): boolean/)
+    expect(index).toMatch(/function parkOverlayAfterHideSpring\(force = false\): boolean/)
     expect(index).toMatch(/\[overlay-watch\] reveal/)
     expect(index).toMatch(/\[overlay-watch\] leave/)
     expect(index).toMatch(/\[overlay-watch\] park/)

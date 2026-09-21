@@ -3022,12 +3022,14 @@ function healHideGhostSlab(): boolean {
 }
 
 /** Returns true only when the window was actually parked on this call. */
-function parkOverlayAfterHideSpring(): boolean {
+function parkOverlayAfterHideSpring(force = false): boolean {
   if (!win || win.isDestroyed() || onboardingExclusiveLive()) return false
   if (settingsSurfaceOpen) return false
   // Do not refuse park because the hover latch is stuck. If the pointer is
-  // still on the bar or the top-edge strip, stay. Else Hide must go to 8×2.
-  if (pointerInIslandOrBar()) return false
+  // still on the bar or the top-edge strip, stay. An explicit dock close is the exception: its cursor
+  // remains inside the disappearing drawer until after the exit spring, so refusing to park would leave
+  // a 360px transparent hit target on screen despite the renderer showing only the 52px rail.
+  if (!force && pointerInIslandOrBar()) return false
   cancelOverlayLeavePark()
   const layout = liveOverlayLayout()
   if (!overlayUsesHover(layout)) return false
@@ -8456,10 +8458,10 @@ function registerIpc(): void {
     assertMainWindow(e)
     restoreBarWidth()
   })
-  ipcMain.handle(IPC.overlayParkAfterHide, (e) => {
+  ipcMain.handle(IPC.overlayParkAfterHide, (e, force?: unknown) => {
     if (isRecentlyRetiredOverlaySender(e)) return
     assertMainWindow(e)
-    parkOverlayAfterHideSpring()
+    parkOverlayAfterHideSpring(force === true)
   })
   // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
   // caught render-throw survives to disk instead of only reaching console (gated behind

@@ -137,8 +137,8 @@ function initialSettingsTabFromLaunch(): 'ai' | undefined {
 }
 
 /** A renderer can be retired while an auto-hide callback is already queued. Parking is best effort. */
-function parkOverlayAfterHide(): void {
-  void window.toto.parkAfterHide().catch(() => {})
+function parkOverlayAfterHide(force = false): void {
+  void window.toto.parkAfterHide(force).catch(() => {})
 }
 
 const GUARD_LINE =
@@ -671,6 +671,25 @@ export function App(): JSX.Element {
     typedInput: input.trim().length > 0
   })
   const [autoHide, dispatchAutoHide] = useReducer(reduceAutoHide, autoHideSetting, initialAutoHideState)
+  // The user may hand a right-edge session to the standalone Intelligence window while a draft or an
+  // important notice keeps the generic auto-hide machine forced open. Keep that state and the draft
+  // intact, but let the user-requested handoff park this surface until they explicitly reopen it.
+  const [rightEdgeDockDismissed, setRightEdgeDockDismissed] = useState(false)
+  // A deliberate dock dismissal has different semantics from a pointer leave: the cursor is necessarily
+  // still over the departing drawer when its exit spring finishes, so main must not mistake that position
+  // for renewed hover and leave the 360px window open. This flag is consumed exactly once at the park
+  // boundary; ordinary pointer-driven hides retain their cursor safety guard.
+  const forceParkAfterHideRef = useRef(false)
+  const parkCurrentOverlayAfterHide = useCallback((): void => {
+    const force = forceParkAfterHideRef.current
+    forceParkAfterHideRef.current = false
+    parkOverlayAfterHide(force)
+  }, [])
+  const closeRightEdgeDock = useCallback((): void => {
+    forceParkAfterHideRef.current = true
+    setRightEdgeDockDismissed(true)
+    dispatchAutoHide({ type: 'collapse-now' })
+  }, [])
   useEffect(() => {
     dispatchAutoHide({ type: 'set-enabled', enabled: overlayIdle })
   }, [overlayIdle])
@@ -731,72 +750,87 @@ export function App(): JSX.Element {
   }, [autoHide.hoverPending])
   // Hide/island idle: park the rest rect (do not anchorTop to islandSafeTop — that was the 103px stub).
   const overlayRevealed = isOverlayRevealed(autoHide)
+  // A forced draft/update should normally keep a hover overlay open. The right edge has one deliberate
+  // exception: after its user-requested dashboard handoff, retain the draft but show the rail until the
+  // user clicks it or summons Métis again.
+  const overlaySurfaceRevealed = rightEdgePresentation && rightEdgeDockDismissed ? false : overlayRevealed
+  const edgeDockParked = rightEdgePresentation && rightEdgeDockDismissed
   const [overlaySpring, setOverlaySpring] = useState<OverlaySpring>('rest')
   const [circleRestSpring, setCircleRestSpring] = useState<CircleRestSpring>('idle')
   // Hide pad / island peek only when fully parked. Bar stays mounted during the spring (in / out).
   // Hide keeps Bar mounted (park is window size only). Island may swap to OverlayPeek.
-  const overlayPeeked = overlayShowPeek(
+  const overlayPeeked = (edgeDockParked && overlaySpring === 'rest') || overlayShowPeek(
     overlayIdle,
-    overlayRevealed,
+    overlaySurfaceRevealed,
     overlaySpring,
     overlayRestsHidden(overlayLayout)
   )
   const springIdleRef = useRef(false)
-  const wasRevealedRef = useRef(overlayRevealed)
-  const overlayRevealedRef = useRef(overlayRevealed)
-  overlayRevealedRef.current = overlayRevealed
+  const wasRevealedRef = useRef(overlaySurfaceRevealed)
+  const overlayRevealedRef = useRef(overlaySurfaceRevealed)
+  overlayRevealedRef.current = overlaySurfaceRevealed
   useEffect(() => {
     if (!overlayIdle) {
       setOverlaySpring('rest')
       springIdleRef.current = false
-      wasRevealedRef.current = overlayRevealed
+      wasRevealedRef.current = overlaySurfaceRevealed
       return
     }
     const becameIdle = !springIdleRef.current
     springIdleRef.current = true
     const reduced = prefersOverlayReducedMotion()
     const wasRevealed = wasRevealedRef.current
-    wasRevealedRef.current = overlayRevealed
+    wasRevealedRef.current = overlaySurfaceRevealed
     if (shouldForceParkOnBecameIdle({ becameIdle, usesHover: overlayUsesHover(overlayLayout) })) {
       // Settings → Island/Hide must park now. A leftover full bar or Settings-tall
       // window is a fat hover trigger (Teams mute / camera / share sit under it).
       dispatchAutoHide({ type: 'collapse-now' })
       setOverlaySpring('rest')
       wasRevealedRef.current = false
-      parkOverlayAfterHide()
+      parkCurrentOverlayAfterHide()
       return
     }
-    if (becameIdle && !overlayRevealed) {
+    if (becameIdle && !overlaySurfaceRevealed) {
       // Left Settings / pill to Hide with the pointer out — park, no ~100px stub spring.
       setOverlaySpring('rest')
-      parkOverlayAfterHide()
+      parkCurrentOverlayAfterHide()
       return
     }
-    if (overlayRevealed && !wasRevealed) {
+    if (overlaySurfaceRevealed && !wasRevealed) {
       void window.toto.revealWidth()
       setOverlaySpring(overlaySpringAfterReveal(reduced))
-    } else if (!overlayRevealed && wasRevealed) {
+    } else if (!overlaySurfaceRevealed && wasRevealed) {
       const next = overlaySpringAfterHide(reduced)
       setOverlaySpring(next)
-      if (next === 'rest') parkOverlayAfterHide()
+      if (next === 'rest') parkCurrentOverlayAfterHide()
     }
-  }, [overlayIdle, overlayRevealed, overlayLayout])
+  }, [overlayIdle, overlaySurfaceRevealed, overlayLayout, parkCurrentOverlayAfterHide])
   useEffect(() => {
     if (overlaySpring !== 'out') return
     const t = window.setTimeout(() => {
       if (overlayRevealedRef.current) return
-      parkOverlayAfterHide()
+      parkCurrentOverlayAfterHide()
       setOverlaySpring('rest')
     }, OVERLAY_PARK_FALLBACK_MS)
     return () => window.clearTimeout(t)
-  }, [overlaySpring])
-  const revealOverlay = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
-  const onOverlayPointerEnter = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
+  }, [overlaySpring, parkCurrentOverlayAfterHide])
+  const revealOverlay = useCallback(() => {
+    setRightEdgeDockDismissed(false)
+    dispatchAutoHide({ type: 'pointer-enter' })
+  }, [])
+  const onOverlayPointerEnter = useCallback(() => {
+    if (rightEdgePresentation) setRightEdgeDockDismissed(false)
+    dispatchAutoHide({ type: 'pointer-enter' })
+  }, [rightEdgePresentation])
   const onOverlayPointerLeave = useCallback(() => dispatchAutoHide({ type: 'pointer-leave' }), [])
   // Main-process cursor watch: macOS menu bar / Dynamic Island often skips renderer mouseenter.
   useEffect(() => {
     return window.toto.onOverlayCursorHover?.((d) => {
       if (d.hovering) {
+        // Main restores the native drawer before it emits this fallback hover signal. Mirror the
+        // ordinary pointer-enter path here so a deliberately parked edge dock cannot leave a
+        // full-size transparent window behind a renderer-only rail.
+        setRightEdgeDockDismissed(false)
         dispatchAutoHide({ type: 'reveal-now' })
       } else {
         dispatchAutoHide({ type: 'pointer-leave' })
@@ -829,11 +863,12 @@ export function App(): JSX.Element {
   // onTogglePanel). Only fires the confirm when Review is actually open AND dirty; every other view-switch
   // (History, Settings, and the hotkey dispatch below) used to skip this check entirely and navigate away
   // ungated, silently dropping the edit.
-  const guardReviewNav = useCallback((proceed: () => void): void => {
+  const guardReviewNav = useCallback((proceed: () => void): boolean => {
     if (viewRef.current === 'review' && reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
-      return
+      return false
     }
     proceed()
+    return true
   }, [])
   // Set by endReview() while waiting for listen.stop()'s asynchronous terminal drain before the recap is
   // generated. Healthy queued windows commit first; a no-progress expiry instead leaves an incomplete
@@ -2962,6 +2997,7 @@ export function App(): JSX.Element {
     // `reveal-now` is intentionally immediate: a parked right-edge sidecar must open for a keyboard
     // summon instead of waiting for hover dwell.
     else if (a === 'metis-command') {
+      setRightEdgeDockDismissed(false)
       dispatchAutoHide({ type: 'reveal-now' })
       setCollapsed(false)
     }
@@ -3237,10 +3273,31 @@ export function App(): JSX.Element {
   // (same minimize Escape already does) so the dashboard window is what the user looks at next, not a
   // still-expanded panel behind it. Wired into both real "open the dashboard" entry points below: History's
   // own button and the in-bar BrainView glance's footer button.
-  const minimizeForIntelligence = useCallback(() => {
+  const minimizeForIntelligence = useCallback((): void => {
     setView('answer')
     setCollapsed(true)
-  }, [setView])
+    if (rightEdgePresentation) closeRightEdgeDock()
+  }, [closeRightEdgeDock, rightEdgePresentation])
+
+  // The dock needs the same standalone Intelligence route as History and BrainView. Do not hand it
+  // minimizeForIntelligence directly: that only collapses the overlay and would falsely imply a dashboard
+  // opened. Keeping the IPC and failure normalization in App lets the compact dock remain presentation-only.
+  const openIntelligenceDashboard = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    if (capturing || capturingRef.current) return { ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence.' }
+    let approved = false
+    guardReviewNav(() => {
+      approved = true
+    })
+    if (!approved) return { ok: false, error: 'Save or discard the recap before opening Mantu Intelligence.' }
+    try {
+      const result = await window.toto.brainOpenDashboard()
+      if (!result.ok) return { ok: false, error: result.error || 'Could not open Mantu Intelligence.' }
+      minimizeForIntelligence()
+      return { ok: true }
+    } catch {
+      return { ok: false, error: 'Could not open Mantu Intelligence.' }
+    }
+  }, [capturing, guardReviewNav, minimizeForIntelligence])
 
   // Panel body — memoized so state changes unrelated to the active view/answer (typing in the ask input,
   // the elapsed-meeting clock, focus signals, etc.) don't rebuild this whole element tree on every App
@@ -3709,6 +3766,10 @@ export function App(): JSX.Element {
   // bottom). Only the full views (settings / history / review / agenda) render as a panel below the bar.
   const barBody = answerView && !collapsed ? body : undefined
   const isPanelBody = body != null && !answerView
+  // Edge chrome is for the compact Ask/Copilot surface only. Full product views (Settings, History,
+  // Review, Agenda, Intelligence) replace it instead of rendering beneath the dock or being squeezed
+  // into its 360px native window.
+  const rightEdgeDockVisible = rightEdgePresentation && !isPanelBody
   // An actual answer/suggestion is open → the bar shows the ← back arrow + the follow-up placeholder.
   const hasAnswer =
     (view === 'answer' && (!!ask.answer || capturing)) ||
@@ -3742,12 +3803,15 @@ export function App(): JSX.Element {
         // window and the last rows were clipped (Tony live: M / tray open, cannot scroll down).
         // Circle rest must not keep h-full or the hug becomes a Settings-tall gray slab.
         overlayShowsSettingsSheet(view, minimized) ? 'h-full min-h-0' : '',
+        // The right-edge drawer is absolutely positioned. Its host must fill the native 360×560
+        // sidecar window or the root will hug a normal-flow notice and clip the drawer to that notice.
+        rightEdgeDockVisible ? 'h-full min-h-0' : '',
         // Stealth (contentProtection) paints a multi-colour halo that spills ~34px past the widget via
         // box-shadow (see .aw-hidden-rainbow). The overlay window hugs content height to ~2px, so without
         // extra room the halo would be clipped at the window edge into a flat band. Widen the transparent
         // margin only while invisible; the resting/visible overlay keeps its tight p-1.5. Settings is
         // opaque glass, so skip the 20px stealth pad that crushed the scroll surface.
-        overlayPeeked ? 'p-0' : overlayShowsSettingsSheet(view, minimized) ? 'p-1.5' : (settings?.contentProtection ?? true) && !minimized ? 'p-5 stealth-glow' : 'p-1.5',
+        overlayPeeked ? 'p-0' : rightEdgeDockVisible ? 'p-0' : overlayShowsSettingsSheet(view, minimized) ? 'p-1.5' : (settings?.contentProtection ?? true) && !minimized ? 'p-5 stealth-glow' : 'p-1.5',
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
@@ -3815,13 +3879,28 @@ export function App(): JSX.Element {
           />
         </div>
       ) : overlayPeeked ? (
-        rightEdgePresentation ? (
+        rightEdgeDockVisible ? (
           <RightEdgeSidecar
             open={false}
             onOpen={revealOverlay}
-            onClose={() => dispatchAutoHide({ type: 'collapse-now' })}
+            onClose={closeRightEdgeDock}
+            canClose={overlayIdle && !autoHideForced}
             commandState={commandState}
-            meetingListening={listen.listening}
+            value={input}
+            onChange={setInput}
+            onSubmit={submit}
+            onStop={onStop}
+            busy={capturing || ask.answer?.streaming === true || suggest.answer?.streaming === true}
+            stoppable={ask.answer?.streaming === true || suggest.answer?.streaming === true}
+            body={barBody}
+            listening={listen.listening}
+            onToggleListen={toggleListen}
+            capturing={capturing}
+            onCapture={capture}
+            onOpenIntelligence={openIntelligenceDashboard}
+            onSpotlightRef={spotlightRef}
+            spotlightReady={spotlightRefReady}
+            onSettings={onBarSettings}
           />
         ) : (
         // Hide: 8×2 hairline (cursor watch is the sensor). Island: visible peek (hug-width).
@@ -3835,15 +3914,18 @@ export function App(): JSX.Element {
         <>
           {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. */}
           <div
-            className={
-              overlayIdle ? overlaySpringClassName(overlaySpring) : circleRestSpringClassName(circleRestSpring)
-            }
+            className={[
+              overlayIdle ? overlaySpringClassName(overlaySpring, rightEdgePresentation ? 'right' : 'top') : circleRestSpringClassName(circleRestSpring),
+              // The drawer's own position is absolute. Keep this animation host full-height too so
+              // percentage heights resolve to the 360×560 native sidecar rather than its empty flow box.
+              rightEdgeDockVisible ? 'h-full' : ''
+            ].join(' ')}
             onAnimationEnd={(e) => {
               if (e.target !== e.currentTarget) return
               if (overlayIdle) {
                 if (overlaySpring === 'in') setOverlaySpring('settled')
                 if (overlaySpring === 'out' && !overlayRevealedRef.current) {
-                  parkOverlayAfterHide()
+                  parkCurrentOverlayAfterHide()
                   setOverlaySpring('rest')
                 }
                 return
@@ -3852,15 +3934,30 @@ export function App(): JSX.Element {
               if (circleRestSpring === 'collapse') commitCircleRestMinimize()
             }}
           >
-          {rightEdgePresentation ? (
+          {rightEdgeDockVisible ? (
             <RightEdgeSidecar
               open={true}
               onOpen={revealOverlay}
-              onClose={() => dispatchAutoHide({ type: 'collapse-now' })}
+              onClose={closeRightEdgeDock}
+              canClose={overlayIdle && !autoHideForced}
               commandState={commandState}
-              meetingListening={listen.listening}
+              value={input}
+              onChange={setInput}
+              onSubmit={submit}
+              onStop={onStop}
+              busy={capturing || ask.answer?.streaming === true || suggest.answer?.streaming === true}
+              stoppable={ask.answer?.streaming === true || suggest.answer?.streaming === true}
+              body={barBody}
+              listening={listen.listening}
+              onToggleListen={toggleListen}
+              capturing={capturing}
+              onCapture={capture}
+              onOpenIntelligence={openIntelligenceDashboard}
+              onSpotlightRef={spotlightRef}
+              spotlightReady={spotlightRefReady}
+              onSettings={onBarSettings}
             />
-          ) : <Bar
+          ) : rightEdgePresentation ? null : <Bar
             value={input}
             onChange={setInput}
             onSubmit={submit}
@@ -4041,7 +4138,7 @@ export function App(): JSX.Element {
               running Métis Local with no cloud provider does not need one — that install is finished, not
               half-configured. Telling them to "Add your Cloudflare API key" while the local model answers
               every question is the app contradicting itself. Same flag the requireProvider gate reads. */}
-          {settings && !settings.providerReady && !settings.localFallbackReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
+          {settings && !rightEdgeDockVisible && !settings.providerReady && !settings.localFallbackReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
             const activeDef = PROVIDERS[settings.provider]
             // MQA-216: same three cases as requireProvider above, in the same order. Reading a saved key
             // as proof of an org policy made the CTA tell a Cloudflare user to "switch to an approved
