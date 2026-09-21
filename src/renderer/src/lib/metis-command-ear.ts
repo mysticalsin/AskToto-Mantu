@@ -83,6 +83,15 @@ function feedUnavailable(result: unknown): boolean {
   return !!result && typeof result === 'object' && (result as { unavailable?: unknown }).unavailable === true
 }
 
+/** Main answers a FAILED decode with `{ text: '', error: true }` rather than rejecting. That used to
+ *  be indistinguishable from genuine silence here: the fail counter was reset and the engine stayed in
+ *  the cascade forever, so a permanently broken engine (Tony live FAIL: the Parakeet helper could not
+ *  load its native addon) cost a doomed round-trip on every single wake window. A resolved error is an
+ *  engine failure, and counts as one. */
+function feedErrored(result: unknown): boolean {
+  return !!result && typeof result === 'object' && (result as { error?: unknown }).error === true
+}
+
 export function startMetisCommandEar(opts: MetisCommandEarOptions): () => void {
   let stopped = false
   let stream: MediaStream | null = null
@@ -171,6 +180,14 @@ export function startMetisCommandEar(opts: MetisCommandEarOptions): () => void {
         if (feedUnavailable(result)) {
           engineDead[via] = true
           console.warn('[cap2-ear] engine unavailable:', via)
+          continue
+        }
+        if (feedErrored(result)) {
+          engineFails[via] += 1
+          if (engineFails[via] >= ENGINE_FAIL_MAX) {
+            engineDead[via] = true
+            console.warn('[cap2-ear] engine retired after repeated decode errors:', via)
+          }
           continue
         }
         engineFails[via] = 0

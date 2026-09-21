@@ -3134,6 +3134,32 @@ function logCap2EngineOnce(engine: 'parakeet' | 'apple', reason: string): void {
   mainLog.info(`[cap2] wake engine unavailable: ${engine} (${reason})`)
 }
 
+/** Cap2 wake readiness for Parakeet. `parakeetModelReady()` only proves the model FILES are on disk.
+ *  On Tony's live FAIL Mac they were — while the isolated helper could not load its native
+ *  sherpa-onnx addon at all, so every wake window spawned a host that failed, main answered the ear
+ *  with `{ error: true }` (which the ear reads as genuine SILENCE, not as a broken engine), and a
+ *  permanently deaf Parakeet stayed "alive" for the whole session in front of Apple Speech. Probe the
+ *  addon once per session as well, so an engine that can never produce text is reported `unavailable`
+ *  and retired by the ear instead of failing silent. */
+let cap2ParakeetUsableProbe: Promise<boolean> | null = null
+function cap2ParakeetUsable(): Promise<boolean> {
+  if (!cap2ParakeetUsableProbe) {
+    cap2ParakeetUsableProbe = (async () => {
+      if (!parakeetModelReady()) {
+        logCap2EngineOnce('parakeet', 'model files missing')
+        return false
+      }
+      const addonError = await parakeetAddonError()
+      if (addonError) {
+        logCap2EngineOnce('parakeet', `native addon unavailable: ${addonError.slice(0, 200)}`)
+        return false
+      }
+      return true
+    })()
+  }
+  return cap2ParakeetUsableProbe
+}
+
 /** True while the Cap2 listen pill owns the overlay window, so park opacity must stay 1. */
 let metisCommandPillLive = false
 
@@ -5045,9 +5071,11 @@ function registerIpc(): void {
   registerMetisCommandIpc({
     assertMainWindow
   })
-  mainLog.info(
-    `[cap2] wake engines parakeet=${parakeetModelReady() ? 'ready' : 'missing'} apple=${appleSpeechAvailable() ? 'ready' : 'missing'}`
-  )
+  void cap2ParakeetUsable().then((parakeetUsable) => {
+    mainLog.info(
+      `[cap2] wake engines parakeet=${parakeetUsable ? 'ready' : 'missing'} apple=${appleSpeechAvailable() ? 'ready' : 'missing'}`
+    )
+  })
   // Cap2 ear pre-flight. macOS hands a renderer getUserMedia stream of pure silence — not an error —
   // when the mic TCC grant was never made, which is exactly the "I say Hey Métis and nothing happens"
   // failure with no error anywhere. Ask for the grant from main (the only side that can) and tell the
@@ -5057,7 +5085,7 @@ function registerIpc(): void {
     if (process.platform === 'darwin' && systemPreferences.getMediaAccessStatus('microphone') === 'not-determined') {
       await systemPreferences.askForMediaAccess('microphone').catch(() => false)
     }
-    const engines = { parakeet: parakeetModelReady(), apple: appleSpeechAvailable() }
+    const engines = { parakeet: await cap2ParakeetUsable(), apple: appleSpeechAvailable() }
     if (!engines.parakeet && !engines.apple) mainLog.warn('[cap2] no wake ASR engine available — Hey Métis cannot be heard')
     return { microphone: getPlatformPermissions().microphone, engines }
   })
@@ -6446,8 +6474,7 @@ function registerIpc(): void {
     // rejected this invoke and the ear — which tried no other engine — heard nothing while the
     // env-var prove path passed. Report the engine as unavailable instead of throwing: the caller
     // then drops this engine and falls through to the next one (and the chip can say the ear is deaf).
-    if (!parakeetModelReady()) {
-      logCap2EngineOnce('parakeet', 'model files missing')
+    if (!(await cap2ParakeetUsable())) {
       return { text: '', unavailable: true }
     }
     const speakerKey = captureLiveSpeakerKey(p.startedAt)

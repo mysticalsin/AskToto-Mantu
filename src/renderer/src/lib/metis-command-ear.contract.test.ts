@@ -56,6 +56,19 @@ describe('Cap2 always-on command ear', () => {
     expect(main).toContain('[cap2] wake engines parakeet=')
   })
 
+  it('retires an engine that can never transcribe instead of paying for it every window', () => {
+    // Tony live FAIL tip f688b761: the model FILES were on disk, so parakeetModelReady() said "ready",
+    // while the isolated helper could not load its native sherpa-onnx addon at all. Main answered every
+    // wake window with `{ error: true }`, the ear read that as genuine silence, and a permanently deaf
+    // Parakeet stayed in front of Apple Speech for the whole session. Cap2 readiness now probes the
+    // addon too, and a resolved decode error counts as an engine failure here.
+    expect(main).toContain('function cap2ParakeetUsable')
+    expect(main).toContain('await parakeetAddonError()')
+    expect(main).toContain('await cap2ParakeetUsable()')
+    expect(ear).toContain('function feedErrored')
+    expect(ear).toContain('engine retired after repeated decode errors')
+  })
+
   it('asks for the mic grant from main before listening to silence', () => {
     // macOS returns a live track of zeros, not an error, when the TCC grant was never made.
     expect(ear).toContain('cap2EarPrepare')
