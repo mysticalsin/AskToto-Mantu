@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   METIS_PILL_HI,
   METIS_PILL_LISTENING,
+  METIS_WAKE_WORD,
   foldSpeech,
   stripWakeWord,
   transcriptContainsEndPhrase,
@@ -9,9 +10,13 @@ import {
 } from './metis-wake'
 
 describe('Cap2 wake word', () => {
-  it('matches Métis with accent folding', () => {
+  it('HARD: Hey Métis wakes; bare Métis does not', () => {
+    expect(METIS_WAKE_WORD).toBe('Hey Métis')
     expect(transcriptContainsWakeWord('Hey Métis')).toBe(true)
-    expect(transcriptContainsWakeWord('metis open notes')).toBe(true)
+    expect(transcriptContainsWakeWord('hey metis open notes')).toBe(true)
+    expect(transcriptContainsWakeWord('Hey, Métis')).toBe(true)
+    expect(transcriptContainsWakeWord('Métis')).toBe(false)
+    expect(transcriptContainsWakeWord('metis open notes')).toBe(false)
     expect(transcriptContainsWakeWord('meeting about meta systems')).toBe(false)
   })
 
@@ -26,7 +31,7 @@ describe('Cap2 wake word', () => {
     expect(METIS_PILL_LISTENING).toBe("Hi Métis, I'm listening...")
   })
 
-  it('stripWakeWord removes the name call', () => {
-    expect(foldSpeech(stripWakeWord('Métis open notes'))).toContain('open notes')
+  it('stripWakeWord removes Hey Métis', () => {
+    expect(foldSpeech(stripWakeWord('Hey Métis open notes'))).toBe('open notes')
   })
 })

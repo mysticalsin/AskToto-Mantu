@@ -12,7 +12,7 @@
    - History, Settings, Visible-in-share as Bar parity
    - Ask composer = Bar Ask DNA (pill + submit)
 2. **Visual:** still Apple-grade glass per CAP4-DESIGN-POLISH-BRIEF — nested bezel, empty hierarchy, edge spring. Design skills still apply. No thin 4-row launcher.
-3. **Cap2 wake:** saying **Métis** / Hey Métis must arm listen pill (real mic), same as Cap2 tip `18cf5b73` PASS. Ear chip top-center, not dock-scoped.
+3. **Cap2 wake:** saying **Hey Métis** must arm listen pill (real mic), same as Cap2 tip `18cf5b73` PASS. Ear chip top-center, not dock-scoped.
 4. **Cap2 actions:** Notes → Arc → Google → X → Photo Booth chain must still execute from voice after wake (existing adapters — extend, do not rebuild).
 
 ## Tip lineage
@@ -21,7 +21,7 @@ Base polish `62482d2a`. Next tip must include centralized Bar tools + Cap2 regre
 ## Prove gates (Ultron stamp requires all)
 A. REST + EXPANDED dock shots that are **the Métis overlay**, not Grok Bot desktop
 B. DOM: no `undefined` in titles/aria; Capture + Deep thinking present and labeled
-C. Cap2 real-mic wake: pill/listen on say Métis
+C. Cap2 real-mic wake: pill/listen on say Hey Métis
 D. Cap2 actions chain smoke (or recorded prove) on same tip
 E. Vitest dock + Cap2 contracts green
 

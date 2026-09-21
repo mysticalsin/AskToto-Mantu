@@ -3810,7 +3810,7 @@ export function App(): JSX.Element {
             className="pointer-events-none absolute left-1/2 top-1 z-[80] -translate-x-1/2 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium tracking-wide text-white/90"
           >
             {metisCommandEarStatus.state === 'listening'
-              ? 'Ear on · say Métis'
+              ? 'Ear on · say Hey Métis'
               : metisCommandEarStatus.state === 'arming'
                 ? 'Ear arming…'
                 : metisCommandEarStatus.state === 'denied'
