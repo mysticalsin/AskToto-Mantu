@@ -6590,31 +6590,31 @@ export function Settings({
                     <span className="text-[12px] text-[color:var(--color-ink)]">This is how the overlay bar will look.</span>
                   </div>
                   <div className="mt-3 px-1">
-                    <p className="m-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Overlay chrome</p>
-                    <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                      How Métis sits on the desktop. Changes apply now, no reinstall.
-                    </p>
-                    <OverlayChromePicker
-                      value={settings.overlayLayout}
-                      locked={settings.managedKeys.includes('overlayLayout')}
-                      onChange={(id) =>
-                        patch({
-                          overlayLayout: id,
-                          autoHideOverlay: autoHideOverlayForLayout(id),
-                          ...(id === 'dock' ? { overlayPlacement: 'right-edge' as OverlayPlacement } : {})
-                        })
-                      }
-                    />
-                    <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                    <p className="m-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">
                       Overlay position <ManagedChip keys={settings.managedKeys} k="overlayPlacement" />
                     </p>
                     <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                      Keep Métis at the top center, or use a right-edge sidecar and drag it vertically to place it.
+                      Top keeps Métis at the top of the display. Right edge is the dock chat sidecar.
                     </p>
                     <OverlayPlacementPicker
                       value={settings.overlayPlacement}
                       locked={settings.managedKeys.includes('overlayPlacement') || overlayPlacementSave.busy}
-                      onChange={saveOverlayPlacement}
+                      onChange={(id) => {
+                        // Top ↔ Right drive chrome: Right force-docks; Top never offers Dock as a peer of Bar.
+                        // Placement itself is persisted by saveOverlayPlacement (durable main round-trip).
+                        if (id === 'right-edge') {
+                          patch({
+                            overlayLayout: 'dock',
+                            autoHideOverlay: autoHideOverlayForLayout('dock')
+                          })
+                        } else if (settings.overlayLayout === 'dock') {
+                          patch({
+                            overlayLayout: 'hide',
+                            autoHideOverlay: autoHideOverlayForLayout('hide')
+                          })
+                        }
+                        void saveOverlayPlacement(id)
+                      }}
                     />
                     {overlayPlacementSave.busy ? (
                       <p className="mt-2 mb-0 text-[11px] text-[color:var(--cl-muted-foreground)]" aria-live="polite">
@@ -6625,6 +6625,28 @@ export function Settings({
                       <p role="alert" className="mt-2 mb-0 text-[11px] text-[color:var(--cl-destructive)]">
                         {overlayPlacementSave.error}
                       </p>
+                    ) : null}
+                    {settings.overlayPlacement !== 'right-edge' ? (
+                      <>
+                        <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                          Top chrome <ManagedChip keys={settings.managedKeys} k="overlayLayout" />
+                        </p>
+                        <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                          How Métis rests at the top. Right edge dock is chosen under Overlay position.
+                        </p>
+                        <OverlayChromePicker
+                          value={settings.overlayLayout === 'dock' ? 'hide' : settings.overlayLayout}
+                          locked={settings.managedKeys.includes('overlayLayout')}
+                          layouts={['hide', 'island', 'bar'] as const}
+                          onChange={(id) =>
+                            patch({
+                              overlayLayout: id,
+                              autoHideOverlay: autoHideOverlayForLayout(id),
+                              overlayPlacement: 'top-center' as OverlayPlacement
+                            })
+                          }
+                        />
+                      </>
                     ) : null}
                     {settings.overlayLayout === 'dock' ? (
                       <>

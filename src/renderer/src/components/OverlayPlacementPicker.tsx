@@ -6,12 +6,12 @@ import {
 
 const OVERLAY_PLACEMENT_COPY: Record<OverlayPlacement, { title: string; desc: string }> = {
   'top-center': {
-    title: 'Top center',
-    desc: 'The familiar position above your work.'
+    title: 'Top',
+    desc: 'Hide, Island, or Bar at the top of your display.'
   },
   'right-edge': {
     title: 'Right edge',
-    desc: 'A sidecar beside your meeting. Drag it up or down.'
+    desc: 'Dock chat sidecar. Drag it up or down.'
   }
 }
 

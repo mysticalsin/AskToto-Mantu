@@ -80,7 +80,7 @@ export function CommandListeningPill({
       data-metis-command-listen-orb="1"
       role="status"
       aria-live="polite"
-      className="pointer-events-auto fixed left-1/2 top-3 z-[80] flex max-w-[min(560px,92vw)] -translate-x-1/2 items-center gap-3 rounded-full border border-white/15 bg-black/55 px-4 py-2.5 text-[13px] text-white/95 shadow-lg backdrop-blur-md"
+      className="pointer-events-auto fixed left-1/2 top-3 z-[80] flex max-w-[min(560px,92vw)] -translate-x-1/2 items-center gap-3 rounded-full border border-white/20 bg-black/35 px-4 py-2.5 text-[13px] text-white/95 shadow-lg backdrop-blur-md"
     >
       {/* Cap4 Jarvis particle sphere — must visibly turn in listening state (Tony HARD). */}
       <ObsidianOrb

@@ -3810,12 +3810,21 @@ export function App(): JSX.Element {
       ].join(' ')}
     >
             <div data-metis-command-pill-host="1">
-        {/* Cap4: dock rest / OverlayPeek must not show Cap2 Ear chrome (Tony FAIL Ear error on notch). */}
-        {/* Cap2: always show ear status when armed — dock park used to hide all feedback. */}
-        {metisCommandEarStatus.state !== 'idle' || metisCommand.pillVisible || (!overlayPeeked && !(overlayLayout === 'dock' && !overlayRevealed)) ? (
+        {/* Cap4 FE SoT 2026-09-21: Heard/Ear chip NEVER on pill / hide-park / dock-rest.
+            Only when overlay is expanded/revealed for ask (Tony voice TONY-VOICE-FE-FIXES). */}
+        {(() => {
+          const overlayResting =
+            overlayPeeked ||
+            !overlayRevealed ||
+            (overlayLayout === 'bar' && minimized) ||
+            (overlayLayout === 'dock' && !overlayRevealed)
+          const earArmed =
+            metisCommandEarStatus.state !== 'idle' || metisCommand.pillVisible
+          return !overlayResting && earArmed
+        })() ? (
           <div
             data-metis-command-ear-chip="1"
-            className="pointer-events-none absolute left-1/2 top-1 z-[80] -translate-x-1/2 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium tracking-wide text-white/90"
+            className="pointer-events-none absolute left-1/2 top-1 z-[80] -translate-x-1/2 rounded-full bg-black/40 px-2 py-0.5 text-[10px] font-medium tracking-wide text-white/90"
           >
             {metisCommandEarStatus.state === 'listening'
               ? 'Ear on · say Hey Métis'
