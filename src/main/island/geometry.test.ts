@@ -659,12 +659,11 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
   const macbookBounds: Rect = { x: 0, y: 0, width: 1512, height: 982 }
   const macbookWorkArea: Rect = { x: 0, y: 39, width: 1512, height: 943 }
 
-  it('exclusiveOnboardingBounds covers the display and is never smaller than the work area', () => {
+  it('exclusiveOnboardingBounds covers display.bounds exactly (Tony HARD Dig letterbox)', () => {
     const stage = exclusiveOnboardingBounds(macbookBounds, macbookWorkArea)
-    expect(stage.x).toBe(macbookBounds.x)
-    expect(stage.y).toBe(macbookBounds.y)
-    expect(stage.width).toBeGreaterThanOrEqual(macbookWorkArea.width)
-    expect(stage.height).toBeGreaterThanOrEqual(macbookWorkArea.height)
+    expect(stage).toEqual(macbookBounds)
+    expect(stage.width).toBe(macbookBounds.width)
+    expect(stage.height).toBe(macbookBounds.height)
     expect(onboardingFitsWorkArea(stage, macbookWorkArea)).toBe(true)
   })
 

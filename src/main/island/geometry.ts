@@ -437,17 +437,17 @@ export function slideWithinMargin(anchorY: number, height: number, workArea: Rec
 }
 
 /**
- * Exclusive onboarding stage: cover the display. Width/height are never smaller than the work
- * area (Tony live fail: 880×816 card at Y=39). `bounds.y = 0` is correct HERE — the stage owns
- * the display. After `onboardingDone`, hide/island also rest at `bounds.y` (the notch strip)
- * so the hardware island can hit them — never as an 880×816 card.
+ * Exclusive onboarding stage: cover display.bounds exactly (Tony HARD 2026-09-21 Dig p0:
+ * letterboxed purple card with menu bar + widgets visible). Never a workArea-sized card and
+ * never a Dig-clamped inset (x=80 y=60). `workArea` stays in the signature for call sites /
+ * wiped-profile acceptance helpers. After onboardingDone, hide/island rest at bounds.y.
  */
-export function exclusiveOnboardingBounds(bounds: Rect, workArea: Rect): Rect {
+export function exclusiveOnboardingBounds(bounds: Rect, _workArea: Rect): Rect {
   return {
     x: bounds.x,
     y: bounds.y,
-    width: Math.max(bounds.width, workArea.width),
-    height: Math.max(bounds.height, workArea.height)
+    width: bounds.width,
+    height: bounds.height
   }
 }
 

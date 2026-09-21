@@ -1106,6 +1106,8 @@ let settingsSurfaceOpen = false
 let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
 let overlayCursorWatchEnteredAt: number | null = null
 let overlayCursorWatchHovering = false
+/** Fight Dig CDP letterbox clamps while exclusive owns the display (Tony HARD p0). */
+let exclusiveBoundsWatchTimer: ReturnType<typeof setInterval> | null = null
 let overlayLeaveParkTimer: ReturnType<typeof setTimeout> | null = null
 const streams = new Map<string, { abort: () => void }>()
 let importJobs: ImportJobManager | null = null
@@ -2200,14 +2202,72 @@ function commitParkedOverlayBounds(park: { x: number; y: number; width: number; 
   }
 }
 
-function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
+function stopExclusiveBoundsWatch(): void {
+  if (!exclusiveBoundsWatchTimer) return
+  clearInterval(exclusiveBoundsWatchTimer)
+  exclusiveBoundsWatchTimer = null
+}
+
+/** Dig seats must not leave exclusive as a letterboxed card (Tony HARD p0 / clamp x=80 y=60). */
+function armExclusiveBoundsWatch(w: BrowserWindow, displayId: number): void {
+  stopExclusiveBoundsWatch()
+  exclusiveBoundsWatchTimer = setInterval(() => {
+    if (!onboardingExclusiveLive() || !w || w.isDestroyed()) {
+      stopExclusiveBoundsWatch()
+      return
+    }
+    const display =
+      screen.getAllDisplays().find((d) => d.id === displayId) ?? screen.getPrimaryDisplay()
+    const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
+    try {
+      const after = w.getBounds()
+      if (
+        after.x !== stage.x ||
+        after.y !== stage.y ||
+        after.width !== stage.width ||
+        after.height !== stage.height
+      ) {
+        w.setBounds(stage, false)
+        w.setPosition(stage.x, stage.y, false)
+      }
+    } catch {
+      /* headless */
+    }
+  }, 250)
+  exclusiveBoundsWatchTimer.unref?.()
+}
+
+function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getPrimaryDisplay()): void {
   // Totos-Mac 044c0f1: simple-fullscreen on a transparent window is a 3600×2338 RGBA(0,0,0,0) void.
   if (overlayWindowTransparent) {
     recreateOverlayWindow()
     return
   }
   stopOverlayCursorWatch()
-  const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
+  // Tony HARD 2026-09-21: exclusive covers display.bounds on the primary (Dig never x=8960 secondary).
+  // Callers may pass a display; prefer primary when the matched display is not the primary and the
+  // window is clearly letterboxed (Dig clamp), otherwise honor the passed display.
+  const primary = screen.getPrimaryDisplay()
+  let target = display
+  try {
+    const b = w.getBounds()
+    const coversPrimary =
+      b.width >= primary.bounds.width - 2 && b.height >= primary.bounds.height - 2
+    if (!coversPrimary && display.id !== primary.id) target = primary
+    // Dig letterbox clamp on primary (inset but not full): still force primary bounds.
+    if (
+      display.id === primary.id &&
+      (b.width < primary.bounds.width - 2 ||
+        b.height < primary.bounds.height - 2 ||
+        b.x !== primary.bounds.x ||
+        b.y !== primary.bounds.y)
+    ) {
+      target = primary
+    }
+  } catch {
+    target = primary
+  }
+  const stage = exclusiveOnboardingBounds(target.bounds, target.workArea)
   currentWidth = stage.width
   lastBarHeight = stage.height
   isMinimized = false
@@ -2226,10 +2286,22 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
     w.setFullScreenable?.(true)
     w.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
     w.setOpacity(1)
-    w.setBounds(stage)
+    w.setBounds(stage, false)
+    // Second pass: Dig CDP / OS may clamp the first setBounds into a letterbox.
+    const after = w.getBounds()
+    if (
+      after.x !== stage.x ||
+      after.y !== stage.y ||
+      after.width !== stage.width ||
+      after.height !== stage.height
+    ) {
+      w.setBounds(stage, false)
+      w.setPosition(stage.x, stage.y, false)
+    }
   } catch {
     /* headless / already destroyed */
   }
+  armExclusiveBoundsWatch(w, target.id)
   // FITO-185-S: never OS simpleFullScreen/kiosk on Electron 43+ (Tony FAIL e404460). Product path is
   // opaque bounds + show after Act1 first paint (FITO-185-Y). ASKTOTO_ALLOW_SFS only on Electron <=39.
   const mayOsExclusive =
@@ -2253,6 +2325,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
 /** After onboardingDone only: leave exclusive fullscreen and park hide/island peek (never 880×816). */
 function exitExclusiveOnboardingStage(): void {
   if (!win || win.isDestroyed()) return
+  stopExclusiveBoundsWatch()
   lockOnboardingAudioInRenderer(win)
   leaveExclusiveOsFullscreen(win)
   if (!overlayWindowTransparent) {

@@ -274,3 +274,23 @@ describe('exclusive onboard freezes hoverWatch (Tony HARD Dig thrash)', () => {
     expect(sched).toMatch(/if \(onboardingExclusiveLive\(\)\) return/)
   })
 })
+
+describe('exclusive bounds fight Dig letterbox clamp (Tony HARD p0)', () => {
+  it('applyExclusiveOnboardingStage covers display.bounds and arms a reassert watch', () => {
+    const index = readFileSync(join(__dirname, '..', 'index.ts'), 'utf8')
+    expect(index).toMatch(/function armExclusiveBoundsWatch/)
+    expect(index).toMatch(/function stopExclusiveBoundsWatch/)
+    const apply = index.slice(
+      index.indexOf('function applyExclusiveOnboardingStage'),
+      index.indexOf('function exitExclusiveOnboardingStage')
+    )
+    expect(apply).toMatch(/exclusiveOnboardingBounds\(target\.bounds/)
+    expect(apply).toMatch(/armExclusiveBoundsWatch\(w, target\.id\)/)
+    expect(apply).toMatch(/setBounds\(stage, false\)/)
+    const geo = readFileSync(join(__dirname, 'geometry.ts'), 'utf8')
+    const fn = geo.slice(geo.indexOf('export function exclusiveOnboardingBounds'), geo.indexOf('export const MANTU_BRAND_PURPLE'))
+    expect(fn).toMatch(/width: bounds\.width/)
+    expect(fn).toMatch(/height: bounds\.height/)
+    expect(fn).not.toMatch(/Math\.max\(bounds\.width/)
+  })
+})
