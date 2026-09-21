@@ -11,6 +11,11 @@ import {
   ONBOARDING_APPEARANCE_COPY,
   ONBOARDING_APPEARANCE_HEADING,
   ONBOARDING_APPEARANCE_LEAD,
+  chromeSettingsPatch,
+  onboardingChromeForPlacement,
+  ONBOARDING_PLACEMENT_COPY,
+  ONBOARDING_PLACEMENT_HEADING,
+  ONBOARDING_CHROME_HEADING,
   placementSettingsPatch,
   reduceAppearancePreview,
   resolveOnboardingPlacementSync,
@@ -89,7 +94,7 @@ describe('onboarding appearance — persist existing overlay', () => {
   it('finish / onDone never writes overlayLayout', () => {
     expect(experience).toMatch(/mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
     expect(experience).not.toMatch(/onDone\(\{[\s\S]*overlayLayout/)
-    expect(experience).toMatch(/appearanceSettingsPatch\(id\)/)
+    expect(experience).toMatch(/chromeSettingsPatch\(placement, id\)/)
     expect(experience).toMatch(/placementSettingsPatch\(id\)/)
     expect(experience).toMatch(/saveOnboardingAppearanceChoice/)
     expect(experience).toMatch(/resolveOnboardingPlacementSync/)
@@ -100,20 +105,50 @@ describe('onboarding appearance — persist existing overlay', () => {
   })
 })
 
-describe('onboarding appearance — Tony copy', () => {
-  it('asks Hidden vs Island vs Bar with click-to-open Hidden and no em dash', () => {
-    expect(ONBOARDING_APPEARANCE_COPY.hide.title).toBe('Hidden')
-    expect(ONBOARDING_APPEARANCE_COPY.hide.desc).toBe('Move to the top, then click to open.')
-    expect(ONBOARDING_APPEARANCE_COPY.island.title).toBe('Island')
-    expect(ONBOARDING_APPEARANCE_COPY.bar.title).toBe('Bar')
-    expect(ONBOARDING_APPEARANCE_HEADING).toBe('Where should Métis live?')
-    expect(ONBOARDING_APPEARANCE_LEAD).toMatch(/Hidden is the default/)
-    const all = `${ONBOARDING_APPEARANCE_HEADING} ${ONBOARDING_APPEARANCE_LEAD} ${Object.values(ONBOARDING_APPEARANCE_COPY)
-      .map((c) => `${c.title} ${c.desc}`)
-      .join(' ')}`
-    expect(all).not.toMatch(/\u2014/)
-    expect(all).not.toMatch(/Vibe Island/)
-    expect(appearanceLib).not.toMatch(/\u2014/)
+describe('onboarding appearance — 2.0 two-step', () => {
+  it('places Top vs Right first, then chrome without Island or em dash', () => {
+    expect(ONBOARDING_PLACEMENT_HEADING).toBe('Where should Métis sit?')
+    expect(ONBOARDING_CHROME_HEADING).toBe('How should it look?')
+    expect(onboardingChromeForPlacement('top-center').map((c) => c.id)).toEqual([
+      'hidden',
+      'bar-hides',
+      'bar-stays',
+      'circle',
+      'jarvis'
+    ])
+    expect(onboardingChromeForPlacement('right-edge').map((c) => c.id)).toEqual([
+      'dock',
+      'bar-hides',
+      'bar-stays',
+      'circle',
+      'jarvis'
+    ])
+    expect(onboardingChromeForPlacement('top-center').map((c) => c.title).join(' ')).not.toMatch(/Island/)
+    const all = [
+      ONBOARDING_PLACEMENT_HEADING,
+      ONBOARDING_CHROME_HEADING,
+      ...Object.values(ONBOARDING_PLACEMENT_COPY).flatMap((c) => [c.title, c.desc]),
+      ...onboardingChromeForPlacement('top-center').flatMap((c) => [c.title, c.desc]),
+      ...onboardingChromeForPlacement('right-edge').flatMap((c) => [c.title, c.desc])
+    ].join(' ')
+    expect(all).not.toMatch(/Vibe Island|—/)
+  })
+
+  it('maps chrome cards to layout + autoHide + orbStyle', () => {
+    expect(chromeSettingsPatch('top-center', 'hidden')).toMatchObject({
+      overlayLayout: 'hide',
+      autoHideOverlay: true,
+      overlayPlacement: 'top-center'
+    })
+    expect(chromeSettingsPatch('top-center', 'jarvis')).toMatchObject({
+      overlayLayout: 'bar',
+      overlayOrbStyle: 'obsidian',
+      overlayPlacement: 'top-center'
+    })
+    expect(chromeSettingsPatch('right-edge', 'dock')).toMatchObject({
+      overlayLayout: 'dock',
+      overlayPlacement: 'right-edge'
+    })
   })
 })
 

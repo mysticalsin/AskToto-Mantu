@@ -2456,6 +2456,53 @@ button.onboard-cta {
   background: rgba(214, 186, 255, 0.92);
   pointer-events: none;
 }
+
+/* Onboarding appearance 2.0 — placement two-up + dock/circle preview */
+.overlay-chrome-grid--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 420px;
+}
+.onboard-appearance-preview--dock .onboard-appearance-preview__hit {
+  /* hit band along right edge of mock desktop */
+}
+.onboard-appearance-preview__dock {
+  position: absolute;
+  top: 18%;
+  right: 10px;
+  width: 4px;
+  height: 48%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.35);
+  transition: width 160ms var(--ease-spring), opacity 160ms var(--ease-spring);
+}
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__dock {
+  right: 8px;
+}
+.onboard-appearance-preview__dock--open {
+  width: 28%;
+  height: 64%;
+  top: 12%;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.onboard-appearance-preview__circle {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 30%, #fff, #7f00da 55%, #2a0845 100%);
+  box-shadow: 0 0 16px rgba(127, 0, 218, 0.55);
+}
+.onboard-appearance-preview__circle--jarvis {
+  background: radial-gradient(circle at 40% 35%, #d9f7ff, #32ade6 45%, #0b1c2c 100%);
+  box-shadow: 0 0 16px rgba(50, 173, 230, 0.55);
+}
+.onboard-appearance-back {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
 .onboard-appearance-preview__bar-slot {
   position: absolute;
   top: 8px;

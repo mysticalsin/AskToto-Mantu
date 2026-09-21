@@ -1,53 +1,73 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
-import { OverlayChromePicker } from './OverlayChromePicker'
-import { OverlayPlacementPicker } from './OverlayPlacementPicker'
 import { MetisMark } from './MetisMark'
 import {
   appearancePreviewInitialPhase,
   appearancePreviewShowsBar,
+  appearancePreviewShowsCircle,
+  appearancePreviewShowsDock,
   appearancePreviewShowsHint,
   appearancePreviewShowsIsland,
-  ONBOARDING_APPEARANCE_COPY,
-  ONBOARDING_APPEARANCE_HEADING,
-  ONBOARDING_APPEARANCE_LAYOUTS,
-  ONBOARDING_APPEARANCE_LEAD,
+  chromeSpec,
+  defaultChromeId,
+  ONBOARDING_CHROME_HEADING,
+  ONBOARDING_CHROME_LEAD,
+  ONBOARDING_PLACEMENT_COPY,
+  ONBOARDING_PLACEMENT_HEADING,
+  ONBOARDING_PLACEMENT_LEAD,
+  ONBOARDING_PLACEMENTS,
+  onboardingChromeForPlacement,
   reduceAppearancePreview,
-  type AppearancePreviewPhase
+  type AppearancePreviewPhase,
+  type OnboardingChromeId
 } from '../lib/onboarding-appearance'
 
-function AppearanceLivePreview({ layout, placement }: { layout: OverlayLayout; placement: OverlayPlacement }): JSX.Element {
+function AppearanceLivePreview({
+  layout,
+  placement,
+  chromeId
+}: {
+  layout: OverlayLayout
+  placement: OverlayPlacement
+  chromeId: OnboardingChromeId
+}): JSX.Element {
   const [phase, setPhase] = useState<AppearancePreviewPhase>(() => appearancePreviewInitialPhase(layout))
 
   useEffect(() => {
     setPhase(appearancePreviewInitialPhase(layout))
-  }, [layout])
+  }, [layout, chromeId, placement])
 
   const send = (event: Parameters<typeof reduceAppearancePreview>[2]): void => {
     setPhase((current) => reduceAppearancePreview(layout, current, event))
   }
 
-  const showBar = appearancePreviewShowsBar(phase)
+  const showBar = appearancePreviewShowsBar(phase) && layout === 'bar'
   const showIsland = appearancePreviewShowsIsland(layout, phase)
+  const showDock = appearancePreviewShowsDock(layout, phase)
   const showHint = appearancePreviewShowsHint(layout, phase)
+  const showCircle = appearancePreviewShowsCircle(chromeId, phase)
   const placementLabel = placement === 'right-edge' ? 'right edge' : 'top'
   const hitLabel =
     layout === 'hide'
       ? `Click the ${placementLabel} to open Hidden`
-      : layout === 'island'
-        ? 'Hover the island to open'
-        : 'Bar stays on screen'
+      : layout === 'dock'
+        ? 'Hover the dock to open'
+        : layout === 'island'
+          ? 'Hover the island to open'
+          : 'Bar stays on screen'
 
   return (
     <div
       className={
         'onboard-appearance-preview' +
         (layout === 'bar' ? ' onboard-appearance-preview--bar' : '') +
+        (layout === 'dock' ? ' onboard-appearance-preview--dock' : '') +
         (placement === 'right-edge' ? ' onboard-appearance-preview--right-edge' : '')
       }
       data-appearance-preview={layout}
       data-placement-preview={placement}
+      data-chrome-preview={chromeId}
       data-appearance-phase={phase}
     >
       <div className="onboard-appearance-preview__desktop" aria-hidden="true" />
@@ -63,28 +83,47 @@ function AppearanceLivePreview({ layout, placement }: { layout: OverlayLayout; p
       {showIsland ? (
         <span className="onboard-appearance-preview__island" data-island-square="true" aria-hidden="true" />
       ) : null}
+      {showDock ? (
+        <span
+          className={
+            'onboard-appearance-preview__dock' +
+            (phase === 'settled' || phase === 'in' ? ' onboard-appearance-preview__dock--open' : '')
+          }
+          aria-hidden="true"
+        />
+      ) : null}
       {showBar ? (
         <div className="onboard-appearance-preview__bar-slot">
-          <div
-            className={
-              'onboard-appearance-preview__bar' +
-              (layout === 'bar' || phase === 'settled'
-                ? ' overlay-spring overlay-spring--settled'
-                : phase === 'in'
-                  ? ' overlay-spring overlay-spring--in'
-                  : phase === 'out'
-                    ? ' overlay-spring overlay-spring--out'
-                    : '')
-            }
-            onAnimationEnd={(e) => {
-              if (e.target !== e.currentTarget) return
-              if (phase === 'in') send('spring-in-end')
-              if (phase === 'out') send('spring-out-end')
-            }}
-          >
-            <MetisMark size={14} />
-            <span>Métis</span>
-          </div>
+          {showCircle ? (
+            <span
+              className={
+                'onboard-appearance-preview__circle' +
+                (chromeId === 'jarvis' ? ' onboard-appearance-preview__circle--jarvis' : '')
+              }
+              aria-hidden="true"
+            />
+          ) : (
+            <div
+              className={
+                'onboard-appearance-preview__bar' +
+                (phase === 'settled'
+                  ? ' overlay-spring overlay-spring--settled'
+                  : phase === 'in'
+                    ? ' overlay-spring overlay-spring--in'
+                    : phase === 'out'
+                      ? ' overlay-spring overlay-spring--out'
+                      : '')
+              }
+              onAnimationEnd={(e) => {
+                if (e.target !== e.currentTarget) return
+                if (phase === 'in') send('spring-in-end')
+                if (phase === 'out') send('spring-out-end')
+              }}
+            >
+              <MetisMark size={14} />
+              <span>Métis</span>
+            </div>
+          )}
         </div>
       ) : null}
     </div>
@@ -96,58 +135,166 @@ export function OnboardingAppearance({
   locked,
   placement,
   placementLocked,
+  chromeId: chromeIdProp,
   compact,
   saving = false,
   error = null,
   onChange,
   onPlacementChange,
+  onChromeChange,
   onContinue
 }: {
   value: OverlayLayout
   locked: boolean
   placement: OverlayPlacement
   placementLocked: boolean
+  chromeId?: OnboardingChromeId
   compact?: boolean
   saving?: boolean
   error?: string | null
   onChange: (id: OverlayLayout) => void
   onPlacementChange: (id: OverlayPlacement) => void
+  onChromeChange?: (id: OnboardingChromeId) => void
   onContinue?: () => void
 }): JSX.Element {
+  const [step, setStep] = useState<'placement' | 'chrome'>('placement')
+  const [chromeId, setChromeId] = useState<OnboardingChromeId>(
+    () => chromeIdProp ?? defaultChromeId(placement)
+  )
+
+  useEffect(() => {
+    if (chromeIdProp) setChromeId(chromeIdProp)
+  }, [chromeIdProp])
+
+  useEffect(() => {
+    // When placement changes, reset chrome to that edge's default unless parent owns it.
+    if (!chromeIdProp) setChromeId(defaultChromeId(placement))
+  }, [placement, chromeIdProp])
+
+  const cards = useMemo(() => onboardingChromeForPlacement(placement), [placement])
+  const active = chromeSpec(placement, chromeId)
+
+  const pickPlacement = (id: OverlayPlacement): void => {
+    onPlacementChange(id)
+    setStep('chrome')
+  }
+
+  const pickChrome = (id: OnboardingChromeId): void => {
+    setChromeId(id)
+    const spec = chromeSpec(placement, id)
+    onChange(spec.layout)
+    onChromeChange?.(id)
+  }
+
   return (
     <div
       className={
         'onboard-appearance flex w-full flex-col items-center gap-5' + (compact ? ' onboard-appearance--compact' : '')
       }
+      data-onboard-appearance-step={step}
     >
-      <AppearanceLivePreview key={`${value}:${placement}`} layout={value} placement={placement} />
-      <div className="onboard-act4-heading flex flex-col items-center gap-2">
-        <h2 className="onboard-act4-title">{ONBOARDING_APPEARANCE_HEADING}</h2>
-        <p className="onboard-act4-lead">{ONBOARDING_APPEARANCE_LEAD}</p>
-      </div>
-      <OverlayChromePicker
-        value={value}
-        locked={locked || saving}
-        copy={ONBOARDING_APPEARANCE_COPY}
-        layouts={ONBOARDING_APPEARANCE_LAYOUTS}
-        onChange={onChange}
+      <AppearanceLivePreview
+        key={`${placement}:${active.layout}:${active.overlayOrbStyle}:${chromeId}`}
+        layout={active.layout}
+        placement={placement}
+        chromeId={chromeId}
       />
-      <div className="flex w-full flex-col gap-2">
-        <p className="m-0 text-center text-[12px] font-medium text-white">Position</p>
-        <p className="m-0 text-center text-[11px] leading-snug text-white/70">
-          Right edge stays beside your meeting. Drag it up or down anytime.
-        </p>
-        <OverlayPlacementPicker value={placement} locked={placementLocked || saving} onChange={onPlacementChange} />
-      </div>
+      {step === 'placement' ? (
+        <>
+          <div className="onboard-act4-heading flex flex-col items-center gap-2">
+            <h2 className="onboard-act4-title">{ONBOARDING_PLACEMENT_HEADING}</h2>
+            <p className="onboard-act4-lead">{ONBOARDING_PLACEMENT_LEAD}</p>
+          </div>
+          <div role="radiogroup" aria-label="Overlay placement" className="overlay-chrome-grid overlay-chrome-grid--two">
+            {ONBOARDING_PLACEMENTS.map((id) => {
+              const on = placement === id
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  disabled={placementLocked || saving}
+                  onClick={() => pickPlacement(id)}
+                  className={
+                    'overlay-chrome-card no-drag focus-ring ' +
+                    (on ? 'overlay-chrome-card--selected' : '') +
+                    (placementLocked || saving ? ' opacity-60' : '')
+                  }
+                >
+                  <span className="overlay-chrome-card__title">{ONBOARDING_PLACEMENT_COPY[id].title}</span>
+                  <span className="overlay-chrome-card__desc">{ONBOARDING_PLACEMENT_COPY[id].desc}</span>
+                </button>
+              )
+            })}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="onboard-act4-heading flex flex-col items-center gap-2">
+            <h2 className="onboard-act4-title">{ONBOARDING_CHROME_HEADING}</h2>
+            <p className="onboard-act4-lead">{ONBOARDING_CHROME_LEAD}</p>
+          </div>
+          <div role="radiogroup" aria-label="Overlay chrome" className="overlay-chrome-grid">
+            {cards.map((card) => {
+              const on = chromeId === card.id
+              return (
+                <button
+                  key={card.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  disabled={locked || saving}
+                  onClick={() => pickChrome(card.id)}
+                  className={
+                    'overlay-chrome-card no-drag focus-ring ' +
+                    (on ? 'overlay-chrome-card--selected' : '') +
+                    (locked || saving ? ' opacity-60' : '')
+                  }
+                >
+                  <span className="overlay-chrome-card__title">
+                    {card.title}
+                    {card.default ? <span className="overlay-chrome-card__default">Default</span> : null}
+                  </span>
+                  <span className="overlay-chrome-card__desc">{card.desc}</span>
+                </button>
+              )
+            })}
+          </div>
+          <button
+            type="button"
+            className="onboard-appearance-back no-drag focus-ring text-[12px] text-white/70 underline-offset-2 hover:text-white"
+            onClick={() => setStep('placement')}
+            disabled={saving}
+          >
+            Back to placement
+          </button>
+        </>
+      )}
       {saving ? (
-        <p aria-live="polite" className="m-0 text-center text-[11px] text-white/70">Saving your appearance…</p>
+        <p aria-live="polite" className="m-0 text-center text-[11px] text-white/70">
+          Saving your appearance…
+        </p>
       ) : null}
-      {error ? <p role="alert" className="m-0 text-center text-[11px] text-[#ffb4b4]">{error}</p> : null}
-      {onContinue ? (
-        <button type="button" onClick={onContinue} disabled={saving} className="onboard-cta no-drag focus-ring disabled:opacity-60">
+      {error ? (
+        <p role="alert" className="m-0 text-center text-[11px] text-[#ffb4b4]">
+          {error}
+        </p>
+      ) : null}
+      {onContinue && step === 'chrome' ? (
+        <button
+          type="button"
+          onClick={onContinue}
+          disabled={saving}
+          className="onboard-cta no-drag focus-ring disabled:opacity-60"
+        >
           {saving ? 'Saving…' : 'Continue'}
         </button>
       ) : null}
+      {/* silence unused value lint when parent still tracks layout */}
+      <span className="sr-only" aria-hidden="true">
+        {value}
+      </span>
     </div>
   )
 }

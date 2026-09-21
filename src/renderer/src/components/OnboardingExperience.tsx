@@ -92,12 +92,15 @@ import {
   type OnboardingScene
 } from '../lib/onboarding-flow'
 import {
-  appearanceSettingsPatch,
   placementSettingsPatch,
   resolveOnboardingPlacementSync,
+  chromeSettingsPatch,
+  defaultChromeId,
   saveOnboardingAppearanceChoice,
   seedOnboardingAppearance,
-  seedOnboardingPlacement
+  seedOnboardingChrome,
+  seedOnboardingPlacement,
+  type OnboardingChromeId
 } from '../lib/onboarding-appearance'
 import { onboardingReadinessCopy } from '../lib/onboarding-readiness-copy'
 import {
@@ -1112,6 +1115,9 @@ export function OnboardingExperience({
   const [mode, setMode] = useState<ConversationMode>('general')
   const [appearance, setAppearance] = useState<OverlayLayout>(() => seedOnboardingAppearance(settings))
   const [placement, setPlacement] = useState<OverlayPlacement>(() => seedOnboardingPlacement(settings))
+  const [chromeId, setChromeId] = useState<OnboardingChromeId>(() =>
+    seedOnboardingChrome(seedOnboardingPlacement(settings), settings)
+  )
   const [appearanceSave, setAppearanceSave] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
   const placementUserSelectedRef = useRef(false)
   const placementManaged = Boolean(settings?.managedKeys?.includes('overlayPlacement'))
@@ -1125,19 +1131,30 @@ export function OnboardingExperience({
     if (next) setPlacement(next)
   }, [placement, placementManaged, settings?.overlayPlacement])
   const pickAppearance = async (id: OverlayLayout): Promise<void> => {
+    // Layout-only path kept for managed/legacy; chrome cards use pickChrome.
     if (appearanceSave.busy || appearanceLocked) return
+    setAppearance(id)
+  }
+  const pickChrome = async (id: OnboardingChromeId): Promise<void> => {
+    if (appearanceSave.busy || appearanceLocked) return
+    const body = chromeSettingsPatch(placement, id)
     if (!patch) {
-      setAppearance(id)
+      setChromeId(id)
+      setAppearance(body.overlayLayout)
       return
     }
     setAppearanceSave({ busy: true, error: null })
     try {
       const saved = await saveOnboardingAppearanceChoice(
-        () => patch(appearanceSettingsPatch(id)),
-        (next) => next.overlayLayout === id
+        () => patch(body),
+        (next) =>
+          next.overlayLayout === body.overlayLayout &&
+          next.overlayPlacement === body.overlayPlacement &&
+          (next.overlayOrbStyle === undefined || next.overlayOrbStyle === body.overlayOrbStyle)
       )
       if (!saved) throw new Error('appearance was not saved')
-      setAppearance(id)
+      setChromeId(id)
+      setAppearance(body.overlayLayout)
     } catch {
       setAppearanceSave({ busy: false, error: "Métis couldn't save this appearance. Try again." })
       return
@@ -1149,6 +1166,7 @@ export function OnboardingExperience({
     if (!patch) {
       placementUserSelectedRef.current = true
       setPlacement(id)
+      setChromeId(defaultChromeId(id))
       return
     }
     setAppearanceSave({ busy: true, error: null })
@@ -1160,6 +1178,7 @@ export function OnboardingExperience({
       if (!saved) throw new Error('placement was not saved')
       placementUserSelectedRef.current = true
       setPlacement(id)
+      setChromeId(defaultChromeId(id))
     } catch {
       setAppearanceSave({ busy: false, error: "Métis couldn't save this appearance. Try again." })
       return
@@ -1843,10 +1862,12 @@ export function OnboardingExperience({
             locked={appearanceLocked}
             placement={placement}
             placementLocked={placementLocked}
+            chromeId={chromeId}
             saving={appearanceSave.busy}
             error={appearanceSave.error}
             onChange={(id) => void pickAppearance(id)}
             onPlacementChange={(id) => void pickPlacement(id)}
+            onChromeChange={(id) => void pickChrome(id)}
             onContinue={() => {
               playHero()
               setScene(sceneAfterAppearance())
