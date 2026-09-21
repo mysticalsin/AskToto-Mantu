@@ -26,4 +26,19 @@ describe('Cap2 desktop-adapters contract', () => {
     expect(src).toContain('/usr/bin/osascript')
     expect(src).not.toMatch(/apple-speech|cloud-stt|MediaRecorder/)
   })
+
+  it('keeps the fixed demo actions free of shell dispatch and script interpolation', () => {
+    // The adapter boundary must never turn a request argument into shell or AppleScript source.
+    // The current demo may create only its documented, fixed "hello" note.
+    expect(src).not.toMatch(/cmd\.exe/)
+    expect(src).not.toMatch(/make new note with properties \{name:"\$\{/)
+    expect(src).toContain('CREATE_HELLO_NOTE_SCRIPT')
+    expect(src).toContain('Unsupported fixed-demo note title')
+  })
+
+  it('pins Windows shell targets to a SystemRoot executable instead of PATH', () => {
+    expect(src).toContain("const WINDOWS_ROOT = process.env.SystemRoot || 'C:\\\\Windows'")
+    expect(src).toContain("win32.join(WINDOWS_ROOT, 'explorer.exe')")
+    expect(src).not.toMatch(/run\(['"](?:notepad|arc)\.exe/)
+  })
 })
