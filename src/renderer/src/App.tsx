@@ -2671,14 +2671,14 @@ export function App(): JSX.Element {
   // the first Transcript click must return to Copilot and show it; a pressed-looking button with an
   // invisible transcript would be a no-op. Subsequent clicks in Copilot toggle the session-only view.
   const toggleTranscript = useCallback(() => {
-    if (view !== 'copilot') {
+    if (view !== 'copilot' || collapsed) {
       setTranscriptShown(true)
       setCollapsed(false)
       setView('copilot')
       return
     }
     setTranscriptShown((v) => !v)
-  }, [view, setView])
+  }, [view, collapsed, setView])
 
   // Stabilized Bar callbacks (previously fresh inline arrow functions on every render) — a prerequisite
   // for React.memo(Bar) to actually skip re-renders; an unstable prop defeats memo's shallow comparison
@@ -3944,7 +3944,7 @@ export function App(): JSX.Element {
             onToggleListen={toggleListen}
             onTogglePause={onTogglePause}
             onTranscript={toggleTranscript}
-            transcriptShown={view === 'copilot' && transcriptShown}
+            transcriptShown={view === 'copilot' && !collapsed && transcriptShown}
             capturing={capturing}
             onCapture={capture}
             onOpenIntelligence={openIntelligenceDashboard}
@@ -4008,7 +4008,7 @@ export function App(): JSX.Element {
               onToggleListen={toggleListen}
               onTogglePause={onTogglePause}
               onTranscript={toggleTranscript}
-              transcriptShown={view === 'copilot' && transcriptShown}
+              transcriptShown={view === 'copilot' && !collapsed && transcriptShown}
               capturing={capturing}
               onCapture={capture}
               onOpenIntelligence={openIntelligenceDashboard}
@@ -4042,7 +4042,7 @@ export function App(): JSX.Element {
             onBack={hasAnswer ? clearAnswer : undefined}
             screenCapturedAt={ctxCapturedAt}
             onTranscript={toggleTranscript}
-            transcriptShown={view === 'copilot' && transcriptShown}
+            transcriptShown={view === 'copilot' && !collapsed && transcriptShown}
             onNewMeeting={newMeeting}
             customModes={settings?.customModes}
             canPrewarm={!!settings?.visionAvailable && (settings?.screenAsk ?? true)}
