@@ -42,7 +42,8 @@ import {
 } from './lib/overlay-autohide'
 import {
   reduceRightEdgeDismissalLock,
-  shouldIgnoreRightEdgeNativeHover
+  shouldIgnoreRightEdgeNativeHover,
+  type RightEdgeDismissalLockState
 } from './lib/right-edge-dismissal-lock'
 import {
   overlayAllowsMinimize,
@@ -263,7 +264,12 @@ const DEMO_SUG = `**Say this:** "At Mantu I led the Métis build, a Cluely-class
 - If pushed: the risk was system-audio capture, so I de-risked it first.`
 
 export function App(): JSX.Element {
-  const setRoot = useAutoResize() // callback ref — tracks the live root across view switches
+  const autoResizeRoot = useAutoResize() // callback ref — tracks the live root across view switches
+  const rootElementRef = useRef<HTMLElement | null>(null)
+  const setRoot = useCallback((el: HTMLElement | null) => {
+    rootElementRef.current = el
+    autoResizeRoot(el)
+  }, [autoResizeRoot])
 
   // Single window-drag instance for post-onboarding surfaces (loading strip, sign-in, bar/panel).
   // Exclusive onboarding must NOT spread this — click-hold cannot drag the stage off-screen.
@@ -684,17 +690,23 @@ export function App(): JSX.Element {
   // for renewed hover and leave the 360px window open. This flag is consumed exactly once at the park
   // boundary; ordinary pointer-driven hides retain their cursor safety guard.
   const forceParkAfterHideRef = useRef(false)
-  // The native cursor watcher samples the former 360px drawer for a tick or two after an explicit
-  // dismissal. Do not let that stale “hovering” sample immediately reopen the dock the user just closed.
-  // A subsequent real mouse-enter on the parked rail or an explicit Open action clears this latch.
-  const rightEdgeDismissalLockRef = useRef(false)
+  // Explicit dismissal has a short closing phase: the parked rail can mount under the pointer and the
+  // shrinking drawer can emit a leave before the park settles. Track that lifecycle so only a later,
+  // genuine return to the rail reopens the dock.
+  const rightEdgeDismissalLockRef = useRef<RightEdgeDismissalLockState>('open')
   const parkCurrentOverlayAfterHide = useCallback((): void => {
     const force = forceParkAfterHideRef.current
     forceParkAfterHideRef.current = false
+    if (rightEdgePresentation) {
+      rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
+        type: 'park-settled',
+        railHovering: rootElementRef.current?.matches(':hover') === true
+      })
+    }
     parkOverlayAfterHide(force)
-  }, [])
+  }, [rightEdgePresentation])
   const closeRightEdgeDock = useCallback((): void => {
-    rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, 'explicit-close')
+    rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-close' })
     forceParkAfterHideRef.current = true
     setRightEdgeDockDismissed(true)
     dispatchAutoHide({ type: 'collapse-now' })
@@ -824,26 +836,28 @@ export function App(): JSX.Element {
     return () => window.clearTimeout(t)
   }, [overlaySpring, parkCurrentOverlayAfterHide])
   const revealOverlay = useCallback(() => {
-    rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, 'explicit-reveal')
+    rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-reveal' })
     setRightEdgeDockDismissed(false)
     dispatchAutoHide({ type: 'pointer-enter' })
   }, [])
   const onOverlayPointerEnter = useCallback(() => {
     if (rightEdgePresentation) {
-      // Renderer enter is the reliable signal that the user has reached the parked rail again. Native
-      // cursor-watch hovers remain gated until this path or an explicit open action consumes the latch.
-      rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(
-        rightEdgeDismissalLockRef.current,
-        'renderer-pointer-enter'
-      )
-      setRightEdgeDockDismissed(false)
+      const nextLock = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'renderer-pointer-enter' })
+      rightEdgeDismissalLockRef.current = nextLock
+      if (nextLock !== 'open') return
+      if (nextLock === 'open') setRightEdgeDockDismissed(false)
     }
     dispatchAutoHide({ type: 'pointer-enter' })
   }, [rightEdgePresentation])
   const onOverlayPointerLeave = useCallback(() => {
-    rightEdgeDismissalLockRef.current = rightEdgePresentation
-      ? reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, 'renderer-pointer-leave')
-      : false
+    if (rightEdgePresentation) {
+      const previousLock = rightEdgeDismissalLockRef.current
+      const nextLock = reduceRightEdgeDismissalLock(previousLock, { type: 'renderer-pointer-leave' })
+      rightEdgeDismissalLockRef.current = nextLock
+      if (previousLock === 'closing' && nextLock === 'closing') return
+    } else {
+      rightEdgeDismissalLockRef.current = 'open'
+    }
     dispatchAutoHide({ type: 'pointer-leave' })
   }, [rightEdgePresentation])
   // Main-process cursor watch: macOS menu bar / Dynamic Island often skips renderer mouseenter.
@@ -857,7 +871,7 @@ export function App(): JSX.Element {
         if (rightEdgePresentation && d.restoredFromParkedRail) {
           rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(
             rightEdgeDismissalLockRef.current,
-            'native-hover-restored'
+            { type: 'native-hover-restored' }
           )
         }
         // Main restores the native drawer before it emits this fallback hover signal. Mirror the
@@ -3030,7 +3044,7 @@ export function App(): JSX.Element {
     // `reveal-now` is intentionally immediate: a parked right-edge sidecar must open for a keyboard
     // summon instead of waiting for hover dwell.
     else if (a === 'metis-command') {
-      rightEdgeDismissalLockRef.current = false
+      rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'metis-command' })
       setRightEdgeDockDismissed(false)
       dispatchAutoHide({ type: 'reveal-now' })
       setCollapsed(false)
