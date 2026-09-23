@@ -136,7 +136,7 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
       index.indexOf('function applyExclusiveOnboardingStage'),
       index.indexOf('function exitExclusiveOnboardingStage')
     )
-    expect(apply).toMatch(/if \(overlayWindowTransparent\) \{\s*recreateOverlayWindow\(\)/)
+    expect(apply).toMatch(/if \(overlayWindowTransparent\) \{[\s\S]*?replaceTransparentOverlayWithExclusiveOnboarding\(\)/)
     expect(apply).toMatch(/exclusiveMayUseSimpleFullScreen\(overlayWindowTransparent\)/)
     expect(apply).toMatch(/exclusiveOsFullscreenAllowed\(/)
     expect(apply).toMatch(/process\.versions\.electron/)
@@ -153,6 +153,50 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
     expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(replay.indexOf('haltAllOnboardingAudio()'))
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeLessThan(replay.indexOf('window.toto.onboardingEnter()'))
+
+    const enter = index.slice(index.indexOf("ipcMain.on(IPC.onboardingEnter"), index.indexOf("ipcMain.on(IPC.onboardingExit"))
+    const handoff = index.slice(
+      index.indexOf('function replaceTransparentOverlayWithExclusiveOnboarding'),
+      index.indexOf('function applyOverlaySurfaceChrome')
+    )
+    expect(enter).toMatch(/replaceTransparentOverlayWithExclusiveOnboarding\(\)/)
+    expect(enter).not.toMatch(/showForExclusiveOnboarding\(win\)/)
+    expect(handoff).toMatch(/screen\.getDisplayMatching\(dying\.getBounds\(\)\)/)
+    const successorCreate = handoff.search(/createWindow\(replacementDisplay\)\r?\n\s*const replacement/)
+    expect(successorCreate).toBeGreaterThan(-1)
+    expect(successorCreate).toBeLessThan(handoff.indexOf('dying.destroy()'))
+  })
+
+  it('reconciles a native Electron clamp while exclusive onboarding owns the display', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const apply = index.slice(
+      index.indexOf('function applyExclusiveOnboardingStage'),
+      index.indexOf('function exitExclusiveOnboardingStage')
+    )
+    const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function createWindow'))
+    const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+
+    expect(index).toMatch(/let exclusiveBoundsWatchTimer:/)
+    expect(index).toMatch(/function reconcileExclusiveOnboardingBounds\(/)
+    expect(index).toMatch(/function armExclusiveBoundsWatch\(/)
+    expect(index).toMatch(/EXCLUSIVE_BOUNDS_MAX_RECONCILIATIONS\s*=\s*4/)
+    expect(apply).toMatch(/reconcileExclusiveOnboardingBounds\(w, display\)/)
+    expect(apply).toMatch(/armExclusiveBoundsWatch\(w, display\.id\)/)
+    expect(exit).toMatch(/stopExclusiveBoundsWatch\(\)/)
+    const closed = create.slice(create.indexOf('const self = win'), create.indexOf('// Security: never let model-output'))
+    expect(closed).toMatch(/if \(win !== self\) return/)
+    expect(closed).toMatch(/stopExclusiveBoundsWatch\(\)/)
+  })
+
+  it('smoke tests full native onboarding bounds instead of creating a compact onboarding window', () => {
+    const smoke = readFileSync(join(__dirname, '../../../scripts/e2e-smoke.mjs'), 'utf8')
+    expect(smoke).not.toContain('COMPACT_ONBOARDING')
+    expect(smoke).not.toContain('setCompactOnboardingBounds')
+    expect(smoke).toMatch(/assertExclusiveOnboardingNativeBounds/)
+    expect(smoke).toMatch(/simulateNativeOnboardingClampAndRequireRecovery/)
+    expect(smoke).toMatch(/simulateNativeOnboardingClampAndRequireRecovery\('after Settings replay'\)/)
+    expect(smoke).toMatch(/armReplayOpaqueCoverageTrace/)
+    expect(smoke).toMatch(/assertReplayOpaqueCoverage/)
   })
 })
 

@@ -24,7 +24,7 @@ import { modeLabel } from '@shared/ipc'
 import type { ConversationMode, CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
 import { accelLabel } from '../lib/keys'
-import type { CaptureDegraded } from '../lib/listen'
+import type { CaptureDegraded, CaptureHealth, RecognizerStatus } from '../lib/listen'
 import { ObsidianOrb } from './ObsidianOrb'
 import { JarvisOrbButton } from './JarvisOrbButton'
 import { BAR_MARK_SIZE_PX, type OrbMood } from '../lib/bar-pill-orb'
@@ -177,6 +177,12 @@ export interface BarProps {
    *  "Heard live" chip to an amber "Mic only"/"No mic" state so the degradation stays visible in the
    *  persistent chrome instead of only inside the (collapsible) Copilot body. See lib/listen.ts. */
   captureDegraded?: CaptureDegraded | null
+  /** Safe live microphone status from the actual meeting capture track, not the Settings preflight meter. */
+  captureHealth?: CaptureHealth | null
+  /** Low-priority cue after bounded connected-mic silence; capture degradation always takes precedence. */
+  noSpeechWarning?: boolean
+  /** Renderer-local actual recognizer/model and safe language mode. */
+  recognizerStatus?: RecognizerStatus | null
   /** Pause suspends capture without ending the meeting; Stop (onToggleListen) ends it. Distinct actions. */
   onTogglePause: () => void
   onCapture: () => void
@@ -483,10 +489,24 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               // deliberate no-live-banner design stays (nothing new appears, nothing interrupts), but the
               // one piece of persistent chrome that said "Heard live" stops claiming a side it isn't
               // capturing. Tooltip carries the full platform-aware cause + fix (e.g. Screen Recording).
-              title={!props.paused ? props.captureDegraded?.note : undefined}
+              title={
+                !props.paused
+                  ? ([
+                      props.captureDegraded?.note ?? null,
+                      props.captureHealth
+                        ? `Live microphone: ${props.captureHealth.selectionOutcome}; input ${props.captureHealth.inputSampleRate ?? 'unknown'} Hz, ${props.captureHealth.inputChannelCount ?? 'unknown'} channel(s) → 16 kHz processing. Settings meter is preflight only.`
+                        : null,
+                      props.recognizerStatus
+                        ? `Transcription: ${props.recognizerStatus.model ?? `${props.recognizerStatus.engine} starting`}; language ${props.recognizerStatus.languageMode}${props.recognizerStatus.language ? ` (${props.recognizerStatus.language})` : ''}${props.recognizerStatus.requestedLanguage ? `; requested (${props.recognizerStatus.requestedLanguage})` : ''}.`
+                        : null
+                    ]
+                      .filter(Boolean)
+                      .join(' ') || undefined)
+                  : undefined
+              }
               className={[
                 'flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px]',
-                !props.paused && props.captureDegraded
+                !props.paused && (props.captureDegraded || props.noSpeechWarning || props.captureHealth?.selectionOutcome === 'fallback-default' || props.captureHealth?.selectionOutcome === 'unavailable')
                   ? 'text-[color:var(--color-warn,#fac775)]'
                   : 'text-[color:var(--color-ink-2)]'
               ].join(' ')}
@@ -501,6 +521,24 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                   <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn,#fac775)]" />
                   <AudioLines size={11} strokeWidth={ICON_STROKE} />
                   {props.captureDegraded.side === 'them' ? 'Mic only' : 'No mic'}
+                </>
+              ) : props.captureHealth?.selectionOutcome === 'unavailable' ? (
+                <>
+                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn,#fac775)]" />
+                  <AudioLines size={11} strokeWidth={ICON_STROKE} />
+                  No mic
+                </>
+              ) : props.noSpeechWarning ? (
+                <>
+                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn,#fac775)]" />
+                  <AudioLines size={11} strokeWidth={ICON_STROKE} />
+                  No speech detected
+                </>
+              ) : props.captureHealth?.selectionOutcome === 'fallback-default' ? (
+                <>
+                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn,#fac775)]" />
+                  <AudioLines size={11} strokeWidth={ICON_STROKE} />
+                  Mic fallback
                 </>
               ) : (
                 <>
@@ -575,7 +613,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           )}
         </div>
     ),
-    [expanded, hasAnswer, props.onBack, props.screenCapturedAt, props.listening, props.paused, props.captureDegraded, props.value, props.onChange, props.canPrewarm, props.onSubmit, props.busy, props.onToggleListen, props.onStop]
+    [expanded, hasAnswer, props.onBack, props.screenCapturedAt, props.listening, props.paused, props.captureDegraded, props.captureHealth, props.noSpeechWarning, props.recognizerStatus, props.value, props.onChange, props.canPrewarm, props.onSubmit, props.busy, props.onToggleListen, props.onStop]
   )
 
   const toolbarRow = useMemo(

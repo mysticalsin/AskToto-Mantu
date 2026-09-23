@@ -1,8 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { overlayAllowsMinimize } from '@shared/overlay-chrome'
 import { orbHostPaintsText } from '../lib/bar-pill-orb'
 import { Bar, type BarProps } from './Bar'
+
+const barSrc = readFileSync(join(__dirname, 'Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 function props(overrides: Partial<BarProps> = {}): BarProps {
   return {
@@ -182,6 +186,110 @@ describe('Bar Heard-live chip capture degradation', () => {
     )
     expect(html).toContain('Paused')
     expect(html).not.toContain('Mic only')
+  })
+
+  it('shows bounded no-speech as a lower-priority cue and retains the real capture format in the tooltip', () => {
+    const html = renderToStaticMarkup(
+      <Bar
+        {...props({
+          listening: true,
+          noSpeechWarning: true,
+          captureHealth: {
+            requestedDevice: true,
+            selectionOutcome: 'fallback-default',
+            inputSampleRate: 48000,
+            inputChannelCount: 1,
+            processingSampleRate: 16000,
+            trackState: 'connected'
+          }
+        })}
+      />
+    )
+    expect(html).toContain('No speech detected')
+    expect(html).toContain('input 48000 Hz, 1 channel(s) → 16 kHz processing')
+    expect(html).toContain('Settings meter is preflight only')
+  })
+
+  it('keeps degraded capture ahead of the no-speech cue', () => {
+    const html = renderToStaticMarkup(
+      <Bar {...props({ listening: true, noSpeechWarning: true, captureDegraded: { side: 'them', note, permission: true } })} />
+    )
+    expect(html).toContain('Mic only')
+    expect(html).not.toContain('No speech detected')
+  })
+
+  it('keeps unavailable capture ahead of the no-speech cue', () => {
+    const html = renderToStaticMarkup(
+      <Bar
+        {...props({
+          listening: true,
+          noSpeechWarning: true,
+          captureHealth: {
+            requestedDevice: true,
+            selectionOutcome: 'unavailable',
+            inputSampleRate: null,
+            inputChannelCount: null,
+            processingSampleRate: 16000,
+            trackState: 'unavailable'
+          }
+        })}
+      />
+    )
+    expect(html).toContain('No mic')
+    expect(html).not.toContain('No speech detected')
+  })
+
+  it('refreshes the live chip across warning and late health transitions', () => {
+    const base = props({ listening: true })
+    const silent = renderToStaticMarkup(<Bar {...base} noSpeechWarning />)
+    const admitted = renderToStaticMarkup(<Bar {...base} noSpeechWarning={false} />)
+    const fallback = renderToStaticMarkup(
+      <Bar
+        {...base}
+        captureHealth={{
+          requestedDevice: true,
+          selectionOutcome: 'fallback-default',
+          inputSampleRate: 44100,
+          inputChannelCount: 1,
+          processingSampleRate: 16000,
+          trackState: 'connected'
+        }}
+      />
+    )
+    expect(silent).toContain('No speech detected')
+    expect(admitted).toContain('Heard live')
+    expect(admitted).not.toContain('No speech detected')
+    expect(fallback).toContain('Mic fallback')
+    expect(fallback).toContain('input 44100 Hz, 1 channel(s) → 16 kHz processing')
+    // The Node renderer cannot retain a hook instance between markup passes. Pin the useMemo dependency
+    // contract directly so a real renderer re-render receives every transition above.
+    expect(barSrc).toMatch(/props\.captureDegraded, props\.captureHealth, props\.noSpeechWarning, props\.recognizerStatus, props\.value/)
+  })
+
+  it('names the actual compact Whisper base model and language mode in live status', () => {
+    const html = renderToStaticMarkup(
+      <Bar
+        {...props({
+          listening: true,
+          recognizerStatus: { engine: 'whisper', model: 'whisper-base', languageMode: 'detecting', language: null, requestedLanguage: null }
+        })}
+      />
+    )
+    expect(html).toContain('Transcription: whisper-base; language detecting.')
+    expect(html).not.toContain('whisper-large-v3-turbo')
+  })
+
+  it('keeps safe recognizer details in the degraded capture tooltip', () => {
+    const html = renderToStaticMarkup(
+      <Bar
+        {...props({
+          listening: true,
+          captureDegraded: { side: 'you', note: 'Microphone unavailable.', permission: false },
+          recognizerStatus: { engine: 'whisper', model: 'whisper-base', languageMode: 'detecting', language: null, requestedLanguage: null }
+        })}
+      />
+    )
+    expect(html).toContain('Microphone unavailable. Transcription: whisper-base; language detecting.')
   })
 })
 

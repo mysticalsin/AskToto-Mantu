@@ -21,9 +21,9 @@ describe('mic-only capture degradation stays visible', () => {
     // Set from the start()-time soft note, with the Screen-Recording cause carried as `permission`.
     expect(listen).toMatch(/side: micOk \? 'them' : 'you', note, permission: micOk && isSysPermDenied/)
     // Reset on every fresh start and on final teardown — a stale flag must not leak across sessions.
-    expect(listen).toMatch(/error: null, captureDegraded: null, listening: true, paused: false/)
+    expect(listen).toMatch(/error: null,\n {10}captureDegraded: null,\n {10}captureHealth: null,\n {10}noSpeechWarning: false,[\s\S]*?listening: true,\n {10}paused: false/)
     expect(listen).toMatch(
-      /listening: false,\n {12}capturing: false,\n {12}paused: false,\n {12}loading: false,\n {12}error,\n {12}captureDegraded: null/
+      /listening: false,\n {12}capturing: false,\n {12}paused: false,\n {12}loading: false,\n {12}error,\n {12}captureDegraded: null,\n {12}captureHealth: null/
     )
   })
 
@@ -41,8 +41,13 @@ describe('mic-only capture degradation stays visible', () => {
   it("the Bar's Heard-live chip flips to an honest amber Mic-only/No-mic state while degraded", () => {
     expect(bar).toMatch(/captureDegraded\?: CaptureDegraded \| null/)
     expect(bar).toMatch(/props\.captureDegraded\.side === 'them' \? 'Mic only' : 'No mic'/)
-    // The full platform-aware cause rides on the chip as its tooltip.
-    expect(bar).toMatch(/title=\{!props\.paused \? props\.captureDegraded\?\.note : undefined\}/)
+    // Degradation retains priority, but the tooltip starts with its note and appends safe mic and
+    // recognizer facts; paused capture intentionally omits every live-status detail.
+    const heardLiveChip = bar.slice(bar.indexOf('/* "Heard live" chip'), bar.indexOf('className={[', bar.indexOf('/* "Heard live" chip')))
+    expect(heardLiveChip).toMatch(
+      /title=\{\n\s*!props\.paused\n\s*\? \(\[\n\s*props\.captureDegraded\?\.note \?\? null,[\s\S]*?Live microphone: \$\{props\.captureHealth\.selectionOutcome\}[\s\S]*?Transcription: \$\{props\.recognizerStatus\.model[\s\S]*?\]\n\s*\.filter\(Boolean\)[\s\S]*?: undefined\n\s*\}/
+    )
+    expect(bar).toMatch(/props\.captureDegraded \|\| props\.noSpeechWarning \|\| props\.captureHealth\?\.selectionOutcome === 'fallback-default'/)
     expect(app).toMatch(/captureDegraded=\{listen\.captureDegraded\}/)
   })
 

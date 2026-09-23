@@ -28,6 +28,7 @@ import { transcriptToText } from './transcript'
 import { shouldUseBundledAsr } from './asr-offline'
 
 const SR = 16000
+const NO_SPEECH_WARNING_MS = 30_000
 
 /**
  * Build Nova-3 / Soniox language opts for a Listen cloud STT session from Settings.asrLanguage.
@@ -428,6 +429,137 @@ export interface CaptureDegraded {
   permission: boolean
 }
 
+export type CaptureSelectionOutcome = 'system-default' | 'requested-device' | 'fallback-default' | 'unavailable'
+
+export function micSelectionOutcome(
+  requestedDevice: boolean,
+  usedFallback: boolean,
+  unavailable = false
+): CaptureSelectionOutcome {
+  if (unavailable) return 'unavailable'
+  if (!requestedDevice) return 'system-default'
+  return usedFallback ? 'fallback-default' : 'requested-device'
+}
+
+/** Privacy-safe, current-session facts from the actual active microphone track. */
+export interface CaptureHealth {
+  requestedDevice: boolean
+  selectionOutcome: CaptureSelectionOutcome
+  inputSampleRate: number | null
+  inputChannelCount: number | null
+  processingSampleRate: 16000
+  trackState: 'connected' | 'ended' | 'unavailable'
+}
+
+export interface RecognizerStatus {
+  engine: 'whisper' | 'parakeet' | 'apple' | 'cloud'
+  model: 'whisper-base' | 'whisper-large-v3-turbo' | 'parakeet' | 'apple-speech' | 'cloud-stt' | null
+  /** Effective engine behavior, which can differ from the user's requested language. */
+  languageMode: 'explicit' | 'detecting' | 'pinned' | 'engine-auto'
+  language: string | null
+  requestedLanguage: string | null
+}
+
+export function recognizerStatusFor(
+  engine: RecognizerStatus['engine'],
+  workerEngine: 'wasm' | 'webgpu' | null,
+  language: string,
+  pinnedLanguage: string | null
+): RecognizerStatus {
+  const model =
+    engine === 'whisper'
+      ? workerEngine === 'webgpu'
+        ? 'whisper-large-v3-turbo'
+        : workerEngine === 'wasm'
+          ? 'whisper-base'
+          : null
+      : engine === 'parakeet'
+        ? 'parakeet'
+        : engine === 'apple'
+          ? 'apple-speech'
+          : 'cloud-stt'
+  const requestedLanguage = language === 'auto' ? null : language
+  // Parakeet's live recognizer auto-detects regardless of the configured preference. Keep the preference
+  // separately for supportability, but never present it as an engine-enforced language.
+  if (engine === 'parakeet') return { engine, model, languageMode: 'engine-auto', language: null, requestedLanguage }
+  return language !== 'auto'
+    ? { engine, model, languageMode: 'explicit', language, requestedLanguage }
+    : pinnedLanguage
+      ? { engine, model, languageMode: 'pinned', language: pinnedLanguage, requestedLanguage: null }
+      : { engine, model, languageMode: 'detecting', language: null, requestedLanguage: null }
+}
+
+export function shouldShowNoSpeechWarning(
+  currentEpoch: number,
+  eventEpoch: number,
+  captureHealth: CaptureHealth | null,
+  speechAdmitted: boolean,
+  captureDegraded: CaptureDegraded | null
+): boolean {
+  return (
+    currentEpoch === eventEpoch &&
+    captureHealth?.trackState === 'connected' &&
+    !speechAdmitted &&
+    captureDegraded === null
+  )
+}
+
+type CaptureTrack = Pick<MediaStreamTrack, 'readyState' | 'getSettings'>
+
+function safeTrackNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
+export function captureHealthForTrack(
+  track: CaptureTrack | null,
+  requestedDevice: boolean,
+  selectionOutcome: CaptureSelectionOutcome
+): CaptureHealth {
+  if (!track) {
+    return {
+      requestedDevice,
+      selectionOutcome,
+      inputSampleRate: null,
+      inputChannelCount: null,
+      processingSampleRate: 16000,
+      trackState: 'unavailable'
+    }
+  }
+  let settings: MediaTrackSettings = {}
+  try {
+    settings = track.getSettings()
+  } catch {
+    // The health DTO must never turn a browser-specific settings read into a capture failure.
+  }
+  return {
+    requestedDevice,
+    selectionOutcome,
+    inputSampleRate: safeTrackNumber(settings.sampleRate),
+    inputChannelCount: safeTrackNumber(settings.channelCount),
+    processingSampleRate: 16000,
+    trackState: track.readyState === 'ended' ? 'ended' : 'connected'
+  }
+}
+
+/** Keep asynchronous capture/recovery events from publishing into a replacement session. */
+export function captureHealthIfCurrent<T>(currentEpoch: number, eventEpoch: number, current: T, next: T): T {
+  return currentEpoch === eventEpoch ? next : current
+}
+
+function sameCaptureHealth(left: CaptureHealth | null, right: CaptureHealth | null): boolean {
+  return (
+    left === right ||
+    (left !== null &&
+      right !== null &&
+      left.requestedDevice === right.requestedDevice &&
+      left.selectionOutcome === right.selectionOutcome &&
+      left.inputSampleRate === right.inputSampleRate &&
+      left.inputChannelCount === right.inputChannelCount &&
+      left.processingSampleRate === right.processingSampleRate &&
+      left.trackState === right.trackState)
+  )
+}
+
 /**
  * Exported for unit testing — the pure decision behind recoverMic's success path (see useListen below).
  * `captureDegraded` is ONE slot but both sides can be degraded at once: on a mic-only session (Screen
@@ -496,6 +628,11 @@ export interface ListenApi {
   qualityDegraded: boolean
   /** Non-null while a requested capture side isn't being heard (see CaptureDegraded above). */
   captureDegraded: CaptureDegraded | null
+  /** Current-session microphone format/selection facts; never includes a device ID, label, or audio. */
+  captureHealth: CaptureHealth | null
+  /** Low-priority current-session cue; true only after bounded live mic silence without admitted speech. */
+  noSpeechWarning: boolean
+  recognizerStatus: RecognizerStatus | null
   start: (
     source: AudioSource,
     quality?: 'best' | 'fast',
@@ -529,13 +666,36 @@ function escapeRegExp(s: string): string {
  * away (e.g. AirPods disconnected), fall back to the system default so a meeting never loses its mic over
  * a device that vanished. Empty deviceId means "follow the system default" from the start.
  */
-async function acquireMic(deviceId: string): Promise<MediaStream> {
+interface MicCapture {
+  stream: MediaStream
+  /** Kept only in this renderer session; never copied into the public health DTO. */
+  track: MediaStreamTrack
+  health: CaptureHealth
+}
+
+async function acquireMic(deviceId: string): Promise<MicCapture> {
   const base: MediaTrackConstraints = { channelCount: 1, echoCancellation: true, noiseSuppression: true }
-  if (!deviceId) return navigator.mediaDevices.getUserMedia({ audio: base })
-  try {
-    return await navigator.mediaDevices.getUserMedia({ audio: { ...base, deviceId: { exact: deviceId } } })
-  } catch {
-    return navigator.mediaDevices.getUserMedia({ audio: base })
+  let stream: MediaStream
+  let usedFallback = false
+  if (!deviceId) {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: base })
+  } else {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { ...base, deviceId: { exact: deviceId } } })
+    } catch {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: base })
+      usedFallback = true
+    }
+  }
+  const track = stream.getAudioTracks()[0]
+  if (!track) {
+    stream.getTracks().forEach((candidate) => candidate.stop())
+    throw new Error('no microphone audio track')
+  }
+  return {
+    stream,
+    track,
+    health: captureHealthForTrack(track, Boolean(deviceId), micSelectionOutcome(Boolean(deviceId), usedFallback))
   }
 }
 
@@ -636,7 +796,10 @@ export function useListen(
     error: null as string | null,
     loadingPct: null as number | null,
     qualityDegraded: false,
-    captureDegraded: null as CaptureDegraded | null
+    captureDegraded: null as CaptureDegraded | null,
+    captureHealth: null as CaptureHealth | null,
+    noSpeechWarning: false,
+    recognizerStatus: null as RecognizerStatus | null
   })
   const [lines, setLines] = useState<TranscriptLine[]>([])
 
@@ -693,6 +856,12 @@ export function useListen(
   const stopFlushAckRef = useRef<((speaker: Speaker, requestId: string) => void) | null>(null)
   const nextStopRequestRef = useRef(1)
   const sessionEpochRef = useRef(0) // incremented each start(); drain/finishTeardown bails if epoch changed
+  // The actual track object is session-local opaque identity only. It is never exposed in state, IPC,
+  // telemetry, or persistence; public state contains only CaptureHealth's safe numeric/status fields.
+  const activeMicTrackRef = useRef<MediaStreamTrack | null>(null)
+  const captureHealthRef = useRef<CaptureHealth | null>(null)
+  const micSpeechAdmittedRef = useRef(false)
+  const noSpeechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Supplied by App from the persisted meeting owner; legacy callers have no speaker identity.
   const sessionStartedAtRef = useRef<number | undefined>(undefined)
   const queue = useRef<LiveAudioWindow[]>([])
@@ -705,6 +874,43 @@ export function useListen(
   const liveRef = useRef(false) // true only between start() and stop() — guards stale results
   function captureAdmissionIsOpen(epoch: number): boolean {
     return liveRef.current && !stoppingRef.current && sessionEpochRef.current === epoch
+  }
+  const publishCaptureHealth = useCallback((epoch: number, health: CaptureHealth): void => {
+    if (sessionEpochRef.current !== epoch) return
+    const next = captureHealthIfCurrent(sessionEpochRef.current, epoch, captureHealthRef.current, health)
+    if (sameCaptureHealth(captureHealthRef.current, next)) return
+    captureHealthRef.current = next
+    setState((current) => (sameCaptureHealth(current.captureHealth, next) ? current : { ...current, captureHealth: next }))
+  }, [])
+  function clearNoSpeechWarning(): void {
+    if (noSpeechTimerRef.current) {
+      clearTimeout(noSpeechTimerRef.current)
+      noSpeechTimerRef.current = null
+    }
+    setState((current) => (current.noSpeechWarning ? { ...current, noSpeechWarning: false } : current))
+  }
+  function markMicSpeechAdmitted(): void {
+    if (micSpeechAdmittedRef.current) return
+    micSpeechAdmittedRef.current = true
+    clearNoSpeechWarning()
+  }
+  function armNoSpeechWarning(epoch: number): void {
+    clearNoSpeechWarning()
+    if (micSpeechAdmittedRef.current || captureHealthRef.current?.trackState !== 'connected') return
+    noSpeechTimerRef.current = setTimeout(() => {
+      noSpeechTimerRef.current = null
+      setState((current) =>
+        shouldShowNoSpeechWarning(
+          sessionEpochRef.current,
+          epoch,
+          captureHealthRef.current,
+          micSpeechAdmittedRef.current,
+          current.captureDegraded
+        )
+          ? { ...current, noSpeechWarning: true }
+          : current
+      )
+    }, NO_SPEECH_WARNING_MS)
   }
   // Synchronous in-flight guard for start(): a rapid double-click/double-hotkey on Listen calls start()
   // twice before React re-renders listen.listening to true (that state update is async), so a boolean
@@ -962,6 +1168,15 @@ export function useListen(
         if (next.shouldPin && next.pinnedLang) {
           probePinnedRef.current = true
           pinnedLangRef.current = next.pinnedLang
+          setState((state) => ({
+            ...state,
+            recognizerStatus:
+              state.recognizerStatus?.engine === engineRef.current
+                ? engineRef.current === 'parakeet'
+                  ? { ...state.recognizerStatus, languageMode: 'engine-auto', language: null, requestedLanguage: asrLanguageRef.current === 'auto' ? null : asrLanguageRef.current }
+                  : { ...state.recognizerStatus, languageMode: 'pinned', language: next.pinnedLang, requestedLanguage: null }
+                : recognizerStatusFor(engineRef.current, null, asrLanguageRef.current, next.pinnedLang)
+          }))
           // Sticky + mid-meeting switch for cloud Nova/Soniox path (applies when WS attaches).
           cloudSttNovaLangRef.current = resolveNova3LanguageQueryPinned(
             asrLanguageRef.current,
@@ -1202,6 +1417,12 @@ export function useListen(
           loading: false,
           loadingPct: null,
           qualityDegraded: !!m.qualityDegraded,
+          recognizerStatus: recognizerStatusFor(
+            'whisper',
+            m.engine === 'webgpu' || m.engine === 'wasm' ? m.engine : null,
+            asrLanguageRef.current,
+            probePinnedRef.current ? pinnedLangRef.current : null
+          ),
           error: s.error === OFFLINE_MSG || s.error === RECONNECTING_MSG ? null : s.error
         }))
         pump() // drain windows captured while the model loaded
@@ -1409,6 +1630,10 @@ export function useListen(
   const pushAudio = useCallback(
     (sp: Speaker, audio: Float32Array, partial = false, startedAt?: number): void => {
       if (!liveRef.current || pausedRef.current) return
+      // Worklet output reaches this boundary only after its VAD/window admission. This is intentionally
+      // per admitted window (never per render quantum), so a verified mic utterance clears the low-priority
+      // silent-capture cue immediately without adding audio-path state churn.
+      if (sp === 'you') markMicSpeechAdmitted()
       // Cloud STT: pump() does not locally decode, but sticky language still needs the same
       // whisper/parakeet probe cadence so Nova/Soniox refs pin + follow mid-meeting switches
       // before / when the live WS attaches.
@@ -1506,24 +1731,27 @@ export function useListen(
   // Ref-indirected like recoverSystemAudioRef below: openChannelNow's identity changes with pushAudio,
   // and the serializing wrapper must always invoke the CURRENT one, not the render it was created in.
   const openChannelNowRef = useRef<
-    ((sp: Speaker, stream: MediaStream, admissionEpoch: number) => Promise<boolean>) | null
+    ((sp: Speaker, stream: MediaStream, admissionEpoch: number, micCapture?: MicCapture) => Promise<boolean>) | null
   >(null)
 
-  const openChannel = useCallback((sp: Speaker, stream: MediaStream, admissionEpoch: number): Promise<boolean> => {
+  const openChannel = useCallback(
+    (sp: Speaker, stream: MediaStream, admissionEpoch: number, micCapture?: MicCapture): Promise<boolean> => {
     const prev = openSeqRef.current[sp] ?? Promise.resolve()
     // Chain regardless of the predecessor's outcome — a failed open must not wedge every later one.
     const run = prev.catch(() => {}).then(() => {
       const open = openChannelNowRef.current
-      if (open) return open(sp, stream, admissionEpoch)
+      if (open) return open(sp, stream, admissionEpoch, micCapture)
       stream.getTracks().forEach((track) => track.stop())
       return false
     })
     openSeqRef.current[sp] = run.catch(() => {}) as Promise<void> // keep the chain alive past a failure
-    return run
-  }, [])
+      return run
+    },
+    []
+  )
 
   const openChannelNow = useCallback(
-    async (sp: Speaker, stream: MediaStream, admissionEpoch: number): Promise<boolean> => {
+    async (sp: Speaker, stream: MediaStream, admissionEpoch: number, micCapture?: MicCapture): Promise<boolean> => {
       if (!captureAdmissionIsOpen(admissionEpoch)) {
         stream.getTracks().forEach((track) => track.stop())
         return false
@@ -1556,7 +1784,10 @@ export function useListen(
         // 'speakers' makes the graph itself downmix L+R to mono before process() runs, instead of the
         // worklet silently reading only input[0] and dropping the right channel.
         channelCountMode: 'explicit',
-        channelInterpretation: 'speakers'
+        channelInterpretation: 'speakers',
+        // AudioContext's requested 16 kHz is advisory. The worklet receives this actual rate and
+        // converts its reusable quantum buffer before VAD or any ASR path sees PCM.
+        processorOptions: { sourceSampleRate: ctx.sampleRate }
       })
       // 'them' (system loopback): un-AGC'd call audio is typically 2–4× quieter than mic input and
       // often never crosses the fixed VAD ON/EMIT_RMS thresholds. A GainNode lifts it into the
@@ -1584,12 +1815,21 @@ export function useListen(
       worklet.port.onmessage = (ev: MessageEvent): void => {
         // Allow the current Stop's final PCM + ACK, but never attribute a retired channel to its replacement.
         if (admissionEpoch !== sessionEpochRef.current) return
-        const data = ev.data as { type?: string; requestId?: string; audio?: Float32Array; partial?: boolean }
+        const data = ev.data as {
+          type?: string
+          requestId?: string
+          audio?: Float32Array
+          sampleRate?: number
+          partial?: boolean
+        }
         if (data.type === 'flush-ack' && typeof data.requestId === 'string') {
           stopFlushAckRef.current?.(sp, data.requestId)
           return
         }
         if (data.audio) {
+          // All VAD/ASR consumers are fixed at 16 kHz; silently drop malformed worklet output rather
+          // than letting a device's native rate corrupt timing or transcription.
+          if (data.sampleRate !== SR) return
           if (sp === 'them') {
             // Rolling proof-of-life read by armThemProbation — one boolean store, nothing else, so the
             // per-window path stays as cheap as it was before the probation existed.
@@ -1611,6 +1851,11 @@ export function useListen(
       }
       const ch: Channel = { ctx, src, worklet, stream, gain: gain ?? undefined, limiter: limiter ?? undefined }
       channels.current[sp] = ch
+      if (sp === 'you' && micCapture) {
+        activeMicTrackRef.current = micCapture.track
+        publishCaptureHealth(admissionEpoch, micCapture.health)
+        armNoSpeechWarning(admissionEpoch)
+      }
       if (gain && limiter) {
         // them: source -> boost -> limiter -> worklet. The limiter must sit AFTER the gain — it exists
         // to flatten the overs the gain creates; upstream of it, it would do nothing.
@@ -1639,6 +1884,14 @@ export function useListen(
           console.warn(`[listen] ${sp} audio track ended unexpectedly (device change / sleep)`)
           closeChannel(sp)
           if (sp === 'you') {
+            micSpeechAdmittedRef.current = false
+            clearNoSpeechWarning()
+            if (activeMicTrackRef.current === t && micCapture) {
+              publishCaptureHealth(
+                admissionEpoch,
+                captureHealthForTrack(t, micCapture.health.requestedDevice, micCapture.health.selectionOutcome)
+              )
+            }
             setState((s) => ({ ...s, error: MIC_LOST_MSG, captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false } }))
             void recoverMicRef.current?.()
           } else {
@@ -1674,7 +1927,7 @@ export function useListen(
       }
       return true
     },
-    [pushAudio]
+    [publishCaptureHealth, pushAudio]
   )
   openChannelNowRef.current = openChannelNow
 
@@ -1690,10 +1943,10 @@ export function useListen(
     try {
       const mic = await acquireMic(micDeviceIdRef.current)
       if (!captureAdmissionIsOpen(admissionEpoch)) {
-        mic.getTracks().forEach((t) => t.stop())
+        mic.stream.getTracks().forEach((t) => t.stop())
         return
       }
-      if (!(await openChannel('you', mic, admissionEpoch)) || !captureAdmissionIsOpen(admissionEpoch)) return
+      if (!(await openChannel('you', mic.stream, admissionEpoch, mic)) || !captureAdmissionIsOpen(admissionEpoch)) return
       setState((s) => ({
         ...s,
         error: s.error === MIC_LOST_MSG ? null : s.error,
@@ -1706,6 +1959,14 @@ export function useListen(
       }))
     } catch {
       if (!captureAdmissionIsOpen(admissionEpoch)) return
+      publishCaptureHealth(
+        admissionEpoch,
+        captureHealthForTrack(
+          null,
+          Boolean(micDeviceIdRef.current),
+          micSelectionOutcome(Boolean(micDeviceIdRef.current), false, true)
+        )
+      )
       // Nothing to acquire (no mic connected) — the sticky MIC_LOST_MSG stays until a device change
       // retriggers recovery or the user restarts Listen.
       setState((s) => ({ ...s, error: MIC_LOST_MSG, captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false } }))
@@ -2001,12 +2262,25 @@ export function useListen(
         probeWindowCountRef.current = 0
         probeSwitchRunRef.current = null
         themDegradedRef.current = null // fresh session → no carried-over 'them' degradation cause
-        setState((s) => ({ ...s, error: null, captureDegraded: null, listening: true, paused: false }))
+        activeMicTrackRef.current = null
+        captureHealthRef.current = null
+        micSpeechAdmittedRef.current = false
+        clearNoSpeechWarning()
+        setState((s) => ({
+          ...s,
+          error: null,
+          captureDegraded: null,
+          captureHealth: null,
+          noSpeechWarning: false,
+          recognizerStatus: recognizerStatusFor(engine, null, language, null),
+          listening: true,
+          paused: false
+        }))
         // MQA-285: same-turn capture. Kick getUserMedia BEFORE any await so the click gesture still
         // covers the permission prompt and the first second of audio is on the MediaStream — not lost
         // behind setListeningState / parakeetEnsure / getAsrBundled. Windows queue in pump() until
         // the (prewarmed) engine reports ready.
-        let micP: Promise<MediaStream> | null = null
+        let micP: Promise<MicCapture> | null = null
         if (source === 'mic' || source === 'both') {
           micP = acquireMic(micDeviceIdRef.current)
         }
@@ -2228,13 +2502,21 @@ export function useListen(
           try {
             const mic = await micP
             if (!captureAdmissionIsOpen(myEpoch)) {
-              mic.getTracks().forEach((t) => t.stop())
+              mic.stream.getTracks().forEach((t) => t.stop())
               return
             }
-            micOk = await openChannel('you', mic, myEpoch)
+            micOk = await openChannel('you', mic.stream, myEpoch, mic)
             if (!micOk && !captureAdmissionIsOpen(myEpoch)) return
           } catch (e) {
             if (!captureAdmissionIsOpen(myEpoch)) return
+            publishCaptureHealth(
+              myEpoch,
+              captureHealthForTrack(
+                null,
+                Boolean(micDeviceIdRef.current),
+                micSelectionOutcome(Boolean(micDeviceIdRef.current), false, true)
+              )
+            )
             console.warn('[listen] microphone capture failed:', (e as Error)?.name, (e as Error)?.message)
           }
         }
@@ -2362,6 +2644,7 @@ export function useListen(
       clearTimeout(themWatchdogRef.current)
       themWatchdogRef.current = null
     }
+    if (sp === 'you') clearNoSpeechWarning()
     ch.worklet.disconnect()
     ch.worklet.port.onmessage = null
     ch.gain?.disconnect() // disconnect the boost node if present (them channel only)
@@ -2385,6 +2668,8 @@ export function useListen(
       if (!captureAdmissionIsOpen(sessionEpochRef.current)) return
       const startedAt = sessionStartedAtRef.current
       liveRef.current = false
+      activeMicTrackRef.current = null
+      clearNoSpeechWarning()
       pausedRef.current = false
       readyRef.current = false
       busy.current = false
@@ -2434,6 +2719,7 @@ export function useListen(
   const pause = useCallback((): void => {
     if (!liveRef.current || pausedRef.current) return
     pausedRef.current = true
+    clearNoSpeechWarning()
     // The 'them' watchdog is armed once at channel-open and otherwise runs on a wall-clock timer that
     // doesn't know about pause — left ticking, an ordinary pause longer than THEM_WATCHDOG_MS (20s) fires
     // a false "not hearing the other side" note over what is actually an intentional pause with nothing
@@ -2490,6 +2776,7 @@ export function useListen(
     // THEM_WATCHDOG_MS window post-resume instead of staying permanently disarmed. No-op if 'them' isn't
     // open, or if it already emitted audio before the pause (armThemWatchdog checks themHeardRef).
     if (channels.current.them) armThemWatchdog()
+    if (captureHealthRef.current?.trackState === 'connected') armNoSpeechWarning(sessionEpochRef.current)
     setState((s) => ({ ...s, paused: false }))
   }, [])
 
@@ -2578,6 +2865,9 @@ export function useListen(
         )
           return
         liveRef.current = false
+        activeMicTrackRef.current = null
+        captureHealthRef.current = null
+        clearNoSpeechWarning()
         disarmNetworkRetry()
         queue.current = [] // drop anything still undispatched once the bounded drain ends
         clearProvisional()
@@ -2620,7 +2910,8 @@ export function useListen(
             paused: false,
             loading: false,
             error,
-            captureDegraded: null
+            captureDegraded: null,
+            captureHealth: null
           }
           })
           drainTimerRef.current = null
@@ -2832,6 +3123,15 @@ export function useListen(
       pinnedLangRef.current = null
       probeWindowCountRef.current = 0
       probeSwitchRunRef.current = null
+      setState((state) => ({
+        ...state,
+        recognizerStatus:
+          state.recognizerStatus?.engine === engineRef.current
+            ? engineRef.current === 'parakeet'
+              ? { ...state.recognizerStatus, languageMode: 'engine-auto', language: null, requestedLanguage: language === 'auto' ? null : language }
+              : { ...state.recognizerStatus, languageMode: language === 'auto' ? 'detecting' : 'explicit', language: language === 'auto' ? null : language, requestedLanguage: language === 'auto' ? null : language }
+            : recognizerStatusFor(engineRef.current, null, language, null)
+      }))
       if (engineRef.current !== 'whisper' || !workerRef.current || !liveRef.current) return
       try {
         const bundled = await getAsrBundled()

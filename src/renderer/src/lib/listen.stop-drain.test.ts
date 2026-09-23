@@ -79,6 +79,7 @@ type WorkletMessage = {
   type?: string
   requestId?: string
   audio?: Float32Array
+  sampleRate?: number
   partial?: boolean
 }
 type SealMode = {
@@ -143,7 +144,7 @@ class FakeAudioWorkletNode {
   }
 
   emit(message: WorkletMessage): void {
-    this.port.onmessage?.({ data: message } as MessageEvent<WorkletMessage>)
+    this.port.onmessage?.({ data: message.audio ? { sampleRate: 16000, ...message } : message } as MessageEvent<WorkletMessage>)
   }
 
   connect(): void {}
@@ -151,6 +152,7 @@ class FakeAudioWorkletNode {
 }
 
 class FakeAudioContext {
+  sampleRate = 16000
   state = 'running'
   destination = {}
   onstatechange: (() => void) | null = null
@@ -210,6 +212,7 @@ class FakeWorker {
   emit(message: {
     type: string
     qualityDegraded?: boolean
+    engine?: 'wasm' | 'webgpu'
     text?: string
     speaker?: 'you' | 'them'
     message?: string
@@ -249,6 +252,11 @@ function renderWithEnterprise(engine: Engine, enterpriseLive?: EnterpriseLive): 
 
 function render(engine: Engine = 'parakeet'): ListenApi {
   return renderWithEnterprise(engine, engine === 'cloud' ? cloudOnlyProfile : undefined)
+}
+
+function renderWithMicDevice(deviceId: string, engine: Engine = 'parakeet'): ListenApi {
+  host.beginRender()
+  return useListen(undefined, undefined, undefined, deviceId, undefined, engine, 'fast')
 }
 
 function renderBeforeSettingsResolve(): ListenApi {
@@ -330,6 +338,98 @@ afterEach(() => {
 })
 
 describe('live audio transport identity', () => {
+  it('publishes the ready worker fallback and live language change as actual recognizer state', async () => {
+    let api = render('whisper')
+    await api.start('mic', 'fast', 'whisper', 'French', 123)
+    await settle()
+    const worker = workers.at(-1)
+    if (!worker) throw new Error('test Whisper worker did not open')
+
+    // This is the actual worker-ready path, not the pure status mapper: wasm is the packaged fallback.
+    worker.emit({ type: 'ready', qualityDegraded: true, engine: 'wasm' })
+    await settle()
+    api = render('whisper')
+    expect(api.recognizerStatus).toEqual({
+      engine: 'whisper',
+      model: 'whisper-base',
+      languageMode: 'explicit',
+      language: 'French',
+      requestedLanguage: 'French'
+    })
+
+    await api.setLanguage('auto')
+    await settle()
+    api = render('whisper')
+    expect(api.recognizerStatus).toMatchObject({
+      model: 'whisper-base',
+      languageMode: 'detecting',
+      language: null,
+      requestedLanguage: null
+    })
+  })
+
+  it('raises the bounded live-mic no-speech cue and clears it on an admitted worklet window', async () => {
+    let api = render()
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    api = render()
+    expect(api.noSpeechWarning).toBe(true)
+
+    worklets.at(-1)?.emit({ audio: Float32Array.from([0.2]), partial: false })
+    await settle()
+    api = render()
+    expect(api.noSpeechWarning).toBe(false)
+  })
+
+  it('reports unavailable, not fallback-default, when both selected and default microphone requests fail', async () => {
+    let attempts = 0
+    getUserMediaImpl = async () => {
+      attempts++
+      throw new Error('Synthetic selected and default microphone refusal')
+    }
+
+    let api = renderWithMicDevice('chosen-device')
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    api = renderWithMicDevice('chosen-device')
+
+    expect(attempts).toBe(2)
+    expect(api.captureHealth).toMatchObject({
+      requestedDevice: true,
+      selectionOutcome: 'unavailable',
+      trackState: 'unavailable',
+      inputSampleRate: null,
+      inputChannelCount: null
+    })
+  })
+
+  it('publishes unavailable after a live selected microphone ends and both recovery requests fail', async () => {
+    let api = renderWithMicDevice('chosen-device')
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    const active = streams.find((entry) => entry.kind === 'mic')
+    if (!active) throw new Error('expected an active microphone track')
+
+    let attempts = 0
+    getUserMediaImpl = async () => {
+      attempts++
+      throw new Error('Synthetic recovery microphone refusal')
+    }
+    active.track.readyState = 'ended'
+    active.track.onended?.()
+    await settle()
+    api = renderWithMicDevice('chosen-device')
+
+    expect(attempts).toBe(2)
+    expect(api.captureHealth).toMatchObject({
+      requestedDevice: true,
+      selectionOutcome: 'unavailable',
+      trackState: 'unavailable'
+    })
+  })
+
   it('force-stops a delayed cloud start after both capture sources fail', async () => {
     let resolveCloudStart!: (result: { ok: true }) => void
     const offFinal = vi.fn()

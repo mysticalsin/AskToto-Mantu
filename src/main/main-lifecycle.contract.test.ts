@@ -140,13 +140,16 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
     // ensureWindow() may now run during the async gap between the handler registration and boot's own
     // runStep('createWindow'). Without this guard the boot step would overwrite `win` with a second
     // BrowserWindow, leaving the first visible, always-on-top and unreferenced.
-    const head = sliceBetween('function createWindow(): void {', 'isMinimized = false')
+    const head = sliceBetween('function createWindow(targetDisplay?: Electron.Display): void {', 'isMinimized = false')
     expect(head).toMatch(/if \(win && !win\.isDestroyed\(\)\) return/)
   })
 
-  it("MQA-172 — the 'closed' handler only clears the module ref when it still points at that window", () => {
+  it("MQA-172 — a retired window's 'closed' handler cannot mutate its replacement", () => {
     const closed = sliceBetween('const self = win', '// Security: never let model-output')
-    expect(closed).toMatch(/if \(win === self\)/)
+    const ownerGuard = closed.indexOf('if (win !== self) return')
+    const revoke = closed.indexOf("commandControl.revokeForLifecycleEvent('window_closed')")
+    expect(ownerGuard).toBeGreaterThan(-1)
+    expect(revoke).toBeGreaterThan(ownerGuard)
     expect(closed).toMatch(/win = null/)
     expect(closed).toMatch(/stopOverlayCursorWatch/)
   })
@@ -183,7 +186,8 @@ describe('MQA-340 — onboarding durable saves reply before opaque-window replac
     // The persisted false value makes onboardingExclusiveLive() true before the opaque replacement;
     // `overlayWindowTransparent` is the actual stage-state guard for a replay request.
     expect(replayEvent).toMatch(/!overlayWindowTransparent/)
-    expect(replayEvent).toMatch(/applyExclusiveOnboardingStage\(win\)/)
+    expect(replayEvent).toMatch(/replaceTransparentOverlayWithExclusiveOnboarding\(\)/)
+    expect(replayEvent).not.toMatch(/showForExclusiveOnboarding\(win\)/)
   })
 
   it('recovers a completed opaque onboarding window only when its renderer misses the normal exit handoff', () => {
@@ -237,12 +241,47 @@ describe('MQA-345 — constructor swaps keep the retiring renderer trusted until
     expect(localModels).toMatch(/if \(isRecentlyRetiredOverlaySender\(e\)\) return \[\]/)
     expect(park.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(park.indexOf('assertMainWindow(e)'))
     expect(park).toMatch(/if \(isRecentlyRetiredOverlaySender\(e\)\) return/)
+    expect(park).toMatch(/force === true/)
     expect(bundled.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(bundled.indexOf('assertMainWindow(e)'))
     expect(bundled).toMatch(/if \(isRecentlyRetiredOverlaySender\(e\)\) return true/)
     expect(indexSrc.match(/isRecentlyRetiredOverlaySender\(e\)/g)).toHaveLength(3)
 
     expect(localModels).toMatch(/assertMainWindow\(e\)/)
     expect(park).toMatch(/assertMainWindow\(e\)/)
+    expect(indexSrc).toMatch(/function parkOverlayAfterHideSpring\(force = false\)/)
     expect(bundled).toMatch(/assertMainWindow\(e\)/)
+  })
+
+  it('keeps Settings usable if an opaque replay replacement cannot be created', () => {
+    const handoff = sliceBetween(
+      'function replaceTransparentOverlayWithExclusiveOnboarding(): void {',
+      '/** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */'
+    )
+    expect(handoff).toMatch(/screen\.getDisplayMatching\(dying\.getBounds\(\)\)/)
+    expect(handoff).toMatch(/try \{\s*createWindow\(replacementDisplay\)/)
+    expect(handoff).toMatch(/coversExclusiveOnboardingDisplay\(replacement, replacementDisplay\)/)
+    expect(handoff).toMatch(/catch \{[\s\S]*?win = dying/)
+    expect(handoff).toMatch(/setSettingsWithSpeakerPolicy\(\{ onboardingDone: true \}\)/)
+    expect(handoff).toMatch(/auditLog\('app\.recovery', \{ kind: 'onboarding-replay-replacement-failed' \}\)/)
+    expect(handoff).not.toMatch(/throw error/)
+    expect(handoff.indexOf('stopExclusiveBoundsWatch()')).toBeLessThan(
+      handoff.indexOf('    createWindow(replacementDisplay)\n    const replacement')
+    )
+  })
+
+  it('never lets a retired renderer crash reconfigure its successor', () => {
+    const rendererGone = sliceBetween("win.webContents.on('render-process-gone'", '// FITO-185-N')
+    const ownerGuard = rendererGone.indexOf('if (win !== self) return')
+    const revoke = rendererGone.indexOf("commandControl.revokeForLifecycleEvent('renderer_replaced')")
+    expect(ownerGuard).toBeGreaterThan(-1)
+    expect(revoke).toBeGreaterThan(ownerGuard)
+    const apply = rendererGone.indexOf('const retainedOwnership = applyExclusiveOnboardingStage(self)')
+    const postApplyGuard = rendererGone.indexOf('if (!retainedOwnership && win !== self) return')
+    expect(apply).toBeGreaterThan(-1)
+    expect(postApplyGuard).toBeGreaterThan(apply)
+    expect(rendererGone).toMatch(/showForExclusiveOnboarding\(self\)/)
+    expect(rendererGone).toMatch(/self\.loadURL\(overlayRendererUrl\(\)\)/)
+    expect(rendererGone).toMatch(/if \(retainedOwnership\) \{[\s\S]*?showForExclusiveOnboarding\(self\)/)
+    expect(rendererGone).not.toMatch(/applyExclusiveOnboardingStage\(win\)/)
   })
 })

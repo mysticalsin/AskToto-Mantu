@@ -11,6 +11,8 @@ export const OVERLAY_HIDE_MS = 320
 export const OVERLAY_PARK_FALLBACK_MS = 400
 
 export type OverlaySpring = 'rest' | 'in' | 'settled' | 'out'
+/** The motion follows the surface anchor so a right dock never drops in from the top edge. */
+export type OverlayEdge = 'top' | 'right'
 
 export function overlaySpringAfterReveal(reducedMotion: boolean): OverlaySpring {
   return reducedMotion ? 'settled' : 'in'
@@ -45,10 +47,11 @@ export function overlayShowPeek(
   return idle && !revealed && spring === 'rest'
 }
 
-export function overlaySpringClassName(spring: OverlaySpring): string {
-  if (spring === 'in') return 'overlay-spring overlay-spring--in w-full'
-  if (spring === 'out') return 'overlay-spring overlay-spring--out w-full'
-  if (spring === 'settled') return 'overlay-spring overlay-spring--settled w-full'
+export function overlaySpringClassName(spring: OverlaySpring, edge: OverlayEdge = 'top'): string {
+  const anchor = edge === 'right' ? ' overlay-spring--edge-right' : ''
+  if (spring === 'in') return `overlay-spring overlay-spring--in${anchor} w-full`
+  if (spring === 'out') return `overlay-spring overlay-spring--out${anchor} w-full`
+  if (spring === 'settled') return `overlay-spring overlay-spring--settled${anchor} w-full`
   return 'w-full'
 }
 

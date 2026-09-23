@@ -68,6 +68,7 @@ import type {
 } from '@shared/ipc'
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
+import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
@@ -93,12 +94,12 @@ import {
 } from '../lib/onboarding-flow'
 import {
   appearanceSettingsPatch,
-  placementSettingsPatch,
   resolveOnboardingPlacementSync,
   saveOnboardingAppearanceChoice,
   seedOnboardingAppearance,
   seedOnboardingPlacement
 } from '../lib/onboarding-appearance'
+import { persistOverlayPlacement } from '../lib/overlay-placement-save'
 import { onboardingReadinessCopy } from '../lib/onboarding-readiness-copy'
 import {
   createOnboardingCompletionFlow,
@@ -1147,22 +1148,23 @@ export function OnboardingExperience({
   const pickPlacement = async (id: OverlayPlacement): Promise<void> => {
     if (appearanceSave.busy || placementLocked) return
     const previousPlacement = placement
+    const previousAppearance = appearance
+    const nextAppearance = resolveOverlayPresentation({ layout: appearance, placement: id }).layout
     const previousPlacementWasUserSelected = placementUserSelectedRef.current
     placementUserSelectedRef.current = true
     setPlacement(id)
+    setAppearance(nextAppearance)
     if (!patch) {
       return
     }
     setAppearanceSave({ busy: true, error: null })
     try {
-      const saved = await saveOnboardingAppearanceChoice(
-        () => patch(placementSettingsPatch(id)),
-        (next) => next.overlayPlacement === id
-      )
+      const saved = await persistOverlayPlacement(id, appearance, patch)
       if (!saved) throw new Error('placement was not saved')
     } catch {
       placementUserSelectedRef.current = previousPlacementWasUserSelected
       setPlacement(previousPlacement)
+      setAppearance(previousAppearance)
       setAppearanceSave({ busy: false, error: "Métis couldn't save this position. Try again." })
       return
     }

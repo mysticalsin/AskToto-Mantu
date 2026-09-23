@@ -25,6 +25,8 @@ describe('right-edge placement main-process contract', () => {
     expect(index).toMatch(/function overlayHoverRestRect\(/)
     const cursorWatch = section(index, 'function tickOverlayCursorWatch()', 'function notifyOverlayCursorHover')
     expect(cursorWatch).toMatch(/overlayHoverRestRect\(layout, display\)/)
+    expect(cursorWatch).toMatch(/const restoredFromParkedRail = islandResting/)
+    expect(cursorWatch).toMatch(/notifyOverlayCursorHover\(true, restoredFromParkedRail\)/)
     const reanchor = section(index, 'function registerScreenListeners()', 'function toggleVisible')
     expect(reanchor).toMatch(/resolvedOverlayPlacementForDisplay\(display\) === 'right-edge'/)
     expect(reanchor).toMatch(/overlayPositionForDisplay\(/)
@@ -59,5 +61,14 @@ describe('right-edge placement main-process contract', () => {
     expect(settings).toMatch(/const placementChanged = cur\.overlayPlacement !== next\.overlayPlacement/)
     expect(settings).toMatch(/else if \(placementChanged && !settingsSurfaceOpen\)/)
     expect(settings).toMatch(/overlayPositionForDisplay\(/)
+  })
+
+  it('does not resize native sidecar bounds for streaming renderer content', () => {
+    const resize = section(index, 'function resizeTo(height: number): void', '/** Collapse to / expand')
+    expect(resize).toMatch(/if \(placement === 'right-edge'\) return/)
+    const resizeIpc = section(index, "ipcMain.handle(IPC.windowResize", 'ipcMain.handle(IPC.windowMode')
+    expect(resizeIpc).toMatch(/resolvedOverlayPlacementForDisplay\(display\) === 'right-edge'/)
+    expect(resizeIpc).toMatch(/return/)
+    expect(resizeIpc).not.toMatch(/resizeTo\(height\).*right-edge/)
   })
 })

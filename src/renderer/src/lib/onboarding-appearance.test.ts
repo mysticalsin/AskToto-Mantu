@@ -1,8 +1,15 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it, vi } from 'vitest'
+import type { PublicSettings } from '@shared/ipc'
+import { OnboardingAppearance } from '../components/OnboardingAppearance'
+import { persistOverlayPlacement } from './overlay-placement-save'
 import {
+  appearancePreviewEdgeState,
   appearancePreviewInitialPhase,
+  appearancePreviewStateKey,
   appearancePreviewRestKind,
   appearancePreviewShowsBar,
   appearancePreviewShowsHint,
@@ -35,6 +42,7 @@ const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const design = readFileSync(join(__dirname, '../../../../DESIGN.md'), 'utf8')
 const geometry = readFileSync(join(__dirname, '../../../main/island/geometry.ts'), 'utf8')
 const indexMain = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
+const e2eSmoke = readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8')
 
 describe('onboarding appearance — persist existing overlay', () => {
   it('seeds Hidden on a fresh install and keeps a saved island or bar', () => {
@@ -55,8 +63,31 @@ describe('onboarding appearance — persist existing overlay', () => {
     expect(seedOnboardingPlacement(undefined)).toBe('top-center')
     expect(seedOnboardingPlacement({})).toBe('top-center')
     expect(seedOnboardingPlacement({ overlayPlacement: 'right-edge' })).toBe('right-edge')
-    expect(placementSettingsPatch('right-edge')).toEqual({ overlayPlacement: 'right-edge' })
-    expect(placementSettingsPatch('top-center')).toEqual({ overlayPlacement: 'top-center' })
+    expect(placementSettingsPatch('right-edge', 'bar')).toEqual({
+      overlayPlacement: 'right-edge',
+      overlayLayout: 'island',
+      autoHideOverlay: true
+    })
+    expect(placementSettingsPatch('top-center', 'island')).toEqual({
+      overlayPlacement: 'top-center',
+      overlayLayout: 'island',
+      autoHideOverlay: true
+    })
+  })
+
+  it('atomically saves right-edge with Island and auto-hide', async () => {
+    const saveSettings = vi.fn(async (next: Partial<PublicSettings>) => ({
+      overlayPlacement: next.overlayPlacement ?? 'top-center',
+      overlayLayout: next.overlayLayout ?? 'hide',
+      autoHideOverlay: next.autoHideOverlay ?? true
+    }))
+
+    await expect(persistOverlayPlacement('right-edge', 'bar', saveSettings)).resolves.toBe(true)
+    expect(saveSettings).toHaveBeenCalledWith({
+      overlayPlacement: 'right-edge',
+      overlayLayout: 'island',
+      autoHideOverlay: true
+    })
   })
 
   it('adopts real or managed settings after boot without overwriting an in-flow choice', () => {
@@ -90,7 +121,7 @@ describe('onboarding appearance — persist existing overlay', () => {
     expect(experience).toMatch(/mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
     expect(experience).not.toMatch(/onDone\(\{[\s\S]*overlayLayout/)
     expect(experience).toMatch(/appearanceSettingsPatch\(id\)/)
-    expect(experience).toMatch(/placementSettingsPatch\(id\)/)
+    expect(experience).toMatch(/persistOverlayPlacement\(id, appearance, patch\)/)
     expect(experience).toMatch(/saveOnboardingAppearanceChoice/)
     expect(experience).toMatch(/resolveOnboardingPlacementSync/)
     expect(experience).toMatch(/const placementUserSelectedRef = useRef\(false\)/)
@@ -106,8 +137,8 @@ describe('onboarding appearance — Tony copy', () => {
     expect(ONBOARDING_APPEARANCE_COPY.hide.desc).toBe('Move to the top, then click to open.')
     expect(ONBOARDING_APPEARANCE_COPY.island.title).toBe('Island')
     expect(ONBOARDING_APPEARANCE_COPY.bar.title).toBe('Bar')
-    expect(ONBOARDING_APPEARANCE_HEADING).toBe('Where should Métis live?')
-    expect(ONBOARDING_APPEARANCE_LEAD).toMatch(/Hidden is the default/)
+    expect(ONBOARDING_APPEARANCE_HEADING).toBe('How should Métis look?')
+    expect(ONBOARDING_APPEARANCE_LEAD).toMatch(/Choose a resting shape/)
     const all = `${ONBOARDING_APPEARANCE_HEADING} ${ONBOARDING_APPEARANCE_LEAD} ${Object.values(ONBOARDING_APPEARANCE_COPY)
       .map((c) => `${c.title} ${c.desc}`)
       .join(' ')}`
@@ -118,6 +149,113 @@ describe('onboarding appearance — Tony copy', () => {
 })
 
 describe('onboarding appearance — live preview, no lag', () => {
+  it('keeps right-edge Hidden invisible and gives Island the visible rail', () => {
+    expect(appearancePreviewEdgeState('hide', 'rest')).toEqual({ showRail: false, showDrawer: false, showEdgeGlow: true })
+    expect(appearancePreviewEdgeState('hide', 'in')).toEqual({ showRail: false, showDrawer: true, showEdgeGlow: false })
+    expect(appearancePreviewEdgeState('island', 'rest')).toEqual({ showRail: true, showDrawer: false, showEdgeGlow: false })
+    expect(appearancePreviewEdgeState('island', 'in')).toEqual({ showRail: true, showDrawer: true, showEdgeGlow: false })
+    expect(appearancePreviewEdgeState('island', 'settled')).toEqual({ showRail: true, showDrawer: true, showEdgeGlow: false })
+    expect(appearancePreviewEdgeState('island', 'out')).toEqual({ showRail: true, showDrawer: true, showEdgeGlow: false })
+    expect(appearancePreviewEdgeState('bar', 'settled')).toEqual({ showRail: false, showDrawer: false, showEdgeGlow: false })
+  })
+
+  it('matches the right-edge sidecar by revealing Hidden from its rail hover', () => {
+    expect(reduceAppearancePreview('hide', 'rest', 'hover-enter')).toBe('rest')
+    expect(reduceAppearancePreview('hide', 'rest', 'hover-enter', 'right-edge')).toBe('in')
+    expect(reduceAppearancePreview('hide', 'in', 'spring-in-end', 'right-edge')).toBe('settled')
+    expect(reduceAppearancePreview('hide', 'settled', 'hover-leave', 'right-edge')).toBe('out')
+  })
+
+  it('resets an Island preview when its presentation moves from the top to the right edge', () => {
+    expect(appearancePreviewStateKey('island', false)).not.toBe(appearancePreviewStateKey('island', true))
+    expect(appearancePreviewStateKey('island', true)).toBe('right-edge:island')
+    expect(appearancePreviewStateKey('bar', false)).toBe('top-center:bar')
+  })
+
+  it('renders a compact edge rail instead of embedding a wide preview slab', () => {
+    expect(component).toMatch(/appearancePreviewEdgeState/)
+    expect(component).toMatch(/onboard-appearance-preview__edge-rail/)
+    expect(component).toMatch(/onboard-appearance-preview__edge-glow/)
+    expect(component).toMatch(/edgeState\.showEdgeGlow/)
+    expect(component).toMatch(/edgeState\.showDrawer/)
+    expect(component).toMatch(/useLayoutEffect/)
+    expect(component).toMatch(/\[presentationLayout, previewStateKey\]/)
+    expect(component).toMatch(/onFocus=\{\(\) => send\('hover-enter'\)\}/)
+    expect(component).toMatch(/onBlur=\{\(\) => send\('hover-leave'\)\}/)
+    expect(component).not.toMatch(/w-2\/3/)
+    expect(component).not.toMatch(/<AppearanceLivePreview key=/)
+    expect(css).toMatch(/\.onboard-appearance-preview__edge-rail/)
+    expect(css).toMatch(/\.onboard-appearance-preview__edge-glow/)
+    expect(css).toMatch(/\.onboard-appearance-preview__edge-drawer/)
+    expect(css).toMatch(/width:\s*10px/)
+    expect(css).toMatch(/@media \(max-height: 720px\)[\s\S]*onboard-appearance-preview__edge-drawer/)
+  })
+
+  it('requires a fresh onboarding build before accepting right-edge E2E evidence', () => {
+    expect(e2eSmoke).toMatch(/OnboardingExperience\.tsx/)
+    expect(e2eSmoke).toMatch(/OnboardingAppearance\.tsx/)
+    expect(e2eSmoke).toMatch(/onboarding-appearance\.ts/)
+    expect(e2eSmoke).toMatch(/OverlayChromePicker\.tsx/)
+    expect(e2eSmoke).toMatch(/OverlayPlacementPicker\.tsx/)
+    expect(e2eSmoke).toMatch(/shared', 'overlay-presentation\.ts/)
+    expect(e2eSmoke).toMatch(/shared', 'overlay-chrome\.ts/)
+    expect(e2eSmoke).toMatch(/shared', 'overlay-placement\.ts/)
+  })
+
+  it('exercises distinct right-edge Hidden and Island rests plus compact hover previews in E2E', () => {
+    expect(e2eSmoke).toMatch(/Right-edge Hidden preview rendered a visible rail at rest/)
+    expect(e2eSmoke).toMatch(/Right-edge Hidden preview did not render its faint edge glow/)
+    expect(e2eSmoke).toMatch(/Right-edge Island preview did not render its compact rail/)
+    expect(e2eSmoke).toMatch(/Right-edge preview rendered a drawer before it was hovered/)
+    expect(e2eSmoke).toMatch(/Right-edge preview did not reveal its drawer on rail hover/)
+    expect(e2eSmoke).toMatch(/Right-edge preview drawer is too wide/)
+    expect(e2eSmoke).toMatch(/verifyRightEdgeOnboardingPreview\('hide'/)
+    expect(e2eSmoke).toMatch(/Top-center Island preview did not expand before the placement switch/)
+    expect(e2eSmoke).toMatch(/Right-edge preview is clipped inside the compact onboarding surface/)
+  })
+
+  it('keeps the 1.9.8 placement-first flow while retaining current safe pickers', () => {
+    expect(component).toMatch(/const \[step, setStep\] = useState<'position' \| 'appearance'>\('position'\)/)
+    expect(component).toMatch(/data-onboard-appearance-step=\{step\}/)
+    expect(component).toMatch(/step === 'position'/)
+    expect(component).toMatch(/Continue to appearance/)
+    expect(component).toMatch(/Back to position/)
+    expect(component.indexOf('<OverlayPlacementPicker')).toBeLessThan(component.indexOf('<OverlayChromePicker'))
+    expect(e2eSmoke).toMatch(/Continue to appearance/)
+    expect(e2eSmoke).toMatch(/Back to position/)
+  })
+
+  it('lets managed-placement users continue while keeping their placement picker read-only', () => {
+    const markup = renderToStaticMarkup(
+      createElement(OnboardingAppearance, {
+        value: 'hide',
+        locked: true,
+        placement: 'right-edge',
+        placementLocked: true,
+        saving: false,
+        onChange: vi.fn(),
+        onPlacementChange: vi.fn(),
+        onContinue: vi.fn()
+      })
+    )
+    const placementOptions = [...markup.matchAll(/<button[^>]*role="radio"[^>]*>/g)].map((match) => match[0])
+    const continueButton = markup.match(/<button[^>]*data-onboard-placement-continue="1"[^>]*>/)?.[0]
+    expect(placementOptions).toHaveLength(2)
+    expect(placementOptions.every((option) => /\sdisabled(?:=|\s|>)/.test(option))).toBe(true)
+    expect(continueButton).toBeDefined()
+    expect(continueButton).not.toMatch(/\sdisabled(?:=|\s|>)/)
+  })
+
+  it('guards the exact placement-to-appearance transition against a transparent or masked window frame', () => {
+    expect(e2eSmoke).toMatch(/assertOpaqueOnboardingStage/)
+    expect(e2eSmoke).toMatch(/before Continue to appearance/)
+    expect(e2eSmoke).toMatch(/immediately after Continue to appearance/)
+    expect(e2eSmoke).toMatch(/after the next compositor frame/)
+    expect(e2eSmoke).toMatch(/Onboarding stage background is not opaque/)
+    expect(e2eSmoke).toMatch(/Onboarding stage still has a mask/)
+    expect(e2eSmoke).toMatch(/Onboarding stage is still animating/)
+  })
+
   it('Hidden rests empty until a top click; hover does not reveal', () => {
     expect(appearancePreviewRestKind('hide')).toBe('empty')
     expect(appearancePreviewInitialPhase('hide')).toBe('rest')
@@ -147,6 +285,11 @@ describe('onboarding appearance — live preview, no lag', () => {
 
   it('preview is CSS-only: no setBounds, Bar, Listen, orb, WebGL, or rAF', () => {
     expect(component).toMatch(/onboard-appearance-preview/)
+    expect(component).toMatch(/resolveOverlayPresentation/)
+    expect(component).toMatch(/data-edge-tab="true"/)
+    expect(component).toMatch(/data-edge-drawer="true"/)
+    expect(component).toMatch(/data-edge-glow="true"/)
+    expect(component.indexOf('<OverlayPlacementPicker')).toBeLessThan(component.indexOf('<OverlayChromePicker'))
     expect(component).toMatch(/overlay-spring/)
     expect(component).not.toMatch(/setBounds/)
     expect(component).not.toMatch(/from '\.\/Bar'/)

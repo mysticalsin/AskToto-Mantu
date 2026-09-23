@@ -16,13 +16,43 @@ function between(source: string, start: string, end: string): string {
 }
 
 describe('Cap2 command authority boundary', () => {
-  it('does not expose a renderer IPC that can manufacture desktop commands', () => {
+  it('exposes only sanitized command state plus id-and-nonce confirmation controls', () => {
     expect(preload).not.toContain('metisCommandIngest')
     expect(ipc).not.toContain('metisCommandIngest')
     expect(preload).not.toContain('metisCommandStop')
-    expect(preload).not.toContain('onMetisCommandState')
-    expect(ipc).not.toContain('metisCommandState')
-    expect(ipc).not.toContain('metisCommandStop')
+    expect(preload).toContain('onMetisCommandState')
+    expect(preload).toContain('confirmMetisCommand')
+    expect(preload).toContain('cancelMetisCommand')
+    expect(ipc).toContain('metisCommandState')
+    expect(ipc).toContain('metisCommandConfirm')
+    expect(ipc).toContain('metisCommandCancel')
+    expect(preload).not.toContain('executeDesktopAction')
+  })
+
+  it('guards command confirmation IPC with the main-window top-frame boundary', () => {
+    const confirm = between(main, 'ipcMain.handle(IPC.metisCommandConfirm', 'ipcMain.handle(IPC.metisCommandCancel')
+    expect(confirm).toContain('assertMainWindow(e)')
+    expect(confirm).toContain('commandControl.confirm')
+    expect(confirm).not.toContain('request')
+  })
+
+  it('revokes command authority when the owning window or renderer is replaced', () => {
+    expect(main).toContain('const self = win')
+    const closed = between(main, "win.on('closed', () => {", "win.webContents.setWindowOpenHandler(")
+    expect(closed).toMatch(/if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('window_closed'\)/)
+    const rendererGone = between(main, "win.webContents.on('render-process-gone', (_e, details) => {", 'const rendererUrl = overlayRendererUrl()')
+    expect(rendererGone).toMatch(/if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('renderer_replaced'\)/)
+    expect(rendererGone).toMatch(/if \(win !== self \|\| self\.isDestroyed\(\)\) return\s*self\.loadURL\(overlayRendererUrl\(\)\)/)
+  })
+
+  it('keeps the Metis command hotkey separate from meeting Listen', () => {
+    expect(ipc).toContain("'metis-command'")
+    expect(main).toContain("'metis-command': () => sendHotkey('metis-command')")
+    expect(app).toContain("a === 'metis-command'")
+    expect(app).toMatch(/else if \(a === 'toggle-listen'\) toggleListen\(\)/)
+    expect(app).toMatch(
+      /else if \(a === 'metis-command'\) \{\s*rightEdgeDismissalLockRef\.current = false\s*setRightEdgeDockDismissed\(false\)\s*dispatchAutoHide\(\{ type: 'reveal-now' \}\)\s*setCollapsed\(false\)\s*\}/
+    )
   })
 
   it('keeps cloud STT transcript-only because renderer PCM has no hardware provenance', () => {

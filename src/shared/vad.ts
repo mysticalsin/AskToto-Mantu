@@ -87,6 +87,7 @@ export function makeVad(): { step: (rms: number, n: number) => boolean; reset: (
   // but ~0.2s snappier than a conservative 0.8s — the dominant slice of perceived live-caption lag.
   const MIN_SPEECH = Math.round(SR * 0.3) // real speech needed in-window before we'll endpoint (rejects transients)
   const ON = 0.012 // per-quantum RMS to ENTER the speech state
+  const QUIET_ON = 0.008 // only after calibration; preserves enough energy for the unchanged emit-side ASR gate
   const OFF = 0.006 // per-quantum RMS to EXIT it (ON > OFF = hysteresis, no flicker at the boundary)
   // ON/OFF are the FLOOR of an adaptive pair, not the whole rule. Absolute alone, the exit cannot end a
   // turn on the 3.0×-boosted 'them' channel: a far-end bed (conference comfort noise, hold music, a fan)
@@ -104,17 +105,41 @@ export function makeVad(): { step: (rms: number, n: number) => boolean; reset: (
   const UP_IDLE = 1.25 // per second
   const DOWN_IDLE = 6
   const UP_HELD = 0.1
+  const CALIBRATION_SAMPLES = Math.round(SR * 0.4) // enough room tone to distinguish quiet speech from a cold-start spike
+  const QUIET_RISES = 2 // two syllabic rises are required; a steady low bed never qualifies by level alone
+  const QUIET_RISE_WINDOW = Math.round(SR * 1.2)
   let floor = 0
   let active = false
   let silence = 0
   let speech = 0
+  let idleSamples = 0
+  let quietRises = 0
+  let quietRiseAge = 0
+  let previousRms = 0
   return {
     // Feed one quantum (its RMS + sample count). Returns true when the window should be emitted now.
     step(rms, n) {
       const rate = active ? (rms > floor ? UP_HELD : 0) : rms > floor ? UP_IDLE : DOWN_IDLE
       floor += (rms - floor) * Math.min(1, (n / SR) * rate) // clamped: one long quantum must not overshoot
+      // A genuine quiet microphone is identifiable only after it has supplied bounded, low-level room
+      // tone. Until then retain the conservative ON floor so a cold-start click/noise burst cannot admit
+      // itself. Once calibrated, permit quiet speech only when it remains at least 2× the learned bed.
+      if (!active && rms < ON) idleSamples = Math.min(CALIBRATION_SAMPLES, idleSamples + n)
+      else if (!active) idleSamples = 0
+      const quietCalibrated = idleSamples >= CALIBRATION_SAMPLES && floor <= 0.004
       const off = Math.max(OFF, floor * OFF_K)
-      const on = Math.max(ON, floor * ON_K)
+      if (!active && quietCalibrated) {
+        quietRiseAge += n
+        if (quietRiseAge > QUIET_RISE_WINDOW) {
+          quietRises = 0
+          quietRiseAge = 0
+        }
+        if (rms >= QUIET_ON && previousRms < off) quietRises += 1
+      } else if (!active) {
+        quietRises = 0
+        quietRiseAge = 0
+      }
+      const on = Math.max(quietCalibrated && quietRises >= QUIET_RISES ? QUIET_ON : ON, floor * ON_K)
       if (active) {
         if (rms < off) active = false
       } else if (rms >= on) {
@@ -123,9 +148,12 @@ export function makeVad(): { step: (rms: number, n: number) => boolean; reset: (
       if (active) {
         speech += n
         silence = 0
+        quietRises = 0
+        quietRiseAge = 0
       } else {
         silence += n
       }
+      previousRms = rms
       return speech >= MIN_SPEECH && silence >= ENDPOINT
     },
     reset() {
@@ -134,6 +162,8 @@ export function makeVad(): { step: (rms: number, n: number) => boolean; reset: (
       active = false
       silence = 0
       speech = 0
+      quietRises = 0
+      quietRiseAge = 0
     }
   }
 }

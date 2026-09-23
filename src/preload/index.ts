@@ -65,7 +65,9 @@ import {
   type ImportJobView,
   type LocalModelSummary,
   type ProfileRecoveryResult,
-  type ScreenCaptureCheckResult
+  type ScreenCaptureCheckResult,
+  type MetisCommandState,
+  type MetisCommandConfirmation
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
@@ -435,9 +437,11 @@ const api = {
   anchorTop: (): Promise<void> => ipcRenderer.invoke(IPC.windowAnchorTop),
   // Auto-hide reveal: widen the window back to the full bar width after the peek narrowed it.
   revealWidth: (): Promise<void> => ipcRenderer.invoke(IPC.windowRevealWidth),
-  onOverlayCursorHover: (cb: (d: { hovering: boolean }) => void): Unsub =>
+  onOverlayCursorHover: (cb: (d: { hovering: boolean; restoredFromParkedRail?: boolean }) => void): Unsub =>
     sub(IPC.overlayCursorHover, cb),
-  parkAfterHide: (): Promise<void> => ipcRenderer.invoke(IPC.overlayParkAfterHide),
+  // `force` is limited to a user-initiated edge-dock dismissal. It only bypasses the main process's
+  // cursor-in-drawer deferment after the renderer has completed its exit spring.
+  parkAfterHide: (force = false): Promise<void> => ipcRenderer.invoke(IPC.overlayParkAfterHide, force === true),
   // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
   // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
   reportCrash: (message: string, stack?: string, componentStack?: string): Promise<void> =>
@@ -452,6 +456,12 @@ const api = {
   onError: (cb: (d: StreamError) => void): Unsub => sub(IPC.streamError, cb),
   onMeta: (cb: (d: StreamMeta) => void): Unsub => sub(IPC.streamMeta, cb),
   onHotkey: (cb: (a: HotkeyAction) => void): Unsub => sub(IPC.hotkey, cb),
+  // Command authority is main-owned. The renderer only observes sanitized state and returns its opaque pair.
+  onMetisCommandState: (cb: (state: MetisCommandState) => void): Unsub => sub(IPC.metisCommandState, cb),
+  confirmMetisCommand: (confirmation: MetisCommandConfirmation): Promise<{ ok: boolean; reason?: string; outcome?: string }> =>
+    ipcRenderer.invoke(IPC.metisCommandConfirm, confirmation),
+  cancelMetisCommand: (confirmation: MetisCommandConfirmation): Promise<{ ok: boolean; reason?: string }> =>
+    ipcRenderer.invoke(IPC.metisCommandCancel, confirmation),
 
   onUpdateReady: (cb: (d: { version?: string; notes?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
   onUpdateProgress: (cb: (d: { percent?: number }) => void): Unsub => sub(IPC.updateProgress, cb),

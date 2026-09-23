@@ -2,7 +2,7 @@ import { memo } from 'react'
 
 /**
  * Auto-hide rest surface. Hide: invisible 1–8px hairline (cursor watch is the sensor).
- * Island: visible peek capsule (hug-width OK).
+ * Island: visible top-center peek capsule (hug-width OK). Right edge uses RightEdgeSidecar.
  */
 export const OverlayPeek = memo(function OverlayPeek({
   onReveal,
