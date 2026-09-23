@@ -75,10 +75,14 @@ describe('hashed SPA router (#104)', () => {
     const windowObj: {
       route?: (to?: string) => void
       addEventListener: (type: string, fn: (ev?: unknown) => void) => void
+      dispatchEvent: () => boolean
     } = {
       addEventListener(type, fn) {
         if (type === 'hashchange') listeners.push(fn)
-      }
+      },
+      // The live poller reports every connection-state change as a `metis:live-state` event
+      // (operator/client/live.ts dispatchState), including after this vm's failing fetch.
+      dispatchEvent: () => true
     }
     const document = {
       documentElement: {
@@ -249,6 +253,9 @@ describe('hashed SPA router (#104)', () => {
     }
     const windowObj = {
       addEventListener() {},
+      // The live poller reports every connection-state change as a `metis:live-state` event
+      // (operator/client/live.ts dispatchState), including after this vm's failing fetch.
+      dispatchEvent: () => true,
       route: undefined as undefined | ((to?: string) => void)
     }
     const ctx = createContext({
