@@ -71,7 +71,7 @@ describe('Cap2 command authority boundary', () => {
     expect(app).toContain("a === 'metis-command'")
     expect(app).toMatch(/else if \(a === 'toggle-listen'\) toggleListen\(\)/)
     expect(app).toMatch(
-      /else if \(a === 'metis-command'\) \{\s*rightEdgeDismissalLockRef\.current = false\s*setRightEdgeDockDismissed\(false\)\s*dispatchAutoHide\(\{ type: 'reveal-now' \}\)\s*setCollapsed\(false\)\s*\}/
+      /else if \(a === 'metis-command'\) \{\s*rightEdgeDismissalLockRef\.current = reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current, \{ type: 'metis-command' \}\)\s*setRightEdgeDockDismissed\(false\)\s*dispatchAutoHide\(\{ type: 'reveal-now' \}\)\s*setCollapsed\(false\)\s*\}/
     )
   })
 

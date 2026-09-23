@@ -1,23 +1,37 @@
-export type RightEdgeDismissalLockEvent =
-  | 'explicit-close'
-  | 'explicit-reveal'
-  | 'native-hover-restored'
-  | 'renderer-pointer-enter'
-  | 'renderer-pointer-leave'
+export type RightEdgeDismissalLockState = 'open' | 'closing' | 'awaiting-leave' | 'armed'
 
-export function reduceRightEdgeDismissalLock(locked: boolean, event: RightEdgeDismissalLockEvent): boolean {
-  switch (event) {
+export type RightEdgeDismissalLockEvent =
+  | { type: 'explicit-close' }
+  | { type: 'explicit-reveal' }
+  | { type: 'metis-command' }
+  | { type: 'native-hover-restored' }
+  | { type: 'park-settled'; railHovering: boolean }
+  | { type: 'renderer-pointer-enter' }
+  | { type: 'renderer-pointer-leave' }
+
+export function reduceRightEdgeDismissalLock(
+  state: RightEdgeDismissalLockState,
+  event: RightEdgeDismissalLockEvent
+): RightEdgeDismissalLockState {
+  switch (event.type) {
     case 'explicit-close':
-      return true
-    case 'renderer-pointer-leave':
-      return locked
-    case 'explicit-reveal':
-    case 'native-hover-restored':
+      return 'closing'
+    case 'park-settled':
+      return event.railHovering ? 'awaiting-leave' : 'armed'
     case 'renderer-pointer-enter':
-      return false
+      return state === 'armed' ? 'open' : state
+    case 'renderer-pointer-leave':
+      return state === 'awaiting-leave' ? 'armed' : state
+    case 'explicit-reveal':
+    case 'metis-command':
+    case 'native-hover-restored':
+      return 'open'
   }
 }
 
-export function shouldIgnoreRightEdgeNativeHover(locked: boolean, restoredFromParkedRail?: boolean): boolean {
-  return locked && !restoredFromParkedRail
+export function shouldIgnoreRightEdgeNativeHover(
+  state: RightEdgeDismissalLockState,
+  restoredFromParkedRail?: boolean
+): boolean {
+  return state !== 'open' && !restoredFromParkedRail
 }
