@@ -2584,10 +2584,10 @@ button.onboard-cta {
   transform-origin: right center;
 }
 .onboard-appearance-preview__edge-drawer--in {
-  animation: onboard-edge-preview-in 180ms var(--ease-spring) both;
+  animation: onboard-edge-preview-in 340ms var(--ease-spring) both;
 }
 .onboard-appearance-preview__edge-drawer--out {
-  animation: onboard-edge-preview-out 160ms var(--ease-spring) both;
+  animation: onboard-edge-preview-out 300ms var(--ease-spring) both;
 }
 .onboard-appearance--compact .onboard-appearance-preview__edge-rail {
   top: 14px;
