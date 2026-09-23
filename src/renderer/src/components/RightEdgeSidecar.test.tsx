@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RightEdgeSidecar, SidecarChat } from './RightEdgeSidecar'
 
 const sidecar = readFileSync(join(__dirname, './RightEdgeSidecar.tsx'), 'utf8')
@@ -22,6 +22,7 @@ function findElement(node: ReactNode, type: string): ReactElement<Record<string,
 }
 
 describe('right-edge dock', () => {
+  afterEach(() => vi.useRealTimers())
   it('uses the supplied controlled conversation route and sends an uncomposed Enter exactly once', () => {
     const changes: string[] = []
     let submissions = 0
@@ -127,6 +128,83 @@ describe('right-edge dock', () => {
     expect(markup).toContain('History')
   })
 
+  it('keeps live meeting pause and transcript controls reachable without widening the action rail', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(120_000)
+    const live = renderToStaticMarkup(
+      <RightEdgeSidecar
+        open
+        onOpen={() => undefined}
+        onClose={() => undefined}
+        listening
+        paused={false}
+        startedAt={55_000}
+        onToggleListen={() => undefined}
+        onTogglePause={() => undefined}
+        onTranscript={() => undefined}
+        transcriptShown={false}
+        onHistory={() => undefined}
+      />
+    )
+    expect(live).toContain('aria-label="Meeting controls"')
+    expect(live).toContain('aria-label="Meeting duration"')
+    expect(live).toContain('>1:05</span>')
+    expect(live).toContain('data-right-edge-status="Listening"')
+    expect(live).toContain('aria-label="Pause meeting"')
+    expect(live).toContain('aria-label="Stop meeting"')
+    expect(live).toContain('aria-label="Show transcript"')
+    expect(live).not.toContain('aria-label="Open History"')
+
+    const paused = renderToStaticMarkup(
+      <RightEdgeSidecar
+        open
+        onOpen={() => undefined}
+        onClose={() => undefined}
+        listening
+        paused
+        startedAt={55_000}
+        onToggleListen={() => undefined}
+        onTogglePause={() => undefined}
+        onTranscript={() => undefined}
+        transcriptShown
+        onHistory={() => undefined}
+      />
+    )
+    expect(paused).toContain('data-right-edge-status="Paused"')
+    expect(paused).toContain('aria-label="Resume meeting"')
+    expect(paused).toContain('aria-label="Hide transcript"')
+    expect(paused).toContain('aria-pressed="true"')
+    expect(paused).not.toContain('aria-label="Pause meeting"')
+  })
+
+  it('keeps meeting time stable across a parked dock and starts the next meeting at zero', () => {
+    vi.useFakeTimers()
+    const renderClock = (startedAt: number, paused: boolean, pausedMs: number, pausedAt: number | null): string =>
+      renderToStaticMarkup(
+        <RightEdgeSidecar
+          open
+          onOpen={() => undefined}
+          onClose={() => undefined}
+          listening
+          paused={paused}
+          startedAt={startedAt}
+          pausedMs={pausedMs}
+          pausedAt={pausedAt}
+          onToggleListen={() => undefined}
+        />
+      )
+
+    vi.setSystemTime(100_000)
+    expect(renderClock(1_000, true, 0, 85_000)).toContain('>1:24</span>')
+    // This is a fresh render after the sidecar was parked, not an update to its prior clock instance.
+    vi.setSystemTime(130_000)
+    expect(renderClock(1_000, true, 0, 85_000)).toContain('>1:24</span>')
+    vi.setSystemTime(150_000)
+    expect(renderClock(1_000, false, 55_000, null)).toContain('>1:34</span>')
+    vi.setSystemTime(175_000)
+    expect(renderClock(170_000, false, 0, null)).toContain('>0:05</span>')
+  })
+
   it('keeps microphone failure and degraded-capture notices accurate in the compact dock', () => {
     const visibleNotice = (liveNotice: string): string => {
       const markup = renderToStaticMarkup(
@@ -189,6 +267,13 @@ describe('right-edge dock', () => {
       expect(call).toContain('canClose={overlayIdle && !autoHideForced}')
       expect(call).toContain('body={barBody}')
       expect(call).toContain('onToggleListen={toggleListen}')
+      expect(call).toContain('paused={listen.paused}')
+      expect(call).toContain('startedAt={meetingStartRef.current}')
+      expect(call).toContain('pausedMs={meetingPauseRef.current.pausedMs}')
+      expect(call).toContain('pausedAt={meetingPauseRef.current.pausedAt}')
+      expect(call).toContain('onTogglePause={onTogglePause}')
+      expect(call).toContain('onTranscript={toggleTranscript}')
+      expect(call).toContain('transcriptShown={transcriptShown}')
       expect(call).toContain('onCapture={capture}')
       expect(call).toContain('onOpenIntelligence={openIntelligenceDashboard}')
       expect(call).toContain('onSpotlightRef={spotlightRef}')
@@ -197,6 +282,8 @@ describe('right-edge dock', () => {
       expect(call).toContain('onSettings={onBarSettings}')
       expect(call).toContain('liveNotice={listen.error}')
     }
+    expect(app.match(/meetingPauseRef\.current = freshMeetingPauseClock\(\)/g)).toHaveLength(2)
+    expect(app).toContain('meetingPauseRef.current = setMeetingPaused(meetingPauseRef.current')
     expect(app).toContain('const openIntelligenceDashboard = useCallback')
     expect(app).toContain('window.toto.brainOpenDashboard()')
     expect(app).toContain('minimizeForIntelligence()')
@@ -286,7 +373,10 @@ describe('right-edge dock', () => {
   })
 
   it('renders each action only through an explicit real handler and keeps opaque proposals cancellable', () => {
-    expect(sidecar).toMatch(/\{onToggleListen \? \(/)
+    expect(sidecar).toMatch(/\{listening && onToggleListen \? \(/)
+    expect(sidecar).toMatch(/\{!listening && onToggleListen \? \(/)
+    expect(sidecar).toMatch(/\{onTogglePause \? \(/)
+    expect(sidecar).toMatch(/\{listening && onTranscript \? \(/)
     expect(sidecar).toMatch(/\{onCapture \? \(/)
     expect(sidecar).toMatch(/\{onOpenIntelligence \? \(/)
     expect(sidecar).toMatch(/\{onSpotlightRef \? \(/)

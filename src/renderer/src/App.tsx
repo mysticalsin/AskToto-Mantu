@@ -74,6 +74,7 @@ import {
   type OverlaySpring
 } from './lib/overlay-motion'
 import { useListen, playListenChime } from './lib/listen'
+import { freshMeetingPauseClock, setMeetingPaused } from './lib/meeting-clock'
 import { shouldUseCloudSttEngine } from '@shared/cloud-stt-provider'
 import { resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { transcriptToText, recapPersistAction, type RecapPersistTarget } from './lib/transcript'
@@ -590,6 +591,7 @@ export function App(): JSX.Element {
   const lastTurnAtRef = useRef(0)
   const pendingUserRef = useRef<{ id: string; q: string } | null>(null)
   const meetingStartRef = useRef(0)
+  const meetingPauseRef = useRef(freshMeetingPauseClock())
   // Exact live-recap ownership. The answer hook deliberately carries old visible text until a new run's
   // first token; only a run id paired with this meeting start may turn that state into saved notes.
   const liveRecapTargetRef = useRef<RecapPersistTarget | null>(null)
@@ -2174,6 +2176,7 @@ export function App(): JSX.Element {
     setView('copilot')
     setCollapsed(false)
     meetingStartRef.current = nextMeetingStart(meetingStartRef.current)
+    meetingPauseRef.current = freshMeetingPauseClock()
     savedRef.current = ''
     setSavedPath(null)
     savingPromiseRef.current = null // this meeting hasn't autosaved yet — don't let a PRIOR meeting's
@@ -2604,6 +2607,7 @@ export function App(): JSX.Element {
     // Invalidate this meeting even when it was already stopped in Review. Monotonic ownership prevents a
     // same-millisecond reset/restart from letting its late save publish a path or release the next lock.
     meetingStartRef.current = nextMeetingStart(meetingStartRef.current)
+    meetingPauseRef.current = freshMeetingPauseClock()
     pendingRecapRef.current = false // cancel any recap still waiting on endReview's drain — reset abandons it
     setRecapSkipped(false)
     ask.clear()
@@ -2673,8 +2677,13 @@ export function App(): JSX.Element {
   // for React.memo(Bar) to actually skip re-renders; an unstable prop defeats memo's shallow comparison
   // regardless of how many other props are stable.
   const onTogglePause = useCallback(
-    () => (listen.paused ? listen.resume() : listen.pause()),
-    [listen.paused, listen.resume, listen.pause]
+    () => {
+      if (!listen.listening) return
+      if (listen.paused) listen.resume()
+      else listen.pause()
+      meetingPauseRef.current = setMeetingPaused(meetingPauseRef.current, !listen.paused, Date.now())
+    },
+    [listen.listening, listen.paused, listen.resume, listen.pause]
   )
   const onSetMode = useCallback((m: ConversationMode) => void patch({ mode: m }), [patch])
   const onToggleThinking = useCallback(() => {
@@ -3921,7 +3930,14 @@ export function App(): JSX.Element {
             stoppable={ask.answer?.streaming === true || suggest.answer?.streaming === true}
             body={barBody}
             listening={listen.listening}
+            paused={listen.paused}
+            startedAt={meetingStartRef.current}
+            pausedMs={meetingPauseRef.current.pausedMs}
+            pausedAt={meetingPauseRef.current.pausedAt}
             onToggleListen={toggleListen}
+            onTogglePause={onTogglePause}
+            onTranscript={toggleTranscript}
+            transcriptShown={transcriptShown}
             capturing={capturing}
             onCapture={capture}
             onOpenIntelligence={openIntelligenceDashboard}
@@ -3978,7 +3994,14 @@ export function App(): JSX.Element {
               stoppable={ask.answer?.streaming === true || suggest.answer?.streaming === true}
               body={barBody}
               listening={listen.listening}
+              paused={listen.paused}
+              startedAt={meetingStartRef.current}
+              pausedMs={meetingPauseRef.current.pausedMs}
+              pausedAt={meetingPauseRef.current.pausedAt}
               onToggleListen={toggleListen}
+              onTogglePause={onTogglePause}
+              onTranscript={toggleTranscript}
+              transcriptShown={transcriptShown}
               capturing={capturing}
               onCapture={capture}
               onOpenIntelligence={openIntelligenceDashboard}
@@ -4038,6 +4061,8 @@ export function App(): JSX.Element {
             onToggleStealth={onToggleStealth}
             stealthLocked={stealthLocked}
             startedAt={meetingStartRef.current}
+            pausedMs={meetingPauseRef.current.pausedMs}
+            pausedAt={meetingPauseRef.current.pausedAt}
             panelOpen={panelOpen}
             onTogglePanel={onTogglePanel}
             canTogglePanel={canTogglePanel}

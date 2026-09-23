@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
-import { AudioLines, Brain, ChevronLeft, CornerDownLeft, FileSearch, Image, LoaderCircle, Settings, Square, X } from 'lucide-react'
+import { AudioLines, Brain, ChevronLeft, CornerDownLeft, FileSearch, Image, LoaderCircle, Pause, Play, Settings, Square, X } from 'lucide-react'
 import type { MetisCommandState } from '@shared/ipc'
+import { ElapsedClock } from './Bar'
 import { MantuMark } from './MantuMark'
 
 export const RIGHT_EDGE_TAB_WIDTH = 52
@@ -129,7 +130,14 @@ function compactLiveNotice(notice: string): string {
 
 export interface RightEdgeDockActions {
   listening?: boolean
+  paused?: boolean
+  startedAt?: number
+  pausedMs?: number
+  pausedAt?: number | null
   onToggleListen?: () => void
+  onTogglePause?: () => void
+  onTranscript?: () => void
+  transcriptShown?: boolean
   capturing?: boolean
   onCapture?: () => void
   /** Opens the existing standalone Intelligence dashboard and reports an honest failure to the dock. */
@@ -159,7 +167,14 @@ export function RightEdgeSidecar({
   stoppable,
   body,
   listening = false,
+  paused = false,
+  startedAt,
+  pausedMs = 0,
+  pausedAt = null,
   onToggleListen,
+  onTogglePause,
+  onTranscript,
+  transcriptShown = false,
   capturing = false,
   onCapture,
   onOpenIntelligence,
@@ -218,7 +233,7 @@ export function RightEdgeSidecar({
     commandState.proposalId !== null && pendingCancel.proposalId === commandState.proposalId
       ? pendingCancel.status
       : 'idle'
-  const status = capturing ? 'Capturing screen' : listening ? 'Listening' : busy ? 'Thinking' : 'Ready'
+  const status = capturing ? 'Capturing screen' : listening ? (paused ? 'Paused' : 'Listening') : busy ? 'Thinking' : 'Ready'
 
   return (
     <div className={'right-edge-sidecar' + (open ? ' right-edge-sidecar--open' : '')}>
@@ -270,6 +285,25 @@ export function RightEdgeSidecar({
               <p className="right-edge-sidecar__status-notice" role="status" aria-label={liveNotice} title={liveNotice}>
                 {compactLiveNotice(liveNotice)}
               </p>
+            ) : null}
+
+            {listening && onToggleListen ? (
+              <div className="right-edge-sidecar__meeting" role="group" aria-label="Meeting controls">
+                <span className="right-edge-sidecar__meeting-label">{paused ? 'Meeting paused' : 'Meeting live'}</span>
+                {typeof startedAt === 'number' && startedAt > 0 ? (
+                  <span className="right-edge-sidecar__meeting-time" aria-label="Meeting duration">
+                    <ElapsedClock startedAt={startedAt} paused={paused} pausedMs={pausedMs} pausedAt={pausedAt} />
+                  </span>
+                ) : null}
+                {onTogglePause ? (
+                  <DockAction label={paused ? 'Resume meeting' : 'Pause meeting'} onClick={onTogglePause}>
+                    {paused ? <Play size={16} strokeWidth={1.9} /> : <Pause size={16} strokeWidth={1.9} />}
+                  </DockAction>
+                ) : null}
+                <DockAction label="Stop meeting" onClick={onToggleListen} active>
+                  <Square size={16} strokeWidth={1.9} />
+                </DockAction>
+              </div>
             ) : null}
 
             <section
@@ -326,18 +360,26 @@ export function RightEdgeSidecar({
                     {intelligence.status === 'opening' ? <LoaderCircle size={17} strokeWidth={1.9} className="right-edge-sidecar__spin" /> : <Brain size={17} strokeWidth={1.9} />}
                   </DockAction>
                 ) : null}
-                {onToggleListen ? <span className="right-edge-sidecar__action-divider" aria-hidden="true" /> : null}
-                {onToggleListen ? (
+                {!listening && onToggleListen ? <span className="right-edge-sidecar__action-divider" aria-hidden="true" /> : null}
+                {!listening && onToggleListen ? (
                   <DockAction
-                    label={listening ? 'Stop meeting' : 'Start listening'}
-                    status={listening ? 'Listening' : undefined}
+                    label="Start listening"
                     onClick={onToggleListen}
-                    active={listening}
                   >
-                    {listening ? <Square size={16} strokeWidth={1.9} /> : <AudioLines size={17} strokeWidth={1.9} />}
+                    <AudioLines size={17} strokeWidth={1.9} />
                   </DockAction>
                 ) : null}
-                {onHistory ? (
+                {listening && onTranscript ? (
+                  <button
+                    type="button"
+                    aria-label={transcriptShown ? 'Hide transcript' : 'Show transcript'}
+                    aria-pressed={transcriptShown}
+                    className="right-edge-sidecar__history no-drag focus-ring"
+                    onClick={onTranscript}
+                  >
+                    Transcript
+                  </button>
+                ) : onHistory ? (
                   <button
                     type="button"
                     aria-label="Open History"
