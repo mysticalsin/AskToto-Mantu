@@ -61,7 +61,7 @@ function fixture(target: 'win' | 'mac' = 'win', arches = ['arm64']): Fixture {
   const staged = (relative: string) => join(stage, 'node_modules', relative)
   const backing = (relative: string) => join(resources, 'app.asar.unpacked', 'node_modules', relative)
   mkdirSync(join(root, 'scripts/lib'), { recursive: true })
-  for (const name of ['check-packaged-runtime.mjs', 'verify-packaged-sharp.mjs', 'lib/local-model-inventory.mjs']) {
+  for (const name of ['check-packaged-runtime.mjs', 'verify-packaged-sharp.mjs', 'lib/local-model-inventory.mjs', 'lib/mac-helper-privacy.mjs']) {
     if (existsSync(join(repo, 'scripts', name))) copyFileSync(join(repo, 'scripts', name), join(root, 'scripts', name))
   }
   put(join(root, 'scripts/local-model-assets.mjs'),
