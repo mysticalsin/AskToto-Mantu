@@ -1,8 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron')
 
@@ -28,38 +25,25 @@ import { npmInstallWithDiagnosis } from './cli'
  * was in what the user actually saw, not in what the source looked like.
  */
 describe('MQA-250 — npm install failure advice', () => {
-  let dir: string
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'metis-npm-advice-'))
-  })
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true })
-  })
-
   /** Run the generated block with `npm` stubbed to fail and print `output`. Returns what the user sees. */
   function runWith(output: string): string {
     // A bash FUNCTION rather than a file on PATH: on Windows/Git Bash a plain `npm` file loses to
     // npm.cmd and the REAL npm runs — which is how the first version of this test silently exercised
     // nothing at all. A function cannot be shadowed that way, on any platform.
-    const script = join(dir, 'run.sh')
-    writeFileSync(
-      script,
-      [
-        '#!/bin/bash',
-        'npm() {',
-        "  cat <<'NPMEOF' >&2",
-        output,
-        'NPMEOF',
-        '  return 1',
-        '}',
-        'read() { :; }',
-        ...npmInstallWithDiagnosis('@anthropic-ai/claude-code', 'Step 1/2  Installing…')
-      ].join('\n') + '\n',
-      { mode: 0o755 }
-    )
+    // Feed the script on stdin so Git Bash never has to interpret a Windows temp path.
+    const script = [
+      '#!/bin/bash',
+      'npm() {',
+      "  cat <<'NPMEOF' >&2",
+      output,
+      'NPMEOF',
+      '  return 1',
+      '}',
+      'read() { :; }',
+      ...npmInstallWithDiagnosis('@anthropic-ai/claude-code', 'Step 1/2  Installing…')
+    ].join('\n') + '\n'
     try {
-      return execFileSync('bash', [script], { encoding: 'utf8', stdio: 'pipe' })
+      return execFileSync('bash', ['-s'], { input: script, encoding: 'utf8', stdio: 'pipe' })
     } catch (e) {
       const err = e as { stdout?: string; stderr?: string }
       return `${err.stdout ?? ''}${err.stderr ?? ''}`
@@ -68,9 +52,7 @@ describe('MQA-250 — npm install failure advice', () => {
 
   it('is valid bash — a script that does not parse advises nobody', () => {
     const script = ['#!/bin/bash', ...npmInstallWithDiagnosis('@openai/codex', 'Step 1/2  Installing…')].join('\n')
-    const path = join(dir, 'syntax.sh')
-    writeFileSync(path, script + '\n')
-    expect(() => execFileSync('bash', ['-n', path], { stdio: 'pipe' })).not.toThrow()
+    expect(() => execFileSync('bash', ['-n'], { input: script + '\n', stdio: 'pipe' })).not.toThrow()
   })
 
   it('NEVER tells the user to sudo npm install — that is what breaks the cache', () => {
