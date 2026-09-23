@@ -162,7 +162,7 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(enter).toMatch(/replaceTransparentOverlayWithExclusiveOnboarding\(\)/)
     expect(enter).not.toMatch(/showForExclusiveOnboarding\(win\)/)
     expect(handoff).toMatch(/screen\.getDisplayMatching\(dying\.getBounds\(\)\)/)
-    const successorCreate = handoff.indexOf('    createWindow(replacementDisplay)\n    const replacement')
+    const successorCreate = handoff.search(/createWindow\(replacementDisplay\)\r?\n\s*const replacement/)
     expect(successorCreate).toBeGreaterThan(-1)
     expect(successorCreate).toBeLessThan(handoff.indexOf('dying.destroy()'))
   })
