@@ -17,6 +17,7 @@ export function reduceRightEdgeDismissalLock(
     case 'explicit-close':
       return 'closing'
     case 'park-settled':
+      if (state !== 'closing') return state
       return event.railHovering ? 'awaiting-leave' : 'armed'
     case 'renderer-pointer-enter':
       return state === 'armed' ? 'open' : state
