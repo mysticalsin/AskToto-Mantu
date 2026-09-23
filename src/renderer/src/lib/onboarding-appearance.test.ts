@@ -226,6 +226,23 @@ describe('onboarding appearance — live preview, no lag', () => {
     expect(css).toMatch(/@media \(max-height: 720px\)[\s\S]*onboard-appearance-preview__edge-drawer/)
   })
 
+  it('keeps right-edge preview drawer animation durations inside the DESIGN motion budget', () => {
+    expect(design).toContain('320–380ms in / 280–340ms out')
+    const match = (className: string, animationName: string): RegExpMatchArray => {
+      const result = css.match(new RegExp(`\\.${className} \\{\\s*animation:\\s*${animationName} (\\d+)ms var\\(--ease-spring\\) both;\\s*\\}`))
+      expect(result, `missing ${animationName} duration`).not.toBeNull()
+      return result as RegExpMatchArray
+    }
+
+    const previewInMs = Number(match('onboard-appearance-preview__edge-drawer--in', 'onboard-edge-preview-in')[1])
+    const previewOutMs = Number(match('onboard-appearance-preview__edge-drawer--out', 'onboard-edge-preview-out')[1])
+
+    expect(previewInMs).toBeGreaterThanOrEqual(320)
+    expect(previewInMs).toBeLessThanOrEqual(380)
+    expect(previewOutMs).toBeGreaterThanOrEqual(280)
+    expect(previewOutMs).toBeLessThanOrEqual(340)
+  })
+
   it('requires a fresh onboarding build before accepting right-edge E2E evidence', () => {
     expect(e2eSmoke).toMatch(/OnboardingExperience\.tsx/)
     expect(e2eSmoke).toMatch(/OnboardingAppearance\.tsx/)
