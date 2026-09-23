@@ -130,6 +130,43 @@ export interface AskRow {
   path_tag?: string | null
 }
 
+function isDeliveredAsk(row: AskRow): boolean {
+  return row.outcome === 'answered' || row.outcome === 'thumbs-down'
+}
+
+/** Worker metering and seat metadata can arrive in either order under the same owned Ask id.
+ *  Keep complementary fields, but never blend a failed provider attempt into the delivered failover. */
+export function mergeOwnedAsk(previous: AskRow, incoming: AskRow): AskRow {
+  const delivered = isDeliveredAsk(previous) && incoming.outcome === 'error'
+    ? previous
+    : isDeliveredAsk(incoming) && previous.outcome === 'error' ? incoming : null
+  if (delivered) {
+    const rating = incoming.rating ?? previous.rating
+    return {
+      ...delivered,
+      id: previous.id,
+      device_id: previous.device_id,
+      ts: Math.min(previous.ts, incoming.ts),
+      rating,
+      outcome: rating === 'down' ? 'thumbs-down' : delivered.outcome
+    }
+  }
+
+  const merged = { ...previous } as Record<string, unknown>
+  for (const [key, value] of Object.entries(incoming)) {
+    if (key !== 'id' && key !== 'device_id' && value !== null && value !== undefined) merged[key] = value
+  }
+  merged.ts = Math.min(previous.ts, incoming.ts)
+  merged.mode = incoming.mode && incoming.mode !== 'operator'
+    ? incoming.mode
+    : previous.mode && previous.mode !== 'operator' ? previous.mode : incoming.mode ?? previous.mode
+  if (incoming.mode === 'operator' && previous.mode && previous.mode !== 'operator') {
+    merged.preview = previous.preview ?? incoming.preview
+  }
+  if (merged.rating === 'down') merged.outcome = 'thumbs-down'
+  return merged as unknown as AskRow
+}
+
 export interface PulseRow {
   id: string
   device_id: string
@@ -285,12 +322,16 @@ export interface OperatorStore {
   upsertSeat(row: SeatRow): Promise<void>
   updateSeatApproval(deviceId: string, approval: string): Promise<boolean>
   getSeat(deviceId: string): Promise<SeatRow | null>
-  insertAsk(row: AskRow): Promise<void>
+  /** True only when this device inserted or updated its own Ask id. */
+  insertAsk(row: AskRow): Promise<boolean>
   updateAskRating(id: string, rating: string): Promise<void>
   listAsks(limit: number, since?: number): Promise<AskRow[]>
   getAsk(id: string): Promise<AskRow | null>
   listSeats(): Promise<SeatRow[]>
-  insertPulse(row: PulseRow): Promise<void>
+  /** True only when this pulse id was newly inserted; Ask retries use it to avoid double-counting sessions. */
+  insertPulse(row: PulseRow): Promise<boolean>
+  /** Commit the pulse and its session aggregate together; false means this pulse id was already recorded. */
+  recordPulseSession(row: PulseRow, seatMeta: { os: string | null; app_version: string | null }): Promise<boolean>
   listPulses(since: number): Promise<PulseRow[]>
   listProposals(limit?: number): Promise<ProposalRow[]>
   getProposal(id: string): Promise<ProposalRow | null>
@@ -394,7 +435,8 @@ function decodeCursor(cursor: string | undefined): { ts: number; id: string } | 
   if (!cursor) return null
   try {
     const raw = fromBase64Url(cursor)
-    const i = raw.lastIndexOf(':')
+    // The timestamp has no colon; event IDs can (for example `ask:<id>`).
+    const i = raw.indexOf(':')
     if (i < 0) return null
     const ts = Number(raw.slice(0, i))
     const id = raw.slice(i + 1)
@@ -532,8 +574,9 @@ export function memoryStore(): OperatorStore {
     },
     async insertAsk(row) {
       const previous = asks.get(row.id)
-      if (previous && previous.device_id !== row.device_id) return
-      asks.set(row.id, row)
+      if (previous && previous.device_id !== row.device_id) return false
+      asks.set(row.id, previous ? mergeOwnedAsk(previous, row) : row)
+      return true
     },
     async updateAskRating(id, rating) {
       const row = asks.get(id)
@@ -554,11 +597,18 @@ export function memoryStore(): OperatorStore {
       return [...seats.values()]
     },
     async insertPulse(row) {
+      if (pulses.some((p) => p.id === row.id)) return false
       pulses.push(row)
       const cut = row.ts - PULSE_TTL_MS
       for (let i = pulses.length - 1; i >= 0; i--) {
         if (pulses[i].ts < cut) pulses.splice(i, 1)
       }
+      return true
+    },
+    async recordPulseSession(row, seatMeta) {
+      if (!await this.insertPulse(row)) return false
+      await this.touchSession(row.device_id, row.ts, row.kind, row, seatMeta)
+      return true
     },
     async listPulses(since) {
       return pulses.filter((p) => p.ts >= since)

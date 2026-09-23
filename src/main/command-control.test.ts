@@ -21,7 +21,7 @@ describe('CommandControl', () => {
     let resolveExecute: () => void = () => {}
     const execute = vi.fn(
       () => new Promise<import('@shared/desktop-actions').DesktopActionResult>((resolve) => {
-        resolveExecute = () => resolve({ id: 'desktop.open_notes', ok: true, outcome: 'unknown' })
+        resolveExecute = () => resolve({ id: 'desktop.open_notes', ok: true, outcome: 'verified' })
       })
     )
     const controller = new CommandControl({ execute })
@@ -36,8 +36,50 @@ describe('CommandControl', () => {
       reason: 'proposal_missing'
     })
     resolveExecute()
-    expect(await first).toEqual({ ok: true, outcome: 'unknown' })
+    expect(await first).toEqual({ ok: true, outcome: 'verified' })
     expect(execute).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not report success when the adapter accepted a request but cannot verify its outcome', async () => {
+    const audit = vi.fn()
+    const controller = new CommandControl({
+      execute: async () => ({ id: 'desktop.open_notes', ok: true, outcome: 'unknown' }),
+      audit
+    })
+    const proposal = controller.propose(
+      { webContentsId: 11, revision: 3 },
+      { id: 'desktop.open_notes', args: {} }
+    )
+
+    expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({
+      ok: false,
+      reason: 'outcome_unverified'
+    })
+    expect(audit).toHaveBeenCalledWith('command.confirmed', {
+      actionId: 'desktop.open_notes',
+      outcome: 'unknown'
+    })
+  })
+
+  it('does not attribute a verified result for another action to the confirmed action', async () => {
+    const audit = vi.fn()
+    const controller = new CommandControl({
+      execute: async () => ({ id: 'desktop.open_arc', ok: true, outcome: 'verified' }),
+      audit
+    })
+    const proposal = controller.propose(
+      { webContentsId: 11, revision: 3 },
+      { id: 'desktop.open_notes', args: {} }
+    )
+
+    expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({
+      ok: false,
+      reason: 'adapter_failed'
+    })
+    expect(audit).toHaveBeenCalledWith('command.confirmed', {
+      actionId: 'desktop.open_notes',
+      outcome: 'failed'
+    })
   })
 
   it('rejects an expired, replaced, cancelled, or nonce-mismatched proposal', async () => {

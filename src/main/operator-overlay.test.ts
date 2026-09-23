@@ -21,11 +21,16 @@ import {
 vi.mock('electron', () => ({
   app: { getPath: () => tmpdir(), getVersion: () => '1.8.0-test' }
 }))
-vi.mock('./license', () => ({ getMachineId: () => 'machine-test' }))
+const machineIdentity = vi.hoisted(() => ({ durableId: 'machine-test' as string | null }))
+vi.mock('./license', () => ({
+  getMachineId: () => 'machine-test',
+  getDurableMachineId: () => machineIdentity.durableId
+}))
 vi.mock('./logger', () => ({ mainLog: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }))
 vi.mock('./operator-skill-key', () => ({ getOperatorSkillPublicKeyRaw: vi.fn() }))
 
 afterEach(() => {
+  machineIdentity.durableId = 'machine-test'
   stopOperatorOverlayPoll()
   setModeSkillsOverlayRoot(null)
   setModeSkillsRootForTests(null)
@@ -35,6 +40,14 @@ afterEach(() => {
 describe('Operator skill manifest download', () => {
   afterEach(() => {
     setOperatorOverlayFetchForTests(null)
+  })
+
+  it('does not request a manifest with an unpersisted device identity', async () => {
+    machineIdentity.durableId = null
+    const fetcher = vi.fn()
+    setOperatorOverlayFetchForTests(fetcher as unknown as typeof fetch)
+    expect(await pullOperatorSkillManifest({ operatorUrl: 'https://operator.test', operatorLicenseToken: 'METIS-OP-1.fixture' })).toBe(0)
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it('does not follow redirects while sending the licence credential', async () => {

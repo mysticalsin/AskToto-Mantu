@@ -68,6 +68,20 @@ silently wrong · `medium` = degraded or confusing in a real scenario · `low` =
 | MQA-330 | Signing preflight discards the chain flags needed to distinguish trust failures | Diagnose a rejected Windows signing identity | medium | FIXED | `scripts/windows-signing-identity-preflight.test.mjs` | Versioned bounded numeric facts are validated and reconstructed as sorted unique fixed codes; contradictory categories fail closed.153 tests pass/one native Windows skip, independently repeated. Trust, secrets and workflows unchanged; actual identity failure remains MQA-332. |
 | MQA-331 | Audit-chain tests fail nondeterministically on the same Windows source | Run full Windows source CI | high | FIXED | `src/main/audit-log-chain.test.ts`, `src/main/logger.profile-isolation.test.ts` | Deterministic two-writer reproduction matched the3-to139 failure. Both tests now own and clean up unique scratch roots; production logging, real transport and integrity assertions are unchanged. Concurrent suites pass while an independent writer retains its verified chain. Fresh Windows CI remains required. |
 | MQA-332 | Configured Windows signing identity fails standard chain trust | Validate the actual release signing identity | high | OPEN | — | Main-only preflight34722312817 passed revision and66 credential-free tests, then CHAIN_UNTRUSTED. Leaf identity checks passed; the trust cause and final installer signature remain unverified. Never bypass trust to publish. |
+| MQA-333 | A non-durable device ID can consume new licence seats and remote HTTP can expose activation data | Activate or heartbeat when the local data folder fails or a remote licence URL is entered | high | FIXED | `src/main/license.test.ts`, `src/main/license/client.test.ts` | Keep a process-stable candidate but transmit only a persisted ID; use HTTPS remotely, refuse credential redirects, and allow HTTP only on loopback. |
+| MQA-334 | Concurrent devices can replace another Ask's activity despite an owned Ask row | Two signed seats submit the same Ask ID before either preflight read settles | high | FIXED | `operator/src/ask-ingest-integrity.test.ts` | The SQL/store ownership result now gates the event, pulse and session writes; same-device retries remain idempotent. |
+| MQA-335 | Client activity IDs can overwrite Ask or another device's Events entry | Log listen or recap with a reused or crafted ID | high | FIXED | `operator/src/ask-ingest-integrity.test.ts` | Listen/recap activity IDs are stable digests scoped to event kind and signed device; their raw ID remains only the response ID. |
+| MQA-336 | Ask activity IDs with colons make Events pagination repeat a page | Page after an Ask event named `ask:<id>` | medium | FIXED | `operator/src/ask-ingest-integrity.test.ts` | Cursor decoding splits at the first timestamp separator, preserving the entire event ID. |
+| MQA-337 | A disappeared command proposal can still be confirmed before the longer approval TTL ends | Let a voice proposal expire, correct it, replace its owner, or stop capture | high | FIXED | `src/main/metis-command-register.test.ts` | Runtime expiry/retraction now revokes main-owned approval immediately; unknown adapter outcomes still fail closed. |
+| MQA-338 | Onboarding can skip the interactive demo or trap its Next button after media failure | Advance from the problem scene through the four demo stages | high | OPEN | `src/renderer/src/components/OnboardingExperience.browser.test.ts` | Source browser regression passes for compact/reduced-motion views and synchronous media failure; exact installed Mac/Windows flow remains unverified. |
+| MQA-339 | A stale Vite URL can route packaged onboarding and decoder windows away from installed assets | Launch a package with inherited `ELECTRON_RENDERER_URL` | high | OPEN | `src/renderer/src/lib/onboarding-boot.test.ts` | Source uses the packaged dev-environment guard; exact installed package launch/visual readback remains unverified. |
+| MQA-340 | Overview strands its fifth KPI and squeezes map and device data on narrow layouts | Open the Operator Overview at desktop and mobile widths | medium | FIXED | `operator/src/render/pages/overview.layout.test.ts` | Scoped responsive layout and local Chromium fixture checks remove horizontal overflow; production deployment/readback remains separate. |
+| MQA-341 | Position preview and right-edge cards depict an almost invisible or top-edge surface | Choose Right edge during onboarding with Hidden saved | medium | FIXED | `src/renderer/src/lib/onboarding-appearance.test.ts`, `src/renderer/src/components/OverlayChromePicker.test.ts` | Placement now demonstrates the selected physical edge; right-edge cards and copy depict vertical hover behavior without changing the stored shape. |
+| MQA-342 | Exclusive onboarding can remain inset after its short bounds watcher expires | Select Right edge, wait past the native watcher, then resize or move the exclusive window | high | OPEN | `src/main/island/exclusive-bounds-repair.test.ts`, `scripts/e2e-smoke.mjs` | Bounded event-driven recovery passes source and exact universal Mac package tests, including a late injected clamp; installed Windows visual acceptance remains required. |
+| MQA-343 | Hey Métis shortcut opens the sidecar but cannot complete a spoken verified action | Press command keybind or say the wake phrase, speak an app action, and confirm it | high | OPEN | — | No production command-audio ingress or verified adapter postcondition; keep the fail-closed confirmation boundary. |
+| MQA-344 | A crashed recovery gate can strand empty machine-ID repair | Crash during stale machine-ID lock reclamation, then retry activation | low | OPEN | — | The `.recover` file can survive a crash and block later repair; network activation correctly fails closed until durable identity returns. |
+| MQA-345 | A crash between Operator Ask pulse and session write undercounts a session | Crash after pulse insert but before `touchSession`, then retry the same Ask | high | FIXED | `operator/src/pulse-session-integrity.test.ts` | Pulse, session update/open and retention now share one D1 batch transaction; fail-once/retry and concurrent-first-pulse regressions pass. Historical orphan pulses are not backfilled. |
+| MQA-346 | A late failed Operator attempt can overwrite a successful failover's provider and outcome | Worker fails, desktop answers through another provider, then metering arrives in either order | high | FIXED | `operator/src/ask-ingest-integrity.test.ts` | Failed streams use separate metering identity; memory and D1 owned-Ask merges keep the delivered attempt intact in both arrival orders. Production deployment/readback is separate. |
 | MQA-001 | DeepSeek shipped retired model ids (`deepseek-chat`/`deepseek-reasoner`) as its defaults | pick a provider · every ask | high | FIXED | `src/shared/providers.test.ts`, `src/main/store.test.ts` | Registry moved to V4; persisted overrides heal on read |
 | MQA-002 | Windows never probed screen capture and never ran the upfront permission pass — setup readiness was macOS-only | first run · setup checklist | high | FIXED | `src/main/platform-perms.test.ts` | Probe-backed status + boot probe on win32 |
 | MQA-003 | No circuit breaker: a provider with a dead key is retried first on every single ask | live answers · every ask after a key dies | high | FIXED | `src/main/llm/provider-health.test.ts`, `src/main/provider-health-ux.contract.test.ts` | Session-scoped cooldown; demotes, never blocks |
@@ -4580,3 +4594,87 @@ Tony live `/Applications/Metis.app` 1.8.3 then shows the red Settings / Intellig
 **Repro.** Manual preflight34722312817 accepted the exact main SHA0da2d800 and passed all66 Windows synthetic/native malformed-input tests, then the real identity failed `CHAIN_UNTRUSTED`. Earlier checks for configured publisher, leaf validity, code-signing EKU and private-key-handle access passed. This neither proves a self-signed identity nor identifies an expired leaf.
 
 **Release boundary.** Obtain the fixed non-secret chain diagnostics through MQA-330 before selecting the remedy. Any certificate replacement or external signing-service setup needs the release owner's authorized identity; do not install custom trusted roots, ignore revocation or loosen artifact verification. Actual trusted/timestamped EXE signing and physical installation remain separate mandatory gates.
+
+### MQA-333 — require durable identity and protected licence transport
+
+**Repro.** An unwritable data folder made `getMachineId()` generate a new ID on each call, while activation and fleet heartbeat could still send it. The legacy URL normalizer gave a bare remote server `http://` and credential-bearing fetches followed redirects.
+
+**Fixed and verified.** A process-stable candidate is retried locally, but network activation and Operator calls require a persisted ID; an existing ID always wins. Empty-file repair is serialized across processes and fails closed when ownership cannot be proven. Bare remote addresses now use HTTPS, explicit remote HTTP is refused, loopback HTTP remains available for development, and credential-bearing redirects are rejected. Focused identity/licence tests and typecheck pass. The exact installed data-folder failure still requires device QA.
+
+### MQA-334 — reject losing Ask activity in a concurrent ownership race
+
+**Repro.** Two authenticated devices could both pass the initial `getAsk(id)` read; the database rejected the losing Ask upsert but the handler still wrote the same event and pulse ID, allowing the loser to replace activity attribution.
+
+**Fixed and verified.** Both in-memory and D1 upserts return whether ownership was accepted, and the handler stops before event/pulse/session writes on rejection. A barrier-controlled two-device test failed on both stores before the fix and passes afterward. Same-device retries keep one pulse/session count. Production Worker deployment and live telemetry readback remain separate gates.
+
+### MQA-335 — isolate listen and recap event IDs
+
+**Repro.** Listen and recap Events used a raw client-supplied ID, while event persistence replaced rows on ID conflict. A crafted `ask:<id>` or the same raw ID from two devices could overwrite another event; the shared Ask preflight also wrongly rejected an otherwise independent listening event.
+
+**Fixed and verified.** A stable digest of event kind, signed device ID and normalized client ID separates activity namespaces while deduping retries. The unrelated Ask ownership preflight no longer runs for listen/recap; it remains for Ask and rating. Red-first memory and real-SQLite adapter cases pass. Live deployment is unverified.
+
+### MQA-336 — preserve colon-containing event IDs in cursors
+
+**Repro.** Events cursors encoded `timestamp:id` but decoded with the last colon. Paging after an `ask:<id>` event parsed `timestamp:ask` as the numeric part, rejected the cursor and repeated the first page on both adapters.
+
+**Fixed and verified.** The first colon now separates the numeric timestamp from the complete ID. The two-adapter test failed before the change and passes afterward; old cursor shape remains compatible. Operator suite and typecheck pass.
+
+### MQA-337 — revoke stale command approvals
+
+**Repro.** The command runtime expired or replaced a proposal before `CommandControl`'s longer approval TTL, but its prior nonce remained confirmable. Stopping capture or losing the window owner could leave the same stale approval.
+
+**Fixed and verified.** Runtime state clearing/replacement revokes the controller before another owner/proposal can be considered. Four real runtime-to-register-to-controller tests failed before the fix and pass afterward. All desktop adapters still report `unknown` outcomes, which the confirmation boundary now rejects as unverified; this is not a working spoken action flow.
+
+### MQA-338 — installed onboarding demo can skip or stall
+
+**Repro.** Current-source problem Continue skipped the Reveal/demo scene. A synchronous background media playback exception could swallow a user-controlled demo Next transition. The historical installed 1.9.8 freeze has not been reproduced on the exact package.
+
+**Source repair, still OPEN.** Continue now enters the guarded demo, and optional music/video failures cannot block scene navigation. Real-component Chromium tests pass at compact and reduced-motion sizes and under a thrown media call. Rebuild and physically walk the installed Mac and Windows onboarding, including right-edge selection and final setup, before closing.
+
+### MQA-339 — stale development URL in packaged windows
+
+**Repro.** A process with inherited `ELECTRON_RENDERER_URL` could route packaged onboarding or import-decoder windows to an unavailable Vite server, producing a blank or flashing window.
+
+**Source repair, still OPEN.** The window paths now use the existing `devEnv()` packaged guard, and source contracts reject direct `process.env` use. Build passes. Installed exact-package launch and visual validation are required to close the issue.
+
+### MQA-340 — Operator Overview layout loses a KPI and usable map space
+
+**Repro.** The fifth KPI wrapped into an orphan row, spend labels overflowed, device rows lacked alignment, and the map occupied too little room for meaningful fleet orientation.
+
+**Fixed in source and locally verified.** Overview-scoped CSS and formatting keep five cards, align rows, enlarge the theme-aware map and cap the activity preview with an Events link. Local Chromium fixture checks at 1440 and 390 pixels showed document width exactly equal to viewport width in light/dark themes; the narrow Realtime regression remains covered. The live portal was not deployed/read back by this source check.
+
+### MQA-341 — right-edge onboarding preview and cards show the wrong surface
+
+**Repro.** With a fresh Hidden preference, the Position step passed Hidden into the live preview, making Right edge nearly blank before the user chose its resting shape. The right-edge choice cards still drew short horizontal marks at the top, and Hidden instructed the user to move to the top even though its right-edge trigger opens on hover. The implementation was in `OnboardingAppearance.tsx`, `OverlayChromePicker.tsx` and their CSS; the intended right-edge behavior is represented by `appearancePreviewEdgeState` and `allowedOverlayLayouts`.
+
+**Fixed and Mac-package tested.** Position now demonstrates a visible top bar or right rail and explicitly says the actual shape is chosen next. On the appearance step the preview returns to the saved or selected shape; right-edge card diagrams are vertical and the copy describes the right-edge hover. The right-edge Bar remains unavailable and existing radio keyboard navigation is unchanged. Red-first component/pure-helper tests passed; the exact ad-hoc universal Mac package passed the right-edge Hidden/Island preview and full-screen onboarding smoke (74/74). Installed Windows visual acceptance remains separate.
+
+### MQA-342 — native exclusive onboarding bounds can remain inset
+
+**Repro.** Select Right edge, wait more than two seconds, then cause a native inset move/resize while the opaque exclusive onboarding stage is visible. The short bounds watcher in `src/main/index.ts` has already expired, and right-edge resize IPC returns before exclusive repair. Source review found this recovery gap; the historical screenshot is not yet correlated to native bounds. The intended state is an opaque stage covering the full display for every onboarding frame.
+
+**Mac package tested; Windows still OPEN.** A bounded event-driven guard watches native move/resize for the entire exclusive stage, repairs the owning window to display bounds, and stops when onboarding ends or the window is replaced. A red-first asynchronous reclamp regression exposed 13 repairs despite the intended four-attempt cap; the corrected guard keeps one budget until a full second of stable bounds. All five guard tests and the serial source suite (6,682 passed, 18 skipped) passed. The exact ad-hoc universal Mac app then passed 74/74 isolated onboarding/sidecar smoke checks, including an injected native clamp after the original two-second watcher expires and an opaque position-to-appearance transition. Installed Windows visual acceptance and a trusted signed customer package remain outstanding.
+
+### MQA-343 — Hey Métis has no verified spoken action journey
+
+**Repro.** The keybind reveals the right-edge sidecar, but no production handler feeds a bounded command microphone transcript into `MetisCommandRuntime.ingestTranscript`. The existing microphone lease owns no ASR handoff, while current desktop adapters return `unknown` for attempted success. `CommandControl` correctly refuses to claim an unverified outcome. The intended user journey is wake/keybind, visible listening, transcript, action preview, explicit approval, execution, and a verified postcondition; meeting speech must never gain command authority.
+
+**Status.** OPEN as a 2.0 release blocker. Implement one safe vertical slice and test denial, cancellation, timeout, permissions, device loss, and Mac/Windows postconditions before broad app control is claimed. HeyClicky is a UI reference only; its proprietary code/assets are not an input to this path.
+
+### MQA-344 — a crashed machine-ID recovery gate can outlive its owner
+
+**Repro.** During stale empty-ID lock recovery, a process creates `machine-id.txt.lock.recover` and dies before the `finally` removes it. A later process cannot acquire that recovery gate, so it refuses to repair the empty ID even if the old owner is demonstrably gone. This is visible in `src/main/license.ts` and was found by independent source review; no crash injection has yet established frequency. The durable-identity network rule correctly refuses activation rather than minting a new seat.
+
+**Status.** OPEN. Recovery must be provably race-safe across two live processes and a crashed owner; deleting a seemingly stale file without atomic ownership proof is not an acceptable fix.
+
+### MQA-345 — Ask session write is not atomic with its pulse
+
+**Repro.** The Operator writes an Ask row and stable pulse, then calls `touchSession` only when that pulse insert is first. A Worker crash between these writes leaves the pulse present; a retry sees it as already inserted and skips the session update. Event and pulse deduplication work, but session usage can be undercounted. The sequence is in `operator/src/index.ts`; the intended portal count is one session Ask for one accepted pulse.
+
+**Fixed in source.** The production D1 store now records the pulse and session projection in one transaction and aborts the whole batch for a duplicate pulse; a retry cannot strand or double-count the session. A fail-once regression, concurrent first-pulse regression, and post-gap retry regression passed, as did the 1,002-test Operator suite. Existing orphan pulses from older deployments are not backfilled, and the live Worker is not yet deployed/read back.
+
+### MQA-346 — failed Operator metering overwrites a delivered failover
+
+**Repro.** A Worker Ask attempt fails, then the desktop answers through another provider. The late Worker metering row can share the client Ask ID and replace or contaminate the delivered provider/model/outcome, depending on arrival order.
+
+**Fixed in source.** Failed Worker attempts now use separate metering IDs. For older same-ID rows, the memory and D1 stores deterministically retain the complete delivered attempt while preserving earliest timestamp and user rating. Red-first regressions cover both arrival orders in both stores and failed-stream identity; 1,002 Operator tests passed. This does not establish that the production Operator has been deployed or its historical rows repaired.

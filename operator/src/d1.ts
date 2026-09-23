@@ -38,6 +38,8 @@ interface D1Stmt {
 
 export interface D1DatabaseLike {
   prepare(query: string): D1Stmt
+  /** D1 executes a batch as one transaction, rolling back every statement if any fails. */
+  batch?(statements: D1Stmt[]): Promise<Array<{ success?: boolean }>>
 }
 
 const NONCE_TTL_MS = 10 * 60 * 1000
@@ -69,12 +71,41 @@ const ASK_BASE_COLUMNS = [
   'preview'
 ] as const
 
-/** An Ask id is device-owned. Same-device retries update their row; a different device gets no write,
- *  even if two Worker requests race past any application-level read. */
+/** An Ask id is device-owned. Merge complementary Worker/seat fields, but keep a failed provider
+ *  attempt from replacing or contaminating the successful failover that was delivered to the user. */
 function ownedAskUpsertSql(columns: readonly string[]): string {
   const updateColumns = columns.filter((column) => column !== 'id' && column !== 'device_id')
+  const asksDelivered = "asks.outcome IN ('answered', 'thumbs-down')"
+  const excludedDelivered = "excluded.outcome IN ('answered', 'thumbs-down')"
+  const keepDeliveredAttempt = (column: string, fallback: string): string =>
+    `CASE WHEN ${asksDelivered} AND excluded.outcome = 'error' THEN asks.${column} ` +
+    `WHEN ${excludedDelivered} AND asks.outcome = 'error' THEN excluded.${column} ELSE ${fallback} END`
+  const valueFor = (column: string): string => {
+    if (column === 'ts') return 'MIN(asks.ts, excluded.ts)'
+    if (column === 'rating') return 'COALESCE(excluded.rating, asks.rating)'
+    if (column === 'mode') {
+      return keepDeliveredAttempt(
+        column,
+        "COALESCE(NULLIF(excluded.mode, 'operator'), NULLIF(asks.mode, 'operator'), excluded.mode, asks.mode)"
+      )
+    }
+    if (column === 'preview') {
+      return keepDeliveredAttempt(
+        column,
+        "CASE WHEN excluded.mode = 'operator' AND asks.mode IS NOT NULL AND asks.mode != 'operator' " +
+          'THEN COALESCE(asks.preview, excluded.preview) ELSE COALESCE(excluded.preview, asks.preview) END'
+      )
+    }
+    if (column === 'outcome') {
+      return "CASE WHEN COALESCE(excluded.rating, asks.rating) = 'down' THEN 'thumbs-down' " +
+        `WHEN ${asksDelivered} AND excluded.outcome = 'error' THEN asks.outcome ` +
+        `WHEN ${excludedDelivered} AND asks.outcome = 'error' THEN excluded.outcome ` +
+        'ELSE COALESCE(excluded.outcome, asks.outcome) END'
+    }
+    return keepDeliveredAttempt(column, `COALESCE(excluded.${column}, asks.${column})`)
+  }
   return `INSERT INTO asks (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})
-    ON CONFLICT(id) DO UPDATE SET ${updateColumns.map((column) => `${column} = excluded.${column}`).join(', ')}
+    ON CONFLICT(id) DO UPDATE SET ${updateColumns.map((column) => `${column} = ${valueFor(column)}`).join(', ')}
     WHERE device_id = excluded.device_id`
 }
 
@@ -118,7 +149,8 @@ function decodeCursor(cursor: string | undefined): { ts: number; id: string } | 
   if (!cursor) return null
   try {
     const raw = fromBase64Url(cursor)
-    const i = raw.lastIndexOf(':')
+    // The timestamp has no colon; event IDs can (for example `ask:<id>`).
+    const i = raw.indexOf(':')
     if (i < 0) return null
     const ts = Number(raw.slice(0, i))
     const id = raw.slice(i + 1)
@@ -207,8 +239,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     )
   }
 
-  async function writeSession(row: SessionState): Promise<void> {
-    await db
+  function sessionWriteStatement(row: SessionState): D1Stmt {
+    return db
       .prepare(
         `INSERT OR REPLACE INTO sessions (
           id, device_id, started_at, last_pulse_at, ended_at, pulses, asks, recaps, country, city, os, app_version
@@ -228,7 +260,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         row.os,
         row.app_version
       )
-      .run()
+  }
+
+  async function writeSession(row: SessionState): Promise<void> {
+    await sessionWriteStatement(row).run()
   }
 
   return {
@@ -340,19 +375,18 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         row.prompt_iv,
         row.preview
       ]
+      const upsert = async (columns: readonly string[], values: unknown[]): Promise<boolean> => {
+        const result = await db.prepare(ownedAskUpsertSql(columns)).bind(...values).run() as { meta?: { changes?: number } }
+        // The SQL WHERE is the ownership decision. A foreign Ask id changes zero rows.
+        return result?.meta?.changes === 1
+      }
       // Fail-safe for a live D1 that has not had schema-alter.sql applied yet: the first insert that
       // trips "no such column" flips this isolate to the legacy statement, so an Ask is never dropped
       // because the fleet store is one migration behind. The type is lost for that row (null), which the
       // dashboard reports as coverage, never as a silent 100%.
       if (!askInsertLegacy && !askInsertNoPathTag) {
         try {
-          await db
-            .prepare(
-              ownedAskUpsertSql([...ASK_BASE_COLUMNS, 'question_type', 'path_tag'])
-            )
-            .bind(...base, row.question_type, row.path_tag ?? null)
-            .run()
-          return
+          return await upsert([...ASK_BASE_COLUMNS, 'question_type', 'path_tag'], [...base, row.question_type, row.path_tag ?? null])
         } catch (e) {
           if (isMissingColumnError(e, 'path_tag')) {
             askInsertNoPathTag = true
@@ -371,13 +405,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       }
       if (!askInsertLegacy) {
         try {
-          await db
-            .prepare(
-              ownedAskUpsertSql([...ASK_BASE_COLUMNS, 'question_type'])
-            )
-            .bind(...base, row.question_type)
-            .run()
-          return
+          return await upsert([...ASK_BASE_COLUMNS, 'question_type'], [...base, row.question_type])
         } catch (e) {
           if (!isMissingColumnError(e, 'question_type')) throw e
           askInsertLegacy = true
@@ -386,12 +414,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           )
         }
       }
-      await db
-        .prepare(
-          ownedAskUpsertSql(ASK_BASE_COLUMNS)
-        )
-        .bind(...base)
-        .run()
+      return upsert(ASK_BASE_COLUMNS, base)
     },
     async updateAskRating(id, rating) {
       const outcome = rating === 'down' ? 'thumbs-down' : null
@@ -428,11 +451,61 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       }))
     },
     async insertPulse(row) {
-      await db
-        .prepare('INSERT OR REPLACE INTO pulses (id, device_id, ts, kind, country, city, region) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      const result = await db
+        .prepare('INSERT INTO pulses (id, device_id, ts, kind, country, city, region) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING')
         .bind(row.id, row.device_id, row.ts, row.kind, row.country, row.city, row.region ?? null)
-        .run()
+        .run() as { meta?: { changes?: number } }
       await db.prepare('DELETE FROM pulses WHERE ts < ?').bind(row.ts - PULSE_TTL_MS).run()
+      // D1 reports meta.changes. Missing metadata cannot prove a new pulse and must not inflate a session.
+      return result?.meta?.changes === 1
+    },
+    async recordPulseSession(row, seatMeta) {
+      // A missing transactional D1 API must fail closed: separate writes can strand a pulse
+      // without its session aggregate when the Worker is interrupted between statements.
+      if (!db.batch) throw new Error('D1 batch transaction is unavailable')
+      const newSessionId = crypto.randomUUID()
+      const askIncrement = row.kind === 'ask' ? 1 : 0
+      const statements: D1Stmt[] = [
+        // Deliberately do not use ON CONFLICT DO NOTHING: a duplicate must abort the whole batch,
+        // not run the following session write and count the Ask again.
+        db.prepare('INSERT INTO pulses (id, device_id, ts, kind, country, city, region) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .bind(row.id, row.device_id, row.ts, row.kind, row.country, row.city, row.region ?? null),
+        // Read the latest session inside the transaction. A read before batch would let concurrent
+        // pulses each see the same stale row and overwrite its count (or open two first sessions).
+        db.prepare(`UPDATE sessions SET
+          last_pulse_at = ?, pulses = pulses + 1, asks = asks + ?,
+          country = COALESCE(?, country), city = COALESCE(?, city),
+          os = COALESCE(?, os), app_version = COALESCE(?, app_version)
+          WHERE id = (SELECT id FROM sessions WHERE device_id = ? ORDER BY started_at DESC, id DESC LIMIT 1)
+          AND ended_at IS NULL AND ? >= last_pulse_at AND ? - last_pulse_at <= ?`)
+          .bind(row.ts, askIncrement, row.country, row.city, seatMeta.os, seatMeta.app_version,
+            row.device_id, row.ts, row.ts, SESSION_GAP_MS),
+        // changes() refers to the preceding UPDATE in the same D1 batch transaction. Open only
+        // if that UPDATE did not continue a session; this also handles the first pulse for a seat.
+        db.prepare(`INSERT INTO sessions (
+          id, device_id, started_at, last_pulse_at, ended_at, pulses, asks, recaps, country, city, os, app_version
+        ) SELECT ?, ?, ?, ?, NULL, 1, ?, 0, ?, ?, ?, ? WHERE changes() = 0`)
+          .bind(newSessionId, row.device_id, row.ts, row.ts, askIncrement,
+            row.country, row.city, seatMeta.os, seatMeta.app_version),
+        // The fresh id exists only when the INSERT above opened a session. Close the preceding
+        // open session at its own last pulse, preserving the existing two-minute gap semantics.
+        db.prepare(`UPDATE sessions SET ended_at = last_pulse_at
+          WHERE device_id = ? AND id != ? AND ended_at IS NULL
+          AND EXISTS (SELECT 1 FROM sessions WHERE id = ?)`)
+          .bind(row.device_id, newSessionId, newSessionId),
+        db.prepare('DELETE FROM pulses WHERE ts < ?').bind(row.ts - PULSE_TTL_MS)
+      ]
+      try {
+        const results = await db.batch(statements)
+        if (results.length !== statements.length || results.some((result) => result?.success !== true)) {
+          throw new Error('D1 pulse/session transaction did not complete')
+        }
+        return true
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (/UNIQUE constraint failed:\s*pulses\.id\b/i.test(message)) return false
+        throw error
+      }
     },
     async listPulses(since) {
       const r = await db

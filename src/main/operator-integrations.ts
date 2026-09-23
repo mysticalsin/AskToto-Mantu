@@ -13,7 +13,7 @@
  * transport) so Métis can call their tools the same way it calls a user's own pasted-key connection.
  */
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
-import { getMachineId } from './license'
+import { getDurableMachineId } from './license'
 import { inspectBundleResponse } from '@shared/bundle-response'
 import { resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
 import {
@@ -178,6 +178,10 @@ export async function fetchOperatorIntegrations(
 ): Promise<OperatorIntegration[] | null> {
   const connection = useConnection(settings)
   if (!connection) return null
+  // An ephemeral identity can receive a licence-device 403. Do not request or interpret that as
+  // a revoked entitlement, which would discard previously fetched managed credentials.
+  const machineId = getDurableMachineId()
+  if (!machineId) return null
   if (inFlight) return inFlight
   const { url, secret } = connection
   const generation = connectionGeneration
@@ -185,7 +189,7 @@ export async function fetchOperatorIntegrations(
   inFlightAbort = abort
   const attempt = (async (): Promise<OperatorIntegration[] | null> => {
     try {
-      const deviceId = hashOperatorId(getMachineId())
+      const deviceId = hashOperatorId(machineId)
       const headers = operatorHmacHeaders(secret, deviceId, '')
       const res = await fetchImpl(`${url}/v1/integrations`, {
         method: 'GET', headers, redirect: 'manual',

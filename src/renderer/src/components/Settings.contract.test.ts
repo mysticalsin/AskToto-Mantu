@@ -10,12 +10,29 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { pickReadyProvider, detectHint, SETTINGS_CONTENT_SCROLL_CLASS, settingsScrollClipsOverflowX } from './Settings'
+import { pickReadyProvider, detectHint, licenseErrorMessage, SETTINGS_CONTENT_SCROLL_CLASS, settingsScrollClipsOverflowX } from './Settings'
+import { licenseErrorMessage as onboardingLicenseErrorMessage } from './OnboardingExperience'
+import { licenseErrorMessage as gateLicenseErrorMessage } from './LicenseGate'
 
 // Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
 // newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
 // Normalizing keeps every anchor line-ending-independent without weakening what each one pins.
 const source = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8').replace(/\r\n/g, '\n')
+
+describe('legacy licence activation errors', () => {
+  it('explains a non-persistent device setup without blaming the network', () => {
+    const message = licenseErrorMessage('device_identity_unavailable')
+    expect(message).toMatch(/data folder.*writable/i)
+    expect(message).not.toMatch(/server|network|machine id|license key/i)
+  })
+
+  it('explains insecure server addresses and local device setup on every activation surface', () => {
+    for (const copy of [licenseErrorMessage, onboardingLicenseErrorMessage, gateLicenseErrorMessage]) {
+      expect(copy('insecure_url')).toMatch(/HTTPS.*localhost.*HTTP/i)
+      expect(copy('device_identity_unavailable')).toMatch(/data folder.*writable/i)
+    }
+  })
+})
 
 // Returns the source slice from `startAnchor` up to (not including) the first `endMarker` found after it.
 function blockAfter(startAnchor: string, endMarker: string): string {

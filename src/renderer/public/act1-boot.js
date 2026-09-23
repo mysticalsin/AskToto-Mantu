@@ -11,14 +11,14 @@
     document.documentElement.classList.add('act1-first-paint')
     document.documentElement.dataset.act1FirstPaint = '1'
   }
-  // FITO-185-AA: once React mounts HeroWelcome it sets [hidden]; also observe and remove
-  // the static chrome so a specificity bug can never leave Next covering Act 2.
+  // The static Next is only for first paint. Remove it, rather than hiding it, so a hidden
+  // duplicate cannot receive programmatic clicks after React owns onboarding.
   function retireBootChrome() {
     var chrome = document.getElementById('act1-boot-chrome')
     if (!chrome) return
-    chrome.setAttribute('hidden', '')
-    chrome.style.display = 'none'
-    chrome.style.pointerEvents = 'none'
+    var next = document.getElementById('act1-boot-next')
+    if (next) next.disabled = true
+    chrome.remove()
   }
   function watchReactRetire() {
     var root = document.getElementById('root')

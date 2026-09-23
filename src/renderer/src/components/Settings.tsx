@@ -8307,7 +8307,7 @@ function DangerZoneSection({
 /** Plain-language copy for every code the license server (or this client) can return. Falls back to the
  *  raw string for anything unexpected — a validation message, "sign in first" — so nothing is silently
  *  swallowed. */
-function licenseErrorMessage(code: string | undefined): string {
+export function licenseErrorMessage(code: string | undefined): string {
   switch (code) {
     case 'invalid':
       return 'That license key was not recognized.'
@@ -8319,6 +8319,10 @@ function licenseErrorMessage(code: string | undefined): string {
       return 'All seats on this license are in use.'
     case 'network':
       return 'Could not reach the license server. Check the server URL and your connection.'
+    case 'insecure_url':
+      return 'Use an HTTPS license server address. Only localhost can use HTTP for testing.'
+    case 'device_identity_unavailable':
+      return 'Métis cannot save its device setup. Close other Métis copies, check that its data folder is writable, and try again. If it persists, contact support to repair the data folder.'
     default:
       return code || 'Could not activate this license.'
   }

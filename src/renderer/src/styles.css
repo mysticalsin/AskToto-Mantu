@@ -2244,6 +2244,25 @@ button.onboard-cta {
     inset 0 0 0 1.25px rgba(255, 255, 255, 0.72),
     0 0 0 1px rgba(255, 255, 255, 0.12);
 }
+.overlay-chrome-diagram--right-edge.overlay-chrome-diagram--hide .overlay-chrome-diagram__mark {
+  top: 18px;
+  right: 8px;
+  left: auto;
+  width: 2px;
+  height: 17px;
+  border-radius: 3px 0 0 3px;
+  opacity: 0.38;
+  transform: none;
+}
+.overlay-chrome-diagram--right-edge.overlay-chrome-diagram--island .overlay-chrome-diagram__mark {
+  top: 14px;
+  right: 8px;
+  left: auto;
+  width: 8px;
+  height: 25px;
+  border-radius: 7px 0 0 7px;
+  transform: none;
+}
 .overlay-placement-diagram {
   position: relative;
   height: 52px;
@@ -2410,6 +2429,14 @@ button.onboard-cta {
 }
 .onboard-appearance--compact .onboard-appearance-preview {
   height: 104px;
+}
+.onboard-appearance-preview-caption {
+  max-width: 100%;
+  margin: -10px 0 0;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
 }
 .onboard-appearance-preview__desktop {
   position: absolute;

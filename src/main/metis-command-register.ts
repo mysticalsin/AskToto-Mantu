@@ -27,17 +27,24 @@ export function ensureMetisCommandRuntime(opts: {
     onState: (state) => {
       const proposal = state.proposal
       if (!proposal) {
+        // The runtime can expire, stop, or retract a proposal before CommandControl's
+        // own TTL. The old nonce must cease to authorize an action immediately.
+        opts.commandControl?.revokeForLifecycleEvent('runtime_proposal_cleared')
         lastProposalId = null
         return
       }
       if (proposal.id === lastProposalId) return
+      // Revoke before resolving a replacement owner. A window may disappear
+      // between utterances; that must not leave the previous action confirmable.
+      opts.commandControl?.revokeForLifecycleEvent('runtime_proposal_replaced')
+      lastProposalId = null
       const owner = opts.getCommandOwner?.()
       if (!owner || !opts.commandControl) return
-      lastProposalId = proposal.id
       opts.commandControl.propose(
         { webContentsId: owner.webContentsId, revision: proposal.utteranceRevision },
         proposal.request
       )
+      lastProposalId = proposal.id
     },
     jevEnabled: () => opts.jevEnabled?.() === true,
     operatorDecideAuth: () => {

@@ -203,6 +203,7 @@ import {
   shouldParkHoverRestAfterLeavingSurface,
   topClamp
 } from './island/geometry'
+import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
 import {
   OVERLAY_REST_BACKGROUND,
   SETTINGS_SURFACE_BACKGROUND,
@@ -1098,6 +1099,7 @@ let overlayCursorWatchHovering = false
 // normal-window card. Keep this narrowly scoped to the opaque onboarding owner; normal overlay layouts
 // must remain free to resize and park themselves.
 let exclusiveBoundsWatchTimer: ReturnType<typeof setInterval> | null = null
+let exclusiveBoundsEventGuard: { window: BrowserWindow; displayId: number; stop: () => void } | null = null
 const EXCLUSIVE_BOUNDS_WATCH_INTERVAL_MS = 250
 const EXCLUSIVE_BOUNDS_WATCH_DURATION_MS = 2_000
 const EXCLUSIVE_BOUNDS_MAX_RECONCILIATIONS = 4
@@ -1485,15 +1487,17 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
   })
 
   try {
-    const decoderUrl = process.env.ELECTRON_RENDERER_URL
-      ? new URL('/decoder.html', process.env.ELECTRON_RENDERER_URL).toString()
+    // Packaged imports must ignore a stale user-level Vite URL.
+    const viteDev = devEnv('ELECTRON_RENDERER_URL')
+    const decoderUrl = viteDev
+      ? new URL('/decoder.html', viteDev).toString()
       : pathToFileURL(join(__dirname, '../renderer/decoder.html')).toString()
     decoderExpectedUrl = decoderUrl
     const ready = waitForDecoderReady()
     // Observe the rejection immediately so a loadURL/loadFile failure below can't surface as an
     // unhandled rejection before `await ready` runs; the real error still propagates at that await.
     ready.catch(() => {})
-    if (process.env.ELECTRON_RENDERER_URL) await active.loadURL(decoderUrl)
+    if (viteDev) await active.loadURL(decoderUrl)
     else await active.loadFile(join(__dirname, '../renderer/decoder.html'))
     if (active.isDestroyed() || decoderWin !== active) throw new Error('Import decoder closed before it started.')
     await ready
@@ -2057,7 +2061,7 @@ function onboardingExclusiveLive(): boolean {
  * tour before a later crash must still return to the ordinary overlay.
  */
 function overlayRendererUrl(): string {
-  let rendererUrl = process.env['ELECTRON_RENDERER_URL'] ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
+  let rendererUrl = devEnv('ELECTRON_RENDERER_URL') ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
   const params = new URLSearchParams()
   const onboardingLive = onboardingExclusiveLive()
   if (onboardingLive) params.set('exclusiveOnboarding', '1')
@@ -2110,6 +2114,7 @@ function lockOnboardingAudioInRenderer(w: BrowserWindow | null): void {
 /** Destroy the current overlay and build one whose constructor chrome matches onboardingExclusiveLive(). */
 function recreateOverlayWindow(): void {
   stopExclusiveBoundsWatch()
+  stopExclusiveBoundsEventGuard()
   const dying = win
   if (!dying || dying.isDestroyed()) {
     win = null
@@ -2162,6 +2167,7 @@ function replaceTransparentOverlayWithExclusiveOnboarding(): void {
   // A retiring overlay may still own an earlier onboarding watcher. Stop it before constructing the
   // successor; never stop again after createWindow(), because that successor needs its own clamp repair.
   stopExclusiveBoundsWatch()
+  stopExclusiveBoundsEventGuard()
   // BrowserWindow construction/show is synchronous enough to paint the opaque stage before the old
   // transparent rail can disappear. This is intentionally not the generic recreate path: the inverse
   // handoff after onboarding still waits for the exclusive window to close before revealing a small overlay.
@@ -2281,6 +2287,25 @@ function stopExclusiveBoundsWatch(): void {
   exclusiveBoundsWatchTimer = null
 }
 
+function stopExclusiveBoundsEventGuard(): void {
+  exclusiveBoundsEventGuard?.stop()
+  exclusiveBoundsEventGuard = null
+}
+
+/** Native move/resize events can clamp the opaque stage long after the two-second startup watch expires. */
+function ensureExclusiveBoundsEventGuard(w: BrowserWindow, displayId: number): void {
+  if (exclusiveBoundsEventGuard?.window === w && exclusiveBoundsEventGuard.displayId === displayId) return
+  stopExclusiveBoundsEventGuard()
+  const stop = observeExclusiveBounds(w, {
+    expected: () => {
+      const display = screen.getAllDisplays().find(candidate => candidate.id === displayId) ?? screen.getPrimaryDisplay()
+      return exclusiveOnboardingBounds(display.bounds, display.workArea)
+    },
+    ownsDisplay: () => onboardingExclusiveLive() && !overlayWindowTransparent && win === w
+  })
+  exclusiveBoundsEventGuard = { window: w, displayId, stop }
+}
+
 function hasExclusiveOnboardingBounds(
   actual: { x: number; y: number; width: number; height: number },
   expected: { x: number; y: number; width: number; height: number }
@@ -2385,6 +2410,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   }
   reconcileExclusiveOnboardingBounds(w, display)
   armExclusiveBoundsWatch(w, display.id)
+  ensureExclusiveBoundsEventGuard(w, display.id)
   // FITO-185-S: never OS simpleFullScreen/kiosk on Electron 43+ (Tony FAIL e404460). Product path is
   // opaque bounds + show after Act1 first paint (FITO-185-Y). ASKTOTO_ALLOW_SFS only on Electron <=39.
   const mayOsExclusive =
@@ -2409,6 +2435,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
 /** After onboardingDone only: leave exclusive fullscreen and park hide/island peek (never 880×816). */
 function exitExclusiveOnboardingStage(): void {
   stopExclusiveBoundsWatch()
+  stopExclusiveBoundsEventGuard()
   if (!win || win.isDestroyed()) return
   lockOnboardingAudioInRenderer(win)
   leaveExclusiveOsFullscreen(win)
@@ -2636,6 +2663,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // null the module ref before rethrowing so the caller (the boot runStep's catch, or ensureWindow's own
     // try/catch on recovery) can cleanly recreate on its next attempt instead of reusing a broken window.
     mainLog.error('[createWindow] post-construction setup failed, discarding partial window:', e)
+    stopExclusiveBoundsEventGuard()
     try {
       win?.destroy()
     } catch {
@@ -2666,6 +2694,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     invalidateCloudSttOwner(selfWebContentsId)
     stopOverlayCursorWatch()
     stopExclusiveBoundsWatch()
+    stopExclusiveBoundsEventGuard()
     win = null
   })
 
@@ -7617,9 +7646,12 @@ function registerIpc(): void {
               cacheStatus: u.cacheStatus,
               cacheTtl: u.cacheTtl
             })
+            // Record every completed model request, including live suggestions and meeting recaps.
+            // The mode distinguishes background work from a user question; only metrics and a local
+            // closed-taxonomy classification cross the Operator ingest boundary, never prompt content.
+            let skillId: string | undefined
+            let skillVersion: string | undefined
             if (req.mode === 'answer' || req.mode === 'vision') {
-              let skillId: string | undefined
-              let skillVersion: string | undefined
               try {
                 const skill = loadVerifiedSkill(isBuiltinConversationMode(s.mode) ? s.mode : 'humanizer')
                 skillId = skill.id
@@ -7627,31 +7659,29 @@ function registerIpc(): void {
               } catch {
                 /* integrity errors already fail closed on the ask path */
               }
-              void recordOperatorAsk(s, {
-                id: req.id,
-                mode: s.mode,
-                skillId,
-                skillVersion,
-                provider,
-                model,
-                ttftMs,
-                totalMs: Date.now() - startedAt,
-                inputTokens: u.inputTokens,
-                outputTokens: u.outputTokens,
-                cacheRead: u.cacheRead,
-                cacheWrite: u.cacheWrite,
-                cacheUncached: u.cacheUncached,
-                cacheStatus: u.cacheStatus,
-                cacheTtl: u.cacheTtl,
-                outcome: 'answered',
-                question: typeof req.prompt === 'string' ? req.prompt : undefined,
-                // Closed-taxonomy label, computed here on the seat. Ships as a metric with every Ask so the
-                // Operator "Question types" panel works even when Ask text is off. Never throws.
-                questionType: classifyQuestionType(req.prompt, { vision: req.mode === 'vision' }),
-                vision: req.mode === 'vision',
-                pathTag: pathTagForSeatProvider(provider, viaOperator)
-              })
             }
+            void recordOperatorAsk(s, {
+              id: req.id,
+              mode: req.mode,
+              skillId,
+              skillVersion,
+              provider,
+              model,
+              ttftMs,
+              totalMs: Date.now() - startedAt,
+              inputTokens: u.inputTokens,
+              outputTokens: u.outputTokens,
+              cacheRead: u.cacheRead,
+              cacheWrite: u.cacheWrite,
+              cacheUncached: u.cacheUncached,
+              cacheStatus: u.cacheStatus,
+              cacheTtl: u.cacheTtl,
+              outcome: 'answered',
+              // Do not pass the prompt to telemetry. Empty/background prompts remain honestly 'unknown'.
+              questionType: classifyQuestionType(req.prompt, { vision: req.mode === 'vision' }),
+              vision: req.mode === 'vision',
+              pathTag: pathTagForSeatProvider(provider, viaOperator)
+            })
             // The winning leg's success is the whole race's terminal outcome — drop the combined abort
             // registration set up before either leg started (see the hedge dispatch below).
             if (race) streams.delete(req.id)

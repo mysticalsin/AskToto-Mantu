@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createPrivateKey, sign } from 'node:crypto'
@@ -10,6 +10,8 @@ import { devLeasePublicKeyForTests } from './license-lease-key'
 import { TRIAL_DAYS, TRIAL_MS } from './license-trial'
 
 vi.mock('electron')
+
+// MQA-333: activation and fleet traffic must never use an identity that cannot survive restart.
 
 // license.ts only ever touches settings via getSettings()/setSettings() — stub the store entirely so
 // these tests never hit the real userData settings.json, and so setSettings mutations are observable.
@@ -28,6 +30,7 @@ import {
   heartbeat,
   checkLicenseGrace,
   getMachineId,
+  getDurableMachineId,
   normalizeServerUrl,
   verifyLease,
   noteQualifyingUse,
@@ -110,14 +113,104 @@ describe('license.ts — phone-home activation', () => {
       expect(second).toBe(first)
       expect(readFileSync(join(ud, 'machine-id.txt'), 'utf8').trim()).toBe(first)
     })
+
+    it('keeps one device id for this process when its data folder is unwritable', () => {
+      ;(app.getPath as ReturnType<typeof vi.fn>).mockReturnValue(join(ud, 'missing-user-data'))
+
+      const first = getMachineId()
+      const second = getMachineId()
+
+      expect(second).toBe(first)
+    })
+
+    it('persists the same temporary id once its data folder becomes writable', () => {
+      const delayedFolder = join(ud, 'delayed-user-data')
+      ;(app.getPath as ReturnType<typeof vi.fn>).mockReturnValue(delayedFolder)
+
+      const first = getMachineId()
+      mkdirSync(delayedFolder)
+
+      expect(getMachineId()).toBe(first)
+      expect(readFileSync(join(delayedFolder, 'machine-id.txt'), 'utf8').trim()).toBe(first)
+    })
+
+    it('does not treat an in-memory-only id as durable for licence activation', () => {
+      ;(app.getPath as ReturnType<typeof vi.fn>).mockReturnValue(join(ud, 'missing-user-data'))
+
+      const temporary = getMachineId()
+
+      expect(getDurableMachineId()).toBeNull()
+      expect(getMachineId()).toBe(temporary)
+    })
+
+    it('accepts an existing readable id as durable without replacing it', () => {
+      writeFileSync(join(ud, 'machine-id.txt'), 'existing-device-id', { mode: 0o400 })
+
+      expect(getDurableMachineId()).toBe('existing-device-id')
+      expect(readFileSync(join(ud, 'machine-id.txt'), 'utf8')).toBe('existing-device-id')
+    })
+
+    it('repairs an empty machine id file before binding a licence', () => {
+      writeFileSync(join(ud, 'machine-id.txt'), '')
+
+      const id = getDurableMachineId()
+
+      expect(id).toBeTruthy()
+      expect(readFileSync(join(ud, 'machine-id.txt'), 'utf8')).toBe(id)
+      expect(getDurableMachineId()).toBe(id)
+    })
+
+    it('fails closed if another process owns the empty-file repair lock', () => {
+      writeFileSync(join(ud, 'machine-id.txt'), '')
+      writeFileSync(join(ud, 'machine-id.txt.lock'), '')
+
+      expect(getDurableMachineId()).toBeNull()
+      expect(readFileSync(join(ud, 'machine-id.txt'), 'utf8')).toBe('')
+    })
+
+    it('recovers an empty-file repair lock only after its recorded owner is confirmed gone', () => {
+      const lockPath = join(ud, 'machine-id.txt.lock')
+      writeFileSync(join(ud, 'machine-id.txt'), '')
+      writeFileSync(lockPath, JSON.stringify({ pid: 987654321, createdAt: Date.now() - 60_000 }))
+      const kill = vi.spyOn(process, 'kill').mockImplementation((pid) => {
+        if (pid === 987654321) throw Object.assign(new Error('process gone'), { code: 'ESRCH' })
+        return true
+      })
+      try {
+        const id = getDurableMachineId()
+
+        expect(id).toBeTruthy()
+        expect(readFileSync(join(ud, 'machine-id.txt'), 'utf8')).toBe(id)
+        expect(existsSync(lockPath)).toBe(false)
+      } finally {
+        kill.mockRestore()
+      }
+    })
+
+    it('never reclaims a repair lock whose owner is still running', () => {
+      const lockPath = join(ud, 'machine-id.txt.lock')
+      writeFileSync(join(ud, 'machine-id.txt'), '')
+      writeFileSync(lockPath, JSON.stringify({ pid: process.pid, createdAt: Date.now() - 60_000 }))
+
+      expect(getDurableMachineId()).toBeNull()
+      expect(existsSync(lockPath)).toBe(true)
+    })
+
+    it('stops treating a cached id as durable if its backing folder disappears', () => {
+      const id = getMachineId()
+      rmSync(ud, { recursive: true, force: true })
+
+      expect(getMachineId()).toBe(id)
+      expect(getDurableMachineId()).toBeNull()
+    })
   })
 
   describe('normalizeServerUrl', () => {
     it('adds http:// to a scheme-less address so fetch does not reject it', () => {
       expect(normalizeServerUrl('127.0.0.1:8420')).toBe('http://127.0.0.1:8420')
       expect(normalizeServerUrl('localhost:8420')).toBe('http://localhost:8420')
-      expect(normalizeServerUrl('192.168.1.50:8420')).toBe('http://192.168.1.50:8420')
-      expect(normalizeServerUrl('licenses.acme.com')).toBe('http://licenses.acme.com')
+      expect(normalizeServerUrl('192.168.1.50:8420')).toBe('https://192.168.1.50:8420')
+      expect(normalizeServerUrl('licenses.acme.com')).toBe('https://licenses.acme.com')
     })
     it('preserves an explicit scheme and strips trailing slashes and whitespace', () => {
       expect(normalizeServerUrl('https://license.acme.com/')).toBe('https://license.acme.com')
@@ -129,12 +222,65 @@ describe('license.ts — phone-home activation', () => {
       fetchMock.mockResolvedValue(jsonResponse({ ok: true, companyName: 'Acme', seatCap: 5, seatsUsed: 1, expiresAt: null }))
       await activateLicense('127.0.0.1:8420', ' KEY-123 ')
       expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8420/activate', expect.anything())
+      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8420/activate', expect.objectContaining({ redirect: 'error' }))
       expect(testSettings.licenseServerUrl).toBe('http://127.0.0.1:8420')
       expect(testSettings.licenseKey).toBe('KEY-123') // trimmed
     })
+
+    it('never sends a licence key to an explicit remote HTTP server', async () => {
+      const result = await activateLicense('http://licenses.acme.test', 'KEY-123')
+
+      expect(result).toEqual({ ok: false, error: 'insecure_url' })
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(setSettingsSpy).not.toHaveBeenCalled()
+    })
+
+    it('rejects an unsupported URL scheme before sending a licence key', async () => {
+      const result = await activateLicense('ftp://licenses.acme.test', 'KEY-123')
+
+      expect(result).toEqual({ ok: false, error: 'insecure_url' })
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
+
+  it('keeps a saved licence valid without sending it to an insecure remote HTTP server', async () => {
+    testSettings = baseSettings({ licenseServerUrl: 'http://licenses.acme.test', licenseKey: 'KEY-123', licenseValid: true })
+
+    const result = await heartbeat()
+
+    expect(result).toEqual({ ok: false, error: 'insecure_url' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(testSettings.licenseValid).toBe(true)
+    expect(setSettingsSpy).not.toHaveBeenCalled()
+  })
+
+  it('keeps an existing licence offline when its persisted device id disappears', async () => {
+    testSettings = baseSettings({ licenseServerUrl: 'https://license.test', licenseKey: 'KEY-123', licenseValid: true })
+    getMachineId()
+    rmSync(ud, { recursive: true, force: true })
+
+    const result = await heartbeat()
+
+    expect(result).toEqual({ ok: false, error: 'network' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(testSettings.licenseValid).toBe(true)
+    expect(setSettingsSpy).not.toHaveBeenCalled()
   })
 
   describe('activateLicense', () => {
+    it('does not bind a licence to a device id that cannot be saved', async () => {
+      ;(app.getPath as ReturnType<typeof vi.fn>).mockReturnValue(join(ud, 'missing-user-data'))
+      fetchMock.mockResolvedValue(
+        jsonResponse({ ok: true, companyName: 'Acme', seatCap: 5, seatsUsed: 1, expiresAt: null })
+      )
+
+      const result = await activateLicense('https://license.acme.test', 'KEY-123')
+
+      expect(result).toEqual({ ok: false, error: 'device_identity_unavailable' })
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(setSettingsSpy).not.toHaveBeenCalled()
+    })
+
     it('success persists settings', async () => {
       fetchMock.mockResolvedValue(
         jsonResponse({ ok: true, companyName: 'Acme', seatCap: 5, seatsUsed: 2, expiresAt: 1_800_000_000_000 })
@@ -605,6 +751,11 @@ describe('license.ts — phone-home activation', () => {
   })
 
   describe('fetchLicenseConfig — informational GET /license/config read (ActLicense onboarding scene)', () => {
+    it('does not contact an explicit remote HTTP server', async () => {
+      expect(await fetchLicenseConfig('http://license.acme.test')).toEqual({ ok: false, error: 'insecure_url' })
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
     it('returns the server-declared pair on success', async () => {
       fetchMock.mockResolvedValue(
         jsonResponse({ ok: true, licenseEnforcement: false, licenseUiEnabled: false, drift: false })
@@ -614,6 +765,7 @@ describe('license.ts — phone-home activation', () => {
 
       expect(r).toEqual({ ok: true, licenseEnforcement: false, licenseUiEnabled: false, drift: false })
       expect(fetchMock).toHaveBeenCalledWith('https://license.acme.test/license/config', expect.anything())
+      expect(fetchMock).toHaveBeenCalledWith('https://license.acme.test/license/config', expect.objectContaining({ redirect: 'error' }))
     })
 
     it('normalizes a scheme-less URL before fetching, same convention as activate/heartbeat', async () => {
@@ -623,7 +775,7 @@ describe('license.ts — phone-home activation', () => {
 
       await fetchLicenseConfig('license.acme.test')
 
-      expect(fetchMock).toHaveBeenCalledWith('http://license.acme.test/license/config', expect.anything())
+      expect(fetchMock).toHaveBeenCalledWith('https://license.acme.test/license/config', expect.anything())
     })
 
     it('a network failure or malformed response reads as error:"network", never throws', async () => {

@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { OVERLAY_LAYOUT_COPY, OVERLAY_LAYOUTS } from '@shared/overlay-chrome'
+import { OverlayChromePicker } from './OverlayChromePicker'
 
 const picker = readFileSync(join(__dirname, './OverlayChromePicker.tsx'), 'utf8')
 const settings = readFileSync(join(__dirname, './Settings.tsx'), 'utf8')
@@ -36,6 +39,20 @@ describe('Settings overlay chrome cards', () => {
     expect(OVERLAY_LAYOUT_COPY.bar.desc).toBe('The bar stays on screen.')
     expect(picker).toMatch(/overlay-chrome-diagram__orb/)
     expect(css).toMatch(/overlay-chrome-diagram__orb/)
+  })
+
+  // MQA-341: diagrams must show the right edge rather than a horizontal top-edge strip.
+  it('draws the right-edge choices vertically and never offers a horizontal bar', () => {
+    const markup = renderToStaticMarkup(createElement(OverlayChromePicker, {
+      value: 'hide', placement: 'right-edge', locked: false, onChange: () => {}
+    }))
+    expect(markup).toContain('data-chrome-placement="right-edge"')
+    expect(markup).toContain('overlay-chrome-diagram--right-edge')
+    expect(markup).toContain('data-chrome-diagram="hide"')
+    expect(markup).toContain('data-chrome-diagram="island"')
+    expect(markup).not.toContain('data-chrome-diagram="bar"')
+    expect(css).toMatch(/\.overlay-chrome-diagram--right-edge\.overlay-chrome-diagram--hide \.overlay-chrome-diagram__mark/)
+    expect(css).toMatch(/\.overlay-chrome-diagram--right-edge\.overlay-chrome-diagram--island \.overlay-chrome-diagram__mark/)
   })
 
   it('switching overlayLayout patches settings immediately', () => {
