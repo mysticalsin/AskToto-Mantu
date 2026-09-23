@@ -845,7 +845,7 @@ export function App(): JSX.Element {
       const nextLock = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'renderer-pointer-enter' })
       rightEdgeDismissalLockRef.current = nextLock
       if (nextLock !== 'open') return
-      if (nextLock === 'open') setRightEdgeDockDismissed(false)
+      setRightEdgeDockDismissed(false)
     }
     dispatchAutoHide({ type: 'pointer-enter' })
   }, [rightEdgePresentation])
