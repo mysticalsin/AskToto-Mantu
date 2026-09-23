@@ -21,7 +21,9 @@ import {
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const portalSrc = readFileSync(join(__dirname, './onboarding-portal.ts'), 'utf8')
-const stageBlock = css.slice(css.indexOf('.onboard-stage {'), css.indexOf('@media (prefers-reduced-motion: reduce)'))
+const stageStart = css.indexOf('.onboard-stage {')
+const stageBlock = css.slice(stageStart, css.indexOf('@media (prefers-reduced-motion: reduce)', stageStart))
+const baseStageBlock = css.slice(stageStart, css.indexOf('.onboard-stage--portal-close', stageStart))
 
 describe('onboarding portal pill + Ready-only finish', () => {
   it('precomputes different sci-fi open and close buffers at module load', () => {
@@ -43,7 +45,7 @@ describe('onboarding portal pill + Ready-only finish', () => {
     expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
   })
 
-  it('opens as a slow soft pill, not a clip-path circle pop', () => {
+  it('keeps the full onboarding window opaque instead of opening it through a desktop-revealing mask', () => {
     expect(ONBOARDING_PORTAL_OPEN_MS).toBeGreaterThanOrEqual(1100)
     expect(ONBOARDING_PORTAL_OPEN_MS).toBeLessThanOrEqual(1400)
     expect(ONBOARDING_PORTAL_CLOSE_MS).toBeGreaterThanOrEqual(1100)
@@ -51,22 +53,24 @@ describe('onboarding portal pill + Ready-only finish', () => {
     expect(ONBOARDING_PORTAL_MS).toBe(ONBOARDING_PORTAL_CLOSE_MS)
     expect(stageBlock).not.toMatch(/clip-path:\s*circle\(8% at 50% 0%\)/)
     expect(stageBlock).not.toMatch(/clip-path:\s*circle/)
-    expect(css).toMatch(/@keyframes onboard-portal-open/)
-    expect(css).toMatch(/@keyframes onboard-portal-close/)
-    expect(css).toMatch(/cubic-bezier\(0\.22,\s*1,\s*0\.36,\s*1\)/)
-    expect(css).toMatch(/cubic-bezier\(0\.4,\s*0,\s*0\.2,\s*1\)/)
-    expect(css).toMatch(/mask-size:\s*120px 36px/)
-    expect(css).toMatch(/\.onboard-stage--portal-close/)
-    // FITO-185-M: portal-open must clear mask + force content opacity (no stalled fade-in void)
-    expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open[\s\S]*?-webkit-mask-image:\s*none/)
+    expect(stageBlock).toMatch(/background:\s*#05010a/)
+    expect(baseStageBlock).not.toMatch(/mask-image/)
+    expect(baseStageBlock).not.toMatch(/mask-size/)
+    expect(baseStageBlock).not.toMatch(/animation:/)
+    expect(css).not.toMatch(/@keyframes onboard-portal-open/)
+    expect(css).not.toMatch(/@keyframes onboard-portal-close/)
+    expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open\s*\{[\s\S]*?background:\s*#05010a/)
+    expect(css).toMatch(/\.onboard-stage--portal-close\s*\{[\s\S]*?background:\s*#05010a/)
+    // A final exit may move content, but the window bed itself must remain opaque.
+    expect(css).toMatch(/\.onboard-stage--portal-close \.onboard-portal-content[\s\S]*?animation:\s*onboard-portal-content-out/)
     expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open \.onboard-portal-content[\s\S]*?opacity:\s*1/)
     // FITO-185-P
     expect(css).toMatch(/onboard-stage--portal-open \.fade-up/)
 
     expect(css).toMatch(/\.onboard-portal-content/)
-    expect(css).toMatch(/translateY\(8px\)/)
+    expect(css).toMatch(/@keyframes onboard-portal-content-out/)
     expect(css).toMatch(
-      /prefers-reduced-motion: reduce\) \{[\s\S]*?\.onboard-stage--portal-close \{[\s\S]*?animation:\s*none;[\s\S]*?mask-image:\s*none/
+      /prefers-reduced-motion: reduce\) \{[\s\S]*?\.onboard-stage--portal-close \{[\s\S]*?animation:\s*none/
     )
     expect(onboardingPortalWaitMs(true)).toBe(0)
     expect(onboardingPortalWaitMs(false)).toBe(ONBOARDING_PORTAL_CLOSE_MS)
@@ -138,11 +142,16 @@ describe('closeOnboardingPortal call order', () => {
 })
 
 describe('FITO-185-L portal-open on Act 1 first paint', () => {
-  it('App exclusive stage ships portal-open so the mask cannot hide the lady', () => {
+  it('App exclusive stage ships an opaque portal-open bed from its first paint', () => {
     const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
     expect(app).toMatch(/onboard-stage onboard-stage--portal-open onboard-exclusive-lock/)
-    expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open/)
-    expect(css).toMatch(/mask-size:\s*280vmax 180vmax/)
+    const openBlock = css.slice(
+      css.indexOf('.onboard-stage.onboard-stage--portal-open {'),
+      css.indexOf('.onboard-stage.onboard-stage--portal-open .onboard-portal-content')
+    )
+    expect(openBlock).toMatch(/background:\s*#05010a/)
+    expect(openBlock).not.toMatch(/mask-/)
+    expect(openBlock).not.toMatch(/animation:/)
   })
 
   it('HeroWelcome + Act1 mount call requestOnboardingPortalOpen immediately (no 1400ms race)', () => {

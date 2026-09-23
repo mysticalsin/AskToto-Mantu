@@ -708,7 +708,7 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(create).toMatch(/islandResting = overlayUsesHover\(layout\)/)
     expect(create).not.toMatch(/width: onboardingLive \? stage.width : BAR_WIDTH/)
     expect(create).not.toMatch(/onboardingLive \? stage.width : restPark.width/)
-    const live = index.slice(index.indexOf('function onboardingExclusiveLive'), index.indexOf('function applyExclusiveOnboardingStage'))
+    const live = index.slice(index.indexOf('function onboardingExclusiveLive'), index.indexOf('function overlayRendererUrl'))
     expect(live).toMatch(/return true/)
     expect(live).not.toMatch(/return false/)
   })

@@ -680,12 +680,17 @@ export function App(): JSX.Element {
   // for renewed hover and leave the 360px window open. This flag is consumed exactly once at the park
   // boundary; ordinary pointer-driven hides retain their cursor safety guard.
   const forceParkAfterHideRef = useRef(false)
+  // The native cursor watcher samples the former 360px drawer for a tick or two after an explicit
+  // dismissal. Do not let that stale “hovering” sample immediately reopen the dock the user just closed.
+  // A subsequent real mouse-enter on the parked rail or an explicit Open action clears this latch.
+  const rightEdgeDismissalLockRef = useRef(false)
   const parkCurrentOverlayAfterHide = useCallback((): void => {
     const force = forceParkAfterHideRef.current
     forceParkAfterHideRef.current = false
     parkOverlayAfterHide(force)
   }, [])
   const closeRightEdgeDock = useCallback((): void => {
+    rightEdgeDismissalLockRef.current = true
     forceParkAfterHideRef.current = true
     setRightEdgeDockDismissed(true)
     dispatchAutoHide({ type: 'collapse-now' })
@@ -815,18 +820,34 @@ export function App(): JSX.Element {
     return () => window.clearTimeout(t)
   }, [overlaySpring, parkCurrentOverlayAfterHide])
   const revealOverlay = useCallback(() => {
+    rightEdgeDismissalLockRef.current = false
     setRightEdgeDockDismissed(false)
     dispatchAutoHide({ type: 'pointer-enter' })
   }, [])
   const onOverlayPointerEnter = useCallback(() => {
-    if (rightEdgePresentation) setRightEdgeDockDismissed(false)
+    // The parked tab mounts underneath the pointer as a dock finishes closing. That synthetic enter is
+    // not a new user request to reopen; consume it and wait until the cursor leaves before honoring a
+    // real return to the rail.
+    if (rightEdgePresentation && rightEdgeDismissalLockRef.current) return
+    if (rightEdgePresentation) {
+      rightEdgeDismissalLockRef.current = false
+      setRightEdgeDockDismissed(false)
+    }
     dispatchAutoHide({ type: 'pointer-enter' })
   }, [rightEdgePresentation])
-  const onOverlayPointerLeave = useCallback(() => dispatchAutoHide({ type: 'pointer-leave' }), [])
+  const onOverlayPointerLeave = useCallback(() => {
+    rightEdgeDismissalLockRef.current = false
+    dispatchAutoHide({ type: 'pointer-leave' })
+  }, [])
   // Main-process cursor watch: macOS menu bar / Dynamic Island often skips renderer mouseenter.
   useEffect(() => {
     return window.toto.onOverlayCursorHover?.((d) => {
       if (d.hovering) {
+        // An explicit close is authoritative until the pointer truly leaves and re-enters the parked
+        // rail. The cursor watcher is still sampling the vanished drawer at this point, so treating this
+        // message as a new enter produces the visible close → reopen flash reported in device QA.
+        if (rightEdgePresentation && rightEdgeDismissalLockRef.current && !d.restoredFromParkedRail) return
+        if (rightEdgePresentation && d.restoredFromParkedRail) rightEdgeDismissalLockRef.current = false
         // Main restores the native drawer before it emits this fallback hover signal. Mirror the
         // ordinary pointer-enter path here so a deliberately parked edge dock cannot leave a
         // full-size transparent window behind a renderer-only rail.
@@ -836,7 +857,7 @@ export function App(): JSX.Element {
         dispatchAutoHide({ type: 'pointer-leave' })
       }
     })
-  }, [])
+  }, [rightEdgePresentation])
 
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
   // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.
@@ -2997,6 +3018,7 @@ export function App(): JSX.Element {
     // `reveal-now` is intentionally immediate: a parked right-edge sidecar must open for a keyboard
     // summon instead of waiting for hover dwell.
     else if (a === 'metis-command') {
+      rightEdgeDismissalLockRef.current = false
       setRightEdgeDockDismissed(false)
       dispatchAutoHide({ type: 'reveal-now' })
       setCollapsed(false)
@@ -3544,12 +3566,13 @@ export function App(): JSX.Element {
         onGoDeeper={capturing ? undefined : goDeeper}
         captureAccel={captureAccel}
         askId={capturing ? undefined : ask.answer?.id}
+        variant={rightEdgePresentation ? 'sidecar' : 'default'}
       />
     )
-  }, [capturing, captureError, ask.answer, retryAnswer, goDeeper, captureAccel])
+  }, [capturing, captureError, ask.answer, retryAnswer, goDeeper, captureAccel, rightEdgePresentation])
   // Demo overrides (DEMO is a build/query-time constant, so these memos are inert in real sessions).
   const demoBody = useMemo(() => {
-    if (DEMO === 'answer') return <Answer text={DEMO_ANSWER} streaming={false} error={null} />
+    if (DEMO === 'answer') return <Answer text={DEMO_ANSWER} streaming={false} error={null} variant={rightEdgePresentation ? 'sidecar' : 'default'} />
     if (DEMO === 'copilot')
       return (
         <Copilot
@@ -3566,7 +3589,7 @@ export function App(): JSX.Element {
       )
     if (DEMO === 'history') return <RecallView onOpenFolder={() => {}} />
     return null
-  }, [])
+  }, [rightEdgePresentation])
   const body: JSX.Element | null =
     DEMO === 'answer' || DEMO === 'copilot' || DEMO === 'history'
       ? demoBody
@@ -3785,6 +3808,10 @@ export function App(): JSX.Element {
   // synchronously, so gating the visible chrome on the view — not the raw listening flag — makes Review
   // render clean immediately while the real drain safely finishes behind it.
   const showListeningChrome = listen.listening && view !== 'review' && !stoppingRef.current
+  // The right-edge native rest surface is only 52px wide. Never mount Bar-only meeting controls or
+  // notices beside its rail: those normal-flow siblings are what leaked a clipped “Mic silent” message
+  // across the user's desktop. The dock receives its live notice through its own bounded, scrollable body.
+  const showWideMeetingChrome = showListeningChrome && !rightEdgeDockVisible
 
   return (
     // Root drag is withheld while minimized: ControlPill (rendered below) arms its OWN drag instance on
@@ -3900,6 +3927,8 @@ export function App(): JSX.Element {
             onOpenIntelligence={openIntelligenceDashboard}
             onSpotlightRef={spotlightRef}
             spotlightReady={spotlightRefReady}
+            onHistory={onBarHistory}
+            liveNotice={listen.error}
             onSettings={onBarSettings}
           />
         ) : (
@@ -3955,6 +3984,8 @@ export function App(): JSX.Element {
               onOpenIntelligence={openIntelligenceDashboard}
               onSpotlightRef={spotlightRef}
               spotlightReady={spotlightRefReady}
+              onHistory={onBarHistory}
+              liveNotice={listen.error}
               onSettings={onBarSettings}
             />
           ) : rightEdgePresentation ? null : <Bar
@@ -4016,7 +4047,7 @@ export function App(): JSX.Element {
           {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only
               while a meeting is actively being listened to — clean bar with nothing under it at launch
               and after a meeting ends (Review screen), per Tony's ask. */}
-          {showListeningChrome && (
+          {showWideMeetingChrome && (
             <QuickActions
               onAction={onQuickAction}
               rainbowRing={settings?.quickActionsRainbow !== false}
@@ -4029,7 +4060,7 @@ export function App(): JSX.Element {
           {/* Listen-engine status (offline/reconnecting/crash notes) — shown regardless of which view is
               active. Copilot already renders the same `listen.error` text inline among its chips, so skip
               it there to avoid showing the same note twice; every other view has no other place for it. */}
-          {showListeningChrome && listen.error && view !== 'copilot' && (
+          {showWideMeetingChrome && listen.error && view !== 'copilot' && (
             <div title={listen.error ?? undefined} className="fade-up rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)] line-clamp-2">
               {listen.error}
             </div>

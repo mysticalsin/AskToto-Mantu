@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
@@ -6,13 +6,17 @@ import { OverlayChromePicker } from './OverlayChromePicker'
 import { OverlayPlacementPicker } from './OverlayPlacementPicker'
 import { MetisMark } from './MetisMark'
 import {
+  appearancePreviewEdgeState,
   appearancePreviewInitialPhase,
+  appearancePreviewStateKey,
   appearancePreviewShowsBar,
   appearancePreviewShowsHint,
   appearancePreviewShowsIsland,
   ONBOARDING_APPEARANCE_COPY,
   ONBOARDING_APPEARANCE_HEADING,
   ONBOARDING_APPEARANCE_LEAD,
+  ONBOARDING_POSITION_HEADING,
+  ONBOARDING_POSITION_LEAD,
   reduceAppearancePreview,
   type AppearancePreviewPhase
 } from '../lib/onboarding-appearance'
@@ -21,26 +25,30 @@ function AppearanceLivePreview({ layout, placement }: { layout: OverlayLayout; p
   const presentation = resolveOverlayPresentation({ layout, placement })
   const presentationLayout = presentation.layout
   const rightEdgePreview = presentation.surface === 'edge-chat'
+  const previewStateKey = appearancePreviewStateKey(presentationLayout, rightEdgePreview)
   const [phase, setPhase] = useState<AppearancePreviewPhase>(() => appearancePreviewInitialPhase(presentationLayout))
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setPhase(appearancePreviewInitialPhase(presentationLayout))
-  }, [presentationLayout])
+  }, [presentationLayout, previewStateKey])
 
   const send = (event: Parameters<typeof reduceAppearancePreview>[2]): void => {
-    setPhase((current) => reduceAppearancePreview(presentationLayout, current, event))
+    setPhase((current) => reduceAppearancePreview(presentationLayout, current, event, placement))
   }
 
   const showBar = !rightEdgePreview && appearancePreviewShowsBar(phase)
   const showIsland = !rightEdgePreview && appearancePreviewShowsIsland(presentationLayout, phase)
   const showHint = !rightEdgePreview && appearancePreviewShowsHint(presentationLayout, phase)
+  const edgeState = appearancePreviewEdgeState(presentationLayout, phase)
   const placementLabel = placement === 'right-edge' ? 'right edge' : 'top'
   const hitLabel =
-    presentationLayout === 'hide'
-      ? `Click the ${placementLabel} to open Hidden`
-      : presentationLayout === 'island'
-        ? 'Hover the island to open'
-        : 'Bar stays on screen'
+    rightEdgePreview
+      ? `Hover the right edge ${presentationLayout === 'hide' ? 'zone' : 'rail'} to preview ${presentationLayout === 'hide' ? 'Hidden' : 'Island'}`
+      : presentationLayout === 'hide'
+        ? `Click the ${placementLabel} to open Hidden`
+        : presentationLayout === 'island'
+          ? 'Hover the island to open'
+          : 'Bar stays on screen'
 
   return (
     <div
@@ -56,11 +64,34 @@ function AppearanceLivePreview({ layout, placement }: { layout: OverlayLayout; p
       <div className="onboard-appearance-preview__desktop" aria-hidden="true" />
       {rightEdgePreview ? (
         <>
-          <div data-edge-drawer="true" aria-hidden="true" className="absolute top-8 right-0 z-[1] flex h-16 w-2/3 items-center gap-2 rounded-l-xl border border-white/15 bg-black/45 px-3 text-[10px] text-white/80">
-            <MetisMark size={14} />
-            <span>Command sidecar</span>
-          </div>
-          <span data-edge-tab="true" aria-hidden="true" className="absolute top-12 right-0 z-[2] h-10 w-3 rounded-l-lg bg-[#d6baff]" />
+          {edgeState.showEdgeGlow ? (
+            <span data-edge-glow="true" aria-hidden="true" className="onboard-appearance-preview__edge-glow" />
+          ) : null}
+          {edgeState.showDrawer ? (
+            <div
+              data-edge-drawer="true"
+              aria-hidden="true"
+              className={
+                'onboard-appearance-preview__edge-drawer' +
+                (phase === 'in'
+                  ? ' onboard-appearance-preview__edge-drawer--in'
+                  : phase === 'out'
+                    ? ' onboard-appearance-preview__edge-drawer--out'
+                    : '')
+              }
+              onAnimationEnd={(event) => {
+                if (event.target !== event.currentTarget) return
+                if (phase === 'in') send('spring-in-end')
+                if (phase === 'out') send('spring-out-end')
+              }}
+            >
+              <MetisMark size={14} />
+              <span>Command sidecar</span>
+            </div>
+          ) : null}
+          {edgeState.showRail ? (
+            <span data-edge-tab="true" aria-hidden="true" className="onboard-appearance-preview__edge-rail" />
+          ) : null}
         </>
       ) : null}
       <button
@@ -70,6 +101,8 @@ function AppearanceLivePreview({ layout, placement }: { layout: OverlayLayout; p
         onClick={() => send('click-top')}
         onPointerEnter={() => send('hover-enter')}
         onPointerLeave={() => send('hover-leave')}
+        onFocus={() => send('hover-enter')}
+        onBlur={() => send('hover-leave')}
       />
       {showHint ? <span className="onboard-appearance-preview__hint" aria-hidden="true" /> : null}
       {showIsland ? (
@@ -126,36 +159,67 @@ export function OnboardingAppearance({
   onPlacementChange: (id: OverlayPlacement) => void
   onContinue?: () => void
 }): JSX.Element {
+  const [step, setStep] = useState<'position' | 'appearance'>('position')
+
   return (
     <div
       className={
         'onboard-appearance flex w-full flex-col items-center gap-5' + (compact ? ' onboard-appearance--compact' : '')
       }
+      data-onboard-appearance-step={step}
     >
-      <AppearanceLivePreview key={`${value}:${placement}`} layout={value} placement={placement} />
-      <div className="onboard-act4-heading flex flex-col items-center gap-2">
-        <h2 className="onboard-act4-title">{ONBOARDING_APPEARANCE_HEADING}</h2>
-        <p className="onboard-act4-lead">{ONBOARDING_APPEARANCE_LEAD}</p>
-      </div>
-      <div className="flex w-full flex-col gap-2">
-        <p className="m-0 text-center text-[12px] font-medium text-white">Position</p>
-        <p className="m-0 text-center text-[11px] leading-snug text-white/70">
-          Right edge stays beside your meeting. Drag it up or down anytime.
-        </p>
-        <OverlayPlacementPicker value={placement} locked={placementLocked || saving} onChange={onPlacementChange} />
-      </div>
-      <OverlayChromePicker
-        value={value}
-        placement={placement}
-        locked={locked || saving}
-        copy={ONBOARDING_APPEARANCE_COPY}
-        onChange={onChange}
-      />
+      <AppearanceLivePreview layout={value} placement={placement} />
+      {step === 'position' ? (
+        <>
+          <div className="onboard-act4-heading flex flex-col items-center gap-2">
+            <h2 className="onboard-act4-title">{ONBOARDING_POSITION_HEADING}</h2>
+            <p className="onboard-act4-lead">{ONBOARDING_POSITION_LEAD}</p>
+          </div>
+          <div className="flex w-full flex-col gap-2">
+            <p className="m-0 text-center text-[12px] font-medium text-white">Position</p>
+            <p className="m-0 text-center text-[11px] leading-snug text-white/70">
+              Right edge stays beside your meeting. Drag it up or down anytime.
+            </p>
+            <OverlayPlacementPicker value={placement} locked={placementLocked || saving} onChange={onPlacementChange} />
+          </div>
+          <button
+            type="button"
+            className="onboard-cta no-drag focus-ring disabled:opacity-60"
+            data-onboard-placement-continue="1"
+            disabled={saving}
+            onClick={() => setStep('appearance')}
+          >
+            Continue to appearance
+          </button>
+        </>
+      ) : (
+        <>
+          <div className="onboard-act4-heading flex flex-col items-center gap-2">
+            <h2 className="onboard-act4-title">{ONBOARDING_APPEARANCE_HEADING}</h2>
+            <p className="onboard-act4-lead">{ONBOARDING_APPEARANCE_LEAD}</p>
+          </div>
+          <OverlayChromePicker
+            value={value}
+            placement={placement}
+            locked={locked || saving}
+            copy={ONBOARDING_APPEARANCE_COPY}
+            onChange={onChange}
+          />
+          <button
+            type="button"
+            className="onboard-appearance-back no-drag focus-ring text-[12px] text-white/70 underline-offset-2 hover:text-white"
+            disabled={saving}
+            onClick={() => setStep('position')}
+          >
+            Back to position
+          </button>
+        </>
+      )}
       {saving ? (
         <p aria-live="polite" className="m-0 text-center text-[11px] text-white/70">Saving your appearance…</p>
       ) : null}
       {error ? <p role="alert" className="m-0 text-center text-[11px] text-[#ffb4b4]">{error}</p> : null}
-      {onContinue ? (
+      {onContinue && step === 'appearance' ? (
         <button type="button" onClick={onContinue} disabled={saving} className="onboard-cta no-drag focus-ring disabled:opacity-60">
           {saving ? 'Saving…' : 'Continue'}
         </button>

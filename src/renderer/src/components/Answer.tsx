@@ -56,7 +56,8 @@ export const Answer = memo(function Answer({
   onRetry,
   onGoDeeper,
   captureAccel,
-  askId
+  askId,
+  variant = 'default'
 }: {
   text: string
   streaming: boolean
@@ -86,6 +87,8 @@ export const Answer = memo(function Answer({
   /** This answer's real id (App.tsx's ask.answer.id) — threaded into the rating so Operator attaches it
    *  to the exact answer, not whatever this process last happened to send. */
   askId?: string
+  /** The right-edge dock has a fixed narrow reading surface; its footer must wrap inside that surface. */
+  variant?: 'default' | 'sidecar'
 }): JSX.Element {
   const [copied, flashCopied] = useFlash(1500)
   const [copyError, setCopyError] = useState<string | null>(null)
@@ -95,6 +98,10 @@ export const Answer = memo(function Answer({
 
   // First-token wait. The orb is the liveness signal — no elapsed-time coaching.
   const thinking = !text && streaming
+  const containerClass = [
+    'answer flex flex-col gap-2',
+    variant === 'sidecar' ? 'answer--sidecar' : 'fade-up mx-auto max-w-[620px]'
+  ].join(' ')
 
   // Record the user's verdict on this answer. Metadata only (rating + kind) → audit log; no content sent.
   // MQA-278: refuses while the Act 2 onboarding demo is on screen — nothing real should be written
@@ -234,8 +241,8 @@ export const Answer = memo(function Answer({
   }
 
   const footer = !streaming && (text || error) ? (
-    <div className="mt-1 flex flex-col gap-1.5">
-      <div className="flex items-center gap-1.5">
+    <div className="answer__footer mt-1 flex flex-col gap-1.5">
+      <div className="answer__footer-row flex items-center gap-1.5">
         <TextButton onClick={copy} disabled={!text}>
           {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
           {copied ? 'Copied' : 'Copy'}
@@ -297,7 +304,7 @@ export const Answer = memo(function Answer({
   if (error) {
     const hint = errorHint(error)
     return (
-      <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
+      <div className={containerClass}>
         {header}
         {notice}
         {/* state.ts preserves any partial answer captured before the error — show it (same markdown
@@ -322,7 +329,7 @@ export const Answer = memo(function Answer({
     // MQA-269: no provider name here. The wait re-renders on every failover attempt; naming the brain
     // narrated each hop. The finished answer's `Answered by` byline remains the one attribution surface.
     return (
-      <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
+      <div className={containerClass}>
         {header}
         {notice}
         <AgentStatus kind="thinking" size="hero" />
@@ -331,7 +338,7 @@ export const Answer = memo(function Answer({
   }
   if (!text) {
     return (
-      <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
+      <div className={containerClass}>
         {header}
         {notice}
         <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-6 text-center text-[13px] text-[color:var(--color-ink-2)]">
@@ -347,7 +354,7 @@ export const Answer = memo(function Answer({
   }
   const verdict = kind === 'factcheck' ? parseVerdict(text) : null
   return (
-    <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
+    <div className={containerClass}>
       {header}
       {notice}
       {attribution}

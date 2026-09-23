@@ -67,6 +67,8 @@ describe('exclusive onboarding renderer recovery', () => {
       loadURL,
       webContents: {}
     }
+    const showForExclusiveOnboarding = vi.fn()
+    const applyExclusiveOnboardingStage = vi.fn(() => true)
     const gone = actualRendererGoneHandler({
       mainLog: { error: vi.fn() },
       auditLog: vi.fn(),
@@ -75,8 +77,8 @@ describe('exclusive onboarding renderer recovery', () => {
       invalidateCloudSttOwner: vi.fn(),
       setTrayRecording: vi.fn(),
       setRecordingPowerSaveBlock: vi.fn(),
-      applyExclusiveOnboardingStage: vi.fn(),
-      showForExclusiveOnboarding: vi.fn(),
+      applyExclusiveOnboardingStage,
+      showForExclusiveOnboarding,
       onboardingExclusiveLive: () => true,
       overlayRendererUrl: () => recoveryUrl,
       listeningActive: true,
@@ -85,7 +87,7 @@ describe('exclusive onboarding renderer recovery', () => {
       isMinimized: true,
       currentWidth: 1,
       BAR_WIDTH: 600,
-      self: { webContents: { id: 1 } },
+      self: win,
       // Captured beside `const self = win`, outside this handler: reading self.webContents here would
       // throw against an already-torn-down WebContents (MQA-340).
       selfWebContentsId: 1,
@@ -95,6 +97,8 @@ describe('exclusive onboarding renderer recovery', () => {
 
     gone({}, { reason: 'crashed', exitCode: 1 })
 
+    expect(applyExclusiveOnboardingStage).toHaveBeenCalledExactlyOnceWith(win)
+    expect(showForExclusiveOnboarding).toHaveBeenCalledExactlyOnceWith(win)
     expect(loadURL).toHaveBeenCalledExactlyOnceWith(recoveryUrl)
     expect(revokeForLifecycleEvent).toHaveBeenCalledExactlyOnceWith('renderer_replaced')
   })
