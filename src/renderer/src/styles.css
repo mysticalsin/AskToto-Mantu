@@ -1899,9 +1899,33 @@ button.onboard-cta {
 .right-edge-sidecar__status[data-right-edge-status='Listening'] {
   color: #43d5dc;
 }
+.right-edge-sidecar__status[data-right-edge-status='Paused'] {
+  color: var(--color-warn);
+}
 .right-edge-sidecar__status[data-right-edge-status='Capturing screen'],
 .right-edge-sidecar__status[data-right-edge-status='Thinking'] {
   color: var(--color-accent-2, #b6a4ff);
+}
+.right-edge-sidecar__meeting {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  min-height: 42px;
+  padding: 2px 14px;
+  border-block: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(240, 113, 122, 0.06);
+}
+.right-edge-sidecar__meeting-label {
+  flex: 1;
+  min-width: 0;
+  color: var(--color-ink-2);
+  font-size: 11px;
+  font-weight: 650;
+}
+.right-edge-sidecar__meeting-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
 }
 .right-edge-sidecar__empty-mark {
   display: grid;
@@ -2090,6 +2114,10 @@ button.onboard-cta {
 .right-edge-sidecar__history:hover {
   background: rgba(255, 255, 255, 0.1);
   color: var(--color-ink);
+}
+.right-edge-sidecar__history[aria-pressed='true'] {
+  color: var(--color-accent-2, #b6a4ff);
+  background: rgba(121, 37, 211, 0.22);
 }
 .right-edge-sidecar__notice,
 .right-edge-sidecar__pending {

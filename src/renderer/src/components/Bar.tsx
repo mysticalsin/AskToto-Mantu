@@ -75,41 +75,27 @@ function clock(s: number): string {
  *  elapsed time from `startedAt` (a wall-clock timestamp) rather than counting up itself, so it can never
  *  drift from the real meeting duration even if a render is skipped/delayed.
  *
- *  Pause must exclude dead air from the displayed time (the old counter simply stopped incrementing while
- *  paused) — tracked here as accumulated pausedMs, subtracted from the raw wall-clock delta so a long pause
- *  doesn't make the clock jump forward on resume. */
+ *  Pause time is supplied by the meeting owner, so parking/remounting this clock cannot erase it. */
 export const ElapsedClock = memo(function ElapsedClock({
   startedAt,
-  paused
+  paused,
+  pausedMs,
+  pausedAt
 }: {
   startedAt: number
   paused: boolean
+  pausedMs: number
+  pausedAt: number | null
 }): JSX.Element {
   const [now, setNow] = useState(() => Date.now())
-  const pausedMsRef = useRef(0) // total time already spent paused this meeting
-  const pausedAtRef = useRef<number | null>(null) // wall-clock moment the current pause began
   useEffect(() => {
-    if (paused) {
-      pausedAtRef.current = Date.now()
-      return
-    }
-    if (pausedAtRef.current != null) {
-      pausedMsRef.current += Date.now() - pausedAtRef.current
-      pausedAtRef.current = null
-      setNow(Date.now())
-    }
+    if (paused) return
+    setNow(Date.now())
     const iv = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(iv)
-  }, [paused])
-  // startedAt changing means a NEW meeting — reset the accumulated pause bookkeeping so it doesn't leak
-  // across sessions (a ref, so this can't just be a useState initializer keyed on mount).
-  const startedAtRef = useRef(startedAt)
-  if (startedAtRef.current !== startedAt) {
-    startedAtRef.current = startedAt
-    pausedMsRef.current = 0
-    pausedAtRef.current = null
-  }
-  const seconds = Math.max(0, Math.floor((now - startedAt - pausedMsRef.current) / 1000))
+  }, [paused, startedAt])
+  const elapsedUntil = paused && pausedAt !== null ? pausedAt : now
+  const seconds = Math.max(0, Math.floor((elapsedUntil - startedAt - pausedMs) / 1000))
   return (
     <span
       className={[
@@ -211,6 +197,9 @@ export interface BarProps {
   /** Wall-clock start time of the current meeting (Date.now() at startListen) — ElapsedClock derives the
    *  ticking display from this instead of App owning a 1 Hz `seconds` counter. Ignored while !listening. */
   startedAt: number
+  /** Paused duration and current pause boundary owned by the meeting, surviving dock remounts. */
+  pausedMs?: number
+  pausedAt?: number | null
   panelOpen: boolean
   onTogglePanel: () => void
   /** False when there's no answer/history/settings content behind the bar for the chevron to reveal —
@@ -738,7 +727,12 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           <div className="aw-toolbar__actions" data-bar-actions>
             {props.listening && (
               <div className="aw-toolbar__timer" data-bar-listen-timer>
-                  <ElapsedClock startedAt={props.startedAt} paused={props.paused} />
+                  <ElapsedClock
+                    startedAt={props.startedAt}
+                    paused={props.paused}
+                    pausedMs={props.pausedMs ?? 0}
+                    pausedAt={props.pausedAt ?? null}
+                  />
                   {/* Pause suspends capture (mic + system audio stay warm, nothing is finalized/saved) —
                       distinct from Stop (the danger rec-dot in the tools cluster), which ends the meeting. */}
                   <button
@@ -829,7 +823,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           </div>
         </div>
     ),
-    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canMinimize, props.orbMood, props.orbStyle, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
+    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.pausedMs, props.pausedAt, props.onTogglePause, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canMinimize, props.orbMood, props.orbStyle, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
   )
 
   return (
