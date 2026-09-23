@@ -105,6 +105,8 @@ jobs:
         run: npx tsc --noEmit -p operator/tsconfig.json
       - name: Typecheck operator (client)
         run: npx tsc --noEmit -p operator/client/tsconfig.json
+      - name: Install Playwright Chromium for Operator layout tests
+        run: npx playwright install --with-deps chromium
       - name: Operator test suite
         run: npx vitest run --config operator/vitest.config.ts
       - name: Operator scripts contract tests (deploy/smoke/backup/dev-session)
