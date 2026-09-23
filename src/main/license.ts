@@ -29,7 +29,7 @@
  */
 import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { closeSync, linkSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -39,6 +39,7 @@ import type { AskMode, LicenseActivateResult, LicenseConfigResult } from '@share
 import { getLicenseLeasePublicKeyRaw } from './license-lease-key'
 import { isLeaseValidNow, verifyLeaseToken, type LeasePayload } from './license-lease-verify'
 import { shouldStartTrial, trialStatus } from './license-trial'
+import { isSecureLicenseServerUrl, normalizeLicenseServerUrl } from './license/server-url'
 
 const ACTIVATE_TIMEOUT_MS = 10_000
 const CONFIG_FETCH_TIMEOUT_MS = 8_000
@@ -52,23 +53,128 @@ function machineIdPath(): string {
   return join(app.getPath('userData'), 'machine-id.txt')
 }
 
+let cachedMachineId: { path: string; id: string; durable: boolean } | null = null
+
+function readMachineId(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8').trim() || null
+  } catch {
+    return null
+  }
+}
+
+const STALE_REPAIR_LOCK_MS = 5_000
+
+function ownerIsGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return false
+  } catch (error) {
+    // EPERM and every unexpected failure are unknown, not proof that a process died.
+    return (error as NodeJS.ErrnoException).code === 'ESRCH'
+  }
+}
+
+function reclaimStaleRepairLock(lockPath: string): boolean {
+  // A separate exclusive recovery gate prevents two survivors from removing the same stale owner and
+  // then accidentally removing one another's new lock. An unidentifiable/active owner stays locked.
+  const recoveryPath = `${lockPath}.recover`
+  let recovery: number
+  try { recovery = openSync(recoveryPath, 'wx', 0o600) } catch { return false }
+  try {
+    const raw = readFileSync(lockPath, 'utf8')
+    const owner: unknown = JSON.parse(raw)
+    if (!owner || typeof owner !== 'object') return false
+    const { pid, createdAt } = owner as { pid?: unknown; createdAt?: unknown }
+    if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) return false
+    if (typeof createdAt !== 'number' || !Number.isFinite(createdAt)) return false
+    if (Date.now() - createdAt < STALE_REPAIR_LOCK_MS || !ownerIsGone(pid)) return false
+    if (readFileSync(lockPath, 'utf8') !== raw || !ownerIsGone(pid)) return false
+    rmSync(lockPath)
+    return true
+  } catch {
+    return false
+  } finally {
+    try { closeSync(recovery) } catch { /* best effort */ }
+    try { rmSync(recoveryPath, { force: true }) } catch { /* fail closed on a stale recovery gate */ }
+  }
+}
+
+function acquireRepairLock(lockPath: string): (() => void) | null {
+  const owner = JSON.stringify({ pid: process.pid, createdAt: Date.now() })
+  const staged = `${lockPath}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(staged, owner, { mode: 0o600, flag: 'wx' })
+    try {
+      // Hard-link publishes the fully-written owner record atomically, with EEXIST on contention.
+      linkSync(staged, lockPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !reclaimStaleRepairLock(lockPath)) return null
+      linkSync(staged, lockPath)
+    }
+    return () => {
+      try {
+        if (readFileSync(lockPath, 'utf8') === owner) rmSync(lockPath)
+      } catch { /* fail closed if ownership changed */ }
+    }
+  } catch {
+    return null
+  } finally {
+    try { rmSync(staged, { force: true }) } catch { /* best effort */ }
+  }
+}
+
+function repairEmptyMachineId(path: string, id: string): void {
+  const release = acquireRepairLock(`${path}.lock`)
+  if (!release) return
+  const tempPath = `${path}.${randomUUID()}.tmp`
+  try {
+    if (readFileSync(path, 'utf8').trim()) return
+    writeFileSync(tempPath, id, { mode: 0o600, flag: 'wx' })
+    // A concurrent writer that established a valid ID wins; rename is atomic for other readers.
+    if (!readFileSync(path, 'utf8').trim()) renameSync(tempPath, path)
+  } catch {
+    // A missing/unwritable file is not durable. Retry on the next call without using this ID online.
+  } finally {
+    try { rmSync(tempPath, { force: true }) } catch { /* best effort */ }
+    release()
+  }
+}
+
+function machineIdentity(): { id: string; durable: boolean } {
+  const path = machineIdPath()
+  const existing = readMachineId(path)
+  if (existing) {
+    cachedMachineId = { path, id: existing, durable: true }
+    return cachedMachineId
+  }
+
+  // A failed first write must not create another seat on the next heartbeat. Keep the same ID in
+  // memory, and retry persisting it if the data folder becomes writable later in this process.
+  const id = cachedMachineId?.path === path ? cachedMachineId.id : randomUUID()
+  try {
+    writeFileSync(path, id, { mode: 0o600, flag: 'wx' })
+  } catch (error) {
+    // Another process may have created the file. Its persisted identity wins over our temporary one;
+    // a zero-byte file can be repaired only while holding a cross-process exclusive lock.
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST' && !readMachineId(path)) repairEmptyMachineId(path, id)
+  }
+  const persisted = readMachineId(path)
+  cachedMachineId = { path, id: persisted || id, durable: Boolean(persisted) }
+  return cachedMachineId
+}
+
 /** Stable per-install id, generated once and persisted to disk. Deliberately NOT derived from hostname
  *  or OS username — both can change (a renamed machine, a different login) and would make a real device
  *  look like a brand-new activation to the license server, silently burning a seat every time. */
 export function getMachineId(): string {
-  try {
-    const existing = readFileSync(machineIdPath(), 'utf8').trim()
-    if (existing) return existing
-  } catch {
-    /* no file yet */
-  }
-  const id = randomUUID()
-  try {
-    writeFileSync(machineIdPath(), id, { mode: 0o600 })
-  } catch {
-    /* best-effort — an unwritable userData dir just means this id won't survive a restart */
-  }
-  return id
+  return machineIdentity().id
+}
+
+/** A licence must bind only to an identity that survives an app restart. */
+export function getDurableMachineId(): string | null {
+  const identity = machineIdentity()
+  return identity.durable ? identity.id : null
 }
 
 const ServerOkSchema = z.object({
@@ -97,6 +203,7 @@ async function postJson(url: string, body: unknown): Promise<LicenseActivateResu
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      redirect: 'error',
       signal: AbortSignal.timeout(ACTIVATE_TIMEOUT_MS)
     })
   } catch {
@@ -123,9 +230,12 @@ async function postJson(url: string, body: unknown): Promise<LicenseActivateResu
  *  re-activation attempt (typo'd key, server hiccup) must never un-license a device that already works. */
 export async function activateLicense(serverUrl: string, licenseKey: string): Promise<LicenseActivateResult> {
   const url = normalizeServerUrl(serverUrl)
+  if (!isSecureLicenseServerUrl(url)) return { ok: false, error: 'insecure_url' }
+  const machineId = getDurableMachineId()
+  if (!machineId) return { ok: false, error: 'device_identity_unavailable' }
   const r = await postJson(`${url}/activate`, {
     licenseKey: licenseKey.trim(),
-    machineId: getMachineId(),
+    machineId,
     machineName: hostname()
   })
   if (r.ok) {
@@ -147,15 +257,9 @@ export async function activateLicense(serverUrl: string, licenseKey: string): Pr
   return r
 }
 
-/** Accept whatever a human types for the server address and turn it into a URL fetch() won't reject.
- *  A bare `127.0.0.1:8420`, `localhost:8420`, or `licenses.acme.com` has no scheme, so fetch throws
- *  "Invalid URL" and the activation silently reads as a network failure — the #1 reason a good key
- *  looks broken. Default to http:// when no scheme is given (plain-LAN/dev is the common no-scheme
- *  case; a real deployment uses an https:// URL explicitly), and strip trailing slashes. */
+/** Bare remote servers use HTTPS; only loopback development servers default to HTTP. */
 export function normalizeServerUrl(raw: string): string {
-  let u = raw.trim().replace(/\/+$/, '')
-  if (u && !/^https?:\/\//i.test(u)) u = `http://${u}`
-  return u
+  return normalizeLicenseServerUrl(raw)
 }
 
 /** Re-validate the already-saved activation. Called by checkLicenseGrace() in the background once the
@@ -163,9 +267,13 @@ export function normalizeServerUrl(raw: string): string {
 export async function heartbeat(): Promise<LicenseActivateResult> {
   const s = getSettings()
   if (!s.licenseServerUrl || !s.licenseKey) return { ok: false, error: 'not_activated' }
-  const r = await postJson(`${normalizeServerUrl(s.licenseServerUrl)}/heartbeat`, {
+  const url = normalizeServerUrl(s.licenseServerUrl)
+  if (!isSecureLicenseServerUrl(url)) return { ok: false, error: 'insecure_url' }
+  const machineId = getDurableMachineId()
+  if (!machineId) return { ok: false, error: 'network' }
+  const r = await postJson(`${url}/heartbeat`, {
     licenseKey: s.licenseKey,
-    machineId: getMachineId()
+    machineId
   })
   if (r.ok) {
     setSettings({
@@ -318,9 +426,9 @@ const LicenseConfigResponseSchema = z.object({
  *  the server side, so no license key is needed to call this — only a server URL. */
 export async function fetchLicenseConfig(serverUrl: string): Promise<LicenseConfigResult> {
   const url = normalizeServerUrl(serverUrl)
-  if (!url) return { ok: false, error: 'network' }
+  if (!isSecureLicenseServerUrl(url)) return { ok: false, error: 'insecure_url' }
   try {
-    const res = await fetch(`${url}/license/config`, { signal: AbortSignal.timeout(CONFIG_FETCH_TIMEOUT_MS) })
+    const res = await fetch(`${url}/license/config`, { redirect: 'error', signal: AbortSignal.timeout(CONFIG_FETCH_TIMEOUT_MS) })
     const parsed = LicenseConfigResponseSchema.safeParse(await res.json())
     if (!parsed.success) return { ok: false, error: 'network' }
     return {

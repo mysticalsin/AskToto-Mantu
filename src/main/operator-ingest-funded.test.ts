@@ -2,9 +2,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
+import { enqueueOperatorItem, loadQueueState } from './operator-queue'
 
 vi.mock('electron', () => ({ app: { getVersion: () => '1.8.2', getPath: () => '/tmp' } }))
-vi.mock('./license', () => ({ getMachineId: () => 'machine-test' }))
+const durableMachineId = vi.hoisted(() => vi.fn((): string | null => 'machine-test'))
+vi.mock('./license', () => ({ getMachineId: () => 'machine-test', getDurableMachineId: durableMachineId }))
 vi.mock('./logger', () => ({
   mainLog: { warn: vi.fn() },
   // auth.ts registers an audit actor at module load — a real seatMeta() now imports it for ssoEmail.
@@ -36,6 +38,7 @@ import {
   operatorAskTransport,
   operatorFundedProviders,
   operatorHeartbeat,
+  recordOperatorAsk,
   setOperatorFetchForTests,
   setOperatorFundedProvidersForTests,
   setOperatorQueueDirForTests
@@ -46,6 +49,7 @@ describe('heartbeat fundedProviders — IDs only, never secrets', () => {
   // call, and a shared literal '/tmp' would leak queue state across test files and runs.
   let queueDir: string
   beforeEach(() => {
+    durableMachineId.mockReturnValue('machine-test')
     metadata.getSettings.mockClear()
     metadata.authStatus.mockClear()
     metadata.lastIndexedAt.mockClear()
@@ -97,6 +101,33 @@ describe('heartbeat fundedProviders — IDs only, never secrets', () => {
     expect(metadata.lastIndexedAt).toHaveBeenCalledWith(metadata.settings)
   })
 
+  it('stays offline without a durable device id and leaves queued events untouched', async () => {
+    durableMachineId.mockReturnValue(null)
+    const old = Date.now() - 70_000
+    enqueueOperatorItem(queueDir, { path: '/v1/ingest', body: { id: 'queued-before-offline', ts: old } }, undefined, old)
+    const network = vi.fn(async () => new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }))
+    setOperatorFetchForTests(network)
+
+    const result = await operatorHeartbeat({ operatorUrl: 'https://operator.test', operatorLicenseToken: 'METIS-OP-1.test' })
+
+    expect(result).toEqual({ ok: false, retry: [] })
+    expect(network).not.toHaveBeenCalled()
+    expect(loadQueueState(queueDir).items).toMatchObject([{ body: { id: 'queued-before-offline', ts: old }, attempts: 0 }])
+  })
+
+  it('queues ingest without sending a transient HMAC device identity', async () => {
+    durableMachineId.mockReturnValue(null)
+    const network = vi.fn(async () => new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }))
+    setOperatorFetchForTests(network)
+
+    await recordOperatorAsk({ operatorUrl: 'https://operator.test', operatorLicenseToken: 'METIS-OP-1.test' }, { id: 'offline-ask' })
+
+    expect(network).not.toHaveBeenCalled()
+    const queued = loadQueueState(queueDir).items
+    expect(queued).toMatchObject([{ body: { id: 'offline-ask' }, attempts: 0 }])
+    expect(queued[0].body).not.toHaveProperty('seatHash')
+  })
+
   it('does not treat Access login HTML as a successful heartbeat', async () => {
     setOperatorFetchForTests(
       async () =>
@@ -143,6 +174,20 @@ describe('heartbeat fundedProviders — IDs only, never secrets', () => {
     expect(requestHeaders?.get('x-metis-license')).toBe(token)
     expect(metadata.setSettings).not.toHaveBeenCalled()
     expect(operatorFundedProviders()).toEqual([])
+  })
+
+  it('refuses to bind a licence when its device id cannot survive a restart', async () => {
+    durableMachineId.mockReturnValue(null)
+    const network = vi.fn(async () => new Response(JSON.stringify({ ok: true, approved: true, tier: 'metis' }), {
+      headers: { 'content-type': 'application/json' }
+    }))
+    setOperatorFetchForTests(network)
+
+    const result = await confirmOperatorLicenseConnection({ operatorLicenseToken: 'METIS-OP-1.test' })
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/device identity.*data folder.*writable/i)
+    expect(network).not.toHaveBeenCalled()
   })
 
   it.each([

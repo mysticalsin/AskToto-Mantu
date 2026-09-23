@@ -17,6 +17,7 @@ import {
   type AccessCtx
 } from './access'
 import { asCrmStatus, CRM_CANONICAL_TITLE, normalizeCrmRow } from './crm'
+import { sha256Hex } from './crypto'
 import { geoFromRequest, type CfGeo } from './geo'
 import { verifyDeviceRequest, withVerifiedLicense, type VerifiedDeviceLicense } from './device-auth'
 import { json } from './http'
@@ -347,7 +348,7 @@ async function heartbeat(
   await store.upsertSeat(seat)
   const stored = (await store.getSeat(deviceId)) ?? seat
   const pulseId = crypto.randomUUID()
-  await store.insertPulse({
+  await store.recordPulseSession({
     id: pulseId,
     device_id: deviceId,
     ts: now,
@@ -355,7 +356,7 @@ async function heartbeat(
     country: geo.country,
     city: geo.city,
     region: geo.region ?? null
-  })
+  }, seat)
   await store.insertEvent({
     id: pulseId,
     ts: now,
@@ -365,7 +366,6 @@ async function heartbeat(
     country: geo.country,
     detail: null
   })
-  await store.touchSession(deviceId, now, 'heartbeat', geo, seat)
   await ingestCrmList(store, deviceId, rawBody, now)
   // First seat to present an active Operator-issued jti binds activated_device (console / export).
   // Entitlement still resolves via seat.license_jti → issued_licenses even before this bind.
@@ -408,9 +408,9 @@ async function ingest(
   const pathTag = parseAskPathTag(rawBody.pathTag ?? rawBody.path_tag)
   if (pathTag) body.pathTag = pathTag
   const id = deviceSuppliedId(body.id)
-  // An ask id is client-chosen. A row may only be created, replaced or rated by the device that owns it;
-  // otherwise one seat could rewrite or thumbs-down another seat's history through a guessed id.
-  const existing = await store.getAsk(id)
+  // Listening and recap events have their own device-scoped namespace, so their client id is
+  // independent of an Ask id. Preserve the Ask ownership preflight for the other ingest branches.
+  const existing = body.event === 'listen' || body.event === 'recap' ? null : await store.getAsk(id)
   if (existing && existing.device_id !== deviceId) return json({ ok: false, error: 'forbidden' }, 403)
   if (body.event === 'rating') {
     if (existing) await store.updateAskRating(id, String(body.rating || ''))
@@ -429,8 +429,11 @@ async function ingest(
   if (body.event === 'listen' || body.event === 'recap') {
     const seat = seatFromBody(deviceId, body, now, geo)
     const minutes = num(body.minutes)
+    // The client id is not globally unique: scope activity to its kind and signed device so a
+    // retry dedupes without replacing another device's event or an Ask event with the same id.
+    const activityId = `activity-${await sha256Hex(JSON.stringify([body.event, deviceId, id]))}`
     await store.insertEvent({
-      id,
+      id: activityId,
       ts: now,
       kind: body.event,
       actor: seat.sso_email,
@@ -483,20 +486,12 @@ async function ingest(
     question_type: questionType,
     path_tag: parseAskPathTag(body.pathTag ?? body.path_tag)
   }
-  await store.insertAsk(projectAskTelemetry(row))
-  const pulseId = crypto.randomUUID()
-  await store.insertPulse({
-    id: pulseId,
-    device_id: deviceId,
-    ts: row.ts,
-    kind: 'ask',
-    country: geo.country,
-    city: geo.city,
-    region: geo.region ?? null
-  })
+  if (!await store.insertAsk(projectAskTelemetry(row))) return json({ ok: false, error: 'forbidden' }, 403)
+  // A lost response can replay the same Ask from the durable outbox. Stable activity IDs let each
+  // replay repair a partial event write without making a second pulse or second feed entry.
+  const pulseId = `ask:${id}`
   const seat = seatFromBody(deviceId, body, now, geo)
   await store.upsertSeat(seat)
-  await store.touchSession(deviceId, row.ts, 'ask', geo, seat)
   await store.insertEvent({
     id: pulseId,
     ts: row.ts,
@@ -506,6 +501,15 @@ async function ingest(
     country: geo.country,
     detail: safeEventDetail(row.mode || row.cache_status || 'ask')
   })
+  await store.recordPulseSession({
+    id: pulseId,
+    device_id: deviceId,
+    ts: row.ts,
+    kind: 'ask',
+    country: geo.country,
+    city: geo.city,
+    region: geo.region ?? null
+  }, seat)
   return json({ ok: true, id })
 }
 

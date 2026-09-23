@@ -15,10 +15,13 @@ import {
   appearancePreviewShowsHint,
   appearancePreviewShowsIsland,
   appearanceSettingsPatch,
+  onboardingAppearanceCopy,
   ONBOARDING_APPEARANCE_COPY,
   ONBOARDING_APPEARANCE_HEADING,
   ONBOARDING_APPEARANCE_LEAD,
   placementSettingsPatch,
+  placementDemoLayout,
+  placementPreviewCaption,
   reduceAppearancePreview,
   resolveOnboardingPlacementSync,
   saveOnboardingAppearanceChoice,
@@ -149,6 +152,38 @@ describe('onboarding appearance — Tony copy', () => {
 })
 
 describe('onboarding appearance — live preview, no lag', () => {
+  // MQA-341: a right-edge placement must not preview an almost invisible top-edge resting state.
+  it('shows a legible placement demonstration without changing the saved resting shape', () => {
+    expect(placementDemoLayout('top-center')).toBe('bar')
+    expect(placementDemoLayout('right-edge')).toBe('island')
+    expect(placementPreviewCaption('top-center')).toMatch(/top of your screen/i)
+    expect(placementPreviewCaption('right-edge')).toMatch(/right edge/i)
+
+    const markup = renderToStaticMarkup(
+      createElement(OnboardingAppearance, {
+        value: 'hide',
+        locked: false,
+        placement: 'right-edge',
+        placementLocked: false,
+        onChange: vi.fn(),
+        onPlacementChange: vi.fn()
+      })
+    )
+    expect(markup).toContain('data-appearance-preview="island"')
+    expect(markup).toContain('data-placement-caption="right-edge"')
+    expect(markup).toContain('data-onboard-appearance-step="position"')
+    expect(markup).not.toContain('data-appearance-preview="bar"')
+  })
+
+  it('describes right-edge hover behavior instead of instructing a top-edge click', () => {
+    expect(onboardingAppearanceCopy('top-center').hide.desc).toBe(ONBOARDING_APPEARANCE_COPY.hide.desc)
+    expect(onboardingAppearanceCopy('right-edge').hide.desc).toMatch(/right edge/i)
+    expect(onboardingAppearanceCopy('right-edge').hide.desc).toMatch(/hover/i)
+    expect(onboardingAppearanceCopy('right-edge').hide.desc).not.toMatch(/top/i)
+    expect(onboardingAppearanceCopy('right-edge').island.desc).toMatch(/right edge/i)
+    expect(component).toMatch(/copy=\{onboardingAppearanceCopy\(placement\)\}/)
+  })
+
   it('keeps right-edge Hidden invisible and gives Island the visible rail', () => {
     expect(appearancePreviewEdgeState('hide', 'rest')).toEqual({ showRail: false, showDrawer: false, showEdgeGlow: true })
     expect(appearancePreviewEdgeState('hide', 'in')).toEqual({ showRail: false, showDrawer: true, showEdgeGlow: false })

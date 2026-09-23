@@ -4,7 +4,7 @@ import {
   isHtmlContentType,
   looksLikeAccessRedirect
 } from '@shared/bundle-response'
-import { getMachineId } from '../license'
+import { getDurableMachineId } from '../license'
 import { hashOperatorId, operatorHmacHeaders } from '../operator-hmac-sign'
 import { mainLog } from '../logger'
 import { operatorVisionModel, parseOperatorImage, type OperatorImage } from '@shared/operator-vision'
@@ -54,6 +54,14 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
     model = visionModel
   }
 
+  // The Worker binds the licence to this ID. Never transmit conversation text or a screenshot
+  // under an in-memory identity that will change on the next launch.
+  const machineId = getDurableMachineId()
+  if (!machineId) {
+    queueMicrotask(() => fail('Métis could not save its device identity. Check the app data folder and retry.'))
+    return { abort: () => ac.abort() }
+  }
+
   const messages = [
     ...opts.req.history.map((t) => ({ role: t.role, content: t.content })),
     { role: 'user' as const, content: userText(opts.req) }
@@ -79,7 +87,7 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
   const url = `${transport.url.replace(/\/$/, '')}/v1/ask`
   const headers = {
     'content-type': 'application/json',
-    ...operatorHmacHeaders(transport.secret, hashOperatorId(getMachineId()), body)
+    ...operatorHmacHeaders(transport.secret, hashOperatorId(machineId), body)
   }
 
   void (async () => {

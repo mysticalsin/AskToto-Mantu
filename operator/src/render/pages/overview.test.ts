@@ -11,6 +11,8 @@ describe('renderOverview (QA fixture)', () => {
     expect(html).toContain('Portal CF')
     expect(html).toContain('Portal direct')
     expect(html).toContain('Live seats')
+    expect(html).toContain('heartbeat &lt; 2 min · real devices')
+    expect(html).not.toContain('heartbeat &amp;lt; 2 min')
     expect(html).toContain('Time saved')
     expect(html).toContain('Value')
     expect(html).toContain('Portal CF')
@@ -37,5 +39,34 @@ describe('renderOverview (QA fixture)', () => {
     const html = renderOverview(data, CTX)
     expect(html).toContain(`Devices · ${data.profiles.length} seats`)
     expect(html).toContain('data-toplist-device')
+  })
+
+  it('keeps the spend number compact and moves the estimate into supporting copy', async () => {
+    const data = await fixtureDashboard()
+    data.roi.portalDirect = '21991 tok · ≈$0.01 · estimate, list price'
+    const html = renderOverview(data, CTX)
+    expect(html).toContain('<div class="n">21991 tok</div>')
+    expect(html).toContain('DeepSeek platform · ≈$0.01 · estimate, list price')
+    expect(html).not.toContain('<div class="n">21991 tok · ≈$0.01 · estimate, list price</div>')
+  })
+
+  it('shows zero activity for a known seat with no events instead of inventing one', async () => {
+    const data = await fixtureDashboard()
+    data.events = []
+    const html = renderOverview(data, CTX)
+    const firstDevice = html.match(/<div class="vol-row" data-toplist-device="[^"]+"[\s\S]*?<\/div>/)?.[0]
+    expect(firstDevice).toContain('<span class="muted">0</span>')
+    expect(firstDevice).toContain('width="0%"')
+  })
+
+  it('keeps the Overview activity concise and links to the full Events page', async () => {
+    const data = await fixtureDashboard()
+    expect(data.events.length).toBeGreaterThan(10)
+
+    const html = renderOverview(data, CTX)
+
+    expect((html.match(/data-event="/g) ?? [])).toHaveLength(10)
+    expect(html).toContain('href="#events"')
+    expect(html).toContain('Open Events')
   })
 })

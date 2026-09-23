@@ -15,14 +15,15 @@ import {
   setOperatorQueueDirForTests
 } from './operator-ingest'
 import { enqueueOperatorItem, loadQueueState, saveQueueState } from './operator-queue'
-import { signOperatorIngest } from './operator-hmac-sign'
+import { hashOperatorId, signOperatorIngest } from './operator-hmac-sign'
 import { resetOperatorIntegrationsStateForTests, setOperatorIntegrationsFetchForTests } from './operator-integrations'
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp', getVersion: () => '1.8.0-test' }
 }))
 vi.mock('./license', () => ({
-  getMachineId: () => 'machine-test-0001'
+  getMachineId: () => 'machine-test-0001',
+  getDurableMachineId: () => 'machine-test-0001'
 }))
 vi.mock('./logger', () => ({
   mainLog: { warn: () => {}, info: () => {}, error: () => {} },
@@ -248,7 +249,10 @@ describe('operatorHeartbeat v2 seat fields + queue reporting', () => {
     expect(beat.ok).toBe(true)
     expect(f.calls).toHaveLength(1)
     const body = f.calls[0].body
-    expect(body.seatHash).toBeTruthy()
+    // The Worker derives a keyless seat hash from this same signed device ID. Do not duplicate an
+    // earlier (possibly transient) identity in the body if another process persisted a different ID.
+    expect(body).not.toHaveProperty('seatHash')
+    expect(f.calls[0].headers.get(OPERATOR_HMAC_HEADERS.device)).toBe(hashOperatorId('machine-test-0001'))
     expect(body.os).toBeTruthy()
     expect(body.appVersion).toBe('1.8.0-test')
     expect(body.lastIndexAt).toBe(1_700_000_000_333)
@@ -258,6 +262,13 @@ describe('operatorHeartbeat v2 seat fields + queue reporting', () => {
     expect(body.dropped).toBe(0)
     expect(JSON.stringify(body)).not.toMatch(/sk-ant|secret|password/i)
     expect(metadata.lastIndexedAt).toHaveBeenCalledWith(metadata.settings)
+  })
+
+  it('keeps a legacy licence-based seat hash when one is configured', async () => {
+    const f = captureFetch()
+    await operatorHeartbeat({ ...SETTINGS, licenseKey: 'LEGACY-LICENCE' })
+
+    expect(f.calls[0].body.seatHash).toBe(hashOperatorId('LEGACY-LICENCE'))
   })
 
   it('drains queued asks in enqueue order on the tick, before the heartbeat itself, then reports empty', async () => {
@@ -491,4 +502,18 @@ describe('recordOperatorRating explicit askId', () => {
     await recordOperatorRating(SETTINGS, 'down')
     expect(f.calls[1].body.id).toBe('ask-C')
   })
+
+  it.each(['suggest', 'summary', 'recap'])(
+    'does not let a %s update replace the last answer used by legacy ratings',
+    async (mode) => {
+      const f = captureFetch()
+      await recordOperatorAsk(SETTINGS, { id: 'answer-to-rate', mode: 'answer', question: 'q' })
+      await recordOperatorAsk(SETTINGS, { id: `background-${mode}`, mode, question: 'q' })
+
+      await recordOperatorRating(SETTINGS, 'up')
+
+      expect(f.calls).toHaveLength(3)
+      expect(f.calls[2].body.id).toBe('answer-to-rate')
+    }
+  )
 })

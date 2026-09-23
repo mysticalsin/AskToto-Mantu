@@ -234,7 +234,9 @@ function sseResponse(
         inputTokens,
         outputTokens,
         outcome,
-        askId: req.clientAskId
+        // The client id names the answer delivered to the user. A failed provider leg gets its own
+        // metering id so a successful desktop failover can claim the client id without being downgraded.
+        askId: outcome === 'answered' ? req.clientAskId : undefined
       })
     } catch {
       /* metering must never fail the seat stream */

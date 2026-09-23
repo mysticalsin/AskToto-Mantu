@@ -196,7 +196,9 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
     expect(main).toMatch(/const onboardingLive = onboardingExclusiveLive\(\)/)
     expect(main).toMatch(/if \(onboardingLive\) params\.set\('exclusiveOnboarding'/)
     // The helper always starts from either the dev URL or the packaged file URL, then adds the flag.
-    expect(main).toMatch(/process\.env\['ELECTRON_RENDERER_URL'\] \?\? pathToFileURL/)
+    expect(main).toMatch(/devEnv\('ELECTRON_RENDERER_URL'\) \?\? pathToFileURL/)
+    // MQA-339: a stale user environment variable must not route packaged onboarding or imports to Vite.
+    expect(main).not.toMatch(/process\.env\[?['"]?ELECTRON_RENDERER_URL/)
     expect(main).toMatch(/const rendererUrl = overlayRendererUrl\(\)/)
     expect(main).toMatch(/win\.loadURL\(rendererUrl\)/)
     expect(main).toMatch(/self\.loadURL\(overlayRendererUrl\(\)\)/)

@@ -14,6 +14,7 @@ export type CommandControlReason =
   | 'nonce_mismatch'
   | 'expired'
   | 'policy_denied'
+  | 'outcome_unverified'
   | 'adapter_failed'
 
 type CurrentProposal = CommandControlProposal & {
@@ -95,8 +96,13 @@ export class CommandControl {
     }
     try {
       const result = await this.deps.execute(proposal.request)
+      if (result.id !== proposal.request.id) {
+        this.audit('command.confirmed', { actionId: proposal.request.id, outcome: 'failed' })
+        return { ok: false, reason: 'adapter_failed' }
+      }
       this.audit('command.confirmed', { actionId: proposal.request.id, outcome: result.outcome })
-      if (result.ok) return { ok: true, outcome: result.outcome }
+      if (result.ok && result.outcome === 'verified') return { ok: true, outcome: result.outcome }
+      if (result.ok && result.outcome === 'unknown') return { ok: false, reason: 'outcome_unverified' }
       return { ok: false, reason: 'adapter_failed' }
     } catch {
       this.audit('command.confirmed', { actionId: proposal.request.id, outcome: 'failed' })
