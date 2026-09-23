@@ -1,9 +1,8 @@
 /**
- * Console theme preference (cookie + map paint resolution).
- * Realtime map must never treat "system" as light SSR: that paints light fills on a dark
- * card and reads as sparse jagged outlines. System resolves to dark for map paint unless the
- * user explicitly chose light; the client paintRealtimeMapTheme still respects prefers-color-scheme
- * when data-theme is absent.
+ * Console theme preference (cookie + theme resolution helpers).
+ * The realtime map no longer bakes a theme into its SSR markup: land, ocean and pills read the
+ * --map-* CSS tokens, so they follow `data-theme` (or prefers-color-scheme when it is absent)
+ * without a repaint. `resolveMapTheme` stays for callers that still need a concrete light/dark.
  */
 
 export type ThemePreference = 'light' | 'dark' | 'system'

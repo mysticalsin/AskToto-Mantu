@@ -65,7 +65,10 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     // Amaris-skinned tokens (plan 3.2) supersede the measured-Shoey light palette; --def-100 is
     // now an alias of --bg, not a literal duplicate hex. Card radius is 14px (plan 3.4), not
     // the measured-Shoey 6.4px.
-    expect(SPA_CSS).toContain('--bg: #f8f6fd')
+    // Rock 1 (2026-09-23): the canvas is rebased to the reference light palette (SPEC.md def-100).
+    expect(SPA_CSS).toContain('--bg: #fafafa')
+    expect(SPA_CSS).toContain('--border: #e3e8ee')
+    expect(SPA_CSS).toContain('--chart-0: #2362ee')
     expect(SPA_CSS).toContain('--def-100: var(--bg)')
     expect(SPA_CSS).toContain('--radius-card: 14px')
     expect(SPA_JS_PATH).toMatch(/^\/assets\/operator-[0-9a-f]{12}\.js$/)

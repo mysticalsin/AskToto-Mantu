@@ -65,10 +65,17 @@ export interface MapInteractionOptions {
   maxZoom?: number
   /** Multiplier applied per +/- button press or keyboard +/-. Reference uses 1.6. */
   buttonZoomFactor?: number
+  /** Called after every transform change with the current zoom factor (realtime re-clustering). */
+  onZoom?: (k: number) => void
 }
 
 export interface MapInteractionHandle {
   destroy(): void
+  /** Current zoom factor. */
+  zoom(): number
+  /** Re-apply the counter-scale to `data-pin-inner` nodes inserted after the last transform
+   *  (the realtime client swaps pin/cluster layers in place on every live poll). */
+  refresh(): void
 }
 
 /**
@@ -78,7 +85,7 @@ export interface MapInteractionHandle {
  * constant screen size while the map zooms, exactly like MapCanvas.tsx.
  */
 export function attachMapInteraction(root: ParentNode, options: MapInteractionOptions): MapInteractionHandle {
-  const { width, height, minZoom = 1, maxZoom = 8, buttonZoomFactor = 1.6 } = options
+  const { width, height, minZoom = 1, maxZoom = 8, buttonZoomFactor = 1.6, onZoom } = options
   const svg = root.querySelector<SVGSVGElement>('[data-map-svg]')
   const viewport = root.querySelector<SVGGElement>('[data-viewport]')
   const zoomInBtn = root.querySelector<HTMLButtonElement>('[data-zoom-in]')
@@ -92,14 +99,18 @@ export function attachMapInteraction(root: ParentNode, options: MapInteractionOp
     listeners.push(() => target.removeEventListener(type, handler, opts))
   }
 
+  function counterScale(): void {
+    if (!svg) return
+    const inverse = 1 / transform.k
+    svg.querySelectorAll<SVGGElement>('[data-pin-inner]').forEach((el) => {
+      el.setAttribute('transform', `scale(${inverse})`)
+    })
+  }
+
   function apply(): void {
     if (viewport) viewport.setAttribute('transform', `translate(${transform.x} ${transform.y}) scale(${transform.k})`)
-    if (svg) {
-      const inverse = 1 / transform.k
-      svg.querySelectorAll<SVGGElement>('[data-pin-inner]').forEach((el) => {
-        el.setAttribute('transform', `scale(${inverse})`)
-      })
-    }
+    counterScale()
+    if (onZoom) onZoom(transform.k)
   }
 
   function clientToSvg(clientX: number, clientY: number): { x: number; y: number } | null {
@@ -134,6 +145,10 @@ export function attachMapInteraction(root: ParentNode, options: MapInteractionOp
 
     on(svg, 'pointerdown', (e: Event) => {
       const pe = e as PointerEvent
+      // Never capture (or start a drag) from an interactive child: capture would retarget the
+      // click away from a cluster pill button inside its foreignObject.
+      const target = pe.target as Element | null
+      if (target && target.closest && target.closest('button, a, [data-cluster-pill]')) return
       svg.setPointerCapture(pe.pointerId)
       drag = { pointerId: pe.pointerId, startClientX: pe.clientX, startClientY: pe.clientY, startX: transform.x, startY: transform.y }
     })
@@ -168,6 +183,12 @@ export function attachMapInteraction(root: ParentNode, options: MapInteractionOp
   return {
     destroy(): void {
       listeners.forEach((off) => off())
+    },
+    zoom(): number {
+      return transform.k
+    },
+    refresh(): void {
+      counterScale()
     }
   }
 }

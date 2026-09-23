@@ -10,22 +10,18 @@ export const NAV_SECTIONS = [
     ]
   },
   {
-    id: 'fleet',
-    label: 'Fleet',
+    // Reference sidebar "Manage" section (operator/shoey-ref/SPEC.md): notifications and
+    // settings first, then the fleet (licenses, groups) and ops (keys, connectors, audit) pages.
+    id: 'manage',
+    label: 'Manage',
     items: [
+      { id: 'notifications', label: 'Notifications' },
+      { id: 'settings', label: 'Settings' },
       { id: 'licenses', label: 'Licenses' },
       { id: 'groups', label: 'Groups' },
-      { id: 'notifications', label: 'Notifications' }
-    ]
-  },
-  {
-    id: 'ops',
-    label: 'Ops',
-    items: [
       { id: 'keys', label: 'Keys' },
       { id: 'connectors', label: 'Connectors' },
-      { id: 'audit', label: 'Audit' },
-      { id: 'settings', label: 'Settings' }
+      { id: 'audit', label: 'Audit' }
     ]
   }
 ] as const

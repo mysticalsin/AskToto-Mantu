@@ -296,10 +296,14 @@ describe('quality bar: keys last4 and Cloudflare fail-loud', () => {
     expect(html).toContain('Connect Cloudflare (login) on Keys.')
     expect(html).toContain('data-install-works')
     expect(html).toContain('Install → works')
-    // Default theme is system (no data-theme attr) so Realtime never SSR-forces light land.
+    // Default theme is system (no data-theme attr) so Realtime never SSR-forces a theme:
+    // the map paints land through the --map-land token, which follows the OS until the user picks one.
     // Align with ui.console.test.ts / beff0b0.
     expect(html).not.toContain('data-theme="light"')
-    expect(html).toContain('data-map-theme="system"')
+    expect(html).not.toMatch(/<html[^>]*data-theme=/)
+    const rtMap = html.slice(html.indexOf('<div id="map-root"'), html.indexOf('<div class="rt-overlay">'))
+    expect(rtMap).toContain('fill="var(--map-land)"')
+    expect(rtMap).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
     expect(html).not.toContain('Cloudflare token missing')
     expect(html).toContain('data-page="keys"')
     expect(html).not.toMatch(tokenPatternForTests())

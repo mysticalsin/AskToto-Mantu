@@ -1,7 +1,7 @@
 import { geoMercator } from 'd3-geo'
 import { describe, expect, it } from 'vitest'
 import { CENTROIDS_1152, CENTROIDS_520 } from './paths.generated'
-import { MERCATOR_VARIANTS, projectPoint } from './mercator'
+import { MAP_DIMENSIONS, MERCATOR_VARIANTS, projectPoint } from './mercator'
 
 describe('projectPoint matches d3-geo geoMercator exactly', () => {
   const cases: [number, number][] = [
@@ -44,7 +44,20 @@ describe('projectPoint reproduces the generated centroids', () => {
     expect(x).toBeGreaterThan(0)
     expect(x).toBeLessThan(1152)
     expect(y).toBeGreaterThan(0)
-    expect(y).toBeLessThan(576)
+    expect(y).toBeLessThan(MAP_DIMENSIONS['1152'].height)
+  })
+
+  it('every generated centroid sits inside its frame, and Antarctica has none', () => {
+    for (const [variant, centroids] of [['1152', CENTROIDS_1152], ['520', CENTROIDS_520]] as const) {
+      const { width, height } = MAP_DIMENSIONS[variant]
+      expect(centroids.AQ, `${variant} AQ`).toBeUndefined()
+      for (const [iso, [x, y]] of Object.entries(centroids)) {
+        expect(x, `${variant} ${iso} x`).toBeGreaterThanOrEqual(0)
+        expect(x, `${variant} ${iso} x`).toBeLessThanOrEqual(width)
+        expect(y, `${variant} ${iso} y`).toBeGreaterThanOrEqual(0)
+        expect(y, `${variant} ${iso} y`).toBeLessThanOrEqual(height)
+      }
+    }
   })
 
   it('CENTROIDS_520.US matches projectPoint at the 520 variant within 40px (country centroid vs. its capital-ish point)', () => {

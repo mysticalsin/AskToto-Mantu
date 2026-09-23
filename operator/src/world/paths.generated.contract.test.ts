@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { buildWorldData } from '../../scripts/build-world.mjs'
+import { buildWorldData, DROPPED_FEATURE_IDS, isWorldRect } from '../../scripts/build-world.mjs'
 import { CENTROIDS_1152, CENTROIDS_520, WORLD_1152, WORLD_520 } from './paths.generated'
+import { MAP_DIMENSIONS, MERCATOR_VARIANTS } from './mercator'
 
 describe('generated world paths are not stale', () => {
   it('committed paths.generated.ts matches a fresh build-world.mjs run', async () => {
@@ -57,6 +58,38 @@ describe('committed world paths have no degenerate or band-shaped rings', () => 
         const pts = pointsFromSubpath(subpath)
         expect(pts.length, `${entry.alpha2 || entry.id} ring`).toBeGreaterThanOrEqual(4)
         expect(isBandBox(pts), `${entry.alpha2 || entry.id} ring should not be a band artifact`).toBe(false)
+      }
+    }
+  })
+
+  it('no committed ring is an inverted whole-world rectangle (Brunei 096 regression), in either variant', () => {
+    for (const [variant, world] of [['1152', WORLD_1152], ['520', WORLD_520]] as const) {
+      const worldWidth = 2 * Math.PI * MERCATOR_VARIANTS[variant].scale
+      for (const entry of world) {
+        for (const subpath of splitSubpaths(entry.d)) {
+          expect(isWorldRect(pointsFromSubpath(subpath), worldWidth), `${variant} ${entry.alpha2 || entry.id} whole-world ring`).toBe(false)
+        }
+      }
+    }
+  })
+
+  it('isWorldRect flags the full clip rectangle and not a real wide country', () => {
+    const worldWidth = 2 * Math.PI * MERCATOR_VARIANTS['1152'].scale
+    expect(isWorldRect([[95.5, -31.5], [1056.5, -31.5], [1056.5, 929.5], [95.5, 929.5]], worldWidth)).toBe(true)
+    // Russia: full width, ~250 px tall.
+    expect(isWorldRect([[95.5, 40], [1056.5, 40], [1056.5, 290], [95.5, 290]], worldWidth)).toBe(false)
+  })
+
+  it('every committed ring lies inside its frame (nothing clipped at the top, no Antarctica)', () => {
+    for (const [variant, world] of [['1152', WORLD_1152], ['520', WORLD_520]] as const) {
+      const { width, height } = MAP_DIMENSIONS[variant]
+      expect(world.some((e) => DROPPED_FEATURE_IDS.has(e.id)), `${variant} dropped ids present`).toBe(false)
+      for (const entry of world) {
+        for (const subpath of splitSubpaths(entry.d)) {
+          for (const [x, y] of pointsFromSubpath(subpath)) {
+            expect(x >= 0 && x <= width && y >= 0 && y <= height, `${variant} ${entry.alpha2 || entry.id} (${x},${y})`).toBe(true)
+          }
+        }
       }
     }
   })

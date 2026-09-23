@@ -20,7 +20,7 @@ import { api } from './api'
 import { initRouter } from './router'
 import { initTheme } from './theme'
 import { initGeoCountryFilter, paintShoeyMap } from './map'
-import { initRealtimeMap, paintRealtimeMapTheme } from './realtime-map'
+import { initRealtimeMap } from './realtime-map'
 import {
   initVolumeTabs,
   initVolumeSearch,
@@ -83,7 +83,6 @@ function reinitPage(page: string): void {
   if (page === 'realtime') {
     initGeoCountryFilter()
     initRealtimeMap()
-    paintRealtimeMapTheme()
   }
   if (page === 'events') {
     initEventsFilters()

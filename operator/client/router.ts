@@ -5,7 +5,7 @@
  * navigation directly.
  */
 import { paintShoeyMap } from './map'
-import { initRealtimeMap, paintRealtimeMapTheme } from './realtime-map'
+import { initRealtimeMap } from './realtime-map'
 import { applyEventsFilter } from './filters'
 
 /** Mirrors operator/src/render/shell.ts's `railActionFor()` exactly (plan P0.4: "the rail shows
@@ -62,7 +62,6 @@ export function route(to?: string): void {
   if (t) t.textContent = titles[id]
   if (id === 'realtime') {
     initRealtimeMap()
-    paintRealtimeMapTheme()
   } else if (id === 'overview') {
     // Overview corner choropleth is not #map-root. paintShoeyMap no-ops when Realtime
     // Mission Control svg.rt-map-svg owns #map-root (see client/map.ts).

@@ -1,6 +1,6 @@
 import { WORLD_PATHS } from './world-paths'
 import { stripMapBands } from './map-bands'
-import { projectPoint, renderCornerMapSvg, renderRealtimeMapSvg, type RealtimeMapPoint } from './world/map'
+import { MAP_DIMENSIONS, projectPoint, renderCornerMapSvg, renderRealtimeMapSvg, type RealtimeMapOptions, type RealtimeMapPoint } from './world/map'
 import type { MapCountry, MapDot, MixBar, SeriesPoint, TokenPoint } from './dashboard'
 
 const MONO = ['#2a2a2e', '#3f3f46', '#71717a', '#a1a1aa', '#e4e4e7']
@@ -109,7 +109,10 @@ export function heatmapGrid(values: number[]): string {
   return out
 }
 
-/** Same Mercator math as the realtime map (1152x576 viewport), so the legacy 4-variant
+const W1152 = MAP_DIMENSIONS['1152'].width
+const H1152 = MAP_DIMENSIONS['1152'].height
+
+/** Same Mercator math as the realtime map (1152-wide viewport), so the legacy 4-variant
  * Map page's dots/graticule line up with the WORLD_PATHS land it now shares. */
 function project(lat: number, lon: number): { x: number; y: number } {
   const [x, y] = projectPoint(lat, lon, '1152')
@@ -145,11 +148,11 @@ export function choropleth(
   if (variant === 'graticule') {
     for (let lon = -180; lon <= 180; lon += 30) {
       const x = project(0, lon).x
-      grid += `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="576" class="grat" />`
+      grid += `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${H1152}" class="grat" />`
     }
     for (let lat = -60; lat <= 80; lat += 30) {
       const y = project(lat, 0).y
-      grid += `<line x1="0" y1="${y.toFixed(1)}" x2="1152" y2="${y.toFixed(1)}" class="grat" />`
+      grid += `<line x1="0" y1="${y.toFixed(1)}" x2="${W1152}" y2="${y.toFixed(1)}" class="grat" />`
     }
   }
   const marks = empty
@@ -163,7 +166,7 @@ export function choropleth(
   const caption = empty
     ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in.</div>`
     : ''
-  return `${caption}<svg class="world" viewBox="0 0 1152 576" role="img" aria-label="Unique devices by country">
+  return `${caption}<svg class="world" viewBox="0 0 ${W1152} ${H1152}" role="img" aria-label="Unique devices by country">
     <defs>
       <pattern id="hatch-1" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="var(--chart-3)" stroke-width="1"/></pattern>
       <pattern id="hatch-2" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="5" stroke="var(--chart-4)" stroke-width="1"/></pattern>
@@ -237,7 +240,7 @@ export function choroplethMini(countries: MapCountry[], cls = 'stat-choro'): str
   return svg.replace('class="corner-map-svg"', `class="corner-map-svg ${cls}"`)
 }
 
-/** Ocean + every world-atlas country at the 1152x576 realtime-map viewport. Inlined into
+/** Ocean + every world-atlas country at the 1152-wide realtime-map viewport. Inlined into
  * #map-root HTML. paintShoeyMap only restyles theme (fill/stroke attributes, not CSS). */
 export function shoeyLandSvg(cls = 'world shoey-world'): string {
   let land = ''
@@ -246,22 +249,26 @@ export function shoeyLandSvg(cls = 'world shoey-world'): string {
     if (!painted) continue
     land += `<path class="world-land" data-iso="${iso}" d="${painted}" fill="${SHOEY_LAND}" stroke="${SHOEY_LAND_STROKE}" stroke-width="1.15" />`
   }
-  return `<svg class="${cls}" viewBox="0 0 1152 576" width="1152" height="576" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Unique seats by country" data-land="${SHOEY_LAND}">
-    <rect class="world-ocean" width="1152" height="576" fill="${SHOEY_OCEAN}"/>
+  return `<svg class="${cls}" viewBox="0 0 ${W1152} ${H1152}" width="${W1152}" height="${H1152}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Unique seats by country" data-land="${SHOEY_LAND}">
+    <rect class="world-ocean" width="${W1152}" height="${H1152}" fill="${SHOEY_OCEAN}"/>
     ${land}
   </svg>`
 }
 
 export const SHOEY_LAND_SVG = shoeyLandSvg()
 
-/** Realtime map: dark ocean + grid, country flag pills, pulsing dots with city labels,
- * zoom/pan. Faithful port via ./world/map.ts (renderRealtimeMapSvg). Country rollups feed
- * pill seat totals so fleet device counts stay honest. Default theme is dark (Realtime). */
-export function shoeyWorld(countries: MapCountry[], dots: MapDot[], theme: 'light' | 'dark' = 'dark'): string {
+/** Realtime map from ready-made places (live.json geo.places via placeToPoint): one dot per
+ * place, cluster pills, zoom/pan. Colours follow the theme through CSS tokens. */
+export function realtimeWorld(points: RealtimeMapPoint[], opts: Omit<RealtimeMapOptions, 'points'> = {}): string {
+  return renderRealtimeMapSvg({ ...opts, points })
+}
+
+/** Legacy entry point: fleet dots grouped to places. `countries` and `theme` are accepted for
+ * existing callers and ignored (pills count the seats of the places they group; colours are
+ * tokens). New callers use realtimeWorld. */
+export function shoeyWorld(countries: MapCountry[], dots: MapDot[], _theme?: 'light' | 'dark'): string {
   const empty = countries.length === 0 && dots.length === 0
-  const points = empty ? [] : groupDotsToPoints(dots)
-  const rollup = countries.map((c) => ({ iso: c.iso, devices: c.devices }))
-  return renderRealtimeMapSvg({ points, theme, countries: rollup })
+  return renderRealtimeMapSvg({ points: empty ? [] : groupDotsToPoints(dots) })
 }
 
 /** Seats sharing a country, city, and lat/lon (to 2 decimals, ~1km) render as one dot whose

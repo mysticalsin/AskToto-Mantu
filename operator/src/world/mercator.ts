@@ -9,17 +9,21 @@
 
 export type MapVariant = '1152' | '520'
 
-/** Exact reference projection constants:
- * WorldMap.tsx: geoMercator().translate([576, 288]).scale(152.948) for the 1152x576 realtime map.
- * CountryMap.tsx: geoMercator().translate([260, 180]).scale(70) for the 520x300 corner map. */
+/** Projection constants. Scales are the reference's (WorldMap.tsx 152.948, CountryMap.tsx 70);
+ * the vertical frame is ours. The reference's 1152x576 frame (translate y 288) clips everything
+ * north of ~72.7°N, cutting north Greenland, Svalbard and the Canadian Arctic. Antarctica is not
+ * drawn at all (operator/scripts/build-world.mjs drops feature 010), so the frame now runs from
+ * ~83.7°N down to ~56.5°S:
+ * - 1152: translate y 449, height 642 (y=5.5 at 83.7°N, y=633 at 56.5°S).
+ * - 520:  translate y 206, height 292 (y=3 at 83.7°N, y=290 at 56.5°S). */
 export const MERCATOR_VARIANTS: Record<MapVariant, { translate: [number, number]; scale: number }> = {
-  '1152': { translate: [576, 288], scale: 152.948 },
-  '520': { translate: [260, 180], scale: 70 }
+  '1152': { translate: [576, 449], scale: 152.948 },
+  '520': { translate: [260, 206], scale: 70 }
 }
 
 export const MAP_DIMENSIONS: Record<MapVariant, { width: number; height: number }> = {
-  '1152': { width: 1152, height: 576 },
-  '520': { width: 520, height: 300 }
+  '1152': { width: 1152, height: 642 },
+  '520': { width: 520, height: 292 }
 }
 
 /**

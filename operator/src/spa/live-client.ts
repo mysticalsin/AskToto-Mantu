@@ -6,7 +6,9 @@
  * is exactly the logic (fetch scheduling, backoff, ETag handling) that needs a real test.
  */
 
-export type LiveConnState = 'live' | 'reconnecting' | 'paused'
+/** 'expired' is terminal: the Access session is gone (401 or a login redirect), so polling stops
+ *  and the shell shows "Session expired — reload" instead of retrying forever. */
+export type LiveConnState = 'live' | 'reconnecting' | 'paused' | 'expired'
 
 /** Only the live.json fields the shell chrome consumes today (operator/src/routes/live.ts,
  * operator/src/dashboard.ts LiveSnapshot). Duplicated as a minimal local shape rather than
@@ -24,8 +26,8 @@ export interface PollState {
   lastSuccessAt: number | null
 }
 
-/** 5s, 10s, 20s, 40s, 60s (plan D3: "exponential backoff (5, 10, 20, 40, max 60s)"). */
-export const BACKOFF_SEQUENCE_MS = [5000, 10000, 20000, 40000, 60000]
+/** 5s, 10s, 20s, then 30s (operator UX PLAN.md error matrix: "backoff 5→10→20→30 s, resets on success"). */
+export const BACKOFF_SEQUENCE_MS = [5000, 10000, 20000, 30000]
 export const VISIBLE_INTERVAL_MS = 5000
 export const HIDDEN_INTERVAL_MS = 30000
 
@@ -37,6 +39,7 @@ export type FetchOutcome =
   | { kind: 'not-modified' }
   | { kind: 'ok'; etag: string | null }
   | { kind: 'error' }
+  | { kind: 'expired' }
 
 /**
  * One state transition: given the previous poll state and what the last fetch did, returns the
@@ -45,6 +48,9 @@ export type FetchOutcome =
  * flips to 'reconnecting'. Never throws, never touches the DOM or a clock other than `now`.
  */
 export function nextPollState(prev: PollState, outcome: FetchOutcome, now: number): PollState {
+  // Terminal: once the session is known to be gone, nothing (not even a stray 200) revives polling.
+  if (prev.state === 'expired') return prev
+  if (outcome.kind === 'expired') return { ...prev, state: 'expired' }
   if (outcome.kind === 'error') {
     const idx = BACKOFF_SEQUENCE_MS.indexOf(prev.backoffMs)
     const nextBackoff = BACKOFF_SEQUENCE_MS[Math.min(idx + 1, BACKOFF_SEQUENCE_MS.length - 1)]
@@ -56,10 +62,11 @@ export function nextPollState(prev: PollState, outcome: FetchOutcome, now: numbe
   return { etag: outcome.etag ?? prev.etag, backoffMs: BACKOFF_SEQUENCE_MS[0], state: 'live', lastSuccessAt: now }
 }
 
-/** Delay until the next poll. Reconnecting always uses the current backoff step regardless of
- * visibility; a healthy connection uses the visible/hidden cadence (plan D3: 5s visible, 30s
- * hidden). */
-export function pollDelayMs(state: PollState, visible: boolean): number {
+/** Delay until the next poll, or null when polling must stop (session expired). Reconnecting
+ * always uses the current backoff step regardless of visibility; a healthy connection uses the
+ * visible/hidden cadence (plan D3: 5s visible, 30s hidden). */
+export function pollDelayMs(state: PollState, visible: boolean): number | null {
+  if (state.state === 'expired') return null
   if (state.state === 'reconnecting') return state.backoffMs
   return visible ? VISIBLE_INTERVAL_MS : HIDDEN_INTERVAL_MS
 }
@@ -67,12 +74,14 @@ export function pollDelayMs(state: PollState, visible: boolean): number {
 /** What the rail indicator shows. A hidden tab always reads "Paused" regardless of connection
  * health (plan 6.1), even though polling keeps running underneath at the slower cadence. */
 export function displayLiveState(poll: LiveConnState, documentVisible: boolean): LiveConnState {
+  if (poll === 'expired') return 'expired'
   if (!documentVisible) return 'paused'
   return poll
 }
 
 /**
- * "Live, updated 3s ago" / "Live, updated just now" / "Reconnecting" / "Paused". `formatAge` is
+ * "Live, updated 3s ago" / "Live, updated just now" / "Live paused · retrying" / "Paused" /
+ * "Session expired — reload". `formatAge` is
  * injected (the real client passes operator/src/render primitives.relativeTime) so this stays a
  * pure string function with no time-formatting duplicated here.
  */
@@ -82,8 +91,9 @@ export function liveStatusText(
   now: number,
   formatAge: (ts: number, now: number) => string
 ): string {
+  if (display === 'expired') return 'Session expired — reload'
   if (display === 'paused') return 'Paused'
-  if (display === 'reconnecting') return 'Reconnecting'
+  if (display === 'reconnecting') return 'Live paused · retrying'
   if (lastSuccessAt == null) return 'Live'
   const age = formatAge(lastSuccessAt, now)
   return age === 'now' ? 'Live, updated just now' : `Live, updated ${age} ago`

@@ -368,8 +368,8 @@ function contrastRatio(hexA, hexB) {
  *  css.ts's template string. If css.ts's tokens move, update this table in the same commit. */
 const THEMES = {
   light: {
-    bg: '#f8f6fd', surface: '#ffffff', surface2: '#f5f1fc',
-    ink: '#170826', ink2: '#5c5273', ink3: '#66607d',
+    bg: '#fafafa', surface: '#ffffff', surface2: '#f4f4f4',
+    ink: '#020819', ink2: '#475569', ink3: '#5c6779',
     accentFill: '#7f00da', accentInk: '#ffffff', accentSoft: '#f1e6fb', accentText: '#7f00da'
   },
   dark: {

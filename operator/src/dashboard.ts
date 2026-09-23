@@ -21,7 +21,16 @@ import {
 } from './fleet'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
 import { projectAskTelemetry, projectEventTelemetry } from './privacy'
-import { geoRegionRows, realtimeGeoRows, type GeoRegionRow, type RealtimeGeoRow } from './realtime-geo'
+import {
+  geoRegionRows,
+  realtimeGeoRows,
+  realtimePlaceActivity,
+  realtimePlaces,
+  type GeoRegionRow,
+  type PlaceActivity,
+  type RealtimeGeoRow,
+  type RealtimePlace
+} from './realtime-geo'
 import { readIntegrationExtra } from './connectors/data'
 import type {
   AskRow,
@@ -247,6 +256,30 @@ export interface DashboardPayload {
   geo: RealtimeGeoRow[]
   geoRegions: GeoRegionRow[]
   questions: QuestionsPayload
+  /** Realtime map data (seats heard from in the last 30 min). Built by the same functions as
+   *  live.json `geo` / `placeActivity`, so the SSR page and the 5 s poll always agree. */
+  realtime: RealtimePayload
+}
+
+export interface RealtimePayload {
+  places: RealtimePlace[]
+  placeActivity: Record<string, PlaceActivity>
+  /** Seats online now (heartbeat < 2 min), same as `roi.liveSeats`. */
+  liveSeats: number
+  /** Same projection as live.json `recentEvents`, so the SSR feed and the 5 s repaint share one row shape. */
+  recentEvents: RecentEvent[]
+}
+
+/** One row of live.json `recentEvents`: metadata only, never detail/preview/prompt text. */
+export interface RecentEvent {
+  id: string
+  ts: number
+  kind: string
+  actor: string | null
+  country: string | null
+  city: string | null
+  os: string | null
+  appVersion: string | null
 }
 
 /** src/shared/question-type.ts owns the taxonomy and the aggregation math; this is just the shape. */
@@ -1165,8 +1198,46 @@ export async function buildDashboard(
     },
     geo: realtimeGeoRows(seats, sessions),
     geoRegions: geoRegionRows(seats),
-    questions: buildQuestionsPayload(weekAsks)
+    questions: buildQuestionsPayload(weekAsks),
+    realtime: buildRealtimePayload(seats, sessions, asks, live, now, recentEventsFrom(storedEvents, seatsById, 50))
   }
+}
+
+function buildRealtimePayload(
+  seats: SeatRow[],
+  sessions: SessionRow[],
+  asks: AskRow[],
+  liveSeats: number,
+  now: number,
+  recentEvents: RecentEvent[]
+): RealtimePayload {
+  const places = realtimePlaces(seats, sessions, now)
+  return { places, placeActivity: realtimePlaceActivity(places, seats, asks, now), liveSeats, recentEvents }
+}
+
+/** Newest-first event metadata for the Realtime feed and the Events "N new events" pill. `rows`
+ *  must already be privacy-projected. Kind names that look like secrets collapse to "event". */
+export function recentEventsFrom(rows: EventRow[], seatsById: Map<string, SeatRow>, limit = 50): RecentEvent[] {
+  return rows
+    .slice()
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, limit)
+    .map((row) => {
+      const seat = row.device_id ? seatsById.get(row.device_id) : undefined
+      const who = displayProfile(seat)
+      const actor = who.hostname || who.email || (row.actor && !looksLikeSecret(row.actor) ? row.actor : null)
+      const city = seat?.city && !looksLikeSecret(seat.city) ? seat.city : null
+      return {
+        id: row.id,
+        ts: row.ts,
+        kind: looksLikeSecret(row.kind) ? 'event' : row.kind,
+        actor,
+        country: row.country || seat?.country || null,
+        city,
+        os: seat?.os || null,
+        appVersion: seat?.app_version || null
+      }
+    })
 }
 
 function buildQuestionsPayload(asks: AskRow[]): QuestionsPayload {
@@ -1271,7 +1342,13 @@ export interface LiveSnapshot {
     costToday: string | null
     cacheHit: string | null
   }
-  geo: RealtimeGeoRow[]
+  /** Realtime map contract (PLAN.md "Live"): places heard from in the last 30 min, seats online
+   *  now, and the snapshot time. */
+  geo: { places: RealtimePlace[]; liveSeats: number; asOf: number }
+  /** Up to 50 newest events, metadata only (no detail/preview/prompt). */
+  recentEvents: RecentEvent[]
+  /** Top ask modes / skills per place key over the last 30 min; keys ⊆ geo.places keys. */
+  placeActivity: Record<string, PlaceActivity>
   liveSeatsTable: LiveSeatRow[]
   /** Rail badge counts (task B7). Seats whose approval is `pending` (fleet.ts `approvalOf`). */
   pendingApprovals: number
@@ -1345,7 +1422,7 @@ export async function buildLiveSnapshot(store: OperatorStore, now: number, opts:
   const [seatsRaw, sessionsPage, eventsRaw, todayAsksRaw, crmRaw, proposals, integrations, issuedLicenses] = await Promise.all([
     store.listSeats(),
     store.listSessions({ since: now - DAY, limit: 500 }),
-    store.listEvents(40),
+    store.listEvents(50),
     store.listAsks(500, now - DAY),
     store.listCrm(50),
     store.listProposals(50),
@@ -1394,8 +1471,11 @@ export async function buildLiveSnapshot(store: OperatorStore, now: number, opts:
     })
 
   const notices = buildNotices(seats, crm, proposals)
-  const eventsOut = events.map((e) => eventFromStored(e, seatsById))
-  const geo = realtimeGeoRows(seats, sessionsPage.rows)
+  const eventsOut = events.slice(0, 40).map((e) => eventFromStored(e, seatsById))
+  const recentEvents = recentEventsFrom(events, seatsById, 50)
+  const places = realtimePlaces(seats, sessionsPage.rows, now)
+  const placeActivity = realtimePlaceActivity(places, seats, todayAsks, now)
+  const geo = { places, liveSeats: liveSeats.length, asOf: now }
 
   const pendingApprovals = seats.filter((s) => approvalOf(s) === 'pending').length
   const unseenNotices = opts.since == null ? notices.length : notices.filter((n) => n.ts > opts.since!).length
@@ -1417,6 +1497,8 @@ export async function buildLiveSnapshot(store: OperatorStore, now: number, opts:
       cacheHit: sliceToday.hitRate == null ? null : `${Math.round(sliceToday.hitRate * 100)}%`
     },
     geo,
+    recentEvents,
+    placeActivity,
     liveSeatsTable,
     pendingApprovals,
     unseenNotices,

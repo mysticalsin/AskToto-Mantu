@@ -1,12 +1,18 @@
 /**
  * Pure, isomorphic world-map rendering. No DOM access anywhere in this module (that lives
- * in ./map-dom.ts, imported only by the client bundle). Ports the OpenPanel "Shoey" demo
- * (WorldMap.tsx, shared/MapCanvas.tsx, shared/ZoomPan.tsx, demo-shoey-0c94a954/CountryMap.tsx)
- * faithfully: same Mercator constants, same greedy clustering, same choropleth formula.
+ * in ./map-dom.ts, imported only by the client bundle). The client bundle also imports the
+ * layer renderers below (renderPinLayer / renderClusterLayer / clusterPopoverHtml) so a live
+ * payload repaints the same markup the server rendered, in place.
  *
- * Realtime uplift (Tony 2026-09-13): dark ocean + subtle grid, country flag pills
- * (`{Country} · {N} devices · {places} places` = fleet geo, not Live), city labels beside pulsing dots.
- * `clusterPins` still drives badge placement distance; country rollups supply pill text.
+ * Two modes, one module:
+ * - Realtime (renderRealtimeMapSvg): one small dot per place, cluster pills above groups of
+ *   places (pulsing live dot, seat count, divider, label), re-clustered per zoom level.
+ * - Overview choropleth (renderCornerMapSvg): country fill = --chart-0 at an opacity linear in
+ *   the country's seat count, no zoom.
+ *
+ * Colours are CSS tokens only (var(--map-*), var(--chart-0)), so light/dark follow the console
+ * theme with no JS repaint and no hex anywhere in the markup. Honesty rules (quality-bar):
+ * exactly one pin per supplied place, never a sample dot, asks omitted when unknown.
  */
 import { CENTROIDS_1152, CENTROIDS_520, WORLD_1152, WORLD_520 } from './paths.generated'
 import { MAP_DIMENSIONS, MERCATOR_VARIANTS, projectPoint, type MapVariant } from './mercator'
@@ -33,17 +39,29 @@ export function countryName(code: string): string {
   }
 }
 
+function escapeXml(s: string): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
 // ---------------------------------------------------------------------------------------
-// Clustering (ported from WorldMap.tsx). Used for tooltip aggregation and to space
-// country pills when several countries are on the map.
+// Clustering (ported from WorldMap.tsx).
 // ---------------------------------------------------------------------------------------
 
 export interface ClusterPoint {
+  /** ISO 3166-1 alpha-2 code. */
   country: string
   city: string
   count: number
   x: number
   y: number
+  /** Place key (see placeKey) when the point came from a realtime place. */
+  key?: string
+  /** Open sessions at this place, when known. */
+  sessions?: number
 }
 
 export interface Cluster {
@@ -109,8 +127,8 @@ export function clusterPins(points: ClusterPoint[], options: ClusterOptions = DE
   return { clusters, badgeClusters }
 }
 
-/** "Longueuil" for a single member, "Canada, 3 places" for one country with several members,
- * "5 places" once more than one country is represented. */
+/** Reference pill wording: "Longueuil" for a single place (country name when it has no city),
+ * "Canada, 3 cities" for several places in one country, "5 countries" across countries. */
 export function clusterLabel(cluster: Cluster): string {
   const { members } = cluster
   if (members.length === 1) {
@@ -120,320 +138,297 @@ export function clusterLabel(cluster: Cluster): string {
   const countryCodes = new Set(members.map((m) => m.country))
   if (countryCodes.size === 1) {
     const [code] = countryCodes
-    return `${countryName(code)}, ${members.length} places`
+    return `${countryName(code)}, ${members.length} cities`
   }
-  return `${members.length} places`
+  return `${countryCodes.size} countries`
 }
 
 // ---------------------------------------------------------------------------------------
-// Rendering
+// Realtime places
 // ---------------------------------------------------------------------------------------
-
-export type Theme = 'light' | 'dark'
-
-const LAND_FILL: Record<Theme, string> = { light: 'rgb(240,240,240)', dark: '#1f1830' }
-const LAND_STROKE: Record<Theme, string> = { light: 'rgb(153,153,153)', dark: '#3a2f52' }
-const OCEAN_FILL: Record<Theme, string> = { light: '#ffffff', dark: '#120e1c' }
-const GRID_STROKE: Record<Theme, string> = { light: 'rgba(23, 8, 38, 0.08)', dark: 'rgba(37, 29, 54, 0.85)' }
-const LABEL_FILL: Record<Theme, string> = { light: '#170826', dark: '#f3eefb' }
-const PILL_BG: Record<Theme, string> = { light: 'rgba(255,255,255,0.92)', dark: 'rgba(26, 21, 38, 0.92)' }
-const PILL_BORDER: Record<Theme, string> = { light: 'rgba(23, 8, 38, 0.12)', dark: 'rgba(255,255,255,0.14)' }
-const PILL_FG: Record<Theme, string> = { light: '#170826', dark: '#fafafa' }
-
-function escapeXml(s: string): string {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-function landPaths(entries: { id: string; alpha2: string; d: string }[], theme: Theme): string {
-  const fill = LAND_FILL[theme]
-  const stroke = LAND_STROKE[theme]
-  return entries
-    .map(
-      (c) =>
-        `<path class="world-land" data-iso="${escapeXml(c.alpha2 || c.id)}" d="${c.d}" fill="${fill}" stroke="${stroke}" stroke-width="0.5" />`
-    )
-    .join('')
-}
-
-/** Subtle lon/lat grid behind land — Mission Control density without clutter. */
-function oceanGrid(theme: Theme, width: number, height: number): string {
-  const stroke = GRID_STROKE[theme]
-  const lines: string[] = []
-  for (let lon = -180; lon <= 180; lon += 30) {
-    const [x] = projectPoint(0, lon, '1152')
-    lines.push(
-      `<line class="rt-map-grid" x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${height}" stroke="${stroke}" stroke-width="0.6" />`
-    )
-  }
-  for (let lat = -60; lat <= 80; lat += 30) {
-    const [, y] = projectPoint(lat, 0, '1152')
-    lines.push(
-      `<line class="rt-map-grid" x1="0" y1="${y.toFixed(1)}" x2="${width}" y2="${y.toFixed(1)}" stroke="${stroke}" stroke-width="0.6" />`
-    )
-  }
-  return `<rect class="world-ocean" width="${width}" height="${height}" fill="${OCEAN_FILL[theme]}" />
-    <g class="rt-map-grid-layer" aria-hidden="true">${lines.join('')}</g>`
-}
 
 export interface RealtimeMapPoint {
+  /** ISO 3166-1 alpha-2 code (kept under this name for existing callers). */
   country: string
   city: string
   lat: number
   lon: number
   /** Seats reporting from this exact point. */
   count: number
-  /** Asks in the last 30 min from this point, when known. Omitted entirely from the
-   * tooltip when not supplied — numbers stay honest, never a fabricated zero. */
+  /** Asks in the last 30 min from this point, when known. Omitted entirely from the markup
+   * when not supplied — numbers stay honest, never a fabricated zero. */
   asks?: number
+  iso2?: string
+  region?: string | null
+  /** Open sessions at this point, when known. */
+  sessions?: number
+  /** Stable place key (see placeKey); derived from the point when absent. */
+  placeKey?: string
 }
 
-/** Optional country rollup (from dashboard map.countries) so pill seat totals stay honest
- * when fleet device counts are known separately from dots. */
-export interface RealtimeCountryRollup {
-  iso: string
-  devices: number
+/** The live.json `geo.places[]` entry (operator/src/realtime-geo.ts RealtimePlace). */
+export interface RealtimePlaceLike {
+  iso2: string
+  country: string
+  region: string | null
+  city: string | null
+  lat: number
+  lon: number
+  seats: number
+  sessions: number
 }
+
+/** `${iso2}|${city}|${lat 2dp}|${lon 2dp}` — must match operator/src/realtime-geo.ts placeKey. */
+export function placeKey(p: { iso2: string; city: string | null; lat: number; lon: number }): string {
+  return `${(p.iso2 || '').toUpperCase()}|${(p.city || '').trim()}|${p.lat.toFixed(2)}|${p.lon.toFixed(2)}`
+}
+
+function pointKey(p: RealtimeMapPoint): string {
+  return p.placeKey ?? placeKey({ iso2: p.iso2 ?? p.country, city: p.city, lat: p.lat, lon: p.lon })
+}
+
+/** Adapter from a live.json place to a map point. */
+export function placeToPoint(place: RealtimePlaceLike): RealtimeMapPoint {
+  return {
+    country: (place.iso2 || '').toUpperCase(),
+    city: place.city || '',
+    lat: place.lat,
+    lon: place.lon,
+    count: place.seats,
+    iso2: (place.iso2 || '').toUpperCase(),
+    region: place.region,
+    sessions: place.sessions,
+    placeKey: placeKey(place)
+  }
+}
+
+const VARIANT: MapVariant = '1152'
+
+function toClusterPoint(p: RealtimeMapPoint): ClusterPoint {
+  const [x, y] = projectPoint(p.lat, p.lon, VARIANT)
+  return { country: (p.country || '').toUpperCase(), city: p.city || '', count: p.count, x, y, key: pointKey(p), sessions: p.sessions }
+}
+
+/** Screen-space cluster radius at zoom 1. Divided by the zoom factor, so zooming in splits
+ * clusters (the pills are counter-scaled and keep a constant on-screen size). */
+export const CLUSTER_RADIUS_PX = 36
+
+/** Cluster places for the current zoom factor `zoomK` (1 = whole world). */
+export function clusterPlaces(points: RealtimeMapPoint[], zoomK = 1): Cluster[] {
+  const k = Number.isFinite(zoomK) && zoomK > 0 ? zoomK : 1
+  const { clusters } = clusterPins(points.map(toClusterPoint), {
+    radiusPx: CLUSTER_RADIUS_PX / k,
+    maxBadges: Number.MAX_SAFE_INTEGER,
+    minBadgeDistancePx: 0
+  })
+  return clusters
+}
+
+/** Seat-weighted centre of a cluster, so the pill sits over the mass of its places rather
+ * than over whichever place happened to be listed first. */
+function clusterCentre(cluster: Cluster): { x: number; y: number } {
+  const total = cluster.members.reduce((sum, m) => sum + Math.max(1, m.count), 0)
+  let x = 0
+  let y = 0
+  for (const m of cluster.members) {
+    const w = Math.max(1, m.count) / total
+    x += m.x * w
+    y += m.y * w
+  }
+  return { x, y }
+}
+
+function pinLabel(p: RealtimeMapPoint): string {
+  const name = countryName(p.country)
+  const place = p.city ? `${p.city}, ${name}` : name
+  return `${place} · ${p.count} ${p.count === 1 ? 'seat' : 'seats'}`
+}
+
+function renderPin(point: RealtimeMapPoint): string {
+  const [x, y] = projectPoint(point.lat, point.lon, VARIANT)
+  const iso = (point.country || '').toUpperCase()
+  const city = point.city || countryName(iso)
+  const asksAttr = point.asks == null ? '' : ` data-asks="${point.asks}"`
+  const sessionsAttr = point.sessions == null ? '' : ` data-sessions="${point.sessions}"`
+  return `<g class="rt-pin" data-pin tabindex="0" role="img" aria-label="${escapeXml(pinLabel(point))}" data-place="${escapeXml(pointKey(point))}" data-country="${escapeXml(countryName(iso))}" data-iso="${escapeXml(iso)}" data-city="${escapeXml(city)}" data-seats="${point.count}"${asksAttr}${sessionsAttr} transform="translate(${x.toFixed(2)} ${y.toFixed(2)})"><g class="rt-pin-inner" data-pin-inner><g class="rt-pin-halo" aria-hidden="true"><circle r="3" /></g><circle class="rt-pin-dot" r="3" /></g></g>`
+}
+
+/** One dot per supplied place, never more, never fewer. */
+export function renderPinLayer(points: RealtimeMapPoint[]): string {
+  return `<g class="rt-pin-layer" data-pin-layer>${points.map(renderPin).join('')}</g>`
+}
+
+/** Clusters that get a pill: every multi-place cluster plus the busiest single places, capped,
+ * then thinned so no two pills overlap on screen (pill boxes are PILL_W x PILL_H screen px). */
+const PILL_MAX = 24
+const PILL_TOP_SINGLES = 12
+const PILL_W = 150
+const PILL_H = 30
+
+export function pillClusters(clusters: Cluster[], zoomK = 1): Cluster[] {
+  const k = Number.isFinite(zoomK) && zoomK > 0 ? zoomK : 1
+  const bySeats = [...clusters].sort((a, b) => b.count - a.count)
+  const singles = new Set(bySeats.filter((c) => c.members.length === 1).slice(0, PILL_TOP_SINGLES))
+  const wanted = bySeats.filter((c) => c.members.length >= 2 || singles.has(c))
+  const accepted: { c: Cluster; x: number; y: number }[] = []
+  for (const c of wanted) {
+    if (accepted.length >= PILL_MAX) break
+    const centre = clusterCentre(c)
+    const clear = accepted.every((a) => Math.abs(a.x - centre.x) * k >= PILL_W || Math.abs(a.y - centre.y) * k >= PILL_H)
+    if (clear) accepted.push({ c, x: centre.x, y: centre.y })
+  }
+  return accepted.map((a) => a.c)
+}
+
+/** Zoom buckets the client re-clusters on (bucket changes, not every wheel tick). */
+export function zoomBucket(zoomK: number): number {
+  if (!(zoomK > 1.25)) return 1
+  if (zoomK < 1.9) return 1.5
+  if (zoomK < 2.7) return 2.25
+  return 3
+}
+
+function renderClusterPill(cluster: Cluster, index: number): string {
+  const { x, y } = clusterCentre(cluster)
+  const label = clusterLabel(cluster)
+  const seatsWord = cluster.count === 1 ? 'seat' : 'seats'
+  const keys = JSON.stringify(cluster.members.map((m) => m.key ?? ''))
+  return `<g class="rt-cluster" data-cluster="${index}" data-cluster-count="${cluster.count}" data-cluster-members="${cluster.members.length}" data-cluster-keys="${escapeXml(keys)}" transform="translate(${x.toFixed(2)} ${y.toFixed(2)})"><g class="rt-cluster-inner" data-pin-inner><foreignObject x="-110" y="-40" width="220" height="32"><div xmlns="http://www.w3.org/1999/xhtml" class="rt-pill-wrap"><button type="button" class="rt-pill" data-cluster-pill="${index}" aria-label="${escapeXml(`${label}, ${cluster.count} ${seatsWord}`)}"><span class="rt-pill-dot" aria-hidden="true"></span><span class="rt-pill-count">${cluster.count}</span><span class="rt-pill-sep" aria-hidden="true"></span><span class="rt-pill-label">${escapeXml(label)}</span></button></div></foreignObject></g></g>`
+}
+
+/** Pill layer for the given zoom factor. `data-cluster` indexes into clusterPlaces(points, k)
+ * order, so the client can recover a pill's members without re-deriving the pixel geometry. */
+export function renderClusterLayer(points: RealtimeMapPoint[], zoomK = 1): string {
+  const clusters = clusterPlaces(points, zoomK)
+  const pills = new Set(pillClusters(clusters, zoomK))
+  const markup = clusters
+    .map((c, i) => (pills.has(c) ? renderClusterPill(c, i) : ''))
+    .join('')
+  return `<g class="rt-cluster-layer" data-cluster-layer data-zoom-bucket="${zoomBucket(zoomK)}">${markup}</g>`
+}
+
+function landPaths(entries: { id: string; alpha2: string; d: string }[]): string {
+  return entries
+    .map(
+      (c) =>
+        `<path class="world-land" data-iso="${escapeXml(c.alpha2 || c.id)}" d="${c.d}" fill="var(--map-land)" stroke="var(--map-stroke)" stroke-width="0.5" vector-effect="non-scaling-stroke" />`
+    )
+    .join('')
+}
+
+export const DEFAULT_EMPTY_CAPTION =
+  'No heartbeats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.'
 
 export interface RealtimeMapOptions {
   points: RealtimeMapPoint[]
-  theme?: Theme
-  countries?: RealtimeCountryRollup[]
+  /** Current zoom factor for the initial cluster layer (default 1). */
+  zoomK?: number
+  /** Honest empty-state copy; must keep "not sample dots" (quality-bar). */
+  emptyCaption?: string
+  /** @deprecated Colours follow the console theme through CSS tokens; ignored. */
+  theme?: 'light' | 'dark'
+  /** @deprecated Pills now count the seats of the places they group; ignored. */
+  countries?: { iso: string; devices: number }[]
 }
 
-const PULSE_STYLE = `
-    .rt-pin { cursor: pointer; }
-    .rt-pin-halo {
-      fill: none;
-      stroke: #10b981;
-      stroke-width: 1.5;
-      opacity: 0.6;
-      transform-origin: center;
-      animation: metis-rt-pulse 1.8s ease-out infinite;
-    }
-    .rt-pin-dot { fill: #10b981; stroke: #ffffff; stroke-width: 1.5; }
-    .rt-pin-label {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 11px;
-      font-weight: 500;
-      letter-spacing: 0.01em;
-      pointer-events: none;
-      user-select: none;
-    }
-    .rt-country-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 10px 4px 8px;
-      border-radius: 999px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 11px;
-      font-weight: 500;
-      line-height: 1.2;
-      white-space: nowrap;
-      box-shadow: 0 6px 18px rgba(0,0,0,0.28);
-      pointer-events: none;
-      user-select: none;
-    }
-    .rt-country-pill img {
-      width: 16px;
-      height: 12px;
-      border-radius: 2px;
-      display: block;
-      flex: 0 0 auto;
-    }
-    .rt-country-pill .rt-pill-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #3f3f46;
-      flex: 0 0 auto;
-    }
-    @keyframes metis-rt-pulse {
-      0% { r: 4.5; opacity: 0.6; }
-      100% { r: 14; opacity: 0; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .rt-pin-halo { animation: none; r: 9; opacity: 0.25; }
-    }
-  `
-
-const MAX_LABEL_CHARS = 22
-
-function truncateLabel(raw: string): string {
-  const s = String(raw || '').trim()
-  if (s.length <= MAX_LABEL_CHARS) return s
-  return `${s.slice(0, MAX_LABEL_CHARS - 1)}...`
-}
-
-/** City label lines for a pin. Multi-line when the city string uses " / " or newlines. */
-function cityLabelLines(city: string, country: string): string[] {
-  const raw = (city || '').trim()
-  if (!raw) return [countryName(country)]
-  const parts = raw.split(/\s*\/\s*|\n+/).map((p) => p.trim()).filter(Boolean)
-  return parts.length ? parts : [raw]
-}
-
-function renderPin(point: RealtimeMapPoint, variant: MapVariant, theme: Theme): string {
-  const [x, y] = projectPoint(point.lat, point.lon, variant)
-  const dotRadius = point.count > 1 ? 6.5 : 4.5
-  const label = point.city || countryName(point.country)
-  const asksAttr = point.asks == null ? '' : ` data-asks="${point.asks}"`
-  const lines = cityLabelLines(point.city, point.country)
-  const fullTitle = lines.join(' / ')
-  const labelFill = LABEL_FILL[theme]
-  const tspans = lines
-    .map((line, i) => {
-      const dy = i === 0 ? '0.35em' : '1.15em'
-      return `<tspan x="10" dy="${dy}">${escapeXml(truncateLabel(line))}</tspan>`
-    })
-    .join('')
-  return `<g class="rt-pin" data-pin tabindex="0" data-country="${escapeXml(countryName(point.country))}" data-city="${escapeXml(label)}" data-seats="${point.count}"${asksAttr} transform="translate(${x.toFixed(2)} ${y.toFixed(2)})">
-      <g class="rt-pin-inner" data-pin-inner>
-        <circle class="rt-pin-halo" r="4.5" />
-        <circle class="rt-pin-dot" r="${dotRadius}" />
-        <text class="rt-pin-label" fill="${labelFill}" title="${escapeXml(fullTitle)}">${tspans}</text>
-      </g>
-    </g>`
-}
-
-export interface CountryPill {
-  iso: string
-  name: string
-  seats: number
-  places: number
-  x: number
-  y: number
-}
-
-/** Roll points up by country for flag pills. Seat totals prefer `countries` rollup when
- * present so the pill matches fleet device counts. */
-export function countryPillsFromPoints(
-  points: RealtimeMapPoint[],
-  countries: RealtimeCountryRollup[] = [],
-  variant: MapVariant = '1152'
-): CountryPill[] {
-  if (!points.length) return []
-  const byIso = new Map<
-    string,
-    { seats: number; places: Set<string>; xs: number[]; ys: number[] }
-  >()
-  for (const p of points) {
-    const iso = (p.country || '').toUpperCase()
-    if (!iso) continue
-    const [x, y] = projectPoint(p.lat, p.lon, variant)
-    const placeKey = `${(p.city || '').trim().toLowerCase()}|${p.lat.toFixed(2)}|${p.lon.toFixed(2)}`
-    const prev = byIso.get(iso)
-    if (prev) {
-      prev.seats += p.count
-      prev.places.add(placeKey)
-      prev.xs.push(x)
-      prev.ys.push(y)
-    } else {
-      byIso.set(iso, { seats: p.count, places: new Set([placeKey]), xs: [x], ys: [y] })
-    }
-  }
-  const deviceByIso = new Map(countries.map((c) => [c.iso.toUpperCase(), c.devices]))
-  const pills: CountryPill[] = []
-  for (const [iso, agg] of byIso) {
-    const seats = deviceByIso.get(iso) ?? agg.seats
-    const avgX = agg.xs.reduce((a, b) => a + b, 0) / agg.xs.length
-    const avgY = agg.ys.reduce((a, b) => a + b, 0) / agg.ys.length
-    const centroid = CENTROIDS_1152[iso]
-    // Prefer country centroid when available so the pill sits on land (Tony Canada pill),
-    // not on top of city labels. Fall back to mean of reporting points.
-    const x = centroid ? centroid[0] : avgX
-    const y = centroid ? centroid[1] : avgY
-    pills.push({
-      iso,
-      name: countryName(iso),
-      seats,
-      places: agg.places.size,
-      x,
-      y
-    })
-  }
-  // Space pills with the same greedy distance rule as badgeClusters.
-  const asClusters: ClusterPoint[] = pills.map((p) => ({
-    country: p.iso,
-    city: p.name,
-    count: p.seats,
-    x: p.x,
-    y: p.y
-  }))
-  const { badgeClusters } = clusterPins(asClusters, {
-    ...DEFAULT_CLUSTER_OPTIONS,
-    radiusPx: 0,
-    minBadgeDistancePx: 110,
-    maxBadges: 24
-  })
-  const keep = new Set(badgeClusters.map((c) => c.members[0]?.country))
-  // Design: country cluster pill stays for multi-place countries (Tony flag pill).
-  return pills
-    .filter((p) => keep.has(p.iso) && p.places >= 2)
-    .sort((a, b) => b.seats - a.seats)
-}
-
-function renderCountryPill(pill: CountryPill, theme: Theme): string {
-  const iso = pill.iso.toLowerCase()
-  // Fleet device count (dashboard country rollup), not Live seats.
-  const label = `${pill.name} · ${pill.seats} devices · ${pill.places} places`
-  const bg = PILL_BG[theme]
-  const border = PILL_BORDER[theme]
-  const fg = PILL_FG[theme]
-  // foreignObject sized generously; CSS pill shrink-wraps content.
-  const foW = Math.min(320, Math.max(160, 28 + label.length * 7.2))
-  const foH = 28
-  return `<g class="rt-country-pill-g pill-g" data-country-pill="${escapeXml(pill.iso)}" data-seats="${pill.seats}" data-places="${pill.places}" transform="translate(${pill.x.toFixed(2)} ${pill.y.toFixed(2)})">
-      <g class="rt-pill-inner" data-pin-inner>
-        <foreignObject x="${(-foW / 2).toFixed(1)}" y="${(-foH / 2).toFixed(1)}" width="${foW.toFixed(1)}" height="${foH}" requiredExtensions="http://www.w3.org/1999/xhtml">
-          <div xmlns="http://www.w3.org/1999/xhtml" class="rt-country-pill" style="background:${bg};border:1px solid ${border};color:${fg}">
-            <span class="rt-pill-dot" aria-hidden="true"></span>
-            <img src="/assets/flags/${escapeXml(iso)}.svg" width="16" height="12" alt="" />
-            <span>${escapeXml(label)}</span>
-          </div>
-        </foreignObject>
-      </g>
-    </g>`
-}
-
-/** Full realtime map SVG: dark ocean + grid, land, country flag pills, pulsing dots with
- * city labels, zoom/pan viewport and +/- controls. */
+/** Full realtime map: ocean, land, one dot per place, cluster pills, zoom/pan viewport and
+ * +/- controls. Layers are separately addressable (`data-pin-layer`, `data-cluster-layer`)
+ * so the client swaps them in place on each live payload and zoom-bucket change. */
 export function renderRealtimeMapSvg(options: RealtimeMapOptions): string {
-  const { points, countries = [], theme = 'dark' } = options
-  const variant: MapVariant = '1152'
-  const { width, height } = MAP_DIMENSIONS[variant]
+  const { points, zoomK = 1, emptyCaption = DEFAULT_EMPTY_CAPTION } = options
+  const { width, height } = MAP_DIMENSIONS[VARIANT]
   const empty = points.length === 0
-  const ocean = oceanGrid(theme, width, height)
-  const land = landPaths(WORLD_1152, theme)
-  const pills = empty ? [] : countryPillsFromPoints(points, countries, variant)
-  const pillMarkup = pills.map((p) => renderCountryPill(p, theme)).join('')
-  const pins = empty ? '' : points.map((p) => renderPin(p, variant, theme)).join('')
-  const caption = empty
-    ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.</div>`
-    : ''
-  const svg = `<svg class="rt-map-svg" data-map-svg data-map-theme="${theme}" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Live seat locations">
-    <style>${PULSE_STYLE}</style>
+  const caption = empty ? `<div class="empty map-empty" data-map-empty>${escapeXml(emptyCaption)}</div>` : ''
+  const svg = `<svg class="rt-map-svg" data-map-svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Live seat locations">
     <g class="rt-viewport" data-viewport transform="translate(0,0) scale(1)">
-      ${ocean}
-      ${land}
-      ${pillMarkup}
-      ${pins}
+      <rect class="world-ocean" width="${width}" height="${height}" fill="var(--map-ocean)" />
+      <g class="world-land-layer" aria-hidden="true">${landPaths(WORLD_1152)}</g>
+      ${renderPinLayer(points)}
+      ${renderClusterLayer(points, zoomK)}
     </g>
   </svg>`
   const controls = `<div class="rt-map-controls" data-map-controls>
     <button type="button" class="rt-map-zoom" data-zoom-in aria-label="Zoom in">+</button>
     <button type="button" class="rt-map-zoom" data-zoom-out aria-label="Zoom out">&minus;</button>
   </div>`
-  const fade = `<div class="rt-map-fade" aria-hidden="true"></div>`
-  return `${caption}<div class="rt-map" data-map-root style="position:relative">${svg}${controls}${fade}</div>`
+  return `${caption}<div class="rt-map" data-map-root>${svg}${controls}</div>`
 }
 
 // ---------------------------------------------------------------------------------------
-// Corner choropleth (CountryMap.tsx port). Unchanged by the realtime-map spec update.
+// Cluster popover (pure HTML; the client positions it next to the clicked pill).
+// ---------------------------------------------------------------------------------------
+
+export interface PopoverSession {
+  hostname: string | null
+  email: string | null
+  city: string | null
+  country: string | null
+  /** ms epoch of the last heartbeat (or session start) when known. */
+  lastSeen?: number | null
+}
+
+export interface ClusterPopoverCtx {
+  modes: [string, number][]
+  skills: [string, number][]
+  sessions: PopoverSession[]
+  /** ms epoch for relative times; omitted → no relative time column. */
+  now?: number
+}
+
+function shortAgo(ts: number, now: number): string {
+  const s = Math.max(0, Math.round((now - ts) / 1000))
+  if (s < 45) return 'now'
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.round(h / 24)}d ago`
+}
+
+function rankList(rows: [string, number][], empty: string): string {
+  if (!rows.length) return `<p class="rt-pop-empty">${escapeXml(empty)}</p>`
+  return `<ol class="rt-pop-rank">${rows
+    .map(([name, n]) => `<li><span class="rt-pop-name">${escapeXml(name)}</span><span class="rt-pop-n">${n}</span></li>`)
+    .join('')}</ol>`
+}
+
+export function clusterPopoverHtml(cluster: Cluster, ctx: ClusterPopoverCtx): string {
+  const label = clusterLabel(cluster)
+  const countries = new Set(cluster.members.map((m) => m.country)).size
+  const cities = new Set(cluster.members.map((m) => (m.city || '').trim()).filter(Boolean)).size
+  const knownSessions = cluster.members.every((m) => m.sessions != null)
+  const sessionsTotal = cluster.members.reduce((sum, m) => sum + (m.sessions ?? 0), 0)
+  const seatsWord = cluster.count === 1 ? 'seat' : 'seats'
+  const sub = knownSessions
+    ? `${cluster.count} ${seatsWord} · ${sessionsTotal} ${sessionsTotal === 1 ? 'session' : 'sessions'}`
+    : `${cluster.count} ${seatsWord}`
+  const tile = (name: string, n: number) => `<div class="rt-pop-tile"><span>${name}</span><b>${n}</b></div>`
+  const sessions = ctx.sessions.length
+    ? `<ul class="rt-pop-sessions">${ctx.sessions
+        .map((s) => {
+          const who = s.hostname || s.email || 'Unnamed seat'
+          const where = [s.city, s.country ? countryName(s.country) : null].filter(Boolean).join(', ')
+          const when = ctx.now != null && s.lastSeen != null ? `<span class="rt-pop-when">${shortAgo(s.lastSeen, ctx.now)}</span>` : ''
+          return `<li><span class="rt-pop-who">${escapeXml(who)}</span><span class="rt-pop-where">${escapeXml(where)}</span>${when}</li>`
+        })
+        .join('')}</ul>`
+    : '<p class="rt-pop-empty">No open sessions here right now.</p>'
+  return `<div class="rt-pop" data-rt-popover-body>
+    <div class="rt-pop-head">
+      <div><p class="rt-pop-eyebrow">REALTIME CLUSTER</p><h3 class="rt-pop-title">${escapeXml(label)}</h3><p class="rt-pop-sub">${escapeXml(sub)}</p></div>
+      <button type="button" class="rt-pop-close" data-rt-popover-close aria-label="Close">&times;</button>
+    </div>
+    <div class="rt-pop-tiles">${tile('Locations', cluster.members.length)}${tile('Countries', countries)}${tile('Cities', cities)}</div>
+    <div class="rt-pop-cols">
+      <section><h4>Top modes</h4>${rankList(ctx.modes, 'No asks here in the last 30 minutes.')}</section>
+      <section><h4>Top skills</h4>${rankList(ctx.skills, 'No skills used here in the last 30 minutes.')}</section>
+    </div>
+    <section><h4>Recent sessions</h4>${sessions}</section>
+  </div>`
+}
+
+// ---------------------------------------------------------------------------------------
+// Overview choropleth (CountryMap.tsx layout, reference opacity scale).
 // ---------------------------------------------------------------------------------------
 
 export interface CornerCountry {
@@ -445,29 +440,92 @@ export interface CornerMapOptions {
   countries: CornerCountry[]
 }
 
-/** 520x300 corner choropleth: `oklch(54.6% 0.22 263 / alpha)` fill with
- * alpha = 0.12 + 0.88 * sqrt(count / max), theme-aware land/strokes, and invisible hit pins at
- * centroids for tooltips. Countries with no data use the current theme's neutral land color. */
+/** Reference choropleth opacity: 0.2 at the smallest non-zero value, 0.8 at the maximum,
+ * linear in between (react-svg-worldmap's default scale). */
+export function choroplethOpacity(count: number, max: number): number {
+  if (!(max > 0) || !(count > 0)) return 0
+  return 0.2 + 0.6 * Math.min(1, count / max)
+}
+
+/** 520-wide overview choropleth: data countries `fill="var(--chart-0)"` at choroplethOpacity,
+ * no-data countries in the theme's neutral land colour, a native `<title>` tooltip per data
+ * country, and invisible focusable hit pins at centroids. */
 export function renderCornerMapSvg(options: CornerMapOptions): string {
   const variant: MapVariant = '520'
   const { width, height } = MAP_DIMENSIONS[variant]
-  const byIso = new Map(options.countries.map((c) => [c.iso, c.count]))
-  const max = Math.max(1, ...options.countries.map((c) => c.count))
+  const byIso = new Map(options.countries.filter((c) => c.count > 0).map((c) => [c.iso.toUpperCase(), c.count]))
+  const max = Math.max(0, ...byIso.values())
   const land = WORLD_520.map((c) => {
+    const iso = c.alpha2 || c.id
     const count = byIso.get(c.alpha2)
-    const fill =
-      count === undefined ? 'var(--map-land)' : `oklch(54.6% 0.22 263 / ${(0.12 + 0.88 * Math.sqrt(count / max)).toFixed(3)})`
-    return `<path class="world-land" data-iso="${escapeXml(c.alpha2 || c.id)}" d="${c.d}" fill="${fill}" stroke="var(--map-stroke)" stroke-width="0.5" />`
+    if (count === undefined) {
+      return `<path class="world-land" data-iso="${escapeXml(iso)}" d="${c.d}" fill="var(--map-land)" stroke="var(--map-stroke)" stroke-width="0.5" />`
+    }
+    const title = `${countryName(c.alpha2)} · ${count} ${count === 1 ? 'seat' : 'seats'}`
+    return `<path class="world-land has-data" data-iso="${escapeXml(iso)}" data-count="${count}" d="${c.d}" fill="var(--chart-0)" fill-opacity="${choroplethOpacity(count, max).toFixed(3)}" stroke="var(--map-stroke)" stroke-width="0.5"><title>${escapeXml(title)}</title></path>`
   }).join('')
-  const pins = options.countries
-    .filter((c) => byIso.has(c.iso) && CENTROIDS_520[c.iso])
-    .map((c) => {
-      const [x, y] = CENTROIDS_520[c.iso]
-      const count = byIso.get(c.iso) ?? 0
-      return `<g class="corner-pin" data-pin tabindex="0" data-country="${escapeXml(countryName(c.iso))}" data-count="${count}" transform="translate(${x} ${y})"><circle r="6" fill="transparent" /></g>`
+  const pins = [...byIso.entries()]
+    .filter(([iso]) => CENTROIDS_520[iso])
+    .map(([iso, count]) => {
+      const [x, y] = CENTROIDS_520[iso]
+      return `<g class="corner-pin" data-pin tabindex="0" data-country="${escapeXml(countryName(iso))}" data-count="${count}" transform="translate(${x} ${y})"><circle r="6" fill="transparent" /></g>`
     })
     .join('')
   return `<svg class="corner-map-svg" data-map-svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Countries by activity">${land}${pins}</svg>`
+}
+
+// ---------------------------------------------------------------------------------------
+// Legacy country pills (kept exported for existing importers; the realtime map now draws
+// cluster pills instead).
+// ---------------------------------------------------------------------------------------
+
+export interface CountryPill {
+  iso: string
+  name: string
+  seats: number
+  places: number
+  x: number
+  y: number
+}
+
+/** Roll points up by country. Seat totals prefer `countries` rollup when present. */
+export function countryPillsFromPoints(
+  points: RealtimeMapPoint[],
+  countries: { iso: string; devices: number }[] = [],
+  variant: MapVariant = '1152'
+): CountryPill[] {
+  if (!points.length) return []
+  const byIso = new Map<string, { seats: number; places: Set<string>; xs: number[]; ys: number[] }>()
+  for (const p of points) {
+    const iso = (p.country || '').toUpperCase()
+    if (!iso) continue
+    const [x, y] = projectPoint(p.lat, p.lon, variant)
+    const key = `${(p.city || '').trim().toLowerCase()}|${p.lat.toFixed(2)}|${p.lon.toFixed(2)}`
+    const prev = byIso.get(iso)
+    if (prev) {
+      prev.seats += p.count
+      prev.places.add(key)
+      prev.xs.push(x)
+      prev.ys.push(y)
+    } else {
+      byIso.set(iso, { seats: p.count, places: new Set([key]), xs: [x], ys: [y] })
+    }
+  }
+  const deviceByIso = new Map(countries.map((c) => [c.iso.toUpperCase(), c.devices]))
+  const centroids = variant === '1152' ? CENTROIDS_1152 : CENTROIDS_520
+  return [...byIso.entries()]
+    .map(([iso, agg]) => {
+      const centroid = centroids[iso]
+      return {
+        iso,
+        name: countryName(iso),
+        seats: deviceByIso.get(iso) ?? agg.seats,
+        places: agg.places.size,
+        x: centroid ? centroid[0] : agg.xs.reduce((a, b) => a + b, 0) / agg.xs.length,
+        y: centroid ? centroid[1] : agg.ys.reduce((a, b) => a + b, 0) / agg.ys.length
+      }
+    })
+    .sort((a, b) => b.seats - a.seats)
 }
 
 export { CENTROIDS_1152, CENTROIDS_520, WORLD_1152, WORLD_520 }

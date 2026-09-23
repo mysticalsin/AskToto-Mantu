@@ -4,6 +4,7 @@ import { fixtureDashboard } from '../fixture'
 import { SPA_CSS } from '../../spa/manifest'
 import { renderOverview } from './overview'
 import { renderRealtime } from './realtime'
+import { shoot } from '../test-shots'
 
 // MQA-340: keep the fifth KPI, map and fleet rows usable without narrow-view overflow.
 
@@ -49,9 +50,7 @@ describe('Overview responsive layout', () => {
     expect(desktop.worksColumns).toBe(3)
     expect(desktop.mapHeight).toBeGreaterThan(180)
     expect(desktop.overflow).toBe(false)
-    if (process.env.METIS_OVERVIEW_SCREENSHOT) {
-      await page.screenshot({ path: process.env.METIS_OVERVIEW_SCREENSHOT, fullPage: true })
-    }
+    await shoot(page, 'overview-light', { legacyEnv: 'METIS_OVERVIEW_SCREENSHOT' })
 
     const mapLand = () => page.evaluate(() => {
       const neutral = [...document.querySelectorAll('.corner-map-svg path')]
@@ -61,9 +60,7 @@ describe('Overview responsive layout', () => {
     const lightLand = await mapLand()
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
     expect(await mapLand()).not.toBe(lightLand)
-    if (process.env.METIS_OVERVIEW_SCREENSHOT_DARK) {
-      await page.screenshot({ path: process.env.METIS_OVERVIEW_SCREENSHOT_DARK, fullPage: true })
-    }
+    await shoot(page, 'overview-dark', { legacyEnv: 'METIS_OVERVIEW_SCREENSHOT_DARK' })
 
     await page.setViewportSize({ width: 390, height: 844 })
     const narrow = await page.evaluate(() => ({
@@ -74,9 +71,7 @@ describe('Overview responsive layout', () => {
     expect(narrow.columns).toBe(1)
     expect(narrow.worksColumns).toBe(1)
     expect(narrow.overflow).toBe(false)
-    if (process.env.METIS_OVERVIEW_SCREENSHOT_NARROW) {
-      await page.screenshot({ path: process.env.METIS_OVERVIEW_SCREENSHOT_NARROW, fullPage: true })
-    }
+    await shoot(page, 'overview-narrow', { legacyEnv: 'METIS_OVERVIEW_SCREENSHOT_NARROW' })
     await page.close()
   }, 30_000)
 
@@ -85,7 +80,7 @@ describe('Overview responsive layout', () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } })
     await page.setContent(`<style>${SPA_CSS}</style><main class="wrap">${renderRealtime(data, CTX)}</main>`)
     const layout = await page.evaluate(() => ({
-      minWidth: getComputedStyle(document.querySelector('[data-live-presence] .people-row')!).minWidth,
+      minWidth: getComputedStyle(document.querySelector('[data-live-presence] .rt-seat')!).minWidth,
       viewportOverflow: document.documentElement.scrollWidth > innerWidth
     }))
     expect(layout.minWidth).not.toBe('720px')

@@ -46,6 +46,8 @@ const MERCATOR_ENTRY = join(WORLD_DIR, 'mercator.ts')
 const ISO_ENTRY = join(WORLD_DIR, 'iso.ts')
 const OUT_FILE = join(WORLD_DIR, 'paths.generated.ts')
 
+/** world-atlas numeric ids never drawn: 010 = Antarctica. */
+export const DROPPED_FEATURE_IDS = new Set(['010'])
 const MAX_BYTES_1152 = 350 * 1024
 const MAX_BYTES_520 = 120 * 1024
 
@@ -288,12 +290,39 @@ function isBandBox(points) {
  *    jump bug this validation exists to catch, so it fails the build loudly instead of
  *    silently shipping a wedge artifact.
  */
-function buildValidatedPath(raw, label) {
+/**
+ * A simplified ring whose winding flipped (a tiny island reduced to its endpoints can invert)
+ * is read by d3-geo as its spherical complement: the whole globe minus the island, which
+ * projects to the full clip rectangle. Found on Brunei (096): one 26-point ring spanning the
+ * entire world width and ±85° of latitude, painting every ocean pixel in land colour. No real
+ * country is both full-width and taller than 3/4 of the world width (Russia spans the width
+ * at ~250 px tall), so such a ring is always the artifact and is dropped, not drawn.
+ */
+export function isWorldRect(points, worldWidth) {
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  for (const [x, y] of points) {
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+  }
+  return maxX - minX >= 0.98 * worldWidth && maxY - minY >= 0.75 * worldWidth
+}
+
+function buildValidatedPath(raw, label, worldWidth) {
   let d = ''
   let points = 0
   let dropped = 0
+  let inverted = 0
   for (const subpath of splitSubpaths(raw)) {
     const pts = pointsFromSubpath(subpath)
+    if (isWorldRect(pts, worldWidth)) {
+      inverted++
+      continue
+    }
     if (isBandBox(pts)) {
       throw new Error(`build-world: ${label} has a band-shaped ring (self-crossing or antimeridian-jump artifact): ${subpath.slice(0, 160)}`)
     }
@@ -304,22 +333,27 @@ function buildValidatedPath(raw, label) {
     d += subpath
     points += pts.length
   }
-  return { d, points, dropped }
+  return { d, points, dropped, inverted }
 }
 
-async function buildVariant({ features, pathGenerator, precision, numericToAlpha2, variantLabel }) {
+async function buildVariant({ features, pathGenerator, precision, numericToAlpha2, variantLabel, worldWidth }) {
   const entries = []
   const centroids = {}
   const pointCounts = []
   let droppedRings = 0
+  const invertedRings = []
   for (const f of features) {
     const id = f.id == null ? 'x' : String(f.id).padStart(3, '0')
+    // Antarctica is not drawn: no seat reports from it, and at Mercator it would take up a third
+    // of the frame. operator/src/world/mercator.ts frames both variants to ~83.7°N .. ~56.5°S.
+    if (DROPPED_FEATURE_IDS.has(id)) continue
     const alpha2 = numericToAlpha2[id] ?? ''
     const raw = pathGenerator(f) ?? ''
     if (!raw) continue
     const label = `${variantLabel} ${alpha2 || id} (feature id ${id})`
-    const { d, points, dropped } = buildValidatedPath(raw, label)
+    const { d, points, dropped, inverted } = buildValidatedPath(raw, label, worldWidth)
     droppedRings += dropped
+    if (inverted) invertedRings.push(alpha2 || id)
     if (!d) continue
     pointCounts.push({ alpha2: alpha2 || id, points })
     entries.push({ id, alpha2, d: roundPath(d, precision) })
@@ -332,7 +366,7 @@ async function buildVariant({ features, pathGenerator, precision, numericToAlpha
       }
     }
   }
-  return { entries, centroids, pointCounts, droppedRings }
+  return { entries, centroids, pointCounts, droppedRings, invertedRings }
 }
 
 export async function buildWorldData() {
@@ -364,14 +398,16 @@ export async function buildWorldData() {
     pathGenerator: geoPath1152,
     precision: PRECISION_1152,
     numericToAlpha2: NUMERIC_TO_ALPHA2,
-    variantLabel: '1152'
+    variantLabel: '1152',
+    worldWidth: 2 * Math.PI * MERCATOR_VARIANTS['1152'].scale
   })
   const world520 = await buildVariant({
     features: features520,
     pathGenerator: geoPath520,
     precision: PRECISION_520,
     numericToAlpha2: NUMERIC_TO_ALPHA2,
-    variantLabel: '520'
+    variantLabel: '520',
+    worldWidth: 2 * Math.PI * MERCATOR_VARIANTS['520'].scale
   })
 
   const code = renderGeneratedFile(world1152, world520)
@@ -433,7 +469,8 @@ async function main() {
     `Métis Operator: wrote ${relative(OPERATOR_ROOT, OUT_FILE)} (${(bytes / 1024).toFixed(1)} KB total, ` +
       `1152=${(bytes1152 / 1024).toFixed(1)} KB / ${world1152.entries.length} pieces / ${world1152.droppedRings} degenerate rings dropped, ` +
       `520=${(bytes520 / 1024).toFixed(1)} KB / ${world520.entries.length} pieces / ${world520.droppedRings} degenerate rings dropped, ` +
-      `${Object.keys(world1152.centroids).length} centroids)`
+      `${Object.keys(world1152.centroids).length} centroids; inverted world-rect rings dropped: ` +
+      `1152=[${world1152.invertedRings.join(',')}] 520=[${world520.invertedRings.join(',')}])`
   )
 }
 

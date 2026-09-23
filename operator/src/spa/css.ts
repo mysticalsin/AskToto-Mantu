@@ -24,18 +24,20 @@ import { GENERATED_FONTS } from './fonts.generated'
 // ---------------------------------------------------------------------------
 const LIGHT_TOKENS = `
   /* -- surfaces, ink, accent, status, data (plan 3.2 light table) -- */
-  --bg: #f8f6fd;
-  --bg-2: #efeafb;
+  /* Rock 1 (operator UX overhaul, 2026-09-23): neutral canvas rebased to the reference light
+     palette (operator/shoey-ref/SPEC.md section 1: def-100 page, white cards, #e3e8ee hairlines,
+     near-black ink, slate secondary text). Métis purple stays for the brand logo and the primary
+     action only. --ink-3 is darkened from the reference #64748b to #5c6779 so captions clear
+     WCAG AA 4.5:1 on every surface incl. --accent-soft (#64748b is 3.95:1 there). */
+  --bg: #fafafa;
+  --bg-2: #f4f4f4;
   --surface: #ffffff;
-  --surface-2: #f5f1fc;
-  --border: #ece5f7;
-  --border-2: #ddd2ee;
-  --ink: #170826;
-  --ink-2: #5c5273;
-  /* Plan 3.2 gives #6d6784; darkened to #66607d (QA's gates.mjs: the literal spec value is
-     4.45:1 on --accent-soft, under the 4.5:1 floor -- this value clears bg, surface and
-     accent-soft). */
-  --ink-3: #66607d;
+  --surface-2: #f4f4f4;
+  --border: #e3e8ee;
+  --border-2: #e3e3e3;
+  --ink: #020819;
+  --ink-2: #475569;
+  --ink-3: #5c6779;
   /* --accent: rings and selected states only. --accent-fill: button/badge fills (paired with
      --accent-ink text). --accent-text: accent-as-text. Split 2026-09-06 after gates.mjs found
      --accent-ink on the dark --accent fill at 4.25:1, under the 4.5:1 floor -- light values are
@@ -58,13 +60,18 @@ const LIGHT_TOKENS = `
   --data-track: #efeafb;
   /* -- map (Tony, 2026-09-06: not a dark focal panel -- a light choropleth matching the page
      canvas). --map-stroke is used at 0.5px, --map-graticule at 60% opacity. -- */
-  --map-ocean: #ffffff;
+  /* Reference ocean is the page canvas showing through (realtime map is full-bleed on --bg). */
+  --map-ocean: #fafafa;
   --map-land: #f0f0f0;
   --map-stroke: #999999;
-  --map-graticule: #ece5f7;
-  --map-land-hover: #e4defa;
-  --map-dot: #170826;
+  --map-graticule: #e3e8ee;
+  --map-land-hover: #e3e8ee;
+  --map-dot: #0f172a;
   --map-pill: #ffffff;
+  /* Rock 1 map tokens: cluster pill surface/border and the live halo (emerald, reference). */
+  --map-pill-bg: #ffffff;
+  --map-pill-border: #e3e8ee;
+  --map-halo: #10b981;
   /* -- sequential choropleth scale (light to saturated violet), plan 3.2 token change 2026-09-06. -- */
   --chart-scale-01: #f1e6fb;
   --chart-scale-02: #d9bdf7;
@@ -72,11 +79,13 @@ const LIGHT_TOKENS = `
   --chart-scale-04: #9d4dff;
   --chart-scale-05: #7f00da;
   --beacon-idle: color-mix(in srgb, var(--data-1) 55%, transparent);
-  --shadow: 0 1px 2px rgba(40, 10, 70, 0.06), 0 18px 40px -18px rgba(90, 0, 150, 0.22);
+  /* Reference cards are flat (1px hairline, no lift); only popovers and map pills float. */
+  --shadow: 0 1px 2px rgba(2, 8, 25, 0.04);
+  --shadow-pop: 0 4px 16px rgba(2, 8, 25, 0.10);
   --shadow-ring: 0 0 0 3px rgba(127, 0, 218, 0.18);
   --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   --glass: rgba(255, 255, 255, 0.72);
-  --glass-blur: blur(24px) saturate(1.2);
+  --glass-blur: blur(12px) saturate(1.2);
 
   /* -- type (plan 3.3). Family names come from the fonts actually built by
      operator/scripts/build-assets.mjs (operator/src/spa/fonts.generated.ts); when a package was
@@ -124,7 +133,8 @@ const LIGHT_TOKENS = `
   --primary: var(--accent-fill);
   --primary-foreground: var(--accent-ink);
   --destructive: var(--danger);
-  --chart-0: var(--data-1);
+  /* Primary chart / choropleth blue (reference --chart-0). */
+  --chart-0: #2362ee;
   --chart-1: var(--accent-soft);
   --chart-2: var(--border-2);
   --chart-3: var(--data-4);
@@ -172,19 +182,24 @@ const DARK_TOKENS = `
   --accent-text: #b98cff;
   --accent-soft: #231437;
   --data-track: #1a1526;
-  --map-ocean: #120e1c;
+  --map-ocean: #0b0813;
   --map-land: #1f1830;
   --map-stroke: #3a2f52;
   --map-graticule: #251d36;
   --map-land-hover: #2d2246;
   --map-dot: #f3eefb;
   --map-pill: #1a1526;
+  --map-pill-bg: #1a1526;
+  --map-pill-border: #332948;
+  --map-halo: #34d399;
+  --chart-0: #3b82f6;
   --chart-scale-01: #231437;
   --chart-scale-02: #3b1f63;
   --chart-scale-03: #5a2f95;
   --chart-scale-04: #7d45c9;
   --chart-scale-05: #9d4dff;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 18px 40px -18px rgba(120, 60, 200, 0.35);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.45);
   --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0);
   --glass: rgba(18, 14, 28, 0.72);
   /* Muted and dark so an avatar tile never blows out against dark surfaces (plan 3.6). */
@@ -607,11 +622,14 @@ button.danger { color: var(--danger); }
 .tick { fill: var(--ink3); font-size: 9px; font-family: var(--mono); }
 .tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
 .tab {
-  border: 1px solid transparent; background: transparent; color: var(--ink2);
-  font: 600 11px/1 var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase;
-  padding: 4px 9px; border-radius: var(--radius-pill); cursor: pointer;
+  border: 1px solid transparent; background: transparent; color: var(--ink-3);
+  font: 500 12px/1 var(--font-body); letter-spacing: 0; text-transform: none;
+  padding: 6px 10px; border-radius: 6px; cursor: pointer;
+  transition: background 150ms var(--ease-color), color 150ms var(--ease-color);
 }
-.tab.on { background: var(--ink); color: var(--bg); }
+.tab:hover { background: var(--bg-2); color: var(--ink); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tab.on { background: var(--bg-2); color: var(--ink); }
 .tab.on .status-badge { color: inherit; border-color: currentColor; background: transparent; }
 .pill {
   display: inline-block; padding: 1px 7px; border-radius: var(--radius-pill); font-size: 10px;

@@ -35,7 +35,10 @@ function reverse(array, n) {
   while (i < --j) {
     t = array[i]
     array[i++] = array[j]
-    array[j--] = t
+    // Exactly topojson-client: `--j` in the loop test is the only decrement. A second `j--`
+    // here scrambled every reversed arc (fans of spikes along shared borders, and flipped
+    // island rings such as Brunei's world-sized complement).
+    array[j] = t
   }
 }
 

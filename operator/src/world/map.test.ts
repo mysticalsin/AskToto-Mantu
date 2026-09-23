@@ -1,15 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import {
+  choroplethOpacity,
+  CLUSTER_RADIUS_PX,
   clusterLabel,
   clusterPins,
+  clusterPlaces,
+  clusterPopoverHtml,
   countryName,
   countryPillsFromPoints,
   DEFAULT_CLUSTER_OPTIONS,
+  MAP_DIMENSIONS,
+  pillClusters,
+  placeKey,
+  placeToPoint,
   projectPoint,
+  renderClusterLayer,
   renderCornerMapSvg,
+  renderPinLayer,
   renderRealtimeMapSvg,
+  zoomBucket,
   type Cluster,
-  type ClusterPoint
+  type ClusterPoint,
+  type RealtimeMapPoint
 } from './map'
 
 /**
@@ -74,12 +86,12 @@ describe('clusterPins reproduces the reference outcome on its own fixture', () =
     expect(badgeClusters.length).toBe(6)
   })
 
-  it('the busiest cluster is 14 Brazilian points totalling 31 events, labelled "Brazil, 14 places"', () => {
+  it('the busiest cluster is 14 Brazilian points totalling 31 events, labelled "Brazil, 14 cities"', () => {
     const { clusters } = clusterPins(toClusterPoints(), DEFAULT_CLUSTER_OPTIONS)
     const top = [...clusters].sort((a, b) => b.count - a.count)[0]
     expect(top.count).toBe(31)
     expect(top.members.length).toBe(14)
-    expect(clusterLabel(top)).toBe('Brazil, 14 places')
+    expect(clusterLabel(top)).toBe('Brazil, 14 cities')
   })
 })
 
@@ -98,16 +110,16 @@ describe('clusterLabel', () => {
     expect(clusterLabel(c)).toBe('Canada')
   })
 
-  it('several members in one country: "Canada, 3 places"', () => {
+  it('several members in one country: "Canada, 3 cities"', () => {
     const c = cluster([
       { country: 'CA', city: 'Longueuil', count: 1, x: 0, y: 0 },
       { country: 'CA', city: 'Montreal', count: 1, x: 1, y: 1 },
       { country: 'CA', city: '', count: 1, x: 2, y: 2 }
     ])
-    expect(clusterLabel(c)).toBe('Canada, 3 places')
+    expect(clusterLabel(c)).toBe('Canada, 3 cities')
   })
 
-  it('members across several countries: "5 places"', () => {
+  it('members across several countries: "5 countries" (distinct countries, not places)', () => {
     const c = cluster([
       { country: 'CA', city: 'Longueuil', count: 1, x: 0, y: 0 },
       { country: 'US', city: 'Ashburn', count: 1, x: 1, y: 1 },
@@ -115,7 +127,16 @@ describe('clusterLabel', () => {
       { country: 'DE', city: 'Gera', count: 1, x: 3, y: 3 },
       { country: 'JP', city: 'Tokyo', count: 1, x: 4, y: 4 }
     ])
-    expect(clusterLabel(c)).toBe('5 places')
+    expect(clusterLabel(c)).toBe('5 countries')
+  })
+
+  it('counts distinct countries, not members, across countries: 3 places in 2 countries → "2 countries"', () => {
+    const c = cluster([
+      { country: 'CA', city: 'Longueuil', count: 1, x: 0, y: 0 },
+      { country: 'CA', city: 'Montreal', count: 1, x: 1, y: 1 },
+      { country: 'US', city: 'Ashburn', count: 1, x: 2, y: 2 }
+    ])
+    expect(clusterLabel(c)).toBe('2 countries')
   })
 })
 
@@ -132,144 +153,271 @@ describe('countryName', () => {
   })
 })
 
+const LONGUEUIL: RealtimeMapPoint = { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 }
+const MONTREAL: RealtimeMapPoint = { country: 'CA', city: 'Montreal', lat: 45.5, lon: -73.57, count: 6 }
+const ASHBURN: RealtimeMapPoint = { country: 'US', city: 'Ashburn', lat: 39.05, lon: -77.49, count: 3 }
+const TOKYO: RealtimeMapPoint = { country: 'JP', city: 'Tokyo', lat: 35.68, lon: 139.68, count: 2 }
+
 describe('renderRealtimeMapSvg', () => {
-  it('renders land only, no pins, and an honest empty caption when there are no points', () => {
+  it('renders land only, no pins, no pills and an honest empty caption when there are no points', () => {
     const svg = renderRealtimeMapSvg({ points: [] })
-    expect(svg).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
-    expect(svg).not.toContain('data-pin')
+    expect(svg).toContain('No heartbeats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.')
+    expect(svg).not.toContain('data-pin ')
+    expect(svg).not.toContain('data-cluster=')
     expect(svg).toContain('data-iso=')
-    expect(svg).toContain('viewBox="0 0 1152 576"')
+    expect(svg).toContain('viewBox="0 0 1152 642"')
+  })
+
+  it('takes a caller-supplied empty caption verbatim', () => {
+    const svg = renderRealtimeMapSvg({ points: [], emptyCaption: 'No seat in the last 30 minutes. Not sample dots.' })
+    expect(svg).toContain('>No seat in the last 30 minutes. Not sample dots.<')
   })
 
   it('never fakes a dot: exactly one pin per supplied point, no more', () => {
-    const svg = renderRealtimeMapSvg({
-      points: [
-        { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 },
-        { country: 'US', city: 'Ashburn', lat: 39.05, lon: -77.49, count: 3 }
-      ]
-    })
+    const svg = renderRealtimeMapSvg({ points: [LONGUEUIL, ASHBURN] })
     expect((svg.match(/class="rt-pin"/g) || []).length).toBe(2)
     expect(svg).not.toContain('class="empty')
   })
 
-  it('draws country pills and a city label for every distinct place (Tony uplift)', () => {
-    const svg = renderRealtimeMapSvg({
-      points: [
-        { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 6 },
-        { country: 'CA', city: 'Montreal', lat: 45.5, lon: -73.57, count: 6 }
-      ],
-      countries: [{ iso: 'CA', devices: 12 }],
-      theme: 'dark'
-    })
-    expect(svg).toContain('foreignObject')
-    expect(svg).toContain('rt-country-pill')
-    expect(svg).toContain('data-country-pill="CA"')
-    expect(svg).toContain('/assets/flags/ca.svg')
-    expect(svg).toContain('Canada · 12 devices · 2 places')
-    expect(svg).toContain('rt-pin-label')
-    expect(svg).toContain('Longueuil')
-    expect(svg).toContain('Montreal')
-    expect(svg).toContain('world-ocean')
-    expect(svg).toContain('rt-map-grid')
-    expect((svg.match(/class="rt-pin"/g) || []).length).toBe(2)
+  it('every place is one r=3 dot with a halo group, the seat count in data-seats, and no per-pin text label', () => {
+    const svg = renderRealtimeMapSvg({ points: [LONGUEUIL, { ...ASHBURN, count: 4 }] })
+    expect(svg).toMatch(/data-seats="1"[^>]*><g class="rt-pin-inner" data-pin-inner><g class="rt-pin-halo" aria-hidden="true"><circle r="3" \/><\/g><circle class="rt-pin-dot" r="3" \/>/)
+    expect(svg).toMatch(/data-seats="4"[^>]*><g class="rt-pin-inner" data-pin-inner><g class="rt-pin-halo" aria-hidden="true"><circle r="3" \/><\/g><circle class="rt-pin-dot" r="3" \/>/)
+    expect(svg).not.toContain('<text')
+    expect(svg).not.toContain('rt-pin-label')
   })
 
-  it('skips country pills when a country has only one place', () => {
-    const svg = renderRealtimeMapSvg({
-      points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 }],
-      theme: 'dark'
-    })
-    expect(svg).not.toContain('data-country-pill')
-    expect(svg).toContain('Longueuil')
-  })
-
-  it('defaults to dark theme when theme is unspecified', () => {
-    const svg = renderRealtimeMapSvg({
-      points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 }]
-    })
-    expect(svg).toContain('data-map-theme="dark"')
-    expect(svg).toContain('#120e1c')
-    expect(svg).toContain('#1f1830')
-  })
-
-  it('supports multi-line city labels split on slash', () => {
-    const svg = renderRealtimeMapSvg({
-      points: [{ country: 'CA', city: 'Longueuil / Montréal', lat: 45.53, lon: -73.52, count: 1 }],
-      theme: 'dark'
-    })
-    expect(svg).toContain('Longueuil')
-    expect(svg).toContain('Montréal')
-    expect(svg).toContain('<tspan')
-  })
-
-  it('a single seat renders a clearly visible dot (r=4.5); several seats at one point render larger (r=6.5)', () => {
-    const svg = renderRealtimeMapSvg({
-      points: [
-        { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 },
-        { country: 'US', city: 'Ashburn', lat: 39.05, lon: -77.49, count: 4 }
-      ]
-    })
-    expect(svg).toContain('data-seats="1"')
-    expect(svg).toContain('data-seats="4"')
-    expect(svg).toMatch(/data-seats="1"[^>]*>[\s\S]*?<circle class="rt-pin-dot" r="4.5"/)
-    expect(svg).toMatch(/data-seats="4"[^>]*>[\s\S]*?<circle class="rt-pin-dot" r="6.5"/)
-    expect(svg).toContain('stroke: #ffffff')
-    expect(svg).toContain('stroke-width: 1.5')
-  })
-
-  it('carries tooltip data: country, city, seats, and asks when known', () => {
-    const svg = renderRealtimeMapSvg({
-      points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 2, asks: 5 }]
-    })
+  it('carries tooltip/popover data: place key, country name, iso, city, seats, and asks when known', () => {
+    const svg = renderRealtimeMapSvg({ points: [{ ...LONGUEUIL, count: 2, asks: 5 }] })
+    expect(svg).toContain('data-place="CA|Longueuil|45.53|-73.52"')
     expect(svg).toContain('data-country="Canada"')
+    expect(svg).toContain('data-iso="CA"')
     expect(svg).toContain('data-city="Longueuil"')
     expect(svg).toContain('data-seats="2"')
     expect(svg).toContain('data-asks="5"')
+    expect(svg).toContain('aria-label="Longueuil, Canada · 2 seats"')
   })
 
-  it('omits data-asks entirely when asks is not known (never a fabricated 0)', () => {
-    const svg = renderRealtimeMapSvg({ points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 }] })
+  it('omits data-asks and data-sessions entirely when unknown (never a fabricated 0)', () => {
+    const svg = renderRealtimeMapSvg({ points: [LONGUEUIL] })
     expect(svg).not.toContain('data-asks')
+    expect(svg).not.toContain('data-sessions')
   })
 
-  it('renders zoom/pan control buttons and a viewport group in the markup', () => {
-    const svg = renderRealtimeMapSvg({ points: [] })
+  it('renders zoom/pan controls, a viewport group, and separately swappable pin and cluster layers', () => {
+    const svg = renderRealtimeMapSvg({ points: [LONGUEUIL] })
     expect(svg).toContain('data-zoom-in')
     expect(svg).toContain('data-zoom-out')
     expect(svg).toContain('data-viewport')
+    expect(svg).toContain('<g class="rt-pin-layer" data-pin-layer>')
+    expect(svg).toContain('<g class="rt-cluster-layer" data-cluster-layer data-zoom-bucket="1">')
   })
 
-  it('includes the pulsing-halo keyframes and a reduced-motion fallback', () => {
-    const svg = renderRealtimeMapSvg({ points: [] })
-    expect(svg).toMatch(/@keyframes\s+[\w-]+/)
-    expect(svg).toMatch(/prefers-reduced-motion:\s*reduce/)
+  it('uses theme tokens only: no hex colour, no inline <style>, no style= attribute, no grid', () => {
+    const svg = renderRealtimeMapSvg({ points: [LONGUEUIL, MONTREAL, ASHBURN, TOKYO] })
+    expect(svg).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+    expect(svg).not.toContain('<style')
+    expect(svg).not.toContain('style="')
+    expect(svg).not.toContain('rt-map-grid')
+    expect(svg).toContain('fill="var(--map-ocean)"')
+    expect(svg).toMatch(/<path class="world-land" data-iso="CA" d="[^"]+" fill="var\(--map-land\)" stroke="var\(--map-stroke\)" stroke-width="0.5" vector-effect="non-scaling-stroke" \/>/)
+  })
+
+  it('never draws Antarctica', () => {
+    expect(renderRealtimeMapSvg({ points: [] })).not.toContain('data-iso="AQ"')
+  })
+})
+
+describe('clusterPlaces / pills', () => {
+  it('groups nearby places at zoom 1 and splits them again once zoomed in', () => {
+    // Longueuil and Montreal are ~6 km apart: one cluster at every zoom this map allows.
+    // Ashburn (~800 km from Montreal) is ~22 px away at zoom 1 (inside the 36 px radius) and
+    // ~7 px * 3 = 66 px apart at zoom 3 (outside 36/3 = 12 px): split.
+    const points = [LONGUEUIL, MONTREAL, ASHBURN]
+    const z1 = clusterPlaces(points, 1)
+    const z3 = clusterPlaces(points, 3)
+    expect(z1.length).toBe(1)
+    expect(z1[0].count).toBe(10)
+    expect(clusterLabel(z1[0])).toBe('2 countries')
+    expect(z3.length).toBe(2)
+    expect(z3.map(clusterLabel).sort()).toEqual(['Ashburn', 'Canada, 2 cities'])
+  })
+
+  it('uses a 36 px screen radius divided by the zoom factor', () => {
+    expect(CLUSTER_RADIUS_PX).toBe(36)
+    const [ax, ay] = projectPoint(MONTREAL.lat, MONTREAL.lon, '1152')
+    const [bx, by] = projectPoint(ASHBURN.lat, ASHBURN.lon, '1152')
+    const d = Math.hypot(ax - bx, ay - by)
+    expect(d).toBeLessThan(36)
+    expect(d).toBeGreaterThan(36 / 3)
+  })
+
+  it('renders one pill per multi-place cluster with the reference anatomy', () => {
+    const layer = renderClusterLayer([LONGUEUIL, MONTREAL, TOKYO], 1)
+    expect(layer).toContain('data-cluster-count="7"')
+    expect(layer).toContain('data-cluster-members="2"')
+    expect(layer).toContain('<span class="rt-pill-dot" aria-hidden="true"></span><span class="rt-pill-count">7</span><span class="rt-pill-sep" aria-hidden="true"></span><span class="rt-pill-label">Canada, 2 cities</span>')
+    expect(layer).toContain('aria-label="Canada, 2 cities, 7 seats"')
+    expect(layer).toContain('data-cluster-keys="[&quot;CA|Longueuil|45.53|-73.52&quot;,&quot;CA|Montreal|45.50|-73.57&quot;]"')
+    // Tokyo is a single place, but one of the busiest, so it gets a pill too.
+    expect(layer).toContain('<span class="rt-pill-label">Tokyo</span>')
+  })
+
+  it('pill layer is counter-scaled (data-pin-inner) so pills keep a constant screen size', () => {
+    const layer = renderClusterLayer([LONGUEUIL, MONTREAL], 1)
+    expect(layer).toMatch(/<g class="rt-cluster" [^>]*><g class="rt-cluster-inner" data-pin-inner><foreignObject x="-110" y="-40" width="220" height="32">/)
+  })
+
+  it('caps single-place pills at the 12 busiest and never overlaps two pills on screen', () => {
+    // 20 single places spread across the world, far enough apart never to cluster.
+    const spread: RealtimeMapPoint[] = Array.from({ length: 20 }, (_, i) => ({
+      country: 'BR',
+      city: `City ${i}`,
+      lat: -30 + (i % 5) * 12,
+      lon: -170 + i * 17,
+      count: 20 - i
+    }))
+    const clusters = clusterPlaces(spread, 1)
+    expect(clusters.length).toBe(20)
+    const pills = pillClusters(clusters, 1)
+    expect(pills.length).toBeLessThanOrEqual(12)
+    expect(pills[0].count).toBe(20)
+    for (let i = 0; i < pills.length; i++) {
+      for (let j = i + 1; j < pills.length; j++) {
+        const dx = Math.abs(pills[i].x - pills[j].x)
+        const dy = Math.abs(pills[i].y - pills[j].y)
+        expect(dx >= 150 || dy >= 30, `pills ${i} and ${j} overlap`).toBe(true)
+      }
+    }
+  })
+
+  it('zoom buckets change only at 1.25 / 1.9 / 2.7', () => {
+    expect([1, 1.2, 1.3, 1.8, 2, 2.6, 2.8, 8].map(zoomBucket)).toEqual([1, 1, 1.5, 1.5, 2.25, 2.25, 3, 3])
+  })
+
+  it('renderPinLayer draws exactly the supplied places', () => {
+    const layer = renderPinLayer([LONGUEUIL, MONTREAL, ASHBURN])
+    expect((layer.match(/class="rt-pin"/g) || []).length).toBe(3)
+  })
+})
+
+describe('placeToPoint / placeKey', () => {
+  it('maps a live.json place onto a map point with the shared key format', () => {
+    const place = { iso2: 'ca', country: 'Canada', region: 'Quebec', city: 'Longueuil', lat: 45.531, lon: -73.518, seats: 3, sessions: 2 }
+    const point = placeToPoint(place)
+    expect(point).toEqual({
+      country: 'CA',
+      city: 'Longueuil',
+      lat: 45.531,
+      lon: -73.518,
+      count: 3,
+      iso2: 'CA',
+      region: 'Quebec',
+      sessions: 2,
+      placeKey: 'CA|Longueuil|45.53|-73.52'
+    })
+    expect(placeKey({ iso2: 'CA', city: null, lat: 1, lon: 2 })).toBe('CA||1.00|2.00')
+    expect(renderPinLayer([point])).toContain('data-sessions="2"')
+  })
+})
+
+describe('clusterPopoverHtml', () => {
+  const [cluster] = clusterPlaces(
+    [
+      { ...LONGUEUIL, sessions: 1, placeKey: 'CA|Longueuil|45.53|-73.52' },
+      { ...MONTREAL, sessions: 2, placeKey: 'CA|Montreal|45.50|-73.57' }
+    ],
+    1
+  )
+
+  it('renders the reference sections with real numbers', () => {
+    const html = clusterPopoverHtml(cluster, {
+      modes: [['interview', 4], ['sales', 1]],
+      skills: [['Draft recruiting', 2]],
+      sessions: [{ hostname: 'tony-mbp', email: null, city: 'Montreal', country: 'CA', lastSeen: 1_000_000 - 120_000 }],
+      now: 1_000_000
+    })
+    expect(html).toContain('>REALTIME CLUSTER<')
+    expect(html).toContain('<h3 class="rt-pop-title">Canada, 2 cities</h3>')
+    expect(html).toContain('<p class="rt-pop-sub">7 seats · 3 sessions</p>')
+    expect(html).toContain('<div class="rt-pop-tile"><span>Locations</span><b>2</b></div><div class="rt-pop-tile"><span>Countries</span><b>1</b></div><div class="rt-pop-tile"><span>Cities</span><b>2</b></div>')
+    expect(html).toContain('<li><span class="rt-pop-name">interview</span><span class="rt-pop-n">4</span></li>')
+    expect(html).toContain('<li><span class="rt-pop-name">Draft recruiting</span><span class="rt-pop-n">2</span></li>')
+    expect(html).toContain('<span class="rt-pop-who">tony-mbp</span><span class="rt-pop-where">Montreal, Canada</span><span class="rt-pop-when">2m ago</span>')
+    expect(html).toContain('data-rt-popover-close')
+  })
+
+  it('says so honestly when there is nothing to show, and omits sessions count when unknown', () => {
+    const [bare] = clusterPlaces([LONGUEUIL, MONTREAL], 1)
+    const html = clusterPopoverHtml(bare, { modes: [], skills: [], sessions: [] })
+    expect(html).toContain('No asks here in the last 30 minutes.')
+    expect(html).toContain('No skills used here in the last 30 minutes.')
+    expect(html).toContain('No open sessions here right now.')
+    expect(html).toContain('<p class="rt-pop-sub">7 seats</p>')
+  })
+
+  it('escapes names', () => {
+    const html = clusterPopoverHtml(cluster, { modes: [['<b>x</b>', 1]], skills: [], sessions: [] })
+    expect(html).toContain('&lt;b&gt;x&lt;/b&gt;')
+    expect(html).not.toContain('<b>x</b>')
   })
 })
 
 describe('renderCornerMapSvg', () => {
-  it('renders the 520x300 choropleth with oklch fill scaled by count', () => {
+  it('renders the 520x292 choropleth: --chart-0 fill with the reference 0.2 → 0.8 linear opacity', () => {
     const svg = renderCornerMapSvg({
       countries: [
         { iso: 'CA', count: 4 },
         { iso: 'US', count: 1 }
       ]
     })
-    expect(svg).toContain('viewBox="0 0 520 300"')
-    expect(svg).toContain('data-iso="CA"')
-    expect(svg).toContain('stroke="var(--map-stroke)"')
-    expect(svg).toMatch(/oklch\(54\.6% 0\.22 263 \/ 1(\.000)?\)/) // max count -> alpha 1
+    expect(svg).toContain('viewBox="0 0 520 292"')
+    expect(svg).toMatch(/<path class="world-land has-data" data-iso="CA" data-count="4" d="[^"]+" fill="var\(--chart-0\)" fill-opacity="0.800" stroke="var\(--map-stroke\)" stroke-width="0.5"><title>Canada · 4 seats<\/title><\/path>/)
+    expect(svg).toMatch(/<path class="world-land has-data" data-iso="US" data-count="1" d="[^"]+" fill="var\(--chart-0\)" fill-opacity="0.350" stroke="var\(--map-stroke\)" stroke-width="0.5"><title>United States · 1 seat<\/title><\/path>/)
   })
 
-  it('countries with no data use the current theme land color, not a fabricated activity color', () => {
+  it('choroplethOpacity is linear from 0.2 to 0.8 and 0 for no data', () => {
+    expect(choroplethOpacity(0, 10)).toBe(0)
+    expect(choroplethOpacity(10, 10)).toBeCloseTo(0.8, 10)
+    expect(choroplethOpacity(5, 10)).toBeCloseTo(0.5, 10)
+    expect(choroplethOpacity(1, 0)).toBe(0)
+  })
+
+  it('countries with no data use the current theme land colour, not a fabricated activity colour', () => {
     const svg = renderCornerMapSvg({ countries: [{ iso: 'CA', count: 1 }] })
-    expect(svg).toContain('data-iso="US"')
-    expect(svg).toMatch(/data-iso="US"[^>]*fill="var\(--map-land\)"/)
+    expect(svg).toMatch(/<path class="world-land" data-iso="US" d="[^"]+" fill="var\(--map-land\)" stroke="var\(--map-stroke\)" stroke-width="0.5" \/>/)
+    expect(svg).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+    expect(svg).not.toContain('oklch(')
   })
 
-  it('empty input renders land only, no hit pins', () => {
+  it('a zero count is treated as no data (no pin, no fill)', () => {
+    const svg = renderCornerMapSvg({ countries: [{ iso: 'CA', count: 0 }] })
+    expect(svg).not.toContain('has-data')
+    expect(svg).not.toContain('data-pin')
+  })
+
+  it('empty input renders land only, no hit pins, and no Antarctica', () => {
     const svg = renderCornerMapSvg({ countries: [] })
     expect(svg).toContain('data-iso=')
     expect(svg).not.toContain('data-pin')
+    expect(svg).not.toContain('data-iso="AQ"')
+  })
+})
+
+describe('map frame', () => {
+  it('1152 is 1152x642 and 520 is 520x292', () => {
+    expect(MAP_DIMENSIONS['1152']).toEqual({ width: 1152, height: 642 })
+    expect(MAP_DIMENSIONS['520']).toEqual({ width: 520, height: 292 })
+  })
+
+  it('the far north (83.6°N, Cape Morris Jesup) and far south (55.98°S, Cape Horn) are both inside both frames', () => {
+    for (const variant of ['1152', '520'] as const) {
+      const { height } = MAP_DIMENSIONS[variant]
+      const [, north] = projectPoint(83.6, -33.4, variant)
+      const [, south] = projectPoint(-55.98, -67.27, variant)
+      expect(north, `${variant} north`).toBeGreaterThan(0)
+      expect(south, `${variant} south`).toBeLessThan(height)
+    }
   })
 })
 

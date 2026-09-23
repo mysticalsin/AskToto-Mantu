@@ -47,6 +47,8 @@ export const SHELL_CSS = `
 .live-indicator[data-state="paused"] .live-dot { background: var(--ink-3); animation: none; }
 .live-indicator[data-state="reconnecting"] { color: var(--warn); }
 .live-indicator[data-state="paused"] { color: var(--ink-3); }
+.live-indicator[data-state="expired"] .live-dot { background: var(--danger); animation: none; }
+.live-indicator[data-state="expired"] { color: var(--danger); }
 
 .rail-action.tool {
   display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
@@ -77,26 +79,30 @@ export const SHELL_CSS = `
 
 .rail nav { display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; margin-top: 4px; overflow-y: auto; }
 .nav-sec { display: flex; flex-direction: column; gap: 1px; }
+/* Reference sidebar (operator/shoey-ref/SPEC.md): 12px muted section label, 36px nav rows,
+   13px/500 label, 6px radius, a neutral grey (--bg-2 = def-200) fill for hover and the active
+   page. The brand accent is not used for navigation state. */
 .nav-sec p {
-  font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3);
-  margin: 6px 8px 4px; font-weight: 600;
+  font-size: 12px; letter-spacing: 0; color: var(--ink-3);
+  margin: 6px 12px 4px; font-weight: 500;
 }
 .nav-item {
-  display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px;
-  color: var(--ink-2); font-size: 13px; font-weight: 500; position: relative;
+  display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; border-radius: 6px;
+  color: var(--ink); font-size: 13px; font-weight: 500; line-height: 1.2; position: relative;
   transition: background 150ms var(--ease-color), color 150ms var(--ease-color);
 }
-.nav-item .tool-ic { width: 16px; height: 16px; color: var(--ink-3); flex: none; }
+.nav-item .tool-ic { width: 18px; height: 18px; color: var(--ink-2); flex: none; }
 .nav-item:hover { background: var(--bg-2); color: var(--ink); }
-.nav-item.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-.nav-item.on .tool-ic { color: var(--accent); }
+.nav-item.on { background: var(--bg-2); color: var(--ink); font-weight: 500; }
+.nav-item.on .tool-ic { color: var(--ink); }
+.nav-item:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .nav-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-count {
   display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px;
   padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--accent-ink);
   font-size: 10.5px; font-weight: 700; line-height: 1;
 }
-.nav-item.on .nav-count { background: var(--accent); color: var(--accent-ink); }
+.nav-item.on .nav-count { background: var(--accent-fill); color: var(--accent-ink); }
 
 .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
 .access-chip {
@@ -134,6 +140,20 @@ export const SHELL_CSS = `
 }
 .live-dot-mini[data-state="reconnecting"] { background: var(--warn); animation: none; }
 .live-dot-mini[data-state="paused"] { background: var(--ink-3); animation: none; }
+.live-dot-mini[data-state="expired"] { background: var(--danger); animation: none; }
+
+/* ---- Session expired banner (operator/client/live.ts, 401 / Access redirect) ------------ */
+.session-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 12px 16px 0; padding: 10px 14px; border-radius: var(--radius-control);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface)); color: var(--ink); font-size: 13px;
+}
+.session-banner button {
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+  border-radius: var(--radius-control); padding: 6px 12px; font: 600 12px/1 var(--font-body); cursor: pointer;
+}
+.session-banner button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .rail-toggle {
   display: none; align-items: center; justify-content: center; width: 32px; height: 32px;

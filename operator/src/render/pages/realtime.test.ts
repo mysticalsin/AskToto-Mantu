@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { resolveMapTheme } from '../../theme-preference'
 import { fixtureDashboard } from '../fixture'
-import { liveStripEvents, renderRealtime } from './realtime'
+import { liveStripEvents, realtimeSeatTotal, renderRealtime, rtFeedRows, rtLocationTable } from './realtime'
 
 const CTX = { now: 1_725_000_000_000, theme: 'light' as const }
 
+function mapMarkup(html: string): string {
+  const start = html.indexOf('<div id="map-root"')
+  const end = html.indexOf('<div class="rt-overlay">', start)
+  return start >= 0 && end > start ? html.slice(start, end) : ''
+}
+
 describe('renderRealtime (QA fixture)', () => {
-  it('renders the map, the live strip, and the geo table, in order', async () => {
+  it('renders the map stage, the live strip, and the locations card, in order', async () => {
     const data = await fixtureDashboard()
     const html = renderRealtime(data, CTX)
     expect(html).toContain('data-world-map')
@@ -17,19 +23,26 @@ describe('renderRealtime (QA fixture)', () => {
     expect(html).toContain('>Realtime<')
   })
 
-  // operator/src/world/map.ts:232 (dev-analytics/P1.2, not this file) still bakes
-  // `style="position:relative"` into its `data-map-root` div; this page's own code adds none.
-  // See the task report for the one-line patch (move `position:relative` into a `.rt-map` CSS
-  // rule) once P1.2 lands.
-  it('adds no inline style= of its own outside map markup (viewport + country pills)', async () => {
+  // Stronger successor of the old "no inline style outside map markup" pin: the map module now
+  // styles everything through classes + tokens, so the whole page carries no style= at all.
+  it('adds no inline style= anywhere, map markup included', async () => {
+    const data = await fixtureDashboard()
+    expect(renderRealtime(data, CTX)).not.toContain('style="')
+  })
+
+  it('KPI headline is the 30 min seat total over realtime places', async () => {
     const data = await fixtureDashboard()
     const html = renderRealtime(data, CTX)
-    // map.ts owns position:relative on data-map-root and theme colors on rt-country-pill.
-    const withoutKnownMapStyle = html
-      .split('style="position:relative"')
-      .join('')
-      .replace(/style="background:[^"]*"/g, '')
-    expect(withoutKnownMapStyle).not.toContain('style="')
+    const total = realtimeSeatTotal(data.realtime.places)
+    expect(html).toContain(`data-rt-seats>${total}<`)
+  })
+
+  it('Locations card has Countries | Regions | Cities panes built from realtime places', async () => {
+    const data = await fixtureDashboard()
+    const html = renderRealtime(data, CTX)
+    for (const pane of ['country', 'region', 'city']) expect(html).toContain(`data-rt-loc-pane="${pane}"`)
+    expect(html).toMatch(/data-rt-loc-tabs[\s\S]*?data-tab="country"[\s\S]*?data-tab="region"[\s\S]*?data-tab="city"/)
+    expect(rtLocationTable([], 'city')).toContain('No seat locations in the last 30 minutes.')
   })
 })
 
@@ -38,13 +51,16 @@ describe('realtime map theme + live strip', () => {
     expect(resolveMapTheme('system')).toBe('dark')
   })
 
-  it('uses dark land when ctx.theme is system and emits data-map-theme', async () => {
+  // Successor of the "#1f1830 dark land" pin: colour now comes only from tokens (css.ts
+  // --map-* in both themes), so the map markup carries no hex colour and no data-map-theme.
+  it('map markup carries token classes, never a hex colour or a baked theme', async () => {
     const data = await fixtureDashboard()
-    const html = renderRealtime(data, { now: data.now, theme: 'system' })
-    expect(html).toContain('data-map-theme="system"')
-    expect(html).toContain('#1f1830')
-    expect(html).toContain('world-ocean')
-    expect(html).toContain('rt-map')
+    const map = mapMarkup(renderRealtime(data, { now: data.now, theme: 'system' }))
+    expect(map).toContain('class="world-ocean"')
+    expect(map).toMatch(/class="world-land"/)
+    expect(map).toContain('rt-map')
+    expect(map).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+    expect(map).not.toContain('data-map-theme')
   })
 
   it('drops stale heartbeats from LIVE EVENTS while keeping fresh ones', () => {
@@ -55,5 +71,14 @@ describe('realtime map theme + live strip', () => {
     ]
     const fresh = liveStripEvents(events, now)
     expect(fresh.map((e) => e.id)).toEqual(['fresh'])
+  })
+
+  it('live feed rows are metadata only and stale rows fall back to the honest empty line', () => {
+    const now = 1_725_000_000_000
+    const row = { id: 'e1', ts: now - 60_000, kind: 'ask', actor: 'Tonys-MacBook-Pro', country: 'CA', city: 'Longueuil', os: 'darwin', appVersion: '1.9.6' }
+    const html = rtFeedRows([row], now)
+    expect(html).toContain('data-rt-feed-row="e1"')
+    expect(html).toContain('class="rt-feed-where">Longueuil, CA<')
+    expect(rtFeedRows([{ ...row, ts: now - 2 * 60 * 60 * 1000 }], now)).toContain('No events in the last 30 minutes.')
   })
 })
