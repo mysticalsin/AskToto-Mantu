@@ -39,6 +39,10 @@ import {
 import { SETTINGS_SURFACE_BACKGROUND } from './settings-bounds'
 
 describe('overlay chrome modes', () => {
+  it('keeps the persisted layout vocabulary placement-independent', () => {
+    expect(OVERLAY_LAYOUTS).toEqual(['hide', 'island', 'bar'])
+  })
+
   it('default is hide (fresh install, no reinstall required to change later)', () => {
     expect(DEFAULT_OVERLAY_LAYOUT).toBe('hide')
     expect(OVERLAY_LAYOUTS).toEqual(['hide', 'island', 'bar'])

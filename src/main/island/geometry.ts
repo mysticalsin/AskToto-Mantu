@@ -224,6 +224,10 @@ export function hoverRestWidth(m: DisplayMetrics): number {
 
 /** Breathing room between a sidecar overlay and the usable display edge. */
 export const RIGHT_EDGE_MARGIN_PX = 12
+export const RIGHT_EDGE_TAB_WIDTH = 52
+export const RIGHT_EDGE_DRAWER_WIDTH = 360
+export const RIGHT_EDGE_TAB_HEIGHT = 52
+export const RIGHT_EDGE_DRAWER_HEIGHT = 560
 /** A sidecar opens high enough to be discoverable without covering meeting controls. */
 export const RIGHT_EDGE_DEFAULT_NORMALIZED_Y = 0.2
 /** The compact side target is intentionally small; cursor-watch supplies dwell and leave hysteresis. */
@@ -235,7 +239,7 @@ export const RIGHT_EDGE_HOVER_TARGET = { width: 24, height: HOVER_ISLAND_HEIGHT_
  * bar. Those displays deliberately fall back to the established top-center path instead.
  */
 export function rightEdgePlacementFits(m: DisplayMetrics, margin = RIGHT_EDGE_MARGIN_PX): boolean {
-  return m.workArea.width >= OVERLAY_BAR_REST.width + margin * 2
+  return m.workArea.width >= RIGHT_EDGE_DRAWER_WIDTH + margin * 2
 }
 
 /** The selected preference can safely differ from the effective placement on a constrained display. */
@@ -279,6 +283,20 @@ export function rightEdgePosition(
   return { x, y }
 }
 
+/** Closed tab and opened drawer share one display-relative right boundary. */
+export function rightEdgeSidecarBounds(
+  m: DisplayMetrics,
+  input: { open: boolean; normalizedY?: number; margin?: number }
+): Rect {
+  const margin = input.margin ?? RIGHT_EDGE_MARGIN_PX
+  const width = input.open ? RIGHT_EDGE_DRAWER_WIDTH : RIGHT_EDGE_TAB_WIDTH
+  const height = input.open
+    ? Math.min(RIGHT_EDGE_DRAWER_HEIGHT, Math.max(RIGHT_EDGE_TAB_HEIGHT, m.workArea.height - margin * 2))
+    : RIGHT_EDGE_TAB_HEIGHT
+  const { y } = rightEdgePosition(width, height, m, input.normalizedY, margin)
+  return { x: m.workArea.x + m.workArea.width - margin - width, y, width, height }
+}
+
 /** Inverse of rightEdgePosition's vertical mapping for an explicit user drag. */
 export function normalizeRightEdgeY(
   y: number,
@@ -293,14 +311,7 @@ export function normalizeRightEdgeY(
 
 /** Compact side-edge target for Hide/Island that reuses the cursor-watch dwell/leave state machine. */
 export function rightEdgeHoverRestRect(normalizedY: number | undefined, m: DisplayMetrics): Rect {
-  const { y } = rightEdgePosition(
-    RIGHT_EDGE_HOVER_TARGET.width,
-    RIGHT_EDGE_HOVER_TARGET.height,
-    m,
-    normalizedY
-  )
-  const x = m.workArea.x + m.workArea.width - RIGHT_EDGE_HOVER_TARGET.width
-  return { x, y, ...RIGHT_EDGE_HOVER_TARGET }
+  return rightEdgeSidecarBounds(m, { open: false, normalizedY })
 }
 
 /** One placement-aware bounds resolver. Top-center remains on its established path. */
@@ -588,7 +599,7 @@ export function parkAfterExclusiveOnboarding(
   if (effectivePlacement === 'top-center' && layout === 'hide') return hideParkRect(m)
   const size = overlayRestSize(layout, m)
   if (effectivePlacement === 'right-edge') {
-    return { ...rightEdgePosition(size.width, size.height, m, normalizedY), width: size.width, height: size.height }
+    return rightEdgeSidecarBounds(m, { open: false, normalizedY })
   }
   if (layout === 'island') {
     const x = clampAxis(

@@ -1,16 +1,14 @@
 /**
- * Métis 2.0 Cap 2 — command runtime: wake → pill → mid-sentence execute → thank-you dismiss.
- * Deterministic path works with Jev OFF. Stop/Escape never waits on /v1/decide.
+ * Métis command runtime: trusted command text becomes one proposal only.
+ * Execution is deliberately deferred to Task 5's main-owned confirmation boundary.
  */
-
-import { desktopActionFingerprint, desktopActionMayReachDecide } from '@shared/desktop-actions'
+import { desktopActionMayReachDecide } from '@shared/desktop-actions'
+import { commandContextHash } from '@shared/metis-command-proposal'
 import {
   idleMetisCommandSession,
-  pendingFingerprints,
   reduceMetisCommandSession,
   type MetisCommandSessionState
 } from '@shared/metis-command-session'
-import { executeDesktopAction, type DesktopAdapterPlatform } from './desktop-adapters'
 import { decideActionDisambiguate } from './metis-decide-client'
 
 export const METIS_COMMAND_IDLE_TIMEOUT_MS = 8_000
@@ -21,20 +19,24 @@ export type MetisCommandRuntimeHooks = {
   /** Optional: seat has decisionProviders.jev from heartbeat. */
   jevEnabled?: () => boolean
   operatorDecideAuth?: () => { baseUrl: string; authorizationHeader: string } | null
-  platform?: DesktopAdapterPlatform
   fetchImpl?: typeof fetch
-  /** Test seam only; production uses the allowlisted desktop adapter. */
-  execute?: typeof executeDesktopAction
+  /** Reserved for Task 5 confirmation; this runtime never calls it. */
+  execute?: typeof import('./desktop-adapters').executeDesktopAction
 }
 
 export class MetisCommandRuntime {
   private state: MetisCommandSessionState = idleMetisCommandSession()
-  private running = false
   private listenCopyTimer: ReturnType<typeof setTimeout> | null = null
   private idleTimer: ReturnType<typeof setTimeout> | null = null
+  private proposalTimer: ReturnType<typeof setTimeout> | null = null
   private settleTimer: ReturnType<typeof setTimeout> | null = null
   private idleTimerGeneration = 0
   private generation = 0
+  private sessionSequence = 0
+  private sessionId = ''
+  private utteranceRevision = 0
+  private decisionController: AbortController | null = null
+  private decisionContextHash: string | null = null
 
   constructor(private readonly hooks: MetisCommandRuntimeHooks) {
     this.emit()
@@ -44,12 +46,24 @@ export class MetisCommandRuntime {
     return this.state
   }
 
-  /** Feed trusted local ASR text. Meeting channel is a defense-in-depth no-op. */
+  /** Feed only text from a main-owned command capture. Meeting input is always ignored. */
   ingestTranscript(text: string, channel: 'meeting' | 'command'): void {
     if (channel !== 'command') return
+    this.abortDecision()
     const wasActive = this.state.active
-    const next = reduceMetisCommandSession(this.state, { type: 'transcript', text, channel })
+    const sessionId = wasActive ? this.sessionId : `command-${++this.sessionSequence}`
+    const utteranceRevision = ++this.utteranceRevision
+    const contextHash = commandContextHash(text)
+    const next = reduceMetisCommandSession(this.state, {
+      type: 'transcript',
+      text,
+      channel,
+      sessionId,
+      utteranceRevision,
+      contextHash
+    })
 
+    if (!wasActive && next.active) this.sessionId = sessionId
     if (wasActive && !next.active) {
       const generation = ++this.generation
       this.clearTimers()
@@ -63,13 +77,16 @@ export class MetisCommandRuntime {
     if (!wasActive && next.active) this.armListeningCopy()
     if (next.active) this.armIdleTimeout()
     else this.clearIdleTimer()
-    if (next.pending.length) void this.flushPending()
-    else if (next.lastParse?.ambiguous && next.active) void this.maybeDisambiguate(next)
+    this.armProposalExpiry()
+    if (!next.proposal && next.lastParse?.provisional.length && next.active) {
+      void this.maybeDisambiguate(next, sessionId, utteranceRevision, contextHash)
+    }
   }
 
-  /** Local Stop / Escape — immediate; does not await decide. */
+  /** Local Stop / Escape — immediate; does not await optional decision work. */
   stopLocal(reason = 'escape'): void {
     const generation = ++this.generation
+    this.abortDecision()
     this.clearTimers()
     const next = reduceMetisCommandSession(this.state, { type: 'stop' })
     next.reason = reason
@@ -80,8 +97,15 @@ export class MetisCommandRuntime {
   /** Revoke command authority when a capture owner is replaced, stopped, or destroyed. */
   reset(reason = 'source_replaced'): void {
     this.generation++
+    this.abortDecision()
     this.clearTimers()
+    this.sessionId = ''
+    this.utteranceRevision++
     this.apply({ ...idleMetisCommandSession(), reason })
+  }
+
+  destroy(): void {
+    this.reset('destroyed')
   }
 
   private armListeningCopy(): void {
@@ -117,9 +141,30 @@ export class MetisCommandRuntime {
     }
   }
 
+  private armProposalExpiry(): void {
+    this.clearProposalTimer()
+    const proposal = this.state.proposal
+    if (!proposal) return
+    const proposalId = proposal.id
+    const delay = Math.max(0, proposal.expiresAt - Date.now())
+    this.proposalTimer = setTimeout(() => {
+      this.proposalTimer = null
+      const next = reduceMetisCommandSession(this.state, { type: 'proposal_expired', proposalId })
+      if (next !== this.state) this.apply(next)
+    }, delay)
+  }
+
+  private clearProposalTimer(): void {
+    if (this.proposalTimer) {
+      clearTimeout(this.proposalTimer)
+      this.proposalTimer = null
+    }
+  }
+
   private clearTimers(): void {
     this.clearListeningCopy()
     this.clearIdleTimer()
+    this.clearProposalTimer()
     this.clearSettleTimer()
   }
 
@@ -139,6 +184,12 @@ export class MetisCommandRuntime {
     }, METIS_COMMAND_SETTLE_DELAY_MS)
   }
 
+  private abortDecision(): void {
+    this.decisionController?.abort()
+    this.decisionController = null
+    this.decisionContextHash = null
+  }
+
   private apply(next: MetisCommandSessionState): void {
     this.state = next
     this.emit()
@@ -148,48 +199,39 @@ export class MetisCommandRuntime {
     this.hooks.onState(this.state)
   }
 
-  private async flushPending(): Promise<void> {
-    if (this.running) return
-    this.running = true
-    const gen = this.generation
-    try {
-      while (gen === this.generation) {
-        const req = this.state.pending[0]
-        if (!req) break
-        await (this.hooks.execute ?? executeDesktopAction)(req, this.hooks.platform)
-        if (gen !== this.generation) break
-        const next = reduceMetisCommandSession(this.state, {
-          type: 'mark_committed',
-          fingerprints: [desktopActionFingerprint(req)]
-        })
-        this.apply(next)
-      }
-    } finally {
-      this.running = false
-      // A prior action can finish after a replacement session starts. The old generation must not
-      // commit into that session, but it must release the runner so its new pending work can drain.
-      if (this.state.pending.length) void this.flushPending()
-    }
-  }
-
-  private async maybeDisambiguate(snapshot: MetisCommandSessionState): Promise<void> {
+  private async maybeDisambiguate(
+    snapshot: MetisCommandSessionState,
+    sessionId: string,
+    utteranceRevision: number,
+    contextHash: string
+  ): Promise<void> {
     if (!this.hooks.jevEnabled?.()) return
     const auth = this.hooks.operatorDecideAuth?.()
     if (!auth) return
     const candidates = (snapshot.lastParse?.provisional || []).filter(desktopActionMayReachDecide)
     if (!candidates.length) return
-    const gen = this.generation
+    const controller = new AbortController()
+    this.decisionController = controller
+    this.decisionContextHash = contextHash
     const result = await decideActionDisambiguate({
       operatorBaseUrl: auth.baseUrl,
       authorizationHeader: auth.authorizationHeader,
-      transcript: snapshot.liveTranscript,
+      transcript: snapshot.liveTranscript.slice(0, 512),
       candidates,
       deadlineMs: 1200,
-      fetchImpl: this.hooks.fetchImpl
+      fetchImpl: this.hooks.fetchImpl,
+      signal: controller.signal
     })
-    if (gen !== this.generation) return
-    if (!result.ok) return // deterministic path already primary; ignore outage
-    // Soft hint only: re-ingest does not auto-force; caller may use adapter id later.
+    if (
+      controller.signal.aborted ||
+      this.sessionId !== sessionId ||
+      this.utteranceRevision !== utteranceRevision ||
+      this.decisionContextHash !== contextHash
+    ) {
+      return
+    }
+    if (this.decisionController === controller) this.abortDecision()
+    // Advisory only. A remote response cannot create, alter, or execute a proposal.
     void result
   }
 }
@@ -197,5 +239,3 @@ export class MetisCommandRuntime {
 export function createMetisCommandRuntime(hooks: MetisCommandRuntimeHooks): MetisCommandRuntime {
   return new MetisCommandRuntime(hooks)
 }
-
-export { pendingFingerprints }

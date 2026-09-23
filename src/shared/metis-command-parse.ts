@@ -3,21 +3,17 @@
  * Starts each step as keywords finalize — does not wait for full utterance end.
  * Cap1 /v1/decide may disambiguate ONLY; this path MUST work with Jev off/outage.
  */
-import {
-  type DesktopActionRequest,
-  type DesktopAdapterId,
-  desktopActionFingerprint
-} from './desktop-actions'
+import { type DesktopActionRequest, type DesktopAdapterId } from './desktop-actions'
 import { foldSpeech, stripWakeWord } from './metis-wake'
 
-export type ParseCommit = {
+export type ParseCandidate = {
   request: DesktopActionRequest
   at: number
   confidence: 'deterministic'
 }
 
 export type ParseSnapshot = {
-  commits: ParseCommit[]
+  candidates: ParseCandidate[]
   provisional: DesktopAdapterId[]
   ambiguous: boolean
   negation: boolean
@@ -79,16 +75,15 @@ const RULES: Rule[] = [
 ]
 
 export function parseMetisCommandTranscript(
-  rawText: string,
-  alreadyCommitted: ReadonlySet<string> = new Set()
+  rawText: string
 ): ParseSnapshot {
   const folded = foldSpeech(stripWakeWord(rawText))
   const negation = NEGATION_RE.test(folded)
-  const commits: ParseCommit[] = []
+  const candidates: ParseCandidate[] = []
   const provisional: DesktopAdapterId[] = []
   let ambiguous = false
 
-  if (!folded) return { commits, provisional, ambiguous, negation }
+  if (!folded) return { candidates, provisional, ambiguous, negation }
 
   for (const rule of RULES) {
     const matched = rule.allOf.every((re) => re.test(folded))
@@ -102,16 +97,14 @@ export function parseMetisCommandTranscript(
       provisional.push(rule.id)
       continue
     }
-    const fp = desktopActionFingerprint(req)
-    if (alreadyCommitted.has(fp)) continue
     if (negation) {
       provisional.push(rule.id)
       continue
     }
-    commits.push({ request: req, at: folded.length, confidence: 'deterministic' })
+    candidates.push({ request: req, at: folded.length, confidence: 'deterministic' })
   }
 
   const order = new Map(RULES.map((r, i) => [r.id, i]))
-  commits.sort((a, b) => (order.get(a.request.id) ?? 99) - (order.get(b.request.id) ?? 99))
-  return { commits, provisional, ambiguous, negation }
+  candidates.sort((a, b) => (order.get(a.request.id) ?? 99) - (order.get(b.request.id) ?? 99))
+  return { candidates, provisional, ambiguous, negation }
 }

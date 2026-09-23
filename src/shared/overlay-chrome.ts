@@ -6,6 +6,7 @@ import { SETTINGS_SURFACE_BACKGROUND, SETTINGS_WINDOW_MIN } from './settings-bou
  * and main geometry all read one enum. Default is hide-until-hover (fresh install).
  */
 
+/** Persisted chrome vocabulary; placement-specific filtering lives in overlay-presentation. */
 export const OVERLAY_LAYOUTS = ['hide', 'island', 'bar'] as const
 export type OverlayLayout = (typeof OVERLAY_LAYOUTS)[number]
 

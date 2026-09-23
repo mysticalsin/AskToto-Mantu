@@ -12,6 +12,11 @@ const experienceSrc = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 
 const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
 
 describe('MQA-283 — the narrative experience now ends at Ready, not a legacy provider handoff', () => {
+  it('persists right-edge position, Island chrome, and auto-hide in one save', () => {
+    expect(experienceSrc).toMatch(/persistOverlayPlacement\(id, appearance, patch\)/)
+    expect(settingsSrc).toMatch(/persistOverlayPlacement\(id, settings\.overlayLayout, patch\)/)
+  })
+
   it('OnboardingV2 no longer has a provider or legacy-full phase', () => {
     expect(experienceSrc).not.toMatch(/legacy-full/)
     expect(experienceSrc).not.toMatch(/setPhase\('provider'\)/)

@@ -92,7 +92,8 @@ import {
   type ScreenContextResult,
   type DiagnosticsExportResult,
   type RecallExportPlainResult,
-  ScreenCaptureCheckPayloadSchema
+  ScreenCaptureCheckPayloadSchema,
+  MetisCommandConfirmationSchema
 } from '@shared/ipc'
 import {
   getSettings,
@@ -192,6 +193,7 @@ import {
   overlayRestSize,
   normalizeRightEdgeY,
   overlayPlacementPosition,
+  rightEdgeSidecarBounds,
   resolveOverlayPlacement,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
@@ -241,6 +243,7 @@ import {
   parseOverlayOrbStyle
 } from '@shared/overlay-orb'
 import { overlayDisplayKey, parseOverlayPlacement, type OverlayPlacement } from '@shared/overlay-placement'
+import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 
 // --- Speaker session ownership (Task 7-P2b) ---
 
@@ -593,6 +596,9 @@ import { activateOperatorLicenseToken } from './operator-license-activate'
 import { operatorGate } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
 import { initLogging, mainLog, auditLog } from './logger'
+import { CommandControl } from './command-control'
+import { executeDesktopAction } from './desktop-adapters'
+import { ensureMetisCommandRuntime } from './metis-command-register'
 import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
 import { safeMeetingBasename } from './meeting-path'
 import {
@@ -977,6 +983,13 @@ function privateViewOn(): boolean {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
+const commandControl = new CommandControl({
+  execute: executeDesktopAction,
+  audit: (event, metadata) => auditLog(event as Parameters<typeof auditLog>[0], metadata),
+  onState: (state) => {
+    if (win && !win.isDestroyed()) win.webContents.send(IPC.metisCommandState, state)
+  }
+})
 
 // Electron can dispatch an invoke that the retiring overlay queued just before a constructor-required
 // window swap. This is deliberately an exact, short-lived identity record — not a second trusted-window
@@ -1081,6 +1094,13 @@ let settingsSurfaceOpen = false
 let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
 let overlayCursorWatchEnteredAt: number | null = null
 let overlayCursorWatchHovering = false
+// Electron can accept an onboarding setBounds request and then let the compositor clamp it into a
+// normal-window card. Keep this narrowly scoped to the opaque onboarding owner; normal overlay layouts
+// must remain free to resize and park themselves.
+let exclusiveBoundsWatchTimer: ReturnType<typeof setInterval> | null = null
+const EXCLUSIVE_BOUNDS_WATCH_INTERVAL_MS = 250
+const EXCLUSIVE_BOUNDS_WATCH_DURATION_MS = 2_000
+const EXCLUSIVE_BOUNDS_MAX_RECONCILIATIONS = 4
 let overlayLeaveParkTimer: ReturnType<typeof setTimeout> | null = null
 const streams = new Map<string, { abort: () => void }>()
 let importJobs: ImportJobManager | null = null
@@ -2089,6 +2109,7 @@ function lockOnboardingAudioInRenderer(w: BrowserWindow | null): void {
 
 /** Destroy the current overlay and build one whose constructor chrome matches onboardingExclusiveLive(). */
 function recreateOverlayWindow(): void {
+  stopExclusiveBoundsWatch()
   const dying = win
   if (!dying || dying.isDestroyed()) {
     win = null
@@ -2118,6 +2139,94 @@ function recreateOverlayWindow(): void {
     // BrowserWindow.destroy can report an already-closing window. Do not leave the app with no
     // recovery path; the guarded finisher is idempotent if `closed` arrives immediately afterward.
     finishRecreate()
+  }
+}
+
+/** Cover a transparent overlay with the opaque onboarding stage before retiring it, so replay cannot flash desktop. */
+function replaceTransparentOverlayWithExclusiveOnboarding(): void {
+  const dying = win
+  if (!dying || dying.isDestroyed()) {
+    win = null
+    createWindow()
+    return
+  }
+
+  // Replay must cover the display that contains the retiring Settings overlay, not whichever monitor
+  // happens to hold the cursor. Otherwise a cursor on a second monitor can make the old display flash.
+  let replacementDisplay: Electron.Display
+  try {
+    replacementDisplay = screen.getDisplayMatching(dying.getBounds())
+  } catch {
+    replacementDisplay = screen.getPrimaryDisplay()
+  }
+  // A retiring overlay may still own an earlier onboarding watcher. Stop it before constructing the
+  // successor; never stop again after createWindow(), because that successor needs its own clamp repair.
+  stopExclusiveBoundsWatch()
+  // BrowserWindow construction/show is synchronous enough to paint the opaque stage before the old
+  // transparent rail can disappear. This is intentionally not the generic recreate path: the inverse
+  // handoff after onboarding still waits for the exclusive window to close before revealing a small overlay.
+  const previousTransparent = overlayWindowTransparent
+  const previousWindowState = {
+    currentWidth,
+    lastBarHeight,
+    isMinimized,
+    islandResting,
+    settingsSurfaceOpen,
+    userAnchorY,
+    postOnboardingDestination
+  }
+  win = null
+  try {
+    createWindow(replacementDisplay)
+    const replacement = win as BrowserWindow | null
+    if (!replacement || replacement.isDestroyed() || !coversExclusiveOnboardingDisplay(replacement, replacementDisplay)) {
+      throw new Error('Opaque onboarding replacement did not cover the display.')
+    }
+  } catch {
+    // This runs from a one-way IPC event. A native BrowserWindow failure must leave the existing
+    // Settings surface usable instead of escaping as an uncaught main-process exception. The user can
+    // retry replay after the compositor recovers; the durable setting is restored to match the live UI.
+    const replacement = win as BrowserWindow | null
+    win = dying
+    overlayWindowTransparent = previousTransparent
+    currentWidth = previousWindowState.currentWidth
+    lastBarHeight = previousWindowState.lastBarHeight
+    isMinimized = previousWindowState.isMinimized
+    islandResting = previousWindowState.islandResting
+    settingsSurfaceOpen = previousWindowState.settingsSurfaceOpen
+    userAnchorY = previousWindowState.userAnchorY
+    postOnboardingDestination = previousWindowState.postOnboardingDestination
+    stopExclusiveBoundsWatch()
+    try {
+      if (replacement && replacement !== dying && !replacement.isDestroyed()) replacement.destroy()
+    } catch {
+      /* already gone */
+    }
+    try {
+      if (!getSettings().onboardingDone) setSettingsWithSpeakerPolicy({ onboardingDone: true })
+      notifySettingsChanged()
+    } catch {
+      /* preserve the still-usable window even if a locked profile refuses the rollback */
+    }
+    mainLog.error('[onboarding] replay replacement failed; keeping the existing Settings window')
+    auditLog('app.recovery', { kind: 'onboarding-replay-replacement-failed' })
+    return
+  }
+  // The successor is now visible, opaque, and edge-to-edge. Only now retire work owned by the transparent
+  // renderer; if construction fails above, the existing Settings surface and its work remain intact.
+  stopOverlayCursorWatch()
+  rememberRetiringOverlaySender(dying)
+  lockOnboardingAudioInRenderer(dying)
+  leaveExclusiveOsFullscreen(dying)
+  commandControl.revokeForLifecycleEvent('window_replaced')
+  clearCompletedOnboardingExitFallback(dying)
+  streams.forEach((stream) => stream.abort())
+  streams.clear()
+  invalidateCloudSttOwner(dying.webContents.id)
+  try {
+    dying.destroy()
+  } catch {
+    /* the opaque replacement is already live; the retiring window will close through its lifecycle hook */
   }
 }
 
@@ -2166,11 +2275,89 @@ function commitParkedOverlayBounds(park: { x: number; y: number; width: number; 
   }
 }
 
-function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
+function stopExclusiveBoundsWatch(): void {
+  if (!exclusiveBoundsWatchTimer) return
+  clearInterval(exclusiveBoundsWatchTimer)
+  exclusiveBoundsWatchTimer = null
+}
+
+function hasExclusiveOnboardingBounds(
+  actual: { x: number; y: number; width: number; height: number },
+  expected: { x: number; y: number; width: number; height: number }
+): boolean {
+  return (
+    actual.x === expected.x &&
+    actual.y === expected.y &&
+    actual.width === expected.width &&
+    actual.height === expected.height
+  )
+}
+
+/** A replay only retires its transparent predecessor after the opaque successor already covers its display. */
+function coversExclusiveOnboardingDisplay(w: BrowserWindow, expectedDisplay?: Electron.Display): boolean {
+  try {
+    if (w.isDestroyed() || !w.isVisible()) return false
+    const bounds = w.getBounds()
+    const display = expectedDisplay ?? screen.getDisplayMatching(bounds)
+    return hasExclusiveOnboardingBounds(bounds, exclusiveOnboardingBounds(display.bounds, display.workArea))
+  } catch {
+    return false
+  }
+}
+
+/** Reapply the exact display rect when Electron/macOS has clamped the first onboarding setBounds. */
+function reconcileExclusiveOnboardingBounds(w: BrowserWindow, display: Electron.Display): void {
+  const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
+  try {
+    w.setBounds(stage, false)
+    if (!hasExclusiveOnboardingBounds(w.getBounds(), stage)) {
+      w.setBounds(stage, false)
+      w.setPosition(stage.x, stage.y, false)
+    }
+  } catch {
+    /* headless / already destroyed */
+  }
+}
+
+/** Keep the opaque onboarding window edge-to-edge only while it owns the display. */
+function armExclusiveBoundsWatch(w: BrowserWindow, displayId: number): void {
+  stopExclusiveBoundsWatch()
+  const expiresAt = Date.now() + EXCLUSIVE_BOUNDS_WATCH_DURATION_MS
+  let reconciliations = 0
+  exclusiveBoundsWatchTimer = setInterval(() => {
+    if (!onboardingExclusiveLive() || w.isDestroyed() || win !== w) {
+      stopExclusiveBoundsWatch()
+      return
+    }
+    const display = screen.getAllDisplays().find(candidate => candidate.id === displayId) ?? screen.getPrimaryDisplay()
+    const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
+    try {
+      if (hasExclusiveOnboardingBounds(w.getBounds(), stage)) {
+        if (Date.now() >= expiresAt) stopExclusiveBoundsWatch()
+        return
+      }
+      if (reconciliations >= EXCLUSIVE_BOUNDS_MAX_RECONCILIATIONS || Date.now() >= expiresAt) {
+        mainLog.warn('[onboarding-bounds] native display reconciliation did not settle; stopped after bounded retries')
+        stopExclusiveBoundsWatch()
+        return
+      }
+      reconciliations += 1
+      reconcileExclusiveOnboardingBounds(w, display)
+    } catch {
+      stopExclusiveBoundsWatch()
+    }
+  }, EXCLUSIVE_BOUNDS_WATCH_INTERVAL_MS)
+  exclusiveBoundsWatchTimer.unref?.()
+}
+
+/** Returns false when a transparent overlay must be replaced before onboarding can be shown. */
+function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): boolean {
   // Totos-Mac 044c0f1: simple-fullscreen on a transparent window is a 3600×2338 RGBA(0,0,0,0) void.
   if (overlayWindowTransparent) {
-    recreateOverlayWindow()
-    return
+    // Settings replay can re-enter through an auto-resize before the one-way onboarding IPC arrives.
+    // Use the cover-then-retire handoff here too; generic destroy-then-create would briefly expose desktop.
+    if (w === win) replaceTransparentOverlayWithExclusiveOnboarding()
+    return false
   }
   stopOverlayCursorWatch()
   const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
@@ -2178,6 +2365,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   lastBarHeight = stage.height
   isMinimized = false
   islandResting = false
+  settingsSurfaceOpen = false
   try {
     w.setIgnoreMouseEvents(false)
   } catch {
@@ -2192,10 +2380,11 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
     w.setFullScreenable?.(true)
     w.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
     w.setOpacity(1)
-    w.setBounds(stage)
   } catch {
     /* headless / already destroyed */
   }
+  reconcileExclusiveOnboardingBounds(w, display)
+  armExclusiveBoundsWatch(w, display.id)
   // FITO-185-S: never OS simpleFullScreen/kiosk on Electron 43+ (Tony FAIL e404460). Product path is
   // opaque bounds + show after Act1 first paint (FITO-185-Y). ASKTOTO_ALLOW_SFS only on Electron <=39.
   const mayOsExclusive =
@@ -2214,10 +2403,12 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   } catch {
     /* CI / Linux kiosk unsupported — bounds still cover the display */
   }
+  return true
 }
 
 /** After onboardingDone only: leave exclusive fullscreen and park hide/island peek (never 880×816). */
 function exitExclusiveOnboardingStage(): void {
+  stopExclusiveBoundsWatch()
   if (!win || win.isDestroyed()) return
   lockOnboardingAudioInRenderer(win)
   leaveExclusiveOsFullscreen(win)
@@ -2300,7 +2491,7 @@ function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
   }
 }
 
-function createWindow(): void {
+function createWindow(targetDisplay?: Electron.Display): void {
   // Idempotent: `second-instance` is registered before app-ready and can call ensureWindow() while boot's
   // own runStep('createWindow') is still queued behind its awaits. Without this, the boot step would
   // overwrite `win` with a second BrowserWindow and orphan the first one — still visible, still
@@ -2333,7 +2524,7 @@ function createWindow(): void {
   // Wiped-profile onboarding owns the display (exclusiveOnboardingBounds) — never the 880×816 card
   // that overlapped Tony's work. Auto-resize must not shrink this until onboardingDone; exit then
   // parks hide/island at bounds.y (notch strip) so the hardware island can hit. getSettings() is file-keystore-safe here.
-  const placementDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const placementDisplay = targetDisplay ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const onboardingLive = onboardingExclusiveLive()
   const layout = liveOverlayLayout()
   const placement = resolvedOverlayPlacementForDisplay(placementDisplay)
@@ -2398,6 +2589,11 @@ function createWindow(): void {
       webSecurity: true
     }
   })
+  ensureMetisCommandRuntime({
+    getSettings,
+    commandControl,
+    getCommandOwner: () => (win && !win.isDestroyed() ? { webContentsId: win.webContents.id } : null)
+  })
 
   try {
   // Frameless transparent windows on darwin still inherit an OS min (~44). Hide park is 8×2.
@@ -2458,16 +2654,19 @@ function createWindow(): void {
   const selfWebContentsId = self.webContents.id
   win.on('closed', () => {
     clearCompletedOnboardingExitFallback(self)
+    // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
+    // a selected recording. Their checkpointed state resumes even if the entire app exits. A retiring
+    // window can close after an opaque replacement has already become `win`; it must not cancel work
+    // owned by that replacement.
+    if (win !== self) return
+    commandControl.revokeForLifecycleEvent('window_closed')
     // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
     streams.forEach((s) => s.abort())
     streams.clear()
     invalidateCloudSttOwner(selfWebContentsId)
-    // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
-    // a selected recording. Their checkpointed state resumes even if the entire app exits.
-    if (win === self) {
-      stopOverlayCursorWatch()
-      win = null
-    }
+    stopOverlayCursorWatch()
+    stopExclusiveBoundsWatch()
+    win = null
   })
 
   // Security: never let model-output links navigate the trusted renderer or open child windows
@@ -2492,10 +2691,12 @@ function createWindow(): void {
   // sit blank with no trace in any log. Record it, and record the recovery. No automatic reload: Chromium
   // recovers most stalls on its own, and a forced reload mid-meeting would drop the live transcript.
   win.on('unresponsive', () => {
+    if (win !== self) return
     mainLog.warn('[renderer-unresponsive] overlay renderer stopped responding')
     auditLog('app.unresponsive', { kind: 'overlay' })
   })
   win.on('responsive', () => {
+    if (win !== self) return
     mainLog.info('[renderer-responsive] overlay renderer recovered')
   })
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
@@ -2505,6 +2706,8 @@ function createWindow(): void {
   // Persist it like onFatal does for a main-process crash, then reload the same content so the overlay
   // recovers instead of hanging forever.
   win.webContents.on('render-process-gone', (_e, details) => {
+    if (win !== self) return
+    commandControl.revokeForLifecycleEvent('renderer_replaced')
     mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
     auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
     // A dead/reloading renderer cannot receive final STT messages or issue Stop. Force-close the live
@@ -2530,18 +2733,24 @@ function createWindow(): void {
     // width — squeezing the recovered bar into a ~130px sliver that resizable:false makes unfixable. Same
     // two lines createWindow's crash guard uses, for the reload path that never reaches it.
     isMinimized = false
-    if (onboardingExclusiveLive() && win && !win.isDestroyed()) {
-      applyExclusiveOnboardingStage(win)
-      try {
-        showForExclusiveOnboarding(win)
-      } catch {
-        /* headless */
+    if (onboardingExclusiveLive() && !self.isDestroyed()) {
+      const retainedOwnership = applyExclusiveOnboardingStage(self)
+      // A transparent renderer can crash after Settings durably re-arms onboarding but before its
+      // replay IPC runs. The exclusive helper then creates the opaque successor itself; this retiring
+      // crash callback must not show, resize, or reload that successor.
+      if (!retainedOwnership && win !== self) return
+      if (retainedOwnership) {
+        try {
+          showForExclusiveOnboarding(self)
+        } catch {
+          /* headless */
+        }
       }
     } else {
       currentWidth = BAR_WIDTH
     }
-    if (!win || win.isDestroyed()) return
-    win.loadURL(overlayRendererUrl())
+    if (win !== self || self.isDestroyed()) return
+    self.loadURL(overlayRendererUrl())
   })
   // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
   // The same helper is used by crash recovery, so the parser-time Act 1 shell cannot disappear there.
@@ -2650,6 +2859,7 @@ function resizeTo(height: number): void {
   const display = screen.getDisplayMatching(win.getBounds())
   const layout = liveOverlayLayout()
   const placement = resolvedOverlayPlacementForDisplay(display)
+  if (placement === 'right-edge') return
   const rest = overlayRestSize(layout, getDisplayMetrics(display))
   // Hide rest is a 1–8px hairline. BAR_MIN_HEIGHT (44) must never grow it into Tony's slab.
   if (!settingsSurfaceOpen && islandResting && layout === 'hide') return
@@ -2677,19 +2887,13 @@ function resizeTo(height: number): void {
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
   if (!isMinimized && !islandResting) lastBarHeight = rememberBarContentHeight(h, lastBarHeight)
-  let x: number
-  let y: number
-  if (placement === 'right-edge') {
-    ;({ x, y } = overlayPositionForDisplay(currentWidth, h, layout, display, ISLAND_TOP_MARGIN))
-  } else {
-    // Resting hide/island stay at hoverRestTop (island hit). Revealed chrome sits at islandSafeTop
-    // (below the notch). Do not fight macOS by writing y=0 on the full bar every tick.
-    const metrics = getDisplayMetrics(display)
-    y = islandResting ? hoverRestTop(metrics) : topClamp(layout, metrics, ISLAND_TOP_MARGIN)
-    // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
-    // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
-    x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
-  }
+  // Resting hide/island stay at hoverRestTop (island hit). Revealed chrome sits at islandSafeTop
+  // (below the notch). Do not fight macOS by writing y=0 on the full bar every tick.
+  const metrics = getDisplayMetrics(display)
+  const y = islandResting ? hoverRestTop(metrics) : topClamp(layout, metrics, ISLAND_TOP_MARGIN)
+  // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
+  // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
+  const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
   win.setBounds({ x, y, width: currentWidth, height: h }, false)
 }
 
@@ -2756,7 +2960,10 @@ const TOP_CENTER_MARGIN_PX = 24
 const RESIZE_EDGE_MARGIN = 8
 
 function liveOverlayLayout(): OverlayLayout {
-  return parseOverlayLayout(getSettings().overlayLayout)
+  return resolveOverlayPresentation({
+    placement: liveOverlayPlacement(),
+    layout: parseOverlayLayout(getSettings().overlayLayout)
+  }).layout
 }
 
 /** Physical placement is separate from visual chrome. Older or malformed settings stay top-center. */
@@ -2907,9 +3114,10 @@ function tickOverlayCursorWatch(): void {
   overlayCursorWatchEnteredAt = null
   overlayCursorWatchHovering = step.osHoverSeen
   if (step.action === 'restore') {
+    const restoredFromParkedRail = islandResting
     cancelOverlayLeavePark()
     restoreBarWidth()
-    notifyOverlayCursorHover(true)
+    notifyOverlayCursorHover(true, restoredFromParkedRail)
     const after = win.getBounds()
     // Transition log only (a hug-stub restore can repeat per tick until the bar settles).
     if (after.width !== bounds.width || after.height !== bounds.height || !windowVisible) {
@@ -2932,10 +3140,10 @@ function tickOverlayCursorWatch(): void {
   /* stay / leave-ignored: never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
 }
 
-function notifyOverlayCursorHover(hovering: boolean): void {
+function notifyOverlayCursorHover(hovering: boolean, restoredFromParkedRail = false): void {
   if (!win || win.isDestroyed()) return
   try {
-    win.webContents.send(IPC.overlayCursorHover, { hovering })
+    win.webContents.send(IPC.overlayCursorHover, { hovering, restoredFromParkedRail })
   } catch {
     /* renderer gone */
   }
@@ -3004,12 +3212,14 @@ function healHideGhostSlab(): boolean {
 }
 
 /** Returns true only when the window was actually parked on this call. */
-function parkOverlayAfterHideSpring(): boolean {
+function parkOverlayAfterHideSpring(force = false): boolean {
   if (!win || win.isDestroyed() || onboardingExclusiveLive()) return false
   if (settingsSurfaceOpen) return false
   // Do not refuse park because the hover latch is stuck. If the pointer is
-  // still on the bar or the top-edge strip, stay. Else Hide must go to 8×2.
-  if (pointerInIslandOrBar()) return false
+  // still on the bar or the top-edge strip, stay. An explicit dock close is the exception: its cursor
+  // remains inside the disappearing drawer until after the exit spring, so refusing to park would leave
+  // a 360px transparent hit target on screen despite the renderer showing only the 52px rail.
+  if (!force && pointerInIslandOrBar()) return false
   cancelOverlayLeavePark()
   const layout = liveOverlayLayout()
   if (!overlayUsesHover(layout)) return false
@@ -3113,6 +3323,17 @@ function restoreBarWidth(): void {
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   const layout = liveOverlayLayout()
+  const placement = resolvedOverlayPlacementForDisplay(display)
+  if (placement === 'right-edge') {
+    const sidecar = rightEdgeSidecarBounds(getDisplayMetrics(display), {
+      open: true,
+      normalizedY: rightEdgeYForDisplay(display)
+    })
+    currentWidth = sidecar.width
+    if (b.x === sidecar.x && b.y === sidecar.y && b.width === sidecar.width && b.height === sidecar.height) return
+    win.setBounds(sidecar, false)
+    return
+  }
   // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
   // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
   let revealedHeight = overlayUsesHover(layout)
@@ -3123,16 +3344,9 @@ function restoreBarWidth(): void {
   }
   const wasBarWidth = currentWidth === BAR_WIDTH
   currentWidth = BAR_WIDTH
-  const placement = resolvedOverlayPlacementForDisplay(display)
-  let position: { x: number; y: number }
-  if (placement === 'right-edge') {
-    position = overlayPositionForDisplay(BAR_WIDTH, revealedHeight, layout, display, ISLAND_TOP_MARGIN)
-  } else {
-    // Preserve the historic top-center path verbatim.
-    const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-    position = { x: wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0), y }
-  }
-  const { x, y } = position
+  // Preserve the historic top-center path verbatim.
+  const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  const x = wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
   // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
   if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
   win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
@@ -3885,6 +4099,7 @@ const shortcutActions: Record<string, () => void> = {
   hide: () => toggleVisible(),
   reset: () => sendHotkey('reset'),
   'toggle-listen': () => sendHotkey('toggle-listen'),
+  'metis-command': () => sendHotkey('metis-command'),
   capture: () => sendHotkey('capture'),
   factcheck: () => sendHotkey('factcheck'),
   whatnext: () => sendHotkey('whatnext'),
@@ -4429,6 +4644,18 @@ function registerIpc(): void {
     assertMainWindow(e)
     return shortcutFailures
   })
+  ipcMain.handle(IPC.metisCommandConfirm, async (e, raw: unknown) => {
+    assertMainWindow(e)
+    const parsed = MetisCommandConfirmationSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, reason: 'invalid_confirmation' }
+    return commandControl.confirm({ ...parsed.data, webContentsId: e.sender.id })
+  })
+  ipcMain.handle(IPC.metisCommandCancel, async (e, raw: unknown) => {
+    assertMainWindow(e)
+    const parsed = MetisCommandConfirmationSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, reason: 'invalid_confirmation' }
+    return commandControl.cancel({ ...parsed.data, webContentsId: e.sender.id })
+  })
   // Deep-link to the relevant macOS Privacy pane once a permission has been denied — getUserMedia never
   // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it. The
   // x-apple.systempreferences scheme only exists on macOS; a no-op elsewhere.
@@ -4538,12 +4765,7 @@ function registerIpc(): void {
     // replay from a transparent overlay or a freshly-created opaque onboarding window. The constructor
     // state can: only the former needs a replacement.
     if (!win || win.isDestroyed() || !overlayWindowTransparent) return
-    applyExclusiveOnboardingStage(win)
-    try {
-      showForExclusiveOnboarding(win)
-    } catch {
-      /* headless */
-    }
+    replaceTransparentOverlayWithExclusiveOnboarding()
   })
 
   ipcMain.on(IPC.onboardingExit, (e, destination: unknown) => {
@@ -4699,7 +4921,10 @@ function registerIpc(): void {
     // Both onboarding transitions replace the window only after this handler replies: `onboarding:enter`
     // for Replay, `onboarding:exit` for Act 6. Never destroy this renderer in the middle of its invoke.
     if (next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
-      const layout = parseOverlayLayout(next.overlayLayout)
+      const layout = resolveOverlayPresentation({
+        placement: parseOverlayPlacement(next.overlayPlacement),
+        layout: parseOverlayLayout(next.overlayLayout)
+      }).layout
       const layoutChanged = cur.overlayLayout !== next.overlayLayout
       const placementChanged = cur.overlayPlacement !== next.overlayPlacement
       if (overlayUsesHover(layout)) {
@@ -8354,6 +8579,8 @@ function registerIpc(): void {
   // --- Window management ---
   ipcMain.handle(IPC.windowResize, (e, payload: { height: number; width?: number }) => {
     assertMainWindow(e)
+    const display = win ? screen.getDisplayMatching(win.getBounds()) : null
+    if (display && resolvedOverlayPlacementForDisplay(display) === 'right-edge') return
     // Hide rest stays the 1–8px hairline. The 120px hug floor and BAR_MIN_HEIGHT (44) must not
     // grow it into a visible slab.
     if (!settingsSurfaceOpen && islandResting && liveOverlayLayout() === 'hide') return
@@ -8416,10 +8643,10 @@ function registerIpc(): void {
     assertMainWindow(e)
     restoreBarWidth()
   })
-  ipcMain.handle(IPC.overlayParkAfterHide, (e) => {
+  ipcMain.handle(IPC.overlayParkAfterHide, (e, force?: unknown) => {
     if (isRecentlyRetiredOverlaySender(e)) return
     assertMainWindow(e)
-    parkOverlayAfterHideSpring()
+    parkOverlayAfterHideSpring(force === true)
   })
   // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
   // caught render-throw survives to disk instead of only reaching console (gated behind

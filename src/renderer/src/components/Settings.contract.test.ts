@@ -522,22 +522,29 @@ describe('Dust instant validate proves a live connection', () => {
   })
 })
 
-describe('Settings Bar rest orb picker', () => {
-  it('wires OverlayOrbPicker next to Overlay chrome only when Bar is selected', () => {
+describe('Settings placement-aware overlay controls', () => {
+  it('places position first and resolves Bar rest from the normalized placement', () => {
     expect(source).toMatch(/overlayShowsBarRestPicker/)
-    expect(source).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
+    expect(source).toMatch(/resolveOverlayPresentation\(\{ layout: settings\.overlayLayout, placement: settings\.overlayPlacement \}\)\.layout/)
+    expect(source).toMatch(/persistOverlayPlacement\(id, settings\.overlayLayout, patch\)/)
     expect(source).toMatch(/OverlayOrbPicker/)
     expect(source).toMatch(/overlayOrbStyle: id/)
     expect(source).toMatch(/Applies when Overlay chrome is Bar/)
     const appearance = source.slice(source.indexOf('title="Appearance"'), source.indexOf('title="Language"'))
-    expect(appearance).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
-    const barRestStart = appearance.indexOf('overlayShowsBarRestPicker(settings.overlayLayout)')
+    expect(appearance.indexOf('<OverlayPlacementPicker')).toBeLessThan(appearance.indexOf('<OverlayChromePicker'))
+    expect(appearance).toMatch(/overlayShowsBarRestPicker\(resolveOverlayPresentation/)
+    const barRestStart = appearance.indexOf('overlayShowsBarRestPicker(resolveOverlayPresentation')
     const orbStart = appearance.indexOf('<OverlayOrbPicker', barRestStart)
     const gated = appearance.slice(barRestStart, appearance.indexOf(') : null}', orbStart))
     expect(gated).toMatch(/<OverlayOrbPicker/)
     expect(gated).toMatch(/Bar rest/)
     const orbBlock = source.slice(source.indexOf('<OverlayOrbPicker'), source.indexOf('<OverlayOrbPicker') + 400)
     expect(orbBlock).not.toMatch(/\u2014/)
+  })
+
+  it('keeps the separate Metis command shortcut visible and configurable', () => {
+    expect(source).toContain("'metis-command': 'Summon Métis command'")
+    expect(source).toContain("'metis-command': 'General'")
   })
 })
 

@@ -29,6 +29,25 @@ function run(segments: Array<{ rms: number; sec: number }>): Array<{ speechSec: 
 }
 
 describe('makeVad — voice-activity endpointing', () => {
+  it('admits quiet speech only after bounded quiet-room calibration', () => {
+    const emits = run([
+      { rms: 0.001, sec: 0.5 }, // calibrate a genuinely quiet room before reducing the admission floor
+      { rms: 0.008, sec: 0.18 }, // below legacy ON=0.012, but clearly above the calibrated bed
+      { rms: 0.003, sec: 0.08 }, // syllabic trough proves this is not a steady low bed
+      { rms: 0.008, sec: 0.35 },
+      { rms: SILENCE, sec: 0.8 }
+    ])
+    expect(emits).toHaveLength(1)
+  })
+
+  it('does not calibrate a cold-start noise spike into speech admission', () => {
+    const emits = run([
+      { rms: 0.008, sec: 0.15 }, // too short and arrives before calibration
+      { rms: SILENCE, sec: 1 }
+    ])
+    expect(emits).toHaveLength(0)
+  })
+
   it('emits once, ~0.6s after a real utterance ends', () => {
     const emits = run([
       { rms: SPEECH, sec: 1.2 },
@@ -244,21 +263,21 @@ describe('whisper worklet source', () => {
   })
 
   /** Instantiate the ACTUAL worklet source with the realtime globals stubbed, capturing emitted windows. */
-  function instantiateWorklet(messages: Array<{ audio?: Float32Array }>): {
+  function instantiateWorklet(messages: Array<{ audio?: Float32Array; sampleRate?: number }>, sourceRate = SR): {
     process: (inputs: Float32Array[][]) => boolean
   } {
     let Registered: (new () => { process: (inputs: Float32Array[][]) => boolean }) | null = null
     class FakeProcessor {
       port = {
         onmessage: null as ((e: MessageEvent) => void) | null,
-        postMessage: (m: { audio?: Float32Array }): void => void messages.push(m)
+        postMessage: (m: { audio?: Float32Array; sampleRate?: number }): void => void messages.push(m)
       }
     }
     new Function('AudioWorkletProcessor', 'registerProcessor', 'sampleRate', WHISPER_WORKLET_SRC)(
       FakeProcessor,
       (_name: string, cls: new () => { process: (inputs: Float32Array[][]) => boolean }): void =>
         void (Registered = cls),
-      SR
+      sourceRate
     )
     if (!Registered) throw new Error('worklet source registered no processor')
     return new Registered()
@@ -268,6 +287,13 @@ describe('whisper worklet source', () => {
     const n = Math.round(sec * SR)
     const buf = new Float32Array(n)
     for (let i = 0; i < n; i++) buf[i] = amp * Math.sin((2 * Math.PI * hz * i) / SR)
+    return buf
+  }
+
+  function toneAtRate(sec: number, amp: number, sourceRate: number, hz = 440): Float32Array {
+    const n = Math.round(sec * sourceRate)
+    const buf = new Float32Array(n)
+    for (let i = 0; i < n; i++) buf[i] = amp * Math.sin((2 * Math.PI * hz * i) / sourceRate)
     return buf
   }
 
@@ -317,6 +343,33 @@ describe('whisper worklet source', () => {
     const finals = messages.filter((m) => !(m as { partial?: boolean }).partial)
     expect(finals).toHaveLength(1)
     expect(finals[0].audio!.length).toBeGreaterThan(0)
+  })
+
+  it('converts a 48 kHz worklet quantum stream before VAD and emits explicit 16 kHz PCM', () => {
+    const messages: Array<{ audio?: Float32Array; sampleRate?: number }> = []
+    const w = instantiateWorklet(messages, 48000)
+    const silence = new Float32Array(Math.round(0.8 * 48000))
+    feed(w, concat(toneAtRate(0.6, 0.2, 48000), silence))
+
+    const final = messages.find((message) => message.audio && !(message as { partial?: boolean }).partial)
+    expect(final?.sampleRate).toBe(SR)
+    expect(final?.audio!.length).toBeGreaterThan(SR)
+    expect(final?.audio!.length).toBeLessThan(2 * SR)
+  })
+
+  it('emits a bounded quiet calibrated utterance above the unchanged ASR RMS floor', () => {
+    const messages: Array<{ audio?: Float32Array; sampleRate?: number }> = []
+    const w = instantiateWorklet(messages)
+    const silence = (sec: number): Float32Array => new Float32Array(Math.round(sec * SR))
+    // Quiet speech is below the legacy VAD ON floor, but has two syllabic rises after room-tone
+    // calibration and enough bounded energy that the worklet's unchanged EMIT_RMS gate accepts it.
+    feed(w, concat(silence(0.5), tone(0.18, 0.0168), silence(0.08), tone(0.7, 0.0168), silence(0.7)))
+
+    const final = messages.find((message) => message.audio && !(message as { partial?: boolean }).partial)
+    expect(final?.audio).toBeInstanceOf(Float32Array)
+    const audio = final?.audio ?? new Float32Array()
+    const rms = Math.sqrt(audio.reduce((sum, sample) => sum + sample * sample, 0) / audio.length)
+    expect(rms).toBeGreaterThanOrEqual(0.005)
   })
 })
 

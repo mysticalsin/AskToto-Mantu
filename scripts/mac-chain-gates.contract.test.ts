@@ -165,7 +165,9 @@ describe('MQA-249 — a portable "this build came up" signal, and the macOS gate
   const loggerSrc = readFileSync(join(root, 'src', 'main', 'logger.ts'), 'utf8')
 
   it('MQA-249: createWindow emits app.started unconditionally', () => {
-    const createWindow = indexSrc.slice(indexSrc.indexOf('function createWindow(): void {'))
+    const start = indexSrc.indexOf('function createWindow(')
+    expect(start).toBeGreaterThan(-1)
+    const createWindow = indexSrc.slice(start)
     const body = createWindow.slice(0, createWindow.indexOf('\n}\n'))
     expect(body).toMatch(/auditLog\('app\.started'/)
     // Before any early return that could skip it — other than the idempotency guard, which only fires

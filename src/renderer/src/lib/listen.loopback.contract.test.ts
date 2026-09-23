@@ -109,9 +109,9 @@ describe('MQA-267 — the boost cannot clip now that processing is off', () => {
 describe('MQA-268 — channel opens are serialized per speaker', () => {
   it('openChannel chains onto the previous open for the same speaker', () => {
     expect(SRC).toMatch(/const openSeqRef = useRef/)
-    expect(SRC).toMatch(/const run = prev\.catch\(\(\) => \{\}\)\.then\(\(\) => \{[\s\S]*?return open\(sp, stream, admissionEpoch\)/)
+    expect(SRC).toMatch(/const run = prev\.catch\(\(\) => \{\}\)\.then\(\(\) => \{[\s\S]*?return open\(sp, stream, admissionEpoch, micCapture\)/)
     expect(SRC).toMatch(
-      /const openChannelNowRef = useRef<\s*\(\(sp: Speaker, stream: MediaStream, admissionEpoch: number\) => Promise<boolean>\) \| null/
+      /const openChannelNowRef = useRef<\s*\(\(sp: Speaker, stream: MediaStream, admissionEpoch: number, micCapture\?: MicCapture\) => Promise<boolean>\) \| null/
     )
   })
 

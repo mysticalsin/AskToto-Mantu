@@ -3,7 +3,8 @@
  * No new mic/ASR. No silent app substitution. Photo never uploaded to Jev.
  */
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { win32 } from 'node:path'
 import { promisify } from 'node:util'
 import {
   WINDOWS_DESKTOP_EQUIVALENTS,
@@ -13,6 +14,37 @@ import {
 } from '@shared/desktop-actions'
 
 const execFileAsync = promisify(execFile)
+
+// This inherited layer deliberately remains a fixed demo allowlist. Keep every executable,
+// URL, and AppleScript literal in source: future command ingress must not be able to turn text
+// into an OS command or script.
+const FIXED_DEMO_NOTE_TITLE = 'hello'
+const FIXED_DEMO_SEARCH_QUERY = 'Norbert Wiener'
+const GOOGLE_NORBERT_WIENER_URL = 'https://www.google.com/search?q=Norbert%20Wiener'
+const X_URL = 'https://x.com'
+const WINDOWS_ROOT = process.env.SystemRoot || 'C:\\Windows'
+const WINDOWS_EXPLORER = win32.join(WINDOWS_ROOT, 'explorer.exe')
+const WINDOWS_NOTEPAD = win32.join(WINDOWS_ROOT, 'notepad.exe')
+const WINDOWS_STICKY_NOTES = 'shell:AppsFolder\\Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe!App'
+const WINDOWS_CAMERA = 'microsoft.windows.camera:'
+const CREATE_HELLO_NOTE_SCRIPT =
+  'tell application "Notes"\n' +
+  'activate\n' +
+  'make new note with properties {name:"hello", body:"hello"}\n' +
+  'end tell'
+const PHOTO_BOOTH_SHUTTER_SCRIPT =
+  'tell application "Photo Booth" to activate\n' +
+  'delay 0.8\n' +
+  'tell application "System Events"\n' +
+  '  if exists process "Photo Booth" then\n' +
+  '    tell process "Photo Booth" to keystroke return\n' +
+  '  end if\n' +
+  'end tell'
+
+type MacAppName = 'Notes' | 'Arc' | 'Photo Booth'
+type MacUrl = typeof GOOGLE_NORBERT_WIENER_URL | typeof X_URL
+type WindowsShellTarget = typeof WINDOWS_STICKY_NOTES | typeof GOOGLE_NORBERT_WIENER_URL | typeof X_URL | typeof WINDOWS_CAMERA
+type MacAppleScript = typeof CREATE_HELLO_NOTE_SCRIPT | typeof PHOTO_BOOTH_SHUTTER_SCRIPT
 
 export type DesktopAdapterPlatform = 'darwin' | 'win32' | 'linux' | 'other'
 
@@ -61,7 +93,7 @@ function okResult(
   return { id, ok: true, outcome, detail }
 }
 
-async function macOpenApp(name: string): Promise<{ ok: boolean; detail: string }> {
+async function macOpenApp(name: MacAppName): Promise<{ ok: boolean; detail: string }> {
   const r = await run('/usr/bin/open', ['-a', name])
   if (!r.ok) {
     return {
@@ -72,30 +104,72 @@ async function macOpenApp(name: string): Promise<{ ok: boolean; detail: string }
   return { ok: true, detail: `Opened ${name}` }
 }
 
-async function macOpenUrl(url: string, app?: string): Promise<{ ok: boolean; detail: string }> {
+async function macOpenUrl(url: MacUrl, app?: 'Arc'): Promise<{ ok: boolean; detail: string }> {
   const args = app ? ['-a', app, url] : [url]
   const r = await run('/usr/bin/open', args)
   if (!r.ok) return { ok: false, detail: r.stderr || `open failed for ${url}` }
   return { ok: true, detail: `Opened ${url}` }
 }
 
-async function macOsascript(source: string): Promise<{ ok: boolean; detail: string }> {
+async function macOsascript(source: MacAppleScript): Promise<{ ok: boolean; detail: string }> {
   const r = await run('/usr/bin/osascript', ['-e', source])
   if (!r.ok) return { ok: false, detail: r.stderr || 'osascript failed' }
   return { ok: true, detail: r.stdout.trim() || 'ok' }
 }
 
-async function winStart(target: string): Promise<{ ok: boolean; detail: string }> {
-  // cmd /c start "" <target> — target must not be free-form shell.
-  const r = await run('cmd.exe', ['/d', '/s', '/c', 'start', '', target])
-  if (!r.ok) return { ok: false, detail: r.stderr || `start failed for ${target}` }
-  return { ok: true, detail: `Started ${target}` }
+async function winOpenTarget(target: WindowsShellTarget): Promise<{ ok: boolean; detail: string }> {
+  // explorer.exe is pinned to SystemRoot. Unlike `cmd /c start`, it does not parse a shell command.
+  const r = await run(WINDOWS_EXPLORER, [target])
+  if (!r.ok) return { ok: false, detail: r.stderr || `open failed for ${target}` }
+  return { ok: true, detail: `Open request accepted for ${target}` }
+}
+
+async function winOpenNotepad(): Promise<{ ok: boolean; detail: string }> {
+  // Notepad is a persistent GUI process. A launch acknowledgement must not wait for it to exit
+  // or impose the command/script timeout used by `run`.
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (result: { ok: boolean; detail: string }) => {
+      if (settled) return
+      settled = true
+      resolve(result)
+    }
+
+    try {
+      const child = spawn(WINDOWS_NOTEPAD, [], {
+        detached: false,
+        shell: false,
+        stdio: 'ignore',
+        windowsHide: true
+      })
+      child.once('error', (error) => finish({ ok: false, detail: error.message || 'Notepad launch failed' }))
+      child.once('spawn', () => {
+        child.unref()
+        finish({ ok: true, detail: 'Notepad launch request accepted' })
+      })
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Notepad launch failed'
+      finish({ ok: false, detail })
+    }
+  })
+}
+
+function fixedDemoRequestError(req: DesktopActionRequest): string | null {
+  if (req.id === 'desktop.create_note' && req.args.title !== FIXED_DEMO_NOTE_TITLE) {
+    return 'Unsupported fixed-demo note title'
+  }
+  if (req.id === 'desktop.google_search' && req.args.q !== FIXED_DEMO_SEARCH_QUERY) {
+    return 'Unsupported fixed-demo search query'
+  }
+  return null
 }
 
 export async function executeDesktopAction(
   req: DesktopActionRequest,
   platform: DesktopAdapterPlatform = detectDesktopAdapterPlatform()
 ): Promise<DesktopActionResult> {
+  const requestError = fixedDemoRequestError(req)
+  if (requestError) return fail(req.id, requestError, { outcome: 'unsupported' })
   if (platform === 'darwin') return executeMac(req)
   if (platform === 'win32') return executeWin(req)
   return fail(req.id, `Desktop adapters unsupported on ${platform}`, { outcome: 'unsupported' })
@@ -108,18 +182,12 @@ async function executeMac(req: DesktopActionRequest): Promise<DesktopActionResul
       return r.ok ? okResult(req.id, 'unknown', r.detail) : fail(req.id, r.detail, { preferredMissing: true })
     }
     case 'desktop.create_note': {
-      const title = req.args.title
-      // Title exactly as requested (Cap1: hello).
-      const safe = title.replace(/["\\]/g, '')
-      const script =
-        'tell application "Notes"\n' +
-        'activate\n' +
-        `make new note with properties {name:"${safe}", body:"${safe}"}\n` +
-        'end tell'
       const open = await macOpenApp('Notes')
       if (!open.ok) return fail(req.id, open.detail, { preferredMissing: true })
-      const r = await macOsascript(script)
-      return r.ok ? okResult(req.id, 'unknown', `note title=${title}`) : fail(req.id, r.detail)
+      const r = await macOsascript(CREATE_HELLO_NOTE_SCRIPT)
+      return r.ok
+        ? okResult(req.id, 'unknown', `Note creation requested for ${FIXED_DEMO_NOTE_TITLE}`)
+        : fail(req.id, r.detail)
     }
     case 'desktop.open_arc': {
       const r = await macOpenApp('Arc')
@@ -128,21 +196,18 @@ async function executeMac(req: DesktopActionRequest): Promise<DesktopActionResul
         : fail(req.id, 'Arc is not available. No silent browser swap.', { preferredMissing: true })
     }
     case 'desktop.google_search': {
-      const q = encodeURIComponent(req.args.q)
-      const url = `https://www.google.com/search?q=${q}`
       // Prefer Arc when present; if Arc missing, open via default handler but surface note.
-      const viaArc = await macOpenUrl(url, 'Arc')
+      const viaArc = await macOpenUrl(GOOGLE_NORBERT_WIENER_URL, 'Arc')
       if (viaArc.ok) return okResult(req.id, 'unknown', viaArc.detail)
-      const viaDefault = await macOpenUrl(url)
+      const viaDefault = await macOpenUrl(GOOGLE_NORBERT_WIENER_URL)
       return viaDefault.ok
         ? okResult(req.id, 'unknown', `${viaDefault.detail} (Arc missing; used default handler)`)
         : fail(req.id, viaDefault.detail)
     }
     case 'desktop.open_x': {
-      const url = 'https://x.com'
-      const viaArc = await macOpenUrl(url, 'Arc')
+      const viaArc = await macOpenUrl(X_URL, 'Arc')
       if (viaArc.ok) return okResult(req.id, 'unknown', viaArc.detail)
-      const viaDefault = await macOpenUrl(url)
+      const viaDefault = await macOpenUrl(X_URL)
       return viaDefault.ok
         ? okResult(req.id, 'unknown', viaDefault.detail)
         : fail(req.id, viaDefault.detail)
@@ -152,15 +217,7 @@ async function executeMac(req: DesktopActionRequest): Promise<DesktopActionResul
       const open = await macOpenApp('Photo Booth')
       if (!open.ok) return fail(req.id, open.detail, { preferredMissing: true })
       // Best-effort shutter via UI scripting; outcome unknown without AX verify.
-      const shutter =
-        'tell application "Photo Booth" to activate\n' +
-        'delay 0.8\n' +
-        'tell application "System Events"\n' +
-        '  if exists process "Photo Booth" then\n' +
-        '    tell process "Photo Booth" to keystroke return\n' +
-        '  end if\n' +
-        'end tell'
-      const r = await macOsascript(shutter)
+      const r = await macOsascript(PHOTO_BOOTH_SHUTTER_SCRIPT)
       return r.ok
         ? okResult(req.id, 'unknown', 'Photo Booth capture attempted (local only)')
         : fail(req.id, r.detail)
@@ -173,40 +230,36 @@ async function executeWin(req: DesktopActionRequest): Promise<DesktopActionResul
   switch (req.id) {
     case 'desktop.open_notes': {
       // Prefer Sticky Notes AppX; fall back Notepad with disclosure in detail.
-      const sticky = await winStart('shell:AppsFolder\\Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe!App')
+      const sticky = await winOpenTarget(WINDOWS_STICKY_NOTES)
       if (sticky.ok) return okResult(req.id, 'unknown', sticky.detail)
-      const notepad = await winStart('notepad.exe')
+      const notepad = await winOpenNotepad()
       return notepad.ok
         ? okResult(req.id, 'unknown', `${notepad.detail} (Sticky Notes missing; Notepad disclosed)`)
         : fail(req.id, `${disc.note} ${notepad.detail}`, { preferredMissing: true })
     }
     case 'desktop.create_note': {
       // Disclosed analogue: open Notepad; title file not auto-named without user path — unknown.
-      const r = await winStart('notepad.exe')
+      const r = await winOpenNotepad()
       return r.ok
-        ? okResult(req.id, 'unknown', `Notepad opened for title=${req.args.title} (${disc.note})`)
+        ? okResult(req.id, 'unknown', `Notepad opened for ${FIXED_DEMO_NOTE_TITLE} (${disc.note})`)
         : fail(req.id, r.detail, { preferredMissing: true })
     }
     case 'desktop.open_arc': {
-      const r = await winStart('arc.exe')
-      return r.ok
-        ? okResult(req.id, 'unknown', r.detail)
-        : fail(req.id, 'Arc is not available on this PC. No silent Edge/Chrome swap.', {
-            preferredMissing: true
-          })
+      return fail(req.id, 'Arc launch is unavailable without a trusted installed-app path. No silent Edge/Chrome swap.', {
+        outcome: 'unsupported',
+        preferredMissing: true
+      })
     }
     case 'desktop.google_search': {
-      const q = encodeURIComponent(req.args.q)
-      const url = `https://www.google.com/search?q=${q}`
-      const r = await winStart(url)
+      const r = await winOpenTarget(GOOGLE_NORBERT_WIENER_URL)
       return r.ok ? okResult(req.id, 'unknown', r.detail) : fail(req.id, r.detail)
     }
     case 'desktop.open_x': {
-      const r = await winStart('https://x.com')
+      const r = await winOpenTarget(X_URL)
       return r.ok ? okResult(req.id, 'unknown', r.detail) : fail(req.id, r.detail)
     }
     case 'desktop.photo_booth_capture': {
-      const r = await winStart('microsoft.windows.camera:')
+      const r = await winOpenTarget(WINDOWS_CAMERA)
       return r.ok
         ? okResult(req.id, 'unknown', `Camera opened (${disc.note})`)
         : fail(req.id, r.detail, { preferredMissing: true })

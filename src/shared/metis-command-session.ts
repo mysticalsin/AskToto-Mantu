@@ -1,8 +1,12 @@
 /**
- * Métis 2.0 Cap 2 — command session state machine (pure).
- * Meeting Listen ≠ command until wake word. Stop/Escape is local (never await decide).
+ * Métis command session state machine (pure).
+ * Trusted command capture can create one typed proposal; it cannot execute it.
  */
-import { desktopActionFingerprint, type DesktopActionRequest } from './desktop-actions'
+import {
+  commandContextHash,
+  createCommandProposal,
+  type CommandProposal
+} from './metis-command-proposal'
 import { parseMetisCommandTranscript, type ParseSnapshot } from './metis-command-parse'
 import {
   METIS_PILL_HI,
@@ -14,15 +18,15 @@ import {
 
 export type MetisChimeKind = 'none' | 'single' | 'double'
 export type MetisCommandUiCopy = typeof METIS_PILL_HI | typeof METIS_PILL_LISTENING | string
+export type MetisProposalPhase = MetisCommandPhase | 'awaiting-confirmation'
 
 export interface MetisCommandSessionState {
-  phase: MetisCommandPhase
+  phase: MetisProposalPhase
   active: boolean
   pillVisible: boolean
   pillCopy: MetisCommandUiCopy
   liveTranscript: string
-  committed: string[]
-  pending: DesktopActionRequest[]
+  proposal?: CommandProposal
   chime: MetisChimeKind
   lastParse: ParseSnapshot | null
   reason?: string
@@ -35,116 +39,117 @@ export function idleMetisCommandSession(): MetisCommandSessionState {
     pillVisible: false,
     pillCopy: METIS_PILL_HI,
     liveTranscript: '',
-    committed: [],
-    pending: [],
     chime: 'none',
     lastParse: null
   }
 }
 
 export type MetisCommandEvent =
-  | { type: 'transcript'; text: string; channel: 'meeting' | 'command' }
+  | {
+      type: 'transcript'
+      text: string
+      /** Only the main-owned command capture may provide this literal source. */
+      channel: 'meeting' | 'command'
+      sessionId?: string
+      utteranceRevision?: number
+      contextHash?: string
+      now?: number
+    }
   | { type: 'stop' }
-  | { type: 'mark_committed'; fingerprints: string[] }
+  | { type: 'cancel' }
+  | { type: 'proposal_expired'; proposalId: string; now?: number }
   | { type: 'tick_listening_copy' }
 
-/**
- * Advance session. Meeting-channel transcripts never activate or execute.
- */
+function proposalFor(event: Extract<MetisCommandEvent, { type: 'transcript' }>, snapshot: ParseSnapshot) {
+  const candidate = snapshot.candidates[0]
+  if (!candidate || snapshot.negation) return undefined
+  return createCommandProposal({
+    sessionId: event.sessionId ?? 'trusted-command',
+    utteranceRevision: event.utteranceRevision ?? 0,
+    contextHash: event.contextHash ?? commandContextHash(event.text),
+    request: candidate.request,
+    now: event.now
+  })
+}
+
+function listeningState(
+  prev: MetisCommandSessionState,
+  event: Extract<MetisCommandEvent, { type: 'transcript' }>,
+  snapshot: ParseSnapshot,
+  reason?: string
+): MetisCommandSessionState {
+  const proposal = proposalFor(event, snapshot)
+  return {
+    ...prev,
+    phase: proposal ? 'awaiting-confirmation' : 'listening',
+    active: true,
+    pillVisible: true,
+    pillCopy: prev.pillCopy === METIS_PILL_HI ? METIS_PILL_HI : METIS_PILL_LISTENING,
+    liveTranscript: event.text,
+    proposal,
+    chime: 'none',
+    lastParse: snapshot,
+    reason
+  }
+}
+
+/** Advance session. Meeting transcripts never activate or create proposals. */
 export function reduceMetisCommandSession(
   prev: MetisCommandSessionState,
   event: MetisCommandEvent
 ): MetisCommandSessionState {
-  if (event.type === 'stop') {
+  if (event.type === 'stop' || event.type === 'cancel') {
     if (!prev.active && prev.phase === 'idle') return { ...prev, chime: 'none' }
     return {
       ...idleMetisCommandSession(),
       phase: 'deactivating',
       chime: 'double',
-      reason: 'local_stop'
+      reason: event.type === 'stop' ? 'local_stop' : 'cancelled'
     }
   }
 
-  if (event.type === 'mark_committed') {
-    const committed = [...prev.committed]
-    for (const fp of event.fingerprints) {
-      if (!committed.includes(fp)) committed.push(fp)
-    }
-    const pending = prev.pending.filter(
-      (request) => !event.fingerprints.includes(desktopActionFingerprint(request))
-    )
-    return {
-      ...prev,
-      committed,
-      pending,
-      chime: 'none',
-      phase: prev.active ? (pending.length ? 'executing' : 'listening') : prev.phase
-    }
+  if (event.type === 'proposal_expired') {
+    if (!prev.proposal || prev.proposal.id !== event.proposalId) return prev
+    return { ...prev, phase: 'listening', proposal: undefined, reason: 'proposal_expired', chime: 'none' }
   }
 
   if (event.type === 'tick_listening_copy') {
     if (!prev.active) return prev
-    return { ...prev, pillCopy: METIS_PILL_LISTENING, phase: 'listening', chime: 'none' }
+    return { ...prev, pillCopy: METIS_PILL_LISTENING, chime: 'none' }
   }
 
-  // transcript
-  const { text, channel } = event
-  if (channel === 'meeting') return prev
+  if (event.channel === 'meeting') return prev
 
-  if (!prev.active) {
-    if (!transcriptContainsWakeWord(text)) {
-      return { ...prev, chime: 'none' }
-    }
-    // Wake → single chime + pill; same utterance may also finalize keywords.
-    const snap = parseMetisCommandTranscript(text, new Set<string>())
-    const pending = snap.negation ? [] : snap.commits.map((c) => c.request)
-    return {
-      phase: pending.length ? 'executing' : 'waking',
-      active: true,
-      pillVisible: true,
-      pillCopy: METIS_PILL_HI,
-      liveTranscript: text,
-      committed: [],
-      pending,
-      chime: 'single',
-      lastParse: snap,
-      reason: 'wake'
-    }
-  }
-
-  // Active command session
-  if (transcriptContainsEndPhrase(text)) {
+  if (transcriptContainsEndPhrase(event.text)) {
     return {
       ...idleMetisCommandSession(),
       phase: 'deactivating',
       chime: 'double',
-      liveTranscript: text,
+      liveTranscript: event.text,
       reason: 'thank_you'
     }
   }
 
-  const snap = parseMetisCommandTranscript(text, new Set(prev.committed))
-  // ASR emits incremental and final copies of the same sentence. Keep the action already being
-  // executed plus any queued follow-ons, add each new request once, and let a later negation clear
-  // only work that has not reached the OS yet.
-  const queued = new Set(prev.pending.map(desktopActionFingerprint))
-  const pending = snap.negation
-    ? []
-    : [...prev.pending, ...snap.commits.map((c) => c.request).filter((request) => !queued.has(desktopActionFingerprint(request)))]
-  const phase: MetisCommandPhase = pending.length ? 'executing' : 'listening'
-
-  return {
-    ...prev,
-    phase,
-    pillVisible: true,
-    pillCopy: prev.pillCopy === METIS_PILL_HI ? METIS_PILL_HI : METIS_PILL_LISTENING,
-    liveTranscript: text,
-    pending,
-    chime: 'none',
-    lastParse: snap
+  const snapshot = parseMetisCommandTranscript(event.text)
+  if (!prev.active) {
+    // The command source is main-owned. It can be activated by wake word or explicit command mic.
+    if (!transcriptContainsWakeWord(event.text) && !snapshot.candidates.length && !snapshot.provisional.length) {
+      return { ...prev, chime: 'none' }
+    }
+    const proposal = proposalFor(event, snapshot)
+    return {
+      phase: proposal ? 'awaiting-confirmation' : 'waking',
+      active: true,
+      pillVisible: true,
+      pillCopy: METIS_PILL_HI,
+      liveTranscript: event.text,
+      proposal,
+      chime: 'single',
+      lastParse: snapshot,
+      reason: 'wake'
+    }
   }
-}
 
-export function pendingFingerprints(state: MetisCommandSessionState): string[] {
-  return state.pending.map(desktopActionFingerprint)
+  // Every trusted partial supersedes the prior proposal. Parsing supplies candidates, never authority.
+  return listeningState(prev, event, snapshot, snapshot.negation ? 'cancelled' : undefined)
 }
