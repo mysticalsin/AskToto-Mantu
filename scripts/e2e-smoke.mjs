@@ -546,17 +546,21 @@ async function selectAppearanceAndBar() {
   await topCenter.waitFor({ state: 'visible', timeout: 8_000 })
   await topCenter.click({ timeout: 5_000 })
   await settingsMatch({ overlayPlacement: 'top-center' })
-  if ((await topCenter.getAttribute('aria-checked')) !== 'true') {
-    throw new Error('Top center was written to settings but the selected control did not update.')
-  }
+  await waitFor(
+    async () => (await topCenter.getAttribute('aria-checked')) === 'true',
+    'Top center was written to settings but the selected control did not update.',
+    1_000
+  )
   await continueToAppearance()
   const bar = await visibleOnboardingRadio('Bar')
   await bar.waitFor({ state: 'visible', timeout: 8_000 })
   await bar.click({ timeout: 5_000 })
   await settingsMatch({ overlayLayout: 'bar' })
-  if ((await bar.getAttribute('aria-checked')) !== 'true') {
-    throw new Error('Bar was written to settings but the selected control did not update.')
-  }
+  await waitFor(
+    async () => (await bar.getAttribute('aria-checked')) === 'true',
+    'Bar was written to settings but the selected control did not update.',
+    1_000
+  )
   ok('Top center Bar choice persists during onboarding')
   await screenshot('02-top-center-bar-appearance')
 }
