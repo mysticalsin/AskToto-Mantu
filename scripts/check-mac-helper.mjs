@@ -7,6 +7,7 @@ import { accessSync, constants, existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { assertMacHelperSpeechUsage } from './lib/mac-helper-privacy.mjs'
 
 // Both slices, because the mac package is universal: an arm64-only helper is not executable on an
 // Intel Mac, and the failure is invisible until a user there gets no screen context at all.
@@ -54,6 +55,12 @@ if (missing.length) {
       'context on every Mac of the other architecture.\n' +
       'Rebuild it: node scripts/build-mac-helper.mjs'
   )
+  process.exit(1)
+}
+try {
+  assertMacHelperSpeechUsage(binary, REQUIRED_ARCHES)
+} catch (error) {
+  console.error(`[check-mac-helper] ${error?.message ?? error}`)
   process.exit(1)
 }
 console.log(`[check-mac-helper] ok (${arches.join(', ')})`)
