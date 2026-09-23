@@ -273,7 +273,7 @@ describe('right-edge dock', () => {
       expect(call).toContain('pausedAt={meetingPauseRef.current.pausedAt}')
       expect(call).toContain('onTogglePause={onTogglePause}')
       expect(call).toContain('onTranscript={toggleTranscript}')
-      expect(call).toContain('transcriptShown={transcriptShown}')
+      expect(call).toContain("transcriptShown={view === 'copilot' && transcriptShown}")
       expect(call).toContain('onCapture={capture}')
       expect(call).toContain('onOpenIntelligence={openIntelligenceDashboard}')
       expect(call).toContain('onSpotlightRef={spotlightRef}')
@@ -284,6 +284,7 @@ describe('right-edge dock', () => {
     }
     expect(app.match(/meetingPauseRef\.current = freshMeetingPauseClock\(\)/g)).toHaveLength(2)
     expect(app).toContain('meetingPauseRef.current = setMeetingPaused(meetingPauseRef.current')
+    expect(app).toMatch(/const toggleTranscript = useCallback\(\(\) => \{\s*if \(view !== 'copilot'\) \{\s*setTranscriptShown\(true\)\s*setCollapsed\(false\)\s*setView\('copilot'\)/)
     expect(app).toContain('const openIntelligenceDashboard = useCallback')
     expect(app).toContain('window.toto.brainOpenDashboard()')
     expect(app).toContain('minimizeForIntelligence()')
