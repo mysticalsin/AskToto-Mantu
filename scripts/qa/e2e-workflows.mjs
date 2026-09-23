@@ -18,19 +18,22 @@
  *   node scripts/qa/e2e-workflows.mjs --only=degrade         # one group
  *   node scripts/qa/e2e-workflows.mjs --meetings=D:\fixtures # point at a fixture meetings folder first
  *   node scripts/qa/e2e-workflows.mjs --list                 # group names
+ *   METIS_QA_APP_EXECUTABLE=<packaged-exe> ASKTOTO_USERDATA=<dir> node scripts/qa/e2e-workflows.mjs --only=boot,screen
+ *     Packaged mode uses Playwright's Electron driver; the QA profile is mandatory.
  *
  * The degradation group sets deliberately INVALID API keys and issues one request each, so real
  * endpoints return 401. That is the point: it physically reproduces "my API key stopped working".
  */
-import { chromium } from 'playwright-core'
-import { writeFileSync, rmSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { _electron as electron, chromium } from 'playwright'
+import { writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs'
+import { basename, isAbsolute, join, relative } from 'node:path'
 // Used only by the `cloudflare` group, to probe the mock gateway from THIS process rather than from the
 // CSP-restricted renderer. `rejectUnauthorized: false` is safe and necessary here: the mock serves a
 // throwaway self-signed cert on 127.0.0.1, and this is test tooling, never shipped code.
 import { request as httpsRequest } from 'node:https'
 
 const CDP = process.env.METIS_CDP ?? 'http://127.0.0.1:9334'
+const APP_EXECUTABLE = process.env.METIS_QA_APP_EXECUTABLE
 const OUT = process.env.METIS_QA_OUT ?? 'D:\\tmp-metis-e2e\\qa-report.json'
 const args = process.argv.slice(2)
 const only = (args.find((a) => a.startsWith('--only=')) ?? '').replace('--only=', '')
@@ -219,7 +222,12 @@ async function groupBoot() {
   // platform, whether mic and screen capture will actually work. Windows screen status used to be
   // hardcoded 'unknown' forever, so this asserts a committed answer on the platform under test.
   await check(g, 'screen-capture readiness reports a committed answer, not a permanent unknown (MQA-002)', async () => {
-    const perms = await page.evaluate(() => window.toto.getPermissions())
+    let perms = await page.evaluate(() => window.toto.getPermissions())
+    const deadline = Date.now() + 2_000
+    while (process.platform === 'win32' && perms.screenRecording === 'unknown' && Date.now() < deadline) {
+      await sleep(100)
+      perms = await page.evaluate(() => window.toto.getPermissions())
+    }
     if (process.platform === 'win32') {
       assert(perms.screenRecording !== 'unknown',
         'Windows screen readiness is still "unknown" — the boot probe did not run, so the checklist cannot tell the user whether screenshots work')
@@ -789,10 +797,39 @@ async function groupMeetings() {
 
 async function groupBrain() {
   const g = 'brain'
-  // The `meetings` group deletes every transcript it saves as its own cleanup, so by the time this
-  // group runs there is nothing left on disk to index — the commitments check below would find zero
-  // by construction, not because extraction is broken. Save (and auto-enqueue-ingest) a dedicated,
-  // commitment-bearing fixture here and only delete it once this group's own checks are done with it.
+  let priorLocal = null
+  let extractionReady = true
+  try {
+    // A fresh packaged profile has Local AI off and no user keys. Opt in to the bundled model so this
+    // group can exercise real extraction without borrowing a credential from the test host.
+    if (APP_EXECUTABLE) {
+      const before = await settings()
+      priorLocal = before.localLlm
+      await patch({
+        localLlm: {
+          ...before.localLlm,
+          enabled: true,
+          useFor: { ...before.localLlm.useFor, summary: true }
+        }
+      })
+      const enabled = await settings()
+      if (enabled.localSummaryReady) {
+        record(g, 'bundled Local AI is ready for extraction', 'pass', enabled.localLlm.modelId)
+      } else {
+        extractionReady = false
+        record(g, 'bundled Local AI is ready for extraction', 'info',
+          'not exercised — the packaged local model is unavailable on this host')
+      }
+    }
+    await runBrainChecks(g, extractionReady)
+  } finally {
+    if (priorLocal) await patch({ localLlm: priorLocal })
+  }
+}
+
+async function runBrainChecks(g, extractionReady) {
+  // Save and auto-enqueue a dedicated fixture. An unattended native delete confirmation can leave
+  // another group's meeting behind, so only this fixture can satisfy the extraction check below.
   const commitTitle = `QA Commitment Probe ${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`
   let commitFile = null
   await check(g, 'a meeting with a clear next step is saved for indexing', async () => {
@@ -829,7 +866,7 @@ async function groupBrain() {
   // EXERCISED: that is not a defect in extraction, it is an absence of evidence, and calling it a
   // failure is the same lie as a false green (see the third status in the summary below).
   const commitmentsName = 'commitments (next steps) are present after indexing'
-  const settleDeadline = Date.now() + 6 * 60 * 1000
+  const settleDeadline = Date.now() + (extractionReady ? 6 * 60 * 1000 : 0)
   let indexSettled = false
   while (Date.now() < settleDeadline) {
     // MQA-265: bounded, for the same reason as the accuracy group's loop below — the deadline is only
@@ -840,7 +877,7 @@ async function groupBrain() {
       new Promise((r) => setTimeout(() => r(null), 20000))
     ])
     const idle = st?.backfill && !st.backfill.running && !st.backfill.preparing
-    if (idle && (st.ingestedFiles?.length ?? 0) > 0) {
+    if (idle && st.ingestedFiles?.includes(basename(commitFile ?? ''))) {
       indexSettled = true
       break
     }
@@ -848,14 +885,17 @@ async function groupBrain() {
   }
   if (!indexSettled) {
     record(g, commitmentsName, 'info',
-      'not exercised — indexing did not settle within 6 min (on-device model busy); re-run this group alone to cover it')
+      extractionReady
+        ? 'not exercised — indexing did not settle within 6 min; re-run this group alone to cover it'
+        : 'not exercised — no local extraction provider was ready on this host')
   } else {
     await check(g, commitmentsName, async () => {
       const read = await page.evaluate(() => window.toto.brainRead())
       const commitments = []
       for (const d of read.deals ?? []) for (const c of d.commitments ?? []) commitments.push(c.text)
       for (const p of read.people ?? []) for (const c of p.commitments ?? []) commitments.push(c.text)
-      assert(commitments.length > 0, 'no commitments extracted from any indexed meeting')
+      assert(commitments.some((text) => text.toLowerCase().includes('security questionnaire')),
+        'the dedicated meeting commitment was not extracted')
       return { count: commitments.length, sample: commitments.slice(0, 3) }
     })
   }
@@ -872,13 +912,21 @@ async function groupBrain() {
     assert(res && Array.isArray(res.names), 'entity names malformed (expected { names: string[] })')
     return { names: res.names.length, sample: res.names.slice(0, 4) }
   })
-  await check(g, 'a second backfill on an already-indexed folder is a cheap no-op, not a re-extraction', async () => {
-    const before = await page.evaluate(() => window.toto.brainStatus())
-    const kicked = await page.evaluate(() => window.toto.brainBackfill())
-    await sleep(4000)
-    const after = await page.evaluate(() => window.toto.brainStatus())
-    return { kicked, revisionBefore: before?.revision, revisionAfter: after?.revision }
-  })
+  const noOpName = 'a second backfill on an already-indexed folder is a cheap no-op, not a re-extraction'
+  if (!indexSettled) {
+    record(g, noOpName, 'info', 'not exercised — the first indexing pass did not settle')
+  } else {
+    await check(g, noOpName, async () => {
+      const before = await page.evaluate(() => window.toto.brainStatus())
+      const kicked = await page.evaluate(() => window.toto.brainBackfill())
+      await sleep(4000)
+      const after = await page.evaluate(() => window.toto.brainStatus())
+      assert(kicked?.deferred !== 'no-provider' && kicked?.queued === 0,
+        `the second backfill did not recognize the indexed folder: ${JSON.stringify(kicked)}`)
+      assert(after?.revision === before?.revision, 'the no-op backfill changed the graph revision')
+      return { kicked, revisionBefore: before?.revision, revisionAfter: after?.revision }
+    })
+  }
   // Housekeeping, not an assertion — so it must NOT go through recallDelete. That handler opens a
   // native confirm dialog (dialog.showMessageBox, Delete/Cancel) and its promise does not settle until
   // someone answers, which in an unattended run means the whole suite parks here forever with the rest
@@ -888,9 +936,13 @@ async function groupBrain() {
   await check(g, 'clean up the commitment fixture', async () => {
     if (!commitFile) return 'nothing to clean up'
     const folder = await page.evaluate(async () => (await window.toto.getSettings()).resolvedMeetingsFolder)
-    const path = join(folder, commitFile)
+    const path = isAbsolute(commitFile) ? commitFile : join(folder, commitFile)
+    const withinFolder = relative(folder, path)
+    assert(withinFolder && !withinFolder.startsWith('..') && !isAbsolute(withinFolder),
+      `fixture path is outside the meetings folder: ${path}`)
+    assert(existsSync(path), `fixture was missing before cleanup: ${path}`)
     try {
-      rmSync(path, { force: true })
+      rmSync(path)
     } catch (e) {
       throw new Error(`could not unlink the fixture at ${path}: ${e.message}`)
     }
@@ -1618,14 +1670,45 @@ if (args.includes('--list')) {
   process.exit(0)
 }
 
-const browser = await chromium.connectOverCDP(CDP)
-page = await findTotoPage(browser)
-
 const selected = only ? only.split(',').map((s) => s.trim()).filter((s) => GROUPS[s]) : Object.keys(GROUPS)
 if (only && !selected.length) {
-  console.error(`unknown group "${only}". Known: ${Object.keys(GROUPS).join(', ')}`)
-  process.exit(2)
+  throw new Error(`unknown group "${only}". Known: ${Object.keys(GROUPS).join(', ')}`)
 }
+
+if (APP_EXECUTABLE && !existsSync(APP_EXECUTABLE)) {
+  throw new Error(`Packaged QA executable not found: ${APP_EXECUTABLE}`)
+}
+const qaProfile = process.env.ASKTOTO_USERDATA
+if (APP_EXECUTABLE && (!qaProfile || !isAbsolute(qaProfile))) {
+  throw new Error('Packaged QA requires an absolute ASKTOTO_USERDATA path for a fresh, disposable profile.')
+}
+if (APP_EXECUTABLE && existsSync(qaProfile) && readdirSync(qaProfile).length > 0) {
+  throw new Error(`Packaged QA requires a fresh, empty profile: ${qaProfile}`)
+}
+
+// Pass only the OS environment needed to launch Electron. Inherited provider keys, Operator
+// endpoints, and product-control flags would make this run measure the host instead of the package.
+const osEnvKeys = new Set([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR',
+  'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'ALLUSERSPROFILE',
+  'PROGRAMFILES', 'PROGRAMFILES(X86)', 'COMMONPROGRAMFILES', 'COMMONPROGRAMFILES(X86)',
+  'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS', 'HOMEDRIVE', 'HOMEPATH',
+  'USERNAME', 'COMPUTERNAME', 'OS', 'SYSTEMDRIVE', 'PUBLIC', 'HOME', 'USER',
+  'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE', 'DISPLAY'
+])
+const packagedEnv = Object.fromEntries(Object.entries(process.env)
+  .filter(([key]) => osEnvKeys.has(key.toUpperCase())))
+packagedEnv.ASKTOTO_USERDATA = qaProfile
+packagedEnv.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
+const electronApp = APP_EXECUTABLE
+  ? await electron.launch({ executablePath: APP_EXECUTABLE, env: packagedEnv, timeout: 30_000 })
+  : null
+const browser = electronApp
+  ? { contexts: () => [electronApp.context()], close: () => electronApp.close() }
+  : await chromium.connectOverCDP(CDP)
+let qaExitCode
+try {
+  page = await findTotoPage(browser)
 
 if (meetingsFolder) {
   await page.evaluate((f) => window.toto.setSettings({ meetingsFolder: f }), meetingsFolder)
@@ -1692,5 +1775,8 @@ if (failed) {
   console.log('\nFAILURES:')
   for (const r of results.filter((x) => x.status === 'fail')) console.log(`  ${r.group} :: ${r.name} — ${r.detail}`)
 }
-await browser.close()
-process.exit(failed ? 1 : 0)
+qaExitCode = failed ? 1 : 0
+} finally {
+  await browser.close()
+}
+process.exit(qaExitCode)
