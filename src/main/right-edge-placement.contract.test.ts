@@ -25,6 +25,8 @@ describe('right-edge placement main-process contract', () => {
     expect(index).toMatch(/function overlayHoverRestRect\(/)
     const cursorWatch = section(index, 'function tickOverlayCursorWatch()', 'function notifyOverlayCursorHover')
     expect(cursorWatch).toMatch(/overlayHoverRestRect\(layout, display\)/)
+    expect(cursorWatch).toMatch(/const restoredFromParkedRail = islandResting/)
+    expect(cursorWatch).toMatch(/notifyOverlayCursorHover\(true, restoredFromParkedRail\)/)
     const reanchor = section(index, 'function registerScreenListeners()', 'function toggleVisible')
     expect(reanchor).toMatch(/resolvedOverlayPlacementForDisplay\(display\) === 'right-edge'/)
     expect(reanchor).toMatch(/overlayPositionForDisplay\(/)

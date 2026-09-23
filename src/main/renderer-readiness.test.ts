@@ -120,7 +120,9 @@ describe('MQA-318 real renderer readiness signal', () => {
 
   it('binds the isolated launch probe before navigation and preserves app.started', () => {
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-    const body = source.slice(source.indexOf('function createWindow(): void {'), source.indexOf('\nfunction resizeTo('))
+    const start = source.indexOf('function createWindow(')
+    expect(start).toBeGreaterThan(-1)
+    const body = source.slice(start, source.indexOf('\nfunction resizeTo(', start))
     const bind = body.indexOf('bindRendererReadiness(')
     const load = body.indexOf('win.loadURL(rendererUrl)', bind)
     expect(bind).toBeGreaterThan(body.indexOf('win = new BrowserWindow('))

@@ -197,7 +197,9 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
     expect(main).toMatch(/if \(onboardingLive\) params\.set\('exclusiveOnboarding'/)
     // The helper always starts from either the dev URL or the packaged file URL, then adds the flag.
     expect(main).toMatch(/process\.env\['ELECTRON_RENDERER_URL'\] \?\? pathToFileURL/)
-    expect(main).toMatch(/win\.loadURL\(overlayRendererUrl\(\)\)/)
+    expect(main).toMatch(/const rendererUrl = overlayRendererUrl\(\)/)
+    expect(main).toMatch(/win\.loadURL\(rendererUrl\)/)
+    expect(main).toMatch(/self\.loadURL\(overlayRendererUrl\(\)\)/)
   })
 })
 

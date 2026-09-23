@@ -257,7 +257,7 @@ describe('MQA-176 — contentProtectionOn() is the single decision, and it is ho
   })
 
   it('MQA-176 — a rebuilt overlay re-applies the decision at construction', () => {
-    const createWindow = sliceBetween(indexSrc, 'function createWindow(): void {', 'function resizeTo(')
+    const createWindow = sliceBetween(indexSrc, 'function createWindow(', 'function resizeTo(')
     expect(createWindow).toContain('win.setContentProtection(contentProtectionOn())')
   })
 

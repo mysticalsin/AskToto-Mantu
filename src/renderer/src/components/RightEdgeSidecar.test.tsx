@@ -6,8 +6,10 @@ import { describe, expect, it } from 'vitest'
 import { RightEdgeSidecar, SidecarChat } from './RightEdgeSidecar'
 
 const sidecar = readFileSync(join(__dirname, './RightEdgeSidecar.tsx'), 'utf8')
+const answer = readFileSync(join(__dirname, './Answer.tsx'), 'utf8')
 const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const e2eSmoke = readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8')
 
 function findElement(node: ReactNode, type: string): ReactElement<Record<string, unknown>> | null {
   if (!isValidElement(node)) return null
@@ -99,7 +101,9 @@ describe('right-edge dock', () => {
         onOpenIntelligence={async () => ({ ok: true })}
         onSpotlightRef={() => undefined}
         spotlightReady
+        onHistory={() => undefined}
         onSettings={() => undefined}
+        liveNotice="Microphone needs input. Check your microphone connection."
       />
     )
 
@@ -111,7 +115,33 @@ describe('right-edge dock', () => {
     expect(markup).toContain('Capture screen')
     expect(markup).toContain('Mantu Intelligence')
     expect(markup).toContain('Spotlight Ref')
-    expect(markup).toContain('Settings')
+    expect(markup).toContain('Microphone needs input. Check your microphone connection.')
+    expect(markup).toContain('data-right-edge-status="Ready"')
+    expect(markup).toContain('data-right-edge-action-rail="true"')
+    expect(markup).toContain('aria-label="Start listening"')
+    expect(markup).toContain('aria-label="Capture screen"')
+    expect(markup).toContain('aria-label="Mantu Intelligence"')
+    expect(markup).toContain('aria-label="Spotlight Ref"')
+    expect(markup).toContain('aria-label="Open settings"')
+    expect(markup).toContain('aria-label="Open History"')
+    expect(markup).toContain('History')
+  })
+
+  it('keeps microphone failure and degraded-capture notices accurate in the compact dock', () => {
+    const visibleNotice = (liveNotice: string): string => {
+      const markup = renderToStaticMarkup(
+        <RightEdgeSidecar open onOpen={() => undefined} onClose={() => undefined} liveNotice={liveNotice} />
+      )
+      expect(markup).toContain(`aria-label="${liveNotice.replaceAll("'", '&#x27;')}"`)
+      return markup.match(/class="right-edge-sidecar__status-notice"[^>]*>([^<]*)<\/p>/)?.[1] ?? ''
+    }
+
+    expect(visibleNotice('Mic silent · check input')).toBe('Mic silent · check input')
+    expect(visibleNotice('Microphone input stopped (device disconnected or sleep); reconnecting automatically…')).toBe('Mic lost · reconnecting')
+    expect(visibleNotice('Could not start the microphone. Check Windows microphone access.')).toBe('Mic unavailable · check access')
+    expect(visibleNotice("Couldn't start the microphone. Check Microphone access in System Settings.")).toBe('Mic unavailable · check access')
+    expect(visibleNotice('Microphone unavailable. Listening to system audio only.')).toBe('Mic unavailable · system audio only')
+    expect(visibleNotice('System audio needs Screen Recording permission. Listening to microphone only.')).toBe('System audio needs Screen Recording permission. Listening to microphone only.')
   })
 
   it('does not expose an inert dismissal control while the dock must remain open', () => {
@@ -163,7 +193,9 @@ describe('right-edge dock', () => {
       expect(call).toContain('onOpenIntelligence={openIntelligenceDashboard}')
       expect(call).toContain('onSpotlightRef={spotlightRef}')
       expect(call).toContain('spotlightReady={spotlightRefReady}')
+      expect(call).toContain('onHistory={onBarHistory}')
       expect(call).toContain('onSettings={onBarSettings}')
+      expect(call).toContain('liveNotice={listen.error}')
     }
     expect(app).toContain('const openIntelligenceDashboard = useCallback')
     expect(app).toContain('window.toto.brainOpenDashboard()')
@@ -181,15 +213,15 @@ describe('right-edge dock', () => {
     expect(sidecar).not.toContain('useCommandMic')
     expect(sidecar).not.toContain('Test microphone access')
     expect(sidecar).toContain('event.nativeEvent.isComposing')
-    expect(sidecar).toContain("'right-edge-sidecar__action', 'no-drag', 'focus-ring'")
+    expect(sidecar).toContain("'right-edge-sidecar__action--icon'")
     expect(sidecar).toMatch(/onKeyDown/)
     expect(sidecar).toMatch(/event\.key === 'Escape'/)
     expect(sidecar).toMatch(/const close = \(\): void => \{[\s\S]*?cancelPendingCommand\(\)[\s\S]*?onClose\(\)/)
     expect(css).toMatch(/\.right-edge-sidecar__body \{[\s\S]*?overflow-y: auto/)
+    expect(css).toMatch(/\.right-edge-sidecar__body \{[\s\S]*?overflow-x: hidden/)
     expect(css).toMatch(/\.right-edge-sidecar__drawer-scroll \{[\s\S]*?overflow: hidden/)
     expect(css).toMatch(/\.right-edge-sidecar__drawer \{[\s\S]*?z-index: 2/)
     expect(css).toMatch(/\.right-edge-sidecar__rail \{[\s\S]*?width: 12px/)
-    expect(css).toMatch(/\.right-edge-sidecar__zone \{[\s\S]*?right-edge-sidecar-zone-in/)
     expect(css).toMatch(/prefers-reduced-motion/)
     expect(app).toContain('const rightEdgeDockVisible = rightEdgePresentation && !isPanelBody')
     // The drawer is absolutely positioned, so its host must own the native sidecar height. Otherwise
@@ -203,6 +235,54 @@ describe('right-edge dock', () => {
     expect(sidecar).toContain('tabIndex={open ? -1 : 0}')
     expect(sidecar).toContain('aria-hidden={open || undefined}')
     expect(sidecar).toContain('requestAnimationFrame(() => composerRef.current?.focus())')
+    expect(sidecar).toContain('data-right-edge-status={')
+    expect(sidecar).toContain('right-edge-sidecar__header-back')
+    expect(sidecar).toContain('data-right-edge-action-rail="true"')
+    expect(sidecar).toContain('aria-label={label}')
+    expect(sidecar).toContain('liveNotice?: string | null')
+    expect(sidecar).toContain('{liveNotice ?')
+    expect(sidecar).toContain('aria-label="Open History"')
+    expect(sidecar.indexOf('right-edge-sidecar__body')).toBeLessThan(sidecar.indexOf('right-edge-sidecar__actions'))
+    expect(sidecar.indexOf('right-edge-sidecar__actions')).toBeLessThan(sidecar.indexOf('right-edge-sidecar__composer'))
+    expect(css).toMatch(/\.right-edge-sidecar__drawer \{[\s\S]*?border-radius:\s*16px/)
+    expect(css).toMatch(/\.right-edge-sidecar__action-rail \{[\s\S]*?display:\s*flex/)
+    expect(css).toMatch(/\.right-edge-sidecar__history \{[\s\S]*?margin-left:\s*auto/)
+    expect(css).toMatch(/\.right-edge-sidecar__status-notice \{[\s\S]*?text-overflow:\s*ellipsis/)
+    expect(sidecar).toContain('right-edge-sidecar__action--icon')
+    expect(sidecar).toContain('className="right-edge-sidecar__chat-input no-drag"')
+    expect(sidecar).not.toContain('right-edge-sidecar__chat-input no-drag focus-ring')
+    expect(sidecar).toContain('className="right-edge-sidecar__status-notice"')
+    expect(sidecar).toContain("return 'Mic silent · check input'")
+    expect(sidecar).toContain("return 'Transcription repair'")
+    expect(css).not.toMatch(/@keyframes right-edge-sidecar-zone-in/)
+    const rightEdgeSpring = css.slice(css.indexOf('@keyframes overlay-spring-in-right'), css.indexOf('@keyframes overlay-spring-out-right'))
+    expect(rightEdgeSpring).toContain('transform: translateX(10px);')
+    expect(rightEdgeSpring).not.toContain('scale(')
+    const onboardingEdgePreviewSpring = css.slice(css.indexOf('@keyframes onboard-edge-preview-in'), css.indexOf('.overlay-spring {'))
+    expect(onboardingEdgePreviewSpring).toContain('transform: translateX(12px);')
+    expect(onboardingEdgePreviewSpring).not.toContain('scale(')
+    expect(css).toMatch(/\.right-edge-sidecar__answer \{[\s\S]*?width: 100%/)
+    expect(css).toMatch(/\.answer--sidecar \{[\s\S]*?min-width: 0/)
+    expect(css).toMatch(/\.answer--sidecar \.md pre \{[\s\S]*?overflow-x: auto/)
+    expect(css).toMatch(/\.answer--sidecar \.md table \{[\s\S]*?table-layout: fixed/)
+    expect(css).toMatch(/\.answer--sidecar \.md :where\(th, td\) \{[\s\S]*?overflow-wrap: anywhere/)
+    expect(answer).toContain("variant?: 'default' | 'sidecar'")
+    expect(answer).toContain("variant === 'sidecar'")
+    expect(answer).toContain('answer__footer-row')
+    expect(app).toContain("variant={rightEdgePresentation ? 'sidecar' : 'default'}")
+    expect(app).toContain('const showWideMeetingChrome = showListeningChrome && !rightEdgeDockVisible')
+    expect(app).toContain('const rightEdgeDismissalLockRef = useRef(false)')
+    expect(app).toContain('rightEdgeDismissalLockRef.current = true')
+    expect(app).toContain('if (rightEdgePresentation && rightEdgeDismissalLockRef.current && !d.restoredFromParkedRail) return')
+    expect(app).toContain('if (rightEdgePresentation && d.restoredFromParkedRail) rightEdgeDismissalLockRef.current = false')
+    expect(app).toMatch(/const onOverlayPointerLeave = useCallback\(\(\) => \{[\s\S]*?rightEdgeDismissalLockRef\.current = false/)
+    expect(app).toMatch(/else if \(a === 'metis-command'\) \{[\s\S]*?rightEdgeDismissalLockRef\.current = false/)
+    expect(app).toMatch(/\{showWideMeetingChrome && \(\s*<QuickActions/)
+    expect(app).toMatch(/\{showWideMeetingChrome && listen\.error/)
+    expect(e2eSmoke).toContain('verifyRightEdgeReferenceLayout')
+    expect(e2eSmoke).toContain('right-edge action rail did not keep every action on one compact row')
+    expect(e2eSmoke).toContain('verifyLongSidecarResponse')
+    expect(e2eSmoke).toContain('long sidecar answer wraps prose and tables while the composer remains anchored')
   })
 
   it('renders each action only through an explicit real handler and keeps opaque proposals cancellable', () => {
@@ -231,9 +311,11 @@ describe('right-edge dock', () => {
   it('reconciles a native cursor-watch reveal with the parked right-edge renderer', () => {
     const cursorHoverAt = app.indexOf('window.toto.onOverlayCursorHover?.((d) => {')
     expect(cursorHoverAt).toBeGreaterThan(-1)
-    const cursorHover = app.slice(cursorHoverAt, cursorHoverAt + 640)
+    const cursorHover = app.slice(cursorHoverAt, cursorHoverAt + 960)
 
     expect(cursorHover).toContain('if (d.hovering)')
+    expect(cursorHover).toContain('if (rightEdgePresentation && rightEdgeDismissalLockRef.current && !d.restoredFromParkedRail) return')
+    expect(cursorHover).toContain('if (rightEdgePresentation && d.restoredFromParkedRail) rightEdgeDismissalLockRef.current = false')
     expect(cursorHover).toContain('setRightEdgeDockDismissed(false)')
     expect(cursorHover).toContain("dispatchAutoHide({ type: 'reveal-now' })")
   })
@@ -248,7 +330,7 @@ describe('right-edge dock', () => {
     expect(app).toMatch(/const overlaySurfaceRevealed = rightEdgePresentation && rightEdgeDockDismissed \? false : overlayRevealed/)
     expect(app).toMatch(/const edgeDockParked = rightEdgePresentation && rightEdgeDockDismissed/)
     expect(app).toMatch(/const overlayPeeked = \(edgeDockParked && overlaySpring === 'rest'\) \|\| overlayShowPeek/)
-    expect(app).toMatch(/const revealOverlay = useCallback\(\(\) => \{\s*setRightEdgeDockDismissed\(false\)/)
+    expect(app).toMatch(/const revealOverlay = useCallback\(\(\) => \{[\s\S]*?rightEdgeDismissalLockRef\.current = false[\s\S]*?setRightEdgeDockDismissed\(false\)/)
   })
 
   it('does not hand off to Intelligence while a screen capture is still active', () => {

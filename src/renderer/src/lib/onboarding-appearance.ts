@@ -12,9 +12,12 @@ import { parseOverlayPlacement, type OverlayPlacement } from '@shared/overlay-pl
 import type { PublicSettings } from '@shared/ipc'
 import { overlayPlacementSettingsPatch } from './overlay-placement-save'
 
-export const ONBOARDING_APPEARANCE_HEADING = 'Where should Métis live?'
+export const ONBOARDING_POSITION_HEADING = 'Where should Métis sit?'
+export const ONBOARDING_POSITION_LEAD =
+  'Choose the top of your screen or a sidecar beside your meeting.'
+export const ONBOARDING_APPEARANCE_HEADING = 'How should Métis look?'
 export const ONBOARDING_APPEARANCE_LEAD =
-  'Hidden is the default. Move to the top, then click to open. Change it anytime in Settings.'
+  'Choose a resting shape. You can change it anytime in Settings.'
 
 export const ONBOARDING_APPEARANCE_COPY: Record<OverlayLayout, { title: string; desc: string }> = {
   hide: {
@@ -113,13 +116,45 @@ export function appearancePreviewShowsHint(layout: OverlayLayout, phase: Appeara
 }
 
 /**
- * Live preview only. Hidden is click-to-open (hover does not reveal).
- * Island hover expands. Bar stays settled. No dwell. No overlay park / setBounds.
+ * Right-edge onboarding preview only. The actual sidecar keeps its compact rail
+ * at rest; this prevents the preview from claiming that Hidden opens a wide panel.
+ */
+export function appearancePreviewEdgeState(
+  layout: OverlayLayout,
+  phase: AppearancePreviewPhase
+): { showRail: boolean; showDrawer: boolean; showEdgeGlow: boolean } {
+  if (layout === 'hide') {
+    return {
+      showRail: false,
+      showDrawer: phase === 'in' || phase === 'settled' || phase === 'out',
+      // Hidden is truly hidden at rest in the production right-edge surface. The onboarding stage keeps
+      // only a faint visual cue so the invisible hover target remains learnable without posing as a rail.
+      showEdgeGlow: phase === 'rest'
+    }
+  }
+  if (layout !== 'island') return { showRail: false, showDrawer: false, showEdgeGlow: false }
+  return {
+    showRail: true,
+    showDrawer: phase === 'in' || phase === 'settled' || phase === 'out',
+    showEdgeGlow: false
+  }
+}
+
+/** A placement change is a new preview surface even when the layout name is unchanged. */
+export function appearancePreviewStateKey(layout: OverlayLayout, rightEdge: boolean): string {
+  return `${rightEdge ? 'right-edge' : 'top-center'}:${layout}`
+}
+
+/**
+ * Live preview only. Top Hidden is click-to-open; its accessible right-edge rail
+ * mirrors the runtime sidecar and opens on hover. Island hover expands. Bar stays settled.
+ * No dwell. No overlay park / setBounds.
  */
 export function reduceAppearancePreview(
   layout: OverlayLayout,
   phase: AppearancePreviewPhase,
-  event: AppearancePreviewEvent
+  event: AppearancePreviewEvent,
+  placement: OverlayPlacement = 'top-center'
 ): AppearancePreviewPhase {
   if (layout === 'bar') return 'settled'
 
@@ -127,7 +162,7 @@ export function reduceAppearancePreview(
     case 'click-top':
       return phase === 'rest' || phase === 'out' ? 'in' : phase
     case 'hover-enter':
-      if (layout === 'hide') return phase
+      if (layout === 'hide' && placement !== 'right-edge') return phase
       return phase === 'rest' || phase === 'out' ? 'in' : phase
     case 'hover-leave':
       return phase === 'in' || phase === 'settled' ? 'out' : phase

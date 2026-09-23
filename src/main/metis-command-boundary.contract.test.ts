@@ -37,8 +37,12 @@ describe('Cap2 command authority boundary', () => {
   })
 
   it('revokes command authority when the owning window or renderer is replaced', () => {
-    expect(main).toMatch(/win\.on\('closed', \(\) => \{\s*commandControl\.revokeForLifecycleEvent\('window_closed'\)/)
-    expect(main).toMatch(/webContents\.on\('render-process-gone', \(_e, details\) => \{\s*commandControl\.revokeForLifecycleEvent\('renderer_replaced'\)/)
+    expect(main).toContain('const self = win')
+    const closed = between(main, "win.on('closed', () => {", "win.webContents.setWindowOpenHandler(")
+    expect(closed).toMatch(/if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('window_closed'\)/)
+    const rendererGone = between(main, "win.webContents.on('render-process-gone', (_e, details) => {", 'const rendererUrl = overlayRendererUrl()')
+    expect(rendererGone).toMatch(/if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('renderer_replaced'\)/)
+    expect(rendererGone).toMatch(/if \(win !== self \|\| self\.isDestroyed\(\)\) return\s*self\.loadURL\(overlayRendererUrl\(\)\)/)
   })
 
   it('keeps the Metis command hotkey separate from meeting Listen', () => {
@@ -47,7 +51,7 @@ describe('Cap2 command authority boundary', () => {
     expect(app).toContain("a === 'metis-command'")
     expect(app).toMatch(/else if \(a === 'toggle-listen'\) toggleListen\(\)/)
     expect(app).toMatch(
-      /else if \(a === 'metis-command'\) \{\s*setRightEdgeDockDismissed\(false\)\s*dispatchAutoHide\(\{ type: 'reveal-now' \}\)\s*setCollapsed\(false\)\s*\}/
+      /else if \(a === 'metis-command'\) \{\s*rightEdgeDismissalLockRef\.current = false\s*setRightEdgeDockDismissed\(false\)\s*dispatchAutoHide\(\{ type: 'reveal-now' \}\)\s*setCollapsed\(false\)\s*\}/
     )
   })
 
