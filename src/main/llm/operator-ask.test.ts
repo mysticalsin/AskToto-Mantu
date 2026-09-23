@@ -3,7 +3,11 @@ import type { AskStart } from '@shared/ipc'
 import type { StreamHandlers } from './shared'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp', getVersion: () => '1.8.2' } }))
-vi.mock('../license', () => ({ getMachineId: () => 'machine-test' }))
+const machineIdentity = vi.hoisted(() => ({ durableId: 'machine-test' as string | null }))
+vi.mock('../license', () => ({
+  getMachineId: () => 'machine-test',
+  getDurableMachineId: () => machineIdentity.durableId
+}))
 vi.mock('../logger', () => ({ mainLog: { warn: vi.fn() }, auditLog: vi.fn() }))
 
 import { streamOperatorAsk } from './operator-ask'
@@ -18,6 +22,23 @@ const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4
 describe('streamOperatorAsk', () => {
   beforeEach(() => {
     vi.unstubAllGlobals()
+    machineIdentity.durableId = 'machine-test'
+  })
+
+  it('refuses to send a prompt or screenshot when the device identity is not durable', async () => {
+    machineIdentity.durableId = null
+    const h = handlers()
+    const fetcher = vi.fn()
+    vi.stubGlobal('fetch', fetcher)
+    streamOperatorAsk({
+      providerId: 'cloudflare', kind: 'openai', apiKey: '', viaOperator: true,
+      operatorTransport: { url: 'https://operator.test', secret: 'METIS-OP-1.fixture' },
+      model: '@cf/deepseek-ai/deepseek-v4-flash-0731', temperature: 0.2, system: 'sys',
+      req: { ...req, mode: 'vision', image: SCREENSHOT_PNG }, handlers: h
+    })
+    await vi.waitFor(() => expect(h.onError).toHaveBeenCalledWith(expect.stringMatching(/device identity/i)))
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(h.onDone).not.toHaveBeenCalled()
   })
 
   it('MQA-301 includes the explicitly requested screenshot in the signed managed vision request', async () => {

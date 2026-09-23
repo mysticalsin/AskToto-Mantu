@@ -182,10 +182,13 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(index).toMatch(/EXCLUSIVE_BOUNDS_MAX_RECONCILIATIONS\s*=\s*4/)
     expect(apply).toMatch(/reconcileExclusiveOnboardingBounds\(w, display\)/)
     expect(apply).toMatch(/armExclusiveBoundsWatch\(w, display\.id\)/)
+    expect(apply).toMatch(/ensureExclusiveBoundsEventGuard\(w, display\.id\)/)
     expect(exit).toMatch(/stopExclusiveBoundsWatch\(\)/)
+    expect(exit).toMatch(/stopExclusiveBoundsEventGuard\(\)/)
     const closed = create.slice(create.indexOf('const self = win'), create.indexOf('// Security: never let model-output'))
     expect(closed).toMatch(/if \(win !== self\) return/)
     expect(closed).toMatch(/stopExclusiveBoundsWatch\(\)/)
+    expect(closed).toMatch(/stopExclusiveBoundsEventGuard\(\)/)
   })
 
   it('smoke tests full native onboarding bounds instead of creating a compact onboarding window', () => {

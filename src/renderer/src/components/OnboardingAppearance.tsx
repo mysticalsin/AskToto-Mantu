@@ -12,11 +12,13 @@ import {
   appearancePreviewShowsBar,
   appearancePreviewShowsHint,
   appearancePreviewShowsIsland,
-  ONBOARDING_APPEARANCE_COPY,
   ONBOARDING_APPEARANCE_HEADING,
   ONBOARDING_APPEARANCE_LEAD,
   ONBOARDING_POSITION_HEADING,
   ONBOARDING_POSITION_LEAD,
+  onboardingAppearanceCopy,
+  placementDemoLayout,
+  placementPreviewCaption,
   reduceAppearancePreview,
   type AppearancePreviewPhase
 } from '../lib/onboarding-appearance'
@@ -160,6 +162,7 @@ export function OnboardingAppearance({
   onContinue?: () => void
 }): JSX.Element {
   const [step, setStep] = useState<'position' | 'appearance'>('position')
+  const previewLayout = step === 'position' ? placementDemoLayout(placement) : value
 
   return (
     <div
@@ -168,7 +171,13 @@ export function OnboardingAppearance({
       }
       data-onboard-appearance-step={step}
     >
-      <AppearanceLivePreview layout={value} placement={placement} />
+      <AppearanceLivePreview layout={previewLayout} placement={placement} />
+      <p
+        className="onboard-appearance-preview-caption"
+        data-placement-caption={placement}
+      >
+        {step === 'position' ? placementPreviewCaption(placement) : 'Preview your chosen resting shape.'}
+      </p>
       {step === 'position' ? (
         <>
           <div className="onboard-act4-heading flex flex-col items-center gap-2">
@@ -202,7 +211,7 @@ export function OnboardingAppearance({
             value={value}
             placement={placement}
             locked={locked || saving}
-            copy={ONBOARDING_APPEARANCE_COPY}
+            copy={onboardingAppearanceCopy(placement)}
             onChange={onChange}
           />
           <button

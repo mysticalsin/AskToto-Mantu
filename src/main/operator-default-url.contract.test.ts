@@ -9,7 +9,8 @@ vi.mock('electron', () => ({
   app: { getPath: () => '/tmp', getVersion: () => '1.8.0-test' }
 }))
 vi.mock('./license', () => ({
-  getMachineId: () => 'machine-test-default-url'
+  getMachineId: () => 'machine-test-default-url',
+  getDurableMachineId: () => 'machine-test-default-url'
 }))
 vi.mock('./logger', () => ({
   mainLog: { warn: () => {}, info: () => {}, error: () => {} },

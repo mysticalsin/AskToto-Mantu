@@ -15,6 +15,17 @@ import { overlayPlacementSettingsPatch } from './overlay-placement-save'
 export const ONBOARDING_POSITION_HEADING = 'Where should Métis sit?'
 export const ONBOARDING_POSITION_LEAD =
   'Choose the top of your screen or a sidecar beside your meeting.'
+
+/** Show the surface, not the user's as-yet-unselected resting shape, during the position step. */
+export function placementDemoLayout(placement: OverlayPlacement): OverlayLayout {
+  return placement === 'right-edge' ? 'island' : 'bar'
+}
+
+export function placementPreviewCaption(placement: OverlayPlacement): string {
+  return placement === 'right-edge'
+    ? 'Métis opens from the right edge. Choose Hidden or Island next.'
+    : 'Métis opens at the top of your screen. Choose its resting shape next.'
+}
 export const ONBOARDING_APPEARANCE_HEADING = 'How should Métis look?'
 export const ONBOARDING_APPEARANCE_LEAD =
   'Choose a resting shape. You can change it anytime in Settings.'
@@ -31,6 +42,17 @@ export const ONBOARDING_APPEARANCE_COPY: Record<OverlayLayout, { title: string; 
   bar: {
     title: 'Bar',
     desc: 'The bar stays on screen.'
+  }
+}
+
+export function onboardingAppearanceCopy(
+  placement: OverlayPlacement
+): Record<OverlayLayout, { title: string; desc: string }> {
+  if (placement === 'top-center') return ONBOARDING_APPEARANCE_COPY
+  return {
+    ...ONBOARDING_APPEARANCE_COPY,
+    hide: { title: 'Hidden', desc: 'Hover at the right edge to open Métis.' },
+    island: { title: 'Island', desc: 'A slim rail stays at the right edge. Hover to open.' }
   }
 }
 

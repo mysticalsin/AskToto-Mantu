@@ -13,7 +13,7 @@ import {
 import { buildSeatMeta, type SeatMeta } from '@shared/operator-seat'
 import { classifyQuestionType, normalizeQuestionType, type QuestionType } from '@shared/question-type'
 import type { Settings } from '@shared/ipc'
-import { getMachineId, memberLicenseStatus, licenseDisplayStatus } from './license'
+import { getDurableMachineId, memberLicenseStatus, licenseDisplayStatus } from './license'
 import { getSettings as getStoreSettings } from './store'
 import { authStatus } from './auth'
 import { lastIndexedAt } from './brain/intelligence-index'
@@ -128,10 +128,10 @@ function safeLastIndexAt(): number | undefined {
   }
 }
 
-function seatMeta(settings: OperatorRuntimeSettings): SeatMeta {
-  const rawSeat = settings.licenseKey?.trim() || getMachineId()
-  return buildSeatMeta({
-    seatHash: hashOperatorId(rawSeat),
+function seatMeta(settings: OperatorRuntimeSettings): Partial<SeatMeta> {
+  const rawSeat = settings.licenseKey?.trim()
+  const meta: Partial<SeatMeta> = buildSeatMeta({
+    seatHash: rawSeat ? hashOperatorId(rawSeat) : '',
     os: osLabel(),
     appVersion: app.getVersion(),
     hostname: safeHostname(),
@@ -144,6 +144,10 @@ function seatMeta(settings: OperatorRuntimeSettings): SeatMeta {
     licenseId: settings.operatorLicenseJti,
     licenseLast4: settings.operatorLicenseLast4
   })
+  // A keyless seat is identified by the signed durable device ID. Let the Worker derive its hash from
+  // that same header; a second read of a changing local ID could put a different seat hash in the body.
+  if (!rawSeat) delete meta.seatHash
+  return meta
 }
 
 export type { OperatorCrmEvent, OperatorCrmStatus } from './operator-crm'
@@ -151,10 +155,6 @@ export type { OperatorCrmEvent, OperatorCrmStatus } from './operator-crm'
 export interface OperatorRuntimeHooks {
   onCrmRetry?: (ids: string[]) => Promise<void>
   onReadinessChanged?: () => void
-}
-
-function deviceId(): string {
-  return hashOperatorId(getMachineId())
 }
 
 async function signedPost(
@@ -167,10 +167,12 @@ async function signedPost(
   // An unsupported legacy record can never become valid by retrying. Treat it as consumed without a
   // network call so it cannot disclose content or remain a permanent durable-queue poison pill.
   if (!projected) return { ok: true, json: null, status: 204 }
+  const machineId = getDurableMachineId()
+  if (!machineId) throw new Error('Métis device identity is not persisted')
   const body = JSON.stringify(projected)
   const headers = {
     'content-type': 'application/json',
-    ...operatorHmacHeaders(secret, deviceId(), body)
+    ...operatorHmacHeaders(secret, hashOperatorId(machineId), body)
   }
   const res = await fetchImpl(`${url}${path}`, {
     method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(15_000)
@@ -276,6 +278,9 @@ export async function confirmOperatorLicenseConnection(
 ): Promise<{ ok: boolean; error?: string; confirmation?: unknown }> {
   const transport = operatorAskTransport(settings)
   if (!transport) return { ok: false, error: 'Set a valid Métis service address before activating.' }
+  if (!getDurableMachineId()) {
+    return { ok: false, error: 'Métis could not save this device identity in its data folder. Close other Métis copies, check that the folder is writable, and try again. If it persists, contact support to repair the data folder.' }
+  }
   try {
     const result = await signedPost(transport.url, transport.secret, '/v1/heartbeat', { ...seatMeta(settings) })
     const data = result.json && typeof result.json === 'object' ? result.json as Record<string, unknown> : {}
@@ -311,6 +316,7 @@ export async function operatorHeartbeat(
   const secret = resolveSecret(settings)
   const generation = runtimeGeneration
   if (!operatorUrlConfigured(settings) || !secret) return { ok: false, retry: [] }
+  if (!getDurableMachineId()) return { ok: false, retry: [] }
   // Drain the durable outbox on every tick, BEFORE the heartbeat itself, so a just-flushed queue is
   // reflected in the {queued, dropped} counts this same heartbeat reports. Heartbeats are never queued.
   const queueReport = await drainOperatorQueue(queueDir(), Date.now(), async (path, body) => {
@@ -438,7 +444,8 @@ export async function recordOperatorAsk(
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
   if (!operatorUrlConfigured(settings) || !secret) return
-  lastAskId = event.id
+  // Background outputs must not steal the fallback target of a legacy answer-rating IPC.
+  if (event.mode !== 'suggest' && event.mode !== 'summary' && event.mode !== 'recap') lastAskId = event.id
   const payload: Record<string, unknown> = {
     id: event.id,
     ts: event.ts ?? Date.now(),

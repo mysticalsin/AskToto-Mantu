@@ -10,11 +10,12 @@ import {
 } from '@shared/overlay-presentation'
 import type { OverlayPlacement } from '@shared/overlay-placement'
 
-function ChromeDiagram({ id }: { id: OverlayLayout }): JSX.Element {
+function ChromeDiagram({ id, placement }: { id: OverlayLayout; placement: OverlayPlacement }): JSX.Element {
   return (
     <div
-      className={`overlay-chrome-diagram overlay-chrome-diagram--${id}`}
+      className={`overlay-chrome-diagram overlay-chrome-diagram--${id}${placement === 'right-edge' ? ' overlay-chrome-diagram--right-edge' : ''}`}
       data-chrome-diagram={id}
+      data-chrome-placement={placement}
       aria-hidden="true"
     >
       <span className="overlay-chrome-diagram__desktop" />
@@ -76,7 +77,7 @@ export function OverlayChromePicker({
               (locked ? ' opacity-60' : '')
             }
           >
-            <ChromeDiagram id={id} />
+            <ChromeDiagram id={id} placement={placement} />
             <span className="overlay-chrome-card__title">
               {copy[id].title}
               {id === 'hide' ? <span className="overlay-chrome-card__default">Default</span> : null}

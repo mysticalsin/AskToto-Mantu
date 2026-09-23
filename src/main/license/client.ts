@@ -12,6 +12,7 @@ import {
   type V1RegisterRequest,
   type V1RegisterResponse
 } from '@shared/license-types'
+import { isSecureLicenseServerUrl, normalizeLicenseServerUrl } from './server-url'
 
 const ACTIVATE_TIMEOUT_MS = 10_000
 
@@ -29,21 +30,18 @@ export const unavailableLicenseClient: LicenseClient = {
   }
 }
 
-function normalizeServerUrl(raw: string): string {
-  let u = raw.trim().replace(/\/+$/, '')
-  if (u && !/^https?:\/\//i.test(u)) u = `https://${u}`
-  return u
-}
-
 export function createNetworkLicenseClient(serverUrl: string): LicenseClient {
-  const base = normalizeServerUrl(serverUrl)
+  const base = normalizeLicenseServerUrl(serverUrl)
+  const secure = isSecureLicenseServerUrl(base)
   return {
     async activate(req: V1ActivateRequest): Promise<V1ActivateResponse> {
+      if (!secure) return { ok: false, error: 'network' }
       try {
         const res = await fetch(`${base}/v1/licenses/activate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(req),
+          redirect: 'error',
           signal: AbortSignal.timeout(ACTIVATE_TIMEOUT_MS)
         })
         const parsed = V1ActivateResponseSchema.safeParse(await res.json())
@@ -54,11 +52,13 @@ export function createNetworkLicenseClient(serverUrl: string): LicenseClient {
       }
     },
     async registerInstall(req: V1RegisterRequest): Promise<V1RegisterResponse> {
+      if (!secure) return { ok: false, error: 'network' }
       try {
         const res = await fetch(`${base}/v1/installs/register`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(req),
+          redirect: 'error',
           signal: AbortSignal.timeout(ACTIVATE_TIMEOUT_MS)
         })
         const parsed = V1RegisterResponseSchema.safeParse(await res.json())

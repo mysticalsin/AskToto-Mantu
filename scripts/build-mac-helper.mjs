@@ -13,9 +13,11 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { assertMacHelperSpeechUsage } from './lib/mac-helper-privacy.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const source = join(repoRoot, 'native', 'mac-helper', 'main.swift')
+const privacyPlist = join(repoRoot, 'native', 'mac-helper', 'Info.plist')
 const outDir = join(repoRoot, 'resources', 'mac-helper')
 const outBinary = join(outDir, 'metis-mac-helper')
 
@@ -41,10 +43,11 @@ if (process.platform !== 'darwin') {
   process.exit(0)
 }
 
-if (!existsSync(source)) {
-  console.error(`[build-mac-helper] missing Swift source at ${source}`)
+if (!existsSync(source) || !existsSync(privacyPlist)) {
+  console.error('[build-mac-helper] missing Swift source or privacy Info.plist')
   process.exit(1)
 }
+execFileSync('plutil', ['-lint', privacyPlist], { stdio: 'pipe' })
 
 // The freshness check tests the SLICES as well as the timestamp. Before this script went universal it
 // emitted an arm64-only binary, and that leftover is newer than an unchanged main.swift — so an mtime
@@ -52,9 +55,14 @@ if (!existsSync(source)) {
 const wanted = TARGETS.map((t) => t.arch)
 const existing = existsSync(outBinary) ? archesOf(outBinary) : []
 const hasAllSlices = wanted.every((a) => existing.includes(a))
-if (hasAllSlices && statSync(outBinary).mtimeMs >= statSync(source).mtimeMs) {
-  console.log(`[build-mac-helper] universal binary is up to date (${existing.join(', ')}) — skipped`)
-  process.exit(0)
+if (hasAllSlices && statSync(outBinary).mtimeMs >= Math.max(statSync(source).mtimeMs, statSync(privacyPlist).mtimeMs)) {
+  try {
+    assertMacHelperSpeechUsage(outBinary, wanted)
+    console.log(`[build-mac-helper] universal binary is up to date (${existing.join(', ')}) — skipped`)
+    process.exit(0)
+  } catch {
+    console.log('[build-mac-helper] existing binary lacks embedded Speech privacy metadata — rebuilding')
+  }
 }
 if (existsSync(outBinary) && !hasAllSlices) {
   console.log(`[build-mac-helper] existing binary is ${existing.join(', ') || 'unreadable'} — rebuilding universal`)
@@ -69,7 +77,11 @@ try {
     // binary's minimum — built on a macOS 27 beta box, dyld on a macOS 26 user machine would refuse to
     // load the helper and silently degrade screen context. Vision text recognition + NSWorkspace need
     // nothing newer than macOS 13.
-    execFileSync('xcrun', ['swiftc', '-O', '-target', target.triple, '-o', slicePaths[i], source], {
+    execFileSync('xcrun', [
+      'swiftc', '-O', '-target', target.triple,
+      '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', privacyPlist,
+      '-o', slicePaths[i], source
+    ], {
       stdio: 'inherit'
     })
   }
@@ -97,4 +109,5 @@ if (missing.length) {
   )
   process.exit(1)
 }
+assertMacHelperSpeechUsage(outBinary, wanted)
 console.log(`[build-mac-helper] built ${outBinary} (${built.join(', ')})`)

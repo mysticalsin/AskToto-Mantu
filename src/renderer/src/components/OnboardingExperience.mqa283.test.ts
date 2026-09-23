@@ -44,10 +44,9 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).not.toMatch(/setScene\(settings\?\.licenseGateEnabled \? 'license' : 'personalize'\)/)
   })
 
-  it('keeps the optional demo bundle out of Act 1 while retaining a visible recovery surface', () => {
-    expect(experienceSrc).toMatch(/lazy, Suspense/)
-    expect(experienceSrc).toMatch(/const OnboardingDemoScene = lazy\(/)
-    expect(experienceSrc).not.toMatch(/import \{ OnboardingDemoScene \} from '\.\/OnboardingDemoScene'/)
+  it('loads the demo with onboarding so Continue never waits on its own chunk', () => {
+    expect(experienceSrc).toMatch(/import \{ OnboardingDemoScene \} from '\.\/OnboardingDemoScene'/)
+    expect(experienceSrc).not.toMatch(/const OnboardingDemoScene = lazy\(/)
     const reveal = experienceSrc.slice(experienceSrc.indexOf("{scene === 'reveal'"), experienceSrc.indexOf("{scene === 'setup'"))
     expect(reveal).toMatch(/<Suspense/)
     expect(reveal).toMatch(/Continue/)

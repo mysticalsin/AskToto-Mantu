@@ -141,12 +141,14 @@ async function askProviderWithStore(
   provider: 'openai' | 'anthropic',
   providerFetch: typeof fetch,
   nonce: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  clientAskId?: string
 ): Promise<Response> {
   const body = JSON.stringify({
     provider,
     model: provider === 'openai' ? 'gpt-4o-mini' : 'claude-haiku-4-5-20251001',
-    messages: [{ role: 'user', content: 'Say ok.' }]
+    messages: [{ role: 'user', content: 'Say ok.' }],
+    ...(clientAskId ? { clientAskId } : {})
   })
   return handleRequest(await signedRequest('/v1/ask', body, nonce, signal), env(), {}, {
     store,
@@ -656,6 +658,34 @@ describe('truthful provider completion', () => {
     )
     expect(got.some((event) => event.t === 'done')).toBe(false)
     expect((await store.listAsks(1))[0]?.outcome).toBe('error')
+  })
+
+  it('keeps a failed provider attempt off the client Ask id reserved for a successful failover', async () => {
+    const clientAskId = 'ask-client-failover-identity'
+    const frames = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial answer' } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'length' }] })}\n\n`,
+      'data: [DONE]\n\n'
+    ].join('')
+    const store = memoryStore()
+    await addProviderKey(store, 'openai', OPENAI_SECRET)
+    await approveDevice(store)
+
+    const response = await askProviderWithStore(
+      store,
+      'openai',
+      upstream(frames),
+      'failed-client-attempt',
+      undefined,
+      clientAskId
+    )
+    expect(events(await response.text())).toContainEqual(expect.objectContaining({ t: 'error' }))
+
+    expect(await store.getAsk(clientAskId)).toBeNull()
+    const attempts = await store.listAsks(10)
+    expect(attempts).toHaveLength(1)
+    expect(attempts[0]).toMatchObject({ outcome: 'error', provider: 'openai' })
+    expect(attempts[0]?.id).not.toBe(clientAskId)
   })
 
   it('rejects OpenAI transport EOF after a finish reason but before the terminal sentinel', async () => {

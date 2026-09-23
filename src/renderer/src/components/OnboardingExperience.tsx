@@ -33,7 +33,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useCallback, useEffect, useId, useRef, useState, lazy, Suspense, type Ref, useLayoutEffect } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, Suspense, type Ref, useLayoutEffect } from 'react'
 import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
@@ -74,10 +74,9 @@ import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
 import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
-/** Act 2 only — keep DemoScene/Bar off Act 1 first-paint parse in this chunk. */
-const OnboardingDemoScene = lazy(() =>
-  import('./OnboardingDemoScene').then((m) => ({ default: m.OnboardingDemoScene }))
-)
+// Keep the scripted demo ready when the user reaches Reveal; its heavy Answer/Copilot
+// children remain lazy inside the demo scene.
+import { OnboardingDemoScene } from './OnboardingDemoScene'
 import { OnboardingAppearance } from './OnboardingAppearance'
 import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
@@ -304,11 +303,7 @@ function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
   useLayoutEffect(() => {
     requestOnboardingPortalOpen()
     const boot = document.getElementById('act1-boot-chrome')
-    if (boot) {
-      boot.setAttribute('hidden', '')
-      boot.style.display = 'none'
-      boot.style.pointerEvents = 'none'
-    }
+    boot?.remove()
     const w = window as Window & { __act1BootNextQueued?: boolean }
     if (w.__act1BootNextQueued) {
       w.__act1BootNextQueued = false
@@ -601,7 +596,7 @@ function MiniToggle({ on, onChange, label }: { on: boolean; onChange: (v: boolea
  *  Settings.tsx's / LicenseGate.tsx's licenseErrorMessage on purpose — same reasoning both of those give
  *  for not importing one another: this scene has to keep working even if either of those chunks changes
  *  shape, and the map is a handful of lines. */
-function licenseErrorMessage(code: string | undefined): string {
+export function licenseErrorMessage(code: string | undefined): string {
   switch (code) {
     case 'invalid':
       return 'That license key was not recognized.'
@@ -613,6 +608,10 @@ function licenseErrorMessage(code: string | undefined): string {
       return 'All seats on this license are in use.'
     case 'network':
       return 'Could not reach the license server. Check the server URL and your connection.'
+    case 'insecure_url':
+      return 'Use an HTTPS license server address. Only localhost can use HTTP for testing.'
+    case 'device_identity_unavailable':
+      return 'Métis cannot save its device setup. Close other Métis copies, check that its data folder is writable, and try again. If it persists, contact support to repair the data folder.'
     default:
       return code || 'Could not activate this license.'
   }
@@ -1052,9 +1051,10 @@ export function OnboardingExperience({
   const music = useOnboardingMusic()
   const heroVideoRef = useRef<HTMLVideoElement>(null)
   const playHero = (): void => {
-    music.start()
-    // FITO-185-V: user gesture / Next retry — unmute autoplay policy and promote ready via playing.
-    playOnboardingVideo(heroVideoRef.current)
+    // Background media is optional. A synchronous decoder/playback failure must never swallow
+    // the same click's scene transition (especially Act 2's user-controlled Next).
+    try { music.start() } catch { /* continue without music */ }
+    try { playOnboardingVideo(heroVideoRef.current) } catch { /* continue without video */ }
   }
 
   useEffect(() => {
@@ -1226,6 +1226,7 @@ export function OnboardingExperience({
   // P0: any post-hero scene must keep portal mask open (Tony: after Next → black).
   useEffect(() => {
     if (scene === 'hero') return
+    document.getElementById('act1-boot-chrome')?.remove()
     try {
       requestOnboardingPortalOpen()
     } catch {
@@ -1534,9 +1535,8 @@ export function OnboardingExperience({
           <button
             type="button"
             onClick={() => {
-              // P0 Tony: reveal/demo Suspense hung black after story Continue — skip to next act.
               playHero()
-              setScene(sceneAfterReveal())
+              setScene('reveal')
             }}
             className="onboard-cta no-drag focus-ring"
           >

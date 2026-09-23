@@ -7,7 +7,9 @@ const sidecar = readFileSync(resolve(__dirname, 'RightEdgeSidecar.tsx'), 'utf8')
 describe('right-edge microphone and command safety contract', () => {
   it('uses the app-owned meeting action instead of acquiring a second command microphone lease', () => {
     expect(sidecar).toContain('onToggleListen')
-    expect(sidecar).toContain("label={listening ? 'Stop meeting' : 'Start listening'}")
+    expect(sidecar).toContain('label="Start listening"')
+    expect(sidecar).toContain('label="Stop meeting"')
+    expect(sidecar).toContain("onTogglePause")
     expect(sidecar).not.toContain('useCommandMic')
     expect(sidecar).not.toContain('Test microphone access')
     expect(sidecar).not.toContain('getUserMedia')

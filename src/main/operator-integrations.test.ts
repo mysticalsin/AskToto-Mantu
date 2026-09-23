@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp', getVersion: () => '1.8.0-test' } }))
-vi.mock('./license', () => ({ getMachineId: () => 'machine-test-0001' }))
+const machineIdentity = vi.hoisted(() => ({ durableId: 'machine-test-0001' as string | null }))
+vi.mock('./license', () => ({
+  getMachineId: () => 'machine-test-0001',
+  getDurableMachineId: () => machineIdentity.durableId
+}))
 vi.mock('./logger', () => ({
   mainLog: { warn: () => {}, info: () => {}, error: () => {} },
   setAuditActor: () => {},
@@ -66,6 +70,7 @@ const plane: OperatorIntegration = {
 }
 
 beforeEach(() => {
+  machineIdentity.durableId = 'machine-test-0001'
   resetOperatorIntegrationsStateForTests()
   connectMcpMock.mockReset()
   pushToMcpMock.mockReset()
@@ -158,6 +163,17 @@ describe('reconcileOperatorMcpRegistry (register / replace / remove)', () => {
 })
 
 describe('MQA-295 fetchOperatorIntegrations credential isolation', () => {
+  it('does not request integrations or clear a good cache when the device identity is not durable', async () => {
+    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [hubspot] })) as typeof fetch)
+    await fetchOperatorIntegrations(SETTINGS)
+    machineIdentity.durableId = null
+    const fetcher = vi.fn(async () => jsonResponse({ ok: false, error: 'seat not entitled' }, 403))
+    setOperatorIntegrationsFetchForTests(fetcher as typeof fetch)
+    expect(await fetchOperatorIntegrations(SETTINGS)).toBeNull()
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(operatorIntegrationFor('hubspot')?.id).toBe('int-hubspot')
+  })
+
   it('never forwards a licence credential through an HTTP redirect', async () => {
     const fetcher = vi.fn(async () => new Response(null, { status: 302, headers: { location: 'https://elsewhere.test' } }))
     setOperatorIntegrationsFetchForTests(fetcher as typeof fetch)
