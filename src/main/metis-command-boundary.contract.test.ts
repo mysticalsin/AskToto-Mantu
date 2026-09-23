@@ -45,6 +45,26 @@ describe('Cap2 command authority boundary', () => {
     expect(rendererGone).toMatch(/if \(win !== self \|\| self\.isDestroyed\(\)\) return\s*self\.loadURL\(overlayRendererUrl\(\)\)/)
   })
 
+  it('revokes command authority during replay handoff without letting retired-window close revoke the successor', () => {
+    const handoff = between(
+      main,
+      'function replaceTransparentOverlayWithExclusiveOnboarding(): void {',
+      '/** Exclusive hero hold'
+    )
+    const replacementReady = handoff.indexOf('coversExclusiveOnboardingDisplay(replacement, replacementDisplay)')
+    const revokeForHandoff = handoff.indexOf("commandControl.revokeForLifecycleEvent('window_replaced')")
+    const retireWindow = handoff.indexOf('dying.destroy()')
+    expect(replacementReady).toBeGreaterThan(-1)
+    expect(revokeForHandoff).toBeGreaterThan(replacementReady)
+    expect(retireWindow).toBeGreaterThan(revokeForHandoff)
+
+    const closed = between(main, "win.on('closed', () => {", "win.webContents.setWindowOpenHandler(")
+    const retiredGuard = closed.indexOf('if (win !== self) return')
+    const revokeOnCurrentClose = closed.indexOf("commandControl.revokeForLifecycleEvent('window_closed')")
+    expect(retiredGuard).toBeGreaterThan(-1)
+    expect(revokeOnCurrentClose).toBeGreaterThan(retiredGuard)
+  })
+
   it('keeps the Metis command hotkey separate from meeting Listen', () => {
     expect(ipc).toContain("'metis-command'")
     expect(main).toContain("'metis-command': () => sendHotkey('metis-command')")
