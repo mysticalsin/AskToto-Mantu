@@ -136,17 +136,21 @@ describe('actual live completion outcomes', () => {
     vi.runAllTimers()
     expect(f.retry).not.toHaveBeenCalled()
   })
-  it.each(['recap', 'summary', 'answer', 'vision'])('keeps verified complete %s successful with usage', (mode) => {
+  it.each(['recap', 'summary', 'suggest', 'answer', 'vision'])('records each complete %s request as metadata-only operator usage', (mode) => {
     const f = setup({ mode })
     f.handlers.onDelta('complete answer')
     f.handlers.onDone(usage, { status: 'complete', reason: 'stop' })
     expect(f.events('error')).toHaveLength(0)
     expect(f.events('done')).toEqual([['done', { id, ...usage }]])
     expect(f.qualifying).toHaveBeenCalledTimes(1)
-    expect(f.record).toHaveBeenCalledTimes(['answer', 'vision'].includes(mode) ? 1 : 0)
-    if (['answer', 'vision'].includes(mode)) {
-      expect(f.record.mock.calls[0][1]).toMatchObject({ pathTag: 'seat-local' })
-    }
+    expect(f.record).toHaveBeenCalledTimes(1)
+    expect(f.record.mock.calls[0][1]).toMatchObject({
+      id, mode, provider: 'openai', model: 'synthetic-model',
+      inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+      cacheRead: usage.cacheRead, outcome: 'answered', pathTag: 'seat-local'
+    })
+    expect(f.record.mock.calls[0][1]).not.toHaveProperty('question')
+    expect(f.record.mock.calls[0][1]).not.toHaveProperty('transcript')
     expect(f.streams.has(id)).toBe(false)
   })
   it('deliberately preserves legacy onDone without metadata, not a verified-completeness claim', () => {

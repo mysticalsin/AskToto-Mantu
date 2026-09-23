@@ -62,6 +62,17 @@ async function signedRequest(
 }
 
 describe('HMAC ingest', () => {
+  it('uses the signed durable device ID when queued metadata omits a transient seat hash', async () => {
+    const store = memoryStore()
+    const deviceId = 'durable-device-1'
+    const req = await signedRequest('/v1/ingest', JSON.stringify({ id: 'queued-without-seat-hash', ts: NOW }), { deviceId })
+
+    const res = await handleRequest(req, env(), {}, { store, now: NOW })
+
+    expect(res.status).toBe(200)
+    expect(await store.getSeat(deviceId)).toMatchObject({ seat_hash: deviceId })
+  })
+
   it('accepts a valid legacy Ask but stores only approved metadata, never question content or ciphertext', async () => {
     const store = memoryStore()
     const question = 'How do I close a consulting offer this week?'

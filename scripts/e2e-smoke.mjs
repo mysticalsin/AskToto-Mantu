@@ -319,9 +319,9 @@ async function assertExclusiveOnboardingNativeBounds(phase) {
 }
 
 async function simulateNativeOnboardingClampAndRequireRecovery(phase) {
-  // During onboarding this is a geometry no-op except for reapplying the exclusive stage. It gives the
-  // bounded real production watcher a fresh settling window before we inject the compositor clamp.
-  await win.evaluate(() => window.toto.windowMode('bar'))
+  // Inject after the two-second startup watcher expires. A fresh windowMode call would rearm that
+  // watcher and hide a late compositor regression instead of testing the native geometry guard.
+  await delay(2_500)
   const result = await app.evaluate(({ BrowserWindow, screen }) => {
     const overlay = BrowserWindow.getAllWindows()
       .filter((candidate) => !candidate.isDestroyed() && candidate.isVisible())
@@ -505,8 +505,12 @@ async function selectAppearanceAndRightEdge() {
   if (await win.getByRole('radio', { name: /^Bar\b/i }).count()) {
     throw new Error('Right edge still exposed the horizontal Bar choice.')
   }
-  await verifyRightEdgeOnboardingPreview('hide', '02-right-edge-hidden-preview-hover')
+  // Position deliberately demonstrates a visible Island rail even when the saved choice is
+  // Hidden; the Appearance step immediately below must show the actual Hidden selection.
+  await verifyRightEdgeOnboardingPreview('island', '02-right-edge-position-preview-hover')
   await continueToAppearance()
+  await win.mouse.move(40, 40)
+  await verifyRightEdgeOnboardingPreview('hide', '02-right-edge-hidden-preview-hover')
   const backToPosition = win.getByRole('button', { name: 'Back to position', exact: true }).last()
   await backToPosition.click({ timeout: 5_000 })
   await win.locator('[data-onboard-appearance-step="position"]').first().waitFor({ state: 'visible', timeout: 5_000 })

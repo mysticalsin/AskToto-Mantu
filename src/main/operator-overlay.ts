@@ -3,7 +3,7 @@ import { HUMANIZER_SKILL_ID, isBuiltinConversationMode, type ModeSkillId } from 
 import { operatorUrlConfigured, resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
 import { applyOverlaySkillFile } from './mode-skills'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
-import { getMachineId } from './license'
+import { getDurableMachineId } from './license'
 import { verifyOperatorSkillPack } from './operator-skill-verify'
 import { mainLog } from './logger'
 
@@ -64,10 +64,16 @@ export async function pullOperatorSkillManifest(settings: OverlayRuntimeSettings
     invalidateManifests()
     manifestConnection = identity
   }
+  const machineId = getDurableMachineId()
+  if (!machineId) {
+    invalidateManifests()
+    mainLog.warn('[operator] manifest skipped: device identity is not saved')
+    return 0
+  }
   const generation = manifestGeneration
   const abort = new AbortController()
   pendingManifests.add(abort)
-  const headers = operatorHmacHeaders(secret, hashOperatorId(getMachineId()), '')
+  const headers = operatorHmacHeaders(secret, hashOperatorId(machineId), '')
   try {
     const res = await fetchImpl(`${url}/v1/skills/manifest`, {
       method: 'GET', headers, redirect: 'manual',

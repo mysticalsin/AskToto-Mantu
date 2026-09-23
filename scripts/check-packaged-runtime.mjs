@@ -24,6 +24,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { REPO_ROOT } from './local-model-assets.mjs'
 import { verifyLocalModelPayload } from './lib/local-model-inventory.mjs'
 import { verifyPackagedSharp } from './verify-packaged-sharp.mjs'
+import { assertMacHelperSpeechUsage } from './lib/mac-helper-privacy.mjs'
 
 const argv = process.argv.slice(2)
 const target = argv.shift()
@@ -640,6 +641,10 @@ if (target === 'mac') {
   // stage is supposed to have, so a universal package missing a slice fails here rather than on a
   // user's machine.
   verifyMachOArches(join(macOsDir, 'Metis'), expectedMachoArches)
+  const speechHelper = join(resourcesRoot, 'mac-helper', 'metis-mac-helper')
+  requireRegularFile(speechHelper)
+  verifyMachOArches(speechHelper, ['arm64', 'x64'])
+  assertMacHelperSpeechUsage(speechHelper, ['arm64', 'x86_64'])
   if (postSign) {
     if (process.platform !== 'darwin') throw new Error('macOS post-sign verification must run on macOS')
     execFileSync('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appRoot], { stdio: 'inherit' })

@@ -161,6 +161,15 @@ function chipVal(chips: { key: string; value: string }[], key: string): string |
   return hit && !looksLikeSecret(hit.value) ? hit.value : null
 }
 
+function portalSpendCard(value: string, provider: string): { value: string; sub: string } {
+  if (value === 'not reported') return { value, sub: `${provider} · no usage reported` }
+  const [primary, ...detail] = value.split(' · ')
+  return {
+    value: primary,
+    sub: detail.length ? `${provider} · ${detail.join(' · ')}` : `${provider} · price not reported`
+  }
+}
+
 function renderEvents(events: ConsoleEvent[], now: number): string {
   if (!events.length) return '<div class="empty">No events yet.</div>'
   return events
@@ -203,19 +212,19 @@ function renderTopLists(data: DashboardPayload): string {
   }
   const kindRows = [...kinds.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
   const maxKind = Math.max(1, ...kindRows.map(([, n]) => n))
-  const maxDev = Math.max(1, ...devices.map((r) => byDevice.get(r.hostname || r.email || r.device) ?? 1))
+  const maxDev = Math.max(1, ...devices.map((r) => byDevice.get(r.hostname || r.email || r.device) ?? 0))
   const osRows = data.scale.os.slice(0, 8)
   const maxOs = Math.max(1, ...osRows.map((r) => r.value))
   const deviceBody = devices
     .map((r) => {
       const who = r.hostname || r.email || r.device
       const n = byDevice.get(who) ?? 0
-      const pct = Math.max(10, Math.round((Math.max(n, 1) / maxDev) * 100))
+      const pct = n ? Math.max(6, Math.round((n / maxDev) * 100)) : 0
       const q = `${who} ${r.city || ''} ${r.os}`.toLowerCase()
       return `<div class="vol-row" data-toplist-device="${esc(r.device)}" data-q="${esc(q)}">
         ${percentBar(pct, 'vol-bar')}
         <span>${field(who)}</span>
-        <span class="muted">${n || 1}</span>
+        <span class="muted">${n}</span>
         <span>${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}</span>
       </div>`
     })
@@ -250,7 +259,7 @@ function renderTopLists(data: DashboardPayload): string {
         <button class="tab" data-device-tab="os" type="button">OS</button>
       </div>
       <input class="search-bar" data-list-search="devices" type="search" placeholder="Search devices…" autocomplete="off">
-      <div class="vol-head"><span></span><span>Seats</span><span>Live</span></div>
+      <div class="vol-head"><span>Device</span><span>Count</span><span>Live</span></div>
       <div data-device-pane="devices">${deviceBody || '<div class="empty">No seats yet.</div>'}</div>
       <div data-device-pane="os" hidden>${osBody || '<div class="empty">No OS mix yet.</div>'}</div>
     </article>
@@ -266,13 +275,15 @@ function renderTopLists(data: DashboardPayload): string {
 export function renderOverview(data: DashboardPayload, _ctx: RenderCtx): string {
   const k = data.kpis
   const liveSeats = data.profiles.filter((p) => p.live)
+  const portalCf = portalSpendCard(data.roi.portalCf, 'Workers AI DeepSeek')
+  const portalDirect = portalSpendCard(data.roi.portalDirect, 'DeepSeek platform')
   return `${pageHeader({ title: 'Overview', subtitle: "What's happening across the fleet right now." })}
     <div class="kpis glance" data-overview-kpis>
-      ${kpiCard({ title: 'Live seats', value: String(data.roi.liveSeats), sub: 'heartbeat &lt; 2 min · real devices', spark: sparklineLine(k.liveSeries) })}
+      ${kpiCard({ title: 'Live seats', value: String(data.roi.liveSeats), sub: 'heartbeat < 2 min · real devices', spark: sparklineLine(k.liveSeries) })}
       ${kpiCard({ title: 'Time saved', value: data.roi.timeSaved, sub: data.roi.timeSavedSub, spark: '' })}
       ${kpiCard({ title: 'Value', value: data.roi.value, sub: data.roi.valueSub, spark: '' })}
-      ${kpiCard({ title: 'Portal CF', value: data.roi.portalCf, sub: 'Workers AI DeepSeek · estimate, list price', spark: '' })}
-      ${kpiCard({ title: 'Portal direct', value: data.roi.portalDirect, sub: 'DeepSeek platform · estimate, list price', spark: '' })}
+      ${kpiCard({ title: 'Portal CF', value: portalCf.value, sub: portalCf.sub, spark: '' })}
+      ${kpiCard({ title: 'Portal direct', value: portalDirect.value, sub: portalDirect.sub, spark: '' })}
     </div>
     ${renderTopLists(data)}
     ${renderGeoCorner(data)}
@@ -281,7 +292,8 @@ export function renderOverview(data: DashboardPayload, _ctx: RenderCtx): string 
       ${
         data.events.length
           ? `<div class="sub muted pad-b6">Seats, heartbeats, asks, recaps. City from request.cf. Not pageviews.</div>
-             <div data-activity-stream>${renderEvents(data.events.slice(0, 24), data.now)}</div>`
+             <div data-activity-stream>${renderEvents(data.events.slice(0, 10), data.now)}</div>
+             <a class="tool overview-events-link" href="#events">Open Events</a>`
           : '<div class="empty">No activity yet. A heartbeat writes city and lands here.</div>'
       }
     </article>

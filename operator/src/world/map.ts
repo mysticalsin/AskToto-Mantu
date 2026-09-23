@@ -446,8 +446,8 @@ export interface CornerMapOptions {
 }
 
 /** 520x300 corner choropleth: `oklch(54.6% 0.22 263 / alpha)` fill with
- * alpha = 0.12 + 0.88 * sqrt(count / max), white 0.5 strokes, invisible hit pins at
- * centroids for tooltips. Countries with no data render the same flat grey as the land. */
+ * alpha = 0.12 + 0.88 * sqrt(count / max), theme-aware land/strokes, and invisible hit pins at
+ * centroids for tooltips. Countries with no data use the current theme's neutral land color. */
 export function renderCornerMapSvg(options: CornerMapOptions): string {
   const variant: MapVariant = '520'
   const { width, height } = MAP_DIMENSIONS[variant]
@@ -456,8 +456,8 @@ export function renderCornerMapSvg(options: CornerMapOptions): string {
   const land = WORLD_520.map((c) => {
     const count = byIso.get(c.alpha2)
     const fill =
-      count === undefined ? 'rgb(240,240,240)' : `oklch(54.6% 0.22 263 / ${(0.12 + 0.88 * Math.sqrt(count / max)).toFixed(3)})`
-    return `<path class="world-land" data-iso="${escapeXml(c.alpha2 || c.id)}" d="${c.d}" fill="${fill}" stroke="rgb(255,255,255)" stroke-width="0.5" />`
+      count === undefined ? 'var(--map-land)' : `oklch(54.6% 0.22 263 / ${(0.12 + 0.88 * Math.sqrt(count / max)).toFixed(3)})`
+    return `<path class="world-land" data-iso="${escapeXml(c.alpha2 || c.id)}" d="${c.d}" fill="${fill}" stroke="var(--map-stroke)" stroke-width="0.5" />`
   }).join('')
   const pins = options.countries
     .filter((c) => byIso.has(c.iso) && CENTROIDS_520[c.iso])

@@ -6,7 +6,7 @@ const NOW = 1_725_000_000_000
 const SHARED_ASK_ID = 'ask-shared-1234'
 
 describe('persistProxyAsk ownership', () => {
-  it('keeps a client ask id owned by its original device while allowing that device to retry it', async () => {
+  it('keeps a client ask id owned by its original device without letting a late failure downgrade its answer', async () => {
     const store = memoryStore()
 
     await persistProxyAsk(store, {
@@ -44,8 +44,8 @@ describe('persistProxyAsk ownership', () => {
 
     expect(await store.getAsk(SHARED_ASK_ID)).toMatchObject({
       device_id: 'device-a',
-      model: 'retry-model',
-      outcome: 'error'
+      model: 'first-model',
+      outcome: 'answered'
     })
     expect(await store.listAsks(10)).toHaveLength(1)
   })

@@ -256,14 +256,14 @@ describe('renderCornerMapSvg', () => {
     })
     expect(svg).toContain('viewBox="0 0 520 300"')
     expect(svg).toContain('data-iso="CA"')
-    expect(svg).toContain('stroke="rgb(255,255,255)"')
+    expect(svg).toContain('stroke="var(--map-stroke)"')
     expect(svg).toMatch(/oklch\(54\.6% 0\.22 263 \/ 1(\.000)?\)/) // max count -> alpha 1
   })
 
-  it('countries with no data render flat grey, not a fabricated color', () => {
+  it('countries with no data use the current theme land color, not a fabricated activity color', () => {
     const svg = renderCornerMapSvg({ countries: [{ iso: 'CA', count: 1 }] })
     expect(svg).toContain('data-iso="US"')
-    expect(svg).toMatch(/data-iso="US"[^>]*fill="rgb\(240,240,240\)"/)
+    expect(svg).toMatch(/data-iso="US"[^>]*fill="var\(--map-land\)"/)
   })
 
   it('empty input renders land only, no hit pins', () => {
