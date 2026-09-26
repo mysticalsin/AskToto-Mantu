@@ -9,7 +9,7 @@ import {
   CF_OAUTH_TOKEN
 } from './cloudflare-connect'
 import { handleRequest, type Env } from './index'
-import { memoryStore } from './store'
+import { memoryStore, type OperatorStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN, TEST_VAULT_KEY } from './test-fixtures'
 import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
@@ -33,9 +33,26 @@ function env(extra: Partial<Env> = {}): Env {
   }
 }
 
+function requestUrl(input: RequestInfo | URL): URL {
+  return new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+}
+
+/** Drives the connect step alone: GET /cloudflare/connect, then the state cookie and the
+ * `state` param a callback needs to prove it belongs to the same OAuth round-trip. */
+async function startCloudflareOAuth(store: OperatorStore): Promise<{ cookie: string; state: string }> {
+  const start = await handleRequest(
+    new Request(`https://operator.test${CF_CONNECT_PATH}`),
+    env(),
+    { access: tony },
+    { store, now: NOW }
+  )
+  const cookie = (start.headers.get('set-cookie') || '').split(';')[0]
+  const state = new URL(start.headers.get('location') || 'https://x.test').searchParams.get('state') || ''
+  return { cookie, state }
+}
+
 function cfFetch(input: RequestInfo | URL): Promise<Response> {
-  const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-  const url = new URL(href)
+  const url = requestUrl(input)
   if (url.href === CF_OAUTH_TOKEN || url.pathname.endsWith('/oauth2/token')) {
     return Promise.resolve(
       new Response(JSON.stringify({ access_token: TOKEN, token_type: 'bearer' }), {
@@ -102,15 +119,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
 
   it('callback exchanges the code and writes AI Gateway + account keys, last4 only', async () => {
     const store = memoryStore()
-    const start = await handleRequest(
-      new Request(`https://operator.test${CF_CONNECT_PATH}`),
-      env(),
-      { access: tony },
-      { store, now: NOW }
-    )
-    const cookie = (start.headers.get('set-cookie') || '').split(';')[0]
-    const loc = new URL(start.headers.get('location') || 'https://x.test')
-    const state = loc.searchParams.get('state') || ''
+    const { cookie, state } = await startCloudflareOAuth(store)
     const cb = await handleRequest(
       new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-1&state=${state}`, {
         headers: { cookie }
@@ -130,18 +139,10 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
 
   it('reads the gateway privacy check exactly once while provisioning both vault rows', async () => {
     const store = memoryStore()
-    const start = await handleRequest(
-      new Request(`https://operator.test${CF_CONNECT_PATH}`),
-      env(),
-      { access: tony },
-      { store, now: NOW }
-    )
-    const cookie = (start.headers.get('set-cookie') || '').split(';')[0]
-    const state = new URL(start.headers.get('location') || 'https://x.test').searchParams.get('state') || ''
+    const { cookie, state } = await startCloudflareOAuth(store)
     let gatewayGets = 0
     const countingCfFetch: typeof fetch = async (input) => {
-      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
-      if (url.pathname.includes('/ai-gateway/gateways')) gatewayGets += 1
+      if (requestUrl(input).pathname.includes('/ai-gateway/gateways')) gatewayGets += 1
       return cfFetch(input)
     }
     const cb = await handleRequest(
@@ -166,17 +167,9 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
   ] as const) {
     it(`callback redirects to the keys page and writes no vault row when ${label}`, async () => {
       const store = memoryStore()
-      const start = await handleRequest(
-        new Request(`https://operator.test${CF_CONNECT_PATH}`),
-        env(),
-        { access: tony },
-        { store, now: NOW }
-      )
-      const cookie = (start.headers.get('set-cookie') || '').split(';')[0]
-      const state = new URL(start.headers.get('location') || 'https://x.test').searchParams.get('state') || ''
+      const { cookie, state } = await startCloudflareOAuth(store)
       const unsafeCfFetch: typeof fetch = async (input) => {
-        const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
-        if (url.pathname.includes('/ai-gateway/gateways')) return gatewayReply()
+        if (requestUrl(input).pathname.includes('/ai-gateway/gateways')) return gatewayReply()
         return cfFetch(input)
       }
       const cb = await handleRequest(
@@ -197,14 +190,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
 
   it('authorized seat can /v1/use cloudflare after the provisioned key', async () => {
     const store = memoryStore()
-    const start = await handleRequest(
-      new Request(`https://operator.test${CF_CONNECT_PATH}`),
-      env(),
-      { access: tony },
-      { store, now: NOW }
-    )
-    const cookie = (start.headers.get('set-cookie') || '').split(';')[0]
-    const state = new URL(start.headers.get('location') || 'https://x.test').searchParams.get('state') || ''
+    const { cookie, state } = await startCloudflareOAuth(store)
     await handleRequest(
       new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-2&state=${state}`, {
         headers: { cookie }
