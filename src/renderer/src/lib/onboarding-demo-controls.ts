@@ -152,7 +152,7 @@ export function watchDemoEnvironment(
   }
 }
 
-export type DemoClockCommand = 'finish' | 'pause' | 'play'
+export type DemoClockCommand = keyof Pick<DemoPlaybackClock, 'finish' | 'pause' | 'play'>
 
 /** The one owner of what a DemoPlaybackClock should be doing: reduced motion always settles
  * it at its hold, a hidden window or the user's own pause holds it where it is, and otherwise
