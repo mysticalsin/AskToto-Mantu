@@ -291,6 +291,20 @@ describe('extractNumerals', () => {
     const acceptable = [[], [12500], [12, 500]]
     expect(acceptable.some((a) => a.length === values.length && a.every((v, i) => v === values[i]))).toBe(true)
   })
+
+  it('P5-F3: sorts hits by real transcript position, not by re-deriving it via span.indexOf(raw) on text that recurs', () => {
+    // The final sort discards each hit's own start offset and instead recomputes a sort key with
+    // `span.indexOf(a.raw)` — which always resolves to the position of the FIRST occurrence of that
+    // exact substring anywhere in the whole span, not the occurrence this particular hit came from.
+    // A bare "5" recurs here both standalone AND as the leading digit of "500k": indexOf("5") always
+    // finds the "5" inside "500k" (or the earlier standalone "5"), so the LATER standalone "5" is
+    // pulled forward to right after the first one — ahead of "500k", even though "500k" is stated
+    // well before it. (Two hits alone would tie and JS's stable sort would preserve the already-
+    // correct insertion order by coincidence; a third, later recurrence of the same short raw text is
+    // what actually exposes the misorder.)
+    const span = 'the tally is 5 today, revenue reached 500k by March, and headcount grew by 5 more'
+    expect(extractNumerals(span).map((h) => h.value)).toEqual([5, 500_000, 5])
+  })
 })
 
 describe('numeralDerivable', () => {
