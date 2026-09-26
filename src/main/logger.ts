@@ -206,13 +206,13 @@ export type AuditEvent =
   | 'app.act1.dom'
   | 'app.crash'
   // M2-0006: the clean-shutdown marker — written at the end of will-quit, so the NEXT app.started can
-  // report prevShutdown as 'clean' instead of 'unknown'/'unclean'.
+  // report a real prevShutdown classification instead of no evidence at all (see boot-sentinel.ts).
   | 'app.shutdown.clean'
   // M2-0006: a 1s heartbeat timer fired at least 1s late (main-thread stall, see boot-sentinel.ts's
   // run-state tracking and infra/observability/stall-monitor.ts), plus its periodic p99 summary.
   | 'app.stall'
   | 'app.stall.summary'
-  // M2-0006: pairs 'app.unresponsive' with how long the renderer stayed wedged before it recovered.
+  // M2-0006: pairs app.unresponsive with how long the renderer stayed wedged before it recovered.
   | 'app.responsive'
   // A main-process, state-checked repair completed a renderer handoff after durable setup save.
   | 'app.recovery'

@@ -162,15 +162,18 @@ describe('M2-0006 — app.renderer.ready fires regardless of ASKTOTO_MAC_LAUNCH_
 })
 
 describe("M2-0006 — app.responsive pairs app.unresponsive with how long the renderer was wedged", () => {
+  // Starts after the `let unresponsiveSince: number | null = null` declaration, not at it: that line's
+  // type annotation is valid TypeScript but not valid plain JavaScript, and new Function evaluates plain
+  // JS. The wrapper below declares the same local without the annotation instead.
   const body = sliceBetween(
-    'let unresponsiveSince: number | null = null',
+    "win.on('unresponsive', () => {",
     "win.webContents.on('render-process-gone'"
   )
 
   class FakeWindow extends EventEmitter {}
 
   function bind(win: FakeWindow, self: FakeWindow, mainLog: { warn: ReturnType<typeof vi.fn>; info: ReturnType<typeof vi.fn> }, auditLog: ReturnType<typeof vi.fn>): void {
-    new Function('win', 'self', 'mainLog', 'auditLog', body)(win, self, mainLog, auditLog)
+    new Function('win', 'self', 'mainLog', 'auditLog', `let unresponsiveSince = null;\n${body}`)(win, self, mainLog, auditLog)
   }
 
   it('audits app.responsive with the elapsed stallMs after a matching app.unresponsive', () => {
