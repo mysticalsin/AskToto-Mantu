@@ -461,38 +461,19 @@ function hashFile(path: string): Promise<string> {
   })
 }
 
-interface FileIdentity {
-  size: number
-  mtimeMs: number
-  ino: number
-}
-
 /**
- * Successfully verified (path, size, mtime, inode) triples, for the life of the process. A hit means the
- * file's on-disk identity has not moved since its last successful hash, so a repeat cold start of the
- * same, unchanged model can skip re-reading and re-hashing up to ~2.9 GB of GGUF. Corruption, a repair, or
- * a fresh download's rename-into-place all change size, mtime or inode, which misses the cache and forces
- * a fresh hash — a tampered file always fails closed. A failed hash never populates this map.
+ * Path to `${size}:${mtimeNs}:${ctimeNs}:${ino}`, for files verified this process's life. A cache hit for
+ * a path guarantees: a POSIX write to that path always advances its ctime — `utimes`/`touch -r` can roll
+ * mtime back but not ctime, which is why git's index uses it too — a replace-by-rename gives the path a
+ * new inode, and a failed checksum never reaches this map. So a hit means the bytes are exactly what was
+ * last hashed at that path; a metadata-only change (chmod, xattr) costs one extra hash, which is the safe
+ * direction. bigint stats avoid the Number rounding of 64-bit NTFS file IDs on Windows.
  */
-const verifiedFileIdentity = new Map<string, FileIdentity>()
+const verifiedFileIdentity = new Map<string, string>()
 
-function fileIdentity(path: string): FileIdentity | null {
-  try {
-    const stat = statSync(path)
-    return { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino }
-  } catch {
-    return null
-  }
-}
-
-function sameIdentity(current: FileIdentity | null, cached: FileIdentity | undefined): boolean {
-  return (
-    current !== null &&
-    cached !== undefined &&
-    current.size === cached.size &&
-    current.mtimeMs === cached.mtimeMs &&
-    current.ino === cached.ino
-  )
+function fileIdentity(path: string): string {
+  const stat = statSync(path, { bigint: true })
+  return `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}`
 }
 
 async function verifyFileChecksum(
@@ -502,13 +483,13 @@ async function verifyFileChecksum(
   spec: LocalModelFile
 ): Promise<void> {
   const identity = fileIdentity(path)
-  if (sameIdentity(identity, verifiedFileIdentity.get(path))) return
+  if (verifiedFileIdentity.get(path) === identity) return
   const digest = await hashFile(path)
   if (digest !== spec.sha256) {
     localAudit('local.model.checksum_fail', { modelId, file })
     throw new ChecksumMismatchError(modelId, file, spec.sha256, digest)
   }
-  if (identity) verifiedFileIdentity.set(path, identity)
+  verifiedFileIdentity.set(path, identity)
 }
 
 /**
