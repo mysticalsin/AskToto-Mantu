@@ -173,6 +173,7 @@
 }
 .cl-content {
   background: var(--cl-background);
+  overflow-x: hidden;
 }
 .cl-footer {
   border-top: 1px solid var(--cl-border);
