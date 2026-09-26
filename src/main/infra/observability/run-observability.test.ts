@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { startRunObservability, type ResumeSource } from './run-observability'
+import { startRunObservability } from './run-observability'
 import type { PriorRun } from '../../boot-sentinel'
 import type { StallMonitor, StallMonitorOptions } from './stall-monitor'
 
@@ -7,7 +7,7 @@ function fakePrior(overrides: Partial<PriorRun> = {}): PriorRun {
   return { prevBootId: undefined, prevShutdown: 'unknown', prevLastAliveAt: undefined, ...overrides }
 }
 
-function fakePowerMonitor(): ResumeSource & { on: ReturnType<typeof vi.fn>; removeListener: ReturnType<typeof vi.fn> } {
+function fakePowerMonitor() {
   return { on: vi.fn(), removeListener: vi.fn() }
 }
 

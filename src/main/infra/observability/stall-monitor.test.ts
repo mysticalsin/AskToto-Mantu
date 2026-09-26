@@ -199,7 +199,7 @@ describe('startStallMonitor', () => {
     const clock = fakeTimer()
     const onStall = vi.fn()
     const realDateNow = Date.now
-    Date.now = vi.fn(() => 0)
+    Date.now = () => 0
     try {
       startStallMonitor({
         bootId: 'boot-1',
@@ -213,7 +213,7 @@ describe('startStallMonitor', () => {
         histogram: fakeHistogram(0)
       })
       clock.advanceTo(1000) // monotonic clock on schedule; expectedAt -> 2000
-      Date.now = vi.fn(() => 999_999_999) // wall clock jumps forward hugely — monotonic clock untouched
+      Date.now = () => 999_999_999 // wall clock jumps forward hugely — monotonic clock untouched
       clock.advanceTo(2000) // still on schedule per the monotonic clock
       expect(onStall).not.toHaveBeenCalled()
     } finally {
