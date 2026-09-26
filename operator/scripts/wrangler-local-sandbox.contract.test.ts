@@ -16,12 +16,11 @@ import { createHermeticSandbox, hermeticWranglerEnv, mergedEnv } from '../../scr
 // cover the native workerd child process, DNS resolution, or UDP — those need a separate mechanism (see
 // this ticket's advisory notes on a network-namespaced CI leg).
 //
-// Round-2 finding: `execFileSync` throwing was never real proof here. wrangler's own metrics dispatcher
-// catches a failed fetch and only logs it at debug level, so a non-loopback connect() denied deep inside
-// wrangler's dependency tree could leave the process exiting 0 with the denial visible nowhere this test
-// looked. deny-non-loopback.cjs now writes every denial to the child's stderr synchronously, independent
-// of whether wrangler catches the error — so `spawnSync` plus an explicit stderr check is the actual
-// proof; a non-throwing exit no longer means "stayed local," this assertion does.
+// A clean exit alone is never proof here: wrangler's own metrics dispatcher catches a failed fetch and
+// only logs it at debug level, so a non-loopback connect() denied deep inside wrangler's dependency tree
+// could leave the process exiting 0 with the denial visible nowhere else. deny-non-loopback.cjs writes
+// every denial to the child's stderr synchronously, independent of whether wrangler catches the error —
+// so `spawnSync` plus the explicit stderr check below is what actually proves "stayed local."
 //
 // scripts/hermetic/sandbox-env.test.ts already covers hermeticWranglerEnv's own assertions
 // (credential-stripping, config-dir sandboxing); this file is only the real-process proof.

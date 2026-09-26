@@ -1,13 +1,15 @@
 import { existsSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHermeticSandbox, hermeticEnv, hermeticWranglerEnv, mergedEnv } from './sandbox-env.mjs'
 
-// W0-HERMETIC (M2-0190) — this module is what every non-vitest test runner (license-server's
-// `node --test`, the scripts/qa harnesses, operator's wrangler-local-sandbox test) builds its own
-// sandbox from, since none of them has a config-level env hook the way vitest.config.ts's `test.env`
-// gives every vitest worker. These assertions are the single source of truth all of those consumers
-// share — a regression here would silently reopen the sandbox everywhere at once.
+// W0-HERMETIC (M2-0190) — this module is what every non-vitest runner that builds its sandbox here
+// (license-server's `node --test`, operator's wrangler-local-sandbox test) builds it FROM, since neither
+// has a config-level env hook the way vitest.config.ts's `test.env` gives every vitest worker. (scripts/qa
+// checks whether the ATTACHED app is sandboxed instead — scripts/qa/lib/sandbox-guard.mjs — and swift
+// test builds its own sandbox directly in run-swift-tests.sh; neither imports this file.) These
+// assertions are the single source of truth every consumer above shares — a regression here would
+// silently reopen the sandbox everywhere at once.
 describe('createHermeticSandbox', () => {
   it('creates a fresh, empty, uniquely-prefixed home with its own tmp subdirectory', () => {
     const a = createHermeticSandbox()
@@ -44,10 +46,11 @@ describe('hermeticEnv', () => {
 })
 
 describe('hermeticWranglerEnv', () => {
-  // Round-2 finding: a hand-kept CLOUDFLARE_* name list missed wrangler 4.131.1's deprecated aliases
-  // (CF_API_TOKEN, CF_API_KEY, CF_EMAIL, CF_ACCOUNT_ID) and WRANGLER_CF_AUTHORIZATION_TOKEN. Seeding a
-  // fake `inheritedEnv` (never the real `process.env`) is what lets this prove the strip without
-  // mutating the actual process environment other tests in this same worker run under.
+  // Covers wrangler 4.131.1's deprecated aliases (CF_API_TOKEN, CF_API_KEY, CF_EMAIL, CF_ACCOUNT_ID) and
+  // WRANGLER_CF_AUTHORIZATION_TOKEN, not just the current CLOUDFLARE_* names — proving the strip is a
+  // prefix match, not a name list that could miss the next one. Seeding a fake `inheritedEnv` (never the
+  // real `process.env`) is what lets this prove the strip without mutating the actual process environment
+  // other tests in this same worker run under.
   it('strips every inherited CLOUDFLARE_/CF_/WRANGLER_-prefixed credential, including the deprecated aliases', () => {
     const inheritedEnv = {
       CLOUDFLARE_API_TOKEN: 'real-token',
@@ -95,22 +98,25 @@ describe('hermeticWranglerEnv', () => {
     expect(env.HOME).toBe(sandbox.home)
   })
 
-  it('defaults inheritedEnv to process.env when the caller passes none', () => {
-    const sandbox = createHermeticSandbox()
-    const env = hermeticWranglerEnv(sandbox)
-    expect(env.HOME).toBe(sandbox.home)
+  describe('default inheritedEnv (process.env)', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it('strips a real credential from process.env when the caller passes no inheritedEnv', () => {
+      vi.stubEnv('CF_API_TOKEN', 'real-token-from-the-actual-shell')
+      const sandbox = createHermeticSandbox()
+      const env = hermeticWranglerEnv(sandbox)
+      expect(env.HOME).toBe(sandbox.home)
+      expect(env.CF_API_TOKEN).toBeUndefined()
+    })
   })
 })
 
 describe('mergedEnv', () => {
-  it('deletes a key from process.env when the override sets it to undefined', () => {
+  it('deletes a key from process.env when the override sets it to undefined, never as the literal string "undefined"', () => {
     const merged = mergedEnv({ CLOUDFLARE_API_TOKEN: undefined, HOME: '/sandbox' })
     expect(merged.HOME).toBe('/sandbox')
     expect('CLOUDFLARE_API_TOKEN' in merged).toBe(false)
-  })
-
-  it('never leaks the string "undefined" into the child env', () => {
-    const merged = mergedEnv({ CLOUDFLARE_API_TOKEN: undefined })
-    expect(merged.CLOUDFLARE_API_TOKEN).not.toBe('undefined')
   })
 })

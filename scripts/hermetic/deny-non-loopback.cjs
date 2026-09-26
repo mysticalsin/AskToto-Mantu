@@ -56,10 +56,10 @@ net.Socket.prototype.connect = function hermeticConnect(...args) {
     const message =
       `HERMETIC_NETWORK_DENIED: blocked a connect() to non-loopback host "${host}" — ` +
       'M2-0190 isolation-canary preload only allows loopback traffic.'
-    // Round-2 finding: a caller that catches the connect() failure and only logs it (wrangler's own
-    // metrics dispatcher does exactly this, at debug level, when WRANGLER_SEND_METRICS is left unset)
-    // can exit 0 with no visible trace of the denial. Reporting has to happen HERE, synchronously, so
-    // it can never depend on whether — or how — the caller handles the error this function also raises
+    // A caller that catches the connect() failure and only logs it (wrangler's own metrics dispatcher
+    // does exactly this, at debug level, when WRANGLER_SEND_METRICS is left unset) must still not be able
+    // to exit 0 with no visible trace of the denial. Reporting has to happen HERE, synchronously, so it
+    // can never depend on whether — or how — the caller handles the error this function also raises
     // below. fd 2 is written directly (not console.error, which can be monkey-patched or buffered)
     // so a test can assert on the child process's real stderr regardless of its exit code.
     try {

@@ -1,12 +1,17 @@
 // W0-HERMETIC (M2-0190) — the same per-run sandbox vitest.config.ts's `hermeticHomeEnv` gives every
 // vitest worker (see M2-0001), for anything that spawns a plain process INSTEAD of running inside a
-// vitest worker: license-server's `node --test`, the scripts/qa harnesses, and any test that shells out
-// to `swift test` or `wrangler`. None of those runners has a `test.env` hook, so the sandbox has to be
-// built here and layered onto the child process's environment before it starts.
+// vitest worker and therefore has no `test.env` hook: license-server's `node --test` (wrapped by
+// run-with-sandbox.mjs) and operator's wrangler-local-sandbox test (via hermeticWranglerEnv below). The
+// sandbox is built here and layered onto the child process's environment before it starts.
 //
-// Zero external dependencies (node:fs/os/path only) and one small module, so every consumer (root
-// vitest.config.ts, license-server, scripts/qa, operator's wrangler test) builds the exact same sandbox
-// shape from a single source, rather than five independent, silently-drifting copies.
+// scripts/qa's harnesses check something this module has no part in — whether the ATTACHED, already-
+// running app is sandboxed (scripts/qa/lib/sandbox-guard.mjs) — since there is no child process here to
+// hand an env to. `swift test` builds its own sandbox directly in run-swift-tests.sh, since it takes no
+// env-builder module either. Neither imports this file.
+//
+// Zero external dependencies (node:fs/os/path only) and one small module, so every consumer that DOES
+// build its sandbox from here (root vitest.config.ts, license-server, operator's wrangler test) gets the
+// exact same shape from a single source, rather than drifting independent copies.
 import { mkdtempSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -60,12 +65,12 @@ export function hermeticEnv(sandbox, extra = {}) {
   }
 }
 
-// Round-1 fixed this as a hand-kept list of credential names, which round-2 validation showed wrangler
-// 4.131.1 could still slip past: it also reads the deprecated aliases CF_API_TOKEN/CF_API_KEY/CF_EMAIL/
-// CF_ACCOUNT_ID and WRANGLER_CF_AUTHORIZATION_TOKEN (its `deprecatedName` entries), none of which carry
-// the CLOUDFLARE_ prefix a name-list has to be told about one at a time. A prefix strip can't miss the
-// next alias the same way — the same allow-list-over-deny-list approach scripts/qa/lib/sandbox-guard.mjs
-// already uses for ASKTOTO_USERDATA.
+// A prefix strip, not a hand-kept list of exact credential names: wrangler 4.131.1 also reads the
+// deprecated aliases CF_API_TOKEN/CF_API_KEY/CF_EMAIL/CF_ACCOUNT_ID and
+// WRANGLER_CF_AUTHORIZATION_TOKEN (its `deprecatedName` entries), none of which carry the CLOUDFLARE_
+// prefix a name-list would have to be told about one at a time — and a future wrangler release could add
+// more. A prefix strip covers the next alias automatically, the same allow-list-over-deny-list approach
+// scripts/qa/lib/sandbox-guard.mjs uses for ASKTOTO_USERDATA.
 /** @type {readonly string[]} */
 const CREDENTIAL_PREFIXES = Object.freeze(['CLOUDFLARE_', 'CF_', 'WRANGLER_'])
 

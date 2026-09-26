@@ -32,7 +32,7 @@
   (subpath (string-append (param "HOME") "/Library/Application Support/AskToto"))
   (subpath (string-append (param "HOME") "/Library/Application Support/asktoto-dev"))
   ;; The unpackaged, pre-suffix default — the same directory as "AskToto" on case-insensitive APFS.
-  ;; Denied under both literal spellings: SBPL subpath matching is a string compare against the syscall's
-  ;; own path argument, not a case-folded filesystem lookup, so the case actually used has to match one of
-  ;; the literals here.
+  ;; Denied under both literal spellings, as a precaution: SBPL subpath matching may compare against the
+  ;; syscall's own path argument rather than a case-folded filesystem lookup, so the case actually used
+  ;; might need to match one of the literals here exactly.
   (subpath (string-append (param "HOME") "/Library/Application Support/asktoto")))

@@ -85,32 +85,25 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      # M2-0190 round-2 finding — the previous version of this job only proved 2 of the 7 (now 10) denied
-      # roots this way; a typo in any of the untested ones would have gone unnoticed. Looping over every
-      # root in scripts/hermetic/owner-account.sb — instead of one hand-written step per root — means a
-      # root added to the profile without a matching line here is a step that never asserted anything,
-      # not a silent gap in coverage. The accented "Library/Application Support/Métis" literal needs this
-      # proof most: SBPL subpath matching is a string compare against the syscall's own path argument, so
-      # whether that literal actually matches is otherwise unverified.
+      # Every root this asserts on is EXTRACTED from scripts/hermetic/owner-account.sb's own
+      # `(subpath (string-append (param "HOME") "..."))` literals below — never a hand-kept list — so a
+      # root added to (or renamed in) the profile is exercised here automatically, and this job cannot
+      # silently drift out of sync with the profile it proves. The accented "Library/Application
+      # Support/Métis" literal needs this proof most: SBPL subpath matching is a string compare against
+      # the syscall's own path argument (unconfirmed against Seatbelt's own source — treat this as a
+      # precaution, not a guarantee), so whether that literal actually matches is otherwise unverified.
       - name: Seed a probe in every denied root and assert both read and write are refused
         run: |
           set -euo pipefail
-          # Keep in sync with the (subpath ...) list in scripts/hermetic/owner-account.sb.
-          roots=(
-            "Library/CloudStorage/OneDrive-Honeypot"
-            "Library/Keychains"
-            ".wrangler"
-            ".config/.wrangler"
-            "Library/Preferences/.wrangler"
-            "Library/Application Support/Metis"
-            "Library/Application Support/Métis"
-            "Library/Application Support/AskToto"
-            "Library/Application Support/asktoto-dev"
-            "Library/Application Support/asktoto"
-          )
+          roots=()
+          while IFS= read -r root; do
+            roots+=("$root")
+          done < <(grep -o '(param "HOME") "[^"]*"' scripts/hermetic/owner-account.sb | sed -E 's/.*"HOME"\) "(.*)"/\1/')
+          [ "${#roots[@]}" -ge 1 ] || { echo "no (subpath ...) literals found in scripts/hermetic/owner-account.sb"; exit 1; }
+
           fail=0
           for root in "${roots[@]}"; do
-            dir="$HOME/$root"
+            dir="$HOME$root"
             probe="$dir/probe"
             mkdir -p "$dir"
             echo probe > "$probe"

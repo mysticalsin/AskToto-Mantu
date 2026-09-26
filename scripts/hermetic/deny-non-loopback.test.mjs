@@ -54,11 +54,10 @@ for (const [label, script] of Object.entries(DENIED_SCRIPTS)) {
   })
 }
 
-// M2-0190 round-2 finding — a caller that catches the connect() error and swallows it (wrangler's own
-// metrics dispatcher does this, logging only at debug level) can exit 0 with nothing on stdout to show a
-// denial ever happened. The preload has to report a denial on stderr unconditionally, not only when the
-// caller happens to let the error surface. This is RED against the preload before that fix (stderr was
-// empty — the Error's message went nowhere but the destroyed socket) and GREEN after it.
+// A caller that catches the connect() error and swallows it (wrangler's own metrics dispatcher does
+// this, logging only at debug level) must still be unable to exit 0 with nothing on stdout to show a
+// denial ever happened. The preload reports a denial on stderr unconditionally, never only when the
+// caller happens to let the error surface.
 test('a denial reaches stderr even when the caller swallows the error and the process exits 0', () => {
   const script = `
     const net = require('net')

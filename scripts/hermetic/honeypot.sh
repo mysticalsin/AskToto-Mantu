@@ -3,11 +3,13 @@
 # sandboxed never actually touched a directory standing in for the runner's real home-derived state.
 # Used by more than one isolation-canary.yml job so the mechanism isn't kept as separate, drifting copies.
 #
-# The reference timestamp lives in $RUNNER_TEMP, OUTSIDE every honeypot directory this checks. A prior
-# version compared `find "$dir" -newer "$dir/sentinel"` — that looks equivalent but is not: an in-place
-# rewrite of sentinel updates the very file everything else is compared against, so the rewritten file can
-# never show up as "newer than itself" and the rewrite goes unreported. A reference file outside the
-# honeypot has no such blind spot.
+# The reference timestamp lives in $RUNNER_TEMP, OUTSIDE every honeypot directory this checks — comparing
+# a directory's mtime against a file inside itself would go blind the moment that file is the one
+# rewritten in place, since a rewritten file can never show up as "newer than itself".
+#
+# `check` fails CLOSED: a missing reference file, a deleted honeypot directory or sentinel, or a `find`
+# error are every one of them a failure, never "nothing to report" — anything else would let a suite that
+# deletes or corrupts the honeypot pass the very check meant to catch it.
 set -euo pipefail
 
 honeypot_ref() { echo "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/metis-honeypot-ref"; }
@@ -26,7 +28,23 @@ case "$cmd" in
     touch "$(honeypot_ref)"
     ;;
   check)
-    touched="$(find "$dir" -newer "$(honeypot_ref)" 2>/dev/null || true)"
+    ref="$(honeypot_ref)"
+    if [ ! -e "$ref" ]; then
+      echo "no reference timestamp at $ref — run 'seed $dir' before 'check $dir'"
+      exit 1
+    fi
+    if [ ! -d "$dir" ]; then
+      echo "the honeypot directory is gone: $dir (the suite may have deleted it)"
+      exit 1
+    fi
+    if [ ! -f "$dir/sentinel" ]; then
+      echo "the honeypot sentinel file is gone: $dir/sentinel (the suite may have deleted it)"
+      exit 1
+    fi
+    if ! touched="$(find "$dir" -newer "$ref")"; then
+      echo "find failed while scanning the honeypot at $dir"
+      exit 1
+    fi
     if [ -n "$touched" ]; then
       echo "the suite touched the real-home honeypot it must never reach:"
       echo "$touched"

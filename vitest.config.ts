@@ -27,8 +27,9 @@ function playwrightBrowsersPath(realHome: string): string {
   }
   return join(process.env.XDG_CACHE_HOME || join(realHome, '.cache'), 'ms-playwright')
 }
-// scripts/hermetic/sandbox-env.mjs is the single implementation every non-vitest runner (license-server,
-// scripts/qa, operator's wrangler test) builds its own sandbox from (M2-0190); building this vitest
+// scripts/hermetic/sandbox-env.mjs is the single implementation every non-vitest runner that shares this
+// mechanism (license-server, operator's wrangler test — scripts/qa and swift test build their sandboxes a
+// different way, see that file's own header) builds its own sandbox from (M2-0190); building this vitest
 // worker's own env from the same two functions, rather than an independent literal copy, makes that
 // true rather than merely documented.
 const sandbox = createHermeticSandbox()

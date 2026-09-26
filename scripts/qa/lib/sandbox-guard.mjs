@@ -2,15 +2,16 @@
 // exhaustion-sim.mjs) must confirm the ATTACHED APP is sandboxed before it touches that app's
 // settings/brain/API-keys on disk.
 //
-// Round-2 finding: the previous version of this guard checked the HARNESS's own process.env.
-// ASKTOTO_USERDATA, not the app it is about to mutate. The documented launch
-// (`ASKTOTO_USERDATA=<dir> ./electron ...`) sets that variable only on the spawned app process, so a
-// harness shell that never exported it was refused with a message telling the operator to do what they
-// already did — and a harness shell that happened to have it set (e.g. inherited from a parent shell)
-// passed even while the attached app ran on the real, unsandboxed profile. The only source of truth for
-// "is THIS app sandboxed" is what the app itself reports: getSettings().resolvedMeetingsFolder resolves
-// inside ASKTOTO_USERDATA when that variable was set on the app (main/index.ts), and both harnesses
-// already read and delete files from underneath it.
+// The only source of truth for "is THIS app sandboxed" is what the ATTACHED APP itself reports —
+// getSettings().resolvedMeetingsFolder — never this harness's own process.env.ASKTOTO_USERDATA: the
+// documented launch (`ASKTOTO_USERDATA=<dir> ./electron ...`) sets that variable only on the spawned app
+// process, so a harness shell can disagree with the app it drives in either direction. A
+// resolvedMeetingsFolder is accepted ONLY when it resolves inside the OS temp dir (where an
+// ASKTOTO_USERDATA-launched profile lives): an explicit settings.meetingsFolder can point anywhere — a
+// mounted volume, a network share, a moved OneDrive root — while every other real setting, API key and
+// brain index on that profile is still the real one, so "outside the home directory" is never itself
+// proof of isolation. Both harnesses already read and delete files from underneath this folder, which is
+// why the check runs before either touches settings, brain or API keys.
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 
@@ -35,24 +36,25 @@ function isInside(parent, child) {
 /**
  * Throws unless `meetingsFolder` — the ATTACHED APP's own reported
  * `getSettings().resolvedMeetingsFolder`, never a launching shell's environment — resolves under
- * `tmpDir`, or outside `homeDir` entirely.
+ * `tmpDir`. An explicit settings.meetingsFolder can point anywhere, so resolving outside `homeDir` is
+ * never itself proof of isolation; only `tmpDir` (where an ASKTOTO_USERDATA-launched profile lives) is.
  *
  * `homeDir` and `tmpDir` are parameters (never read internally via `os.homedir()`/`os.tmpdir()`) so a
  * test can exercise every case without a real home or temp directory.
  *
  * @param {{ meetingsFolder: string | undefined, homeDir: string, tmpDir: string }} args
- * @returns {true}
+ * @returns {void}
  */
 export function assertSandboxedMeetingsFolder({ meetingsFolder, homeDir, tmpDir }) {
   if (!meetingsFolder) {
     throw new Error(
       'The attached app reported no resolvedMeetingsFolder. This harness drives a REAL running app and ' +
-        'mutates its settings/brain/API-keys on disk — launch it with ASKTOTO_USERDATA=<an isolated dir> ' +
-        'set (see this harness\'s own header), or it falls back to the real developer profile.'
+        'mutates its settings/brain/API-keys on disk — launch it with ASKTOTO_USERDATA=<a dir under the ' +
+        "OS temp dir> set (see this harness's own header), or it falls back to the real developer profile."
     )
   }
   const resolved = resolve(meetingsFolder)
-  if (isInside(tmpDir, resolved)) return true
+  if (isInside(tmpDir, resolved)) return
   if (isInside(homeDir, resolved)) {
     throw new Error(
       `The attached app's resolvedMeetingsFolder (${meetingsFolder}) resolves inside the real home ` +
@@ -61,7 +63,14 @@ export function assertSandboxedMeetingsFolder({ meetingsFolder, homeDir, tmpDir 
         'directory under the OS temp dir instead.'
     )
   }
-  return true
+  throw new Error(
+    `The attached app's resolvedMeetingsFolder (${meetingsFolder}) does not resolve under the OS temp ` +
+      `directory (${tmpDir}). Resolving outside the home directory (${homeDir}) is not proof of an ` +
+      'isolated profile by itself — an explicit settings.meetingsFolder can point anywhere (a mounted ' +
+      'volume, a network share, a moved OneDrive root) while every other real setting, API key and brain ' +
+      'index on that profile is still the real one. Relaunch the app with ASKTOTO_USERDATA pointed at a ' +
+      'directory under the OS temp dir instead.'
+  )
 }
 
 /**
@@ -72,9 +81,9 @@ export function assertSandboxedMeetingsFolder({ meetingsFolder, homeDir, tmpDir 
  *
  * @param {{ evaluate: (fn: () => unknown) => Promise<unknown> }} page a Playwright page connected to the app over CDP
  * @param {{ homeDir?: string, tmpDir?: string }} [overrides] test-only escape hatch; production callers take the defaults
- * @returns {Promise<true>}
+ * @returns {Promise<void>}
  */
 export async function assertAttachedAppIsSandboxed(page, { homeDir = homedir(), tmpDir = tmpdir() } = {}) {
   const meetingsFolder = await page.evaluate(async () => (await window.toto.getSettings()).resolvedMeetingsFolder)
-  return assertSandboxedMeetingsFolder({ meetingsFolder, homeDir, tmpDir })
+  assertSandboxedMeetingsFolder({ meetingsFolder, homeDir, tmpDir })
 }
