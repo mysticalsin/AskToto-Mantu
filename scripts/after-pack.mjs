@@ -135,6 +135,10 @@ export default async function afterPack(context) {
   // A local/CI macOS build intentionally has no Developer ID. Give it a complete ad-hoc signature
   // after the raw byte gate so the DMG/ZIP contains a coherently sealed, launchable app. Tagged
   // customer releases leave this unset and electron-builder performs real signing/notarization next.
+  // ASKTOTO_MAC_SIGN_IDENTITY (M2-0187) makes this hook, not electron-builder, sign with the QA
+  // candidate lane's stable QA certificate instead of ad-hoc: its designated requirement survives
+  // rebuilds, so TCC grants persist across candidates. It is never a Developer ID — customer releases
+  // sign through electron-builder instead, and never set this variable.
   //
   // On a universal build this MUST wait for the merged bundle. Signing each arch sub-build rewrites
   // the _CodeSignature/CodeResources files inside Electron Framework, and @electron/universal then
@@ -145,15 +149,16 @@ export default async function afterPack(context) {
     console.log(`  • afterPack: deferring ad-hoc signature to the merged universal bundle (${arch} sub-build)`)
   }
   if (isMac && !isUniversalSubBuild && process.env.ASKTOTO_ADHOC_SIGN === '1') {
+    const identity = process.env.ASKTOTO_MAC_SIGN_IDENTITY || '-'
     const app = join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
-    console.log(`  • afterPack: applying complete ad-hoc signature to ${app}`)
+    console.log(`  • afterPack: applying complete ${identity === '-' ? 'ad-hoc' : 'QA identity'} signature to ${app}`)
     execFileSync(
       'codesign',
       [
         '--force',
         '--deep',
         '--sign',
-        '-',
+        identity,
         '--timestamp=none',
         '--options',
         'runtime',
