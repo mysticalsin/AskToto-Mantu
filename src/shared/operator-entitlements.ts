@@ -6,6 +6,7 @@
  * false/null/[] per the wire contract, exactly like operator-seat.ts's sanitizers do for the request
  * side of the same contract.
  */
+import { CONNECTOR_KINDS, type ConnectorKind } from './operator-connectors'
 
 // ── Heartbeat response additions ──────────────────────────────────────────────────────────────────
 
@@ -163,16 +164,11 @@ export function operatorGate(
 
 // ── GET /v1/integrations ───────────────────────────────────────────────────────────────────────────
 
-export const OPERATOR_INTEGRATION_KINDS = [
-  'hubspot',
-  'salesforce',
-  'pipedrive',
-  'clickup',
-  'plane',
-  'notion',
-  'custom-mcp'
-] as const
-export type OperatorIntegrationKind = (typeof OPERATOR_INTEGRATION_KINDS)[number]
+/** Derived from the Worker's own catalog (L12-F3, DT1) rather than hand-maintained here, so the two
+ *  lists cannot drift again: a kind added to `CONNECTOR_KINDS` is automatically accepted by
+ *  `parseOperatorIntegration` below with no second edit to remember. */
+export const OPERATOR_INTEGRATION_KINDS = CONNECTOR_KINDS
+export type OperatorIntegrationKind = ConnectorKind
 
 const INTEGRATION_KIND_SET: ReadonlySet<string> = new Set(OPERATOR_INTEGRATION_KINDS)
 
