@@ -178,7 +178,7 @@ export async function provisionCloudflareKeys(
 ): Promise<{ ok: true; last4: string } | { ok: false; error: string; status: number }> {
   // writeVaultKey already certifies gateway privacy before writing a 'cloudflare' row (see
   // isCloudflareVaultPaste), so writing that row first gives one readback and leaves no row
-  // behind at all when it fails, instead of a second, separate check here.
+  // behind at all when it fails.
   const gateway = await writeVaultKey(
     store,
     env,
@@ -229,8 +229,9 @@ export async function handleCloudflareCallback(
   if (!exchanged.ok) return redirectToKeysAfterCloudflareLogin('failed')
   const account = await resolveCloudflareAccount(exchanged.token, env, fetchImpl)
   if (!account.ok) return redirectToKeysAfterCloudflareLogin('failed')
-  // provisionCloudflareKeys never throws: a rejected privacy check comes back as { ok: false },
-  // handled the same as any other provisioning failure below.
+  // A rejected privacy check or invalid input comes back as { ok: false } here and redirects
+  // like any other provisioning failure below; a D1 or crypto failure inside writeVaultKey
+  // still propagates, since none of its store/encryptVault calls are caught.
   const written = await provisionCloudflareKeys(
     store,
     env,
