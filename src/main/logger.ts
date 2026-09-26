@@ -178,6 +178,11 @@ export type AuditEvent =
   | 'brain.commitment.rejected'
   | 'brain.rebuild.aborted'
   | 'brain.corrections.lock_cleared'
+  // M2-0003: index.json exists but cannot be used on this device this session (io / undecryptable /
+  // unsupported / corrupt-kept), and a decoded-but-invalid index was set aside. Content-free: cause/
+  // counts only, never a path, decode reason, or filename.
+  | 'brain.index.unavailable'
+  | 'brain.index.quarantined'
   // Task MI-5: the markdown mirror (main/brain/publish.ts).
   | 'transcript.confidential_set'
   | 'brain.publish.consent'

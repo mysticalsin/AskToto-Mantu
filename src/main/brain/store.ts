@@ -10,6 +10,7 @@ import {
   AccountEntitySchema,
   DealEntitySchema,
   MeetingExtractionSchema,
+  BRAIN_SCHEMA_VERSION,
   type BrainIndex,
   type BrainGraph,
   type PersonEntity,
@@ -17,7 +18,8 @@ import {
   type DealEntity,
   type MeetingExtraction,
   type Confidence,
-  type ProvenantField
+  type ProvenantField,
+  type IndexUnavailableCause
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult } from '../transcripts'
 import { mainLog } from '../logger'
@@ -417,6 +419,76 @@ export function ensureV1Backup(settings: Settings): void {
     // every future correction/entity write until a human intervenes (a hard-refuse would do exactly
     // that, since OneDrive/AV holds are often transient) — the next write's own ensureV1Backup call
     // retries the copy from scratch instead.
+  }
+}
+
+// ── M2-0003 read/replace invariant — type surface (docs/metis-2.0/designs/M2-0003-DESIGN.md) ─────────
+//
+// TDD-through-CI note: this block lands in the RED (tests-only) commit so the new test files can compile
+// under `npm run typecheck`, which CI runs before `npm test`. `classifyIndexBytes` and
+// `indexUnavailableMessage` are pure functions with no callers yet, so they are implemented in full here.
+// `indexUnavailable` is a placeholder that always returns null — `readIndex`/`writeIndex` below are still
+// unchanged (today's rename-on-any-decode-failure behaviour), so nothing is actually tracked as
+// unavailable yet. The next commit replaces this placeholder and readIndex/writeIndex/
+// quarantineUnusableIndex together with the real stat-keyed invariant; no stub code remains afterward.
+
+export class BrainIndexUnavailableError extends Error {
+  override readonly name = 'BrainIndexUnavailableError'
+  // NOT `cause` — that is Error.cause (ES2022).
+  constructor(readonly unavailable: IndexUnavailableCause) {
+    super(`brain index is read-only on this device (${unavailable})`)
+  }
+}
+
+export const INDEX_AUTO_SNAPSHOT_CAP = 5
+export const INDEX_IO_RETRY_MS = 30_000
+
+type IndexLoad =
+  | { kind: 'ready'; index: BrainIndex }
+  | { kind: 'absent' }
+  | { kind: 'corrupt' } // decoded, but not a valid index for this build
+  | { kind: 'unavailable'; cause: IndexUnavailableCause; detail?: string } // detail: log-only (errno / decode reason)
+
+/** Pure classification of index.json bytes. No filesystem writes. */
+export function classifyIndexBytes(buf: Buffer): IndexLoad {
+  if (buf.length === 0) return { kind: 'absent' } // torn to zero bytes: nothing to preserve (unchanged)
+  const decoded = decodeSavedResult(buf)
+  if (!decoded.ok) return { kind: 'unavailable', cause: 'undecryptable', detail: decoded.reason }
+  let raw: unknown
+  try {
+    raw = JSON.parse(decoded.text)
+  } catch {
+    return { kind: 'corrupt' }
+  }
+  const parsed = BrainIndexSchema.safeParse(raw)
+  if (parsed.success) return { kind: 'ready', index: parsed.data }
+  const v = (raw as { schema_version?: unknown } | null)?.schema_version
+  if (typeof v === 'number' && v > BRAIN_SCHEMA_VERSION) return { kind: 'unavailable', cause: 'unsupported' }
+  return { kind: 'corrupt' }
+}
+
+/** Non-null while an existing index.json cannot be used here: the index is read-only for the session.
+ *  RED-phase placeholder (see block comment above) — always null until the next commit. */
+export function indexUnavailable(_s: Settings): IndexUnavailableCause | null {
+  return null
+}
+
+/** User-facing, content-free explanation for brainStatus.error. */
+export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
+  switch (cause) {
+    case 'undecryptable':
+      return "Mantu Intelligence can't read its index on this device: it was encrypted with a key this " +
+        'device doesn\'t have (another device, or a keychain that is unavailable). Nothing was changed ' +
+        'or deleted. Indexing is paused on this device.'
+    case 'io':
+      return "Mantu Intelligence couldn't read its index file just now (it may still be downloading from " +
+        'OneDrive). Nothing was changed. Indexing resumes automatically once the file can be read.'
+    case 'unsupported':
+      return "Mantu Intelligence's index was written by a newer version of Métis. Nothing was changed. " +
+        'Update Métis on this device to resume indexing.'
+    case 'corrupt-kept':
+      return "Mantu Intelligence's index is damaged and the automatic repair limit for this folder has " +
+        'been reached. Nothing was deleted. Indexing is paused on this device.'
   }
 }
 
