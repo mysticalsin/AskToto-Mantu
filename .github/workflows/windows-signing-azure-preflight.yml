@@ -1,0 +1,55 @@
+name: Windows Azure signing preflight
+
+# Diagnostic only. Signs one throwaway canary PE with the real Public Trust identity and checks it
+# against the Public Trust EKU policy. Cannot build, sign, or publish Metis, and touches no WIN_CSC_*
+# PFX secret at all.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact 40-character current main commit approved for this diagnostic
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: windows-signing-azure-preflight
+  cancel-in-progress: false
+
+jobs:
+  azure-identity:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    environment: windows-signing
+    env:
+      METIS_PREFLIGHT_EXPECTED_SHA: ${{ inputs.expected_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Require exact reviewed main revision before any credential
+        run: node scripts/windows-signing-identity-preflight.mjs --check-revision
+      - name: Run dependency-free synthetic security regressions without secrets
+        run: node --test scripts/windows-signing-azure-probe.test.mjs
+      - name: Install the pinned Microsoft ArtifactSigning PowerShell module
+        run: node scripts/artifact-signing-module.mjs install
+      - name: Azure login for the signing probe (OIDC, no client secret in the repo)
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ secrets.WIN_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.WIN_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.WIN_AZURE_SUBSCRIPTION_ID }}
+      - name: Probe Azure signing with one canary signature (no app build, no publish)
+        run: node scripts/windows-signing-azure-probe.mjs
+        env:
+          WIN_AZURE_SIGNING_ENDPOINT: ${{ vars.WIN_AZURE_SIGNING_ENDPOINT }}
+          WIN_AZURE_SIGNING_ACCOUNT: ${{ vars.WIN_AZURE_SIGNING_ACCOUNT }}
+          WIN_AZURE_CERT_PROFILE: ${{ vars.WIN_AZURE_CERT_PROFILE }}
+          WIN_AZURE_IDENTITY_EKU: ${{ vars.WIN_AZURE_IDENTITY_EKU }}
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}

@@ -99,4 +99,60 @@ describe('MQA-300 release signature verification', () => {
       expect(windowsSignatureProblem(signature, valid.CommonName)).not.toBeNull()
     }
   })
+
+  // Design §2.5: azure mode adds an EKU policy on top of the unchanged Status/subject/timestamp checks
+  // above; pfx mode (the default policy, and every call above that omits a third argument) is untouched.
+  describe('azure-mode EKU policy (design §2.5)', () => {
+    const PUBLIC_TRUST = '1.3.6.1.4.1.311.97.1.0'
+    const IDENTITY = '1.3.6.1.4.1.311.97.42.7'
+    const LIFETIME_SIGNING = '1.3.6.1.4.1.311.10.3.13'
+    const azureValid = { ...valid, EkuOids: [PUBLIC_TRUST, IDENTITY] }
+
+    it('is not applied under the default (pfx) policy, even with no EKU data at all', () => {
+      expect(windowsSignatureProblem(valid, valid.CommonName)).toBeNull()
+      expect(windowsSignatureProblem({ ...valid, EkuOids: undefined }, valid.CommonName, { mode: 'pfx' })).toBeNull()
+    })
+
+    it('passes an azure signature carrying the Public Trust EKU', () => {
+      expect(windowsSignatureProblem(azureValid, valid.CommonName, { mode: 'azure' })).toBeNull()
+    })
+
+    it('requires the Public Trust EKU in azure mode', () => {
+      expect(windowsSignatureProblem({ ...valid, EkuOids: [IDENTITY] }, valid.CommonName, { mode: 'azure' }))
+        .toContain(PUBLIC_TRUST)
+    })
+
+    it('rejects the lifetime-signing EKU of a Public Trust Test certificate even alongside Public Trust', () => {
+      const testProfile = { ...valid, EkuOids: [PUBLIC_TRUST, LIFETIME_SIGNING] }
+      expect(windowsSignatureProblem(testProfile, valid.CommonName, { mode: 'azure' })).toContain('lifetime-signing')
+    })
+
+    it('optionally requires the exact configured identity EKU', () => {
+      expect(windowsSignatureProblem(azureValid, valid.CommonName, { mode: 'azure', identityEku: IDENTITY })).toBeNull()
+      expect(windowsSignatureProblem(azureValid, valid.CommonName, { mode: 'azure', identityEku: '1.3.6.1.4.1.311.97.99.9' }))
+        .toContain('identity EKU')
+      // No identityEku configured: only the Public Trust / lifetime-signing checks apply.
+      expect(windowsSignatureProblem(azureValid, valid.CommonName, { mode: 'azure' })).toBeNull()
+    })
+
+    it('fails closed on missing or malformed EKU output in azure mode', () => {
+      for (const ekuOids of [undefined, null, 'not-an-array', {}]) {
+        expect(windowsSignatureProblem({ ...valid, EkuOids: ekuOids }, valid.CommonName, { mode: 'azure' }))
+          .toContain('enhanced key usage')
+      }
+    })
+
+    it('still enforces Status/subject/timestamp before ever reaching the EKU checks', () => {
+      expect(windowsSignatureProblem({ ...azureValid, Status: 'NotTrusted' }, valid.CommonName, { mode: 'azure' }))
+        .toContain('NotTrusted')
+      expect(windowsSignatureProblem({ ...azureValid, TimeStamperSubject: '' }, valid.CommonName, { mode: 'azure' }))
+        .toContain('timestamp')
+    })
+  })
+
+  it('emits the signer certificate EKU OID list alongside the existing Authenticode fields', () => {
+    const command = windowsSignatureCommand('Metis-Setup.exe')
+    expect(command).toContain("$ext.Oid.Value -eq '2.5.29.37'")
+    expect(command).toContain('EkuOids=$ekuOids')
+  })
 })

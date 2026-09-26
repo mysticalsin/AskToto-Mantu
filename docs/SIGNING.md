@@ -19,14 +19,17 @@ The repo can enforce build gates and package shapes. It cannot create Tony's cer
 | Channel | Command | Hard gates |
 |---|---|---|
 | macOS direct | `npm run release` | `GH_TOKEN` or `GITHUB_TOKEN`, `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
-| Windows direct | `npm run release:win` | `GH_TOKEN` or `GITHUB_TOKEN`, `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`, `WIN_CSC_EXPECTED_SUBJECT` |
+| Windows direct (`WIN_SIGNING_MODE=pfx`) | `npm run release:win` | `GH_TOKEN` or `GITHUB_TOKEN`, `WIN_SIGNING_MODE=pfx`, `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`, `WIN_CSC_EXPECTED_SUBJECT` |
+| Windows direct (`WIN_SIGNING_MODE=azure`) | `npm run release:win` | `GH_TOKEN` or `GITHUB_TOKEN`, `WIN_SIGNING_MODE=azure`, `WIN_AZURE_SIGNING_ENDPOINT`, `WIN_AZURE_SIGNING_ACCOUNT`, `WIN_AZURE_CERT_PROFILE`, `WIN_AZURE_PUBLISHER_NAME`, `WIN_CSC_EXPECTED_SUBJECT`, an `azure/login` OIDC session |
 | Mac App Store | `MAS_PROVISIONING_PROFILE=/path/profile.provisionprofile npm run release:mas` | `CSC_LINK`, `CSC_KEY_PASSWORD`, existing `MAS_PROVISIONING_PROFILE` file |
 | Microsoft Store | `npm run release:win:store` | AppX package builds locally; Microsoft signs Store-submitted packages after upload |
 
 The tag workflow mirrors the direct-release gates with no ad-hoc exception: missing Apple
 `CSC_*` / `APPLE_*` secrets fail the macOS job before it builds or uploads an artifact. The public
-release accepts only Developer ID-signed, notarized macOS artifacts; Windows `WIN_CSC_*` remains a
-hard fail. Local ad-hoc packages are QA-only and must never be uploaded to the public release feed.
+release accepts only Developer ID-signed, notarized macOS artifacts; on Windows, a missing, invalid,
+ambiguous, or incomplete-for-its-mode `WIN_SIGNING_MODE` remains a hard fail — see §Windows Direct
+Distribution below. Local ad-hoc packages are QA-only and must never be uploaded to the public release
+feed.
 
 Every command above also runs two native-binary provisioning gates first: `scripts/check-ffmpeg-sidecar.mjs`
 (the LGPL decoder sidecar) and `scripts/check-sherpa-platform.mjs` (the Parakeet on-device ASR addon for
@@ -97,15 +100,24 @@ Review risk to test before submission:
 
 Verified: Microsoft says public Win32 MSI/EXE Store submissions are not re-signed by Microsoft, and direct public installers should be signed by a trusted certificate. See [Microsoft code signing options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options).
 
+Two signing modes, chosen explicitly by the `WIN_SIGNING_MODE` repo/environment **variable** (never
+inferred from which secrets happen to be set — see `scripts/lib/windows-signing-mode.mjs`). The release
+job (`.github/workflows/release.yml`, `release-windows`) refuses to publish an unsigned Windows release
+whenever the mode is missing, invalid, ambiguous (inputs for both modes present at once), or incomplete
+for the mode selected.
+
+### Mode: `pfx` (today's default — internal self-signed certificate)
+
 Needed owner inputs:
 
-- Authenticode `.pfx` certificate from a trusted CA, or a future wired Azure Artifact Signing flow.
+- Authenticode `.pfx` certificate.
 - GitHub token that can publish to `mysticalsin/Metis-Releases`.
 
 Environment:
 
 ```powershell
 $env:GH_TOKEN="..."
+$env:WIN_SIGNING_MODE="pfx"
 $env:WIN_CSC_LINK="C:\secure\MantuCodeSigning.pfx"
 $env:WIN_CSC_KEY_PASSWORD="..."
 $env:WIN_CSC_EXPECTED_SUBJECT="<exact certificate Subject or common name>"
@@ -117,6 +129,63 @@ The Windows tag job now runs:
 ```bash
 node scripts/verify-signing.mjs
 ```
+
+### Mode: `azure` (Microsoft Artifact Signing, formerly Trusted Signing — Public Trust)
+
+Public-trust signing with no certificate file and no signing identity checked into this repo: the
+release job authenticates to Azure over OIDC (`azure/login`, no client secret) and signs through a
+pinned PowerShell module. See the decision brief and integration design under
+`/Users/tony/AI-Brain-build/metis-2.0-exec/tasks/WINDOWS-SIGNING/` for the full trade-off analysis (cost,
+entity eligibility, the publisher-name migration) — the summary below is the operator checklist only.
+
+Needed owner/IT inputs, in order:
+
+1. **Choose the signing entity and confirm eligibility** (legal/Tony). Complete Artifact Signing identity
+   validation (Public Trust) for that entity and record the exact certificate **Subject** (CN/O/L/S/C)
+   and its durable subscriber EKU (`1.3.6.1.4.1.311.97.<…>`). Owner decision, 2026-09-24: the signing
+   entity is **MANTU GROUP SA**; the identity-validation outcome and exact certificate CN are **not yet
+   available** — do not write a specific CN here until validation completes. Use the placeholder below.
+2. **Create the Azure side** (Tony/IT): an Artifact Signing account in a region (this fixes the
+   endpoint, e.g. `https://weu.codesigning.azure.net` or `https://swn.codesigning.azure.net`) and a
+   **Public Trust** certificate profile — not Public Trust *Test*, whose lifetime EKU
+   (`1.3.6.1.4.1.311.10.3.13`) `verify-signing`/the azure probe reject outright. Create an Entra
+   application (or user-assigned managed identity) with a **federated credential** whose subject is
+   exactly `repo:mysticalsin/AskToto-Mantu:environment:windows-signing`, and assign it the **Artifact
+   Signing Certificate Profile Signer** role on the profile (or account).
+3. **Create the GitHub environment** (Tony, repo settings → Environments): `windows-signing`, with
+   deployments restricted to `v*` tags (and optionally a required reviewer). Add:
+   - Environment **secrets**: `WIN_AZURE_CLIENT_ID`, `WIN_AZURE_TENANT_ID`, `WIN_AZURE_SUBSCRIPTION_ID`
+     (used only as `azure/login` inputs — never as build-step env; the app's own SSO config reads
+     `AZURE_CLIENT_ID`/`AZURE_TENANT_ID` at runtime, so these must never leak into a launched build).
+   - Environment **variables**: `WIN_AZURE_SIGNING_ENDPOINT`, `WIN_AZURE_SIGNING_ACCOUNT`,
+     `WIN_AZURE_CERT_PROFILE`, `WIN_AZURE_PUBLISHER_NAME`, `WIN_UPDATE_PUBLISHER_NAMES` (JSON array —
+     see §Publisher-name migration below), `WIN_AZURE_IDENTITY_EKU` (optional, the durable subscriber
+     EKU from step 1).
+   - `WIN_CSC_EXPECTED_SUBJECT` set to the new certificate's exact CN
+     (`<Artifact Signing certificate CN — fill in once identity validation completes>`).
+4. **Dispatch the standalone Azure preflight** (`windows-signing-azure-preflight.yml`, manual, main-only,
+   exact-SHA) and require `PASS` before relying on it in a real release.
+5. **Flip `WIN_SIGNING_MODE=azure`** (repo/environment variable) and push a `v*` tag. The release must
+   pass the fail-fast Azure canary probe, `verify-signing` (Valid signature, matching CN, trusted
+   timestamp, Public Trust EKU present, test-profile EKU absent) and `check-update-publisher` before it
+   ever reaches the draft-then-publish step.
+6. **Confirm the update path** on a clean, unmanaged public Windows machine: the current public Latest
+   release auto-updates to the new one, and the fresh install's `resources\app-update.yml` carries the
+   intended publisher pin.
+
+None of steps 1–3 can be done from this repo — they need an Azure subscription, a paid Artifact Signing
+plan, and GitHub repo-admin access. Until they are done, `WIN_SIGNING_MODE=azure` fails closed with
+`AZURE_CONFIG_INCOMPLETE` (or `SIGNING_MODE_REQUIRED` if the variable itself is unset) — it does not fall
+back to `pfx` or to an unsigned build.
+
+### Publisher-name migration (either mode)
+
+The first Windows release signed under a new identity fixes the pin every later update must match — see
+`scripts/check-update-publisher.mjs`, which fails a release whose installs would then reject its own
+next update. No public installer on the feed today carries any pin at all (all of them are unsigned), so
+moving straight to `azure` needs no transitional release for the public feed. A fleet still running a
+`CN=Mantu`-signed build needs `WIN_UPDATE_PUBLISHER_NAMES` to list **both** names for one release before
+dropping the old one — see the integration design §3.3 for the exact sequencing.
 
 ## Microsoft Store
 

@@ -5,6 +5,7 @@
 
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { resolveWindowsSigningMode, describeSigningModeFailure } from './lib/windows-signing-mode.mjs'
 
 const mode = process.argv[2] || ''
 
@@ -46,13 +47,15 @@ switch (mode) {
     requireAny(['GH_TOKEN', 'GITHUB_TOKEN'], 'GitHub release token')
     requireAll(APPLE_RELEASE_SECRETS, 'macOS Developer ID release')
     break
-  case 'win':
-    requireAny(['GH_TOKEN', 'GITHUB_TOKEN'], 'GitHub release token')
-    requireAll(
-      ['WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD', 'WIN_CSC_EXPECTED_SUBJECT'],
-      'Windows Authenticode release'
-    )
+  case 'win': {
+    // Thin CLI over the shared pfx/azure resolver: one source of truth, reused as-is by
+    // scripts/electron-builder-win.mjs to build the signing config overlay. Never prints an env
+    // value, only the fixed failure code and the names of the variables it names.
+    const resolved = resolveWindowsSigningMode(process.env)
+    if (!resolved.ok) fail(describeSigningModeFailure(resolved))
+    else console.log(`[check:release-secrets] OK - win (${resolved.mode})`)
     break
+  }
   case 'mas':
     requireAll(['CSC_LINK', 'CSC_KEY_PASSWORD'], 'Mac App Store app signing')
     requireFileEnv('MAS_PROVISIONING_PROFILE', 'Mac App Store provisioning profile')
@@ -67,4 +70,5 @@ switch (mode) {
 }
 
 if (process.exitCode) process.exit(process.exitCode)
-console.log(`[check:release-secrets] OK - ${mode}`)
+// 'win' already printed its own richer OK line above (with the resolved mode).
+if (mode !== 'win') console.log(`[check:release-secrets] OK - ${mode}`)

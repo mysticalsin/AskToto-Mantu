@@ -198,11 +198,26 @@ function killApp() {
   if (isWindows) ps("Get-Process -Name 'Metis*' -ErrorAction SilentlyContinue | Stop-Process -Force")
 }
 
+/**
+ * Windows signing design F18: this gate historically forwarded the WHOLE build env to the app it
+ * launches, and the app reads AZURE_CLIENT_ID/AZURE_TENANT_ID from its own env as live SSO config
+ * (src/main/auth.ts). Once the release job's build step can carry Windows signing inputs
+ * (WIN_SIGNING_MODE=azure — see docs/SIGNING.md), a stray AZURE_-, WIN_AZURE_- or WIN_CSC_-prefixed
+ * variable would silently become the launched app's own configuration instead of staying release-job-only.
+ * Strip those alongside the existing provider-API-key scrub, which exists for the same reason: a real
+ * secret must never change the path this gate is measuring.
+ */
+export function scrubLaunchEnv(env) {
+  const clean = { ...env }
+  for (const key of Object.keys(clean)) {
+    if (/_API_KEY$/i.test(key) || /^(AZURE_|WIN_AZURE_|WIN_CSC_)/i.test(key)) delete clean[key]
+  }
+  return clean
+}
+
 // A clean profile on purpose: a leftover profile can hide a first-run crash.
 const userData = mkdtempSync(join(tmpdir(), 'metis-launch-'))
-const env = { ...process.env, ASKTOTO_USERDATA: userData, ELECTRON_ENABLE_LOGGING: '1' }
-// A real provider key changes startup routing; the gate must measure the shipped default path.
-for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
+const env = scrubLaunchEnv({ ...process.env, ASKTOTO_USERDATA: userData, ELECTRON_ENABLE_LOGGING: '1' })
 
 console.log(`[check:launch] launching ${target}`)
 console.log(`[check:launch]   clean profile: ${userData}`)

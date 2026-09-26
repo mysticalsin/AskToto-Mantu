@@ -51,13 +51,7 @@ function result(code, revision = 'unknown') {
   return { ok: code === 'PASS' || code === 'REVISION_ACCEPTED', code, revision }
 }
 
-export function checkTrustedRevision(env = process.env, revisionCommand = execFileSync) {
-  const revision = SHA.test(env.GITHUB_SHA || '') ? env.GITHUB_SHA : 'unknown'
-  if (env.GITHUB_ACTIONS !== 'true' || env.GITHUB_EVENT_NAME !== 'workflow_dispatch' ||
-      env.GITHUB_REPOSITORY !== 'mysticalsin/AskToto-Mantu' || env.GITHUB_REF !== 'refs/heads/main' ||
-      revision === 'unknown' || env.METIS_PREFLIGHT_EXPECTED_SHA !== revision) {
-    return result('REVISION_REJECTED', revision)
-  }
+function verifiedHeadRevision(env, revision, revisionCommand) {
   try {
     const actual = revisionCommand('git', ['rev-parse', '--verify', 'HEAD'], {
       encoding: 'utf8', timeout: 10_000, maxBuffer: 1_024, killSignal: 'SIGKILL',
@@ -69,6 +63,31 @@ export function checkTrustedRevision(env = process.env, revisionCommand = execFi
   } catch {
     return result('REVISION_UNAVAILABLE', revision)
   }
+}
+
+export function checkTrustedRevision(env = process.env, revisionCommand = execFileSync) {
+  const revision = SHA.test(env.GITHUB_SHA || '') ? env.GITHUB_SHA : 'unknown'
+  if (env.GITHUB_ACTIONS !== 'true' || env.GITHUB_EVENT_NAME !== 'workflow_dispatch' ||
+      env.GITHUB_REPOSITORY !== 'mysticalsin/AskToto-Mantu' || env.GITHUB_REF !== 'refs/heads/main' ||
+      revision === 'unknown' || env.METIS_PREFLIGHT_EXPECTED_SHA !== revision) {
+    return result('REVISION_REJECTED', revision)
+  }
+  return verifiedHeadRevision(env, revision, revisionCommand)
+}
+
+// Release-gate context (design §2.6): a tag push, not a manually approved dispatch. There is no
+// separate operator-approved expected SHA here — the tag push is itself the trigger, and this only
+// confirms the checkout actually matches the SHA GitHub says triggered the run. Rejects a
+// workflow_dispatch context exactly as checkTrustedRevision rejects a push context (each mode
+// requires its own event_name, so the two contexts are mutually exclusive by construction).
+export function checkReleaseRevision(env = process.env, revisionCommand = execFileSync) {
+  const revision = SHA.test(env.GITHUB_SHA || '') ? env.GITHUB_SHA : 'unknown'
+  if (env.GITHUB_ACTIONS !== 'true' || env.GITHUB_EVENT_NAME !== 'push' ||
+      env.GITHUB_REPOSITORY !== 'mysticalsin/AskToto-Mantu' || !/^refs\/tags\/v/.test(env.GITHUB_REF || '') ||
+      revision === 'unknown') {
+    return result('REVISION_REJECTED', revision)
+  }
+  return verifiedHeadRevision(env, revision, revisionCommand)
 }
 
 export function evaluateIdentityReport(report, now = Date.now()) {
@@ -113,9 +132,9 @@ function supportedCredential(value) {
 }
 
 export function runSigningIdentityPreflight({ env = process.env, platform = process.platform,
-  now, revisionCommand = execFileSync, probe = spawnSync } = {}) {
+  now, revisionCommand = execFileSync, probe = spawnSync, revisionCheck = checkTrustedRevision } = {}) {
   if (platform !== 'win32') return result('UNSUPPORTED_PLATFORM')
-  const revision = checkTrustedRevision(env, revisionCommand)
+  const revision = revisionCheck(env, revisionCommand)
   if (!revision.ok) return revision
   const fail = (code) => result(code, revision.revision)
   if (['WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD', 'WIN_CSC_EXPECTED_SUBJECT']
@@ -164,7 +183,9 @@ export function runSigningIdentityPreflight({ env = process.env, platform = proc
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   let outcome
   if (process.argv.length === 3 && process.argv[2] === '--check-revision') outcome = checkTrustedRevision()
-  else if (process.argv.length === 2) outcome = runSigningIdentityPreflight()
+  else if (process.argv.length === 3 && process.argv[2] === '--release-gate') {
+    outcome = runSigningIdentityPreflight({ revisionCheck: checkReleaseRevision })
+  } else if (process.argv.length === 2) outcome = runSigningIdentityPreflight()
   else outcome = result('ARGUMENTS_UNSUPPORTED')
   console.log(JSON.stringify(outcome))
   process.exitCode = outcome.ok ? 0 : 1

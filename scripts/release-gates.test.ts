@@ -25,7 +25,9 @@ describe('installer branding', () => {
     expect(overlay).toContain("!node_modules/sherpa-onnx-linux-*{,/**/*}")
     expect(overlay).toContain("!node_modules/@img/sharp-linux-*{,/**/*}")
 
-    for (const script of ['dist:win', 'dist:win:appx', 'release:build:win', 'release:win:store']) {
+    // release:build:win is intentionally excluded here: it now goes through the mode-aware config-overlay
+    // wrapper (scripts/electron-builder-win.mjs), asserted separately below, not the literal filename.
+    for (const script of ['dist:win', 'dist:win:appx', 'release:win:store']) {
       expect(pkg.scripts[script]).toContain('--config electron-builder.win.yml')
     }
     const installerBuilder = readFileSync(join(root, 'scripts', 'build-installers.mjs'), 'utf8')
@@ -160,18 +162,90 @@ describe('direct release signing gates', () => {
     expect(workflow).not.toContain('METIS_EMBED_CLOUDFLARE_KEY:')
   })
 
-  it('requires an explicit expected Windows signer identity', () => {
-    const result = spawnSync(process.execPath, [join(__dirname, 'check-release-secrets.mjs'), 'win'], {
-      encoding: 'utf8',
-      env: {
-        PATH: process.env.PATH || '',
-        GH_TOKEN: 'test-token',
-        WIN_CSC_LINK: 'test-certificate',
-        WIN_CSC_KEY_PASSWORD: 'test-password'
+  // Successor to the old single "requires an explicit expected Windows signer identity" test: the gate
+  // is now mode-aware (scripts/lib/windows-signing-mode.mjs), so "missing subject" is one row of a
+  // fail-closed matrix rather than the only failure shape. Every row below still asserts the same thing
+  // that test asserted (status 1, WIN_CSC_EXPECTED_SUBJECT named), plus the modes that did not exist yet.
+  describe('mode-aware Windows signing gate (pfx / azure / both / neither)', () => {
+    const PFX_COMPLETE = {
+      WIN_SIGNING_MODE: 'pfx',
+      WIN_CSC_LINK: 'synthetic-pkcs12-fixture',
+      WIN_CSC_KEY_PASSWORD: 'synthetic-password-never-log',
+      WIN_CSC_EXPECTED_SUBJECT: 'synthetic-publisher-never-log'
+    }
+    const AZURE_COMPLETE = {
+      WIN_SIGNING_MODE: 'azure',
+      WIN_AZURE_SIGNING_ENDPOINT: 'https://weu.codesigning.azure.net',
+      WIN_AZURE_SIGNING_ACCOUNT: 'synthetic-account',
+      WIN_AZURE_CERT_PROFILE: 'synthetic-profile',
+      WIN_AZURE_PUBLISHER_NAME: 'synthetic-publisher-never-log',
+      WIN_CSC_EXPECTED_SUBJECT: 'synthetic-publisher-never-log'
+    }
+
+    function runGate(env: Record<string, string>) {
+      return spawnSync(process.execPath, [join(__dirname, 'check-release-secrets.mjs'), 'win'], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH || '', GH_TOKEN: 'test-token', ...env }
+      })
+    }
+
+    it('accepts a complete pfx configuration', () => {
+      const result = runGate(PFX_COMPLETE)
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).toContain('OK - win (pfx)')
+    })
+
+    it('accepts a complete azure configuration', () => {
+      const result = runGate(AZURE_COMPLETE)
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).toContain('OK - win (azure)')
+    })
+
+    it('refuses when inputs for both modes are present (ambiguous), naming variables but never values', () => {
+      for (const env of [
+        { ...PFX_COMPLETE, ...AZURE_COMPLETE, WIN_SIGNING_MODE: 'pfx' },
+        { ...PFX_COMPLETE, ...AZURE_COMPLETE, WIN_SIGNING_MODE: 'azure' }
+      ]) {
+        const result = runGate(env)
+        expect(result.status).toBe(1)
+        expect(result.stderr).toContain('refusing to publish an unsigned Windows release')
+        for (const secret of ['synthetic-pkcs12-fixture', 'synthetic-password-never-log', 'synthetic-publisher-never-log']) {
+          expect(result.stderr).not.toContain(secret)
+        }
       }
     })
-    expect(result.status).toBe(1)
-    expect(result.stderr).toContain('WIN_CSC_EXPECTED_SUBJECT')
+
+    it('refuses when no signing mode is configured at all', () => {
+      const result = runGate({})
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('refusing to publish an unsigned Windows release')
+    })
+
+    it('refuses an incomplete pfx configuration, naming the missing expected-subject variable', () => {
+      const result = runGate({
+        WIN_SIGNING_MODE: 'pfx',
+        WIN_CSC_LINK: 'synthetic-pkcs12-fixture',
+        WIN_CSC_KEY_PASSWORD: 'synthetic-password-never-log'
+      })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('WIN_CSC_EXPECTED_SUBJECT')
+      expect(result.stderr).toContain('refusing to publish an unsigned Windows release')
+    })
+
+    it('refuses an incomplete azure configuration', () => {
+      const result = runGate({ WIN_SIGNING_MODE: 'azure', WIN_AZURE_SIGNING_ENDPOINT: AZURE_COMPLETE.WIN_AZURE_SIGNING_ENDPOINT })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('refusing to publish an unsigned Windows release')
+    })
+  })
+
+  it('release:build:win runs through the mode-aware config-overlay wrapper', () => {
+    expect(pkg.scripts['release:build:win']).toContain('node scripts/electron-builder-win.mjs')
+    const wrapper = readFileSync(join(root, 'scripts', 'electron-builder-win.mjs'), 'utf8')
+    expect(wrapper).toContain("'--config'")
+    // The overlay's `extends` value is built in scripts/lib/windows-signing-mode.mjs; the wrapper's own
+    // contract is passing it the real base config path rather than a guessed or hardcoded one.
+    expect(wrapper).toContain('electron-builder.win.yml')
   })
 
   it('verifies produced signatures in both direct release commands', () => {

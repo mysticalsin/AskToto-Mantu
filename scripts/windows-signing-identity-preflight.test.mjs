@@ -7,7 +7,8 @@ import { windowsPowerShell } from './lib/signing-policy.mjs'
 import {
   evaluateIdentityReport,
   runSigningIdentityPreflight,
-  checkTrustedRevision
+  checkTrustedRevision,
+  checkReleaseRevision
 } from './windows-signing-identity-preflight.mjs'
 
 const SHA = '1'.repeat(40)
@@ -246,6 +247,88 @@ test('compares actual checkout SHA, without executing a shell or exposing git er
   assert.equal(called, true)
   assert.equal(checked.code, 'REVISION_ACCEPTED')
 })
+
+// --release-gate (design §2.6): a tag push, not an operator-approved workflow_dispatch. Reuses the
+// same evaluateIdentityReport and PowerShell probe; only the revision context check differs.
+const TAG_REF = 'refs/tags/v1.9.7'
+const releaseEnv = () => ({
+  GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'push',
+  GITHUB_REPOSITORY: 'mysticalsin/AskToto-Mantu', GITHUB_REF: TAG_REF, GITHUB_SHA: SHA,
+  WIN_CSC_LINK: CERT, WIN_CSC_KEY_PASSWORD: PASSWORD, WIN_CSC_EXPECTED_SUBJECT: SUBJECT,
+  SystemRoot: 'C:\\Windows', TEMP: 'C:\\Temp', NODE_OPTIONS: RAW, GH_TOKEN: RAW,
+  PSModulePath: RAW, HTTP_PROXY: RAW
+})
+function runReleaseGate(options = {}) {
+  return runSigningIdentityPreflight({ env: releaseEnv(), platform: 'win32', now: NOW,
+    revisionCommand: git, probe: () => ok(), revisionCheck: checkReleaseRevision, ...options })
+}
+
+test('MQA-release-gate accepts a tag push at the checked-out HEAD with no operator-approved SHA needed', () => {
+  assert.deepEqual(checkReleaseRevision(releaseEnv(), git), { ok: true, code: 'REVISION_ACCEPTED', revision: SHA })
+  assert.deepEqual(runReleaseGate(), { ok: true, code: 'PASS', revision: SHA })
+})
+
+test('MQA-release-gate never requires METIS_PREFLIGHT_EXPECTED_SHA, unlike the dispatch gate', () => {
+  const env = releaseEnv()
+  assert.equal('METIS_PREFLIGHT_EXPECTED_SHA' in env, false)
+  assert.equal(checkReleaseRevision(env, git).ok, true)
+})
+
+for (const [key, value] of [
+  ['GITHUB_ACTIONS', 'false'], ['GITHUB_EVENT_NAME', 'workflow_dispatch'], ['GITHUB_EVENT_NAME', 'pull_request'],
+  ['GITHUB_REPOSITORY', 'elsewhere/fork'], ['GITHUB_REF', 'refs/heads/main'], ['GITHUB_REF', 'refs/tags/notv1'],
+  ['GITHUB_REF', 'refs/pull/1/merge'], ['GITHUB_SHA', RAW]
+]) {
+  test(`release-gate rejects untrusted revision context ${key}=${value}`, () => {
+    const result = runSigningIdentityPreflight({ env: { ...releaseEnv(), [key]: value }, platform: 'win32', now: NOW,
+      revisionCheck: checkReleaseRevision, probe: () => assert.fail('must not load credential') })
+    assert.equal(result.code, 'REVISION_REJECTED')
+    assert.equal(result.ok, false)
+    privateResult(result)
+  })
+}
+
+test('each revision-check mode rejects the other mode\'s trigger context', () => {
+  // A workflow_dispatch context (accepted by checkTrustedRevision) is rejected by checkReleaseRevision.
+  assert.equal(checkReleaseRevision(env(), git).code, 'REVISION_REJECTED')
+  // A tag-push context (accepted by checkReleaseRevision) is rejected by checkTrustedRevision.
+  assert.equal(checkTrustedRevision(releaseEnv(), git).code, 'REVISION_REJECTED')
+})
+
+test('release-gate compares actual checkout SHA, without executing a shell or exposing git errors', () => {
+  assert.equal(checkReleaseRevision(releaseEnv(), () => '2'.repeat(40)).code, 'REVISION_REJECTED')
+  const failed = checkReleaseRevision(releaseEnv(), () => { throw new Error(RAW) })
+  assert.equal(failed.code, 'REVISION_UNAVAILABLE')
+  privateResult(failed)
+  let called = false
+  const checked = checkReleaseRevision(releaseEnv(), (command, args, options) => {
+    called = true
+    assert.equal(command, 'git')
+    assert.deepEqual(args, ['rev-parse', '--verify', 'HEAD'])
+    for (const key of ['WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD', 'WIN_CSC_EXPECTED_SUBJECT', 'GH_TOKEN']) {
+      assert.equal(options.env[key], undefined)
+    }
+    return SHA
+  })
+  assert.equal(called, true)
+  assert.equal(checked.code, 'REVISION_ACCEPTED')
+})
+
+test('release-gate CLI mode is wired and exits non-zero off a non-Windows host', () => {
+  const script = fileURLToPath(new URL('./windows-signing-identity-preflight.mjs', import.meta.url))
+  const child = spawnSync(process.execPath, [script, '--release-gate'], { encoding: 'utf8', timeout: 10_000 })
+  assert.equal(child.status, 1)
+  assert.deepEqual(JSON.parse(child.stdout.trim()), { ok: false, code: 'UNSUPPORTED_PLATFORM', revision: 'unknown' })
+})
+
+for (const argv of [['--release-gate', 'extra'], ['--Release-Gate'], ['--release-gate', '--check-revision']]) {
+  test(`unsupported --release-gate argv forms remain rejected: ${JSON.stringify(argv)}`, () => {
+    const script = fileURLToPath(new URL('./windows-signing-identity-preflight.mjs', import.meta.url))
+    const child = spawnSync(process.execPath, [script, ...argv], { encoding: 'utf8', timeout: 10_000 })
+    assert.equal(child.status, 1)
+    assert.deepEqual(JSON.parse(child.stdout.trim()), { ok: false, code: 'ARGUMENTS_UNSUPPORTED', revision: 'unknown' })
+  })
+}
 
 for (const key of ['WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD', 'WIN_CSC_EXPECTED_SUBJECT']) {
   test(`requires ${key} without echoing its value`, () => {

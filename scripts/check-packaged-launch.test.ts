@@ -6,7 +6,8 @@ const fixtures = vi.hoisted(() => ({
   onSpawn: undefined as (() => void) | undefined,
   child: undefined as unknown,
   spawn: vi.fn(),
-  remove: vi.fn()
+  remove: vi.fn(),
+  execFileSync: vi.fn()
 }))
 vi.mock('node:child_process', () => ({
   spawn: (...args: unknown[]) => {
@@ -14,7 +15,7 @@ vi.mock('node:child_process', () => ({
     fixtures.onSpawn?.()
     return fixtures.child
   },
-  execFileSync: vi.fn()
+  execFileSync: (...args: unknown[]) => fixtures.execFileSync(...args)
 }))
 vi.mock('node:fs', () => ({
   existsSync: () => true,
@@ -33,6 +34,9 @@ class FakeChild extends EventEmitter {
   exitCode: number | null = null
   signalCode: NodeJS.Signals | null = null
   unref = vi.fn()
+  // Only read on the Windows path (child.stdout/stderr.on), harmless and unused on the macOS path.
+  stdout = new EventEmitter()
+  stderr = new EventEmitter()
   constructor() {
     super()
     // Keep deliberately injected errors observable without an uncaught EventEmitter error in the
@@ -52,6 +56,7 @@ beforeEach(() => {
   fixtures.onSpawn = undefined
   fixtures.spawn.mockClear()
   fixtures.remove.mockClear()
+  fixtures.execFileSync.mockReset()
   child = new FakeChild()
   fixtures.child = child
   Object.defineProperty(process, 'platform', { value: 'darwin' })
@@ -133,5 +138,36 @@ describe('MQA-318 packaged Mac launch readiness', () => {
     fixtures.audit = event('app.started') + event('app.renderer.ready')
     fixtures.onSpawn = () => setTimeout(() => { fixtures.audit += event(name) }, 1000)
     expect(await runGate()).toBe(1)
+  })
+})
+
+describe('Windows signing design F18: the launched app never sees release-job signing credentials', () => {
+  // The gate is a top-level script (every code path ends in process.exit), so scrubLaunchEnv cannot be
+  // imported and called in isolation without also running the whole launch flow — this exercises it
+  // exactly the way the real Windows release build does: end-to-end, through the actual spawn call.
+  it('the Windows launch path spawns the app with AZURE_ / WIN_AZURE_ / WIN_CSC_ / *_API_KEY vars removed', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    process.argv = [process.execPath, 'check-packaged-launch.mjs', '/fixture/Metis.exe']
+    vi.stubEnv('AZURE_CLIENT_ID', 'client-id-leak')
+    vi.stubEnv('AZURE_TENANT_ID', 'tenant-id-leak')
+    vi.stubEnv('WIN_CSC_LINK', 'pfx-cert-leak')
+    vi.stubEnv('WIN_CSC_KEY_PASSWORD', 'pfx-password-leak')
+    vi.stubEnv('WIN_AZURE_PUBLISHER_NAME', 'publisher-leak')
+    vi.stubEnv('OPENAI_API_KEY', 'sk-test-leak')
+    fixtures.execFileSync.mockImplementation((_cmd: string, args: string[]) =>
+      args.join(' ').includes('MainWindowTitle') ? 'Metis\n' : ''
+    )
+
+    expect(await runGate()).toBe(0)
+
+    expect(fixtures.spawn).toHaveBeenCalledOnce()
+    const spawnedEnv = fixtures.spawn.mock.calls[0][2].env as Record<string, string>
+    for (const leaked of [
+      'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD',
+      'WIN_AZURE_PUBLISHER_NAME', 'OPENAI_API_KEY'
+    ]) {
+      expect(spawnedEnv, leaked).not.toHaveProperty(leaked)
+    }
+    expect(spawnedEnv.ELECTRON_ENABLE_LOGGING).toBe('1')
   })
 })

@@ -203,8 +203,17 @@ jobs:
     needs: release-quality
     runs-on: windows-latest
     timeout-minutes: 120
+    # A GitHub environment (rather than a bare tag-push subject) gives azure/login's OIDC token a fixed
+    # subject, repo:mysticalsin/AskToto-Mantu:environment:windows-signing, instead of one that changes
+    # with every tag (refs/tags/<tag>). It also lets deployments be restricted to v* tags and reviewed.
+    environment: windows-signing
+    permissions:
+      contents: read   # checkout + gh release download ffmpeg-sidecar-v1
+      id-token: write  # azure/login OIDC, used only when WIN_SIGNING_MODE=azure
+    env:
+      WIN_SIGNING_MODE: ${{ vars.WIN_SIGNING_MODE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Verify tag matches package.json version
         shell: bash
         run: node scripts/check-version-parity.mjs
@@ -214,7 +223,7 @@ jobs:
       # the ffmpeg-sidecar-v1 release in this repo. Cache the target binary directory so a
       # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
       # GITHUB_TOKEN, read-only, scoped to this repo) on a cache miss.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: ffmpeg-cache
         with:
           path: resources/ffmpeg/win32-x64
@@ -245,30 +254,57 @@ jobs:
             echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/darwin-x64/ffmpeg /tmp/ffmpeg-darwin-x64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-darwin-x64 /tmp/ffmpeg-win32-x64.exe --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (tracked manifest.json contains SHA256s).'"
             exit 1
           fi
-      - name: Require signing secrets before releasing
-        shell: bash
-        run: |
-          missing=()
-          [ -z "$GH_TOKEN" ] && missing+=(GH_TOKEN)
-          [ -z "$WIN_CSC_LINK" ] && missing+=(WIN_CSC_LINK)
-          [ -z "$WIN_CSC_KEY_PASSWORD" ] && missing+=(WIN_CSC_KEY_PASSWORD)
-          [ -z "$WIN_CSC_EXPECTED_SUBJECT" ] && missing+=(WIN_CSC_EXPECTED_SUBJECT)
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Missing release secret(s): ${missing[*]}. See docs/SIGNING.md - refusing to publish an unsigned Windows release."
-            exit 1
-          fi
+      # Fail-closed mode gate, and the ONLY place WIN_SIGNING_MODE is interpreted (scripts/lib/windows-signing-mode.mjs).
+      # Missing, invalid or ambiguous (inputs for both modes present) or incomplete-for-the-chosen-mode
+      # means refusing to publish an unsigned Windows release. See docs/SIGNING.md.
+      - name: Require signing inputs before releasing
+        run: node scripts/check-release-secrets.mjs win
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_CSC_LINK: ${{ vars.WIN_SIGNING_MODE == 'pfx' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ vars.WIN_SIGNING_MODE == 'pfx' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
-      - uses: actions/setup-node@v4
+          WIN_AZURE_SIGNING_ENDPOINT: ${{ vars.WIN_AZURE_SIGNING_ENDPOINT }}
+          WIN_AZURE_SIGNING_ACCOUNT: ${{ vars.WIN_AZURE_SIGNING_ACCOUNT }}
+          WIN_AZURE_CERT_PROFILE: ${{ vars.WIN_AZURE_CERT_PROFILE }}
+          WIN_AZURE_PUBLISHER_NAME: ${{ vars.WIN_AZURE_PUBLISHER_NAME }}
+          WIN_AZURE_IDENTITY_EKU: ${{ vars.WIN_AZURE_IDENTITY_EKU }}
+          WIN_UPDATE_PUBLISHER_NAMES: ${{ vars.WIN_UPDATE_PUBLISHER_NAMES }}
+      # Fail-fast probes, run BEFORE setup-node/npm ci/the model cache/the ~1 hour build: a broken signing
+      # identity is caught here in minutes instead of after the build (see docs/SIGNING.md, design §4).
+      - name: Probe PFX signing identity chain (no build, no signing)
+        if: vars.WIN_SIGNING_MODE == 'pfx'
+        run: node scripts/windows-signing-identity-preflight.mjs --release-gate
+        env:
+          WIN_CSC_LINK: ${{ vars.WIN_SIGNING_MODE == 'pfx' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ vars.WIN_SIGNING_MODE == 'pfx' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+      - name: Install the pinned Microsoft Artifact Signing module
+        if: vars.WIN_SIGNING_MODE == 'azure'
+        run: node scripts/artifact-signing-module.mjs install
+      - name: Azure login for the signing probe (OIDC)
+        if: vars.WIN_SIGNING_MODE == 'azure'
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ secrets.WIN_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.WIN_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.WIN_AZURE_SUBSCRIPTION_ID }}
+      - name: Probe Azure signing with one canary signature (no app build)
+        if: vars.WIN_SIGNING_MODE == 'azure'
+        run: node scripts/windows-signing-azure-probe.mjs --release-gate
+        env:
+          WIN_AZURE_SIGNING_ENDPOINT: ${{ vars.WIN_AZURE_SIGNING_ENDPOINT }}
+          WIN_AZURE_SIGNING_ACCOUNT: ${{ vars.WIN_AZURE_SIGNING_ACCOUNT }}
+          WIN_AZURE_CERT_PROFILE: ${{ vars.WIN_AZURE_CERT_PROFILE }}
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+          WIN_AZURE_IDENTITY_EKU: ${{ vars.WIN_AZURE_IDENTITY_EKU }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
       # Same model cache as build.yml / release-macos (~1.3 GB fetched by predist:win -> fetch-models.mjs).
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             resources/models
@@ -277,24 +313,48 @@ jobs:
             resources/llama
             resources/local-llm
           key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+      # A build step this far from the probes' azure/login is 60+ minutes away by the time it signs;
+      # refresh the OIDC-derived az CLI session immediately beforehand rather than reuse the probe's.
+      - name: Refresh Azure login immediately before the signing build
+        if: vars.WIN_SIGNING_MODE == 'azure'
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ secrets.WIN_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.WIN_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.WIN_AZURE_SUBSCRIPTION_ID }}
       # Release scripts fetch and verify every runtime asset before packaging. The compact Qwen default
       # is embedded; only explicitly selected larger models retain a reviewed optional download path.
       - run: npm run release:build:win
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_CSC_LINK: ${{ vars.WIN_SIGNING_MODE == 'pfx' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ vars.WIN_SIGNING_MODE == 'pfx' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+          WIN_AZURE_SIGNING_ENDPOINT: ${{ vars.WIN_AZURE_SIGNING_ENDPOINT }}
+          WIN_AZURE_SIGNING_ACCOUNT: ${{ vars.WIN_AZURE_SIGNING_ACCOUNT }}
+          WIN_AZURE_CERT_PROFILE: ${{ vars.WIN_AZURE_CERT_PROFILE }}
+          WIN_AZURE_PUBLISHER_NAME: ${{ vars.WIN_AZURE_PUBLISHER_NAME }}
+          WIN_UPDATE_PUBLISHER_NAMES: ${{ vars.WIN_UPDATE_PUBLISHER_NAMES }}
           # Standard installers authenticate through the licensed operator relay; no shared provider
-          # API credential is passed into this build or embedded in its artifacts.
+          # API credential is passed into this build or embedded in its artifacts. Azure OIDC credentials
+          # (AZURE_CLIENT_ID/TENANT_ID/CLIENT_SECRET/…) are deliberately never set as env here: they would
+          # also reach the packaged app this same build launches (check-packaged-launch.mjs), which reads
+          # AZURE_CLIENT_ID as live SSO config. azure/login above receives them only as action `with:` inputs.
       # Same pre-publication size gate as release-macos.
       - run: npm run check:release
         env:
           ASKTOTO_ARTIFACTS_DIR: release
-      - run: node scripts/verify-signing.mjs
+      - name: Verify Windows signing
+        run: node scripts/verify-signing.mjs
         env:
+          WIN_SIGNING_MODE: ${{ vars.WIN_SIGNING_MODE }}
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
-      - uses: actions/upload-artifact@v4
+          WIN_AZURE_IDENTITY_EKU: ${{ vars.WIN_AZURE_IDENTITY_EKU }}
+      - name: Prove installs of this release will accept the next identically signed update
+        run: node scripts/check-update-publisher.mjs release
+        env:
+          WIN_UPDATE_PUBLISHER_NAMES: ${{ vars.WIN_UPDATE_PUBLISHER_NAMES }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: metis-release-windows
           retention-days: 1

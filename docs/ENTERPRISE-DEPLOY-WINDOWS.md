@@ -42,15 +42,21 @@ automatic optional-model provisioning; an explicit Download/Retry remains a user
 
 Builds are Authenticode-signed with an **internal self-signed certificate**:
 
-- Subject: `CN=Mantu` (matches `win.publisherName` in `electron-builder.yml`, which
-  `verifyUpdateCodeSignature: true` checks before installing any update)
+- Subject: `CN=Mantu`. `electron-builder.yml` no longer sets a `win.publisherName` field (that key was
+  removed and the current electron-builder rejects it) — electron-builder derives the updater's pin
+  directly from the certificate's common name, so a `CN=Mantu`-signed build pins `["Mantu"]`.
+  `verifyUpdateCodeSignature: true` checks that pin before installing any update.
 - Signature: SHA-256 with an RFC 3161 timestamp (valid after cert expiry)
 
 A self-signed cert gives you integrity + updater trust **inside the fleet** once machines trust it
 (below). It does **not** give public SmartScreen reputation — outside the fleet, users still see
-"Windows protected your PC". For public distribution, upgrade to **Azure Trusted Signing** or an
-OV/EV certificate (see `SIGNING.md` §Windows) — drop-in: set `WIN_CSC_LINK`/`WIN_CSC_KEY_PASSWORD`
-(or Azure signing params) in CI and re-release; nothing else changes.
+"Windows protected your PC". For public distribution, the release job supports a second mode,
+`WIN_SIGNING_MODE=azure` (Microsoft Artifact Signing, formerly Trusted Signing — Public Trust). This is
+**not** a drop-in: it needs an Azure subscription, a paid Artifact Signing plan, a validated legal
+signing entity, and a new GitHub environment before it can be used, and the certificate's publisher name
+changes from `Mantu` to that entity's validated legal name — every install's update pin changes with it.
+See `SIGNING.md` §Windows Direct Distribution for the full operator checklist and the publisher-name
+migration this implies.
 
 ## Fleet trust (one-time IT action)
 
@@ -81,10 +87,15 @@ reports `UnknownError` (signed correctly, root not trusted locally) — expected
 
 Installed apps poll the public **Métis-Releases** GitHub repo on launch, download in the
 background, and install on quit (`electron-builder.yml` publish block; `src/main/updater.ts`).
-Updates are rejected unless their Authenticode signature matches `publisherName` (`CN=Mantu`) —
-a compromised feed cannot push an unsigned or foreign-signed binary. Release flow: tag `v*` →
-`release.yml` builds, signs, and publishes (requires `WIN_CSC_LINK`/`WIN_CSC_KEY_PASSWORD` secrets;
-the `check:release` preflight enforces `releaseType: release` so the feed never dangles on drafts).
+Updates are rejected unless their Authenticode signature matches the publisher pin baked into the
+*installed* app's own `app-update.yml` at build time (today, `["Mantu"]` for a `CN=Mantu`-signed build)
+— a compromised feed cannot push an unsigned or foreign-signed binary. Release flow: tag `v*` →
+`release.yml` resolves `WIN_SIGNING_MODE` (`pfx` or `azure`) and refuses to publish an unsigned release
+if it is unset, ambiguous, or incomplete for the chosen mode; `pfx` mode requires the same
+`WIN_CSC_LINK`/`WIN_CSC_KEY_PASSWORD`/`WIN_CSC_EXPECTED_SUBJECT` secrets as before (see `SIGNING.md`).
+`check:release` still enforces `releaseType: release` so the feed never dangles on drafts, and the new
+`check-update-publisher` gate additionally proves that installs of the release being published will
+accept the *next* identically signed update before it ships.
 
 ## Managed configuration
 

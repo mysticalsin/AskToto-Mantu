@@ -29,6 +29,39 @@ import {
 const REQUIRE_NOTARIZED = process.argv.includes('--require-notarized')
 const argDir = process.argv.slice(2).find((a) => !a.startsWith('--'))
 const { directory: dir, candidates } = selectSigningDirectory(argDir)
+
+// Mode-aware EKU policy (design §2.5). scripts/lib/windows-signing-mode.mjs is a SIBLING lane's shared
+// contract module (design's shared API contract) and may not exist in every checkout. This script must
+// keep working, unchanged, for local/legacy PFX use when WIN_SIGNING_MODE is unset — that is the only
+// case this falls back silently. If WIN_SIGNING_MODE IS set, the resolver is required: silently ignoring
+// a declared azure mode would skip the EKU checks above and let a Public Trust Test signature pass.
+async function resolveVerificationPolicy() {
+  const mode = String(process.env.WIN_SIGNING_MODE || '').trim()
+  if (!mode) {
+    return { mode: 'pfx', expectedSigner: String(process.env.WIN_CSC_EXPECTED_SUBJECT || '').trim(), identityEku: null }
+  }
+  let resolver
+  try {
+    resolver = await import('./lib/windows-signing-mode.mjs')
+  } catch (error) {
+    throw new Error(
+      `WIN_SIGNING_MODE=${mode} is set but scripts/lib/windows-signing-mode.mjs could not be loaded (${error.code || error.message})`
+    )
+  }
+  const resolved = resolver.resolveWindowsSigningMode(process.env)
+  if (!resolved.ok) {
+    throw new Error(
+      typeof resolver.describeSigningModeFailure === 'function'
+        ? resolver.describeSigningModeFailure(resolved)
+        : `signing mode resolution failed: ${resolved.code}`
+    )
+  }
+  return {
+    mode: resolved.mode,
+    expectedSigner: resolved.expectedSubject,
+    identityEku: resolved.mode === 'azure' ? (resolved.azure?.identityEku || null) : null
+  }
+}
 function sh(cmd, args) {
   const result = spawnSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   const stdout = result.stdout || ''
@@ -106,7 +139,14 @@ if (platform() === 'darwin') {
 
 // ── Windows ──────────────────────────────────────────────────────────────────
 if (platform() === 'win32') {
-  const expectedSigner = String(process.env.WIN_CSC_EXPECTED_SUBJECT || '').trim()
+  let policy
+  try {
+    policy = await resolveVerificationPolicy()
+  } catch (error) {
+    console.error(`[verify:signing] ${error.message}`)
+    process.exit(2)
+  }
+  const expectedSigner = policy.expectedSigner
   if (!expectedSigner) {
     fails.push('WIN_CSC_EXPECTED_SUBJECT is required and must exactly match the release certificate subject or common name')
   }
@@ -123,7 +163,8 @@ if (platform() === 'win32') {
     }
     const subject = String(signature.Subject || '').trim()
     const commonName = String(signature.CommonName || '').trim()
-    const problem = !r.ok ? 'Authenticode verification command failed' : windowsSignatureProblem(signature, expectedSigner)
+    const problem = !r.ok ? 'Authenticode verification command failed'
+      : windowsSignatureProblem(signature, expectedSigner, { mode: policy.mode, identityEku: policy.identityEku })
     if (problem) {
       fails.push(`${problem}: ${exe}`)
       console.error(`  ✗ ${problem}: ${exe}`)
