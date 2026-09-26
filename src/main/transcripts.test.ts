@@ -1127,11 +1127,15 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     vi.mocked(renameAsync).mockImplementation(async (src: string, dest: string) => renameSync(src, dest))
     // decryptToTemp writes its plaintext copy under app.getPath('temp') — route that to a real,
     // per-test directory instead of the shared default mock path, which nothing here creates on disk.
+    // Sandboxed per-run (see __mocks__/electron.ts) rather than a hardcoded literal — only `temp` matters
+    // to this suite, but a stray fixed /tmp path here would be exactly the collision-across-concurrent-runs
+    // hazard the sandbox root exists to close.
+    const sandbox = process.env.ASKTOTO_TEST_SANDBOX_ROOT ?? '/tmp/asktoto-test-fallback'
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
       if (name === 'temp') return tempDir
-      if (name === 'userData') return '/tmp/asktoto-test-userdata'
-      if (name === 'documents') return '/tmp/asktoto-test-documents'
-      return `/tmp/asktoto-${name}`
+      if (name === 'userData') return join(sandbox, 'userdata')
+      if (name === 'documents') return join(sandbox, 'documents')
+      return join(sandbox, name)
     })
   })
 

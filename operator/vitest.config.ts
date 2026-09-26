@@ -1,7 +1,42 @@
 import { defineConfig } from 'vitest/config'
-import { readFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { readFileSync, mkdtempSync, mkdirSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+// W0-HERMETIC — consistency only, not a closed hazard for the OneDrive/brain-index defect this ticket
+// fixes: this suite doesn't import src/main/transcripts.ts or src/main/brain/store.ts (see
+// plan-work/prep/HERMETIC-TESTS.md §4.1), so it isn't exposed to the real-OneDrive path the root
+// vitest.config.ts's hermetic home closes. Same sandbox anyway, so a future test that starts depending on
+// homedir()-derived paths here doesn't silently reopen it un-noticed.
+//
+// This suite DOES already run Playwright (src/render/pages/overview.layout.test.ts), which resolves its
+// browser cache from the home directory — pin PLAYWRIGHT_BROWSERS_PATH to the REAL cache or that test
+// loses its Chromium the moment HOME below points somewhere fresh and empty.
+function playwrightBrowsersPath(realHome: string): string {
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) return process.env.PLAYWRIGHT_BROWSERS_PATH
+  if (process.platform === 'darwin') return join(realHome, 'Library', 'Caches', 'ms-playwright')
+  if (process.platform === 'win32') {
+    return join(process.env.LOCALAPPDATA || join(realHome, 'AppData', 'Local'), 'ms-playwright')
+  }
+  return join(process.env.XDG_CACHE_HOME || join(realHome, '.cache'), 'ms-playwright')
+}
+const testHome = mkdtempSync(join(tmpdir(), 'metis-test-home-operator-'))
+const testTmpDir = join(testHome, 'tmp')
+mkdirSync(testTmpDir, { recursive: true })
+const hermeticHomeEnv = {
+  HOME: testHome,
+  USERPROFILE: testHome,
+  OneDrive: '',
+  OneDriveCommercial: '',
+  OneDriveConsumer: '',
+  APPDATA: join(testHome, 'AppData', 'Roaming'),
+  LOCALAPPDATA: join(testHome, 'AppData', 'Local'),
+  TMPDIR: testTmpDir,
+  TMP: testTmpDir,
+  TEMP: testTmpDir,
+  PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath(homedir())
+}
 
 /**
  * Own config, same reason as cloudflare-proxy/: the root vitest include globs never
@@ -42,6 +77,7 @@ export default defineConfig({
   test: {
     root: dirname(fileURLToPath(import.meta.url)),
     environment: 'node',
+    env: hermeticHomeEnv,
     include: ['src/**/*.test.ts', 'scripts/**/*.test.ts']
   }
 })

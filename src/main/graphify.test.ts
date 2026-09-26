@@ -199,8 +199,11 @@ describe('purgeGraphArtifacts — the whole graph directory Metis owns (MQA-170)
     )
   })
   afterEach(() => {
+    // Restore the module mock's own default (see __mocks__/electron.ts) rather than a hardcoded literal —
+    // that default is itself sandboxed per-run under ASKTOTO_TEST_SANDBOX_ROOT.
+    const sandbox = process.env.ASKTOTO_TEST_SANDBOX_ROOT ?? '/tmp/asktoto-test-fallback'
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
-      name === 'userData' ? '/tmp/asktoto-test-userdata' : `/tmp/asktoto-${name}`
+      join(sandbox, name === 'userData' ? 'userdata' : name)
     )
     rmSync(userData, { recursive: true, force: true })
   })
