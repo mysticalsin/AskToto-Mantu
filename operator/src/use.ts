@@ -1,11 +1,11 @@
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '../../src/shared/providers'
 import { operatorVisionModel, parseOperatorImage, type OperatorImage } from '../../src/shared/operator-vision'
-import { ensureDefaultAiGateway } from './ai-gateway'
+import { ensureDefaultAiGateway, GatewayPrivacyError } from './ai-gateway'
 import { decryptVault } from './crypto'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { looksLikeSecret, providerRefusedPayload } from './redact'
 import type { OperatorStore, VaultKeyRow } from './store'
-import { persistProxyAsk } from './ask-meter'
+import { persistProxyAsk, proxyTokenCount } from './ask-meter'
 import { seatHasEntitlement } from './tiers'
 import { decodeVaultPlaintext, isForbiddenVaultProvider, isVaultLlmProvider } from './vault'
 
@@ -22,9 +22,17 @@ const PROVIDER_FETCH_TIMEOUT_MS = 60_000
 
 /** Wraps a fetch implementation so every provider call it makes carries the same abort timeout, without
  *  every call site having to remember to pass one. */
-function withProviderTimeout(providerFetch: typeof fetch): typeof fetch {
-  return ((input: RequestInfo | URL, init?: RequestInit) =>
-    providerFetch(input, { ...init, redirect: 'manual', signal: AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS) })) as typeof fetch
+export function withProviderTimeout(providerFetch: typeof fetch): typeof fetch {
+  return ((input: RequestInfo | URL, init?: RequestInit) => {
+    const callerSignal = init?.signal === null ? undefined :
+      init?.signal ?? (input instanceof Request ? input.signal : undefined)
+    const signals = [callerSignal, AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS)].filter(
+      (signal): signal is AbortSignal => Boolean(signal)
+    )
+    // Preserve a shorter caller deadline (including gateway privacy checks). A wrapper
+    // must not turn an eight-second abort into a sixty-second orphaned request.
+    return providerFetch(input, { ...init, redirect: 'manual', signal: AbortSignal.any(signals) })
+  }) as typeof fetch
 }
 
 
@@ -250,11 +258,13 @@ export async function decryptActiveLlmSecret(
 }
 
 function publicUseResult(text: string, inputTokens?: number, outputTokens?: number): UseOk {
+  const input = proxyTokenCount(inputTokens)
+  const output = proxyTokenCount(outputTokens)
   return {
     ok: true,
     text: clip(text, TEXT_CAP),
-    ...(typeof inputTokens === 'number' ? { inputTokens } : {}),
-    ...(typeof outputTokens === 'number' ? { outputTokens } : {})
+    ...(input !== null ? { inputTokens: input } : {}),
+    ...(output !== null ? { outputTokens: output } : {})
   }
 }
 
@@ -406,7 +416,10 @@ export async function handleUse(
         : def.kind === 'anthropic'
           ? await callAnthropic(unlocked.secret, parsed.req, timedFetch)
           : await callOpenAICompat(unlocked.secret, parsed.req, def.baseUrl, timedFetch)
-  } catch {
+  } catch (error) {
+    if (error instanceof GatewayPrivacyError) {
+      return fail('Cloudflare gateway privacy is not verified.', 503, { code: error.code })
+    }
     return fail('Operator cannot issue a use', 503)
   }
   if (!('text' in out)) {
@@ -443,7 +456,10 @@ export async function handleUse(
       model: parsed.req.model,
       inputTokens: out.inputTokens,
       outputTokens: out.outputTokens,
-      outcome: 'answered'
+      outcome: 'answered',
+      // Bind Worker and seat reports to the same logical Ask. Attempts still need
+      // their separate accounting ledger; do not mint a duplicate operation here.
+      askId: parsed.req.clientAskId
     })
   } catch {
     /* metering must never fail the buffered use */
