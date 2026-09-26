@@ -1,3 +1,4 @@
+import { reviewedGatewayReply, reviewedGatewayFetch } from './ai-gateway.privacy-fixture'
 import { describe, expect, it, vi } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { hmacHex } from './hmac'
@@ -84,7 +85,7 @@ async function addCloudflareKey(store: ReturnType<typeof memoryStore>) {
     }),
     env(),
     { access: tony },
-    { store, now: NOW }
+    { store, now: NOW, cfFetch: reviewedGatewayFetch }
   )
   expect(res.status).toBe(200)
 }
@@ -233,7 +234,7 @@ describe('HMAC POST /v1/use', () => {
     })
     const providerFetch = vi.fn(async (input) => {
       if (String(input).includes('/ai-gateway/gateways')) {
-        return new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+        return reviewedGatewayReply()
       }
       return provider === 'anthropic'
         ? new Response(JSON.stringify({ content: [{ type: 'text', text: 'unexpected upstream call' }] }), { status: 200, headers: { 'content-type': 'application/json' } })
