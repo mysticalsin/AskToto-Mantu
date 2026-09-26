@@ -3,19 +3,22 @@
  * build-traceability.mjs — M2-0011.
  *
  * Builds a per-ID traceability matrix from a kit/registry ID inventory and the program ticket
- * ledger: every inventory row gets a repo status derived from the ticket(s) that cite it (and
- * any per-kit_ref evidence override), and the check fails closed on anything that does not
- * reconcile — an inventory row no ticket cites, a ticket citing an id absent from the inventory,
- * an unqualified citation that is ambiguous across kits, a `needs_decision` id with no entry in
- * DECISIONS.md, or a BLOCKERS.md row citing a ticket the ledger does not have.
+ * ledger: every inventory row gets a repo status derived from the ticket(s) that cite it (and any
+ * per-kit_ref ADR-017 evidence override), and the check fails closed on anything that does not
+ * reconcile — an inventory row no live ticket cites, a ticket citing an id absent from the
+ * inventory or citing a program ticket id where a kit requirement id belongs, an unqualified
+ * citation that is ambiguous across kits, a malformed ledger ticket id, an unresolved
+ * `needs_decision`, or a BLOCKERS.md row citing a ticket the ledger does not have.
  *
- * This module is deliberately data-free: it takes inventory rows, tickets, decision ids and
- * blocker ticket refs as plain data (see `main`'s CLI contract for where those come from) and
- * contains no Métis 2.0 program content of its own, so its test suite runs anywhere with wholly
- * synthetic fixtures.
+ * This module is deliberately data-free: it takes inventory rows, tickets, decision ids, blocker
+ * ticket refs and (optionally) per-ticket evidence overrides as plain data — see `main`'s CLI
+ * contract for where those come from — and contains no Métis 2.0 program content of its own, so
+ * its test suite runs anywhere with wholly synthetic fixtures.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { parseArgs } from 'node:util'
 
 // ---- ID classification ------------------------------------------------------------------------
 
@@ -66,15 +69,12 @@ export function buildInventoryIndex(rows) {
 }
 
 /**
- * Resolve one kit_refs citation against an inventory index. A `kit:id` citation always resolves
- * to that exact row. A bare citation resolves only when the id is unique across every kit; an id
- * shared by two or more kits (the REF-* namespaces) refuses as `ambiguous` rather than picking one
- * — the ticket has to name the kit.
+ * Resolve one kit_refs citation against an inventory index.
  * @param {string} citation
  * @param {{ byId: Map<string, InventoryRow[]>, byKitId: Map<string, InventoryRow> }} index
- * @returns {{ ok: boolean, row?: InventoryRow, reason?: 'unknown' | 'ambiguous' }} a flat shape
- *   (not a discriminated union) so callers may read `.row` or `.reason` directly — the field the
- *   `ok` value does not select is simply absent, i.e. `undefined`
+ * @returns {{ ok: true, row: InventoryRow } | { ok: false, reason: 'unknown' | 'ambiguous' }}
+ *   `unknown` when no row anywhere matches; `ambiguous` when a bare (unqualified) citation matches
+ *   an id shared by two or more kits and must instead be qualified as `kit:id`.
  */
 export function resolveCitation(citation, index) {
   const qualified = /^(.+?):(.+)$/.exec(citation)
@@ -107,6 +107,13 @@ const STATUS_RANK = {
   DONE: 6
 }
 
+/** @param {string} status */
+function assertKnownStatus(status) {
+  if (!Object.prototype.hasOwnProperty.call(STATUS_RANK, status)) {
+    throw new Error(`unrecognized status: ${status}`)
+  }
+}
+
 /**
  * Normalize a raw ticket/evidence status: `TODO` renames to `NOT_STARTED`, every other recognized
  * value passes through unchanged, and an unrecognized value throws rather than being guessed at.
@@ -114,8 +121,8 @@ const STATUS_RANK = {
  */
 function normalizeStatus(status) {
   if (status === 'TODO') return 'NOT_STARTED'
-  if (Object.prototype.hasOwnProperty.call(STATUS_RANK, status)) return status
-  throw new Error(`unrecognized status: ${status}`)
+  assertKnownStatus(status)
+  return status
 }
 
 /** @param {{ status: string }} ticket */
@@ -129,33 +136,51 @@ export function statusForTicket(ticket) {
  * @param {string[]} statuses
  */
 export function mergeStatuses(statuses) {
-  for (const status of statuses) {
-    if (!Object.prototype.hasOwnProperty.call(STATUS_RANK, status)) {
-      throw new Error(`mergeStatuses: unrecognized status: ${status}`)
-    }
-  }
+  for (const status of statuses) assertKnownStatus(status)
   return statuses.reduce((best, status) => (STATUS_RANK[status] > STATUS_RANK[best] ? status : best))
 }
 
+// ---- ADR-017 evidence overrides ----------------------------------------------------------------
+
+const KNOWN_KIT_STATUSES = new Set(['MET', 'PARTIAL', 'BLOCKED', 'NOT_MET'])
+
 /**
- * @typedef {{ ticket: { id: string, status: string, evidence?: unknown }, citation: string }} Citation
+ * Maps one per-kit_ref ADR-017 evidence status onto this module's row-status vocabulary, given the
+ * citing ticket's own (already normalized) status. One mapping, defined here and nowhere else:
+ *   - `BLOCKED` always becomes `BLOCKED_EXTERNAL`, regardless of the ticket's own status.
+ *   - `MET` takes the ticket's own status unchanged — the evidence confirms it, it does not raise it.
+ *   - `PARTIAL` and `NOT_MET` never rank above `IN_PROGRESS`: a kit_ref the evidence itself says
+ *     isn't there yet can't make the row ENGINEERING_COMPLETE or DONE, however advanced the ticket is.
+ * @param {string} kitStatus one of the ADR-017 KIT_STATUSES: MET, PARTIAL, BLOCKED or NOT_MET
+ * @param {string} ticketStatus a normalized row-status value (a key of STATUS_RANK)
+ * @returns {string}
+ */
+export function applyEvidenceOverride(kitStatus, ticketStatus) {
+  if (!KNOWN_KIT_STATUSES.has(kitStatus)) throw new Error(`unrecognized kit_ref evidence status: ${kitStatus}`)
+  if (kitStatus === 'BLOCKED') return 'BLOCKED_EXTERNAL'
+  if (kitStatus === 'MET') return ticketStatus
+  return STATUS_RANK[ticketStatus] > STATUS_RANK.IN_PROGRESS ? 'IN_PROGRESS' : ticketStatus
+}
+
+/**
+ * @typedef {{ ticket: { id: string, status: string }, citation: string }} Citation
  */
 
 /**
  * The repo status for one inventory row: `UNMAPPED` when nothing cites it, otherwise the
- * most-advanced status across every citing ticket — where a ticket's `evidence` array carries a
- * `{ kit_ref, status }` record naming this exact citation, that record's status overrides the
- * ticket's own status for this row only. A ticket whose `evidence` is absent or not an array (the
- * ledger's current shape, a single provenance object) simply has no override.
- * @param {InventoryRow} _row unused directly; kept so the signature reads as "row, its citations"
+ * most-advanced status across every citing ticket, with each citation's status first passed
+ * through `applyEvidenceOverride` when `evidenceByTicket` carries an override for that exact
+ * ticket + kit_ref pair. A ticket with no entry in `evidenceByTicket` simply has no override.
  * @param {Citation[]} citations
+ * @param {Map<string, Record<string, string>>} [evidenceByTicket] ticket id -> { kit_ref -> ADR-017
+ *   kit status }, e.g. the latest PASS record's `kit_refs` for that ticket (see `main`'s `--evidence`)
  */
-export function computeRowStatus(_row, citations) {
+export function computeRowStatus(citations, evidenceByTicket = new Map()) {
   if (citations.length === 0) return 'UNMAPPED'
   const statuses = citations.map(({ ticket, citation }) => {
-    const evidence = Array.isArray(ticket.evidence) ? ticket.evidence : []
-    const override = evidence.find((e) => e && e.kit_ref === citation)
-    return override ? normalizeStatus(override.status) : statusForTicket(ticket)
+    const ticketStatus = statusForTicket(ticket)
+    const kitStatus = evidenceByTicket.get(ticket.id)?.[citation]
+    return kitStatus ? applyEvidenceOverride(kitStatus, ticketStatus) : ticketStatus
   })
   return mergeStatuses(statuses)
 }
@@ -163,19 +188,24 @@ export function computeRowStatus(_row, citations) {
 // ---- markdown extraction (DECISIONS.md / BLOCKERS.md) ------------------------------------------
 
 /**
- * Every bare `D-<n>` decision id in DECISIONS.md — never the `D-<n>` suffix embedded inside
- * `OD-<n>` or `PD-<n>` (a negative lookbehind refuses a preceding letter).
+ * Every decision id defined as a table row's first cell in DECISIONS.md (`| D-3 | ... |`) — never
+ * a bare `D-<n>` mentioned in prose, and never the `D-<n>` suffix embedded inside `OD-<n>` or
+ * `PD-<n>`, since those never begin a cell with exactly `D-`.
  * @param {string} markdown
  * @returns {Set<string>}
  */
 export function extractDecisionIds(markdown) {
   const ids = new Set()
-  for (const match of markdown.matchAll(/(?<![A-Za-z])(D-\d+)/g)) ids.add(match[1])
+  for (const line of markdown.split('\n')) {
+    const match = /^\|\s*(D-\d+)\s*\|/.exec(line)
+    if (match) ids.add(match[1])
+  }
   return ids
 }
 
 const TABLE_SEPARATOR_RE = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/
-const LEADING_TICKET_NUMBER_RE = /^\s*(\d+)/
+const TICKET_COLUMN_HEADERS = new Set(['Ticket', 'Affected tickets'])
+const BARE_TICKET_NUMBER_RE = /^(\d{4})(?!\d)/
 
 /** @param {string} line */
 function splitTableRow(line) {
@@ -186,17 +216,38 @@ function splitTableRow(line) {
 }
 
 /**
- * Every ticket referenced by a "Ticket" column, across every markdown table in BLOCKERS.md — the
- * document has one table per owner-role section, each with its own column layout, so this walks
- * line by line rather than assuming a single table. A cell is read as its leading digit run (some
- * rows carry a trailing description after the number, e.g. `0007: Provision the QA host`), always
- * returned `M2-`-prefixed — a bare `M2-` prefix is never accepted as a match on its own.
+ * Parses one ticket-column cell item (already split on comma and trimmed) into a program ticket
+ * id: `M2-NNNN` directly, or a bare 4-digit run at the start (some rows carry a trailing
+ * description after the number, e.g. `0007: Provision the QA host`) prefixed with `M2-`. A bare
+ * `M2-` prefix is never accepted on its own. Returns `null` for a non-empty item that parses as
+ * neither — the caller reports that as malformed rather than skipping it.
+ * @param {string} item
+ * @returns {string | null}
+ */
+function parseTicketCellItem(item) {
+  if (PROGRAM_TICKET_ID_RE.test(item)) return item
+  const bare = BARE_TICKET_NUMBER_RE.exec(item)
+  return bare ? `M2-${bare[1]}` : null
+}
+
+/**
+ * Every ticket BLOCKERS.md cites: every item (comma-separated lists included, not just the first)
+ * in a ticket-bearing column's cell — a column headed exactly `Ticket` or `Affected tickets`,
+ * across every markdown table in the document, since it has one table per owner-role section, each
+ * with its own column layout — plus every bare `M2-\d{4}` token anywhere in the document, which
+ * catches tables (such as the escalated-decisions table's prior-blocker references) that cite a
+ * ticket outside a ticket-bearing column. A non-empty ticket-bearing cell item that parses as
+ * neither form is reported as malformed rather than silently skipped.
  * @param {string} markdown
- * @returns {Set<string>}
+ * @returns {{ refs: Set<string>, malformed: string[] }}
  */
 export function extractBlockerTicketRefs(markdown) {
-  const lines = markdown.split('\n')
   const refs = new Set()
+  const malformed = []
+
+  for (const match of markdown.matchAll(/M2-\d{4}/g)) refs.add(match[0])
+
+  const lines = markdown.split('\n')
   let ticketColumn = null
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -207,7 +258,7 @@ export function extractBlockerTicketRefs(markdown) {
     const nextLine = lines[i + 1] ?? ''
     if (TABLE_SEPARATOR_RE.test(nextLine.trim())) {
       const header = splitTableRow(line)
-      const idx = header.findIndex((cell) => cell.trim() === 'Ticket')
+      const idx = header.findIndex((cell) => TICKET_COLUMN_HEADERS.has(cell.trim()))
       ticketColumn = idx >= 0 ? idx : null
       i += 1 // consume the separator row too
       continue
@@ -215,10 +266,16 @@ export function extractBlockerTicketRefs(markdown) {
     if (ticketColumn === null) continue
     const cells = splitTableRow(line)
     if (ticketColumn >= cells.length) continue
-    const match = LEADING_TICKET_NUMBER_RE.exec(cells[ticketColumn].trim())
-    if (match) refs.add(`M2-${match[1]}`)
+    for (const item of cells[ticketColumn].split(',')) {
+      const trimmed = item.trim()
+      if (trimmed.length === 0) continue
+      const ref = parseTicketCellItem(trimmed)
+      if (ref) refs.add(ref)
+      else malformed.push(trimmed)
+    }
   }
-  return refs
+
+  return { refs, malformed }
 }
 
 // ---- the matrix ---------------------------------------------------------------------------------
@@ -229,25 +286,45 @@ export function extractBlockerTicketRefs(markdown) {
  * @typedef {{ type: 'unmapped', id: string, kit: string }
  *   | { type: 'dangling-ticket-ref', ticketId: string, citation: string }
  *   | { type: 'ambiguous-citation', ticketId: string, citation: string }
+ *   | { type: 'ticket-ref-in-kit-refs', ticketId: string, citation: string }
+ *   | { type: 'malformed-ticket-id', ticketId: string }
  *   | { type: 'unresolved-decision', ticketId: string, decisionId: string }
- *   | { type: 'dangling-blocker-ref', ticketId: string }} TraceError
+ *   | { type: 'dangling-blocker-ref', ticketId: string }
+ *   | { type: 'malformed-blocker-ticket-ref', cell: string }} TraceError
  */
 
 /**
  * Build the traceability matrix and its errors from an inventory, the ticket ledger, the decision
- * ids DECISIONS.md defines, and the ticket ids BLOCKERS.md cites. Pure function — no file I/O; see
- * `main` for the CLI that reads these four inputs from disk.
+ * ids DECISIONS.md defines, the ticket ids BLOCKERS.md cites (plus any cell it could not parse),
+ * and per-ticket ADR-017 evidence overrides. Pure function — no file I/O; see `main` for the CLI
+ * that reads these inputs from disk.
  * @param {{ inventory: InventoryRow[], tickets: unknown[], decisionIds: Set<string>,
- *   blockerTicketRefs: Set<string> }} input
+ *   blockerTicketRefs: Set<string>, malformedBlockerRefs?: string[],
+ *   evidenceByTicket?: Map<string, Record<string, string>> }} input
  * @returns {{ rows: TraceRow[], errors: TraceError[] }}
  */
-export function buildTraceability({ inventory, tickets, decisionIds, blockerTicketRefs }) {
+export function buildTraceability({
+  inventory,
+  tickets,
+  decisionIds,
+  blockerTicketRefs,
+  malformedBlockerRefs = [],
+  evidenceByTicket = new Map()
+}) {
   const index = buildInventoryIndex(inventory)
   const citationsByRow = new Map(inventory.map((row) => [row, /** @type {Citation[]} */ ([])]))
   const errors = []
 
   for (const ticket of tickets) {
+    if (!PROGRAM_TICKET_ID_RE.test(ticket.id)) {
+      errors.push({ type: 'malformed-ticket-id', ticketId: ticket.id })
+    }
+
     for (const citation of ticket.kit_refs ?? []) {
+      if (classifyM2Id(citation) === 'ticket') {
+        errors.push({ type: 'ticket-ref-in-kit-refs', ticketId: ticket.id, citation })
+        continue
+      }
       const resolved = resolveCitation(citation, index)
       if (!resolved.ok) {
         errors.push({
@@ -268,17 +345,24 @@ export function buildTraceability({ inventory, tickets, decisionIds, blockerTick
 
   const rows = inventory.map((row) => {
     const citations = citationsByRow.get(row)
-    if (citations.length === 0) errors.push({ type: 'unmapped', id: row.id, kit: row.kit })
+    // A row cited only by CANCELLED tickets has no real coverage — cancelling a ticket must be
+    // able to turn a mapped row back into an unmapped one, since catching exactly that is this
+    // check's job. The cancelled ticket still appears in `tickets` below, for visibility.
+    const coveringCitations = citations.filter((c) => c.ticket.status !== 'CANCELLED')
+    if (coveringCitations.length === 0) errors.push({ type: 'unmapped', id: row.id, kit: row.kit })
     return {
       ...row,
       tickets: [...new Set(citations.map((c) => c.ticket.id))],
-      status: computeRowStatus(row, citations)
+      status: computeRowStatus(coveringCitations, evidenceByTicket)
     }
   })
 
   const ticketIds = new Set(tickets.map((t) => t.id))
   for (const ticketId of blockerTicketRefs) {
     if (!ticketIds.has(ticketId)) errors.push({ type: 'dangling-blocker-ref', ticketId })
+  }
+  for (const cell of malformedBlockerRefs) {
+    errors.push({ type: 'malformed-blocker-ticket-ref', cell })
   }
 
   return { rows, errors }
@@ -322,21 +406,27 @@ export function renderJson(result) {
 
 // ---- CLI -----------------------------------------------------------------------------------
 
-/** @param {string[]} argv */
-function parseArgs(argv) {
-  const args = { check: false }
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]
-    if (arg === '--check') {
-      args.check = true
-      continue
-    }
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())
-      args[key] = argv[++i]
-    }
-  }
-  return args
+const USAGE =
+  'usage: build-traceability.mjs --tickets <path> --inventory <path> --decisions <path> ' +
+  '--blockers <path> [--evidence <dir>] (--check | --out-md <path> --out-json <path>)'
+
+const CLI_OPTIONS = {
+  check: { type: 'boolean', default: false },
+  tickets: { type: 'string' },
+  inventory: { type: 'string' },
+  decisions: { type: 'string' },
+  blockers: { type: 'string' },
+  evidence: { type: 'string' },
+  'out-md': { type: 'string' },
+  'out-json': { type: 'string' }
+}
+
+const REQUIRED_ARGS = ['tickets', 'inventory', 'decisions', 'blockers']
+
+/** @param {string} message */
+function usageExit(message) {
+  console.error(`${USAGE} — ${message}`)
+  process.exit(2)
 }
 
 /** @param {TraceError} error */
@@ -348,49 +438,116 @@ function formatError(error) {
       return `${error.ticketId} cites ${error.citation}, which is not in the inventory`
     case 'ambiguous-citation':
       return `${error.ticketId} cites ${error.citation}, which exists in more than one kit — qualify it as kit:id`
+    case 'ticket-ref-in-kit-refs':
+      return `${error.ticketId} cites ${error.citation} in kit_refs, but that id is a program ticket, not a kit requirement`
+    case 'malformed-ticket-id':
+      return `ledger ticket id "${error.ticketId}" does not match ${PROGRAM_TICKET_ID_RE}`
     case 'unresolved-decision':
       return `${error.ticketId} needs_decision ${error.decisionId}, which has no entry in DECISIONS.md`
     case 'dangling-blocker-ref':
       return `BLOCKERS.md cites ${error.ticketId}, which is not in the ledger`
-    default:
-      return JSON.stringify(error)
+    case 'malformed-blocker-ticket-ref':
+      return `BLOCKERS.md cites "${error.cell}", which does not parse as a ticket reference`
   }
 }
 
 /**
- * The `--check` CLI contract (ticket verification step): read the four inputs, build the matrix,
- * and either exit 1 naming every error (`--check`, or implicitly whenever errors exist) or write
- * `--out-md` / `--out-json` when both are clean.
+ * Reads per-kit_ref evidence overrides from the ADR-017 record store (M2-0002's
+ * scripts/evidence/record.mjs) for every ticket that has one, as the `kit_refs` map of its latest
+ * PASS record — the last one in file order, since the store is an append-only log where the last
+ * line for a ticket governs. A ticket with no PASS record simply has no entry in the result. This
+ * never re-parses the JSONL store itself: it delegates entirely to M2-0002's reader.
+ * @param {string | undefined} evidenceDir
+ * @returns {Promise<Map<string, Record<string, string>>>}
+ */
+async function loadEvidenceByTicket(evidenceDir) {
+  if (!evidenceDir) return new Map()
+  let readRecordStore
+  try {
+    ;({ readRecordStore } = await import('../evidence/record.mjs'))
+  } catch (error) {
+    throw new Error(
+      `--evidence requires scripts/evidence/record.mjs (M2-0002), which could not be imported: ${error.message}`
+    )
+  }
+  const { recordsByTicket, problems } = readRecordStore(evidenceDir)
+  if (problems.length > 0) throw new Error(`--evidence: ${problems.join('; ')}`)
+  const evidenceByTicket = new Map()
+  for (const [ticketId, records] of recordsByTicket) {
+    const latestPass = [...records].reverse().find((record) => record.result === 'PASS')
+    if (latestPass) evidenceByTicket.set(ticketId, latestPass.kit_refs)
+  }
+  return evidenceByTicket
+}
+
+/**
+ * The CLI contract (ticket verification step): read the inputs, build the matrix, and either exit
+ * 1 naming every error (whenever any exist) or, when clean and `--check` was not given, write
+ * `--out-md` / `--out-json`. `--check` only ever validates: given alongside `--out-md`/`--out-json`
+ * it never writes them, clean or not.
  * @param {string[]} argv
  */
-export function main(argv) {
-  const args = parseArgs(argv)
-  const ticketsRaw = JSON.parse(readFileSync(args.tickets, 'utf8'))
-  const tickets = Array.isArray(ticketsRaw) ? ticketsRaw : ticketsRaw.tickets
-  const inventory = JSON.parse(readFileSync(args.inventory, 'utf8'))
-  const decisionIds = extractDecisionIds(readFileSync(args.decisions, 'utf8'))
-  const blockerTicketRefs = extractBlockerTicketRefs(readFileSync(args.blockers, 'utf8'))
+export async function main(argv) {
+  let values
+  try {
+    ;({ values } = parseArgs({ args: argv, options: CLI_OPTIONS, strict: true }))
+  } catch (error) {
+    return usageExit(error.message)
+  }
 
-  const result = buildTraceability({ inventory, tickets, decisionIds, blockerTicketRefs })
+  const missing = REQUIRED_ARGS.filter((key) => typeof values[key] !== 'string')
+  if (missing.length > 0) {
+    return usageExit(`missing required argument(s): ${missing.map((key) => `--${key}`).join(', ')}`)
+  }
+
+  const { tickets } = JSON.parse(readFileSync(values.tickets, 'utf8'))
+  const inventory = JSON.parse(readFileSync(values.inventory, 'utf8'))
+  const decisionIds = extractDecisionIds(readFileSync(values.decisions, 'utf8'))
+  const { refs: blockerTicketRefs, malformed: malformedBlockerRefs } = extractBlockerTicketRefs(
+    readFileSync(values.blockers, 'utf8')
+  )
+
+  let evidenceByTicket
+  try {
+    evidenceByTicket = await loadEvidenceByTicket(values.evidence)
+  } catch (error) {
+    console.error(`[trace] ${error.message}`)
+    process.exit(1)
+  }
+
+  const result = buildTraceability({
+    inventory,
+    tickets,
+    decisionIds,
+    blockerTicketRefs,
+    malformedBlockerRefs,
+    evidenceByTicket
+  })
 
   if (result.errors.length > 0) {
     for (const error of result.errors) console.error(`[trace] ${formatError(error)}`)
     console.error(`[trace] ${result.errors.length} error(s) — see above`)
     process.exit(1)
-    return
   }
 
   console.log(`[trace] OK — ${result.rows.length} row(s), 0 errors`)
 
-  if (args.outMd) {
-    if (!existsSync(dirname(args.outMd))) mkdirSync(dirname(args.outMd), { recursive: true })
-    writeFileSync(args.outMd, renderMarkdown(result), 'utf8')
+  if (values.check) return
+
+  if (values['out-md']) {
+    mkdirSync(dirname(values['out-md']), { recursive: true })
+    writeFileSync(values['out-md'], renderMarkdown(result), 'utf8')
   }
-  if (args.outJson) {
-    if (!existsSync(dirname(args.outJson))) mkdirSync(dirname(args.outJson), { recursive: true })
-    writeFileSync(args.outJson, `${JSON.stringify(renderJson(result), null, 1)}\n`, 'utf8')
+  if (values['out-json']) {
+    mkdirSync(dirname(values['out-json']), { recursive: true })
+    writeFileSync(values['out-json'], `${JSON.stringify(renderJson(result), null, 1)}\n`, 'utf8')
   }
 }
 
-const isMainModule = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
-if (isMainModule) main(process.argv.slice(2))
+const invokedAsScript = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+if (invokedAsScript) {
+  main(process.argv.slice(2)).catch((error) => {
+    console.error(error)
+    process.exit(1)
+  })
+}
