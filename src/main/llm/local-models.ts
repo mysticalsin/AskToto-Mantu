@@ -461,20 +461,60 @@ function hashFile(path: string): Promise<string> {
   })
 }
 
+interface FileIdentity {
+  size: number
+  mtimeMs: number
+  ino: number
+}
+
+/**
+ * Successfully verified (path, size, mtime, inode) triples, for the life of the process. A hit means the
+ * file's on-disk identity has not moved since its last successful hash, so a repeat cold start of the
+ * same, unchanged model can skip re-reading and re-hashing up to ~2.9 GB of GGUF. Corruption, a repair, or
+ * a fresh download's rename-into-place all change size, mtime or inode, which misses the cache and forces
+ * a fresh hash — a tampered file always fails closed. A failed hash never populates this map.
+ */
+const verifiedFileIdentity = new Map<string, FileIdentity>()
+
+function fileIdentity(path: string): FileIdentity | null {
+  try {
+    const stat = statSync(path)
+    return { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino }
+  } catch {
+    return null
+  }
+}
+
+function sameIdentity(current: FileIdentity | null, cached: FileIdentity | undefined): boolean {
+  return (
+    current !== null &&
+    cached !== undefined &&
+    current.size === cached.size &&
+    current.mtimeMs === cached.mtimeMs &&
+    current.ino === cached.ino
+  )
+}
+
 async function verifyFileChecksum(
   modelId: string,
   file: 'gguf' | 'mmproj',
   path: string,
   spec: LocalModelFile
 ): Promise<void> {
+  const identity = fileIdentity(path)
+  if (sameIdentity(identity, verifiedFileIdentity.get(path))) return
   const digest = await hashFile(path)
   if (digest !== spec.sha256) {
     localAudit('local.model.checksum_fail', { modelId, file })
     throw new ChecksumMismatchError(modelId, file, spec.sha256, digest)
   }
+  if (identity) verifiedFileIdentity.set(path, identity)
 }
 
-/** Re-hash both model files before a cold llama-server start. */
+/**
+ * Verify both model files before a cold llama-server start, re-hashing only when a file's on-disk
+ * identity is not already cached as verified (see `verifiedFileIdentity`).
+ */
 export async function verifyIntegrity(id: string): Promise<void> {
   assertRamOk(id)
   const entry = getModel(id)
