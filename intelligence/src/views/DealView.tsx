@@ -15,6 +15,7 @@ import { ledgerTotals } from '../lib/ledgerstats'
 import { slug } from '../lib/slug'
 import { Timeline } from '../components/Timeline'
 import { AcceptSuggestion } from '../components/AcceptSuggestion'
+import { EmptyState } from '../components/EmptyState'
 
 interface Props {
   data: DashboardData
@@ -158,7 +159,12 @@ export function DealView({ data }: Props) {
       )
     }
     return (
-      <div className="mx-auto max-w-7xl px-6 py-8 text-sm text-white/50">No deals available.</div>
+      <EmptyState
+        title="Deals"
+        standfirst="Every mapped deal, with stage, commitments, and the meetings that named it."
+        headline="No deals mapped yet."
+        body="Deals appear here as Métis extracts them from your meetings. Save a client-facing meeting that names an opportunity, then use Update Intelligence. If this brain looks empty, reconnect OneDrive in Settings → Brain."
+      />
     )
   }
 

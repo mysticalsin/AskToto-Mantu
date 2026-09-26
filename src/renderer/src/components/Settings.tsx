@@ -19,6 +19,7 @@ import {
   Mic,
   Volume2,
   Headphones,
+  Video,
   ChevronDown,
   ChevronUp,
   Sparkles,
@@ -116,6 +117,7 @@ import { modeSkillLock } from '@shared/mode-skills'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
+import { BrainConnectPanel } from './BrainConnectPanel'
 import { ClickUpMark } from './brand/ClickUpMark'
 import { PlaneMark } from './brand/PlaneMark'
 import { MetisMark } from './MetisMark'
@@ -5653,7 +5655,9 @@ const TABS: {
       'task management', 'book next steps', 'action items', 'time saved', 'estimate',
       'consolidation', 'token', 'batch index', 'brain consolidation',
       'batch index (1–2× / day)', 'prefer on-device model for consolidation',
-      '06:00', '12:00', '18:00', 'America/Toronto', 'intelligence index'
+      '06:00', '12:00', '18:00', 'America/Toronto', 'intelligence index',
+      'connect mantu intelligence', 'onedrive', 'ai second brain', 'scan onedrive',
+      'connections', 'paste a path'
     ]
   },
   {
@@ -6096,6 +6100,60 @@ export function Settings({
                 </Section>
                 <TapControlCard settings={settings} patch={patch} />
                 <Section title="In meetings" icon={Headphones}>
+                  <ToggleRow
+                    label="Start Listen when I join"
+                    desc="Starts Listen when Teams, Zoom, or Google Meet becomes the front window. Only after onboarding and recording consent. Does not stop Listen when you leave."
+                    on={settings.autoStartMeetings.enabled}
+                    onChange={(v) =>
+                      patch({ autoStartMeetings: { ...settings.autoStartMeetings, enabled: v } })
+                    }
+                    disabled={settings.managedKeys.includes('autoStartMeetings')}
+                    icon={Video}
+                  />
+                  <div
+                    className={
+                      settings.autoStartMeetings.enabled
+                        ? 'ml-4 border-l border-[color:var(--cl-border)] pl-3'
+                        : 'ml-4 border-l border-[color:var(--cl-border)] pl-3 opacity-60'
+                    }
+                  >
+                    <ToggleRow
+                      label="Microsoft Teams"
+                      desc="Start when the Teams desktop app is in front."
+                      on={settings.autoStartMeetings.teams}
+                      onChange={(v) =>
+                        patch({ autoStartMeetings: { ...settings.autoStartMeetings, teams: v } })
+                      }
+                      disabled={
+                        !settings.autoStartMeetings.enabled ||
+                        settings.managedKeys.includes('autoStartMeetings')
+                      }
+                    />
+                    <ToggleRow
+                      label="Zoom"
+                      desc="Start when the Zoom desktop app is in front."
+                      on={settings.autoStartMeetings.zoom}
+                      onChange={(v) =>
+                        patch({ autoStartMeetings: { ...settings.autoStartMeetings, zoom: v } })
+                      }
+                      disabled={
+                        !settings.autoStartMeetings.enabled ||
+                        settings.managedKeys.includes('autoStartMeetings')
+                      }
+                    />
+                    <ToggleRow
+                      label="Google Meet"
+                      desc="Start when a browser window title includes Google Meet or meet.google.com."
+                      on={settings.autoStartMeetings.meet}
+                      onChange={(v) =>
+                        patch({ autoStartMeetings: { ...settings.autoStartMeetings, meet: v } })
+                      }
+                      disabled={
+                        !settings.autoStartMeetings.enabled ||
+                        settings.managedKeys.includes('autoStartMeetings')
+                      }
+                    />
+                  </div>
                   <ToggleRow
                     label="Auto-answer"
                     desc="Draft a reply the moment they ask a question."
@@ -7121,6 +7179,14 @@ function IntelligenceTab({
 
   return (
     <div className="flex flex-col gap-6">
+      <Section
+        title="Connect Mantu Intelligence"
+        desc="Scan OneDrive for an existing second brain or LLM wiki. Connect is the happy path. Pasting a folder path is the power path."
+        icon={FolderOpen}
+      >
+        <BrainConnectPanel settings={settings} patch={patch} />
+      </Section>
+
       <Section
         title="Mantu Intelligence"
         desc="Your meeting brain: dashboards and graphs built from every meeting Métis has captured, covering pipeline, people, deals going cold, and the week's Mars draft."

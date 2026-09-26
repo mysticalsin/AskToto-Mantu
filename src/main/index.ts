@@ -57,6 +57,7 @@ import {
   EntityUnmergePayloadSchema,
   EntityUpdateFieldPayloadSchema,
   FieldDecisionPayloadSchema,
+  BrainConnectPayloadSchema,
   CommitmentRejectPayloadSchema,
   MeetingExtractionQuerySchema,
   appendAsrCorrection,
@@ -258,6 +259,7 @@ import { listModels as listLocalModels, bestModelForMachine, isDownloaded as loc
 import { ensureLocalModel, localModelDownloadState, shouldFetchWeights } from './llm/local-model-download'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
+import { createMeetingAutoStart } from './meeting-auto-start'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
@@ -325,6 +327,8 @@ import {
   slugify as brainSlugify,
   brainDir as brainStoreDir
 } from './brain/store'
+import { scanOneDriveBrains } from './brain/onedrive-scan'
+import { brainConnectSettingsPatch, buildMeetingConnections, normalizeConnectPath } from '@shared/mantu-intelligence'
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
@@ -2907,6 +2911,32 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   audit: (event, data) => auditLog(event as Parameters<typeof auditLog>[0], data)
 })
 
+// Meeting auto-start: same foreground-watcher producer (no Accessibility). Own instance so Listen
+// can start even when background screen context is off. Gated in shared/meeting-auto-start.ts.
+const meetingAutoStart = createMeetingAutoStart({
+  startWatcher: (onChange) =>
+    startForegroundWatcher(onChange, {
+      onError: (message) => mainLog.warn(`[meeting-auto-start] watcher: ${message}`)
+    }),
+  getSettings: () => {
+    const s = getSettings()
+    return {
+      onboardingDone: s.onboardingDone,
+      recordingConsent: s.recordingConsent,
+      autoStartMeetings: s.autoStartMeetings
+    }
+  },
+  isListening: () => listeningActive,
+  startListen: (platform) => {
+    if (listeningActive) return
+    const w = ensureWindow()
+    if (!w) return
+    w.webContents.send(IPC.meetingAutoStart, { platform })
+  },
+  log: (message) => mainLog.info(`[meeting-auto-start] ${message}`),
+  audit: (event, data) => auditLog(event, data)
+})
+
 /**
  * The ONE place that reconciles background screen preprocessing with reality. Call it from every event
  * that can change canRun(): boot, a settings write, sign-in, session clear, the local-model download
@@ -3511,10 +3541,11 @@ function registerIpc(): void {
   // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
   // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
   // prompt API; Screen Recording has none, but a 1px desktopCapturer probe registers the app with
-  // TCC and raises the system prompt. Accessibility is deliberately NOT requested — nothing in the
-  // app needs it since meeting-detect was removed, and an unexplained Accessibility prompt is
-  // exactly the kind of thing enterprise IT flags. Never re-prompts after an explicit Deny (macOS
-  // suppresses those anyway); the checklist's "Open System Settings" link stays the recovery path.
+  // TCC and raises the system prompt. Accessibility is deliberately NOT requested — meeting
+  // auto-start uses foreground-watcher (NSWorkspace / GetForegroundWindow), not AX APIs, and an
+  // unexplained Accessibility prompt is exactly the kind of thing enterprise IT flags. Never
+  // re-prompts after an explicit Deny (macOS suppresses those anyway); the checklist's "Open
+  // System Settings" link stays the recovery path.
   ipcMain.handle(IPC.permissionsRequestUpfront, async (e) => {
     assertMainWindow(e)
     if (process.platform === 'darwin') {
@@ -3731,6 +3762,7 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
+    meetingAutoStart.refresh()
     // Local AI turned ON → re-arm the weight fetch if boot somehow skipped it (offline first launch,
     // under-RAM machine later upgraded). Boot already starts the download whenever the app opens
     // (RAM permitting); this edge is the second chance, not the only path to the weights.
@@ -6486,16 +6518,60 @@ function registerIpc(): void {
     if (!requireAuth()) throw new Error('Not signed in.')
     const s = getSettings()
     const index = readBrainIndex(s)
+    const people = listBrainEntities(s, 'person')
+      .map((slug) => readBrainPerson(s, slug))
+      .filter((entity): entity is NonNullable<typeof entity> => !!entity)
+    const accounts = listBrainEntities(s, 'account')
+      .map((slug) => readBrainAccount(s, slug))
+      .filter((entity): entity is NonNullable<typeof entity> => !!entity)
+    const deals = listBrainEntities(s, 'deal')
+      .map((slug) => readBrainDeal(s, slug))
+      .filter((entity): entity is NonNullable<typeof entity> => !!entity)
+    const meetings = listBrainMeetingExtractions(s)
+      .map((slug) => readBrainMeetingExtraction(s, slug))
+      .filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
     return {
       index,
       graph: readBrainGraph(s),
-      people: listBrainEntities(s, 'person').map((slug) => readBrainPerson(s, slug)).filter(Boolean),
-      accounts: listBrainEntities(s, 'account').map((slug) => readBrainAccount(s, slug)).filter(Boolean),
-      deals: listBrainEntities(s, 'deal').map((slug) => readBrainDeal(s, slug)).filter(Boolean),
-      meetings: listBrainMeetingExtractions(s)
-        .map((slug) => readBrainMeetingExtraction(s, slug))
-        .filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
+      people,
+      accounts,
+      deals,
+      meetings,
+      connections: buildMeetingConnections({ people, accounts, deals, meetings })
     }
+  })
+  ipcMain.handle(IPC.brainScanOneDrive, (e) => {
+    assertMainWindow(e)
+    const s = getSettings()
+    try {
+      return scanOneDriveBrains({
+        configuredFolder: s.meetingsFolder || resolveMeetingsFolder(s)
+      })
+    } catch (err) {
+      return {
+        hits: [],
+        connectedPath: s.meetingsFolder || resolveMeetingsFolder(s),
+        scannedRoots: [],
+        error: err instanceof Error ? err.message : String(err)
+      }
+    }
+  })
+  ipcMain.handle(IPC.brainConnect, (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = BrainConnectPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: 'Paste or pick a folder path first.' }
+    const normalized = normalizeConnectPath(parsed.data.path)
+    if (!normalized.ok) return normalized
+    try {
+      if (!existsSync(normalized.path) || !statSync(normalized.path).isDirectory()) {
+        return { ok: false, error: 'That folder is not on this computer.' }
+      }
+    } catch {
+      return { ok: false, error: 'That folder is not on this computer.' }
+    }
+    setSettings(brainConnectSettingsPatch(normalized.path))
+    return { ok: true, path: normalized.path }
   })
   // Canonical people/account NAMES ONLY (never quotes, roles, deals, or any other entity field) — feeds
   // the renderer's ASR entity-casing bias (lib/entity-casing.ts) so a live transcript can spell a known
@@ -7018,6 +7094,36 @@ function registerIpc(): void {
     await shell.openPath(dir)
     return { ok: true, path: dir }
   })
+
+  // QA-only: synthetic foreground for Ultron CDP (zoomIdle no-fire + zoom fire). Registered ONLY
+  // when ASKTOTO_USERDATA isolates the profile — never expose this fire path in production.
+  if (process.env.ASKTOTO_USERDATA) {
+    ipcMain.handle(IPC.meetingInjectAutoStart, (e, payload: unknown) => {
+      assertMainWindow(e)
+      if (!process.env.ASKTOTO_USERDATA) {
+        return { ok: false as const, error: 'meeting inject requires ASKTOTO_USERDATA' }
+      }
+      const platform =
+        payload && typeof payload === 'object' && 'platform' in payload
+          ? (payload as { platform?: unknown }).platform
+          : undefined
+      const fixtures: Record<string, { windowId: string; title: string; pid: number }> = {
+        zoom: { windowId: 'us.zoom.xos', title: 'Zoom Meeting', pid: 4242 },
+        teams: { windowId: 'com.microsoft.teams2', title: 'Microsoft Teams', pid: 4243 },
+        meet: {
+          windowId: 'com.google.Chrome',
+          title: 'Meet - meet.google.com - Google Chrome',
+          pid: 4244
+        },
+        idle: { windowId: 'com.apple.finder', title: 'Finder', pid: 1 }
+      }
+      if (typeof platform !== 'string' || !(platform in fixtures)) {
+        return { ok: false as const, error: 'bad payload: platform must be zoom|teams|meet|idle' }
+      }
+      const result = meetingAutoStart.inject(fixtures[platform])
+      return { ok: true as const, fired: result.fired, platform: result.platform }
+    })
+  }
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
   ipcMain.handle(IPC.listeningState, (e, on: unknown) => {
@@ -7815,6 +7921,7 @@ if (!app.requestSingleInstanceLock()) {
   // Silent on macOS by construction: eligibility now requires the Screen Recording grant to ALREADY exist
   // (screenCaptureGranted above), so this reconcile can never be what raises the TCC prompt (MQA-209).
   runStep('refreshScreenPreprocess', refreshScreenPreprocess)
+  runStep('refreshMeetingAutoStart', () => meetingAutoStart.refresh())
   // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
   // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
   // first use), so it no longer sits ahead of createWindow on the boot path.
@@ -7976,6 +8083,11 @@ app.on('will-quit', () => {
     screenPreprocess.stop()
   } catch (e) {
     mainLog.warn('[will-quit] screenPreprocess.stop failed', e)
+  }
+  try {
+    meetingAutoStart.stop()
+  } catch (e) {
+    mainLog.warn('[will-quit] meetingAutoStart.stop failed', e)
   }
   // Kill the llama-server sidecar synchronously (SIGKILL, F3 hardening) — without this an on-device
   // suggest/summary/vision sidecar could outlive the app the user just quit.

@@ -206,6 +206,7 @@ export type AuditEvent =
   // island is diagnosable from the support bundle; the app does not reload or kill it on this signal.
   | 'app.unresponsive'
   | 'meeting.detect.degraded'
+  | 'meeting.auto_start'
   | 'recall.open'
   | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
   // Generalized MCP push connections (BidStack CRM, Plane, ClickUp, …) — see main/mcp/mcpClient.ts.

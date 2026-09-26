@@ -172,6 +172,10 @@ const api = {
   brainClearJournalCorruption: (): Promise<{ ok: boolean; cleared?: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainClearJournalCorruption),
   brainRead: (): Promise<import('@shared/brain').BrainRead> => ipcRenderer.invoke(IPC.brainRead),
+  brainScanOneDrive: (): Promise<import('@shared/ipc').BrainScanResult> =>
+    ipcRenderer.invoke(IPC.brainScanOneDrive),
+  brainConnect: (path: string): Promise<import('@shared/ipc').BrainConnectResult> =>
+    ipcRenderer.invoke(IPC.brainConnect, { path }),
   // Canonical people/account names only — feeds the ASR entity-casing bias (lib/entity-casing.ts).
   brainEntityNames: (): Promise<import('@shared/ipc').BrainEntityNamesResult> =>
     ipcRenderer.invoke(IPC.brainEntityNames),
@@ -393,6 +397,15 @@ const api = {
   onError: (cb: (d: StreamError) => void): Unsub => sub(IPC.streamError, cb),
   onMeta: (cb: (d: StreamMeta) => void): Unsub => sub(IPC.streamMeta, cb),
   onHotkey: (cb: (a: HotkeyAction) => void): Unsub => sub(IPC.hotkey, cb),
+  onMeetingAutoStart: (cb: (d: { platform: 'zoom' | 'teams' | 'meet' }) => void): Unsub =>
+    sub(IPC.meetingAutoStart, cb),
+  // QA-only fire path: main registers the handler only when ASKTOTO_USERDATA is set.
+  injectMeetingAutoStart: (payload: {
+    platform: 'zoom' | 'teams' | 'meet' | 'idle'
+  }): Promise<
+    | { ok: true; fired: boolean; platform: 'zoom' | 'teams' | 'meet' | null }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke(IPC.meetingInjectAutoStart, payload),
 
   onUpdateReady: (cb: (d: { version?: string; notes?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
   onUpdateProgress: (cb: (d: { percent?: number }) => void): Unsub => sub(IPC.updateProgress, cb),
