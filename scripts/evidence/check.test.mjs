@@ -355,21 +355,16 @@ test('C24 CLI --ledger: a valid tree exits 0, a FAIL line exits 1 naming the tic
     recordsPath,
     `${JSON.stringify(record({ ticket: 'M2-0001' }))}\n${JSON.stringify(record({ ticket: 'M2-0001', result: 'FAIL', exit_code: 1, ci_run_id: 202 }))}\n`
   )
-  try {
-    execFileSync(process.execPath, [cliPath, '--ledger', ledgerPath], { encoding: 'utf8', stdio: 'pipe' })
-    assert.fail('expected the CLI to exit 1')
-  } catch (error) {
-    assert.equal(error.status, 1)
-    assert.match(error.stderr, /M2-0001/)
-  }
+  assert.throws(
+    () => execFileSync(process.execPath, [cliPath, '--ledger', ledgerPath], { encoding: 'utf8', stdio: 'pipe' }),
+    { status: 1, stderr: /M2-0001/ }
+  )
 
   for (const args of [[], ['--ledger', ledgerPath, '--pr-event', ledgerPath]]) {
-    try {
-      execFileSync(process.execPath, [cliPath, ...args], { encoding: 'utf8', stdio: 'pipe' })
-      assert.fail('expected the CLI to exit 2')
-    } catch (error) {
-      assert.equal(error.status, 2)
-    }
+    assert.throws(
+      () => execFileSync(process.execPath, [cliPath, ...args], { encoding: 'utf8', stdio: 'pipe' }),
+      { status: 2 }
+    )
   }
 })
 
