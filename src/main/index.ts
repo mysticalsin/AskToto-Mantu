@@ -2759,6 +2759,10 @@ function createWindow(targetDisplay?: Electron.Display): void {
     commandControl.revokeForLifecycleEvent('renderer_replaced')
     mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
     auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
+    // The content died instead of recovering on its own — any pending unresponsiveSince belongs to a wedge
+    // that will never get its matching 'responsive'. Without this, a later 'unresponsive' in the reloaded
+    // renderer would be paired with the stale one and report a stallMs of however long it's been since.
+    responsiveness.markGone()
     // A dead/reloading renderer cannot receive final STT messages or issue Stop. Force-close the live
     // socket before reload so provider callbacks cannot bleed into the new renderer session.
     invalidateCloudSttOwner(selfWebContentsId)

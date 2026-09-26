@@ -8,6 +8,11 @@ export interface ResponsivenessTracker {
   /** Call from the window's `responsive` handler. Returns the elapsed ms since the matching
    *  `markUnresponsive`, or `null` when none is pending (no unpaired `app.responsive` is ever reported). */
   markResponsive(): number | null
+  /** Call from `render-process-gone`: the content died instead of recovering on its own, so any pending
+   *  `unresponsiveSince` belongs to a wedge that will never get its matching `responsive`. Clearing it here
+   *  is what lets a later `unresponsive` in the reloaded renderer (MQA-038 reloads the same window) start a
+   *  fresh pairing instead of being measured from before the crash. */
+  markGone(): void
 }
 
 export function createResponsivenessTracker(now: () => number = Date.now): ResponsivenessTracker {
@@ -23,6 +28,9 @@ export function createResponsivenessTracker(now: () => number = Date.now): Respo
       const stallMs = now() - unresponsiveSince
       unresponsiveSince = null
       return stallMs
+    },
+    markGone(): void {
+      unresponsiveSince = null
     }
   }
 }

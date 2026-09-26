@@ -17,8 +17,8 @@ import { randomUUID } from 'node:crypto'
  * drives both halves of the recovery — the durable trace (what died, when, and which minidump belongs to
  * it) and the routing decision (skip the boot step that did the killing).
  *
- * Deliberately dependency-free (node:fs/node:path only): this runs before anything else can be trusted,
- * and must never be the reason a boot fails.
+ * Deliberately dependency-free (node built-ins only): this runs before anything else can be trusted, and
+ * must never be the reason a boot fails.
  */
 
 const SENTINEL = 'boot-incomplete.json'

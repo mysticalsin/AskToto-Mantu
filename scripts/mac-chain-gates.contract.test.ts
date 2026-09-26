@@ -169,9 +169,8 @@ describe('MQA-249 — a portable "this build came up" signal, and the macOS gate
     expect(start).toBeGreaterThan(-1)
     const createWindow = indexSrc.slice(start)
     const body = createWindow.slice(0, createWindow.indexOf('\n}\n'))
-    // M2-0006: the actual auditLog('app.started', ...) call moved into
-    // infra/observability/run-observability.ts (startRunObservability); createWindow's call-site into
-    // it is what's pinned here.
+    // createWindow's app.started audit lives in infra/observability/run-observability.ts
+    // (startRunObservability); this pins createWindow's call-site into it, not the audit call itself.
     expect(body).toMatch(/startRunObservability\(/)
     // Before any early return that could skip it — other than the idempotency guard, which only fires
     // when a window already exists and the app has therefore demonstrably already started.
