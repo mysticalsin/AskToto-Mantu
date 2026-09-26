@@ -1,6 +1,55 @@
 import { defineConfig, mergeConfig } from 'vitest/config'
-import { resolve } from 'path'
+import { mkdtempSync, mkdirSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join, resolve } from 'path'
 import electronViteConfig from './electron.vite.config'
+
+// W0-HERMETIC / MQA-348 — every test worker gets a fresh, empty home directory. Production code derives
+// real user locations from the home directory (detectOneDrive → ~/Library/CloudStorage/OneDrive-*, then
+// the one-time "AskToto Meetings" copy-forward into "Métis Meetings"), so a test that never pins a
+// meetings folder was reading and WRITING the developer's real OneDrive meeting store. Under the sandbox
+// the write failed silently; unsandboxed, copyFileSync blocked on a cloud-only placeholder and hung the
+// worker forever (a synchronous block starves testTimeout, so the run never ended). CI has no OneDrive,
+// which is why it never showed there. A throwaway home per run makes every test resolve the same
+// no-OneDrive path CI sees, and nothing a test does can reach a real profile — even a HOME the calling
+// shell or CI environment already set is overridden here, since Vitest's `test.env` wins over inherited
+// process env for the worker.
+//
+// Playwright resolves its browser cache from the home directory too, so pin it to the REAL cache (unless
+// the caller already chose one) or the browser-backed tests would lose their Chromium. `homedir()` here
+// runs in the config-loading process, before any override below applies, so it still resolves the actual
+// developer home.
+function playwrightBrowsersPath(realHome: string): string {
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) return process.env.PLAYWRIGHT_BROWSERS_PATH
+  if (process.platform === 'darwin') return join(realHome, 'Library', 'Caches', 'ms-playwright')
+  if (process.platform === 'win32') {
+    return join(process.env.LOCALAPPDATA || join(realHome, 'AppData', 'Local'), 'ms-playwright')
+  }
+  return join(process.env.XDG_CACHE_HOME || join(realHome, '.cache'), 'ms-playwright')
+}
+const testHome = mkdtempSync(join(tmpdir(), 'metis-test-home-'))
+// A handful of existing tests already do mkdtempSync(join(tmpdir(), 'asktoto-...')) — once TMPDIR below
+// is honored by os.tmpdir(), those land inside the sandbox home too, so create it up front.
+const testTmpDir = join(testHome, 'tmp')
+mkdirSync(testTmpDir, { recursive: true })
+const hermeticHomeEnv = {
+  HOME: testHome,
+  USERPROFILE: testHome,
+  // Windows detectOneDrive() trusts these before the home directory; empty means "no OneDrive".
+  OneDrive: '',
+  OneDriveCommercial: '',
+  OneDriveConsumer: '',
+  APPDATA: join(testHome, 'AppData', 'Roaming'),
+  LOCALAPPDATA: join(testHome, 'AppData', 'Local'),
+  TMPDIR: testTmpDir,
+  TMP: testTmpDir,
+  TEMP: testTmpDir,
+  PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath(homedir()),
+  METIS_TEST_HOME: testHome,
+  // Unique per run/worktree — __mocks__/electron.ts derives every app.getPath(...) answer from this, so
+  // a concurrent run (another worktree, a parallel agent) never shares a userData/documents path with us.
+  ASKTOTO_TEST_SANDBOX_ROOT: testHome
+}
 
 // A `#!/usr/bin/env node` shebang is valid in a file Node's own loader reads directly, but esbuild's
 // transform (which Vitest runs on served modules) PRESERVES it, and Vitest then evaluates the
@@ -55,6 +104,7 @@ const vitestConfig = defineConfig({
     // scatter of per-test magic numbers.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    env: hermeticHomeEnv,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
