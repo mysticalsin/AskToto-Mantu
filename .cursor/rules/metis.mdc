@@ -1,0 +1,13 @@
+---
+description: Métis repository rules — read AGENTS.md and the relay baton before editing
+alwaysApply: true
+---
+
+- Before any change, read `AGENTS.md` here and `_relay/HANDOFF.md` in the private repo `mysticalsin/Metis-2.0-Program`.
+- Métis 2.0 work is tracked as `M2-####` tickets in `docs/metis-2.0/ledger/` of the private repo `mysticalsin/Metis-2.0-Program`. Name branches `m2/M2-####-slug`,
+  put the ticket id in every commit subject, and open one PR per ticket with `.github/pull_request_template.md`.
+- Write a failing test before fixing a bug. Tests run only in CI (owner decision D-28): never run `npm test`,
+  `npx vitest`, `node` on repo files or the app on a Mac. Push the branch and read the CI run; locally you may run
+  `npx tsc --noEmit -p tsconfig.node.json` / `tsconfig.web.json`.
+- Never run release, dist, installer, deploy or migrate scripts, never push tags, and never commit secrets.
+- Update `_relay/HANDOFF.md` in the private program repo when you stop, following the format already in the file.
