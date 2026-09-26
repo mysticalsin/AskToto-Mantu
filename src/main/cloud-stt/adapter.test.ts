@@ -223,6 +223,45 @@ describe('normalizeNova3ResultsMessage', () => {
     expect(out.finals[0].cluster).toBe('0')
     expect(out.finals[1].cluster).toBe('1')
   })
+
+  it('keeps the final transcript text when words[] is empty (F-L04-1)', () => {
+    const out = normalizeNova3ResultsMessage(
+      {
+        type: 'Results',
+        is_final: true,
+        channel: {
+          alternatives: [
+            {
+              transcript: 'Hello world',
+              words: []
+            }
+          ]
+        }
+      },
+      { scope, messageSequence: 5 }
+    )
+    expect(out.finals).toHaveLength(1)
+    expect(out.finals[0]).toMatchObject({
+      text: 'Hello world',
+      cluster: 'unknown',
+      isFinal: true
+    })
+    expect(out.interimText).toBe('')
+  })
+
+  it('drops a final Results message with empty words and blank transcript (unchanged)', () => {
+    const out = normalizeNova3ResultsMessage(
+      {
+        type: 'Results',
+        is_final: true,
+        channel: {
+          alternatives: [{ transcript: '   ', words: [] }]
+        }
+      },
+      { scope, messageSequence: 6 }
+    )
+    expect(out).toEqual({ finals: [], interimText: '', finished: false })
+  })
 })
 
 describe('resolveNova3LanguageQuery / resolveSonioxLanguageConfig', () => {
