@@ -43,6 +43,7 @@ import { OnboardingDemoPreviewBoundary } from './OnboardingDemoPreviewBoundary'
 import {
   advanceDemoBeat,
   createDemoPlaybackClock,
+  demoClockCommand,
   demoOrchestratorSnapshot,
   demoPlaybackStatus,
   initialDemoOrchestratorState,
@@ -111,8 +112,10 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
   const phaseRef = useRef<DemoPlaybackPhase>('paused')
   const controlsRef = useRef({ environment, paused: orchestrator.paused })
   controlsRef.current = { environment, paused: orchestrator.paused }
+  // commit() is the only writer of orchestrator state, and it sets this ref synchronously
+  // before it, so the ref is never stale by the time a render observes it — no render-time
+  // write needed here.
   const orchestratorRef = useRef(orchestrator)
-  orchestratorRef.current = orchestrator
   const cursorRef = useRef<HTMLDivElement>(null)
   const lastCommitRef = useRef(0)
   const clickedForRef = useRef<DemoCursorTarget | null>(null)
@@ -123,10 +126,7 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
       motion,
       (next) => {
         controlsRef.current = { ...controlsRef.current, environment: next }
-        const clock = clockRef.current
-        if (next.reducedMotion) clock?.finish()
-        else if (next.hidden) clock?.pause()
-        else if (!controlsRef.current.paused) clock?.play()
+        clockRef.current?.[demoClockCommand(next, controlsRef.current.paused)]()
         setEnvironment(next)
       }
     ), [motion])
@@ -192,10 +192,10 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
       request: (callback) => requestAnimationFrame(callback),
       cancel: (id) => cancelAnimationFrame(id)
     }, tick)
+    // Deliberately no play/pause/finish call here: the sync effect below depends on the same
+    // orchestrator.beat/replayKey and runs right after this one in the same commit, so it is
+    // the only place that drives a freshly created clock too.
     clockRef.current = clock
-    const current = controlsRef.current
-    if (current.environment.reducedMotion) clock.finish()
-    else if (!current.environment.hidden && !current.paused) clock.play()
     return () => {
       clock.dispose()
       if (clockRef.current === clock) clockRef.current = null
@@ -204,11 +204,7 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
   }, [orchestrator.beat, orchestrator.replayKey, wrapRef])
 
   useEffect(() => {
-    const clock = clockRef.current
-    if (!clock) return
-    if (environment.reducedMotion) clock.finish()
-    else if (environment.hidden || orchestrator.paused) clock.pause()
-    else clock.play()
+    clockRef.current?.[demoClockCommand(environment, orchestrator.paused)]()
   }, [environment.hidden, environment.reducedMotion, orchestrator.paused, orchestrator.beat, orchestrator.replayKey])
 
   const resetPlayback = (): void => {
@@ -238,8 +234,7 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
       const next = toggleDemoPause(orchestratorRef.current, phaseRef.current, controlsRef.current.environment.reducedMotion)
       if (next === orchestratorRef.current) return
       controlsRef.current = { ...controlsRef.current, paused: next.paused }
-      if (next.paused) clockRef.current?.pause()
-      else if (!controlsRef.current.environment.hidden) clockRef.current?.play()
+      clockRef.current?.[demoClockCommand(controlsRef.current.environment, next.paused)]()
       commit(next)
     },
     replay: () => {

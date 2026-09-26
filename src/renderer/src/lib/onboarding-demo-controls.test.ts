@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   advanceDemoBeat,
   createDemoPlaybackClock,
+  demoClockCommand,
   demoOrchestratorSnapshot,
   demoPlaybackStatus,
   initialDemoOrchestratorState,
@@ -154,6 +155,25 @@ describe('onboarding demo pacing and lifecycle', () => {
     expect(changes).toHaveLength(2)
     expect(documentEvents.size + motionEvents.size).toBe(0)
     expect(readDemoEnvironment(null, null)).toEqual({ hidden: false, reducedMotion: false })
+  })
+})
+
+describe('demoClockCommand — the one owner of finish/pause/play', () => {
+  it('finishes under reduced motion regardless of hidden or paused', () => {
+    expect(demoClockCommand({ hidden: false, reducedMotion: true }, false)).toBe('finish')
+    expect(demoClockCommand({ hidden: true, reducedMotion: true }, true)).toBe('finish')
+  })
+
+  it('pauses when hidden, even if the user has not paused', () => {
+    expect(demoClockCommand({ hidden: true, reducedMotion: false }, false)).toBe('pause')
+  })
+
+  it('pauses when the user has paused, even if visible', () => {
+    expect(demoClockCommand({ hidden: false, reducedMotion: false }, true)).toBe('pause')
+  })
+
+  it('plays only when visible, not reduced motion and not paused', () => {
+    expect(demoClockCommand({ hidden: false, reducedMotion: false }, false)).toBe('play')
   })
 })
 

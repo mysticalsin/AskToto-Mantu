@@ -152,6 +152,18 @@ export function watchDemoEnvironment(
   }
 }
 
+export type DemoClockCommand = 'finish' | 'pause' | 'play'
+
+/** The one owner of what a DemoPlaybackClock should be doing: reduced motion always settles
+ * it at its hold, a hidden window or the user's own pause holds it where it is, and otherwise
+ * it plays. Every call site that must drive a clock imperatively resolves through this rather
+ * than repeating the rule. */
+export function demoClockCommand(environment: DemoEnvironment, paused: boolean): DemoClockCommand {
+  if (environment.reducedMotion) return 'finish'
+  if (environment.hidden || paused) return 'pause'
+  return 'play'
+}
+
 /** Optional decoration is attempted in the click, but cannot own navigation. */
 export function runOptionalDemoMedia(effect: (() => unknown) | undefined): void {
   try {
@@ -176,9 +188,9 @@ export function demoPlaybackStatus(
 /**
  * Cold orchestration state: which step is showing, which "take" of it (a fresh replayKey
  * tells the caller to recreate its clock), and the user's own pause choice. The hot,
- * per-frame state (elapsed ms, clock phase) is owned by the DemoPlaybackClock and mirrored
- * back in via onClockFrame — it is not part of this state, so a tick can never race a step
- * change through this module.
+ * per-frame state (elapsed ms, clock phase) is owned by the DemoPlaybackClock itself and
+ * lives in the caller's own state — it is not part of this state, so a tick can never race
+ * a step change through this module.
  */
 export interface DemoOrchestratorState {
   beat: number
@@ -224,8 +236,9 @@ export function previousDemoBeat(state: DemoOrchestratorState): DemoOrchestrator
   return { ...state, beat: state.beat - 1, paused: false }
 }
 
-/** Advancing can land mid-beat: afterNext's carried-over localMs is not necessarily zero.
- * The caller applies it to the fresh per-beat clock it creates for the new beat. */
+/** Hands back whatever localMs the model's afterNext computes for the new beat — the demo's
+ * own model always starts a beat at 0 — for the caller to seed the fresh clock it creates
+ * for that beat. */
 export function advanceDemoBeat(
   state: DemoOrchestratorState,
   model: Pick<DemoBeatModel, 'afterNext'>
@@ -242,8 +255,9 @@ export interface DemoOrchestratorSnapshot {
   elapsedMs: number
 }
 
-/** localMs is the current beat-local clock reading (0 unless just carried over by
- * advanceDemoBeat); reduced motion always reports the step already settled at its hold. */
+/** localMs is this beat's own elapsed-ms reading: reset to 0 whenever the beat changes and
+ * updated periodically while it plays. Reduced motion always reports the step already
+ * settled at its hold, regardless of localMs. */
 export function demoOrchestratorSnapshot(
   state: DemoOrchestratorState,
   localMs: number,
