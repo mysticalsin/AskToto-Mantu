@@ -30,8 +30,18 @@ export function prefersOverlayReducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
-/** Hide pad / island peek only when fully parked. Bar stays mounted during in / settled / out. */
-export function overlayShowPeek(idle: boolean, revealed: boolean, spring: OverlaySpring): boolean {
+/**
+ * Island peek only when fully parked. Hide keeps Bar mounted (window size is the park)
+ * so top-edge restoreBarWidth shows Ask immediately — Ultron a40a22f: 880×44
+ * buttons=[Show Métis] hasAsk=false after unmounting Bar for OverlayPeek.
+ */
+export function overlayShowPeek(
+  idle: boolean,
+  revealed: boolean,
+  spring: OverlaySpring,
+  keepAskMounted = false
+): boolean {
+  if (keepAskMounted) return false
   return idle && !revealed && spring === 'rest'
 }
 
@@ -39,5 +49,24 @@ export function overlaySpringClassName(spring: OverlaySpring): string {
   if (spring === 'in') return 'overlay-spring overlay-spring--in w-full'
   if (spring === 'out') return 'overlay-spring overlay-spring--out w-full'
   if (spring === 'settled') return 'overlay-spring overlay-spring--settled w-full'
+  return 'w-full'
+}
+
+/** Circle/Jarvis expand to the Ask bar. Bar-circle ease-spring only. Not Hide/Island overlay-spring. */
+export type CircleRestSpring = 'idle' | 'expand' | 'collapse'
+export const CIRCLE_REST_EXPAND_MS = 420
+export const CIRCLE_REST_COLLAPSE_MS = 340
+
+export function circleRestSpringAfterExpand(reducedMotion: boolean): CircleRestSpring {
+  return reducedMotion ? 'idle' : 'expand'
+}
+
+export function circleRestSpringAfterCollapse(reducedMotion: boolean): CircleRestSpring {
+  return reducedMotion ? 'idle' : 'collapse'
+}
+
+export function circleRestSpringClassName(spring: CircleRestSpring): string {
+  if (spring === 'expand') return 'circle-rest-spring circle-rest-spring--expand w-full'
+  if (spring === 'collapse') return 'circle-rest-spring circle-rest-spring--collapse w-full'
   return 'w-full'
 }

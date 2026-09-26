@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 vi.mock('./auth', () => ({ getGraphToken: vi.fn(async () => 'graph-token') }))
 vi.mock('./logger', () => ({ auditLog: vi.fn() }))
 
-import { calendarToday } from './calendar'
+import { calendarToday, safeTimeZone } from './calendar'
 
 // MQA-026 — "today's agenda" must be the user's LOCAL day. Graph interprets calendarView's
 // startDateTime/endDateTime by the offset carried in the value and ignores Prefer: outlook.timezone for
@@ -148,5 +148,40 @@ describe('calendarToday — join URL allow-list', () => {
     expect(res.ok).toBe(true)
     expect(res.events?.[0]?.joinUrl).toMatch(/^https:\/\/teams\.microsoft\.com\//)
     expect(res.events?.[1]?.joinUrl).toBeUndefined()
+  })
+})
+
+describe('calendarToday — renderer-supplied zone never reaches the Prefer header unchecked', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it('safeTimeZone keeps IANA names and falls back to UTC for anything else', () => {
+    expect(safeTimeZone('Europe/Brussels')).toBe('Europe/Brussels')
+    expect(safeTimeZone('America/Argentina/Buenos_Aires')).toBe('America/Argentina/Buenos_Aires')
+    expect(safeTimeZone('Etc/GMT+3')).toBe('Etc/GMT+3')
+    expect(safeTimeZone('UTC')).toBe('UTC')
+    expect(safeTimeZone('Not/AZone')).toBe('UTC')
+    expect(safeTimeZone('Europe/Brussels"\r\nX-Injected: 1')).toBe('UTC')
+    expect(safeTimeZone('Europe/Brussels" ; evil')).toBe('UTC')
+    expect(safeTimeZone('a'.repeat(200))).toBe('UTC')
+    expect(safeTimeZone('')).toBe('UTC')
+    expect(safeTimeZone(42)).toBe('UTC')
+    expect(safeTimeZone(undefined)).toBe('UTC')
+  })
+
+  it('a header-shaped zone is replaced by UTC in the request', async () => {
+    const { prefer } = await boundsAt('2026-08-08T19:15:00Z', 'Europe/Brussels"\r\nX-Injected: 1')
+    expect(prefer).toBe('outlook.timezone="UTC"')
+  })
+
+  it('a valid zone still goes through untouched', async () => {
+    const { prefer } = await boundsAt('2026-08-08T19:15:00Z', 'Asia/Tokyo')
+    expect(prefer).toBe('outlook.timezone="Asia/Tokyo"')
   })
 })

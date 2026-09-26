@@ -1,3 +1,6 @@
+import { CIRCLE_REST_HOST_PX, CIRCLE_REST_SHADOW_PAD_PX } from './overlay-orb'
+import { SETTINGS_SURFACE_BACKGROUND, SETTINGS_WINDOW_MIN } from './settings-bounds'
+
 /**
  * Overlay chrome modes (hide / island / bar). Shared so Settings, the renderer rest surface,
  * and main geometry all read one enum. Default is hide-until-hover (fresh install).
@@ -74,6 +77,219 @@ export function overlayDocksBarCircle(layout: OverlayLayout): boolean {
  */
 export function shouldForceParkOnBecameIdle(input: { becameIdle: boolean; usesHover: boolean }): boolean {
   return input.becameIdle && input.usesHover
+}
+
+/**
+ * Hide/Island stay hover-idle on the answer surface even with a live answer or
+ * listening chrome (Tony 2026-09-06). A leftover Circle minimized flag must not
+ * block park — Hide never rests as Expand Métis. Settings / History / Review /
+ * capture stay fully shown.
+ */
+export function overlayHoverIdle(input: {
+  usesHover: boolean
+  minimized: boolean
+  onboardingDone: boolean
+  view: string
+  capturing: boolean
+}): boolean {
+  return (
+    input.usesHover &&
+    input.onboardingDone &&
+    input.view === 'answer' &&
+    !input.capturing
+  )
+}
+
+/** Toasts and typed input force the bar open. Listening and a standing answer do not. */
+export function overlayHoverForced(input: {
+  updateReady: boolean
+  toast: boolean
+  typedInput: boolean
+}): boolean {
+  return input.updateReady || input.toast || input.typedInput
+}
+
+/**
+ * Hug-width is the minimized pill or a parked island peek.
+ * Revealed Hide/Island must stay the full Ask bar (880). Ultron f12003d:
+ * OverlayPeek hug + 120 floor + BAR_MIN_HEIGHT 44 opened 120×44 Show Métis.
+ */
+export function overlayAllowsHugWidth(input: {
+  minimized: boolean
+  islandResting: boolean
+  restWidth: number
+  nextWidth: number
+}): boolean {
+  if (input.minimized) return true
+  return input.islandResting && input.nextWidth <= input.restWidth + 24
+}
+
+/** Legacy hug floor for toasts / non-circle. Circle rest must not use this. */
+export const WINDOW_RESIZE_HUG_FLOOR_PX = 120
+
+/** 41 orb + pad when Circle/Jarvis rest is showing. Else the 120 toast floor. */
+export function overlayHugWidthFloor(circleRest: boolean): number {
+  return circleRest ? CIRCLE_REST_HOST_PX + CIRCLE_REST_SHADOW_PAD_PX : WINDOW_RESIZE_HUG_FLOOR_PX
+}
+
+/**
+ * IPC.windowResize hug. A 41 Circle used to become Math.max(120, 41+10) = 120.
+ * Circle rest hugs to 41+pad. Hide/Island still use the 120 floor when they hug.
+ */
+export function overlayHugNextWidth(input: {
+  reportedWidth: number
+  maxWidth: number
+  circleRest: boolean
+}): number {
+  const pad = CIRCLE_REST_SHADOW_PAD_PX
+  const floor = overlayHugWidthFloor(input.circleRest)
+  return Math.max(floor, Math.min(Math.ceil(input.reportedWidth) + pad, input.maxWidth))
+}
+
+/** Classic Bar idle hug. Settings is 800+. A leftover 800 slab under the bar is the ghost panel. */
+export const BAR_IDLE_HEIGHT_PX = 84
+
+/** Idle Ask + Settings chrome. Peek 2px / hug 44 / Ultron 880×44 must not win after reveal. */
+export const ASK_REVEAL_MIN_HEIGHT_PX = 120
+
+/** Settings / exclusive-stage heights. Never remember these as the Bar hug. */
+export function isSettingsTallHeight(height: number): boolean {
+  return Number.isFinite(height) && height >= SETTINGS_WINDOW_MIN.height
+}
+
+/**
+ * lastBarHeight must stay a bar / answer hug, not Settings 800+ or the 816 onboarding card.
+ * A long Review can grow again via useAutoResize after Settings closes.
+ */
+export function rememberBarContentHeight(height: number, fallback = BAR_IDLE_HEIGHT_PX): number {
+  if (!Number.isFinite(height) || height <= 0) return fallback
+  if (isSettingsTallHeight(height)) return fallback
+  return Math.round(height)
+}
+
+/**
+ * Settings chrome mounts only while Settings is the view and the Circle pill is not up.
+ * Circle rest / Circle click must leave Settings so a 800+ sheet cannot sit under the bar.
+ */
+export function overlayShowsSettingsSheet(view: string, minimized = false): boolean {
+  return view === 'settings' && !minimized
+}
+
+/**
+ * Dock / activate opens Settings only for Bar. Hide and Island launch parked.
+ * Fresh userdata must boot 8×2, not 880×1017 Settings.
+ */
+export function overlayActivateOpensSettings(layout: string): boolean {
+  return layout === 'bar'
+}
+
+/**
+ * Top-edge Ask height. Never Math.max with a leftover Settings 800+ slab.
+ * Ultron: 880×1017 + Expand Métis while Hide should have been 880×120.
+ */
+export function askRevealHeight(input: {
+  currentHeight: number
+  lastBarHeight: number
+  minReveal?: number
+}): number {
+  const min = input.minReveal ?? ASK_REVEAL_MIN_HEIGHT_PX
+  const last = rememberBarContentHeight(input.lastBarHeight, min)
+  const current = rememberBarContentHeight(input.currentHeight, min)
+  return Math.max(min, last, current)
+}
+
+/** Ultron CDP: 880×1017, buttons=[Expand Métis], hasAsk=false. Not Hide park. Not Ask reveal. */
+export function isSettingsSlabInsteadOfAsk(input: {
+  width: number
+  height: number
+  hasAsk: boolean
+  buttons?: readonly string[]
+}): boolean {
+  const onlyExpand =
+    !!input.buttons &&
+    input.buttons.length > 0 &&
+    input.buttons.every((b) => b === 'Expand Métis')
+  if (isFullAskReveal({ width: input.width, height: input.height, hasAsk: input.hasAsk })) {
+    return false
+  }
+  return input.width >= 800 && (isSettingsTallHeight(input.height) || onlyExpand)
+}
+
+/**
+ * Tony live FAIL: Overlay=Bar, Settings closed, gray Settings-like slab under the bar
+ * (window still settings-tall and/or SETTINGS_SURFACE_BACKGROUND leftover).
+ */
+export function isBarIdleGhostPanel(input: {
+  layout: string
+  settingsSurfaceOpen: boolean
+  width: number
+  height: number
+  background?: string
+  minimized?: boolean
+}): boolean {
+  if (input.layout !== 'bar' || input.settingsSurfaceOpen) return false
+  if (input.background === SETTINGS_SURFACE_BACKGROUND) return true
+  return isSettingsTallHeight(input.height)
+}
+
+/** Ultron 2026-09-06: top-edge hover opened this stub instead of the 880 Ask bar. */
+export function isShowMetisHugStub(win: { width: number; height: number }): boolean {
+  return win.width === 120 && win.height === 44
+}
+
+/**
+ * After hug-width is blocked, OverlayPeek can still report 2–20px. clampHeight
+ * then floors to BAR_MIN_HEIGHT 44 → 880×44 Show Métis. Force restore.
+ */
+export function isIncompleteAskReveal(win: { width: number; height: number }): boolean {
+  if (isShowMetisHugStub(win)) return true
+  return win.width >= 800 && win.height > 0 && win.height <= 44
+}
+
+/** Revealed Hide/Island keeps at least the idle Ask bar. Park, Bar idle, and the mini-pill stay exact. */
+export function overlayRevealedContentHeight(input: {
+  islandResting: boolean
+  minimized: boolean
+  settingsOpen: boolean
+  reportedHeight: number
+  minBarHeight?: number
+  usesHover?: boolean
+}): number {
+  const floor = input.minBarHeight ?? ASK_REVEAL_MIN_HEIGHT_PX
+  if (input.islandResting || input.minimized || input.settingsOpen) return input.reportedHeight
+  if (input.usesHover === false) return input.reportedHeight
+  return Math.max(input.reportedHeight, floor)
+}
+
+/**
+ * Ultron CDP after top-edge dwell. FAIL: widened Show Métis stub, no Ask field.
+ * PASS: Ask chrome (hasAsk) at full bar width and taller than the 44px peek.
+ */
+export function isShowMetisOnlyStub(input: {
+  width: number
+  height: number
+  hasAsk: boolean
+  buttons: readonly string[]
+}): boolean {
+  if (input.hasAsk) return false
+  const onlyShowMetis =
+    input.buttons.length > 0 &&
+    input.buttons.every((b) => b === 'Show Métis')
+  if (onlyShowMetis && input.height <= 44) return true
+  return isIncompleteAskReveal(input)
+}
+
+export function isFullAskReveal(input: {
+  width: number
+  height: number
+  hasAsk: boolean
+}): boolean {
+  return (
+    input.hasAsk &&
+    input.width >= 800 &&
+    input.height > 44 &&
+    input.height >= ASK_REVEAL_MIN_HEIGHT_PX
+  )
 }
 
 /**

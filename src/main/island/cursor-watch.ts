@@ -8,26 +8,113 @@
 
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
-import { HOVER_ISLAND_HEIGHT_MAX_PX, HOVER_ISLAND_WIDTH_MAX_PX, type Rect } from './geometry'
+import { HOVER_ISLAND_HEIGHT_MAX_PX, type Rect } from './geometry'
 
-/** Ignore a leftover 560×44 menu-bar slab. Reveal is the camera island only. */
-function clampHoverRestRect(rect: Rect): Rect {
-  const width = Math.min(rect.width, HOVER_ISLAND_WIDTH_MAX_PX)
+/** Cap leftover 44px slabs so Teams mute at Y=40 still misses. Width stays full top edge. */
+export function clampHoverRestRect(rect: Rect): Rect {
   const height = Math.min(rect.height, HOVER_ISLAND_HEIGHT_MAX_PX)
-  if (width === rect.width && height === rect.height) return rect
-  const midX = rect.x + rect.width / 2
-  return {
-    x: Math.round(midX - width / 2),
-    y: rect.y,
-    width,
-    height
-  }
+  if (height === rect.height) return rect
+  return { ...rect, height }
+}
+
+/**
+ * A tray Show/Hide `hide()` leaves the LSUIElement window invisible while
+ * `islandResting` may still be false. Treat that as not revealed so top-edge
+ * hover calls restoreBarWidth + showInactive instead of stay.
+ */
+export function overlayWatchTreatAsRevealed(islandResting: boolean, windowVisible: boolean): boolean {
+  return !islandResting && windowVisible
+}
+
+export type CursorWatchDecision = 'reveal' | 'hide' | 'stay'
+
+/** Reveal even when the hovering latch is stuck, if the window is still parked, hidden, or the 120×44 stub. */
+export function overlayWatchNeedsRestore(input: {
+  decision: CursorWatchDecision
+  alreadyHovering: boolean
+  islandResting: boolean
+  windowVisible: boolean
+  hugStub?: boolean
+}): boolean {
+  if (input.hugStub && (input.decision === 'reveal' || input.decision === 'stay')) return true
+  if (input.decision !== 'reveal') return false
+  if (!input.alreadyHovering) return true
+  return input.islandResting || !input.windowVisible
 }
 
 /** Poll while hide/island is resting. 16–32ms — one frame-ish, no Accessibility tap. */
 export const CURSOR_WATCH_INTERVAL_MS = 24
 /** Extra pixels around the revealed bar before we treat the pointer as gone. */
 export const CURSOR_LEAVE_GRACE_PX = 8
+/**
+ * After cursor-watch hide, main parks Hide/Island even if the renderer never
+ * calls overlayParkAfterHide. Ultron c74e389: 5s at ~(900,600) left 880×120 up.
+ * Must land inside 1–2s. Do not reset this timer on every hide tick.
+ */
+export const OVERLAY_LEAVE_PARK_MS = 800
+
+/**
+ * Revealed Hide/Island + cursor outside the bar and the top-edge strip → park,
+ * but only once main has SEEN the OS cursor in the strip or on the bar during
+ * this reveal (`osHoverSeen`). A reveal the renderer opened on its own (forced
+ * toast / typed input, Island peek mouseenter, a CDP-synthetic hover) never had
+ * the OS cursor near the bar; parking it 800ms later is the "bar flashes then
+ * disappears" FAIL and would close a toast the user never hovered. The renderer
+ * parks those through its own leave / force-end path (overlayParkAfterHide).
+ */
+export function overlayWatchShouldParkOnLeave(input: {
+  decision: CursorWatchDecision
+  islandResting: boolean
+  osHoverSeen: boolean
+}): boolean {
+  return input.decision === 'hide' && !input.islandResting && input.osHoverSeen
+}
+
+export type OverlayWatchAction = 'restore' | 'stay' | 'park' | 'leave-ignored'
+
+/**
+ * One cursor-watch tick as a pure step. `osHoverSeen` is main's latch: true once
+ * the OS cursor has been inside the strip or the revealed bar since the last
+ * park; it is what makes leave → park legitimate. `restore` = restoreBarWidth +
+ * hover-true; `park` = hover-false + schedule the OVERLAY_LEAVE_PARK_MS park;
+ * `stay` / `leave-ignored` never touch bounds.
+ */
+export function overlayWatchStep(input: {
+  cursor: { x: number; y: number }
+  restRect: Rect
+  revealedRect: Rect
+  islandResting: boolean
+  windowVisible: boolean
+  osHoverSeen: boolean
+  hugStub?: boolean
+}): { action: OverlayWatchAction; osHoverSeen: boolean } {
+  const revealed = overlayWatchTreatAsRevealed(input.islandResting, input.windowVisible)
+  const decision = decideCursorWatch({
+    cursor: input.cursor,
+    restRect: input.restRect,
+    revealedRect: input.revealedRect,
+    revealed
+  })
+  if (
+    overlayWatchNeedsRestore({
+      decision,
+      alreadyHovering: input.osHoverSeen,
+      islandResting: input.islandResting,
+      windowVisible: input.windowVisible,
+      hugStub: input.hugStub
+    })
+  ) {
+    return { action: 'restore', osHoverSeen: true }
+  }
+  if (decision !== 'hide') {
+    // Revealed + 'stay' means the OS cursor is in the strip or on the bar: latch it.
+    return { action: 'stay', osHoverSeen: input.osHoverSeen || revealed }
+  }
+  if (!overlayWatchShouldParkOnLeave({ decision, islandResting: input.islandResting, osHoverSeen: input.osHoverSeen })) {
+    return { action: 'leave-ignored', osHoverSeen: input.osHoverSeen }
+  }
+  return { action: 'park', osHoverSeen: false }
+}
 
 export function pointInRect(point: { x: number; y: number }, rect: Rect): boolean {
   return (
@@ -47,13 +134,11 @@ export function inflateRect(rect: Rect, pad: number): Rect {
   }
 }
 
-export type CursorWatchDecision = 'reveal' | 'hide' | 'stay'
-
 /**
- * Resting: cursor in the hide/island rest rect → reveal.
- * Revealed: stay if the cursor is still in the island/notch rest strip OR the
- * inflated bar. Hide only when it is in neither. macOS clamps the bar to
- * workArea.y (~39); a cursor in the island (Y≈12) must not oscillate hide/reveal.
+ * Resting: cursor in the top-edge approach strip → reveal.
+ * Revealed: stay if the cursor is still in that strip OR the inflated bar.
+ * Hide only when it is in neither. macOS clamps the bar to workArea.y (~39);
+ * a cursor on the top edge (Y≈12) must not oscillate hide/reveal.
  */
 export function decideCursorWatch(input: {
   cursor: { x: number; y: number }

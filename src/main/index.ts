@@ -93,6 +93,7 @@ import {
   setSettings,
   getLockedKeys,
   getAllowedProviders,
+  getEgressAllowlist,
   getEnvKeyProviders,
   getApiKey,
   setApiKey,
@@ -174,19 +175,48 @@ import {
   overlayRestSize,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
+  settingsOpenRect,
   shouldIgnoreResizeWhilePeekResting,
   shouldParkHoverRestAfterLeavingSurface,
   topCenterPosition,
   topClamp
 } from './island/geometry'
 import {
+  OVERLAY_REST_BACKGROUND,
+  SETTINGS_SURFACE_BACKGROUND,
+  SETTINGS_WINDOW_MIN,
+  settingsContentHeight
+} from '@shared/settings-bounds'
+import {
   CURSOR_WATCH_INTERVAL_MS,
+  OVERLAY_LEAVE_PARK_MS,
   decideCursorWatch,
+  overlayWatchStep,
   pointInRect,
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
-import { overlayAllowsMinimize, overlayUsesHover, parseOverlayLayout, type OverlayLayout } from '@shared/overlay-chrome'
+import {
+  ASK_REVEAL_MIN_HEIGHT_PX,
+  BAR_IDLE_HEIGHT_PX,
+  askRevealHeight,
+  isIncompleteAskReveal,
+  isSettingsTallHeight,
+  overlayActivateOpensSettings,
+  overlayAllowsHugWidth,
+  overlayAllowsMinimize,
+  overlayHugNextWidth,
+  overlayRevealedContentHeight,
+  overlayUsesHover,
+  parseOverlayLayout,
+  rememberBarContentHeight,
+  type OverlayLayout
+} from '@shared/overlay-chrome'
+import {
+  minimizedCircleRestBounds,
+  overlayOrbRestIsCircle,
+  parseOverlayOrbStyle
+} from '@shared/overlay-orb'
 
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until the first THEM window with the feature enabled (never on the startup path).
@@ -299,6 +329,7 @@ import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
 import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey } from '@shared/operator'
+import { cloudflareConnectTarget } from './cloudflare-connect'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import {
   operatorAskTransport,
@@ -308,6 +339,9 @@ import {
   recordOperatorRating,
   startOperatorRuntime
 } from './operator-ingest'
+import { classifyQuestionType } from '@shared/question-type'
+import { BoundedSet } from './bounded-set'
+import { installEgressGuard } from './net/egress-guard'
 import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
 import { startOperatorOverlayPoll } from './operator-overlay'
 import { initLogging, mainLog, auditLog } from './logger'
@@ -663,8 +697,11 @@ let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collap
 let isMinimized = false
 // Hide/island rest after exclusive onboarding. Stale exclusive / 880×816 measures must not grow the park.
 let islandResting = false
+// Settings is a full surface, not Hide 8×2 / Island peek. Cursor watch and park must not crush it.
+let settingsSurfaceOpen = false
 let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
 let overlayCursorWatchHovering = false
+let overlayLeaveParkTimer: ReturnType<typeof setTimeout> | null = null
 const streams = new Map<string, { abort: () => void }>()
 let importJobs: ImportJobManager | null = null
 let decoderWin: BrowserWindow | null = null
@@ -674,7 +711,9 @@ let closingDecoderJobId: string | null = null
 let sourceAck: { jobId: string; resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
 let decoderReady: { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
 const ffmpegDecoders = new Map<string, FfmpegDecoder>()
-const notifiedImportJobs = new Set<string>()
+// "Notified once" keys. Bounded: a session that runs for days imports many files, and an unbounded Set
+// here was one of the two module-level structures that only ever grew (RAM audit, 2026-09-05).
+const notifiedImportJobs = new BoundedSet<string>(500)
 
 type BrainStatusCounts = { people: number; accounts: number; deals: number; nodes: number; edges: number }
 let brainStatusCountsCache: { folder: string; revision: number; counts: BrainStatusCounts } | null = null
@@ -1660,6 +1699,11 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
     /* headless */
   }
   try {
+    w.setMovable(false)
+  } catch {
+    /* headless */
+  }
+  try {
     w.setFullScreenable?.(true)
     w.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
     w.setBounds(stage)
@@ -1695,6 +1739,7 @@ function exitExclusiveOnboardingStage(): void {
   }
   try {
     win.setFullScreenable?.(false)
+    win.setMovable(true)
     win.setBackgroundColor(OVERLAY_TRANSPARENT_BACKGROUND)
   } catch {
     /* ignore */
@@ -1787,7 +1832,7 @@ function createWindow(): void {
     transparent: chrome.transparent,
     hasShadow: false, // panel paints its own shadow; window shadow would box the transparent area
     resizable: false,
-    movable: true,
+    movable: !onboardingLive,
     skipTaskbar: true,
     fullscreenable: chrome.fullscreenable,
     maximizable: false,
@@ -1888,6 +1933,16 @@ function createWindow(): void {
       if (level >= 2) mainLog.info(`[renderer] ${message}  (${sourceId}:${line})`)
     })
   }
+  // A renderer that is wedged (event loop stuck) never fires render-process-gone below, so the island can
+  // sit blank with no trace in any log. Record it, and record the recovery. No automatic reload: Chromium
+  // recovers most stalls on its own, and a forced reload mid-meeting would drop the live transcript.
+  win.on('unresponsive', () => {
+    mainLog.warn('[renderer-unresponsive] overlay renderer stopped responding')
+    auditLog('app.unresponsive', { kind: 'overlay' })
+  })
+  win.on('responsive', () => {
+    mainLog.info('[renderer-responsive] overlay renderer recovered')
+  })
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
   // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
   // dead renderer and the overlay sits permanently blank. Previously this was only logged via
@@ -1965,24 +2020,47 @@ function resizeTo(height: number): void {
     applyExclusiveOnboardingStage(win)
     return
   }
+  // MQA-286 — Settings hug reports ~325px. Never keep park / bar height while Settings is open.
+  // Circle rest must not take this branch: settingsSurfaceOpen leftover + isMinimized was the
+  // 880×1017 gray Settings sheet under the Ask bar.
+  if (settingsSurfaceOpen && !isMinimized) {
+    const display = screen.getDisplayMatching(win.getBounds())
+    const metrics = getDisplayMetrics(display)
+    const rect = settingsOpenRect(metrics, ISLAND_TOP_MARGIN)
+    const h = clampHeight(settingsContentHeight(height), display.workArea.height)
+    currentWidth = SETTINGS_WINDOW_MIN.width
+    if (win.getBounds().width === rect.width && win.getBounds().height === h && win.getBounds().y === rect.y) return
+    win.setBounds({ x: rect.x, y: rect.y, width: rect.width, height: h }, false)
+    return
+  }
   const display = screen.getDisplayMatching(win.getBounds())
   const rest = overlayRestSize(liveOverlayLayout(), getDisplayMetrics(display))
   // Hide rest is a 1–8px hairline. BAR_MIN_HEIGHT (44) must never grow it into Tony's slab.
-  if (islandResting && liveOverlayLayout() === 'hide') return
-  if (shouldIgnoreResizeWhilePeekResting(islandResting, height, rest.height)) return
+  if (!settingsSurfaceOpen && islandResting && liveOverlayLayout() === 'hide') return
+  if (!settingsSurfaceOpen && shouldIgnoreResizeWhilePeekResting(islandResting, height, rest.height)) return
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
   const { workArea } = display
-  const h = clampHeight(Math.round(height), workArea.height)
+  // OverlayPeek can still report 2–20px after restoreBarWidth. clampHeight would floor that
+  // to BAR_MIN_HEIGHT 44 (880×44 Show Métis). Revealed Hide/Island stays the Ask bar.
+  const lifted = overlayRevealedContentHeight({
+    islandResting,
+    minimized: isMinimized,
+    settingsOpen: settingsSurfaceOpen,
+    reportedHeight: height,
+    minBarHeight: ASK_REVEAL_MIN_HEIGHT_PX,
+    usesHover: overlayUsesHover(liveOverlayLayout())
+  })
+  const h = clampHeight(Math.round(lifted), workArea.height)
   const b = win.getBounds()
   if (h === b.height && currentWidth === b.width) {
     // Only remember this height for restore-on-expand when it's the real bar, not the mini-pill's
-    // much shorter content — see isMinimized comment above.
-    if (!isMinimized && !islandResting) lastBarHeight = h
+    // much shorter content — see isMinimized comment above. Never store Settings 800+ (ghost slab).
+    if (!isMinimized && !islandResting) lastBarHeight = rememberBarContentHeight(h, lastBarHeight)
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
-  if (!isMinimized && !islandResting) lastBarHeight = h
+  if (!isMinimized && !islandResting) lastBarHeight = rememberBarContentHeight(h, lastBarHeight)
   // Resting hide/island stay at hoverRestTop (island hit). Revealed chrome sits at islandSafeTop
   // (below the notch). Do not fight macOS by writing y=0 on the full bar every tick.
   const metrics = getDisplayMetrics(display)
@@ -2002,11 +2080,22 @@ function setMinimizedWidth(narrow: boolean): void {
   // Flip BEFORE resizeTo so the pill's own resize reports (while narrow) never clobber lastBarHeight,
   // and so expanding restores the last real bar height instead of the pill's tiny one.
   if (narrow) {
+    if (settingsSurfaceOpen) leaveSettingsSurface()
     islandResting = false
     isMinimized = true
-    currentWidth = PILL_WIDTH
     applyHideClickThrough()
-    resizeTo(lastBarHeight)
+    // Circle rest is the 41 host. A Settings-tall lastBarHeight was the gray box under Jarvis.
+    const circleRest = minimizedCircleRestBounds({
+      layout: liveOverlayLayout(),
+      style: parseOverlayOrbStyle(getSettings().overlayOrbStyle)
+    })
+    if (circleRest) {
+      currentWidth = circleRest.width
+      resizeTo(circleRest.height)
+      return
+    }
+    currentWidth = PILL_WIDTH
+    resizeTo(rememberBarContentHeight(lastBarHeight, BAR_IDLE_HEIGHT_PX))
     return
   }
   const leavingPill = isMinimized
@@ -2066,6 +2155,7 @@ function stopOverlayCursorWatch(): void {
     overlayCursorWatchTimer = null
   }
   overlayCursorWatchHovering = false
+  cancelOverlayLeavePark()
 }
 
 function startOverlayCursorWatch(): void {
@@ -2080,27 +2170,51 @@ function tickOverlayCursorWatch(): void {
     stopOverlayCursorWatch()
     return
   }
+  // A parked Settings-tall ghost heals here. If the heal was refused because the
+  // pointer is in the top-edge strip, fall through: that pointer is a hover, so
+  // reveal instead of stalling on the ghost until the mouse leaves.
+  if (healHideGhostSlab()) return
+  if (settingsSurfaceOpen) return
   const display = screen.getDisplayMatching(win.getBounds())
   const m = getDisplayMetrics(display)
   const layout = liveOverlayLayout()
   const rest = hoverWatchRestRect(layout, m)
-  const decision = decideCursorWatch({
-    cursor: screen.getCursorScreenPoint(),
+  const windowVisible = win.isVisible()
+  const bounds = win.getBounds()
+  const cursor = screen.getCursorScreenPoint()
+  // overlayCursorWatchHovering is the OS-hover latch: main saw the cursor in the
+  // strip or on the bar since the last park. Only a latched reveal parks on leave.
+  const step = overlayWatchStep({
+    cursor,
     restRect: rest,
-    revealedRect: win.getBounds(),
-    revealed: !islandResting
+    revealedRect: bounds,
+    islandResting,
+    windowVisible,
+    osHoverSeen: overlayCursorWatchHovering,
+    hugStub: isIncompleteAskReveal(bounds)
   })
-  if (decision === 'reveal' && !overlayCursorWatchHovering) {
-    overlayCursorWatchHovering = true
+  overlayCursorWatchHovering = step.osHoverSeen
+  if (step.action === 'restore') {
+    cancelOverlayLeavePark()
     restoreBarWidth()
     notifyOverlayCursorHover(true)
-  } else if (decision === 'stay') {
-    /* never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
-  } else if (decision === 'hide' && overlayCursorWatchHovering) {
-    overlayCursorWatchHovering = false
-    // Do not park on this tick — the renderer plays the hide spring first, then overlayParkAfterHide.
+    const after = win.getBounds()
+    // Transition log only (a hug-stub restore can repeat per tick until the bar settles).
+    if (after.width !== bounds.width || after.height !== bounds.height || !windowVisible) {
+      mainLog.info(
+        `[overlay-watch] reveal cursor=(${cursor.x},${cursor.y}) from=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) to=${after.width}x${after.height}@(${after.x},${after.y}) visible=${windowVisible}`
+      )
+    }
+  } else if (step.action === 'park') {
+    // Renderer spring may park first. Main parks at OVERLAY_LEAVE_PARK_MS so a
+    // missed overlayParkAfterHide cannot leave 880×120 up (Ultron c74e389).
     notifyOverlayCursorHover(false)
+    scheduleOverlayLeavePark()
+    mainLog.info(
+      `[overlay-watch] leave cursor=(${cursor.x},${cursor.y}) bar=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) park in ${OVERLAY_LEAVE_PARK_MS}ms`
+    )
   }
+  /* stay / leave-ignored: never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
 }
 
 function notifyOverlayCursorHover(hovering: boolean): void {
@@ -2110,6 +2224,23 @@ function notifyOverlayCursorHover(hovering: boolean): void {
   } catch {
     /* renderer gone */
   }
+}
+
+function cancelOverlayLeavePark(): void {
+  if (!overlayLeaveParkTimer) return
+  clearTimeout(overlayLeaveParkTimer)
+  overlayLeaveParkTimer = null
+}
+
+function scheduleOverlayLeavePark(): void {
+  if (overlayLeaveParkTimer) return
+  overlayLeaveParkTimer = setTimeout(() => {
+    overlayLeaveParkTimer = null
+    if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen) return
+    if (pointerInIslandOrBar()) return
+    parkOverlayAfterHideSpring()
+  }, OVERLAY_LEAVE_PARK_MS)
+  overlayLeaveParkTimer.unref?.()
 }
 
 /** Island strip or the revealed bar — not the ControlPill. Used when leaving pill/Settings. */
@@ -2123,22 +2254,53 @@ function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
   if (pointInRect(cursor, rest)) return true
   // The pill window is not the bar. Expanding it must not count as "pointer in bar".
   if (opts?.ignoreWindow || isMinimized || islandResting) return false
+  const bounds = win.getBounds()
+  // A Settings-tall ghost is not the Ask bar. (900, 600) over 880×1017 must still park 8×2.
+  if (isSettingsTallHeight(bounds.height) && !settingsSurfaceOpen) return false
   return (
     decideCursorWatch({
       cursor,
       restRect: rest,
-      revealedRect: win.getBounds(),
+      revealedRect: bounds,
       revealed: true
     }) === 'stay'
   )
 }
 
-function parkOverlayAfterHideSpring(): void {
-  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
-  if (overlayCursorWatchHovering) return
+/**
+ * Hide/Island must never keep a Settings-tall ghost or a leftover Circle pill.
+ * Fresh launch and mouse-away park 8×2. Expand Métis is Bar-only.
+ */
+function healHideGhostSlab(): boolean {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return false
   const layout = liveOverlayLayout()
-  if (!overlayUsesHover(layout)) return
+  if (!overlayUsesHover(layout)) return false
+  // Circle pill is Bar-only. Hide + Expand Métis is the 880×1017 ghost.
+  if (isMinimized) {
+    if (settingsSurfaceOpen) leaveSettingsSurface()
+    isMinimized = false
+    return parkOverlayAfterHideSpring()
+  }
+  // Parked Hide/Island with a leftover Settings-tall window (launch activate slab).
+  // A refused park (pointer in the strip) returns false so the tick can reveal.
+  if (!settingsSurfaceOpen && islandResting && isSettingsTallHeight(win.getBounds().height)) {
+    return parkOverlayAfterHideSpring()
+  }
+  return false
+}
+
+/** Returns true only when the window was actually parked on this call. */
+function parkOverlayAfterHideSpring(): boolean {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return false
+  if (settingsSurfaceOpen) return false
+  // Do not refuse park because the hover latch is stuck. If the pointer is
+  // still on the bar or the top-edge strip, stay. Else Hide must go to 8×2.
+  if (pointerInIslandOrBar()) return false
+  cancelOverlayLeavePark()
+  const layout = liveOverlayLayout()
+  if (!overlayUsesHover(layout)) return false
   const display = screen.getDisplayMatching(win.getBounds())
+  const before = win.getBounds()
   const park = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   currentWidth = park.width
   islandResting = true
@@ -2149,14 +2311,32 @@ function parkOverlayAfterHideSpring(): void {
     /* headless */
   }
   win.setBounds(park, false)
+  overlayCursorWatchHovering = false
   applyHideClickThrough()
+  // Hide rest is an always-on invisible hairline. Tray hide() must not leave
+  // the LSUIElement window gone — hover still needs a live window + watch.
+  try {
+    if (!win.isVisible()) win.showInactive()
+  } catch {
+    /* headless */
+  }
+  if (before.width !== park.width || before.height !== park.height || before.y !== park.y) {
+    mainLog.info(
+      `[overlay-watch] park ${layout} from=${before.width}x${before.height}@(${before.x},${before.y}) to=${park.width}x${park.height}@(${park.x},${park.y})`
+    )
+  }
+  return true
 }
 
 /** Hide rest is click-through so the menu bar stays usable. Island peek and the bar must receive clicks. */
 function applyHideClickThrough(): void {
   if (!win || win.isDestroyed()) return
   const clickThrough =
-    islandResting && liveOverlayLayout() === 'hide' && !isMinimized && !onboardingExclusiveLive()
+    !settingsSurfaceOpen &&
+    islandResting &&
+    liveOverlayLayout() === 'hide' &&
+    !isMinimized &&
+    !onboardingExclusiveLive()
   try {
     win.setIgnoreMouseEvents(clickThrough)
   } catch {
@@ -2196,17 +2376,87 @@ function anchorTopCenter(): void {
  *  safe Y. Leave collapse is the inverse (resizeTo with peek height, same Y). */
 function restoreBarWidth(): void {
   if (!win || onboardingExclusiveLive()) return
+  // Do not un-park Hide just to bounce off Settings. That left islandResting
+  // false on a 880×1017 slab so mouse-away could not park 8×2.
+  if (settingsSurfaceOpen) return
+  cancelOverlayLeavePark()
   islandResting = false
   applyHideClickThrough()
+  // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
+  // showInactive (never show+focus) so the top-edge path works without hunting the menu.
+  try {
+    if (!win.isVisible()) win.showInactive()
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setAlwaysOnTop(true, 'screen-saver')
+  } catch {
+    /* headless */
+  }
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
+  const layout = liveOverlayLayout()
   const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-  const revealedHeight = Math.max(b.height, lastBarHeight, BAR_HEIGHT)
+  // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
+  // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
+  let revealedHeight = overlayUsesHover(layout)
+    ? askRevealHeight({ currentHeight: b.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX })
+    : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
+  if (isSettingsTallHeight(revealedHeight)) {
+    revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
+  }
   const x = currentWidth === BAR_WIDTH ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
   currentWidth = BAR_WIDTH
   // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
   if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
   win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
+}
+
+/**
+ * MQA-286 — tray / dock / IPC Settings must use a full Settings window, never Hide 8×2 or Island peek.
+ * Closing Settings calls leaveSettingsSurface then setWindowMode, which re-parks Hide/Island.
+ */
+function applySettingsSurface(): void {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
+  settingsSurfaceOpen = true
+  islandResting = false
+  isMinimized = false
+  currentWidth = SETTINGS_WINDOW_MIN.width
+  try {
+    win.setMinimumSize(SETTINGS_WINDOW_MIN.width, SETTINGS_WINDOW_MIN.height)
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
+  } catch {
+    /* headless */
+  }
+  const display = screen.getDisplayMatching(win.getBounds())
+  const rect = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  win.setBounds(rect, false)
+  applyHideClickThrough()
+}
+
+function leaveSettingsSurface(): void {
+  settingsSurfaceOpen = false
+  lastBarHeight = rememberBarContentHeight(lastBarHeight, BAR_IDLE_HEIGHT_PX)
+  if (overlayUsesHover(liveOverlayLayout())) {
+    islandResting = true
+    startOverlayCursorWatch()
+  }
+  if (!win || win.isDestroyed()) return
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+  } catch {
+    /* headless */
+  }
 }
 
 // Re-center the compact bar on its current display. The old fixed 'settings' window-mode was removed —
@@ -2233,7 +2483,14 @@ function setWindowMode(): void {
   // windowMode('bar') on every mount — including the reload after a renderer crash — which can land after
   // the overlay has moved to a shorter monitor, so re-apply that monitor's ceiling instead of restoring a
   // height it cannot show (resizable:false leaves no manual way back).
-  win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(lastBarHeight, workArea.height) }, false)
+  // Settings 800+ must not come back as a gray slab under an idle Bar.
+  const height = rememberBarContentHeight(lastBarHeight, BAR_IDLE_HEIGHT_PX)
+  try {
+    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+  } catch {
+    /* headless */
+  }
+  win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(height, workArea.height) }, false)
 }
 
 /** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
@@ -2269,6 +2526,7 @@ function showForAsk(w: BrowserWindow): void {
 function sendHotkey(action: HotkeyAction): void {
   const w = ensureWindow()
   if (!w) return
+  if (action === 'settings') applySettingsSurface()
   if (!w.isVisible()) {
     if (action === 'ask') showForAsk(w)
     else w.showInactive()
@@ -2718,6 +2976,8 @@ function refitToDisplay(next: Electron.Rectangle, fromDisplayId: number): Electr
 }
 
 function moveBy(dx: number, dy: number): void {
+  // Exclusive onboarding owns the display. Click-hold / scroll-nudge must not drag it off-screen.
+  if (onboardingExclusiveLive()) return
   // Self-heal a null win (e.g. a one-time createWindow() throw during boot) — mirrors sendHotkey/
   // toggleVisible so scroll/move hotkeys recover instead of staying permanently dead for the process life.
   const w = ensureWindow()
@@ -2813,8 +3073,12 @@ function toggleVisible(): void {
   const hadNoWindow = !win || win.isDestroyed()
   const w = ensureWindow()
   if (!w) return
-  if (!hadNoWindow && w.isVisible()) w.hide()
-  else {
+  if (!hadNoWindow && w.isVisible()) {
+    w.hide()
+    // Tray Hide is not the rest sensor. Keep the top-edge watch armed so
+    // mouse-at-top can showInactive without hunting Show Métis.
+    if (overlayUsesHover(liveOverlayLayout())) startOverlayCursorWatch()
+  } else {
     // Revealing via the show/hide hotkey always opens the ask input right after — the same deliberate,
     // user-initiated focus grab as sendHotkey('ask'). See showForAsk's doc comment.
     showForAsk(w)
@@ -2910,7 +3174,9 @@ const trackTimer = <T extends ReturnType<typeof setInterval> | ReturnType<typeof
   backgroundTimers.push(t)
   return t
 }
-const notifiedKeys = new Set<string>() // keys of events already notified this session
+// Keys of events already notified this session. Bounded: the notifier polls every 30 s for the life of
+// the process, and every event that ever crossed its 60 s mark used to stay here forever.
+const notifiedKeys = new BoundedSet<string>(1_000)
 
 // Cache today's agenda (~30s) so startMeetingNotifier can cross-reference upcoming events against real
 // calendar data without hammering Graph on every 30s poll.
@@ -3028,6 +3294,8 @@ function createTray(): void {
     if (process.platform === 'darwin' && img.isEmpty()) tray.setTitle(' ◉ Métis')
     tray.setToolTip('Métis')
     tray.setContextMenu(buildTrayMenu())
+    // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
+    tray.on('click', () => sendHotkey('settings'))
   } catch {
     /* tray optional */
   }
@@ -3417,34 +3685,36 @@ function registerIpc(): void {
     else if (cur.onboardingDone && !next.onboardingDone && win && !win.isDestroyed()) {
       applyExclusiveOnboardingStage(win)
     }
-    if (cur.overlayLayout !== next.overlayLayout && next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
+    if (next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
       const layout = parseOverlayLayout(next.overlayLayout)
       if (overlayUsesHover(layout)) {
+        // Re-arm on every settings write, not only a layout change. CDP setSettings(Hide)
+        // while already Hide used to leave a dead watch until tray Show/Hide.
         startOverlayCursorWatch()
-        // Park now only when the pointer is out of the island/bar and this is not an open
-        // Settings panel (tall window). The renderer parks on idle if Settings is still open.
-        const display = screen.getDisplayMatching(win.getBounds())
-        const metrics = getDisplayMetrics(display)
-        const rest = overlayRestSize(layout, metrics)
-        const openPanel = win.getBounds().height > rest.height + 80
-        if (
-          !isMinimized &&
-          !openPanel &&
-          shouldParkHoverRestAfterLeavingSurface({
-            layout,
-            pointerInIslandOrBar: pointerInIslandOrBar()
-          })
-        ) {
-          overlayCursorWatchHovering = false
-          const park = parkAfterExclusiveOnboarding(layout, metrics, ISLAND_TOP_MARGIN)
-          currentWidth = park.width
-          islandResting = true
-          userAnchorY = park.y
-          win.setBounds(park, false)
-          applyHideClickThrough()
-          notifyOverlayCursorHover(false)
+        if (cur.overlayLayout !== next.overlayLayout) {
+          // Switching to Hide/Island must park. A leftover Circle pill or Settings-tall
+          // ghost was Ultron 880×1017 + Expand Métis. Keep a real Settings panel open.
+          isMinimized = false
+          const display = screen.getDisplayMatching(win.getBounds())
+          const metrics = getDisplayMetrics(display)
+          if (
+            !settingsSurfaceOpen &&
+            shouldParkHoverRestAfterLeavingSurface({
+              layout,
+              pointerInIslandOrBar: pointerInIslandOrBar({ ignoreWindow: true })
+            })
+          ) {
+            overlayCursorWatchHovering = false
+            const park = parkAfterExclusiveOnboarding(layout, metrics, ISLAND_TOP_MARGIN)
+            currentWidth = park.width
+            islandResting = true
+            userAnchorY = park.y
+            win.setBounds(park, false)
+            applyHideClickThrough()
+            notifyOverlayCursorHover(false)
+          }
         }
-      } else {
+      } else if (cur.overlayLayout !== next.overlayLayout) {
         stopOverlayCursorWatch()
         restoreBarWidth()
       }
@@ -3571,6 +3841,13 @@ function registerIpc(): void {
     const urlLocked = getLockedKeys().includes('licenseServerUrl')
     const serverUrl = urlLocked ? getSettings().licenseServerUrl || parsed.data.serverUrl : parsed.data.serverUrl
     return activateLicense(serverUrl, parsed.data.licenseKey)
+  })
+  ipcMain.handle(IPC.cloudflareConnect, (e) => {
+    assertMainWindow(e)
+    const target = cloudflareConnectTarget(getSettings())
+    if (!target.ok) return target
+    void shell.openExternal(target.href)
+    return target
   })
   // Read-only, local settings only — never touches the network. Mirrors metricsRead's pattern of
   // returning a safe empty/default shape (rather than throwing) when signed out.
@@ -3931,21 +4208,28 @@ function registerIpc(): void {
     await verifyCliSessions()
     return publicSettings()
   })
+  // Parse, never cast: setupCli / installCli / loginCli put the provider id into temp-file names and
+  // child-process arguments, so a renderer-supplied string outside the ProviderId enum must not reach
+  // them (cliDetect / cliTest above already do this; these three were still blind-casting).
+  const cliProviderArg = (provider: unknown): ProviderId => {
+    const parsed = ProviderIdSchema.safeParse(provider)
+    return parsed.success ? parsed.data : 'claude-cli'
+  }
   ipcMain.handle(IPC.cliSetup, (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return setupCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
+    return setupCli(cliProviderArg(provider))
   })
   ipcMain.handle(IPC.cliInstall, (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const p = typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli'
+    const p = cliProviderArg(provider)
     return installCli(p, (line) => win?.webContents.send(IPC.cliInstallProgress, { provider: p, line }))
   })
   ipcMain.handle(IPC.cliLogin, (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return loginCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
+    return loginCli(cliProviderArg(provider))
   })
 
   // --- MCP connections: BidStack CRM push + Plane "Book next steps" ---
@@ -5692,7 +5976,11 @@ function registerIpc(): void {
                 cacheStatus: u.cacheStatus,
                 cacheTtl: u.cacheTtl,
                 outcome: 'answered',
-                question: typeof req.prompt === 'string' ? req.prompt : undefined
+                question: typeof req.prompt === 'string' ? req.prompt : undefined,
+                // Closed-taxonomy label, computed here on the seat. Ships as a metric with every Ask so the
+                // Operator "Question types" panel works even when Ask text is off. Never throws.
+                questionType: classifyQuestionType(req.prompt, { vision: req.mode === 'vision' }),
+                vision: req.mode === 'vision'
               })
             }
             // The winning leg's success is the whole race's terminal outcome — drop the combined abort
@@ -6772,7 +7060,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     // Hide rest stays the 1–8px hairline. The 120px hug floor and BAR_MIN_HEIGHT (44) must not
     // grow it into a visible slab.
-    if (islandResting && liveOverlayLayout() === 'hide') return
+    if (!settingsSurfaceOpen && islandResting && liveOverlayLayout() === 'hide') return
     // A view can opt into reporting its own visible width (the collapsed control mini-pill, and a toast
     // that widens the pill to fit itself while minimized) instead of relying on the fixed
     // BAR_WIDTH/PILL_WIDTH guess. Without this the pill's real content (~170px) sat centered inside the
@@ -6783,10 +7071,25 @@ function registerIpc(): void {
     if (typeof payload?.width === 'number' && Number.isFinite(payload.width) && !onboardingExclusiveLive()) {
       // +10 (not the height report's +2) gives the pill's own box-shadow/glow room to render without
       // being hard-clipped at the window edge — see the .aw-pill / .aw-mark-glow comments in styles.css.
-      const nextWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 10, BAR_WIDTH))
+      // Circle/Jarvis rest reports ~41; the old Math.max(120, …) floor left a 120 slab, never 41.
       const layout = liveOverlayLayout()
+      const nextWidth = overlayHugNextWidth({
+        reportedWidth: payload.width,
+        maxWidth: BAR_WIDTH,
+        circleRest:
+          isMinimized &&
+          overlayOrbRestIsCircle(layout, parseOverlayOrbStyle(getSettings().overlayOrbStyle))
+      })
       const rest = overlayRestSize(layout)
-      if (!islandResting || nextWidth <= rest.width + 24) {
+      // Revealed Hide/Island keeps BAR_WIDTH. Hug 120 + height 44 was the Ultron Show Métis stub.
+      if (
+        overlayAllowsHugWidth({
+          minimized: isMinimized,
+          islandResting,
+          restWidth: rest.width,
+          nextWidth
+        })
+      ) {
         currentWidth = nextWidth
       }
     }
@@ -6797,9 +7100,13 @@ function registerIpc(): void {
       typeof payload?.height === 'number' && Number.isFinite(payload.height) ? payload.height : BAR_HEIGHT
     resizeTo(height)
   })
-  ipcMain.handle(IPC.windowMode, (e) => {
+  ipcMain.handle(IPC.windowMode, (e, mode: unknown) => {
     assertMainWindow(e)
-    setWindowMode()
+    if (mode === 'settings') applySettingsSurface()
+    else {
+      if (settingsSurfaceOpen) leaveSettingsSurface()
+      setWindowMode()
+    }
   })
   ipcMain.handle(IPC.windowMinimize, (e, narrow: unknown) => {
     assertMainWindow(e)
@@ -6832,6 +7139,7 @@ function registerIpc(): void {
   // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
   ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {
     assertMainWindow(e)
+    if (onboardingExclusiveLive()) return
     const { dx, dy } = (d ?? {}) as { dx?: number; dy?: number }
     if (typeof dx === 'number' && typeof dy === 'number' && Number.isFinite(dx) && Number.isFinite(dy)) {
       moveBy(dx, dy)
@@ -6936,6 +7244,14 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
+  // Managed egressAllowlist (docs/NETWORK-EGRESS.md): when IT names the hosts this seat may reach, refuse
+  // every other host on both network stacks. Best-effort like the proxy install: a failure here must not
+  // block boot, and an absent key changes nothing.
+  try {
+    installEgressGuard(getEgressAllowlist())
+  } catch (e) {
+    mainLog.warn('[net] egress guard not installed:', e)
+  }
   // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
   // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
   try {
@@ -7572,8 +7888,19 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('activate', () => {
     if (!win) createWindow()
-    // Non-activating (island contract) — a dock-icon click surfaces the overlay without stealing focus.
     else win.showInactive()
+    // Bar dock click still opens Settings. Hide/Island launch must stay parked
+    // 8×2 — Ultron fresh userdata was 880×1017 Settings / Expand Métis.
+    try {
+      if (
+        getSettings().onboardingDone &&
+        overlayActivateOpensSettings(liveOverlayLayout())
+      ) {
+        sendHotkey('settings')
+      }
+    } catch {
+      /* settings store not ready */
+    }
   })
   }).catch((e) => {
     // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same

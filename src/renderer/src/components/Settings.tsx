@@ -68,6 +68,7 @@ import { timeSavedFromTotals } from '@shared/time-saved'
 import { TimeSavedView } from './TimeSavedView'
 import { autoHideOverlayForLayout } from '@shared/overlay-chrome'
 import { OverlayChromePicker } from './OverlayChromePicker'
+import { OverlayOrbPicker } from './OverlayOrbPicker'
 import { formatResetPhrase } from '@shared/reset-time'
 import {
   DEFAULT_SHORTCUTS,
@@ -973,9 +974,8 @@ function AiSection({
   // exclude all three from the generic tiles grid. The remainder splits by `tier`: 'featured' (GPT, Grok,
   // Kimi, Gemini) gets its own always-visible grid right under Anthropic's card, matching the CLI
   // cards' prominence; 'more' (Qwen, OpenRouter, Groq, Mistral, Grok, Gemini, Dust, custom) stays tucked
-  // in the collapsed "Experience: more models" section. Cloudflare is 'featured' and is the default
-  // provider: it is the one card most installs must touch, because the Worker URL ships preset and the
-  // METIS_PROXY_KEY is the single string a user pastes.
+  // in the collapsed "Experience: more models" section. Cloudflare is 'featured'. Happy path is
+  // Operator OAuth (tile click → default browser `/cloudflare/connect`), not Worker URL + METIS_PROXY_KEY paste.
   // When the org sets a data-residency allowlist, only approved providers are offered — mirroring what
   // the main process enforces at request time, so the UI can't offer a provider every ask would reject.
   const orgAllowed = settings.allowedProviders
@@ -1005,7 +1005,13 @@ function AiSection({
   // key here would silently never be used until the env var is removed. Lock the field instead of letting
   // Save claim it's "valid and working" for a key that will never actually be read.
   const envKeyActive = settings.envKeys.includes(provider)
-  const keyEntrySection = !CLI_PROVIDERS.has(provider) && PROVIDERS[provider].kind !== 'local' ? (
+  const connectCloudflare = (): void => {
+    void patch({ provider: 'cloudflare' })
+    void window.toto.cloudflareConnect()
+  }
+
+  const keyEntrySection =
+    !CLI_PROVIDERS.has(provider) && provider !== 'cloudflare' && PROVIDERS[provider].kind !== 'local' ? (
     <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider." icon={Lock}>
       <div className="flex items-center gap-2">
         <label htmlFor={keyInputId} className="sr-only">
@@ -1094,33 +1100,8 @@ function AiSection({
               <Trash2 size={14} />
             </button>
           )
-        ) : canRestoreEmbedded ? (
-          <button
-            type="button"
-            onClick={() => void onRestoreEmbedded()}
-            title="Put back the Cloudflare key that shipped with Metis"
-            className="no-drag cl-focus flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]"
-          >
-            Restore shipped key
-          </button>
         ) : null}
       </div>
-
-      {/* MQA-261: a fresh install gets a working Cloudflare key nobody typed, so the user has no copy of
-          it. Removing it is therefore not like removing a key they pasted — say so before, and offer the
-          way back after. */}
-      {confirmRemove && provider === 'cloudflare' && settings.embeddedCloudflareKeyAvailable && (
-        <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
-          This key came with Metis rather than from you, so you have no copy of it. You can put it back
-          from this card afterwards.
-        </div>
-      )}
-      {canRestoreEmbedded && (
-        <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
-          Metis shipped with a Cloudflare key. Restore it to keep Cloudflare answering — or add another
-          provider&apos;s API key below.
-        </div>
-      )}
       {restoreMsg && (
         <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>
       )}
@@ -1280,32 +1261,6 @@ function AiSection({
               <ManagedChip keys={settings.managedKeys} k="customBaseUrl" />
             </div>
           )}
-          {provider === 'cloudflare' && (
-            <div className="flex flex-col gap-1">
-              <label htmlFor={baseUrlInputId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-                Worker endpoint URL
-              </label>
-              <div className="flex items-center gap-2">
-                {/* MQA-069: debounced for the same reason as the model fields above. The placeholder is
-                    the hostname cloudflare-proxy/README.md's deploy step actually produces, and keeps the
-                    /v1 suffix visible: the OpenAI client appends /chat/completions to whatever is here. */}
-                <LazyInput
-                  id={baseUrlInputId}
-                  value={settings.cloudflareBaseUrl}
-                  disabled={settings.managedKeys.includes('cloudflareBaseUrl')}
-                  onCommit={(v) => patch({ cloudflareBaseUrl: v })}
-                  placeholder="https://metis-cloudflare-proxy.your-subdomain.workers.dev/v1"
-                  className={['flex-1 min-w-0', ctl, settings.managedKeys.includes('cloudflareBaseUrl') ? 'opacity-60' : ''].join(' ')}
-                />
-                <ManagedChip keys={settings.managedKeys} k="cloudflareBaseUrl" />
-              </div>
-              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                Your team deploys a small Cloudflare Worker that holds the Cloudflare account token as a
-                Wrangler secret; Métis never stores that token. Paste the Worker&rsquo;s URL here and your
-                METIS_PROXY_KEY in the key field above.
-              </p>
-            </div>
-          )}
           <label className="flex items-center justify-between gap-3 px-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
             <span className="flex items-center gap-2">
               Creativity · {settings.temperature.toFixed(1)}
@@ -1404,7 +1359,7 @@ function AiSection({
               recommended={id === recommended}
               hasKey={!!settings.hasKeys[id]}
               locked={locked}
-              onSelect={() => patch({ provider: id })}
+              onSelect={() => (id === 'cloudflare' ? connectCloudflare() : patch({ provider: id }))}
             />
           ))}
         </div>
@@ -1414,6 +1369,56 @@ function AiSection({
           </div>
         )}
       </Section>
+
+      {provider === 'cloudflare' && (
+        <Section
+          title="Cloudflare · AI Gateway"
+          desc="Log in to Cloudflare. Operator adds the AI Gateway key. Paste is not the happy path."
+          icon={ExternalLink}
+        >
+          <button
+            type="button"
+            data-cf-aig-connect
+            disabled={locked}
+            onClick={() => connectCloudflare()}
+            className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            <ExternalLink size={13} />
+            Log in to Cloudflare
+          </button>
+          <p className="mt-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Finish in your default browser. Then this seat uses Operator platform keys. No Worker URL
+            or METIS_PROXY_KEY paste.
+          </p>
+          {/* MQA-261 lives on this card now. The generic key box is `provider !== 'cloudflare'`, so a
+              `provider === 'cloudflare'` compare there is TS2367 (no overlap) and the restore never
+              rendered. Provenance + restore stay here, where Cloudflare is the active provider. */}
+          {canRestoreEmbedded ? (
+            <>
+              <button
+                type="button"
+                onClick={() => void onRestoreEmbedded()}
+                title="Put back the Cloudflare key that shipped with Metis"
+                className="no-drag cl-focus mt-2 flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]"
+              >
+                Restore shipped key
+              </button>
+              <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+                Metis shipped with a Cloudflare key. Restore it to keep Cloudflare answering, or add another
+                provider&apos;s API key below.
+              </div>
+            </>
+          ) : settings.embeddedCloudflareKeyAvailable ? (
+            <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+              This key came with Metis rather than from you, so you have no copy of it. You can put it back
+              from this card afterwards.
+            </div>
+          ) : null}
+          {restoreMsg && (
+            <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>
+          )}
+        </Section>
+      )}
 
       {isFeatured && keyEntrySection}
 
@@ -1539,13 +1544,13 @@ function providerLimitLabel(u: { reason: string; until: number }): string {
         : 'retry shortly'
   switch (u.reason) {
     case 'rate-limit':
-      return `rate-limited — ${when}`
+      return `rate-limited, ${when}`
     case 'quota-exhausted':
-      return 'out of credit — add credit or switch providers'
+      return 'out of credit. Add credit or switch providers'
     case 'usage-cap':
-      return `usage limit reached — ${when}`
+      return `usage limit reached, ${when}`
     default:
-      return 'key rejected — re-enter it below'
+      return 'key rejected. Re-enter it below'
   }
 }
 
@@ -1566,7 +1571,7 @@ function ResilienceSection({
   return (
     <Section
       title="Backups & limits"
-      desc="When a provider runs out of tokens or credit, Métis automatically falls back — to a free provider, then to the on-device model — so you are never stuck."
+      desc="When a provider runs out of tokens or credit, Métis automatically falls back, first to a free provider, then to the on-device model, so you are never stuck."
       icon={ShieldCheck}
     >
       <div className="flex flex-col gap-3">
@@ -1651,7 +1656,7 @@ function ResilienceSection({
 
         <ToggleRow
           label="Race a backup provider on a slow answer"
-          desc="For a quick question, start a second provider if the first hasn't answered within 3 seconds — whichever answers first wins, the other is cancelled. Can occasionally use both."
+          desc="For a quick question, start a second provider if the first hasn't answered within 3 seconds. Whichever answers first wins, the other is cancelled. Can occasionally use both."
           on={settings.resilience.hedge}
           onChange={(v) => patch({ resilience: { ...settings.resilience, hedge: v } })}
         />
@@ -1659,7 +1664,7 @@ function ResilienceSection({
         <div className="flex items-start gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
           <Cpu size={13} className="mt-0.5 shrink-0" />
           <span>
-            Worst case, the on-device model answers with no API at all — controlled by <b>Local AI → use as a
+            Worst case, the on-device model answers with no API at all, controlled by <b>Local AI → use as a
             safety net</b> above.
           </span>
         </div>
@@ -1721,7 +1726,7 @@ function FallbackOrderEditor({
       <div className="mb-2 text-[11.5px] text-[color:var(--cl-muted-foreground)]">
         {chain.length
           ? 'Providers are tried top to bottom when one fails. Anything not listed stays available after the chain.'
-          : 'Automatic — Métis picks the next provider itself. Set an order to decide it yourself.'}
+          : 'Automatic. Métis picks the next provider itself. Set an order to decide it yourself.'}
       </div>
       {chain.length > 0 && (
         <ul className="mb-2 flex flex-col gap-1">
@@ -1803,8 +1808,8 @@ function AsrModelRow(): JSX.Element | null {
         {state.ready
           ? `High-accuracy transcription model installed (${gb} GB). Imports use it instead of the compact model.`
           : state.status === 'downloading'
-            ? `Downloading the high-accuracy transcription model — ${Math.round(state.progress * 100)}% of ${gb} GB.`
-            : `Imports use the compact transcription model. The high-accuracy one is a ${gb} GB download — noticeably better, especially on non-English audio.`}
+            ? `Downloading the high-accuracy transcription model: ${Math.round(state.progress * 100)}% of ${gb} GB.`
+            : `Imports use the compact transcription model. The high-accuracy one is a ${gb} GB download, noticeably better, especially on non-English audio.`}
         {state.status === 'error' && state.error ? ` ${state.error}` : ''}
       </span>
       {state.status !== 'downloading' && (
@@ -1896,14 +1901,14 @@ function LocalAiSection({
   // incomplete" and told the user to reinstall Métis — an instruction the build gate guarantees cannot
   // work, because no installer contains the weights (MQA-188/191).
   const downloadFailedText =
-    'Could not download the on-device model. Métis retries on the next launch — check that huggingface.co is reachable from this network.'
+    'Could not download the on-device model. Métis retries on the next launch. Check that huggingface.co is reachable from this network.'
   const notDownloadedText =
     'Not downloaded yet. Métis fetches the on-device model automatically when the app opens (~730 MB).'
 
   return (
     <Section
       title="Local AI"
-      desc="Optional on-device model. Off by default for answering — Cloudflare and any API keys you add stay primary. The model downloads in the background when Métis opens so enabling Local later is instant."
+      desc="Optional on-device model. Off by default for answering. Cloudflare and any API keys you add stay primary. The model downloads in the background when Métis opens so enabling Local later is instant."
       icon={Cpu}
     >
       <div className="flex flex-col gap-3">
@@ -2059,7 +2064,7 @@ function LocalAiSection({
           <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Fallback</span>
           <ToggleRow
             label="Use as a fallback when cloud AI is unavailable"
-            desc="If every configured cloud provider is unreachable or none is set up, run meeting indexing, live suggestions, summaries and screenshot analysis on-device as a last resort — instead of failing. Cloud providers are always preferred when they work."
+            desc="If every configured cloud provider is unreachable or none is set up, run meeting indexing, live suggestions, summaries and screenshot analysis on-device as a last resort instead of failing. Cloud providers are always preferred when they work."
             on={settings.localLlm.fallback}
             onChange={(v) => patch({ localLlm: { ...settings.localLlm, fallback: v } })}
           />
@@ -2290,7 +2295,7 @@ function CliIntegration({
       markConnected(
         testResult.version ?? null,
         testResult.session === 'weekly-limit'
-          ? testResult.error || 'Signed in. Weekly usage limit reached — not disconnected.'
+          ? testResult.error || 'Signed in. Weekly usage limit reached, not disconnected.'
           : 'Connected'
       )
       return
@@ -2317,7 +2322,7 @@ function CliIntegration({
         markConnected(
           again.version ?? null,
           again.session === 'weekly-limit'
-            ? again.error || 'Signed in. Weekly usage limit reached — not disconnected.'
+            ? again.error || 'Signed in. Weekly usage limit reached, not disconnected.'
             : 'Connected'
         )
         return
@@ -2334,12 +2339,38 @@ function CliIntegration({
     }
   }
 
-  // Connect button (setup-opened / error): re-run test only
+  // Connect: install in-flow if the CLI is missing, then prove a live session. Never mark Connected
+  // from this handler — main writes cliConnected only after connectCliSession returns ok.
   const connect = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
     // Capture which provider was active when this connect attempt started — see the patch() call below.
     const startProvider = providerRef.current
     setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
-    const r = await window.toto.cliTest(id)
+    let r = await window.toto.cliTest(id)
+    if (!r.ok && r.session === 'missing') {
+      setState(id, { phase: 'installing', msg: 'Installing…', version: null })
+      const installResult = await window.toto.cliInstall(id, (line) => {
+        setState(id, { phase: 'installing', msg: line, version: null })
+      })
+      if (installResult.needsTerminal) {
+        window.toto.cliSetup(id)
+        setState(id, {
+          phase: 'setup-opened',
+          msg: 'Finish the login in the window that opened, then come back and press Connect.',
+          version: null
+        })
+        return
+      }
+      if (!installResult.ok) {
+        setState(id, {
+          phase: 'install-error',
+          msg: installResult.error || 'Installation failed.',
+          version: null
+        })
+        return
+      }
+      setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
+      r = await window.toto.cliTest(id)
+    }
     const binaryPresent = r.ok || r.session !== 'missing'
     const testOk = !!r.ok && r.session !== 'missing'
     if (canShowConnected({ binaryPresent, testOk })) {
@@ -2352,11 +2383,18 @@ function CliIntegration({
         phase: 'done',
         msg:
           r.session === 'weekly-limit'
-            ? r.error || 'Signed in. Weekly usage limit reached — not disconnected.'
+            ? r.error || 'Signed in. Weekly usage limit reached, not disconnected.'
             : 'Connected',
         version: r.version ?? null,
         binaryPresent: true,
         testOk: true
+      })
+    } else if (r.session === 'signed-out') {
+      window.toto.cliLogin(id)
+      setState(id, {
+        phase: 'setup-opened',
+        msg: 'Installed. Sign in through the window that opened, then come back and press Connect.',
+        version: null
       })
     } else {
       setState(id, {
@@ -2609,7 +2647,7 @@ function CliIntegration({
   return (
     <Section
       title="CLI Integration"
-      desc="Claude Code and Codex route through your own local install of that tool. It has to be on this device. Set up automatically installs it (via npm i -g) if it's missing, or connects straight away if it's already there."
+      desc="Claude Code and Codex route through your own local install of that tool. It has to be on this device. Set up automatically installs a managed copy if the CLI is missing, or reuses a Claude or Codex login already on this machine. Connected only after a live session check."
       icon={Link2}
     >
       <div className="flex flex-col gap-3">
@@ -3157,7 +3195,7 @@ function ProductConnectCard({
               ? kind === 'clickup' && conn.clickupListName
                 ? `Tasks go to ${conn.clickupListName}`
                 : `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
-              : 'Connected — no tools reported for this account.'}
+              : 'Connected. No tools reported for this account.'}
           </span>
           <button
             type="button"
@@ -3284,7 +3322,7 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
       mark={<ClickUpMark size={28} />}
       connect={() => window.toto.mcpClickupConnect()}
       pinnedEndpoint="https://mcp.clickup.com/mcp"
-      apiKeyHint="ClickUp API token (power option — Connect is the usual path)"
+      apiKeyHint="ClickUp API token (power option, Connect is the usual path)"
     />
   )
 }
@@ -3733,7 +3771,7 @@ function DustSetup({
     const tick = async (intervalSec: number): Promise<void> => {
       if (cancelled) return
       if (Date.now() > oauth.expiresAt) {
-        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: 'Sign-in expired — try again.' } : o))
+        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: 'Sign-in expired. Try again.' } : o))
         return
       }
       const r = await window.toto.dustLoginPoll()
@@ -3961,7 +3999,7 @@ function DustSetup({
       }
       // decision === 'run-setup' — the saved CLI session is dead. Nudge toward a fix rather than silently
       // relaunching anything: there is no more in-app installer/terminal step for the CLI path to reopen.
-      const msg = 'Your Dust CLI session ended. Run `dust login` again and Reconnect — or use the automatic sign-in above.'
+      const msg = 'Your Dust CLI session ended. Run `dust login` again and Reconnect, or use the automatic sign-in above.'
       setCli({ busy: false, ok: false, msg })
       setErr(msg)
     })()
@@ -4865,7 +4903,7 @@ function UpdatesSection(): JSX.Element {
   }, [])
 
   return (
-    <Section title="Updates" desc="Métis installs updates automatically where the platform allows. Check, download, and install here any time." icon={RefreshCw}>
+    <Section title="Updates" desc="Métis installs a QA-approved Latest from Metis-Releases. Draft and prerelease builds are never offered." icon={RefreshCw}>
       <div className="flex flex-col items-center gap-2">
         {result?.current ? (
           <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">Installed version: {result.current}</span>
@@ -5572,7 +5610,7 @@ const TABS: {
       'thinking mode', 'model', 'other providers', 'model provider', 'cli integration',
       'fallback', 'indexing fallback', 'offline indexing',
       'backups & limits', 'nvidia', 'nim', 'race a backup provider', 'hedge',
-      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key',
+      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key', 'oauth', 'connect',
       'routing mode', 'routing', 'local', 'api', 'auto'
     ]
   },
@@ -5773,7 +5811,7 @@ export function Settings({
   }, [tab, settings.asrEngine])
 
   return (
-    <div className="cl-root panel-enter flex w-full flex-col overflow-hidden rounded-2xl shadow-[var(--shadow-panel)] text-[color:var(--cl-foreground)]">
+    <div className="cl-root flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl shadow-[var(--shadow-panel)] text-[color:var(--cl-foreground)]">
       {/* Draggable header — sits directly under the always-visible Métis bar */}
       <header className="cl-header drag flex h-11 shrink-0 items-center gap-2 rounded-t-2xl px-3.5">
         <MetisMark size={18} />
@@ -5811,7 +5849,7 @@ export function Settings({
           openSettings(tab, notice), so only show it while the user is ON that tab — once they navigate
           away it no longer points at anything visible. Reappears if they come back to the tab. */}
       {notice && tab === (initialTab ?? 'personalize') && (
-        <div className="no-drag border-b border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-3.5 py-2 text-[12px] leading-snug text-[color:var(--cl-foreground)]">
+        <div className="no-drag shrink-0 border-b border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-3.5 py-2 text-[12px] leading-snug text-[color:var(--cl-foreground)]">
           {notice}
         </div>
       )}
@@ -5866,11 +5904,11 @@ export function Settings({
       {/* Active tab's short intro — one line, so a dense nine-tab bar still reads as a guided flow rather
           than a wall of pill buttons. Swaps for the search results list while a query is live. */}
       {query.trim() === '' ? (
-        <p className="m-0 border-b border-[var(--cl-border)] px-3.5 py-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+        <p className="m-0 shrink-0 border-b border-[var(--cl-border)] px-3.5 py-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           {TABS.find((t) => t.id === tab)?.desc}
         </p>
       ) : (
-        <div className="flex flex-col gap-0.5 border-b border-[var(--cl-border)] px-2 py-1.5">
+        <div className="flex shrink-0 flex-col gap-0.5 border-b border-[var(--cl-border)] px-2 py-1.5">
           {searchMatches.length === 0 ? (
             <p className="m-0 px-1.5 py-1 text-[11px] text-[color:var(--cl-muted-foreground)]">No matching settings.</p>
           ) : (
@@ -5897,7 +5935,7 @@ export function Settings({
         role="tabpanel"
         id="settings-panel"
         aria-labelledby={`settings-tab-${tab}`}
-        className="cl-content scroll-thin max-h-[480px] overflow-y-auto"
+        className="cl-content scroll-thin min-h-0 flex-1 overflow-y-auto"
       >
         <TabIconContext.Provider value={TABS.find((t) => t.id === tab)?.icon}>
         <div className="flex flex-col gap-6 px-5 pt-5 pb-16">
@@ -5948,7 +5986,7 @@ export function Settings({
                   <div className="mt-3 px-1">
                     <p className="m-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Overlay chrome</p>
                     <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                      How Métis sits on the desktop. Changes apply now — no reinstall.
+                      How Métis sits on the desktop. Changes apply now, no reinstall.
                     </p>
                     <OverlayChromePicker
                       value={settings.overlayLayout}
@@ -5959,6 +5997,15 @@ export function Settings({
                           autoHideOverlay: autoHideOverlayForLayout(id)
                         })
                       }
+                    />
+                    <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Bar rest</p>
+                    <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                      Applies when Overlay chrome is Bar.
+                    </p>
+                    <OverlayOrbPicker
+                      value={settings.overlayOrbStyle}
+                      locked={settings.managedKeys.includes('overlayOrbStyle')}
+                      onChange={(id) => patch({ overlayOrbStyle: id })}
                     />
                   </div>
                 </Section>
@@ -6029,7 +6076,7 @@ export function Settings({
                   {settings.micOnlyFallbackAt != null && (
                     <div className="mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>
-                        A recent meeting captured your microphone only — the other side&apos;s audio was not
+                        A recent meeting captured your microphone only. The other side&apos;s audio was not
                         recorded
                         {isWindows
                           ? ' (check that the call plays through your default output device)'
@@ -6091,7 +6138,7 @@ export function Settings({
                     label="Best transcription quality"
                     desc={
                       asrBundled
-                        ? 'Default is Best. Fast is a power option. This installer ships the compact model — if Best cannot load, Métis runs Fast and says so below (never a silent Fast with a Best label). Download the high-accuracy model to restore Best.'
+                        ? 'Default is Best. Fast is a power option. This installer ships the compact model. If Best cannot load, Métis runs Fast and says so below (never a silent Fast with a Best label). Download the high-accuracy model to restore Best.'
                         : 'Default is Best (Whisper large multilingual, 60+ languages). Fast is a Settings power option for constrained machines.'
                     }
                     on={settings.asrQuality === 'best'}
@@ -6101,7 +6148,7 @@ export function Settings({
                   <div className="flex flex-col gap-1.5 px-1 py-1">
                     <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
                       Transcription engine
-                      <FieldHint text="Parakeet is the default — bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper handles ~99 languages; pick it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
+                      <FieldHint text="Parakeet is the default: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper handles ~99 languages; pick it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
                         <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
                       </FieldHint>
                       <ManagedChip keys={settings.managedKeys} k="asrEngine" />
@@ -6166,7 +6213,7 @@ export function Settings({
                   {settings.asrImportTierFallbackAt != null && (
                     <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>
-                        An imported recording was transcribed with the compact model — the
+                        An imported recording was transcribed with the compact model. The
                         higher-accuracy one is not installed. Accuracy is lower, especially on
                         non-English audio. {new Date(settings.asrImportTierFallbackAt).toLocaleString()}.
                       </span>
@@ -6176,7 +6223,7 @@ export function Settings({
                   {(settings as SettingsWithAsrWebgpuFallback).asrWebgpuFallbackAt != null && (
                     <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>
-                        Best was requested but is not running on this device — Fast is active. Download
+                        Best was requested but is not running on this device. Fast is active. Download
                         the high-accuracy model below, or keep Fast as a power option.
                       </span>
                       <TextButton
@@ -6234,12 +6281,12 @@ export function Settings({
                           ? isWindows
                             ? // Local AI is ready, so the missing piece is the OS window signal — telling
                               // this user to enable Local AI would just be the opposite lie.
-                              "Not running on this machine — Métis can't tell when you switch windows, so screen asks capture live instead."
+                              "Not running on this machine. Métis can't tell when you switch windows, so screen asks capture live instead."
                             : // On macOS there is a second way to be off: the reader is gated on Screen
                               // Recording already being granted, because its own capture would otherwise be
                               // what raises the system prompt (MQA-209). The renderer can't tell the two
                               // apart, so name the actionable one first rather than guess wrong.
-                              'Not running on this machine — check Screen Recording under Permissions below (a new grant needs a restart). Screen asks capture live instead.'
+                              'Not running on this machine. Check Screen Recording under Permissions below (a new grant needs a restart). Screen asks capture live instead.'
                           : 'Enable Local AI (below) to use this. The background reader never leaves your device.'
                     }
                     on={settings.backgroundScreenContext}
@@ -6299,7 +6346,7 @@ export function Settings({
                 <Section title="Screen access" desc="Whether Métis can see your own screen to answer what's in front of you." icon={Eye}>
                   <ToggleRow
                     label="Let Métis see your screen on request"
-                    desc="Governs the explicit screen asks — the Capture button, its shortcut, quick actions, and pressing Enter with an empty box. Typed questions never capture your screen."
+                    desc="Governs the explicit screen asks: the Capture button, its shortcut, quick actions, and pressing Enter with an empty box. Typed questions never capture your screen."
                     on={settings.screenAsk}
                     onChange={(v) => patch({ screenAsk: v })}
                     disabled={settings.managedKeys.includes('screenAsk')}
@@ -6313,7 +6360,7 @@ export function Settings({
                 >
                   <ToggleRow
                     label="Carry context into follow-up questions"
-                    desc="When on, the next question can refer back to the last few answers (expires after 10 idle minutes). When off (default), every question outside a meeting starts completely fresh — nothing from the previous question leaks into the next answer. During a live meeting, Copilot always keeps the meeting's context either way."
+                    desc="When on, the next question can refer back to the last few answers (expires after 10 idle minutes). When off (default), every question outside a meeting starts completely fresh. Nothing from the previous question leaks into the next answer. During a live meeting, Copilot always keeps the meeting's context either way."
                     on={settings.askFollowUpMemory}
                     onChange={(v) => patch({ askFollowUpMemory: v })}
                     disabled={settings.managedKeys.includes('askFollowUpMemory')}
@@ -6403,7 +6450,7 @@ export function Settings({
                   {/^https:\/\//i.test(settings.operatorUrl || '') && (
                     <ToggleRow
                       label="Send Ask text for skill improvement"
-                      desc="When on, the question text goes with the metrics so skills can be drafted. Metrics always send. Listen transcripts and screens never send."
+                      desc="When on, the question text goes with the metrics so skills can be drafted. Metrics always send: mode, timing, token counts, and a question type label such as Factual or How to, never the words. Listen transcripts and screens never send."
                       on={settings.sendAskText !== false}
                       onChange={(v) => patch({ sendAskText: v })}
                       disabled={settings.managedKeys.includes('sendAskText')}
@@ -7267,14 +7314,14 @@ function IntelligenceTab({
 
       <Section
         title="Plane"
-        desc="Push meeting action items to Plane as work items — see Review → Book next steps. Manual and review-first: nothing sends automatically."
+        desc="Push meeting action items to Plane as work items. See Review → Book next steps. Manual and review-first: nothing sends automatically."
       >
         <PlaneCard settings={settings} patch={patch} />
       </Section>
 
       <Section
         title="ClickUp"
-        desc="Push meeting action items to ClickUp as tasks — see Review → Book next steps. Manual and review-first: nothing sends automatically."
+        desc="Push meeting action items to ClickUp as tasks. See Review → Book next steps. Manual and review-first: nothing sends automatically."
       >
         <ClickupCard settings={settings} patch={patch} />
       </Section>
@@ -8127,7 +8174,7 @@ function PermissionsSection(): JSX.Element {
         </div>
         <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           First check is the OS permission probe. Check again to send a frame to Local AI if it is ready,
-          otherwise the active API (including Dust when that is the provider). The result stays here — it
+          otherwise the active API (including Dust when that is the provider). The result stays here. It
           is never sent to a teammate.
         </div>
         {checkResult && (
@@ -8428,7 +8475,7 @@ function Shortcuts({
             <AlertCircle size={13} className="mt-px shrink-0" />
             <span>
               {failures.length === 1 ? "This shortcut couldn't" : "These shortcuts couldn't"} be
-              registered — either another app already owns the combo, or it is a navigation key Métis will
+              registered. Either another app already owns the combo, or it is a navigation key Métis will
               not take over globally. Rebind {failures.length === 1 ? 'it' : 'them'} below.
             </span>
           </div>

@@ -176,6 +176,12 @@ function freeRamGBValue(): number {
 
 export const PREWARM_MIN_FREE_RAM_GB = 4
 
+/** Org allowlist: null means unrestricted. An explicit list must include `local` or we must not warm. */
+export function orgAllowlistPermitsLocal(allowed: string[] | null | undefined): boolean {
+  if (allowed == null) return true
+  return allowed.includes('local')
+}
+
 export function localPrewarmEligible(
   s: Pick<Settings, 'localLlm' | 'resilience'>,
   allowed: string[] | null,
@@ -183,7 +189,7 @@ export function localPrewarmEligible(
   freeRamGB = freeRamGBValue()
 ): boolean {
   if (!s.localLlm.enabled) return false
-  if (allowed && !allowed.includes('local')) return false
+  if (!orgAllowlistPermitsLocal(allowed)) return false
   // MQA-270 (B8): both unattended warms (boot, window-focus) route through here — one floor covers both.
   if (freeRamGB < PREWARM_MIN_FREE_RAM_GB) return false
   // "Local first for suggestions" — the original condition: local WILL serve the next suggest.

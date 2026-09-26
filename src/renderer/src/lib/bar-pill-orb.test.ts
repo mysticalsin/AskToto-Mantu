@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { CIRCLE_REST_HOST_PX } from '@shared/overlay-orb'
 import { paintOrbFirstFrame } from './orb-first-frame'
 import {
   BAR_ORB_SPEED,
@@ -19,6 +20,7 @@ import {
   orbBoxForMood,
   orbHostPaintsText,
   pillClickShouldExpand,
+  runOrbPillActivate,
   resolveBarOrbState,
   resolveOrbMood,
   shouldAnimateOrb,
@@ -31,6 +33,7 @@ describe('bar pill thinking-orb circle', () => {
     expect(BAR_PILL_SIZE_PX).toBe(64)
     expect(BAR_PILL_FROM_VISIBLE_PX).toBe(51)
     expect(BAR_PILL_VISIBLE_PX).toBe(41)
+    expect(BAR_PILL_VISIBLE_PX).toBe(CIRCLE_REST_HOST_PX)
     expect(BAR_PILL_VISIBLE_PX).toBe(Math.round(BAR_PILL_FROM_VISIBLE_PX * 0.8))
     expect(BAR_PILL_BACKING_DPR).toBe(2)
     expect(BAR_PILL_BACKING_PX).toBe(128)
@@ -98,6 +101,13 @@ describe('bar pill thinking-orb circle', () => {
   it('click expands and drag does not', () => {
     expect(pillClickShouldExpand(false)).toBe(true)
     expect(pillClickShouldExpand(true)).toBe(false)
+    let n = 0
+    expect(runOrbPillActivate({ enableDrag: true, dragMoved: false, onActivate: () => { n++ } })).toBe(true)
+    expect(n).toBe(1)
+    expect(runOrbPillActivate({ enableDrag: true, dragMoved: true, onActivate: () => { n++ } })).toBe(false)
+    expect(n).toBe(1)
+    expect(runOrbPillActivate({ enableDrag: false, dragMoved: true, onActivate: () => { n++ } })).toBe(true)
+    expect(n).toBe(2)
   })
 
   it('orb rAF runs on a Bar circle and is off on Hide/Island', () => {

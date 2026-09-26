@@ -1,4 +1,5 @@
 import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
+import { aggregateQuestionTypes, normalizeQuestionType, QUESTION_TYPE_LABELS, type QuestionTypeMix } from '../../src/shared/question-type'
 import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
 import type { OperatorStore, PulseRow, SeatRow } from './store'
 
@@ -84,7 +85,19 @@ export interface DashboardPayload {
     dots: MapDot[]
     empty: boolean
   }
-  asks: { id: string; ts: number; mode: string; preview: string; cache_status: string; provider: string }[]
+  asks: { id: string; ts: number; mode: string; preview: string; cache_status: string; provider: string; questionType: string }[]
+  /**
+   * Question-type tracking over the 7-day window. `mix.total` counts every Ask in the window, including
+   * ones from seats that never sent a type, so `coverage` is an honest "we know the type of N%". Empty
+   * window = `empty: true` and the console shows a real empty state, never a sample chart.
+   */
+  questions: {
+    windowDays: 7
+    empty: boolean
+    mix: QuestionTypeMix
+    byMode: QuestionsByMode[]
+    note: string
+  }
   proposals: {
     id: string
     skill_id: string
@@ -96,6 +109,23 @@ export interface DashboardPayload {
     created_by: string
     created_at: number
   }[]
+  licenses: {
+    empty: boolean
+    seats: {
+      device: string
+      os: string
+      version: string
+      lastSeen: number
+      country: string | null
+      live: boolean
+    }[]
+  }
+  roi: {
+    asks7d: number
+    liveSeats: number
+    cost7d: string | null
+    note: string
+  }
   crm: {
     counts: Record<CrmStatus, number>
     landing: CrmLanding
@@ -117,6 +147,36 @@ export interface DashboardPayload {
       action: string | null
     }[]
   }
+}
+
+export type QuestionsByMode = {
+  mode: string
+  asks: number
+  typed: number
+  /** Top three labels with counts, e.g. "Behavioral 5". Empty when nothing in this mode carried a type. */
+  top: { label: string; count: number }[]
+}
+
+/** Mode × type cross-tab for the console table. Modes sorted by volume; ties alphabetical. */
+export function questionsByMode(asks: { mode: string | null; question_type: string | null | undefined }[]): QuestionsByMode[] {
+  const byMode = new Map<string, (string | null | undefined)[]>()
+  for (const a of asks) {
+    const mode = a.mode || 'unknown'
+    const list = byMode.get(mode) ?? []
+    list.push(a.question_type)
+    byMode.set(mode, list)
+  }
+  return [...byMode.entries()]
+    .map(([mode, types]) => {
+      const mix = aggregateQuestionTypes(types)
+      return {
+        mode,
+        asks: mix.total,
+        typed: mix.classified,
+        top: mix.bars.slice(0, 3).map((b) => ({ label: b.label, count: b.count }))
+      }
+    })
+    .sort((a, b) => b.asks - a.asks || a.mode.localeCompare(b.mode))
 }
 
 export type CrmLanding = {
@@ -414,6 +474,8 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
   const counts = Object.fromEntries(CRM_STATUSES.map((s) => [s, 0])) as Record<CrmStatus, number>
   for (const row of crm) counts[row.status]++
 
+  const questionMix = aggregateQuestionTypes(weekAsks.map((a) => a.question_type))
+
   return {
     email,
     now,
@@ -447,6 +509,26 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
       heatmap,
       adoption: mix(seats.map((s) => s.app_version))
     },
+    licenses: {
+      empty: seats.length === 0,
+      seats: seats
+        .slice()
+        .sort((a, b) => b.last_seen - a.last_seen)
+        .map((s) => ({
+          device: s.device_id.slice(0, 10),
+          os: s.os || 'unknown',
+          version: s.app_version || 'unknown',
+          lastSeen: s.last_seen,
+          country: s.country,
+          live: now - s.last_seen < ONLINE_MS
+        }))
+    },
+    roi: {
+      asks7d: weekAsks.length,
+      liveSeats: live,
+      cost7d,
+      note: 'Estimate from reported Asks. Missing usage is not reported, never invented.'
+    },
     map: {
       countries,
       dots,
@@ -458,8 +540,16 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
       mode: a.mode || '',
       preview: a.preview || 'Ask',
       cache_status: a.cache_status || 'not-reported',
-      provider: a.provider || ''
+      provider: a.provider || '',
+      questionType: a.question_type ? QUESTION_TYPE_LABELS[normalizeQuestionType(a.question_type)] : 'not reported'
     })),
+    questions: {
+      windowDays: 7,
+      empty: weekAsks.length === 0,
+      mix: questionMix,
+      byMode: questionsByMode(weekAsks),
+      note: 'Type is a label the seat computes locally. Question text never rides with it; Reveal is separate and audited.'
+    },
     proposals: proposals.map((p) => ({
       id: p.id,
       skill_id: p.skill_id,

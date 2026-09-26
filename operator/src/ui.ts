@@ -213,6 +213,7 @@ export function renderConsole(data: DashboardPayload): string {
     .map(
       (a) => `<tr>
         <td>${esc(a.mode)}</td>
+        <td class="muted">${esc(a.questionType)}</td>
         <td>${esc(a.preview)}</td>
         <td><span class="pill ${esc(a.cache_status)}">${esc(a.cache_status)}</span></td>
         <td class="muted">${esc(a.provider)}</td>
@@ -263,6 +264,33 @@ export function renderConsole(data: DashboardPayload): string {
   ).join('')
   const indexHint =
     k.lastIndexAt != null ? `last index ${when(k.lastIndexAt)}` : 'last index not reported'
+  const q = data.questions
+  const coveragePct = q.mix.coverage == null ? null : Math.round(q.mix.coverage * 100)
+  const questionBars = q.mix.bars.length
+    ? bars(
+        q.mix.bars.map((b) => ({ label: b.label, value: b.count })),
+        520,
+        140
+      )
+    : ''
+  const questionModeRows = q.byMode
+    .map(
+      (m) => `<tr>
+        <td>${esc(m.mode)}</td>
+        <td>${m.asks}</td>
+        <td class="muted">${m.typed}</td>
+        <td class="muted">${m.top.length ? m.top.map((t) => `${esc(t.label)} ${t.count}`).join(' · ') : 'no type yet'}</td>
+      </tr>`
+    )
+    .join('')
+  const questionsPanel = q.empty
+    ? '<div class="empty">No Asks in the last 7 days. The panel fills from real ingest only.</div>'
+    : q.mix.classified === 0
+      ? `<div class="empty">${q.mix.total} Asks in the last 7 days, none carried a type. Seats on this build or newer send a type label with every Ask, with or without Ask text.</div>`
+      : `${questionBars}
+         <div class="sub muted">type known for ${q.mix.classified} of ${q.mix.total} Asks${coveragePct == null ? '' : ` (${coveragePct}%)`}</div>
+         <table><thead><tr><th>Mode</th><th>Asks</th><th>Typed</th><th>Top types</th></tr></thead><tbody>${questionModeRows}</tbody></table>
+         <div class="sub muted" style="padding-bottom:8px">${esc(q.note)}</div>`
 
   return `<!doctype html>
 <html lang="en"><head>
@@ -320,6 +348,42 @@ svg path { vector-effect: non-scaling-stroke; }
 
   <section class="grid-2">
     <article class="card">
+      <p class="eyebrow">ROI</p>
+      <div class="kpis" style="grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+        ${kpiCard({ title: 'Asks 7d', value: String(data.roi.asks7d), sub: 'real ingest only', spark: '' })}
+        ${kpiCard({ title: 'Live seats', value: String(data.roi.liveSeats), sub: 'last-seen under 2 minutes', spark: '' })}
+        ${kpiCard({
+          title: 'Cost 7d',
+          value: data.roi.cost7d ?? 'not reported',
+          sub: data.roi.note,
+          spark: ''
+        })}
+      </div>
+    </article>
+    <article class="card">
+      <p class="eyebrow">Licenses</p>
+      ${
+        data.licenses.empty
+          ? '<div class="empty">No heartbeats yet. Licenses stay empty until a seat checks in.</div>'
+          : `<table><thead><tr><th>Device</th><th>OS</th><th>Version</th><th>Where</th><th>Last seen</th><th></th></tr></thead><tbody>${data.licenses.seats
+              .map(
+                (s) => `<tr>
+        <td>${esc(s.device)}</td>
+        <td class="muted">${esc(s.os)}</td>
+        <td class="muted">${esc(s.version)}</td>
+        <td class="muted">${esc(s.country || '')}</td>
+        <td class="muted">${esc(when(s.lastSeen))}</td>
+        <td>${s.live ? '<span class="pill up">live</span>' : '<span class="pill">idle</span>'}</td>
+      </tr>`
+              )
+              .join('')}</tbody></table>
+             <div class="sub muted" style="padding-bottom:8px">Real D1 seats. Activate stays on Fly. No keys on this page.</div>`
+      }
+    </article>
+  </section>
+
+  <section class="grid-2">
+    <article class="card">
       <p class="eyebrow">Scale</p>
       <div class="tabs">
         <button class="tab on" data-scale="24h">24h</button>
@@ -361,6 +425,11 @@ svg path { vector-effect: non-scaling-stroke; }
     </article>
   </section>
 
+  <section class="card" style="padding-bottom:10px" id="question-types">
+    <p class="eyebrow">Question types · 7d</p>
+    ${questionsPanel}
+  </section>
+
   <section class="card" style="padding-bottom:10px">
     <p class="eyebrow">Map</p>
     <div class="tabs" id="map-tabs">
@@ -395,7 +464,7 @@ svg path { vector-effect: non-scaling-stroke; }
       <p class="eyebrow">Asks</p>
       ${
         askRows
-          ? `<table><thead><tr><th>Mode</th><th>Preview</th><th>Cache</th><th>Provider</th><th></th></tr></thead><tbody>${askRows}</tbody></table>`
+          ? `<table><thead><tr><th>Mode</th><th>Type</th><th>Preview</th><th>Cache</th><th>Provider</th><th></th></tr></thead><tbody>${askRows}</tbody></table>`
           : '<div class="empty">No Asks on the fleet yet.</div>'
       }
       <div id="reveal" class="muted" style="padding:8px 0"></div>

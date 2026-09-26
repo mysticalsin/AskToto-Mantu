@@ -123,6 +123,15 @@ describe('CI cost gates — what must NOT be sacrificed to save minutes', () => 
     }
   })
 
+  it('installs Playwright Chromium before quality npm test — the package is not the browser', () => {
+    const start = source.indexOf('\n  quality:\n')
+    expect(start, 'quality job not found').toBeGreaterThan(-1)
+    const nextJob = source.slice(start + 1).search(/\n {2}[a-z][a-z0-9-]*:\n/)
+    const block = nextJob === -1 ? source.slice(start) : source.slice(start, start + 1 + nextJob)
+    expect(block).toMatch(/npx playwright install[^\n]*chromium/)
+    expect(block.indexOf('playwright install')).toBeLessThan(block.indexOf('npm test'))
+  })
+
   it('keeps workflow_dispatch, the escape hatch that packages a branch on demand', () => {
     expect(source).toMatch(/^ {2}workflow_dispatch:$/m)
   })

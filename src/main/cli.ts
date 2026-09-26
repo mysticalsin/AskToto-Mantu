@@ -17,17 +17,17 @@
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { join, isAbsolute } from 'node:path'
+import { join, isAbsolute, posix } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createInterface } from 'node:readline'
 import { app, shell } from 'electron'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import type { StreamCacheUsage } from '@shared/operator'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import type { CliActionResult, CliInstallResult, CliSessionVerdict } from '@shared/ipc'
-import { managedCliEntry, installManagedCli } from './cli-installer'
+import { managedCliEntry, managedCliCommand, installManagedCli } from './cli-installer'
 import { classifyExhaustion } from './llm/exhaustion'
 
 const execFileAsync = promisify(execFile)
@@ -111,14 +111,21 @@ export function clearBinCache(): void {
   binCache.clear()
 }
 
+/** Claude Desktop (and other packaged apps) drop an App Execution Alias under WindowsApps.
+ *  `where claude` hits that first. It is not Claude Code. Connecting it is the Windows pain. */
+export function isWindowsDesktopAlias(binPath: string): boolean {
+  return /[/\\]WindowsApps[/\\]/i.test(binPath)
+}
+
 /** Parse `where <bin>` stdout: return the first hit ending in .cmd or .exe. `where` can list several
- *  shadowed matches (e.g. an extension-less dir entry) — only a .cmd shim or .exe is launchable. */
+ *  shadowed matches (e.g. an extension-less dir entry) — only a .cmd shim or .exe is launchable.
+ *  WindowsApps aliases are skipped so Claude Desktop never wins over Claude Code. */
 export function parseWhereOutput(stdout: string): string | null {
   const lines = stdout
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean)
-  return lines.find((l) => /\.(cmd|exe)$/i.test(l)) ?? null
+  return lines.find((l) => /\.(cmd|exe)$/i.test(l) && !isWindowsDesktopAlias(l)) ?? null
 }
 
 /** npm's default global-bin locations on Windows for a given binary name. Used as a fallback when
@@ -134,19 +141,75 @@ export function npmGlobalBinCandidates(bin: string): string[] {
 /** Well-known user bin folders a GUI Electron process often misses. Login-shell `command -v` should
  *  already see these when PATH is set in `.zprofile`, but Tony's CLIs live in `~/.local/bin` and a
  *  non-interactive `-lc` does not source `.zshrc`. Probe the folders directly so Settings → Connect
- *  does not report "not installed" for a binary the terminal can see. */
+ *  does not report "not installed" for a binary the terminal can see. Homebrew paths cover a Mac
+ *  GUI that never loaded the login PATH. */
 export function posixUserBinCandidates(bin: string): string[] {
   const home = process.env.HOME ?? ''
-  if (!home) return []
-  return [join(home, '.local', 'bin', bin), join(home, '.hermes', 'node', 'bin', bin)]
+  // Always POSIX separators: this probe is for mac/Linux GUI PATH gaps, and Windows CI hosts
+  // still unit-test the helper. path.join() on win32 turned `/Users/tony` into `\\Users\\tony\\...`.
+  const out: string[] = []
+  if (home) {
+    out.push(posix.join(home, '.local', 'bin', bin), posix.join(home, '.hermes', 'node', 'bin', bin))
+  }
+  out.push(`/opt/homebrew/bin/${bin}`, `/usr/local/bin/${bin}`)
+  return out
+}
+
+/**
+ * Official native installer locations on Windows. A licensed Claude Code / Codex install lands
+ * here, and a GUI Electron PATH often never sees `%USERPROFILE%\.local\bin`. Probed BEFORE `where`
+ * so Claude Desktop's WindowsApps alias cannot steal Connect.
+ */
+export function windowsUserBinCandidates(bin: string): string[] {
+  const home = process.env.USERPROFILE || process.env.HOME || ''
+  const local = process.env.LOCALAPPDATA || ''
+  const out: string[] = []
+  if (home) {
+    out.push(join(home, '.local', 'bin', `${bin}.exe`))
+    out.push(join(home, '.local', 'bin', `${bin}.cmd`))
+    out.push(join(home, '.local', 'bin', bin))
+  }
+  if (local) {
+    if (bin === 'claude') {
+      out.push(join(local, 'Programs', 'Claude Code', 'claude.exe'))
+      out.push(join(local, 'Programs', 'claude', 'claude.exe'))
+      out.push(join(local, 'Programs', 'claude', 'bin', 'claude.exe'))
+      out.push(join(local, 'Microsoft', 'WinGet', 'Links', 'claude.exe'))
+    } else if (bin === 'codex') {
+      out.push(join(local, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe'))
+      out.push(join(local, 'Programs', 'codex', 'codex.exe'))
+      out.push(join(local, 'OpenAI', 'Codex', 'bin', 'codex.exe'))
+      out.push(join(local, 'Microsoft', 'WinGet', 'Links', 'codex.exe'))
+    }
+  }
+  return out
+}
+
+/** True when `binPath` is a real non-empty file and not a WindowsApps Desktop alias. */
+export function pathLooksLikeCliBin(binPath: string): boolean {
+  if (!binPath || isWindowsDesktopAlias(binPath)) return false
+  if (!existsSync(binPath)) return false
+  try {
+    const st = statSync(binPath)
+    if (!st.isFile() || st.size === 0) return false
+  } catch {
+    return false
+  }
+  return true
+}
+
+function cacheResolved(bin: string, resolved: string): string {
+  binCache.set(bin, resolved)
+  return resolved
 }
 
 /**
  * Resolve a CLI binary to its absolute path.
  * A packaged Electron app runs with a minimal PATH. On macOS/Linux the login shell loads the full
  * environment (nvm, homebrew, user profile, etc.) so `claude` / `codex` installed globally are found.
- * On Windows there is no login-shell equivalent, so we shell out to `where`, then fall back to probing
- * npm's default global-bin folder directly (see npmGlobalBinCandidates) for the stale-PATH case above.
+ * On Windows there is no login-shell equivalent: official native folders are probed first (license
+ * reuse), then `where` with WindowsApps aliases dropped, then npm's default global-bin folder
+ * (stale GUI PATH after `npm i -g`), then the in-app managed install.
  * Results are cached in-process — resolveBin is called on every streaming request, so caching
  * prevents repeated shell spawns per conversation turn.
  */
@@ -154,24 +217,21 @@ export async function resolveBin(bin: string): Promise<string | null> {
   if (binCache.has(bin)) return binCache.get(bin) ?? null
 
   if (process.platform === 'win32') {
+    for (const candidate of windowsUserBinCandidates(bin)) {
+      if (pathLooksLikeCliBin(candidate)) return cacheResolved(bin, candidate)
+    }
     try {
       // windowsHide: `where` is a console-subsystem binary — without this a child console window
       // flashes on screen even though nothing is printed to it. Absolute System32 path (not bare
       // 'where') so a planted where.exe earlier on PATH/cwd can't hijack the lookup.
       const { stdout } = await execFileAsync(system32('where.exe'), [bin], { windowsHide: true })
       const resolved = parseWhereOutput(stdout)
-      if (resolved) {
-        binCache.set(bin, resolved)
-        return resolved
-      }
+      if (resolved) return cacheResolved(bin, resolved)
     } catch {
       // `where` exits non-zero when nothing on PATH matches — fall through to the APPDATA probe.
     }
     for (const candidate of npmGlobalBinCandidates(bin)) {
-      if (existsSync(candidate)) {
-        binCache.set(bin, candidate)
-        return candidate
-      }
+      if (pathLooksLikeCliBin(candidate)) return cacheResolved(bin, candidate)
     }
     // Not caching the miss mirrors the mac/Linux branch below — a subsequent in-app install must be
     // picked up immediately without requiring an app restart.
@@ -184,16 +244,13 @@ export async function resolveBin(bin: string): Promise<string | null> {
     const resolved = stdout.trim() || null
     // Only cache positive hits; null (not-found) must not be cached so that a subsequent
     // in-app install is picked up immediately without requiring an app restart.
-    if (resolved !== null) binCache.set(bin, resolved)
-    if (resolved !== null) return resolved
+    // Drop a WindowsApps-shaped path if a test stubs darwin onto a Windows fixture.
+    if (resolved && !isWindowsDesktopAlias(resolved)) return cacheResolved(bin, resolved)
   } catch {
     /* fall through to the user-bin + managed-CLI probes */
   }
   for (const candidate of posixUserBinCandidates(bin)) {
-    if (existsSync(candidate)) {
-      binCache.set(bin, candidate)
-      return candidate
-    }
+    if (pathLooksLikeCliBin(candidate)) return cacheResolved(bin, candidate)
   }
   return managedBinFallback(bin)
 }
@@ -206,7 +263,11 @@ function managedBinFallback(bin: string): string | null {
   const id = bin === 'claude' ? 'claude' : bin === 'codex' ? 'codex' : bin === 'dust' ? 'dust' : null
   if (!id) return null
   try {
-    return managedCliEntry(id)?.entry ?? null
+    const found = managedCliEntry(id)
+    // Refuse leftover current.json pointers (directory, empty stub, path outside install root).
+    // Those used to make checkCliSession skip `if (!absBin) return 'missing'` and classify as unknown.
+    if (!found) return null
+    return found.entry
   } catch {
     return null
   }
@@ -895,7 +956,7 @@ export async function connectCliSession(provider: ProviderId): Promise<CliAction
       version: detected.version,
       error:
         session === 'weekly-limit'
-          ? `${label} is signed in. Weekly usage limit reached — this is not disconnected. Asks wait until the cap resets.`
+          ? `${label} is signed in. Weekly usage limit reached, this is not disconnected. Asks wait until the cap resets.`
           : undefined
     }
   }
@@ -1288,6 +1349,30 @@ async function managedInstall(
   }
 }
 
+/** After a managed install (or a leftover pointer), resolveBin must find a real CLI.
+ *  Returning ok without this is how Settings used to show a fake Connected. */
+async function proveResolvedCliBin(bin: string): Promise<string | null> {
+  binCache.delete(bin)
+  const found = await resolveBin(bin)
+  if (!found || isWindowsDesktopAlias(found)) return null
+  return found
+}
+
+async function managedInstallAndProve(
+  provider: ProviderId,
+  onProgress: (line: string) => void,
+  bin: string
+): Promise<CliInstallResult> {
+  const managed = await managedInstall(provider, onProgress)
+  if (!managed.ok) return managed
+  const found = await proveResolvedCliBin(bin)
+  if (found) {
+    onProgress('Ready to connect.')
+    return { ok: true }
+  }
+  return { ok: false, error: 'Installed but Métis cannot find a runnable CLI. Retry install.' }
+}
+
 export async function installCli(
   provider: ProviderId,
   onProgress: (line: string) => void
@@ -1295,18 +1380,16 @@ export async function installCli(
   const cfg = CLI_CONFIGS[provider]
   if (!cfg) return { ok: false, error: 'No installer for this provider.' }
 
-  const existing = await resolveBin(cfg.bin)
+  const existing = await proveResolvedCliBin(cfg.bin)
   if (existing) {
     onProgress('Already installed.')
     return { ok: true }
   }
 
-  // No system npm → skip the shell entirely and self-install on Electron's embedded Node. This is the
-  // one-click path for machines without a dev toolchain — the old behavior told the user to go install
-  // Node from nodejs.org, which is exactly the onboarding wall this removes.
-  if ((await resolveBin('npm')) === null) {
-    return managedInstall(provider, onProgress)
-  }
+  // Windows + Mac: managed tarball first. PATH npm in an Electron GUI is how Dust hit exit 127.
+  const managed = await managedInstallAndProve(provider, onProgress, cfg.bin)
+  if (managed.ok) return managed
+  if ((await resolveBin('npm')) === null) return managed
 
   const pkg =
     provider === 'claude-cli'
@@ -1372,13 +1455,19 @@ export async function installCli(
         // resolveBin() call (e.g. the caller's immediate re-check) succeeds without waiting on `where`.
         if (process.platform === 'win32') {
           for (const candidate of npmGlobalBinCandidates(cfg.bin)) {
-            if (existsSync(candidate)) {
+            if (pathLooksLikeCliBin(candidate)) {
               binCache.set(cfg.bin, candidate)
               break
             }
           }
         }
-        resolve({ ok: true })
+        void proveResolvedCliBin(cfg.bin).then((found) => {
+          resolve(
+            found
+              ? { ok: true }
+              : { ok: false, error: 'Installed but Métis cannot find a runnable CLI. Retry install.' }
+          )
+        })
         return
       }
       const stderrText = stderrLines.join('\n')
@@ -1387,21 +1476,23 @@ export async function installCli(
       if (/command not found|not recognized as an internal/i.test(stderrText)) {
         // npm existed at probe time but vanished/misfired — self-contained install instead of telling
         // the user to go install Node.
-        void managedInstall(provider, onProgress).then(resolve)
+        void managedInstallAndProve(provider, onProgress, cfg.bin).then(resolve)
         return
       }
       // Permission error: the global npm prefix needs admin. The managed install needs NO permissions
       // (it lives in userData) — try it before surfacing the Terminal fallback.
       if (INSTALL_PERMISSION_ERROR_RE.test(stderrText)) {
         onProgress('Global npm install needs admin — switching to the self-contained install…')
-        void managedInstall(provider, onProgress).then((res) =>
+        void managedInstallAndProve(provider, onProgress, cfg.bin).then((res) =>
           resolve(res.ok ? res : { ok: false, needsTerminal: true, error: 'Global install needs admin permission.' })
         )
         return
       }
       const tail = stderrText.slice(-300) || `Install failed (exit ${code}).`
       // Any other npm failure: the self-contained path is independent of whatever broke npm — last try.
-      void managedInstall(provider, onProgress).then((res) => resolve(res.ok ? res : { ok: false, error: tail }))
+      void managedInstallAndProve(provider, onProgress, cfg.bin).then((res) =>
+        resolve(res.ok ? res : { ok: false, error: tail })
+      )
     })
   })
 }
@@ -1413,6 +1504,80 @@ export async function installCli(
  * install step). The user has already installed the CLI in-app via installCli; this is the
  * companion step for providers that require an interactive login flow. Mirrors setupCli's pattern.
  */
+function loginScriptPathSafe(bin: string): boolean {
+  return !/["\r\n%]/.test(bin)
+}
+
+function invokeResolvedBinLines(bin: string, extra: string[], isWin: boolean): string[] | null {
+  if (!loginScriptPathSafe(bin) || isWindowsDesktopAlias(bin)) return null
+  const extraQ = extra.map((a) => `"${a}"`).join(' ')
+  if (isWin) {
+    if (isCmdShim(bin)) {
+      return extraQ ? [`call "${bin}" ${extraQ}`] : [`call "${bin}"`]
+    }
+    return extraQ ? [`"${bin}" ${extraQ}`] : [`"${bin}"`]
+  }
+  return extraQ ? [`"${bin}" ${extraQ}`] : [`"${bin}"`]
+}
+
+/** Windows/Mac login script: reuse a licensed native install, then managed Node, never WindowsApps. */
+export function loginCliInvokeLines(
+  provider: 'claude-cli' | 'codex-cli',
+  isWin: boolean,
+  managed: { command: string; args: string[]; env: Record<string, string> } | null,
+  resolvedBin?: string | null
+): string[] {
+  const extra = provider === 'codex-cli' ? ['login'] : []
+  // A real Claude Code / Codex exe on disk is the license the user already paid for.
+  if (resolvedBin && !isManagedCliEntry(resolvedBin)) {
+    const native = invokeResolvedBinLines(resolvedBin, extra, isWin)
+    if (native) return native
+  }
+  if (managed?.command) {
+    const quoted = [`"${managed.command}"`, ...managed.args.map((a) => `"${a}"`), ...extra.map((a) => `"${a}"`)].join(
+      ' '
+    )
+    if (isWin) {
+      const sets = Object.entries(managed.env).map(([k, v]) => `set ${k}=${v}`)
+      return [...sets, quoted]
+    }
+    const env = Object.entries(managed.env)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' ')
+    return [env ? `${env} ${quoted}` : quoted]
+  }
+  if (resolvedBin && isManagedCliEntry(resolvedBin)) {
+    const managedJs = invokeResolvedBinLines(resolvedBin, extra, isWin)
+    if (managedJs) return managedJs
+  }
+  if (isWin) return [provider === 'codex-cli' ? 'call codex login' : 'call claude']
+  return [provider === 'codex-cli' ? 'codex login' : 'claude']
+}
+
+async function openCliScript(scriptPath: string, isWin: boolean): Promise<string> {
+  if (isWin) {
+    const startErr = await new Promise<string>((resolve) => {
+      let settled = false
+      const done = (msg: string): void => {
+        if (settled) return
+        settled = true
+        resolve(msg)
+      }
+      const child = spawn(comSpecExe(), ['/d', '/c', 'start', '', scriptPath], {
+        shell: false,
+        windowsHide: false,
+        detached: true,
+        stdio: 'ignore'
+      })
+      child.once('error', (e) => done(e.message))
+      child.once('close', (code) => done(code === 0 || code === null ? '' : `start failed (${code})`))
+      child.unref?.()
+    })
+    if (!startErr) return ''
+  }
+  return (await shell.openPath(scriptPath)) || ''
+}
+
 export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; error?: string }> {
   if (process.platform !== 'darwin' && process.platform !== 'win32') {
     return {
@@ -1421,70 +1586,61 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
     }
   }
 
+  if (provider !== 'claude-cli' && provider !== 'codex-cli') {
+    return { ok: false, error: `loginCli: unknown provider '${provider}'` }
+  }
+
   const isWin = process.platform === 'win32'
+  const managedId = provider === 'claude-cli' ? 'claude' : 'codex'
+  let managed: { command: string; args: string[]; env: Record<string, string> } | null = null
+  try {
+    managed = managedCliCommand(managedId)
+  } catch {
+    managed = null
+  }
+  const cfg = CLI_CONFIGS[provider]
+  const resolvedBin = cfg ? await resolveBin(cfg.bin) : null
+  const invoke = loginCliInvokeLines(
+    provider,
+    isWin,
+    managed,
+    resolvedBin && !isWindowsDesktopAlias(resolvedBin) ? resolvedBin : null
+  )
+
   let scriptLines: string[]
 
   // Plain ASCII only in the batch body — the console codepage mangles accents (see setupCli).
   if (isWin) {
-    if (provider === 'claude-cli') {
-      scriptLines = [
-        '@echo off',
-        'cls',
-        'echo Metis - Claude Code CLI login',
-        'echo ================================',
-        'echo.',
-        'echo Type /login at the prompt below and follow the instructions.',
-        'echo ----------------------------------------',
-        'call claude',
-        'echo.',
-        'echo Done. Go back to Metis and click Connect again.',
-        'pause'
-      ]
-    } else if (provider === 'codex-cli') {
-      scriptLines = [
-        '@echo off',
-        'cls',
-        'echo Metis - OpenAI Codex CLI login',
-        'echo =================================',
-        'echo.',
-        'echo Follow the instructions below to sign in.',
-        'echo ----------------------------------------',
-        'call codex login',
-        'echo.',
-        'echo Done. Go back to Metis and click Connect again.',
-        'pause'
-      ]
-    } else {
-      return { ok: false, error: `loginCli: unknown provider '${provider}'` }
-    }
-  } else if (provider === 'claude-cli') {
     scriptLines = [
-      '#!/bin/bash',
-      'clear',
-      'echo "Métis — Claude Code CLI login"',
-      'echo "================================"',
-      'echo',
-      'echo "Type /login at the prompt below and follow the instructions."',
-      'echo "────────────────────────────────────────────────"',
-      'claude',
-      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
-      'echo "You can close this window."'
-    ]
-  } else if (provider === 'codex-cli') {
-    scriptLines = [
-      '#!/bin/bash',
-      'clear',
-      'echo "Métis — OpenAI Codex CLI login"',
-      'echo "================================="',
-      'echo',
-      'echo "Follow the instructions below to sign in."',
-      'echo "────────────────────────────────────────────────"',
-      'codex login',
-      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
-      'echo "You can close this window."'
+      '@echo off',
+      'cls',
+      provider === 'claude-cli' ? 'echo Metis - Claude Code CLI login' : 'echo Metis - OpenAI Codex CLI login',
+      'echo ================================',
+      'echo.',
+      provider === 'claude-cli'
+        ? 'echo Type /login at the prompt below and follow the instructions.'
+        : 'echo Follow the instructions below to sign in.',
+      'echo ----------------------------------------',
+      ...invoke,
+      'echo.',
+      'echo Done. Go back to Metis and click Connect again.',
+      'pause'
     ]
   } else {
-    return { ok: false, error: `loginCli: unknown provider '${provider}'` }
+    scriptLines = [
+      '#!/bin/bash',
+      'clear',
+      provider === 'claude-cli' ? 'echo "Metis - Claude Code CLI login"' : 'echo "Metis - OpenAI Codex CLI login"',
+      'echo "================================"',
+      'echo',
+      provider === 'claude-cli'
+        ? 'echo "Type /login at the prompt below and follow the instructions."'
+        : 'echo "Follow the instructions below to sign in."',
+      'echo "--------------------------------"',
+      ...invoke,
+      'echo; echo "Done. Go back to Metis and click Connect again."',
+      'echo "You can close this window."'
+    ]
   }
 
   try {
@@ -1493,7 +1649,7 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
     const script = scriptLines.join(eol) + eol
     const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-login-${randomBytes(8).toString('hex')}.${isWin ? 'cmd' : 'command'}`)
     writeFileSync(scriptPath, script, { mode: 0o755, flag: 'wx' })
-    const err = await shell.openPath(scriptPath)
+    const err = await openCliScript(scriptPath, isWin)
     if (err) return { ok: false, error: err }
     return { ok: true }
   } catch (e) {

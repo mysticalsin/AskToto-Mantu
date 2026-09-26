@@ -1,16 +1,14 @@
 /**
- * Island / Hide hover hit — hardware camera / Dynamic Island square only.
+ * Hide / Island hover hit — full top-edge approach strip.
  *
- * Tony live (Teams): mute lives in the menu bar under the camera housing.
- * A 560×~37 top slab still reveals Métis. Reveal only on the black camera
- * pill: top-center, notchWidth × housing height. These tests fail if the
- * watch rect is 560-wide or 44-tall.
+ * Tony live 2026-09-05: mouse at the top of the screen did not show Métis.
+ * Only tray Show/Hide worked. Reveal must hit the top edge (left, camera, right)
+ * without hunting the menu Show item. Teams mute at Y≈40 still misses.
  */
 import { describe, expect, it } from 'vitest'
 import { decideCursorWatch, pointInRect } from './cursor-watch'
 import {
   HOVER_ISLAND_HEIGHT_MAX_PX,
-  HOVER_ISLAND_WIDTH_MAX_PX,
   OVERLAY_HIDE_TARGET,
   TEAMS_MEETING_CHROME_Y,
   TEAMS_UNDER_ISLAND_Y,
@@ -30,60 +28,70 @@ const TOTOS_MAC: DisplayMetrics = {
   source: 'helper'
 }
 
-const LEFT_MENU_BAR = { x: 24, y: 12 }
+const LEFT_TOP = { x: 24, y: 12 }
 const NOTCH_CENTER = { x: 900, y: 12 }
+const RIGHT_TOP = { x: 1770, y: 8 }
 
-describe('hover hit is the camera / Dynamic Island square only', () => {
-  it('watch rect is notch-wide and housing-tall — never 560×44', () => {
+describe('hover hit is the full top-edge approach strip', () => {
+  it('watch rect is work-area-wide and covers the menu bar plus first work-area row', () => {
     for (const layout of ['hide', 'island'] as const) {
       const rest = hoverWatchRestRect(layout, TOTOS_MAC)
-      expect(hoverRestWidth(TOTOS_MAC)).toBe(TOTOS_MAC.notchWidth)
-      expect(rest.width).toBe(TOTOS_MAC.notchWidth)
-      expect(rest.width).toBeLessThanOrEqual(HOVER_ISLAND_WIDTH_MAX_PX)
-      expect(rest.width).toBeLessThan(OVERLAY_HIDE_TARGET.width)
-      expect(rest.width).not.toBe(560)
+      expect(hoverRestWidth(TOTOS_MAC)).toBe(TOTOS_MAC.workArea.width)
+      expect(rest.width).toBe(TOTOS_MAC.workArea.width)
+      expect(rest.x).toBe(TOTOS_MAC.workArea.x)
+      expect(rest.width).toBeGreaterThan(OVERLAY_HIDE_TARGET.width)
       expect(rest.height).toBe(hoverHitBandHeight(TOTOS_MAC))
+      expect(rest.height).toBe(TOTOS_MAC.workArea.y - TOTOS_MAC.bounds.y + 1)
       expect(rest.height).toBeLessThanOrEqual(HOVER_ISLAND_HEIGHT_MAX_PX)
       expect(rest.height).toBeLessThan(44)
-      expect(rest.height).toBeLessThan(TOTOS_MAC.menuBarHeight)
+      expect(HOVER_ISLAND_HEIGHT_MAX_PX).toBe(TEAMS_UNDER_ISLAND_Y)
       expect(HOVER_ISLAND_HEIGHT_MAX_PX).toBeLessThan(44)
-      expect(HOVER_ISLAND_WIDTH_MAX_PX).toBeLessThanOrEqual(250)
       expect(rest.y).toBe(TOTOS_MAC.bounds.y)
     }
   })
 
-  it('(a) notch center Y≈8–12 reveals hide and island', () => {
+  it('top edge left / camera / right reveals hide and island', () => {
     for (const layout of ['hide', 'island'] as const) {
       const rest = hoverWatchRestRect(layout, TOTOS_MAC)
-      expect(pointInRect({ x: NOTCH_CENTER.x, y: 8 }, rest)).toBe(true)
-      expect(pointInRect(NOTCH_CENTER, rest)).toBe(true)
-      expect(
-        decideCursorWatch({
-          cursor: NOTCH_CENTER,
-          restRect: rest,
-          revealedRect: { x: 460, y: 39, width: 880, height: 84 },
-          revealed: false
-        })
-      ).toBe('reveal')
+      for (const cursor of [LEFT_TOP, NOTCH_CENTER, RIGHT_TOP, { x: 900, y: 0 }]) {
+        expect(pointInRect(cursor, rest)).toBe(true)
+        expect(
+          decideCursorWatch({
+            cursor,
+            restRect: rest,
+            revealedRect: { x: 460, y: 39, width: 880, height: 84 },
+            revealed: false
+          })
+        ).toBe('reveal')
+      }
     }
   })
 
-  it('(b) same Y in the left menu-bar misses', () => {
+  it('approach from below at workArea.y 39 reveals — the 32px housing cap was a dead zone', () => {
     for (const layout of ['hide', 'island'] as const) {
       const rest = hoverWatchRestRect(layout, TOTOS_MAC)
-      expect(pointInRect(LEFT_MENU_BAR, rest)).toBe(false)
-      expect(
-        decideCursorWatch({
-          cursor: LEFT_MENU_BAR,
-          restRect: rest,
-          revealedRect: { x: 460, y: 39, width: 880, height: 84 },
-          revealed: false
-        })
-      ).toBe('stay')
+      for (const y of [32, 37, 38, TOTOS_MAC.workArea.y]) {
+        expect(pointInRect({ x: 24, y }, rest)).toBe(true)
+        expect(
+          decideCursorWatch({
+            cursor: { x: 24, y },
+            restRect: rest,
+            revealedRect: { x: 460, y: 39, width: 880, height: 84 },
+            revealed: false
+          })
+        ).toBe('reveal')
+      }
     }
   })
 
-  it('(c) center X at TEAMS_MEETING_CHROME_Y 48 misses', () => {
+  it('helper-miss (hasNotch false) still uses the Electron workArea inset', () => {
+    const noHelper: DisplayMetrics = { ...TOTOS_MAC, hasNotch: false, notchWidth: 0, source: 'heuristic' }
+    const rest = hoverWatchRestRect('hide', noHelper)
+    expect(pointInRect({ x: 24, y: TOTOS_MAC.workArea.y }, rest)).toBe(true)
+    expect(pointInRect({ x: 24, y: TEAMS_UNDER_ISLAND_Y }, rest)).toBe(false)
+  })
+
+  it('center X at TEAMS_MEETING_CHROME_Y 48 misses', () => {
     for (const layout of ['hide', 'island'] as const) {
       const rest = hoverWatchRestRect(layout, TOTOS_MAC)
       expect(TEAMS_MEETING_CHROME_Y).toBe(48)
@@ -99,7 +107,7 @@ describe('hover hit is the camera / Dynamic Island square only', () => {
     }
   })
 
-  it('(d) center X at Y=40 under the island (typical Teams) misses', () => {
+  it('center X at Y=40 under the island (typical Teams) misses', () => {
     for (const layout of ['hide', 'island'] as const) {
       const rest = hoverWatchRestRect(layout, TOTOS_MAC)
       expect(TEAMS_UNDER_ISLAND_Y).toBe(40)
@@ -115,19 +123,8 @@ describe('hover hit is the camera / Dynamic Island square only', () => {
     }
   })
 
-  it('a leftover 560×44 (or full-width) slab is clamped to the camera island so menu-bar and Teams miss', () => {
+  it('a leftover 560×44 slab is height-clamped so Teams mute still misses', () => {
     const fat = { x: 0, y: 0, width: TOTOS_MAC.bounds.width, height: 44 }
-    expect(fat.width).toBeGreaterThanOrEqual(560)
-    expect(pointInRect(LEFT_MENU_BAR, fat)).toBe(true)
-    expect(pointInRect({ x: NOTCH_CENTER.x, y: TEAMS_UNDER_ISLAND_Y }, fat)).toBe(true)
-    expect(
-      decideCursorWatch({
-        cursor: LEFT_MENU_BAR,
-        restRect: fat,
-        revealedRect: { x: 460, y: 39, width: 880, height: 84 },
-        revealed: false
-      })
-    ).toBe('stay')
     expect(
       decideCursorWatch({
         cursor: { x: NOTCH_CENTER.x, y: TEAMS_UNDER_ISLAND_Y },
@@ -138,7 +135,7 @@ describe('hover hit is the camera / Dynamic Island square only', () => {
     ).toBe('stay')
     expect(
       decideCursorWatch({
-        cursor: NOTCH_CENTER,
+        cursor: LEFT_TOP,
         restRect: fat,
         revealedRect: { x: 460, y: 39, width: 880, height: 84 },
         revealed: false
@@ -146,7 +143,7 @@ describe('hover hit is the camera / Dynamic Island square only', () => {
     ).toBe('reveal')
   })
 
-  it('leaving the island does not sticky-reveal from a mid-window hover', () => {
+  it('leaving the top edge does not sticky-reveal from a mid-window hover', () => {
     const rest = hoverWatchRestRect('island', TOTOS_MAC)
     expect(
       decideCursorWatch({

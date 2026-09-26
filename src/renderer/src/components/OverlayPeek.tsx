@@ -21,7 +21,7 @@ export const OverlayPeek = memo(function OverlayPeek({
     <div className="flex w-full justify-center">
       <button
         type="button"
-        data-hug-width
+        data-hug-width={hidden ? undefined : true}
         onPointerEnter={hidden ? undefined : onReveal}
         onClick={onReveal}
         onFocus={onReveal}

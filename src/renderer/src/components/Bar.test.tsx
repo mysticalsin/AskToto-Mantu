@@ -204,10 +204,10 @@ describe('Bar screen-share visibility control (MQA-036)', () => {
   it('states the CURRENT state and what clicking will do, in both directions', () => {
     const hidden = renderToStaticMarkup(<Bar {...props({ stealth: true })} />)
     expect(hidden).toContain('Hidden from screen share')
-    expect(hidden).toContain('click to make Métis visible')
+    expect(hidden).toContain('Click to make Métis visible')
 
     const visible = renderToStaticMarkup(<Bar {...props({ stealth: false })} />)
     expect(visible).toContain('Visible in screen share')
-    expect(visible).toContain('click to hide Métis')
+    expect(visible).toContain('Click to hide Métis')
   })
 })

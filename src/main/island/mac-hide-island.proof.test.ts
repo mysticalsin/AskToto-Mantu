@@ -4,15 +4,18 @@
  * This is geometry + cursor-watch. Live Totos-Mac listwins is not this Linux host.
  */
 import { describe, expect, it } from 'vitest'
-import { decideCursorWatch, pointInRect } from './cursor-watch'
+import { OVERLAY_LEAVE_PARK_MS, decideCursorWatch, overlayWatchStep, pointInRect } from './cursor-watch'
 import {
   OVERLAY_HIDE_PARK,
   TEAMS_MEETING_CHROME_Y,
   hoverWatchRestRect,
+  isLeftoverSettingsTrigger,
   isVisibleHideSlab,
   parkedHoverReanchor,
+  parkAfterExclusiveOnboarding,
   type DisplayMetrics
 } from './geometry'
+import { TONY_LIVE_SETTINGS_CRUSH, isFatHoverTrigger } from '@shared/settings-bounds'
 
 /** Tony built-in Retina (notch). workArea.y ≈ 39. */
 const TOTOS_MAC: DisplayMetrics = {
@@ -94,5 +97,58 @@ describe('Mac-test Island hover', () => {
         revealed: false
       })
     ).toBe('reveal')
+  })
+})
+
+describe('Mac-test Hide hover reveal + leave park (Ultron top-edge re-check)', () => {
+  const rest = hoverWatchRestRect('hide', TOTOS_MAC)
+  const park = parkAfterExclusiveOnboarding('hide', TOTOS_MAC, 8)
+  const ask = { x: 460, y: 39, width: 880, height: 120 }
+
+  it('listwins 8x2@(896,0): cursor at the camera strip reveals; revealed bar sits in the work area', () => {
+    expect(park).toEqual({ x: 896, y: 0, width: 8, height: 2 })
+    const s = overlayWatchStep({ cursor: { x: 900, y: 12 }, restRect: rest, revealedRect: park, islandResting: true, windowVisible: true, osHoverSeen: false })
+    expect(s).toEqual({ action: 'restore', osHoverSeen: true })
+    expect(ask.y).toBe(TOTOS_MAC.workArea.y)
+    expect(ask.x).toBeGreaterThanOrEqual(TOTOS_MAC.workArea.x)
+    expect(ask.x + ask.width).toBeLessThanOrEqual(TOTOS_MAC.workArea.x + TOTOS_MAC.workArea.width)
+  })
+
+  it('mouse away to (900,600) parks within OVERLAY_LEAVE_PARK_MS and the park is the 8x2 hairline', () => {
+    const s = overlayWatchStep({ cursor: { x: 900, y: 600 }, restRect: rest, revealedRect: ask, islandResting: false, windowVisible: true, osHoverSeen: true })
+    expect(s).toEqual({ action: 'park', osHoverSeen: false })
+    expect(OVERLAY_LEAVE_PARK_MS).toBeLessThanOrEqual(2000)
+    expect(isVisibleHideSlab(park)).toBe(false)
+  })
+
+  it('a reveal main never hovered (forced toast / synthetic pointer) is left to the renderer', () => {
+    const s = overlayWatchStep({ cursor: { x: 900, y: 600 }, restRect: rest, revealedRect: ask, islandResting: false, windowVisible: true, osHoverSeen: false })
+    expect(s.action).toBe('leave-ignored')
+  })
+})
+
+describe('MQA-289 — leftover 880×133 at Y=39 is a fat trigger; park stays Y=0', () => {
+  it('Hide/Island park at bounds.y after Settings; 880×133 at Y=39 must not remain', () => {
+    const leftover = { width: 880, height: 133, y: 39 }
+    expect(isFatHoverTrigger(leftover, TOTOS_MAC.workArea.y)).toBe(true)
+    expect(isLeftoverSettingsTrigger(leftover, TOTOS_MAC)).toBe(true)
+    expect(isFatHoverTrigger({ width: 880, height: 325, y: 39 }, TOTOS_MAC.workArea.y)).toBe(true)
+    expect(isFatHoverTrigger(TONY_LIVE_SETTINGS_CRUSH, TOTOS_MAC.workArea.y)).toBe(true)
+    const hide = parkAfterExclusiveOnboarding('hide', TOTOS_MAC, 8)
+    expect(hide.y).toBe(0)
+    expect(hide.y).not.toBe(39)
+    expect(hide.width).toBe(8)
+    expect(hide.height).toBe(2)
+    expect(isFatHoverTrigger(hide, TOTOS_MAC.workArea.y)).toBe(false)
+    const island = parkAfterExclusiveOnboarding('island', TOTOS_MAC, 8)
+    expect(island.y).toBe(0)
+    expect(island.width).toBeLessThan(200)
+    const rest = hoverWatchRestRect('hide', TOTOS_MAC)
+    expect(rest.y).toBe(0)
+    expect(rest.width).toBe(TOTOS_MAC.workArea.width)
+    expect(rest.height).toBe(TOTOS_MAC.workArea.y - TOTOS_MAC.bounds.y + 1)
+    expect(rest.height).toBeLessThan(44)
+    expect(pointInRect({ x: 40, y: TOTOS_MAC.workArea.y }, rest)).toBe(true)
+    expect(pointInRect({ x: 40, y: 12 }, rest)).toBe(true)
   })
 })

@@ -37,6 +37,36 @@ motion:
 
 # Métis Design Contract
 
+## Platform (Fable 5.1)
+
+The one product story is [`METIS-PLATFORM-NORTH-STAR.md`](METIS-PLATFORM-NORTH-STAR.md). Slice
+files keep their pixels. The north star keeps install-to-first-Ask, fail-loud security, and
+Apple-grade defaults. READY TO MERGE stays no.
+
+Three feelings, in this order:
+
+1. **It just works.** Install, then Ask. Defaults friendly. Power lives in Settings.
+2. **It never lies.** Connected means a live session. Latest is a QA+Ultron fact.
+3. **It recedes.** Hide until the top edge. Settings never crushed. No white flash.
+
+| Default | Value | Why |
+| --- | --- | --- |
+| Overlay chrome | Hide | Invisible until intent. |
+| Bar rest | Circle (`overlayOrbStyle: 'jakub'`) | Original thinking-orb. Jarvis particles are opt-in. |
+| Provider | Cloudflare | One operator endpoint. |
+| `providerPriority` | `api` | CLI-first is a live promotion when a CLI session is actually connected. |
+| Local AI | off | Weights may warm. They do not preempt. |
+| `encryptTranscripts` | true | Fail closed on disk. |
+| Operator URL | empty | No phone-home until Tony points the seat. |
+
+Fail loud: a WindowsApps Desktop alias is not Claude Code. A leftover managed pointer is not
+installed. `installCli` is not ok until `resolveBin` finds a runnable entry. `cliConnected` is
+written only after `connectCliSession` (`live` or `weekly-limit`). Never a billed Connect turn.
+Never `--with-tools` on Dust. Never a raw key in the renderer.
+
+Desktop holds R01–R07 on this branch (overlay law, Settings surface, flash, top hover, Bar rest,
+CLI install, CLI session). R17 (vault last4) is Operator. Do not implement `#keys` here.
+
 ## Surfaces (the ONLY visible elements — page is transparent)
 1. **Pill bar** — centered, docked near top of screen. Height ~38–44px. `radius.pill`.
    Glass fill + `glass-border` hairline + `blur.bar` + `elevation.bar`. Contents L→R:
@@ -47,7 +77,10 @@ motion:
    max-height ~670px, `radius.lg`, `glass-fill-strong` + `blur.panel` + `elevation.glass`.
    Scrollable. Two modes: ANSWER (streamed markdown via streamdown) · LISTEN
    (live transcript left/right speaker + AI Suggestions cards).
-3. **Settings** — compact 320–360px glass card (API key, model, hotkeys, audio source, toggles).
+3. **Settings** — a real surface, never a leftover bar. Minimum **880×800** at `islandSafeTop`,
+   background `#120022`. Tray, dock, hotkey, and IPC all call `applySettingsSurface` first. Never
+   Hide 8×2. Never Island peek. Never the live 880×325 Cmd+, crush. Closing Settings
+   `leaveSettingsSurface` then parks. Identity pass lives here ([`IDENTITY-CARD.md`](IDENTITY-CARD.md)).
 4. **Review / recap** — drops below the bar in the same Panel shell as History / Agenda / Brain.
    Must **fit or scroll**. Never clip. `Panel` is the one overflow-y scroller (`html`/`body`/`#root`
    stay hidden). Cap is screen-derived (`panelMaxHeight`), never `vh` / `innerHeight`: leave room for
@@ -148,17 +181,21 @@ See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 ## Bar sphere
 See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a Jakub thinking-orb (`thinking-orbs`, theme `dark`): canvas 64, 2x backing, visible 41×41. Idle `solving` with no caption, listen `listening`, think `working`, fact-check `searching`, connecting `connecting`. Same circle when minimized. Left Settings M stays a circle (no-squash M). Not stuffed into overlay Hide/Island. Not a Fit Studio magenta core.
 
+Bar rest look (power choice): [ORB-SELECTION.md](./ORB-SELECTION.md). Full bar (default, Jarvis circle docked) or Circle (Jarvis particle rest). Hide/Island ignore it. Never Obsidian.
+
 ## Auto-answer
 Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send) or a new question replaces it. Not an ephemeral 4s/7s card.
 
 ## CLI session and Spotlight Ref
 Settings → CLI Integration Connect is a zero-token session probe (`missing` / `signed-out` / `weekly-limit` / `live`). A Claude weekly cap is signed-in, not disconnected. Codex `login status` = Logged in is connected. Never auto-send a billed turn to connect.
 
+Connect / Install must install in-flow (managed tarball, no system Node) when the CLI is missing, then prove that session. Windows must reuse a licensed Claude Code / Codex native install (`%USERPROFILE%\.local\bin`, `%LOCALAPPDATA%\Programs\...`) and must never treat Claude Desktop's `WindowsApps` alias as the CLI. Login scripts invoke that resolved binary (or the managed entry), not a PATH-only `call claude`. No fake Connected.
+
 ### Managed Dust CLI (not web-only)
 
 Spotlight Ref is a CLI call. The web REST picker (`listDustAgents` / view merge) must not be the only path and must not dead-end on reconnect copy.
 
-- **Install.** `MANAGED_CLIS.dust` is `@dust-tt/dust-cli` (verified 0.4.5: `bin.dust` = `dist/index.js`). Same `installManagedCli` pattern as claude/codex: fetch the npm tarball, sha512 integrity, zip-slip-safe unpack into `userData/managed-cli/dust`. No system `npm i -g`. The published tarball is not a single-file bundle: after unpack, install production deps with the **managed Node** `npm` into that package dir (still not global).
+- **Install.** `MANAGED_CLIS.dust` is `@dust-tt/dust-cli` (verified 0.4.5: `bin.dust` = `dist/index.js`). Same `installManagedCli` pattern as claude/codex: fetch the npm tarball, sha512 integrity, zip-slip-safe unpack into `userData/managed-cli/dust`. No system `npm i -g`. The published tarball is not a single-file bundle: after unpack, install production deps with the **managed Node** binary plus `npm-cli.js` (never the `bin/npm` shebang: Electron PATH has no `node`, and that was exit 127). Fail loud if Node is missing. Never leave a half tmp package as Connected.
 - **Runtime.** `@dust-tt/dust-cli` statically imports `keytar` (native). `ELECTRON_RUN_AS_NODE` does not load a Node-ABI addon. Spawn the managed `dust` entry with a **vendored portable Node** (`userData/managed-node` or `resources/managed-node`), never a user-installed Node/Git/VC++ homework step. If the pack omitted the binary (dev checkout), Set up Dust fetches official Node 22.22.3 into userData after a sha256 check.
 - **Windows.** Ship portable Node (pinned `22.22.3` win-x64) under `resources/managed-node/win-x64` so the next pack includes it. If keytar cannot load without the VC++ runtime, ship `vc_redist.x64.exe` under `resources/vcredist` and run it from the Set up Dust / installer path (`/quiet /norestart`). One-click Set up Dust. No browser-only Windows path.
 - **Set up Dust.** Settings → AI → Set up Dust installs this CLI, then signs in (native OAuth or an existing CLI session). Copy must not say "No CLI".

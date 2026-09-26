@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
 
@@ -10,7 +10,14 @@ import { createHash } from 'node:crypto'
 vi.mock('electron')
 
 import { app } from 'electron'
-import { installManagedCli, managedCliEntry, managedCliCommand, MANAGED_CLIS, type CliInstallProgress } from './cli-installer'
+import {
+  installManagedCli,
+  managedCliEntry,
+  managedCliCommand,
+  managedEntryIsRunnable,
+  MANAGED_CLIS,
+  type CliInstallProgress
+} from './cli-installer'
 
 // ─── tarBuilder test helper: hand-assembled ustar tar buffer ────────────────────────
 // Mirrors exactly the field layout cli-installer.ts's vendored reader expects (name @0/100,
@@ -87,6 +94,37 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   rmSync(userData, { recursive: true, force: true })
+})
+
+describe('managedCliEntry — leftover pointers are not an install', () => {
+  it('returns null when current.json points at a directory (existsSync is true)', () => {
+    const root = join(userData, 'managed-cli', 'claude')
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, 'current.json'), JSON.stringify({ version: '1.0.0', entry: root }))
+    expect(managedEntryIsRunnable('claude', root)).toBe(false)
+    expect(managedCliEntry('claude')).toBeNull()
+  })
+
+  it('returns null when current.json points at an empty stub', () => {
+    const root = join(userData, 'managed-cli', 'claude')
+    const empty = join(root, '1.0.0', 'package', 'cli.js')
+    mkdirSync(dirname(empty), { recursive: true })
+    writeFileSync(empty, '')
+    writeFileSync(join(root, 'current.json'), JSON.stringify({ version: '1.0.0', entry: empty }))
+    expect(managedEntryIsRunnable('claude', empty)).toBe(false)
+    expect(managedCliEntry('claude')).toBeNull()
+  })
+
+  it('returns null when current.json points outside the install root', () => {
+    const outsider = join(userData, 'not-managed', 'cli.js')
+    mkdirSync(dirname(outsider), { recursive: true })
+    writeFileSync(outsider, 'console.log(1)\n')
+    const root = join(userData, 'managed-cli', 'claude')
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, 'current.json'), JSON.stringify({ version: '1.0.0', entry: outsider }))
+    expect(managedEntryIsRunnable('claude', outsider)).toBe(false)
+    expect(managedCliEntry('claude')).toBeNull()
+  })
 })
 
 describe('installManagedCli — happy path', () => {

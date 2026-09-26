@@ -255,11 +255,13 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       sliceBetween('function setWindowMode(): void {', '/** Self-heal a null `win`')
     )
     const preamble = [
-      'const { screen, clampHeight, recenterXForWidth } = stubs',
+      'const { screen, clampHeight, recenterXForWidth, rememberBarContentHeight } = stubs',
       'let current = { x: 0, y: 0, width: 880, height: 400 }',
-      'const win = { getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } } }',
+      'const win = { getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } }, setBackgroundColor: () => {} }',
       'const currentWidth = 880',
       `const lastBarHeight = ${TALL}`,
+      'const BAR_IDLE_HEIGHT_PX = 84',
+      'const OVERLAY_REST_BACKGROUND = "#00000000"',
       'const onboardingExclusiveLive = () => false',
       'const islandResting = false',
       ''
@@ -270,7 +272,8 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
     const height = run({
       screen: fakeScreen([LAPTOP_ALONE]),
       clampHeight: (h: number, areaHeight: number) => Math.min(h, areaHeight - 48),
-      recenterXForWidth
+      recenterXForWidth,
+      rememberBarContentHeight: (h: number) => h
     }).height
     expect(height).toBeLessThanOrEqual(LAPTOP_ALONE.workArea.height - 48)
   })

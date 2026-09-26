@@ -83,7 +83,9 @@ describe('localPrewarmEligible', () => {
     expect(
       localPrewarmEligible(
         settingsFor({ useFor: { suggest: false, summary: true, vision: true } }, NO_HEDGE),
-        null
+        null,
+        true,
+        8
       )
     ).toBe(false)
   })
@@ -149,11 +151,11 @@ describe('localPrewarmEligible', () => {
 
   // F6 hardening: the org allowlist gate.
   it('false when the org allowlist excludes "local", even though localLlm is fully enabled', () => {
-    expect(localPrewarmEligible(settingsFor(), ['anthropic', 'openai'])).toBe(false)
+    expect(localPrewarmEligible(settingsFor(), ['anthropic', 'openai'], true, 8)).toBe(false)
   })
 
   it('true when the org allowlist explicitly includes "local"', () => {
-    expect(localPrewarmEligible(settingsFor(), ['anthropic', 'local'])).toBe(true)
+    expect(localPrewarmEligible(settingsFor(), ['anthropic', 'local'], true, 8)).toBe(true)
   })
 })
 
@@ -290,7 +292,9 @@ describe('ensureLocalRuntimeStarted', () => {
 // engine-aware prewarmLocal(); the markActivity → ensure → prewarm sequence below is exactly its llama
 // branch, and the engine dispatch itself (apple vs llama) is proven in local.engine.test.ts.
 async function runPrewarmHandler(s: Settings, allowed: string[] | null, text: string): Promise<void> {
-  if (!localPrewarmEligible(s, allowed)) return
+  // Pin free RAM: the default reads os.freemem(). Totos-Mac Quality failed the warm/allowlist
+  // cases when the live machine sat under PREWARM_MIN_FREE_RAM_GB — that is MQA-270, not this gate.
+  if (!localPrewarmEligible(s, allowed, true, 8)) return
   localRuntimeMock.markActivity()
   try {
     await ensureLocalRuntimeStarted(s.localLlm.modelId)

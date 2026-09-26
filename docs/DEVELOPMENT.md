@@ -35,11 +35,14 @@ to work, each with a graceful fallback — know about them so you're not surpris
 1. **The `intelligence/` dashboard is a separate npm workspace**, not covered by the root
    `npm install`. It has its own `package.json` (`deal-psychology-dashboard`) and is built via
    `npm run build:intelligence`, which itself runs `cd intelligence && npm ci && npm run build`.
+   `npm run build` and `npm run dev` now run `scripts/ensure-intelligence-bundle.mjs` first, so a
+   normal tree cannot skip the dashboard. Totos-Mac show tree failed `tsc -b` with
+   `IntelligenceUpdateButton.tsx(12,5): error TS2503: Cannot find namespace 'JSX'` (MQA-290); the
+   button returns `ReactElement` and `tsconfig.app.json` loads React types. Tony's live 1.8.3 banner
+   (`Intelligence dashboard bundle not found`) is the same miss on an app that never ran that build.
    `openIntelligenceWindow()` (`src/main/intelligence.ts`) looks for a built `intelligence/dist/index.html`
    in three candidate locations and returns `{ ok: false, error: 'Intelligence dashboard bundle not
    found — run npm run build:intelligence, then restart.' }` if none exist — it does not crash the app.
-   Run `npm run build:intelligence` once if you want the "Mantu Intelligence" dashboard window to open
-   in a dev run.
 
 2. **The FFmpeg sidecar binaries are untracked.** `.gitignore` excludes the platform binaries below
    `resources/ffmpeg/` while preserving the tracked `manifest.json` trust anchor and LGPL license. A
