@@ -223,6 +223,9 @@ export type AuditEvent =
   | 'meeting.detect.degraded'
   | 'recall.open'
   | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
+  // A cloud-placeholder probe could not classify a batch of meeting files, so they were treated as
+  // cloud-only and not read. Once per failure streak; reason and file count only.
+  | 'storage.dataless_probe_failed'
   // Generalized MCP push connections (BidStack CRM, Plane, ClickUp, …) — see main/mcp/mcpClient.ts.
   | 'mcp.connected'
   | 'mcp.disconnected'

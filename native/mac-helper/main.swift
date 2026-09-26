@@ -1,7 +1,7 @@
 // metis-mac-helper — dependency-free macOS sidecar for Métis (compiled by scripts/build-mac-helper.mjs,
 // shipped via electron-builder's mac extraResources; mirrors the llama-server sidecar pattern).
 //
-// Two subcommands, both designed to plug into EXISTING main-process seams without new protocols:
+// Subcommands, each spawned by the main process:
 //
 //   watch-frontmost   Long-running. Prints one TSV line per app activation — the SAME
 //                     `windowId \t pid \t title` shape foreground-watcher.ts already parses from the
@@ -33,6 +33,12 @@
 //                     `frame`/`visibleFrame` are AppKit rects (bottom-left origin) — the TS side must
 //                     NEVER treat them as Electron bounds/workArea (top-left origin); only the magnitude
 //                     fields (notchWidth, safeAreaInsetTop, backingScaleFactor) cross that boundary.
+//
+//   stat-flags        One-shot. Reads NUL-separated UTF-8 paths from stdin and prints ONE JSON array
+//                     holding each path's st_flags, or null where stat(2) failed, in input order.
+//                     stat(2) reads the inode and never opens the file, so probing a dataless
+//                     (cloud-only) file cannot materialize it. src/main/infra/storage/dataless.ts owns
+//                     the protocol and decodes SF_DATALESS; this command reports the raw word.
 import AppKit
 import Speech
 import Vision
@@ -285,11 +291,30 @@ func runScreenMetrics() -> Never {
     exit(0)
 }
 
+// MARK: - stat-flags
+
+func runStatFlags() -> Never {
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    let flags: [UInt32?] = input.split(separator: 0).map { pathBytes in
+        var info = stat()
+        let path = String(decoding: pathBytes, as: UTF8.self)
+        return stat(path, &info) == 0 ? info.st_flags : nil
+    }
+    do {
+        let encoded = try JSONEncoder().encode(flags)
+        FileHandle.standardOutput.write(encoded)
+        FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+    } catch {
+        fail("stat-flags: could not encode result: \(error.localizedDescription)")
+    }
+    exit(0)
+}
+
 // MARK: - entry point
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -303,6 +328,8 @@ case "transcribe":
     runTranscribe(path: arguments[2], localeIdentifier: arguments.count >= 4 ? arguments[3] : nil)
 case "screen-metrics":
     runScreenMetrics()
+case "stat-flags":
+    runStatFlags()
 default:
     fail("unknown command: \(arguments[1])")
 }
