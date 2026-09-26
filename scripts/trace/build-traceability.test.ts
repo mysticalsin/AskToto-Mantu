@@ -237,8 +237,8 @@ describe('buildTraceability — the eight acceptance behaviors', () => {
     return {
       inventory: [row({ id: 'FOO-01', kit: 'kitA' }), row({ id: 'FOO-02', kit: 'kitA' })],
       tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01', 'FOO-02'], status: 'DONE' })],
-      decisionIds: new Set(),
-      blockerTicketRefs: new Set(),
+      decisionIds: new Set<string>(),
+      blockerTicketRefs: new Set<string>(),
       ...overrides
     }
   }
@@ -336,8 +336,8 @@ describe('rendering — structural, not a source-text snapshot', () => {
   const result = buildTraceability({
     inventory: [row({ id: 'FOO-01', kit: 'kitA' })],
     tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })],
-    decisionIds: new Set(),
-    blockerTicketRefs: new Set()
+    decisionIds: new Set<string>(),
+    blockerTicketRefs: new Set<string>()
   })
 
   it('renderMarkdown emits one row per inventory row with an id, kit and status column', () => {
