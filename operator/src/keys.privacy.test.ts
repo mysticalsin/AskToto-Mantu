@@ -12,6 +12,7 @@ const NEXT = 'FAKE_REPLACEMENT_TOKEN_TEST_ONLY_0002'
 const badFetch: typeof fetch = async () => new Response(JSON.stringify({
   success: true, result: { id: 'default', collect_logs: true, cache_ttl: 0, logpush: false }
 }), { headers: { 'content-type': 'application/json' } })
+const missingGatewayFetch: typeof fetch = async () => new Response('{"success":false}', { status: 404 })
 
 async function seed() {
   const store = memoryStore()
@@ -34,7 +35,7 @@ describe('R11 no credential mutation before privacy readback', () => {
             provider: 'cloudflare', accountId: 'test-account-0001', secret: NEXT
           }, badFetch)
         : await rotateVaultKey(store, env, EMAIL, NOW + 1, id, { secret: NEXT }, badFetch)
-      expect(result).toMatchObject({ ok: false, status: 503 })
+      expect(result).toMatchObject({ ok: false, status: 503, code: 'GATEWAY_CONFIGURATION_UNSAFE' })
       expect(await store.listVaultRows()).toEqual(before)
       expect(await store.listAudit(100)).toEqual(beforeAudit)
       expect(await store.listEvents(100)).toEqual(beforeEvents)
@@ -42,4 +43,12 @@ describe('R11 no credential mutation before privacy readback', () => {
       expect(JSON.stringify(result)).not.toContain(NEXT)
     })
   }
+
+  it('distinguishes a missing gateway from an unsafe one by code, not just a shared 503', async () => {
+    const { store, id } = await seed()
+    const missing = await rotateVaultKey(store, env, EMAIL, NOW + 1, id, { secret: NEXT }, missingGatewayFetch)
+    const unsafe = await rotateVaultKey(store, env, EMAIL, NOW + 1, id, { secret: NEXT }, badFetch)
+    expect(missing).toMatchObject({ ok: false, status: 503, code: 'GATEWAY_REVIEW_REQUIRED' })
+    expect(unsafe).toMatchObject({ ok: false, status: 503, code: 'GATEWAY_CONFIGURATION_UNSAFE' })
+  })
 })

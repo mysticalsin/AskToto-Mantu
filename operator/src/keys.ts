@@ -1,4 +1,9 @@
-import { ensureDefaultAiGateway, isCloudflareVaultPaste } from './ai-gateway'
+import {
+  GatewayPrivacyError,
+  isCloudflareVaultPaste,
+  verifyDefaultGatewayPrivacy,
+  type GatewayPrivacyErrorCode
+} from './ai-gateway'
 import { decryptVault, encryptVault } from './crypto'
 import { looksLikeSecret } from './redact'
 import { seatAuthorizedForKeys } from './fleet'
@@ -56,6 +61,31 @@ function readSecret(body: Record<string, unknown>): string {
   return ''
 }
 
+export type VaultKeyFailure = { ok: false; error: string; status: number; code?: GatewayPrivacyErrorCode }
+
+/** A failed privacy check must leave the previous working credential intact — the caller
+ * runs this before touching the vault, never after. Distinguishes a missing gateway
+ * (REVIEW_REQUIRED) from logging left on (CONFIGURATION_UNSAFE) or a token without
+ * permission (CHECK_DENIED) instead of collapsing every case into the same 503.
+ */
+async function verifyGatewayPrivacyForVault(
+  secret: string,
+  accountId: string,
+  fetchImpl: typeof fetch
+): Promise<{ ok: true } | VaultKeyFailure> {
+  try {
+    await verifyDefaultGatewayPrivacy(secret, accountId, fetchImpl)
+    return { ok: true }
+  } catch (error) {
+    return {
+      ok: false,
+      error: 'Cloudflare gateway privacy is not verified; no vault changes were made.',
+      status: 503,
+      code: error instanceof GatewayPrivacyError ? error.code : undefined
+    }
+  }
+}
+
 export async function writeVaultKey(
   store: OperatorStore,
   env: { OPERATOR_VAULT_KEY?: string },
@@ -63,7 +93,7 @@ export async function writeVaultKey(
   now: number,
   body: Record<string, unknown>,
   fetchImpl: typeof fetch = fetch
-): Promise<{ ok: true; id: string; last4: string; status: string } | { ok: false; error: string; status: number }> {
+): Promise<{ ok: true; id: string; last4: string; status: string } | VaultKeyFailure> {
   if (!env.OPERATOR_VAULT_KEY) return { ok: false, error: 'vault key missing', status: 500 }
   const provider = typeof body.provider === 'string' ? body.provider.trim() : ''
   if (!isVaultProvider(provider) || isForbiddenVaultProvider(provider)) {
@@ -77,13 +107,9 @@ export async function writeVaultKey(
   if (needsAccount && !accountId) {
     return { ok: false, error: 'accountId required', status: 400 }
   }
-  // A failed privacy check must leave the previous working credential intact.
   if (isCloudflareVaultPaste(provider, accountId) && accountId) {
-    try {
-      await ensureDefaultAiGateway(secret, accountId, fetchImpl)
-    } catch {
-      return { ok: false, error: 'Cloudflare gateway privacy is not verified; no vault changes were made.', status: 503 }
-    }
+    const privacy = await verifyGatewayPrivacyForVault(secret, accountId, fetchImpl)
+    if (!privacy.ok) return privacy
   }
   const label = labelFromBody(body, accountId || provider)
   const last4 = last4OfSecret(secret)
@@ -127,15 +153,16 @@ export async function rotateVaultKey(
   id: string,
   body: Record<string, unknown>,
   fetchImpl: typeof fetch = fetch
-): Promise<{ ok: true; id: string; last4: string; status: string } | { ok: false; error: string; status: number }> {
+): Promise<{ ok: true; id: string; last4: string; status: string } | VaultKeyFailure> {
   if (!env.OPERATOR_VAULT_KEY) return { ok: false, error: 'vault key missing', status: 500 }
   const existing = await store.getVaultKey(id)
   if (!existing) return { ok: false, error: 'not found', status: 404 }
   if (existing.status === 'revoked') return { ok: false, error: 'revoked', status: 400 }
   const secret = readSecret(body)
   if (!secret) return { ok: false, error: 'secret required', status: 400 }
+  const isCloudflareProvider = existing.provider === CF_ACCOUNT_PROVIDER || existing.provider === 'cloudflare'
   let accountId: string | undefined
-  if (existing.provider === CF_ACCOUNT_PROVIDER || existing.provider === 'cloudflare') {
+  if (isCloudflareProvider) {
     try {
       const prev = decodeVaultPlaintext(await decryptVault(existing.cipher, existing.iv, env.OPERATOR_VAULT_KEY))
       accountId = typeof body.accountId === 'string' && body.accountId.trim() ? body.accountId.trim() : prev.accountId
@@ -143,16 +170,12 @@ export async function rotateVaultKey(
       accountId = typeof body.accountId === 'string' ? body.accountId.trim() : undefined
     }
   }
-  if ((existing.provider === CF_ACCOUNT_PROVIDER || existing.provider === 'cloudflare') && !accountId) {
+  if (isCloudflareProvider && !accountId) {
     return { ok: false, error: 'accountId required', status: 400 }
   }
-  // A failed privacy check must leave the previous working credential intact.
   if (isCloudflareVaultPaste(existing.provider, accountId) && accountId) {
-    try {
-      await ensureDefaultAiGateway(secret, accountId, fetchImpl)
-    } catch {
-      return { ok: false, error: 'Cloudflare gateway privacy is not verified; no vault changes were made.', status: 503 }
-    }
+    const privacy = await verifyGatewayPrivacyForVault(secret, accountId, fetchImpl)
+    if (!privacy.ok) return privacy
   }
   const last4 = last4OfSecret(secret)
   const enc = await encryptVault(encodeVaultPlaintext(secret, accountId), env.OPERATOR_VAULT_KEY)

@@ -128,6 +128,43 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     expect(JSON.stringify(await store.listEvents(10))).not.toContain(TOKEN)
   })
 
+  for (const [label, gatewayReply] of [
+    ['the gateway is missing (404)', () => new Response('{"success":false}', { status: 404 })],
+    ['logging is left on', () => new Response(JSON.stringify({
+      success: true, result: { id: 'default', collect_logs: true, cache_ttl: 0, logpush: false }
+    }), { status: 200, headers: { 'content-type': 'application/json' } })]
+  ] as const) {
+    it(`callback redirects to the keys page and writes no vault row when ${label}`, async () => {
+      const store = memoryStore()
+      const start = await handleRequest(
+        new Request(`https://operator.test${CF_CONNECT_PATH}`),
+        env(),
+        { access: tony },
+        { store, now: NOW }
+      )
+      const cookie = (start.headers.get('set-cookie') || '').split(';')[0]
+      const state = new URL(start.headers.get('location') || 'https://x.test').searchParams.get('state') || ''
+      const unsafeCfFetch: typeof fetch = async (input) => {
+        const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+        if (url.pathname.includes('/ai-gateway/gateways')) return gatewayReply()
+        return cfFetch(input)
+      }
+      const cb = await handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-unsafe&state=${state}`, {
+          headers: { cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW, cfFetch: unsafeCfFetch }
+      )
+      expect(cb.status).toBe(303)
+      expect(cb.headers.get('location')).toBe('/?cf=failed#keys')
+      // The OAuth state cookie is cleared on every redirect out of the callback, including this one.
+      expect(cb.headers.get('set-cookie') || '').toContain(`${CF_OAUTH_COOKIE}=;`)
+      expect(await store.listVaultMeta()).toEqual([])
+    })
+  }
+
   it('authorized seat can /v1/use cloudflare after the provisioned key', async () => {
     const store = memoryStore()
     const start = await handleRequest(

@@ -151,7 +151,7 @@ describe('admin keys write / rotate / revoke', () => {
     expect(html).not.toContain(secret)
   })
 
-  it('paste provider=cloudflare + accountId calls ensureDefaultAiGateway before Ask can run', async () => {
+  it('paste provider=cloudflare + accountId calls verifyDefaultGatewayPrivacy before Ask can run', async () => {
     const store = memoryStore()
     const secret = 'cf-api-token-TESTKEYONLY-not-a-real-secret-66fd'
     const accountId = '294885a27b3cc0a1cbe5d0ccbe38de4f'
@@ -198,7 +198,7 @@ describe('admin keys write / rotate / revoke', () => {
   it('anthropic paste does not call AI Gateway ensure', async () => {
     const store = memoryStore()
     const cfFetch = async () => {
-      throw new Error('ensureDefaultAiGateway must not run for non-cloudflare paste')
+      throw new Error('verifyDefaultGatewayPrivacy must not run for non-cloudflare paste')
     }
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', {

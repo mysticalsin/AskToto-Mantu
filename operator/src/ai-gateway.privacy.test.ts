@@ -1,11 +1,45 @@
 import { describe, expect, it } from 'vitest'
-import { ensureDefaultAiGateway } from './ai-gateway'
+import { verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { reviewedGatewayReply } from './ai-gateway.privacy-fixture'
 
 const TOKEN = 'FAKE_GATEWAY_REGRESSION_TOKEN_ONLY'
 const ACCOUNT = 'test-account-0001'
+const ROUTE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/ai-gateway/gateways/default`
+
 function reply(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })
+}
+
+/** A structural Response fake for the checks the real class won't let a test override
+ * directly (`redirected`, `url`), and for exotic bodies (invalid UTF-8, oversize streams).
+ */
+function fakeResponse(overrides: {
+  redirected?: boolean
+  url?: string
+  ok?: boolean
+  status?: number
+  headers?: Record<string, string>
+  bodyBytes?: Uint8Array
+}): Response {
+  const headers = new Headers({ 'content-type': 'application/json', ...overrides.headers })
+  const bytes =
+    overrides.bodyBytes ??
+    new TextEncoder().encode(
+      JSON.stringify({ success: true, result: { id: 'default', collect_logs: false, cache_ttl: 0, logpush: false } })
+    )
+  return {
+    redirected: overrides.redirected ?? false,
+    url: overrides.url ?? '',
+    ok: overrides.ok ?? true,
+    status: overrides.status ?? 200,
+    headers,
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes)
+        controller.close()
+      }
+    })
+  } as unknown as Response
 }
 
 describe('R11 SRC-08: gateway privacy is read back, never auto-provisioned', () => {
@@ -15,9 +49,9 @@ describe('R11 SRC-08: gateway privacy is read back, never auto-provisioned', () 
       calls.push({ input: String(input), init })
       return reviewedGatewayReply()
     }
-    await ensureDefaultAiGateway(TOKEN, ACCOUNT, fetcher)
+    await verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)
     expect(calls).toHaveLength(1)
-    expect(calls[0]?.input).toBe(`https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/ai-gateway/gateways/default`)
+    expect(calls[0]?.input).toBe(ROUTE)
     expect(calls[0]?.init?.method).toBe('GET')
     expect(calls[0]?.init?.body).toBeUndefined()
     expect(calls[0]?.init?.redirect).toBe('error')
@@ -32,15 +66,84 @@ describe('R11 SRC-08: gateway privacy is read back, never auto-provisioned', () 
       const fetcher: typeof fetch = async () => reply({ success: true, result: {
         id: 'default', collect_logs: false, cache_ttl: 0, logpush: false, ...bad
       } })
-      await expect(ensureDefaultAiGateway(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_CONFIGURATION_UNSAFE' })
+      await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_CONFIGURATION_UNSAFE' })
     })
   }
 
   it('does not create a missing gateway', async () => {
     let calls = 0
     const fetcher: typeof fetch = async () => { calls++; return reply({ success: false }, 404) }
-    await expect(ensureDefaultAiGateway(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_REVIEW_REQUIRED' })
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_REVIEW_REQUIRED' })
     expect(calls).toBe(1)
+  })
+
+  for (const status of [401, 403]) {
+    it(`denies a ${status} without retrying`, async () => {
+      let calls = 0
+      const fetcher: typeof fetch = async () => { calls++; return reply({ success: false }, status) }
+      await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_CHECK_DENIED' })
+      expect(calls).toBe(1)
+    })
+  }
+
+  it('rejects any other non-2xx as unavailable', async () => {
+    const fetcher: typeof fetch = async () => reply({ success: false }, 500)
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_CHECK_UNAVAILABLE' })
+  })
+
+  it('rejects a redirected response', async () => {
+    const fetcher: typeof fetch = async () => fakeResponse({ redirected: true })
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_RESPONSE_UNVERIFIED' })
+  })
+
+  it('rejects a response whose final URL does not match the requested route', async () => {
+    const fetcher: typeof fetch = async () => fakeResponse({ url: 'https://attacker.example/phish' })
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_RESPONSE_UNVERIFIED' })
+  })
+
+  it('rejects a non-JSON content-type', async () => {
+    const fetcher: typeof fetch = async () => fakeResponse({ headers: { 'content-type': 'text/plain' } })
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_RESPONSE_UNVERIFIED' })
+  })
+
+  it('rejects a body over the byte cap by its declared content-length', async () => {
+    const fetcher: typeof fetch = async () => fakeResponse({ headers: { 'content-length': '999999' } })
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_RESPONSE_UNVERIFIED' })
+  })
+
+  it('rejects a body that streams past the byte cap with no content-length', async () => {
+    const fetcher: typeof fetch = async () => fakeResponse({ bodyBytes: new Uint8Array(70_000) })
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_RESPONSE_UNVERIFIED' })
+  })
+
+  it('rejects invalid UTF-8', async () => {
+    const fetcher: typeof fetch = async () => fakeResponse({ bodyBytes: new Uint8Array([0xff, 0xfe, 0xfd]) })
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_RESPONSE_UNVERIFIED' })
+  })
+
+  it('rejects invalid JSON', async () => {
+    const fetcher: typeof fetch = async () => fakeResponse({ bodyBytes: new TextEncoder().encode('{not valid json') })
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_RESPONSE_UNVERIFIED' })
+  })
+
+  it('rejects a gateway id other than default', async () => {
+    const fetcher: typeof fetch = async () => reply({
+      success: true, result: { id: 'not-default', collect_logs: false, cache_ttl: 0, logpush: false }
+    })
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_RESPONSE_UNVERIFIED' })
+  })
+
+  it.each([
+    ['empty account id', '', TOKEN],
+    ['an account id with path characters', '../etc', TOKEN],
+    ['an empty token', ACCOUNT, ''],
+    // A trailing newline is trimmed away before the check runs; an embedded one is not.
+    ['a token carrying an embedded newline', ACCOUNT, `${TOKEN.slice(0, 4)}\n${TOKEN.slice(4)}`]
+  ])('rejects %s before any network call', async (_label, accountId, token) => {
+    let calls = 0
+    const fetcher: typeof fetch = async () => { calls++; return reply({ success: false }) }
+    await expect(verifyDefaultGatewayPrivacy(token, accountId, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_CREDENTIALS_REQUIRED' })
+    expect(calls).toBe(0)
   })
 
   it('bounds a body that never finishes and cancels its stream', async () => {
@@ -48,12 +151,12 @@ describe('R11 SRC-08: gateway privacy is read back, never auto-provisioned', () 
     const fetcher: typeof fetch = async () => new Response(new ReadableStream<Uint8Array>({
       cancel() { cancelled = true }
     }), { headers: { 'content-type': 'application/json' } })
-    await expect(ensureDefaultAiGateway(TOKEN, ACCOUNT, fetcher, { timeoutMs: 20 })).rejects.toMatchObject({ code: 'GATEWAY_CHECK_TIMEOUT' })
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher, { timeoutMs: 20 })).rejects.toMatchObject({ code: 'GATEWAY_CHECK_TIMEOUT' })
     expect(cancelled).toBe(true)
   })
 
   it('does not leak upstream error text', async () => {
     const fetcher: typeof fetch = async () => { throw new Error(`private error ${TOKEN}`) }
-    await expect(ensureDefaultAiGateway(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ message: 'GATEWAY_CHECK_UNAVAILABLE' })
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ message: 'GATEWAY_CHECK_UNAVAILABLE' })
   })
 })

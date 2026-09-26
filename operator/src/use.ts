@@ -1,6 +1,6 @@
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '../../src/shared/providers'
 import { operatorVisionModel, parseOperatorImage, type OperatorImage } from '../../src/shared/operator-vision'
-import { ensureDefaultAiGateway, GatewayPrivacyError } from './ai-gateway'
+import { GatewayPrivacyError, verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { decryptVault } from './crypto'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { looksLikeSecret, providerRefusedPayload } from './redact'
@@ -334,7 +334,7 @@ async function callCloudflareGateway(
   const id = (accountId || '').trim()
   if (!id) return { ok: false, error: 'Operator cannot issue a use', status: 503 }
   const url = `https://api.cloudflare.com/client/v4/accounts/${id}/ai/v1/chat/completions`
-  await ensureDefaultAiGateway(secret, id, providerFetch)
+  await verifyDefaultGatewayPrivacy(secret, id, providerFetch)
   const messages = openaiMessages(req)
   const res = await providerFetch(url, {
     method: 'POST',
