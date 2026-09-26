@@ -77,6 +77,14 @@ export async function writeVaultKey(
   if (needsAccount && !accountId) {
     return { ok: false, error: 'accountId required', status: 400 }
   }
+  // A failed privacy check must leave the previous working credential intact.
+  if (isCloudflareVaultPaste(provider, accountId) && accountId) {
+    try {
+      await ensureDefaultAiGateway(secret, accountId, fetchImpl)
+    } catch {
+      return { ok: false, error: 'Cloudflare gateway privacy is not verified; no vault changes were made.', status: 503 }
+    }
+  }
   const label = labelFromBody(body, accountId || provider)
   const last4 = last4OfSecret(secret)
   const enc = await encryptVault(encodeVaultPlaintext(secret, accountId), env.OPERATOR_VAULT_KEY)
@@ -108,9 +116,6 @@ export async function writeVaultKey(
     country: null,
     detail: `write ${provider}`
   })
-  if (isCloudflareVaultPaste(provider, accountId) && accountId) {
-    await ensureDefaultAiGateway(secret, accountId, fetchImpl)
-  }
   return { ok: true, id, last4, status: 'active' }
 }
 
@@ -138,6 +143,17 @@ export async function rotateVaultKey(
       accountId = typeof body.accountId === 'string' ? body.accountId.trim() : undefined
     }
   }
+  if ((existing.provider === CF_ACCOUNT_PROVIDER || existing.provider === 'cloudflare') && !accountId) {
+    return { ok: false, error: 'accountId required', status: 400 }
+  }
+  // A failed privacy check must leave the previous working credential intact.
+  if (isCloudflareVaultPaste(existing.provider, accountId) && accountId) {
+    try {
+      await ensureDefaultAiGateway(secret, accountId, fetchImpl)
+    } catch {
+      return { ok: false, error: 'Cloudflare gateway privacy is not verified; no vault changes were made.', status: 503 }
+    }
+  }
   const last4 = last4OfSecret(secret)
   const enc = await encryptVault(encodeVaultPlaintext(secret, accountId), env.OPERATOR_VAULT_KEY)
   await store.putVaultKey({
@@ -158,9 +174,6 @@ export async function rotateVaultKey(
     country: null,
     detail: `rotate ${existing.provider}`
   })
-  if (isCloudflareVaultPaste(existing.provider, accountId) && accountId) {
-    await ensureDefaultAiGateway(secret, accountId, fetchImpl)
-  }
   return { ok: true, id: existing.id, last4, status: 'active' }
 }
 
