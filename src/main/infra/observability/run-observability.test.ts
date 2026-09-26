@@ -12,7 +12,7 @@ function fakePowerMonitor() {
 }
 
 function fakeStallMonitor(overrides: Partial<StallMonitor> = {}): StallMonitor {
-  return { stop: vi.fn(), resync: vi.fn(), pause: vi.fn(), setPhase: vi.fn(), ...overrides }
+  return { stop: vi.fn(), resync: vi.fn(), pause: vi.fn(), timePhase: vi.fn((_label, fn) => fn()), ...overrides }
 }
 
 describe('startRunObservability', () => {
@@ -68,16 +68,16 @@ describe('startRunObservability', () => {
     expect(markAlive).toHaveBeenCalledExactlyOnceWith('/fake', 'boot-1')
   })
 
-  it("wires the stall monitor's onStall/onSummary details straight through to app.stall / app.stall.summary, and setPhase delegates to the stall monitor", () => {
-    // The stall monitor (not this module) now owns deciding what phase, if any, a tick names — see
-    // stall-monitor.test.ts for that behaviour. This module's only job is to forward whatever detail it
-    // receives, and to forward setPhase calls to the stall monitor that owns clearing them.
+  it("wires the stall monitor's onStall/onSummary details straight through to app.stall / app.stall.summary, and timePhase delegates to the stall monitor", () => {
+    // The stall monitor (not this module) now owns measuring and deciding what phase, if any, a tick
+    // names — see stall-monitor.test.ts for that behaviour. This module's only job is to forward whatever
+    // detail it receives, and to forward timePhase calls to the stall monitor that owns them.
     const audit = vi.fn()
-    const setPhase = vi.fn()
+    const timePhase = vi.fn((_label: string, fn: () => unknown) => fn())
     let captured: StallMonitorOptions | undefined
     const startStallMonitor = vi.fn((o: StallMonitorOptions) => {
       captured = o
-      return fakeStallMonitor({ setPhase })
+      return fakeStallMonitor({ timePhase })
     })
     const observability = startRunObservability({
       userData: '/fake',
@@ -94,15 +94,16 @@ describe('startRunObservability', () => {
       }
     })
     expect(startStallMonitor).toHaveBeenCalledWith(expect.objectContaining({ bootId: 'boot-9' }))
-    captured!.onStall({ bootId: 'boot-9', durationMs: 1500, phase: undefined })
-    expect(audit).toHaveBeenCalledWith('app.stall', { bootId: 'boot-9', durationMs: 1500, phase: undefined })
-    captured!.onStall({ bootId: 'boot-9', durationMs: 2000, phase: 'boot:createTray' })
-    expect(audit).toHaveBeenCalledWith('app.stall', { bootId: 'boot-9', durationMs: 2000, phase: 'boot:createTray' })
+    captured!.onStall({ bootId: 'boot-9', durationMs: 1500, phase: undefined, phaseMs: undefined })
+    expect(audit).toHaveBeenCalledWith('app.stall', { bootId: 'boot-9', durationMs: 1500, phase: undefined, phaseMs: undefined })
+    captured!.onStall({ bootId: 'boot-9', durationMs: 2000, phase: 'ensureMeetingsFolder', phaseMs: 1800 })
+    expect(audit).toHaveBeenCalledWith('app.stall', { bootId: 'boot-9', durationMs: 2000, phase: 'ensureMeetingsFolder', phaseMs: 1800 })
     captured!.onSummary({ bootId: 'boot-9', p99Ms: 7 })
     expect(audit).toHaveBeenCalledWith('app.stall.summary', { bootId: 'boot-9', p99Ms: 7 })
 
-    observability.setPhase('boot:createTray')
-    expect(setPhase).toHaveBeenCalledExactlyOnceWith('boot:createTray')
+    const result = observability.timePhase('ensureMeetingsFolder', () => 42)
+    expect(timePhase).toHaveBeenCalledExactlyOnceWith('ensureMeetingsFolder', expect.any(Function))
+    expect(result).toBe(42) // forwards the stall monitor's return value, not just the call
   })
 
   it('pauses the stall monitor on powerMonitor suspend and resyncs it on resume', () => {
@@ -133,6 +134,28 @@ describe('startRunObservability', () => {
     expect(resync).toHaveBeenCalledOnce()
   })
 
+  it("also resyncs the stall monitor on powerMonitor's unlock-screen, in case 'resume' itself is never delivered (an aborted sleep, or a platform that raises 'suspend' without a matching 'resume')", () => {
+    const resync = vi.fn()
+    const powerMonitor = fakePowerMonitor()
+    startRunObservability({
+      userData: '/fake',
+      version: '1.9.7',
+      platform: 'darwin',
+      arch: 'arm64',
+      audit: vi.fn(),
+      powerMonitor,
+      deps: {
+        beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
+        startStallMonitor: vi.fn(() => fakeStallMonitor({ resync })),
+        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+        clearIntervalFn: vi.fn()
+      }
+    })
+    const onUnlockScreen = powerMonitor.on.mock.calls.find((c) => c[0] === 'unlock-screen')![1] as () => void
+    onUnlockScreen()
+    expect(resync).toHaveBeenCalledOnce()
+  })
+
   it("shutdownClean stops the alive timer and stall monitor, unsubscribes from suspend and resume, and audits app.shutdown.clean with markShutdownClean's detail", () => {
     const audit = vi.fn()
     const clearIntervalFn = vi.fn()
@@ -159,6 +182,7 @@ describe('startRunObservability', () => {
     expect(stop).toHaveBeenCalledOnce()
     expect(powerMonitor.removeListener).toHaveBeenCalledWith('suspend', expect.any(Function))
     expect(powerMonitor.removeListener).toHaveBeenCalledWith('resume', expect.any(Function))
+    expect(powerMonitor.removeListener).toHaveBeenCalledWith('unlock-screen', expect.any(Function))
     expect(markShutdownClean).toHaveBeenCalledWith('/fake', 'boot-7', 42)
     // audit was already called once with app.started at construction — this checks the shutdown call
     // specifically, not that it's the mock's only call.

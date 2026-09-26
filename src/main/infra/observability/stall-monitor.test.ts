@@ -296,13 +296,13 @@ describe('startStallMonitor', () => {
       clearIntervalFn: clock.clearIntervalFn,
       histogram: fakeHistogram(0)
     })
-    monitor.setPhase('boot:createTray')
+    monitor.timePhase('ensureMeetingsFolder', () => {})
     clock.advanceTo(1000) // on time — consumes the phase even though this tick itself isn't late
     clock.advanceTo(3500) // 1500ms late, but the phase was already consumed by the on-time tick above
-    expect(onStall).toHaveBeenCalledExactlyOnceWith({ bootId: 'boot-1', durationMs: 1500, phase: undefined })
+    expect(onStall).toHaveBeenCalledExactlyOnceWith({ bootId: 'boot-1', durationMs: 1500, phase: undefined, phaseMs: undefined })
   })
 
-  it('setPhase immediately before a late tick attaches that phase to the app.stall it produces', () => {
+  it('timePhase immediately before a late tick attaches that phase and its own measured duration', () => {
     const clock = fakeTimer()
     const onStall = vi.fn()
     const monitor = startStallMonitor({
@@ -316,8 +316,97 @@ describe('startStallMonitor', () => {
       clearIntervalFn: clock.clearIntervalFn,
       histogram: fakeHistogram(0)
     })
-    monitor.setPhase('boot:createTray')
-    clock.advanceTo(3500) // late by 2500ms on the very first tick — no on-time tick consumed the phase first
-    expect(onStall).toHaveBeenCalledExactlyOnceWith({ bootId: 'boot-1', durationMs: 2500, phase: 'boot:createTray' })
+    // Models a single slow runStep: the step itself takes 3400ms (the clock moves inside the callback,
+    // the way a real synchronous fs call would take real wall time), and the very next tick is late.
+    monitor.timePhase('ensureMeetingsFolder', () => clock.jumpTo(3400))
+    clock.advanceTo(3500) // late by 2500ms — no on-time tick consumed the phase first
+    expect(onStall).toHaveBeenCalledExactlyOnceWith({
+      bootId: 'boot-1',
+      durationMs: 2500,
+      phase: 'ensureMeetingsFolder',
+      phaseMs: 3400
+    })
+  })
+
+  it('names the phase that ran longest since the previous tick, not whichever one ran last — production runs many runStep calls synchronously with no tick able to fire between them', () => {
+    const clock = fakeTimer()
+    const onStall = vi.fn()
+    const monitor = startStallMonitor({
+      bootId: 'boot-1',
+      onStall,
+      onSummary: vi.fn(),
+      tickMs: 1000,
+      summaryIntervalMs: 10_000,
+      now: clock.now,
+      setIntervalFn: clock.setIntervalFn,
+      clearIntervalFn: clock.clearIntervalFn,
+      histogram: fakeHistogram(0)
+    })
+    // Same shape as index.ts's boot sequence: refreshScreenPreprocess through initAutoUpdate run back to
+    // back with no await, so the heartbeat cannot tick until after the last one returns. Only the first
+    // step is actually slow; the last one entered is fast.
+    monitor.timePhase('ensureMeetingsFolder', () => clock.jumpTo(5000)) // slow: ~5000ms
+    monitor.timePhase('initializeImportJobs', () => clock.jumpTo(5010)) // fast: ~10ms, entered and finished last
+    clock.advanceTo(6500) // the first tick able to fire after both steps — 5500ms late
+    expect(onStall).toHaveBeenCalledExactlyOnceWith({
+      bootId: 'boot-1',
+      durationMs: 5500,
+      phase: 'ensureMeetingsFolder',
+      phaseMs: 5000
+    })
+  })
+
+  it('resync() after stop() does not restart the heartbeat', () => {
+    const clock = fakeTimer()
+    const setIntervalSpy = vi.fn(clock.setIntervalFn)
+    const monitor = startStallMonitor({
+      bootId: 'boot-1',
+      onStall: vi.fn(),
+      onSummary: vi.fn(),
+      tickMs: 1000,
+      summaryIntervalMs: 10_000,
+      now: clock.now,
+      setIntervalFn: setIntervalSpy,
+      clearIntervalFn: clock.clearIntervalFn,
+      histogram: fakeHistogram(0)
+    })
+    expect(setIntervalSpy).toHaveBeenCalledOnce() // the initial heartbeat
+    monitor.stop()
+    monitor.resync()
+    expect(setIntervalSpy).toHaveBeenCalledOnce() // resync() did not schedule a second interval
+  })
+
+  it('pause() after stop() is a no-op', () => {
+    const clock = fakeTimer()
+    const histogram = fakeHistogram(0)
+    const monitor = startStallMonitor({
+      bootId: 'boot-1',
+      onStall: vi.fn(),
+      onSummary: vi.fn(),
+      now: clock.now,
+      setIntervalFn: clock.setIntervalFn,
+      clearIntervalFn: clock.clearIntervalFn,
+      histogram
+    })
+    monitor.stop()
+    monitor.pause()
+    expect(clock.cleared).toHaveLength(1) // pause() found no interval left to clear
+    expect(histogram.disable).toHaveBeenCalledOnce() // stop()'s own call, not a second one from pause()
+  })
+
+  it('pause() after pause() is a no-op', () => {
+    const clock = fakeTimer()
+    const monitor = startStallMonitor({
+      bootId: 'boot-1',
+      onStall: vi.fn(),
+      onSummary: vi.fn(),
+      now: clock.now,
+      setIntervalFn: clock.setIntervalFn,
+      clearIntervalFn: clock.clearIntervalFn,
+      histogram: fakeHistogram(0)
+    })
+    monitor.pause()
+    monitor.pause()
+    expect(clock.cleared).toHaveLength(1) // the second pause() found no interval left to clear
   })
 })
