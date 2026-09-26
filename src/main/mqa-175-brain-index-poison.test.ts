@@ -55,7 +55,8 @@ function envelopeV2(content: string): { buf: Buffer; contentKey: Buffer } {
  *  the wrapped content key itself still unwraps perfectly (exactly the field file's behaviour). This is
  *  DAMAGED-OWN: bytes this device wrapped, but the content itself is now corrupt. AES-GCM auth failure
  *  cannot tell this apart from a foreign key, so M2-0003 treats it the same way as FOREIGN-F: read-only,
- *  never auto-quarantined (see M4 below).
+ *  never auto-quarantined (see "damaged own ciphertext is no longer auto-quarantined — left in
+ *  place, read-only" below).
  */
 function poisonedIndexBytes(): Buffer {
   const { buf } = envelopeV2(JSON.stringify({ schema_version: 5, ingested: { 'meeting-a.md': { at: 1, ok: true } } }))

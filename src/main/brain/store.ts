@@ -533,8 +533,6 @@ function setAsideCorruptIndex(p: string): ResolvedIndex {
   } catch (e) {
     return { kind: 'unavailable', cause: 'corrupt-kept', detail: errnoCode(e) }
   }
-  // No indexCache.delete(p) here — the caller (loadIndex) always deletes the entry when this
-  // function returns 'absent', so a second delete here would just be dead code.
   mainLog.warn(
     `[brain] index.json decoded but was not a valid index — preserved as ${basename(to)} (${kept + 1}/${INDEX_AUTO_SNAPSHOT_CAP}); it will be rebuilt from the transcripts`
   )

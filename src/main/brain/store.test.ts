@@ -201,6 +201,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
   })
 
   // The snapshot-cap case (a 6th invalid index left read-only instead of set aside) is covered by
-  // mqa-175-brain-index-poison.test.ts's M8, which also asserts writeIndex rejects and that none of
+  // mqa-175-brain-index-poison.test.ts's "at 5 auto snapshots a sixth invalid index is left in
+  // place and read-only ('corrupt-kept')", which also asserts writeIndex rejects and that none of
   // the capped snapshots' names change — no need to duplicate it here.
 })
