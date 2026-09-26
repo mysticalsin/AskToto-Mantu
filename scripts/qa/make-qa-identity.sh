@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Creates the stable QA code-signing identity for the QA candidate lane and stores it as this
-# repository's QA_MAC_SIGNING secret (M2-0187, owner step B-05). The program owner runs it once, on macOS,
+# repository's QA_MAC_SIGNING secret (M2-0187). The program owner runs it once, on macOS,
 # in an account where `gh` is signed in.
 #
 # The identity is a self-signed code-signing certificate valid for ten years. Candidates signed with it

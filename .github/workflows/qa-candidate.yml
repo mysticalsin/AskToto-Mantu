@@ -1,6 +1,6 @@
 name: QA candidate
 
-# Builds one candidate once (ADR-022): every shipped macOS and Windows installer plus the macOS
+# Builds one candidate once (M2-0187): every shipped macOS and Windows installer plus the macOS
 # QA-identity variant, from one named main commit, in one run. It records provenance (sha256 per
 # installer, commit, run, runner image, Node, Electron and electron-builder versions, builder config
 # hashes), then verifies, installs and launches every installer by sha256. Packaged gates elsewhere
@@ -103,14 +103,14 @@ jobs:
             resources/local-llm
           key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
       # A stable identity keeps one designated requirement across candidates, so TCC grants persist.
-      # Without the secret (owner step B-05) the candidate is ad-hoc signed, and provenance says so.
+      # Without the secret the candidate is ad-hoc signed, and provenance says so.
       - name: Import the stable QA signing identity
         id: identity
         env:
           QA_MAC_SIGNING: ${{ secrets.QA_MAC_SIGNING }}
         run: |
           if [ -z "$QA_MAC_SIGNING" ]; then
-            echo "::warning::QA_MAC_SIGNING is not set (B-05): this candidate is ad-hoc signed, so TCC grants will not carry over to the next candidate."
+            echo "::warning::QA_MAC_SIGNING is not set: this candidate is ad-hoc signed, so TCC grants will not carry over to the next candidate."
             exit 0
           fi
           password=$(jq -r .password <<<"$QA_MAC_SIGNING")
@@ -296,7 +296,11 @@ jobs:
             esac
             app=$(find "$target" -maxdepth 1 -name '*.app' -print -quit)
             if [ "$expected" = ad-hoc ]; then
-              codesign -dv "$app" 2>&1 | grep -qx 'Signature=adhoc' \
+              # Capture codesign's output before grepping it: under `set -o pipefail`, `grep -q` can exit
+              # the pipe early and make codesign die of SIGPIPE, which would fail this check even when
+              # the signature is correct.
+              details=$(codesign -dv "$app" 2>&1)
+              grep -qx 'Signature=adhoc' <<<"$details" \
                 || { echo "::error::$installer is not ad-hoc signed, but its provenance says it is."; exit 1; }
             else
               rm -rf "$RUNNER_TEMP/certificate" && mkdir "$RUNNER_TEMP/certificate"

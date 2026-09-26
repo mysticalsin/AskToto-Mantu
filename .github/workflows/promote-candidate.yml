@@ -1,7 +1,7 @@
 name: Promote candidate
 
 # Publishes the exact bytes of one successful qa-candidate run as an owner-channel prerelease on the
-# release feed (D-13): a prerelease, never Latest, with no latest*.yml or blockmaps, plus SHA256SUMS.txt
+# release feed: a prerelease, never Latest, with no latest*.yml or blockmaps, plus SHA256SUMS.txt
 # and provenance.json. It never builds. It downloads the candidate's artifacts, proves every byte against
 # the candidate's provenance and the promotion evidence, and checks GitHub's digest of every uploaded
 # asset before publishing. The release and its tag are created in the feed repository, which runs no

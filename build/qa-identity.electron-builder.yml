@@ -1,4 +1,4 @@
-# QA-identity variant of Métis (M2-0187, PD-05): the only form an unreleased build may take on the
+# QA-identity variant of Métis (M2-0187): the only form an unreleased build may take on the
 # owner's primary account. It shares nothing the live install owns: its own bundle id (TCC grants), its
 # own runtime name (userData directory and Keychain safeStorage service) and no update feed. Built only by
 # `npm run dist:qa-identity` in qa-candidate.yml, and never published.

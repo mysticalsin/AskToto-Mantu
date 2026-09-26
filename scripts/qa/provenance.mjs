@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // scripts/qa/provenance.mjs — provenance, evidence binding and release preparation for the build-once
-// candidate lane (M2-0187, ADR-022). Node builtins only.
+// candidate lane (M2-0187). Node builtins only.
 //
-// INV-3 (identified by sha256): every consumer verifies each installer's sha256 against this run's
+// Identified by sha256: every consumer verifies each installer's sha256 against this run's
 // provenance.json before using it — evidence binds to bytes by (build_run_id, artifact_sha256).
-// INV-4 (published = tested): promotion uploads exactly the promotable installers, SHA256SUMS.txt and
+// Published = tested: promotion uploads exactly the promotable installers, SHA256SUMS.txt and
 // the unmodified provenance.json — no build, install or npm step ever runs here.
-// INV-5 (evidence required): promotion needs at least one PASS evidence record bound to this run's bytes.
+// Evidence required: promotion needs at least one PASS evidence record bound to this run's bytes.
 //
 // A function reports what it found. Functions named *Problems return string[]; empty means OK.
 // stageBuild, assembleProvenance and prepareRelease throw an Error listing every problem, one per line,
@@ -16,7 +16,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, ren
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-/** Section 4 of the design: every shipped target, plus the macOS QA-identity variant (never promoted). */
+/** Every shipped target, plus the macOS QA-identity variant, which is built but never promoted. */
 export const VARIANTS = Object.freeze({
   mac: {
     promotable: true,
@@ -56,8 +56,17 @@ function sha256Bytes(bytes) {
 }
 
 /**
+ * Strips every trailing line ending (LF or CRLF), all of it, not just the last one — the evidence
+ * schema allows a CRLF file, and a lone-`\n` strip on 'x\r\n\r\n' would leave a dangling '\r\n' behind
+ * and misreport it as a blank line.
+ */
+function stripTrailingNewlines(text) {
+  return text.replace(/(\r?\n)+$/, '')
+}
+
+/**
  * win is always unsigned, whatever the environment holds. mac is signed with the lane's stable QA
- * identity when the owner has stored one (B-05), and ad-hoc otherwise — never a Developer ID.
+ * identity when the owner has stored one, and ad-hoc otherwise — never a Developer ID.
  */
 function resolveSigning(platform, env) {
   if (platform === 'win') return { mode: 'unsigned' }
@@ -71,9 +80,31 @@ function resolveSigning(platform, env) {
 
 const RUNNER_FIELDS = { os: 'RUNNER_OS', arch: 'RUNNER_ARCH', image: 'ImageOS', image_version: 'ImageVersion' }
 
+/** Reads and hashes one file, folding any error (missing, unreadable) into `problems` by its path. */
+function readAndHash(repoRoot, path, problems) {
+  try {
+    return sha256Bytes(readFileSync(join(repoRoot, path)))
+  } catch (error) {
+    problems.push(`cannot read ${path}: ${error.message}`)
+    return undefined
+  }
+}
+
+/** Reads one `node_modules/<name>/package.json`'s version, folding any error into `problems`. */
+function readDependencyVersion(repoRoot, name, problems) {
+  const path = join('node_modules', name, 'package.json')
+  try {
+    return JSON.parse(readFileSync(join(repoRoot, path), 'utf8')).version
+  } catch (error) {
+    problems.push(`cannot read ${path}: ${error.message}`)
+    return undefined
+  }
+}
+
 /**
  * Stages one variant's installers out of `releaseDir` into `<outDir>/assets/`, hashes them, and writes
- * `<outDir>/build-<variant>.json`. Validates everything first: a failure moves nothing.
+ * `<outDir>/build-<variant>.json`. Validates everything first, including every file this function reads
+ * besides the installers themselves: a failure moves nothing.
  */
 export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, nodeVersion }) {
   const config = VARIANTS[variant]
@@ -90,12 +121,7 @@ export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, n
     problems.push(`GITHUB_SHA is not a 40-character lowercase commit hash: ${JSON.stringify(sha)}`)
   }
 
-  const runner = {
-    os: env.RUNNER_OS ?? '',
-    arch: env.RUNNER_ARCH ?? '',
-    image: env.ImageOS ?? '',
-    image_version: env.ImageVersion ?? ''
-  }
+  const runner = Object.fromEntries(Object.entries(RUNNER_FIELDS).map(([field, envVar]) => [field, env[envVar] ?? '']))
   for (const [field, value] of Object.entries(runner)) {
     if (!value) problems.push(`${RUNNER_FIELDS[field]} is empty: the runner image cannot be recorded`)
   }
@@ -114,6 +140,10 @@ export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, n
     }
   }
 
+  const builderConfig = config.configs.map((path) => ({ path, sha256: readAndHash(repoRoot, path, problems) }))
+  const electron = readDependencyVersion(repoRoot, 'electron', problems)
+  const electronBuilder = readDependencyVersion(repoRoot, 'electron-builder', problems)
+
   if (problems.length) throw new Error(problems.join('\n'))
 
   const assetsDir = join(outDir, 'assets')
@@ -126,15 +156,6 @@ export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, n
     renameSync(from, to)
     assets.push({ name, size, sha256: await sha256File(to) })
   }
-
-  const builderConfig = config.configs.map((path) => ({
-    path,
-    sha256: sha256Bytes(readFileSync(join(repoRoot, path)))
-  }))
-  const electron = JSON.parse(readFileSync(join(repoRoot, 'node_modules', 'electron', 'package.json'), 'utf8')).version
-  const electronBuilder = JSON.parse(
-    readFileSync(join(repoRoot, 'node_modules', 'electron-builder', 'package.json'), 'utf8')
-  ).version
 
   const record = {
     variant,
@@ -150,7 +171,6 @@ export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, n
     assets
   }
 
-  mkdirSync(outDir, { recursive: true })
   writeFileSync(join(outDir, `build-${variant}.json`), `${JSON.stringify(record, null, 2)}\n`)
   return record
 }
@@ -274,7 +294,7 @@ export async function directoryProblems(provenance, dir, variants) {
  * build_run_id and artifact_sha256 are read — full record validation belongs to M2-0002's checker.
  */
 export function evidenceProblems(evidenceText, provenance) {
-  const trimmed = evidenceText.replace(/\r?\n+$/, '')
+  const trimmed = stripTrailingNewlines(evidenceText)
   if (trimmed === '') {
     return ['no evidence records: promotion needs at least one passing record bound to these bytes']
   }
@@ -322,8 +342,8 @@ export function evidenceProblems(evidenceText, provenance) {
 }
 
 /**
- * releaseNotes' shape is normative (design section 5.6): version, commit, candidate run, promotion
- * run, owner-channel/hand-install framing (never Latest), signing mode and the evidence summary.
+ * releaseNotes' shape is normative: version, commit, candidate run, promotion run, owner-channel/
+ * hand-install framing (never Latest), signing mode and the evidence summary.
  */
 export function releaseNotes({ provenance, evidence, promotionRunUrl }) {
   const macBuild = provenance.builds.find((build) => build.variant === 'mac')
@@ -359,7 +379,8 @@ ${rows}
 export async function prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, env }) {
   const provenanceBytes = readFileSync(provenancePath)
   const provenance = JSON.parse(provenanceBytes.toString('utf8'))
-  const evidenceText = readFileSync(evidencePath, 'utf8')
+  const evidenceBytes = readFileSync(evidencePath)
+  const evidenceText = evidenceBytes.toString('utf8')
 
   const problems = []
   if (String(provenance.run.id) !== String(candidateRun)) {
@@ -394,13 +415,12 @@ export async function prepareRelease({ provenancePath, evidencePath, downloadsDi
   manifest.sort((a, b) => a.name.localeCompare(b.name))
   writeFileSync(join(outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
 
-  const evidenceRecords = evidenceText
-    .replace(/\r?\n+$/, '')
+  const evidenceRecords = stripTrailingNewlines(evidenceText)
     .split(/\r?\n/)
     .filter((line) => line.trim() !== '')
     .map((line) => JSON.parse(line))
   const tickets = [...new Set(evidenceRecords.map((record) => record.ticket))].sort()
-  const evidence = { count: evidenceRecords.length, tickets, sha256: sha256Bytes(evidenceText) }
+  const evidence = { count: evidenceRecords.length, tickets, sha256: sha256Bytes(evidenceBytes) }
   const promotionRunUrl = `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`
 
   const notes = releaseNotes({ provenance, evidence, promotionRunUrl })

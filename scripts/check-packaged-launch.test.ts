@@ -136,7 +136,7 @@ describe('MQA-318 packaged Mac launch readiness', () => {
     expect(await runGate()).toBe(1)
   })
 
-  // 19 (red before 5.5: the gate must launch the bundle it was given, not a hardcoded "Metis")
+  // Invariant: the gate must launch the executable named after the bundle it was given, never a hardcoded name.
   it('launches the executable named after the bundle it was given, not a hardcoded name', async () => {
     process.argv = [process.execPath, 'check-packaged-launch.mjs', '/fixture/Metis QA.app', '--timeout-seconds', '6']
     fixtures.onSpawn = () => setTimeout(() => { fixtures.audit = event('app.renderer.ready') }, 500)

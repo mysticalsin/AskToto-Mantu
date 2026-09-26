@@ -132,13 +132,12 @@ export default async function afterPack(context) {
     throw error
   }
 
-  // A local/CI macOS build intentionally has no Developer ID. Give it a complete ad-hoc signature
-  // after the raw byte gate so the DMG/ZIP contains a coherently sealed, launchable app. Tagged
-  // customer releases leave this unset and electron-builder performs real signing/notarization next.
-  // ASKTOTO_MAC_SIGN_IDENTITY (M2-0187) makes this hook, not electron-builder, sign with the QA
-  // candidate lane's stable QA certificate instead of ad-hoc: its designated requirement survives
-  // rebuilds, so TCC grants persist across candidates. It is never a Developer ID — customer releases
-  // sign through electron-builder instead, and never set this variable.
+  // ASKTOTO_ADHOC_SIGN=1 makes this hook — not electron-builder — sign the final bundle after the raw
+  // byte gate, so the DMG/ZIP contains a coherently sealed, launchable app: ad-hoc, unless
+  // ASKTOTO_MAC_SIGN_IDENTITY names a keychain identity (the QA candidate lane's stable QA certificate,
+  // never a Developer ID — its designated requirement survives rebuilds, so TCC grants persist across
+  // candidates). Tagged customer releases leave both variables unset and electron-builder performs real
+  // signing/notarization next.
   //
   // On a universal build this MUST wait for the merged bundle. Signing each arch sub-build rewrites
   // the _CodeSignature/CodeResources files inside Electron Framework, and @electron/universal then
@@ -146,7 +145,7 @@ export default async function afterPack(context) {
   // longer match. Sign once, after lipo, when the bundle is actually final.
   const isUniversalSubBuild = isMac && packagedArches.length > 1 && arch !== 'universal'
   if (isUniversalSubBuild && process.env.ASKTOTO_ADHOC_SIGN === '1') {
-    console.log(`  • afterPack: deferring ad-hoc signature to the merged universal bundle (${arch} sub-build)`)
+    console.log(`  • afterPack: deferring signature to the merged universal bundle (${arch} sub-build)`)
   }
   if (isMac && !isUniversalSubBuild && process.env.ASKTOTO_ADHOC_SIGN === '1') {
     const identity = process.env.ASKTOTO_MAC_SIGN_IDENTITY || '-'

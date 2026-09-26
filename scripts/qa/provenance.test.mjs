@@ -1,4 +1,4 @@
-// scripts/qa/provenance.test.mjs — behaviour tests for the build-once candidate lane (M2-0187, ADR-022).
+// scripts/qa/provenance.test.mjs — behaviour tests for the build-once candidate lane (M2-0187).
 //
 // Every test exercises real files under a fresh mkdtemp() root, or the real CLI via spawnSync, never a
 // regex over source text. Fixture rule: no literal high-entropy hex — hashes come from createHash, and
@@ -92,7 +92,20 @@ function cleanup(root) {
   rmSync(root, { recursive: true, force: true })
 }
 
-// 1
+/** Copies every promotable variant's staged assets into `downloadsDir`, as the promotion job does. */
+function copyPromotableAssetsToDownloads(root, provenance, downloadsDir) {
+  for (const variant of PROMOTABLE_VARIANTS) {
+    for (const asset of provenance.builds.find((b) => b.variant === variant).assets) {
+      writeFileSync(join(downloadsDir, asset.name), readFileSync(join(root, 'staged', variant, 'assets', asset.name)))
+    }
+  }
+}
+
+/** One passing evidence-record line (JSON Lines), bound to `provenance`'s run and the given asset sha256. */
+function passEvidenceLine(provenance, assetSha256, ticket = 'M2-0028') {
+  return `${JSON.stringify({ ticket, result: 'PASS', build_run_id: provenance.run.id, artifact_sha256: assetSha256 })}\n`
+}
+
 test('stage moves exactly the variant\'s installers and records size and sha256', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -119,7 +132,6 @@ test('stage moves exactly the variant\'s installers and records size and sha256'
   }
 })
 
-// 2
 test('stage records the runner image, Node, Electron, electron-builder and per-file builder config hashes', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -139,7 +151,6 @@ test('stage records the runner image, Node, Electron, electron-builder and per-f
   }
 })
 
-// 3
 test('stage refuses a missing installer and moves nothing', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -160,7 +171,24 @@ test('stage refuses a missing installer and moves nothing', async () => {
   }
 })
 
-// 4
+test('stage refuses a missing builder-config file and moves nothing', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    rmSync(join(root, 'electron-builder.yml'))
+    const outDir = join(root, 'out')
+    await assert.rejects(
+      stageBuild({ variant: 'mac', repoRoot: root, releaseDir, outDir, env: env(), nodeVersion: NODE_VERSION }),
+      (error) => error.message.includes('electron-builder.yml')
+    )
+    assert.equal(existsSync(outDir), false, 'stage must move nothing before it fails')
+    for (const name of VARIANTS.mac.assets(VERSION)) {
+      assert.ok(existsSync(join(releaseDir, name)), `${name} should remain in release/ untouched`)
+    }
+  } finally {
+    cleanup(root)
+  }
+})
+
 test('stage refuses a build without the runner image', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -178,7 +206,6 @@ test('stage refuses a build without the runner image', async () => {
   }
 })
 
-// 5
 test('stage records the mac identity from the environment, ad-hoc without it, and unsigned on Windows even with it set', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -217,7 +244,6 @@ test('stage records the mac identity from the environment, ad-hoc without it, an
   }
 })
 
-// 6
 test('stage refuses a malformed signing identity', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -237,7 +263,6 @@ test('stage refuses a malformed signing identity', async () => {
   }
 })
 
-// 7
 test('assemble binds every build to one commit and run and lists every asset in SHA256SUMS', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -265,7 +290,6 @@ test('assemble binds every build to one commit and run and lists every asset in 
   }
 })
 
-// 8
 test('assemble refuses a missing or duplicated variant, a foreign commit and mismatched versions', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -284,7 +308,6 @@ test('assemble refuses a missing or duplicated variant, a foreign commit and mis
   }
 })
 
-// 9
 test('verify accepts the exact bytes and names a changed byte, a missing file and an extra file', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -325,7 +348,6 @@ test('verify accepts the exact bytes and names a changed byte, a missing file an
   }
 })
 
-// 10
 test('evidence needs at least one PASS record bound to this run and its bytes', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -338,12 +360,14 @@ test('evidence needs at least one PASS record bound to this run and its bytes', 
     const line = JSON.stringify({ ticket: 'M2-0028', result: 'PASS', build_run_id: provenance.run.id, artifact_sha256: sha })
     assert.deepEqual(evidenceProblems(line, provenance), [])
     assert.deepEqual(evidenceProblems(`${line}\n`, provenance), [])
+    // A CRLF file (the schema explicitly allows one) can end in a repeated line ending; every repetition
+    // must be stripped, not just the last one, or the leftover 'x\r\n' misreports as a blank line 2.
+    assert.deepEqual(evidenceProblems(`${line}\r\n\r\n`, provenance), [])
   } finally {
     cleanup(root)
   }
 })
 
-// 11
 test('evidence problems name the line', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -383,7 +407,6 @@ test('evidence problems name the line', async () => {
   }
 })
 
-// 12
 test('prepare-release publishes only the shipping installers with SHA256SUMS.txt and the original provenance.json', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -395,11 +418,7 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
 
     const downloadsDir = join(root, 'downloads')
     mkdirSync(downloadsDir, { recursive: true })
-    for (const variant of PROMOTABLE_VARIANTS) {
-      for (const asset of provenance.builds.find((b) => b.variant === variant).assets) {
-        writeFileSync(join(downloadsDir, asset.name), readFileSync(join(root, 'staged', variant, 'assets', asset.name)))
-      }
-    }
+    copyPromotableAssetsToDownloads(root, provenance, downloadsDir)
     // The QA-identity zip is never handed to promotion at all: it lives only where build-mac-qa-identity staged it.
     const qaAsset = provenance.builds.find((b) => b.variant === 'mac-qa-identity').assets[0]
     const qaZipElsewhere = join(root, 'staged', 'mac-qa-identity', 'assets', qaAsset.name)
@@ -407,10 +426,7 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
 
     const evidencePath = join(root, 'evidence.jsonl')
     const macSha = provenance.builds.find((b) => b.variant === 'mac').assets[0].sha256
-    writeFileSync(
-      evidencePath,
-      `${JSON.stringify({ ticket: 'M2-0028', result: 'PASS', build_run_id: provenance.run.id, artifact_sha256: macSha })}\n`
-    )
+    writeFileSync(evidencePath, passEvidenceLine(provenance, macSha))
 
     const outDir = join(root, 'promotion')
     await prepareRelease({
@@ -451,7 +467,6 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
   }
 })
 
-// 13
 test('prepare-release refuses unbound provenance or refused evidence and moves nothing', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -461,17 +476,10 @@ test('prepare-release refuses unbound provenance or refused evidence and moves n
     writeFileSync(provenancePath, `${JSON.stringify(provenance, null, 2)}\n`)
     const downloadsDir = join(root, 'downloads')
     mkdirSync(downloadsDir, { recursive: true })
-    for (const variant of PROMOTABLE_VARIANTS) {
-      for (const asset of provenance.builds.find((b) => b.variant === variant).assets) {
-        writeFileSync(join(downloadsDir, asset.name), readFileSync(join(root, 'staged', variant, 'assets', asset.name)))
-      }
-    }
+    copyPromotableAssetsToDownloads(root, provenance, downloadsDir)
     const evidencePath = join(root, 'evidence.jsonl')
     const macSha = provenance.builds.find((b) => b.variant === 'mac').assets[0].sha256
-    writeFileSync(
-      evidencePath,
-      `${JSON.stringify({ ticket: 'M2-0028', result: 'PASS', build_run_id: provenance.run.id, artifact_sha256: macSha })}\n`
-    )
+    writeFileSync(evidencePath, passEvidenceLine(provenance, macSha))
 
     const outDir1 = join(root, 'promotion-wrong-run')
     await assert.rejects(
@@ -503,6 +511,27 @@ test('prepare-release refuses unbound provenance or refused evidence and moves n
     )
     assert.equal(existsSync(join(outDir2, 'upload')), false)
 
+    // Bytes with correct run and commit, but no PASS record bound to them, must still be refused.
+    const failEvidencePath = join(root, 'evidence-fail.jsonl')
+    writeFileSync(
+      failEvidencePath,
+      `${JSON.stringify({ ticket: 'M2-0028', result: 'FAIL', build_run_id: provenance.run.id, artifact_sha256: macSha })}\n`
+    )
+    const outDir3 = join(root, 'promotion-failed-evidence')
+    await assert.rejects(
+      prepareRelease({
+        provenancePath,
+        evidencePath: failEvidencePath,
+        downloadsDir,
+        outDir: outDir3,
+        candidateRun: String(provenance.run.id),
+        candidateCommit: provenance.commit,
+        env: e
+      }),
+      (error) => error.message.includes('line 1') && error.message.includes('FAIL')
+    )
+    assert.equal(existsSync(join(outDir3, 'upload')), false)
+
     for (const variant of PROMOTABLE_VARIANTS) {
       for (const asset of provenance.builds.find((b) => b.variant === variant).assets) {
         assert.ok(existsSync(join(downloadsDir, asset.name)))
@@ -513,7 +542,6 @@ test('prepare-release refuses unbound provenance or refused evidence and moves n
   }
 })
 
-// 14
 test('release notes state version, commit, candidate run, promotion run, not-Latest wording, signing and the evidence hash', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -553,7 +581,6 @@ test('release notes state version, commit, candidate run, promotion run, not-Lat
   }
 })
 
-// 15
 test('check-release accepts matching digests and refuses a missing, extra, resized, not-uploaded or undigested asset', () => {
   const manifest = [
     { name: 'Metis-1.9.7.dmg', size: 100, sha256: sha256('a') },
@@ -583,7 +610,6 @@ test('check-release accepts matching digests and refuses a missing, extra, resiz
   assert.match(problems[0], /no digest/)
 })
 
-// 16
 test('the CLI stages, assembles, verifies and prepares a release end to end', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -626,16 +652,9 @@ test('the CLI stages, assembles, verifies and prepares a release end to end', as
 
     const downloadsDir = join(root, 'downloads')
     mkdirSync(downloadsDir, { recursive: true })
-    for (const variant of PROMOTABLE_VARIANTS) {
-      for (const asset of provenance.builds.find((b) => b.variant === variant).assets) {
-        writeFileSync(join(downloadsDir, asset.name), readFileSync(join(root, 'staged', variant, 'assets', asset.name)))
-      }
-    }
+    copyPromotableAssetsToDownloads(root, provenance, downloadsDir)
     const evidencePath = join(root, 'evidence.jsonl')
-    writeFileSync(
-      evidencePath,
-      `${JSON.stringify({ ticket: 'M2-0028', result: 'PASS', build_run_id: provenance.run.id, artifact_sha256: macAsset.sha256 })}\n`
-    )
+    writeFileSync(evidencePath, passEvidenceLine(provenance, macAsset.sha256))
     const prepareResult = run([
       'prepare-release',
       join('provenance', 'provenance.json'),

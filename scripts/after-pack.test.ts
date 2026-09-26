@@ -97,7 +97,7 @@ describe('afterPack macOS signature', () => {
     ) as [string, string[]] | undefined
   }
 
-  // 17 (already green: this is the pre-existing default, pinned so 5.3 cannot regress it)
+  // Pinned: ad-hoc signing stays the default when no QA identity is configured.
   it('signs the final bundle ad-hoc by default', async () => {
     const appOutDir = macFixture()
     vi.stubEnv('ASKTOTO_ADHOC_SIGN', '1')
@@ -119,7 +119,7 @@ describe('afterPack macOS signature', () => {
     expect(verifyCall![1]).toEqual(['--verify', '--deep', '--strict', '--verbose=2', app])
   })
 
-  // 18 (red before 5.3: the lane's stable QA identity must reach codesign instead of '-')
+  // Invariant: when the lane provides a stable QA identity, it must reach codesign, never fall back to '-'.
   it('signs with the QA identity when the lane provides one', async () => {
     const appOutDir = macFixture()
     const identity = 'A'.repeat(40)
