@@ -44,6 +44,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      # Never bare `swift test` — see docs/metis-2.0/runbooks/test-isolation.md §1. This wrapper is what
-      # gives HermeticHomeTests its per-run sandbox.
+      # Never bare `swift test` (M2-0190) — this wrapper is what provides HermeticHomeTests' sandbox
+      # (HOME, CFFIXED_USER_HOME); running `swift test` directly here would leave both unset and the
+      # canary would fail loudly.
       - run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
+
+  deny-non-loopback:
+    name: deny-non-loopback.cjs denies every connect() shape (hermetic)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+      # No npm ci: this test only uses node:net/http/tls/child_process/test — no third-party dependency.
+      - run: node --test scripts/hermetic/deny-non-loopback.test.mjs
