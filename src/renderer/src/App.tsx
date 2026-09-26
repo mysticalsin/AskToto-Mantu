@@ -2577,6 +2577,14 @@ export function App(): JSX.Element {
   }
   useEffect(() => window.toto.onHotkey((a) => handlersRef.current(a)), [])
 
+  // Main detected a meeting app in the foreground. Reuse startListen (never toggle / stop).
+  const meetingAutoStartRef = useRef<() => void>(() => {})
+  meetingAutoStartRef.current = (): void => {
+    if (listen.listening) return
+    startListen()
+  }
+  useEffect(() => window.toto.onMeetingAutoStart(() => meetingAutoStartRef.current()), [])
+
   // Desk Tap Control: a recognized desk tap dispatches through the exact same router as the global
   // hotkeys — zero new dispatch surface, every existing gate applies. Armed while enabled+calibrated,
   // narrowed to live sessions when armOnlyWhileListening (the default — no idle mic).
