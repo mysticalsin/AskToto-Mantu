@@ -97,4 +97,15 @@ test('S4 CLI prints population and sample and exits 0; a missing --seed exits 2'
   } catch (error) {
     assert.equal(error.status, 2)
   }
+
+  try {
+    execFileSync(
+      process.execPath,
+      [cliPath, '--ledger', join(root, 'ledger', 'missing.json'), '--since', '2026-09-01', '--seed', 'gate-sha'],
+      { encoding: 'utf8', stdio: 'pipe' }
+    )
+    assert.fail('expected the CLI to exit 2 for an unreadable ledger')
+  } catch (error) {
+    assert.equal(error.status, 2)
+  }
 })

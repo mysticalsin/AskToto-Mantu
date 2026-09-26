@@ -271,9 +271,18 @@ test('R19 readRecordStore: missing dir, .gitkeep, unexpected file, ticket/stem m
   writeFileSync(join(dir, 'M2-0002.jsonl'), `${JSON.stringify(locallyTested())}\n`)
   writeFileSync(join(dir, 'M2-0003.jsonl'), `${JSON.stringify(locallyTested({ ticket: 'M2-0002' }))}\n`)
 
+  // A line in a correctly-named file that fails recordProblems is reported and excluded; the file's
+  // other valid lines still count.
+  writeFileSync(
+    join(dir, 'M2-0004.jsonl'),
+    `${JSON.stringify(locallyTested({ ticket: 'M2-0004', result: 'MAYBE' }))}\n${JSON.stringify(locallyTested({ ticket: 'M2-0004', ci_run_id: 303 }))}\n`
+  )
+
   const { recordsByTicket, problems } = readRecordStore(dir)
   assert.deepEqual(recordsByTicket.get('M2-0002'), [locallyTested()])
   assert.equal(recordsByTicket.has('M2-0003'), false)
+  assert.deepEqual(recordsByTicket.get('M2-0004'), [locallyTested({ ticket: 'M2-0004', ci_run_id: 303 })])
   assertProblem(problems, 'notes.txt', 'unexpected file name')
   assertProblem(problems, 'M2-0003.jsonl', 'does not match file')
+  assertProblem(problems, 'M2-0004.jsonl:1', 'result: expected PASS or FAIL')
 })

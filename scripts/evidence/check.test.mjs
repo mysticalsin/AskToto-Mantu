@@ -301,7 +301,7 @@ test('C20 BLOCKED_EXTERNAL requires a complete external_blocker', () => {
   assertProblem(ledgerProblems(ledger({ tickets: [missingStep] }), new Map()), 'M2-0002', 'BLOCKED_EXTERNAL')
 })
 
-test('C21 a dependency cycle is reported once, and an unknown dependency id is a problem', () => {
+test('C21 a dependency cycle is reported once, and an unknown dependency id is a problem for any status', () => {
   const a = ticket({ id: 'M2-0001', status: 'IN_PROGRESS', depends_on: ['M2-0002'] })
   const b = ticket({ id: 'M2-0002', status: 'IN_PROGRESS', depends_on: ['M2-0001'] })
   const cycles = ledgerProblems(ledger({ tickets: [a, b] }), new Map()).filter((p) => p.includes('dependency cycle'))
@@ -309,6 +309,10 @@ test('C21 a dependency cycle is reported once, and an unknown dependency id is a
 
   const unknownDep = ticket({ id: 'M2-0003', status: 'IN_PROGRESS', depends_on: ['M2-9999'] })
   assertProblem(ledgerProblems(ledger({ tickets: [unknownDep] }), new Map()), 'M2-0003', 'M2-9999')
+
+  // L1: depends_on ids must exist for every ticket, whatever its status — not only the statuses L3 checks for readiness.
+  const todoWithUnknownDep = ticket({ id: 'M2-0004', status: 'TODO', depends_on: ['M2-9999'] })
+  assertProblem(ledgerProblems(ledger({ tickets: [todoWithUnknownDep] }), new Map()), 'M2-0004', 'M2-9999')
 })
 
 test('C22 records keyed to a ticket absent from the ledger is a problem', () => {
@@ -369,6 +373,36 @@ test('C24 CLI --ledger: a valid tree exits 0, a FAIL line exits 1 naming the tic
   }
 })
 
+test('C25 ENGINEERING_COMPLETE requires a latest PASS record; a later FAIL withdraws an earlier PASS', () => {
+  const t = ticket({
+    id: 'M2-0001', status: 'ENGINEERING_COMPLETE', required_evidence: ['HOST_CONFIGURED'],
+    external_blocker: { owner: 'o', unblock_step: 'u', needed_by: '2026-10-01', raised_on: '2026-09-01' }
+  })
+  const hostRecord = (result) => record({
+    ticket: 'M2-0001', evidence_level: 'HOST_CONFIGURED', result, exit_code: result === 'PASS' ? 0 : 1,
+    environment: { kind: 'qa-mac', host: 'qa-mac-1' }, output: { path: 'evidence/x.json', sha256: 'a'.repeat(64) }
+  })
+
+  const withdrawn = new Map([['M2-0001', [hostRecord('PASS'), hostRecord('FAIL')]]])
+  assertProblem(ledgerProblems(ledger({ tickets: [t] }), withdrawn), 'M2-0001', 'at least one PASS record')
+
+  const recovered = new Map([['M2-0001', [hostRecord('FAIL'), hostRecord('PASS')]]])
+  assert.ok(noneMatching(ledgerProblems(ledger({ tickets: [t] }), recovered), 'at least one PASS record'))
+})
+
+test('C26 a non-boolean truthy closes_program does not exempt a capped DONE ticket from the cap', () => {
+  const blocker = ticket({
+    id: 'M2-0001', status: 'ENGINEERING_COMPLETE',
+    external_blocker: { owner: 'o', unblock_step: 'u', needed_by: '2026-10-01', raised_on: '2026-09-01' }
+  })
+  const t = ticket({ id: 'M2-0002', status: 'DONE', depends_on: ['M2-0001'], closes_program: 'yes' })
+  const recs = new Map([
+    ['M2-0001', [record({ ticket: 'M2-0001' })]],
+    ['M2-0002', [record({ ticket: 'M2-0002' })]]
+  ])
+  assertProblem(ledgerProblems(ledger({ tickets: [blocker, t] }), recs), 'M2-0002', 'only as ENGINEERING_COMPLETE')
+})
+
 // --- PR rules (P1-P7) and githubApi (G1) ---
 
 const greenRun = Object.freeze({ path: TEST_WORKFLOW, head_sha: SHA1_A, status: 'completed', conclusion: 'success' })
@@ -411,7 +445,7 @@ test('P3 a stale commit or a mismatched PR number is a problem', async () => {
   assertProblem(wrongPr, 'pr')
 })
 
-test('P4 a run on another workflow, another SHA, in progress, failed, or missing is each a problem', async () => {
+test('P4 a run on another workflow, another SHA, in progress, failed, or missing is each a problem, named ci_run_id', async () => {
   const variants = {
     otherWorkflow: { ...greenRun, path: '.github/workflows/other.yml' },
     otherSha: { ...greenRun, head_sha: SHA1_B },
@@ -423,23 +457,23 @@ test('P4 a run on another workflow, another SHA, in progress, failed, or missing
       body: evidenceBody(record({ commit: SHA1_A })), headSha: SHA1_A, prNumber: 42,
       github: fakeGithub({ runs: { 101: run } }), fileExists: () => true
     })
-    assertProblem(problems, 'run:')
+    assertProblem(problems, 'ci_run_id:')
   }
   const missing = await prProblems({
     body: evidenceBody(record({ commit: SHA1_A })), headSha: SHA1_A, prNumber: 42,
     github: fakeGithub({ runs: {} }), fileExists: () => true
   })
-  assertProblem(missing, 'run: not found')
+  assertProblem(missing, 'ci_run_id: not found')
 })
 
-test('P5 repro requires a failed, ancestor run and an existing test file', async () => {
+test('P5 repro requires a failed, ancestor run and an existing test file; its run problems are named repro.ci_run_id', async () => {
   const rec = record({ commit: SHA1_A, repro: { test: 'scripts/evidence/check.test.mjs', commit: SHA1_B, ci_run_id: 202 } })
 
   const redRunSucceeded = await prProblems({
     body: evidenceBody(rec), headSha: SHA1_A, prNumber: 42,
     github: fakeGithub({ runs: { 101: greenRun, 202: { ...redRun, conclusion: 'success' } } }), fileExists: () => true
   })
-  assertProblem(redRunSucceeded, 'run:')
+  assertProblem(redRunSucceeded, 'repro.ci_run_id:')
 
   const notAnAncestor = await prProblems({
     body: evidenceBody(rec), headSha: SHA1_A, prNumber: 42,
@@ -458,6 +492,32 @@ test('P5 repro requires a failed, ancestor run and an existing test file', async
     github: fakeGithub({ runs: { 101: greenRun, 202: redRun } }), fileExists: () => true
   })
   assert.deepEqual(valid, [])
+})
+
+test('P5b wired paths missing from the checkout are each a problem, named wired.client and wired.contract_fake; existing paths pass', async () => {
+  const rec = record({
+    commit: SHA1_A,
+    wired: {
+      client: 'src/main/foo.ts',
+      contract_fake: 'src/main/foo.contract-fake.test.ts',
+      probe: 'node scripts/probe.mjs',
+      capability: 'foo',
+      unblock_step: 'ship it'
+    }
+  })
+
+  const missing = await prProblems({
+    body: evidenceBody(rec), headSha: SHA1_A, prNumber: 42,
+    github: fakeGithub({ runs: { 101: greenRun } }), fileExists: () => false
+  })
+  assertProblem(missing, 'wired.client')
+  assertProblem(missing, 'wired.contract_fake')
+
+  const present = await prProblems({
+    body: evidenceBody(rec), headSha: SHA1_A, prNumber: 42,
+    github: fakeGithub({ runs: { 101: greenRun } }), fileExists: () => true
+  })
+  assert.deepEqual(present, [])
 })
 
 test('P6 the CLI prints a distinct message when a PR body carries no evidence block', () => {
