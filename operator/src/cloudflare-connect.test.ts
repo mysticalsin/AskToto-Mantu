@@ -1,3 +1,4 @@
+import { reviewedGatewayReply } from './ai-gateway.privacy-fixture'
 import { describe, expect, it } from 'vitest'
 import {
   CF_CALLBACK_PATH,
@@ -52,7 +53,7 @@ function cfFetch(input: RequestInfo | URL): Promise<Response> {
     )
   }
   if (url.pathname.includes('/ai-gateway/gateways')) {
-    return Promise.resolve(new Response(JSON.stringify({ success: true }), { status: 200 }))
+    return Promise.resolve(reviewedGatewayReply())
   }
   if (url.pathname.endsWith('/ai/v1/chat/completions')) {
     return Promise.resolve(

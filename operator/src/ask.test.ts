@@ -1,3 +1,4 @@
+import { reviewedGatewayReply, reviewedGatewayFetch } from './ai-gateway.privacy-fixture'
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { ACCESS_BYPASS_PATHS } from './access'
@@ -75,7 +76,7 @@ function gatewayOkFetch(): typeof fetch {
   return async (input) => {
     const url = String(input)
     if (url.includes('/ai-gateway/gateways')) {
-      return new Response(JSON.stringify({ success: true }), { status: 200 })
+      return reviewedGatewayReply()
     }
     return new Response('{"success":false}', { status: 404 })
   }
@@ -164,11 +165,13 @@ function sseUpstream(text = 'hello from CF'): typeof fetch {
     `data: ${JSON.stringify({ usage: { prompt_tokens: 9, completion_tokens: 4 } })}\n\n`,
     'data: [DONE]\n\n'
   ]
-  return async () =>
-    new Response(frames.join(''), {
+  return async (input, init) => {
+    if (String(input).includes('/ai-gateway/gateways')) return reviewedGatewayFetch(input, init)
+    return new Response(frames.join(''), {
       status: 200,
       headers: { 'content-type': 'text/event-stream; charset=utf-8' }
     })
+  }
 }
 
 describe('MQA-301 managed screenshot Ask', () => {
@@ -241,7 +244,7 @@ describe('MQA-301 managed screenshot Ask', () => {
     const seen: { url: string; init?: RequestInit }[] = []
     const providerFetch: typeof fetch = async (url, init) => {
       seen.push({ url: String(url), init })
-      if (String(url).includes('/ai-gateway/gateways')) return new Response('{"success":true}')
+      if (String(url).includes('/ai-gateway/gateways')) return reviewedGatewayReply()
       return new Response(JSON.stringify(provider === 'anthropic'
         ? { content: [{ type: 'text', text: 'The supplied pixel is visible.' }], stop_reason: 'end_turn', usage: { input_tokens: 9, output_tokens: 4 } }
         : { choices: [{ message: { content: 'The supplied pixel is visible.' }, finish_reason: 'stop' }], usage: { prompt_tokens: 9, completion_tokens: 4 } }
@@ -459,7 +462,7 @@ describe('G5 POST /v1/ask SSE', () => {
       providerFetch: async (input) => {
         const url = String(input)
         if (url.includes('/ai-gateway/gateways')) {
-          return new Response(JSON.stringify({ success: true }), { status: 200 })
+          return reviewedGatewayReply()
         }
         return new Response(
           JSON.stringify({
