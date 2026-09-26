@@ -24,11 +24,15 @@
  */
 import { chromium } from 'playwright-core'
 import { writeFileSync, rmSync, existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 // Used only by the `cloudflare` group, to probe the mock gateway from THIS process rather than from the
 // CSP-restricted renderer. `rejectUnauthorized: false` is safe and necessary here: the mock serves a
 // throwaway self-signed cert on 127.0.0.1, and this is test tooling, never shipped code.
 import { request as httpsRequest } from 'node:https'
+// W0-HERMETIC (M2-0190) — see this file's own header: ASKTOTO_USERDATA is "the only reliable isolation
+// switch" for the real app this harness drives. Nothing enforced that prerequisite before now.
+import { assertSandboxedUserData } from './lib/sandbox-guard.mjs'
 
 const CDP = process.env.METIS_CDP ?? 'http://127.0.0.1:9334'
 const OUT = process.env.METIS_QA_OUT ?? 'D:\\tmp-metis-e2e\\qa-report.json'
@@ -1616,6 +1620,16 @@ const GROUPS = {
 if (args.includes('--list')) {
   console.log(Object.keys(GROUPS).join('\n'))
   process.exit(0)
+}
+
+// W0-HERMETIC (M2-0190) — before touching the connected app's real settings/brain on disk, confirm the
+// operator actually followed this file's own documented prerequisite. Refuses to run rather than
+// silently mutating a real developer profile.
+try {
+  assertSandboxedUserData({ userDataDir: process.env.ASKTOTO_USERDATA, homeDir: homedir() })
+} catch (e) {
+  console.error(`[e2e-workflows] ${e.message}`)
+  process.exit(2)
 }
 
 const browser = await chromium.connectOverCDP(CDP)

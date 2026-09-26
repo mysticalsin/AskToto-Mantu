@@ -44,8 +44,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      # RED (M2-0190 TDD step 1): scripts/hermetic/run-swift-tests.sh does not exist yet on this branch —
-      # this bare invocation is what proves HermeticHomeTests fails for the reason the ticket describes
-      # (METIS_TEST_HOME unset) before the wrapper lands. Step 2 replaces this with
-      # `bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit`.
-      - run: swift test --package-path native-app/MetisKit
+      # Never bare `swift test` — see docs/metis-2.0/runbooks/test-isolation.md §1. This wrapper is what
+      # gives HermeticHomeTests its per-run sandbox.
+      - run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
