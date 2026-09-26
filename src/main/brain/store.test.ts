@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync as realRmSync, writeFileSync, readFileSync as realReadFileSync, readdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
@@ -63,6 +63,11 @@ vi.mock('node:fs', async (importOriginal) => {
 // Imported AFTER the mock factory (vi.mock is hoisted above this regardless of source order).
 const store = await import('./store')
 const logger = await import('../logger')
+// `vi.mock('node:fs', ...)` above replaces EVERY import of the module in this file, including a plain
+// `readFileSync` import — so verifying "the primary index.json's bytes are truly unchanged" while a fault
+// is injected for that exact path needs the real, unwrapped implementation, not another binding of the
+// same mock.
+const realFs = await vi.importActual<typeof import('node:fs')>('node:fs')
 
 const ENC_MARKER_V2 = Buffer.from('ATKENC2\n', 'utf8')
 
@@ -122,24 +127,24 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     failRenameOnce = null
     vi.useRealTimers()
     vi.restoreAllMocks()
-    realRmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    realFs.rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
 
   it('an I/O error reading index.json (stat succeeds, read fails) is read-only, not "absent": writeIndex rejects \'io\', bytes unchanged', async () => {
     const healthy = BrainIndexSchema.parse({})
     healthy.ingested['a.md'] = { at: 1, ok: true }
     writeFileSync(primary, JSON.stringify(healthy), 'utf8')
-    const before = realReadFileSync(primary)
+    const before = realFs.readFileSync(primary)
 
     failReadPersistent = mkErr('ETIMEDOUT')
 
     expect(store.readIndex(s).ingested).toEqual({}) // never the swallowed-into-absent behaviour
     expect(store.indexUnavailable(s)).toBe('io')
-    expect(realReadFileSync(primary)).toEqual(before)
+    expect(realFs.readFileSync(primary)).toEqual(before)
 
     await expect(store.writeIndex(s, store.readIndex(s))).rejects.toBeInstanceOf(store.BrainIndexUnavailableError)
     await expect(store.writeIndex(s, store.readIndex(s))).rejects.toMatchObject({ unavailable: 'io' })
-    expect(realReadFileSync(primary)).toEqual(before)
+    expect(realFs.readFileSync(primary)).toEqual(before)
   })
 
   it('an I/O failure is retried after INDEX_IO_RETRY_MS, and the original ledger is then served', async () => {
@@ -169,7 +174,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     }
     expect(store.indexUnavailable(s)).toBe('corrupt-kept')
     expect(existsSync(primary)).toBe(true)
-    expect(realReadFileSync(primary)).toEqual(bad)
+    expect(realFs.readFileSync(primary)).toEqual(bad)
     // One rename ATTEMPT for the whole run (it failed and was cached) — not one per readIndex call.
     expect(renameSyncSpy).toHaveBeenCalledTimes(1)
   })
