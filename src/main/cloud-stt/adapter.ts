@@ -406,11 +406,29 @@ export function normalizeNova3ResultsMessage(
     if (!isFinal) {
       return { finals: [], interimText: transcript, finished: false }
     }
-    if (!transcript.trim()) {
+    const finalText = transcript.trim()
+    if (!finalText) {
       return { finals: [], interimText: '', finished: false }
     }
-    // Final without word timings — keep text, refuse invented precise attribution.
-    throw new CloudSttError('INVALID_STT_TIME')
+    // Final without word timings — keep text, refuse invented precise attribution: no per-word
+    // timing exists to report, so start/end both collapse to the stream offset instead of a
+    // fabricated span, and cluster stays 'unknown' rather than guessing a speaker.
+    return {
+      finals: [
+        {
+          id: segmentId(opts.scope, opts.messageSequence, 0),
+          text: finalText,
+          startMs: streamOffsetMs,
+          endMs: streamOffsetMs,
+          cluster: 'unknown',
+          language: 'und',
+          isFinal: true,
+          revision: 1
+        }
+      ],
+      interimText: '',
+      finished: false
+    }
   }
 
   const tokens: CloudSttWord[] = []
