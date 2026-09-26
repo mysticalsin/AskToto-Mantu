@@ -34,6 +34,7 @@ import {
   isSettingsSlabInsteadOfAsk,
   isShowMetisOnlyStub,
   isFullAskReveal,
+  overlayRestsAsDockSliver,
   parseOverlayLayout
 } from './overlay-chrome'
 import { SETTINGS_SURFACE_BACKGROUND } from './settings-bounds'
@@ -41,27 +42,40 @@ import { SETTINGS_SURFACE_BACKGROUND } from './settings-bounds'
 describe('overlay chrome modes', () => {
   it('default is hide (fresh install, no reinstall required to change later)', () => {
     expect(DEFAULT_OVERLAY_LAYOUT).toBe('hide')
-    expect(OVERLAY_LAYOUTS).toEqual(['hide', 'island', 'bar'])
+    expect(OVERLAY_LAYOUTS).toEqual(['hide', 'island', 'bar', 'dock'])
     expect(parseOverlayLayout(undefined)).toBe('hide')
     expect(parseOverlayLayout('nope')).toBe('hide')
+    expect(parseOverlayLayout('dock')).toBe('dock')
     expect(overlayRestsHidden('hide')).toBe(true)
     expect(overlayRestsHidden('island')).toBe(false)
+    expect(overlayRestsHidden('bar')).toBe(false)
+    expect(overlayRestsHidden('dock')).toBe(false)
+    expect(overlayRestsAsDockSliver('hide')).toBe(false)
+    expect(overlayRestsAsDockSliver('island')).toBe(false)
+    expect(overlayRestsAsDockSliver('bar')).toBe(false)
+    expect(overlayRestsAsDockSliver('dock')).toBe(true)
     expect(overlayUsesHover('hide')).toBe(true)
     expect(overlayUsesHover('island')).toBe(true)
     expect(overlayUsesHover('bar')).toBe(false)
+    expect(overlayUsesHover('dock')).toBe(true)
     expect(autoHideOverlayForLayout('bar')).toBe(false)
+    expect(autoHideOverlayForLayout('dock')).toBe(true)
     expect(overlayAllowsMinimize('bar')).toBe(true)
     expect(overlayAllowsMinimize('hide')).toBe(false)
     expect(overlayAllowsMinimize('island')).toBe(false)
+    expect(overlayAllowsMinimize('dock')).toBe(false)
     expect(overlayShowsBarOrb('hide', false)).toBe(false)
     expect(overlayShowsBarOrb('hide', true)).toBe(false)
     expect(overlayShowsBarOrb('island', false)).toBe(false)
     expect(overlayShowsBarOrb('island', true)).toBe(false)
     expect(overlayShowsBarOrb('bar', false)).toBe(false)
     expect(overlayShowsBarOrb('bar', true)).toBe(true)
+    expect(overlayShowsBarOrb('dock', false)).toBe(false)
+    expect(overlayShowsBarOrb('dock', true)).toBe(false)
     expect(overlayDocksBarCircle('bar')).toBe(true)
     expect(overlayDocksBarCircle('hide')).toBe(false)
     expect(overlayDocksBarCircle('island')).toBe(false)
+    expect(overlayDocksBarCircle('dock')).toBe(false)
   })
 
   it('closing Settings onto Hide/Island force-parks; Bar does not', () => {
@@ -74,6 +88,7 @@ describe('overlay chrome modes', () => {
     expect(migrateOverlayLayout({ overlayLayout: 'island' })).toBe('island')
     expect(migrateOverlayLayout({ overlayLayout: 'bar' })).toBe('bar')
     expect(migrateOverlayLayout({ overlayLayout: 'hide' })).toBe('hide')
+    expect(migrateOverlayLayout({ overlayLayout: 'dock' })).toBe('dock')
   })
 
   it('legacy autoHideOverlay maps to island or bar; an empty profile stays on the hide default', () => {
@@ -86,6 +101,7 @@ describe('overlay chrome modes', () => {
     expect(overlayUsesSafeTop('hide')).toBe(true)
     expect(overlayUsesSafeTop('island')).toBe(true)
     expect(overlayUsesSafeTop('bar')).toBe(false)
+    expect(overlayUsesSafeTop('dock')).toBe(false)
   })
 
   it('Hide stays hover-idle with a standing answer or listening chrome', () => {
@@ -199,6 +215,7 @@ describe('overlay chrome modes', () => {
     expect(overlayActivateOpensSettings('hide')).toBe(false)
     expect(overlayActivateOpensSettings('island')).toBe(false)
     expect(overlayActivateOpensSettings('bar')).toBe(true)
+    expect(overlayActivateOpensSettings('dock')).toBe(false)
     expect(askRevealHeight({ currentHeight: 1017, lastBarHeight: 84 })).toBe(ASK_REVEAL_MIN_HEIGHT_PX)
     expect(askRevealHeight({ currentHeight: 20, lastBarHeight: 84 })).toBe(ASK_REVEAL_MIN_HEIGHT_PX)
     expect(askRevealHeight({ currentHeight: 400, lastBarHeight: 400 })).toBe(400)

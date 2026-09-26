@@ -6600,7 +6600,8 @@ export function Settings({
                       onChange={(id) =>
                         patch({
                           overlayLayout: id,
-                          autoHideOverlay: autoHideOverlayForLayout(id)
+                          autoHideOverlay: autoHideOverlayForLayout(id),
+                          ...(id === 'dock' ? { overlayPlacement: 'right-edge' as OverlayPlacement } : {})
                         })
                       }
                     />

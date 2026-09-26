@@ -6,6 +6,7 @@ import type { DashboardData, GraphEdge, GraphNode, Reason, ScopeSummary, WinLike
 import { bandColor, bandLabel, fmtScopeTotal } from '../lib/format'
 import { findBridges } from '../lib/bridges'
 import { slug } from '../lib/slug'
+import { EmptyState } from '../components/EmptyState'
 
 interface Props {
   data: DashboardData
@@ -27,6 +28,9 @@ const TYPE_SIZE: Record<GraphNode['type'], number> = {
   person: 16,
   strategic_group: 30,
   sector: 30,
+  // Smallest on purpose: a note is evidence for a relationship, not a party to it. It must be findable
+  // and clickable without competing with the entities it connects.
+  meeting: 10,
 }
 
 
@@ -64,7 +68,9 @@ function buildNodeItem(n: GraphNode) {
     id: n.id,
     label: n.label,
     title: `${n.label}${quiet}${n.single_threaded ? ' · SINGLE-THREADED' : ''}${n.unmapped ? ' · no people mapped' : ''}`,
-    shape: 'dot',
+    // Notes read as squares so they are distinguishable from entities at a glance, without spending
+    // another colour channel (fill already carries community, border already carries win band).
+    shape: n.type === 'meeting' ? 'square' : 'dot',
     size: TYPE_SIZE[n.type],
     color: {
       background: fill,
@@ -158,6 +164,11 @@ export function GraphView({ data }: Props) {
   // Two independent, simultaneously-applied filter dimensions — "per company, per sector" taken
   // literally: an account filter and a sector filter both narrow the same graph at once (AND), not a
   // single "pick one lens" toggle.
+  // Notes (meeting nodes) are the evidence behind every edge, so they default to VISIBLE: the graph
+  // should not assert a relationship while hiding what proves it. They are also the densest node type,
+  // which is why they get their own switch rather than being permanently filtered out upstream.
+  const [showNotes, setShowNotes] = useState(true)
+  const noteCount = useMemo(() => graph.nodes.filter((n) => n.type === 'meeting').length, [graph.nodes])
   const [hiddenAccounts, setHiddenAccounts] = useState<Set<string>>(new Set())
   const [hiddenSectors, setHiddenSectors] = useState<Set<string>>(new Set())
   const [hiddenCommunities, setHiddenCommunities] = useState<Set<number>>(new Set())
@@ -199,9 +210,10 @@ export function GraphView({ data }: Props) {
     const visible = graph.nodes.filter(nodeVisible)
     return findBridges(visible, graph.edges)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- nodeVisible reads the hidden* sets below
-  }, [graph.nodes, graph.edges, hiddenAccounts, hiddenSectors, hiddenCommunities, hiddenBands])
+  }, [graph.nodes, graph.edges, showNotes, hiddenAccounts, hiddenSectors, hiddenCommunities, hiddenBands])
 
   function nodeVisible(n: GraphNode): boolean {
+    if (n.type === 'meeting' && !showNotes) return false
     if (n.account && hiddenAccounts.has(n.account)) return false
     if (n.sector && hiddenSectors.has(n.sector)) return false
     if (hiddenCommunities.has(n.community_id)) return false
@@ -362,7 +374,7 @@ export function GraphView({ data }: Props) {
     if (!ds) return
     ds.update(graph.nodes.map((n) => ({ id: n.id, hidden: !nodeVisible(n) })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hiddenAccounts, hiddenSectors, hiddenCommunities, hiddenBands, graph.nodes])
+  }, [showNotes, hiddenAccounts, hiddenSectors, hiddenCommunities, hiddenBands, graph.nodes])
 
   // Deep-link entry point: `#/graph?focus=<nodeId>` (account:<slug> or person:<slug>, matching the id
   // convention in account_graph.nodes) focuses and selects that node once it's present in the graph.
@@ -444,6 +456,29 @@ export function GraphView({ data }: Props) {
   }, [selected, people])
 
   const isThin = accountGroups.length <= 1 && sectorGroups.length <= 1
+
+  // An empty graph used to render the vis-network canvas anyway: a black rectangle with a footer
+  // reading "0 nodes · 0 edges" and nothing saying why. That is indistinguishable from a broken
+  // renderer, which is the exact failure EmptyState was written for (People and Accounts had it too).
+  // Safe here and only here: every hook above has already run, and the mount effect no-ops because it
+  // guards on `containerRef.current`, which never attaches in this branch.
+  if (graph.nodes.length === 0) {
+    // Three causes, three sentences. Telling someone to record a meeting when they are actually looking
+    // at bundled sample data sends them to fix the wrong thing.
+    const body = data.meta.is_placeholder
+      ? 'This window is showing bundled sample data, and that sample carries no relationship graph. Open Intelligence inside Metis with your own brain to see real people, accounts and deals.'
+      : accounts.length > 0 || people.length > 0
+        ? 'Your brain has records, but none of them are linked yet. Links come from meetings: who was on the call, which account it belonged to, which deal it moved. Record or import a meeting and the graph builds itself.'
+        : 'Nothing has been ingested yet. Record a meeting, or import existing recordings from Settings, and Metis extracts the people, accounts and deals, then draws the relationships between them.'
+    return (
+      <EmptyState
+        title="Relationships"
+        standfirst="Who is connected to what, and which of those connections are going cold."
+        headline="No relationships to draw yet."
+        body={body}
+      />
+    )
+  }
 
   return (
     <div className="flex h-[calc(100vh-57px)]">
@@ -876,6 +911,21 @@ export function GraphView({ data }: Props) {
             ))}
           </div>
 
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Notes</h3>
+          <label
+            className={`mb-4 flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-white/5 ${showNotes ? '' : 'opacity-35'}`}
+          >
+            <input
+              type="checkbox"
+              checked={showNotes}
+              onChange={(e) => setShowNotes(e.target.checked)}
+              className="accent-mantu"
+            />
+            <span className="h-2.5 w-2.5 bg-white/50" />
+            <span className="flex-1 text-white/70">Show meeting notes</span>
+            <span className="text-[10px] text-white/30">{noteCount}</span>
+          </label>
+
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Win-likelihood band</h3>
           <div className="space-y-1">
             {(['good', 'mixed', 'concerning'] as WinLikelihoodBand[]).map((band) => (
@@ -897,7 +947,9 @@ export function GraphView({ data }: Props) {
 
           <p className="mt-4 text-[10px] leading-relaxed text-white/30">
             Node fill = community (real connected-component clustering, not hand-assigned). Deal-node ring =
-            win-likelihood band. Solid edges = extracted directly from source. Dashed = inferred or ambiguous.
+            win-likelihood band. Squares are meeting notes, the evidence an edge was drawn from: click one
+            to see its date and source file. Solid edges = extracted directly from source. Dashed =
+            inferred or ambiguous.
             Fading = going cold: full strength ≤14 days since last meeting, dimmed ≤45, ghosted beyond.
             Relationship entropy made visible.
           </p>
@@ -905,6 +957,7 @@ export function GraphView({ data }: Props) {
 
         <div className="shrink-0 border-t border-[var(--color-mantu-border)] px-4 py-2 text-[11px] text-white/30">
           {graph.nodes.length} nodes · {graph.edges.length} edges · {communityGroups.length} communit{communityGroups.length === 1 ? 'y' : 'ies'}
+          {noteCount > 0 && ` · ${noteCount} note${noteCount === 1 ? '' : 's'}${showNotes ? '' : ' hidden'}`}
         </div>
       </aside>
     </div>

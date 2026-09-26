@@ -55,9 +55,13 @@ describe('right-edge overlay placement', () => {
   it('falls back to the established top-center geometry when a full sidecar cannot fit', () => {
     const narrow: DisplayMetrics = { ...METRICS, bounds: { x: 0, y: 0, width: 800, height: 900 }, workArea: { x: 0, y: 0, width: 800, height: 864 } }
     expect(rightEdgePlacementFits(narrow)).toBe(false)
+    expect(rightEdgePlacementFits(narrow, 380)).toBe(true)
     expect(resolveOverlayPlacement('right-edge', narrow)).toBe('top-center')
+    expect(resolveOverlayPlacement('right-edge', narrow, 380)).toBe('right-edge')
     expect(overlayPlacementPosition({ placement: 'right-edge', width: 880, height: 140, layout: 'bar', metrics: narrow, topMargin: 8 })).toEqual({ x: 0, y: 8 })
+    expect(overlayPlacementPosition({ placement: 'right-edge', width: 380, height: 560, layout: 'dock', metrics: narrow, topMargin: 8 })).toEqual({ x: 408, y: 68 })
     expect(hoverWatchRestRect('hide', narrow, 'right-edge')).toEqual(hoverWatchRestRect('hide', narrow, 'top-center'))
+    expect(hoverWatchRestRect('dock', narrow, 'right-edge').x).toBe(780)
     expect(parkAfterExclusiveOnboarding('hide', narrow, 8, 'right-edge')).toEqual(parkAfterExclusiveOnboarding('hide', narrow, 8, 'top-center'))
   })
 })

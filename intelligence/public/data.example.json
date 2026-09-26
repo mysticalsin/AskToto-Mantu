@@ -316,7 +316,9 @@
       "insight_id": "insight-0-example-deal-alpha",
       "pattern": "Resource-based pricing reads as value-blind to procurement-led buyers",
       "n_observations": 2,
-      "deals": ["example-deal-alpha"],
+      "deals": [
+        "example-deal-alpha"
+      ],
       "what_happened": "Procurement raised the same pricing objection twice across the deal.",
       "why_it_matters": "Recurred across 2 meetings: a pattern, not a one-off.",
       "coaching_move": "Lead with outcome-based pricing framing before procurement anchors on headcount math.",
@@ -338,7 +340,10 @@
       "insight_id": "insight-1-example-deal-beta",
       "pattern": "Deals without a hard compelling event stall past their decision window",
       "n_observations": 3,
-      "deals": ["example-deal-beta", "example-deal-delta"],
+      "deals": [
+        "example-deal-beta",
+        "example-deal-delta"
+      ],
       "what_happened": "Both Beta-account deals lacked a forcing deadline and slipped.",
       "why_it_matters": "Recurred across 3 meetings: a pattern, not a one-off.",
       "coaching_move": "Manufacture a compelling event (pricing lock, resource availability window) during discovery instead of waiting for the buyer to find one.",
@@ -364,7 +369,9 @@
       "insight_id": "insight-2-example-deal-alpha",
       "pattern": "Early security/compliance proof clears procurement-level objections",
       "n_observations": 1,
-      "deals": ["example-deal-alpha"],
+      "deals": [
+        "example-deal-alpha"
+      ],
       "what_happened": "Observed during meetings/2026-05-10-alpha-technical-deep-dive.md",
       "why_it_matters": "Single-deal observation, not yet a pattern.",
       "coaching_move": "Surface SOC 2 / compliance evidence earlier in the cycle, before procurement raises it unprompted.",
@@ -382,7 +389,10 @@
       "insight_id": "insight-3-example-deal-gamma",
       "pattern": "Competitor presence goes unasked in later-stage calls",
       "n_observations": 2,
-      "deals": ["example-deal-gamma", "example-deal-delta"],
+      "deals": [
+        "example-deal-gamma",
+        "example-deal-delta"
+      ],
       "what_happened": "Neither late-stage call surfaced a direct competitor question.",
       "why_it_matters": "Recurred across 2 meetings: a pattern, not a one-off.",
       "coaching_move": "Ask a direct competitor question in every late-stage call, even when momentum feels positive.",
@@ -427,7 +437,7 @@
         "type": "account",
         "account": "Example Account Alpha",
         "sector": "Financial Services",
-        "degree": 7,
+        "degree": 10,
         "community_id": 0,
         "community_label": "Financial Services",
         "ref": "meetings/2026-06-20-alpha-exec-checkin.md",
@@ -443,7 +453,7 @@
         "type": "account",
         "account": "Example Account Beta",
         "sector": "Technology",
-        "degree": 4,
+        "degree": 8,
         "community_id": 1,
         "community_label": "Technology",
         "ref": "meetings/2026-06-28-beta-renewal-planning.md",
@@ -459,7 +469,7 @@
         "type": "account",
         "account": "Example Account Gamma",
         "sector": "Technology",
-        "degree": 2,
+        "degree": 5,
         "community_id": 1,
         "community_label": "Technology",
         "ref": "meetings/2026-05-20-gamma-contract-signature.md",
@@ -623,22 +633,287 @@
         "last_touch": "2026-06-28",
         "days_quiet": 7,
         "freshness": "fresh"
+      },
+      {
+        "id": "meeting:meetings-2026-06-28-beta-renewal-planning-md",
+        "label": "Beta Renewal Planning",
+        "type": "meeting",
+        "degree": 1,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-06-28-beta-renewal-planning.md",
+        "date": "2026-06-28",
+        "account": "Example Account Beta",
+        "sector": "Technology",
+        "is_client_facing": true,
+        "freshness": "fresh"
+      },
+      {
+        "id": "meeting:meetings-2026-06-20-alpha-exec-checkin-md",
+        "label": "Alpha Exec Check-in",
+        "type": "meeting",
+        "degree": 1,
+        "community_id": 0,
+        "community_label": "Financial Services",
+        "ref": "meetings/2026-06-20-alpha-exec-checkin.md",
+        "date": "2026-06-20",
+        "account": "Example Account Alpha",
+        "sector": "Financial Services",
+        "is_client_facing": true,
+        "freshness": "cooling"
+      },
+      {
+        "id": "meeting:meetings-2026-06-02-beta-delta-closeout-md",
+        "label": "Beta Delta Closeout",
+        "type": "meeting",
+        "degree": 1,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-06-02-beta-delta-closeout.md",
+        "date": "2026-06-02",
+        "account": "Example Account Beta",
+        "sector": "Technology",
+        "is_client_facing": true,
+        "freshness": "fresh"
+      },
+      {
+        "id": "meeting:meetings-2026-05-20-gamma-contract-signature-md",
+        "label": "Gamma Contract Signature",
+        "type": "meeting",
+        "degree": 1,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-05-20-gamma-contract-signature.md",
+        "date": "2026-05-20",
+        "account": "Example Account Gamma",
+        "sector": "Technology",
+        "is_client_facing": true,
+        "freshness": "cold"
+      },
+      {
+        "id": "meeting:meetings-2026-05-10-alpha-technical-deep-dive-md",
+        "label": "Alpha Technical Deep Dive",
+        "type": "meeting",
+        "degree": 1,
+        "community_id": 0,
+        "community_label": "Financial Services",
+        "ref": "meetings/2026-05-10-alpha-technical-deep-dive.md",
+        "date": "2026-05-10",
+        "account": "Example Account Alpha",
+        "sector": "Financial Services",
+        "is_client_facing": true,
+        "freshness": "cooling"
+      },
+      {
+        "id": "meeting:meetings-2026-05-01-beta-delta-budget-review-md",
+        "label": "Beta Delta Budget Review",
+        "type": "meeting",
+        "degree": 1,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-05-01-beta-delta-budget-review.md",
+        "date": "2026-05-01",
+        "account": "Example Account Beta",
+        "sector": "Technology",
+        "is_client_facing": true,
+        "freshness": "fresh"
+      },
+      {
+        "id": "meeting:meetings-2026-04-18-gamma-commercial-review-md",
+        "label": "Gamma Commercial Review",
+        "type": "meeting",
+        "degree": 1,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-04-18-gamma-commercial-review.md",
+        "date": "2026-04-18",
+        "account": "Example Account Gamma",
+        "sector": "Technology",
+        "is_client_facing": true,
+        "freshness": "cold"
+      },
+      {
+        "id": "meeting:meetings-2026-04-02-beta-intro-call-md",
+        "label": "Beta Intro Call",
+        "type": "meeting",
+        "degree": 1,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-04-02-beta-intro-call.md",
+        "date": "2026-04-02",
+        "account": "Example Account Beta",
+        "sector": "Technology",
+        "is_client_facing": true,
+        "freshness": "fresh"
+      },
+      {
+        "id": "meeting:meetings-2026-03-24-alpha-requirements-workshop-md",
+        "label": "Alpha Requirements Workshop",
+        "type": "meeting",
+        "degree": 1,
+        "community_id": 0,
+        "community_label": "Financial Services",
+        "ref": "meetings/2026-03-24-alpha-requirements-workshop.md",
+        "date": "2026-03-24",
+        "account": "Example Account Alpha",
+        "sector": "Financial Services",
+        "is_client_facing": true,
+        "freshness": "cooling"
+      },
+      {
+        "id": "meeting:meetings-2026-03-10-gamma-discovery-call-md",
+        "label": "Gamma Discovery Call",
+        "type": "meeting",
+        "degree": 1,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-03-10-gamma-discovery-call.md",
+        "date": "2026-03-10",
+        "account": "Example Account Gamma",
+        "sector": "Technology",
+        "is_client_facing": true,
+        "freshness": "cold"
       }
     ],
     "edges": [
-      { "from": "account:example-account-alpha", "to": "sector:Financial Services", "relation": "in-sector", "confidence": "EXTRACTED" },
-      { "from": "account:example-account-beta", "to": "sector:Technology", "relation": "in-sector", "confidence": "EXTRACTED" },
-      { "from": "account:example-account-gamma", "to": "sector:Technology", "relation": "in-sector", "confidence": "EXTRACTED" },
-      { "from": "deal:example-deal-alpha", "to": "account:example-account-alpha", "relation": "belongs-to", "confidence": "EXTRACTED" },
-      { "from": "deal:example-deal-beta", "to": "account:example-account-beta", "relation": "belongs-to", "confidence": "EXTRACTED" },
-      { "from": "deal:example-deal-gamma", "to": "account:example-account-gamma", "relation": "belongs-to", "confidence": "EXTRACTED" },
-      { "from": "deal:example-deal-delta", "to": "account:example-account-beta", "relation": "belongs-to", "confidence": "EXTRACTED" },
-      { "from": "person:alex-example", "to": "account:example-account-alpha", "relation": "works-at", "confidence": "EXTRACTED" },
-      { "from": "person:blair-example", "to": "account:example-account-alpha", "relation": "works-at", "confidence": "EXTRACTED" },
-      { "from": "person:casey-example", "to": "account:example-account-alpha", "relation": "works-at", "confidence": "INFERRED" },
-      { "from": "person:drew-example", "to": "account:example-account-alpha", "relation": "works-at", "confidence": "INFERRED" },
-      { "from": "person:emery-example", "to": "account:example-account-alpha", "relation": "works-at", "confidence": "AMBIGUOUS" },
-      { "from": "person:jordan-example", "to": "account:example-account-beta", "relation": "works-at", "confidence": "EXTRACTED" }
+      {
+        "from": "account:example-account-alpha",
+        "to": "sector:Financial Services",
+        "relation": "in-sector",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-beta",
+        "to": "sector:Technology",
+        "relation": "in-sector",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-gamma",
+        "to": "sector:Technology",
+        "relation": "in-sector",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "deal:example-deal-alpha",
+        "to": "account:example-account-alpha",
+        "relation": "belongs-to",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "deal:example-deal-beta",
+        "to": "account:example-account-beta",
+        "relation": "belongs-to",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "deal:example-deal-gamma",
+        "to": "account:example-account-gamma",
+        "relation": "belongs-to",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "deal:example-deal-delta",
+        "to": "account:example-account-beta",
+        "relation": "belongs-to",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "person:alex-example",
+        "to": "account:example-account-alpha",
+        "relation": "works-at",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "person:blair-example",
+        "to": "account:example-account-alpha",
+        "relation": "works-at",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "person:casey-example",
+        "to": "account:example-account-alpha",
+        "relation": "works-at",
+        "confidence": "INFERRED"
+      },
+      {
+        "from": "person:drew-example",
+        "to": "account:example-account-alpha",
+        "relation": "works-at",
+        "confidence": "INFERRED"
+      },
+      {
+        "from": "person:emery-example",
+        "to": "account:example-account-alpha",
+        "relation": "works-at",
+        "confidence": "AMBIGUOUS"
+      },
+      {
+        "from": "person:jordan-example",
+        "to": "account:example-account-beta",
+        "relation": "works-at",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-beta",
+        "to": "meeting:meetings-2026-06-28-beta-renewal-planning-md",
+        "relation": "discussed-in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-alpha",
+        "to": "meeting:meetings-2026-06-20-alpha-exec-checkin-md",
+        "relation": "discussed-in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-beta",
+        "to": "meeting:meetings-2026-06-02-beta-delta-closeout-md",
+        "relation": "discussed-in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-gamma",
+        "to": "meeting:meetings-2026-05-20-gamma-contract-signature-md",
+        "relation": "discussed-in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-alpha",
+        "to": "meeting:meetings-2026-05-10-alpha-technical-deep-dive-md",
+        "relation": "discussed-in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-beta",
+        "to": "meeting:meetings-2026-05-01-beta-delta-budget-review-md",
+        "relation": "discussed-in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-gamma",
+        "to": "meeting:meetings-2026-04-18-gamma-commercial-review-md",
+        "relation": "discussed-in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-beta",
+        "to": "meeting:meetings-2026-04-02-beta-intro-call-md",
+        "relation": "discussed-in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-alpha",
+        "to": "meeting:meetings-2026-03-24-alpha-requirements-workshop-md",
+        "relation": "discussed-in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "account:example-account-gamma",
+        "to": "meeting:meetings-2026-03-10-gamma-discovery-call-md",
+        "relation": "discussed-in",
+        "confidence": "EXTRACTED"
+      }
     ]
   },
   "account_summaries": [
@@ -647,24 +922,44 @@
       "label": "Example Account Alpha",
       "deal_count": 1,
       "total_value_usd": null,
-      "band_counts": { "good": 1, "mixed": 0, "concerning": 0 },
-      "insight_ids": ["insight-0-example-deal-alpha", "insight-2-example-deal-alpha"]
+      "band_counts": {
+        "good": 1,
+        "mixed": 0,
+        "concerning": 0
+      },
+      "insight_ids": [
+        "insight-0-example-deal-alpha",
+        "insight-2-example-deal-alpha"
+      ]
     },
     {
       "key": "example-account-beta",
       "label": "Example Account Beta",
       "deal_count": 2,
       "total_value_usd": null,
-      "band_counts": { "good": 0, "mixed": 0, "concerning": 1 },
-      "insight_ids": ["insight-1-example-deal-beta", "insight-3-example-deal-gamma"]
+      "band_counts": {
+        "good": 0,
+        "mixed": 0,
+        "concerning": 1
+      },
+      "insight_ids": [
+        "insight-1-example-deal-beta",
+        "insight-3-example-deal-gamma"
+      ]
     },
     {
       "key": "example-account-gamma",
       "label": "Example Account Gamma",
       "deal_count": 1,
       "total_value_usd": null,
-      "band_counts": { "good": 1, "mixed": 0, "concerning": 0 },
-      "insight_ids": ["insight-3-example-deal-gamma"]
+      "band_counts": {
+        "good": 1,
+        "mixed": 0,
+        "concerning": 0
+      },
+      "insight_ids": [
+        "insight-3-example-deal-gamma"
+      ]
     }
   ],
   "sector_summaries": [
@@ -673,16 +968,30 @@
       "label": "Financial Services",
       "deal_count": 1,
       "total_value_usd": null,
-      "band_counts": { "good": 1, "mixed": 0, "concerning": 0 },
-      "insight_ids": ["insight-0-example-deal-alpha", "insight-2-example-deal-alpha"]
+      "band_counts": {
+        "good": 1,
+        "mixed": 0,
+        "concerning": 0
+      },
+      "insight_ids": [
+        "insight-0-example-deal-alpha",
+        "insight-2-example-deal-alpha"
+      ]
     },
     {
       "key": "technology",
       "label": "Technology",
       "deal_count": 3,
       "total_value_usd": null,
-      "band_counts": { "good": 1, "mixed": 0, "concerning": 1 },
-      "insight_ids": ["insight-1-example-deal-beta", "insight-3-example-deal-gamma"]
+      "band_counts": {
+        "good": 1,
+        "mixed": 0,
+        "concerning": 1
+      },
+      "insight_ids": [
+        "insight-1-example-deal-beta",
+        "insight-3-example-deal-gamma"
+      ]
     }
   ],
   "going_cold": [
@@ -854,7 +1163,10 @@
       "date": "2026-06-28",
       "account": "Example Account Beta",
       "sentiment": "mixed",
-      "topics": ["pricing", "timing"]
+      "topics": [
+        "pricing",
+        "timing"
+      ]
     },
     {
       "slug": "meetings-2026-06-20-alpha-exec-checkin-md",
@@ -862,7 +1174,10 @@
       "date": "2026-06-20",
       "account": "Example Account Alpha",
       "sentiment": "good",
-      "topics": ["relationship", "process"]
+      "topics": [
+        "relationship",
+        "process"
+      ]
     },
     {
       "slug": "meetings-2026-06-02-beta-delta-closeout-md",
@@ -870,7 +1185,10 @@
       "date": "2026-06-02",
       "account": "Example Account Beta",
       "sentiment": "concerning",
-      "topics": ["competitor", "timing"]
+      "topics": [
+        "competitor",
+        "timing"
+      ]
     },
     {
       "slug": "meetings-2026-05-20-gamma-contract-signature-md",
@@ -878,7 +1196,10 @@
       "date": "2026-05-20",
       "account": "Example Account Gamma",
       "sentiment": "good",
-      "topics": ["commercial-model", "process"]
+      "topics": [
+        "commercial-model",
+        "process"
+      ]
     },
     {
       "slug": "meetings-2026-05-10-alpha-technical-deep-dive-md",
@@ -886,7 +1207,10 @@
       "date": "2026-05-10",
       "account": "Example Account Alpha",
       "sentiment": "good",
-      "topics": ["technical-fit", "security"]
+      "topics": [
+        "technical-fit",
+        "security"
+      ]
     },
     {
       "slug": "meetings-2026-05-01-beta-delta-budget-review-md",
@@ -894,7 +1218,10 @@
       "date": "2026-05-01",
       "account": "Example Account Beta",
       "sentiment": "concerning",
-      "topics": ["timing", "pricing"]
+      "topics": [
+        "timing",
+        "pricing"
+      ]
     },
     {
       "slug": "meetings-2026-04-18-gamma-commercial-review-md",
@@ -902,7 +1229,10 @@
       "date": "2026-04-18",
       "account": "Example Account Gamma",
       "sentiment": "good",
-      "topics": ["pricing", "commercial-model"]
+      "topics": [
+        "pricing",
+        "commercial-model"
+      ]
     },
     {
       "slug": "meetings-2026-04-02-beta-intro-call-md",
@@ -910,7 +1240,10 @@
       "date": "2026-04-02",
       "account": "Example Account Beta",
       "sentiment": "concerning",
-      "topics": ["pricing", "timing"]
+      "topics": [
+        "pricing",
+        "timing"
+      ]
     },
     {
       "slug": "meetings-2026-03-24-alpha-requirements-workshop-md",
@@ -918,7 +1251,10 @@
       "date": "2026-03-24",
       "account": "Example Account Alpha",
       "sentiment": "mixed",
-      "topics": ["requirements", "technical-fit"]
+      "topics": [
+        "requirements",
+        "technical-fit"
+      ]
     },
     {
       "slug": "meetings-2026-03-10-gamma-discovery-call-md",
@@ -926,7 +1262,10 @@
       "date": "2026-03-10",
       "account": "Example Account Gamma",
       "sentiment": "mixed",
-      "topics": ["discovery", "technical-fit"]
+      "topics": [
+        "discovery",
+        "technical-fit"
+      ]
     }
   ],
   "warnings": [],
