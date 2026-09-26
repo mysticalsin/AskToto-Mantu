@@ -188,8 +188,8 @@ export function demoPlaybackStatus(
 /**
  * Cold orchestration state: which step is showing, which "take" of it (a fresh replayKey
  * tells the caller to recreate its clock), and the user's own pause choice. The hot,
- * per-frame state (elapsed ms, clock phase) is owned by the DemoPlaybackClock itself and
- * lives in the caller's own state — it is not part of this state, so a tick can never race
+ * per-frame state (elapsed ms, clock phase) is owned by the DemoPlaybackClock and mirrored
+ * into the caller's React state — it is not part of this state, so a tick can never race
  * a step change through this module.
  */
 export interface DemoOrchestratorState {
@@ -236,9 +236,8 @@ export function previousDemoBeat(state: DemoOrchestratorState): DemoOrchestrator
   return { ...state, beat: state.beat - 1, paused: false }
 }
 
-/** Hands back whatever localMs the model's afterNext computes for the new beat — the demo's
- * own model always starts a beat at 0 — for the caller to seed the fresh clock it creates
- * for that beat. */
+/** The caller renders this localMs until the new beat's own clock reports its first frame —
+ * the demo's own model always returns 0 here, since every beat starts at rest. */
 export function advanceDemoBeat(
   state: DemoOrchestratorState,
   model: Pick<DemoBeatModel, 'afterNext'>

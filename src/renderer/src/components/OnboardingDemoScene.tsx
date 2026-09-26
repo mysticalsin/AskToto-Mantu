@@ -112,9 +112,8 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
   const phaseRef = useRef<DemoPlaybackPhase>('paused')
   const controlsRef = useRef({ environment, paused: orchestrator.paused })
   controlsRef.current = { environment, paused: orchestrator.paused }
-  // commit() is the only writer of orchestrator state, and it sets this ref synchronously
-  // before it, so the ref is never stale by the time a render observes it — no render-time
-  // write needed here.
+  // Event handlers read the latest orchestrator state from this ref; commit() is the only
+  // writer and updates it before setOrchestrator.
   const orchestratorRef = useRef(orchestrator)
   const cursorRef = useRef<HTMLDivElement>(null)
   const lastCommitRef = useRef(0)
