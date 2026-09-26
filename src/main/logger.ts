@@ -205,6 +205,15 @@ export type AuditEvent =
   // FITO-185-U: live Act1 DOM probe summary (userData/logs/act1-dom.json).
   | 'app.act1.dom'
   | 'app.crash'
+  // M2-0006: the clean-shutdown marker — written at the end of will-quit, so the NEXT app.started can
+  // report prevShutdown as 'clean' instead of 'unknown'/'unclean'.
+  | 'app.shutdown.clean'
+  // M2-0006: a 1s heartbeat timer fired at least 1s late (main-thread stall, see boot-sentinel.ts's
+  // run-state tracking and infra/observability/stall-monitor.ts), plus its periodic p99 summary.
+  | 'app.stall'
+  | 'app.stall.summary'
+  // M2-0006: pairs 'app.unresponsive' with how long the renderer stayed wedged before it recovered.
+  | 'app.responsive'
   // A main-process, state-checked repair completed a renderer handoff after durable setup save.
   | 'app.recovery'
   // FITO-185-E: 15s MQA-175 callback closed the boot watch (finally), whether brain resume ran or threw.
