@@ -195,6 +195,63 @@ describe('admin keys write / rotate / revoke', () => {
     expect(written).not.toMatch(tokenPatternForTests())
   })
 
+  it('POST /v1/admin/keys forwards the privacy error code in the JSON body and writes no row', async () => {
+    const store = memoryStore()
+    const cfFetch: typeof fetch = async () => new Response(JSON.stringify({
+      success: true, result: { id: 'default', collect_logs: true, cache_ttl: 0, logpush: false }
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'cloudflare',
+          label: 'Workers AI',
+          secret: 'cf-api-token-TESTKEYONLY-not-a-real-secret-77ab',
+          accountId: 'acct-test'
+        })
+      }),
+      env(),
+      { access: tony },
+      { store, now: NOW, cfFetch }
+    )
+    expect(res.status).toBe(503)
+    expect(await res.json()).toMatchObject({ ok: false, code: 'GATEWAY_CONFIGURATION_UNSAFE' })
+    expect(await store.listVaultMeta()).toEqual([])
+  })
+
+  it('POST /v1/admin/keys/:id/rotate forwards the privacy error code in the JSON body and keeps the prior row', async () => {
+    const store = memoryStore()
+    const secret = 'cf-api-token-TESTKEYONLY-not-a-real-secret-77ab'
+    const added = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret, accountId: 'acct-test' })
+      }),
+      env(),
+      { access: tony },
+      { store, now: NOW, cfFetch: async () => reviewedGatewayReply() }
+    )
+    expect(added.status).toBe(200)
+    const { id } = (await added.json()) as { id: string }
+    const before = await store.listVaultMeta()
+    const cfFetch: typeof fetch = async () => new Response('{"success":false}', { status: 404 })
+    const res = await handleRequest(
+      new Request(`https://operator.test/v1/admin/keys/${id}/rotate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ secret: 'cf-api-token-TESTKEYONLY-not-a-real-secret-99zz' })
+      }),
+      env(),
+      { access: tony },
+      { store, now: NOW, cfFetch }
+    )
+    expect(res.status).toBe(503)
+    expect(await res.json()).toMatchObject({ ok: false, code: 'GATEWAY_REVIEW_REQUIRED' })
+    expect(await store.listVaultMeta()).toEqual(before)
+  })
+
   it('anthropic paste does not call AI Gateway ensure', async () => {
     const store = memoryStore()
     const cfFetch = async () => {
