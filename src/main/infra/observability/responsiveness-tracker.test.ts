@@ -43,4 +43,22 @@ describe('createResponsivenessTracker', () => {
     expect(stallMs).toBeGreaterThanOrEqual(0)
     expect(stallMs).toBeLessThan(1000)
   })
+
+  it('markGone clears a pending unresponsive so a later unresponsive/responsive pair after a renderer crash is not measured from before the crash', () => {
+    let t = 0
+    const tracker = createResponsivenessTracker(() => t)
+    tracker.markUnresponsive() // t=0 — the renderer wedges
+    t = 999_999_999 // it never recovers; render-process-gone fires instead, hours later
+    tracker.markGone()
+    t = 1_000_000_000 // the reloaded renderer wedges again, long after the crash
+    tracker.markUnresponsive()
+    t = 1_000_000_100
+    expect(tracker.markResponsive()).toBe(100) // measured from the NEW markUnresponsive, not the stale one
+  })
+
+  it('markGone with no pending unresponsive state is a no-op — a later unpaired markResponsive is still null', () => {
+    const tracker = createResponsivenessTracker(() => 0)
+    tracker.markGone()
+    expect(tracker.markResponsive()).toBeNull()
+  })
 })

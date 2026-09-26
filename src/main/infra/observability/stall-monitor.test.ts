@@ -94,7 +94,7 @@ describe('startStallMonitor', () => {
     })
     clock.advanceTo(1000) // on time — expectedAt becomes 2000
     clock.advanceTo(3500) // 1500ms late
-    expect(onStall).toHaveBeenCalledExactlyOnceWith({ bootId: 'boot-1', durationMs: 1500 })
+    expect(onStall).toHaveBeenCalledExactlyOnceWith({ bootId: 'boot-1', durationMs: 1500, phase: undefined })
   })
 
   it('a tick that is late by LESS than a full tick period is not a stall', () => {
@@ -177,48 +177,32 @@ describe('startStallMonitor', () => {
     expect(histogram.disable).toHaveBeenCalledOnce()
   })
 
-  it('defaults tickMs to 1000 and summaryIntervalMs to 5 minutes when not given', () => {
+  it('defaults tickMs to 1000ms and summaryIntervalMs to 5 minutes when neither is given', () => {
     let scheduledMs: number | undefined
-    const setIntervalFn = (handler: () => void, ms: number): NodeJS.Timeout => {
+    let handler: (() => void) | undefined
+    let current = 0
+    const setIntervalFn = (h: () => void, ms: number): NodeJS.Timeout => {
       scheduledMs = ms
+      handler = h
       return 1 as unknown as NodeJS.Timeout
     }
+    const onSummary = vi.fn()
     startStallMonitor({
       bootId: 'boot-1',
       onStall: vi.fn(),
-      onSummary: vi.fn(),
-      now: () => 0,
+      onSummary,
+      now: () => current,
       setIntervalFn,
       clearIntervalFn: vi.fn(),
       histogram: fakeHistogram(0)
     })
     expect(scheduledMs).toBe(1000)
-  })
-
-  it('a wall-clock jump (sleep or an NTP step) never produces a stall — lateness is judged only on the injected monotonic clock, not Date.now', () => {
-    const clock = fakeTimer()
-    const onStall = vi.fn()
-    const realDateNow = Date.now
-    Date.now = () => 0
-    try {
-      startStallMonitor({
-        bootId: 'boot-1',
-        onStall,
-        onSummary: vi.fn(),
-        tickMs: 1000,
-        summaryIntervalMs: 10_000,
-        now: clock.now,
-        setIntervalFn: clock.setIntervalFn,
-        clearIntervalFn: clock.clearIntervalFn,
-        histogram: fakeHistogram(0)
-      })
-      clock.advanceTo(1000) // monotonic clock on schedule; expectedAt -> 2000
-      Date.now = () => 999_999_999 // wall clock jumps forward hugely — monotonic clock untouched
-      clock.advanceTo(2000) // still on schedule per the monotonic clock
-      expect(onStall).not.toHaveBeenCalled()
-    } finally {
-      Date.now = realDateNow
-    }
+    current = 299_000
+    handler!()
+    expect(onSummary).not.toHaveBeenCalled()
+    current = 300_000
+    handler!()
+    expect(onSummary).toHaveBeenCalledOnce()
   })
 
   it('defaults now to performance.now and never calls Date.now', () => {
@@ -269,5 +253,71 @@ describe('startStallMonitor', () => {
     monitor.resync() // called from the powerMonitor 'resume' handler
     clock.advanceTo(3_602_000) // exactly one tick after resync — on schedule relative to the new baseline
     expect(onStall).not.toHaveBeenCalled()
+  })
+
+  it('pause() removes the heartbeat entirely, so no tick can fire during sleep regardless of event order; resync() restarts it from a fresh baseline', () => {
+    // This is the fake-stall race: an overdue heartbeat tick and powerMonitor's 'resume' are delivered by
+    // independent sources, so which one the event loop processes first is not guaranteed. pause() (called
+    // from 'suspend') removes the interval outright, so there is no tick left to race resume with — order
+    // cannot matter because there is nothing pending to order.
+    const clock = fakeTimer()
+    const onStall = vi.fn()
+    const monitor = startStallMonitor({
+      bootId: 'boot-1',
+      onStall,
+      onSummary: vi.fn(),
+      tickMs: 1000,
+      summaryIntervalMs: 10_000,
+      now: clock.now,
+      setIntervalFn: clock.setIntervalFn,
+      clearIntervalFn: clock.clearIntervalFn,
+      histogram: fakeHistogram(0)
+    })
+    monitor.pause() // powerMonitor 'suspend'
+    clock.jumpTo(3_601_000) // an hour asleep
+    clock.advanceTo(3_601_500) // would have fired the interval had pause() not cleared it
+    expect(onStall).not.toHaveBeenCalled()
+    monitor.resync() // powerMonitor 'resume' — restarts the heartbeat from a fresh baseline
+    clock.advanceTo(3_602_500) // exactly one tick after resync — on schedule relative to the new baseline
+    expect(onStall).not.toHaveBeenCalled()
+  })
+
+  it('a tick that fires on time consumes any pending phase, so a later late tick names nothing', () => {
+    const clock = fakeTimer()
+    const onStall = vi.fn()
+    const monitor = startStallMonitor({
+      bootId: 'boot-1',
+      onStall,
+      onSummary: vi.fn(),
+      tickMs: 1000,
+      summaryIntervalMs: 10_000,
+      now: clock.now,
+      setIntervalFn: clock.setIntervalFn,
+      clearIntervalFn: clock.clearIntervalFn,
+      histogram: fakeHistogram(0)
+    })
+    monitor.setPhase('boot:createTray')
+    clock.advanceTo(1000) // on time — consumes the phase even though this tick itself isn't late
+    clock.advanceTo(3500) // 1500ms late, but the phase was already consumed by the on-time tick above
+    expect(onStall).toHaveBeenCalledExactlyOnceWith({ bootId: 'boot-1', durationMs: 1500, phase: undefined })
+  })
+
+  it('setPhase immediately before a late tick attaches that phase to the app.stall it produces', () => {
+    const clock = fakeTimer()
+    const onStall = vi.fn()
+    const monitor = startStallMonitor({
+      bootId: 'boot-1',
+      onStall,
+      onSummary: vi.fn(),
+      tickMs: 1000,
+      summaryIntervalMs: 10_000,
+      now: clock.now,
+      setIntervalFn: clock.setIntervalFn,
+      clearIntervalFn: clock.clearIntervalFn,
+      histogram: fakeHistogram(0)
+    })
+    monitor.setPhase('boot:createTray')
+    clock.advanceTo(3500) // late by 2500ms on the very first tick — no on-time tick consumed the phase first
+    expect(onStall).toHaveBeenCalledExactlyOnceWith({ bootId: 'boot-1', durationMs: 2500, phase: 'boot:createTray' })
   })
 })

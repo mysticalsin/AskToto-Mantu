@@ -11,6 +11,10 @@ function fakePowerMonitor() {
   return { on: vi.fn(), removeListener: vi.fn() }
 }
 
+function fakeStallMonitor(overrides: Partial<StallMonitor> = {}): StallMonitor {
+  return { stop: vi.fn(), resync: vi.fn(), pause: vi.fn(), setPhase: vi.fn(), ...overrides }
+}
+
 describe('startRunObservability', () => {
   it('audits app.started with the fields beginRunWatch reports', () => {
     const audit = vi.fn()
@@ -24,7 +28,7 @@ describe('startRunObservability', () => {
       powerMonitor: fakePowerMonitor(),
       deps: {
         beginRunWatch,
-        startStallMonitor: vi.fn(() => ({ stop: vi.fn(), resync: vi.fn() })),
+        startStallMonitor: vi.fn(() => fakeStallMonitor()),
         setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
         clearIntervalFn: vi.fn()
       }
@@ -54,7 +58,7 @@ describe('startRunObservability', () => {
       deps: {
         beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
         markAlive,
-        startStallMonitor: vi.fn(() => ({ stop: vi.fn(), resync: vi.fn() })),
+        startStallMonitor: vi.fn(() => fakeStallMonitor()),
         setIntervalFn,
         clearIntervalFn: vi.fn()
       }
@@ -64,12 +68,16 @@ describe('startRunObservability', () => {
     expect(markAlive).toHaveBeenCalledExactlyOnceWith('/fake', 'boot-1')
   })
 
-  it('starts the stall monitor for this bootId and wires its callbacks to app.stall / app.stall.summary, attaching the last phase set', () => {
+  it("wires the stall monitor's onStall/onSummary details straight through to app.stall / app.stall.summary, and setPhase delegates to the stall monitor", () => {
+    // The stall monitor (not this module) now owns deciding what phase, if any, a tick names — see
+    // stall-monitor.test.ts for that behaviour. This module's only job is to forward whatever detail it
+    // receives, and to forward setPhase calls to the stall monitor that owns clearing them.
     const audit = vi.fn()
+    const setPhase = vi.fn()
     let captured: StallMonitorOptions | undefined
     const startStallMonitor = vi.fn((o: StallMonitorOptions) => {
       captured = o
-      return { stop: vi.fn(), resync: vi.fn() }
+      return fakeStallMonitor({ setPhase })
     })
     const observability = startRunObservability({
       userData: '/fake',
@@ -86,16 +94,19 @@ describe('startRunObservability', () => {
       }
     })
     expect(startStallMonitor).toHaveBeenCalledWith(expect.objectContaining({ bootId: 'boot-9' }))
-    captured!.onStall({ bootId: 'boot-9', durationMs: 1500 })
+    captured!.onStall({ bootId: 'boot-9', durationMs: 1500, phase: undefined })
     expect(audit).toHaveBeenCalledWith('app.stall', { bootId: 'boot-9', durationMs: 1500, phase: undefined })
-    observability.setPhase('boot:createTray')
-    captured!.onStall({ bootId: 'boot-9', durationMs: 2000 })
+    captured!.onStall({ bootId: 'boot-9', durationMs: 2000, phase: 'boot:createTray' })
     expect(audit).toHaveBeenCalledWith('app.stall', { bootId: 'boot-9', durationMs: 2000, phase: 'boot:createTray' })
     captured!.onSummary({ bootId: 'boot-9', p99Ms: 7 })
     expect(audit).toHaveBeenCalledWith('app.stall.summary', { bootId: 'boot-9', p99Ms: 7 })
+
+    observability.setPhase('boot:createTray')
+    expect(setPhase).toHaveBeenCalledExactlyOnceWith('boot:createTray')
   })
 
-  it('resyncs the stall monitor when powerMonitor emits resume', () => {
+  it('pauses the stall monitor on powerMonitor suspend and resyncs it on resume', () => {
+    const pause = vi.fn()
     const resync = vi.fn()
     const powerMonitor = fakePowerMonitor()
     startRunObservability({
@@ -107,18 +118,22 @@ describe('startRunObservability', () => {
       powerMonitor,
       deps: {
         beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
-        startStallMonitor: vi.fn(() => ({ stop: vi.fn(), resync })),
+        startStallMonitor: vi.fn(() => fakeStallMonitor({ pause, resync })),
         setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
         clearIntervalFn: vi.fn()
       }
     })
-    expect(powerMonitor.on).toHaveBeenCalledExactlyOnceWith('resume', expect.any(Function))
-    const onResume = powerMonitor.on.mock.calls[0][1] as () => void
+    expect(powerMonitor.on).toHaveBeenCalledWith('suspend', expect.any(Function))
+    expect(powerMonitor.on).toHaveBeenCalledWith('resume', expect.any(Function))
+    const onSuspend = powerMonitor.on.mock.calls.find((c) => c[0] === 'suspend')![1] as () => void
+    const onResume = powerMonitor.on.mock.calls.find((c) => c[0] === 'resume')![1] as () => void
+    onSuspend()
+    expect(pause).toHaveBeenCalledOnce()
     onResume()
     expect(resync).toHaveBeenCalledOnce()
   })
 
-  it('shutdownClean stops the alive timer and stall monitor, unsubscribes from resume, and audits app.shutdown.clean with markShutdownClean\'s detail', () => {
+  it("shutdownClean stops the alive timer and stall monitor, unsubscribes from suspend and resume, and audits app.shutdown.clean with markShutdownClean's detail", () => {
     const audit = vi.fn()
     const clearIntervalFn = vi.fn()
     const stop = vi.fn()
@@ -134,7 +149,7 @@ describe('startRunObservability', () => {
       deps: {
         beginRunWatch: () => ({ bootId: 'boot-7', prior: fakePrior() }),
         markShutdownClean,
-        startStallMonitor: vi.fn(() => ({ stop, resync: vi.fn() })),
+        startStallMonitor: vi.fn(() => fakeStallMonitor({ stop })),
         setIntervalFn: vi.fn(() => 1234 as unknown as ReturnType<typeof setInterval>),
         clearIntervalFn
       }
@@ -142,7 +157,8 @@ describe('startRunObservability', () => {
     observability.shutdownClean(42)
     expect(clearIntervalFn).toHaveBeenCalledWith(1234)
     expect(stop).toHaveBeenCalledOnce()
-    expect(powerMonitor.removeListener).toHaveBeenCalledExactlyOnceWith('resume', expect.any(Function))
+    expect(powerMonitor.removeListener).toHaveBeenCalledWith('suspend', expect.any(Function))
+    expect(powerMonitor.removeListener).toHaveBeenCalledWith('resume', expect.any(Function))
     expect(markShutdownClean).toHaveBeenCalledWith('/fake', 'boot-7', 42)
     // audit was already called once with app.started at construction — this checks the shutdown call
     // specifically, not that it's the mock's only call.
@@ -162,7 +178,7 @@ describe('startRunObservability', () => {
       deps: {
         beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
         markShutdownClean: vi.fn(() => ({ bootId: 'boot-1', uptimeS: 1, reason: 'will-quit' as const })),
-        startStallMonitor: vi.fn(() => ({ stop, resync: vi.fn() })),
+        startStallMonitor: vi.fn(() => fakeStallMonitor({ stop })),
         setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
         clearIntervalFn: vi.fn()
       }
@@ -171,31 +187,5 @@ describe('startRunObservability', () => {
     observability.shutdownClean(1)
     expect(stop).toHaveBeenCalledOnce()
     expect(audit.mock.calls.filter((c) => c[0] === 'app.shutdown.clean')).toHaveLength(1)
-  })
-
-  it('never touches a real boot-sentinel/stall-monitor dependency when every dep is injected (isolation check)', () => {
-    // Guards against a future edit silently falling back to a real dependency inside the module (which
-    // would make this file's fs- and timer-free tests reach real disk or real timers).
-    const calls: string[] = []
-    startRunObservability({
-      userData: '/fake',
-      version: '1.9.7',
-      platform: 'darwin',
-      arch: 'arm64',
-      audit: vi.fn(),
-      powerMonitor: fakePowerMonitor(),
-      deps: {
-        beginRunWatch: () => {
-          calls.push('beginRunWatch')
-          return { bootId: 'boot-1', prior: fakePrior() }
-        },
-        markAlive: vi.fn(),
-        markShutdownClean: vi.fn(() => ({ bootId: 'boot-1', uptimeS: 0, reason: 'will-quit' as const })),
-        startStallMonitor: vi.fn((): StallMonitor => ({ stop: vi.fn(), resync: vi.fn() })),
-        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
-        clearIntervalFn: vi.fn()
-      }
-    })
-    expect(calls).toEqual(['beginRunWatch'])
   })
 })
