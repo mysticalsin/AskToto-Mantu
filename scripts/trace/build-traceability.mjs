@@ -143,7 +143,14 @@ export function mergeStatuses(statuses) {
 
 // ---- ADR-017 evidence overrides ----------------------------------------------------------------
 
-const KNOWN_KIT_STATUSES = new Set(['MET', 'PARTIAL', 'BLOCKED', 'NOT_MET'])
+/**
+ * Rank for merging governing records' opinions about the same kit_ref (ADR-017 KIT_STATUSES),
+ * least to most advanced. `BLOCKED` ranks below `NOT_MET`: an external block is a harder stop than
+ * "not yet done". This is the one place the four kit statuses are listed — `KNOWN_KIT_STATUSES`
+ * below, and every rank comparison in this module, derive from this table alone.
+ */
+const KIT_STATUS_RANK = { BLOCKED: 0, NOT_MET: 1, PARTIAL: 2, MET: 3 }
+const KNOWN_KIT_STATUSES = new Set(Object.keys(KIT_STATUS_RANK))
 
 /**
  * Maps one per-kit_ref ADR-017 evidence status onto this module's row-status vocabulary, given the
@@ -161,6 +168,43 @@ export function applyEvidenceOverride(kitStatus, ticketStatus) {
   if (kitStatus === 'BLOCKED') return 'BLOCKED_EXTERNAL'
   if (kitStatus === 'MET') return ticketStatus
   return STATUS_RANK[ticketStatus] > STATUS_RANK.IN_PROGRESS ? 'IN_PROGRESS' : ticketStatus
+}
+
+/**
+ * Merges one ticket's per-level governing records (ADR-017 INV-2: the last record of each
+ * evidence_level governs) into a single status per kit_ref: the most-advanced status among every
+ * governing PASS record, capped by the least-advanced status among every governing FAIL record —
+ * `min(maxPASS, minFAIL)`. PASS evidence can therefore advance a kit_ref (a later PASS at a
+ * different level is not held back by an earlier, less-advanced PASS), but a governing FAIL can
+ * never be hidden behind a more-advanced PASS from another level. A kit_ref only PASS records
+ * mention takes the most-advanced of those; a kit_ref only FAIL records mention takes the
+ * least-advanced of those. Levels are an unordered set (INV-3): this never treats one level as
+ * "later" than another — a record's own `result` (PASS or FAIL), not its `evidence_level`, decides
+ * which side of the merge it falls on.
+ * @param {Map<string, { result?: string, kit_refs?: Record<string, string> }>} recordsByLevel the
+ *   `latestByLevel(records)` result for one ticket (M2-0002's scripts/evidence/record.mjs)
+ * @returns {Record<string, string>}
+ */
+export function mergeGoverningKitRefs(recordsByLevel) {
+  const maxPass = {}
+  const minFail = {}
+  for (const record of recordsByLevel.values()) {
+    for (const [ref, status] of Object.entries(record.kit_refs ?? {})) {
+      if (record.result === 'FAIL') {
+        if (minFail[ref] === undefined || KIT_STATUS_RANK[status] < KIT_STATUS_RANK[minFail[ref]]) minFail[ref] = status
+      } else if (maxPass[ref] === undefined || KIT_STATUS_RANK[status] > KIT_STATUS_RANK[maxPass[ref]]) {
+        maxPass[ref] = status
+      }
+    }
+  }
+  const merged = {}
+  for (const ref of new Set([...Object.keys(maxPass), ...Object.keys(minFail)])) {
+    const pass = maxPass[ref]
+    const fail = minFail[ref]
+    merged[ref] =
+      pass === undefined ? fail : fail === undefined ? pass : KIT_STATUS_RANK[pass] < KIT_STATUS_RANK[fail] ? pass : fail
+  }
+  return merged
 }
 
 /**
@@ -228,8 +272,8 @@ function toProgramTicketId(bareOrPrefixed) {
 /**
  * Parses one ticket-bearing table cell (already trimmed) as a whole — never by first splitting on
  * comma, since the real by-role tables carry a `NNNN: <description>` cell whose description
- * routinely contains its own commas (e.g. `9007: Get approval for policy A (X, Y, Z), policy B
- * (W), and the default route`), which a naive split would misread as three more ticket items. A
+ * routinely contains its own commas (e.g. `9007: Order parts: bolts (M3, M4, M5), washers (M4),
+ * and a spare`), which a naive split would misread as three more ticket items. A
  * cell is either a comma-separated list of bare ticket numbers (each optionally `M2-`-prefixed), or
  * a single described ticket (`NNNN: <description>` / `M2-NNNN: <description>`) whose ticket number
  * is the only part that matters. A bare `M2-` prefix is never accepted on its own. Returns `null`
@@ -407,7 +451,7 @@ function summarize(result) {
     rows_mapped: rowsMapped,
     unique_ids: ids.size,
     unique_ids_mapped: idsMapped.size,
-    errorCount: result.errors.length
+    error_count: result.errors.length
   }
 }
 
@@ -424,7 +468,7 @@ export function renderMarkdown(result) {
     '# Traceability: kit/registry IDs to program tickets',
     '',
     `Generated from the repository's own ID inventory and ledger. ${s.rows} row(s) (${s.rows_mapped} mapped), ` +
-      `${s.unique_ids} unique id(s) (${s.unique_ids_mapped} mapped), ${s.errorCount} error(s).`,
+      `${s.unique_ids} unique id(s) (${s.unique_ids_mapped} mapped), ${s.error_count} error(s).`,
     '',
     header,
     ...lines,
@@ -489,37 +533,6 @@ function formatError(error) {
     case 'malformed-blocker-ticket-ref':
       return `BLOCKERS.md cites "${error.cell}", which does not parse as a ticket reference`
   }
-}
-
-/**
- * Rank for merging two governing records' opinions about the same kit_ref (ADR-017 KIT_STATUSES),
- * least to most advanced. `BLOCKED` ranks below `NOT_MET`: an external block is a harder stop than
- * "not yet done".
- */
-const KIT_STATUS_RANK = { BLOCKED: 0, NOT_MET: 1, PARTIAL: 2, MET: 3 }
-
-/**
- * Merges one ticket's per-level governing records (ADR-017 INV-2: the last record of each
- * evidence_level governs) into a single status per kit_ref. A kit_ref that only one level's
- * governing record mentions takes that record's status unchanged. A kit_ref two or more governing
- * records disagree about takes the least-advanced (most conservative) of their statuses — evidence
- * never advances a kit_ref past what its worst still-governing record reports. This applies
- * equally to a governing record whose own `result` is FAIL: a later FAIL at one level does not
- * merely withdraw an earlier PASS's kit_refs, its own kit_refs (often BLOCKED/NOT_MET) are read too.
- * @param {Map<string, { kit_refs?: Record<string, string> }>} recordsByLevel the
- *   `latestByLevel(records)` result for one ticket (M2-0002's scripts/evidence/record.mjs)
- * @returns {Record<string, string>}
- */
-export function mergeGoverningKitRefs(recordsByLevel) {
-  const merged = {}
-  for (const record of recordsByLevel.values()) {
-    for (const [ref, status] of Object.entries(record.kit_refs ?? {})) {
-      if (merged[ref] === undefined || KIT_STATUS_RANK[status] < KIT_STATUS_RANK[merged[ref]]) {
-        merged[ref] = status
-      }
-    }
-  }
-  return merged
 }
 
 /**
@@ -609,14 +622,20 @@ export async function main(argv) {
 
   if (values.check) return
 
-  if (values['out-md']) {
-    mkdirSync(dirname(values['out-md']), { recursive: true })
-    writeFileSync(values['out-md'], renderMarkdown(result), 'utf8')
-  }
-  if (values['out-json']) {
-    mkdirSync(dirname(values['out-json']), { recursive: true })
-    writeFileSync(values['out-json'], `${JSON.stringify(renderJson(result), null, 1)}\n`, 'utf8')
-  }
+  // Reached only when neither --check nor a missing --out-md/--out-json exited above (the guard at
+  // the top of main), so both paths are always set here.
+  writeOutput(values['out-md'], renderMarkdown(result))
+  writeOutput(values['out-json'], `${JSON.stringify(renderJson(result), null, 1)}\n`)
+}
+
+/**
+ * Writes one generated file, creating its directory first.
+ * @param {string} path
+ * @param {string} contents
+ */
+function writeOutput(path, contents) {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, contents, 'utf8')
 }
 
 const invokedAsScript = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
