@@ -11,6 +11,7 @@ import {
   macHelperPath,
   macHelperPresent,
   macScreenMetricsSpawnSpec,
+  macStatFlagsSpawnSpec,
   getMacScreenMetrics,
   extractScreenText,
   type OcrResult
@@ -98,6 +99,16 @@ describe('macScreenMetricsSpawnSpec / getMacScreenMetrics (MQA-275 — island no
     try {
       Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
       await expect(getMacScreenMetrics()).resolves.toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+    }
+  })
+
+  it('stat-flags spawn spec degrades to null where the helper cannot exist', () => {
+    const originalPlatform = process.platform
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(macStatFlagsSpawnSpec()).toBeNull()
     } finally {
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
     }
