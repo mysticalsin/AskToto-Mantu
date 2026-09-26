@@ -163,6 +163,15 @@ To rotate a leaked installer key without expanding its scope: `npm run rotate:em
 
 ---
 
+
+## Packaged endpoint pin
+
+In packaged / admin-managed installs, `settings.cloudflareBaseUrl` is pinned to `*.workers.dev` plus any
+hosts in the admin managed-config `cloudflareBaseUrlAllowlist` (and the host of an admin-set
+`cloudflareBaseUrl`). A per-user settings or managed-config rewrite to an arbitrary host is refused so the
+bearer cannot be stolen by redirection. Self-hosted Workers are configured through that admin allowlist —
+see `docs/NETWORK-EGRESS.md`.
+
 ## Model ids: `{provider}/{model}`
 
 Cloudflare's AI REST API is OpenAI-compatible. There are **two** id forms, and they are not
@@ -257,3 +266,7 @@ Both are one command and are covered step by step in
 - **Revoking a leaked proxy key** takes effect the moment the new version deploys. Every install using
   the old key gets `401` until Settings is updated, which is the correct behaviour for a bearer
   credential to a paid endpoint.
+
+## Release / Latest embed (CRITICAL#1)
+
+Release workflows ship a **Worker proxy key only** (`METIS_PROXY_KEY` → encrypted blob). They must **not** set `METIS_CLOUDFLARE_ACCOUNT_ID` or `METIS_CLOUDFLARE_API_TOKEN` on the release path. An account-token shape is refused by `scripts/embed-cloudflare-key.mjs` and `scripts/check-embedded-cloudflare-key.mjs`.

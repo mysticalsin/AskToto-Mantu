@@ -51,6 +51,11 @@ import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { stripProxyFaultMarker } from './llm/retry'
 import { migrateOverlayLayout } from '@shared/overlay-chrome'
+import { isPackagedBuild } from './dev-env'
+import {
+  cloudflareBaseUrlAllowed,
+  parseCloudflareBaseUrlAllowlist
+} from './cloudflare-base-url'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -589,6 +594,35 @@ function currentSettingsMtimes(): Pick<
   }
 }
 
+
+/** Packaged (or admin-managed) builds pin cloudflareBaseUrl so user-writable settings/managed-config
+ *  cannot redirect the bearer. Self-host = admin allowlist / admin-configured URL. See docs/NETWORK-EGRESS.md. */
+function cloudflarePinOpts(): { packaged: boolean; adminAllowlist: string[]; adminConfiguredUrl: string | null } {
+  const admin = adminManagedContent()
+  let adminConfiguredUrl: string | null = null
+  if (admin) {
+    try {
+      const obj = JSON.parse(admin) as { cloudflareBaseUrl?: unknown }
+      if (typeof obj.cloudflareBaseUrl === 'string') adminConfiguredUrl = obj.cloudflareBaseUrl
+    } catch {
+      /* ignore */
+    }
+  }
+  return {
+    packaged: isPackagedBuild() || !!admin,
+    adminAllowlist: parseCloudflareBaseUrlAllowlist(admin),
+    adminConfiguredUrl
+  }
+}
+
+function pinCloudflareBaseUrl(url: string): string {
+  if (cloudflareBaseUrlAllowed(url, cloudflarePinOpts())) return url
+  mainLog.warn(
+    '[store] refusing unpinned cloudflareBaseUrl (packaged/managed builds allow *.workers.dev + admin cloudflareBaseUrlAllowlist only); using default Worker URL'
+  )
+  return DEFAULT_SETTINGS.cloudflareBaseUrl
+}
+
 export function getSettings(): Settings {
   const m = currentSettingsMtimes()
   if (
@@ -691,6 +725,10 @@ export function getSettings(): Settings {
     value = repaired.success ? repaired.data : SettingsSchema.parse(DEFAULT_SETTINGS) // always valid
   }
 
+  // Packaged/managed pin: never send the bearer to a user-writable arbitrary host.
+  const pinnedUrl = pinCloudflareBaseUrl(value.cloudflareBaseUrl)
+  if (pinnedUrl !== value.cloudflareBaseUrl) value = { ...value, cloudflareBaseUrl: pinnedUrl }
+
   // Only memoise a result derived from a settings.json we could actually read — see `stored` above.
   if (stored !== null) _settingsCache = { value, ...m }
   return value
@@ -739,6 +777,10 @@ export function setSettings(patch: Partial<Settings>): Settings {
   for (const [k, v] of Object.entries(clean)) {
     if (locked.includes(k)) {
       mainLog.warn(`[store] ignoring locked setting "${k}"`)
+      continue
+    }
+    if (k === 'cloudflareBaseUrl' && !cloudflareBaseUrlAllowed(String(v ?? ''), cloudflarePinOpts())) {
+      mainLog.warn('[store] ignoring unpinned cloudflareBaseUrl (*.workers.dev or admin allowlist only in packaged/managed builds)')
       continue
     }
     allowed[k] = v

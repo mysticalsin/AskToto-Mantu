@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { encryptProxyKey } from '../../scripts/lib/embedded-cloudflare-crypto.mjs'
 
 vi.mock('electron')
-vi.mock('./store', () => ({ getApiKey: vi.fn(), setApiKey: vi.fn(), setSettings: vi.fn() }))
+vi.mock('./store', () => ({ getApiKey: vi.fn(), setApiKey: vi.fn(), setSettings: vi.fn(), getSettings: vi.fn() }))
 vi.mock('./cahe-edition', () => ({ isCaheEdition: vi.fn() }))
 vi.mock('./logger', () => ({ mainLog: { warn: vi.fn(), info: vi.fn() }, auditLog: vi.fn() }))
 
@@ -27,7 +28,11 @@ describe('Cahê embedded Kimi key seed', () => {
 
   const markerPath = (): string => join(userData, MARKER_NAME)
   const bundlePath = (): string => join(resourcesPath, 'cahe', 'kimi.json')
-  const writeBundle = (contents: string): void => {
+  const writeEncryptedBundle = (token: string = VALID_TOKEN): void => {
+    mkdirSync(join(resourcesPath, 'cahe'), { recursive: true })
+    writeFileSync(bundlePath(), JSON.stringify(encryptProxyKey(token)))
+  }
+  const writePlainBundle = (contents: string): void => {
     mkdirSync(join(resourcesPath, 'cahe'), { recursive: true })
     writeFileSync(bundlePath(), contents)
   }
@@ -38,9 +43,6 @@ describe('Cahê embedded Kimi key seed', () => {
     originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
     Object.defineProperty(process, 'resourcesPath', { configurable: true, value: resourcesPath })
 
-    // vi.mock(path, factory)'s vi.fn() instances are created once, at module-mock setup, and are not
-    // reached by vi.restoreAllMocks()/vi.clearAllMocks() the way per-test vi.fn()s are — so each mock is
-    // explicitly reset here rather than relying on a global reset to clear the previous test's call log.
     ;(app.getPath as ReturnType<typeof vi.fn>).mockReset().mockImplementation((name: string) =>
       name === 'userData' ? userData : join(userData, name)
     )
@@ -62,7 +64,7 @@ describe('Cahê embedded Kimi key seed', () => {
 
   it('is a no-op outside the Cahê edition — no marker, no keystore lookup, no provider seed', () => {
     ;(isCaheEdition as ReturnType<typeof vi.fn>).mockReturnValue(false)
-    writeBundle(JSON.stringify({ kimiApiKey: VALID_TOKEN }))
+    writeEncryptedBundle()
 
     importEmbeddedCaheKey()
 
@@ -73,41 +75,59 @@ describe('Cahê embedded Kimi key seed', () => {
     expect(existsSync(markerPath())).toBe(false)
   })
 
-  it('extracts the bare sk-kimi- token from a label-prefixed bundle, seeds it, activates kimi, and writes the marker', () => {
-    // Tolerates an accidental "Metis: " label prefix the operator may have pasted alongside the key.
-    writeBundle(JSON.stringify({ kimiApiKey: `Metis: ${VALID_TOKEN}` }))
+  it('decrypts the encrypted blob, seeds the sk-kimi- token, activates kimi, and writes the marker', () => {
+    writeEncryptedBundle(VALID_TOKEN)
 
     importEmbeddedCaheKey()
 
     expect(setApiKey).toHaveBeenCalledTimes(1)
     expect(setApiKey).toHaveBeenCalledWith('kimi', VALID_TOKEN)
     expect(auditLog).toHaveBeenCalledWith('key.set', { provider: 'kimi', source: 'cahe-embedded' })
-    // caheEditionPolicy() no longer locks/forces `provider` — the out-of-box Kimi default now has to come
-    // from this one-time setSettings write instead of a managed-default override.
     expect(setSettings).toHaveBeenCalledTimes(1)
     expect(setSettings).toHaveBeenCalledWith({ provider: 'kimi' })
     expect(existsSync(markerPath())).toBe(true)
   })
 
-  it('never re-seeds once the marker exists — neither the key nor the provider default, so a user-chosen provider survives restarts', () => {
+  it('fail-closed: refuses a plaintext kimiApiKey bundle (must never ship) — no key, no marker', () => {
+    writePlainBundle(JSON.stringify({ kimiApiKey: VALID_TOKEN }))
+
+    expect(() => importEmbeddedCaheKey()).not.toThrow()
+
+    expect(setApiKey).not.toHaveBeenCalled()
+    expect(setSettings).not.toHaveBeenCalled()
+    const warnCalls = (mainLog.warn as ReturnType<typeof vi.fn>).mock.calls
+    expect(warnCalls.some((c) => String(c[0]).includes('plaintext kimiApiKey'))).toBe(true)
+    expect(existsSync(markerPath())).toBe(false)
+  })
+
+  it('fail-closed: tampered ciphertext does not seed and does not burn the marker', () => {
+    const blob = encryptProxyKey(VALID_TOKEN) as { ciphertext: string; [k: string]: unknown }
+    blob.ciphertext = Buffer.from('tampered-not-valid-gcm').toString('base64')
+    writePlainBundle(JSON.stringify(blob))
+
+    expect(() => importEmbeddedCaheKey()).not.toThrow()
+
+    expect(setApiKey).not.toHaveBeenCalled()
+    expect(setSettings).not.toHaveBeenCalled()
+    expect(existsSync(markerPath())).toBe(false)
+  })
+
+  it('never re-seeds once the marker exists — neither the key nor the provider default', () => {
     writeFileSync(markerPath(), '2026-01-01T00:00:00.000Z')
-    writeBundle(JSON.stringify({ kimiApiKey: VALID_TOKEN })) // present, but must never be consulted
-    ;(getApiKey as ReturnType<typeof vi.fn>).mockReturnValue('') // the user cleared their key in Settings
+    writeEncryptedBundle()
+    ;(getApiKey as ReturnType<typeof vi.fn>).mockReturnValue('')
 
     importEmbeddedCaheKey()
 
     expect(getApiKey).not.toHaveBeenCalled()
     expect(setApiKey).not.toHaveBeenCalled()
-    // The marker guarantees this seed never re-fires, so a provider the user switched to later (Claude
-    // CLI, Codex CLI, Dust, another API key, …) is never reset back to Kimi on a later launch.
     expect(setSettings).not.toHaveBeenCalled()
-    // The early return happens before the marker is ever rewritten, so the original stamp survives.
     expect(readFileSync(markerPath(), 'utf8')).toBe('2026-01-01T00:00:00.000Z')
   })
 
   it('does not overwrite an existing key, but still activates kimi as the default provider and writes the marker', () => {
     ;(getApiKey as ReturnType<typeof vi.fn>).mockReturnValue('user-provided-key-value')
-    writeBundle(JSON.stringify({ kimiApiKey: VALID_TOKEN }))
+    writeEncryptedBundle()
 
     importEmbeddedCaheKey()
 
@@ -117,22 +137,19 @@ describe('Cahê embedded Kimi key seed', () => {
     expect(existsSync(markerPath())).toBe(true)
   })
 
-  it('missing bundle: leaves normal onboarding in place — no keyless kimi default, and NO marker so a corrected build can still seed later', () => {
+  it('missing bundle: leaves normal onboarding in place — no keyless kimi default, and NO marker', () => {
     expect(existsSync(bundlePath())).toBe(false)
 
     expect(() => importEmbeddedCaheKey()).not.toThrow()
 
     expect(setApiKey).not.toHaveBeenCalled()
-    // A build that shipped no key must NOT strand the user on a keyless "kimi" provider…
     expect(setSettings).not.toHaveBeenCalled()
     expect(mainLog.warn).toHaveBeenCalled()
-    // …and must NOT burn the one-time marker, so a later keyed build (or a bundle that appears on a
-    // subsequent launch) still gets a chance to seed rather than being disabled forever by one bad launch.
     expect(existsSync(markerPath())).toBe(false)
   })
 
   it('malformed-JSON bundle: leaves normal onboarding in place — no keyless kimi default, and no marker', () => {
-    writeBundle('{ this is not valid JSON')
+    writePlainBundle('{ this is not valid JSON')
 
     expect(() => importEmbeddedCaheKey()).not.toThrow()
 
@@ -142,10 +159,8 @@ describe('Cahê embedded Kimi key seed', () => {
     expect(existsSync(markerPath())).toBe(false)
   })
 
-  it('placeholder / wrong-format key (no sk-kimi- token): leaves normal onboarding in place — no keyless kimi default, and no marker', () => {
-    // The real-world failure: an installer built from a placeholder key file. Extraction finds nothing, so
-    // the app must fall through to normal onboarding, not sit on Kimi with no working key.
-    writeBundle(JSON.stringify({ kimiApiKey: 'REPLACE_ME' }))
+  it('encrypted blob whose plaintext is not an sk-kimi- token: no seed, no marker', () => {
+    writeEncryptedBundle('REPLACE_ME_not_a_kimi_key_xxxxxx')
 
     expect(() => importEmbeddedCaheKey()).not.toThrow()
 
@@ -155,7 +170,7 @@ describe('Cahê embedded Kimi key seed', () => {
   })
 
   it('does not throw and still writes the marker when setSettings itself fails', () => {
-    writeBundle(JSON.stringify({ kimiApiKey: VALID_TOKEN }))
+    writeEncryptedBundle()
     ;(setSettings as ReturnType<typeof vi.fn>).mockImplementation(() => {
       throw new Error('disk full')
     })

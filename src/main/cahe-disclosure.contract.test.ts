@@ -23,7 +23,7 @@ describe('Cahê pilot doc discloses the embedded Kimi key (MQA-098)', () => {
   it('the build really does embed the key — the premise these assertions rest on', () => {
     // If this fails the embed was removed, and the doc assertions below should be revisited rather than
     // "fixed": the honest doc for a keyless build is the opposite of the honest doc for this one.
-    expect(caheBuilder).toMatch(/resources\/cahe\/kimi\.json|cahe-kimi\.local\.json/)
+    expect(caheBuilder).toMatch(/build\/cahe-embed|cahe-kimi\.local\.json|resources\/cahe/)
   })
 
   it('never claims the key is absent from the installer', () => {

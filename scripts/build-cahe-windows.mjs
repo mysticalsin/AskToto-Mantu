@@ -78,6 +78,7 @@ run('npm', ['run', 'build'])
 // chains): a no-op unless the operator set METIS_PROXY_KEY, and it must ALSO set METIS_EMBED_CLOUDFLARE_KEY=1
 // for the packaging gate below to allow it. The blob ships ENCRYPTED (obfuscated, not secret — see
 // src/main/embedded-cloudflare-key.ts). check-cloudflare-key-valid proves the key the Worker will accept.
+run('node', ['scripts/embed-cahe-kimi-key.mjs'])
 run('node', ['scripts/embed-cloudflare-key.mjs'])
 run('node', ['scripts/check-cloudflare-key-valid.mjs'])
 run('npx', [
