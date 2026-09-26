@@ -223,6 +223,82 @@ describe('normalizeNova3ResultsMessage', () => {
     expect(out.finals[0].cluster).toBe('0')
     expect(out.finals[1].cluster).toBe('1')
   })
+
+  it('keeps the final transcript text when words[] is empty', () => {
+    const out = normalizeNova3ResultsMessage(
+      {
+        type: 'Results',
+        is_final: true,
+        start: 12.5,
+        duration: 1.5,
+        channel: {
+          alternatives: [
+            {
+              transcript: 'Hello world',
+              words: []
+            }
+          ]
+        }
+      },
+      { scope, messageSequence: 5 }
+    )
+    expect(out.finals).toHaveLength(1)
+    expect(out.finals[0]).toMatchObject({
+      text: 'Hello world',
+      startMs: 12500,
+      endMs: 14000,
+      cluster: 'unknown',
+      language: 'und',
+      isFinal: true,
+      revision: 1
+    })
+    expect(out.interimText).toBe('')
+  })
+
+  it('applies streamOffsetMs to a word-less final on the meeting audio clock', () => {
+    const out = normalizeNova3ResultsMessage(
+      {
+        type: 'Results',
+        is_final: true,
+        start: 12.5,
+        duration: 1.5,
+        channel: {
+          alternatives: [{ transcript: 'Hello world', words: [] }]
+        }
+      },
+      { scope, messageSequence: 5, streamOffsetMs: 1000 }
+    )
+    expect(out.finals[0]).toMatchObject({ startMs: 13500, endMs: 15000 })
+  })
+
+  it('rejects a word-less final Results frame missing start/duration', () => {
+    expect(() =>
+      normalizeNova3ResultsMessage(
+        {
+          type: 'Results',
+          is_final: true,
+          channel: {
+            alternatives: [{ transcript: 'Hello world', words: [] }]
+          }
+        },
+        { scope, messageSequence: 5 }
+      )
+    ).toThrow(CloudSttError)
+  })
+
+  it('drops a final Results message with empty words and blank transcript', () => {
+    const out = normalizeNova3ResultsMessage(
+      {
+        type: 'Results',
+        is_final: true,
+        channel: {
+          alternatives: [{ transcript: '   ', words: [] }]
+        }
+      },
+      { scope, messageSequence: 6 }
+    )
+    expect(out).toEqual({ finals: [], interimText: '', finished: false })
+  })
 })
 
 describe('resolveNova3LanguageQuery / resolveSonioxLanguageConfig', () => {

@@ -178,6 +178,11 @@ export type AuditEvent =
   | 'brain.commitment.rejected'
   | 'brain.rebuild.aborted'
   | 'brain.corrections.lock_cleared'
+  // M2-0003: index.json exists but cannot be used on this device this session (io / undecryptable /
+  // unsupported / corrupt-kept), and a decoded-but-invalid index was set aside. Content-free: cause/
+  // counts only, never a path, decode reason, or filename.
+  | 'brain.index.unavailable'
+  | 'brain.index.quarantined'
   // Task MI-5: the markdown mirror (main/brain/publish.ts).
   | 'transcript.confidential_set'
   | 'brain.publish.consent'
@@ -228,6 +233,9 @@ export type AuditEvent =
   | 'meeting.detect.degraded'
   | 'recall.open'
   | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
+  // A cloud-placeholder probe could not classify a batch of meeting files, so they were treated as
+  // cloud-only and not read. Once per failure streak; reason and file count only.
+  | 'storage.dataless_probe_failed'
   // Generalized MCP push connections (BidStack CRM, Plane, ClickUp, …) — see main/mcp/mcpClient.ts.
   | 'mcp.connected'
   | 'mcp.disconnected'
