@@ -1,7 +1,15 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Eye, EyeOff, AudioLines, Copy, Check, AlertTriangle } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
 import { transcriptDisplayName } from '@shared/speaker-names'
+import {
+  groupTranscriptRows,
+  isFollowingTail,
+  newLinesLabel,
+  transcriptElapsed,
+  transcriptMaxHeight,
+  type TranscriptRowModel
+} from '../lib/transcript-view'
 import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
@@ -21,31 +29,53 @@ const TRANSCRIPT_RENDER_LIMIT = 150
  *  a Speaker Intelligence name can attach to an already-committed 'them' line slightly later (listen.ts's
  *  attachSpeakerName, Whisper-engine only). */
 const TranscriptRow = memo(function TranscriptRow({
-  line,
-  youLabel
+  row,
+  youLabel,
+  firstT
 }: {
-  line: TranscriptLine
+  row: TranscriptRowModel
   youLabel?: string | null
+  firstT?: number
 }): JSX.Element {
+  const { line, startsGroup, endsGroup } = row
+  const mine = line.speaker === 'you'
   const label = transcriptDisplayName(line, { youLabel })
+  const at = startsGroup ? transcriptElapsed(line.t, firstT) : null
   return (
-    <div className={line.speaker === 'you' ? 'flex justify-end' : 'flex justify-start'}>
+    <div
+      className={[
+        'flex flex-col',
+        mine ? 'items-end' : 'items-start',
+        // Space BETWEEN people, not between every sentence. A run by one speaker reads as one turn.
+        startsGroup ? 'mt-2.5 first:mt-0' : 'mt-0.5'
+      ].join(' ')}
+    >
+      {startsGroup && (
+        <div
+          className={[
+            'mb-1 flex items-baseline gap-1.5 px-1 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]',
+            mine ? 'flex-row-reverse' : ''
+          ].join(' ')}
+        >
+          <span>{label}</span>
+          {at && <span className="font-medium tabular-nums opacity-70">{at}</span>}
+        </div>
+      )}
       <div
         className={[
-          'max-w-[82%] rounded-[var(--radius-xl)] px-3 py-1.5 text-[13px] leading-snug break-words',
-          line.speaker === 'you'
-            ? 'bg-[var(--color-accent-soft)] text-[color:var(--color-ink)]'
-            : 'bg-white/[0.06] text-[color:var(--color-ink)]',
-          // ASR quality (1B.2b) — a provisional line is a "…" placeholder standing in for a window still
-          // decoding (see shared/ipc.ts's TranscriptLineSchema.provisional); fade it so it visibly reads
-          // as pending rather than a real, final transcribed line — it's replaced (not restyled) once
-          // the real text commits, so this class never lingers on an actual line.
+          'max-w-[88%] px-3 py-2 text-[13.5px] leading-[1.45] break-words [overflow-wrap:anywhere]',
+          // Flatten only the corner on the speaker's own side, and only on the last bubble of the run:
+          // that is what makes a group read as one turn with a tail rather than a stack of lozenges.
+          mine
+            ? 'rounded-[var(--radius-xl)] bg-[var(--color-accent-soft)] text-[color:var(--color-ink)]'
+            : 'rounded-[var(--radius-xl)] bg-white/[0.06] text-[color:var(--color-ink)]',
+          endsGroup ? (mine ? 'rounded-br-[6px]' : 'rounded-bl-[6px]') : '',
+          // ASR quality (1B.2b) — a provisional line is a "…" placeholder for a window still decoding
+          // (shared/ipc.ts TranscriptLineSchema.provisional). Fade it so it reads as pending, never as a
+          // final transcribed line. It is replaced, not restyled, once the real text commits.
           line.provisional ? 'opacity-40' : ''
         ].join(' ')}
       >
-        <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">
-          {label}
-        </span>
         {line.text}
       </div>
     </div>
@@ -106,8 +136,18 @@ export const Copilot = memo(function Copilot({
     // row's key as the render-limit window slides forward, defeating TranscriptRow's memoization and
     // remounting the whole visible slice on every new line. `start + i` never changes for an
     // already-committed line, so React skips re-rendering every row whose `line` prop is unchanged.
-    return visible.map((l, i) => <TranscriptRow key={`${l.t}-${start + i}`} line={l} youLabel={youLabel} />)
-  }, [lines])
+    // Grouping is computed over the VISIBLE slice, so the first row of the window always carries its
+    // speaker label even when the run it belongs to started before the render limit.
+    const firstT = visible[0]?.t
+    return groupTranscriptRows(visible).map((row) => (
+      <TranscriptRow
+        key={`${row.line.t}-${start + row.index}`}
+        row={row}
+        youLabel={youLabel}
+        firstT={firstT}
+      />
+    ))
+  }, [lines, youLabel])
 
   // Transcript is hidden during the call; the bar's "Transcript" button drives showTranscript on demand.
   const showTx = showTranscript
@@ -115,10 +155,42 @@ export const Copilot = memo(function Copilot({
   // The scroller section only mounts while showTx is true — depending on `lines` alone means opening it
   // mid-call (showTx flipping true with no new line arriving) leaves it scrolled to wherever it happened
   // to mount instead of the bottom. Re-run on showTx too so opening it always jumps to the latest line.
+  // Opening the transcript always lands on the latest line. After that, an arriving line only moves the
+  // view if the reader is still at the bottom: scrolling up to re-read something and being yanked back
+  // by the next sentence made the transcript impossible to check mid-call. Lines that arrive while the
+  // reader is up in the history are counted and offered as a pill instead.
+  const [behindBy, setBehindBy] = useState(0)
+  const lastCountRef = useRef(lines.length)
+
   useEffect(() => {
     const el = scroller.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (!el || !showTx) return
+    el.scrollTop = el.scrollHeight
+    setBehindBy(0)
+    lastCountRef.current = lines.length
+    // Only on open: `lines` is deliberately absent so this does not re-run per arriving line.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showTx])
+
+  useEffect(() => {
+    const el = scroller.current
+    if (!el || !showTx) return
+    const arrived = Math.max(0, lines.length - lastCountRef.current)
+    lastCountRef.current = lines.length
+    if (isFollowingTail(el)) {
+      el.scrollTop = el.scrollHeight
+      setBehindBy(0)
+    } else if (arrived > 0) {
+      setBehindBy((n) => n + arrived)
+    }
   }, [lines, showTx])
+
+  const jumpToLatest = useCallback(() => {
+    const el = scroller.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    setBehindBy(0)
+  }, [])
 
   // Real flag (state.ts AnswerState.usedScreen), not a label string-match — robust even if a future
   // caller passes a different label alongside a screenshot-grounded answer.
@@ -291,25 +363,52 @@ export const Copilot = memo(function Copilot({
       )}
       {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). */}
       {showTx && (
-        <section>
-          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)]">
-            Transcript
+        <section className="flex min-h-0 flex-col">
+          <div className="mb-1.5 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)]">
+            <span>Transcript</span>
+            {listening && (
+              <span className="flex items-center gap-1 normal-case tracking-normal text-[color:var(--color-ink-3)]">
+                <span className="rec-dot" />
+                live
+              </span>
+            )}
+            <span className="flex-1" />
+            {lines.length > 0 && (
+              <span className="font-medium tabular-nums normal-case tracking-normal opacity-70">
+                {lines.length} {lines.length === 1 ? 'line' : 'lines'}
+              </span>
+            )}
           </div>
           {truncated && (
             <div className="mb-1.5 text-[11px] text-[color:var(--color-ink-3)]">
               Earlier lines are in the Review transcript
             </div>
           )}
-          <div
-            ref={scroller}
-            className="scroll-thin flex max-h-[240px] flex-col gap-1.5 overflow-y-auto pr-1"
-          >
-            {lines.length === 0 ? (
-              <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">
-                {listening ? 'Waiting for speech…' : 'No audio yet.'}
-              </div>
-            ) : (
-              transcriptRows
+          {/* relative: the jump-to-latest pill floats over the tail of the scroller rather than
+              displacing it, so arriving lines never shift the text the reader is looking at. */}
+          <div className="relative min-h-0">
+            <div
+              ref={scroller}
+              className="scroll-thin flex flex-col overflow-y-auto pr-1"
+              style={{ maxHeight: transcriptMaxHeight() }}
+            >
+              {lines.length === 0 ? (
+                <div className="py-3 text-[13px] text-[color:var(--color-ink-2)]">
+                  {listening ? 'Waiting for speech…' : 'No audio yet.'}
+                </div>
+              ) : (
+                transcriptRows
+              )}
+            </div>
+            {behindBy > 0 && (
+              <button
+                type="button"
+                onClick={jumpToLatest}
+                aria-label={`Jump to latest, ${newLinesLabel(behindBy)}`}
+                className="dock-pill-in no-drag focus-ring glass-chip absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full px-3 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] shadow-lg transition-[background-color,transform] duration-[var(--duration-hover)] hover:brightness-110 active:scale-[0.97]"
+              >
+                {newLinesLabel(behindBy)} ↓
+              </button>
             )}
           </div>
         </section>

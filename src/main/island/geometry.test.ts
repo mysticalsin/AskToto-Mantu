@@ -806,8 +806,8 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
   })
 })
 
-describe('overlay chrome modes (hide / island / bar)', () => {
-  it('default is hide; Settings switches island and bar; hide rest + leave collapse', () => {
+describe('overlay chrome modes (hide / island / bar / dock)', () => {
+  it('default is hide; Settings switches island, bar, and dock; hide rest + leave collapse', () => {
     const ipc = readFileSync(join(__dirname, '../../shared/ipc.ts'), 'utf8')
     const settings = readFileSync(join(__dirname, '../../renderer/src/components/Settings.tsx'), 'utf8')
     const picker = readFileSync(join(__dirname, '../../renderer/src/components/OverlayChromePicker.tsx'), 'utf8')
@@ -815,11 +815,12 @@ describe('overlay chrome modes (hide / island / bar)', () => {
     const peek = readFileSync(join(__dirname, '../../renderer/src/components/OverlayPeek.tsx'), 'utf8')
     const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
     const autohide = readFileSync(join(__dirname, '../../renderer/src/lib/overlay-autohide.ts'), 'utf8')
-    expect(ipc).toMatch(/overlayLayout: z\.enum\(\['hide', 'island', 'bar'\]\)\.default\('hide'\)/)
+    expect(ipc).toMatch(/overlayLayout: z\.enum\(\['hide', 'island', 'bar', 'dock'\]\)\.default\('hide'\)/)
     expect(ipc).toMatch(/overlayLayout: 'hide'/)
     expect(ipc).toMatch(/overlayOrbStyle: z\.enum\(\['bar', 'jakub', 'obsidian'\]\)\.default\('jakub'\)/)
     expect(settings).toMatch(/OverlayChromePicker/)
     expect(settings).toMatch(/overlayLayout: id/)
+    expect(settings).toMatch(/overlayPlacement: 'right-edge'/)
     expect(picker).toMatch(/OVERLAY_LAYOUTS/)
     expect(picker).toMatch(/aria-label="Overlay chrome"/)
     expect(picker).toMatch(/Default/)
@@ -828,18 +829,25 @@ describe('overlay chrome modes (hide / island / bar)', () => {
     expect(css).toMatch(/\.overlay-chrome-diagram--hide/)
     expect(css).toMatch(/\.overlay-chrome-diagram--island/)
     expect(css).toMatch(/\.overlay-chrome-diagram--bar/)
+    expect(css).toMatch(/\.overlay-chrome-diagram--dock/)
     expect(settings).not.toMatch(/label="Auto-hide overlay"/)
     expect(app).toMatch(/parseOverlayLayout/)
     expect(app).toMatch(/overlayShowPeek\(/)
     expect(app).toMatch(/overlayRestsHidden\(overlayLayout\)/)
-    expect(app).toMatch(/overlayRestsHidden\(overlayLayout\) \? 'hide' : 'island'/)
+    // The dock rest now has two paint modes (see dock-invisible.test.ts). The contract pinned here is
+    // unchanged: hide is the hairline, dock is a dock rest, everything else is the island peek.
+    expect(app).toMatch(
+      /overlayRestsHidden\(overlayLayout\) \? 'hide' : overlayLayout === 'dock' \? \(dockRestHidden \? 'dock-hidden' : 'dock'\) : 'island'/
+    )
     expect(app).toMatch(/reveal-now/)
     expect(app).toMatch(/pointer-leave/)
     expect(app).toMatch(/onOverlayCursorHover/)
     expect(app).toMatch(/dwell-elapsed/)
     expect(peek).toMatch(/rest === 'hide'/)
+    expect(peek).toMatch(/rest === 'dock'/)
     expect(peek).toMatch(/data-hug-width/)
     expect(css).toMatch(/\.overlay-hide-target/)
+    expect(css).toMatch(/\.overlay-dock-peek/)
     expect(css).toMatch(/background:\s*transparent/)
     expect(css).toMatch(/\.overlay-chrome-diagram--hide/)
     expect(autohide).toMatch(/case 'pointer-leave'/)

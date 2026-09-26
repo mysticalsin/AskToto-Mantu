@@ -45,11 +45,20 @@ export function overlayShowPeek(
   return idle && !revealed && spring === 'rest'
 }
 
-export function overlaySpringClassName(spring: OverlaySpring): string {
-  if (spring === 'in') return 'overlay-spring overlay-spring--in w-full'
-  if (spring === 'out') return 'overlay-spring overlay-spring--out w-full'
-  if (spring === 'settled') return 'overlay-spring overlay-spring--settled w-full'
-  return 'w-full'
+/**
+ * Which screen edge the surface is anchored to. The spring's origin and vector follow from it: a
+ * top-hugging bar drops DOWN from above, an edge-docked sidecar slides IN from the side. Reusing the
+ * top-edge spring on the dock made the panel arrive from the wrong direction, from an origin that is
+ * not even attached to it.
+ */
+export type OverlayEdge = 'top' | 'right'
+
+export function overlaySpringClassName(spring: OverlaySpring, edge: OverlayEdge = 'top'): string {
+  if (spring === 'rest') return 'w-full'
+  const anchor = edge === 'right' ? ' overlay-spring--edge-right' : ''
+  if (spring === 'in') return `overlay-spring overlay-spring--in${anchor} w-full`
+  if (spring === 'out') return `overlay-spring overlay-spring--out${anchor} w-full`
+  return `overlay-spring overlay-spring--settled${anchor} w-full`
 }
 
 /** Circle/Jarvis expand to the Ask bar. Bar-circle ease-spring only. Not Hide/Island overlay-spring. */

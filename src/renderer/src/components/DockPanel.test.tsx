@@ -1,0 +1,241 @@
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { DockPanel } from './DockPanel'
+import type { BarProps } from './Bar'
+
+/**
+ * DockPanel.test.tsx
+ *
+ * The dock opens a 380x560 window. It used to render Bar into it, and Bar is an 880-wide horizontal
+ * strip whose toolbar DESIGN.md pins as in-flow reserved boxes with overlap called a SHIP BLOCKER — so
+ * the dock was shipping the exact overlap the contract forbids, with the answer crushed into a
+ * letterbox. These render the real component (same idiom as Bar.test.tsx) and assert the properties
+ * that make a narrow sidecar legible, rather than grepping its source.
+ */
+function props(overrides: Partial<BarProps> = {}): BarProps {
+  return {
+    value: '',
+    onChange: () => {},
+    onSubmit: () => {},
+    onStop: () => {},
+    busy: false,
+    listening: false,
+    onToggleListen: () => {},
+    paused: false,
+    onTogglePause: () => {},
+    onCapture: () => {},
+    capturing: false,
+    captureAccel: 'Cmd+Shift+1',
+    onSettings: () => {},
+    onHistory: () => {},
+    onMinimize: () => {},
+    stealth: false,
+    onToggleStealth: () => {},
+    startedAt: Date.now(),
+    panelOpen: true,
+    onTogglePanel: () => {},
+    canTogglePanel: true,
+    focusSignal: 0,
+    mode: 'general',
+    onSetMode: () => {},
+    ...overrides
+  }
+}
+
+describe('DockPanel — a sidecar, not a squeezed bar', () => {
+  it('is a single vertical column that fills its window', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toContain('dock-panel')
+    expect(html).toContain('flex-col')
+    expect(html).toContain('h-full')
+  })
+
+  it('always offers the ask field and a send control, answer or not', () => {
+    const empty = renderToStaticMarkup(<DockPanel {...props()} />)
+    const answered = renderToStaticMarkup(
+      <DockPanel {...props({ body: <p>an answer</p>, hasAnswer: true })} />
+    )
+    for (const html of [empty, answered]) {
+      expect(html).toContain('aria-label="Ask Métis anything"')
+      expect(html).toContain('aria-label="Ask"')
+    }
+  })
+
+  it('never renders an empty void: with no answer it says what the panel is for', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toMatch(/Ready when you are/)
+    expect(html).toMatch(/Ask Métis, capture the screen, or start a meeting/)
+    const listening = renderToStaticMarkup(<DockPanel {...props({ listening: true })} />)
+    expect(listening).toMatch(/>Listening</)
+    expect(listening).toMatch(/Ask about this meeting\. The answer opens here\./)
+  })
+
+  it('gives a live meeting its own strip instead of wedging it between tool icons', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props({ listening: true })} />)
+    expect(html).toContain('rec-dot')
+    expect(html).toContain('aria-label="Stop meeting"')
+    expect(html).toContain('aria-label="Pause"')
+    // Start is gone while a meeting runs: one control, one meaning.
+    expect(html).not.toContain('aria-label="Start listening"')
+  })
+
+  it('offers Start only when idle', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toContain('aria-label="Start listening"')
+    expect(html).not.toContain('aria-label="Stop meeting"')
+  })
+
+  it('keeps every Bar capability reachable at 380 wide', () => {
+    const html = renderToStaticMarkup(
+      <DockPanel
+        {...props({
+          onSpotlightRef: () => {},
+          onToggleThinking: () => {},
+          body: <p>answer</p>,
+          hasAnswer: true,
+          onBack: () => {}
+        })}
+      />
+    )
+    for (const label of [
+      'Capture screen',
+      'Spotlight Ref',
+      'Deep thinking',
+      'screen share',
+      'Start listening',
+      'Back'
+    ]) {
+      expect(html).toContain(label)
+    }
+    expect(html).toMatch(/History|Transcript/)
+  })
+
+  it('offers Copy only when there is an answer to copy', () => {
+    const none = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(none).not.toContain('Copy answer')
+    const some = renderToStaticMarkup(<DockPanel {...props({ body: <p>a</p>, hasAnswer: true })} />)
+    expect(some).toContain('Copy answer')
+  })
+
+  it('offers New meeting only during a meeting, and only when the caller supports it', () => {
+    const idle = renderToStaticMarkup(<DockPanel {...props({ onNewMeeting: () => {} })} />)
+    expect(idle).not.toContain('New meeting')
+    const live = renderToStaticMarkup(<DockPanel {...props({ listening: true, onNewMeeting: () => {} })} />)
+    expect(live).toContain('New meeting')
+    // No handler means no button, rather than a control that does nothing.
+    const unsupported = renderToStaticMarkup(<DockPanel {...props({ listening: true })} />)
+    expect(unsupported).not.toContain('New meeting')
+  })
+
+  it('the answer is the biggest zone and the only scroller', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props({ body: <p>answer</p>, hasAnswer: true })} />)
+    expect(html).toContain('scroll-thin')
+    // min-h-0 is load-bearing: without it a long answer pushes the composer out of a fixed-height window.
+    expect(html).toContain('min-h-0')
+    expect(html).toContain('flex-1')
+  })
+
+  it('stealth is stated in words, not just an icon, and respects its lock', () => {
+    const on = renderToStaticMarkup(<DockPanel {...props({ stealth: true })} />)
+    expect(on).toContain('Hidden from screen share')
+    const off = renderToStaticMarkup(<DockPanel {...props({ stealth: false })} />)
+    expect(off).toContain('Visible in screen share')
+    const locked = renderToStaticMarkup(<DockPanel {...props({ stealthLocked: true })} />)
+    expect(locked).toContain('disabled')
+  })
+
+  it('is drag-safe: every control opts out of the window drag region', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props({ listening: true })} />)
+    const buttons = html.match(/<button[^>]*>/g) ?? []
+    expect(buttons.length).toBeGreaterThan(5)
+    for (const b of buttons) expect(b).toContain('no-drag')
+  })
+
+  it('gives its contents an arrival, in zones, once', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toContain('dock-panel--entering')
+    // Four zones: header, body, tools, composer. The cascade is declarative (CSS nth-child delays), so
+    // there is no JS timer per zone to drift or leak.
+    expect((html.match(/dock-zone/g) ?? []).length).toBe(4)
+  })
+
+  it('the live strip and the mode sheet animate as state changes, not as arrivals', () => {
+    const live = renderToStaticMarkup(<DockPanel {...props({ listening: true })} />)
+    expect(live).toContain('dock-strip')
+    // The sheet is closed on first paint, so its class must not be present until it opens.
+    expect(live).not.toContain('dock-sheet')
+  })
+
+  it('a new answer rises once, keyed by identity so a streaming token does not replay it', () => {
+    const answered = renderToStaticMarkup(<DockPanel {...props({ body: <p>a</p>, hasAnswer: true })} />)
+    expect(answered).toContain('dock-body-in')
+  })
+
+  it('connects the sliver to the panel with its own edge rail', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toContain('dock-panel__rail')
+    // Continuity, not information: it must not be announced.
+    expect(html).toMatch(/dock-panel__rail[^>]*aria-hidden="true"|aria-hidden="true"[^>]*dock-panel__rail/)
+  })
+
+  it('the header hairline is earned by scrolling, not painted by default', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props({ body: <p>a</p>, hasAnswer: true })} />)
+    expect(html).toContain('dock-panel__head')
+    expect(html).toContain('data-scrolled="0"')
+  })
+
+  it('streaming says so continuously; a finished answer does not', () => {
+    const busy = renderToStaticMarkup(<DockPanel {...props({ busy: true })} />)
+    expect(busy).toContain('shimmer')
+    const done = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(done).not.toContain('shimmer')
+    // A live meeting owns the status line, so it never competes with the streaming signal.
+    const live = renderToStaticMarkup(<DockPanel {...props({ busy: true, listening: true })} />)
+    expect(live).not.toContain('shimmer')
+  })
+
+  it('tooltips wait for hover intent but never delay keyboard focus', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toContain('group-hover:delay-[400ms]')
+    expect(html).toContain('peer-focus-visible:delay-0')
+  })
+
+  it('every control carries an accessible name', () => {
+    const html = renderToStaticMarkup(
+      <DockPanel {...props({ onSpotlightRef: () => {}, onToggleThinking: () => {} })} />
+    )
+    // A name may come from aria-label/title OR from the button's own visible text (the History pill
+    // names itself that way, which is a real accessible name, not a gap).
+    const buttons = [...html.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)]
+    expect(buttons.length).toBeGreaterThan(5)
+    for (const [, attrs, inner] of buttons) {
+      const named = /aria-label=|title=/.test(attrs) || inner.replace(/<[^>]*>/g, '').trim().length > 0
+      expect(named, `unnamed control: <button${attrs}>`).toBe(true)
+    }
+  })
+})
+
+describe('DockPanel never-lies chrome', () => {
+  it('never stringifies undefined into Capture/Mode tool titles', () => {
+    const src = readFileSync(join(__dirname, 'DockPanel.tsx'), 'utf8')
+    expect(src).not.toMatch(/Capture screen \(\$\{props\.captureAccel\}\)/)
+    expect(src).toMatch(/props\.captureAccel/)
+    expect(src).toMatch(/props\.mode\s*\?/)
+  })
+})
+
+describe('DockPanel Bar-centralized tools', () => {
+  it('exposes Capture, Deep thinking, Listen, Mode, History like Bar', () => {
+    const html = renderToStaticMarkup(<DockPanel {...props()} />)
+    expect(html).toMatch(/Capture screen/)
+    expect(html).toMatch(/Deep thinking off/)
+    expect(html).toMatch(/Start listening/)
+    expect(html).toMatch(/History/)
+    expect(html).toMatch(/Spotlight Ref/)
+    expect(html).not.toMatch(/undefined/)
+  })
+})
+

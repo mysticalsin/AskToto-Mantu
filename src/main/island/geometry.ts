@@ -17,6 +17,9 @@
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
+
+/** Dock rest paint mode — mirrors PublicSettings.dockRest (shared/ipc.ts). */
+export type DockRest = 'sliver' | 'hidden'
 import { SETTINGS_WINDOW_MIN, isFatHoverTrigger as sharedIsFatHoverTrigger } from '@shared/settings-bounds'
 
 export type { OverlayLayout }
@@ -176,6 +179,17 @@ export const OVERLAY_PEEK_WIDTH_PAD = 10
 export const OVERLAY_PEEK_HEIGHT_PAD = 4
 /** Classic idle bar — used only when chrome is `bar`. */
 export const OVERLAY_BAR_REST = { width: 880, height: 84 } as const
+/**
+ * Dock chrome. A tall sidecar panel that sits BESIDE a meeting window rather than across the top, so it
+ * is deliberately narrower than the 880 bar and taller than it. Main owns this size in both states: the
+ * renderer never grows the dock the way it grows the bar.
+ */
+export const OVERLAY_DOCK_PANEL = { width: 380, height: 560 } as const
+/**
+ * Dock rest: a slim vertical sliver on the edge. Unlike Hide's 8x2 hairline this is VISIBLE and
+ * clickable — it is the affordance that says Métis is there.
+ */
+export const OVERLAY_DOCK_SLIVER = { width: 10, height: 104 } as const
 
 /**
  * First unobstructed row under the notch / menu bar (bar chrome, exclusive-stage docs).
@@ -234,13 +248,24 @@ export const RIGHT_EDGE_HOVER_TARGET = { width: 24, height: HOVER_ISLAND_HEIGHT_
  * hide/island rest fits on much narrower displays, but using it there would reveal an inaccessible 880px
  * bar. Those displays deliberately fall back to the established top-center path instead.
  */
-export function rightEdgePlacementFits(m: DisplayMetrics, margin = RIGHT_EDGE_MARGIN_PX): boolean {
-  return m.workArea.width >= OVERLAY_BAR_REST.width + margin * 2
+export function rightEdgePlacementFits(
+  m: DisplayMetrics,
+  // Annotated `number`, not left to inference: OVERLAY_BAR_REST is `as const`, so a bare default
+  // narrows this parameter to the literal 880 and passing any other revealed width — the 380 dock
+  // panel, for one — fails to compile.
+  revealedWidth: number = OVERLAY_BAR_REST.width,
+  margin = RIGHT_EDGE_MARGIN_PX
+): boolean {
+  return m.workArea.width >= revealedWidth + margin * 2
 }
 
 /** The selected preference can safely differ from the effective placement on a constrained display. */
-export function resolveOverlayPlacement(placement: OverlayPlacement, m: DisplayMetrics): OverlayPlacement {
-  return placement === 'right-edge' && !rightEdgePlacementFits(m) ? 'top-center' : placement
+export function resolveOverlayPlacement(
+  placement: OverlayPlacement,
+  m: DisplayMetrics,
+  revealedWidth: number = OVERLAY_BAR_REST.width
+): OverlayPlacement {
+  return placement === 'right-edge' && !rightEdgePlacementFits(m, revealedWidth) ? 'top-center' : placement
 }
 
 function clampNormalized(value: number): number {
@@ -313,7 +338,7 @@ export function overlayPlacementPosition(input: {
   topMargin: number
   normalizedY?: number
 }): { x: number; y: number } {
-  if (resolveOverlayPlacement(input.placement, input.metrics) === 'right-edge') {
+  if (resolveOverlayPlacement(input.placement, input.metrics, input.width) === 'right-edge') {
     return rightEdgePosition(input.width, input.height, input.metrics, input.normalizedY)
   }
   return topCenterPosition(input.width, input.layout, input.metrics, input.topMargin)
@@ -321,12 +346,21 @@ export function overlayPlacementPosition(input: {
 
 /** Placement-aware hover rest. Top-center preserves the existing top-edge band. */
 export function hoverWatchRestRect(
-  _layout: OverlayLayout,
+  layout: OverlayLayout,
   m: DisplayMetrics,
   placement: OverlayPlacement = 'top-center',
   normalizedY?: number
 ): Rect {
-  if (resolveOverlayPlacement(placement, m) === 'right-edge') return rightEdgeHoverRestRect(normalizedY, m)
+  const revealedWidth = layout === 'dock' ? OVERLAY_DOCK_PANEL.width : OVERLAY_BAR_REST.width
+  const effectivePlacement = resolveOverlayPlacement(placement, m, revealedWidth)
+  // Dock rests as a sliver the user can SEE, so its band is that sliver rather than the compact
+  // 24x40 side target: a pointer arriving at the visible top or bottom of the sliver must reveal,
+  // not land in a dead zone beside it.
+  if (layout === 'dock' && effectivePlacement === 'right-edge') {
+    // Invisible rest (#188): hover band MUST equal parked window (paint-only; same reachability).
+    return dockSliverRect(m, normalizedY)
+  }
+  if (effectivePlacement === 'right-edge') return rightEdgeHoverRestRect(normalizedY, m)
   const height = hoverRestHeight(m)
   const width = hoverRestWidth(m)
   return { x: m.workArea.x, y: hoverRestTop(m), width, height }
@@ -456,10 +490,29 @@ export function isForbiddenMidFlowCard(win: Pick<Rect, 'width' | 'height'>): boo
 export function overlayRestSize(layout: OverlayLayout, m?: DisplayMetrics): { width: number; height: number } {
   if (layout === 'bar') return { width: OVERLAY_BAR_REST.width, height: OVERLAY_BAR_REST.height }
   if (layout === 'hide') return { width: OVERLAY_HIDE_PARK.width, height: OVERLAY_HIDE_PARK.height }
+  // Dock rests as a sliver. Same pad idiom as the island peek so the glow is not clipped by the window.
+  if (layout === 'dock') {
+    return {
+      width: OVERLAY_DOCK_SLIVER.width + OVERLAY_PEEK_WIDTH_PAD,
+      height: OVERLAY_DOCK_SLIVER.height + OVERLAY_PEEK_HEIGHT_PAD
+    }
+  }
   return {
     width: OVERLAY_ISLAND_PEEK.width + OVERLAY_PEEK_WIDTH_PAD,
     height: OVERLAY_ISLAND_PEEK.height + OVERLAY_PEEK_HEIGHT_PAD
   }
+}
+
+/**
+ * Parked dock window: the slim vertical sliver, flush to the usable right edge. It carries no margin on
+ * the screen-adjacent side on purpose — the sliver is meant to look attached to the display edge, the
+ * way the island capsule looks attached to the top. The revealed panel keeps `RIGHT_EDGE_MARGIN_PX`.
+ */
+export function dockSliverRect(m: DisplayMetrics, normalizedY?: number): Rect {
+  const size = overlayRestSize('dock', m)
+  const { y } = rightEdgePosition(size.width, size.height, m, normalizedY)
+  const x = m.workArea.x + m.workArea.width - size.width
+  return { x, y, width: size.width, height: size.height }
 }
 
 /** Parked hide window: tiny, fully transparent. Cursor watch still uses hoverWatchRestRect. */
@@ -507,8 +560,18 @@ export function isExclusivePurpleFlash(color?: string): boolean {
  * Bar, Settings, and exclusive onboarding stay 1. Cursor watch does not use
  * this window — hoverWatchRestRect still reveals.
  */
-export function hideParkWindowOpacity(layout: OverlayLayout, resting: boolean): number {
-  return layout === 'hide' && resting ? 0 : 1
+export function hideParkWindowOpacity(
+  layout: OverlayLayout,
+  resting: boolean,
+  /** Dock only. 'hidden' parks the dock invisibly, the same bargain Hide makes at the top edge. */
+  dockRest: DockRest = 'sliver'
+): number {
+  if (!resting) return 1
+  if (layout === 'hide') return 0
+  // A hidden dock is a PAINT choice only: hoverWatchRestRect still returns the full sliver band, so the
+  // window stays exactly as reachable as a visible one. Reachability must never ride on opacity.
+  if (layout === 'dock' && dockRest === 'hidden') return 0
+  return 1
 }
 
 /**
@@ -584,8 +647,11 @@ export function parkAfterExclusiveOnboarding(
   placement: OverlayPlacement = 'top-center',
   normalizedY?: number
 ): Rect {
-  const effectivePlacement = resolveOverlayPlacement(placement, m)
+  const revealedWidth = layout === 'dock' ? OVERLAY_DOCK_PANEL.width : OVERLAY_BAR_REST.width
+  const effectivePlacement = resolveOverlayPlacement(placement, m, revealedWidth)
   if (effectivePlacement === 'top-center' && layout === 'hide') return hideParkRect(m)
+  // Dock's sliver hugs the edge with no outboard margin, unlike every other right-edge rest.
+  if (effectivePlacement === 'right-edge' && layout === 'dock') return dockSliverRect(m, normalizedY)
   const size = overlayRestSize(layout, m)
   if (effectivePlacement === 'right-edge') {
     return { ...rightEdgePosition(size.width, size.height, m, normalizedY), width: size.width, height: size.height }

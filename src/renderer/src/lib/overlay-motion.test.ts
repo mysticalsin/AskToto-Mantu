@@ -46,6 +46,18 @@ describe('overlay hide/reveal spring timings', () => {
     expect(overlaySpringClassName('out')).toMatch(/overlay-spring--out/)
   })
 
+  it('a dock springs from the edge it is attached to, not from above', () => {
+    // Top stays exactly as it was: no existing surface changes direction.
+    expect(overlaySpringClassName('in')).not.toMatch(/edge-right/)
+    expect(overlaySpringClassName('in', 'top')).not.toMatch(/edge-right/)
+    expect(overlaySpringClassName('in', 'right')).toMatch(/overlay-spring--in/)
+    expect(overlaySpringClassName('in', 'right')).toMatch(/overlay-spring--edge-right/)
+    expect(overlaySpringClassName('out', 'right')).toMatch(/overlay-spring--edge-right/)
+    expect(overlaySpringClassName('settled', 'right')).toMatch(/overlay-spring--edge-right/)
+    // Rest is no animation at all, on any edge.
+    expect(overlaySpringClassName('rest', 'right')).toBe('w-full')
+  })
+
   it('Circle/Jarvis expand is a spring, not a hard cut; reduced-motion skips it', () => {
     expect(CIRCLE_REST_EXPAND_MS).toBeGreaterThanOrEqual(380)
     expect(CIRCLE_REST_EXPAND_MS).toBeLessThanOrEqual(480)

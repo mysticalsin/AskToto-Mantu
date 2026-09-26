@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
+import { DockPanel } from './components/DockPanel'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
+import { CommandListeningPill } from './components/CommandListeningPill'
+import { startMetisCommandEar, type MetisCommandEarStatus } from './lib/metis-command-ear'
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import {
@@ -66,6 +69,7 @@ import {
   overlaySpringAfterHide,
   overlaySpringAfterReveal,
   overlaySpringClassName,
+  type OverlayEdge,
   prefersOverlayReducedMotion,
   type CircleRestSpring,
   type OverlaySpring
@@ -281,6 +285,52 @@ export function App(): JSX.Element {
   const bootError = settingsBootError ?? auth.bootError
   // FITO-185-X: mid-wait escape on the post-onboarding Loading strip (Tony: never forever Loading).
   const [bootSlow, setBootSlow] = useState(false)
+
+  // Métis 2.0 Cap 2 — wake-word command pill (top-center). Meeting Listen ≠ command until wake.
+  const [metisCommand, setMetisCommand] = useState<{
+    phase: string
+    active: boolean
+    pillVisible: boolean
+    pillCopy: string
+    liveTranscript: string
+    chime: 'none' | 'single' | 'double'
+  }>({
+    phase: 'idle',
+    active: false,
+    pillVisible: false,
+    pillCopy: 'Hi Métis',
+    liveTranscript: '',
+    chime: 'none'
+  })
+  const [metisCommandEarStatus, setMetisCommandEarStatus] = useState<MetisCommandEarStatus>({ state: 'idle' })
+  useEffect(() => {
+    const unsub = window.toto.onMetisCommandState?.((state) => setMetisCommand(state))
+    return () => {
+      unsub?.()
+    }
+  }, [])
+
+  // Cap2 always-on ear: arm whenever overlay is past exclusive onboarding (do not wait on settings race).
+  useEffect(() => {
+    const exclusive =
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('exclusiveOnboarding') === '1'
+    const enabled = !exclusive
+    const stop = startMetisCommandEar({
+      enabled,
+      preferApple: true,
+      isMeetingListening: () => document.documentElement.dataset.metisListening === '1',
+      onStatus: (s) => {
+        setMetisCommandEarStatus(s)
+        if (s.state === 'heard') console.info('[cap2-ear]', s.via, s.text)
+        if (s.state === 'denied' || s.state === 'error') console.warn('[cap2-ear]', s)
+      },
+      onMicDenied: () => {
+        void window.toto.openPermissionSettings('microphone')
+      }
+    })
+    return () => stop()
+  }, [settings?.onboardingDone])
 
   // ── License enforcement master switch ──────────────────────────────────────────────────────────
   // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
@@ -640,6 +690,15 @@ export function App(): JSX.Element {
   // — the non-activating notch contract. The pure state machine lives in lib/overlay-autohide.ts.
   const overlayLayout = parseOverlayLayout(settings?.overlayLayout)
   const overlayOrbStyle = parseOverlayOrbStyle(settings?.overlayOrbStyle)
+  // Dock is a 380-wide edge sidecar that fills its own window (h-full). Settings does not open in that
+  // window: applySettingsSurface resizes to the wide centred SETTINGS_WINDOW_MIN rect and renders the
+  // sheet BELOW the ask surface. Left as DockPanel there, its h-full claimed the whole tall window and
+  // its body was empty, so Settings was squeezed to nothing behind a full-height slab of dark glass —
+  // the "big black box". At settings width the bar is the correct surface, so hand back to it.
+  const settingsSheetOpen = overlayShowsSettingsSheet(view, minimized)
+  const AskSurface = overlayLayout === 'dock' && !settingsSheetOpen ? DockPanel : Bar
+  // The dock is attached to the right edge, so it springs from there. Every other chrome hugs the top.
+  const overlaySpringEdge: OverlayEdge = overlayLayout === 'dock' && !settingsSheetOpen ? 'right' : 'top'
   const canMinimize = overlayAllowsMinimize(overlayLayout)
   const showBarOrb = overlayShowsBarOrb(overlayLayout, minimized)
   const autoHideSetting = overlayUsesHover(overlayLayout)
@@ -3688,8 +3747,17 @@ export function App(): JSX.Element {
   const answerView = view === 'answer' || view === 'copilot' || DEMO === 'answer' || DEMO === 'copilot'
   // Answer / live-copilot render INSIDE the expanded bar (one surface: big input → body → toolbar at the
   // bottom). Only the full views (settings / history / review / agenda) render as a panel below the bar.
-  const barBody = answerView && !collapsed ? body : undefined
-  const isPanelBody = body != null && !answerView
+  // The dock IS a panel, so everything it can show belongs INSIDE it. Routing History/Review/Brain/
+  // Agenda to a <Panel> below the ask surface is right for the bar (a wide strip with room underneath)
+  // and wrong for the dock: DockPanel fills its window by design, so the panel below got squeezed to
+  // nothing behind a full-height slab of dark glass. Same black box as Settings, three more views.
+  // Settings is the exception and keeps the sheet, because main gives it its own wide window.
+  // Dock rest paint mode. Invisible is a paint choice only: the hover band and the window are unchanged,
+  // so an invisible dock stays exactly as reachable as a visible one.
+  const dockRestHidden = settings?.dockRest === 'hidden'
+  const dockSurfaceLive = overlayLayout === 'dock' && !settingsSheetOpen
+  const barBody = (answerView || dockSurfaceLive) && !collapsed ? body : undefined
+  const isPanelBody = body != null && !answerView && !dockSurfaceLive
   // An actual answer/suggestion is open → the bar shows the ← back arrow + the follow-up placeholder.
   const hasAnswer =
     (view === 'answer' && (!!ask.answer || capturing)) ||
@@ -3732,6 +3800,34 @@ export function App(): JSX.Element {
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
+            <div data-metis-command-pill-host="1">
+        {/* Cap4: dock rest / OverlayPeek must not show Cap2 Ear chrome (Tony FAIL Ear error on notch). */}
+        {!overlayPeeked && !(overlayLayout === 'dock' && !overlayRevealed) ? (
+          <div
+            data-metis-command-ear-chip="1"
+            className="pointer-events-none absolute left-1/2 top-1 z-[80] -translate-x-1/2 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium tracking-wide text-white/90"
+          >
+            {metisCommandEarStatus.state === 'listening'
+              ? 'Ear on · say Métis'
+              : metisCommandEarStatus.state === 'arming'
+                ? 'Ear arming…'
+                : metisCommandEarStatus.state === 'denied'
+                  ? 'Mic blocked · Privacy'
+                  : metisCommandEarStatus.state === 'heard'
+                    ? `Heard: ${'text' in metisCommandEarStatus ? metisCommandEarStatus.text.slice(0, 42) : ''}`
+                    : metisCommandEarStatus.state === 'error'
+                      ? 'Ear error'
+                      : null}
+          </div>
+        ) : null}
+        <CommandListeningPill
+          visible={!overlayPeeked && metisCommand.pillVisible}
+          copy={metisCommand.pillCopy}
+          liveTranscript={metisCommand.liveTranscript}
+          chime={metisCommand.chime}
+          onStop={() => void window.toto.metisCommandStop?.()}
+        />
+      </div>
       {(() => {
         const toasts = (
           <>
@@ -3796,9 +3892,9 @@ export function App(): JSX.Element {
           />
         </div>
       ) : overlayPeeked ? (
-        // Hide: 8×2 hairline (cursor watch is the sensor). Island: visible peek (hug-width).
+        // Hide: 8x2 hairline (cursor watch is the sensor). Island: top peek. Dock: edge sliver.
         <OverlayPeek
-          rest={overlayRestsHidden(overlayLayout) ? 'hide' : 'island'}
+          rest={overlayRestsHidden(overlayLayout) ? 'hide' : overlayLayout === 'dock' ? (dockRestHidden ? 'dock-hidden' : 'dock') : 'island'}
           onReveal={revealOverlay}
           stealth={settings?.contentProtection ?? true}
         />
@@ -3807,7 +3903,7 @@ export function App(): JSX.Element {
           {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. */}
           <div
             className={
-              overlayIdle ? overlaySpringClassName(overlaySpring) : circleRestSpringClassName(circleRestSpring)
+              overlayIdle ? overlaySpringClassName(overlaySpring, overlaySpringEdge) : circleRestSpringClassName(circleRestSpring)
             }
             onAnimationEnd={(e) => {
               if (e.target !== e.currentTarget) return
@@ -3823,7 +3919,10 @@ export function App(): JSX.Element {
               if (circleRestSpring === 'collapse') commitCircleRestMinimize()
             }}
           >
-          <Bar
+          {/* Dock is a 380-wide sidecar; Bar is an 880 horizontal strip whose toolbar overlap below that
+              width DESIGN.md calls a ship blocker. Same props either way (DockPanel takes BarProps), so
+              this is a surface swap, not a second wiring. */}
+          <AskSurface
             value={input}
             onChange={setInput}
             onSubmit={submit}

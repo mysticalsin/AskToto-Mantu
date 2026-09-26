@@ -1779,9 +1779,388 @@ button.onboard-cta {
 .overlay-peek--stealth .overlay-peek__grip > span {
   background: rgba(219, 190, 255, 0.85);
 }
+/* Dock panel — the revealed sidecar surface.
+   It is attached to the screen edge, so it drops the right radius and the right border the way the
+   sliver does: a floating rounded card at a screen edge reads as misplaced, a panel that meets the
+   edge reads as docked. Same glass as .aw-widget, restated only where the edge changes it. */
+.dock-panel {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: 0;
+  /* Nested bezel: outer hairline + inset highlight (DESIGN.md glass + high-end Doppelrand, no neon). */
+  background: var(--aw-glass-bot, rgba(20, 20, 22, 0.55));
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  backdrop-filter: blur(24px) saturate(140%);
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 0 0 1px rgba(127, 0, 218, 0.08),
+    -18px 0 48px -22px rgba(0, 0, 0, 0.55),
+    0 0 40px -16px var(--color-accent-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  transform-origin: right center;
+}
+
+/* The scroller must not collide with the rounded corners of the zone above and below it. */
+.dock-panel .aw-body {
+  scroll-padding-block: 8px;
+}
+
+/* Content that continues past the fold should fade, not be guillotined by a hard edge. The mask is
+   STATIC (no transition, no animation): it costs one composite at paint and nothing per frame, which
+   keeps it inside the motion budget that bans animating filters. `mask-composite` is not needed since
+   a single linear gradient does both ends. */
+.dock-panel__scroll {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 10px,
+    #000 calc(100% - 14px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 10px,
+    #000 calc(100% - 14px),
+    transparent 100%
+  );
+}
+
+/* A short answer never reaches the fold, and fading the last line of a two-line answer reads as a
+   rendering fault rather than an affordance. Only mask once there is genuinely more to see. */
+.dock-panel__scroll:not([data-overflowing='1']) {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+
+/* Cap4 DESIGN POLISH — empty state + Bar Ask DNA composer (DESIGN.md tokens) */
+.dock-empty__mark {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* Cap4 Bar-centralize: dock tools mirror Bar toolbar rhythm */
+.dock-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 2px;
+  opacity: 1;
+}
+.dock-tools__cluster {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+.dock-tools__rule {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.dock-tools__history {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 9999px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.dock-tools__history:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.dock-ask {
+  padding: 2px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.dock-ask__shell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 3px 3px 3px 14px;
+  border-radius: 9999px;
+  background: rgba(16, 16, 18, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.dock-ask__input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 14px;
+  font-weight: 450;
+  letter-spacing: -0.01em;
+  caret-color: var(--color-accent-2, #7f00da);
+}
+.dock-ask__input::placeholder {
+  color: rgba(255, 255, 255, 0.38);
+}
+.dock-ask__go {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: transform 120ms cubic-bezier(0.22, 1, 0.36, 1), background-color 120ms ease, color 120ms ease;
+}
+.dock-ask__go:active {
+  transform: scale(0.94);
+}
+.dock-ask__go--ask {
+  background: var(--color-accent, #7f00da);
+  color: #fff;
+  box-shadow: 0 4px 14px -6px var(--color-accent-glow, rgba(127, 0, 218, 0.55));
+}
+.dock-ask__go--ask:hover {
+  background: color-mix(in srgb, var(--color-accent, #7f00da) 88%, white);
+}
+.dock-ask__go--stop {
+  background: var(--color-danger-soft, rgba(240, 113, 122, 0.16));
+  color: var(--color-danger, #F0717A);
+  border: 1px solid rgba(240, 113, 122, 0.3);
+}
+@media (prefers-reduced-motion: reduce) {
+  .dock-ask__go { transition: none; }
+  .dock-ask__go:active { transform: none; }
+}
+
+.overlay-dock-peek {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 104px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-right: 0;
+  border-radius: 999px 0 0 999px;
+  background: var(--aw-glass-bot);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow:
+    -4px 0 12px -7px rgba(0, 0, 0, 0.58),
+    0 0 14px -8px var(--color-accent-glow);
+  cursor: pointer;
+  transform: translateX(0);
+  transition:
+    width 160ms var(--ease-spring),
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+  animation: overlay-peek-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* ── Dock motion ──────────────────────────────────────────────────────────────────────────────────
+   The panel sprang in and then everything inside it simply existed, which is what made it read as a
+   window rather than a surface. These give the CONTENTS a sense of arrival and of state change.
+
+   Rules this obeys, from DESIGN.md's motion budget: transform and opacity only, never filter, blur,
+   box-shadow or layout; --ease-spring for arrivals; the global prefers-reduced-motion rule at the
+   bottom of this file zeroes every duration here, so none of it needs its own override. Each is a
+   one-shot `both` animation, never an infinite loop (the recording dot is the only sanctioned loop). */
+
+/* Zone cascade on reveal. 3 zones, 45ms apart: enough to read as arrival, short enough that the panel
+   is fully usable inside a quarter second. Delays are declarative (no JS timers to drift or leak). */
+@keyframes dock-zone-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.dock-panel--entering .dock-zone {
+  animation: dock-zone-in 220ms var(--ease-spring) both;
+}
+.dock-panel--entering .dock-zone:nth-child(1) { animation-delay: 0ms; }
+.dock-panel--entering .dock-zone:nth-child(2) { animation-delay: 45ms; }
+.dock-panel--entering .dock-zone:nth-child(3) { animation-delay: 90ms; }
+.dock-panel--entering .dock-zone:nth-child(4) { animation-delay: 135ms; }
+
+/* The live strip is a state change, not an arrival: it drops from under the header and pushes nothing,
+   because the layout jump happens instantly underneath while only the paint animates. */
+@keyframes dock-strip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.dock-strip {
+  animation: dock-strip-in 220ms var(--ease-spring) both;
+  transform-origin: top center;
+}
+
+/* A new answer rises into place rather than replacing the previous one in a hard cut. Keyed on the
+   body's identity in React, so it plays once per answer and never on a streaming token. */
+@keyframes dock-body-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.dock-body-in {
+  animation: dock-body-in 240ms var(--ease-spring) both;
+}
+
+/* The mode sheet comes up from the bottom of the body it covers, which is where it belongs: it is a
+   drawer over the answer, not a dialog from nowhere. */
+@keyframes dock-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.dock-sheet {
+  animation: dock-sheet-in 200ms var(--ease-spring) both;
+  transform-origin: bottom center;
+}
+
+/* Confirmation pop for the copy tick. Small, once, and only on success. */
+@keyframes dock-pop {
+  0% { transform: scale(0.7); }
+  60% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+.dock-pop {
+  animation: dock-pop 260ms var(--ease-spring) both;
+}
+
+/* The jump-to-latest pill in the transcript arrives the same way it behaves: from below, out of the
+   way, offering rather than demanding. */
+@keyframes dock-pill-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+.dock-pill-in {
+  animation: dock-pill-in 200ms var(--ease-spring) both;
+}
+
+/* Continuity from the sliver. The sliver vanished and a panel appeared, with nothing connecting the
+   two, so the dock read as two unrelated objects. This is the panel's own edge rail growing from the
+   sliver's proportion (108 of 560, ~0.2) to full height. It is a 2px element scaled on one axis, so no
+   text is ever distorted — scaling the whole panel non-uniformly to "unfurl" it would smear the type,
+   which is the usual way this effect goes wrong. */
+@keyframes dock-rail-grow {
+  from { transform: scaleY(0.2); opacity: 0.55; }
+  to   { transform: scaleY(1);   opacity: 1; }
+}
+.dock-panel__rail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 2px 0 0 2px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--color-accent-2) 18%,
+    var(--color-accent-2) 82%,
+    transparent
+  );
+  opacity: 0.5;
+  pointer-events: none;
+  transform-origin: right center;
+}
+.dock-panel--entering .dock-panel__rail {
+  animation: dock-rail-grow 320ms var(--ease-spring) both;
+}
+
+/* The header earns its hairline only once something has scrolled under it. A permanent divider on a
+   panel whose content does not fill it is a line for its own sake; appearing on scroll is the surface
+   telling you there is more above. Border-colour is a paint change on a static element, not an
+   animated layout property. */
+.dock-panel__head {
+  border-bottom: 1px solid transparent;
+  transition: border-color 160ms var(--ease-spring);
+}
+.dock-panel__head[data-scrolled='1'] {
+  border-bottom-color: var(--color-hair-soft);
+}
+
+/* Invisible dock rest: paints nothing, occupies the same box, keeps its hit area. Opacity rather than
+   display:none or visibility:hidden on purpose - the element must still receive the pointer, and main
+   sets the WINDOW opacity to 0 as well, so this is the renderer half of the same bargain Hide makes. */
+.overlay-dock-peek--invisible {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.overlay-dock-peek--invisible:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
+.overlay-dock-peek:hover {
+  width: 14px;
+  box-shadow:
+    -5px 0 14px -7px rgba(0, 0, 0, 0.62),
+    0 0 18px -6px var(--color-accent-glow);
+}
+.overlay-dock-peek__rail {
+  display: block;
+  width: 3px;
+  height: 46px;
+  border-radius: 999px;
+  background: var(--color-ink-3);
+}
+.overlay-dock-peek--stealth {
+  border-color: rgba(175, 82, 222, 0.5);
+  box-shadow:
+    0 0 0 1px rgba(175, 82, 222, 0.5),
+    0 0 10px -2px rgba(127, 0, 218, 0.7),
+    0 0 14px 0 rgba(50, 173, 230, 0.35),
+    -4px 0 12px -7px rgba(0, 0, 0, 0.5);
+}
+.overlay-dock-peek--stealth .overlay-dock-peek__rail {
+  background: rgba(219, 190, 255, 0.85);
+}
 .overlay-chrome-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 .overlay-chrome-grid--two {
@@ -1858,6 +2237,15 @@ button.onboard-cta {
   width: 72%;
   height: 7px;
   border-radius: 0 0 3px 3px;
+}
+.overlay-chrome-diagram--dock .overlay-chrome-diagram__mark {
+  top: 17px;
+  right: 8px;
+  left: auto;
+  width: 5px;
+  height: 24px;
+  border-radius: 999px 0 0 999px;
+  transform: none;
 }
 .overlay-chrome-diagram__orb {
   display: none;
@@ -2163,13 +2551,58 @@ button.onboard-cta {
   transform: none;
   opacity: 1;
 }
+/* Blur is disabled DURING the spring: animating backdrop-filter is the expensive path (DESIGN.md's
+   motion budget). `.aw-widget` is listed because the dock panel is built on it rather than `.glass`,
+   and without it the dock was the one surface still blurring mid-spring. */
 .overlay-spring--in .glass,
 .overlay-spring--out .glass,
 .overlay-spring--in .glass-strong,
-.overlay-spring--out .glass-strong {
+.overlay-spring--out .glass-strong,
+.overlay-spring--in .aw-widget,
+.overlay-spring--out .aw-widget,
+.overlay-spring--in.aw-widget,
+.overlay-spring--out.aw-widget {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+/* Edge-docked variant of the same spring family. The top-edge spring drops DOWN from above with a
+   top-center origin, which is the wrong direction and an unattached origin for a panel fixed to the
+   right edge: it arrived from nowhere. Here the origin is the edge it is actually attached to and the
+   surface slides in from off-edge. Duration and easing are inherited from --in/--out above, so the
+   320-380 / 280-340 budget and --ease-spring are unchanged. Transform + opacity only. */
+.overlay-spring--edge-right {
+  transform-origin: right center;
+}
+.overlay-spring--edge-right.overlay-spring--in {
+  animation-name: overlay-spring-in-right;
+}
+.overlay-spring--edge-right.overlay-spring--out {
+  animation-name: overlay-spring-out-right;
+}
+
+@keyframes overlay-spring-in-right {
+  from {
+    opacity: 0.85;
+    /* Less scale than the bar's 0.92: a tall panel scaling that hard reads as a zoom, not a slide. */
+    transform: scale(0.96) translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateX(0);
+  }
+}
+
+@keyframes overlay-spring-out-right {
+  from {
+    opacity: 1;
+    transform: scale(1) translateX(0);
+  }
+  to {
+    opacity: 0.85;
+    transform: scale(0.96) translateX(12px);
+  }
+}
+
 @keyframes overlay-spring-in {
   from {
     opacity: 0.85;

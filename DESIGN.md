@@ -4,11 +4,24 @@ This file is the gate. Do not add or restyle overlay / onboarding UI unless it m
 
 ## Chrome
 
-Three modes in Settings (persist, no reinstall). Default on a fresh install is **hide**.
+Four modes in Settings (persist, no reinstall). Default on a fresh install is **hide**. Onboarding still asks **three** (Hidden / Island / Bar): dock is a Settings-only chrome, and the appearance scene stays the pinned three-card layout (`ONBOARDING_APPEARANCE_LAYOUTS`).
 
 1. **hide** (default). Fully hidden until the pointer approaches the **top edge** of the display (left, camera, or right), then reveal down. Leave that strip hides. Do not hunt tray Show/Hide. Windows: top edge of the display, **no fake notch**.
 2. **island**. The always-visible peek capsule (may sit in the island / notch). Hover the same top edge expands down. Leave that strip returns to the peek. Island must never minimize to a second disk.
 3. **bar**. Classic bar. Always visible. Idle rest is the **full bar plus a clickable Jarvis circle** (visible 41×41, tonys-jarvis particle orb, never a gray box, never CSS rings). The only layout that can collapse to that same circle. Hide and Island must never grow a minimize-to-circle control, and any minimize call while those layouts are active is a no-op (do not jump Hide → Bar). The circle is invisible whenever the bar is invisible. Contract: `docs/design/BAR-PILL.md`. Settings Appearance Bar rest: Full bar (default) or Circle (Jarvis particle). Persist may still say `obsidian`. Never label it Obsidian. That key never changes Hide or Island.
+
+4. **dock**. A tall sidecar on a screen edge, for working beside a meeting window instead of across the top of it. Chrome is the SHAPE; `overlayPlacement` (top-center / right-edge) is WHERE it sits, and the two axes stay independent (`OverlayPlacementPicker` must never mention a layout). Picking Dock in Settings writes `overlayPlacement: 'right-edge'` alongside it, because that is the placement it was designed against; the user may still move it back.
+
+### Dock
+
+- **Rest.** A slim vertical sliver, `OVERLAY_DOCK_SLIVER` 10x104, flush to the usable right edge with no outboard margin, plus the peek pad. Unlike Hide's 8x2 hairline the dock rest is **visible and clickable** - it is the affordance that says Metis is there. `.overlay-dock-peek`, flat right side, rounded inboard, three-dot rail.
+- **Revealed.** `OVERLAY_DOCK_PANEL` 380x560, ceilinged to the work area. Main owns this size in BOTH states: the renderer never grows the dock the way it grows the bar (`resizeTo` returns early for dock), so a streaming answer cannot resize the window.
+- **Surface.** `DockPanel`, not `Bar`. Bar is 880 and its toolbar overlap below that width is a ship blocker, so the dock gets a surface built for its own axis: header (identity + current state + exit), body (the answer, `flex-1`, the only scroller, the biggest zone), composer (one tool row, then the ask field). A live meeting gets its own full-width strip. Start and Stop are never both present. Mode opens INSIDE the panel; a popover would be clipped by a main-owned fixed size.
+- **Shape.** The panel meets the edge: right radius and right border dropped, shadow falling inboard. A floating rounded card at a screen edge reads as misplaced.
+- **Motion.** Same spring family, own anchor: `transform-origin: right center`, `scale(0.96) translateX(12px)` in, reverse out, durations and easing inherited from the shared `--in`/`--out` rules. A tall panel scaling 0.92 reads as a zoom rather than a slide. Blur off during the spring (`.aw-widget` is included in that rule, since the dock is built on it).
+- **Parity.** `DockPanel` takes `BarProps` verbatim. The type is the contract: a capability added to the bar cannot silently go missing in the dock.
+- **Narrow displays.** `resolveOverlayPlacement` falls back to top-center when the revealed width plus margins does not fit, so the dock inherits that fallback rather than inventing one.
+- **Out of scope.** Hide park 8x2 and Island peek 132x15 stay frozen. Dock adds its own rest rect and changes neither.
 
 ### Bar sphere (thinking-orb, Bar only)
 
