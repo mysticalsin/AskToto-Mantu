@@ -27,7 +27,7 @@ describe('createHermeticSandbox', () => {
 })
 
 describe('hermeticEnv', () => {
-  it('matches vitest.config.ts hermeticHomeEnv field-for-field', () => {
+  it('produces the env root vitest.config.ts now builds hermeticHomeEnv from (the single shared implementation)', () => {
     const sandbox = createHermeticSandbox()
     const env = hermeticEnv(sandbox)
     expect(env.HOME).toBe(sandbox.home)

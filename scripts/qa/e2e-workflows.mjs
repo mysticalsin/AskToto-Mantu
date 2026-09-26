@@ -24,7 +24,7 @@
  */
 import { chromium } from 'playwright-core'
 import { writeFileSync, rmSync, existsSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 // Used only by the `cloudflare` group, to probe the mock gateway from THIS process rather than from the
 // CSP-restricted renderer. `rejectUnauthorized: false` is safe and necessary here: the mock serves a
@@ -1626,7 +1626,7 @@ if (args.includes('--list')) {
 // operator actually followed this file's own documented prerequisite. Refuses to run rather than
 // silently mutating a real developer profile.
 try {
-  assertSandboxedUserData({ userDataDir: process.env.ASKTOTO_USERDATA, homeDir: homedir() })
+  assertSandboxedUserData({ userDataDir: process.env.ASKTOTO_USERDATA, homeDir: homedir(), tmpDir: tmpdir() })
 } catch (e) {
   console.error(`[e2e-workflows] ${e.message}`)
   process.exit(2)

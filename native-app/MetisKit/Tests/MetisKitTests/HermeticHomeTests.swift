@@ -10,8 +10,8 @@ import Foundation
 /// this package could reach a real profile unnoticed.
 ///
 /// `HOME` and `CFFIXED_USER_HOME` here are both set by scripts/hermetic/run-swift-tests.sh, which every
-/// CI/agent invocation of `swift test` for this package must go through (never bare `swift test` — see
-/// docs/metis-2.0/runbooks/test-isolation.md). On Darwin, Foundation's `NSHomeDirectory()`/
+/// CI/agent invocation of `swift test` for this package must go through — never bare `swift test`, or
+/// both are unset and this canary fails loudly. On Darwin, Foundation's `NSHomeDirectory()`/
 /// `FileManager.default.homeDirectoryForCurrentUser` resolve from `getpwuid()`, NOT from `$HOME` alone,
 /// for an ordinary process — `CFFIXED_USER_HOME` is the override CoreFoundation's home-directory
 /// resolution actually honors. No Foundation Model or `@testable` seam has to change for this to hold.
@@ -28,19 +28,11 @@ final class HermeticHomeTests: XCTestCase {
         XCTAssertEqual(NSHomeDirectory(), sandboxHome, "NSHomeDirectory() must resolve to the sandbox, not the real user profile")
         XCTAssertEqual(
             FileManager.default.homeDirectoryForCurrentUser.path, sandboxHome,
-            "FileManager's home must agree with NSHomeDirectory() — both are supposed to honor $HOME"
+            "FileManager's home must agree with NSHomeDirectory() — both resolve via CFFIXED_USER_HOME, never $HOME alone"
         )
     }
-
-    func testSandboxHomeHasNoCloudStorageToLeakInto() throws {
-        guard let sandboxHome = ProcessInfo.processInfo.environment["METIS_TEST_HOME"] else {
-            XCTFail("METIS_TEST_HOME is unset — run swift test via scripts/hermetic/run-swift-tests.sh, never directly")
-            return
-        }
-        let cloudStorage = (sandboxHome as NSString).appendingPathComponent("Library/CloudStorage")
-        XCTAssertFalse(
-            FileManager.default.fileExists(atPath: cloudStorage),
-            "a freshly mktemp'd sandbox must never contain a real Library/CloudStorage"
-        )
-    }
+    // A "the fresh sandbox has no real Library/CloudStorage" check always passes trivially — a
+    // brand-new mktemp'd directory is empty by construction, proving nothing about isolation. The real
+    // proof is isolation-canary.yml's metiskit-swift-test job, which seeds a honeypot in the RUNNER'S
+    // REAL home and fails the job if this suite ever touches it.
 }

@@ -19,18 +19,27 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost', '::ffff:127.0.0
 
 function isLoopback(host) {
   if (!host) return true // no host = the connect(path, ...) Unix-domain-socket form
-  return LOOPBACK_HOSTS.has(host) || host.startsWith('127.')
+  if (LOOPBACK_HOSTS.has(host)) return true
+  // net.isIPv4, not a string prefix: "127.example.com" starts with "127." too, but resolves through
+  // DNS to whatever that name points at, not to loopback.
+  return net.isIPv4(host) && host.startsWith('127.')
 }
 
-/** Pulls the intended destination host out of any of net.Socket#connect's call shapes. */
+/**
+ * Pulls the intended destination host out of any of net.Socket#connect's call shapes.
+ *
+ * net.connect()/net.createConnection() — and everything built on them: http.Agent's own
+ * createConnection, undici's plain-http path — normalize their arguments once and call
+ * Socket#connect with the already-normalized `[options, cb]` ARRAY, tagged so it is never
+ * re-normalized. A direct `socket.connect(port, host)` (what tls.connect() uses) never goes through
+ * that normalization, so it has to be done here instead. Array.isArray(args[0]) tells the two shapes
+ * apart; net._normalizeArgs reproduces net's own normalization for the second one, so both paths read
+ * the same options object net itself would.
+ */
 function targetHost(args) {
-  const first = args[0]
-  if (first && typeof first === 'object' && !Array.isArray(first)) {
-    if (first.path) return null // Unix domain socket — always allowed
-    return first.host ?? '127.0.0.1' // net's own default when only a port is given
-  }
-  if (typeof args[1] === 'string') return args[1] // connect(port, host, ...)
-  return '127.0.0.1' // connect(port, ...) with no host = net's own loopback default
+  const [options] = Array.isArray(args[0]) ? args[0] : net._normalizeArgs(args)
+  if (options.path) return null // Unix domain socket — always allowed
+  return options.host ?? '127.0.0.1' // net's own default when only a port is given
 }
 
 const originalConnect = net.Socket.prototype.connect
@@ -42,11 +51,12 @@ net.Socket.prototype.connect = function hermeticConnect(...args) {
         'M2-0190 isolation-canary preload only allows loopback traffic.'
     )
     error.code = 'HERMETIC_NETWORK_DENIED'
-    // Match net's own contract: connect() itself returns synchronously (the socket object); a real
-    // connection failure always surfaces later, asynchronously, via the 'error' event — never as a
-    // thrown exception from connect() itself. queueMicrotask fires after the caller's own synchronous
-    // `.connect(...).on('error', ...)` chain has run, so the listener is always attached in time.
-    queueMicrotask(() => this.emit('error', error))
+    // Match net's own contract for a failed connection: asynchronous, and via destroy(err) — which
+    // emits 'error' and then 'close', exactly what a real failed connect() does — never a bare
+    // emit('error') that leaves the socket undestroyed and never emits 'close'. queueMicrotask fires
+    // after the caller's own synchronous `.connect(...).on('error', ...)` chain has run, so the
+    // listener is always attached in time.
+    queueMicrotask(() => this.destroy(error))
     return this
   }
   return originalConnect.apply(this, args)

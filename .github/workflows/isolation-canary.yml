@@ -1,15 +1,13 @@
 name: isolation-canary
 
-# M2-0190 — extends M2-0001's hermetic-test guarantee to the two runners build.yml's `quality`/`operator`
-# jobs never touch: swift test (native-app/MetisKit has no vitest equivalent) and license-server's
-# `node --test` (a separate npm project, its own package-lock, never chained into the root `npm test`).
-# A new workflow file rather than a new job in build.yml — see AGENTS.md's guardrail against two tickets
-# editing the same CI file. The wrangler-isolation proof and the scripts/qa canary do NOT need a job
-# here: they are plain `*.test.ts` files under `scripts/` and `operator/scripts/`, so build.yml's existing
-# `quality` job (root `npm test`, both ubuntu and windows) and `operator` job (its `*.contract.test.ts`
-# step) already run them — a duplicate job here would just be a second, narrower copy of that same
-# coverage (operator/scripts/wrangler-local-sandbox.contract.test.ts, scripts/qa/lib/sandbox-guard.test.ts,
-# scripts/hermetic/sandbox-env.test.ts).
+# M2-0190 — hermetic-test canaries for the runners build.yml's `quality`/`operator` jobs never exercise:
+# swift test (native-app/MetisKit has no vitest equivalent), license-server's `node --test` (a separate
+# npm project, its own package-lock), the deny-non-loopback.cjs network preload, and the owner-account.sb
+# OS sandbox profile. Kept in a separate workflow file rather than a new job in build.yml.
+#
+# operator/scripts/wrangler-local-sandbox.contract.test.ts, scripts/qa/lib/sandbox-guard.test.ts and
+# scripts/hermetic/sandbox-env.test.ts need no job here: they are plain `*.test.ts` files already run by
+# build.yml's `quality` job (root `npm test`) and `operator` job.
 on:
   push:
     branches:
@@ -20,6 +18,9 @@ on:
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   license-server:
@@ -33,10 +34,25 @@ jobs:
           node-version: 22.22.3
           cache: npm
           cache-dependency-path: license-server/package-lock.json
+      # M2-0190 acceptance #4 — proves the isolation against the runner's REAL home, not a fresh
+      # (and therefore trivially empty) sandbox dir. A sentinel file lets the later step tell "untouched"
+      # apart from "touched before the suite even ran".
+      - name: Seed a real-home honeypot the suite must never touch
+        run: |
+          mkdir -p "$HOME/Library/CloudStorage/OneDrive-Honeypot"
+          echo sentinel > "$HOME/Library/CloudStorage/OneDrive-Honeypot/sentinel"
       - run: npm ci
         working-directory: license-server
       - run: npm test
         working-directory: license-server
+      - name: Fail if the suite touched the real-home honeypot
+        run: |
+          touched="$(find "$HOME/Library/CloudStorage/OneDrive-Honeypot" -newer "$HOME/Library/CloudStorage/OneDrive-Honeypot/sentinel")"
+          if [ -n "$touched" ]; then
+            echo "the suite touched the real-home honeypot it must never reach:"
+            echo "$touched"
+            exit 1
+          fi
 
   metiskit-swift-test:
     name: MetisKit swift test (hermetic)
@@ -44,10 +60,22 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Seed a real-home honeypot the suite must never touch
+        run: |
+          mkdir -p "$HOME/Library/CloudStorage/OneDrive-Honeypot"
+          echo sentinel > "$HOME/Library/CloudStorage/OneDrive-Honeypot/sentinel"
       # Never bare `swift test` (M2-0190) — this wrapper is what provides HermeticHomeTests' sandbox
       # (HOME, CFFIXED_USER_HOME); running `swift test` directly here would leave both unset and the
       # canary would fail loudly.
       - run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
+      - name: Fail if the suite touched the real-home honeypot
+        run: |
+          touched="$(find "$HOME/Library/CloudStorage/OneDrive-Honeypot" -newer "$HOME/Library/CloudStorage/OneDrive-Honeypot/sentinel")"
+          if [ -n "$touched" ]; then
+            echo "the suite touched the real-home honeypot it must never reach:"
+            echo "$touched"
+            exit 1
+          fi
 
   deny-non-loopback:
     name: deny-non-loopback.cjs denies every connect() shape (hermetic)
@@ -60,3 +88,39 @@ jobs:
           node-version: 22.22.3
       # No npm ci: this test only uses node:net/http/tls/child_process/test — no third-party dependency.
       - run: node --test scripts/hermetic/deny-non-loopback.test.mjs
+
+  owner-sandbox-profile:
+    name: owner-account.sb denies real user state (hermetic)
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seed honeypots the profile must deny
+        run: |
+          mkdir -p "$HOME/Library/CloudStorage/OneDrive-Honeypot"
+          echo probe > "$HOME/Library/CloudStorage/OneDrive-Honeypot/probe"
+          mkdir -p "$HOME/.wrangler"
+          echo probe > "$HOME/.wrangler/probe"
+      - name: Denies reading a honeypot under Library/CloudStorage
+        run: |
+          if bash scripts/hermetic/run-under-owner-sandbox.sh cat "$HOME/Library/CloudStorage/OneDrive-Honeypot/probe" 2>err.log; then
+            echo "expected the read to be denied"; cat err.log; exit 1
+          fi
+          cat err.log
+          grep -q "Operation not permitted" err.log
+      - name: Denies writing into that same honeypot
+        run: |
+          if bash scripts/hermetic/run-under-owner-sandbox.sh sh -c 'echo x >> "$HOME/Library/CloudStorage/OneDrive-Honeypot/probe"' 2>err.log; then
+            echo "expected the write to be denied"; cat err.log; exit 1
+          fi
+          cat err.log
+          grep -q "Operation not permitted" err.log
+      - name: Denies reading wrangler's real global config directory
+        run: |
+          if bash scripts/hermetic/run-under-owner-sandbox.sh cat "$HOME/.wrangler/probe" 2>err.log; then
+            echo "expected the read to be denied"; cat err.log; exit 1
+          fi
+          cat err.log
+          grep -q "Operation not permitted" err.log
+      - name: Positive control — reading a repository file still works under the profile
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh cat AGENTS.md > /dev/null

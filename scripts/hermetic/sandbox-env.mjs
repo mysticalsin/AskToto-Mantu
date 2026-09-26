@@ -4,9 +4,9 @@
 // to `swift test` or `wrangler`. None of those runners has a `test.env` hook, so the sandbox has to be
 // built here and layered onto the child process's environment before it starts.
 //
-// Kept deliberately dependency-free (no npm install allowed in worktrees — see AGENTS.md) and in one
-// small module so every consumer (license-server, scripts/qa, operator's wrangler test) builds the exact
-// same shape vitest.config.ts does, rather than five independent, silently-drifting copies.
+// Zero external dependencies (node:fs/os/path only) and one small module, so every consumer (root
+// vitest.config.ts, license-server, scripts/qa, operator's wrangler test) builds the exact same sandbox
+// shape from a single source, rather than five independent, silently-drifting copies.
 import { mkdtempSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,21 +20,20 @@ import { join } from 'node:path'
  * vitest.config.ts's `mkdtempSync(join(tmpdir(), 'metis-test-home-'))` + `join(testHome, 'tmp')`.
  * Nothing under `home` exists before this call, so there is nothing real left to resolve into.
  *
- * @param {string} [prefix]
  * @returns {HermeticSandbox}
  */
-export function createHermeticSandbox(prefix = 'metis-test-home-') {
-  const home = mkdtempSync(join(tmpdir(), prefix))
+export function createHermeticSandbox() {
+  const home = mkdtempSync(join(tmpdir(), 'metis-test-home-'))
   const tmp = join(home, 'tmp')
   mkdirSync(tmp, { recursive: true })
   return { home, tmp }
 }
 
 /**
- * The env every hermetic child process gets, extended with `extra`. Matches
- * vitest.config.ts's `hermeticHomeEnv` field-for-field — same keys, same values shape — so a
+ * The env every hermetic child process gets, extended with `extra`. Root vitest.config.ts's own
+ * `hermeticHomeEnv` is built from this same function (plus its own `PLAYWRIGHT_BROWSERS_PATH`), so a
  * `homedir()`/`app.getPath()`-derived path can never tell whether it's running under vitest or under
- * one of these wrapped runners.
+ * one of these wrapped runners — there is only ever the one implementation.
  *
  * @param {HermeticSandbox} sandbox
  * @param {Record<string, string | undefined>} [extra]
@@ -54,6 +53,8 @@ export function hermeticEnv(sandbox, extra = {}) {
     TMP: sandbox.tmp,
     TEMP: sandbox.tmp,
     METIS_TEST_HOME: sandbox.home,
+    // Unique per run/worktree — __mocks__/electron.ts derives every app.getPath(...) answer from this,
+    // so a concurrent run (another worktree, a parallel agent) never shares a userData/documents path.
     ASKTOTO_TEST_SANDBOX_ROOT: sandbox.home,
     ...extra
   }
@@ -91,10 +92,9 @@ export function hermeticWranglerEnv(sandbox) {
     WRANGLER_SEND_METRICS: 'false',
     // WRANGLER_SEND_METRICS only turns off wrangler's own telemetry POST. Every command still calls
     // printWranglerBanner(), which — unless this is set — awaits an npm-registry GET for the latest
-    // wrangler version before the command's real work even starts (confirmed against a real --local run
-    // under deny-non-loopback.cjs: HERMETIC_NETWORK_DENIED on registry.npmjs.org). WRANGLER_HIDE_BANNER
-    // makes printWranglerBanner() return before it ever calls updateCheck(), so this is the one variable
-    // that actually keeps a --local run on loopback, not a side effect this repo is relying on by accident.
+    // wrangler version before the command's real work even starts. WRANGLER_HIDE_BANNER makes
+    // printWranglerBanner() return before it ever calls updateCheck(), so this is the variable that
+    // actually keeps a `--local` run on loopback, not a side effect this repo is relying on by accident.
     WRANGLER_HIDE_BANNER: 'true'
   })
   for (const key of CLOUDFLARE_CREDENTIAL_KEYS) env[key] = undefined

@@ -1,23 +1,37 @@
-// W0-HERMETIC (M2-0190) — e2e-workflows.mjs's own header has documented, since it was written, that it
-// must be pointed at an isolated profile ("ASKTOTO_USERDATA=<dir> ... — the only reliable isolation
-// switch"), but nothing ever checked that the operator actually did it. This harness drives a REAL
-// running app over CDP and, per its own doc comment, exercises "real settings on disk" — an app
-// launched without ASKTOTO_USERDATA set falls back to the developer's real profile, and this suite
-// would then mutate meetings folders, provider keys and brain state there. `assertSandboxedUserData`
-// is the check that was missing: called once, at the top of any harness that relies on that prerequisite,
-// before it touches anything.
-import { join, resolve, sep } from 'node:path'
+// W0-HERMETIC (M2-0190) — any harness that drives a REAL running app over CDP (e2e-workflows.mjs) must
+// call assertSandboxedUserData() before it touches that app's settings/brain on disk.
+//
+// This is an allow-list, not a deny-list: ASKTOTO_USERDATA must resolve under the OS temp directory, or
+// outside the user's home directory entirely. Nothing under the real home directory is trusted, because
+// every real hazard — the real OneDrive/iCloud sync root, the real Métis userData profile, the real
+// Keychain-backed settings store — lives somewhere under there, under names a fixed deny-list keeps
+// missing: a business OneDrive root is `<home>/OneDrive - <Org>`, not `<home>/OneDrive`; the packaged
+// and unpackaged Métis userData directories are `<home>/Library/Application Support/{Metis,asktoto-dev}`.
+import { isAbsolute, relative, resolve } from 'node:path'
 
 /**
- * Throws a descriptive error unless `userDataDir` is set and does not resolve under `homeDir`'s real
- * cloud-synced folders (`Library/CloudStorage`, `OneDrive`) — the same two hazards M2-0001 closed for
- * vitest. `homeDir` is a parameter (not read internally via `os.homedir()`) so a test can exercise both
- * the safe and unsafe cases without needing a real home directory at all.
+ * True when `child` resolves inside (or equal to) `parent`, compared as real path segments via
+ * `path.relative` — a string-prefix compare would treat `<parent> - Other` as inside `<parent>`, and
+ * needs a separate `sep`-aware case for every platform; `path.relative` handles both for free.
  *
- * @param {{ userDataDir: string | undefined, homeDir: string }} args
+ * @param {string} parent
+ * @param {string} child
+ * @returns {boolean}
+ */
+function isInside(parent, child) {
+  const rel = relative(resolve(parent), resolve(child))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+/**
+ * Throws unless `userDataDir` is set and resolves under `tmpDir`, or outside `homeDir` entirely.
+ * `homeDir` and `tmpDir` are parameters (never read internally via `os.homedir()`/`os.tmpdir()`) so a
+ * test can exercise every case without a real home or temp directory.
+ *
+ * @param {{ userDataDir: string | undefined, homeDir: string, tmpDir: string }} args
  * @returns {true}
  */
-export function assertSandboxedUserData({ userDataDir, homeDir }) {
+export function assertSandboxedUserData({ userDataDir, homeDir, tmpDir }) {
   if (!userDataDir) {
     throw new Error(
       'ASKTOTO_USERDATA is unset. This harness drives a REAL running app and mutates its settings/brain ' +
@@ -26,16 +40,13 @@ export function assertSandboxedUserData({ userDataDir, homeDir }) {
     )
   }
   const resolvedUserData = resolve(userDataDir)
-  const realCloudStorage = resolve(join(homeDir, 'Library', 'CloudStorage'))
-  const realOneDrive = resolve(join(homeDir, 'OneDrive'))
-  // `sep`, not a literal '/' — this app ships on Windows too (see this file's own e2e-workflows.mjs
-  // caller, whose METIS_QA_OUT default is a `D:\...` path), where resolve()/join() return
-  // backslash-separated paths; a hardcoded '/' silently never matched there (confirmed on a real
-  // windows-latest CI run: the two "resolves inside the real ..." cases passed through unthrown).
-  const underRealCloudStorage = resolvedUserData === realCloudStorage || resolvedUserData.startsWith(realCloudStorage + sep)
-  const underRealOneDrive = resolvedUserData === realOneDrive || resolvedUserData.startsWith(realOneDrive + sep)
-  if (underRealCloudStorage || underRealOneDrive) {
-    throw new Error(`ASKTOTO_USERDATA (${userDataDir}) resolves inside the real synced meetings store — point it at an isolated directory instead.`)
+  if (isInside(tmpDir, resolvedUserData)) return true
+  if (isInside(homeDir, resolvedUserData)) {
+    throw new Error(
+      `ASKTOTO_USERDATA (${userDataDir}) resolves inside the real home directory (${homeDir}) — the real ` +
+        'synced meetings store, the real Métis userData profile and other real user state can all live ' +
+        'there. Point it at a directory under the OS temp dir instead.'
+    )
   }
   return true
 }

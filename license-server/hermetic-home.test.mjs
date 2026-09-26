@@ -1,6 +1,5 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -18,10 +17,8 @@ describe('hermetic home — license-server tests run against a per-run sandbox, 
     assert.match(basename(home), /^metis-test-home-/);
     assert.equal(tmpdir(), join(home, 'tmp'));
   });
-
-  it('the sandbox has no real Library/CloudStorage or .wrangler to leak into', () => {
-    const home = homedir();
-    assert.equal(existsSync(join(home, 'Library', 'CloudStorage')), false);
-    assert.equal(existsSync(join(home, '.wrangler')), false);
-  });
+  // A "the fresh mkdtemp'd sandbox has no real Library/CloudStorage" check always passes trivially — a
+  // brand-new directory is empty by construction, proving nothing about isolation. The real proof is
+  // isolation-canary.yml's license-server job, which seeds a honeypot in the RUNNER'S REAL home and
+  // fails the job if this suite ever touches it.
 });

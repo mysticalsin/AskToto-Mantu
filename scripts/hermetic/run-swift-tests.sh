@@ -14,25 +14,21 @@ PACKAGE_PATH="$1"
 shift
 
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/metis-test-home-XXXXXX")"
-# macOS's own $TMPDIR already ends in a slash (/var/folders/.../T/), so the template above produces a
-# literal double slash; mktemp preserves it verbatim instead of normalizing it away. Foundation's
-# NSHomeDirectory() DOES normalize it — proven by CI, where the double-slash $SANDBOX and single-slash
-# NSHomeDirectory() compared unequal despite naming the same directory. Canonicalize once here so every
-# consumer of $SANDBOX (this script's own exports, the canary's string comparisons) agrees byte-for-byte.
+trap 'rm -rf "$SANDBOX"' EXIT
+# macOS's own $TMPDIR always ends in a slash (/var/folders/.../T/); mktemp's template preserves that
+# verbatim as a literal double slash instead of normalizing it away, but Foundation's NSHomeDirectory()
+# always normalizes. Canonicalize once here so every consumer of $SANDBOX (this script's own exports,
+# HermeticHomeTests' string comparisons) agrees byte-for-byte with what NSHomeDirectory() reports.
 SANDBOX="$(cd "$SANDBOX" && pwd)"
 mkdir -p "$SANDBOX/tmp"
 
 export HOME="$SANDBOX"
 # On Darwin, Foundation's NSHomeDirectory()/FileManager.homeDirectoryForCurrentUser resolve the home
-# directory from getpwuid(), NOT from $HOME, for an ordinary (non-sandboxed) process — proven by CI: HOME
-# alone left NSHomeDirectory() reporting the real runner account. CFFIXED_USER_HOME is the one override
-# CoreFoundation's home-directory resolution actually honors regardless of sandbox status; both are set
-# so this sandbox holds on every platform `swift test` runs on.
+# directory from getpwuid(), NOT from $HOME alone, for an ordinary (non-sandboxed) process.
+# CFFIXED_USER_HOME is the one override CoreFoundation's home-directory resolution actually honors
+# regardless of sandbox status; both are set so this sandbox holds on every platform `swift test` runs on.
 export CFFIXED_USER_HOME="$SANDBOX"
 export TMPDIR="$SANDBOX/tmp"
 export METIS_TEST_HOME="$SANDBOX"
-# Windows detectOneDrive()'s env vars are inert on this platform; unset here too so a copy-pasted
-# assertion in a shared canary can check them everywhere without special-casing macOS/Linux.
-unset OneDrive OneDriveCommercial OneDriveConsumer 2>/dev/null || true
 
 swift test --package-path "$PACKAGE_PATH" "$@"
