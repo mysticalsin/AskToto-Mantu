@@ -462,12 +462,22 @@ function hashFile(path: string): Promise<string> {
 }
 
 /**
- * Path to `${size}:${mtimeNs}:${ctimeNs}:${ino}`, for files verified this process's life. A cache hit for
- * a path guarantees: a POSIX write to that path always advances its ctime — `utimes`/`touch -r` can roll
- * mtime back but not ctime, which is why git's index uses it too — a replace-by-rename gives the path a
- * new inode, and a failed checksum never reaches this map. So a hit means the bytes are exactly what was
- * last hashed at that path; a metadata-only change (chmod, xattr) costs one extra hash, which is the safe
- * direction. bigint stats avoid the Number rounding of 64-bit NTFS file IDs on Windows.
+ * Path to `${size}:${mtimeNs}:${ctimeNs}:${ino}`, for files verified this process's life — the cache lives
+ * only for the process, so every fresh launch re-hashes regardless.
+ *
+ * The invariant a hit relies on: any write, rename, or `utimes`/`touch -r` mtime restore made through
+ * ordinary file APIs changes this identity and forces a re-hash. A write or rename always moves size,
+ * mtime, or inode; a restore rolls mtime back but not ctime — the inode change time, which is why git's
+ * index compares it too — so it still changes the identity. A failed checksum never reaches this map, so
+ * a repaired file re-verifies on its next check. A metadata-only change (chmod, xattr) still advances
+ * ctime and costs one extra hash, which is the safe direction to be wrong in.
+ *
+ * That invariant is not a cryptographic guarantee. It holds for ordinary file operations, not against: a
+ * process able to set ctime directly (Windows `SetFileInformationByHandle(FileBasicInfo)` under
+ * `FILE_WRITE_ATTRIBUTES`, or POSIX root) — but such a process already runs as this user and could tamper
+ * some other way too; or a kernel without fine-grained (multigrain) timestamps, where a write landing in
+ * the same coarse clock tick as the read does not move ctime. bigint stats avoid the Number rounding of
+ * 64-bit NTFS file IDs on Windows.
  */
 const verifiedFileIdentity = new Map<string, string>()
 

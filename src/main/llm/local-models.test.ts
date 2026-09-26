@@ -58,6 +58,7 @@ import {
   verifyIntegrity,
   ChecksumMismatchError,
   InsufficientRamError,
+  type LocalModelEntry,
   type LocalModelFile
 } from './local-models'
 
@@ -331,7 +332,10 @@ describe('bundled local model runtime', () => {
     // size of the production model.
     const GOOD = Buffer.from('a small synthetic payload standing in for the pinned GGUF bytes')
     const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
-    let model: (typeof LOCAL_MODELS)[number]
+    // Computed once, at collection time — before the outer beforeEach zeroes hashState.calls — so setting
+    // up GOOD's pinned digest never itself counts as a verification hash inside a test.
+    const GOOD_SHA256 = sha256(GOOD)
+    let model: LocalModelEntry
     let originalGguf: LocalModelFile
     let originalMmproj: LocalModelFile
 
@@ -339,8 +343,8 @@ describe('bundled local model runtime', () => {
       model = LOCAL_MODELS[0]
       originalGguf = model.gguf
       originalMmproj = model.mmproj
-      model.gguf = { ...model.gguf, bytes: GOOD.length, sha256: sha256(GOOD) }
-      model.mmproj = { ...model.mmproj, bytes: GOOD.length, sha256: sha256(GOOD) }
+      model.gguf = { ...model.gguf, bytes: GOOD.length, sha256: GOOD_SHA256 }
+      model.mmproj = { ...model.mmproj, bytes: GOOD.length, sha256: GOOD_SHA256 }
       const paths = modelPaths(model.id)
       mkdirSync(paths.dir, { recursive: true })
       writeFileSync(paths.gguf, GOOD)
@@ -354,12 +358,13 @@ describe('bundled local model runtime', () => {
 
     it('skips re-hashing on a second cold start when the file identity (size, mtime, ctime, inode) is unchanged', async () => {
       await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
-      const afterFirstColdStart = hashState.calls
-      expect(afterFirstColdStart).toBeGreaterThan(0) // the first verification must still do real work
+      // One real hash per model file (gguf + mmproj) — GOOD_SHA256 above did no counted hashing inside
+      // this test, so this is exactly the first verification's own work, not an artifact of setup.
+      expect(hashState.calls).toBe(2)
 
       await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
       // No new hashing on the second, unchanged cold start — this is the whole point of the cache.
-      expect(hashState.calls).toBe(afterFirstColdStart)
+      expect(hashState.calls).toBe(2)
     })
 
     it('re-verifies (and fails closed) the moment a previously-verified file changes on disk', async () => {
@@ -413,7 +418,7 @@ describe('bundled local model runtime', () => {
       await expect(verifyIntegrity(model.id)).rejects.toBeInstanceOf(ChecksumMismatchError)
     })
 
-    it('rejects a replace-by-rename with matching size and mtime, because the inode changed', async () => {
+    it('rejects a same-size, same-mtime replacement renamed over the verified file', async () => {
       const paths = modelPaths(model.id)
       const fixedMtime = new Date(Math.floor(Date.now() / 1000) * 1000)
       utimesSync(paths.gguf, fixedMtime, fixedMtime)
