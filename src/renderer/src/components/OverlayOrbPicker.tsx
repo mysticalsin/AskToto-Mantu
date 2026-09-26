@@ -9,17 +9,18 @@ import {
 import { JarvisOrbButton } from './JarvisOrbButton'
 import { ObsidianOrb } from './ObsidianOrb'
 
-function OrbDiagram({ id }: { id: OverlayOrbPickerCard }): JSX.Element {
+function OrbDiagram({ id, animate }: { id: OverlayOrbPickerCard; animate: boolean }): JSX.Element {
   return (
     <div
       className={`overlay-orb-diagram overlay-orb-diagram--${id}`}
       data-orb-diagram={id}
+      data-orb-diagram-animate={animate || undefined}
       aria-hidden="true"
     >
       {id === 'jakub' ? (
-        <JarvisOrbButton preview onActivate={() => undefined} title="" ariaLabel="" />
+        <JarvisOrbButton preview animate={animate} onActivate={() => undefined} title="" ariaLabel="" />
       ) : (
-        <ObsidianOrb preview onActivate={() => undefined} title="" ariaLabel="" />
+        <ObsidianOrb preview animate={animate} onActivate={() => undefined} title="" ariaLabel="" />
       )}
     </div>
   )
@@ -53,7 +54,7 @@ export function OverlayOrbPicker({
               (locked ? ' opacity-60' : '')
             }
           >
-            <OrbDiagram id={id} />
+            <OrbDiagram id={id} animate={on} />
             <span className="overlay-chrome-card__title">
               {OVERLAY_ORB_COPY[id].title}
               {id === 'jakub' ? <span className="overlay-chrome-card__default">Default</span> : null}

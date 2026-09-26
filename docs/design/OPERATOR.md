@@ -28,7 +28,7 @@ typography:
 
 Tony's packed ops console. One page. Not a marketing site. How people use Métis, who is live, what Asks cost, whether prompt cache is hitting, where seats check in, which CRM sends are stuck, and a signed push of a skill to every Mac and Windows seat.
 
-This is not a Settings card. It is not a local analytics page. The product is a Cloudflare Worker named `metis-operator` under `operator/`. The Métis client keeps prompt caching on, and talks to this Worker only when Settings has an Operator URL.
+This is not a Settings card. It is not a local analytics page. The product is a Cloudflare Worker named `metis-operator` under `operator/`. The Métis client keeps prompt caching on, and talks to this Worker when Settings has an Operator URL, `METIS_OPERATOR_URL` is set, or the shipped default `https://metis-operator.tony-walteur.workers.dev` applies. Heartbeat and ingest still require the ingest secret.
 
 ## Pixel language
 
@@ -119,7 +119,7 @@ Prompt caching is always on for supported cloud APIs.
 - Local / llama / Dust / CLI: `cache: 'n/a'`.
 - Prefix byte-stability: two `buildSystem` calls in one session with different transcripts must produce identical cached-prefix bytes.
 
-When Settings has an Operator URL:
+When an https Operator URL resolves (Settings, env, or the shipped default) and an ingest secret is set:
 
 - Heartbeat about every 60s while the app is up. No coordinates.
 - After each Ask: metrics always; prompt text only if the Ask-text toggle is on.

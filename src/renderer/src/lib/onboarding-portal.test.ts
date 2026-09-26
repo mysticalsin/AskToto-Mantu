@@ -19,7 +19,7 @@ import {
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const portalSrc = readFileSync(join(__dirname, './onboarding-portal.ts'), 'utf8')
-const stageBlock = css.slice(css.indexOf('.onboard-stage {'), css.indexOf('.onboard-stripes,'))
+const stageBlock = css.slice(css.indexOf('.onboard-stage {'), css.indexOf('@media (prefers-reduced-motion: reduce)'))
 
 describe('onboarding portal pill + Ready-only finish', () => {
   it('precomputes different sci-fi open and close buffers at module load', () => {

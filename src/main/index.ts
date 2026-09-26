@@ -175,6 +175,7 @@ import {
   overlayRestSize,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
+  hideParkWindowOpacity,
   settingsOpenRect,
   shouldIgnoreResizeWhilePeekResting,
   shouldParkHoverRestAfterLeavingSurface,
@@ -187,6 +188,7 @@ import {
   SETTINGS_WINDOW_MIN,
   settingsContentHeight
 } from '@shared/settings-bounds'
+import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 import {
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
@@ -327,8 +329,9 @@ import {
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
+import { applyCaveman } from '@shared/caveman-ask'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
-import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey } from '@shared/operator'
+import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey, resolveOperatorBaseUrl } from '@shared/operator'
 import { cloudflareConnectTarget } from './cloudflare-connect'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import {
@@ -604,6 +607,19 @@ if (process.env.ASKTOTO_USERDATA) app.setPath('userData', process.env.ASKTOTO_US
 // clobber it, wedging onboarding at the last slide. A '-dev' suffixed profile sidesteps all of it.
 if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
+}
+
+// Unpackaged Electron.app still ships CFBundleName "Electron". setName changes
+// app.getName() / About / some menus to Métis. The macOS menu-bar process name
+// stays Electron unless a wrapper .app overrides Info.plist — do not invent
+// a second product name for unpackaged builds. Packaged Metis.app already
+// uses CFBundleDisplayName Métis.
+if (!app.isPackaged && !isCaheEdition()) {
+  try {
+    app.setName('Métis')
+  } catch {
+    /* headless */
+  }
 }
 
 // Profile-dir migration across product-name changes. userData follows CFBundleName, so each rename
@@ -1666,11 +1682,24 @@ function leaveExclusiveOsFullscreen(w: BrowserWindow): void {
   }
 }
 
+/** Seal Goldberg in the live renderer before exclusive destroy / park. */
+function lockOnboardingAudioInRenderer(w: BrowserWindow | null): void {
+  if (!w || w.isDestroyed()) return
+  try {
+    void w.webContents.executeJavaScript(
+      `window.dispatchEvent(new Event(${JSON.stringify(ONBOARDING_AUDIO_LOCK_EVENT)}))`
+    )
+  } catch {
+    /* headless / already gone */
+  }
+}
+
 /** Destroy the current overlay and build one whose constructor chrome matches onboardingExclusiveLive(). */
 function recreateOverlayWindow(): void {
   const dying = win
   win = null
   if (dying && !dying.isDestroyed()) {
+    lockOnboardingAudioInRenderer(dying)
     leaveExclusiveOsFullscreen(dying)
     try {
       dying.destroy()
@@ -1679,6 +1708,51 @@ function recreateOverlayWindow(): void {
     }
   }
   createWindow()
+}
+
+/** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */
+function applyOverlaySurfaceChrome(): void {
+  if (!win || win.isDestroyed()) return
+  if (onboardingExclusiveLive()) {
+    try {
+      win.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+      win.setOpacity(1)
+    } catch {
+      /* headless */
+    }
+    return
+  }
+  if (settingsSurfaceOpen) {
+    try {
+      win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
+      win.setOpacity(1)
+    } catch {
+      /* headless */
+    }
+    return
+  }
+  try {
+    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+  } catch {
+    /* headless */
+  }
+}
+
+/** Hide/island park at bounds.y. Re-assert if darwin clamped into workArea.y≈39. */
+function commitParkedOverlayBounds(park: { x: number; y: number; width: number; height: number }): void {
+  if (!win || win.isDestroyed()) return
+  win.setBounds(park, false)
+  try {
+    const after = win.getBounds()
+    if (after.x !== park.x || after.y !== park.y) win.setPosition(park.x, park.y, false)
+  } catch {
+    /* headless */
+  }
 }
 
 function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
@@ -1706,6 +1780,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   try {
     w.setFullScreenable?.(true)
     w.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+    w.setOpacity(1)
     w.setBounds(stage)
   } catch {
     /* headless / already destroyed */
@@ -1732,6 +1807,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
 /** After onboardingDone only: leave exclusive fullscreen and park hide/island peek (never 880×816). */
 function exitExclusiveOnboardingStage(): void {
   if (!win || win.isDestroyed()) return
+  lockOnboardingAudioInRenderer(win)
   leaveExclusiveOsFullscreen(win)
   if (!overlayWindowTransparent) {
     recreateOverlayWindow()
@@ -1753,9 +1829,10 @@ function exitExclusiveOnboardingStage(): void {
   currentWidth = park.width
   islandResting = overlayUsesHover(layout)
   userAnchorY = park.y
-  win.setBounds(park, false)
+  commitParkedOverlayBounds(park)
   startOverlayCursorWatch()
   applyHideClickThrough()
+  applyOverlaySurfaceChrome()
 }
 
 function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
@@ -1842,6 +1919,12 @@ function createWindow(): void {
     // move reports 8×44 (Tony listwins) even after clampHeight lets 2px through.
     minWidth: 1,
     minHeight: 1,
+    // Hide park is at bounds.y (0 on primary). Without this, darwin clamps
+    // setBounds into workArea.y≈39 — the visible purple 8×2 hairline.
+    enableLargerThanScreen: true,
+    // Exclusive: hidden until ready-to-show so constructor chrome is never the first
+    // visible frame. Hero-matching hold (`#05010A`) is the window color if paint lags.
+    show: !onboardingLive,
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2009,8 +2092,21 @@ function createWindow(): void {
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
+  const overlay = win
+  const revealExclusiveWhenPainted = (): void => {
+    if (win !== overlay || overlay.isDestroyed() || overlay.isVisible()) return
+    if (!onboardingExclusiveLive()) return
+    try {
+      overlay.showInactive()
+    } catch {
+      /* headless */
+    }
+  }
+  overlay.once('ready-to-show', revealExclusiveWhenPainted)
+  overlay.webContents.once('did-finish-load', revealExclusiveWhenPainted)
   startOverlayCursorWatch()
   applyHideClickThrough()
+  applyOverlaySurfaceChrome()
 }
 
 function resizeTo(height: number): void {
@@ -2310,7 +2406,8 @@ function parkOverlayAfterHideSpring(): boolean {
   } catch {
     /* headless */
   }
-  win.setBounds(park, false)
+  applyOverlaySurfaceChrome()
+  commitParkedOverlayBounds(park)
   overlayCursorWatchHovering = false
   applyHideClickThrough()
   // Hide rest is an always-on invisible hairline. Tray hide() must not leave
@@ -2382,6 +2479,7 @@ function restoreBarWidth(): void {
   cancelOverlayLeavePark()
   islandResting = false
   applyHideClickThrough()
+  applyOverlaySurfaceChrome()
   // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
   // showInactive (never show+focus) so the top-edge path works without hunting the menu.
   try {
@@ -2428,11 +2526,7 @@ function applySettingsSurface(): void {
   } catch {
     /* headless */
   }
-  try {
-    win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
-  } catch {
-    /* headless */
-  }
+  applyOverlaySurfaceChrome()
   const display = screen.getDisplayMatching(win.getBounds())
   const rect = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   win.setBounds(rect, false)
@@ -2452,11 +2546,7 @@ function leaveSettingsSurface(): void {
   } catch {
     /* headless */
   }
-  try {
-    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
-  } catch {
-    /* headless */
-  }
+  applyOverlaySurfaceChrome()
 }
 
 // Re-center the compact bar on its current display. The old fixed 'settings' window-mode was removed —
@@ -2472,8 +2562,9 @@ function setWindowMode(): void {
     const park = parkAfterExclusiveOnboarding(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
     currentWidth = park.width
     userAnchorY = park.y
-    win.setBounds(park, false)
+    commitParkedOverlayBounds(park)
     applyHideClickThrough()
+    applyOverlaySurfaceChrome()
     return
   }
   const { workArea } = screen.getDisplayMatching(win.getBounds())
@@ -2489,6 +2580,11 @@ function setWindowMode(): void {
     win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
   } catch {
     /* headless */
+  }
+  try {
+    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+  } catch {
+    /* headless / lifted placement stub */
   }
   win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(height, workArea.height) }, false)
 }
@@ -3681,7 +3777,10 @@ function registerIpc(): void {
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
     // Exclusive stage exits only here: onboardingDone false→true. Replay (true→false) re-enters it.
-    if (!cur.onboardingDone && next.onboardingDone) exitExclusiveOnboardingStage()
+    if (!cur.onboardingDone && next.onboardingDone) {
+      lockOnboardingAudioInRenderer(win)
+      exitExclusiveOnboardingStage()
+    }
     else if (cur.onboardingDone && !next.onboardingDone && win && !win.isDestroyed()) {
       applyExclusiveOnboardingStage(win)
     }
@@ -3821,8 +3920,8 @@ function registerIpc(): void {
   // --- Licensing (phone-home activation; see main/license.ts) ---
   ipcMain.handle(IPC.operatorOpen, (e) => {
     assertMainWindow(e)
-    const url = (getSettings().operatorUrl || process.env.METIS_OPERATOR_URL || '').trim()
-    if (/^https:\/\//i.test(url)) void shell.openExternal(url)
+    const url = resolveOperatorBaseUrl(getSettings())
+    if (url) void shell.openExternal(url)
   })
   ipcMain.handle(IPC.licenseActivate, async (e, payload: unknown) => {
     assertMainWindow(e)
@@ -5324,7 +5423,18 @@ function registerIpc(): void {
       win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
       return
     }
-    const s = getSettings()
+    let s = getSettings()
+    // Ask caveman register: `/caveman lite|full|ultra…`, "stop caveman", "normal mode".
+    // Persist in the existing settings store, strip the command from the question the model sees.
+    if ((req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck') {
+      const caveman = applyCaveman(req.prompt, s.askCaveman)
+      if (caveman.changed) s = setSettings({ askCaveman: caveman.next })
+      req.prompt = caveman.visiblePrompt
+      if (caveman.changed && !req.prompt.trim() && !req.image && !req.wantsScreenContext) {
+        win?.webContents.send(IPC.streamDone, { id: req.id })
+        return
+      }
+    }
     // Fresh-question boundary (see the state block above): a plain interactive ask outside a live meeting
     // starts clean unless the user opted into follow-up memory — and even then the memory expires after
     // ASK_MEMORY_IDLE_MS of inactivity. Pinned/cascaded requests (agentOverride / providerOverride —
@@ -5853,7 +5963,7 @@ function registerIpc(): void {
         paintedLen += text.length
         win?.webContents.send(IPC.streamDelta, { id: req.id, text })
       }
-      const systemParts = buildSystemParts(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt)
+      const systemParts = buildSystemParts(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt, s.askCaveman)
       const handle = createStream({
         providerId: provider,
         kind: def.kind,

@@ -22,6 +22,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(experience).toMatch(/muted/)
     expect(experience).toMatch(/loop/)
     expect(experience).toMatch(/autoPlay/)
+    expect(experience).toMatch(/preload="auto"/)
     expect(experience).toMatch(/OnboardingHeroVideo/)
     expect(experience).toMatch(/prefersReducedMotion\(\) \|\| failed/)
     expect(css).toMatch(/\.onboard-hero-video\s*\{/)

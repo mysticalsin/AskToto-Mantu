@@ -4,6 +4,8 @@ import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import { OnboardingV2 } from './components/OnboardingExperience'
+import { preloadOnboardingHeroVideo } from './lib/onboarding-hero-video'
+import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
 // Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
 // the user has asked anything — deferring them keeps that weight out of the eager boot chunk.
@@ -67,6 +69,7 @@ import { useListen, playListenChime } from './lib/listen'
 import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
+import { applyCaveman, DEFAULT_ASK_CAVEMAN } from '@shared/caveman-ask'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
@@ -459,6 +462,10 @@ export function App(): JSX.Element {
   const [nudgeExpired, setNudgeExpired] = useState(false)
   const onboardingDoneAt = settings?.onboardingDoneAt ?? 0
   useEffect(() => {
+    installOnboardingAudioLockHooks()
+    if (settings?.onboardingDone) lockOnboardingAudio()
+  }, [settings?.onboardingDone])
+  useEffect(() => {
     if (settings?.onboardingDone && !onboardingDoneAt) {
       // Legacy profile that finished onboarding before this field existed: start the clock now (one
       // write) so the nudge still auto-expires instead of lingering forever.
@@ -561,11 +568,14 @@ export function App(): JSX.Element {
   const prevOrbStyleRef = useRef<OverlayOrbStyle>(overlayOrbStyle)
   useEffect(() => {
     if (!canMinimize) {
+      prevOrbStyleRef.current = overlayOrbStyle
       if (!minimized) return
       setMinimized(false)
       void window.toto.minimize(false)
       return
     }
+    // Preview Circle/Jarvis on the live Bar. Collapse only on Done (view leaves settings).
+    if (view === 'settings') return
     const styleChanged = prevOrbStyleRef.current !== overlayOrbStyle
     prevOrbStyleRef.current = overlayOrbStyle
     const action = decideCircleRestMinimize({
@@ -575,8 +585,6 @@ export function App(): JSX.Element {
       styleChanged
     })
     if (action === 'minimize') {
-      // Picking Circle/Jarvis while Settings is open must leave the 880×1017 sheet.
-      if (view === 'settings') setView('answer')
       setMinimized(true)
       void window.toto.minimize(true)
       return
@@ -1322,7 +1330,14 @@ export function App(): JSX.Element {
 
   const submit = useCallback(() => {
     if (!requireProvider()) return
-    const q = input.trim()
+    const typed = input.trim()
+    const caveman = applyCaveman(typed, settings?.askCaveman ?? DEFAULT_ASK_CAVEMAN)
+    if (caveman.changed) void patch({ askCaveman: caveman.next })
+    const q = caveman.visiblePrompt
+    if (!q && caveman.changed) {
+      setInput('')
+      return
+    }
     setCaptureError(null)
     const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
     // Screen-aware router (Cluely "Uses Screen"): in a call → copilot; else screen-ask when enabled +
@@ -1397,9 +1412,11 @@ export function App(): JSX.Element {
     settings?.screenAsk,
     settings?.visionAvailable,
     settings?.askFollowUpMemory,
+    settings?.askCaveman,
     askScreen,
     assist,
-    requireProvider
+    requireProvider,
+    patch
   ])
 
   const factCheck = useCallback(() => {
@@ -2350,8 +2367,17 @@ export function App(): JSX.Element {
     if (!collapsed && reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
       return
     }
+    // Chevron Collapse with Settings open must leave Settings the same way Done/X do.
+    // setView is startTransition; use setViewRaw so overlayShowsSettingsSheet clears this frame
+    // and windowMode(bar) hugs immediately — otherwise the gray settings slab stays under the Bar.
+    if (!collapsed && view === 'settings') {
+      setViewRaw('answer')
+      setCollapsed(true)
+      void window.toto.windowMode('bar')
+      return
+    }
     setCollapsed((c) => !c)
-  }, [collapsed])
+  }, [collapsed, view])
 
   // recapGen.run()'s own state update lands via React's startTransition (state.ts run()), so for one
   // render it's possible for recapGenTarget to already point at a NEW file while recapGen.answer still
@@ -3216,10 +3242,9 @@ export function App(): JSX.Element {
         </div>
       )
     }
+    preloadOnboardingHeroVideo()
     return (
       <div ref={setRoot} className="onboard-stage onboard-exclusive-lock">
-        <div className="onboard-stripes" aria-hidden="true" />
-        <div className="onboard-stripes onboard-stripes--b" aria-hidden="true" />
         <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
           <OnboardingV2
             settings={settings}

@@ -22,7 +22,7 @@ const packageJson = readFileSync(join(__dirname, '../../package.json'), 'utf8')
 function winExtraResourcesFromYml(yml: string): { from: string; to: string }[] {
   // Windows CI checkouts may rewrite LF → CRLF. `^win:\n` then misses the win: block and the
   // extraResources pin silently reports managed-node / vcredist as absent.
-  const normalized = yml.replace(/\r\n/g, '\n')
+  const normalized = yml.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
   const win = normalized.split(/^win:\n/m)[1] || ''
   const extra = win.split(/extraResources:\n/)[1] || ''
   const block = extra.split(/\n  [a-z]/)[0]
@@ -41,7 +41,8 @@ describe('Windows packaging does not require a preinstalled Node', () => {
   })
 
   it('still finds managed-node and vcredist when the yml is a Windows CRLF checkout', () => {
-    const extras = winExtraResourcesFromYml(builderYml.replace(/\n/g, '\r\n'))
+    const lf = builderYml.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    const extras = winExtraResourcesFromYml(lf.replace(/\n/g, '\r\n'))
     expect(windowsPackIncludesManagedNode(extras)).toBe(true)
     expect(windowsPackIncludesVcRedist(extras)).toBe(true)
   })

@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
-import { ThinkingOrb } from 'thinking-orbs'
+import { BrandThinkingOrb } from './BrandThinkingOrb'
 import { useWindowDrag } from '../lib/window-drag'
 import { paintOrbFirstFrame } from '../lib/orb-first-frame'
 import {
@@ -27,7 +27,8 @@ export function JarvisOrbButton({
   ariaLabel,
   enableDrag = false,
   hugWidth = false,
-  preview = false
+  preview = false,
+  animate = true
 }: {
   onActivate: () => void
   orbMood?: OrbMood
@@ -38,6 +39,8 @@ export function JarvisOrbButton({
   hugWidth?: boolean
   /** Settings card: same ThinkingOrb as Bar, not a button, not the 22px CSS disc. */
   preview?: boolean
+  /** Settings picker: freeze non-selected card to one frame. */
+  animate?: boolean
 }): JSX.Element {
   const hostRef = useRef<HTMLSpanElement>(null)
   const dragMovedRef = useRef(false)
@@ -64,11 +67,12 @@ export function JarvisOrbButton({
         className={preview ? 'overlay-orb-diagram__jakub-host aw-orb__host' : 'aw-orb__host'}
         aria-hidden="true"
       >
-        <ThinkingOrb
+        <BrandThinkingOrb
           state={orbState}
           size={BAR_PILL_SIZE_PX}
           theme={BAR_ORB_THEME}
           speed={BAR_ORB_SPEED}
+          animate={animate}
           className="aw-orb__canvas"
           aria-hidden="true"
           aria-label=""

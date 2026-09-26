@@ -1,7 +1,7 @@
 ---
 project: Métis
 type: locked-mode-skills-contract
-owns: shipped operator skills for the nine builtin conversation modes, plus the shared humanizer
+owns: shipped operator skills for the nine builtin conversation modes, plus the shared humanizer and Ask caveman
 does-not-own: overlay chrome (Bar / Island / Hide), Overlay 58, Brain 69, user-editable mode prompts
 ready-to-merge: no until Devon Mac-shows Interview + Cold Calling + Support answers that use the skill, and Settings cannot edit it
 ---
@@ -28,16 +28,18 @@ Nine builtin modes (`CONVERSATION_MODES` in `src/shared/ipc.ts`):
 | `general` | General | Always-on. Sharpest person in the room. Next line or one best question. |
 | `cold-call` | Cold Calling | Live caller. 70 / 30 listen. One discovery question or one spoken line. Not a prep memo. |
 
-Plus one shared skill:
+Plus two shared skills:
 
 | id | path | Job |
 | --- | --- | --- |
 | `humanizer` | `skills/humanizer/SKILL.md` | Spoken lines a colleague would actually say. Embedded in every mode skill. Also composed after every ask. |
+| `caveman` | `skills/caveman/SKILL.md` | Ask answer register. Default **full**. Off via "stop caveman" / "normal mode". Auto-Clarity drops it for warnings. Not a tenth conversation mode. Not Operator pack push. |
 
 Files:
 
 ```
 skills/humanizer/SKILL.md
+skills/caveman/SKILL.md
 skills/modes/<id>/SKILL.md
 ```
 
@@ -53,7 +55,7 @@ locked: true
 
 `version` is per-skill. Bumping a skill is a Métis release of **that file's hash**. Other skills stay put.
 
-Do **not** paste third-party `SKILL.md` files into this repo. Skills are original Métis playbooks. Patterns below were analyzed; wording is ours.
+Do **not** paste third-party `SKILL.md` files into this repo except Ask `caveman`, which is the JuliusBrussee/caveman playbook locked into the existing mode-skills contract (header + Ask register wiring). Patterns below were analyzed; other wording is ours.
 
 ## Sources analyzed (patterns, not text)
 
@@ -131,6 +133,7 @@ Then main appends locked skills **after** that user / default prompt:
 [visible mode prompt]
 [LOCKED MODE SKILL]     ← builtin modes only, exactly one
 [LOCKED HUMANIZER]      ← always, including custom modes
+[LOCKED CAVEMAN]        ← typed Ask (answer/vision) only, default full, omitted when off
 [profile / docs / rails / language]
 ```
 
@@ -138,8 +141,9 @@ Rules:
 
 - Builtin mode: exactly one locked mode skill + the humanizer.
 - Custom user mode: humanizer only. Never a fake builtin skill. Never "closest match".
-- Fact-check: no mode skill, no humanizer (VERDICT contract stays clean, same as today's persona skip).
-- Recap / summary: no live-mode skill. Those paths keep their own prompts and `HUMAN_STYLE`.
+- Typed Ask (`answer` / `vision`, not fact-check): also locked caveman at `settings.askCaveman` (default `full`). `/caveman lite|full|ultra|wenyan-*` and "stop caveman" / "normal mode" persist in that same settings field and strip from the visible question. Auto-Clarity drops caveman for security warnings, irreversible confirms, multi-step fragment risk, compression ambiguity, and "clarify".
+- Fact-check: no mode skill, no humanizer, no caveman (VERDICT contract stays clean, same as today's persona skip).
+- Recap / summary / live suggest: no caveman. Those paths keep their own prompts and `HUMAN_STYLE`.
 - Typed / screen asks still `retargetForTypedAsk` on the **visible** prompt only. The skill playbook stays. The spoken OUTPUT FORMAT in the visible prompt is what gets swapped.
 
 Each mode skill embeds a Humanizer section so the playbook is complete if read alone. The shared `humanizer` file is still composed in. That is not a user toggle.
@@ -185,6 +189,7 @@ Humanizer (spoken and written the user will say out loud or send):
 - User `modePrompts` cannot replace the skill body.
 - Custom modes do not get a builtin skill.
 - Humanizer is present in every builtin composition (and every custom composition).
+- Typed Ask default includes locked caveman at full. "stop caveman" / "normal mode" omit it. Auto-Clarity directive fires for irreversible / clarify prompts.
 - Settings has no editor for these files.
 - Recruiting skill names the interview-sheet cells (track, identity, wishes, job research, mobility, comp, admin, languages, score, portfolio, availability).
 - Interview skill is candidate-side (I, first sentence, unlabeled STAR). Recruiting skill is interviewer-side (open question, never yes / no).

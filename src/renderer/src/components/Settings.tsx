@@ -67,6 +67,7 @@ import {
 import { timeSavedFromTotals } from '@shared/time-saved'
 import { TimeSavedView } from './TimeSavedView'
 import { autoHideOverlayForLayout } from '@shared/overlay-chrome'
+import { overlayShowsBarRestPicker } from '@shared/overlay-orb'
 import { OverlayChromePicker } from './OverlayChromePicker'
 import { OverlayOrbPicker } from './OverlayOrbPicker'
 import { formatResetPhrase } from '@shared/reset-time'
@@ -113,6 +114,7 @@ import {
 } from '@shared/providers'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { modeSkillLock } from '@shared/mode-skills'
+import { DEFAULT_OPERATOR_URL, operatorUrlConfigured } from '@shared/operator'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
@@ -126,7 +128,7 @@ import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 import { displayAccelerator, isWindows } from '../lib/keys'
 import { decideDustLiveCheck } from '../lib/dust-live-check'
-import { haltAllOnboardingAudio } from '../lib/onboarding-music'
+import { haltAllOnboardingAudio, unlockOnboardingAudio } from '../lib/onboarding-music'
 import { canShowConnected, cliSetupChip, nextCliSetupStep } from '@shared/cli-setup-status'
 import {
   DUST_EMPTY_AGENTS_ERROR,
@@ -152,7 +154,28 @@ const PROFILE_CREDENTIAL_STORE = isWindows ? 'Windows credential store' : 'Keych
 // (Windows renders <option> from its OWN colors, defaulting to white — the app's bg/text don't cascade in).
 // The `option` selector only matches <select> children, so plain inputs sharing this class are unaffected.
 export const ctl =
-  'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] [color-scheme:dark] [&>option]:bg-[#1A0033] [&>option]:text-white'
+  'no-drag font-body cl-input cl-focus min-w-0 max-w-full px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] [color-scheme:dark] [&>option]:bg-[#1A0033] [&>option]:text-white'
+
+/**
+ * Settings tabpanel scroll classes. Vertical scroll only — overflow-x must stay hidden/clip.
+ * overflow-y-auto alone computes overflow-x: auto (CSS overflow pairing), which is the Win
+ * Settings sideways-pan bug on Audio / AI.
+ */
+export const SETTINGS_CONTENT_SCROLL_CLASS =
+  'cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden'
+
+const OVERFLOW_X_CLIP = new Set(['overflow-x-hidden', 'overflow-x-clip'])
+const OVERFLOW_X_ALLOW = new Set(['overflow-x-auto', 'overflow-x-scroll', 'overflow-x-visible'])
+const OVERFLOW_Y_SCROLL = new Set(['overflow-y-auto', 'overflow-y-scroll'])
+
+/** True when a Settings scroll-root class allows Y scroll and clips X (no sideways bar/pan). */
+export function settingsScrollClipsOverflowX(className: string): boolean {
+  const tokens = className.trim().split(/\s+/)
+  const allowsY = tokens.some((t) => OVERFLOW_Y_SCROLL.has(t))
+  const clipsX = tokens.some((t) => OVERFLOW_X_CLIP.has(t))
+  const allowsX = tokens.some((t) => OVERFLOW_X_ALLOW.has(t))
+  return allowsY && clipsX && !allowsX
+}
 
 // Providers excluded from the generic provider tiles grid + generic "key" Section because they have
 // their OWN dedicated setup card instead (dust → DustSetup, claude-cli/codex-cli → CliIntegration).
@@ -457,7 +480,7 @@ export function Section({
   const tabIcon = useContext(TabIconContext)
   const Icon = icon ?? tabIcon
   return (
-    <section className="cl-card flex flex-col gap-0 px-4 py-4">
+    <section className="cl-card flex min-w-0 max-w-full flex-col gap-0 px-4 py-4">
       <div className="mb-3 flex items-start gap-2.5">
         {Icon && (
           <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)]">
@@ -500,7 +523,7 @@ function ProviderTile({
       disabled={locked}
       onClick={onSelect}
       className={[
-        'no-drag cl-focus flex flex-col items-start gap-0.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
+        'no-drag cl-focus flex min-w-0 w-full flex-col items-start gap-0.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
         active
           ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
           : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
@@ -520,7 +543,7 @@ function ProviderTile({
           {hasKey && <Check size={14} className="shrink-0 text-[color:var(--cl-success)]" />}
         </span>
       </span>
-      <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{PROVIDERS[id].blurb}</span>
+      <span className="w-full min-w-0 break-words text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{PROVIDERS[id].blurb}</span>
     </button>
   )
 }
@@ -539,7 +562,7 @@ function ExpandableSection({
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   return (
-    <section className="flex flex-col rounded-[14px] border border-dashed border-[var(--cl-border)] px-4 py-3 transition-colors hover:border-[var(--cl-input)]">
+    <section className="flex min-w-0 max-w-full flex-col rounded-[14px] border border-dashed border-[var(--cl-border)] px-4 py-3 transition-colors hover:border-[var(--cl-input)]">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -1013,7 +1036,7 @@ function AiSection({
   const keyEntrySection =
     !CLI_PROVIDERS.has(provider) && provider !== 'cloudflare' && PROVIDERS[provider].kind !== 'local' ? (
     <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider." icon={Lock}>
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         <label htmlFor={keyInputId} className="sr-only">
           {def.label} API key
         </label>
@@ -1031,7 +1054,7 @@ function AiSection({
                 ? '•••••• saved (paste to replace)'
                 : `Paste your ${def.label} key`
           }
-          className={'flex-1 ' + ctl + (envKeyActive ? ' opacity-60' : '')}
+          className={'min-w-0 flex-1 ' + ctl + (envKeyActive ? ' opacity-60' : '')}
         />
         <button
           type="button"
@@ -1283,7 +1306,7 @@ function AiSection({
   ) : null
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex min-w-0 max-w-full flex-col gap-5">
       {/* CLI Integration — Claude Code CLI and Codex CLI, first so auto-setup is the first thing offered */}
       <CliIntegration settings={settings} patch={patch} />
 
@@ -1302,7 +1325,7 @@ function AiSection({
           plus its full key card below whenever it's the one currently answering questions. */}
       <div
         className={[
-          'flex items-center justify-between gap-2 rounded-[10px] border p-3',
+          'flex min-w-0 items-center justify-between gap-2 rounded-[10px] border p-3',
           provider === 'anthropic'
             ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
             : anthropicAllowed
@@ -1310,7 +1333,7 @@ function AiSection({
               : 'border-[var(--cl-border)] bg-white/[0.02] opacity-60'
         ].join(' ')}
       >
-        <div className="flex flex-col gap-0.5">
+        <div className="min-w-0 flex flex-col gap-0.5">
           <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{PROVIDERS.anthropic.label}</span>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             {PROVIDERS.anthropic.blurb}
@@ -1350,7 +1373,7 @@ function AiSection({
       {/* Featured API providers — same prominence as the CLI cards above, so picking GPT/Grok/Kimi/
           Gemini doesn't require digging into a collapsed section. */}
       <Section title="Other providers" desc="Bring your own key from another provider." icon={Network}>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid min-w-0 grid-cols-2 gap-2">
           {featured.map((id) => (
             <ProviderTile
               key={id}
@@ -1447,7 +1470,7 @@ function AiSection({
               />
             </div>
           )}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid min-w-0 grid-cols-2 gap-2">
             {shown.map((id) => (
               <ProviderTile
                 key={id}
@@ -1484,7 +1507,7 @@ function AiSection({
 
       {/* Thinking mode — applies to whatever's active (raw model tiers, or your two Dust agents) */}
       <Section title="Thinking mode" desc="When to use a fast model vs. a deeper one for harder questions." icon={Lightbulb}>
-        <div className="flex gap-1.5">
+        <div className="flex min-w-0 flex-wrap gap-1.5">
           {(
             [
               ['auto', 'Auto'],
@@ -1500,7 +1523,7 @@ function AiSection({
                 onClick={() => patch({ thinkingMode: m })}
                 aria-pressed={on}
                 className={[
-                  'no-drag cl-focus flex-1 rounded-[8px] border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                  'no-drag cl-focus min-w-0 flex-1 rounded-[8px] border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                   on
                     ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-foreground)]'
                     : 'border-[var(--cl-border)] bg-white/[0.02] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.05]'
@@ -2473,10 +2496,10 @@ function CliIntegration({
             : 'border-[var(--cl-border)] bg-white/[0.02]'
         ].join(' ')}
       >
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex flex-col gap-0.5">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <div className="min-w-0 flex flex-col gap-0.5">
             <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{def.label}</span>
-            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</span>
+            <span className="min-w-0 break-words text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</span>
           </div>
           {isActive ? (
             <span className={activePill}>
@@ -4249,7 +4272,7 @@ function DustSetup({
               value={link}
               onChange={(e) => onLink(e.target.value)}
               placeholder="Paste your Dust workspace or agent URL (fills the fields below)"
-              className={'w-full pl-7 ' + ctl}
+              className={'w-full min-w-0 max-w-full pl-7 ' + ctl}
             />
           </div>
           <span className="pl-7 text-[11px] text-[color:var(--cl-muted-foreground)]">
@@ -4550,7 +4573,7 @@ function AudioChoices({
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
   return (
-    <div className="grid grid-cols-3 gap-2">
+    <div className="grid min-w-0 grid-cols-3 gap-2">
       {getAudioChoices().map((c) => {
         const active = c.id === settings.audioSource
         const locked = settings.managedKeys.includes('audioSource')
@@ -4562,7 +4585,7 @@ function AudioChoices({
             disabled={locked}
             onClick={() => patch({ audioSource: c.id })}
             className={[
-              'no-drag cl-focus flex flex-col items-center gap-1 rounded-[var(--cl-radius)] border px-2 py-3 transition-colors',
+              'no-drag cl-focus flex min-w-0 w-full flex-col items-center gap-1 rounded-[var(--cl-radius)] border px-2 py-3 text-center transition-colors',
               active
                 ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
                 : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
@@ -4571,8 +4594,8 @@ function AudioChoices({
           >
             <c.icon size={16} className={active ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'} />
             <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">{c.label}</span>
-            <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{c.desc}</span>
-            <span className="text-[10px] text-[color:var(--cl-muted-foreground)]">{c.perm}</span>
+            <span className="min-w-0 break-words text-[11px] text-[color:var(--cl-muted-foreground)]">{c.desc}</span>
+            <span className="min-w-0 break-words text-[10px] text-[color:var(--cl-muted-foreground)]">{c.perm}</span>
           </button>
         )
       })}
@@ -4762,15 +4785,15 @@ function MicPicker({
 
   const locked = settings.managedKeys.includes('micDeviceId')
   return (
-    <div className="mt-3 flex flex-col gap-1.5">
-      <div className="flex items-center gap-2">
+    <div className="mt-3 flex min-w-0 flex-col gap-1.5">
+      <div className="flex min-w-0 items-center gap-2">
         <span className="shrink-0 text-[12px] text-[color:var(--cl-muted-foreground)]">Microphone</span>
         <select
           value={settings.micDeviceId}
           disabled={locked}
           onChange={(e) => patch({ micDeviceId: e.target.value })}
           aria-label="Microphone"
-          className={'no-drag flex-1 ' + ctl + (locked ? ' opacity-60' : '')}
+          className={'no-drag min-w-0 flex-1 ' + ctl + (locked ? ' opacity-60' : '')}
         >
           <option value="">System default</option>
           {devices.map((d, i) => (
@@ -5021,7 +5044,10 @@ function ModePromptEditor({
         <p className="m-0 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           Operator skill v{modeSkillLock().skills[mode]?.version ?? 'unknown'} is locked to this Métis
           build. Your prompt above still applies. The skill runs in the background and cannot be
-          edited, deleted, or overridden here.
+          edited, deleted, or overridden here. Ask answers also run locked caveman v
+          {modeSkillLock().skills.caveman?.version ?? 'unknown'} (default full). Say stop caveman or
+          normal mode to drop it. /caveman lite|full|ultra switches intensity. That skill cannot be
+          edited here.
         </p>
       )}
     </div>
@@ -5935,10 +5961,10 @@ export function Settings({
         role="tabpanel"
         id="settings-panel"
         aria-labelledby={`settings-tab-${tab}`}
-        className="cl-content scroll-thin min-h-0 flex-1 overflow-y-auto"
+        className={SETTINGS_CONTENT_SCROLL_CLASS}
       >
         <TabIconContext.Provider value={TABS.find((t) => t.id === tab)?.icon}>
-        <div className="flex flex-col gap-6 px-5 pt-5 pb-16">
+        <div className="flex min-w-0 max-w-full flex-col gap-6 px-5 pt-5 pb-16">
             {tab === 'ai' && (
               <AiSection
                 settings={settings}
@@ -5998,15 +6024,19 @@ export function Settings({
                         })
                       }
                     />
-                    <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Bar rest</p>
-                    <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                      Applies when Overlay chrome is Bar.
-                    </p>
-                    <OverlayOrbPicker
-                      value={settings.overlayOrbStyle}
-                      locked={settings.managedKeys.includes('overlayOrbStyle')}
-                      onChange={(id) => patch({ overlayOrbStyle: id })}
-                    />
+                    {overlayShowsBarRestPicker(settings.overlayLayout) ? (
+                      <>
+                        <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Bar rest</p>
+                        <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                          Applies when Overlay chrome is Bar.
+                        </p>
+                        <OverlayOrbPicker
+                          value={settings.overlayOrbStyle}
+                          locked={settings.managedKeys.includes('overlayOrbStyle')}
+                          onChange={(id) => patch({ overlayOrbStyle: id })}
+                        />
+                      </>
+                    ) : null}
                   </div>
                 </Section>
                 <Section
@@ -6065,7 +6095,7 @@ export function Settings({
             )}
 
             {tab === 'audio' && (
-              <div className="flex flex-col gap-6">
+              <div className="flex min-w-0 max-w-full flex-col gap-6">
                 <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting." icon={Mic}>
                   <div className="mb-2"><ManagedChip keys={settings.managedKeys} k="audioSource" /></div>
                   <AudioChoices settings={settings} patch={patch} />
@@ -6074,8 +6104,8 @@ export function Settings({
                       Speech tab: a meeting that requested system audio ran with the microphone only, so
                       the other side's speech is missing from the transcript. Persists until dismissed. */}
                   {settings.micOnlyFallbackAt != null && (
-                    <div className="mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span>
+                    <div className="mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span className="min-w-0 flex-1 break-words">
                         A recent meeting captured your microphone only. The other side&apos;s audio was not
                         recorded
                         {isWindows
@@ -6201,8 +6231,8 @@ export function Settings({
                     </div>
                   )}
                   {settings.asrLastFallbackAt != null && (
-                    <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span>
+                    <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span className="min-w-0 flex-1 break-words">
                         Parakeet failed and auto-switched to Whisper for the rest of a recent meeting.{' '}
                         {new Date(settings.asrLastFallbackAt).toLocaleString()}.
                       </span>
@@ -6211,8 +6241,8 @@ export function Settings({
                   )}
                   <AsrModelRow />
                   {settings.asrImportTierFallbackAt != null && (
-                    <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span>
+                    <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span className="min-w-0 flex-1 break-words">
                         An imported recording was transcribed with the compact model. The
                         higher-accuracy one is not installed. Accuracy is lower, especially on
                         non-English audio. {new Date(settings.asrImportTierFallbackAt).toLocaleString()}.
@@ -6221,8 +6251,8 @@ export function Settings({
                     </div>
                   )}
                   {(settings as SettingsWithAsrWebgpuFallback).asrWebgpuFallbackAt != null && (
-                    <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span>
+                    <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span className="min-w-0 flex-1 break-words">
                         Best was requested but is not running on this device. Fast is active. Download
                         the high-accuracy model below, or keep Fast as a power option.
                       </span>
@@ -6419,7 +6449,7 @@ export function Settings({
                 </Section>
                 <Section
                   title="Operator"
-                  desc="Point this Mac at Tony's Operator Worker. Empty means no fleet heartbeat. This is not a local analytics page."
+                  desc="Point this Mac at Tony's Operator Worker. Empty uses the shipped Operator URL at runtime. Heartbeat still needs the ingest secret. This is not a local analytics page."
                   icon={Settings2}
                 >
                   <label className="flex flex-col gap-1 px-1 py-2">
@@ -6428,11 +6458,14 @@ export function Settings({
                       value={settings.operatorUrl || ''}
                       spellCheck={false}
                       autoComplete="off"
-                      placeholder="https://metis-operator.example.workers.dev"
+                      placeholder={DEFAULT_OPERATOR_URL}
                       disabled={settings.managedKeys.includes('operatorUrl')}
                       onChange={(e) => patch({ operatorUrl: e.target.value.trim() })}
                       className={`${ctl} w-full`}
                     />
+                    <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                      Leave empty to use {DEFAULT_OPERATOR_URL}. The field is not force-written. Ingest secret stays required.
+                    </span>
                   </label>
                   <label className="flex flex-col gap-1 px-1 py-2">
                     <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Ingest secret</span>
@@ -6456,7 +6489,7 @@ export function Settings({
                       disabled={settings.managedKeys.includes('sendAskText')}
                     />
                   )}
-                  {/^https:\/\//i.test(settings.operatorUrl || '') && (
+                  {operatorUrlConfigured(settings) && (
                     <button
                       type="button"
                       onClick={() => void window.toto.operatorOpen()}
@@ -6799,6 +6832,7 @@ export function Settings({
           onClick={() => {
             if (window.confirm("Replay onboarding from the start? Your settings won't change.")) {
               haltAllOnboardingAudio()
+              unlockOnboardingAudio()
               patch({ onboardingDone: false })
               onClose?.()
             }

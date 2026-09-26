@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 describe('local processing privacy boundary', () => {
   it('forces an opted-in vision request onto local before provider overrides or cloud routing', () => {
@@ -82,7 +82,8 @@ describe('local processing privacy boundary', () => {
     // `req.mode === 'answer' && req.wantsScreenContext` so fact-check-on-screen stops being sent zero
     // screen data. The redaction invariant below is what this test exists to protect, and it is
     // independent of which asks reach the block.
-    const start = source.indexOf('req.wantsScreenContext) {')
+    // Must not match the caveman early-return `!req.wantsScreenContext) {` above this block.
+    const start = source.indexOf("if (req.mode === 'answer' && req.wantsScreenContext) {")
     expect(start).toBeGreaterThan(-1)
     const end = source.indexOf('} catch (err) {', start)
     expect(end).toBeGreaterThan(start)
@@ -102,7 +103,7 @@ describe('local processing privacy boundary', () => {
   // "fact-check what's on my screen" reached the model with no screen data at all. The two
   // injections are now siblings: brainContext stays fact-check-excluded, screenContext does not.
   it('injects screen context for fact-check too — only brainContext is fact-check-excluded (MQA-009)', () => {
-    const screenIdx = source.indexOf('req.wantsScreenContext) {')
+    const screenIdx = source.indexOf("if (req.mode === 'answer' && req.wantsScreenContext) {")
     const brainGateIdx = source.indexOf("req.mode === 'answer' && req.kind !== 'factcheck'")
     expect(screenIdx).toBeGreaterThan(-1)
     expect(brainGateIdx).toBeGreaterThan(-1)
