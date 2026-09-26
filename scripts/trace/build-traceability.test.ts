@@ -173,50 +173,70 @@ describe('applyEvidenceOverride — the one ADR-017 kit-status mapping', () => {
   })
 })
 
-describe('mergeGoverningKitRefs — derives status from every still-governing (latest-per-level) record', () => {
+describe('mergeGoverningKitRefs — most-advanced PASS, capped by least-advanced FAIL, per kit_ref', () => {
+  // Explicit type argument on every fixture below: the map's entries have different kit_refs key
+  // sets, and without it TS infers each entry's own literal shape rather than a plain
+  // Record<string, string>, which a FOO-02-less variant then fails to satisfy.
+  type Rec = { result: 'PASS' | 'FAIL'; kit_refs: Record<string, string> }
+
   it('a kit_ref only one level\'s governing record mentions takes that status unchanged', () => {
-    const byLevel = new Map([['LOCALLY_TESTED', { kit_refs: { 'FOO-01': 'MET' } }]])
+    const byLevel = new Map<string, Rec>([['LOCALLY_TESTED', { result: 'PASS', kit_refs: { 'FOO-01': 'MET' } }]])
     expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'MET' })
   })
 
   it('reads kit_refs from a governing record whose own result is FAIL, not only from a PASS', () => {
-    const byLevel = new Map([['LOCALLY_TESTED', { result: 'FAIL', kit_refs: { 'FOO-01': 'NOT_MET' } }]])
+    const byLevel = new Map<string, Rec>([['LOCALLY_TESTED', { result: 'FAIL', kit_refs: { 'FOO-01': 'NOT_MET' } }]])
     expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'NOT_MET' })
   })
 
-  it('a later-level FAIL withdraws an earlier-level PASS\'s more advanced status for the same kit_ref', () => {
-    // Both are governing (one per level) — this is not "earlier vs later in one file", it's two
-    // levels whose governing records disagree, which is exactly when the least-advanced wins.
-    const byLevel = new Map([
+  it('the SCHEMA.md M2-9000 worked example: three governing PASS records at increasing statuses merge to the most advanced (MET)', () => {
+    // DESIGNED PASS {PARTIAL} -> LOCALLY_TESTED PASS {PARTIAL} -> LIVE_VERIFIED PASS {MET}. All
+    // three are governing (one per level, INV-2) and none is a FAIL, so the most-advanced PASS
+    // wins outright — the old least-advanced-of-all-levels rule stuck this at PARTIAL forever.
+    const byLevel = new Map<string, Rec>([
+      ['DESIGNED', { result: 'PASS', kit_refs: { 'EXAMPLE-01': 'PARTIAL' } }],
+      ['LOCALLY_TESTED', { result: 'PASS', kit_refs: { 'EXAMPLE-01': 'PARTIAL' } }],
+      ['LIVE_VERIFIED', { result: 'PASS', kit_refs: { 'EXAMPLE-01': 'MET' } }]
+    ])
+    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'EXAMPLE-01': 'MET' })
+  })
+
+  it('an ENGINEERING_COMPLETE-to-DONE path: a BLOCKED PASS record does not cap a later-recorded MET PASS at another level', () => {
+    // LOCALLY_TESTED PASS {BLOCKED} (recorded while an external blocker still applied) followed,
+    // after the unblock, by LIVE_VERIFIED PASS {MET}. Both records passed — BLOCKED here is the
+    // kit_ref's own reported status, not a FAIL — so the most-advanced PASS (MET) governs; L9/L10
+    // never require LOCALLY_TESTED to be re-recorded once LIVE_VERIFIED reports MET.
+    const byLevel = new Map<string, Rec>([
+      ['LOCALLY_TESTED', { result: 'PASS', kit_refs: { 'FOO-01': 'BLOCKED' } }],
+      ['LIVE_VERIFIED', { result: 'PASS', kit_refs: { 'FOO-01': 'MET' } }]
+    ])
+    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'MET' })
+  })
+
+  it('a governing FAIL caps a more-advanced governing PASS at the FAIL\'s own (least-advanced) status', () => {
+    // Levels are an unordered set (INV-3) — this is two governing records disagreeing, not "later
+    // withdraws earlier". A FAIL can never be hidden behind a more-advanced PASS from another level.
+    const byLevel = new Map<string, Rec>([
       ['LOCALLY_TESTED', { result: 'PASS', kit_refs: { 'FOO-01': 'MET' } }],
       ['LIVE_VERIFIED', { result: 'FAIL', kit_refs: { 'FOO-01': 'NOT_MET' } }]
     ])
     expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'NOT_MET' })
   })
 
-  it.each([
-    ['BLOCKED', 'NOT_MET', 'BLOCKED'],
-    ['NOT_MET', 'PARTIAL', 'NOT_MET'],
-    ['PARTIAL', 'MET', 'PARTIAL'],
-    ['MET', 'BLOCKED', 'BLOCKED']
-  ])('the least-advanced of %s and %s wins: %s', (a, b, expected) => {
-    const byLevel = new Map([
-      ['LOCALLY_TESTED', { kit_refs: { 'FOO-01': a } }],
-      ['LIVE_VERIFIED', { kit_refs: { 'FOO-01': b } }]
+  it('a kit_ref only FAIL records mention takes the least-advanced of those FAIL statuses', () => {
+    const byLevel = new Map<string, Rec>([
+      ['LOCALLY_TESTED', { result: 'FAIL', kit_refs: { 'FOO-01': 'NOT_MET' } }],
+      ['LIVE_VERIFIED', { result: 'FAIL', kit_refs: { 'FOO-01': 'BLOCKED' } }]
     ])
-    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': expected })
+    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'BLOCKED' })
   })
 
-  it('merges independently per kit_ref — one level\'s BLOCKED does not drag down another kit_ref', () => {
-    // Explicit type argument: the two kit_refs literals below have different key sets, and without
-    // it TS infers a union of their exact shapes rather than each entry's kit_refs as a plain
-    // Record<string, string>, which the FOO-02-less variant then fails (an inferred optional
-    // `'FOO-02'?: undefined` isn't assignable to Record's `string` value type).
-    const byLevel = new Map<string, { kit_refs: Record<string, string> }>([
-      ['LOCALLY_TESTED', { kit_refs: { 'FOO-01': 'MET', 'FOO-02': 'MET' } }],
-      ['LIVE_VERIFIED', { kit_refs: { 'FOO-01': 'BLOCKED' } }]
+  it('merges independently per kit_ref — a FAIL on one kit_ref does not cap another kit_ref it does not mention', () => {
+    const byLevel = new Map<string, Rec>([
+      ['LOCALLY_TESTED', { result: 'PASS', kit_refs: { 'FOO-01': 'MET', 'FOO-02': 'MET' } }],
+      ['LIVE_VERIFIED', { result: 'FAIL', kit_refs: { 'FOO-01': 'NOT_MET' } }]
     ])
-    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'BLOCKED', 'FOO-02': 'MET' })
+    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'NOT_MET', 'FOO-02': 'MET' })
   })
 
   it('an empty governing-records map yields no overrides', () => {
@@ -365,7 +385,7 @@ describe('extractBlockerTicketRefs — ticket-bearing columns (every item) plus 
     const md = `
 | B | Ticket | Exact unblock step |
 |---|---|---|
-| B-07 | 9007: Get the one-page approval: entitlement authority (X, Y, Z), gateway policy (W), and the default route | Read the one-pager and answer |
+| B-99 | 9007: Order parts: bolts (M3, M4, M5), washers (M4), and a spare | Check the catalogue |
 `
     const { refs, malformed } = extractBlockerTicketRefs(md)
     expect(refs.has('M2-9007')).toBe(true)
@@ -581,7 +601,7 @@ describe('buildTraceability — mapping, coverage and fail-closed reconciliation
 describe('rendering — structural, not a source-text snapshot', () => {
   const result = buildTraceability({
     inventory: [
-      row({ id: 'FOO-01', kit: 'kitA', sources: ['plan/registry.json#foo'] }),
+      row({ id: 'FOO-01', kit: 'kitA', sources: ['plan/registry.json#foo'], note: 'a field the typedef does not declare' }),
       row({ id: 'FOO-02', kit: 'kitA' })
     ],
     tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })],
@@ -616,23 +636,18 @@ describe('rendering — structural, not a source-text snapshot', () => {
   it('renderJson emits every inventory row field unchanged (byte-for-byte), plus tickets and status', () => {
     const json = renderJson(result)
     expect(json.rows).toHaveLength(2)
+    const inputRow = row({ id: 'FOO-01', kit: 'kitA', sources: ['plan/registry.json#foo'], note: 'a field the typedef does not declare' })
     const foo01 = json.rows.find((r: any) => r.id === 'FOO-01')
-    expect(foo01).toMatchObject({
-      id: 'FOO-01',
-      kit: 'kitA',
-      source_file: 'plan/registry.json',
-      source_ref: 'foo[0]',
-      parent_task: '',
-      sources: ['plan/registry.json#foo'],
-      tickets: ['M2-9001'],
-      status: 'DONE'
-    })
+    // toEqual, not toMatchObject: a field the typedef does not declare (`note`) must still pass
+    // through untouched, so a dropped or silently renamed field would fail this, not just a
+    // subset check.
+    expect(foo01).toEqual({ ...inputRow, tickets: ['M2-9001'], status: 'DONE' })
   })
 
-  it('renderJson\'s summary reports rows, rows_mapped, unique_ids, unique_ids_mapped and errorCount', () => {
+  it('renderJson\'s summary reports rows, rows_mapped, unique_ids, unique_ids_mapped and error_count', () => {
     const json = renderJson(result)
     // FOO-02 has no citing ticket, so buildTraceability's own fail-closed check flags it unmapped.
-    expect(json.summary).toEqual({ rows: 2, rows_mapped: 1, unique_ids: 2, unique_ids_mapped: 1, errorCount: 1 })
+    expect(json.summary).toEqual({ rows: 2, rows_mapped: 1, unique_ids: 2, unique_ids_mapped: 1, error_count: 1 })
   })
 })
 
