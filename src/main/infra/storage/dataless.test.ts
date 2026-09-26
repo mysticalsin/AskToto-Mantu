@@ -33,19 +33,19 @@ function fileVersion(path: string, overrides: Partial<Omit<FileVersion, 'path'>>
 }
 
 // ---------------------------------------------------------------------------------------------------
-// D1 / D2 — pure decoding
+// Pure decoding
 // ---------------------------------------------------------------------------------------------------
 
 describe('presenceFromStFlags', () => {
-  const table: Array<[number, ContentPresence]> = [
-    [0, 'local'],
-    [0x20, 'local'], // UF_COMPRESSED alone: an APFS-compressed LOCAL file, not dataless
-    [0x8000, 'local'],
-    [0x40000000, 'dataless'], // SF_DATALESS
-    [0x40000020, 'dataless'] // SF_DATALESS + UF_COMPRESSED
+  const table: Array<{ hex: string; flags: number; expected: ContentPresence }> = [
+    { hex: '0x0', flags: 0, expected: 'local' },
+    { hex: '0x20', flags: 0x20, expected: 'local' }, // UF_COMPRESSED alone: an APFS-compressed LOCAL file, not dataless
+    { hex: '0x8000', flags: 0x8000, expected: 'local' },
+    { hex: '0x40000000', flags: 0x40000000, expected: 'dataless' }, // SF_DATALESS
+    { hex: '0x40000020', flags: 0x40000020, expected: 'dataless' } // SF_DATALESS + UF_COMPRESSED
   ]
 
-  it.each(table)('flags 0x%s decodes to %s (SF_DATALESS marks cloud-only, UF_COMPRESSED alone is local)', (flags, expected) => {
+  it.each(table)('flags $hex decodes to $expected (SF_DATALESS marks cloud-only, UF_COMPRESSED alone is local)', ({ flags, expected }) => {
     expect(presenceFromStFlags(flags)).toBe(expected)
   })
 
@@ -55,14 +55,24 @@ describe('presenceFromStFlags', () => {
 })
 
 describe('presenceFromWinAttributes', () => {
-  const localAttrs = [0x20, 0x80, 0x80020, 0x100020] // ARCHIVE, NORMAL, PINNED-hydrated combos
-  const datalessAttrs = [0x1000, 0x40000, 0x400000, 0x401420] // OFFLINE, RECALL_ON_OPEN, RECALL_ON_DATA_ACCESS
+  const localAttrs = [
+    { hex: '0x20', attrs: 0x20 },
+    { hex: '0x80', attrs: 0x80 },
+    { hex: '0x80020', attrs: 0x80020 },
+    { hex: '0x100020', attrs: 0x100020 }
+  ] // ARCHIVE, NORMAL, pinned or unpinned combos (all hydrated)
+  const datalessAttrs = [
+    { hex: '0x1000', attrs: 0x1000 },
+    { hex: '0x40000', attrs: 0x40000 },
+    { hex: '0x400000', attrs: 0x400000 },
+    { hex: '0x401420', attrs: 0x401420 }
+  ] // OFFLINE, RECALL_ON_OPEN, RECALL_ON_DATA_ACCESS
 
-  it.each(localAttrs)('attribute word 0x%s is local (archive/normal/pinned-but-hydrated)', (attrs) => {
+  it.each(localAttrs)('attribute word $hex is local (archive, normal, pinned or unpinned (hydrated))', ({ attrs }) => {
     expect(presenceFromWinAttributes(attrs)).toBe('local')
   })
 
-  it.each(datalessAttrs)('attribute word 0x%s marks a placeholder (dataless)', (attrs) => {
+  it.each(datalessAttrs)('attribute word $hex marks a placeholder (dataless)', ({ attrs }) => {
     expect(presenceFromWinAttributes(attrs)).toBe('dataless')
   })
 
@@ -72,7 +82,7 @@ describe('presenceFromWinAttributes', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------
-// C1-C11 — createDatalessDetector, driven by a fake PresenceProbe (no real process spawned)
+// createDatalessDetector, driven by a fake PresenceProbe (no real process spawned)
 // ---------------------------------------------------------------------------------------------------
 
 /** 'dataless' for names starting `dataless`, 'unknown' for names starting `gone`, else 'local'. */
@@ -263,10 +273,10 @@ describe('createDatalessDetector', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------
-// P1-P6 — the darwin wire protocol, driven by a stand-in helper (`node -e`) so it runs on every CI OS
+// The darwin wire protocol, driven by a stand-in helper (`node -e`) so it runs on every CI OS
 // ---------------------------------------------------------------------------------------------------
 
-/** Speaks the section-2 protocol: reads NUL-separated stdin paths, answers one word per basename. An
+/** Speaks the wire protocol documented in dataless.ts's header: reads NUL-separated stdin paths, answers one word per basename. An
  *  unlisted basename answers null (a failed stat). If UTF-8 broke anywhere across the pipe, the
  *  non-ASCII name would miss this table and read back as `unknown`. */
 const WORDS_BY_NAME =
@@ -352,7 +362,7 @@ describe('darwin wire protocol (stand-in helper)', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------
-// W1 — the real Windows PowerShell attribute probe (skipped off win32)
+// The real Windows PowerShell attribute probe (skipped off win32)
 // ---------------------------------------------------------------------------------------------------
 
 it.runIf(process.platform === 'win32')(

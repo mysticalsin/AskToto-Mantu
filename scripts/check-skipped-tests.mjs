@@ -79,10 +79,8 @@ const REASONS = [
   }
 ]
 
-/** Skips accepted on this platform. Lower it when a skip is retired; never raise it to accommodate one.
- *  linux/darwin were raised by 1 for dataless.test.ts's single win32-only test (M2-0191, see REASONS
- *  above) — a new platform-bound test carrying a REASON, not a hidden regression. win32 is unchanged: the
- *  test it declares actually RUNS there. */
+/** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
+ *  Lower it when a skip is retired; never raise it for an undeclared skip. */
 const BASELINE = { win32: 12, darwin: 2, linux: 19 }
 
 const platform = process.platform
