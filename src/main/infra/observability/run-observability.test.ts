@@ -12,7 +12,13 @@ function fakePowerMonitor() {
 }
 
 function fakeStallMonitor(overrides: Partial<StallMonitor> = {}): StallMonitor {
-  return { stop: vi.fn(), resync: vi.fn(), pause: vi.fn(), timePhase: vi.fn((_label, fn) => fn()), ...overrides }
+  return {
+    stop: vi.fn(),
+    resync: vi.fn(),
+    pause: vi.fn(),
+    timePhase: vi.fn((_label: string, fn: () => unknown) => fn()),
+    ...overrides
+  }
 }
 
 describe('startRunObservability', () => {
