@@ -308,6 +308,35 @@ test('assemble refuses a missing or duplicated variant, a foreign commit and mis
   }
 })
 
+test('assemble refuses builds that disagree on a shared config path\'s sha256', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    const { records, env: e } = await stageAll(root, releaseDir)
+    // 'electron-builder.yml' is read independently by mac, mac-qa-identity and win. One commit has one
+    // set of bytes for that path, so every variant must have hashed the same bytes; a disagreement (for
+    // example a Windows runner's checkout rewriting LF to CRLF) must be a named, refused problem, not a
+    // silently inconsistent provenance record.
+    const tamperedHash = 'f'.repeat(64)
+    const tampered = records.map((record) =>
+      record.variant === 'win'
+        ? {
+            ...record,
+            builder_config: record.builder_config.map((config) =>
+              config.path === 'electron-builder.yml' ? { ...config, sha256: tamperedHash } : config
+            )
+          }
+        : record
+    )
+    assert.throws(
+      () => assembleProvenance(tampered, e),
+      (error) =>
+        error.message.includes('electron-builder.yml') && error.message.includes('mac') && error.message.includes('win')
+    )
+  } finally {
+    cleanup(root)
+  }
+})
+
 test('verify accepts the exact bytes and names a changed byte, a missing file and an extra file', async () => {
   const { root, releaseDir } = fixture()
   try {
