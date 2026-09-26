@@ -128,6 +128,36 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     expect(JSON.stringify(await store.listEvents(10))).not.toContain(TOKEN)
   })
 
+  it('reads the gateway privacy check exactly once while provisioning both vault rows', async () => {
+    const store = memoryStore()
+    const start = await handleRequest(
+      new Request(`https://operator.test${CF_CONNECT_PATH}`),
+      env(),
+      { access: tony },
+      { store, now: NOW }
+    )
+    const cookie = (start.headers.get('set-cookie') || '').split(';')[0]
+    const state = new URL(start.headers.get('location') || 'https://x.test').searchParams.get('state') || ''
+    let gatewayGets = 0
+    const countingCfFetch: typeof fetch = async (input) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+      if (url.pathname.includes('/ai-gateway/gateways')) gatewayGets += 1
+      return cfFetch(input)
+    }
+    const cb = await handleRequest(
+      new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-count&state=${state}`, {
+        headers: { cookie }
+      }),
+      env(),
+      { access: tony },
+      { store, now: NOW, cfFetch: countingCfFetch }
+    )
+    expect(cb.status).toBe(303)
+    expect(cb.headers.get('location')).toBe('/?cf=connected#keys')
+    expect(gatewayGets).toBe(1)
+    expect((await store.listVaultMeta()).map((v) => v.provider).sort()).toEqual(['cloudflare', 'cloudflare-account'])
+  })
+
   for (const [label, gatewayReply] of [
     ['the gateway is missing (404)', () => new Response('{"success":false}', { status: 404 })],
     ['logging is left on', () => new Response(JSON.stringify({
