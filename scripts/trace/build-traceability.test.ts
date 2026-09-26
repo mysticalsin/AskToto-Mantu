@@ -13,6 +13,7 @@ import {
   extractBlockerTicketRefs,
   extractDecisionIds,
   main,
+  mergeGoverningKitRefs,
   mergeStatuses,
   renderJson,
   renderMarkdown,
@@ -72,8 +73,11 @@ describe('classifyM2Id — kit requirement vs program ticket, never a bare M2- p
     expect(classifyM2Id(id)).toBeNull()
   })
 
-  it('the two patterns never both match the same id', () => {
-    expect(KIT_REQUIREMENT_ID_RE.test('M2-BASE-01') && PROGRAM_TICKET_ID_RE.test('M2-BASE-01')).toBe(false)
+  it.each([
+    'M2-BASE-01', 'M2-VOICE-99', 'M2-0011', 'M2-0001',
+    'M2-', 'M2-FOO', 'M2-BASE-1', 'M2-BASE-001', 'M2-A1-01', 'M2-1', 'M2-001', 'M2-00011', 'xM2-0011'
+  ])('the two patterns never both match %s', (id) => {
+    expect(KIT_REQUIREMENT_ID_RE.test(id) && PROGRAM_TICKET_ID_RE.test(id)).toBe(false)
   })
 })
 
@@ -166,6 +170,53 @@ describe('applyEvidenceOverride — the one ADR-017 kit-status mapping', () => {
 
   it('fails closed on an unrecognized kit status rather than guessing', () => {
     expect(() => applyEvidenceOverride('WAT', 'DONE')).toThrow()
+  })
+})
+
+describe('mergeGoverningKitRefs — derives status from every still-governing (latest-per-level) record', () => {
+  it('a kit_ref only one level\'s governing record mentions takes that status unchanged', () => {
+    const byLevel = new Map([['LOCALLY_TESTED', { kit_refs: { 'FOO-01': 'MET' } }]])
+    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'MET' })
+  })
+
+  it('reads kit_refs from a governing record whose own result is FAIL, not only from a PASS', () => {
+    const byLevel = new Map([['LOCALLY_TESTED', { result: 'FAIL', kit_refs: { 'FOO-01': 'NOT_MET' } }]])
+    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'NOT_MET' })
+  })
+
+  it('a later-level FAIL withdraws an earlier-level PASS\'s more advanced status for the same kit_ref', () => {
+    // Both are governing (one per level) — this is not "earlier vs later in one file", it's two
+    // levels whose governing records disagree, which is exactly when the least-advanced wins.
+    const byLevel = new Map([
+      ['LOCALLY_TESTED', { result: 'PASS', kit_refs: { 'FOO-01': 'MET' } }],
+      ['LIVE_VERIFIED', { result: 'FAIL', kit_refs: { 'FOO-01': 'NOT_MET' } }]
+    ])
+    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'NOT_MET' })
+  })
+
+  it.each([
+    ['BLOCKED', 'NOT_MET', 'BLOCKED'],
+    ['NOT_MET', 'PARTIAL', 'NOT_MET'],
+    ['PARTIAL', 'MET', 'PARTIAL'],
+    ['MET', 'BLOCKED', 'BLOCKED']
+  ])('the least-advanced of %s and %s wins: %s', (a, b, expected) => {
+    const byLevel = new Map([
+      ['LOCALLY_TESTED', { kit_refs: { 'FOO-01': a } }],
+      ['LIVE_VERIFIED', { kit_refs: { 'FOO-01': b } }]
+    ])
+    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': expected })
+  })
+
+  it('merges independently per kit_ref — one level\'s BLOCKED does not drag down another kit_ref', () => {
+    const byLevel = new Map([
+      ['LOCALLY_TESTED', { kit_refs: { 'FOO-01': 'MET', 'FOO-02': 'MET' } }],
+      ['LIVE_VERIFIED', { kit_refs: { 'FOO-01': 'BLOCKED' } }]
+    ])
+    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'BLOCKED', 'FOO-02': 'MET' })
+  })
+
+  it('an empty governing-records map yields no overrides', () => {
+    expect(mergeGoverningKitRefs(new Map())).toEqual({})
   })
 })
 
@@ -299,11 +350,23 @@ describe('extractBlockerTicketRefs — ticket-bearing columns (every item) plus 
     const md = `
 | B | Ticket | Exact unblock step |
 |---|---|---|
-| B-03 | 0007: Provision the isolated macOS QA environment | Create a standard macOS user |
+| B-03 | 9007: Provision a test host | Set up a clean environment |
 `
     const { refs } = extractBlockerTicketRefs(md)
-    expect(refs.has('M2-0007')).toBe(true)
+    expect(refs.has('M2-9007')).toBe(true)
     expect(refs.size).toBe(1)
+  })
+
+  it('parses a described cell whose own description contains commas, without misreading them as more ticket items', () => {
+    const md = `
+| B | Ticket | Exact unblock step |
+|---|---|---|
+| B-07 | 9007: Get the one-page approval: entitlement authority (X, Y, Z), gateway policy (W), and the default route | Read the one-pager and answer |
+`
+    const { refs, malformed } = extractBlockerTicketRefs(md)
+    expect(refs.has('M2-9007')).toBe(true)
+    expect(refs.size).toBe(1)
+    expect(malformed).toEqual([])
   })
 
   it('collects every item in a comma-separated Affected tickets cell, not just the first', () => {
@@ -351,6 +414,20 @@ describe('extractBlockerTicketRefs — ticket-bearing columns (every item) plus 
     const { refs, malformed } = extractBlockerTicketRefs(md)
     expect(refs.size).toBe(0)
     expect(malformed).toEqual(['007'])
+  })
+
+  it('never reads a five-digit token as its first four digits, in a bare M2-NNNN mention or a cell', () => {
+    const md = `
+See M2-00123 for background.
+
+| B | Ticket | Exact unblock step |
+|---|---|---|
+| B-01 | 00123 | Do the thing |
+`
+    const { refs, malformed } = extractBlockerTicketRefs(md)
+    expect(refs.has('M2-0012')).toBe(false)
+    expect(refs.has('M2-00123')).toBe(false)
+    expect(malformed).toEqual(['00123'])
   })
 })
 
@@ -499,7 +576,10 @@ describe('buildTraceability — mapping, coverage and fail-closed reconciliation
 
 describe('rendering — structural, not a source-text snapshot', () => {
   const result = buildTraceability({
-    inventory: [row({ id: 'FOO-01', kit: 'kitA' })],
+    inventory: [
+      row({ id: 'FOO-01', kit: 'kitA', sources: ['plan/registry.json#foo'] }),
+      row({ id: 'FOO-02', kit: 'kitA' })
+    ],
     tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })],
     decisionIds: new Set<string>(),
     blockerTicketRefs: new Set<string>()
@@ -512,12 +592,42 @@ describe('rendering — structural, not a source-text snapshot', () => {
     expect(md).toContain('DONE')
   })
 
-  it('renderJson emits a machine-readable row per id with a summary block', () => {
+  it('renderMarkdown escapes a pipe in a title so it cannot corrupt the table', () => {
+    const withPipe = buildTraceability({
+      inventory: [row({ id: 'FOO-01', kit: 'kitA', title: 'A | B' })],
+      tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })],
+      decisionIds: new Set<string>(),
+      blockerTicketRefs: new Set<string>()
+    })
+    expect(renderMarkdown(withPipe)).toContain('A \\| B')
+  })
+
+  it('renderMarkdown\'s summary line reports row and unique-id coverage counts, not only totals', () => {
+    const md = renderMarkdown(result)
+    expect(md).toContain('2 row(s) (1 mapped)')
+    expect(md).toContain('2 unique id(s) (1 mapped)')
+    expect(md).toContain('0 error(s)')
+  })
+
+  it('renderJson emits every inventory row field unchanged (byte-for-byte), plus tickets and status', () => {
     const json = renderJson(result)
-    expect(json.rows).toHaveLength(1)
-    expect(json.rows[0]).toMatchObject({ id: 'FOO-01', kit: 'kitA', status: 'DONE' })
-    expect(json.summary.total).toBe(1)
-    expect(json.summary.errorCount).toBe(0)
+    expect(json.rows).toHaveLength(2)
+    const foo01 = json.rows.find((r: any) => r.id === 'FOO-01')
+    expect(foo01).toMatchObject({
+      id: 'FOO-01',
+      kit: 'kitA',
+      source_file: 'plan/registry.json',
+      source_ref: 'foo[0]',
+      parent_task: '',
+      sources: ['plan/registry.json#foo'],
+      tickets: ['M2-9001'],
+      status: 'DONE'
+    })
+  })
+
+  it('renderJson\'s summary reports rows, rows_mapped, unique_ids, unique_ids_mapped and errorCount', () => {
+    const json = renderJson(result)
+    expect(json.summary).toEqual({ rows: 2, rows_mapped: 1, unique_ids: 2, unique_ids_mapped: 1, errorCount: 0 })
   })
 })
 
@@ -609,6 +719,18 @@ describe('main() — the CLI contract', () => {
 
   it('exits 2 with a usage error on an unrecognized flag', async () => {
     await expect(main(argv(['--check', '--nonsense']))).rejects.toThrow(EXIT)
+    expect(process.exit).toHaveBeenCalledWith(2)
+  })
+
+  it('exits 2 with a usage error when neither --check nor both --out-md/--out-json are given', async () => {
+    writeFixture({ tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })], inventory: [row({ id: 'FOO-01', kit: 'kitA' })] })
+    await expect(main(argv())).rejects.toThrow(EXIT)
+    expect(process.exit).toHaveBeenCalledWith(2)
+  })
+
+  it('exits 2 with a usage error when only one of --out-md/--out-json is given, with no --check', async () => {
+    writeFixture({ tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })], inventory: [row({ id: 'FOO-01', kit: 'kitA' })] })
+    await expect(main(argv(['--out-md', join(dir, 'TRACEABILITY.md')]))).rejects.toThrow(EXIT)
     expect(process.exit).toHaveBeenCalledWith(2)
   })
 

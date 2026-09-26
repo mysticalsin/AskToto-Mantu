@@ -94,8 +94,9 @@ export function resolveCitation(citation, index) {
 /**
  * Rank, least to most advanced. Used only to pick a winner when several tickets (or a ticket and
  * an evidence override) disagree about the same row — never exposed as an ordering guarantee
- * beyond "higher rank wins". CANCELLED ranks below NOT_STARTED: a row one ticket cancelled but
- * another is actively working stays visible as work in flight, not as abandoned.
+ * beyond "higher rank wins". CANCELLED ranks below NOT_STARTED for statusForTicket and for direct
+ * callers of mergeStatuses: buildTraceability itself never merges a CANCELLED status into a row,
+ * since it filters CANCELLED citations out of a row's coverage before computing that row's status.
  */
 const STATUS_RANK = {
   CANCELLED: 0,
@@ -173,7 +174,8 @@ export function applyEvidenceOverride(kitStatus, ticketStatus) {
  * ticket + kit_ref pair. A ticket with no entry in `evidenceByTicket` simply has no override.
  * @param {Citation[]} citations
  * @param {Map<string, Record<string, string>>} [evidenceByTicket] ticket id -> { kit_ref -> ADR-017
- *   kit status }, e.g. the latest PASS record's `kit_refs` for that ticket (see `main`'s `--evidence`)
+ *   kit status }, e.g. the merged per-level governing status for that ticket (see `main`'s
+ *   `--evidence` and `mergeGoverningKitRefs`)
  */
 export function computeRowStatus(citations, evidenceByTicket = new Map()) {
   if (citations.length === 0) return 'UNMAPPED'
@@ -205,7 +207,10 @@ export function extractDecisionIds(markdown) {
 
 const TABLE_SEPARATOR_RE = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/
 const TICKET_COLUMN_HEADERS = new Set(['Ticket', 'Affected tickets'])
-const BARE_TICKET_NUMBER_RE = /^(\d{4})(?!\d)/
+/** A bare or `M2-`-prefixed ticket number, as it appears in one BLOCKERS.md cell. */
+const TICKET_NUMBER_SRC = '(?:M2-)?\\d{4}'
+const TICKET_LIST_RE = new RegExp(`^${TICKET_NUMBER_SRC}(?:\\s*,\\s*${TICKET_NUMBER_SRC})*$`)
+const DESCRIBED_TICKET_RE = new RegExp(`^(${TICKET_NUMBER_SRC}):\\s`)
 
 /** @param {string} line */
 function splitTableRow(line) {
@@ -215,29 +220,38 @@ function splitTableRow(line) {
   return inner.split('|')
 }
 
-/**
- * Parses one ticket-column cell item (already split on comma and trimmed) into a program ticket
- * id: `M2-NNNN` directly, or a bare 4-digit run at the start (some rows carry a trailing
- * description after the number, e.g. `0007: Provision the QA host`) prefixed with `M2-`. A bare
- * `M2-` prefix is never accepted on its own. Returns `null` for a non-empty item that parses as
- * neither — the caller reports that as malformed rather than skipping it.
- * @param {string} item
- * @returns {string | null}
- */
-function parseTicketCellItem(item) {
-  if (PROGRAM_TICKET_ID_RE.test(item)) return item
-  const bare = BARE_TICKET_NUMBER_RE.exec(item)
-  return bare ? `M2-${bare[1]}` : null
+/** @param {string} bareOrPrefixed a ticket number matched by TICKET_NUMBER_SRC */
+function toProgramTicketId(bareOrPrefixed) {
+  return bareOrPrefixed.startsWith('M2-') ? bareOrPrefixed : `M2-${bareOrPrefixed}`
 }
 
 /**
- * Every ticket BLOCKERS.md cites: every item (comma-separated lists included, not just the first)
- * in a ticket-bearing column's cell — a column headed exactly `Ticket` or `Affected tickets`,
- * across every markdown table in the document, since it has one table per owner-role section, each
- * with its own column layout — plus every bare `M2-\d{4}` token anywhere in the document, which
- * catches tables (such as the escalated-decisions table's prior-blocker references) that cite a
- * ticket outside a ticket-bearing column. A non-empty ticket-bearing cell item that parses as
- * neither form is reported as malformed rather than silently skipped.
+ * Parses one ticket-bearing table cell (already trimmed) as a whole — never by first splitting on
+ * comma, since the real by-role tables carry a `NNNN: <description>` cell whose description
+ * routinely contains its own commas (e.g. `9007: Get approval for policy A (X, Y, Z), policy B
+ * (W), and the default route`), which a naive split would misread as three more ticket items. A
+ * cell is either a comma-separated list of bare ticket numbers (each optionally `M2-`-prefixed), or
+ * a single described ticket (`NNNN: <description>` / `M2-NNNN: <description>`) whose ticket number
+ * is the only part that matters. A bare `M2-` prefix is never accepted on its own. Returns `null`
+ * for a non-empty cell that is neither — the caller reports that as malformed rather than skipping
+ * it.
+ * @param {string} cell
+ * @returns {string[] | null}
+ */
+function parseTicketCell(cell) {
+  if (TICKET_LIST_RE.test(cell)) return cell.split(',').map((item) => toProgramTicketId(item.trim()))
+  const described = DESCRIBED_TICKET_RE.exec(cell)
+  return described ? [toProgramTicketId(described[1])] : null
+}
+
+/**
+ * Every ticket BLOCKERS.md cites: every ticket-bearing column's cell — a column headed exactly
+ * `Ticket` or `Affected tickets`, across every markdown table in the document, since it has one
+ * table per owner-role section, each with its own column layout — parsed whole by
+ * `parseTicketCell`, plus every bare `M2-\d{4}` token (not a longer digit run) anywhere in the
+ * document, which catches tables (such as the escalated-decisions table's prior-blocker
+ * references) that cite a ticket outside a ticket-bearing column. A non-empty ticket-bearing cell
+ * that parses as neither form is reported as malformed rather than silently skipped.
  * @param {string} markdown
  * @returns {{ refs: Set<string>, malformed: string[] }}
  */
@@ -245,7 +259,7 @@ export function extractBlockerTicketRefs(markdown) {
   const refs = new Set()
   const malformed = []
 
-  for (const match of markdown.matchAll(/M2-\d{4}/g)) refs.add(match[0])
+  for (const match of markdown.matchAll(/\bM2-\d{4}(?!\d)/g)) refs.add(match[0])
 
   const lines = markdown.split('\n')
   let ticketColumn = null
@@ -266,13 +280,11 @@ export function extractBlockerTicketRefs(markdown) {
     if (ticketColumn === null) continue
     const cells = splitTableRow(line)
     if (ticketColumn >= cells.length) continue
-    for (const item of cells[ticketColumn].split(',')) {
-      const trimmed = item.trim()
-      if (trimmed.length === 0) continue
-      const ref = parseTicketCellItem(trimmed)
-      if (ref) refs.add(ref)
-      else malformed.push(trimmed)
-    }
+    const cell = cells[ticketColumn].trim()
+    if (cell.length === 0) continue
+    const parsed = parseTicketCell(cell)
+    if (parsed) for (const ref of parsed) refs.add(ref)
+    else malformed.push(cell)
   }
 
   return { refs, malformed }
@@ -370,17 +382,47 @@ export function buildTraceability({
 
 // ---- rendering ------------------------------------------------------------------------------
 
+/**
+ * Coverage counts shared by both renderers: a row counts as mapped exactly when its status is not
+ * `UNMAPPED` (the same condition `buildTraceability` uses to raise an `unmapped` error), and an id
+ * counts as mapped when any row bearing it is. Two inventory rows can share one id across kits (the
+ * REF-* namespaces do, on purpose), so `unique_ids` can be lower than `rows`.
+ * @param {{ rows: TraceRow[], errors: TraceError[] }} result
+ */
+function summarize(result) {
+  const ids = new Set()
+  const idsMapped = new Set()
+  let rowsMapped = 0
+  for (const row of result.rows) {
+    ids.add(row.id)
+    if (row.status !== 'UNMAPPED') {
+      rowsMapped += 1
+      idsMapped.add(row.id)
+    }
+  }
+  return {
+    rows: result.rows.length,
+    rows_mapped: rowsMapped,
+    unique_ids: ids.size,
+    unique_ids_mapped: idsMapped.size,
+    errorCount: result.errors.length
+  }
+}
+
 /** @param {{ rows: TraceRow[], errors: TraceError[] }} result */
 export function renderMarkdown(result) {
   const header = '| ID | Family | Title | Kit | Tickets | Status |\n|---|---|---|---|---|---|'
   const lines = result.rows.map((row) => {
     const tickets = row.tickets.length > 0 ? row.tickets.join(', ') : '—'
-    return `| ${row.id} | ${row.family ?? ''} | ${row.title ?? ''} | ${row.kit} | ${tickets} | ${row.status} |`
+    const title = (row.title ?? '').replace(/\|/g, '\\|')
+    return `| ${row.id} | ${row.family ?? ''} | ${title} | ${row.kit} | ${tickets} | ${row.status} |`
   })
+  const s = summarize(result)
   return [
     '# Traceability: kit/registry IDs to program tickets',
     '',
-    `Generated from the repository's own ID inventory and ledger. ${result.rows.length} row(s), ${result.errors.length} error(s).`,
+    `Generated from the repository's own ID inventory and ledger. ${s.rows} row(s) (${s.rows_mapped} mapped), ` +
+      `${s.unique_ids} unique id(s) (${s.unique_ids_mapped} mapped), ${s.errorCount} error(s).`,
     '',
     header,
     ...lines,
@@ -388,20 +430,16 @@ export function renderMarkdown(result) {
   ].join('\n')
 }
 
-/** @param {{ rows: TraceRow[], errors: TraceError[] }} result */
+/**
+ * Emits each row exactly as `buildTraceability` produced it — the full inventory row (id, family,
+ * title, kit, source_file, source_ref, parent_task, sources, and any other field the inventory
+ * carries) plus `tickets` and `status` — so `ledger/traceability.json` stays schema-compatible with
+ * the planning `TRACEABILITY.json` it is seeded from (ticket acceptance criterion 8) and carries the
+ * planning inventory's fields unchanged (criterion 1).
+ * @param {{ rows: TraceRow[], errors: TraceError[] }} result
+ */
 export function renderJson(result) {
-  return {
-    rows: result.rows.map((row) => ({
-      id: row.id,
-      family: row.family,
-      title: row.title,
-      kit: row.kit,
-      tickets: row.tickets,
-      status: row.status
-    })),
-    errors: result.errors,
-    summary: { total: result.rows.length, errorCount: result.errors.length }
-  }
+  return { rows: result.rows, errors: result.errors, summary: summarize(result) }
 }
 
 // ---- CLI -----------------------------------------------------------------------------------
@@ -452,19 +490,51 @@ function formatError(error) {
 }
 
 /**
+ * Rank for merging two governing records' opinions about the same kit_ref (ADR-017 KIT_STATUSES),
+ * least to most advanced. `BLOCKED` ranks below `NOT_MET`: an external block is a harder stop than
+ * "not yet done".
+ */
+const KIT_STATUS_RANK = { BLOCKED: 0, NOT_MET: 1, PARTIAL: 2, MET: 3 }
+
+/**
+ * Merges one ticket's per-level governing records (ADR-017 INV-2: the last record of each
+ * evidence_level governs) into a single status per kit_ref. A kit_ref that only one level's
+ * governing record mentions takes that record's status unchanged. A kit_ref two or more governing
+ * records disagree about takes the least-advanced (most conservative) of their statuses — evidence
+ * never advances a kit_ref past what its worst still-governing record reports. This applies
+ * equally to a governing record whose own `result` is FAIL: a later FAIL at one level does not
+ * merely withdraw an earlier PASS's kit_refs, its own kit_refs (often BLOCKED/NOT_MET) are read too.
+ * @param {Map<string, { kit_refs?: Record<string, string> }>} recordsByLevel the
+ *   `latestByLevel(records)` result for one ticket (M2-0002's scripts/evidence/record.mjs)
+ * @returns {Record<string, string>}
+ */
+export function mergeGoverningKitRefs(recordsByLevel) {
+  const merged = {}
+  for (const record of recordsByLevel.values()) {
+    for (const [ref, status] of Object.entries(record.kit_refs ?? {})) {
+      if (merged[ref] === undefined || KIT_STATUS_RANK[status] < KIT_STATUS_RANK[merged[ref]]) {
+        merged[ref] = status
+      }
+    }
+  }
+  return merged
+}
+
+/**
  * Reads per-kit_ref evidence overrides from the ADR-017 record store (M2-0002's
- * scripts/evidence/record.mjs) for every ticket that has one, as the `kit_refs` map of its latest
- * PASS record — the last one in file order, since the store is an append-only log where the last
- * line for a ticket governs. A ticket with no PASS record simply has no entry in the result. This
- * never re-parses the JSONL store itself: it delegates entirely to M2-0002's reader.
+ * scripts/evidence/record.mjs) for every ticket that has at least one governing record, as
+ * `mergeGoverningKitRefs` of that ticket's `latestByLevel(records)` — never a hand-picked "latest
+ * PASS", which would let a withdrawn PASS keep overriding the row and would never see a later
+ * FAIL's own BLOCKED/NOT_MET kit_refs. This never re-parses the JSONL store itself: it delegates
+ * entirely to M2-0002's reader and level-selection.
  * @param {string | undefined} evidenceDir
  * @returns {Promise<Map<string, Record<string, string>>>}
  */
 async function loadEvidenceByTicket(evidenceDir) {
   if (!evidenceDir) return new Map()
-  let readRecordStore
+  let readRecordStore, latestByLevel
   try {
-    ;({ readRecordStore } = await import('../evidence/record.mjs'))
+    ;({ readRecordStore, latestByLevel } = await import('../evidence/record.mjs'))
   } catch (error) {
     throw new Error(
       `--evidence requires scripts/evidence/record.mjs (M2-0002), which could not be imported: ${error.message}`
@@ -474,8 +544,8 @@ async function loadEvidenceByTicket(evidenceDir) {
   if (problems.length > 0) throw new Error(`--evidence: ${problems.join('; ')}`)
   const evidenceByTicket = new Map()
   for (const [ticketId, records] of recordsByTicket) {
-    const latestPass = [...records].reverse().find((record) => record.result === 'PASS')
-    if (latestPass) evidenceByTicket.set(ticketId, latestPass.kit_refs)
+    const governing = mergeGoverningKitRefs(latestByLevel(records))
+    if (Object.keys(governing).length > 0) evidenceByTicket.set(ticketId, governing)
   }
   return evidenceByTicket
 }
@@ -498,6 +568,9 @@ export async function main(argv) {
   const missing = REQUIRED_ARGS.filter((key) => typeof values[key] !== 'string')
   if (missing.length > 0) {
     return usageExit(`missing required argument(s): ${missing.map((key) => `--${key}`).join(', ')}`)
+  }
+  if (!values.check && !(values['out-md'] && values['out-json'])) {
+    return usageExit('either --check, or both --out-md and --out-json, is required')
   }
 
   const { tickets } = JSON.parse(readFileSync(values.tickets, 'utf8'))
