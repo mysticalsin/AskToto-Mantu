@@ -23,17 +23,20 @@ export function OverlayChromePicker({
   value,
   locked,
   onChange,
-  copy = OVERLAY_LAYOUT_COPY
+  copy = OVERLAY_LAYOUT_COPY,
+  layouts = OVERLAY_LAYOUTS
 }: {
   value: unknown
   locked: boolean
   onChange: (id: OverlayLayout) => void
   copy?: Record<OverlayLayout, { title: string; desc: string }>
+  /** Which cards to offer. Settings shows every chrome; onboarding pins its own three (DESIGN.md). */
+  layouts?: readonly OverlayLayout[]
 }): JSX.Element {
   const selected = parseOverlayLayout(value)
   return (
     <div role="radiogroup" aria-label="Overlay chrome" className="overlay-chrome-grid">
-      {OVERLAY_LAYOUTS.map((id) => {
+      {layouts.map((id) => {
         const on = selected === id
         return (
           <button
