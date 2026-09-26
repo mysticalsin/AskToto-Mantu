@@ -21,7 +21,11 @@ import {
 } from './dataless'
 
 afterEach(() => {
+  // restoreAllMocks() only reverts vi.spyOn() targets (e.g. the performance.now() spies below) — a plain
+  // vi.fn() from a vi.mock() factory (auditLog, mainLog.*, macStatFlagsSpawnSpec) has no "original" to
+  // restore to, so its call history survives into the next test unless cleared explicitly here too.
   vi.restoreAllMocks()
+  vi.clearAllMocks()
 })
 
 function fileVersion(path: string, overrides: Partial<Omit<FileVersion, 'path'>> = {}): FileVersion {
@@ -208,15 +212,18 @@ describe('createDatalessDetector', () => {
     })
     const detector = createDatalessDetector(probe)
 
-    await detector.classify([fileVersion('/a/x.md')]) // fail -> audit #1
+    // Each call targets a DIFFERENT path so every one is a genuine cache miss (a successful classify
+    // caches 'local'/'dataless', so re-using one path across the success step and the next failure step
+    // would silently serve the cache and never re-probe, hiding the very streak this test proves).
+    await detector.classify([fileVersion('/a/w.md')]) // fail -> audit #1
     now += 61_000
     await detector.classify([fileVersion('/a/x.md')]) // fail again, same streak -> no new audit
     shouldFail = false
     now += 61_000
-    await detector.classify([fileVersion('/a/x.md')]) // success -> streak resolved
+    await detector.classify([fileVersion('/a/y.md')]) // success -> streak resolved
     shouldFail = true
     now += 61_000
-    await detector.classify([fileVersion('/a/x.md')]) // fail -> audit #2
+    await detector.classify([fileVersion('/a/z.md')]) // fail -> audit #2
 
     const failureAudits = vi.mocked(auditLog).mock.calls.filter(([event]) => event === 'storage.dataless_probe_failed')
     expect(failureAudits).toHaveLength(2)
