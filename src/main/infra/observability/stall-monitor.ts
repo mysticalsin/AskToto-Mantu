@@ -19,6 +19,13 @@
  * heartbeat entirely, so there is no tick left pending to race `'resume'` no matter which of the two the
  * event loop happens to process first — and call `resync()` from `'resume'`, which re-arms the schedule
  * from the current tick and restarts the heartbeat if `pause()` had stopped it.
+ *
+ * `timePhase(label, fn)` is the boot sequence's phase trace: many boot steps run synchronously back to
+ * back with no `await` between them, so no heartbeat tick can ever fire in the middle of that sequence —
+ * a tick only ever runs before it starts or after it ends. Naming a stall after "whichever step called
+ * `timePhase` last" would therefore always name the LAST step in that sequence, regardless of which one
+ * actually blocked the tick. Measuring each call's own duration and keeping only the longest since the
+ * previous tick fixes that: the phase a tick reports is the one that was actually slow.
  */
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
 
@@ -37,10 +44,12 @@ export interface StallDetail {
   /** How much later than scheduled this tick fired, in ms. Always >= the configured tickMs — the real
    *  stall understates by up to one tick period, since lateness is only observable from the next tick. */
   durationMs: number
-  /** The operation `setPhase` recorded since the previous tick, or `undefined` when none was set, or an
-   *  intervening on-time tick already consumed it. Every tick — late or not — reads this and clears it, so
-   *  a stall never names an operation that had already finished before the stall began. */
+  /** The `timePhase` label with the longest measured duration since the previous tick, or `undefined` when
+   *  none ran, or an intervening on-time tick already consumed it. Every tick — late or not — reads this
+   *  and clears it, so a stall never names an operation that had already finished before the stall began. */
   phase: string | undefined
+  /** That phase's own measured duration, in ms. Present exactly when `phase` is. */
+  phaseMs: number | undefined
 }
 
 /** Periodic p99 event-loop-delay report, independent of whether any single tick tripped the heartbeat. */
@@ -74,9 +83,10 @@ export interface StallMonitor {
    *  `'suspend'` event so no tick can be pending to fire during sleep. A no-op once stopped or already
    *  paused. */
   pause(): void
-  /** Record the operation currently in flight, cheaply, so the NEXT heartbeat tick — whether or not that
-   *  tick is itself late — can name it. Call at the top of any operation worth naming on a late tick. */
-  setPhase(label: string): void
+  /** Run `fn` and measure its wall time on this monitor's own clock. If that duration is the longest of
+   *  any `timePhase` call since the previous tick, the NEXT tick — whether or not that tick is itself late
+   *  — names this `label`. Call around any operation worth naming on a late tick; returns `fn`'s result. */
+  timePhase<T>(label: string, fn: () => T): T
 }
 
 /** Start the heartbeat. Call once per app boot; call `.stop()` from `will-quit`. */
@@ -92,14 +102,22 @@ export function startStallMonitor(opts: StallMonitorOptions): StallMonitor {
   let expectedAt = now() + tickMs
   let nextSummaryAt = now() + summaryIntervalMs
   let phase: string | undefined
+  let phaseMs = 0
 
   const tick = (): void => {
     const at = now()
     const lateMs = at - expectedAt
     const firedPhase = phase
+    const firedPhaseMs = phaseMs
     phase = undefined
+    phaseMs = 0
     if (lateMs >= tickMs) {
-      opts.onStall({ bootId: opts.bootId, durationMs: lateMs, phase: firedPhase })
+      opts.onStall({
+        bootId: opts.bootId,
+        durationMs: lateMs,
+        phase: firedPhase,
+        phaseMs: firedPhase === undefined ? undefined : firedPhaseMs
+      })
     }
     expectedAt = at + tickMs
 
@@ -130,8 +148,17 @@ export function startStallMonitor(opts: StallMonitorOptions): StallMonitor {
       clearIntervalFn(timer)
       timer = undefined
     },
-    setPhase(label: string): void {
-      phase = label
+    timePhase<T>(label: string, fn: () => T): T {
+      const start = now()
+      try {
+        return fn()
+      } finally {
+        const durationMs = now() - start
+        if (durationMs > phaseMs) {
+          phase = label
+          phaseMs = durationMs
+        }
+      }
     }
   }
 }

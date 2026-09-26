@@ -9024,17 +9024,23 @@ if (!app.requestSingleInstanceLock()) {
   // below — previously registered unguarded — run inside it too: a throw during any of those must not
   // take out createTray/registerShortcuts/createWindow further down the boot sequence.
   const runStep = (name: string, fn: () => void): void => {
-    // M2-0006: the cheapest trace of "what was running" a late app.stall tick can attach — a no-op until
-    // startRunObservability has run (observability is still null for every boot step ahead of createWindow).
-    observability?.setPhase(name)
-    try {
-      fn()
-    } catch (e) {
-      // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
-      // boot-step failure is actually diagnosable and shows up in the audit trail.
-      mainLog.error(`[boot] ${name} failed:`, e)
-      auditLog('app.crash', { kind: 'boot_step', step: name })
+    const run = (): void => {
+      try {
+        fn()
+      } catch (e) {
+        // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
+        // boot-step failure is actually diagnosable and shows up in the audit trail.
+        mainLog.error(`[boot] ${name} failed:`, e)
+        auditLog('app.crash', { kind: 'boot_step', step: name })
+      }
     }
+    // M2-0006: timePhase measures how long this step actually took, so a late app.stall tick can name
+    // whichever one really blocked it. Boot steps run synchronously back to back with no await between
+    // them, so no tick can ever fire in the middle of that sequence — only measured duration, never call
+    // order, tells them apart. observability is still null for every boot step ahead of createWindow
+    // (it starts inside createWindow itself); those run un-timed since no heartbeat exists yet to blame.
+    if (observability) observability.timePhase(name, run)
+    else run()
   }
 
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,

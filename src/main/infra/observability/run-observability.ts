@@ -15,10 +15,10 @@ import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from '
 
 type Timer = ReturnType<typeof setInterval>
 
-/** Only the two `powerMonitor` events this module uses. */
+/** Only the `powerMonitor` events this module uses. */
 export interface PowerMonitorSource {
-  on(event: 'resume' | 'suspend', listener: () => void): unknown
-  removeListener(event: 'resume' | 'suspend', listener: () => void): unknown
+  on(event: 'resume' | 'suspend' | 'unlock-screen', listener: () => void): unknown
+  removeListener(event: 'resume' | 'suspend' | 'unlock-screen', listener: () => void): unknown
 }
 
 export interface RunObservabilityOptions {
@@ -42,10 +42,11 @@ export interface RunObservabilityOptions {
 }
 
 export interface RunObservability {
-  /** Record the operation currently in flight, cheaply, so a late stall tick can name it. Forwarded
-   *  straight to the stall monitor, which owns clearing it every tick (stall-monitor.ts). Call at the top
-   *  of any boot step or background-timer callback worth naming on a late tick. */
-  setPhase(label: string): void
+  /** Run `fn`, measuring its duration so a late stall tick can name whichever phase actually ran longest
+   *  since the previous tick. Forwarded straight to the stall monitor, which owns that measurement and
+   *  clearing it every tick (stall-monitor.ts). Wrap any boot step or background-timer callback worth
+   *  naming on a late tick; returns `fn`'s result. */
+  timePhase<T>(label: string, fn: () => T): T
   /** Stop the heartbeat and the stall monitor and audit `app.shutdown.clean`. Call once, last, from
    *  `will-quit`. Idempotent. */
   shutdownClean(uptimeS: number): void
@@ -83,7 +84,13 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
     bootId,
     // The stall monitor decides what phase (if any) a tick names and clears it every tick — this module
     // only forwards whatever detail it produces.
-    onStall: (detail) => opts.audit('app.stall', { bootId: detail.bootId, durationMs: detail.durationMs, phase: detail.phase }),
+    onStall: (detail) =>
+      opts.audit('app.stall', {
+        bootId: detail.bootId,
+        durationMs: detail.durationMs,
+        phase: detail.phase,
+        phaseMs: detail.phaseMs
+      }),
     onSummary: (detail) => opts.audit('app.stall.summary', { bootId: detail.bootId, p99Ms: detail.p99Ms })
   })
 
@@ -95,11 +102,17 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   const onResume = (): void => stallMonitor.resync()
   powerMonitor.on('suspend', onSuspend)
   powerMonitor.on('resume', onResume)
+  // Fallback for the case 'resume' itself never arrives (an aborted sleep, or a platform that raises
+  // 'suspend' without a matching 'resume'): resync() is safe to call whether or not pause() ever fired —
+  // it only re-arms the schedule and restarts the heartbeat if it was stopped — so wiring it to another
+  // wake-adjacent signal costs nothing and closes that gap.
+  const onUnlockScreen = (): void => stallMonitor.resync()
+  powerMonitor.on('unlock-screen', onUnlockScreen)
 
   let stopped = false
   return {
-    setPhase(label: string): void {
-      stallMonitor.setPhase(label)
+    timePhase<T>(label: string, fn: () => T): T {
+      return stallMonitor.timePhase(label, fn)
     },
     shutdownClean(uptimeS: number): void {
       if (stopped) return
@@ -107,6 +120,7 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
       clearIntervalFn(aliveTimer)
       powerMonitor.removeListener('suspend', onSuspend)
       powerMonitor.removeListener('resume', onResume)
+      powerMonitor.removeListener('unlock-screen', onUnlockScreen)
       stallMonitor.stop()
       opts.audit('app.shutdown.clean', doMarkShutdownClean(opts.userData, bootId, uptimeS))
     }
