@@ -293,8 +293,10 @@ export function extractBlockerTicketRefs(markdown) {
 // ---- the matrix ---------------------------------------------------------------------------------
 
 /**
- * @typedef {{ id: string, family?: string, title?: string, kit: string, tickets: string[],
- *   status: string }} TraceRow
+ * The full inventory row (see `InventoryRow`) plus the two fields `buildTraceability` computes.
+ * Its shape is exactly `{ ...inventoryRow, tickets, status }` — see `buildTraceability`'s `rows.map`
+ * and `renderJson`, which both rely on that being true.
+ * @typedef {InventoryRow & { tickets: string[], status: string }} TraceRow
  * @typedef {{ type: 'unmapped', id: string, kit: string }
  *   | { type: 'dangling-ticket-ref', ticketId: string, citation: string }
  *   | { type: 'ambiguous-citation', ticketId: string, citation: string }

@@ -208,7 +208,11 @@ describe('mergeGoverningKitRefs — derives status from every still-governing (l
   })
 
   it('merges independently per kit_ref — one level\'s BLOCKED does not drag down another kit_ref', () => {
-    const byLevel = new Map([
+    // Explicit type argument: the two kit_refs literals below have different key sets, and without
+    // it TS infers a union of their exact shapes rather than each entry's kit_refs as a plain
+    // Record<string, string>, which the FOO-02-less variant then fails (an inferred optional
+    // `'FOO-02'?: undefined` isn't assignable to Record's `string` value type).
+    const byLevel = new Map<string, { kit_refs: Record<string, string> }>([
       ['LOCALLY_TESTED', { kit_refs: { 'FOO-01': 'MET', 'FOO-02': 'MET' } }],
       ['LIVE_VERIFIED', { kit_refs: { 'FOO-01': 'BLOCKED' } }]
     ])
