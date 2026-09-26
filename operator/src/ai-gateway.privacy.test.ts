@@ -54,7 +54,7 @@ describe('R11 SRC-08: gateway privacy is read back, never auto-provisioned', () 
     expect(calls[0]?.input).toBe(ROUTE)
     expect(calls[0]?.init?.method).toBe('GET')
     expect(calls[0]?.init?.body).toBeUndefined()
-    expect(calls[0]?.init?.redirect).toBe('error')
+    expect(calls[0]?.init?.redirect).toBe('manual')
   })
 
   for (const bad of [
@@ -94,6 +94,16 @@ describe('R11 SRC-08: gateway privacy is read back, never auto-provisioned', () 
   it('rejects a redirected response', async () => {
     const fetcher: typeof fetch = async () => fakeResponse({ redirected: true })
     await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_RESPONSE_UNVERIFIED' })
+  })
+
+  it('rejects a 302 with a Location header after exactly one fetch, never following it', async () => {
+    let calls = 0
+    const fetcher: typeof fetch = async () => {
+      calls++
+      return fakeResponse({ status: 302, ok: false, headers: { location: 'https://attacker.example/phish' } })
+    }
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_RESPONSE_UNVERIFIED' })
+    expect(calls).toBe(1)
   })
 
   it('rejects a response whose final URL does not match the requested route', async () => {

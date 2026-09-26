@@ -51,4 +51,23 @@ describe('R11 no credential mutation before privacy readback', () => {
     expect(missing).toMatchObject({ ok: false, status: 503, code: 'GATEWAY_REVIEW_REQUIRED' })
     expect(unsafe).toMatchObject({ ok: false, status: 503, code: 'GATEWAY_CONFIGURATION_UNSAFE' })
   })
+
+  it('requires accountId in the body when the stored row cannot be decrypted, before any gateway fetch', async () => {
+    const { store, id } = await seed()
+    const before = await store.listVaultRows()
+    const beforeAudit = await store.listAudit(100)
+    const beforeEvents = await store.listEvents(100)
+    const wrongVaultEnv = { OPERATOR_VAULT_KEY: Buffer.alloc(32, 13).toString('base64') }
+    let gatewayCalls = 0
+    const countingFetch: typeof fetch = async () => {
+      gatewayCalls++
+      return new Response('{"success":false}', { status: 404 })
+    }
+    const result = await rotateVaultKey(store, wrongVaultEnv, EMAIL, NOW + 1, id, { secret: NEXT }, countingFetch)
+    expect(result).toMatchObject({ ok: false, status: 400, error: 'accountId required' })
+    expect(gatewayCalls).toBe(0)
+    expect(await store.listVaultRows()).toEqual(before)
+    expect(await store.listAudit(100)).toEqual(beforeAudit)
+    expect(await store.listEvents(100)).toEqual(beforeEvents)
+  })
 })
