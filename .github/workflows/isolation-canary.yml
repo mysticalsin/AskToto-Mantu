@@ -1,0 +1,51 @@
+name: isolation-canary
+
+# M2-0190 — extends M2-0001's hermetic-test guarantee to the two runners build.yml's `quality`/`operator`
+# jobs never touch: swift test (native-app/MetisKit has no vitest equivalent) and license-server's
+# `node --test` (a separate npm project, its own package-lock, never chained into the root `npm test`).
+# A new workflow file rather than a new job in build.yml — see AGENTS.md's guardrail against two tickets
+# editing the same CI file. The wrangler-isolation proof and the scripts/qa canary do NOT need a job
+# here: they are plain `*.test.ts` files under `scripts/` and `operator/scripts/`, so build.yml's existing
+# `quality` job (root `npm test`, both ubuntu and windows) and `operator` job (its `*.contract.test.ts`
+# step) already run them — a duplicate job here would just be a second, narrower copy of that same
+# coverage (operator/scripts/wrangler-local-sandbox.contract.test.ts, scripts/qa/lib/sandbox-guard.test.ts,
+# scripts/hermetic/sandbox-env.test.ts).
+on:
+  push:
+    branches:
+      - '**'
+    tags-ignore:
+      - 'v*'
+      - 'ffmpeg-sidecar-*'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  license-server:
+    name: license-server node --test (hermetic)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: license-server/package-lock.json
+      - run: npm ci
+        working-directory: license-server
+      - run: npm test
+        working-directory: license-server
+
+  metiskit-swift-test:
+    name: MetisKit swift test (hermetic)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # RED (M2-0190 TDD step 1): scripts/hermetic/run-swift-tests.sh does not exist yet on this branch —
+      # this bare invocation is what proves HermeticHomeTests fails for the reason the ticket describes
+      # (METIS_TEST_HOME unset) before the wrapper lands. Step 2 replaces this with
+      # `bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit`.
+      - run: swift test --package-path native-app/MetisKit
