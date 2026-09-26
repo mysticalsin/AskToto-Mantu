@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { rmSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -15,6 +15,13 @@ import { createHermeticSandbox, hermeticWranglerEnv, mergedEnv } from '../../scr
 // connect() from wrangler's CLI code or any Node dependency in its tree crashes the process. It does not
 // cover the native workerd child process, DNS resolution, or UDP — those need a separate mechanism (see
 // this ticket's advisory notes on a network-namespaced CI leg).
+//
+// Round-2 finding: `execFileSync` throwing was never real proof here. wrangler's own metrics dispatcher
+// catches a failed fetch and only logs it at debug level, so a non-loopback connect() denied deep inside
+// wrangler's dependency tree could leave the process exiting 0 with the denial visible nowhere this test
+// looked. deny-non-loopback.cjs now writes every denial to the child's stderr synchronously, independent
+// of whether wrangler catches the error — so `spawnSync` plus an explicit stderr check is the actual
+// proof; a non-throwing exit no longer means "stayed local," this assertion does.
 //
 // scripts/hermetic/sandbox-env.test.ts already covers hermeticWranglerEnv's own assertions
 // (credential-stripping, config-dir sandboxing); this file is only the real-process proof.
@@ -46,7 +53,7 @@ describe('a real wrangler --local invocation never leaves loopback', () => {
       // fresh sandbox config dir also prompts interactively (which env.CI otherwise suppresses).
       env.CI = 'true'
 
-      const output = execFileSync(
+      const result = spawnSync(
         process.execPath,
         [
           WRANGLER_BIN,
@@ -61,17 +68,17 @@ describe('a real wrangler --local invocation never leaves loopback', () => {
           // incidental "1"s elsewhere in wrangler's own output (a row count, a duration).
           'SELECT 424242 as answer'
         ],
-        { cwd: OPERATOR_DIR, encoding: 'utf8', env, stdio: 'pipe' }
+        { cwd: OPERATOR_DIR, encoding: 'utf8', env }
       )
 
-      // If wrangler's own Node process had opened a non-loopback connection — an update check, a
-      // telemetry ping, a real API call despite --local — scripts/hermetic/deny-non-loopback.cjs would
-      // have thrown this exact error and crashed the process (execFileSync would then throw instead of
-      // returning). Reaching this line at all is proof the process stayed local; asserting the query's
-      // own distinctive result proves the command actually ran, rather than exiting early for an
-      // unrelated reason.
-      expect(output).not.toContain('HERMETIC_NETWORK_DENIED')
-      expect(output).toContain('424242')
+      // Three independent checks, not one: a clean exit alone proves nothing (wrangler can catch and
+      // swallow a denied connect() internally), and stdout containing the query's result alone proves
+      // only that the command did its real work, not that nothing else happened alongside it. Together:
+      // the command completed normally, it did the real work asked of it, and deny-non-loopback.cjs never
+      // had anything to report on this child's stderr.
+      expect(result.status).toBe(0)
+      expect(result.stdout).toContain('424242')
+      expect(result.stderr).not.toContain('HERMETIC_NETWORK_DENIED')
     },
     30_000
   )

@@ -35,24 +35,22 @@ jobs:
           cache: npm
           cache-dependency-path: license-server/package-lock.json
       # M2-0190 acceptance #4 — proves the isolation against the runner's REAL home, not a fresh
-      # (and therefore trivially empty) sandbox dir. A sentinel file lets the later step tell "untouched"
-      # apart from "touched before the suite even ran".
-      - name: Seed a real-home honeypot the suite must never touch
+      # (and therefore trivially empty) sandbox dir. Two honeypots: detectOneDrive()'s macOS-shaped check
+      # (~/Library/CloudStorage/OneDrive-*) runs on every platform, not only darwin, so it's a real hazard
+      # here too; ~/OneDrive is the separate bare fallback path that check falls through to on this
+      # (ubuntu) runner specifically.
+      - name: Seed real-home honeypots the suite must never touch
         run: |
-          mkdir -p "$HOME/Library/CloudStorage/OneDrive-Honeypot"
-          echo sentinel > "$HOME/Library/CloudStorage/OneDrive-Honeypot/sentinel"
+          bash scripts/hermetic/honeypot.sh seed "$HOME/Library/CloudStorage/OneDrive-Honeypot"
+          bash scripts/hermetic/honeypot.sh seed "$HOME/OneDrive"
       - run: npm ci
         working-directory: license-server
       - run: npm test
         working-directory: license-server
-      - name: Fail if the suite touched the real-home honeypot
+      - name: Fail if the suite touched either real-home honeypot
         run: |
-          touched="$(find "$HOME/Library/CloudStorage/OneDrive-Honeypot" -newer "$HOME/Library/CloudStorage/OneDrive-Honeypot/sentinel")"
-          if [ -n "$touched" ]; then
-            echo "the suite touched the real-home honeypot it must never reach:"
-            echo "$touched"
-            exit 1
-          fi
+          bash scripts/hermetic/honeypot.sh check "$HOME/Library/CloudStorage/OneDrive-Honeypot"
+          bash scripts/hermetic/honeypot.sh check "$HOME/OneDrive"
 
   metiskit-swift-test:
     name: MetisKit swift test (hermetic)
@@ -61,21 +59,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Seed a real-home honeypot the suite must never touch
-        run: |
-          mkdir -p "$HOME/Library/CloudStorage/OneDrive-Honeypot"
-          echo sentinel > "$HOME/Library/CloudStorage/OneDrive-Honeypot/sentinel"
+        run: bash scripts/hermetic/honeypot.sh seed "$HOME/Library/CloudStorage/OneDrive-Honeypot"
       # Never bare `swift test` (M2-0190) — this wrapper is what provides HermeticHomeTests' sandbox
       # (HOME, CFFIXED_USER_HOME); running `swift test` directly here would leave both unset and the
       # canary would fail loudly.
       - run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
       - name: Fail if the suite touched the real-home honeypot
-        run: |
-          touched="$(find "$HOME/Library/CloudStorage/OneDrive-Honeypot" -newer "$HOME/Library/CloudStorage/OneDrive-Honeypot/sentinel")"
-          if [ -n "$touched" ]; then
-            echo "the suite touched the real-home honeypot it must never reach:"
-            echo "$touched"
-            exit 1
-          fi
+        run: bash scripts/hermetic/honeypot.sh check "$HOME/Library/CloudStorage/OneDrive-Honeypot"
 
   deny-non-loopback:
     name: deny-non-loopback.cjs denies every connect() shape (hermetic)
@@ -95,32 +85,49 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Seed honeypots the profile must deny
+      # M2-0190 round-2 finding — the previous version of this job only proved 2 of the 7 (now 10) denied
+      # roots this way; a typo in any of the untested ones would have gone unnoticed. Looping over every
+      # root in scripts/hermetic/owner-account.sb — instead of one hand-written step per root — means a
+      # root added to the profile without a matching line here is a step that never asserted anything,
+      # not a silent gap in coverage. The accented "Library/Application Support/Métis" literal needs this
+      # proof most: SBPL subpath matching is a string compare against the syscall's own path argument, so
+      # whether that literal actually matches is otherwise unverified.
+      - name: Seed a probe in every denied root and assert both read and write are refused
         run: |
-          mkdir -p "$HOME/Library/CloudStorage/OneDrive-Honeypot"
-          echo probe > "$HOME/Library/CloudStorage/OneDrive-Honeypot/probe"
-          mkdir -p "$HOME/.wrangler"
-          echo probe > "$HOME/.wrangler/probe"
-      - name: Denies reading a honeypot under Library/CloudStorage
-        run: |
-          if bash scripts/hermetic/run-under-owner-sandbox.sh cat "$HOME/Library/CloudStorage/OneDrive-Honeypot/probe" 2>err.log; then
-            echo "expected the read to be denied"; cat err.log; exit 1
-          fi
-          cat err.log
-          grep -q "Operation not permitted" err.log
-      - name: Denies writing into that same honeypot
-        run: |
-          if bash scripts/hermetic/run-under-owner-sandbox.sh sh -c 'echo x >> "$HOME/Library/CloudStorage/OneDrive-Honeypot/probe"' 2>err.log; then
-            echo "expected the write to be denied"; cat err.log; exit 1
-          fi
-          cat err.log
-          grep -q "Operation not permitted" err.log
-      - name: Denies reading wrangler's real global config directory
-        run: |
-          if bash scripts/hermetic/run-under-owner-sandbox.sh cat "$HOME/.wrangler/probe" 2>err.log; then
-            echo "expected the read to be denied"; cat err.log; exit 1
-          fi
-          cat err.log
-          grep -q "Operation not permitted" err.log
+          set -euo pipefail
+          # Keep in sync with the (subpath ...) list in scripts/hermetic/owner-account.sb.
+          roots=(
+            "Library/CloudStorage/OneDrive-Honeypot"
+            "Library/Keychains"
+            ".wrangler"
+            ".config/.wrangler"
+            "Library/Preferences/.wrangler"
+            "Library/Application Support/Metis"
+            "Library/Application Support/Métis"
+            "Library/Application Support/AskToto"
+            "Library/Application Support/asktoto-dev"
+            "Library/Application Support/asktoto"
+          )
+          fail=0
+          for root in "${roots[@]}"; do
+            dir="$HOME/$root"
+            probe="$dir/probe"
+            mkdir -p "$dir"
+            echo probe > "$probe"
+
+            echo "-- $root --"
+            if bash scripts/hermetic/run-under-owner-sandbox.sh cat "$probe" 2>err.log; then
+              echo "expected the read of '$root' to be denied"; cat err.log; fail=1
+            elif ! grep -q "Operation not permitted" err.log; then
+              echo "read of '$root' was denied for the wrong reason:"; cat err.log; fail=1
+            fi
+
+            if bash scripts/hermetic/run-under-owner-sandbox.sh sh -c "echo x >> '$probe'" 2>err.log; then
+              echo "expected the write to '$root' to be denied"; cat err.log; fail=1
+            elif ! grep -q "Operation not permitted" err.log; then
+              echo "write to '$root' was denied for the wrong reason:"; cat err.log; fail=1
+            fi
+          done
+          exit "$fail"
       - name: Positive control — reading a repository file still works under the profile
         run: bash scripts/hermetic/run-under-owner-sandbox.sh cat AGENTS.md > /dev/null

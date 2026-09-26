@@ -17,8 +17,7 @@ describe('hermetic home — license-server tests run against a per-run sandbox, 
     assert.match(basename(home), /^metis-test-home-/);
     assert.equal(tmpdir(), join(home, 'tmp'));
   });
-  // A "the fresh mkdtemp'd sandbox has no real Library/CloudStorage" check always passes trivially — a
-  // brand-new directory is empty by construction, proving nothing about isolation. The real proof is
-  // isolation-canary.yml's license-server job, which seeds a honeypot in the RUNNER'S REAL home and
-  // fails the job if this suite ever touches it.
+  // Isolation itself is proven by isolation-canary.yml's license-server job, which seeds a honeypot in
+  // the runner's real home and fails the job if this suite ever touches it — a check against the fresh
+  // mkdtemp'd sandbox dir here would pass trivially (empty by construction) and prove nothing.
 });

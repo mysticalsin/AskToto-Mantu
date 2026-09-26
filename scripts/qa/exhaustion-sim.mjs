@@ -1,5 +1,11 @@
 import { chromium } from 'playwright-core'
 import { writeFileSync } from 'node:fs'
+// W0-HERMETIC (M2-0190) — this harness attaches over CDP and clears EVERY stored API key of the attached
+// app (see the clearAllKeys step below), then rewrites its settings. Round-2 finding: it had no guard at
+// all against doing that to a real developer profile — the runbook's stated reason for omitting one
+// ("doesn't reference ASKTOTO_USERDATA") tested the wrong thing; the hazard is mutating whatever profile
+// happens to be attached, regardless of which env var this harness's own shell does or doesn't reference.
+import { assertAttachedAppIsSandboxed } from './lib/sandbox-guard.mjs'
 
 const CDP = 'http://127.0.0.1:9334'
 const MOCK = 'https://127.0.0.1:8788'
@@ -12,6 +18,13 @@ for (let i = 0; i < 40 && !page; i++) {
   if (!page) await new Promise((r) => setTimeout(r, 1000))
 }
 if (!page) { console.log('no page'); process.exit(1) }
+
+try {
+  await assertAttachedAppIsSandboxed(page)
+} catch (e) {
+  console.error(`[exhaustion-sim] ${e.message}`)
+  process.exit(2)
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const settings = () => page.evaluate(() => window.toto.getSettings())

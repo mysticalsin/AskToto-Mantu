@@ -14,11 +14,11 @@
 // CommonJS (not the repo's usual .mjs) because `--require` only loads CJS; `--import` would need an ESM
 // loader hook for the same effect and buys nothing here.
 const net = require('node:net')
+const fs = require('node:fs')
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost', '::ffff:127.0.0.1'])
 
 function isLoopback(host) {
-  if (!host) return true // no host = the connect(path, ...) Unix-domain-socket form
   if (LOOPBACK_HOSTS.has(host)) return true
   // net.isIPv4, not a string prefix: "127.example.com" starts with "127." too, but resolves through
   // DNS to whatever that name points at, not to loopback.
@@ -39,12 +39,13 @@ function isLoopback(host) {
 function targetHost(args) {
   const [options] = Array.isArray(args[0]) ? args[0] : net._normalizeArgs(args)
   if (options.path) return null // Unix domain socket — always allowed
-  return options.host ?? '127.0.0.1' // net's own default when only a port is given
+  return options.host ?? 'localhost' // net's own default (options.host || 'localhost') when only a port is given
 }
 
 const originalConnect = net.Socket.prototype.connect
 net.Socket.prototype.connect = function hermeticConnect(...args) {
   const host = targetHost(args)
+  if (host === null) return originalConnect.apply(this, args) // Unix domain socket — always allowed
   if (!isLoopback(host)) {
     // Match net's own contract for an in-flight connect(): `connecting` is true until it resolves.
     // Without this, http.Agent's own "is this socket already usable?" check sees a falsy `connecting`
@@ -52,10 +53,22 @@ net.Socket.prototype.connect = function hermeticConnect(...args) {
     // queued destroy() runs — which fails with ERR_SOCKET_CLOSED (no connection handle was ever
     // created) and masks this error entirely.
     this.connecting = true
-    const error = new Error(
+    const message =
       `HERMETIC_NETWORK_DENIED: blocked a connect() to non-loopback host "${host}" — ` +
-        'M2-0190 isolation-canary preload only allows loopback traffic.'
-    )
+      'M2-0190 isolation-canary preload only allows loopback traffic.'
+    // Round-2 finding: a caller that catches the connect() failure and only logs it (wrangler's own
+    // metrics dispatcher does exactly this, at debug level, when WRANGLER_SEND_METRICS is left unset)
+    // can exit 0 with no visible trace of the denial. Reporting has to happen HERE, synchronously, so
+    // it can never depend on whether — or how — the caller handles the error this function also raises
+    // below. fd 2 is written directly (not console.error, which can be monkey-patched or buffered)
+    // so a test can assert on the child process's real stderr regardless of its exit code.
+    try {
+      fs.writeSync(2, `${message}\n`)
+    } catch {
+      // stderr can be closed or redirected away in some embedding contexts; destroy(error) below is
+      // still the caller-visible signal in that case.
+    }
+    const error = new Error(message)
     error.code = 'HERMETIC_NETWORK_DENIED'
     // Match net's own contract for a failed connection: asynchronous, and via destroy(err) — which
     // emits 'error' and then 'close', exactly what a real failed connect() does — never a bare

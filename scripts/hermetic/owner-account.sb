@@ -22,8 +22,17 @@
   (subpath (string-append (param "HOME") "/.wrangler"))
   (subpath (string-append (param "HOME") "/.config/.wrangler"))
   (subpath (string-append (param "HOME") "/Library/Preferences/.wrangler"))
-  ;; The real per-device Métis brain/settings store, packaged and unpackaged — what ASKTOTO_USERDATA
-  ;; exists specifically to redirect away from (electron-builder.yml's productName "Metis"; the
-  ;; unpackaged app's own "-dev" suffix on its default userData directory).
+  ;; The real per-device Métis brain/settings store, under every name the app has ever used — what
+  ;; ASKTOTO_USERDATA exists specifically to redirect away from. src/main/index.ts's own profile-migration
+  ;; logic still reads the prior product names ("Métis", "AskToto") from disk, so a test process must be
+  ;; denied every one of them, not only the current "Metis" (electron-builder.yml's productName) and the
+  ;; unpackaged app's "-dev" suffix.
   (subpath (string-append (param "HOME") "/Library/Application Support/Metis"))
-  (subpath (string-append (param "HOME") "/Library/Application Support/asktoto-dev")))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Métis"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/AskToto"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/asktoto-dev"))
+  ;; The unpackaged, pre-suffix default — the same directory as "AskToto" on case-insensitive APFS.
+  ;; Denied under both literal spellings: SBPL subpath matching is a string compare against the syscall's
+  ;; own path argument, not a case-folded filesystem lookup, so the case actually used has to match one of
+  ;; the literals here.
+  (subpath (string-append (param "HOME") "/Library/Application Support/asktoto")))

@@ -4,13 +4,13 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-// M2-0190 (Opus round-1 finding) — deny-non-loopback.cjs patches net.Socket.prototype.connect(), but
-// net.connect()/net.createConnection() — and everything built on them: http.Agent, undici's plain-http
-// path — call Socket#connect with an already-normalized [options, cb] ARRAY, a different shape from the
-// (port, host) form tls.connect() uses. Before this file existed, only the tls.connect() shape had ever
-// been exercised in CI. These are the direct behaviour proof: spawn a real child process under the
-// preload and assert it is denied quickly, for every shape that reaches Socket#connect, plus a positive
-// control proving loopback traffic still works.
+// M2-0190 — deny-non-loopback.cjs patches net.Socket.prototype.connect(), which every connect() shape
+// eventually reaches, but by different call shapes: net.connect()/net.createConnection() (and everything
+// built on them: http.Agent, undici's plain-http path) call Socket#connect with an already-normalized
+// [options, cb] ARRAY, a different shape from the (port, host) form tls.connect() uses. These are the
+// direct behaviour proof: spawn a real child process under the preload and assert it is denied quickly,
+// for every shape that reaches Socket#connect, plus a positive control proving loopback traffic still
+// works.
 //
 // 192.0.2.1 is TEST-NET-1 (RFC 5737) — guaranteed non-routable and non-existent, so nothing real is ever
 // contacted even while this preload fails to deny it.
