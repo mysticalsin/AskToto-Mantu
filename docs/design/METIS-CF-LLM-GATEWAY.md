@@ -89,9 +89,12 @@ This FRAME does not merge those Workers.
 - Cloudflare · AI Gateway card: **Log in to Cloudflare** → `GET /cloudflare/connect` → callback
   dual-writes vault `cloudflare-account` + `cloudflare` (label `AI Gateway`).
 - `verifyDefaultGatewayPrivacy` reads back the account's `default` gateway before any vault
-  write or provider call; it never creates or repairs one. It fails closed (503) unless an
-  admin has already created and reviewed that gateway with `collect_logs`/`logpush` off and
-  `cache_ttl` 0.
+  write or provider call; it never creates or repairs one. It passes only when the readback's
+  `result.id` is `'default'`, `collect_logs` is `false`, `cache_ttl` is `0`, `logpush` is
+  `false`, `otel` is absent or an empty array, and `log_classification` is absent or `false` —
+  anything else fails closed with `GATEWAY_CONFIGURATION_UNSAFE`. A failed check surfaces as a
+  503 on `POST /v1/use`, `/v1/ask` and the `/v1/admin/keys` routes, and as a redirect to
+  `/?cf=failed#keys` from the OAuth callback card.
 - OAuth scopes already include `workers-ai:run`, `ai-gateway:read`, `ai-gateway:edit`.
 - Missing `CF_OAUTH_CLIENT_ID` / `CF_OAUTH_CLIENT_SECRET` → fail loud on Keys (503 after Access).
   License generate must still work. OAuth stays LAST.
