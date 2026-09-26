@@ -22,13 +22,13 @@ const ENC_MARKER_V2 = Buffer.from('ATKENC2\n', 'utf8')
  * an `ATKENC2\n` v2 envelope with an `S:`-wrapped (safeStorage/DPAPI) content key whose AES-GCM payload
  * fails authentication.
  *
- * M2-0003 replaces the rename-on-any-decode-failure behaviour above with a read/replace invariant
- * (docs/metis-2.0/designs/M2-0003-DESIGN.md): index.json is renamed or overwritten only when THIS
- * process fully decoded its current bytes. Anything it could not decode — another device's key, an
- * unavailable keystore, damaged own ciphertext (indistinguishable from the two above under AES-GCM) — is
- * left byte-identical and the index is read-only for the session. Only decoded-but-invalid bytes are
- * still set aside, capped at 5 automatic snapshots per `.brain`, and the pre-existing legacy
- * `index.corrupt-<ISO>.json` files are never touched by any automatic path.
+ * M2-0003 replaces the rename-on-any-decode-failure behaviour above with a read/replace invariant:
+ * index.json is renamed or overwritten only when THIS process fully decoded its current bytes.
+ * Anything it could not decode — another device's key, an unavailable keystore, damaged own ciphertext
+ * (indistinguishable from the two above under AES-GCM) — is left byte-identical and the index is
+ * read-only for the session. Only decoded-but-invalid bytes are still set aside, capped at 5 automatic
+ * snapshots per `.brain`, and the pre-existing legacy `index.corrupt-<ISO>.json` files are never touched
+ * by any automatic path.
  */
 
 function sha256(buf: Buffer): string {
@@ -54,9 +54,8 @@ function envelopeV2(content: string): { buf: Buffer; contentKey: Buffer } {
 /** The real-world shape: a v2 envelope whose ciphertext has one byte flipped, so GCM auth fails while
  *  the wrapped content key itself still unwraps perfectly (exactly the field file's behaviour). This is
  *  DAMAGED-OWN: bytes this device wrapped, but the content itself is now corrupt. AES-GCM auth failure
- *  cannot tell this apart from a foreign key (see M2-0003-DESIGN.md §1), so M2-0003 treats it the same
- *  way as FOREIGN-F: read-only, never auto-quarantined (see M4 below — this replaces the pre-M2-0003
- *  behaviour of auto-quarantining it).
+ *  cannot tell this apart from a foreign key, so M2-0003 treats it the same way as FOREIGN-F: read-only,
+ *  never auto-quarantined (see M4 below).
  */
 function poisonedIndexBytes(): Buffer {
   const { buf } = envelopeV2(JSON.stringify({ schema_version: 5, ingested: { 'meeting-a.md': { at: 1, ok: true } } }))
@@ -69,10 +68,10 @@ function poisonedIndexBytes(): Buffer {
   ])
 }
 
-/** FOREIGN-F — the incident fixture (RUNTIME-EVIDENCE "Brain index quarantine"): a v2 envelope whose
- *  `kLocal` is the file-backend ('F:') wrap of 72 random bytes — never a key any process holds. Reproduces
- *  the exact `decodeSavedResult` failure logged in the field: "Unsupported state or unable to
- *  authenticate data" (decryptSecret's AES-GCM auth tag never matches). */
+/** FOREIGN-F — the M2-0003 incident fixture: a v2 envelope whose `kLocal` is the file-backend ('F:')
+ *  wrap of 72 random bytes — never a key any process holds. Reproduces the exact `decodeSavedResult`
+ *  failure logged in the field: "Unsupported state or unable to authenticate data" (decryptSecret's
+ *  AES-GCM auth tag never matches). */
 function foreignKeyIndexBytes(): Buffer {
   const env = {
     v: 2,
@@ -178,10 +177,9 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
   })
 
   it('M2-0003: damaged own ciphertext is no longer auto-quarantined — left in place, read-only', () => {
-    // MQA-175's original fixture and behaviour change (design A4): a decode failure this device caused
-    // itself (a torn write) is indistinguishable from FOREIGN-F under AES-GCM, so it gets the same
-    // read-only treatment, not a rename. Replaces the pre-M2-0003 "preserves an undecryptable index.json
-    // aside..." test, which asserted the opposite.
+    // MQA-175's original fixture (M2-0003): a decode failure this device caused itself (a torn write)
+    // is indistinguishable from FOREIGN-F under AES-GCM, so this device's own damaged ciphertext gets
+    // the same read-only treatment as a foreign key — never a rename, never auto-quarantined.
     const poisoned = poisonedIndexBytes()
     const primary = join(brainDir(s), 'index.json')
     writeFileSync(primary, poisoned)
@@ -296,7 +294,8 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
   })
 
   it('M2-0003: purge ends the read-only state — no in-memory ledger outlives the file', async () => {
-    // Regression guard for the prior (pre-design) F1: a session-only shadow index that outlived a purge.
+    // Regression guard (M2-0003): purgeBrain must clear the in-memory read-only state along with the
+    // file, so no in-memory ledger from before the purge can outlive it.
     writeFileSync(join(brainDir(s), 'index.json'), foreignKeyIndexBytes())
     readIndex(s)
     expect(indexUnavailable(s)).toBe('undecryptable')

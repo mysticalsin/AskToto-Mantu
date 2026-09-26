@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
@@ -12,7 +12,7 @@ vi.mock('electron')
  * M2-0003 — unit coverage for the read/replace invariant primitives in store.ts that
  * mqa-175-brain-index-poison.test.ts (an integration-shaped suite) does not exercise directly: the pure
  * classifier, the I/O-vs-decode distinction, the io retry window, a failed set-aside rename, and the
- * once-per-classification log/audit contract. See docs/metis-2.0/designs/M2-0003-DESIGN.md §2.3/§5.2.
+ * once-per-classification log/audit contract.
  *
  * `node:fs` is partially mocked so a fault can be injected on demand for exactly the primary
  * `.brain/index.json` path, following the pattern in store-durability.test.ts. Every other path (the
@@ -96,8 +96,7 @@ describe('classifyIndexBytes — pure classification, no filesystem writes', () 
 
   it('a foreign-key envelope classifies as unavailable/undecryptable', () => {
     const load = store.classifyIndexBytes(foreignKeyIndexBytes())
-    expect(load.kind).toBe('unavailable')
-    expect((load as { cause?: string }).cause).toBe('undecryptable')
+    expect(load).toMatchObject({ kind: 'unavailable', cause: 'undecryptable' })
   })
 
   it('a newer schema_version classifies as unavailable/unsupported, never corrupt', () => {
@@ -201,17 +200,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     }
   })
 
-  it('at the snapshot cap, a sixth invalid index is left read-only instead of set aside', () => {
-    for (let i = 0; i < store.INDEX_AUTO_SNAPSHOT_CAP; i++) {
-      writeFileSync(join(store.brainDir(s), `index.corrupt-auto-2026-09-2${i}T00-00-00-000Z-seed${i}.json`), `seed-${i}`)
-    }
-    const bad = Buffer.from('{"ingested": tru', 'utf8')
-    writeFileSync(primary, bad)
-
-    expect(store.readIndex(s).ingested).toEqual({})
-    expect(store.indexUnavailable(s)).toBe('corrupt-kept')
-    expect(
-      readdirSync(store.brainDir(s)).filter((f) => f.startsWith('index.corrupt-auto-'))
-    ).toHaveLength(store.INDEX_AUTO_SNAPSHOT_CAP) // no 6th snapshot created
-  })
+  // The snapshot-cap case (a 6th invalid index left read-only instead of set aside) is covered by
+  // mqa-175-brain-index-poison.test.ts's M8, which also asserts writeIndex rejects and that none of
+  // the capped snapshots' names change — no need to duplicate it here.
 })

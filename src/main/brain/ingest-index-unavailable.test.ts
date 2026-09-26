@@ -28,8 +28,7 @@ vi.mock('../llm', () => ({ createStream: createStreamMock }))
 /**
  * M2-0003 — the three gates (updateIndex, startBackfill, enqueueIngest) that stop work from running
  * against the empty in-memory stand-in `readIndex` returns while an existing `.brain/index.json` cannot
- * be decoded on this device. Harness follows ingest-index-fallback.test.ts. See
- * docs/metis-2.0/designs/M2-0003-DESIGN.md §2.4/§5.3.
+ * be decoded on this device. Harness follows ingest-index-fallback.test.ts.
  *
  * A "sentinel" entity file stands in for every other derived artifact a runaway re-ingest would touch:
  * if it survives untouched, nothing behind the gate ran.

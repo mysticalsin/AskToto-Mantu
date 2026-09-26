@@ -240,9 +240,8 @@ export function readJson<T>(settings: Settings, rel: string, parse: (v: unknown)
   try {
     value = parse(JSON.parse(readSavedFile(p)))
   } catch {
-    // Corrupt/undecryptable file — callers treat as absent and ingest will rewrite it. This no longer
-    // applies to index.json (M2-0003): it has its own read/replace invariant (loadIndex, above
-    // writeJson) and never goes through readJson at all.
+    // Corrupt/undecryptable file — callers treat as absent and ingest will rewrite it.
+    // index.json never goes through readJson; its read/replace rules live in loadIndex (M2-0003).
     value = null
   }
   if (jsonCache.size >= JSON_CACHE_MAX) jsonCache.clear()
@@ -431,8 +430,7 @@ export function ensureV1Backup(settings: Settings): void {
 // could not be read, decrypted (another device's key, an unavailable keystore, damaged ciphertext — not
 // distinguishable, so never distinguished) or parsed by this build's schema_version are left byte-identical
 // and the index is read-only for the session. Decoded-but-invalid bytes are set aside, capped. Mirrors
-// corrections.ts's parseJournalFile (absent / unreadable / corrupt / ok). See
-// docs/metis-2.0/designs/M2-0003-DESIGN.md.
+// corrections.ts's parseJournalFile (absent / unreadable / corrupt / ok). See ticket M2-0003.
 
 const INDEX_REL = 'index.json'
 /** Only snapshots made by this scheme are counted. Legacy `index.corrupt-<ISO>.json` files (the pre-
@@ -481,12 +479,24 @@ export function classifyIndexBytes(buf: Buffer): IndexLoad {
 // while (mtimeMs,size) still match the file on disk — it ends by itself the moment the bytes change
 // (another device/owner rewrites them, an explicit purge), so nothing in memory ever outlives the file.
 // The (-1,-1) key stands for "stat itself failed (non-ENOENT)".
-const indexCache = new Map<string, { mtimeMs: number; size: number; at: number; load: ResolvedIndex }>()
+type IndexCacheEntry = { mtimeMs: number; size: number; at: number; load: ResolvedIndex }
+const indexCache = new Map<string, IndexCacheEntry>()
+
+/** Node fs errors carry `.code` (ENOENT, ETIMEDOUT, …); anything else has none. */
+function errnoCode(e: unknown): string | undefined {
+  return (e as NodeJS.ErrnoException).code
+}
+
+/** True once a cached I/O-failure entry is old enough to retry. Decode failures never retry here — the
+ *  bytes haven't changed, and polling safeStorage on a timer risks a Keychain-prompt storm. */
+function ioRetryDue(entry: IndexCacheEntry): boolean {
+  return entry.load.kind === 'unavailable' && entry.load.cause === 'io' && Date.now() - entry.at >= INDEX_IO_RETRY_MS
+}
 
 /** Logs and audits a NEW unavailable classification once (not once per poll), then caches it. */
 function recordUnavailable(
   p: string,
-  hit: { mtimeMs: number; size: number; at: number; load: ResolvedIndex } | undefined,
+  hit: IndexCacheEntry | undefined,
   mtimeMs: number,
   size: number,
   load: Extract<ResolvedIndex, { kind: 'unavailable' }>
@@ -514,16 +524,17 @@ function setAsideCorruptIndex(p: string): ResolvedIndex {
   try {
     kept = readdirSync(dir).filter((f) => f.startsWith(INDEX_AUTO_SNAPSHOT_PREFIX)).length
   } catch (e) {
-    return { kind: 'unavailable', cause: 'corrupt-kept', detail: (e as NodeJS.ErrnoException).code }
+    return { kind: 'unavailable', cause: 'corrupt-kept', detail: errnoCode(e) }
   }
   if (kept >= INDEX_AUTO_SNAPSHOT_CAP) return { kind: 'unavailable', cause: 'corrupt-kept', detail: 'snapshot cap reached' }
   const to = join(dir, `${INDEX_AUTO_SNAPSHOT_PREFIX}${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
   try {
     renameSync(p, to)
   } catch (e) {
-    return { kind: 'unavailable', cause: 'corrupt-kept', detail: (e as NodeJS.ErrnoException).code }
+    return { kind: 'unavailable', cause: 'corrupt-kept', detail: errnoCode(e) }
   }
-  indexCache.delete(p)
+  // No indexCache.delete(p) here — the caller (loadIndex) always deletes the entry when this
+  // function returns 'absent', so a second delete here would just be dead code.
   mainLog.warn(
     `[brain] index.json decoded but was not a valid index — preserved as ${basename(to)} (${kept + 1}/${INDEX_AUTO_SNAPSHOT_CAP}); it will be rebuilt from the transcripts`
   )
@@ -542,23 +553,20 @@ function loadIndex(s: Settings): ResolvedIndex {
     mtimeMs = st.mtimeMs
     size = st.size
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+    if (errnoCode(e) === 'ENOENT') {
       indexCache.delete(p)
       return { kind: 'absent' }
     }
-    return recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: (e as NodeJS.ErrnoException).code })
+    return recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: errnoCode(e) })
   }
 
-  const cacheKeyMatches = !!hit && hit.mtimeMs === mtimeMs && hit.size === size
-  const ioRetryDue =
-    cacheKeyMatches && hit!.load.kind === 'unavailable' && hit!.load.cause === 'io' && Date.now() - hit!.at >= INDEX_IO_RETRY_MS
-  if (cacheKeyMatches && !ioRetryDue) return hit!.load
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size && !ioRetryDue(hit)) return hit.load
 
   let buf: Buffer
   try {
     buf = readFileSync(p)
   } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code
+    const code = errnoCode(e)
     if (code === 'ENOENT') {
       indexCache.delete(p)
       return { kind: 'absent' }
@@ -620,6 +628,7 @@ export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
   indexCache.delete(join(brainDir(s), INDEX_REL))
 }
 
+// ── Typed accessors ──────────────────────────────────────────────────────────
 export const readGraph = (s: Settings): BrainGraph =>
   readJson(s, 'graph.json', (v) => BrainGraphSchema.parse(v)) ?? BrainGraphSchema.parse({})
 export const writeGraph = (s: Settings, v: BrainGraph): Promise<void> => writeJson(s, 'graph.json', v)
