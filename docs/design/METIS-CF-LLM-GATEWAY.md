@@ -88,8 +88,10 @@ This FRAME does not merge those Workers.
   OpenRouter, Groq, Mistral, Grok, Custom. AES-GCM in D1 `vault_keys`. last4 only in HTML/JSON.
 - Cloudflare · AI Gateway card: **Log in to Cloudflare** → `GET /cloudflare/connect` → callback
   dual-writes vault `cloudflare-account` + `cloudflare` (label `AI Gateway`).
-- `ensureDefaultAiGateway` POSTs gateway id `default` (best-effort; first authenticated Ask
-  also auto-creates).
+- `verifyDefaultGatewayPrivacy` reads back the account's `default` gateway before any vault
+  write or provider call; it never creates or repairs one. It fails closed (503) unless an
+  admin has already created and reviewed that gateway with `collect_logs`/`logpush` off and
+  `cache_ttl` 0.
 - OAuth scopes already include `workers-ai:run`, `ai-gateway:read`, `ai-gateway:edit`.
 - Missing `CF_OAUTH_CLIENT_ID` / `CF_OAUTH_CLIENT_SECRET` → fail loud on Keys (503 after Access).
   License generate must still work. OAuth stays LAST.
