@@ -72,11 +72,16 @@ const REASONS = [
   {
     match: 'win-security.test.ts',
     why: 'Probes Windows ACL owner SIDs and admin-managed policy files. No-op / skipped on non-Windows hosts by design.'
+  },
+  {
+    match: 'dataless.test.ts',
+    why: 'Runs the real Windows PowerShell attribute probe against an NTFS file carrying FILE_ATTRIBUTE_OFFLINE. The binary and the attribute exist only on Windows; the shared wire protocol, decoding and failure policy run on every platform through a stand-in probe.'
   }
 ]
 
-/** Skips accepted on this platform. Lower it when a skip is retired; never raise it to accommodate one. */
-const BASELINE = { win32: 12, darwin: 1, linux: 18 }
+/** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
+ *  Lower it when a skip is retired; never raise it for an undeclared skip. */
+const BASELINE = { win32: 12, darwin: 2, linux: 19 }
 
 const platform = process.platform
 const allowed = BASELINE[platform]
