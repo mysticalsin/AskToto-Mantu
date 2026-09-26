@@ -1,14 +1,15 @@
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { assertSandboxedMeetingsFolder } from './sandbox-guard.mjs'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { assertAttachedAppIsSandboxed, assertSandboxedMeetingsFolder } from './sandbox-guard.mjs'
 
 // W0-HERMETIC (M2-0190) — e2e-workflows.mjs and exhaustion-sim.mjs both call
-// assertAttachedAppIsSandboxed() (this file's async wrapper around the pure check below) right after
-// connecting to the CDP-attached app, before either touches its settings/brain/API-keys on disk. This is
-// an allow-list (under the OS temp dir, or outside the home directory entirely), not a deny-list, so
-// these cover both failure cases it exists to catch — no resolvedMeetingsFolder reported, and one that
-// resolves anywhere inside the real home directory, including shapes a fixed deny-list missed — plus the
-// two safe cases.
+// assertAttachedAppIsSandboxed() (the async wrapper below around the pure check in this describe block)
+// right after connecting to the CDP-attached app, before either touches its settings/brain/API-keys on
+// disk. This is an allow-list (under the OS temp dir), not a deny-list, so it accepts exactly one shape —
+// resolving under `tmpDir` — and every other case, including one that resolves anywhere inside the real
+// home directory (a fixed deny-list missed some of these) and one that resolves outside the home
+// directory entirely (which is not proof of isolation: an explicit settings.meetingsFolder can point
+// anywhere), throws.
 describe('assertSandboxedMeetingsFolder', () => {
   const homeDir = '/Users/fake-dev'
   const tmpDir = '/private/var/folders/fake/T'
@@ -47,14 +48,54 @@ describe('assertSandboxedMeetingsFolder', () => {
     expect(() => assertSandboxedMeetingsFolder({ meetingsFolder, homeDir, tmpDir })).toThrow(/real home directory/)
   })
 
-  it('does not throw for a directory under the OS temp dir', () => {
-    const meetingsFolder = join(tmpDir, 'metis-qa-userdata-abc123', 'Meetings')
-    expect(assertSandboxedMeetingsFolder({ meetingsFolder, homeDir, tmpDir })).toBe(true)
+  it('throws for a resolvedMeetingsFolder outside the home directory entirely, e.g. a mounted volume', () => {
+    // An explicit settings.meetingsFolder can point anywhere — a mounted volume, a network share, a
+    // moved OneDrive root — so "outside home" alone is never proof that the rest of the profile (API
+    // keys, brain index, every other setting) is sandboxed too. Concretely: e2e-workflows.mjs's
+    // documented `--meetings=D:\fixtures` sets meetingsFolder on whatever profile is attached, and that
+    // value is never restored by its SETTINGS_SNAPSHOT — so once set, it would defeat this guard forever
+    // on that profile if "outside home" were treated as sandboxed.
+    expect(() =>
+      assertSandboxedMeetingsFolder({ meetingsFolder: '/Volumes/Data/Métis Meetings', homeDir, tmpDir })
+    ).toThrow(/does not resolve under the OS temp/)
   })
 
-  it('does not throw for an isolated directory outside the real home entirely', () => {
-    expect(assertSandboxedMeetingsFolder({ meetingsFolder: '/opt/metis-qa-userdata/Meetings', homeDir, tmpDir })).toBe(
-      true
-    )
+  it('throws for a resolvedMeetingsFolder outside home that used to be treated as sandboxed', () => {
+    expect(() =>
+      assertSandboxedMeetingsFolder({ meetingsFolder: '/opt/metis-qa-userdata/Meetings', homeDir, tmpDir })
+    ).toThrow(/does not resolve under the OS temp/)
+  })
+
+  it('does not throw for a directory under the OS temp dir', () => {
+    const meetingsFolder = join(tmpDir, 'metis-qa-userdata-abc123', 'Meetings')
+    expect(() => assertSandboxedMeetingsFolder({ meetingsFolder, homeDir, tmpDir })).not.toThrow()
+  })
+})
+
+describe('assertAttachedAppIsSandboxed', () => {
+  const homeDir = '/Users/fake-dev'
+  const tmpDir = '/private/var/folders/fake/T'
+
+  // Stubs the global `window` the wrapper's page.evaluate callback closes over (window.toto.getSettings())
+  // — this repo's vitest environment is 'node', so `window` does not exist unless stubbed — and returns a
+  // minimal Playwright-page-shaped `evaluate` that just runs the callback, mirroring what a real CDP page
+  // does for a callback with no arguments.
+  function stubbedPage(resolvedMeetingsFolder: string) {
+    vi.stubGlobal('window', { toto: { getSettings: async () => ({ resolvedMeetingsFolder }) } })
+    return { evaluate: (fn: () => unknown) => Promise.resolve(fn()) }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('refuses when the attached app reports a resolvedMeetingsFolder outside the OS temp dir', async () => {
+    const page = stubbedPage(join(homeDir, 'Library', 'CloudStorage', 'OneDrive-FakeCorp', 'Métis Meetings'))
+    await expect(assertAttachedAppIsSandboxed(page, { homeDir, tmpDir })).rejects.toThrow(/real home directory/)
+  })
+
+  it('passes when the attached app reports a resolvedMeetingsFolder under the OS temp dir', async () => {
+    const page = stubbedPage(join(tmpDir, 'metis-qa-userdata-abc123', 'Meetings'))
+    await expect(assertAttachedAppIsSandboxed(page, { homeDir, tmpDir })).resolves.toBeUndefined()
   })
 })
