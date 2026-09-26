@@ -37,12 +37,48 @@ export function transcriptContainsEndPhrase(text: string): boolean {
   return END_RE.test(foldSpeech(text))
 }
 
-/** Strip the wake token so command parsing starts after the name call. */
+/** Locate the folded wake token without using the folded text as the command payload.
+ * Offsets refer to the original UTF-16 string: compatibility characters may expand,
+ * and combining marks may disappear during matching. Neither is a license to rewrite
+ * the user's note, URL, name, punctuation, or casing.
+ */
+function wakeWordSourceSpan(text: string): { start: number; end: number } | null {
+  let folded = ''
+  const starts: number[] = []
+  const ends: number[] = []
+  let offset = 0
+  for (const character of text) {
+    const end = offset + character.length
+    const part = character
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s']/g, ' ')
+    // A decomposed accent following the final letter belongs to that source span.
+    if (!part && ends.length > 0) ends[ends.length - 1] = end
+    for (let i = 0; i < part.length; i++) {
+      starts.push(offset)
+      ends.push(end)
+    }
+    folded += part
+    offset = end
+  }
+  // Collapsing/stripping whitespace is unnecessary for a single-token match and
+  // would discard the offsets. WAKE_RE is intentionally shared with the detector.
+  const match = WAKE_RE.exec(folded)
+  if (!match) return null
+  return { start: starts[match.index], end: ends[match.index + match[0].length - 1] }
+}
+
+/** Remove the first wake token; preserve the remaining source text verbatim apart
+ * from the surrounding whitespace needed to join the two sides of the name call.
+ * Use foldSpeech for keyword matching only, never for persisted/action arguments.
+ */
 export function stripWakeWord(text: string): string {
-  const folded = foldSpeech(text)
-  const m = folded.match(WAKE_RE)
-  if (!m || m.index === undefined) return text.trim()
-  const before = folded.slice(0, m.index).trim()
-  const after = folded.slice(m.index + m[0].length).trim()
+  const span = wakeWordSourceSpan(text)
+  if (!span) return text.trim()
+  const before = text.slice(0, span.start).trim()
+  const after = text.slice(span.end).trim()
   return [before, after].filter(Boolean).join(' ')
 }
