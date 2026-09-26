@@ -5,7 +5,7 @@
 // Math.random, no wall-clock time, so anyone can re-derive the same sample and the lead cannot steer it.
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { CLOSED, loadProgram } from './check.mjs'
 

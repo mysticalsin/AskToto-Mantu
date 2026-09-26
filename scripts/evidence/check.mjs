@@ -237,14 +237,15 @@ function doneProblems(ticket, latest, caps, closesProgram) {
   return problems
 }
 
-// Rules come from this table, not branching: each status dispatches to one small rule function. A
-// status with no row (TODO, IN_PROGRESS, CANCELLED handled above) needs no extra closure rule here.
+// Rules come from this table, not branching: each status dispatches to one small rule function. The
+// not-yet-started and in-progress statuses have no row here; neither has a closure rule beyond the
+// depends_on and slicing checks already run above.
 const STATUS_RULES = Object.freeze({
-  BLOCKED_EXTERNAL: (ticket) => blockedExternalProblems(ticket),
-  CANCELLED: (ticket) => cancelledProblems(ticket),
-  DEFERRED: (ticket, latest) => deferredProblems(ticket, latest),
-  ENGINEERING_COMPLETE: (ticket, latest, caps) => engineeringCompleteProblems(ticket, latest, caps),
-  DONE: (ticket, latest, caps, closesProgram) => doneProblems(ticket, latest, caps, closesProgram)
+  BLOCKED_EXTERNAL: blockedExternalProblems,
+  CANCELLED: cancelledProblems,
+  DEFERRED: deferredProblems,
+  ENGINEERING_COMPLETE: engineeringCompleteProblems,
+  DONE: doneProblems
 })
 
 function inheritedBlockProblems(ticket, latest, roots, closesProgram) {
@@ -276,8 +277,7 @@ function redBeforeProblems(ticket, latest) {
   return record && !record.repro ? [`${ticket.id}: fix ticket requires repro (red-before) on its LOCALLY_TESTED record`] : []
 }
 
-function statusRuleProblems(ticket, records, caps, roots) {
-  const latest = latestByLevel(records)
+function statusRuleProblems(ticket, latest, caps, roots) {
   const closesProgram = ticket.closes_program === true
   const rule = STATUS_RULES[ticket.status]
   return [
@@ -316,11 +316,11 @@ function recordContextProblems(ticket, records, decisions) {
   return problems
 }
 
-function revalidationProblems(ticket, records, decisions) {
+function revalidationProblems(ticket, latest, decisions) {
   if (!CLOSED.has(ticket.status)) return []
   const problems = []
   const seen = new Set()
-  for (const [, record] of latestByLevel(records)) {
+  for (const [, record] of latest) {
     for (const decisionId of record.assumed_decisions ?? []) {
       if (decisions?.[decisionId] === 'ANSWERED_CHANGED' && !seen.has(decisionId)) {
         seen.add(decisionId)
@@ -351,11 +351,12 @@ export function ledgerProblems(ledger, recordsByTicket) {
     const records = recordsByTicket.get(ticket.id) ?? []
     const caps = capsOf(ticket.id, byId)
     const roots = rootsOf(caps)
+    const latest = latestByLevel(records)
     problems.push(...dependencyProblems(ticket, byId))
     problems.push(...slicingProblems(ticket))
-    problems.push(...statusRuleProblems(ticket, records, caps, roots))
+    problems.push(...statusRuleProblems(ticket, latest, caps, roots))
     problems.push(...recordContextProblems(ticket, records, decisions))
-    problems.push(...revalidationProblems(ticket, records, decisions))
+    problems.push(...revalidationProblems(ticket, latest, decisions))
   }
 
   for (const ticketId of recordsByTicket.keys()) {

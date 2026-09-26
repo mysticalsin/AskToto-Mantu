@@ -540,6 +540,26 @@ test('P7 a GitHub API failure becomes a problem, not a crash', async () => {
   assertProblem(problems, 'ci_run_id', 'could not verify')
 })
 
+test('P8 every problem is prefixed with its block index and evidence_level; a non-string evidence_level prefixes as unknown level', async () => {
+  const valid = record({ commit: SHA1_A })
+  const stale = record({ commit: SHA1_B })
+  const twoBlockBody = `${evidenceBody(valid)}\n${evidenceBody(stale)}`
+  const problems = await prProblems({
+    body: twoBlockBody, headSha: SHA1_A, prNumber: 42,
+    github: fakeGithub({ runs: { 101: greenRun } }), fileExists: () => true
+  })
+  assert.ok(problems.length > 0)
+  assert.ok(problems.every((p) => p.startsWith('evidence[1] LOCALLY_TESTED: ')))
+  assert.ok(!problems.some((p) => p.startsWith('evidence[0]')))
+
+  const unknownLevelProblems = await prProblems({
+    body: evidenceBody(record({ evidence_level: 123, commit: SHA1_A })), headSha: SHA1_A, prNumber: 42,
+    github: fakeGithub({ runs: { 101: greenRun } }), fileExists: () => true
+  })
+  assert.ok(unknownLevelProblems.length > 0)
+  assert.ok(unknownLevelProblems.every((p) => p.startsWith('evidence[0] unknown level: ')))
+})
+
 test('G1 githubApi builds the expected URLs, the bearer header, and maps run/compare status', async () => {
   const calls = []
   const fetchImpl = async (url, options) => {

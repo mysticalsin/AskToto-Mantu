@@ -70,7 +70,7 @@ test('S3 the draw is a pure function of the population and the seed, independent
   assert.notDeepEqual(sampleA, drawSample(ids, 'gate-sha-2'))
 })
 
-test('S4 CLI prints population and sample and exits 0; a missing --seed exits 2', () => {
+test('S4 CLI prints population and sample and exits 0; a missing --seed or an unreadable ledger exits 2', () => {
   const root = mkdtempSync(join(tmpdir(), 'evidence-sample-'))
   mkdirSync(join(root, 'ledger'), { recursive: true })
   mkdirSync(join(root, 'evidence', 'records'), { recursive: true })
@@ -91,21 +91,17 @@ test('S4 CLI prints population and sample and exits 0; a missing --seed exits 2'
   assert.deepEqual(parsed.population, ['M2-0001'])
   assert.deepEqual(parsed.sample, ['M2-0001'])
 
-  try {
-    execFileSync(process.execPath, [cliPath, '--ledger', ledgerPath, '--since', '2026-09-01'], { encoding: 'utf8', stdio: 'pipe' })
-    assert.fail('expected the CLI to exit 2 without --seed')
-  } catch (error) {
-    assert.equal(error.status, 2)
-  }
+  assert.throws(
+    () => execFileSync(process.execPath, [cliPath, '--ledger', ledgerPath, '--since', '2026-09-01'], { encoding: 'utf8', stdio: 'pipe' }),
+    { status: 2 }
+  )
 
-  try {
-    execFileSync(
+  assert.throws(
+    () => execFileSync(
       process.execPath,
       [cliPath, '--ledger', join(root, 'ledger', 'missing.json'), '--since', '2026-09-01', '--seed', 'gate-sha'],
       { encoding: 'utf8', stdio: 'pipe' }
-    )
-    assert.fail('expected the CLI to exit 2 for an unreadable ledger')
-  } catch (error) {
-    assert.equal(error.status, 2)
-  }
+    ),
+    { status: 2 }
+  )
 })
