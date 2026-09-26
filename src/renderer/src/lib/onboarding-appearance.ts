@@ -27,8 +27,20 @@ export const ONBOARDING_APPEARANCE_COPY: Record<OverlayLayout, { title: string; 
   bar: {
     title: 'Bar',
     desc: 'The bar stays on screen.'
+  },
+  dock: {
+    title: 'Dock',
+    desc: 'A tall panel on the edge. Hover opens it.'
   }
 }
+
+/**
+ * Onboarding asks exactly three (DESIGN.md, Onboarding appearance): Hidden, Island, Bar. Dock is a
+ * Settings-only chrome, so the first run stays that pinned three-card scene even though the shared
+ * enum now carries a fourth value. The copy above stays exhaustive so promoting Dock later is one
+ * line here, not a rewrite.
+ */
+export const ONBOARDING_APPEARANCE_LAYOUTS: readonly OverlayLayout[] = ['hide', 'island', 'bar']
 
 export function seedOnboardingAppearance(settings?: { overlayLayout?: unknown } | null): OverlayLayout {
   return parseOverlayLayout(settings?.overlayLayout)
