@@ -159,4 +159,17 @@ describe('R11 SRC-08: gateway privacy is read back, never auto-provisioned', () 
     const fetcher: typeof fetch = async () => { throw new Error(`private error ${TOKEN}`) }
     await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ message: 'GATEWAY_CHECK_UNAVAILABLE' })
   })
+
+  it.each([
+    ['too low', 10],
+    ['too high', 8_001],
+    ['not a safe integer', 100.5]
+  ])('rejects a %s test-only timeoutMs before any network call', async (_label, timeoutMs) => {
+    let calls = 0
+    const fetcher: typeof fetch = async () => { calls++; return reply({ success: false }) }
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher, { timeoutMs })).rejects.toMatchObject({
+      code: 'GATEWAY_CHECK_OPTIONS_INVALID'
+    })
+    expect(calls).toBe(0)
+  })
 })
