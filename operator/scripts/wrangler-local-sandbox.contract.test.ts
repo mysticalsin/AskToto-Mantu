@@ -29,6 +29,7 @@ describe('hermeticWranglerEnv', () => {
     const env = hermeticWranglerEnv(sandbox)
     for (const key of CLOUDFLARE_CREDENTIAL_KEYS) expect(env[key]).toBeUndefined()
     expect(env.WRANGLER_SEND_METRICS).toBe('false')
+    expect(env.WRANGLER_HIDE_BANNER).toBe('true')
     expect(env.XDG_CONFIG_HOME.startsWith(sandbox.home)).toBe(true)
   })
 })

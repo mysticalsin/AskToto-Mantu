@@ -57,11 +57,15 @@ describe('hermeticWranglerEnv', () => {
     }
   })
 
-  it('sandboxes wrangler’s own config directory and turns off its telemetry call', () => {
+  it('sandboxes wrangler’s own config directory and turns off its telemetry call and update check', () => {
     const sandbox = createHermeticSandbox()
     const env = hermeticWranglerEnv(sandbox)
     expect(env.XDG_CONFIG_HOME).toBe(join(sandbox.home, '.config'))
     expect(env.WRANGLER_SEND_METRICS).toBe('false')
+    // Without this, every wrangler command's printWranglerBanner() awaits an npm-registry GET for the
+    // latest version before --local's own work starts — a real non-loopback connect(), not a telemetry
+    // side effect WRANGLER_SEND_METRICS covers.
+    expect(env.WRANGLER_HIDE_BANNER).toBe('true')
     // Still gets the plain hermeticEnv fields — wrangler-specific isolation is additive, not a
     // separate, uncoordinated sandbox.
     expect(env.HOME).toBe(sandbox.home)

@@ -88,7 +88,14 @@ export function hermeticWranglerEnv(sandbox) {
   /** @type {Record<string, string | undefined>} */
   const env = hermeticEnv(sandbox, {
     XDG_CONFIG_HOME: join(sandbox.home, '.config'),
-    WRANGLER_SEND_METRICS: 'false'
+    WRANGLER_SEND_METRICS: 'false',
+    // WRANGLER_SEND_METRICS only turns off wrangler's own telemetry POST. Every command still calls
+    // printWranglerBanner(), which — unless this is set — awaits an npm-registry GET for the latest
+    // wrangler version before the command's real work even starts (confirmed against a real --local run
+    // under deny-non-loopback.cjs: HERMETIC_NETWORK_DENIED on registry.npmjs.org). WRANGLER_HIDE_BANNER
+    // makes printWranglerBanner() return before it ever calls updateCheck(), so this is the one variable
+    // that actually keeps a --local run on loopback, not a side effect this repo is relying on by accident.
+    WRANGLER_HIDE_BANNER: 'true'
   })
   for (const key of CLOUDFLARE_CREDENTIAL_KEYS) env[key] = undefined
   return env

@@ -17,6 +17,12 @@ SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/metis-test-home-XXXXXX")"
 mkdir -p "$SANDBOX/tmp"
 
 export HOME="$SANDBOX"
+# On Darwin, Foundation's NSHomeDirectory()/FileManager.homeDirectoryForCurrentUser resolve the home
+# directory from getpwuid(), NOT from $HOME, for an ordinary (non-sandboxed) process — proven by CI: HOME
+# alone left NSHomeDirectory() reporting the real runner account. CFFIXED_USER_HOME is the one override
+# CoreFoundation's home-directory resolution actually honors regardless of sandbox status; both are set
+# so this sandbox holds on every platform `swift test` runs on.
+export CFFIXED_USER_HOME="$SANDBOX"
 export TMPDIR="$SANDBOX/tmp"
 export METIS_TEST_HOME="$SANDBOX"
 # Windows detectOneDrive()'s env vars are inert on this platform; unset here too so a copy-pasted

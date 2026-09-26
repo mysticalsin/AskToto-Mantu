@@ -9,12 +9,12 @@ import Foundation
 /// moment `swift test` ever runs again without the sandbox — before any future disk-touching code in
 /// this package could reach a real profile unnoticed.
 ///
-/// `HOME` here is set by scripts/hermetic/run-swift-tests.sh, which every CI/agent invocation of
-/// `swift test` for this package must go through (never bare `swift test` — see
-/// docs/metis-2.0/runbooks/test-isolation.md). Foundation's `NSHomeDirectory()`/
-/// `FileManager.default.homeDirectoryForCurrentUser` both resolve from the `HOME` environment variable
-/// on Darwin (not from the passwd database), so overriding it is sufficient — no Foundation Model or
-/// `@testable` seam has to change for this to hold.
+/// `HOME` and `CFFIXED_USER_HOME` here are both set by scripts/hermetic/run-swift-tests.sh, which every
+/// CI/agent invocation of `swift test` for this package must go through (never bare `swift test` — see
+/// docs/metis-2.0/runbooks/test-isolation.md). On Darwin, Foundation's `NSHomeDirectory()`/
+/// `FileManager.default.homeDirectoryForCurrentUser` resolve from `getpwuid()`, NOT from `$HOME` alone,
+/// for an ordinary process — `CFFIXED_USER_HOME` is the override CoreFoundation's home-directory
+/// resolution actually honors. No Foundation Model or `@testable` seam has to change for this to hold.
 final class HermeticHomeTests: XCTestCase {
     func testHomeIsThePerRunSandboxNotTheRealProfile() throws {
         guard let sandboxHome = ProcessInfo.processInfo.environment["METIS_TEST_HOME"] else {
