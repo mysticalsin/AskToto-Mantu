@@ -610,7 +610,7 @@ describe('rendering — structural, not a source-text snapshot', () => {
     const md = renderMarkdown(result)
     expect(md).toContain('2 row(s) (1 mapped)')
     expect(md).toContain('2 unique id(s) (1 mapped)')
-    expect(md).toContain('0 error(s)')
+    expect(md).toContain('1 error(s)') // FOO-02 has no citing ticket, so buildTraceability flags it unmapped
   })
 
   it('renderJson emits every inventory row field unchanged (byte-for-byte), plus tickets and status', () => {
@@ -631,7 +631,8 @@ describe('rendering — structural, not a source-text snapshot', () => {
 
   it('renderJson\'s summary reports rows, rows_mapped, unique_ids, unique_ids_mapped and errorCount', () => {
     const json = renderJson(result)
-    expect(json.summary).toEqual({ rows: 2, rows_mapped: 1, unique_ids: 2, unique_ids_mapped: 1, errorCount: 0 })
+    // FOO-02 has no citing ticket, so buildTraceability's own fail-closed check flags it unmapped.
+    expect(json.summary).toEqual({ rows: 2, rows_mapped: 1, unique_ids: 2, unique_ids_mapped: 1, errorCount: 1 })
   })
 })
 
