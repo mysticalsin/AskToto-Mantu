@@ -144,7 +144,9 @@ describe('startRunObservability', () => {
     expect(stop).toHaveBeenCalledOnce()
     expect(powerMonitor.removeListener).toHaveBeenCalledExactlyOnceWith('resume', expect.any(Function))
     expect(markShutdownClean).toHaveBeenCalledWith('/fake', 'boot-7', 42)
-    expect(audit).toHaveBeenCalledExactlyOnceWith('app.shutdown.clean', { bootId: 'boot-7', uptimeS: 42, reason: 'will-quit' })
+    // audit was already called once with app.started at construction — this checks the shutdown call
+    // specifically, not that it's the mock's only call.
+    expect(audit).toHaveBeenCalledWith('app.shutdown.clean', { bootId: 'boot-7', uptimeS: 42, reason: 'will-quit' })
   })
 
   it('shutdownClean is idempotent — a second call does nothing more', () => {

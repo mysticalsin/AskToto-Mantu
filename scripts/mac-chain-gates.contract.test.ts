@@ -164,17 +164,20 @@ describe('MQA-249 — a portable "this build came up" signal, and the macOS gate
   const indexSrc = readFileSync(join(root, 'src', 'main', 'index.ts'), 'utf8')
   const loggerSrc = readFileSync(join(root, 'src', 'main', 'logger.ts'), 'utf8')
 
-  it('MQA-249: createWindow emits app.started unconditionally', () => {
+  it('MQA-249: createWindow starts run observability, and therefore audits app.started, unconditionally', () => {
     const start = indexSrc.indexOf('function createWindow(')
     expect(start).toBeGreaterThan(-1)
     const createWindow = indexSrc.slice(start)
     const body = createWindow.slice(0, createWindow.indexOf('\n}\n'))
-    expect(body).toMatch(/auditLog\('app\.started'/)
+    // M2-0006: the actual auditLog('app.started', ...) call moved into
+    // infra/observability/run-observability.ts (startRunObservability); createWindow's call-site into
+    // it is what's pinned here.
+    expect(body).toMatch(/startRunObservability\(/)
     // Before any early return that could skip it — other than the idempotency guard, which only fires
     // when a window already exists and the app has therefore demonstrably already started.
     const guard = body.indexOf('if (win && !win.isDestroyed()) return')
     expect(guard).toBeGreaterThan(-1)
-    expect(body.indexOf("auditLog('app.started'")).toBeGreaterThan(guard)
+    expect(body.indexOf('startRunObservability(')).toBeGreaterThan(guard)
   })
 
   it('MQA-249: the event is a registered audit event, so it survives the type checker', () => {
