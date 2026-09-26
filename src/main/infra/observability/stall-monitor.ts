@@ -1,15 +1,22 @@
 /**
  * stall-monitor.ts — detect a main-process event-loop stall long enough to explain a frozen UI.
  *
- * The freeze root cause (spindump-verified, RUNTIME-EVIDENCE.md): a main-thread JS timer runs a
- * synchronous fs read against a OneDrive placeholder file, and the kernel blocks the whole event loop for
- * as long as the file takes to materialize — tray, hotkeys, IPC and `activate`/reopen all stop for that
- * long. A blocked event loop cannot log anything about itself while it is blocked; the only observable
- * trace is the NEXT tick of an otherwise-regular timer firing very late. This module runs a 1 s heartbeat
- * and reports any tick that fires at least one full tick period late, plus a `monitorEventLoopDelay` p99
- * summary every 5 minutes so shorter stalls that never trip the heartbeat are still visible.
+ * The freeze root cause (spindump-verified, ticket M2-0006): a main-thread JS timer runs a synchronous fs
+ * read against a OneDrive placeholder file, and the kernel blocks the whole event loop for as long as the
+ * file takes to materialize — tray, hotkeys, IPC and `activate`/reopen all stop for that long. A blocked
+ * event loop cannot log anything about itself while it is blocked; the only observable trace is the NEXT
+ * tick of an otherwise-regular timer firing very late. This module runs a 1 s heartbeat and reports any
+ * tick that fires at least one full tick period late, plus a `monitorEventLoopDelay` p99 summary every
+ * 5 minutes so shorter stalls that never trip the heartbeat are still visible.
+ *
+ * Lateness is measured on `performance.now()` (a monotonic clock), never on `Date.now()` (the wall
+ * clock): a lid-close/sleep or an NTP step moves the wall clock without the event loop having stalled at
+ * all, which would otherwise manufacture a fake `app.stall` whose `durationMs` equals the sleep length or
+ * the clock step and corrupts the "brief stall vs wedge" evidence this module exists to produce. Some
+ * platforms' monotonic clock keeps counting through sleep regardless — `resync()` re-arms the schedule
+ * from the current tick for that case; call it from Electron's `powerMonitor` `'resume'` event.
  */
-import { monitorEventLoopDelay } from 'node:perf_hooks'
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
 
 /** A minimal, injectable stand-in for Node's `IntervalHistogram` — only the methods this module uses. */
 export interface EventLoopHistogram {
@@ -51,13 +58,16 @@ export interface StallMonitorOptions {
 export interface StallMonitor {
   /** Stop the heartbeat and release the histogram. Idempotent. */
   stop(): void
+  /** Re-arm the schedule from the current tick, discarding any lateness accrued before this call. Call
+   *  on resume-from-sleep so the sleep gap itself is never reported as a stall. */
+  resync(): void
 }
 
 /** Start the heartbeat. Call once per app boot; call `.stop()` from `will-quit`. */
 export function startStallMonitor(opts: StallMonitorOptions): StallMonitor {
   const tickMs = opts.tickMs ?? 1000
   const summaryIntervalMs = opts.summaryIntervalMs ?? 5 * 60 * 1000
-  const now = opts.now ?? Date.now
+  const now = opts.now ?? (() => performance.now())
   const setIntervalFn = opts.setIntervalFn ?? setInterval
   const clearIntervalFn = opts.clearIntervalFn ?? clearInterval
   const histogram = opts.histogram ?? monitorEventLoopDelay({ resolution: 20 })
@@ -88,6 +98,9 @@ export function startStallMonitor(opts: StallMonitorOptions): StallMonitor {
       stopped = true
       clearIntervalFn(timer)
       histogram.disable()
+    },
+    resync(): void {
+      expectedAt = now() + tickMs
     }
   }
 }

@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, type Stats } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -139,21 +140,23 @@ export function describeEarlyDeath(d: EarlyDeath): string {
 
 // --- Clean-shutdown / stall-window tracking (M2-0006) ---------------------------------------------
 //
-// A force-quit, an OOM kill and a normal quit all look identical from the NEXT launch's audit log today:
-// nothing in src/main writes any kind of quit/shutdown event, so "no clean-shutdown event between two
-// `app.started` records" was never evidence of anything by itself (RUNTIME-EVIDENCE.md; B3-RC1/RC4's
-// corrected findings). This tracks one more fact per boot — how the PREVIOUS run ended — using the same
-// "write before, read back next time" shape as the sentinel above, in its own file so neither mechanism
-// can corrupt the other's record.
+// Invariant: a run claims `run-state.json` with `clean:false` at boot, and only `markShutdownClean` — the
+// last thing `will-quit` does — ever sets `clean:true`. A run that never reaches that line (killed,
+// crashed, force-quit) leaves `clean:false` on disk forever, which is exactly the "unclean" signal the
+// next boot's `beginRunWatch` reads back. Same "write before, read back next time" shape as the sentinel
+// above, in its own file so neither mechanism can corrupt the other's record.
 //
-// `run-state.json` always describes the CURRENT run while it is alive: {bootId, lastAliveAt, clean}.
-// `clean` starts false and only flips true inside `markShutdownClean`, at the end of `will-quit` — a run
-// that never reaches that line (killed, crashed, force-quit) leaves `clean:false` on disk forever, which
-// is exactly the "unclean" signal the next boot reads back.
+// The liveness heartbeat is a SEPARATE file, `run-alive.json` ({bootId, at}), rewritten every 10 s so a
+// hard kill's final gap is bounded by how stale this gets rather than by the time since boot. Keeping it
+// out of `run-state.json` is what lets that 10 s rewrite run asynchronously off the main thread without
+// racing `markShutdownClean`: the two files' fields are disjoint, so a heartbeat write landing late can
+// never flip `clean` back to false, and never needs to.
 
 const RUN_STATE = 'run-state.json'
+const RUN_ALIVE = 'run-alive.json'
 
-type RunState = { bootId: string; lastAliveAt: string; clean: boolean }
+type RunState = { bootId: string; clean: boolean }
+type RunAlive = { bootId: string; at: string }
 
 /** How the previous run — if any — is known to have ended, from this run's point of view. */
 export type PriorShutdown = 'clean' | 'unclean' | 'unknown'
@@ -169,7 +172,11 @@ function runStatePath(userData: string): string {
   return join(userData, RUN_STATE)
 }
 
-function writeRunState(userData: string, state: RunState): void {
+function runAlivePath(userData: string): string {
+  return join(userData, RUN_ALIVE)
+}
+
+function writeRunStateSync(userData: string, state: RunState): void {
   try {
     mkdirSync(userData, { recursive: true })
     writeFileSync(runStatePath(userData), JSON.stringify(state), { mode: 0o600 })
@@ -179,10 +186,19 @@ function writeRunState(userData: string, state: RunState): void {
   }
 }
 
+function writeRunAliveSync(userData: string, alive: RunAlive): void {
+  try {
+    mkdirSync(userData, { recursive: true })
+    writeFileSync(runAlivePath(userData), JSON.stringify(alive), { mode: 0o600 })
+  } catch {
+    /* best-effort — losing this write costs only how stale prevLastAliveAt reads on the NEXT boot */
+  }
+}
+
 /**
- * Open the run watch: read what the previous run left behind, then claim `run-state.json` for this run
- * (clean:false — a run only earns "clean" by reaching the end of `will-quit`). Call once per boot, at the
- * same point `app.started` is emitted.
+ * Open the run watch: read what the previous run left behind, then claim `run-state.json` and
+ * `run-alive.json` for this run (clean:false — a run only earns "clean" by reaching the end of
+ * `will-quit`). Call once per boot, at the same point `app.started` is emitted.
  */
 export function beginRunWatch(
   userData: string,
@@ -192,46 +208,58 @@ export function beginRunWatch(
   let prior: PriorRun = { prevBootId: undefined, prevShutdown: 'unknown', prevLastAliveAt: undefined }
   try {
     const raw = JSON.parse(readFileSync(runStatePath(userData), 'utf8')) as Partial<RunState>
-    // Only a record with both a real id and a real timestamp counts as evidence — a truncated or
-    // hand-edited file must read as 'unknown', never as a guessed clean or unclean.
-    if (
-      typeof raw?.bootId === 'string' &&
-      raw.bootId !== '' &&
-      typeof raw?.lastAliveAt === 'string' &&
-      raw.lastAliveAt !== ''
-    ) {
-      prior = {
-        prevBootId: raw.bootId,
-        prevShutdown: raw.clean === true ? 'clean' : 'unclean',
-        prevLastAliveAt: raw.lastAliveAt
-      }
+    // Only a record with a real id counts as evidence — a truncated or hand-edited file must read as
+    // 'unknown', never as a guessed clean or unclean.
+    if (typeof raw?.bootId === 'string' && raw.bootId !== '') {
+      prior = { prevBootId: raw.bootId, prevShutdown: raw.clean === true ? 'clean' : 'unclean', prevLastAliveAt: undefined }
     }
   } catch {
     /* absent (first launch ever) or unreadable — neither is evidence of a clean or unclean exit */
   }
+  if (prior.prevBootId) {
+    try {
+      const rawAlive = JSON.parse(readFileSync(runAlivePath(userData), 'utf8')) as Partial<RunAlive>
+      // Only counts when its bootId matches the run-state record just read — a stale or foreign
+      // run-alive.json (e.g. left by a run two launches ago) must never be attributed to THIS prior run.
+      if (rawAlive?.bootId === prior.prevBootId && typeof rawAlive.at === 'string' && rawAlive.at !== '') {
+        prior = { ...prior, prevLastAliveAt: rawAlive.at }
+      }
+    } catch {
+      /* absent or unreadable — no alive evidence, not itself evidence of anything */
+    }
+  }
   const bootId = newBootId()
-  writeRunState(userData, { bootId, lastAliveAt: now(), clean: false })
+  writeRunStateSync(userData, { bootId, clean: false })
+  writeRunAliveSync(userData, { bootId, at: now() })
   return { bootId, prior }
 }
 
-/** Rewrite `lastAliveAt` for the run in progress. Call every 10 s so a hard kill's final gap is bounded
- *  by how stale this gets, instead of by the time since boot. */
-export function markAlive(
+/** Rewrite the liveness heartbeat for the run in progress. Call every 10 s so a hard kill's final gap is
+ *  bounded by how stale this gets, instead of by the time since boot. Async and off the main thread: this
+ *  fires on a main-thread timer for the app's whole lifetime, so a synchronous write here would be exactly
+ *  the kind of periodic main-thread fs call this ticket exists to stop causing. */
+export async function markAlive(
   userData: string,
   bootId: string,
   now: () => string = () => new Date().toISOString()
-): void {
-  writeRunState(userData, { bootId, lastAliveAt: now(), clean: false })
+): Promise<void> {
+  try {
+    await mkdir(userData, { recursive: true })
+    await writeFile(runAlivePath(userData), JSON.stringify({ bootId, at: now() } satisfies RunAlive), { mode: 0o600 })
+  } catch {
+    /* best-effort — losing a heartbeat costs only how stale prevLastAliveAt reads on the NEXT boot */
+  }
 }
 
-/** Record that this run reached the end of `will-quit` on purpose. Returns the `app.shutdown.clean` audit
- *  detail so the one call site only has to pass it through. */
+/** Record that this run reached the end of `will-quit` on purpose. Synchronous and written only here and
+ *  at boot — process exit follows almost immediately after `will-quit`, so an async write could lose the
+ *  race with the process actually dying. Returns the `app.shutdown.clean` audit detail so the one call
+ *  site only has to pass it through. */
 export function markShutdownClean(
   userData: string,
   bootId: string,
-  uptimeS: number,
-  now: () => string = () => new Date().toISOString()
+  uptimeS: number
 ): { bootId: string; uptimeS: number; reason: 'will-quit' } {
-  writeRunState(userData, { bootId, lastAliveAt: now(), clean: true })
+  writeRunStateSync(userData, { bootId, clean: true })
   return { bootId, uptimeS, reason: 'will-quit' }
 }

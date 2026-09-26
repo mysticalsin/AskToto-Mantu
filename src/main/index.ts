@@ -610,8 +610,9 @@ import {
 } from './asr-model-download'
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
-import { beginBootWatch, endBootWatch, describeEarlyDeath, beginRunWatch, markAlive, markShutdownClean } from './boot-sentinel'
-import { startStallMonitor, type StallMonitor } from './infra/observability/stall-monitor'
+import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
+import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
+import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
@@ -2086,10 +2087,9 @@ function overlayRendererUrl(): string {
  */
 let overlayWindowTransparent = true
 let emittedAppStarted = false
-// M2-0006: set once, at the same point app.started fires — will-quit needs it to write the matching
-// app.shutdown.clean record, and it is meaningless before that first createWindow() has run.
-let currentBootId: string | undefined
-let stallMonitor: StallMonitor | null = null
+// M2-0006: set once, at the same point app.started fires — will-quit calls observability.shutdownClean()
+// on it, and it is meaningless before that first createWindow() has run.
+let observability: RunObservability | null = null
 /** Consumed by the next transparent window created when Act 6 finishes. Never persisted. */
 let postOnboardingDestination: 'answer' | 'settings' = 'answer'
 const ONBOARDING_EXIT_FALLBACK_MS = 5_000
@@ -2542,25 +2542,15 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // Emitted here rather than at app-ready because reaching createWindow means the main process survived
   // module load, bytecode load, and boot — which is exactly the class of failure that shipped DOA twice.
   if (!emittedAppStarted) {
-    // M2-0006: replaces the non-evidence "no clean-shutdown event between two app.started records" (see
-    // RUNTIME-EVIDENCE.md, B3-RC1/RC4) with an actual prevShutdown classification, and starts the two
-    // timers that make a stall or a hard kill diagnosable from the NEXT boot's audit log.
-    const { bootId, prior } = beginRunWatch(app.getPath('userData'))
-    currentBootId = bootId
-    auditLog('app.started', {
+    // M2-0006: app.started/app.stall/app.shutdown.clean and the run/liveness/stall-monitor lifecycle
+    // behind them — see infra/observability/run-observability.ts for the invariant this enforces.
+    observability = startRunObservability({
+      userData: app.getPath('userData'),
       version: app.getVersion(),
       platform: process.platform,
       arch: process.arch,
-      bootId,
-      prevBootId: prior.prevBootId,
-      prevShutdown: prior.prevShutdown,
-      prevLastAliveAt: prior.prevLastAliveAt
-    })
-    trackTimer(setInterval(() => markAlive(app.getPath('userData'), bootId), 10_000))
-    stallMonitor = startStallMonitor({
-      bootId,
-      onStall: (detail) => auditLog('app.stall', { bootId: detail.bootId, durationMs: detail.durationMs }),
-      onSummary: (detail) => auditLog('app.stall.summary', { bootId: detail.bootId, p99Ms: detail.p99Ms })
+      audit: auditLog,
+      powerMonitor
     })
     emittedAppStarted = true
   }
@@ -2745,20 +2735,18 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // recovers most stalls on its own, and a forced reload mid-meeting would drop the live transcript.
   // M2-0006: when the overlay recovers on its own, pair it with how long it was wedged — 'app.unresponsive'
   // alone cannot tell a stall Chromium recovered from a wedge that never did.
-  let unresponsiveSince: number | null = null
+  const responsiveness = createResponsivenessTracker()
   win.on('unresponsive', () => {
     if (win !== self) return
-    unresponsiveSince = Date.now()
+    responsiveness.markUnresponsive()
     mainLog.warn('[renderer-unresponsive] overlay renderer stopped responding')
     auditLog('app.unresponsive', { kind: 'overlay' })
   })
   win.on('responsive', () => {
     if (win !== self) return
     mainLog.info('[renderer-responsive] overlay renderer recovered')
-    if (unresponsiveSince !== null) {
-      auditLog('app.responsive', { kind: 'overlay', stallMs: Date.now() - unresponsiveSince })
-      unresponsiveSince = null
-    }
+    const stallMs = responsiveness.markResponsive()
+    if (stallMs !== null) auditLog('app.responsive', { kind: 'overlay', stallMs })
   })
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
   // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
@@ -2819,10 +2807,10 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // The one-time onboarding destination belongs to this replacement only. Later renderer recovery
   // should preserve the user's current surface rather than repeatedly forcing Settings.
   postOnboardingDestination = 'answer'
-  // MQA-318 / M2-0006: fires on every launch, not only under the opt-in launch gate — a session with
-  // app.started but no renderer.ready was otherwise invisible in the audit log (B1-RC2, B3-RC3). Preserve
-  // app.started's boot semantics and never equate entering createWindow with a loaded, responsive
-  // renderer. Register before navigation.
+  // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
+  // below. A session with app.started but no renderer.ready must always be visible in the audit log.
+  // Preserve app.started's boot semantics and never equate entering createWindow with a loaded,
+  // responsive renderer. Register before navigation.
   bindRendererReadiness(win.webContents, rendererUrl, () => {
     auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
   })
@@ -9032,6 +9020,9 @@ if (!app.requestSingleInstanceLock()) {
   // below — previously registered unguarded — run inside it too: a throw during any of those must not
   // take out createTray/registerShortcuts/createWindow further down the boot sequence.
   const runStep = (name: string, fn: () => void): void => {
+    // M2-0006: the cheapest trace of "what was running" a late app.stall tick can attach — a no-op until
+    // startRunObservability has run (observability is still null for every boot step ahead of createWindow).
+    observability?.setPhase(name)
     try {
       fn()
     } catch (e) {
@@ -9550,15 +9541,8 @@ app.on('will-quit', () => {
   // M2-0006: last, so it only fires once every other teardown step above has run. This is the one signal
   // that distinguishes THIS quit from a hard kill on the next boot's app.started.prevShutdown.
   try {
-    stallMonitor?.stop()
+    observability?.shutdownClean(process.uptime())
   } catch (e) {
-    mainLog.warn('[will-quit] stallMonitor.stop failed', e)
-  }
-  try {
-    if (currentBootId) {
-      auditLog('app.shutdown.clean', markShutdownClean(app.getPath('userData'), currentBootId, process.uptime()))
-    }
-  } catch (e) {
-    mainLog.warn('[will-quit] markShutdownClean failed', e)
+    mainLog.warn('[will-quit] observability.shutdownClean failed', e)
   }
 })

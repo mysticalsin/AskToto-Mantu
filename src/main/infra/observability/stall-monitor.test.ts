@@ -1,10 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
+import { performance } from 'node:perf_hooks'
 import { startStallMonitor } from './stall-monitor'
 
 /**
- * M2-0006 — the app.stall heartbeat. The freeze root cause (spindump-verified, RUNTIME-EVIDENCE.md) is a
- * main-thread synchronous fs read blocking the event loop; the only trace it leaves is the next tick of
- * an otherwise-regular timer firing very late. These tests drive startStallMonitor with a fully injected
+ * M2-0006 — the app.stall heartbeat. The freeze root cause (spindump-verified) is a main-thread
+ * synchronous fs read blocking the event loop; the only trace it leaves is the next tick of an otherwise-
+ * regular timer firing very late. These tests drive startStallMonitor with a fully injected
  * clock/timer/histogram, so a "stall" is a deterministic, explicit jump in the injected clock — never a
  * real sleep — and every tick and every summary flush is asserted against a real return value from the
  * module under test, not against the shape of its source.
@@ -12,6 +13,9 @@ import { startStallMonitor } from './stall-monitor'
 function fakeTimer(): {
   now: () => number
   advanceTo: (t: number) => void
+  /** Moves the clock forward WITHOUT firing the interval — models time passing (e.g. system sleep) with
+   *  no timer tick, as opposed to advanceTo's "the timer fired at this time". */
+  jumpTo: (t: number) => void
   setIntervalFn: (handler: () => void, ms: number) => NodeJS.Timeout
   clearIntervalFn: (handle: NodeJS.Timeout) => void
   cleared: unknown[]
@@ -24,6 +28,9 @@ function fakeTimer(): {
     advanceTo: (t: number) => {
       current = t
       tick?.()
+    },
+    jumpTo: (t: number) => {
+      current = t
     },
     setIntervalFn: (handler) => {
       tick = handler
@@ -186,5 +193,81 @@ describe('startStallMonitor', () => {
       histogram: fakeHistogram(0)
     })
     expect(scheduledMs).toBe(1000)
+  })
+
+  it('a wall-clock jump (sleep or an NTP step) never produces a stall — lateness is judged only on the injected monotonic clock, not Date.now', () => {
+    const clock = fakeTimer()
+    const onStall = vi.fn()
+    const realDateNow = Date.now
+    Date.now = vi.fn(() => 0)
+    try {
+      startStallMonitor({
+        bootId: 'boot-1',
+        onStall,
+        onSummary: vi.fn(),
+        tickMs: 1000,
+        summaryIntervalMs: 10_000,
+        now: clock.now,
+        setIntervalFn: clock.setIntervalFn,
+        clearIntervalFn: clock.clearIntervalFn,
+        histogram: fakeHistogram(0)
+      })
+      clock.advanceTo(1000) // monotonic clock on schedule; expectedAt -> 2000
+      Date.now = vi.fn(() => 999_999_999) // wall clock jumps forward hugely — monotonic clock untouched
+      clock.advanceTo(2000) // still on schedule per the monotonic clock
+      expect(onStall).not.toHaveBeenCalled()
+    } finally {
+      Date.now = realDateNow
+    }
+  })
+
+  it('defaults now to performance.now and never calls Date.now', () => {
+    const nowSpy = vi.spyOn(performance, 'now')
+    const dateNowSpy = vi.spyOn(Date, 'now')
+    let scheduledHandler: (() => void) | undefined
+    try {
+      startStallMonitor({
+        bootId: 'boot-1',
+        onStall: vi.fn(),
+        onSummary: vi.fn(),
+        setIntervalFn: (handler) => {
+          scheduledHandler = handler
+          return 1 as unknown as NodeJS.Timeout
+        },
+        clearIntervalFn: vi.fn(),
+        histogram: fakeHistogram(0)
+      })
+      const callsAtStart = nowSpy.mock.calls.length
+      expect(callsAtStart).toBeGreaterThan(0) // the initial expectedAt/nextSummaryAt computation
+      scheduledHandler!()
+      expect(nowSpy.mock.calls.length).toBeGreaterThan(callsAtStart) // the tick itself reads the clock again
+      expect(dateNowSpy).not.toHaveBeenCalled()
+    } finally {
+      nowSpy.mockRestore()
+      dateNowSpy.mockRestore()
+    }
+  })
+
+  it('resync() re-arms the schedule from the current tick, absorbing a resume-from-sleep gap on platforms whose monotonic clock keeps counting through sleep', () => {
+    const clock = fakeTimer()
+    const onStall = vi.fn()
+    const monitor = startStallMonitor({
+      bootId: 'boot-1',
+      onStall,
+      onSummary: vi.fn(),
+      tickMs: 1000,
+      summaryIntervalMs: 10_000,
+      now: clock.now,
+      setIntervalFn: clock.setIntervalFn,
+      clearIntervalFn: clock.clearIntervalFn,
+      histogram: fakeHistogram(0)
+    })
+    clock.advanceTo(1000) // expectedAt -> 2000
+    // The machine sleeps for an hour; this platform's monotonic clock keeps counting through it, so the
+    // clock jumps forward with no tick ever firing during the sleep itself.
+    clock.jumpTo(3_601_000)
+    monitor.resync() // called from the powerMonitor 'resume' handler
+    clock.advanceTo(3_602_000) // exactly one tick after resync — on schedule relative to the new baseline
+    expect(onStall).not.toHaveBeenCalled()
   })
 })
