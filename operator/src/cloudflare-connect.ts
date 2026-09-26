@@ -1,11 +1,8 @@
 /** Cloudflare · AI Gateway: OAuth login, then Operator provisions vault keys. No paste. */
 
-import { verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { writeVaultKey } from './keys'
 import type { OperatorStore } from './store'
 import { CF_ACCOUNT_PROVIDER } from './vault'
-
-export { verifyDefaultGatewayPrivacy }
 
 export const CF_DASH_LOGIN = 'https://dash.cloudflare.com/login'
 export const CF_OAUTH_AUTHORIZE = 'https://dash.cloudflare.com/oauth2/auth'
@@ -179,31 +176,9 @@ export async function provisionCloudflareKeys(
   creds: { token: string; accountId: string; name: string },
   fetchImpl: typeof fetch = fetch
 ): Promise<{ ok: true; last4: string } | { ok: false; error: string; status: number }> {
-  // Verified once, before either vault row is written: a fresh OAuth login has no reviewed
-  // `default` gateway yet, and a rejection here must leave neither row behind.
-  try {
-    await verifyDefaultGatewayPrivacy(creds.token, creds.accountId, fetchImpl)
-  } catch {
-    return {
-      ok: false,
-      error: 'Cloudflare gateway privacy is not verified; no vault changes were made.',
-      status: 503
-    }
-  }
-  const account = await writeVaultKey(
-    store,
-    env,
-    email,
-    now,
-    {
-      provider: CF_ACCOUNT_PROVIDER,
-      accountId: creds.accountId,
-      token: creds.token,
-      label: creds.name
-    },
-    fetchImpl
-  )
-  if (!account.ok) return account
+  // writeVaultKey already certifies gateway privacy before writing a 'cloudflare' row (see
+  // isCloudflareVaultPaste), so writing that row first gives one readback and leaves no row
+  // behind at all when it fails, instead of a second, separate check here.
   const gateway = await writeVaultKey(
     store,
     env,
@@ -218,6 +193,20 @@ export async function provisionCloudflareKeys(
     fetchImpl
   )
   if (!gateway.ok) return gateway
+  const account = await writeVaultKey(
+    store,
+    env,
+    email,
+    now,
+    {
+      provider: CF_ACCOUNT_PROVIDER,
+      accountId: creds.accountId,
+      token: creds.token,
+      label: creds.name
+    },
+    fetchImpl
+  )
+  if (!account.ok) return account
   return { ok: true, last4: gateway.last4 }
 }
 
@@ -240,9 +229,8 @@ export async function handleCloudflareCallback(
   if (!exchanged.ok) return redirectToKeysAfterCloudflareLogin('failed')
   const account = await resolveCloudflareAccount(exchanged.token, env, fetchImpl)
   if (!account.ok) return redirectToKeysAfterCloudflareLogin('failed')
-  // provisionCloudflareKeys verifies gateway privacy itself, before writing either vault
-  // row; a failure there redirects below like any other provisioning failure, instead of
-  // throwing an uncaught GatewayPrivacyError past this route into a Worker exception.
+  // provisionCloudflareKeys never throws: a rejected privacy check comes back as { ok: false },
+  // handled the same as any other provisioning failure below.
   const written = await provisionCloudflareKeys(
     store,
     env,
