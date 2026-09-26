@@ -54,6 +54,29 @@ for (const [label, script] of Object.entries(DENIED_SCRIPTS)) {
   })
 }
 
+// M2-0190 round-2 finding — a caller that catches the connect() error and swallows it (wrangler's own
+// metrics dispatcher does this, logging only at debug level) can exit 0 with nothing on stdout to show a
+// denial ever happened. The preload has to report a denial on stderr unconditionally, not only when the
+// caller happens to let the error surface. This is RED against the preload before that fix (stderr was
+// empty — the Error's message went nowhere but the destroyed socket) and GREEN after it.
+test('a denial reaches stderr even when the caller swallows the error and the process exits 0', () => {
+  const script = `
+    const net = require('net')
+    const s = net.connect(80, '192.0.2.1')
+    s.on('error', () => { process.exit(0) }) // deliberately swallowed — exit status alone must not read as clean
+  `
+  const result = spawnSync(process.execPath, ['--require', PRELOAD, '-e', script], {
+    timeout: TIMEOUT_MS,
+    encoding: 'utf8'
+  })
+  assert.equal(result.status, 0, `expected the swallowed exit to still be 0, got status=${result.status}`)
+  assert.match(
+    result.stderr,
+    /HERMETIC_NETWORK_DENIED/,
+    `expected stderr to carry the denial regardless of exit status; stderr=${result.stderr}`
+  )
+})
+
 test('positive control: a real loopback connect() still succeeds under the preload', () => {
   const script = `
     const net = require('net')
