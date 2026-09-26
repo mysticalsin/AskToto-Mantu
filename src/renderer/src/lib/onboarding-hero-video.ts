@@ -54,35 +54,51 @@ export function preloadOnboardingHeroVideo(): void {
   document.head.appendChild(link)
 }
 
-/**
- * Must run inside a user click. `play()` is the first media call so the user-gesture
- * token is still live — do not seek, await, or setState first (autoplay policy).
+/** Optional media must never prevent an onboarding scene transition.
+ * Rejection handling is attached before any seek. The play phase remains synchronous
+ * in the initiating click; one media failure cannot suppress the other's attempt.
  */
+function tryPlayOnboardingMedia(el: HTMLMediaElement | null | undefined): void {
+  if (!el) return
+  try {
+    const playing = el.play()
+    void playing?.catch(() => {})
+  } catch {
+    // Unsupported/detached media may throw before returning a promise.
+    // Decorative media is not a readiness or permission gate.
+  }
+}
+
+function tryRestartOnboardingMedia(el: HTMLMediaElement | null | undefined): void {
+  if (!el) return
+  try {
+    el.currentTime = 0
+  } catch {
+    // Seeking may fail before metadata arrives or after the element closes.
+  }
+}
+
+/** Must run inside a user click. Playback never gates the user's Next action. */
 export function playOnboardingVideo(
   el: HTMLVideoElement | null | undefined,
   opts: { restart?: boolean } = {}
 ): void {
-  if (!el) return
-  const playing = el.play()
-  if (opts.restart) el.currentTime = 0
-  void playing.catch(() => {})
+  tryPlayOnboardingMedia(el)
+  if (opts.restart) tryRestartOnboardingMedia(el)
 }
 
-/**
- * Combined helper for tests / callers that still want both. Production hero starts the Aria
- * on the portal-open mount (`bed.start()`). Next unmounts the lady clip and lands on KineticGrid.
+/** Attempt BOTH starts before EITHER seek, as the original gesture contract requires.
+ * A failed audio play or seek must not block video, and vice versa.
  */
 export function playOnboardingMedia(
   video: HTMLVideoElement | null | undefined,
   audio: HTMLAudioElement | null | undefined,
   opts: { restart?: boolean } = {}
 ): void {
-  const audioPlay = audio?.play()
-  const videoPlay = video?.play()
+  tryPlayOnboardingMedia(audio)
+  tryPlayOnboardingMedia(video)
   if (opts.restart) {
-    if (audio) audio.currentTime = 0
-    if (video) video.currentTime = 0
+    tryRestartOnboardingMedia(audio)
+    tryRestartOnboardingMedia(video)
   }
-  void audioPlay?.catch(() => {})
-  void videoPlay?.catch(() => {})
 }
