@@ -224,11 +224,13 @@ describe('normalizeNova3ResultsMessage', () => {
     expect(out.finals[1].cluster).toBe('1')
   })
 
-  it('keeps the final transcript text when words[] is empty (F-L04-1)', () => {
+  it('keeps the final transcript text when words[] is empty', () => {
     const out = normalizeNova3ResultsMessage(
       {
         type: 'Results',
         is_final: true,
+        start: 12.5,
+        duration: 1.5,
         channel: {
           alternatives: [
             {
@@ -243,13 +245,48 @@ describe('normalizeNova3ResultsMessage', () => {
     expect(out.finals).toHaveLength(1)
     expect(out.finals[0]).toMatchObject({
       text: 'Hello world',
+      startMs: 12500,
+      endMs: 14000,
       cluster: 'unknown',
-      isFinal: true
+      language: 'und',
+      isFinal: true,
+      revision: 1
     })
     expect(out.interimText).toBe('')
   })
 
-  it('drops a final Results message with empty words and blank transcript (unchanged)', () => {
+  it('applies streamOffsetMs to a word-less final on the meeting audio clock', () => {
+    const out = normalizeNova3ResultsMessage(
+      {
+        type: 'Results',
+        is_final: true,
+        start: 12.5,
+        duration: 1.5,
+        channel: {
+          alternatives: [{ transcript: 'Hello world', words: [] }]
+        }
+      },
+      { scope, messageSequence: 5, streamOffsetMs: 1000 }
+    )
+    expect(out.finals[0]).toMatchObject({ startMs: 13500, endMs: 15000 })
+  })
+
+  it('rejects a word-less final Results frame missing start/duration', () => {
+    expect(() =>
+      normalizeNova3ResultsMessage(
+        {
+          type: 'Results',
+          is_final: true,
+          channel: {
+            alternatives: [{ transcript: 'Hello world', words: [] }]
+          }
+        },
+        { scope, messageSequence: 5 }
+      )
+    ).toThrow(CloudSttError)
+  })
+
+  it('drops a final Results message with empty words and blank transcript', () => {
     const out = normalizeNova3ResultsMessage(
       {
         type: 'Results',
