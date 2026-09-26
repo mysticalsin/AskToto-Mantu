@@ -5,8 +5,11 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
+  statSync,
   truncateSync,
+  utimesSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -349,7 +352,7 @@ describe('bundled local model runtime', () => {
       model.mmproj = originalMmproj
     })
 
-    it('skips re-hashing on a second cold start when the file identity (size, mtime, inode) is unchanged', async () => {
+    it('skips re-hashing on a second cold start when the file identity (size, mtime, ctime, inode) is unchanged', async () => {
       await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
       const afterFirstColdStart = hashState.calls
       expect(afterFirstColdStart).toBeGreaterThan(0) // the first verification must still do real work
@@ -368,18 +371,12 @@ describe('bundled local model runtime', () => {
       const paths = modelPaths(model.id)
       writeFileSync(paths.gguf, Buffer.from('tampered after a prior successful verification'))
 
-      let thrown: unknown
-      try {
-        await verifyIntegrity(model.id)
-      } catch (error) {
-        thrown = error
-      }
-      expect(thrown).toBeInstanceOf(ChecksumMismatchError)
+      await expect(verifyIntegrity(model.id)).rejects.toBeInstanceOf(ChecksumMismatchError)
       // The changed file was re-hashed, not waved through on the strength of the stale cache entry.
       expect(hashState.calls).toBeGreaterThan(afterFirstColdStart)
     })
 
-    it('re-verifies after an explicit repair (file rewritten back to the pinned bytes) instead of trusting a cache that never succeeded', async () => {
+    it('does not cache a failed verification, so a repaired file verifies', async () => {
       const paths = modelPaths(model.id)
       writeFileSync(paths.gguf, Buffer.from('corrupt on the very first cold start'))
       await expect(verifyIntegrity(model.id)).rejects.toBeInstanceOf(ChecksumMismatchError)
@@ -387,6 +384,50 @@ describe('bundled local model runtime', () => {
       // Explicit repair: the file is rewritten with the correct pinned bytes (what a re-download does).
       writeFileSync(paths.gguf, GOOD)
       await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
+    })
+
+    it('rejects a same-size in-place tamper with its mtime put back, because ctime cannot be rolled back', async () => {
+      const paths = modelPaths(model.id)
+      // A whole-second instant so it can be restored to the exact value below on every filesystem's mtime
+      // resolution, not just ones that keep sub-second precision.
+      const verifiedMtime = new Date(Math.floor(Date.now() / 1000) * 1000)
+      utimesSync(paths.gguf, verifiedMtime, verifiedMtime)
+      const verifiedStat = statSync(paths.gguf)
+
+      await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
+
+      // Longer than filesystem timestamp granularity, so the tamper below provably moves ctime forward
+      // rather than landing in the same tick as the verified stat by coincidence.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      // Same length as GOOD, different bytes, mtime put back — everything but ctime matches the verified
+      // stat, and only ctime cannot be forged with utimes.
+      writeFileSync(paths.gguf, Buffer.alloc(GOOD.length, 0x58))
+      utimesSync(paths.gguf, verifiedMtime, verifiedMtime)
+
+      const tamperedStat = statSync(paths.gguf)
+      expect(tamperedStat.size).toBe(verifiedStat.size)
+      expect(tamperedStat.mtimeMs).toBe(verifiedStat.mtimeMs)
+      expect(tamperedStat.ino).toBe(verifiedStat.ino)
+
+      await expect(verifyIntegrity(model.id)).rejects.toBeInstanceOf(ChecksumMismatchError)
+    })
+
+    it('rejects a replace-by-rename with matching size and mtime, because the inode changed', async () => {
+      const paths = modelPaths(model.id)
+      const fixedMtime = new Date(Math.floor(Date.now() / 1000) * 1000)
+      utimesSync(paths.gguf, fixedMtime, fixedMtime)
+
+      await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
+
+      // Same length as GOOD, different bytes, same mtime as the original — built at a separate path so
+      // the rename below gives the gguf path a new inode instead of rewriting the original's.
+      const replacementPath = join(paths.dir, 'replacement.gguf')
+      writeFileSync(replacementPath, Buffer.alloc(GOOD.length, 0x59))
+      utimesSync(replacementPath, fixedMtime, fixedMtime)
+      renameSync(replacementPath, paths.gguf)
+
+      await expect(verifyIntegrity(model.id)).rejects.toBeInstanceOf(ChecksumMismatchError)
     })
   })
 })
