@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   OPERATOR_ENTITLEMENT_GRACE_MS,
-  OPERATOR_INTEGRATION_KINDS,
   askOnlyOperatorEntitlements,
   effectiveOperatorEntitlements,
   emptyOperatorEntitlements,
@@ -199,19 +198,7 @@ describe('parseOperatorIntegrationsResponse', () => {
     expect(parseOperatorIntegrationsResponse({ ok: true, version: -1, integrations: [] })).toBeNull()
     expect(parseOperatorIntegrationsResponse({ ok: true, version: 1, integrations: 'nope' })).toBeNull()
   })
-})
-
-// L12-F3 / DT1: `OPERATOR_INTEGRATION_KINDS` was a hand-maintained 7-entry list that had already drifted
-// from the Worker's `CONNECTOR_KINDS` (28 entries) — see src/shared/operator-connectors.ts's own doc
-// comment, which names this exact drift as "DT1, later" and was never followed up. A real, Worker-
-// supported integration whose `kind` fell in the gap parsed to `null` at operator-entitlements.ts:192
-// and vanished from the desktop app with no error surfaced to the user.
-describe('OPERATOR_INTEGRATION_KINDS parity with the Worker catalog (L12-F3, DT1)', () => {
-  it('the desktop allowlist is exactly the Worker CONNECTOR_KINDS catalog, so the two lists cannot drift', () => {
-    expect([...OPERATOR_INTEGRATION_KINDS].sort()).toEqual([...CONNECTOR_KINDS].sort())
-  })
-
-  it('parses every Worker-supported connector kind instead of silently dropping the ones the old allowlist missed', () => {
+  it('accepts every connector kind in the shared catalog', () => {
     const integrations = CONNECTOR_KINDS.map((kind, i) => ({
       id: `i${i}`,
       kind,
@@ -221,19 +208,6 @@ describe('OPERATOR_INTEGRATION_KINDS parity with the Worker catalog (L12-F3, DT1
       scopes: []
     }))
     const parsed = parseOperatorIntegrationsResponse({ ok: true, version: 1, integrations })
-    expect(parsed?.integrations).toHaveLength(CONNECTOR_KINDS.length)
-
-    // Regression pin: exactly the 21 kinds the old 7-entry list did not have, all real Worker-supported
-    // connector kinds (src/shared/operator-connectors.ts:32) that must never again parse to null.
-    // Typed as `string[]`, not a literal-kind union: this list must still type-check against
-    // `OperatorIntegrationKind` *before* the production fix lands, when that type only covers 7 kinds.
-    const previouslyDropped: string[] = [
-      'zoho', 'dynamics365', 'attio', 'close', 'jira', 'linear', 'asana', 'monday', 'trello',
-      'airtable', 'zendesk', 'intercom', 'freshdesk', 'confluence', 'sharepoint', 'googledrive',
-      'github', 'gitlab', 'slack', 'microsoftteams', 'custom-rest'
-    ]
-    for (const kind of previouslyDropped) {
-      expect(parsed?.integrations.some((i) => i.kind === kind)).toBe(true)
-    }
+    expect(parsed?.integrations.map((i) => i.kind)).toEqual([...CONNECTOR_KINDS])
   })
 })

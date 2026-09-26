@@ -6,7 +6,7 @@
  * false/null/[] per the wire contract, exactly like operator-seat.ts's sanitizers do for the request
  * side of the same contract.
  */
-import { CONNECTOR_KINDS, type ConnectorKind } from './operator-connectors'
+import { isConnectorKind, type ConnectorKind } from './operator-connectors'
 
 // ── Heartbeat response additions ──────────────────────────────────────────────────────────────────
 
@@ -164,13 +164,9 @@ export function operatorGate(
 
 // ── GET /v1/integrations ───────────────────────────────────────────────────────────────────────────
 
-/** Derived from the Worker's own catalog (L12-F3, DT1) rather than hand-maintained here, so the two
- *  lists cannot drift again: a kind added to `CONNECTOR_KINDS` is automatically accepted by
- *  `parseOperatorIntegration` below with no second edit to remember. */
-export const OPERATOR_INTEGRATION_KINDS = CONNECTOR_KINDS
+/** The desktop accepts exactly the shared connector catalog's kinds and drops any other kind
+ *  (fail closed). */
 export type OperatorIntegrationKind = ConnectorKind
-
-const INTEGRATION_KIND_SET: ReadonlySet<string> = new Set(OPERATOR_INTEGRATION_KINDS)
 
 export interface OperatorIntegration {
   id: string
@@ -185,12 +181,12 @@ function parseOperatorIntegration(raw: unknown): OperatorIntegration | null {
   if (!raw || typeof raw !== 'object') return null
   const o = raw as Record<string, unknown>
   if (typeof o.id !== 'string' || !o.id.trim()) return null
-  if (typeof o.kind !== 'string' || !INTEGRATION_KIND_SET.has(o.kind)) return null
+  if (!isConnectorKind(o.kind)) return null
   if (typeof o.label !== 'string' || !o.label.trim()) return null
   const baseUrl = typeof o.baseUrl === 'string' && o.baseUrl.trim() ? o.baseUrl.trim() : null
   const credential = typeof o.credential === 'string' && o.credential ? o.credential : null
   const scopes = Array.isArray(o.scopes) ? o.scopes.filter((s): s is string => typeof s === 'string') : []
-  return { id: o.id, kind: o.kind as OperatorIntegrationKind, label: o.label, baseUrl, credential, scopes }
+  return { id: o.id, kind: o.kind, label: o.label, baseUrl, credential, scopes }
 }
 
 export interface OperatorIntegrationsResponse {
