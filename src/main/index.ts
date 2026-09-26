@@ -555,6 +555,8 @@ import {
 import {
   readIndex as readBrainIndex,
   writeIndex as writeBrainIndex,
+  indexUnavailable,
+  indexUnavailableMessage,
   readGraph as readBrainGraph,
   writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
@@ -7950,6 +7952,9 @@ function registerIpc(): void {
     }
     const s = getSettings()
     const idx = readBrainIndex(s)
+    // M2-0003: non-null while an existing index.json exists but cannot be used on this device — idx
+    // above is then only the empty stand-in, so this must be read before deciding what "no data" means.
+    const unavailable = indexUnavailable(s)
     const counts = brainStatusCounts(s, idx.revision)
     // T6 6c: durable failure counts read straight from the index — unlike backfill.failed below (an
     // ephemeral per-run counter), these stay visible for as long as a source has ok:false, independent
@@ -7986,7 +7991,9 @@ function registerIpc(): void {
       // cleanup is pending instead of silently claiming the delete was complete.
       cleanupPending: idx.sourceRefreshRequested === true,
       lastIndexedAt: lastIndexedAt(s),
-      intelligenceIndex: intelligenceIndexStatus(s)
+      intelligenceIndex: intelligenceIndexStatus(s),
+      // M2-0003: surfaces the degraded read-only state instead of silently reporting an empty brain.
+      ...(unavailable ? { indexUnavailable: unavailable, error: indexUnavailableMessage(unavailable) } : {})
     }
   })
   ipcMain.handle(IPC.brainBackfill, async (e) => {
