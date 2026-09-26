@@ -7,9 +7,7 @@ import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
-import { loadProgram } from './check.mjs'
-
-const CLOSED = new Set(['DONE', 'ENGINEERING_COMPLETE'])
+import { CLOSED, loadProgram } from './check.mjs'
 
 /**
  * S1: closed tickets whose newest record's `recorded_at` is at or after `since`.
@@ -62,8 +60,13 @@ function main() {
   if (!values.seed) return usageExit('sample.mjs: --seed is required and must be non-empty')
   if (!values.since || Number.isNaN(Date.parse(values.since))) return usageExit('sample.mjs: --since must be a parseable date or instant')
 
-  const { ledger, recordsByTicket } = loadProgram(resolve(values.ledger))
-  const population = closedSince(ledger, recordsByTicket, values.since)
+  let program
+  try {
+    program = loadProgram(resolve(values.ledger))
+  } catch (error) {
+    return usageExit(`could not read the ledger: ${error.message}`)
+  }
+  const population = closedSince(program.ledger, program.recordsByTicket, values.since)
   const sample = drawSample(population, values.seed)
   console.log(JSON.stringify({ since: values.since, seed: values.seed, population, sample }, null, 2))
 }

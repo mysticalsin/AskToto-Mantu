@@ -56,7 +56,7 @@ function isInstant(value) {
 function isKitStatusMap(value) {
   if (!isPlainObject(value)) return 'kit_refs: expected an object'
   for (const [ref, status] of Object.entries(value)) {
-    if (typeof ref !== 'string' || ref.length === 0) return 'kit_refs: keys must be non-empty strings'
+    if (ref.length === 0) return 'kit_refs: keys must be non-empty strings'
     if (!KIT_STATUSES.includes(status)) return `kit_refs.${ref}: expected one of ${KIT_STATUSES.join(', ')}`
   }
   return null

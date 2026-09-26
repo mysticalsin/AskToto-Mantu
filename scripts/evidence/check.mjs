@@ -21,15 +21,16 @@ export const TEST_WORKFLOW = '.github/workflows/build.yml'
 
 const READY_DEP = new Set(['ENGINEERING_COMPLETE', 'DONE', 'DEFERRED', 'BLOCKED_EXTERNAL'])
 const IN_HOUSE = new Set(['DESIGNED', 'LOCALLY_TESTED'])
-const CLOSED = new Set(['DONE', 'ENGINEERING_COMPLETE'])
+export const CLOSED = new Set(['DONE', 'ENGINEERING_COMPLETE'])
+const READY_STATUSES = new Set(['IN_PROGRESS', 'ENGINEERING_COMPLETE', 'DEFERRED', 'DONE'])
 const TICKET_RE = /^M2-\d{4}$/
 const DECISION_RE = /^D-\d+$/
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
 
-function latestPass(records, level) {
-  const record = latestByLevel(records).get(level)
-  return record && record.result === 'PASS' ? record : undefined
+function isLatestPass(latest, level) {
+  const record = latest.get(level)
+  return record != null && record.result === 'PASS'
 }
 
 function ticketsById(tickets) {
@@ -47,7 +48,7 @@ function ticketsById(tickets) {
  * @param {Map<string, object>} byId
  * @returns {object[]}
  */
-export function capsOf(id, byId) {
+function capsOf(id, byId) {
   const caps = []
   const visited = new Set([id])
   const stack = [...(byId.get(id)?.depends_on ?? [])]
@@ -164,14 +165,18 @@ function cycleProblems(tickets, byId) {
   return problems
 }
 
+/**
+ * L1's "depends_on ids must exist" applies to every ticket regardless of status; L3's "every direct
+ * dependency must be ready" applies only to the statuses that act on their dependency graph.
+ */
 function dependencyProblems(ticket, byId) {
   const problems = []
-  if (!['IN_PROGRESS', 'ENGINEERING_COMPLETE', 'DEFERRED', 'DONE'].includes(ticket.status)) return problems
+  const checkReady = READY_STATUSES.has(ticket.status)
   for (const depId of ticket.depends_on ?? []) {
     const dep = byId.get(depId)
     if (!dep) {
       problems.push(`${ticket.id}: depends_on references unknown ticket ${depId}`)
-    } else if (!READY_DEP.has(dep.status)) {
+    } else if (checkReady && !READY_DEP.has(dep.status)) {
       problems.push(`${ticket.id}: depends on ${depId} which is not ready (${dep.status})`)
     }
   }
@@ -187,48 +192,64 @@ function slicingProblems(ticket) {
     .map((slice) => `${ticket.id}: slice ${slice?.id ?? '?'} exceeds 10h`)
 }
 
-function statusRuleProblems(ticket, records, caps, roots) {
+function blockedExternalProblems(ticket) {
+  const blocker = ticket.external_blocker
+  if (!isPlainObject(blocker) || !blocker.owner || !blocker.unblock_step || !blocker.needed_by || !blocker.raised_on) {
+    return [`${ticket.id}: BLOCKED_EXTERNAL requires external_blocker.{owner,unblock_step,needed_by,raised_on}`]
+  }
+  return []
+}
+
+function cancelledProblems(ticket) {
+  return ticket.reason ? [] : [`${ticket.id}: CANCELLED requires a non-empty reason`]
+}
+
+function deferredProblems(ticket, latest) {
   const problems = []
-  const latest = latestByLevel(records)
+  if (ticket.flag == null) problems.push(`${ticket.id}: DEFERRED requires a non-null flag`)
+  if (!isLatestPass(latest, 'ACCEPTED')) problems.push(`${ticket.id}: DEFERRED requires an ACCEPTED PASS record (owner approval, D-14)`)
+  return problems
+}
 
-  if (ticket.status === 'BLOCKED_EXTERNAL') {
-    const blocker = ticket.external_blocker
-    if (!isPlainObject(blocker) || !blocker.owner || !blocker.unblock_step || !blocker.needed_by || !blocker.raised_on) {
-      problems.push(`${ticket.id}: BLOCKED_EXTERNAL requires external_blocker.{owner,unblock_step,needed_by,raised_on}`)
-    }
+function engineeringCompleteProblems(ticket, latest, caps) {
+  const problems = []
+  if (!(ticket.external_blocker != null || caps.length > 0)) {
+    problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires its own or an inherited external blocker`)
   }
-
-  if (ticket.status === 'CANCELLED' && !ticket.reason) {
-    problems.push(`${ticket.id}: CANCELLED requires a non-empty reason`)
+  // INV-2: the *latest* record per level governs, so a withdrawn PASS (a later FAIL) must not count.
+  if (![...latest.values()].some((record) => record.result === 'PASS')) {
+    problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires at least one PASS record`)
   }
-
-  if (ticket.status === 'DEFERRED') {
-    if (ticket.flag == null) problems.push(`${ticket.id}: DEFERRED requires a non-null flag`)
-    if (!latestPass(records, 'ACCEPTED')) problems.push(`${ticket.id}: DEFERRED requires an ACCEPTED PASS record (owner approval, D-14)`)
+  for (const level of (ticket.required_evidence ?? []).filter((l) => IN_HOUSE.has(l))) {
+    if (!isLatestPass(latest, level)) problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires a PASS ${level} record`)
   }
+  return problems
+}
 
-  if (ticket.status === 'ENGINEERING_COMPLETE') {
-    if (!(ticket.external_blocker != null || caps.length > 0)) {
-      problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires its own or an inherited external blocker`)
-    }
-    if (!records.some((record) => record.result === 'PASS')) {
-      problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires at least one PASS record`)
-    }
-    for (const level of (ticket.required_evidence ?? []).filter((l) => IN_HOUSE.has(l))) {
-      if (!latestPass(records, level)) problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires a PASS ${level} record`)
-    }
+function doneProblems(ticket, latest, caps, closesProgram) {
+  const problems = []
+  for (const level of ticket.required_evidence ?? []) {
+    if (!isLatestPass(latest, level)) problems.push(`${ticket.id}: DONE requires a PASS ${level} record`)
   }
-
-  if (ticket.status === 'DONE') {
-    for (const level of ticket.required_evidence ?? []) {
-      if (!latestPass(records, level)) problems.push(`${ticket.id}: DONE requires a PASS ${level} record`)
-    }
-    if (caps.length > 0 && !ticket.closes_program) {
-      problems.push(`${ticket.id}: DONE is blocked by a dependency ancestor that is ENGINEERING_COMPLETE or BLOCKED_EXTERNAL; it can close only as ENGINEERING_COMPLETE`)
-    }
+  if (caps.length > 0 && !closesProgram) {
+    problems.push(`${ticket.id}: DONE is blocked by a dependency ancestor that is ENGINEERING_COMPLETE or BLOCKED_EXTERNAL; it can close only as ENGINEERING_COMPLETE`)
   }
+  return problems
+}
 
-  const capsClosure = ticket.status === 'ENGINEERING_COMPLETE' || (ticket.status === 'DONE' && ticket.closes_program === true)
+// Rules come from this table, not branching: each status dispatches to one small rule function. A
+// status with no row (TODO, IN_PROGRESS, CANCELLED handled above) needs no extra closure rule here.
+const STATUS_RULES = Object.freeze({
+  BLOCKED_EXTERNAL: (ticket) => blockedExternalProblems(ticket),
+  CANCELLED: (ticket) => cancelledProblems(ticket),
+  DEFERRED: (ticket, latest) => deferredProblems(ticket, latest),
+  ENGINEERING_COMPLETE: (ticket, latest, caps) => engineeringCompleteProblems(ticket, latest, caps),
+  DONE: (ticket, latest, caps, closesProgram) => doneProblems(ticket, latest, caps, closesProgram)
+})
+
+function inheritedBlockProblems(ticket, latest, roots, closesProgram) {
+  const problems = []
+  const capsClosure = ticket.status === 'ENGINEERING_COMPLETE' || (ticket.status === 'DONE' && closesProgram)
   if (capsClosure && roots.length > 0) {
     for (const [level, record] of latest) {
       const listed = new Set((record.inherited_block ?? []).map((entry) => entry.ticket))
@@ -244,13 +265,26 @@ function statusRuleProblems(ticket, records, caps, roots) {
       }
     }
   }
-
-  if (CLOSED.has(ticket.status) && ticket.type === 'fix' && (ticket.required_evidence ?? []).includes('LOCALLY_TESTED')) {
-    const record = latest.get('LOCALLY_TESTED')
-    if (record && !record.repro) problems.push(`${ticket.id}: fix ticket requires repro (red-before) on its LOCALLY_TESTED record`)
-  }
-
   return problems
+}
+
+function redBeforeProblems(ticket, latest) {
+  if (!(CLOSED.has(ticket.status) && ticket.type === 'fix' && (ticket.required_evidence ?? []).includes('LOCALLY_TESTED'))) {
+    return []
+  }
+  const record = latest.get('LOCALLY_TESTED')
+  return record && !record.repro ? [`${ticket.id}: fix ticket requires repro (red-before) on its LOCALLY_TESTED record`] : []
+}
+
+function statusRuleProblems(ticket, records, caps, roots) {
+  const latest = latestByLevel(records)
+  const closesProgram = ticket.closes_program === true
+  const rule = STATUS_RULES[ticket.status]
+  return [
+    ...(rule ? rule(ticket, latest, caps, closesProgram) : []),
+    ...inheritedBlockProblems(ticket, latest, roots, closesProgram),
+    ...redBeforeProblems(ticket, latest)
+  ]
 }
 
 function recordContextProblems(ticket, records, decisions) {
@@ -366,20 +400,68 @@ export function loadProgram(ledgerPath) {
   return { ledger, programRoot, recordsByTicket, problems }
 }
 
-function runProblems(run, sha, conclusion) {
-  if (!run) return ['run: not found']
+/**
+ * `field` names which record field this run was found by (`ci_run_id` or `repro.ci_run_id`), so a
+ * record carrying both never produces an ambiguous "run: not found".
+ */
+function runProblems(run, sha, conclusion, field) {
+  if (!run) return [`${field}: not found`]
   const problems = []
-  if (run.path !== TEST_WORKFLOW) problems.push(`run: expected workflow ${TEST_WORKFLOW}, got ${run.path}`)
-  if (run.head_sha !== sha) problems.push(`run: expected head_sha ${sha}, got ${run.head_sha}`)
-  if (run.status !== 'completed') problems.push(`run: expected status completed, got ${run.status}`)
-  if (run.conclusion !== conclusion) problems.push(`run: expected conclusion ${conclusion}, got ${run.conclusion}`)
+  if (run.path !== TEST_WORKFLOW) problems.push(`${field}: expected workflow ${TEST_WORKFLOW}, got ${run.path}`)
+  if (run.head_sha !== sha) problems.push(`${field}: expected head_sha ${sha}, got ${run.head_sha}`)
+  if (run.status !== 'completed') problems.push(`${field}: expected status completed, got ${run.status}`)
+  if (run.conclusion !== conclusion) problems.push(`${field}: expected conclusion ${conclusion}, got ${run.conclusion}`)
+  return problems
+}
+
+/**
+ * One evidence block's problems, unprefixed (the caller names the block's position and level).
+ * @returns {Promise<string[]>}
+ */
+async function blockProblems(record, { headSha, prNumber, github, fileExists }) {
+  const shapeProblems = recordProblems(record)
+  if (shapeProblems.length > 0) return shapeProblems
+
+  const problems = []
+
+  if (record.evidence_level === 'LOCALLY_TESTED') {
+    if (record.commit !== headSha) problems.push(`commit: expected the PR head SHA ${headSha}`)
+    if (record.pr !== prNumber) problems.push(`pr: expected the PR number ${prNumber}`)
+    try {
+      problems.push(...runProblems(await github.run(record.ci_run_id), record.commit, 'success', 'ci_run_id'))
+    } catch (error) {
+      problems.push(`ci_run_id: could not verify run ${record.ci_run_id}: ${error.message}`)
+    }
+  }
+
+  if (record.repro) {
+    try {
+      const run = await github.run(record.repro.ci_run_id)
+      problems.push(...runProblems(run, record.repro.commit, 'failure', 'repro.ci_run_id'))
+      if (run) {
+        const isAncestor = await github.isAncestor(record.repro.commit, record.commit)
+        if (!isAncestor) problems.push('repro.commit: expected to be an ancestor of commit')
+      }
+    } catch (error) {
+      problems.push(`repro.ci_run_id: could not verify run ${record.repro.ci_run_id}: ${error.message}`)
+    }
+    if (!fileExists(record.repro.test)) problems.push(`repro.test: ${record.repro.test} does not exist in the checkout`)
+  }
+
+  if (record.wired) {
+    if (!fileExists(record.wired.client)) problems.push(`wired.client: ${record.wired.client} does not exist in the checkout`)
+    if (!fileExists(record.wired.contract_fake)) problems.push(`wired.contract_fake: ${record.wired.contract_fake} does not exist in the checkout`)
+  }
+
   return problems
 }
 
 /**
  * PR rules P1-P6: verifies every ` ```json evidence ` block in a pull request body against that PR's
  * own head commit and number, and the named Actions runs. A body with no block makes no claim and
- * returns no problems (P6) — the CLI prints a distinct message for that case.
+ * returns no problems (P6) — the CLI prints a distinct message for that case. Each block's problems are
+ * prefixed with its position and its own `evidence_level`, so a PR body with several blocks never mixes
+ * up which one a problem belongs to.
  * @param {{body: string, headSha: string, prNumber: number, github: ReturnType<typeof githubApi>, fileExists: (path: string) => boolean}} args
  * @returns {Promise<string[]>}
  */
@@ -387,40 +469,10 @@ export async function prProblems({ body, headSha, prNumber, github, fileExists }
   const { records, problems: parseProblems } = recordsInPrBody(body)
   const problems = [...parseProblems]
 
-  for (const record of records) {
-    const shapeProblems = recordProblems(record)
-    if (shapeProblems.length > 0) {
-      problems.push(...shapeProblems)
-      continue
-    }
-
-    if (record.evidence_level === 'LOCALLY_TESTED') {
-      if (record.commit !== headSha) problems.push(`commit: expected the PR head SHA ${headSha}`)
-      if (record.pr !== prNumber) problems.push(`pr: expected the PR number ${prNumber}`)
-      try {
-        problems.push(...runProblems(await github.run(record.ci_run_id), record.commit, 'success'))
-      } catch (error) {
-        problems.push(`ci_run_id: could not verify run ${record.ci_run_id}: ${error.message}`)
-      }
-    }
-
-    if (record.repro) {
-      try {
-        const run = await github.run(record.repro.ci_run_id)
-        problems.push(...runProblems(run, record.repro.commit, 'failure'))
-        if (run) {
-          const isAncestor = await github.isAncestor(record.repro.commit, record.commit)
-          if (!isAncestor) problems.push('repro.commit: expected to be an ancestor of commit')
-        }
-      } catch (error) {
-        problems.push(`repro.ci_run_id: could not verify run ${record.repro.ci_run_id}: ${error.message}`)
-      }
-      if (!fileExists(record.repro.test)) problems.push(`repro.test: ${record.repro.test} does not exist in the checkout`)
-    }
-
-    if (record.wired) {
-      if (!fileExists(record.wired.client)) problems.push(`wired.client: ${record.wired.client} does not exist in the checkout`)
-      if (!fileExists(record.wired.contract_fake)) problems.push(`wired.contract_fake: ${record.wired.contract_fake} does not exist in the checkout`)
+  for (const [index, record] of records.entries()) {
+    const level = typeof record?.evidence_level === 'string' ? record.evidence_level : 'unknown level'
+    for (const problem of await blockProblems(record, { headSha, prNumber, github, fileExists })) {
+      problems.push(`evidence[${index}] ${level}: ${problem}`)
     }
   }
 
