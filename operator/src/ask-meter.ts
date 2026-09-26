@@ -21,6 +21,8 @@ export function parseAskPathTag(raw: unknown): AskPathTag | null {
 
 /** Counts are exact non-negative safe integers or explicitly unknown. Never turn
  * a malformed provider value into zero, round it, or persist NaN/Infinity to D1.
+ * The `=== 0` branch is deliberate: it normalizes a provider's `-0` to `0` before
+ * either reaches D1 or a JSON response.
  */
 export function proxyTokenCount(raw: unknown): number | null {
   if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 0) return null
