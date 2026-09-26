@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
+  advanceDemoBeat,
   createDemoPlaybackClock,
+  demoOrchestratorSnapshot,
   demoPlaybackStatus,
+  initialDemoOrchestratorState,
+  previousDemoBeat,
   readDemoEnvironment,
+  replayDemoBeat,
   runOptionalDemoMedia,
+  toggleDemoPause,
   watchDemoEnvironment,
+  type DemoBeatModel,
   type DemoPlaybackSnapshot
 } from './onboarding-demo-controls'
 
@@ -147,5 +154,60 @@ describe('onboarding demo pacing and lifecycle', () => {
     expect(changes).toHaveLength(2)
     expect(documentEvents.size + motionEvents.size).toBe(0)
     expect(readDemoEnvironment(null, null)).toEqual({ hidden: false, reducedMotion: false })
+  })
+})
+
+function beatModel(overrides: Partial<DemoBeatModel> = {}): DemoBeatModel {
+  return {
+    hasNextBeat: (beat) => beat < 3,
+    holdMs: (beat) => (beat + 1) * 1000,
+    playbackElapsed: (beat, localMs) => beat * 1000 + localMs,
+    afterNext: (beat) => ({ beat: beat + 1, localMs: 0 }),
+    ...overrides
+  }
+}
+
+describe('demo orchestrator — the one owner of pause/replay/previous/advance', () => {
+  it('starts on step 0, not paused, and its first take', () => {
+    expect(initialDemoOrchestratorState()).toEqual({ beat: 0, replayKey: 0, paused: false })
+  })
+
+  it('toggling pause flips it, and is a no-op (same instance) once held or under reduced motion', () => {
+    const state = initialDemoOrchestratorState()
+    const paused = toggleDemoPause(state, 'playing', false)
+    expect(paused).toEqual({ beat: 0, replayKey: 0, paused: true })
+    expect(toggleDemoPause(paused, 'playing', false)).toEqual({ beat: 0, replayKey: 0, paused: false })
+    expect(toggleDemoPause(state, 'held', false)).toBe(state)
+    expect(toggleDemoPause(state, 'playing', true)).toBe(state)
+  })
+
+  it('replay keeps the step, clears any pause, and bumps replayKey so the caller recreates its clock', () => {
+    const state = { beat: 2, replayKey: 0, paused: true }
+    expect(replayDemoBeat(state)).toEqual({ beat: 2, replayKey: 1, paused: false })
+  })
+
+  it('previous is a no-op (same instance) on step 0, else steps back and clears any pause', () => {
+    const first = initialDemoOrchestratorState()
+    expect(previousDemoBeat(first)).toBe(first)
+    const state = { beat: 2, replayKey: 0, paused: true }
+    expect(previousDemoBeat(state)).toEqual({ beat: 1, replayKey: 0, paused: false })
+  })
+
+  it('advance asks the model for the next beat, clears any pause, and hands back the carried-over localMs', () => {
+    const state = { beat: 0, replayKey: 5, paused: true }
+    const model = beatModel({ afterNext: (beat) => ({ beat: beat + 1, localMs: 250 }) })
+    const { state: next, localMs } = advanceDemoBeat(state, model)
+    expect(next).toEqual({ beat: 1, replayKey: 5, paused: false })
+    expect(localMs).toBe(250)
+  })
+
+  it('snapshots elapsed time and hasNext from the model, holding at the step duration under reduced motion', () => {
+    const state = { beat: 1, replayKey: 0, paused: false }
+    const model = beatModel()
+    expect(demoOrchestratorSnapshot(state, 400, false, model)).toEqual({
+      beat: 1, replayKey: 0, paused: false, hasNext: true, elapsedMs: 1400
+    })
+    expect(demoOrchestratorSnapshot(state, 400, true, model)).toMatchObject({ elapsedMs: 2000 })
+    expect(demoOrchestratorSnapshot({ ...state, beat: 3 }, 0, false, model)).toMatchObject({ hasNext: false })
   })
 })

@@ -41,11 +41,19 @@ import { setOnboardingDemoActive } from '../lib/onboarding-demo-guard'
 import { ModeRecapView, modeRecapSections } from './ModeRecap'
 import { OnboardingDemoPreviewBoundary } from './OnboardingDemoPreviewBoundary'
 import {
+  advanceDemoBeat,
   createDemoPlaybackClock,
+  demoOrchestratorSnapshot,
   demoPlaybackStatus,
+  initialDemoOrchestratorState,
+  previousDemoBeat,
   readDemoEnvironment,
+  replayDemoBeat,
   runOptionalDemoMedia,
+  toggleDemoPause,
   watchDemoEnvironment,
+  type DemoBeatModel,
+  type DemoOrchestratorState,
   type DemoPlaybackClock,
   type DemoPlaybackPhase,
   type DemoPlaybackSnapshot
@@ -74,7 +82,19 @@ const DEMO_STAGE_LABELS = {
   recap: 'Review the recap'
 } as const
 
-/** The same real demo, with one clock owner and explicit user-controlled pacing. */
+/** The demo's own beat/stage content, adapted to the orchestrator's generic contract —
+ * see lib/onboarding-demo.ts for what each query actually computes. */
+const DEMO_BEAT_MODEL: DemoBeatModel = {
+  hasNextBeat: demoHasNextBeat,
+  holdMs: demoBeatHoldMs,
+  playbackElapsed: demoPlaybackElapsed,
+  afterNext: demoPlaybackAfterNext
+}
+
+/** The same real demo, with one clock owner and explicit user-controlled pacing. Pause/
+ * Replay/Previous/Next all resolve through lib/onboarding-demo-controls.ts's pure
+ * orchestrator (unit-tested there); this hook only wires it to the DemoPlaybackClock and
+ * the DOM (cursor position, chip click) that the orchestrator itself cannot own. */
 function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
   const [motion] = useState(() =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -84,17 +104,15 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
   const [environment, setEnvironment] = useState(() =>
     readDemoEnvironment(typeof document === 'undefined' ? null : document, motion)
   )
-  const [beat, setBeat] = useState(0)
+  const [orchestrator, setOrchestrator] = useState<DemoOrchestratorState>(initialDemoOrchestratorState)
   const [localMs, setLocalMs] = useState(0)
-  const [paused, setPaused] = useState(false)
   const [phase, setPhase] = useState<DemoPlaybackPhase>('paused')
-  const [replayKey, setReplayKey] = useState(0)
   const clockRef = useRef<DemoPlaybackClock | null>(null)
   const phaseRef = useRef<DemoPlaybackPhase>('paused')
-  const controlsRef = useRef({ environment, paused })
-  controlsRef.current = { environment, paused }
-  const beatRef = useRef(beat)
-  beatRef.current = beat
+  const controlsRef = useRef({ environment, paused: orchestrator.paused })
+  controlsRef.current = { environment, paused: orchestrator.paused }
+  const orchestratorRef = useRef(orchestrator)
+  orchestratorRef.current = orchestrator
   const cursorRef = useRef<HTMLDivElement>(null)
   const lastCommitRef = useRef(0)
   const clickedForRef = useRef<DemoCursorTarget | null>(null)
@@ -114,6 +132,7 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
     ), [motion])
 
   useEffect(() => {
+    const beat = orchestrator.beat
     clickedForRef.current = null
     lastCommitRef.current = 0
     phaseRef.current = 'paused'
@@ -182,62 +201,64 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
       if (clockRef.current === clock) clockRef.current = null
       if (cursorRef.current) cursorRef.current.style.opacity = '0'
     }
-  }, [beat, replayKey, wrapRef])
+  }, [orchestrator.beat, orchestrator.replayKey, wrapRef])
 
   useEffect(() => {
     const clock = clockRef.current
     if (!clock) return
     if (environment.reducedMotion) clock.finish()
-    else if (environment.hidden || paused) clock.pause()
+    else if (environment.hidden || orchestrator.paused) clock.pause()
     else clock.play()
-  }, [environment.hidden, environment.reducedMotion, paused, beat, replayKey])
+  }, [environment.hidden, environment.reducedMotion, orchestrator.paused, orchestrator.beat, orchestrator.replayKey])
 
   const resetPlayback = (): void => {
     clockRef.current?.dispose()
     controlsRef.current = { ...controlsRef.current, paused: false }
-    setPaused(false)
     lastCommitRef.current = 0
   }
+  const commit = (next: DemoOrchestratorState): void => {
+    orchestratorRef.current = next
+    setOrchestrator(next)
+  }
+
+  const snapshot = demoOrchestratorSnapshot(orchestrator, localMs, environment.reducedMotion, DEMO_BEAT_MODEL)
 
   return {
-    // Reduced motion renders the settled content before a frame or effect is needed.
-    elapsedMs: environment.reducedMotion ? demoBeatHoldMs(beat) : demoPlaybackElapsed(beat, localMs),
-    beat,
-    hasNext: demoHasNextBeat(beat),
+    elapsedMs: snapshot.elapsedMs,
+    beat: snapshot.beat,
+    hasNext: snapshot.hasNext,
     cursorRef,
     reducedMotion: environment.reducedMotion,
-    paused,
+    paused: snapshot.paused,
     phase,
-    replayKey,
-    status: demoPlaybackStatus(phase, environment, paused),
+    replayKey: snapshot.replayKey,
+    status: demoPlaybackStatus(phase, environment, snapshot.paused),
     togglePaused: () => {
-      if (phaseRef.current === 'held' || environment.reducedMotion) return
       // Stop immediately in the click, rather than waiting for a render/effect.
-      const nextPaused = !controlsRef.current.paused
-      controlsRef.current = { ...controlsRef.current, paused: nextPaused }
-      if (nextPaused) clockRef.current?.pause()
+      const next = toggleDemoPause(orchestratorRef.current, phaseRef.current, controlsRef.current.environment.reducedMotion)
+      if (next === orchestratorRef.current) return
+      controlsRef.current = { ...controlsRef.current, paused: next.paused }
+      if (next.paused) clockRef.current?.pause()
       else if (!controlsRef.current.environment.hidden) clockRef.current?.play()
-      setPaused(nextPaused)
+      commit(next)
     },
     replay: () => {
       resetPlayback()
       setLocalMs(0)
-      setReplayKey((previous) => previous + 1)
+      commit(replayDemoBeat(orchestratorRef.current))
     },
     previous: () => {
-      if (beatRef.current === 0) return
+      const next = previousDemoBeat(orchestratorRef.current)
+      if (next === orchestratorRef.current) return
       resetPlayback()
-      const previous = Math.max(0, beatRef.current - 1)
-      beatRef.current = previous
       setLocalMs(0)
-      setBeat(previous)
+      commit(next)
     },
     advance: () => {
       resetPlayback()
-      const next = demoPlaybackAfterNext(beatRef.current)
-      beatRef.current = next.beat
+      const next = advanceDemoBeat(orchestratorRef.current, DEMO_BEAT_MODEL)
       setLocalMs(next.localMs)
-      setBeat(next.beat)
+      commit(next.state)
     }
   }
 }

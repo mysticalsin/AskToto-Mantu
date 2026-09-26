@@ -172,3 +172,89 @@ export function demoPlaybackStatus(
   if (userPaused || phase === 'paused') return 'Paused. Resume when you are ready.'
   return 'Playing. Pause at any time.'
 }
+
+/**
+ * Cold orchestration state: which step is showing, which "take" of it (a fresh replayKey
+ * tells the caller to recreate its clock), and the user's own pause choice. The hot,
+ * per-frame state (elapsed ms, clock phase) is owned by the DemoPlaybackClock and mirrored
+ * back in via onClockFrame — it is not part of this state, so a tick can never race a step
+ * change through this module.
+ */
+export interface DemoOrchestratorState {
+  beat: number
+  replayKey: number
+  paused: boolean
+}
+
+export function initialDemoOrchestratorState(): DemoOrchestratorState {
+  return { beat: 0, replayKey: 0, paused: false }
+}
+
+/** Content/timing queries the orchestrator composes but does not own — see lib/onboarding-demo.ts. */
+export interface DemoBeatModel {
+  hasNextBeat(beat: number): boolean
+  holdMs(beat: number): number
+  playbackElapsed(beat: number, localMs: number): number
+  afterNext(beat: number): { beat: number; localMs: number }
+}
+
+/**
+ * Pause/resume is a no-op once the step has settled at its hold point, or while reduced
+ * motion holds every step settled already. Returns the SAME state instance when it is a
+ * no-op, so a caller can tell `state === next` apart from an actual transition.
+ */
+export function toggleDemoPause(
+  state: DemoOrchestratorState,
+  phase: DemoPlaybackPhase,
+  reducedMotion: boolean
+): DemoOrchestratorState {
+  if (phase === 'held' || reducedMotion) return state
+  return { ...state, paused: !state.paused }
+}
+
+/** Replaying keeps the same step; the fresh replayKey is the caller's signal to recreate
+ * its clock from zero. */
+export function replayDemoBeat(state: DemoOrchestratorState): DemoOrchestratorState {
+  return { ...state, paused: false, replayKey: state.replayKey + 1 }
+}
+
+/** There is no step before the first one — returns the SAME state instance then. */
+export function previousDemoBeat(state: DemoOrchestratorState): DemoOrchestratorState {
+  if (state.beat === 0) return state
+  return { ...state, beat: state.beat - 1, paused: false }
+}
+
+/** Advancing can land mid-beat: afterNext's carried-over localMs is not necessarily zero.
+ * The caller applies it to the fresh per-beat clock it creates for the new beat. */
+export function advanceDemoBeat(
+  state: DemoOrchestratorState,
+  model: Pick<DemoBeatModel, 'afterNext'>
+): { state: DemoOrchestratorState; localMs: number } {
+  const next = model.afterNext(state.beat)
+  return { state: { ...state, beat: next.beat, paused: false }, localMs: next.localMs }
+}
+
+export interface DemoOrchestratorSnapshot {
+  beat: number
+  replayKey: number
+  paused: boolean
+  hasNext: boolean
+  elapsedMs: number
+}
+
+/** localMs is the current beat-local clock reading (0 unless just carried over by
+ * advanceDemoBeat); reduced motion always reports the step already settled at its hold. */
+export function demoOrchestratorSnapshot(
+  state: DemoOrchestratorState,
+  localMs: number,
+  reducedMotion: boolean,
+  model: DemoBeatModel
+): DemoOrchestratorSnapshot {
+  return {
+    beat: state.beat,
+    replayKey: state.replayKey,
+    paused: state.paused,
+    hasNext: model.hasNextBeat(state.beat),
+    elapsedMs: reducedMotion ? model.holdMs(state.beat) : model.playbackElapsed(state.beat, localMs)
+  }
+}
