@@ -14,6 +14,12 @@ PACKAGE_PATH="$1"
 shift
 
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/metis-test-home-XXXXXX")"
+# macOS's own $TMPDIR already ends in a slash (/var/folders/.../T/), so the template above produces a
+# literal double slash; mktemp preserves it verbatim instead of normalizing it away. Foundation's
+# NSHomeDirectory() DOES normalize it — proven by CI, where the double-slash $SANDBOX and single-slash
+# NSHomeDirectory() compared unequal despite naming the same directory. Canonicalize once here so every
+# consumer of $SANDBOX (this script's own exports, the canary's string comparisons) agrees byte-for-byte.
+SANDBOX="$(cd "$SANDBOX" && pwd)"
 mkdir -p "$SANDBOX/tmp"
 
 export HOME="$SANDBOX"

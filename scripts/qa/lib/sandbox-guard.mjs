@@ -6,7 +6,7 @@
 // would then mutate meetings folders, provider keys and brain state there. `assertSandboxedUserData`
 // is the check that was missing: called once, at the top of any harness that relies on that prerequisite,
 // before it touches anything.
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 
 /**
  * Throws a descriptive error unless `userDataDir` is set and does not resolve under `homeDir`'s real
@@ -28,8 +28,12 @@ export function assertSandboxedUserData({ userDataDir, homeDir }) {
   const resolvedUserData = resolve(userDataDir)
   const realCloudStorage = resolve(join(homeDir, 'Library', 'CloudStorage'))
   const realOneDrive = resolve(join(homeDir, 'OneDrive'))
-  const underRealCloudStorage = resolvedUserData === realCloudStorage || resolvedUserData.startsWith(realCloudStorage + '/')
-  const underRealOneDrive = resolvedUserData === realOneDrive || resolvedUserData.startsWith(realOneDrive + '/')
+  // `sep`, not a literal '/' — this app ships on Windows too (see this file's own e2e-workflows.mjs
+  // caller, whose METIS_QA_OUT default is a `D:\...` path), where resolve()/join() return
+  // backslash-separated paths; a hardcoded '/' silently never matched there (confirmed on a real
+  // windows-latest CI run: the two "resolves inside the real ..." cases passed through unthrown).
+  const underRealCloudStorage = resolvedUserData === realCloudStorage || resolvedUserData.startsWith(realCloudStorage + sep)
+  const underRealOneDrive = resolvedUserData === realOneDrive || resolvedUserData.startsWith(realOneDrive + sep)
   if (underRealCloudStorage || underRealOneDrive) {
     throw new Error(`ASKTOTO_USERDATA (${userDataDir}) resolves inside the real synced meetings store — point it at an isolated directory instead.`)
   }
