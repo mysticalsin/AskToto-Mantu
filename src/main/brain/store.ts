@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, renameSync, statSync, cpSync } from 'node:fs'
-import { join, basename } from 'node:path'
+import { join, basename, dirname } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
 import { invalidateMatchKeyDir, resetMatchKeyCacheForTests } from './match-key-cache'
@@ -22,7 +22,7 @@ import {
   type IndexUnavailableCause
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult } from '../transcripts'
-import { mainLog } from '../logger'
+import { mainLog, auditLog } from '../logger'
 
 /**
  * Brain store — plain JSON files under `<meetings folder>/.brain/`.
@@ -240,7 +240,10 @@ export function readJson<T>(settings: Settings, rel: string, parse: (v: unknown)
   try {
     value = parse(JSON.parse(readSavedFile(p)))
   } catch {
-    value = null // corrupt/undecryptable file — callers treat as absent; ingest will rewrite it
+    // Corrupt/undecryptable file — callers treat as absent and ingest will rewrite it. This no longer
+    // applies to index.json (M2-0003): it has its own read/replace invariant (loadIndex, above
+    // writeJson) and never goes through readJson at all.
+    value = null
   }
   if (jsonCache.size >= JSON_CACHE_MAX) jsonCache.clear()
   jsonCache.set(p, { mtimeMs, size, value })
@@ -422,15 +425,31 @@ export function ensureV1Backup(settings: Settings): void {
   }
 }
 
-// ── M2-0003 read/replace invariant — type surface (docs/metis-2.0/designs/M2-0003-DESIGN.md) ─────────
-//
-// TDD-through-CI note: this block lands in the RED (tests-only) commit so the new test files can compile
-// under `npm run typecheck`, which CI runs before `npm test`. `classifyIndexBytes` and
-// `indexUnavailableMessage` are pure functions with no callers yet, so they are implemented in full here.
-// `indexUnavailable` is a placeholder that always returns null — `readIndex`/`writeIndex` below are still
-// unchanged (today's rename-on-any-decode-failure behaviour), so nothing is actually tracked as
-// unavailable yet. The next commit replaces this placeholder and readIndex/writeIndex/
-// quarantineUnusableIndex together with the real stat-keyed invariant; no stub code remains afterward.
+// ── Brain index (index.json) ─ M2-0003 read/replace invariant ─────────────────────────────────────
+// index.json is renamed or overwritten ONLY when this process fully decoded its current bytes (plaintext,
+// or an envelope that authenticated under a key this device holds), or when no file exists. Bytes that
+// could not be read, decrypted (another device's key, an unavailable keystore, damaged ciphertext — not
+// distinguishable, so never distinguished) or parsed by this build's schema_version are left byte-identical
+// and the index is read-only for the session. Decoded-but-invalid bytes are set aside, capped. Mirrors
+// corrections.ts's parseJournalFile (absent / unreadable / corrupt / ok). See
+// docs/metis-2.0/designs/M2-0003-DESIGN.md.
+
+const INDEX_REL = 'index.json'
+/** Only snapshots made by this scheme are counted. Legacy `index.corrupt-<ISO>.json` files (the pre-
+ *  M2-0003 quarantine name) are never counted, renamed or deleted — every existing one stays exactly
+ *  where it is. Keeps the `.corrupt-` infix every `.brain` reader already excludes from its own scans. */
+const INDEX_AUTO_SNAPSHOT_PREFIX = 'index.corrupt-auto-'
+export const INDEX_AUTO_SNAPSHOT_CAP = 5
+/** Only an I/O failure is retried on a timer (e.g. a OneDrive dataless placeholder hydrating). A decode
+ *  failure is not: retrying safeStorage on a timer risks Keychain prompts, and the bytes have not changed. */
+export const INDEX_IO_RETRY_MS = 30_000
+
+type IndexLoad =
+  | { kind: 'ready'; index: BrainIndex }
+  | { kind: 'absent' }
+  | { kind: 'corrupt' } // decoded, but not a valid index for this build
+  | { kind: 'unavailable'; cause: IndexUnavailableCause; detail?: string } // detail: log-only (errno / decode reason)
+type ResolvedIndex = Exclude<IndexLoad, { kind: 'corrupt' }>
 
 export class BrainIndexUnavailableError extends Error {
   override readonly name = 'BrainIndexUnavailableError'
@@ -439,15 +458,6 @@ export class BrainIndexUnavailableError extends Error {
     super(`brain index is read-only on this device (${unavailable})`)
   }
 }
-
-export const INDEX_AUTO_SNAPSHOT_CAP = 5
-export const INDEX_IO_RETRY_MS = 30_000
-
-type IndexLoad =
-  | { kind: 'ready'; index: BrainIndex }
-  | { kind: 'absent' }
-  | { kind: 'corrupt' } // decoded, but not a valid index for this build
-  | { kind: 'unavailable'; cause: IndexUnavailableCause; detail?: string } // detail: log-only (errno / decode reason)
 
 /** Pure classification of index.json bytes. No filesystem writes. */
 export function classifyIndexBytes(buf: Buffer): IndexLoad {
@@ -467,10 +477,120 @@ export function classifyIndexBytes(buf: Buffer): IndexLoad {
   return { kind: 'corrupt' }
 }
 
-/** Non-null while an existing index.json cannot be used here: the index is read-only for the session.
- *  RED-phase placeholder (see block comment above) — always null until the next commit. */
-export function indexUnavailable(_s: Settings): IndexUnavailableCause | null {
-  return null
+// Stat-keyed memo, one entry per `.brain` dir's index.json. NOT session state: an entry is used only
+// while (mtimeMs,size) still match the file on disk — it ends by itself the moment the bytes change
+// (another device/owner rewrites them, an explicit purge), so nothing in memory ever outlives the file.
+// The (-1,-1) key stands for "stat itself failed (non-ENOENT)".
+const indexCache = new Map<string, { mtimeMs: number; size: number; at: number; load: ResolvedIndex }>()
+
+/** Logs and audits a NEW unavailable classification once (not once per poll), then caches it. */
+function recordUnavailable(
+  p: string,
+  hit: { mtimeMs: number; size: number; at: number; load: ResolvedIndex } | undefined,
+  mtimeMs: number,
+  size: number,
+  load: Extract<ResolvedIndex, { kind: 'unavailable' }>
+): ResolvedIndex {
+  const alreadyLogged = hit?.load.kind === 'unavailable' && hit.load.cause === load.cause
+  if (!alreadyLogged) {
+    mainLog.warn(
+      `[brain] index.json can't be used on this device (${load.cause}${load.detail ? `: ${load.detail}` : ''}) — left untouched; indexing is paused until it can be read`
+    )
+    auditLog('brain.index.unavailable', { cause: load.cause })
+  }
+  indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
+  return load
+}
+
+/**
+ * Preserve DECODED-BUT-INVALID index.json bytes aside and let the app carry on with a rebuildable empty
+ * index — the one case this process is certain the bytes are worthless (they authenticated under a key
+ * this device holds; they are simply not a valid index for this build), so a rename is safe. Capped at
+ * `INDEX_AUTO_SNAPSHOT_CAP` on disk, counting only this scheme's own `index.corrupt-auto-` prefix.
+ */
+function setAsideCorruptIndex(p: string): ResolvedIndex {
+  const dir = dirname(p)
+  let kept: number
+  try {
+    kept = readdirSync(dir).filter((f) => f.startsWith(INDEX_AUTO_SNAPSHOT_PREFIX)).length
+  } catch (e) {
+    return { kind: 'unavailable', cause: 'corrupt-kept', detail: (e as NodeJS.ErrnoException).code }
+  }
+  if (kept >= INDEX_AUTO_SNAPSHOT_CAP) return { kind: 'unavailable', cause: 'corrupt-kept', detail: 'snapshot cap reached' }
+  const to = join(dir, `${INDEX_AUTO_SNAPSHOT_PREFIX}${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
+  try {
+    renameSync(p, to)
+  } catch (e) {
+    return { kind: 'unavailable', cause: 'corrupt-kept', detail: (e as NodeJS.ErrnoException).code }
+  }
+  indexCache.delete(p)
+  mainLog.warn(
+    `[brain] index.json decoded but was not a valid index — preserved as ${basename(to)} (${kept + 1}/${INDEX_AUTO_SNAPSHOT_CAP}); it will be rebuilt from the transcripts`
+  )
+  auditLog('brain.index.quarantined', { kept: kept + 1, cap: INDEX_AUTO_SNAPSHOT_CAP })
+  return { kind: 'absent' }
+}
+
+function loadIndex(s: Settings): ResolvedIndex {
+  const p = join(brainDir(s), INDEX_REL)
+  const hit = indexCache.get(p)
+
+  let mtimeMs: number
+  let size: number
+  try {
+    const st = statSync(p)
+    mtimeMs = st.mtimeMs
+    size = st.size
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      indexCache.delete(p)
+      return { kind: 'absent' }
+    }
+    return recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: (e as NodeJS.ErrnoException).code })
+  }
+
+  const cacheKeyMatches = !!hit && hit.mtimeMs === mtimeMs && hit.size === size
+  const ioRetryDue =
+    cacheKeyMatches && hit!.load.kind === 'unavailable' && hit!.load.cause === 'io' && Date.now() - hit!.at >= INDEX_IO_RETRY_MS
+  if (cacheKeyMatches && !ioRetryDue) return hit!.load
+
+  let buf: Buffer
+  try {
+    buf = readFileSync(p)
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') {
+      indexCache.delete(p)
+      return { kind: 'absent' }
+    }
+    return recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: code })
+  }
+
+  const classified = classifyIndexBytes(buf)
+  const load: ResolvedIndex = classified.kind === 'corrupt' ? setAsideCorruptIndex(p) : classified
+
+  if (load.kind === 'absent') {
+    indexCache.delete(p)
+    return load
+  }
+  if (load.kind === 'unavailable') return recordUnavailable(p, hit, mtimeMs, size, load)
+
+  indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
+  return load
+}
+
+/** The index, or an empty stand-in when there is none or it is read-only (see indexUnavailable). The
+ *  stand-in can never be persisted over unreadable bytes: writeIndex refuses. Callers still clone before
+ *  mutating (see updateIndex) — an unchanged file serves the same cached object on every call. */
+export const readIndex = (s: Settings): BrainIndex => {
+  const load = loadIndex(s)
+  return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
+}
+
+/** Non-null while an existing index.json cannot be used here: the index is read-only for the session. */
+export function indexUnavailable(s: Settings): IndexUnavailableCause | null {
+  const load = loadIndex(s)
+  return load.kind === 'unavailable' ? load.cause : null
 }
 
 /** User-facing, content-free explanation for brainStatus.error. */
@@ -492,62 +612,13 @@ export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
   }
 }
 
-// ── Typed accessors ──────────────────────────────────────────────────────────
-
-// MQA-175: one quarantine attempt per path per process. The rename below normally makes the primary
-// absent (so this never fires twice anyway); the set only bounds the case where the rename itself keeps
-// failing — a OneDrive/AV hold on the file — so a 3-10s poller cannot spin on it or spam the log. The
-// next launch retries from scratch.
-const indexQuarantineAttempted = new Set<string>()
-
-/**
- * MQA-175 — preserve an `index.json` that can never produce an index on this device, and let the app
- * carry on with a rebuildable empty one.
- *
- * Same protocol as the corrections journal's own corrupt-input handling (corrections.ts: quarantine
- * under a `<name>.corrupt-<ISO>.json` sibling, log it, never delete), with one deliberate difference
- * that follows from what the two files ARE: corrections.json is irreplaceable human input, so an
- * undecryptable one is refused TRANSIENTLY and left untouched. index.json is DERIVED state — every byte
- * of it is rebuildable from the transcripts — and leaving it in place meant every single read paid to
- * decrypt the same poison again, forever, with no trace of why the brain looked empty.
- *
- * Nothing is destroyed: the bytes are renamed, not removed, so a file that is merely intact-elsewhere
- * (encrypted under another device's keychain on a shared OneDrive `.brain`) can still be recovered by
- * hand. That is strictly better than the previous behaviour, which silently read it as an empty index
- * and then OVERWROTE it on the next ingest.
- */
-function quarantineUnusableIndex(s: Settings): void {
-  const p = join(brainDir(s), 'index.json')
-  if (indexQuarantineAttempted.has(p)) return
-  let buf: Buffer
-  try {
-    buf = readFileSync(p)
-  } catch {
-    return // absent, or transiently unreadable — nothing to preserve, and never a corruption
-  }
-  if (buf.length === 0) return // torn to zero bytes: no content to preserve, treated as an empty index
-  indexQuarantineAttempted.add(p)
-  const decoded = decodeSavedResult(buf)
-  const to = join(brainDir(s), `index.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-  try {
-    renameSync(p, to)
-    jsonCache.delete(p)
-    mainLog.warn(
-      `[brain] index.json was ${decoded.ok ? 'unparseable' : `undecryptable (${decoded.reason})`} — preserved to ${to}; the brain index will be rebuilt from the transcripts`
-    )
-  } catch (e) {
-    mainLog.warn('[brain] could not set aside an unusable index.json:', e)
-  }
+/** Fail-closed write: never replaces bytes this process could not fully decode. */
+export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
+  const blocked = indexUnavailable(s)
+  if (blocked) throw new BrainIndexUnavailableError(blocked)
+  await writeJson(s, INDEX_REL, v)
+  indexCache.delete(join(brainDir(s), INDEX_REL))
 }
-
-export const readIndex = (s: Settings): BrainIndex => {
-  const idx = readJson(s, 'index.json', (v) => BrainIndexSchema.parse(v))
-  if (idx) return idx
-  // null means absent OR unusable — readJson collapses both. Only the unusable case renames anything.
-  quarantineUnusableIndex(s)
-  return BrainIndexSchema.parse({})
-}
-export const writeIndex = (s: Settings, v: BrainIndex): Promise<void> => writeJson(s, 'index.json', v)
 
 export const readGraph = (s: Settings): BrainGraph =>
   readJson(s, 'graph.json', (v) => BrainGraphSchema.parse(v)) ?? BrainGraphSchema.parse({})
