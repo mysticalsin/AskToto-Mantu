@@ -16,7 +16,12 @@ function fakeStallMonitor(overrides: Partial<StallMonitor> = {}): StallMonitor {
     stop: vi.fn(),
     resync: vi.fn(),
     pause: vi.fn(),
-    timePhase: vi.fn((_label: string, fn: () => unknown) => fn()),
+    // A plain passthrough, not vi.fn(...): timePhase is generic (<T>(label, fn: () => T) => T), and a
+    // vi.fn()-wrapped implementation has its own already-concrete Mock type, which a generic method slot
+    // can never structurally accept. A bare function expression is fine — TS infers this one against the
+    // slot's own signature. Tests that need to assert on calls override this with their own wrapper (see
+    // below) instead of asserting on this default.
+    timePhase: (_label, fn) => fn(),
     ...overrides
   }
 }
@@ -79,11 +84,18 @@ describe('startRunObservability', () => {
     // names — see stall-monitor.test.ts for that behaviour. This module's only job is to forward whatever
     // detail it receives, and to forward timePhase calls to the stall monitor that owns them.
     const audit = vi.fn()
-    const timePhase = vi.fn((_label: string, fn: () => unknown) => fn())
+    // A spy called from inside a plain wrapper, not passed directly as the generic timePhase slot itself
+    // — see fakeStallMonitor's own comment for why a vi.fn() value can't fill that slot.
+    const timePhaseSpy = vi.fn()
     let captured: StallMonitorOptions | undefined
     const startStallMonitor = vi.fn((o: StallMonitorOptions) => {
       captured = o
-      return fakeStallMonitor({ timePhase })
+      return fakeStallMonitor({
+        timePhase: (label, fn) => {
+          timePhaseSpy(label, fn)
+          return fn()
+        }
+      })
     })
     const observability = startRunObservability({
       userData: '/fake',
@@ -108,7 +120,7 @@ describe('startRunObservability', () => {
     expect(audit).toHaveBeenCalledWith('app.stall.summary', { bootId: 'boot-9', p99Ms: 7 })
 
     const result = observability.timePhase('ensureMeetingsFolder', () => 42)
-    expect(timePhase).toHaveBeenCalledExactlyOnceWith('ensureMeetingsFolder', expect.any(Function))
+    expect(timePhaseSpy).toHaveBeenCalledExactlyOnceWith('ensureMeetingsFolder', expect.any(Function))
     expect(result).toBe(42) // forwards the stall monitor's return value, not just the call
   })
 
