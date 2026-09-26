@@ -46,6 +46,12 @@ const originalConnect = net.Socket.prototype.connect
 net.Socket.prototype.connect = function hermeticConnect(...args) {
   const host = targetHost(args)
   if (!isLoopback(host)) {
+    // Match net's own contract for an in-flight connect(): `connecting` is true until it resolves.
+    // Without this, http.Agent's own "is this socket already usable?" check sees a falsy `connecting`
+    // on a brand-new socket and writes the request head to it immediately — before this denial's own
+    // queued destroy() runs — which fails with ERR_SOCKET_CLOSED (no connection handle was ever
+    // created) and masks this error entirely.
+    this.connecting = true
     const error = new Error(
       `HERMETIC_NETWORK_DENIED: blocked a connect() to non-loopback host "${host}" — ` +
         'M2-0190 isolation-canary preload only allows loopback traffic.'
