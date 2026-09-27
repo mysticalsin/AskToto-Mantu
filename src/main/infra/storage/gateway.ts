@@ -363,11 +363,32 @@ export function createStorage({
           )
           const files = stats.flatMap(([, file]) => (file.status === 'ok' ? [file.value] : []))
           const presence = files.length > 0 ? await presenceWithin(files, request) : new Map<string, ContentPresence>()
+          const confirmed = new Map(
+            await Promise.all(
+              stats.map(async ([rel, file]): Promise<[string, Settled<FileVersion>]> => {
+                // Re-confirm only while this metadata request still has budget. Once the presence wait
+                // consumed the deadline, a fresh stat would be refused before observing the filesystem and
+                // would corrupt the probe's "no answer" into an admission failure.
+                if (file.status !== 'ok' || request.signal.aborted) return [rel, file]
+                return [rel, await statFile(file.value.path, request)]
+              })
+            )
+          )
           return new Map(
             stats.map(([rel, file]): [string, FileClass] => {
               if (file.status !== 'ok') return [rel, file]
+              const current = confirmed.get(rel) ?? file
+              if (current.status !== 'ok') return [rel, current]
+              const version = versionOf(current.value)
+              if (
+                current.value.mtimeMs !== file.value.mtimeMs ||
+                current.value.ctimeMs !== file.value.ctimeMs ||
+                current.value.size !== file.value.size
+              ) {
+                return [rel, { status: 'unknown', version }]
+              }
               const verdict = presence.get(file.value.path)
-              return [rel, { status: verdict === 'local' ? 'ok' : (verdict ?? 'unknown'), version: versionOf(file.value) }]
+              return [rel, { status: verdict === 'local' ? 'ok' : (verdict ?? 'unknown'), version }]
             })
           )
         } finally {
