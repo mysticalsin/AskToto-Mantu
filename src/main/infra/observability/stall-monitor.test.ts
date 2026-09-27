@@ -232,30 +232,7 @@ describe('startStallMonitor', () => {
     }
   })
 
-  it('resync() re-arms the schedule from the current tick, absorbing a resume-from-sleep gap on platforms whose monotonic clock keeps counting through sleep', () => {
-    const clock = fakeTimer()
-    const onStall = vi.fn()
-    const monitor = startStallMonitor({
-      bootId: 'boot-1',
-      onStall,
-      onSummary: vi.fn(),
-      tickMs: 1000,
-      summaryIntervalMs: 10_000,
-      now: clock.now,
-      setIntervalFn: clock.setIntervalFn,
-      clearIntervalFn: clock.clearIntervalFn,
-      histogram: fakeHistogram(0)
-    })
-    clock.advanceTo(1000) // expectedAt -> 2000
-    // The machine sleeps for an hour; this platform's monotonic clock keeps counting through it, so the
-    // clock jumps forward with no tick ever firing during the sleep itself.
-    clock.jumpTo(3_601_000)
-    monitor.resync() // called from the powerMonitor 'resume' handler
-    clock.advanceTo(3_602_000) // exactly one tick after resync — on schedule relative to the new baseline
-    expect(onStall).not.toHaveBeenCalled()
-  })
-
-  it('pause() removes the heartbeat entirely, so no tick can fire during sleep regardless of event order; resync() restarts it from a fresh baseline', () => {
+  it('pause() removes the heartbeat entirely, so no tick can fire during sleep regardless of event order; restartIfPaused() restarts it from a fresh baseline', () => {
     // This is the fake-stall race: an overdue heartbeat tick and powerMonitor's 'resume' are delivered by
     // independent sources, so which one the event loop processes first is not guaranteed. pause() (called
     // from 'suspend') removes the interval outright, so there is no tick left to race resume with — order
@@ -277,9 +254,30 @@ describe('startStallMonitor', () => {
     clock.jumpTo(3_601_000) // an hour asleep
     clock.advanceTo(3_601_500) // would have fired the interval had pause() not cleared it
     expect(onStall).not.toHaveBeenCalled()
-    monitor.resync() // powerMonitor 'resume' — restarts the heartbeat from a fresh baseline
-    clock.advanceTo(3_602_500) // exactly one tick after resync — on schedule relative to the new baseline
+    monitor.restartIfPaused() // powerMonitor 'resume' — restarts the heartbeat from a fresh baseline
+    clock.advanceTo(3_602_500) // exactly one tick after restarting — on schedule relative to the new baseline
     expect(onStall).not.toHaveBeenCalled()
+  })
+
+  it('restartIfPaused() is a no-op on an already-running heartbeat, so it cannot discard lateness that is genuinely accruing — this is what makes resume and unlock-screen order-independent', () => {
+    const clock = fakeTimer()
+    const onStall = vi.fn()
+    const monitor = startStallMonitor({
+      bootId: 'boot-1',
+      onStall,
+      onSummary: vi.fn(),
+      tickMs: 1000,
+      summaryIntervalMs: 10_000,
+      now: clock.now,
+      setIntervalFn: clock.setIntervalFn,
+      clearIntervalFn: clock.clearIntervalFn,
+      histogram: fakeHistogram(0)
+    })
+    clock.advanceTo(1000) // expectedAt -> 2000
+    clock.jumpTo(1900) // no tick has fired yet; a naive unconditional restart here would re-baseline to 2900
+    monitor.restartIfPaused() // e.g. a redundant 'unlock-screen' after 'resume' already handled it — must not re-baseline
+    clock.advanceTo(3600) // the pending tick finally fires — 1600ms late relative to the ORIGINAL expectedAt
+    expect(onStall).toHaveBeenCalledExactlyOnceWith({ bootId: 'boot-1', durationMs: 1600, phase: undefined, phaseMs: undefined })
   })
 
   it('a tick that fires on time consumes any pending phase, so a later late tick names nothing', () => {
@@ -356,7 +354,7 @@ describe('startStallMonitor', () => {
     })
   })
 
-  it('resync() after stop() does not restart the heartbeat', () => {
+  it('restartIfPaused() after stop() does not restart the heartbeat', () => {
     const clock = fakeTimer()
     const setIntervalSpy = vi.fn(clock.setIntervalFn)
     const monitor = startStallMonitor({
@@ -372,8 +370,8 @@ describe('startStallMonitor', () => {
     })
     expect(setIntervalSpy).toHaveBeenCalledOnce() // the initial heartbeat
     monitor.stop()
-    monitor.resync()
-    expect(setIntervalSpy).toHaveBeenCalledOnce() // resync() did not schedule a second interval
+    monitor.restartIfPaused()
+    expect(setIntervalSpy).toHaveBeenCalledOnce() // restartIfPaused() did not schedule a second interval
   })
 
   it('pause() after stop() is a no-op', () => {

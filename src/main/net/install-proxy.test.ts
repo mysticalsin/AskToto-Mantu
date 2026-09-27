@@ -29,7 +29,10 @@ vi.mock('../logger', () => ({
 
 const fakes = vi.hoisted(() => {
   class FakeProxyAgent {
-    constructor(public readonly uri: string) {}
+    readonly uri: string
+    constructor(opts: { uri: string; factory?: unknown }) {
+      this.uri = opts.uri
+    }
   }
   class FakeAgent {
     constructor(public readonly opts: unknown) {}
@@ -183,5 +186,18 @@ describe('routeDispatcher — a second dispatcher that routes like the global on
     const d = routeDispatcher(lookup) as unknown as InstanceType<typeof FakeProxyAgent>
     expect(d).toBeInstanceOf(FakeProxyAgent)
     expect(d.uri).toBe('http://late-proxy.corp:8080')
+  })
+
+  // M2-0222 — a SOCKS proxy is sent the host name by undici, outside any hook a pinned session could use
+  // to hold it to the address `lookup` resolved, so a pinned dispatcher must refuse it outright rather than
+  // silently resolving through it unpinned. Boot itself is unaffected: the SHARED global dispatcher (no
+  // `lookup`) still installs normally.
+  it('P5: env proxy that is SOCKS — boot still installs the global dispatcher, but a pinned session is refused', async () => {
+    process.env.HTTPS_PROXY = 'socks5://127.0.0.1:1080'
+    await installProxyAwareFetch()
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
+    expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeEnvHttpProxyAgent)
+    expect(() => routeDispatcher(lookup)).toThrow(/SOCKS/)
   })
 })
