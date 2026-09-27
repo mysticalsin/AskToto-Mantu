@@ -875,6 +875,30 @@ describe('one Storage, many gateways (S1-S5)', () => {
     expect(probe).toHaveBeenCalledTimes(1)
   })
 
+  it('noteWritten during an in-flight read is not clobbered by that read\'s own remembered failure', async () => {
+    const fs = memoryFs({ 'a.md': 'fresh content' })
+    const probe = vi.fn<PresenceProbe>(async (paths) => paths.map(() => 'local'))
+    const detector = createDatalessDetector(probe)
+    const gateway = gatewayOver(ROOT, { detector, fs, poolSize: 4 })
+
+    const heldA = fs.hold('readFile', 'a.md')
+    const pendingRead = gateway.read('a.md')
+    await flush()
+
+    const noted = await gateway.noteWritten('a.md')
+    expect(noted.status).toBe('ok')
+
+    heldA.fail('EBUSY')
+    const first = await pendingRead
+    expect(first).toMatchObject({ status: 'unavailable', code: 'EBUSY' })
+
+    // Without a fix, `first`'s failure would be remembered after noteWritten already cleared the entry,
+    // so this second read should prove the just-written version is retried instead of answered from memory.
+    const second = await gateway.read('a.md')
+    expect(second.status).toBe('ok')
+    if (second.status === 'ok') expect(second.bytes.toString('utf8')).toBe('fresh content')
+  })
+
   it('noteWritten refuses a path outside the root with no fs call', async () => {
     const fs = memoryFs({})
     const detector = fakeDetector()
