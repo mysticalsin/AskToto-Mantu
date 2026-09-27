@@ -29,7 +29,10 @@ vi.mock('../logger', () => ({
 
 const fakes = vi.hoisted(() => {
   class FakeProxyAgent {
-    constructor(public readonly uri: string) {}
+    readonly uri: string
+    constructor(opts: { uri: string; factory?: unknown }) {
+      this.uri = opts.uri
+    }
   }
   class FakeAgent {
     constructor(public readonly opts: unknown) {}
