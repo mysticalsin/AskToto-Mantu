@@ -60,17 +60,38 @@ export function classifyProcess(entry) {
   return 'other'
 }
 
-export function oneCoreCpuPercent(before, after, wallSeconds) {
+export function oneCoreCpuPercent(samples, wallSeconds) {
   if (!(wallSeconds > 0)) throw new Error('wallSeconds must be positive')
-  const beforeByKey = new Map(before.map((sample) => [entryKey(sample), sample]))
+  const observed = new Map()
+  for (const sample of samples) {
+    for (const process of sample.processes ?? []) {
+      if (!Number.isFinite(process.cpuSeconds)) continue
+      const key = entryKey(process)
+      const current = observed.get(key)
+      if (!current) {
+        observed.set(key, { first: process.cpuSeconds, last: process.cpuSeconds })
+      } else {
+        current.last = process.cpuSeconds
+      }
+    }
+  }
   let deltaSeconds = 0
-  for (const sample of after) {
-    const first = beforeByKey.get(entryKey(sample))
-    if (!first) continue
-    const delta = sample.cpuSeconds - first.cpuSeconds
+  for (const sample of observed.values()) {
+    const delta = sample.last - sample.first
     if (Number.isFinite(delta) && delta > 0) deltaSeconds += delta
   }
   return (100 * deltaSeconds) / wallSeconds
+}
+
+function observedProcessIdentities(samples) {
+  const identities = new Map()
+  for (const sample of samples) {
+    for (const process of sample.processes ?? []) {
+      const key = entryKey(process)
+      if (!identities.has(key)) identities.set(key, process)
+    }
+  }
+  return [...identities.values()]
 }
 
 export function validateState(state) {
@@ -154,7 +175,6 @@ export function sanitizeReport(report) {
 }
 
 export function summarize(samples, wallSeconds) {
-  const first = samples[0]?.processes ?? []
   const last = samples[samples.length - 1]?.processes ?? []
   const byKind = new Map()
   for (const sample of last) {
@@ -172,7 +192,7 @@ export function summarize(samples, wallSeconds) {
   }
   const gpuProcesses = last.filter((sample) => sample.kind === 'gpu')
   return {
-    oneCoreCpuPercent: oneCoreCpuPercent(first, last, wallSeconds),
+    oneCoreCpuPercent: oneCoreCpuPercent(samples, wallSeconds),
     processCount: last.length,
     byKind: Object.fromEntries([...byKind.entries()].sort(([a], [b]) => a.localeCompare(b))),
     gpuSampled: gpuProcesses.length > 0,
@@ -423,7 +443,7 @@ export async function collectCensus(options) {
     await sleep(Math.min(intervalMs, Math.max(1, end - Date.now())))
   } while (Date.now() < end)
 
-  const processIdentities = samples[0]?.processes ?? []
+  const processIdentities = observedProcessIdentities(samples)
   const report = {
     generatedAt: new Date().toISOString(),
     productVersion,

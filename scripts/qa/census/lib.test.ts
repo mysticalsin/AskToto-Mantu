@@ -132,20 +132,43 @@ describe('resource census process classification', () => {
 })
 
 describe('resource census CPU formula', () => {
-  it('uses one-core CPU percent from total CPU-time deltas over wall time', () => {
-    const before = [
-      { pid: 10, startedMs: 1000, cpuSeconds: 7 },
-      { pid: 11, startedMs: 1100, cpuSeconds: 1 },
-      { pid: 12, startedMs: 1200, cpuSeconds: 2 }
-    ]
-    const after = [
-      { pid: 10, startedMs: 1000, cpuSeconds: 12 },
-      { pid: 11, startedMs: 1100, cpuSeconds: 2 },
-      { pid: 12, startedMs: 9999, cpuSeconds: 200 },
-      { pid: 13, startedMs: 1300, cpuSeconds: 10 }
+  it('uses one-core CPU percent from total observed CPU-time deltas over wall time', () => {
+    const samples = [
+      {
+        tMs: 0,
+        processes: [
+          { pid: 10, startedMs: 1000, cpuSeconds: 7 },
+          { pid: 11, startedMs: 1100, cpuSeconds: 1 },
+          { pid: 12, startedMs: 1200, cpuSeconds: 2 }
+        ]
+      },
+      {
+        tMs: 150_000,
+        processes: [
+          { pid: 10, startedMs: 1000, cpuSeconds: 10 },
+          { pid: 14, startedMs: 1400, cpuSeconds: 3 },
+          { pid: 15, startedMs: 1500, cpuSeconds: 4 }
+        ]
+      },
+      {
+        tMs: 240_000,
+        processes: [
+          { pid: 10, startedMs: 1000, cpuSeconds: 12 },
+          { pid: 14, startedMs: 1400, cpuSeconds: 9 }
+        ]
+      },
+      {
+        tMs: 300_000,
+        processes: [
+          { pid: 10, startedMs: 1000, cpuSeconds: 12 },
+          { pid: 11, startedMs: 1100, cpuSeconds: 2 },
+          { pid: 12, startedMs: 9999, cpuSeconds: 200 },
+          { pid: 13, startedMs: 1300, cpuSeconds: 10 }
+        ]
+      }
     ]
 
-    expect(oneCoreCpuPercent(before, after, 300)).toBe(2)
+    expect(oneCoreCpuPercent(samples, 300)).toBe(4)
   })
 
   it('summarizes GPU sampling by process identity, not by a global machine counter', () => {
