@@ -5,7 +5,7 @@
 import { PROVIDERS, type ProviderId } from '../../src/shared/providers'
 import { PORTAL_CF_DEEPSEEK_PRO, resolvePortalCloudflareModel } from '../../src/shared/ask-routing'
 import { persistProxyAsk } from './ask-meter'
-import { ensureDefaultAiGateway } from './ai-gateway'
+import { GatewayPrivacyError, verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { json } from './http'
 import { providerRefusedPayload } from './redact'
@@ -536,14 +536,17 @@ export async function handleAsk(
   let upstream: Response
   try {
     if (req.provider === 'cloudflare' && unlocked.accountId) {
-      await ensureDefaultAiGateway(unlocked.secret, unlocked.accountId, askFetch)
+      await verifyDefaultGatewayPrivacy(unlocked.secret, unlocked.accountId, askFetch)
     }
     upstream = await askFetch(dest, {
       method: 'POST',
       headers: init.headers,
       body: init.body
     })
-  } catch {
+  } catch (error) {
+    if (error instanceof GatewayPrivacyError) {
+      return fail('Cloudflare gateway privacy is not verified.', 503, { code: error.code })
+    }
     return fail('Operator cannot issue a use', 503)
   }
   if (!upstream.ok) {

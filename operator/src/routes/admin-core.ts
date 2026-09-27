@@ -260,7 +260,7 @@ export function registerAdminCoreRoutes(): void {
       const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
       const fetchImpl = ctx.opts.cfFetch ?? ctx.opts.providerFetch ?? fetch
       const written = await writeVaultKey(ctx.store, ctx.env, ctx.email, ctx.now, body, fetchImpl)
-      if (!written.ok) return json({ ok: false, error: written.error }, written.status)
+      if (!written.ok) return json({ ok: false, error: written.error, ...(written.code ? { code: written.code } : {}) }, written.status)
       return json(written)
     }
   })
@@ -272,7 +272,7 @@ export function registerAdminCoreRoutes(): void {
       const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
       const fetchImpl = ctx.opts.cfFetch ?? ctx.opts.providerFetch ?? fetch
       const out = await rotateVaultKey(ctx.store, ctx.env, ctx.email, ctx.now, param(match, 'id'), body, fetchImpl)
-      if (!out.ok) return json({ ok: false, error: out.error }, out.status)
+      if (!out.ok) return json({ ok: false, error: out.error, ...(out.code ? { code: out.code } : {}) }, out.status)
       return json(out)
     }
   })

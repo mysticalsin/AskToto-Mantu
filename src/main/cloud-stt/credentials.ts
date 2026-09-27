@@ -2,14 +2,14 @@
  * Resolve Nova-3 / Soniox live-WS credentials from existing Operator/gateway patterns.
  * Secrets stay main-side (keystore / env). Never log token values.
  *
- * Gateway id follows Operator `ensureDefaultAiGateway`: when Settings / env leave the gateway
- * blank, resolve to `default` so a seated CF account token + accountId is enough (no bare
- * METIS_CF_AI_GATEWAY_ID required).
+ * Gateway id follows Operator `verifyDefaultGatewayPrivacy`: when Settings / env leave the
+ * gateway blank, resolve to `default` so a seated CF account token + accountId is enough (no
+ * bare METIS_CF_AI_GATEWAY_ID required).
  */
 import type { CloudSttProviderId } from '../../shared/cloud-stt-provider'
 import { CLOUD_STT_UNCONFIGURED } from './adapter'
 
-/** Same id Operator POSTs in ensureDefaultAiGateway / Ask cf-aig-gateway-id header. */
+/** Same id Operator reads back in verifyDefaultGatewayPrivacy / Ask cf-aig-gateway-id header. */
 export const DEFAULT_CLOUD_STT_GATEWAY_ID = 'default'
 
 export const CLOUD_STT_CREDENTIALS_MISSING =
