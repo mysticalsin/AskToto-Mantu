@@ -301,7 +301,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     readIndex(s)
     expect(indexUnavailable(s)).toBe('undecryptable')
 
-    const r = purgeBrain(s)
+    const r = purgeBrain(s, { mode: 'erase' })
     expect(r.ok).toBe(true)
     expect(indexUnavailable(s)).toBeNull()
 
