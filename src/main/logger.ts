@@ -237,6 +237,9 @@ export type AuditEvent =
   // The overlay renderer stopped answering Chromium (event loop wedged, not crashed). Logged so a stuck
   // island is diagnosable from the support bundle; the app does not reload or kill it on this signal.
   | 'app.unresponsive'
+  // M2-0037 (B3-RC2): render-process-gone's reload budget was exhausted (>=3 reloads within 60s with no
+  // recovered 30s-alive window) — auto-reload stops and a recovery dialog is shown instead.
+  | 'app.render_loop_halted'
   | 'meeting.detect.degraded'
   | 'recall.open'
   | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
