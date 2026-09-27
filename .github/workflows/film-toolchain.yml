@@ -1,0 +1,121 @@
+name: Film toolchain
+
+# Proves the launch film's render path (M2-0212) on a GitHub-hosted runner, the machine film renders use
+# instead of a developer Mac (D-28): renders the synthetic 5-second 3840x2160 spike with the pinned
+# toolchain, runs BRAG step 4's delivery tail on it (poster pick, frame-0 bake), measures render time,
+# bake time and runner load, uploads the MP4 with its poster and a contact sheet, and verifies them.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - m2/M2-0212-film-toolchain-spike
+
+permissions:
+  contents: read
+
+concurrency:
+  group: film-toolchain-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+    working-directory: film/toolchain
+
+jobs:
+  spike:
+    name: Render and verify the 4K spike
+    # Named, not ubuntu-latest: the FFmpeg pin below is a package version of this Ubuntu release.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # Ubuntu 24.04 ships exactly this FFmpeg build in its release pocket, which is never rewritten.
+      FFMPEG_VERSION: 7:6.1.1-3ubuntu5
+      HYPERFRAMES_NO_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Install the pinned FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            "ffmpeg=$FFMPEG_VERSION" \
+            "libavcodec60=$FFMPEG_VERSION" \
+            "libavdevice60=$FFMPEG_VERSION" \
+            "libavfilter9=$FFMPEG_VERSION" \
+            "libavformat60=$FFMPEG_VERSION" \
+            "libavutil58=$FFMPEG_VERSION" \
+            "libpostproc57=$FFMPEG_VERSION" \
+            "libswresample4=$FFMPEG_VERSION" \
+            "libswscale7=$FFMPEG_VERSION"
+      - name: Install the pinned Hyperframes
+        run: npm ci --no-audit --no-fund
+      # Hyperframes pins its own chrome-headless-shell build; fetching it here keeps the download out of
+      # the measured render.
+      - name: Install the pinned Chrome
+        run: npx hyperframes browser ensure
+      - name: Record the toolchain
+        run: |
+          ffmpeg -version
+          npx hyperframes doctor --json
+      - name: Check the composition
+        run: npx hyperframes check composition --strict
+      - name: Render the spike and measure the runner
+        run: |
+          echo "Runner: $ImageOS $ImageVersion, $(nproc) vCPU, $(free -m | awk '/^Mem:/ { print $2 }') MiB memory"
+          vmstat -n 1 > "$RUNNER_TEMP/vmstat.log" &
+          sampler=$!
+          /usr/bin/time -v -o "$RUNNER_TEMP/render-time.log" \
+            npx hyperframes render composition --quality high --output spike.mp4
+          kill "$sampler"
+          grep -E 'Elapsed|Percent of CPU|Maximum resident' "$RUNNER_TEMP/render-time.log"
+          # vmstat's first sample averages since boot, so the render's samples start on line 4.
+          awk -v total_kib="$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)" '
+            NR > 3 {
+              busy = 100 - $15
+              cpu += busy
+              if (busy > cpu_peak) cpu_peak = busy
+              used = total_kib - $4 - $5 - $6
+              if (used > memory_peak) memory_peak = used
+              samples++
+            }
+            END {
+              printf "Runner load during the render: CPU busy mean %.0f%%, peak %.0f%%; memory in use peak %.0f MiB (%d one-second samples)\n",
+                cpu / samples, cpu_peak, memory_peak / 1024, samples
+            }' "$RUNNER_TEMP/vmstat.log"
+          echo "Load average after the render: $(cut -d ' ' -f 1-3 /proc/loadavg)"
+      # BRAG step 4's commands at the pinned commit, with its file names changed and two changes to the
+      # bake. Its ffmpeg adds use_metadata_tags, without which the MP4 muxer drops Hyperframes' provenance
+      # tags (hyperframes_version) as non-standard keys. Its mv sits on its own line instead of after
+      # `&&`, because bash -e ignores a failure left of `&&`: chained, a failed bake would pass the step
+      # and leave the unbaked render in place. The poster beat must be settled: the title is fully in at
+      # 1.0 s, the caption at 1.2 s, and nothing exits.
+      - name: Pick the poster at a settled beat
+        run: ffmpeg -ss 3 -i spike.mp4 -frames:v 1 -q:v 2 poster.jpg
+      - name: Bake the poster as frame 0 and measure the bake
+        run: |
+          /usr/bin/time -v -o "$RUNNER_TEMP/bake-time.log" \
+            ffmpeg -y -i spike.mp4 -i poster.jpg \
+              -filter_complex "[0:v][1:v]overlay=0:0:enable='eq(n,0)'[v]" \
+              -map "[v]" -map 0:a? -c:v libx264 -crf 18 -preset slow -pix_fmt yuv420p \
+              -c:a copy -movflags +faststart+use_metadata_tags spike.poster.mp4
+          mv spike.poster.mp4 spike.mp4
+          grep -E 'Elapsed|Percent of CPU|Maximum resident' "$RUNNER_TEMP/bake-time.log"
+      - name: Probe the spike
+        run: ffprobe -hide_banner spike.mp4
+      - name: Draw a contact sheet of the spike, one frame per second
+        run: ffmpeg -v error -i spike.mp4 -vf 'fps=1,scale=960:-2,tile=5x1' -frames:v 1 contact-sheet.png
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: film-toolchain-spike
+          path: |
+            film/toolchain/spike.mp4
+            film/toolchain/poster.jpg
+            film/toolchain/contact-sheet.png
+          if-no-files-found: error
+      - name: Verify the spike
+        run: node --test spike.test.mjs

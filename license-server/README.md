@@ -556,3 +556,8 @@ npm test
 
 Uses Node's built-in `node:test` + `node:assert` — no extra test framework
 dependency for this standalone service.
+
+`npm test` runs through `../scripts/hermetic/run-with-sandbox.mjs`, which requires the monorepo checkout
+this package lives in (it resolves `../scripts` relative to `license-server/`). That wrapper gives every
+test file a fresh, empty `HOME`/`TMPDIR` sandbox — see `license-server/hermetic-home.test.mjs`. A truly
+standalone checkout of this directory alone would need its own equivalent before `npm test` would work.
