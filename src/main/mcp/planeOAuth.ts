@@ -3,11 +3,16 @@
  *
  * Mirrors clickupOAuth.ts (PKCE, CSRF state, loopback 127.0.0.1, 300s timeout, single-flight) — INCLUDING
  * its DCR posture: bind the loopback server first, then register a FRESH confidential client scoped to
- * THIS run's exact `http://127.0.0.1:<port>/callback`, every Connect. The freshly-registered client_id/
- * client_secret are only ever persisted (settings.planeClientId + mcpSecrets) once the token exchange
- * that used them has actually succeeded: a refresh token only works with the client it was issued to, so
- * persisting a new client any earlier would strand an existing refresh token against a client it does
- * not match the moment a Connect is denied, abandoned, or fails after registration.
+ * THIS run's exact `http://127.0.0.1:<port>/callback`, every Connect.
+ *
+ * runPlaneOAuth() itself never persists anything (settings.planeClientId, mcpSecrets, or the tokens):
+ * it only proves the user granted access and hands the freshly-registered client back to the caller
+ * alongside the tokens it minted. Persisting the client without also persisting the tokens it was
+ * issued with — or vice versa — pairs a refresh token with a client it doesn't match, since a refresh
+ * token only works with the client that requested it. The caller (main/index.ts's mcpPlaneConnect
+ * handler, via savePlaneClientAndTokens below) saves the two together, in one step, only once it has
+ * independently confirmed the access token actually works end-to-end with a live connectMcp probe —
+ * a successful token exchange here proves Plane accepted the client, not that the connection is live.
  *
  * GROUND TRUTH (fetched 2026-09-26, live):
  *   authorization_endpoint: https://mcp.plane.so/authorize
@@ -40,7 +45,7 @@ import { createServer } from 'node:http'
 import { randomBytes, createHash } from 'node:crypto'
 import { getSettings, setSettings } from '../store'
 import { auditLog, mainLog } from '../logger'
-import { getMcpClientSecret, setMcpClientSecret } from './mcpSecrets'
+import { getMcpClientSecret, setMcpClientSecret, setMcpApiKey, setMcpRefreshToken } from './mcpSecrets'
 
 const ISSUER = 'https://mcp.plane.so'
 const AUTHORIZE_URL = `${ISSUER}/authorize`
@@ -73,6 +78,11 @@ export interface TokenResult {
   error?: string
   accessToken?: string
   refreshToken?: string
+  /** Only set by a successful runPlaneOAuth() — the client that minted accessToken/refreshToken above,
+   *  returned (never persisted) so the caller can save client and tokens together. Absent from
+   *  refreshPlaneToken()'s result: a refresh never changes which client the tokens are paired with. */
+  clientId?: string
+  clientSecret?: string
 }
 
 const PLANE_REDIRECT_MISMATCH =
@@ -159,12 +169,31 @@ export async function refreshPlaneToken(refreshToken: string): Promise<TokenResu
 }
 
 /**
+ * Persist a Plane client together with the token pair it was just used to mint — in this one call, so
+ * neither is ever written without the other. Callers must save the two together only once they have
+ * independently confirmed the access token actually works (see main/index.ts's mcpPlaneConnect handler,
+ * which calls this only after a connectMcp probe of that token has succeeded): saving the client any
+ * earlier, or the tokens without the client that minted them, can pair a refresh token with a client it
+ * was never issued to — refreshPlaneToken() above always sends whatever pair was last saved here.
+ */
+export function savePlaneClientAndTokens(
+  client: { clientId: string; clientSecret: string },
+  tokens: { accessToken: string; refreshToken: string }
+): void {
+  setSettings({ planeClientId: client.clientId })
+  setMcpClientSecret('plane', client.clientSecret)
+  setMcpApiKey('plane', tokens.accessToken)
+  setMcpRefreshToken('plane', tokens.refreshToken)
+}
+
+/**
  * Dynamic Client Registration (RFC 7591) for THIS run's exact loopback redirect_uri — mirrors
  * registerClickupClient. Always POSTs a fresh confidential client, never reuses a cached client_id/secret
  * for `/authorize` or the token exchange: see the file header (P4-F2) for why a one-time cache bound to a
  * fixed portless URI is wrong regardless of how strictly Plane validates it. Returns the credentials to
- * the caller without persisting them — persistence happens only once the token exchange that uses them
- * succeeds (see runPlaneOAuth). Returns null when registration fails; callers must not fabricate a client.
+ * the caller without persisting them — persistence is entirely the caller's responsibility (see the file
+ * header and savePlaneClientAndTokens); this function and runPlaneOAuth never write to settings or
+ * mcpSecrets. Returns null when registration fails; callers must not fabricate a client.
  */
 async function registerPlaneClient(redirectUri: string): Promise<{ clientId: string; clientSecret: string } | null> {
   try {
@@ -303,12 +332,11 @@ export async function runPlaneOAuth(): Promise<TokenResult> {
       auditLog('plane.oauth.denied', {})
       return result
     }
-    // Persist the client only now: it was just proven to work with a real token exchange, so a
-    // previously-stored client (and the refresh token issued to it) is never replaced by one this run
-    // never actually finished setting up.
-    setSettings({ planeClientId: clientId })
-    setMcpClientSecret('plane', clientSecret)
-    return result
+    // Never persist here: a successful token exchange only proves Plane accepted this client — it does
+    // not prove the access token works end-to-end (the caller still runs a live connectMcp probe). Hand
+    // the client back alongside the tokens instead, so the caller can save both together only once that
+    // probe has also succeeded — see savePlaneClientAndTokens and the file header.
+    return { ...result, clientId, clientSecret }
   } catch (e) {
     auditLog('plane.oauth.failed', { reason: coarseOAuthFailure(e) })
     return { ok: false, error: humanizePlaneOAuthError('', e instanceof Error ? e.message : String(e)) }

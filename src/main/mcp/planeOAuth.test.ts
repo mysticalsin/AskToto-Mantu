@@ -95,7 +95,13 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     expect(dcrBodies).toHaveLength(1)
     expect(dcrBodies[0].redirect_uris).toEqual([redirectUri])
     await hitCallback(redirectUri, { code: 'auth-code-1', state })
-    expect(await first).toEqual({ ok: true, accessToken: 'plane-at-1', refreshToken: 'plane-rt-1' })
+    expect(await first).toEqual({
+      ok: true,
+      accessToken: 'plane-at-1',
+      refreshToken: 'plane-rt-1',
+      clientId: 'plane-client-1',
+      clientSecret: 'plane-secret-1'
+    })
 
     // Second run: its own ephemeral port, so DCR must run again scoped to THAT run's own URI — a
     // cached client registered with the first run's (or any fixed portless) URI is never reused.
@@ -300,6 +306,51 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     })
     expect(getSettings().planeClientId).toBe('client-A')
     expect(getMcpClientSecret('plane')).toBe('secret-A')
+  })
+
+  it('savePlaneClientAndTokens persists client + tokens together, so a later refresh sends the matching pair (P4-F2, AGUC-021, round 2)', async () => {
+    const { getSettings } = await import('../store')
+    const { getMcpClientSecret } = await import('./mcpSecrets')
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('/register')) return jsonResponse({ client_id: 'client-B', client_secret: 'secret-B' })
+      if (String(url).includes('/token')) return jsonResponse({ access_token: 'plane-at-B', refresh_token: 'plane-rt-B', token_type: 'bearer' })
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    const { runPlaneOAuth, savePlaneClientAndTokens } = await import('./planeOAuth')
+    const flow = runPlaneOAuth()
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
+    const { redirectUri, state } = capturedAuthorizeParams()
+    await hitCallback(redirectUri, { code: 'auth-code-1', state })
+    const result = await flow
+    if (!result.ok || !result.clientId || !result.clientSecret || !result.accessToken || !result.refreshToken) {
+      throw new Error('expected a successful result with client + tokens')
+    }
+
+    // The step main/index.ts's mcpPlaneConnect handler takes only after its own connectMcp probe of
+    // result.accessToken has succeeded — never runPlaneOAuth's job (see the tests above).
+    savePlaneClientAndTokens(
+      { clientId: result.clientId, clientSecret: result.clientSecret },
+      { accessToken: result.accessToken, refreshToken: result.refreshToken }
+    )
+    expect(getSettings().planeClientId).toBe('client-B')
+    expect(getMcpClientSecret('plane')).toBe('secret-B')
+
+    let refreshBody = ''
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/token')) {
+        refreshBody = String(init?.body || '')
+        return jsonResponse({ access_token: 'plane-at-B2', refresh_token: 'plane-rt-B2' })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    const { refreshPlaneToken } = await import('./planeOAuth')
+    const refreshed = await refreshPlaneToken(result.refreshToken)
+    expect(refreshed.ok).toBe(true)
+    const body = new URLSearchParams(refreshBody)
+    expect(body.get('client_id')).toBe('client-B')
+    expect(body.get('client_secret')).toBe('secret-B')
+    expect(body.get('refresh_token')).toBe('plane-rt-B')
   })
 
   it('pins the official hosted MCP URLs and never asks the user to paste them', async () => {
