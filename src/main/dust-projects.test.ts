@@ -80,6 +80,82 @@ describe('fetchDustProjects', () => {
     if (r.ok) return
     expect(r.error).toMatch(/401/)
   })
+
+  it("fetches every space's data sources concurrently, not one at a time (P4-F6)", async () => {
+    const callOrder: string[] = []
+    let resolveA: (() => void) | undefined
+    const aWaitsForBToStart = new Promise<void>((resolve) => {
+      resolveA = resolve
+    })
+
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith('/spaces')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            spaces: [
+              { sId: 'a', name: 'A', kind: 'regular' },
+              { sId: 'b', name: 'B', kind: 'regular' }
+            ]
+          }),
+          text: async (): Promise<string> => ''
+        }
+      }
+      if (url.includes('/spaces/a/data_sources')) {
+        callOrder.push('a-start')
+        // A only resolves once B's own fetch has started, so this only completes if both spaces'
+        // data-source lookups are in flight concurrently rather than one waiting for the other.
+        await aWaitsForBToStart
+        callOrder.push('a-end')
+        return { ok: true, status: 200, json: async () => ({ data_sources: [] }), text: async () => '' }
+      }
+      if (url.includes('/spaces/b/data_sources')) {
+        callOrder.push('b-start')
+        resolveA?.()
+        return { ok: true, status: 200, json: async () => ({ data_sources: [] }), text: async () => '' }
+      }
+      throw new Error(`unexpected url ${url}`)
+    })
+
+    const r = await fetchDustProjects({ apiKey: 'sk-test', workspaceId: 'ws_1', fetchImpl })
+    expect(r.ok).toBe(true)
+    expect(callOrder).toEqual(['a-start', 'b-start', 'a-end'])
+  }, 2000)
+
+  it("reports a space with no data sources instead of failing the whole listing when that space's own lookup is rejected", async () => {
+    const r = await fetchDustProjects({
+      apiKey: 'sk-test',
+      workspaceId: 'ws_1',
+      fetchImpl: async (url: string) => {
+        if (url.endsWith('/spaces')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              spaces: [
+                { sId: 'spc_data', name: 'Data and AI', kind: 'regular' },
+                { sId: 'spc_sales', name: 'Sales', kind: 'regular' }
+              ]
+            }),
+            text: async (): Promise<string> => ''
+          }
+        }
+        if (url.includes('/spaces/spc_data/data_sources')) {
+          return { ok: false, status: 403, json: async () => ({}), text: async () => 'forbidden' }
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data_sources: [{ sId: 'ds_crm', name: 'CRM notes' }] }),
+          text: async () => ''
+        }
+      }
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.projects.map((p) => p.name)).toEqual(['Data and AI', 'Sales', 'CRM notes'])
+  })
 })
 
 describe('Devon Totos-Mac click path', () => {

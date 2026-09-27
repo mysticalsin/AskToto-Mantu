@@ -17,9 +17,9 @@ describe('will-quit handler crash guard', () => {
   const handler = (() => {
     const start = source.indexOf("app.on('will-quit'")
     expect(start).toBeGreaterThan(-1)
-    // Grab a generous slice of the handler body (wide enough to include every independent cleanup step:
-    // the tracked background-timer cancellation loop, the screen-preprocess watcher stop, and both
-    // sidecar kills that follow).
+    // Grab a generous slice of the handler body (wide enough to include the isReady() guard around
+    // globalShortcut.unregisterAll() and the tracked background-timer cancellation loop that follows it —
+    // owned-sidecar teardown itself now runs earlier, through installExitPaths's own will-quit listener).
     return source.slice(start, start + 2800)
   })()
 
@@ -33,36 +33,10 @@ describe('will-quit handler crash guard', () => {
   })
 
   it('wraps the globalShortcut call in try/catch so a throw never escapes as uncaught', () => {
-    // Between the guard and the sidecar kill there must be a try around the globalShortcut call.
-    const seg = handler.slice(handler.indexOf('app.isReady()'), handler.indexOf('localRuntime.stop()'))
+    // Between the guard and the background-timer cleanup that follows it, there must be a try around the
+    // globalShortcut call.
+    const seg = handler.slice(handler.indexOf('app.isReady()'), handler.indexOf('if (notifTimer)'))
     expect(seg).toMatch(/try\s*\{/)
     expect(seg).toMatch(/catch/)
-  })
-
-  it('still kills the sidecar even if shortcut cleanup fails (independent cleanup steps)', () => {
-    // localRuntime.stop() must be reachable regardless of the globalShortcut branch — its own try block,
-    // not nested inside the isReady() guard.
-    const stopIdx = handler.indexOf('localRuntime.stop()')
-    const guardBlockEnd = handler.indexOf('if (notifTimer)')
-    expect(stopIdx).toBeGreaterThan(-1)
-    expect(guardBlockEnd).toBeGreaterThan(-1)
-    // localRuntime.stop() comes after the notifTimer line, i.e. outside the isReady() guard block.
-    expect(stopIdx).toBeGreaterThan(guardBlockEnd)
-    const stopSeg = handler.slice(guardBlockEnd, stopIdx + 40)
-    expect(stopSeg).toMatch(/try\s*\{[\s\S]*localRuntime\.stop\(\)/)
-  })
-
-  it('kills the Apple fm-serve sidecar too, in its OWN try (an orphaned unauthenticated loopback server is worse)', () => {
-    // Same F3 contract as llama-server: fmRuntime.stop() must sit in the handler, AFTER
-    // localRuntime.stop(), inside its own independent try/catch — a throw from the llama kill must
-    // never skip the fm kill.
-    const llamaStopIdx = handler.indexOf('localRuntime.stop()')
-    const fmStopIdx = handler.indexOf('fmRuntime.stop()')
-    expect(fmStopIdx).toBeGreaterThan(llamaStopIdx)
-    const between = handler.slice(llamaStopIdx, fmStopIdx)
-    // The llama try-block closes (its catch appears) before the fm call starts — independence proven
-    // by the catch boundary between the two stop calls.
-    expect(between).toMatch(/catch/)
-    expect(between).toMatch(/try\s*\{\s*$/m)
   })
 })

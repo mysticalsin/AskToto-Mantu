@@ -17,6 +17,8 @@
  *     above it fails SAFE, not open: infra/storage/dataless.ts classifies every file 'unknown' (never
  *     read by list or search) when the helper is missing or fails. check-mac-helper.mjs keeps the
  *     helper in every mac package; a dev checkout needs `node scripts/build-mac-helper.mjs` once.
+ *   - `stall-watch`: long-running, one per boot, samples main when `run-alive.json` stops changing;
+ *     infra/observability/stall-sampler.ts owns its arguments and protocol.
  *
  * Everything here degrades to null/absent — a missing or broken helper must leave the app exactly as it
  * behaved before the helper existed (VLM describe, 6s-timer-only mac trigger, floating non-notch island),
@@ -101,6 +103,16 @@ export function macScreenMetricsSpawnSpec(): { command: string; args: string[] }
 export function macStatFlagsSpawnSpec(): { command: string; args: string[] } | null {
   if (!macHelperPresent()) return null
   return { command: macHelperPath(), args: ['stat-flags'] }
+}
+
+/** Flag `diagnostics.stall_sampler` (ARCHITECTURE C15). false restores the pre-M2-0192 boot exactly: no
+ *  stall-watch helper, no capture sweep, no new audit events. */
+const STALL_SAMPLER_ENABLED = true
+
+/** The helper binary for the long-running `stall-watch` sidecar, or null when there is no helper (always
+ *  off macOS) or the flag is off. infra/observability/stall-sampler.ts owns its arguments and protocol. */
+export function macStallWatchCommand(): string | null {
+  return STALL_SAMPLER_ENABLED && macHelperPresent() ? macHelperPath() : null
 }
 
 /** Raw per-screen payload shape emitted by `metis-mac-helper screen-metrics` (see main.swift's

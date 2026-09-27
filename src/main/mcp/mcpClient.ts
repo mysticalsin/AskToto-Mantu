@@ -34,7 +34,7 @@ import { lookup } from 'node:dns/promises'
 import type { LookupAddress } from 'node:dns'
 import type { LookupFunction } from 'node:net'
 import { mainLog } from '../logger'
-import { routeDispatcher } from '../net/install-proxy'
+import { routeDispatcher, UnpinnableProxyError } from '../net/install-proxy'
 
 /** Bound every round-trip so an unreachable/hung server never blocks the main process. */
 const CONNECT_TIMEOUT_MS = 15_000
@@ -49,10 +49,10 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 // (e.g. BidStack's own Settings page defaults to http://localhost:4001).
 //
 // Three layers close this off, none of them alone: validateEndpointUrl (scheme, and the literal
-// configured host, before any network call); sessionLookup (every address the session actually dials,
-// pinned once per session, so a DNS-rebinding resolver can't answer differently for a later connection);
-// and the transport's `fetch` override (refuses every redirect and keeps routing through the global
-// fetch, so net/egress-guard.ts's managed allowlist still applies).
+// configured host, before any network call); sessionLookup (every address the session dials, or asks a
+// proxy to tunnel to, pinned once per session, so a DNS-rebinding resolver can't answer differently for a
+// later connection); and the transport's `fetch` override (refuses every redirect and keeps routing
+// through the global fetch, so net/egress-guard.ts's managed allowlist still applies).
 const BLOCKED_HOSTS = new Set([
   '169.254.169.254',
   'metadata.google.internal',
@@ -147,8 +147,9 @@ async function resolveAllowed(hostname: string): Promise<LookupAddress[]> {
  * closed and is bounded by the existing abort timer, never by a resolver's own timeout.
  *
  * Node's `net` calls this with `{ all: true }` under autoSelectFamily (Node 22's default) and with
- * `{ all: false }` otherwise; both forms are handled. IP-literal hosts never reach `lookup` at all —
- * validateEndpointUrl's literal check above covers them.
+ * `{ all: false }` otherwise; install-proxy's pinned tunnel calls it with `{ all: true }` too. All three
+ * forms are handled. A pinned tunnel calls this for an IP-literal host as well, and `lookup` returns the
+ * literal unchanged — validateEndpointUrl has already refused a metadata literal before this ever runs.
  */
 function sessionLookup(): LookupFunction {
   const pinned = new Map<string, Promise<LookupAddress[]>>()
@@ -184,6 +185,13 @@ function classifyError(e: unknown, endpointUrl: string, label: string): string {
   const blob = raw.toLowerCase()
   if (errorChain(e).some((c) => c instanceof CloudMetadataAddressError)) {
     return `"${endpointUrl}" resolves to a cloud metadata address, which is never a valid ${label} endpoint.`
+  }
+  if (errorChain(e).some((c) => c instanceof UnpinnableProxyError)) {
+    return `${label} can't be reached through a SOCKS proxy: the address it connects to can't be checked. Use an HTTP proxy instead.`
+  }
+  // undici's own refusal shape when the proxy answers CONNECT with anything but 200.
+  if (errorChain(e).some((c) => /^Proxy response \(\d+\)/.test(c.message))) {
+    return `The network proxy refused the connection to ${label} at ${endpointUrl}. Ask IT to allow it through the proxy.`
   }
   // 'timed out'/'-32001' are the MCP SDK's own RequestTimeout shape ("MCP error -32001: Request timed
   // out"), which carries no 'abort' — without them a server that stalls mid-request lands in the
@@ -235,8 +243,10 @@ async function withClient<T>(
   // One dispatcher for this one MCP session: sessionLookup() resolves this session's
   // endpoint host ONCE and pins the answer for every connection the session opens, closing the
   // DNS-rebinding window between validateEndpointUrl's literal-host check and the real connect.
-  // routeDispatcher builds it on the SAME proxy route as the global dispatcher, so pinning never
-  // bypasses a corporate proxy Plane/ClickUp MCP are reached through.
+  // routeDispatcher builds it on the SAME route as the global dispatcher, and aims that route's proxy
+  // tunnels at the same pinned answer. Pinning therefore never bypasses a corporate proxy Plane/ClickUp
+  // MCP are reached through, and the proxy never re-resolves the host. Throws UnpinnableProxyError on a
+  // SOCKS env proxy — connectMcpNow/pushToMcp's callers already wrap this in try/catch.
   const dispatcher = routeDispatcher(sessionLookup())
   // Fresh client + transport for this one call — never reused across calls, matching how dust.ts
   // creates a fresh DustAPI per stream.

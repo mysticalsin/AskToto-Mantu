@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { performance } from 'node:perf_hooks'
 import { createResponsivenessTracker } from './responsiveness-tracker'
 
 describe('createResponsivenessTracker', () => {
@@ -35,13 +36,23 @@ describe('createResponsivenessTracker', () => {
     expect(tracker.markResponsive()).toBeNull()
   })
 
-  it('defaults now to Date.now when not given', () => {
-    const tracker = createResponsivenessTracker()
-    tracker.markUnresponsive()
-    const stallMs = tracker.markResponsive()
-    expect(stallMs).not.toBeNull()
-    expect(stallMs).toBeGreaterThanOrEqual(0)
-    expect(stallMs).toBeLessThan(1000)
+  it('defaults now to performance.now and never calls Date.now, so a wall-clock jump cannot manufacture a fake duration', () => {
+    const nowSpy = vi.spyOn(performance, 'now')
+    const dateNowSpy = vi.spyOn(Date, 'now')
+    try {
+      const tracker = createResponsivenessTracker()
+      const callsAtStart = nowSpy.mock.calls.length
+      tracker.markUnresponsive()
+      expect(nowSpy.mock.calls.length).toBeGreaterThan(callsAtStart)
+      const stallMs = tracker.markResponsive()
+      expect(stallMs).not.toBeNull()
+      expect(stallMs).toBeGreaterThanOrEqual(0)
+      expect(stallMs).toBeLessThan(1000)
+      expect(dateNowSpy).not.toHaveBeenCalled()
+    } finally {
+      nowSpy.mockRestore()
+      dateNowSpy.mockRestore()
+    }
   })
 
   it('markGone clears a pending unresponsive so a later unresponsive/responsive pair after a renderer crash is not measured from before the crash', () => {
