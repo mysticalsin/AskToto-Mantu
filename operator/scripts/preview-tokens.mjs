@@ -4,7 +4,8 @@
  * its name and value, the type scale with real text, a card, a button in every state, an input,
  * a 4-row table, a status dot set, and the four data colours as bars (P0.1 deliverable 7).
  *
- * Writes /private/tmp/claude-501/operator-preview/tokens-light.html and tokens-dark.html. CSS is
+ * Writes tokens-light.html and tokens-dark.html into resolvePreviewDir() (an os.tmpdir()-based
+ * default, overridable via METIS_QA_PREVIEW_DIR). CSS is
  * inlined and the @font-face `src` is rewritten from `/assets/fonts/...` to an absolute
  * `file://` path into operator/public/fonts/, so each file opens standalone (no server, no
  * Worker) with the real Space Grotesk / Inter faces.
@@ -23,7 +24,14 @@ const CSS_ENTRY = join(OPERATOR_ROOT, 'src', 'spa', 'css.ts')
 const FONTS_DIR = join(OPERATOR_ROOT, 'public', 'fonts')
 const LOGOS_DIR = join(OPERATOR_ROOT, 'public', 'logos')
 const FLAGS_DIR = join(OPERATOR_ROOT, 'public', 'flags')
-const OUT_DIR = '/private/tmp/claude-501/operator-preview'
+
+/** Rendered-preview output directory. A plain os.tmpdir() path so this runs on any machine/CI,
+ *  never a committed absolute path tied to one past session. */
+export function resolvePreviewDir(env = process.env) {
+  return env.METIS_QA_PREVIEW_DIR || join(tmpdir(), 'metis-operator-preview')
+}
+
+const OUT_DIR = resolvePreviewDir()
 
 /** Bundles operator/src/spa/css.ts's own CONSOLE_CSS export directly (not manifest.ts's
  *  composed SPA_CSS, which also concatenates other pages' shell/chrome stylesheets owned by

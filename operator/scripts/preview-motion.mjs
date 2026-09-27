@@ -7,7 +7,8 @@
  * checkbox flips `setReducedMotionOverride` live so both states are visible without touching
  * the OS setting.
  *
- * Writes /private/tmp/claude-501/operator-preview/motion-demo.html. Tokens CSS and the compiled
+ * Writes motion-demo.html into resolvePreviewDir() (an os.tmpdir()-based default, overridable via
+ * METIS_QA_PREVIEW_DIR). Tokens CSS and the compiled
  * motion helpers are inlined (same in-Node esbuild-and-import technique as
  * operator/scripts/build-client.mjs's loadShoeyLandSvg() and this directory's
  * preview-tokens.mjs), so the file opens standalone -- no Worker, no dev server.
@@ -25,7 +26,14 @@ const OPERATOR_ROOT = join(__dirname, '..')
 const CSS_ENTRY = join(OPERATOR_ROOT, 'src', 'spa', 'css.ts')
 const MOTION_ENTRY = join(OPERATOR_ROOT, 'client', 'motion.ts')
 const FONTS_DIR = join(OPERATOR_ROOT, 'public', 'fonts')
-const OUT_DIR = '/private/tmp/claude-501/operator-preview'
+
+/** Rendered-preview output directory. A plain os.tmpdir() path so this runs on any machine/CI,
+ *  never a committed absolute path tied to one past session. */
+export function resolvePreviewDir(env = process.env) {
+  return env.METIS_QA_PREVIEW_DIR || join(tmpdir(), 'metis-operator-preview')
+}
+
+const OUT_DIR = resolvePreviewDir()
 
 async function loadConsoleCss() {
   const result = await build({

@@ -27,15 +27,27 @@ import { build } from 'esbuild'
 import { execFileSync } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OPERATOR_ROOT = join(__dirname, '..')
-const PREVIEW_DIR = '/private/tmp/claude-501/operator-preview'
-const SCRATCH_DIR =
-  process.env.METIS_QA_SCRATCH ||
-  '/private/tmp/claude-501/-Users-tony-Library-CloudStorage-OneDrive-MantuGroup-Documents-Chief-of-Staff-Apps-Source-Metis-Portal/7883530c-5678-450a-aef0-46d1bc798bfd/scratchpad'
+
+/** Rendered-preview directory (gate 2 reads the HTML this writes). A plain os.tmpdir() path so
+ *  this runs on any machine/CI, never a committed absolute path tied to one past session. */
+export function resolvePreviewDir(env = process.env) {
+  return env.METIS_QA_PREVIEW_DIR || join(tmpdir(), 'metis-operator-preview')
+}
+
+/** Scratch working directory for gate 5's esbuild-tmp bundle output. Same reasoning as
+ *  resolvePreviewDir(); same default root unless overridden independently. */
+export function resolveScratchDir(env = process.env) {
+  return env.METIS_QA_SCRATCH || join(tmpdir(), 'metis-operator-preview')
+}
+
+const PREVIEW_DIR = resolvePreviewDir()
+const SCRATCH_DIR = resolveScratchDir()
 const EM_DASH = '—'
 
 function walk(dir, out = []) {
@@ -390,7 +402,12 @@ async function main() {
   process.exit(failed ? 1 : 0)
 }
 
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
-})
+// Decode import.meta.url before comparing to argv (matches migrate.mjs): a raw
+// `file://${process.argv[1]}` comparison breaks on paths with spaces (PR #168).
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
+if (isMain) {
+  main().catch((err) => {
+    console.error(err)
+    process.exit(1)
+  })
+}

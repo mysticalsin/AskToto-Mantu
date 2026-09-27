@@ -9,8 +9,9 @@
  *   node operator/scripts/preview.mjs --page overview        one page, both themes
  *   node operator/scripts/preview.mjs --page overview --theme dark
  *
- * Output: /private/tmp/claude-501/operator-preview/<page>-<theme>.html (plan section 8, "Section
- * review cadence": this exact path is the one every agent and the orchestrator use).
+ * Output: resolvePreviewDir()/<page>-<theme>.html — an os.tmpdir()-based default, overridable via
+ * METIS_QA_PREVIEW_DIR (plan section 8, "Section review cadence": every agent and the orchestrator
+ * read the same directory).
  *
  * How it works: the Worker source (operator/src/**) is plain TypeScript with no bundler step of
  * its own for the server render path, so this script bundles a tiny virtual entry that re-exports
@@ -27,15 +28,27 @@
 import { build } from 'esbuild'
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OPERATOR_ROOT = join(__dirname, '..')
-const SCRATCH_DIR =
-  process.env.METIS_QA_SCRATCH ||
-  '/private/tmp/claude-501/-Users-tony-Library-CloudStorage-OneDrive-MantuGroup-Documents-Chief-of-Staff-Apps-Source-Metis-Portal/7883530c-5678-450a-aef0-46d1bc798bfd/scratchpad'
-const OUT_DIR = '/private/tmp/claude-501/operator-preview'
+
+/** Scratch working directory for this script's esbuild-tmp bundle output. A plain os.tmpdir() path
+ *  so this runs on any machine/CI, never a committed absolute path tied to one past session. */
+export function resolveScratchDir(env = process.env) {
+  return env.METIS_QA_SCRATCH || join(tmpdir(), 'metis-operator-preview')
+}
+
+/** Rendered-preview output directory. Same reasoning as resolveScratchDir(); same default root
+ *  unless overridden independently. */
+export function resolvePreviewDir(env = process.env) {
+  return env.METIS_QA_PREVIEW_DIR || join(tmpdir(), 'metis-operator-preview')
+}
+
+const SCRATCH_DIR = resolveScratchDir()
+const OUT_DIR = resolvePreviewDir()
 const PUBLIC_FONTS_DIR = join(OPERATOR_ROOT, 'public', 'fonts')
 
 async function bundleAndImport(virtualEntrySource, tag) {
@@ -145,7 +158,12 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
-})
+// Decode import.meta.url before comparing to argv (matches migrate.mjs): a raw
+// `file://${process.argv[1]}` comparison breaks on paths with spaces (PR #168).
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
+if (isMain) {
+  main().catch((err) => {
+    console.error(err)
+    process.exit(1)
+  })
+}
