@@ -1,9 +1,7 @@
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { bindRendererReadiness, RENDERER_READY_PROBE } from './renderer-readiness'
+import { bindReadinessThenNavigate, bindRendererReadiness, RENDERER_READY_PROBE } from './renderer-readiness'
 
 const expectedUrl = 'file:///fixture/renderer/index.html'
 class Renderer extends EventEmitter {
@@ -118,21 +116,38 @@ describe('MQA-318 real renderer readiness signal', () => {
     expect(await result).toBe(false)
   })
 
-  it('binds the isolated launch probe before navigation and preserves app.started', () => {
-    const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-    const start = source.indexOf('function createWindow(')
-    expect(start).toBeGreaterThan(-1)
-    const body = source.slice(start, source.indexOf('\nfunction resizeTo(', start))
-    const bind = body.indexOf('bindRendererReadiness(')
-    const load = body.indexOf('win.loadURL(rendererUrl)', bind)
-    expect(bind).toBeGreaterThan(body.indexOf('win = new BrowserWindow('))
-    expect(load).toBeGreaterThan(bind)
-    // FITO-185-B: createWindow navigates with loadURL(rendererUrl) only (same string as the bind),
-    // not loadFile — so packaged asar getURL() matches expectedUrl. Recovery may still loadFile.
-    expect(body.slice(bind, load + 'win.loadURL(rendererUrl)'.length)).toMatch(/win\.loadURL\(rendererUrl\)/)
-    expect(body.slice(bind, load + 80)).not.toMatch(/else win\.loadFile\(join\(__dirname, '\.\.\/renderer\/index\.html'\)\)/)
-    expect(body).toContain("auditLog('app.started'")
-    expect(body).toContain("auditLog('app.renderer.ready'")
-    expect(body).toContain("ASKTOTO_MAC_LAUNCH_GATE === '1'")
+  describe('bindReadinessThenNavigate: the wiring createWindow uses to bind before it navigates', () => {
+    // A window whose loadURL resolves the navigation synchronously — the worst case for a
+    // registration-order bug. If a future edit ever navigated before binding, this fake would fire
+    // 'did-finish-load' on a target with no listener yet and the probe below would never observe it.
+    class SynchronouslyNavigatingWindow {
+      webContents = new Renderer()
+      loadURL = vi.fn((url: string) => {
+        this.webContents.url = url
+        this.webContents.emit('did-finish-load')
+      })
+    }
+
+    it('observes readiness on a load that completes the instant it is requested', async () => {
+      const win = new SynchronouslyNavigatingWindow()
+      const ready = vi.fn()
+      bindReadinessThenNavigate(win, expectedUrl, ready)
+      expect(win.loadURL).toHaveBeenCalledWith(expectedUrl)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(win.webContents.executeJavaScript).toHaveBeenCalledWith(RENDERER_READY_PROBE)
+      expect(ready).toHaveBeenCalledOnce()
+    })
+
+    // The fake's synchronous load is invisible to a late bind, so this test discriminates order: it
+    // never calls bindReadinessThenNavigate, only bindRendererReadiness after the load already ran.
+    it("the fake's synchronous load is invisible to a late bind, so the test above discriminates order", async () => {
+      const win = new SynchronouslyNavigatingWindow()
+      const ready = vi.fn()
+      win.loadURL(expectedUrl)
+      bindRendererReadiness(win.webContents, expectedUrl, ready)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(win.webContents.executeJavaScript).not.toHaveBeenCalled()
+      expect(ready).not.toHaveBeenCalled()
+    })
   })
 })

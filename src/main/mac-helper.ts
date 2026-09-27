@@ -13,6 +13,10 @@
  *   - `screen-metrics`: one-shot per-display notch/menu-bar geometry (island/metrics.ts caches + joins
  *     this to Electron's `Display.id`, which IS the `CGDirectDisplayID` NSScreen reports — see that
  *     module's header for the coordinate-space caveat this raw payload carries).
+ *   - `stat-flags`: one-shot st_flags per path for cloud-only file detection. Unlike the features
+ *     above it fails SAFE, not open: infra/storage/dataless.ts classifies every file 'unknown' (never
+ *     read by list or search) when the helper is missing or fails. check-mac-helper.mjs keeps the
+ *     helper in every mac package; a dev checkout needs `node scripts/build-mac-helper.mjs` once.
  *
  * Everything here degrades to null/absent — a missing or broken helper must leave the app exactly as it
  * behaved before the helper existed (VLM describe, 6s-timer-only mac trigger, floating non-notch island),
@@ -90,6 +94,13 @@ export function macWatcherSpawnSpec(): { command: string; args: string[] } | nul
 export function macScreenMetricsSpawnSpec(): { command: string; args: string[] } | null {
   if (!macHelperPresent()) return null
   return { command: macHelperPath(), args: ['screen-metrics'] }
+}
+
+/** Spawn spec for the one-shot `stat-flags` subcommand, or null when the helper isn't available.
+ *  infra/storage/dataless.ts owns the wire protocol and the SF_DATALESS decoding. */
+export function macStatFlagsSpawnSpec(): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  return { command: macHelperPath(), args: ['stat-flags'] }
 }
 
 /** Raw per-screen payload shape emitted by `metis-mac-helper screen-metrics` (see main.swift's

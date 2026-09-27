@@ -88,9 +88,16 @@ This FRAME does not merge those Workers.
   OpenRouter, Groq, Mistral, Grok, Custom. AES-GCM in D1 `vault_keys`. last4 only in HTML/JSON.
 - Cloudflare · AI Gateway card: **Log in to Cloudflare** → `GET /cloudflare/connect` → callback
   dual-writes vault `cloudflare-account` + `cloudflare` (label `AI Gateway`).
-- `ensureDefaultAiGateway` POSTs gateway id `default` (best-effort; first authenticated Ask
-  also auto-creates).
-- OAuth scopes already include `workers-ai:run`, `ai-gateway:read`, `ai-gateway:edit`.
+- `verifyDefaultGatewayPrivacy` reads back the account's `default` gateway before any vault
+  write or provider call; it never creates or repairs one. It passes only when the readback's
+  `result.id` is `'default'`, `collect_logs` is `false`, `cache_ttl` is `0`, `logpush` is
+  `false`, `otel` is absent or an empty array, and `log_classification` is absent or `false` —
+  anything else fails closed with `GATEWAY_CONFIGURATION_UNSAFE`. A failed check surfaces as a
+  503 on `POST /v1/use`, `/v1/ask` and the `/v1/admin/keys` routes, and as a redirect to
+  `/?cf=failed#keys` from the OAuth callback card.
+- OAuth scopes: the fixed, least-privilege set in `CF_OAUTH_SCOPES`
+  (`operator/src/cloudflare-connect.ts`) — one scope per named call site, no `ai-gateway:edit`
+  (the gateway is only ever read back, never provisioned or edited) and no env override.
 - Missing `CF_OAUTH_CLIENT_ID` / `CF_OAUTH_CLIENT_SECRET` → fail loud on Keys (503 after Access).
   License generate must still work. OAuth stays LAST.
 - Forbidden in vault: `claude-cli`, `codex-cli`, `dust`, `local`.

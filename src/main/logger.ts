@@ -178,6 +178,11 @@ export type AuditEvent =
   | 'brain.commitment.rejected'
   | 'brain.rebuild.aborted'
   | 'brain.corrections.lock_cleared'
+  // M2-0003: index.json exists but cannot be used on this device this session (io / undecryptable /
+  // unsupported / corrupt-kept), and a decoded-but-invalid index was set aside. Content-free: cause/
+  // counts only, never a path, decode reason, or filename.
+  | 'brain.index.unavailable'
+  | 'brain.index.quarantined'
   // Task MI-5: the markdown mirror (main/brain/publish.ts).
   | 'transcript.confidential_set'
   | 'brain.publish.consent'
@@ -205,6 +210,16 @@ export type AuditEvent =
   // FITO-185-U: live Act1 DOM probe summary (userData/logs/act1-dom.json).
   | 'app.act1.dom'
   | 'app.crash'
+  // M2-0006: the clean-shutdown marker — written at the end of will-quit, so the NEXT app.started can
+  // report a real prevShutdown classification instead of no evidence at all (see boot-sentinel.ts).
+  | 'app.shutdown.clean'
+  // M2-0006: a 1s heartbeat timer fired at least 1s late (main-thread stall — see
+  // infra/observability/stall-monitor.ts and its orchestrator run-observability.ts), plus its periodic
+  // p99 summary.
+  | 'app.stall'
+  | 'app.stall.summary'
+  // M2-0006: pairs app.unresponsive with how long the renderer stayed wedged before it recovered.
+  | 'app.responsive'
   // A main-process, state-checked repair completed a renderer handoff after durable setup save.
   | 'app.recovery'
   // FITO-185-E: 15s MQA-175 callback closed the boot watch (finally), whether brain resume ran or threw.
@@ -218,6 +233,9 @@ export type AuditEvent =
   | 'meeting.detect.degraded'
   | 'recall.open'
   | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
+  // A cloud-placeholder probe could not classify a batch of meeting files, so they were treated as
+  // cloud-only and not read. Once per failure streak; reason and file count only.
+  | 'storage.dataless_probe_failed'
   // Generalized MCP push connections (BidStack CRM, Plane, ClickUp, …) — see main/mcp/mcpClient.ts.
   | 'mcp.connected'
   | 'mcp.disconnected'

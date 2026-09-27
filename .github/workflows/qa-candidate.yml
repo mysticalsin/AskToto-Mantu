@@ -1,0 +1,350 @@
+name: QA candidate
+
+# Builds one candidate once (M2-0187): every shipped macOS and Windows installer plus the macOS
+# QA-identity variant, from one named main commit, in one run. It records provenance (sha256 per
+# installer, commit, run, runner image, Node, Electron and electron-builder versions, builder config
+# hashes), then verifies, installs and launches every installer by sha256. Packaged gates elsewhere
+# consume these bytes by sha256, and promote-candidate.yml publishes the same bytes. This workflow never
+# signs with a Developer ID, publishes, or pushes a tag.
+#
+# A pull request that changes the lane's own files runs it as a self-test. Such a run builds the PR's
+# merge commit and can never be promoted.
+run-name: ${{ github.event_name == 'pull_request' && format('QA candidate self-test (PR {0})', github.event.pull_request.number) || format('QA candidate {0}', inputs.commit) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: main's current commit (full 40-character SHA)
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/qa-candidate.yml
+      - build/qa-identity.electron-builder.yml
+      - scripts/qa/provenance.mjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-candidate-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  guard:
+    name: Check what this run may build
+    if: github.repository == 'mysticalsin/AskToto-Mantu' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: The named commit is main's head
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          if [ "$COMMIT" != "$GITHUB_SHA" ]; then
+            echo "::error::main is at $GITHUB_SHA and the named commit differs. Dispatch again naming main's current commit."
+            exit 1
+          fi
+
+  build-mac:
+    name: Build ${{ matrix.variant }}
+    needs: guard
+    runs-on: macos-latest
+    timeout-minutes: 120
+    strategy:
+      matrix:
+        include:
+          - variant: mac
+            script: dist
+          - variant: mac-qa-identity
+            script: dist:qa-identity
+    steps:
+      - name: Build once
+        run: |
+          if [ "$GITHUB_RUN_ATTEMPT" != 1 ]; then
+            echo "::error::A candidate is built once. Dispatch a new run; its bytes are a new candidate."
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # predist's check-ffmpeg-sidecar.mjs verifies each binary against resources/ffmpeg/manifest.json
+      # before running it, so trust comes from that hash, not from the download or from Gatekeeper.
+      - name: Provision the reviewed ffmpeg sidecars
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" --pattern 'ffmpeg-darwin-*' --dir resources/ffmpeg
+          for arch in arm64 x64; do
+            mkdir -p "resources/ffmpeg/darwin-$arch"
+            mv "resources/ffmpeg/ffmpeg-darwin-$arch" "resources/ffmpeg/darwin-$arch/ffmpeg"
+            chmod +x "resources/ffmpeg/darwin-$arch/ffmpeg"
+            xattr -d com.apple.quarantine "resources/ffmpeg/darwin-$arch/ffmpeg" 2>/dev/null || true
+          done
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      # Same key as build.yml. fetch-models.mjs reuses cached files only after its exact manifest gate.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            resources/models
+            resources/asr
+            resources/ort
+            resources/llama
+            resources/local-llm
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+      # A stable identity keeps one designated requirement across candidates, so TCC grants persist.
+      # Without the secret the candidate is ad-hoc signed, and provenance says so.
+      - name: Import the stable QA signing identity
+        id: identity
+        env:
+          QA_MAC_SIGNING: ${{ secrets.QA_MAC_SIGNING }}
+        run: |
+          if [ -z "$QA_MAC_SIGNING" ]; then
+            echo "::warning::QA_MAC_SIGNING is not set: this candidate is ad-hoc signed, so TCC grants will not carry over to the next candidate."
+            exit 0
+          fi
+          password=$(jq -r .password <<<"$QA_MAC_SIGNING")
+          keychain_password=$(openssl rand -hex 32)
+          echo "::add-mask::$password"
+          echo "::add-mask::$keychain_password"
+          keychain="$RUNNER_TEMP/qa-identity.keychain-db"
+          jq -r .p12_base64 <<<"$QA_MAC_SIGNING" | base64 --decode > "$RUNNER_TEMP/qa-identity.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/qa-identity.p12" -k "$keychain" -P "$password" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/qa-identity.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identities=$(security find-identity -p codesigning "$keychain")
+          if grep -q '"Developer ID' <<<"$identities"; then
+            echo "::error::QA_MAC_SIGNING holds a Developer ID identity. The QA lane never signs with Developer ID."
+            exit 1
+          fi
+          fingerprint=$(grep -Eo '[0-9A-F]{40}' <<<"$identities" | sort -u)
+          if [ -z "$fingerprint" ] || [ "$(wc -l <<<"$fingerprint")" -ne 1 ]; then
+            echo "::error::QA_MAC_SIGNING must hold exactly one code-signing identity."
+            exit 1
+          fi
+          echo "ASKTOTO_MAC_SIGN_IDENTITY=$fingerprint" >> "$GITHUB_ENV"
+      - name: Build the ${{ matrix.variant }} installers
+        run: npm run ${{ matrix.script }}
+      - name: Refuse any installer over GitHub's per-asset limit
+        run: npm run check:release
+        env:
+          ASKTOTO_ARTIFACTS_DIR: release
+      - name: Stage and hash the installers
+        run: node scripts/qa/provenance.mjs stage ${{ matrix.variant }} release candidate
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-${{ matrix.variant }}
+          path: candidate/assets/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+          compression-level: 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-${{ matrix.variant }}
+          path: candidate/build-${{ matrix.variant }}.json
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+      - name: Remove the QA keychain
+        if: always() && steps.identity.outputs.keychain != ''
+        env:
+          KEYCHAIN: ${{ steps.identity.outputs.keychain }}
+        run: security delete-keychain "$KEYCHAIN"
+
+  build-win:
+    name: Build win
+    needs: guard
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Build once
+        run: |
+          if [ "$GITHUB_RUN_ATTEMPT" != 1 ]; then
+            echo "::error::A candidate is built once. Dispatch a new run; its bytes are a new candidate."
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Provision the reviewed ffmpeg sidecar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" --pattern 'ffmpeg-win32-x64.exe' --dir resources/ffmpeg
+          mkdir -p resources/ffmpeg/win32-x64
+          mv resources/ffmpeg/ffmpeg-win32-x64.exe resources/ffmpeg/win32-x64/ffmpeg.exe
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            resources/models
+            resources/asr
+            resources/ort
+            resources/llama
+            resources/local-llm
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+      # No signing secret reaches this job, so electron-builder leaves both installers unsigned.
+      - name: Build the win installers
+        run: npm run dist:win
+      - name: Refuse any installer over GitHub's per-asset limit
+        run: npm run check:release
+        env:
+          ASKTOTO_ARTIFACTS_DIR: release
+      - name: Stage and hash the installers
+        run: node scripts/qa/provenance.mjs stage win release candidate
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-win
+          path: candidate/assets/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+          compression-level: 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-win
+          path: candidate/build-win.json
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+  provenance:
+    name: Record provenance
+    needs: [build-mac, build-win]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: build-*
+          path: builds
+          merge-multiple: true
+      - name: Assemble provenance.json and SHA256SUMS.txt
+        run: |
+          node scripts/qa/provenance.mjs assemble builds provenance
+          { echo "### Candidate $GITHUB_RUN_ID"; echo '```'; cat provenance/SHA256SUMS.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-provenance
+          path: provenance/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+  smoke-mac:
+    name: Install and launch ${{ matrix.variant }} by sha256
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        variant: [mac, mac-qa-identity]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: candidate-${{ matrix.variant }}
+          path: assets
+      - name: Verify every byte against the provenance
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets ${{ matrix.variant }}
+      - name: Install each installer, check its signature, launch it
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          expected=$(jq -r --arg v "$VARIANT" '.builds[] | select(.variant == $v) | .signing.certificate_sha1 // "ad-hoc"' provenance/provenance.json)
+          for installer in assets/*; do
+            target="$RUNNER_TEMP/installed"
+            rm -rf "$target" && mkdir -p "$target"
+            case "$installer" in
+              *.dmg)
+                volume="$RUNNER_TEMP/volume"
+                hdiutil attach -nobrowse -readonly -mountpoint "$volume" "$installer" > /dev/null
+                bundle=$(cd "$volume" && ls -d *.app)
+                ditto "$volume/$bundle" "$target/$bundle"
+                hdiutil detach "$volume" > /dev/null ;;
+              *.zip) ditto -x -k "$installer" "$target" ;;
+            esac
+            app=$(find "$target" -maxdepth 1 -name '*.app' -print -quit)
+            if [ "$expected" = ad-hoc ]; then
+              # Capture codesign's output before grepping it: under `set -o pipefail`, `grep -q` can exit
+              # the pipe early and make codesign die of SIGPIPE, which would fail this check even when
+              # the signature is correct.
+              details=$(codesign -dv "$app" 2>&1)
+              grep -qx 'Signature=adhoc' <<<"$details" \
+                || { echo "::error::$installer is not ad-hoc signed, but its provenance says it is."; exit 1; }
+            else
+              rm -rf "$RUNNER_TEMP/certificate" && mkdir "$RUNNER_TEMP/certificate"
+              codesign -d --extract-certificates="$RUNNER_TEMP/certificate/c" "$app"
+              [ "$(shasum -a 1 "$RUNNER_TEMP/certificate/c0" | cut -d' ' -f1)" = "$expected" ] \
+                || { echo "::error::$installer is not signed with the QA certificate its provenance records."; exit 1; }
+            fi
+            ASKTOTO_MAC_LAUNCH_GATE=1 node scripts/check-packaged-launch.mjs "$app"
+          done
+
+  smoke-win:
+    name: Install and launch win by sha256
+    needs: provenance
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: candidate-win
+          path: assets
+      - name: Verify every byte against the provenance
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets win
+      - name: Install the Setup silently and launch it, then launch the Portable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($exe in Get-ChildItem assets -Filter *.exe) {
+            if ((Get-AuthenticodeSignature $exe.FullName).Status -ne 'NotSigned') { throw "$($exe.Name) is signed; Windows candidates are unsigned." }
+          }
+          $target = Join-Path $env:RUNNER_TEMP 'installed'
+          $setup = Get-Item assets/Metis-Setup-*.exe
+          $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+          node scripts/check-packaged-launch.mjs (Join-Path $target 'Metis.exe')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/check-packaged-launch.mjs (Get-Item assets/Metis-Portable-*.exe).FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

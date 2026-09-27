@@ -27,6 +27,9 @@ const TYPE_SIZE: Record<GraphNode['type'], number> = {
   person: 16,
   strategic_group: 30,
   sector: 30,
+  // Smallest on purpose: a note is evidence for a relationship, not a party to it — it must not
+  // outshout the entities it connects.
+  meeting: 10,
 }
 
 

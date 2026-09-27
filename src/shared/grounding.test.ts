@@ -291,6 +291,13 @@ describe('extractNumerals', () => {
     const acceptable = [[], [12500], [12, 500]]
     expect(acceptable.some((a) => a.length === values.length && a.every((v, i) => v === values[i]))).toBe(true)
   })
+
+  it('P5-F3: keeps reading order when a short numeral recurs around a longer one', () => {
+    // "5" occurs before 500k, as its leading digit, and after it: each hit must sort by its own
+    // position, not by where its text first appears.
+    const span = 'the tally is 5 today, revenue reached 500k by March, and headcount grew by 5 more'
+    expect(extractNumerals(span).map((h) => h.value)).toEqual([5, 500_000, 5])
+  })
 })
 
 describe('numeralDerivable', () => {

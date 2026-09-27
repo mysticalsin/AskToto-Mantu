@@ -1,0 +1,20 @@
+# QA-identity variant of Métis (M2-0187): the only form an unreleased build may take on the
+# owner's primary account. It shares nothing the live install owns: its own bundle id (TCC grants), its
+# own runtime name (userData directory and Keychain safeStorage service) and no update feed. Built only by
+# `npm run dist:qa-identity` in qa-candidate.yml, and never published.
+# electron-builder resolves `extends` against the project directory, not against this file.
+extends: ./electron-builder.yml
+appId: com.mantu.asktoto.qa
+# ASCII for the same helper-bundle reason as the base productName. It names Metis QA.app, its executable
+# and its "Metis QA Helper" bundles, so the variant installs beside the live Metis.app.
+productName: Metis QA
+# Electron takes the app name from the packaged package.json: userData becomes <appData>/asktoto-qa and
+# the safeStorage Keychain service "asktoto-qa Safe Storage", never the live install's "asktoto".
+extraMetadata:
+  name: asktoto-qa
+mac:
+  artifactName: Metis-QA-${version}.${ext}
+  extendInfo:
+    CFBundleDisplayName: Métis QA
+# No app-update.yml: a QA build never updates itself from, or into, the release feed.
+publish: null

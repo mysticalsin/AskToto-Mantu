@@ -1,11 +1,8 @@
 /** Cloudflare · AI Gateway: OAuth login, then Operator provisions vault keys. No paste. */
 
-import { ensureDefaultAiGateway } from './ai-gateway'
-import { writeVaultKey } from './keys'
+import { writeVaultKeysAtomically } from './keys'
 import type { OperatorStore } from './store'
 import { CF_ACCOUNT_PROVIDER } from './vault'
-
-export { ensureDefaultAiGateway }
 
 export const CF_DASH_LOGIN = 'https://dash.cloudflare.com/login'
 export const CF_OAUTH_AUTHORIZE = 'https://dash.cloudflare.com/oauth2/auth'
@@ -14,12 +11,22 @@ export const CF_CONNECT_PATH = '/cloudflare/connect'
 export const CF_CALLBACK_PATH = '/cloudflare/callback'
 export const CF_OAUTH_COOKIE = 'metis_cf_oauth'
 export const CF_OAUTH_MISSING = 'Cloudflare OAuth is not configured. Set CF_OAUTH_CLIENT_ID and CF_OAUTH_CLIENT_SECRET.'
+// Each scope is required by the call site(s) named beside it (locked by the scope-lock test in
+// cloudflare-connect.test.ts): add a scope only together with its call site.
+//   account:read     resolveCloudflareAccount(): GET /accounts; pullCloudflareOverview()'s
+//                     account analytics: POST /client/v4/graphql
+//   workers-ai:run    ask.ts upstreamUrl('cloudflare') and use.ts callCloudflareGateway():
+//                     POST /accounts/{id}/ai/v1/chat/completions
+//   ai-gateway:read   ai-gateway.ts verifyDefaultGatewayPrivacy():
+//                     GET /accounts/{id}/ai-gateway/gateways/default
+//   workers:read      cloudflare.ts pullCloudflareOverview(): GET /accounts/{id}/workers/scripts
+//   d1:read           cloudflare.ts pullCloudflareOverview(): GET /accounts/{id}/d1/database
+// (Kept out of the array literal below, not as trailing comments, so esbuild's client bundle
+// — which inlines this constant — carries the scope list only, not this mapping.)
 export const CF_OAUTH_SCOPES = [
   'account:read',
-  'user:read',
   'workers-ai:run',
   'ai-gateway:read',
-  'ai-gateway:edit',
   'workers:read',
   'd1:read'
 ].join(' ')
@@ -29,7 +36,6 @@ export type CloudflareOAuthEnv = {
   CF_OAUTH_CLIENT_SECRET?: string
   CF_OAUTH_AUTHORIZE_URL?: string
   CF_OAUTH_TOKEN_URL?: string
-  CF_OAUTH_SCOPES?: string
   CF_ACCOUNT_ID?: string
   OPERATOR_VAULT_KEY?: string
 }
@@ -59,7 +65,7 @@ export function cloudflareAuthorizeLocation(request: Request, env: CloudflareOAu
   authorize.searchParams.set('response_type', 'code')
   authorize.searchParams.set('client_id', oauthClientId(env))
   authorize.searchParams.set('redirect_uri', callbackUrl(request))
-  authorize.searchParams.set('scope', (env.CF_OAUTH_SCOPES || CF_OAUTH_SCOPES).trim() || CF_OAUTH_SCOPES)
+  authorize.searchParams.set('scope', CF_OAUTH_SCOPES)
   authorize.searchParams.set('state', state)
   return authorize.toString()
 }
@@ -179,34 +185,22 @@ export async function provisionCloudflareKeys(
   creds: { token: string; accountId: string; name: string },
   fetchImpl: typeof fetch = fetch
 ): Promise<{ ok: true; last4: string } | { ok: false; error: string; status: number }> {
-  const account = await writeVaultKey(
+  // Both rows are validated, privacy-checked (the 'cloudflare' row only — see isCloudflareVaultPaste)
+  // and encrypted before either is persisted, then committed as one D1 transaction: a failure on
+  // either row can never leave the other one behind.
+  const written = await writeVaultKeysAtomically(
     store,
     env,
     email,
     now,
-    {
-      provider: CF_ACCOUNT_PROVIDER,
-      accountId: creds.accountId,
-      token: creds.token,
-      label: creds.name
-    },
+    [
+      { provider: 'cloudflare', accountId: creds.accountId, token: creds.token, label: 'AI Gateway' },
+      { provider: CF_ACCOUNT_PROVIDER, accountId: creds.accountId, token: creds.token, label: creds.name }
+    ],
     fetchImpl
   )
-  if (!account.ok) return account
-  const gateway = await writeVaultKey(
-    store,
-    env,
-    email,
-    now,
-    {
-      provider: 'cloudflare',
-      accountId: creds.accountId,
-      token: creds.token,
-      label: 'AI Gateway'
-    },
-    fetchImpl
-  )
-  if (!gateway.ok) return gateway
+  if (!written.ok) return written
+  const [gateway] = written.rows
   return { ok: true, last4: gateway.last4 }
 }
 
@@ -229,7 +223,9 @@ export async function handleCloudflareCallback(
   if (!exchanged.ok) return redirectToKeysAfterCloudflareLogin('failed')
   const account = await resolveCloudflareAccount(exchanged.token, env, fetchImpl)
   if (!account.ok) return redirectToKeysAfterCloudflareLogin('failed')
-  await ensureDefaultAiGateway(exchanged.token, account.accountId, fetchImpl)
+  // A rejected privacy check or invalid input comes back as { ok: false } here and redirects
+  // like any other provisioning failure below; a D1 or crypto failure inside
+  // writeVaultKeysAtomically still propagates, since none of its store/encryptVault calls are caught.
   const written = await provisionCloudflareKeys(
     store,
     env,
