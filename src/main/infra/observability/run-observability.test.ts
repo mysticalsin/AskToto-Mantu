@@ -215,13 +215,14 @@ describe('startRunObservability', () => {
     expect(resync).not.toHaveBeenCalled()
 
     onSuspend()
-    onResume() // 'resume' already re-armed it — a later unlock-screen must not resync it again
-    onUnlockScreen()
-    expect(resync).not.toHaveBeenCalled()
+    onResume() // 'resume' resyncs unconditionally, on its own — unrelated to unlock-screen's guard
+    expect(resync).toHaveBeenCalledTimes(1)
+    onUnlockScreen() // 'resume' already re-armed it — a later unlock-screen must not resync it again
+    expect(resync).toHaveBeenCalledTimes(1) // still just resume's call; unlock-screen added nothing
 
     onSuspend()
     onUnlockScreen() // 'resume' never arrived — this is the fallback path unlock-screen exists for
-    expect(resync).toHaveBeenCalledOnce()
+    expect(resync).toHaveBeenCalledTimes(2) // one more call, this time from unlock-screen itself
   })
 
   it('unlock-screen does not re-baseline a running heartbeat, so lateness already accumulated before it fires is still reported as app.stall (round-4 fix: the previous unconditional resync() erased it)', () => {
