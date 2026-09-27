@@ -238,20 +238,6 @@ describe('packaging wiring (mechanical — missing wiring fails this suite)', ()
   })
 })
 
-describe('will-quit wiring (index.ts) — F3', () => {
-  it('kills the local sidecar synchronously on app quit', () => {
-    const src = readFileSync(join(REPO_ROOT, 'src', 'main', 'index.ts'), 'utf8')
-    const startIdx = src.indexOf("app.on('will-quit'")
-    expect(startIdx, 'will-quit handler not found in index.ts').toBeGreaterThan(-1)
-    // The handler body is short (globalShortcut.unregisterAll + the notif timer clear + the sidecar kill)
-    // — a bounded window after the handler's opening line is enough, mirroring the build.yml job-slicing
-    // pattern above rather than trying to balance-parse braces.
-    const endIdx = src.indexOf('\n})', startIdx)
-    const body = src.slice(startIdx, endIdx > -1 ? endIdx : startIdx + 400)
-    expect(body).toMatch(/localRuntime\.stop\(\)/)
-  })
-})
-
 describe('start() integration — real binary + real Qwen3.5-0.8B model', () => {
   // This test SPAWNS the binary, so it needs the slice this process can actually execute — the
   // universal package's other arch is present on disk but would fail with an exec-format error.

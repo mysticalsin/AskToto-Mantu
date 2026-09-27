@@ -12,6 +12,7 @@ import {
   macHelperPresent,
   macScreenMetricsSpawnSpec,
   macStatFlagsSpawnSpec,
+  macStallWatchCommand,
   getMacScreenMetrics,
   extractScreenText,
   type OcrResult
@@ -109,6 +110,17 @@ describe('macScreenMetricsSpawnSpec / getMacScreenMetrics (MQA-275 — island no
     try {
       Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
       expect(macStatFlagsSpawnSpec()).toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+    }
+  })
+
+  // M2-0192: Windows has no stall sampler at all — this is that proof.
+  it('macStallWatchCommand() is null on a platform that cannot have the helper', () => {
+    const originalPlatform = process.platform
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(macStallWatchCommand()).toBeNull()
     } finally {
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
     }

@@ -67,7 +67,7 @@ const REASONS = [
   },
   {
     match: 'ffmpeg-decoder.test.ts',
-    why: 'Needs the packaged ffmpeg sidecar binary for this OS. CI linux images without the sidecar skip the live decode; contract tests cover window sizing without spawning ffmpeg.'
+    why: "Needs the packaged ffmpeg sidecar binary for this OS. CI linux images without the sidecar skip the live decode; contract tests cover window sizing without spawning ffmpeg. The cancel test's SIGTERM-immune stand-in is a POSIX shell script; Windows has no signals to ignore (kill is TerminateProcess), so it runs on linux and darwin only."
   },
   {
     match: 'win-security.test.ts',
@@ -85,7 +85,7 @@ const REASONS = [
 
 /** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
  *  Lower it when a skip is retired; never raise it for an undeclared skip. */
-const BASELINE = { win32: 15, darwin: 2, linux: 19 }
+const BASELINE = { win32: 16, darwin: 2, linux: 19 }
 
 const platform = process.platform
 const allowed = BASELINE[platform]
