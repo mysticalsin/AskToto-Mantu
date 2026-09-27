@@ -89,7 +89,7 @@ describe('ffmpeg provisioning — CI must provision every mac arch the build che
           const dir = `resources/ffmpeg/darwin-${arch}`
           const asset = `ffmpeg-darwin-${arch}`
 
-          const cache = all.find((s) => s.startsWith('uses: actions/cache@v4') && s.includes(`path: ${dir}\n`))
+          const cache = all.find((s) => s.startsWith('uses: actions/cache@') && s.includes(`path: ${dir}\n`))
           expect(cache, `no actions/cache step caches ${dir}`).toBeDefined()
           expect(cache).toContain(`key: ffmpeg-sidecar-v1-darwin-${arch}-`)
           const id = cache?.match(/\n\s+id: (\S+)/)?.[1]
@@ -120,7 +120,7 @@ describe('ffmpeg provisioning — CI must provision every mac arch the build che
 
       it('gives each arch its own cache entry — one shared id skips the other arch on a cache hit', () => {
         const caches = steps(job(chain.source, chain.job)).filter(
-          (s) => s.startsWith('uses: actions/cache@v4') && s.includes('path: resources/ffmpeg/')
+          (s) => s.startsWith('uses: actions/cache@') && s.includes('path: resources/ffmpeg/')
         )
         expect(caches.length).toBe(MAC_ARCHES.length)
         const ids = caches.map((s) => s.match(/\n\s+id: (\S+)/)?.[1])
