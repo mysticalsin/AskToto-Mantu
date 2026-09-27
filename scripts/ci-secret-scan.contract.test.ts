@@ -6,10 +6,10 @@ import { describe, expect, it } from 'vitest'
 /**
  * ci-secret-scan.contract.test.ts — MQA-166. The Security job's "Secret scan" is the repo's ONLY
  * committed-credential gate (no husky hook, no gitleaks, no npm script does this), and it was blind to
- * the one credential this product is documented to embed.
+ * the sk-kimi- shape the kimi provider accepts.
  *
  * Two independent holes, both proven before this file existed. (1) Its prefix list was a hand-written
- * literal alternation that never gained `sk-kimi-`, even though that is a first-class shipped format —
+ * literal alternation that never gained `sk-kimi-`, even though that is a first-class provider key format —
  * src/shared/providers.ts declares it as the `kimi` provider's own keyPattern, so a real sk-kimi- key
  * committed into src/ passed the gate, which then printed "No committed secrets found."
  * (2) Its roots were `src .github electron-builder.yml` and its includes had no `*.mjs`, so scripts/
