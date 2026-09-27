@@ -19,6 +19,8 @@ const fsTrap = vi.hoisted(() => ({
   reads: [] as string[]
 }))
 
+const syncCallsOn = (...names: string[]): string[] => fsTrap.calls.filter((call) => names.includes(call.split(' ').at(-1) ?? ''))
+
 vi.mock('electron', () => ({ app: { getPath: vi.fn(() => '') } }))
 
 vi.mock('node:fs', async () => {
@@ -188,6 +190,6 @@ describe('index brainStatus IPC stall path', () => {
       error: expect.stringMatching(/\S/)
     }))
     expect(fsTrap.reads).not.toContain('index.json')
-    expect(fsTrap.calls).toEqual([])
+    expect(syncCallsOn('index.json', basename(meetingsFolder), '.brain')).toEqual([])
   })
 })

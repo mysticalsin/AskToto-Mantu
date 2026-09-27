@@ -220,7 +220,7 @@ describe('meetings-root stall-path readers', () => {
     await loadIndex(s)
     await writeIndex(s, BrainIndexSchema.parse({ ingested: { 'local-meeting.md': { at: 1, ok: true } } }))
     await writePerson(s, 'person-a', PersonEntitySchema.parse({ id: 'person-a', name: 'Person A', meetings: [], quotes: [], stance_trail: [], commitments: [], aliases: [] }))
-    await writeGraph(s, BrainGraphSchema.parse({ nodes: [{ id: 'n1', kind: 'person', label: 'Person A' }], edges: [] }))
+    await writeGraph(s, BrainGraphSchema.parse({ nodes: [{ id: 'n1', type: 'person', label: 'Person A' }], edges: [] }))
     await writeIntelligenceIndexState({ lastSuccessAt: 123 }, s)
     await loadIndex(s)
     fsTrap.calls.length = 0
@@ -340,6 +340,7 @@ describe('meetings-root stall-path readers', () => {
     fsTrap.armed = false
     const s = getSettings()
     setSettings({ brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: true } })
+    await startBackfill(undefined, { force: true })
     mkdirSync(brainDir(s), { recursive: true })
     writeFileSync(join(brainDir(s), 'consolidate-state.json'), JSON.stringify({ date: '2026-01-01', passes: 0, lastRunAt: 1 }), 'utf8')
     fsTrap.cloud.add('consolidate-state.json')

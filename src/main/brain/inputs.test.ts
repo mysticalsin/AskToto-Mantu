@@ -183,15 +183,15 @@ describe('brain input source helpers', () => {
     const meetingsFolder = mkdtempSync(join(tmpdir(), 'm2-0031-locality-'))
     try {
       mkdirSync(join(meetingsFolder, '.brain'), { recursive: true })
-      writeFileSync(join(meetingsFolder, '.brain', 'index (conflicted copy).json'), '{}', 'utf8')
-      storageState.cloud.add('index (conflicted copy).json')
+      writeFileSync(join(meetingsFolder, '.brain', 'corrections (conflicted copy).json'), '{}', 'utf8')
+      storageState.cloud.add('corrections (conflicted copy).json')
       const base: Settings = { ...DEFAULT_SETTINGS, meetingsFolder, encryptTranscripts: false }
       expect(await brainInputsLocal(base)).toBe(false)
 
       storageState.cloud.clear()
       writeFileSync(join(meetingsFolder, '.brain', 'index.corrupt-2026-01-01.json'), '{}', 'utf8')
       storageState.cloud.add('index.corrupt-2026-01-01.json')
-      unlinkSync(join(meetingsFolder, '.brain', 'index (conflicted copy).json'))
+      unlinkSync(join(meetingsFolder, '.brain', 'corrections (conflicted copy).json'))
       expect(await brainInputsLocal(base)).toBe(true)
 
       writeFileSync(join(meetingsFolder, 'cloud-meeting.md'), 'cloud', 'utf8')

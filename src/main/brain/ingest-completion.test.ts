@@ -360,6 +360,8 @@ describe('backfill run completion observes real work', () => {
     expect(purge).toHaveBeenCalledTimes(1)
     publication.release()
     await expect(run.completion).resolves.toMatchObject({ ok: true })
+    await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false))
+    await whenIndexWritesSettle()
   })
 
   it('gives only one concurrent rebuild ownership of asynchronous preflight and purge', async () => {

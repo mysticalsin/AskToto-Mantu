@@ -87,7 +87,7 @@ const BASELINE: Record<TargetFile, number> = {
   'brain/intelligence-work.ts': 0,
   'brain/intelligence-pass.ts': 0,
   'brain/corrections.ts': 10,
-  'brain/store.ts': 29,
+  'brain/store.ts': 28,
   'recall.ts': 0
 }
 
