@@ -42,9 +42,10 @@ describe('MQA-232 — every audit record chains to the one before it', () => {
   })
 
   it('writes seq/prev on every record and the verifier proves the chain', () => {
-    auditLog('app.crash', { probe: 'chain-1' })
-    auditLog('app.crash', { probe: 'chain-2' })
-    auditLog('app.crash', { probe: 'chain-3' })
+    // An attributed event: app.* is projected and would drop `probe`, leaving the tamper case nothing to edit.
+    auditLog('settings.changed', { probe: 'chain-1' })
+    auditLog('settings.changed', { probe: 'chain-2' })
+    auditLog('settings.changed', { probe: 'chain-3' })
     const lines = readLines()
     expect(lines.length).toBeGreaterThanOrEqual(3)
     const last = JSON.parse(lines[lines.length - 1]) as { seq: number; prev: string }
