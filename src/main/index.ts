@@ -254,7 +254,9 @@ import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 // until an identified and admitted live/import session needs it (never on the startup path).
 let speakerIdInstance: SpeakerId | null = null
 function getSpeakerId(): SpeakerId {
-  if (!speakerIdInstance) speakerIdInstance = createSpeakerId()
+  if (!speakerIdInstance) {
+    speakerIdInstance = createSpeakerId({ canSaveVoiceprints: () => getSettings().speakerId.saveVoiceprints })
+  }
   return speakerIdInstance
 }
 
@@ -302,8 +304,8 @@ function completeLiveSpeakerReceipt(startedAt: number): void {
   if (!receipt || receipt.closedAt === undefined || !receipt.savedFile) return
 
   // Delete before any fallible work: duplicate saves/stops cannot replay the capability or snapshot a
-  // replacement. snapshotSession intentionally keeps its existing qualified-operator flush behavior;
-  // consent/encrypted operator-profile persistence remains Task 7-P3.
+  // replacement. snapshotSession flushes the qualified operator buffer only under the save-voiceprints opt-in,
+  // which speaker-id.ts enforces; encrypting that store remains Task 7-P3.
   liveSpeakerReceipts.delete(startedAt)
   let snapshot: SpeakerEnrollmentSnapshot | null = null
   try {
@@ -6555,7 +6557,8 @@ function registerIpc(): void {
     if (response !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteAllMeetings()
     purgeGraphArtifacts() // legacy userData/graph artifacts + the runner's graphify-out/ manifest
-    const brainPurge = purgeBrain(getSettings()) // the `.brain/` knowledge store — entities, quotes, graph
+    const settings = getSettings()
+    const brainPurge = purgeBrain(settings, { mode: 'erase' }) // the `.brain/` knowledge store — entities, quotes, graph
     // The wiki mirror is that same derived knowledge in CLEARTEXT (publish.ts writes it with
     // `encrypt: false` by design), so an erasure that skipped it would leave a readable copy of every
     // meeting, person and open commitment behind — and, with the brain gone, one nothing can ever prune.
