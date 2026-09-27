@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { writeFileSync, rmSync, existsSync, readFileSync, mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { devEnv } from './dev-env'
 import { getSettings, setSettings } from './store'
 import { saveMeeting, ensureMeetingsFolder, detectOneDrive } from './transcripts'
 import { buildSystem } from './personas'
@@ -16,28 +17,44 @@ interface R {
 
 const EMPTY_PROFILE = { name: '', role: '', company: '', resume: '', jobDescription: '', notes: '' }
 
+// Holds the throwaway directory redirectSelfTestUserData() created, or undefined if it never ran.
+// runSelfTest() checks the CURRENT userData against exactly this value before touching anything —
+// self-test only ever runs against a throwaway userData (M2-0004), never the live profile.
+let redirectedUserData: string | undefined
+
+/** Isolates ASKTOTO_SELFTEST's throwaway profile before Electron — or any of index.ts's own boot work
+ *  (settings reads, embedded-key seeding, local-model provisioning, …) — can resolve or touch a default
+ *  userData path. Call this immediately after index.ts's ASKTOTO_USERDATA / '-dev' profile selection and
+ *  before app ready, mirroring initializeCaheEditionIdentity()'s "must run before the first
+ *  app.getPath('userData') call" contract. mkdtempSync both creates the directory and guarantees a fresh
+ *  one per run, so two self-tests (or a self-test racing a real launch) never collide. A no-op whenever
+ *  ASKTOTO_SELFTEST is unset or the build is packaged — devEnv() is the single gate for both, so a
+ *  persistent `setx ASKTOTO_SELFTEST out.json` can never redirect a shipped install. */
+export function redirectSelfTestUserData(): void {
+  if (!devEnv('ASKTOTO_SELFTEST')) return
+  redirectedUserData = mkdtempSync(join(tmpdir(), 'asktoto-selftest-userdata-'))
+  app.setPath('userData', redirectedUserData)
+}
+
 /** Executes the REAL main-process logic inside the Electron runtime and writes pass/fail JSON.
  *
  *  Every suite below drives the real settings layer (getSettings/setSettings) and the real transcript
  *  writer — exactly the code that a live profile's settings.json, managed-config.json and
- *  meetingsFolder sit behind. So the first thing this function does, before any of that runs, is give
- *  itself a disposable userData directory: nothing past that line can name the owner's real profile,
- *  even if a suite throws (P4-F1). */
+ *  meetingsFolder sit behind. Self-test only ever runs against a throwaway userData (M2-0004): this
+ *  function refuses to run at all unless redirectSelfTestUserData() already pointed userData at its own
+ *  disposable directory, so nothing past that check can ever name the owner's real profile. */
 export async function runSelfTest(outPath: string): Promise<void> {
   const r: R[] = []
   const ok = (test: string, cond: boolean, detail = ''): void => {
     r.push({ test, pass: !!cond, detail })
   }
 
-  // Must run before the first getSettings()/setSettings() call. mkdtempSync both creates the directory
-  // and guarantees a fresh one per run, so two self-tests (or a self-test racing a real launch) never
-  // collide. The read-back refuses to proceed if the redirect somehow didn't take, instead of silently
-  // falling through to the profile app.getPath('userData') resolved to before this line.
-  const sandboxUserData = mkdtempSync(join(tmpdir(), 'asktoto-selftest-userdata-'))
-  app.setPath('userData', sandboxUserData)
+  // The read-back refuses to proceed if the redirect never happened (or happened against a userData
+  // that has since changed again), instead of silently falling through to whatever profile
+  // app.getPath('userData') resolves to.
   const ud = app.getPath('userData')
-  if (ud !== sandboxUserData) {
-    throw new Error("self-test refused to run: app.setPath('userData', …) did not take effect")
+  if (!redirectedUserData || ud !== redirectedUserData) {
+    throw new Error('self-test refused to run: userData is not the throwaway profile redirectSelfTestUserData() created')
   }
   const settingsFile = join(ud, 'settings.json')
   const managedFile = join(ud, 'managed-config.json')
@@ -165,4 +182,7 @@ export async function runSelfTest(outPath: string): Promise<void> {
 
   const passed = r.filter((x) => x.pass).length
   writeFileSync(outPath, JSON.stringify({ passed, total: r.length, results: r }, null, 2))
+  // Leave nothing behind in the OS temp directory once the run is done — this directory only ever
+  // existed for this one self-test run.
+  rmSync(ud, { recursive: true, force: true })
 }
