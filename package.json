@@ -79,6 +79,8 @@
     "check:mode-skills": "node scripts/lock-mode-skills.mjs --check",
     "check:bugs": "node scripts/check-bug-ledger.mjs",
     "check:workflow-pins": "node scripts/ci/check-workflow-pins.mjs",
+    "check:layering": "depcruise src --config .dependency-cruiser.cjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "check:build-host": "node scripts/check-build-host.mjs",
     "typecheck:tests": "node scripts/check-test-types.mjs",
     "check:skips": "node scripts/check-skipped-tests.mjs",
