@@ -412,5 +412,5 @@ Overlay chrome, island geometry, onboarding, identity card, Intelligence dashboa
 
 ## Scope note — AI Gateway no-content-retention contract
 
-This checklist does not cover the AI Gateway no-content-retention contract. M2-0149 closes the
-no-content-retention gates.
+This checklist does not cover the AI Gateway no-content-retention contract, which is owned by
+M2-0149.

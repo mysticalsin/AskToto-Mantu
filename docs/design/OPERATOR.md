@@ -17,9 +17,8 @@ tokens:
 
 # Operator — thin license-generate tip
 
-**Status:** Active — shipped 8-tab Operator console. The kit's 11-surface requirement (MASTER
-§12.2, §12.9) is closed by M2-0158, which adds the missing portal surfaces inside the existing
-chrome per the owner's scope decision.
+**Status:** Active — shipped 8-tab Operator console. Whether and how the kit's 11-surface
+requirement (MASTER §12.2, §12.9) joins this console is an open scope question owned by M2-0158.
 
 Live URL: `https://metis-operator.tony-walteur.workers.dev/` (`#overview`).
 Access: Cloudflare Access email-code only. Allowlist `tony.walteur@gmail.com` +

@@ -479,5 +479,4 @@ The 20-point checklist (same PR, do not re-score the ten here) is `docs/security
 
 ## Scope note — AI Gateway no-content-retention contract
 
-This audit does not cover the AI Gateway no-content-retention contract. M2-0149 closes the
-no-content-retention gates.
+This audit does not cover the AI Gateway no-content-retention contract, which is owned by M2-0149.

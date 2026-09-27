@@ -25,8 +25,8 @@ stays valid and unchanged for that use. The kit's MASTER §16.7 additionally des
 Teams-integrated deployment where other employees' meetings are processed automatically — a
 different processing activity that needs its own LIA/DPIA track, not covered here today.
 **Placeholder:** a second compliance track for the multi-seat/Teams-attendance deployment is owned
-by M2-0150 (which depends on the Teams media receiver in M2-0155) once that work is scheduled; this
-section is a pointer for the DPO, not that track's content.
+by M2-0150 once that work is scheduled; the Teams media receiver that track covers is built in
+M2-0155. This section is a pointer for the DPO, not that track's content.
 
 ## Documents
 

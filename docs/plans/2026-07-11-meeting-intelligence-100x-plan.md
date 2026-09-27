@@ -3,7 +3,8 @@
 **Date:** 2026-07-11
 **Status:** PARTIALLY IMPLEMENTED — Phases 0–4 are in source. The Phase 5 publisher, consent,
 confidential-meeting, graphify, and alias-retrieval source is landed, but its real OneDrive/Dust
-connector E2E checklist remains open. Phases 6–8 remain roadmap work.
+connector E2E checklist remains open. Phases 6–7 remain roadmap work; Phase 8 is partly landed —
+see the 2.0 fold-in note below.
 **Method:** 21-agent deep dive (9 code readers over every meeting-intelligence subsystem, 7 web researchers on 2025–2026 state of the art, 3 rival architectures, 2-judge adversarial panel). Both judges independently selected the CRM-First design (8/10, 8.5/10); this plan is that design plus the grafts both judges demanded and fixes for the blind spots they found in all three designs.
 **Governing rules:** Karpathy guidelines (surgical changes, verifiable success criteria), Tony's builder rules (simplicity first, no new database unless files are proven insufficient — they are not), TDD discipline.
 
@@ -149,7 +150,10 @@ MQA-232), the erasure seams exist (`src/main/erasure-completeness.contract.test.
 `docs/compliance/*` is Phase 8's own paper pack, which cites this plan as its plan of record. The
 remaining governance, subject-rights and multi-seat/Teams-track work is owned by M2-0150 (TASK-058,
 "Complete governance, subject rights and sharing qualification and add the multi-seat/Teams
-compliance track"); no ticket yet owns the central IPC registrar, key custody or consent-UX items.
+compliance track"). The central IPC registrar is owned by M2-0060 (the compile-time schema/guard
+check on `registerHandler`) and M2-0061 (the test enumerating every channel); consent UX on
+recording start is partly shipped already (`src/renderer/src/components/RecordingConsentReminder.tsx`,
+`src/renderer/src/lib/consent.ts`). Only key custody remains without an owning ticket.
 
 Kept below unchanged for lineage.
 
