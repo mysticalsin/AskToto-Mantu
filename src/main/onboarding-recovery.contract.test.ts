@@ -60,7 +60,8 @@ describe('exclusive onboarding renderer recovery', () => {
 
     expect(recoveryUrl).toBe('file:///renderer/index.html?exclusiveOnboarding=1')
 
-    const loadURL = vi.fn()
+    // Real BrowserWindow#loadURL returns a Promise; M2-0037 now observes it (`.catch(...)` on the result).
+    const loadURL = vi.fn(() => Promise.resolve())
     const revokeForLifecycleEvent = vi.fn()
     const win = {
       isDestroyed: () => false,
@@ -93,6 +94,8 @@ describe('exclusive onboarding renderer recovery', () => {
       selfWebContentsId: 1,
       commandControl: { revokeForLifecycleEvent },
       responsiveness: { markGone: vi.fn() },
+      // M2-0037: within budget — the handler must still reload exactly as before.
+      reloadBudget: { onRenderProcessGone: () => 'reload' },
       win
     })
 

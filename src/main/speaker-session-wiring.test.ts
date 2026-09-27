@@ -441,7 +441,8 @@ describe('bounded close and successful-save receipt join', () => {
     for (let i = 0; i < 3; i++) await api.observeOperatorAudio(windowFor(5), 'live:900')
 
     const revokeForLifecycleEvent = vi.fn()
-    const loadURL = vi.fn()
+    // Real BrowserWindow#loadURL returns a Promise; M2-0037 now observes it (`.catch(...)` on the result).
+    const loadURL = vi.fn(() => Promise.resolve())
     const win = { isDestroyed: () => false, loadURL, webContents: { id: 1 } }
     const gone = actualRendererGoneHandler({
       mainLog: { error: vi.fn() },
@@ -465,6 +466,8 @@ describe('bounded close and successful-save receipt join', () => {
       selfWebContentsId: 1,
       commandControl: { revokeForLifecycleEvent },
       responsiveness: { markGone: vi.fn() },
+      // M2-0037: within budget — the handler must still reload exactly as before.
+      reloadBudget: { onRenderProcessGone: () => 'reload' },
       overlayRendererUrl: () => 'file:///renderer/index.html',
       process: { env: {} },
       join

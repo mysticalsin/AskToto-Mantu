@@ -42,7 +42,12 @@ describe('Cap2 command authority boundary', () => {
     expect(closed).toMatch(/if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('window_closed'\)/)
     const rendererGone = between(main, "win.webContents.on('render-process-gone', (_e, details) => {", 'const rendererUrl = overlayRendererUrl()')
     expect(rendererGone).toMatch(/if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('renderer_replaced'\)/)
-    expect(rendererGone).toMatch(/if \(win !== self \|\| self\.isDestroyed\(\)\) return\s*self\.loadURL\(overlayRendererUrl\(\)\)/)
+    // M2-0037: the destroyed-check guard now leads into the reload-budget decision (reload / halt / ignore)
+    // rather than reloading unconditionally — assert order, not exact adjacency, so that branch can grow.
+    const destroyedGuard = rendererGone.indexOf('if (win !== self || self.isDestroyed()) return')
+    const reload = rendererGone.indexOf('self.loadURL(overlayRendererUrl())')
+    expect(destroyedGuard).toBeGreaterThan(-1)
+    expect(reload).toBeGreaterThan(destroyedGuard)
   })
 
   it('revokes command authority during replay handoff without letting retired-window close revoke the successor', () => {
