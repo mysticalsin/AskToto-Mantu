@@ -2,21 +2,20 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { spawn as SpawnFn } from 'node:child_process'
 
 // The temp dir the app writes its setup/login script into. Hoisted so the electron mock (which is
 // itself hoisted above the imports) can read it lazily, once beforeAll has created the real dir.
 const h = vi.hoisted(() => ({ dir: '' }))
 
 // Hoisted handles onto the electron/child_process mocks below, so tests can assert on calls without
-// re-importing the mocked modules. `openPath` is what RF-AUDIT-R3-B1's fix now uses to open every
-// setup/login script; `spawn` stays a real pass-through spy (not a stub) so that if a regression ever
-// reintroduces a spawned cmd.exe for this path, the test sees a genuine spawn() call rather than a
-// silently-mocked no-op.
+// re-importing the mocked modules. `openPath` is what RF-AUDIT-R3-B1's fix uses to open every
+// setup/login script: the Windows script opens via shell.openPath with the exact path, and nothing is
+// spawned (see the SECURITY INVARIANTS header in cli.ts). `spawn` is a plain recording stub, so a
+// regression that spawns anything for this path is caught by `expect(mocks.spawn).not.toHaveBeenCalled()`
+// on every OS.
 const mocks = vi.hoisted(() => ({
   openPath: vi.fn(async () => ''),
-  spawn: vi.fn(),
-  realSpawn: null as typeof SpawnFn | null
+  spawn: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -26,8 +25,6 @@ vi.mock('electron', () => ({
 
 vi.mock('node:child_process', async (importActual) => {
   const actual = await importActual<typeof import('node:child_process')>()
-  mocks.realSpawn = actual.spawn
-  mocks.spawn.mockImplementation((...args: Parameters<typeof SpawnFn>) => mocks.realSpawn!(...args))
   return { ...actual, spawn: mocks.spawn }
 })
 
@@ -237,16 +234,11 @@ describe('cmdShimSpawn and the Windows login script share one quoted-path rule (
   })
 })
 
-// RF-AUDIT-R3-B1 — loginCli must open the Windows setup/login script via shell.openPath (Electron's
-// ShellExecuteExW wrapper), exactly as setupCli always has, and never through a Node-built cmd.exe
-// command line. A spawned `cmd /d /c start "" <scriptPath>` cannot satisfy that invariant even with a
-// perfectly quoted argv: `start` launches a `.cmd` file through a SECOND, independent cmd.exe (its own
-// `/K`), whose quote-retention rule strips the outer quote pair whenever the quoted text contains `&`,
-// `^`, `<`, `>`, `(`, `)`, `@` or `|` — a profile/temp scriptPath containing any of those would reach
-// that second parser unquoted. (ShellExecute's own default "open" verb for a `.cmd` file does still run
-// cmd.exe, as `cmd.exe /c ""<path>" "`, and cmd.exe still expands a literal `%NAME%` inside those quotes
-// — but its quote-retention rule keeps the whole path as one token, which is what these tests check
-// for: exactly the scriptPath reaches shell.openPath, and spawn is never called at all.)
+// RF-AUDIT-R3-B1 — the invariant these tests pin (full rationale in the SECURITY INVARIANTS header in
+// cli.ts): for a scriptPath containing cmd.exe metacharacters or a literal `%NAME%`, loginCli opens it
+// via shell.openPath with the exact, unmodified path, and spawns nothing. `spawn` is a recording stub
+// and `openPath` never touches a real shell, so these tests do not exercise cmd.exe's or ShellExecute's
+// own parsing — they only prove which call path loginCli takes.
 describe('loginCli opens the Windows script via shell.openPath, never a spawned cmd.exe (RF-AUDIT-R3-B1)', () => {
   it.each([
     ['ampersand + space', 'asktoto-cli-script-evil & co '],

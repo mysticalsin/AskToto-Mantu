@@ -10,7 +10,7 @@
  *     cannot neutralize (isQuotablePath) and is otherwise made safe by explicit quoting +
  *     windowsVerbatimArguments (see cmdShimSpawn).
  *   - The Windows setup/login script is opened with shell.openPath (Electron's ShellExecuteExW
- *     wrapper) — the same call setupCli always used — never through a Node-built cmd.exe command line.
+ *     wrapper) — as setupCli does — never through a Node-built cmd.exe command line.
  *     A `start`-spawned cmd.exe cannot make that safe on its own: `start` launches a `.cmd` file
  *     through a SECOND, independent cmd.exe (its own `/K`), whose quote-retention rule strips the outer
  *     quotes whenever the quoted text contains `&`, `^`, `<`, `>`, `(`, `)`, `@` or `|`, so a
