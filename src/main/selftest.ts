@@ -24,16 +24,19 @@ let redirectedUserData: string | undefined
 
 /** Isolates ASKTOTO_SELFTEST's throwaway profile before Electron — or any of index.ts's own boot work
  *  (settings reads, embedded-key seeding, local-model provisioning, …) — can resolve or touch a default
- *  userData path. Call this immediately after index.ts's ASKTOTO_USERDATA / '-dev' profile selection and
- *  before app ready, mirroring initializeCaheEditionIdentity()'s "must run before the first
- *  app.getPath('userData') call" contract. mkdtempSync both creates the directory and guarantees a fresh
- *  one per run, so two self-tests (or a self-test racing a real launch) never collide. A no-op whenever
- *  ASKTOTO_SELFTEST is unset or the build is packaged — devEnv() is the single gate for both, so a
- *  persistent `setx ASKTOTO_SELFTEST out.json` can never redirect a shipped install. */
+ *  userData path. Call this before index.ts's own ASKTOTO_USERDATA handling, mirroring
+ *  initializeCaheEditionIdentity()'s "must run before the first app.getPath('userData') call" contract.
+ *  Setting process.env.ASKTOTO_USERDATA here, rather than calling app.setPath directly, means that
+ *  existing handling — and resolveMeetingsFolder()'s own ASKTOTO_USERDATA check (transcripts.ts) — adopt
+ *  the throwaway directory through the one isolation mechanism the QA profile already uses, instead of a
+ *  second one. mkdtempSync both creates the directory and guarantees a fresh one per run, so two
+ *  self-tests (or a self-test racing a real launch) never collide. A no-op whenever ASKTOTO_SELFTEST is
+ *  unset or the build is packaged — devEnv() is the single gate for both, so a persistent
+ *  `setx ASKTOTO_SELFTEST out.json` can never redirect a shipped install. */
 export function redirectSelfTestUserData(): void {
   if (!devEnv('ASKTOTO_SELFTEST')) return
   redirectedUserData = mkdtempSync(join(tmpdir(), 'asktoto-selftest-userdata-'))
-  app.setPath('userData', redirectedUserData)
+  process.env.ASKTOTO_USERDATA = redirectedUserData
 }
 
 /** Executes the REAL main-process logic inside the Electron runtime and writes pass/fail JSON.
@@ -182,7 +185,4 @@ export async function runSelfTest(outPath: string): Promise<void> {
 
   const passed = r.filter((x) => x.pass).length
   writeFileSync(outPath, JSON.stringify({ passed, total: r.length, results: r }, null, 2))
-  // Leave nothing behind in the OS temp directory once the run is done — this directory only ever
-  // existed for this one self-test run.
-  rmSync(ud, { recursive: true, force: true })
 }

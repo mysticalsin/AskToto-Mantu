@@ -153,7 +153,7 @@ describe('redirectSelfTestUserData — implicit meetings store isolation (M2-000
 
 describe('runSelfTest — borrowed profile state', () => {
   let ud: string
-  let redirected: string
+  let redirected: string | undefined
 
   beforeEach(() => {
     for (const k of Object.keys(settingsState)) delete settingsState[k]
@@ -166,12 +166,12 @@ describe('runSelfTest — borrowed profile state', () => {
     process.env.ASKTOTO_SELFTEST = join(ud, 'out.json')
     redirectSelfTestUserData()
     applyAskTotoUserData()
-    redirected = process.env.ASKTOTO_USERDATA!
+    redirected = process.env.ASKTOTO_USERDATA
   })
 
   afterEach(() => {
     rmSync(ud, { recursive: true, force: true })
-    rmSync(redirected, { recursive: true, force: true })
+    if (redirected) rmSync(redirected, { recursive: true, force: true })
   })
 
   it('MQA-167 — restores encryptTranscripts and the meetings folder when a suite throws mid-way', async () => {

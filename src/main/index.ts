@@ -890,6 +890,13 @@ freezeAsciiUserAgent(app)
 initializeCaheEditionIdentity()
 if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
+// Self-test must own a throwaway userData before anything resolves userData; no-op unless
+// devEnv(ASKTOTO_SELFTEST). Setting ASKTOTO_USERDATA (rather than calling app.setPath directly) lets the
+// ASKTOTO_USERDATA handling immediately below, and resolveMeetingsFolder()'s own ASKTOTO_USERDATA check
+// (transcripts.ts), apply the throwaway directory through the one QA-isolation mechanism instead of a
+// second, self-test-only one (M2-0004).
+redirectSelfTestUserData()
+
 // Select the final user-data profile before crashReporter (or any other Electron service) can resolve
 // a default path. In particular, ASKTOTO_USERDATA must isolate physical QA from a real encrypted profile.
 if (process.env.ASKTOTO_USERDATA) app.setPath('userData', process.env.ASKTOTO_USERDATA)
@@ -901,14 +908,6 @@ if (process.env.ASKTOTO_USERDATA) app.setPath('userData', process.env.ASKTOTO_US
 if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
 }
-
-// Give ASKTOTO_SELFTEST's throwaway profile precedence over whatever the block above just selected.
-// Must run before crashReporter/setName/anything else below touches userData, and strictly before
-// whenReady's self-test dispatch far below ever calls getSettings() — otherwise the boot work in
-// between (egress allowlist, embedded-key seeding, local-model provisioning, launchAtLogin reconcile,
-// …) would run against the live profile first (M2-0004 / P4-F1). A no-op when ASKTOTO_SELFTEST is
-// unset or the build is packaged — devEnv() gates it, same as initializeCaheEditionIdentity() above.
-redirectSelfTestUserData()
 
 // Unpackaged Electron.app still ships CFBundleName "Electron". setName changes
 // app.getName() / About / some menus to Métis. The macOS menu-bar process name
@@ -8987,13 +8986,10 @@ if (!app.requestSingleInstanceLock()) {
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
   process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
   process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
-  // userData was already redirected to a disposable throwaway directory by redirectSelfTestUserData(),
-  // called right after the ASKTOTO_USERDATA / '-dev' profile selection near the top of this file — well
-  // before app ready, so nothing in this whenReady callback ever touched the live profile's
-  // settings.json or managed-config.json first (M2-0004). runSelfTest() itself refuses to run if that
-  // redirect somehow didn't take. devEnv() still keeps this whole path out of packaged builds — a
-  // persistent `setx ASKTOTO_SELFTEST out.json` must never re-trigger this on every launch of a shipped
-  // build.
+  // Self-test must own a throwaway userData before anything resolves userData; no-op unless
+  // devEnv(ASKTOTO_SELFTEST). redirectSelfTestUserData() ran near the top of this file, well before app
+  // ready, so nothing above this line ever touched the live profile's settings.json or managed-config.json
+  // (M2-0004). runSelfTest() itself refuses to run if that redirect somehow didn't take.
   const selfTestOut = devEnv('ASKTOTO_SELFTEST')
   if (selfTestOut) {
     try {
