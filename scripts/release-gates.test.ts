@@ -137,7 +137,7 @@ describe('deterministic packaging toolchain', () => {
 
   it('MQA-207: single-architecture Windows chains keep their bytecode', () => {
     const scripts = pkg.scripts as Record<string, string>
-    for (const name of ['dist:win', 'dist:win:appx', 'installers:win:cahe']) {
+    for (const name of ['dist:win', 'dist:win:appx']) {
       if (scripts[name]) expect(scripts[name]).not.toContain('ASKTOTO_MAC_UNIVERSAL')
     }
   })
@@ -232,5 +232,30 @@ describe('direct release signing gates', () => {
     const winGate = workflow.slice(workflow.indexOf('release-windows:'))
     expect(winGate).toContain('refusing to publish an unsigned Windows release')
     expect(winGate).toContain('WIN_CSC_EXPECTED_SUBJECT')
+  })
+})
+
+describe('embedded-credential placeholder gate (M2-0056)', () => {
+  it('wires check-provisioned-secrets into every release chain that runs check-release-secrets, before electron-builder', () => {
+    const releaseChains = Object.entries(pkg.scripts).filter(
+      ([name, body]) => name.startsWith('release:') && body.includes('check-release-secrets.mjs')
+    )
+    // release:build:mac, release:build:win, release:mas, release:win:store. `release` and `release:win`
+    // are excluded here — they only delegate via `npm run release:build:*` and never repeat the gate text.
+    expect(releaseChains.length).toBeGreaterThanOrEqual(4)
+    for (const [name, body] of releaseChains) {
+      expect(body, `${name} must gate on check-provisioned-secrets.mjs --profile release`).toContain(
+        'node scripts/check-provisioned-secrets.mjs --profile release'
+      )
+      const secretsIndex = body.indexOf('check-release-secrets.mjs')
+      const provisionedIndex = body.indexOf('check-provisioned-secrets.mjs')
+      const builderIndex = body.indexOf('electron-builder')
+      expect(secretsIndex, `${name}: check-release-secrets must run before check-provisioned-secrets`).toBeLessThan(
+        provisionedIndex
+      )
+      expect(provisionedIndex, `${name}: check-provisioned-secrets must run before electron-builder`).toBeLessThan(
+        builderIndex
+      )
+    }
   })
 })

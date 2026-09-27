@@ -18,12 +18,12 @@ import { execFileSync } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { resolveScratchDir } from './qa-dirs.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OPERATOR_ROOT = join(__dirname, '..')
-const SCRATCH_DIR =
-  process.env.METIS_QA_SCRATCH ||
-  '/private/tmp/claude-501/-Users-tony-Library-CloudStorage-OneDrive-MantuGroup-Documents-Chief-of-Staff-Apps-Source-Metis-Portal/7883530c-5678-450a-aef0-46d1bc798bfd/scratchpad'
+
+const SCRATCH_DIR = resolveScratchDir()
 const DATABASE_NAME = 'metis-operator'
 
 async function loadFixtureModule() {

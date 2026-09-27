@@ -1,7 +1,14 @@
 /**
  * responsiveness-tracker.ts — pairs a BrowserWindow's `unresponsive` event with the `responsive` (or
  * `render-process-gone`) that ends it, so `app.responsive` can report how long the renderer was wedged.
+ *
+ * Elapsed time is measured on `performance.now()` (a monotonic clock), never on `Date.now()` (the wall
+ * clock): a lid-close/sleep or an NTP step between the two events would move the wall clock without the
+ * renderer having been wedged for anywhere near that long, manufacturing a fake `app.responsive` duration
+ * — the same hazard stall-monitor.ts's own module header documents for its heartbeat.
  */
+import { performance } from 'node:perf_hooks'
+
 export interface ResponsivenessTracker {
   /** Call from the window's `unresponsive` handler. */
   markUnresponsive(): void
@@ -15,7 +22,7 @@ export interface ResponsivenessTracker {
   markGone(): void
 }
 
-export function createResponsivenessTracker(now: () => number = Date.now): ResponsivenessTracker {
+export function createResponsivenessTracker(now: () => number = () => performance.now()): ResponsivenessTracker {
   let unresponsiveSince: number | null = null
   return {
     markUnresponsive(): void {

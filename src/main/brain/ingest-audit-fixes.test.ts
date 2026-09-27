@@ -502,7 +502,7 @@ describe('brain ingest — audited fixes', () => {
     expect(createStreamMock).toHaveBeenCalledTimes(3)
 
     allowProviders(['anthropic']) // the fresh key is pasted
-    requestBackfill({ respectRetryBackoff: true })
+    requestBackfill()
 
     await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
     releaseHeld()

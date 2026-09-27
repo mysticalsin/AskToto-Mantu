@@ -48,6 +48,15 @@ The CLI providers (`claude`, `codex`) and `ffmpeg` are child processes with thei
 the policy below does not see their sockets. A bank that needs a hard guarantee should not enable CLI
 providers, or should pin them at the proxy.
 
+### MCP connections through a proxy
+
+Before connecting to an MCP endpoint (Plane, ClickUp), the app resolves it on the device and refuses the
+connection if any answer is a cloud-metadata address. It then asks the proxy for a tunnel to that resolved
+address (for example `CONNECT 203.0.113.7:443`), never to the endpoint's name, and TLS inside the tunnel
+still presents and verifies the endpoint's host name (SNI). So the device must be able to resolve the MCP
+endpoint, and the proxy must allow `CONNECT` to its addresses, not only to its name. SOCKS proxies are not
+used for MCP connections.
+
 ## Enforcing it: `egressAllowlist`
 
 Managed config (machine-wide `managed-config.json`, see `docs/ENTERPRISE_RELEASE.md`):

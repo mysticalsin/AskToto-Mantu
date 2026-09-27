@@ -20,9 +20,8 @@ Métis is a packaged Electron app. `npx asar extract` recovers every string insi
 seconds. There is no build flag, no obfuscation and no keychain trick that changes that — anything
 compiled into the app is published with the app.
 
-This repo already treats that as settled: `scripts/check-cahe-package.mjs` refuses to build a package
-carrying an embedded key unless a human sets an explicit override, and it exists because the alternative
-was tried and rejected.
+This repo already treats that as settled: `scripts/check-embedded-cloudflare-key.mjs` refuses to build a
+package carrying an embedded key unless a human sets an explicit override.
 
 A Cloudflare account token is a worse thing to embed than an ordinary model key. It is not scoped to one
 model vendor: through the AI REST API it reaches Workers AI *and* OpenAI, Anthropic, Google AI Studio
@@ -112,8 +111,8 @@ The embedded credential comes in **two shapes**, both encrypted into the same bl
    owner accepts this deliberately and rotates the token out-of-band; size/scope the token accordingly and
    be ready to rotate it. The truly-secure alternative remains shape (1)/the Worker proxy.
 
-Either shape is the same disclosed, opt-in mechanism the Cahê pilot uses for its Kimi key
-(`src/main/cahe-embedded-key.ts`) — `src/main/embedded-cloudflare-key.ts` is the general-build counterpart:
+Either shape uses the same disclosed, opt-in embedding mechanism, implemented in
+`src/main/embedded-cloudflare-key.ts`:
 
 1. Generate a **separate** key — never the operator's own `METIS_PROXY_KEY` — and add it to the Worker's
    `METIS_PROXY_KEYS` array under its own label, e.g. `"embedded-default:<value>"`
@@ -133,7 +132,7 @@ Either shape is the same disclosed, opt-in mechanism the Cahê pilot uses for it
    for the mac/win release jobs, so with the account secrets configured in the repo the DMG/EXE embed the
    credential **by default**; locally you set it explicitly, e.g.
    `METIS_CLOUDFLARE_API_TOKEN=… METIS_CLOUDFLARE_ACCOUNT_ID=… METIS_EMBED_CLOUDFLARE_KEY=1 npm run dist`
-   (or `release:build:mac`, `dist:win`, `release:build:win`, or the Cahê chain). This is a deliberate
+   (or `release:build:mac`, `dist:win`, `release:build:win`). This is a deliberate
    **double opt-in**: the token env supplies the credential, and `METIS_EMBED_CLOUDFLARE_KEY=1` authorizes
    packaging it. Without the second var, `scripts/check-embedded-cloudflare-key.mjs` refuses the package
    outright rather than silently shipping a key nobody meant to embed. That same gate proves the packaged

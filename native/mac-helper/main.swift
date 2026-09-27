@@ -39,6 +39,14 @@
 //                     stat(2) reads the inode and never opens the file, so probing a dataless
 //                     (cloud-only) file cannot materialize it. src/main/infra/storage/dataless.ts owns
 //                     the protocol and decodes SF_DATALESS; this command reports the raw word.
+//
+//   stall-watch       Long-running, one per boot. --pid <main> --alive <file> --capture-prefix <path>
+//                     --stale-after-ms <ms>. Every 5 s it stats <file>; when its mtime has not changed
+//                     for more than <ms> of awake time it runs /usr/bin/sample on <main> into
+//                     <path>.<epochMs>.<stalledMs>.sample, once per stall and at most once per 10 minutes,
+//                     then prints `sampled` or `failed`. It samples only its own parent and exits once
+//                     <main> is no longer its parent. src/main/infra/observability/stall-sampler.ts owns
+//                     the protocol; all redaction, retention and auditing happen there, not here.
 import AppKit
 import Speech
 import Vision
@@ -310,11 +318,103 @@ func runStatFlags() -> Never {
     exit(0)
 }
 
+// MARK: - stall-watch
+
+let stallPollSeconds: UInt32 = 5
+let stallCooldownMs: UInt64 = 600_000
+let sampleDeadlineMs: UInt64 = 60_000
+
+/// Awake milliseconds. CLOCK_UPTIME_RAW stops while the Mac sleeps, so a lid-close never counts toward a
+/// stall.
+func awakeMs() -> UInt64 {
+    clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1_000_000
+}
+
+/// The file's mtime in nanoseconds, or nil when stat(2) fails. Only ever compared for equality, so a
+/// wall-clock step cannot fake a stall either.
+func mtimeNs(_ path: String) -> Int? {
+    var info = stat()
+    guard stat(path, &info) == 0 else { return nil }
+    return info.st_mtimespec.tv_sec * 1_000_000_000 + info.st_mtimespec.tv_nsec
+}
+
+/// Samples `pid` into `path` for 5 s at 10 ms; -mayDie keeps the symbols if `pid` dies mid-sample. True
+/// only when sample exited 0 within the deadline; otherwise it is killed and its partial output removed,
+/// so a failed sample never becomes a bundle.
+func sampleInto(_ path: String, pid: Int32) -> Bool {
+    let sampler = Process()
+    sampler.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+    sampler.arguments = [String(pid), "5", "10", "-mayDie", "-file", path]
+    // This helper's stdout is the protocol pipe to the main process: sample must never write to it.
+    sampler.standardOutput = FileHandle.nullDevice
+    sampler.standardError = FileHandle.nullDevice
+    do {
+        try sampler.run()
+    } catch {
+        return false
+    }
+    let deadline = awakeMs() + sampleDeadlineMs
+    while sampler.isRunning && awakeMs() < deadline {
+        usleep(100_000)
+    }
+    if sampler.isRunning {
+        kill(sampler.processIdentifier, SIGKILL)
+        sampler.waitUntilExit()
+    }
+    let captured = sampler.terminationReason == .exit && sampler.terminationStatus == 0
+    if !captured { unlink(path) }
+    return captured
+}
+
+func runStallWatch(_ options: [String]) -> Never {
+    func value(of flag: String) -> String? {
+        guard let i = options.firstIndex(of: flag), i + 1 < options.count else { return nil }
+        return options[i + 1]
+    }
+    guard let pid = value(of: "--pid").flatMap({ Int32($0) }),
+          let alivePath = value(of: "--alive"),
+          let capturePrefix = value(of: "--capture-prefix"),
+          let staleAfterMs = value(of: "--stale-after-ms").flatMap({ UInt64($0) })
+    else {
+        fail("usage: metis-mac-helper stall-watch --pid <pid> --alive <file> --capture-prefix <path> --stale-after-ms <ms>")
+    }
+    guard getppid() == pid else { fail("stall-watch: --pid \(pid) is not this helper's parent") }
+
+    var lastMtime = mtimeNs(alivePath)
+    var lastChangeAt = awakeMs()
+    var sampledThisStall = false
+    var lastSampleAt: UInt64?
+    while true {
+        sleep(stallPollSeconds)
+        // A dead parent reparents this helper, so getppid() changes: exit rather than ever sample a
+        // process this helper did not come from.
+        guard getppid() == pid else { exit(0) }
+        let now = awakeMs()
+        let mtime = mtimeNs(alivePath)
+        // An unreadable marker is no evidence of a stall: treat it like a fresh write.
+        if mtime == nil || mtime != lastMtime {
+            lastMtime = mtime
+            lastChangeAt = now
+            sampledThisStall = false
+            continue
+        }
+        let stalledMs = now - lastChangeAt
+        let cooledDown = lastSampleAt.map { now - $0 >= stallCooldownMs } ?? true
+        guard stalledMs > staleAfterMs, !sampledThisStall, cooledDown else { continue }
+        sampledThisStall = true
+        lastSampleAt = now
+        let epochMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let captured = sampleInto("\(capturePrefix).\(epochMs).\(stalledMs).sample", pid: pid)
+        print(captured ? "sampled" : "failed")
+        fflush(stdout)
+    }
+}
+
 // MARK: - entry point
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|stall-watch> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -330,6 +430,8 @@ case "screen-metrics":
     runScreenMetrics()
 case "stat-flags":
     runStatFlags()
+case "stall-watch":
+    runStallWatch(Array(arguments.dropFirst(2)))
 default:
     fail("unknown command: \(arguments[1])")
 }

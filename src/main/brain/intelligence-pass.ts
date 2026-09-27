@@ -22,7 +22,7 @@ export function startIntelligencePass(): IntelligencePassStartResult {
   if (pickIntelligencePassCandidates(s).length === 0) {
     return { queued: 0, error: intelligenceNoProviderMessage(s, INTELLIGENCE_PASS_NO_PROVIDER) }
   }
-  const result = startBackfill(undefined, { route: 'intelligence-pass' })
+  const result = startBackfill(undefined, { route: 'intelligence-pass', trigger: 'user' })
   if (result.deferred === 'no-provider') {
     return { queued: 0, error: intelligenceNoProviderMessage(s, INTELLIGENCE_PASS_NO_PROVIDER) }
   }

@@ -29,13 +29,13 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { resolvePreviewDir, resolveScratchDir } from './qa-dirs.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OPERATOR_ROOT = join(__dirname, '..')
-const PREVIEW_DIR = '/private/tmp/claude-501/operator-preview'
-const SCRATCH_DIR =
-  process.env.METIS_QA_SCRATCH ||
-  '/private/tmp/claude-501/-Users-tony-Library-CloudStorage-OneDrive-MantuGroup-Documents-Chief-of-Staff-Apps-Source-Metis-Portal/7883530c-5678-450a-aef0-46d1bc798bfd/scratchpad'
+
+const PREVIEW_DIR = resolvePreviewDir()
+const SCRATCH_DIR = resolveScratchDir()
 const EM_DASH = '—'
 
 function walk(dir, out = []) {

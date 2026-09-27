@@ -15,13 +15,15 @@ const bundled: LocalModelSummary = {
   id: 'qwen3.5-0.8b', label: 'Qwen3.5 0.8B', minTotalRamGB: 8,
   source: 'bundled', ready: true, unavailableReason: null, downloadProgress: 0, downloadError: null
 }
+function publicSettingsWith(overrides: Record<string, unknown>) {
+  return PublicSettingsSchema.parse({
+    ...DEFAULT_SETTINGS, hasApiKey: false, providerReady: false, visionReady: false, hasKeys: {},
+    hasEncryption: true, resolvedMeetingsFolder: '', ...overrides
+  })
+}
 function renderModel(model: LocalModelSummary, enabled = false, others: LocalModelSummary[] = []): string {
   view.models = [model, ...others]
-  const settings = PublicSettingsSchema.parse({
-    ...DEFAULT_SETTINGS, hasApiKey: false, providerReady: false, visionReady: false, hasKeys: {},
-    hasEncryption: true, resolvedMeetingsFolder: '',
-    localLlm: { ...DEFAULT_SETTINGS.localLlm, enabled, modelId: model.id }
-  })
+  const settings = publicSettingsWith({ localLlm: { ...DEFAULT_SETTINGS.localLlm, enabled, modelId: model.id } })
   return renderToStaticMarkup(<LocalAiSection settings={settings} patch={() => {}} />)
 }
 afterEach(() => { view.models = null })
@@ -74,5 +76,23 @@ describe('MQA-319: Local AI shows installed availability and the right recovery 
     expect(html.includes('Included with Métis.')).toBe(true)
     expect(html.includes('Synthetic optional 4B disk shortage')).toBe(false)
     expect(hasRetryButton(html)).toBe(false)
+  })
+})
+
+describe('Speaker identification in Local AI', () => {
+  /** The same healthy included-model card as the MQA-319 cases, with only speakerId varied. */
+  function renderWithSpeakerId(speakerId: unknown): string {
+    view.models = [bundled]
+    return renderToStaticMarkup(<LocalAiSection settings={publicSettingsWith({ speakerId })} patch={() => {}} />)
+  }
+
+  it('offers Save voiceprints, off, on a fresh install and says voiceprints from earlier versions are kept', () => {
+    const html = renderWithSpeakerId(DEFAULT_SETTINGS.speakerId)
+    expect(html).toContain('aria-checked="false" aria-label="Save voiceprints"')
+    expect(html).toContain('Voiceprints saved by earlier versions are kept and still used.')
+  })
+
+  it('hides Save voiceprints while speaker identification is off', () => {
+    expect(renderWithSpeakerId({ enabled: false, saveVoiceprints: true })).not.toContain('Save voiceprints')
   })
 })

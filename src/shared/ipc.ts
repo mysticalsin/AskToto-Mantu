@@ -1113,9 +1113,7 @@ export const BaseSettingsSchema = z.object({
    *  the ON-DEVICE model and cache the description, so "What's on my screen" answers from pre-computed text
    *  instead of a cold capture + full-image round trip. On-device only — nothing extra is sent to the cloud;
    *  Private View hard-blocks it. Default OFF — explicit opt-in. Continuous screen reading is its own
-   *  consent decision, and it also requires Local AI to be enabled (itself off by default). (The Cahê
-   *  pilot still seeds both true explicitly — cahe-embedded-key.ts — which is an explicit per-edition
-   *  choice, not a default.) */
+   *  consent decision, and it also requires Local AI to be enabled (itself off by default). */
   backgroundScreenContext: z.boolean().default(false),
   // How see-through the overlay's glass background is. A multiplier on the default glass alpha values
   // (see --glass-fill etc. in styles.css) — 1 = today's default look, lower = more transparent (see more
@@ -1339,15 +1337,20 @@ export const BaseSettingsSchema = z.object({
       preferLocal: z.boolean().default(false)
     })
     .default({ enabled: true, maxPassesPerDay: 2, preferLocal: false }),
-  // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
-  // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). ON by
-  // default since 2026-08-21 (MQA-235 / Plaud-parity work): the embedding model ships in every build
-  // (runtime-assets-manifest.json pins resources/models/speaker/embedding.onnx; check-packaged-runtime
-  // verifies it), the whole pass is on-device, and speaker-id.ts degrades to unlabeled lines when the
-  // extractor is unavailable — so the default costs nothing where it cannot work.
+  // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): "who's speaking" labels on THEM transcript lines
+  // from on-device voice embeddings (sherpa-onnx, same addon as Parakeet).
+  // `enabled` (default on) gives session-local labels: "Speaker N" clusters held in memory for one meeting. The
+  // embedding model ships in every build and speaker-id.ts degrades to unlabeled lines when the extractor is
+  // unavailable, so this default costs nothing where it cannot work.
+  // `saveVoiceprints` (default off) is the explicit opt-in for anything that outlives a meeting: only while it is
+  // on does speaker-id.ts add to userData/voiceprints.json (named profiles and the operator's own echo-defense
+  // voiceprint). A stored speakerId written before this field existed parses with it off.
   speakerId: z
-    .object({ enabled: z.boolean().default(true) })
-    .default({ enabled: true }),
+    .object({
+      enabled: z.boolean().default(true),
+      saveVoiceprints: z.boolean().default(false)
+    })
+    .default({ enabled: true, saveVoiceprints: false }),
   // Durable "time saved" usage counters (shared/time-saved.ts). Incremented ONCE when a meeting file is
   // first written (main/store.ts recordMeetingSummarized) — a rebuild/re-index never re-counts, and this
   // survives transcriptRetentionDays deleting the meetings a live sum would need, so the lifetime figure
@@ -1722,7 +1725,7 @@ export const DEFAULT_SETTINGS: Settings = {
     useFor: { suggest: false, summary: false, vision: false },
     fallback: false
   },
-  speakerId: { enabled: true },
+  speakerId: { enabled: true, saveVoiceprints: false },
   brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: false },
   usageStats: { meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 },
   timeSaved: { writeupRatio: 0.2, floorMin: 5, capMin: 30 },

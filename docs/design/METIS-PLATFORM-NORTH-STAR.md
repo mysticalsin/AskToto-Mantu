@@ -27,7 +27,9 @@ Tony's challenge: make this very beautiful, scalable, solidly secure, and user-f
 
 This file is the one platform story. Slice contracts stay the law for their pixels. This file is the law for how those slices become one product a stranger can install and a fleet of ten thousand can later join.
 
-**READY TO MERGE: no.** Design only. No product code in the change that lands this file.
+**Status:** Draft — design-only, ready-to-merge: no (see frontmatter); no product code in the
+change that lands this file. This is the 2.0 platform target; `docs/asktoto-architecture.md`
+predates it (see that file's 2.0 platform pointer).
 
 ---
 
@@ -268,7 +270,7 @@ Geo is `request.cf` only. The Worker ignores client `lat`, `lon`, `country`, `ci
 | `fundedProviders` list | A use-token that outlives the ask |
 | Operator URL | Ingest secret in a log / screenshot |
 
-`publicSettings` already redacts. Keep it that way. Embedded `METIS_PROXY_KEY` and Cahê Kimi remain documented residuals (`docs/security/AUDIT-20.md`). Do not add new live secrets to the package.
+`publicSettings` already redacts. Keep it that way. Only the embedded `METIS_PROXY_KEY` remains a documented residual (`docs/security/AUDIT-20.md`). Do not add new live secrets to the package.
 
 ### 5.6 Update / Latest only after QA + Ultron
 

@@ -85,10 +85,10 @@ export function useFileBackend(): boolean {
 }
 
 /**
- * Load or generate the per-install AES-256-GCM key.
- * Persisted to <userData>/secret-key.bin with mode 0o600.
- * Created once on first use; stable for the lifetime of the userData directory.
- * If the file is present but has the wrong length (truncated / corrupt), it is regenerated.
+ * Load the per-install AES-256-GCM key; only a write (`createIfMissing`) may generate it.
+ * Persisted to <userData>/secret-key.bin with mode 0o600; stable for the lifetime of the userData directory.
+ * "No key" means no file, or a zero-byte file on an unwrapped keystore. Any other key file that does not
+ * yield a 32-byte key fails closed and is never overwritten.
  *
  * KEY-ENCRYPTION-KEY (KEK):
  *   When safeStorage.isEncryptionAvailable() is true the 32-byte key is wrapped with
@@ -141,7 +141,15 @@ function persistKeyFileAtomically(p: string, key: Buffer): void {
   }
 }
 
-function getOrCreateKey(allowKeychainMigration = false): Buffer {
+function loadKey({
+  createIfMissing,
+  allowKeychainMigration = false
+}: {
+  /** Generate and persist a key when this profile has none. Writes only: a decrypt never creates a key. */
+  createIfMissing: boolean
+  /** Explicit user write only: may ask the original Keychain to unwrap a legacy wrapped key. */
+  allowKeychainMigration?: boolean
+}): Buffer {
   if (_key) return _key
 
   const p = join(app.getPath('userData'), KEY_FILE)
@@ -212,13 +220,20 @@ function getOrCreateKey(allowKeychainMigration = false): Buffer {
         // when the keychain WAS available (availability has since flipped to false). Regenerating
         // here would silently destroy every existing encrypted secret, session, and transcript
         // content-key. Fail-closed: refuse to overwrite so the data stays recoverable once the
-        // keychain returns. (A genuinely zero-byte file falls through to regeneration below.)
+        // keychain returns. (A genuinely zero-byte file holds no key and falls through to the no-key
+        // case below.)
         throw new KeychainKeyRecoveryError()
       }
-      // else (empty file): fall through to regenerate.
+      // else (empty file): no key, handled below.
     }
     if (_key) return _key
   }
+
+  // This profile holds no key: no key file, or a zero-byte one on an unwrapped keystore. Only a
+  // write creates the key. A decrypt fails here instead: a key generated now can never open bytes
+  // written before it, and generating one would leave secret-key.bin behind as a side effect of a
+  // read.
+  if (!createIfMissing) throw new Error('secrets: this profile has no file key to decrypt with')
 
   const dir = app.getPath('userData')
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
@@ -284,7 +299,7 @@ export function fileKeyState(): 'absent' | 'locked' | 'available' {
  * this never CREATES a key for a backend that would not otherwise use one.
  */
 export function prepareFileKeyForWrite(): void {
-  if (useFileBackend() || fileKeyExists()) getOrCreateKey(true)
+  if (useFileBackend() || fileKeyExists()) loadKey({ createIfMissing: true, allowKeychainMigration: true })
 }
 
 /**
@@ -295,7 +310,7 @@ export function prepareFileKeyForWrite(): void {
  * The returned Buffer is what callers write directly to disk.
  */
 export function encryptSecret(data: string | Buffer): Buffer {
-  const key = getOrCreateKey()
+  const key = loadKey({ createIfMissing: true })
   const iv = randomBytes(IV_LEN)
   const cipher = createCipheriv(ALG, key, iv)
   const input = typeof data === 'string' ? Buffer.from(data, 'utf8') : data
@@ -306,7 +321,7 @@ export function encryptSecret(data: string | Buffer): Buffer {
 
 /**
  * Decrypt a buffer produced by `encryptSecret`.
- * Throws if the buffer is too short, the authentication tag is wrong, or the key doesn't match.
+ * Throws if the buffer is too short, this profile has no file key (a decrypt never creates one), the authentication tag is wrong, or the key doesn't match.
  * Callers should catch and treat as "not our format" to trigger safeStorage migration.
  */
 export function decryptSecret(buf: Buffer): string {
@@ -315,7 +330,7 @@ export function decryptSecret(buf: Buffer): string {
     // to exactly IV_LEN+TAG_LEN bytes), so the floor is IV_LEN+TAG_LEN, not +1.
     throw new Error('secrets: buffer too short to be a valid AES-GCM ciphertext')
   }
-  const key = getOrCreateKey()
+  const key = loadKey({ createIfMissing: false })
   const iv = buf.subarray(0, IV_LEN)
   const authTag = buf.subarray(IV_LEN, IV_LEN + TAG_LEN)
   const ciphertext = buf.subarray(IV_LEN + TAG_LEN)

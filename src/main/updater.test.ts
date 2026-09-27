@@ -5,10 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // real Electron process the 'electron' package resolves to a binary-path string, not an API surface.
 vi.mock('electron')
 
-// The two channel guards checkForUpdateNow consults. Stubbed so the suite states the channel instead of
-// inheriting the test machine's real edition/ProgramData policy (readTrustedAdminManaged would otherwise
-// probe C:\ProgramData on win32 and make these cases machine-dependent).
-vi.mock('./cahe-edition', () => ({ shouldDisableAutoUpdate: vi.fn(() => false) }))
+// The channel guard checkForUpdateNow consults. Stubbed so the suite states the channel instead of
+// inheriting the test machine's real ProgramData policy (readTrustedAdminManaged would otherwise probe
+// C:\ProgramData on win32 and make these cases machine-dependent).
 vi.mock('./win-security', () => ({ readTrustedAdminManaged: vi.fn((): string | null => null) }))
 // initAutoUpdate reads app-update.yml out of process.resourcesPath, which does not exist outside a
 // packaged app — the only fs read in this module, stubbed to a configured feed so the wiring runs.
@@ -16,7 +15,6 @@ vi.mock('node:fs', () => ({ readFileSync: vi.fn(() => 'provider: github\nowner: 
 
 import { app, net, Notification, type BrowserWindow } from 'electron'
 import { IPC } from '@shared/ipc'
-import { shouldDisableAutoUpdate } from './cahe-edition'
 import { readTrustedAdminManaged } from './win-security'
 import {
   blockedUpdateChannel,
@@ -259,25 +257,19 @@ describe('checkForUpdateNow — never throws, always a human-readable result', (
 })
 
 // MQA-079 — the manual "Check for updates" row (Settings → About, auto-fired on mount) used to query the
-// shared Metis-Releases feed with no edition/Store/policy check, so a Cahê pilot was offered the standard
-// Métis installer — a different app with an empty profile — and a Store package / an IT-frozen fleet got
-// a working out-of-band download link.
+// shared Metis-Releases feed with no Store/policy check, so a Store package got a working out-of-band
+// download link and an IT-frozen fleet was offered a version it should not see.
 describe('MQA-079 — blockedUpdateChannel guards the manual check, not just initAutoUpdate', () => {
   const proc = process as NodeJS.Process & { windowsStore?: boolean }
 
   beforeEach(() => {
-    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
     Reflect.deleteProperty(proc, 'windowsStore')
     vi.mocked(net.fetch).mockClear()
   })
 
-  it('reports the three channels that must never consume the shared release feed', () => {
+  it('reports the two channels that must never consume the shared release feed', () => {
     expect(blockedUpdateChannel()).toBe(null)
-
-    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(true)
-    expect(blockedUpdateChannel()).toBe('cahe')
-    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
 
     proc.windowsStore = true
     expect(blockedUpdateChannel()).toBe('store')
@@ -285,16 +277,6 @@ describe('MQA-079 — blockedUpdateChannel guards the manual check, not just ini
 
     vi.mocked(readTrustedAdminManaged).mockReturnValue('{"disableAutoUpdate": true}')
     expect(blockedUpdateChannel()).toBe('policy')
-  })
-
-  it('never contacts the feed from a Cahê pilot — it is updated with its own installer', async () => {
-    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(true)
-    const r = await checkForUpdateNow()
-    expect(net.fetch).not.toHaveBeenCalled()
-    expect(r.ok).toBe(false)
-    expect(r.available).toBeUndefined() // no version comparison, so no download link can render
-    expect(r.error).toMatch(/Cahê installer/)
-    expect(r.current).toBe('0.1.0-test')
   })
 
   it('never contacts the feed from a Store/AppX package', async () => {
@@ -357,7 +339,6 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
 
   beforeEach(() => {
     restorePlatform = pinPlatform('linux')
-    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
     delete (process as unknown as { windowsStore?: boolean }).windowsStore
   })
@@ -409,10 +390,10 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
   })
 
   it('returns the channel reason (never starts a self-install) for a blocked channel', async () => {
-    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(true) // Cahê pilot
+    ;(process as unknown as { windowsStore?: boolean }).windowsStore = true
     const r = await startUpdateDownload()
     expect(r.started).toBe(false)
-    expect(r.reason).toMatch(/Cahê installer/)
+    expect(r.reason).toMatch(/microsoft store/i)
   })
 
   it('refuses to start a download when GitHub Latest is draft or prerelease', async () => {
@@ -458,7 +439,6 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
     // Only the 6-hourly re-check interval is faked: setImmediate has to stay real for the
     // unhandled-rejection probe below (Node emits the event after the microtask queue drains).
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
-    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
     Reflect.deleteProperty(proc, 'windowsStore')
     send.mockClear()

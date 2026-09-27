@@ -30,7 +30,7 @@ describe('afterPack Windows runtime verification', () => {
       arch: 1,
       electronPlatformName: 'win32',
       appOutDir,
-      packager: { appInfo: { productFilename: 'Metis-Windows-Cahe' } }
+      packager: { appInfo: { productFilename: 'Metis-Windows-Test' } }
     })
 
     expect(childProcess.execFileSync).toHaveBeenCalledWith(
@@ -39,7 +39,7 @@ describe('afterPack Windows runtime verification', () => {
         expect.stringMatching(/check-packaged-runtime\.mjs$/),
         'win',
         resources,
-        '--executable=Metis-Windows-Cahe.exe',
+        '--executable=Metis-Windows-Test.exe',
         '--post-sign'
       ],
       expect.objectContaining({ stdio: 'inherit' })
