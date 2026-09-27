@@ -7,6 +7,11 @@ describe('findViolations', () => {
     expect(findViolations(files)).toEqual(['fixture.mjs:1'])
   })
 
+  it('reports the /tmp/claude- form agents receive as $TMPDIR as path:line', () => {
+    const files = [{ path: 'fixture.mjs', content: 'const x = "/tmp/claude-501/foo"' }]
+    expect(findViolations(files)).toEqual(['fixture.mjs:1'])
+  })
+
   it('reports an absolute per-user path literal as path:line', () => {
     const files = [{ path: 'fixture.mjs', content: 'const x = "/Users/someone/foo"' }]
     expect(findViolations(files)).toEqual(['fixture.mjs:1'])
