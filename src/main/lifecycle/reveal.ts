@@ -46,6 +46,19 @@ export interface RevealController {
   hasPendingReveal(): boolean
 }
 
+export function revealLegacyEnabled(
+  env: { METIS_REVEAL?: string },
+  argv: readonly string[]
+): boolean {
+  return (
+    env.METIS_REVEAL === 'legacy' ||
+    argv.includes('--reveal.legacy') ||
+    argv.includes('reveal.legacy') ||
+    argv.includes('--reveal=legacy') ||
+    argv.includes('reveal=legacy')
+  )
+}
+
 export function legacyRevealWindow(
   reason: RevealReason,
   options: Required<RevealOptions>,

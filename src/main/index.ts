@@ -35,7 +35,13 @@ import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
-import { createRevealController, legacyRevealWindow, type PresenterState, type RevealReason } from './lifecycle/reveal'
+import {
+  createRevealController,
+  legacyRevealWindow,
+  revealLegacyEnabled as revealLegacyFlagEnabled,
+  type PresenterState,
+  type RevealReason
+} from './lifecycle/reveal'
 import { captureActiveForWindowRestart as captureActiveForWindowRestartState } from './lifecycle/window-restart'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
@@ -3719,7 +3725,7 @@ function restartMetisWindow(): void {
 }
 
 function revealLegacyEnabled(): boolean {
-  return process.env.METIS_REVEAL === 'legacy' || process.argv.includes('--reveal=legacy') || process.argv.includes('reveal=legacy')
+  return revealLegacyFlagEnabled(process.env, process.argv)
 }
 
 function legacyReveal(reason: RevealReason, options: { focus: boolean }): void {

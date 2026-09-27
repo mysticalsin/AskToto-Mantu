@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createRevealController,
   legacyRevealWindow,
+  revealLegacyEnabled,
   type PresenterState,
   type RevealControllerDeps,
   type RevealWindow
@@ -151,5 +152,21 @@ describe('M2-0036 reveal controller', () => {
 
     expect(showForAsk).toHaveBeenCalledExactlyOnceWith(w)
     expect(w.showInactive).not.toHaveBeenCalled()
+  })
+})
+
+describe('M2-0036 reveal legacy flag', () => {
+  it.each([
+    ['documented dotted argv flag', {}, ['--reveal.legacy']],
+    ['bare dotted argv flag', {}, ['reveal.legacy']],
+    ['existing equals argv flag', {}, ['--reveal=legacy']],
+    ['existing bare equals argv flag', {}, ['reveal=legacy']],
+    ['existing environment flag', { METIS_REVEAL: 'legacy' }, []]
+  ] as const)('enables legacy reveal for %s', (_label, env, argv) => {
+    expect(revealLegacyEnabled(env, argv)).toBe(true)
+  })
+
+  it('keeps explicit reopen reveal as the default when no legacy flag is present', () => {
+    expect(revealLegacyEnabled({}, ['--unrelated', 'reveal=modern'])).toBe(false)
   })
 })
