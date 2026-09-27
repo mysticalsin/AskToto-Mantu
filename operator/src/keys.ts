@@ -131,39 +131,12 @@ async function prepareVaultKeyRow(
   return { ok: true, row }
 }
 
-export async function writeVaultKey(
-  store: OperatorStore,
-  env: { OPERATOR_VAULT_KEY?: string },
-  email: string,
-  now: number,
-  body: Record<string, unknown>,
-  fetchImpl: typeof fetch = fetch
-): Promise<{ ok: true; id: string; last4: string; status: string } | VaultKeyFailure> {
-  const prepared = await prepareVaultKeyRow(env, email, now, body, fetchImpl)
-  if (!prepared.ok) return prepared
-  const { row } = prepared
-  await store.putVaultKey(row)
-  // Only one active row per provider: an older row left `active` after a fresh write would still be
-  // eligible for `use` and dashboard funding checks even though nobody can see or rotate it anymore.
-  await store.supersedeActiveVaultKeys(row.provider, row.id, now)
-  await store.audit(crypto.randomUUID(), now, email, 'vault-write', null, `${row.provider} ·${row.last4}`)
-  await store.insertEvent({
-    id: crypto.randomUUID(),
-    ts: now,
-    kind: 'vault',
-    actor: email,
-    device_id: null,
-    country: null,
-    detail: `write ${row.provider}`
-  })
-  return { ok: true, id: row.id, last4: row.last4, status: 'active' }
-}
-
 export type VaultKeyWrite = { id: string; last4: string; status: string }
 
 /** Writes several vault rows as one D1 transaction: every row is validated, privacy-checked and
  *  encrypted first, then all rows commit together or none do. Cloudflare provisioning uses this
- *  so a failure on the account row can never strand its gateway row (or vice versa). */
+ *  so a failure on the account row can never strand its gateway row (or vice versa); a single-row
+ *  write (`writeVaultKey`) goes through here too, so there is exactly one persistence path. */
 export async function writeVaultKeysAtomically(
   store: OperatorStore,
   env: { OPERATOR_VAULT_KEY?: string },
@@ -178,6 +151,8 @@ export async function writeVaultKeysAtomically(
     if (!prepared.ok) return prepared
     rows.push(prepared.row)
   }
+  // Every row's provider is superseded against the others already committed under it, so one
+  // active row per provider survives even when this call carries several rows for one provider.
   await store.putVaultKeys(rows)
   for (const row of rows) {
     await store.audit(crypto.randomUUID(), now, email, 'vault-write', null, `${row.provider} ·${row.last4}`)
@@ -192,6 +167,19 @@ export async function writeVaultKeysAtomically(
     })
   }
   return { ok: true, rows: rows.map((row) => ({ id: row.id, last4: row.last4, status: row.status })) }
+}
+
+export async function writeVaultKey(
+  store: OperatorStore,
+  env: { OPERATOR_VAULT_KEY?: string },
+  email: string,
+  now: number,
+  body: Record<string, unknown>,
+  fetchImpl: typeof fetch = fetch
+): Promise<{ ok: true; id: string; last4: string; status: string } | VaultKeyFailure> {
+  const written = await writeVaultKeysAtomically(store, env, email, now, [body], fetchImpl)
+  if (!written.ok) return written
+  return { ok: true, ...written.rows[0] }
 }
 
 export async function rotateVaultKey(

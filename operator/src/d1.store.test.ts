@@ -40,6 +40,18 @@ function sqliteD1(db: DatabaseSync): D1DatabaseLike {
         }
       }
       return wrapper
+    },
+    async batch(statements) {
+      db.exec('BEGIN')
+      try {
+        const results = []
+        for (const statement of statements) results.push(await statement.run() as { success: boolean })
+        db.exec('COMMIT')
+        return results
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
     }
   }
 }
@@ -337,8 +349,8 @@ describe('audit with request/route meta, listAudit filters', () => {
   })
 })
 
-describe('vault supersede and clear', () => {
-  it('supersedeActiveVaultKeys marks other active rows superseded and clears their secret', async () => {
+describe('vault put, supersede-on-write, and clear', () => {
+  it('putVaultKeys inserts the new row and supersedes the other active rows for its provider, clearing their secret', async () => {
     await store.putVaultKey({
       id: 'v1',
       provider: 'anthropic',
@@ -352,7 +364,7 @@ describe('vault supersede and clear', () => {
       rotated_at: null,
       revoked_at: null
     })
-    await store.putVaultKey({
+    await store.putVaultKeys([{
       id: 'v2',
       provider: 'anthropic',
       label: 'new',
@@ -364,8 +376,7 @@ describe('vault supersede and clear', () => {
       created_by: 'tony',
       rotated_at: null,
       revoked_at: null
-    })
-    await store.supersedeActiveVaultKeys('anthropic', 'v2', 500)
+    }])
     const v1 = await store.getVaultKey('v1')
     expect(v1?.status).toBe('superseded')
     expect(v1?.cipher).toBe('')

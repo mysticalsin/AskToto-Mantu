@@ -354,10 +354,92 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
         { store, now: NOW, cfFetch }
       )
       await expect(cb).rejects.toThrow('transient vault write failure')
-      // Before this ticket, the gateway row committed as its own independent write and stayed
-      // behind when the account row's independent write failed. Atomic provisioning must roll
-      // both rows back together, not just fail to add the second one.
+      // Invariant: both rows commit in one D1 transaction. A failure on either row rolls back
+      // every statement in the batch, so the other row is never left committed on its own.
       expect(await store.listVaultMeta()).toEqual([])
+    } finally {
+      db.close()
+    }
+  })
+
+  it('a failed reconnect rolls back its own supersede, leaving the previous rows untouched', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      // The 4th INSERT INTO vault_keys overall is the reconnect's account row (1st connect: 2
+      // inserts; reconnect: gateway insert, then this one).
+      const store = d1StoreWithSchema(db, 4)
+      const first = await startCloudflareOAuth(store)
+      await handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-first&state=${first.state}`, {
+          headers: { cookie: first.cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW, cfFetch }
+      )
+      const before = await store.listVaultRows()
+      expect(before).toHaveLength(2)
+      expect(before.every((row) => row.status === 'active' && row.cipher && row.iv)).toBe(true)
+
+      const second = await startCloudflareOAuth(store)
+      const reconnect = handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-second&state=${second.state}`, {
+          headers: { cookie: second.cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW + 1, cfFetch }
+      )
+      await expect(reconnect).rejects.toThrow('transient vault write failure')
+
+      // The reconnect's batch supersedes the previous gateway row before its account insert fails;
+      // the rollback must undo that supersede too, or a crashed reconnect would wipe the working
+      // secret without ever completing the new one.
+      const after = await store.listVaultRows()
+      expect(after).toEqual(before)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('a successful reconnect leaves exactly one active row per provider, with the previous rows superseded', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      const store = d1StoreWithSchema(db)
+      const first = await startCloudflareOAuth(store)
+      await handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-first&state=${first.state}`, {
+          headers: { cookie: first.cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW, cfFetch }
+      )
+      const before = await store.listVaultRows()
+      expect(before).toHaveLength(2)
+      const previousIds = new Set(before.map((row) => row.id))
+
+      const second = await startCloudflareOAuth(store)
+      const cb = await handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-second&state=${second.state}`, {
+          headers: { cookie: second.cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW + 1, cfFetch }
+      )
+      expect(cb.status).toBe(303)
+      expect(cb.headers.get('location')).toBe('/?cf=connected#keys')
+
+      const rows = await store.listVaultRows()
+      expect(rows).toHaveLength(4)
+      for (const provider of ['cloudflare', 'cloudflare-account']) {
+        const active = rows.filter((row) => row.provider === provider && row.status === 'active')
+        expect(active).toHaveLength(1)
+      }
+      const superseded = rows.filter((row) => previousIds.has(row.id))
+      expect(superseded).toHaveLength(2)
+      expect(superseded.every((row) => row.status === 'superseded' && row.cipher === '' && row.iv === '')).toBe(true)
     } finally {
       db.close()
     }

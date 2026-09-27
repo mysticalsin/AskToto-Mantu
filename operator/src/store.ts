@@ -361,7 +361,6 @@ export interface OperatorStore {
   listVaultRows(): Promise<VaultKeyRow[]>
   getVaultKey(id: string): Promise<VaultKeyRow | null>
   putVaultKey(row: VaultKeyRow): Promise<void>
-  supersedeActiveVaultKeys(provider: string, exceptId: string, now: number): Promise<void>
   /** Persists every row and supersedes its own provider's other active rows in one transaction.
    *  Cloudflare provisioning writes a gateway row and an account row together; a partial failure
    *  must never leave one committed without the other. */
@@ -693,12 +692,6 @@ export function memoryStore(): OperatorStore {
     },
     async putVaultKey(row) {
       vault.set(row.id, row)
-    },
-    async supersedeActiveVaultKeys(provider, exceptId, now) {
-      for (const row of vault.values()) {
-        if (row.provider !== provider || row.id === exceptId || row.status !== 'active') continue
-        vault.set(row.id, { ...row, status: 'superseded', cipher: '', iv: '', rotated_at: now })
-      }
     },
     async putVaultKeys(rows) {
       for (const row of rows) {

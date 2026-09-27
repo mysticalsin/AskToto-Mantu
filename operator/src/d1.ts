@@ -266,6 +266,30 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     await sessionWriteStatement(row).run()
   }
 
+  /** The one place that builds a vault_keys upsert, so a single row write (`putVaultKey`, used by
+   *  rotate and revoke) and a multi-row transactional write (`putVaultKeys`) never drift apart. */
+  function vaultKeyUpsertStatement(row: VaultKeyRow): D1Stmt {
+    return db
+      .prepare(
+        `INSERT OR REPLACE INTO vault_keys (
+          id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        row.id,
+        row.provider,
+        row.label,
+        row.last4,
+        row.cipher,
+        row.iv,
+        row.status,
+        row.created_at,
+        row.created_by,
+        row.rotated_at,
+        row.revoked_at
+      )
+  }
+
   return {
     async takeNonce(nonce, ts) {
       const result = await db
@@ -709,35 +733,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       )
     },
     async putVaultKey(row) {
-      await db
-        .prepare(
-          `INSERT OR REPLACE INTO vault_keys (
-            id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          row.id,
-          row.provider,
-          row.label,
-          row.last4,
-          row.cipher,
-          row.iv,
-          row.status,
-          row.created_at,
-          row.created_by,
-          row.rotated_at,
-          row.revoked_at
-        )
-        .run()
-    },
-    async supersedeActiveVaultKeys(provider, exceptId, now) {
-      await db
-        .prepare(
-          `UPDATE vault_keys SET status = 'superseded', cipher = '', iv = '', rotated_at = ?
-           WHERE provider = ? AND id != ? AND status = 'active'`
-        )
-        .bind(now, provider, exceptId)
-        .run()
+      await vaultKeyUpsertStatement(row).run()
     },
     async putVaultKeys(rows) {
       if (rows.length === 0) return
@@ -745,25 +741,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       // provider's vault row without its sibling's when the Worker is interrupted between them.
       if (!db.batch) throw new Error('D1 batch transaction is unavailable')
       const statements: D1Stmt[] = rows.flatMap((row) => [
-        db
-          .prepare(
-            `INSERT OR REPLACE INTO vault_keys (
-              id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            row.id,
-            row.provider,
-            row.label,
-            row.last4,
-            row.cipher,
-            row.iv,
-            row.status,
-            row.created_at,
-            row.created_by,
-            row.rotated_at,
-            row.revoked_at
-          ),
+        vaultKeyUpsertStatement(row),
         db
           .prepare(
             `UPDATE vault_keys SET status = 'superseded', cipher = '', iv = '', rotated_at = ?
