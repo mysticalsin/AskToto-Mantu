@@ -11,6 +11,7 @@ import type { ContentPresence } from '../infra/storage/dataless'
 import type { StorageFs } from '../infra/storage/gateway'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { getSettings, setSettings } from '../store'
+import { listMeetings, searchMeetings } from '../recall'
 import { recoverOrphanDrafts, saveDraftTranscript } from '../transcripts'
 import { readBrainStatus } from './status'
 import { loadIndex, readIndex, writeIndex } from './ledger'
@@ -375,6 +376,27 @@ describe('meetings-root stall-path readers', () => {
     expect(idx.ingested['local-meeting.md']?.ok).toBe(true)
     expect(idx.ingested['cloud-meeting.md']).toBeUndefined()
     expect(syncCallsOn('local-meeting.md', 'cloud-meeting.md', basename(meetingsFolder))).toEqual([])
+  })
+
+  it('History list and search use the gateway and do not open cloud-only meetings', async () => {
+    fsTrap.armed = false
+    const local = '2026-01-08_090000-local-meeting.md'
+    const cloud = '2026-01-08_091500-cloud-meeting.md'
+    writeFileSync(join(meetingsFolder, local), transcriptMd('2026-01-08T09:00:00Z', 'local keyword alpha'), 'utf8')
+    writeFileSync(join(meetingsFolder, cloud), transcriptMd('2026-01-08T09:15:00Z', 'cloud keyword beta'), 'utf8')
+    fsTrap.cloud.add(cloud)
+    fsTrap.calls.length = 0
+    fsTrap.reads.length = 0
+    fsTrap.armed = true
+
+    const list = await listMeetings()
+    const hits = await searchMeetings('alpha')
+
+    expect(list.map((meeting) => meeting.file)).toContain(local)
+    expect(hits.map((meeting) => meeting.file)).toEqual([local])
+    expect(fsTrap.reads).toContain(local)
+    expect(fsTrap.reads).not.toContain(cloud)
+    expect(syncCallsOn(local, cloud, basename(meetingsFolder))).toEqual([])
   })
 
   it('a transcript that is cloud-only when its extraction starts is left pending, not failed', async () => {
