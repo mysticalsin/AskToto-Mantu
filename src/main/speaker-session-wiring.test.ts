@@ -19,6 +19,7 @@ import {
   type SpeakerEnrollmentSnapshot,
   type SpeakerId
 } from './speaker-id'
+import { crashDetail } from './infra/observability/crash-taxonomy'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
@@ -456,6 +457,7 @@ describe('bounded close and successful-save receipt join', () => {
     const gone = actualRendererGoneHandler({
       mainLog: { error: vi.fn() },
       auditLog: vi.fn(),
+      crashDetail,
       resetDustConversation: vi.fn(),
       listeningActive: true,
       lastPlainAskAt: 1,
