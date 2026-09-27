@@ -28,7 +28,7 @@ describe('redactSecrets', () => {
   // MQA-080 — the generic sk- class excluded '-', so a dashed prefix stopped the run before it could
   // reach 20 chars and every such key (including the sk-kimi- one this app ships) left the device raw.
   it('redacts sk- keys with a dashed prefix (MQA-080)', () => {
-    // Shortest shape cahe-embedded-key.ts accepts — proves the 20-char floor still clears the prefix.
+    // Shortest sk-kimi- shape providers.ts's keyPattern accepts — proves the 20-char floor still clears the prefix.
     expect(redactSecrets('key sk-kimi-AbCdEf0123456789')).toBe('key [redacted key]')
     expect(redactSecrets('sk-proj-AbCdEf0123456789xyzQWERTY')).toBe('[redacted key]')
     expect(redactSecrets('sk-or-v1-0123456789abcdef0123')).toBe('[redacted key]')

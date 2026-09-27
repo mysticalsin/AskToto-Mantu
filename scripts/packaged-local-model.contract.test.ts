@@ -13,7 +13,7 @@ const { getConfig } = require('app-builder-lib/out/util/config/config.js') as {
 const source = (path: string): string => readFileSync(join(root, path), 'utf8').replace(/\r\n/g, '\n')
 
 describe('MQA-319: the default local model is self-contained in every Electron installer', () => {
-  it.each(['electron-builder.yml', 'electron-builder.win.yml', 'electron-builder.cahe.win.yml'])(
+  it.each(['electron-builder.yml', 'electron-builder.win.yml'])(
     '%s includes exactly the compact model pair and license through real config inheritance',
     async (file) => {
       const config = await getConfig(root, file)

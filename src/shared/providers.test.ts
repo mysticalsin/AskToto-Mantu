@@ -265,7 +265,7 @@ describe('filterAllowedProviders — org data-residency allowlist', () => {
  *
  * Cloudflare's AI REST API is account-scoped and authenticates with a Cloudflare ACCOUNT token. A packaged
  * Electron app is not a safe place for one: `npx asar extract` recovers any embedded string, which is the
- * whole reason scripts/check-cahe-package.mjs refuses a build with a key in it. So the account token stays
+ * whole reason scripts/check-embedded-cloudflare-key.mjs refuses a build with a key in it. So the account token stays
  * a Wrangler secret on a Worker the operator deploys, and Métis holds only that Worker's URL plus a
  * per-user METIS_PROXY_KEY. These tests pin that shape so a later "convenience default" cannot undo it.
  */

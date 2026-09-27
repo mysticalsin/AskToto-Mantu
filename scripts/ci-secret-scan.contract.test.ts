@@ -10,12 +10,12 @@ import { describe, expect, it } from 'vitest'
  *
  * Two independent holes, both proven before this file existed. (1) Its prefix list was a hand-written
  * literal alternation that never gained `sk-kimi-`, even though that is a first-class shipped format —
- * src/main/cahe-embedded-key.ts defines KIMI_KEY_PATTERN for it, scripts/build-cahe-windows.mjs embeds
- * it into the Cahê installer, and src/shared/providers.ts declares it as a provider keyPattern. So a
- * real sk-kimi- key committed into src/ passed the gate, which then printed "No committed secrets found."
+ * src/shared/providers.ts declares it as the `kimi` provider's own keyPattern, so a real sk-kimi- key
+ * committed into src/ passed the gate, which then printed "No committed secrets found."
  * (2) Its roots were `src .github electron-builder.yml` and its includes had no `*.mjs`, so scripts/
- * (every build and release script), build/ (where the Cahê key file lives), intelligence/src (a real
- * shipped source tree), and the two overlay packaging configs were never looked at at all.
+ * (every build and release script), build/ (where the installer-embedded Cloudflare key material lives),
+ * intelligence/src (a real shipped source tree), and the overlay packaging config were never looked at
+ * at all.
  *
  * What is asserted. Not the presence of a string: the BEHAVIOUR of the shipped grep — its regex is
  * extracted from build.yml and executed, and its roots/includes are checked against the places this
@@ -68,18 +68,15 @@ const DECLARED_PREFIXES = [
   ...readFileSync(join(root, 'src', 'shared', 'providers.ts'), 'utf8').matchAll(/keyPattern: '\^([^']+)'/g)
 ].map((m) => m[1])
 
-/** A 16-character body — the shortest KIMI_KEY_PATTERN accepts, so the gate is tested at its own floor. */
+/** A 16-character body — the scan regex's own `{16,}` floor, so the gate is tested at its own edge. */
 const BODY = 'A1b2C3d4E5f6G7h8'
 
 describe('CI secret scan — must match the key shapes this product itself ships', () => {
-  it("MQA-166 — catches this product's own sk-kimi- key, the one credential it embeds", () => {
-    const kimiSource = /const KIMI_KEY_PATTERN = \/([^\n/]+)\//.exec(
-      readFileSync(join(root, 'src', 'main', 'cahe-embedded-key.ts'), 'utf8')
-    )
-    expect(kimiSource, 'cahe-embedded-key.ts no longer declares KIMI_KEY_PATTERN').not.toBeNull()
+  it("MQA-166 — catches this product's own sk-kimi- key shape", () => {
     const key = `sk-kimi-${BODY}`
-    // Both sides: the app accepts this string as a key, so CI must refuse to let it be committed.
-    expect(new RegExp(kimiSource![1]).test(key)).toBe(true)
+    // Both sides: the app accepts this string as a key (providers.ts's kimi keyPattern), so CI must
+    // refuse to let it be committed.
+    expect(DECLARED_PREFIXES).toContain('sk-kimi-')
     expect(secretScan().pattern.test(key)).toBe(true)
   })
 
@@ -100,8 +97,8 @@ describe('CI secret scan — must match the key shapes this product itself ships
 
 describe('CI secret scan — must look where this product keeps keys', () => {
   it('MQA-166 — scans scripts/, build/ and intelligence/src, not just src/', () => {
-    // build/ holds cahe-kimi.local.json; scripts/ holds the packaging chain that reads it; intelligence/
-    // is a real source tree shipped as extraResources (electron-builder.yml).
+    // build/ holds the installer-embedded Cloudflare key material; scripts/ holds the packaging chain
+    // that reads it; intelligence/ is a real source tree shipped as extraResources (electron-builder.yml).
     const { roots } = secretScan()
     for (const dir of ['src', 'scripts', 'build', 'intelligence/src', '.github']) {
       expect(roots, `unscanned root: ${dir}`).toContain(dir)
@@ -114,7 +111,7 @@ describe('CI secret scan — must look where this product keeps keys', () => {
 
   it('MQA-166 — scans every packaging config, not only the base electron-builder.yml', () => {
     const { roots } = secretScan()
-    for (const file of ['electron-builder.yml', 'electron-builder.win.yml', 'electron-builder.cahe.win.yml']) {
+    for (const file of ['electron-builder.yml', 'electron-builder.win.yml']) {
       expect(roots, `unscanned packaging config: ${file}`).toContain(file)
     }
   })

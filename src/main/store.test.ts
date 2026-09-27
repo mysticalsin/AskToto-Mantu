@@ -582,6 +582,37 @@ describe('store', () => {
     })
   })
 
+  // M2-0214 — owner decision D-30 (2026-09-26): the Cahê pilot edition was removed entirely. An existing
+  // profile that an old Cahê build once wrote to disk must still load as an ordinary standard-edition
+  // profile — nothing in Cahê's on-disk footprint was edition-specific (its policy was already a no-op:
+  // no allowlist, no locked keys, no forced defaults), so removing the edition code changes nothing about
+  // how this settings.json is read.
+  describe('M2-0214: settings written by the retired Cahê edition load as the standard edition', () => {
+    it('loads without error, keeping the provider and Local AI choices the pilot made', () => {
+      const settingsFile = join(userData, 'settings.json')
+      writeFileSync(
+        settingsFile,
+        JSON.stringify({
+          provider: 'kimi',
+          onboardingDone: true,
+          onboardingDoneAt: Date.now(),
+          backgroundScreenContext: true,
+          localLlm: { enabled: true, useFor: { suggest: false, summary: false, vision: false } }
+        }),
+        'utf8'
+      )
+
+      const s = getSettings()
+
+      expect(s.provider).toBe('kimi')
+      expect(s.backgroundScreenContext).toBe(true)
+      expect(s.localLlm.enabled).toBe(true)
+      // No edition ever narrows or locks anything post-removal — same as every other build.
+      expect(getAllowedProviders()).toBeNull()
+      expect(getLockedKeys()).toEqual([])
+    })
+  })
+
   describe('listDustAgents', () => {
     beforeEach(() => {
       setSettings({ dustWorkspaceId: 'ws-1' })
@@ -840,50 +871,6 @@ describe('store', () => {
       // this file's beforeEach).
       const result = await testApiKey('grok', '')
       expect(result).toEqual({ ok: false, error: 'No API key provided.' })
-    })
-  })
-
-  describe('Cahê Windows edition policy', () => {
-    const caheFlag = 'METIS_CAHE_EDITION'
-    let previousCaheFlag: string | undefined
-
-    beforeEach(() => {
-      previousCaheFlag = process.env[caheFlag]
-      process.env[caheFlag] = '1'
-    })
-
-    afterEach(() => {
-      if (previousCaheFlag === undefined) delete process.env[caheFlag]
-      else process.env[caheFlag] = previousCaheFlag
-    })
-
-    it('lets the user switch away from Kimi to any other provider — no edition-level lock', () => {
-      // Cahê's implicit policy is now identical to a non-Cahê build: no allowlist, no locked keys, no
-      // forced managed defaults. Kimi is only the pilot's OUT-OF-BOX default (seeded once by
-      // cahe-embedded-key.ts), not a standing lock — a real switch to Dust (or Claude CLI/Codex CLI/any
-      // API-key provider) must persist exactly like it would outside the Cahê edition.
-      const result = setSettings({
-        provider: 'dust',
-        providerPriority: 'cli',
-        dustWorkspaceId: 'cahe-workspace',
-        providerModels: { ...DEFAULT_SETTINGS.providerModels, dust: 'cahe-dust-agent' }
-      })
-
-      expect(result.provider).toBe('dust')
-      expect(result.providerPriority).toBe('cli')
-      expect(result.dustWorkspaceId).toBe('cahe-workspace')
-      expect(result.providerModels.dust).toBe('cahe-dust-agent')
-      expect(getAllowedProviders()).toBeNull()
-      expect(getLockedKeys()).toEqual([])
-    })
-
-    it('stores a Cahê Kimi key encrypted in the isolated local profile', () => {
-      const key = 'sk-kimi-local-test-key'
-      setApiKey('kimi', key)
-
-      const persisted = readFileSync(join(userData, 'key-kimi.bin')).toString('utf8')
-      expect(getApiKey('kimi')).toBe(key)
-      expect(persisted).not.toContain(key)
     })
   })
 })
