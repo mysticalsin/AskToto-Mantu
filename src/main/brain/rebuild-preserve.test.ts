@@ -287,6 +287,7 @@ describe('rebuild preserves unreadable indexes', () => {
     resetSecretKeyCache()
 
     expect(purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
+    expect(existsSync(join(userData, 'secret-key.bin'))).toBe(false)
 
     const preserved = join(meetingsFolder, '.brain-preserved', fs.readdirSync(join(meetingsFolder, '.brain-preserved'))[0])
     expectBytesUnchanged(preserved, expected)
