@@ -6,59 +6,61 @@
 // this project controls — every packaged skill-pack signature check, and every offline license lease,
 // would verify against a key anyone who clones this repo can find.
 //
-// ONE gate now covers both families that share this exact shape, via scripts/lib/provisioned-secret.mjs:
-//   1. operator skill-pack public key  — resources/operator/pubkey.json       (src/main/operator-skill-key.ts)
-//   2. license-lease public key        — resources/license-lease/pubkey.json  (src/main/license-lease-key.ts)
+// ONE gate, via the shared helper scripts/lib/provisioned-secret.mjs, covers both families that share
+// this exact "provisioned resource, or committed DEV placeholder" shape:
+//   1. operator skill-pack public key  — <resources>/operator/pubkey.json       (src/main/operator-skill-key.ts)
+//   2. license-lease public key        — <resources>/license-lease/pubkey.json  (src/main/license-lease-key.ts)
 //
-// The embedded Cloudflare proxy key (src/main/embedded-cloudflare-key.ts) is a THIRD build-provisioned
-// credential family but does not share this shape — it is opt-in (METIS_EMBED_CLOUDFLARE_KEY=1) rather
-// than mandatory, ships AES-256-GCM encrypted rather than as a plain public key, and its gate
-// (scripts/check-embedded-cloudflare-key.mjs) runs POST-pack against the packaged app, which does not
-// exist yet when this pre-pack script runs. This script reports its local provisioning intent for
-// one-command visibility across all three families, but never gates release on it — that stays
-// check-embedded-cloudflare-key.mjs's job.
+// The embedded Cloudflare proxy key and the Cahê package key are DELIBERATELY out of this gate: both are
+// opt-in credentials with no committed DEV placeholder to fall back to, so a keyless build is already a
+// valid release for them. Their own invariants are enforced post-pack, against the packaged app, by
+// scripts/check-embedded-cloudflare-key.mjs and scripts/check-cahe-package.mjs respectively.
 //
 // Usage:
 //   node scripts/check-provisioned-secrets.mjs --profile <dev|release> [--dry-run]
 //
 //   --profile release   FAIL (exit 1) if the operator or license-lease family is missing OR still the
-//                        committed DEV placeholder. This is what release:build:mac / release:build:win run.
+//                        committed DEV placeholder. This is what release:build:mac / release:build:win /
+//                        release:mas / release:win:store run.
 //   --profile dev        (default) report status only, exit 0 regardless — a plain dev checkout is
 //                        SUPPOSED to fall back to the placeholders.
 //   --dry-run            print the same report a real run would, but never exit non-zero. Safe to run
 //                        against a checkout with no provisioned resources at all (a contributor's
 //                        machine, CI) to smoke-test this script without needing real production keys.
 //
+// Always checks the resources electron-builder.yml actually packages — resources/operator and
+// resources/license-lease at the repo root (see resolveFamilies below) — never a path an environment
+// variable could point somewhere else. That is deliberate: this gate exists to stop a release from
+// shipping the DEV fallback, so it must inspect the exact files packaging will embed, not a stand-in a
+// misconfigured or malicious environment substituted for them.
+//
 // node --test scripts/check-provisioned-secrets.test.mjs is the behavioral suite this gate depends on.
 
-import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { checkProvisionedPublicKey, readDevPlaceholder } from './lib/provisioned-secret.mjs'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** Mandatory-in-release families sharing the provisioned-resource-or-DEV-placeholder shape. Resource
- *  paths are overridable via env for tests only — production always uses the packaging-time default. */
-function resolveFamilies(env) {
+/** Mandatory-in-release families sharing the provisioned-resource-or-DEV-placeholder shape.
+ *  @param {string} resourcesDir - the packaging staging root electron-builder.yml's extraResources reads
+ *    from. Production always uses REPO_ROOT/resources (runCheck's default); a test passes a fixture
+ *    directory shaped the same way instead of pointing at the real checkout. */
+function resolveFamilies(resourcesDir) {
   return [
     {
       label: 'operator skill-pack public key',
-      resourcePath: env.METIS_OPERATOR_PUBKEY_PATH || join(REPO_ROOT, 'resources', 'operator', 'pubkey.json'),
+      resourcePath: join(resourcesDir, 'operator', 'pubkey.json'),
       devSourcePath: join(REPO_ROOT, 'src', 'main', 'operator-skill-key.ts'),
       devConstName: 'DEV_OPERATOR_PUBLIC_KEY'
     },
     {
       label: 'license-lease public key',
-      resourcePath: env.METIS_LICENSE_LEASE_PUBKEY_PATH || join(REPO_ROOT, 'resources', 'license-lease', 'pubkey.json'),
+      resourcePath: join(resourcesDir, 'license-lease', 'pubkey.json'),
       devSourcePath: join(REPO_ROOT, 'src', 'main', 'license-lease-key.ts'),
       devConstName: 'DEV_LEASE_PUBLIC_KEY'
     }
   ]
-}
-
-function resolveCloudflareBundlePath(env) {
-  return env.METIS_CLOUDFLARE_EMBED_PATH || join(REPO_ROOT, 'build', 'cloudflare-embed', 'key.json')
 }
 
 function parseArgs(argv) {
@@ -82,27 +84,23 @@ function parseArgs(argv) {
 /**
  * Runs the full report + gate and returns the exit code, without calling process.exit — kept pure so the
  * test suite (and, in principle, another script) can drive it directly instead of only via a subprocess.
- * @param {{ profile: 'dev' | 'release', dryRun: boolean, env?: Record<string, string | undefined> }} opts
+ * @param {{ profile: 'dev' | 'release', dryRun: boolean, resourcesDir?: string }} opts
  * @returns {number}
  */
-export function runCheck({ profile, dryRun, env = process.env }) {
+export function runCheck({ profile, dryRun, resourcesDir = join(REPO_ROOT, 'resources') }) {
   let anyMandatoryFailure = false
+  let firstFailingFamily = null
 
-  for (const family of resolveFamilies(env)) {
+  for (const family of resolveFamilies(resourcesDir)) {
     const placeholder = readDevPlaceholder(family.devSourcePath, family.devConstName)
     const result = checkProvisionedPublicKey({ resourcePath: family.resourcePath, placeholder })
     const mandatoryFailure = result.status !== 'provisioned'
-    if (mandatoryFailure) anyMandatoryFailure = true
+    if (mandatoryFailure) {
+      anyMandatoryFailure = true
+      firstFailingFamily ??= family
+    }
     const tag = mandatoryFailure ? (profile === 'release' ? 'FAIL' : 'WARN') : 'OK'
     console.log(`[check:provisioned-secrets] ${tag} — ${family.label}: ${result.message}`)
-  }
-
-  if (existsSync(resolveCloudflareBundlePath(env))) {
-    console.log(
-      '[check:provisioned-secrets] INFO — embedded Cloudflare key intended for this build; gated separately, post-pack, by scripts/check-embedded-cloudflare-key.mjs.'
-    )
-  } else {
-    console.log('[check:provisioned-secrets] INFO — no embedded Cloudflare key bundle (normal keyless build).')
   }
 
   const shouldFail = profile === 'release' && anyMandatoryFailure
@@ -112,7 +110,10 @@ export function runCheck({ profile, dryRun, env = process.env }) {
   }
   if (shouldFail) {
     console.error(
-      '[check:provisioned-secrets] FAIL — release profile requires the operator and license-lease families to both be provisioned, not the committed DEV placeholder. See FAIL lines above.'
+      '[check:provisioned-secrets] FAIL — release profile requires the operator and license-lease families to ' +
+        'both be provisioned, not the committed DEV placeholder. See FAIL lines above. Fix: write the shape ' +
+        `{ "algorithm": "ed25519", "publicKey": "<base64url>" } to ${firstFailingFamily.resourcePath} — for ` +
+        'license-lease that JSON is exactly the body GET /license/pubkey returns.'
     )
     return 1
   }
