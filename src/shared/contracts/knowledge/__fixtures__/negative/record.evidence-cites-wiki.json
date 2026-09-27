@@ -1,0 +1,77 @@
+{
+  "key": {
+    "tenant": "00000000-0000-4000-8000-000000000001",
+    "space": "00000000-0000-4000-8000-000000000010",
+    "id": "00000000-0000-4000-8000-000000000101"
+  },
+  "type": "account",
+  "revision": 2,
+  "owner": {
+    "kind": "user",
+    "id": "00000000-0000-4000-8000-0000000000a1"
+  },
+  "committedBy": {
+    "type": "user",
+    "principal": {
+      "kind": "user",
+      "id": "00000000-0000-4000-8000-0000000000a1"
+    }
+  },
+  "committedAt": "2026-09-15T08:00:00Z",
+  "access": {
+    "epoch": 1,
+    "readers": [
+      {
+        "kind": "user",
+        "id": "00000000-0000-4000-8000-0000000000a1"
+      },
+      {
+        "kind": "group",
+        "id": "00000000-0000-4000-8000-0000000000b1"
+      }
+    ],
+    "editors": [
+      {
+        "kind": "user",
+        "id": "00000000-0000-4000-8000-0000000000a1"
+      }
+    ]
+  },
+  "sensitivity": "internal",
+  "retention": {
+    "policy": "standard"
+  },
+  "dates": {
+    "observed": "2026-09-14T09:00:00Z"
+  },
+  "fields": {
+    "sector": {
+      "current": {
+        "value": "retail",
+        "state": "HUMAN-VERIFIED",
+        "observedAt": "2026-09-14T09:00:00Z",
+        "evidence": [
+          {
+            "kind": "source",
+            "source": {
+              "system": "metis-wiki",
+              "id": "accounts/northwind.md",
+              "revision": "1"
+            },
+            "quote": "Sector: retail"
+          }
+        ],
+        "attestation": {
+          "by": {
+            "kind": "user",
+            "id": "00000000-0000-4000-8000-0000000000a1"
+          },
+          "at": "2026-09-15T08:00:00Z",
+          "revision": 2
+        }
+      },
+      "history": [],
+      "disputes": []
+    }
+  }
+}

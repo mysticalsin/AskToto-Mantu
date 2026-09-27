@@ -92,6 +92,7 @@ describe('exclusive onboarding renderer recovery', () => {
       // throw against an already-torn-down WebContents (MQA-340).
       selfWebContentsId: 1,
       commandControl: { revokeForLifecycleEvent },
+      responsiveness: { markGone: vi.fn() },
       win
     })
 

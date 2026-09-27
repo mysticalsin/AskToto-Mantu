@@ -1,0 +1,27 @@
+{
+  "key": {
+    "tenant": "00000000-0000-4000-8000-000000000001",
+    "space": "00000000-0000-4000-8000-000000000010",
+    "id": "00000000-0000-4000-8000-000000000105"
+  },
+  "type": "action",
+  "revision": 4,
+  "deletedAt": "2026-09-24T11:00:00Z",
+  "deletedBy": {
+    "type": "service",
+    "principal": {
+      "kind": "service",
+      "id": "00000000-0000-4000-8000-0000000000c1"
+    },
+    "onBehalfOf": {
+      "kind": "group",
+      "id": "00000000-0000-4000-8000-0000000000b1"
+    }
+  },
+  "reason": "retention-expired",
+  "source": {
+    "system": "metis-meeting",
+    "id": "meeting-2026-09-14-northwind-kickoff",
+    "revision": "sha256-7f3a"
+  }
+}

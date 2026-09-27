@@ -19,7 +19,7 @@ vi.mock('./cli-installer', () => ({
   installManagedCli: vi.fn()
 }))
 
-import { setupCli, loginCli, loginCliInvokeLines } from './cli'
+import { setupCli, loginCli, loginCliInvokeLines, cmdShimSpawn } from './cli'
 
 const REAL_PLATFORM = process.platform
 
@@ -172,5 +172,44 @@ describe('loginCliInvokeLines — managed Node, never PATH-only claude', () => {
   it('Mac login quotes a resolved ~/.local/bin/claude', () => {
     const lines = loginCliInvokeLines('claude-cli', false, null, '/Users/tony/.local/bin/claude')
     expect(lines).toEqual(['"/Users/tony/.local/bin/claude"'])
+  })
+
+  // M2-0147 — `loginScriptPathSafe` used cmd.exe's rule (quote/CR/LF/%) unconditionally, even on the
+  // bash branch, where `$`, backtick and `\` stay live inside double quotes.
+  it('C3: Mac login never embeds a resolved path bash would expand inside double quotes', () => {
+    expect(loginCliInvokeLines('claude-cli', false, null, '/Users/x/$(id)/claude')).toEqual(['claude'])
+    expect(loginCliInvokeLines('claude-cli', false, null, '/Users/x/`id`/claude')).toEqual(['claude'])
+  })
+
+  // M2-0147 — the managed-launcher branch (an in-app one-click Node install) embedded
+  // `managed.command`/`managed.args` with NO validation at all, unlike the resolved-bin branch above.
+  it('C5: Windows login does not embed a managed launcher path cmd.exe would expand', () => {
+    const lines = loginCliInvokeLines('claude-cli', true, {
+      command: 'C:\\Users\\a%b\\Metis.exe',
+      args: ['C:\\Users\\a\\managed-cli\\claude\\cli.js'],
+      env: { ELECTRON_RUN_AS_NODE: '1' }
+    })
+    expect(lines).toEqual(['call claude'])
+  })
+})
+
+// M2-0147 — cmdShimSpawn's bin check and the login script's path check had not drifted apart (both
+// already reject only quote/CR/LF/%) — but nothing PINNED that, so a future edit to either copy could
+// silently diverge. isQuotablePath(path, dialect) is now the one shared rule both call sites use.
+describe('cmdShimSpawn and the Windows login script share one quoted-path rule (M2-0147)', () => {
+  const UNQUOTABLE_CMD = ['"', '\r', '\n', '%']
+  const QUOTABLE_CMD = ['&', '|', '(', ')', '^', '<', '>', '!', ' ']
+
+  it('C4: the shim launcher and the Windows login script refuse exactly the same path characters', () => {
+    for (const ch of UNQUOTABLE_CMD) {
+      const bin = `C:\\npm\\cla${ch}ude.cmd`
+      expect(() => cmdShimSpawn(bin, [])).toThrow()
+      expect(loginCliInvokeLines('claude-cli', true, null, bin)).toEqual(['call claude'])
+    }
+    for (const ch of QUOTABLE_CMD) {
+      const bin = `C:\\npm\\cla${ch}ude.cmd`
+      expect(() => cmdShimSpawn(bin, [])).not.toThrow()
+      expect(loginCliInvokeLines('claude-cli', true, null, bin)).toEqual([`call "${bin}"`])
+    }
   })
 })

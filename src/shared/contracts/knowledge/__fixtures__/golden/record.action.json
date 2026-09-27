@@ -1,0 +1,148 @@
+{
+  "key": {
+    "tenant": "00000000-0000-4000-8000-000000000001",
+    "space": "00000000-0000-4000-8000-000000000010",
+    "id": "00000000-0000-4000-8000-000000000105"
+  },
+  "type": "action",
+  "revision": 3,
+  "owner": {
+    "kind": "user",
+    "id": "00000000-0000-4000-8000-0000000000a1"
+  },
+  "committedBy": {
+    "type": "agent",
+    "principal": {
+      "kind": "service",
+      "id": "00000000-0000-4000-8000-0000000000c2"
+    },
+    "onBehalfOf": {
+      "kind": "user",
+      "id": "00000000-0000-4000-8000-0000000000a1"
+    }
+  },
+  "committedAt": "2026-09-23T16:00:00Z",
+  "access": {
+    "epoch": 1,
+    "readers": [
+      {
+        "kind": "user",
+        "id": "00000000-0000-4000-8000-0000000000a1"
+      },
+      {
+        "kind": "group",
+        "id": "00000000-0000-4000-8000-0000000000b1"
+      }
+    ],
+    "editors": [
+      {
+        "kind": "user",
+        "id": "00000000-0000-4000-8000-0000000000a1"
+      }
+    ]
+  },
+  "sensitivity": "internal",
+  "retention": {
+    "policy": "standard"
+  },
+  "dates": {
+    "observed": "2026-09-14T09:00:00Z"
+  },
+  "fields": {
+    "text": {
+      "current": {
+        "value": "Send the revised proposal to Northwind",
+        "state": "HUMAN-VERIFIED",
+        "observedAt": "2026-09-14T09:00:00Z",
+        "evidence": [
+          {
+            "kind": "record",
+            "record": {
+              "space": "00000000-0000-4000-8000-000000000010",
+              "id": "00000000-0000-4000-8000-000000000103"
+            },
+            "revision": 2,
+            "quote": "Alice will send the revised proposal."
+          }
+        ],
+        "attestation": {
+          "by": {
+            "kind": "user",
+            "id": "00000000-0000-4000-8000-0000000000a1"
+          },
+          "at": "2026-09-16T09:00:00Z",
+          "revision": 2
+        }
+      },
+      "history": [],
+      "disputes": []
+    },
+    "due": {
+      "current": {
+        "value": null,
+        "state": "DELETED",
+        "observedAt": "2026-09-14T09:00:00Z",
+        "evidence": [
+          {
+            "kind": "source",
+            "source": {
+              "system": "metis-meeting",
+              "id": "meeting-2026-09-14-northwind-kickoff",
+              "revision": "sha256-7f3a"
+            }
+          }
+        ],
+        "attestation": {
+          "by": {
+            "kind": "user",
+            "id": "00000000-0000-4000-8000-0000000000a1"
+          },
+          "at": "2026-09-16T09:05:00Z",
+          "revision": 2
+        }
+      },
+      "history": [],
+      "disputes": []
+    },
+    "status": {
+      "current": {
+        "value": "done",
+        "state": "EDITED",
+        "observedAt": "2026-09-23T16:00:00Z",
+        "evidence": [],
+        "attestation": {
+          "by": {
+            "kind": "user",
+            "id": "00000000-0000-4000-8000-0000000000a1"
+          },
+          "at": "2026-09-23T16:00:00Z",
+          "revision": 3
+        }
+      },
+      "history": [
+        {
+          "value": "open",
+          "state": "SUPERSEDED",
+          "observedAt": "2026-09-14T09:00:00Z",
+          "evidence": [
+            {
+              "kind": "source",
+              "source": {
+                "system": "metis-meeting",
+                "id": "meeting-2026-09-14-northwind-kickoff",
+                "revision": "sha256-7f3a"
+              },
+              "quote": "I will send it by Friday."
+            }
+          ]
+        }
+      ],
+      "disputes": []
+    }
+  },
+  "source": {
+    "system": "metis-meeting",
+    "id": "meeting-2026-09-14-northwind-kickoff",
+    "revision": "sha256-7f3a"
+  }
+}
