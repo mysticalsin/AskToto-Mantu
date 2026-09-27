@@ -357,4 +357,84 @@ describe('startRunObservability', () => {
     expect(stop).toHaveBeenCalledOnce()
     expect(audit.mock.calls.filter((c) => c[0] === 'app.shutdown.clean')).toHaveLength(1)
   })
+
+  // M2-0192: the out-of-process stall sampler (stall-sampler.ts). These three tests prove
+  // startRunObservability's own wiring only — stall-sampler.ts's own behaviour is stall-sampler.test.ts's job.
+  it('starts the stall sampler with the helper command, userData, bootId, the alive interval and audit, when stallWatchCommand is given', () => {
+    const startStallSampler = vi.fn(() => ({ stop: vi.fn() }))
+    startRunObservability({
+      userData: '/fake',
+      version: '1.9.7',
+      platform: 'darwin',
+      arch: 'arm64',
+      audit: vi.fn(),
+      powerMonitor: fakePowerMonitor(),
+      stallWatchCommand: '/x/metis-mac-helper',
+      deps: {
+        beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
+        startStallMonitor: vi.fn(() => fakeStallMonitor()),
+        startStallSampler,
+        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+        clearIntervalFn: vi.fn()
+      }
+    })
+    expect(startStallSampler).toHaveBeenCalledExactlyOnceWith({
+      command: '/x/metis-mac-helper',
+      userData: '/fake',
+      bootId: 'boot-1',
+      aliveIntervalMs: 10_000,
+      audit: expect.any(Function)
+    })
+  })
+
+  it("shutdownClean stops the stall sampler before it clears the alive timer, and before app.shutdown.clean is audited", () => {
+    const order: string[] = []
+    const audit = vi.fn((event: string) => {
+      if (event === 'app.shutdown.clean') order.push('audit')
+    })
+    const startStallSampler = vi.fn(() => ({ stop: vi.fn(() => order.push('sampler.stop')) }))
+    const clearIntervalFn = vi.fn(() => order.push('clearInterval'))
+    const observability = startRunObservability({
+      userData: '/fake',
+      version: '1.9.7',
+      platform: 'darwin',
+      arch: 'arm64',
+      audit,
+      powerMonitor: fakePowerMonitor(),
+      stallWatchCommand: '/x/metis-mac-helper',
+      deps: {
+        beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
+        startStallMonitor: vi.fn(() => fakeStallMonitor()),
+        startStallSampler,
+        markShutdownClean: vi.fn(() => ({ bootId: 'boot-1', uptimeS: 1, reason: 'will-quit' as const })),
+        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+        clearIntervalFn
+      }
+    })
+    observability.shutdownClean(1)
+    expect(order).toEqual(['sampler.stop', 'clearInterval', 'audit'])
+  })
+
+  it('never starts a stall sampler when stallWatchCommand is absent, or explicitly null (no helper on this platform, or the flag off)', () => {
+    const startStallSampler = vi.fn(() => ({ stop: vi.fn() }))
+    for (const stallWatchCommand of [undefined, null] as const) {
+      startRunObservability({
+        userData: '/fake',
+        version: '1.9.7',
+        platform: 'darwin',
+        arch: 'arm64',
+        audit: vi.fn(),
+        powerMonitor: fakePowerMonitor(),
+        stallWatchCommand,
+        deps: {
+          beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
+          startStallMonitor: vi.fn(() => fakeStallMonitor()),
+          startStallSampler,
+          setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+          clearIntervalFn: vi.fn()
+        }
+      })
+    }
+    expect(startStallSampler).not.toHaveBeenCalled()
+  })
 })

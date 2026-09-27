@@ -172,7 +172,9 @@ function runStatePath(userData: string): string {
   return join(userData, RUN_STATE)
 }
 
-function runAlivePath(userData: string): string {
+/** M2-0192: the out-of-process stall sampler (infra/observability/stall-sampler.ts) watches this file's
+ *  mtime from a second process, so it must stay exported even though every writer here is in this file. */
+export function runAlivePath(userData: string): string {
   return join(userData, RUN_ALIVE)
 }
 

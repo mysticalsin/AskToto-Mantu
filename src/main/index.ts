@@ -166,7 +166,7 @@ import {
 } from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
-import { extractScreenText } from './mac-helper'
+import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,
@@ -2554,14 +2554,16 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // module load, bytecode load, and boot — which is exactly the class of failure that shipped DOA twice.
   if (!emittedAppStarted) {
     // M2-0006: app.started/app.stall/app.shutdown.clean and the run/liveness/stall-monitor lifecycle
-    // behind them — see infra/observability/run-observability.ts for the invariant this enforces.
+    // behind them, and the out-of-process stall sampler (M2-0192) — see
+    // infra/observability/run-observability.ts for the invariant this enforces.
     observability = startRunObservability({
       userData: app.getPath('userData'),
       version: app.getVersion(),
       platform: process.platform,
       arch: process.arch,
       audit: auditLog,
-      powerMonitor
+      powerMonitor,
+      stallWatchCommand: macStallWatchCommand()
     })
     emittedAppStarted = true
   }
