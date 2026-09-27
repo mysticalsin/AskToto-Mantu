@@ -63,7 +63,7 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       )
     )
     const preamble = [
-      'const { mainLog, auditLog, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, commandControl, responsiveness, reloadBudget, before } = stubs',
+      'const { mainLog, auditLog, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, commandControl, responsiveness, before } = stubs',
       `const BAR_WIDTH = ${constant('BAR_WIDTH')}`,
       'let { listeningActive, lastPlainAskAt, audioArmed, isMinimized, currentWidth } = before',
       'let handler = null',
@@ -96,9 +96,6 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       invalidateCloudSttOwner: () => {},
       commandControl: { revokeForLifecycleEvent },
       responsiveness: { markGone: () => {} },
-      // M2-0037: isDestroyed() -> true above already stops the handler before this is consumed — only
-      // needs to exist so the lifted body doesn't throw a ReferenceError referencing it.
-      reloadBudget: { onRenderProcessGone: () => 'reload' },
       before
     })
     expect(revokeForLifecycleEvent).toHaveBeenCalledExactlyOnceWith('renderer_replaced')

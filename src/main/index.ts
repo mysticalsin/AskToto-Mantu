@@ -3629,7 +3629,7 @@ function persistCrash(kind: string, detail: string, shortMessage: string): void 
 /**
  * Reload the overlay's content, catching and auditing a failed loadURL instead of letting it become an
  * unhandled rejection. Shared by the automatic render-process-gone reload and the halted dialog's manual
- * Reload button (lifecycle/render-loop-halted-dialog.ts) — both used to duplicate this `.catch`.
+ * Reload button (lifecycle/render-loop-halted-dialog.ts).
  */
 function reloadOverlay(target: BrowserWindow): void {
   target.loadURL(overlayRendererUrl()).catch((err) => {
