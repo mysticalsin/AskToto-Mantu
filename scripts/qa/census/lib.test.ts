@@ -1,0 +1,150 @@
+import { describe, expect, it } from 'vitest'
+import {
+  REQUIRED_TRACE_SCENARIOS,
+  STATES,
+  classifyProcess,
+  missingStates,
+  oneCoreCpuPercent,
+  sanitizeReport,
+  defaultOutputPath,
+  summarize,
+  validateState
+} from './lib.mjs'
+
+const startedMs = Date.UTC(2026, 8, 27, 12)
+
+describe('resource census state contract', () => {
+  it('pins the six acceptance states in release-gate order', () => {
+    expect(STATES).toEqual([
+      'cold-start',
+      'settled-idle',
+      'first-inference',
+      'active-transcription',
+      'post-meeting',
+      'post-recovery'
+    ])
+    expect(missingStates(['cold-start', 'settled-idle'])).toEqual([
+      'first-inference',
+      'active-transcription',
+      'post-meeting',
+      'post-recovery'
+    ])
+  })
+
+  it('rejects unknown state names instead of silently creating non-comparable evidence', () => {
+    expect(() => validateState('idle')).toThrow(/cold-start/)
+  })
+})
+
+describe('resource census process classification', () => {
+  it.each([
+    [
+      'renderer',
+      { pid: 2, startedMs, role: 'Metis Helper (Renderer)', exe: '/Applications/Metis.app/Contents/Frameworks/Metis Helper (Renderer)' }
+    ],
+    ['gpu', { pid: 3, startedMs, role: 'Metis Helper (GPU)', commandLine: 'Metis Helper --type=gpu-process' }],
+    ['crashpad', { pid: 4, startedMs, role: 'chrome_crashpad_handler', exe: '/Applications/Metis.app/Contents/Frameworks/chrome_crashpad_handler' }],
+    ['llama-server', { pid: 5, startedMs, role: 'llama-server', exe: '/Applications/Metis.app/Contents/Resources/llama-server' }],
+    ['fm-serve', { pid: 6, startedMs, role: 'fm', commandLine: '/usr/bin/fm serve --port 54321' }],
+    ['parakeet-utility', { pid: 7, startedMs, role: 'Metis Helper (Plugin)', commandLine: 'parakeet-asr-host.js --serviceName metis-parakeet-asr-1' }],
+    ['whisper-utility', { pid: 8, startedMs, role: 'Metis Helper (Plugin)', commandLine: 'whisper-asr-host.js --serviceName metis-whisper-import' }],
+    ['speaker-utility', { pid: 9, startedMs, role: 'Metis Helper (Plugin)', commandLine: 'speaker-embedding-host.js --serviceName metis-speaker-embedding-1' }],
+    ['main', { pid: 1, startedMs, role: 'Metis', exe: '/Applications/Metis.app/Contents/MacOS/Metis' }]
+  ])('classifies %s without relying on pid alone', (expected, entry) => {
+    expect(classifyProcess(entry)).toBe(expected)
+  })
+})
+
+describe('resource census CPU formula', () => {
+  it('uses one-core CPU percent from total CPU-time deltas over wall time', () => {
+    const before = [
+      { pid: 10, startedMs: 1000, cpuSeconds: 7 },
+      { pid: 11, startedMs: 1100, cpuSeconds: 1 },
+      { pid: 12, startedMs: 1200, cpuSeconds: 2 }
+    ]
+    const after = [
+      { pid: 10, startedMs: 1000, cpuSeconds: 12 },
+      { pid: 11, startedMs: 1100, cpuSeconds: 2 },
+      { pid: 12, startedMs: 9999, cpuSeconds: 200 },
+      { pid: 13, startedMs: 1300, cpuSeconds: 10 }
+    ]
+
+    expect(oneCoreCpuPercent(before, after, 300)).toBe(2)
+  })
+
+  it('summarizes GPU sampling by process identity, not by a global machine counter', () => {
+    const samples = [
+      {
+        tMs: 0,
+        processes: [
+          { pid: 1, startedMs, kind: 'main', role: 'Metis', cpuSeconds: 10, rssBytes: 100 },
+          { pid: 2, startedMs, kind: 'gpu', role: 'Metis Helper (GPU)', cpuSeconds: 1, rssBytes: 50 }
+        ]
+      },
+      {
+        tMs: 300_000,
+        processes: [
+          { pid: 1, startedMs, kind: 'main', role: 'Metis', cpuSeconds: 12, rssBytes: 120 },
+          { pid: 2, startedMs, kind: 'gpu', role: 'Metis Helper (GPU)', cpuSeconds: 2, rssBytes: 60 }
+        ]
+      }
+    ]
+
+    expect(summarize(samples, 300)).toMatchObject({
+      oneCoreCpuPercent: 1,
+      processCount: 2,
+      gpuSampled: true,
+      gpuPids: [2],
+      byKind: {
+        gpu: { count: 1, rssBytes: 60 },
+        main: { count: 1, rssBytes: 120 }
+      }
+    })
+  })
+})
+
+describe('resource census report boundary', () => {
+  it('keeps command lines out of the persisted report while preserving pid and start time identity', () => {
+    const report = sanitizeReport({
+      generatedAt: '2026-09-27T12:00:00.000Z',
+      productVersion: '1.9.6',
+      platform: 'darwin',
+      state: 'settled-idle',
+      seconds: 300,
+      intervalMs: 5000,
+      mainPid: 100,
+      installRootKind: 'app-bundle',
+      profileKind: 'representative-synthetic',
+      accountingBoundary: 'test boundary',
+      processIdentities: [
+        { pid: 100, startedMs, role: 'Metis', kind: 'main', commandLine: 'Metis --private-value', rssBytes: 1, cpuSeconds: 0 }
+      ],
+      samples: [
+        {
+          tMs: 0,
+          processes: [
+            { pid: 100, startedMs, role: 'Metis', kind: 'main', commandLine: 'Metis --private-value', rssBytes: 1, cpuSeconds: 0 }
+          ]
+        }
+      ],
+      summary: { oneCoreCpuPercent: 0, processCount: 1 },
+      rendererTrace: { captured: false, scenarios: [] },
+      proveLocalTtft: { recorded: false },
+      windowsWorkingSet: { measured: false }
+    })
+
+    expect(JSON.stringify(report)).not.toContain('private-value')
+    expect(report.processIdentities[0]).toMatchObject({ pid: 100, startedMs, role: 'Metis', kind: 'main' })
+  })
+
+  it('pins the renderer trace scenarios required by the ticket', () => {
+    expect(REQUIRED_TRACE_SCENARIOS).toEqual(['parked-bar-orb', 'backdrop-filter', 'threejs-obsidian-orb'])
+  })
+
+  it('keeps the reusable tool default output out of program-document paths', () => {
+    const output = defaultOutputPath({ state: 'settled-idle', platform: 'darwin' })
+
+    expect(output).toBe('metis-census-output/darwin-settled-idle.json')
+    expect(output).not.toContain('docs/')
+  })
+})
