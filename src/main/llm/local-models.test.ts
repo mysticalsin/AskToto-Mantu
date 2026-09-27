@@ -5,8 +5,11 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
+  statSync,
   truncateSync,
+  utimesSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -17,6 +20,10 @@ vi.mock('electron')
 
 const ramState = vi.hoisted(() => ({ totalMemBytes: 64 * 1024 ** 3 }))
 const diskState = vi.hoisted(() => ({ freeBytes: 512 * 1024 ** 3 }))
+// M2-0035: counts real SHA-256 hashing work so the cache tests can assert a re-hash was SKIPPED or
+// FORCED without reaching into local-models.ts internals — this wraps the same real `createHash`
+// (via importOriginal) rather than replacing it, so every hash in these tests is still genuine.
+const hashState = vi.hoisted(() => ({ calls: 0 }))
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>()
   return { ...actual, totalmem: () => ramState.totalMemBytes }
@@ -26,6 +33,16 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...actual,
     statfsSync: () => ({ bsize: 4096, bavail: Math.floor(diskState.freeBytes / 4096) })
+  }
+})
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>()
+  return {
+    ...actual,
+    createHash: ((...args: Parameters<typeof actual.createHash>) => {
+      hashState.calls++
+      return actual.createHash(...args)
+    }) as typeof actual.createHash
   }
 })
 
@@ -40,7 +57,9 @@ import {
   modelPaths,
   verifyIntegrity,
   ChecksumMismatchError,
-  InsufficientRamError
+  InsufficientRamError,
+  type LocalModelEntry,
+  type LocalModelFile
 } from './local-models'
 
 const mockAppGetPath = app.getPath as ReturnType<typeof vi.fn>
@@ -61,6 +80,7 @@ describe('bundled local model runtime', () => {
     originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
     setTotalMemGB(64)
     diskState.freeBytes = 512 * 1024 ** 3
+    hashState.calls = 0
   })
 
   afterEach(() => {
@@ -303,6 +323,116 @@ describe('bundled local model runtime', () => {
       expect(error.expectedSha256).toBe(LOCAL_MODELS[0].gguf.sha256)
       expect(error.actualSha256).toBe(createHash('sha256').update('corrupt gguf content').digest('hex'))
       expect(existsSync(paths.gguf)).toBe(true)
+    })
+  })
+
+  describe('M2-0035: cached integrity verification', () => {
+    // A small, genuinely pinned-and-matching payload (not the real multi-GB GGUF) — same technique
+    // local-model-bundle.test.ts uses to exercise the real hash pipeline without shipping a fixture the
+    // size of the production model.
+    const GOOD = Buffer.from('a small synthetic payload standing in for the pinned GGUF bytes')
+    const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
+    // Computed once, at collection time — before the outer beforeEach zeroes hashState.calls — so setting
+    // up GOOD's pinned digest never itself counts as a verification hash inside a test.
+    const GOOD_SHA256 = sha256(GOOD)
+    let model: LocalModelEntry
+    let originalGguf: LocalModelFile
+    let originalMmproj: LocalModelFile
+
+    beforeEach(() => {
+      model = LOCAL_MODELS[0]
+      originalGguf = model.gguf
+      originalMmproj = model.mmproj
+      model.gguf = { ...model.gguf, bytes: GOOD.length, sha256: GOOD_SHA256 }
+      model.mmproj = { ...model.mmproj, bytes: GOOD.length, sha256: GOOD_SHA256 }
+      const paths = modelPaths(model.id)
+      mkdirSync(paths.dir, { recursive: true })
+      writeFileSync(paths.gguf, GOOD)
+      writeFileSync(paths.mmproj, GOOD)
+    })
+
+    afterEach(() => {
+      model.gguf = originalGguf
+      model.mmproj = originalMmproj
+    })
+
+    it('skips re-hashing on a second cold start when the file identity (size, mtime, ctime, inode) is unchanged', async () => {
+      await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
+      // One real hash per model file (gguf + mmproj) — GOOD_SHA256 above did no counted hashing inside
+      // this test, so this is exactly the first verification's own work, not an artifact of setup.
+      expect(hashState.calls).toBe(2)
+
+      await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
+      // No new hashing on the second, unchanged cold start — this is the whole point of the cache.
+      expect(hashState.calls).toBe(2)
+    })
+
+    it('re-verifies (and fails closed) the moment a previously-verified file changes on disk', async () => {
+      await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
+      const afterFirstColdStart = hashState.calls
+
+      // Tamper with the gguf after it was already cached as verified. Different length than GOOD, so
+      // the identity check cannot pass by coincidence regardless of filesystem mtime resolution.
+      const paths = modelPaths(model.id)
+      writeFileSync(paths.gguf, Buffer.from('tampered after a prior successful verification'))
+
+      await expect(verifyIntegrity(model.id)).rejects.toBeInstanceOf(ChecksumMismatchError)
+      // The changed file was re-hashed, not waved through on the strength of the stale cache entry.
+      expect(hashState.calls).toBeGreaterThan(afterFirstColdStart)
+    })
+
+    it('does not cache a failed verification, so a repaired file verifies', async () => {
+      const paths = modelPaths(model.id)
+      writeFileSync(paths.gguf, Buffer.from('corrupt on the very first cold start'))
+      await expect(verifyIntegrity(model.id)).rejects.toBeInstanceOf(ChecksumMismatchError)
+
+      // Explicit repair: the file is rewritten with the correct pinned bytes (what a re-download does).
+      writeFileSync(paths.gguf, GOOD)
+      await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
+    })
+
+    it('rejects a same-size in-place tamper with its mtime put back, because ctime cannot be rolled back', async () => {
+      const paths = modelPaths(model.id)
+      // A whole-second instant so it can be restored to the exact value below on every filesystem's mtime
+      // resolution, not just ones that keep sub-second precision.
+      const verifiedMtime = new Date(Math.floor(Date.now() / 1000) * 1000)
+      utimesSync(paths.gguf, verifiedMtime, verifiedMtime)
+      const verifiedStat = statSync(paths.gguf)
+
+      await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
+
+      // Longer than filesystem timestamp granularity, so the tamper below provably moves ctime forward
+      // rather than landing in the same tick as the verified stat by coincidence.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      // Same length as GOOD, different bytes, mtime put back — everything but ctime matches the verified
+      // stat, and only ctime cannot be forged with utimes.
+      writeFileSync(paths.gguf, Buffer.alloc(GOOD.length, 0x58))
+      utimesSync(paths.gguf, verifiedMtime, verifiedMtime)
+
+      const tamperedStat = statSync(paths.gguf)
+      expect(tamperedStat.size).toBe(verifiedStat.size)
+      expect(tamperedStat.mtimeMs).toBe(verifiedStat.mtimeMs)
+      expect(tamperedStat.ino).toBe(verifiedStat.ino)
+
+      await expect(verifyIntegrity(model.id)).rejects.toBeInstanceOf(ChecksumMismatchError)
+    })
+
+    it('rejects a same-size, same-mtime replacement renamed over the verified file', async () => {
+      const paths = modelPaths(model.id)
+      const fixedMtime = new Date(Math.floor(Date.now() / 1000) * 1000)
+      utimesSync(paths.gguf, fixedMtime, fixedMtime)
+
+      await expect(verifyIntegrity(model.id)).resolves.toBeUndefined()
+
+      // Same length as GOOD, different bytes, same mtime as the original — built at a separate path so
+      // the rename below gives the gguf path a new inode instead of rewriting the original's.
+      const replacementPath = join(paths.dir, 'replacement.gguf')
+      writeFileSync(replacementPath, Buffer.alloc(GOOD.length, 0x59))
+      utimesSync(replacementPath, fixedMtime, fixedMtime)
+      renameSync(replacementPath, paths.gguf)
+
+      await expect(verifyIntegrity(model.id)).rejects.toBeInstanceOf(ChecksumMismatchError)
     })
   })
 })

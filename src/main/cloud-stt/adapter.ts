@@ -387,6 +387,8 @@ export function normalizeNova3ResultsMessage(
     type?: unknown
     is_final?: unknown
     speech_final?: unknown
+    start?: unknown
+    duration?: unknown
     channel?: { alternatives?: Array<{ transcript?: unknown; words?: Nova3Word[] }> }
   },
   opts: { scope: CloudSttScope; messageSequence: string | number; streamOffsetMs?: number }
@@ -406,11 +408,33 @@ export function normalizeNova3ResultsMessage(
     if (!isFinal) {
       return { finals: [], interimText: transcript, finished: false }
     }
-    if (!transcript.trim()) {
+    const finalText = transcript.trim()
+    if (!finalText) {
       return { finals: [], interimText: '', finished: false }
     }
-    // Final without word timings — keep text, refuse invented precise attribution.
-    throw new CloudSttError('INVALID_STT_TIME')
+    // Final without word timings: no per-word timing or speaker attribution exists to report,
+    // so cluster stays 'unknown' and language 'und' rather than guessing. Segment timing still
+    // comes from the frame's own top-level start/duration (seconds, same Deepgram Results
+    // stream clock as words[].start/end) — real provider timing, not an invented zero-width
+    // span. A Results frame without these fields is malformed on the wire and fails validation.
+    const startSec = nonNegative(message.start)
+    const durationSec = nonNegative(message.duration)
+    return {
+      finals: [
+        {
+          id: segmentId(opts.scope, opts.messageSequence, 0),
+          text: finalText,
+          startMs: Math.round(startSec * 1000) + streamOffsetMs,
+          endMs: Math.round((startSec + durationSec) * 1000) + streamOffsetMs,
+          cluster: 'unknown',
+          language: 'und',
+          isFinal: true,
+          revision: 1
+        }
+      ],
+      interimText: '',
+      finished: false
+    }
   }
 
   const tokens: CloudSttWord[] = []
