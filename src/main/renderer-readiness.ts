@@ -24,6 +24,11 @@ interface RendererReadyTarget {
   executeJavaScript(source: string): Promise<unknown>
 }
 
+interface NavigableWindow {
+  webContents: RendererReadyTarget
+  loadURL(url: string): unknown
+}
+
 /** Bind before navigation. A reload, failed load, or destroyed renderer invalidates an older probe. */
 export function bindRendererReadiness(
   target: RendererReadyTarget,
@@ -71,4 +76,15 @@ export function bindRendererReadiness(
   target.on('did-finish-load', loaded)
   for (const event of ['did-start-loading', 'did-fail-load', 'render-process-gone']) target.on(event, cancel)
   target.on('destroyed', dispose)
+}
+
+/**
+ * Binds readiness, then navigates, so two invariants hold:
+ * - Readiness is bound before navigation, so even a load that completes synchronously is observed.
+ * - Navigation uses exactly the URL the probe matches, so loadFile's getURL mismatch cannot happen
+ *   (FITO-185-B).
+ */
+export function bindReadinessThenNavigate(win: NavigableWindow, rendererUrl: string, ready: () => void): void {
+  bindRendererReadiness(win.webContents, rendererUrl, ready)
+  win.loadURL(rendererUrl)
 }

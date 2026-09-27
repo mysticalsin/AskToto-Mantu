@@ -10,7 +10,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test",
+    "test": "node ../scripts/hermetic/run-with-sandbox.mjs -- node --test",
     "generate-license": "node scripts/generate-license.mjs",
     "generate-lease-keypair": "node scripts/generate-lease-keypair.mjs",
     "backup": "node scripts/backup.mjs",
