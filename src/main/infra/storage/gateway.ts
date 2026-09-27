@@ -1,6 +1,6 @@
 /**
- * Storage gateway: the only way main-process code reads the meetings root, the synced folder (OneDrive or
- * Documents) that holds the meetings and `.brain`.
+ * Storage gateway: how main-process code reaches the meetings root — the synced folder (OneDrive or
+ * Documents) that holds the meetings and `.brain` — for every reader that has been migrated onto it.
  *
  * Reading a cloud-only (dataless) file makes the OS download it and blocks the reading thread until the
  * provider answers, for minutes when offline; on the main thread that froze the whole app. Async fs moves
@@ -230,6 +230,24 @@ export function createStorage({
   const reads = new Map<string, Promise<Settled<Buffer>>>()
   /** Recent reads that returned no content, by path. The TTL is constant, so insertion order is expiry order. */
   const failures = new Map<string, { result: Unread; expiresAt: number }>()
+  /** Per-path write generation, bumped by noteWritten and expiring like a remembered failure. */
+  const writeGenerations = new Map<string, { generation: number; expiresAt: number }>()
+
+  function currentGeneration(path: string): number {
+    const entry = writeGenerations.get(path)
+    return entry && entry.expiresAt > performance.now() ? entry.generation : 0
+  }
+
+  function bumpGeneration(path: string): void {
+    const now = performance.now()
+    for (const [key, entry] of writeGenerations) {
+      if (entry.expiresAt > now) break
+      writeGenerations.delete(key)
+    }
+    const generation = currentGeneration(path) + 1
+    writeGenerations.delete(path)
+    writeGenerations.set(path, { generation, expiresAt: now + FAILURE_TTL_MS })
+  }
 
   /** null once the request holds a permit, else why it got none. */
   async function admit(lane: Lane, request: Request): Promise<StorageFailure | null> {
@@ -362,10 +380,11 @@ export function createStorage({
         if (!path) return outsideRoot()
         const remembered = failures.get(path)
         if (remembered && remembered.expiresAt > performance.now()) return remembered.result
+        const generation = currentGeneration(path)
         const request = openRequest(CONTENT_DEADLINE_MS, signal)
         try {
           const result = await readLocal(path, request)
-          if (result.status !== 'ok' && REMEMBERED.has(result.status)) remember(path, result)
+          if (result.status !== 'ok' && REMEMBERED.has(result.status) && currentGeneration(path) === generation) remember(path, result)
           return result
         } finally {
           request.close()
@@ -376,6 +395,7 @@ export function createStorage({
         const path = underRoot(base, relPath)
         if (!path) return outsideRoot()
         failures.delete(path)
+        bumpGeneration(path)
         const request = openRequest(METADATA_DEADLINE_MS, signal)
         try {
           const file = await statFile(path, request)

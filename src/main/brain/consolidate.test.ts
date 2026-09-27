@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { getSettings, setSettings, setApiKey } from '../store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { canConsolidateToday, recordConsolidationPass, runConsolidationIfDue, resetConsolidationLockForTests } from './consolidate'
 import { brainBackfillProgress, whenIndexWritesSettle } from './ingest'
 
@@ -43,6 +44,7 @@ beforeEach(() => {
     if (name.endsWith('_API_KEY')) vi.stubEnv(name, undefined)
   }
   setSettings({ meetingsFolder, encryptTranscripts: false })
+  useStorageForTests()
 })
 
 afterEach(async () => {
@@ -57,30 +59,30 @@ afterEach(async () => {
 })
 
 describe('canConsolidateToday', () => {
-  it('true by default (enabled, 0 of maxPassesPerDay spent)', () => {
-    expect(canConsolidateToday(getSettings())).toBe(true)
+  it('true by default (enabled, 0 of maxPassesPerDay spent)', async () => {
+    expect(await canConsolidateToday(getSettings())).toBe(true)
   })
 
-  it('false the instant brainConsolidation.enabled is off, even with a fresh budget', () => {
+  it('false the instant brainConsolidation.enabled is off, even with a fresh budget', async () => {
     setSettings({ brainConsolidation: { enabled: false, maxPassesPerDay: 2, preferLocal: true } })
-    expect(canConsolidateToday(getSettings())).toBe(false)
+    expect(await canConsolidateToday(getSettings())).toBe(false)
   })
 
   it('false once today\u2019s recorded passes reach maxPassesPerDay', async () => {
     setSettings({ brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: true } })
     const s = getSettings()
-    expect(canConsolidateToday(s)).toBe(true)
+    expect(await canConsolidateToday(s)).toBe(true)
     await recordConsolidationPass(s)
-    expect(canConsolidateToday(s)).toBe(true) // 1 of 2 spent
+    expect(await canConsolidateToday(s)).toBe(true) // 1 of 2 spent
     await recordConsolidationPass(s)
-    expect(canConsolidateToday(s)).toBe(false) // 2 of 2 spent
+    expect(await canConsolidateToday(s)).toBe(false) // 2 of 2 spent
   })
 
   it('a lower maxPassesPerDay (1) is spent after a single pass', async () => {
     setSettings({ brainConsolidation: { enabled: true, maxPassesPerDay: 1, preferLocal: true } })
     const s = getSettings()
     await recordConsolidationPass(s)
-    expect(canConsolidateToday(s)).toBe(false)
+    expect(await canConsolidateToday(s)).toBe(false)
   })
 
   it('the budget resets on a new calendar day', async () => {
@@ -88,8 +90,8 @@ describe('canConsolidateToday', () => {
     const s = getSettings()
     const yesterday = Date.now() - 25 * 60 * 60 * 1000
     await recordConsolidationPass(s, yesterday)
-    expect(canConsolidateToday(s, yesterday)).toBe(false) // spent yesterday
-    expect(canConsolidateToday(s)).toBe(true) // today's counter is fresh
+    expect(await canConsolidateToday(s, yesterday)).toBe(false) // spent yesterday
+    expect(await canConsolidateToday(s)).toBe(true) // today's counter is fresh
   })
 })
 
@@ -97,16 +99,16 @@ describe('recordConsolidationPass', () => {
   it('increments the durable per-day counter across separate reads (survives a fresh settings read)', async () => {
     const s = getSettings()
     const first = await recordConsolidationPass(s)
-    expect(first.passes).toBe(1)
+    expect(first?.passes).toBe(1)
     const second = await recordConsolidationPass(getSettings())
-    expect(second.passes).toBe(2)
+    expect(second?.passes).toBe(2)
   })
 
   it('two consolidate.ts instances agree on the same day key (no drift from the caller\u2019s own now())', async () => {
     const s = getSettings()
     const fixedNow = new Date('2026-03-15T10:00:00Z').getTime()
     const r = await recordConsolidationPass(s, fixedNow)
-    expect(r.date).toBe('2026-03-15')
+    expect(r?.date).toBe('2026-03-15')
   })
 })
 
@@ -132,15 +134,15 @@ describe('runConsolidationIfDue', () => {
     writeFileSync(join(meetingsFolder, 'meeting-1.md'), '---\ndate: 2026-01-01\n---\nhello', 'utf8')
     writeFileSync(join(meetingsFolder, 'meeting-2.md'), '---\ndate: 2026-01-02\n---\nworld', 'utf8')
     const s = getSettings()
-    expect(canConsolidateToday(s)).toBe(true)
+    expect(await canConsolidateToday(s)).toBe(true)
     const r = await runConsolidationIfDue(s)
     expect(r.ran).toBe(true)
     expect(r.queued).toBe(2)
     // One pass recorded for this call, not one per queued file.
     const after = getSettings()
-    expect(canConsolidateToday(after)).toBe(true) // default budget is 2/day
+    expect(await canConsolidateToday(after)).toBe(true) // default budget is 2/day
     await recordConsolidationPass(after)
-    expect(canConsolidateToday(getSettings())).toBe(false)
+    expect(await canConsolidateToday(getSettings())).toBe(false)
   })
 
   it('never spends the daily budget on a tick that finds nothing to do', async () => {
@@ -149,6 +151,6 @@ describe('runConsolidationIfDue', () => {
     const s = getSettings()
     const r = await runConsolidationIfDue(s)
     expect(r).toEqual({ ran: false, queued: 0 })
-    expect(canConsolidateToday(getSettings())).toBe(true) // budget untouched
+    expect(await canConsolidateToday(getSettings())).toBe(true) // budget untouched
   })
 })

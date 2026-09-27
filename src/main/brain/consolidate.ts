@@ -12,7 +12,7 @@
 import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
 import { getSettings } from '../store'
-import { readJson, writeJson } from './store'
+import { loadJson, writeJson } from './store'
 import { startBackfill, type BackfillStartResult } from './ingest'
 import { auditLog, mainLog } from '../logger'
 
@@ -44,27 +44,30 @@ function emptyState(now: number): ConsolidateState {
  *  this state lives next to index.json rather than inventing a second storage convention. A stale
  *  `date` (yesterday's counters, or a corrupt/absent file) is never trusted — it degrades to a fresh
  *  empty state for today rather than either crashing or silently carrying over yesterday's budget. */
-function readState(s: Settings, now = Date.now()): ConsolidateState {
-  const v = readJson<ConsolidateState>(s, STATE_FILE, (raw) => ConsolidateStateSchema.parse(raw))
+async function loadState(s: Settings, now = Date.now()): Promise<ConsolidateState | null> {
+  const loaded = await loadJson<ConsolidateState>(s, STATE_FILE, (raw) => ConsolidateStateSchema.parse(raw))
+  if (loaded.status === 'unavailable') return null
+  const v = loaded.value
   if (!v || v.date !== todayKey(now)) return emptyState(now)
   return v
 }
 
 /** Whether `settings.brainConsolidation` currently permits another pass: the feature is on, and today's
- *  count (readState, which itself resets on a day change) hasn't reached the daily cap. Pure and
- *  synchronous on purpose — this is the gate `runConsolidationIfDue`'s hourly timer checks on every
- *  tick, and every one of those ticks must cost nothing beyond one small JSON read. */
-export function canConsolidateToday(s: Settings, now = Date.now()): boolean {
+ *  count (loadState, which itself resets on a day change) hasn't reached the daily cap. null: the state
+ *  file exists but is not readable here, so callers must not overwrite it as absent. */
+export async function canConsolidateToday(s: Settings, now = Date.now()): Promise<boolean | null> {
   if (!s.brainConsolidation.enabled) return false
-  return readState(s, now).passes < s.brainConsolidation.maxPassesPerDay
+  const state = await loadState(s, now)
+  return state === null ? null : state.passes < s.brainConsolidation.maxPassesPerDay
 }
 
 /** Durably record that one consolidation pass just ran, and audit-log it (metrics.ts's
  *  brainConsolidationPasses counter reads the 'brain.consolidation' event this writes). Callers decide
  *  WHEN to call this — `runConsolidationIfDue` only calls it after `startBackfill` actually found and
  *  queued something, so an hourly tick with nothing pending never spends the daily budget on a no-op. */
-export async function recordConsolidationPass(s: Settings, now = Date.now()): Promise<ConsolidateState> {
-  const prev = readState(s, now)
+export async function recordConsolidationPass(s: Settings, now = Date.now()): Promise<ConsolidateState | null> {
+  const prev = await loadState(s, now)
+  if (prev === null) return null
   const next: ConsolidateState = { date: todayKey(now), passes: prev.passes + 1, lastRunAt: now }
   await writeJson(s, STATE_FILE, next)
   auditLog('brain.consolidation', { passes: next.passes, maxPerDay: s.brainConsolidation.maxPassesPerDay })
@@ -75,7 +78,7 @@ export interface ConsolidationRunResult {
   ran: boolean
   queued: number
   /** Present when brainConsolidation.enabled is false or today's pass budget is already spent. */
-  reason?: 'disabled' | 'budget-spent' | 'in-flight'
+  reason?: 'disabled' | 'budget-spent' | 'in-flight' | 'unavailable'
 }
 
 /** Process-wide single-flight — overlapping hourly ticks (or a manual trigger racing the timer) must
@@ -91,13 +94,15 @@ let consolidating = false
  */
 export async function runConsolidationIfDue(s: Settings = getSettings()): Promise<ConsolidationRunResult> {
   if (!s.brainConsolidation.enabled) return { ran: false, queued: 0, reason: 'disabled' }
-  if (!canConsolidateToday(s)) return { ran: false, queued: 0, reason: 'budget-spent' }
+  const allowed = await canConsolidateToday(s)
+  if (allowed === null) return { ran: false, queued: 0, reason: 'unavailable' }
+  if (allowed === false) return { ran: false, queued: 0, reason: 'budget-spent' }
   if (consolidating) return { ran: false, queued: 0, reason: 'in-flight' }
   consolidating = true
   try {
     let result: BackfillStartResult
     try {
-      result = startBackfill()
+      result = await startBackfill()
     } catch (e) {
       // Never let a scan failure (a locked index file, a missing meetings folder) throw out of the timer
       // — the next hourly tick gets another try, same as every other best-effort background pass in main.

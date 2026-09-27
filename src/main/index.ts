@@ -519,11 +519,6 @@ import {
   requestBackfill,
   requestBackfillRun,
   requestSourceRefresh,
-  brainBackfillProgress,
-  brainLiveIngestProgress,
-  ingestFailureCounts,
-  ingestFailureDetails,
-  isPendingIngestRecord,
   resumeBackfillIfPending,
   reconcileMeetingsInBackground,
   settleCommitment,
@@ -538,7 +533,6 @@ import {
   updateEntityField,
   readFieldProvenance,
   rejectCommitment,
-  isJournalCorruptionBlocked,
   clearJournalCorruptionLock,
   readCorrectionsJournal,
   readAliasMap,
@@ -554,9 +548,9 @@ import {
 } from './intelligence'
 import {
   readIndex as readBrainIndex,
-  indexUnavailable,
-  indexUnavailableMessage
+  loadIndex
 } from './brain/ledger'
+import { readBrainStatus } from './brain/status'
 import {
   readGraph as readBrainGraph,
   writeGraph as writeBrainGraph,
@@ -675,8 +669,6 @@ import {
   catchUpIntelligenceIndexIfNeeded,
   runIntelligenceIndex,
   setIntelligenceIndexWork,
-  lastIndexedAt,
-  intelligenceIndexStatus,
   SIGN_IN_INDEX_COPY
 } from './brain/intelligence-index'
 import { startIntelligenceWork } from './brain/intelligence-work'
@@ -1133,27 +1125,6 @@ function speculativeLocalWorkAllowed(): boolean {
 // "Notified once" keys. Bounded: a session that runs for days imports many files, and an unbounded Set
 // here was one of the two module-level structures that only ever grew (RAM audit, 2026-09-05).
 const notifiedImportJobs = new BoundedSet<string>(500)
-
-type BrainStatusCounts = { people: number; accounts: number; deals: number; nodes: number; edges: number }
-let brainStatusCountsCache: { folder: string; revision: number; counts: BrainStatusCounts } | null = null
-
-/** Status is polled frequently by two windows. Re-scan graph/entity directories only after a revision change. */
-function brainStatusCounts(s: ReturnType<typeof getSettings>, revision: number): BrainStatusCounts {
-  const folder = resolveMeetingsFolder(s)
-  if (brainStatusCountsCache?.folder === folder && brainStatusCountsCache.revision === revision) {
-    return brainStatusCountsCache.counts
-  }
-  const graph = readBrainGraph(s)
-  const counts = {
-    people: listBrainEntities(s, 'person').length,
-    accounts: listBrainEntities(s, 'account').length,
-    deals: listBrainEntities(s, 'deal').length,
-    nodes: graph.nodes.length,
-    edges: graph.edges.length
-  }
-  brainStatusCountsCache = { folder, revision, counts }
-  return counts
-}
 
 function noteIpcDenied(reason: 'no_window' | 'sender' | 'frame'): void {
   if (!shouldSampleIpcDeny()) return
@@ -7960,7 +7931,7 @@ function registerIpc(): void {
     })()
     return result
   })
-  ipcMain.handle(IPC.brainStatus, (e) => {
+  ipcMain.handle(IPC.brainStatus, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) {
       return {
@@ -7976,51 +7947,7 @@ function registerIpc(): void {
         error: 'Sign in with your Mantu account first.'
       }
     }
-    const s = getSettings()
-    const idx = readBrainIndex(s)
-    // M2-0003: non-null while an existing index.json exists but cannot be used on this device — idx
-    // above is then only the empty stand-in, so this must be read before deciding what "no data" means.
-    const unavailable = indexUnavailable(s)
-    const counts = brainStatusCounts(s, idx.revision)
-    // T6 6c: durable failure counts read straight from the index — unlike backfill.failed below (an
-    // ephemeral per-run counter), these stay visible for as long as a source has ok:false, independent
-    // of whether a backfill run happens to be active right now.
-    const failure = ingestFailureCounts(idx)
-    // Per-file error text for the same failing sources, bounded to 20 — powers the failed-row tooltip
-    // (RecallView) and the expandable failure detail (BrainView) without shipping the whole ledger.
-    const failureDetails = ingestFailureDetails(idx)
-    return {
-      meetings: Object.values(idx.ingested).filter((v) => v.ok).length,
-      ingestedFiles: Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file),
-      // 6d: failing-source filenames, the failed-side counterpart to ingestedFiles above — lets a
-      // per-meeting indicator (indexed/pending/failed) be derived without a second, heavier IPC call.
-      // Pending (deferred for consolidation) is NOT a failure — same discriminator ingestFailureCounts
-      // already uses. Listing pending here painted every just-saved meeting as a red "failed" History dot.
-      failedFiles: Object.entries(idx.ingested)
-        .filter(([, v]) => !v.ok && !isPendingIngestRecord(v))
-        .map(([file]) => file),
-      ...(failureDetails.length ? { failedDetails: failureDetails } : {}),
-      backfillRequested: idx.backfillRequested,
-      ...counts,
-      warnings: idx.warnings.length,
-      revision: idx.revision,
-      backfill: brainBackfillProgress(),
-      live: brainLiveIngestProgress(),
-      failed: failure.failed,
-      exhausted: failure.exhausted,
-      ...(failure.topError ? { topError: failure.topError } : {}),
-      // MI-2.5 review round 3: computed fresh from the on-disk sentinel each poll — lets BrainView offer
-      // the in-app "Reset corrections lock" recovery instead of a hand-deleted hidden .brain file.
-      corruptionBlocked: isJournalCorruptionBlocked(s),
-      // MQA-230: entity files can still hold items attributed to an already-deleted meeting until the
-      // deferred source refresh runs (it needs a usable provider). Surfaced so the UI can say the
-      // cleanup is pending instead of silently claiming the delete was complete.
-      cleanupPending: idx.sourceRefreshRequested === true,
-      lastIndexedAt: lastIndexedAt(s),
-      intelligenceIndex: intelligenceIndexStatus(s),
-      // M2-0003: surfaces the degraded read-only state instead of silently reporting an empty brain.
-      ...(unavailable ? { indexUnavailable: unavailable, error: indexUnavailableMessage(unavailable) } : {})
-    }
+    return readBrainStatus(getSettings())
   })
   ipcMain.handle(IPC.brainBackfill, async (e) => {
     assertBrainReader(e)
@@ -8069,10 +7996,11 @@ function registerIpc(): void {
     return { ok: true, cleared }
   })
   // Full assembled dataset for the Mantu Intelligence dashboard (decrypted in main when needed).
-  ipcMain.handle(IPC.brainRead, (e) => {
+  ipcMain.handle(IPC.brainRead, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const s = getSettings()
+    await loadIndex(s)
     const index = readBrainIndex(s)
     return {
       index,
@@ -8272,10 +8200,12 @@ function registerIpc(): void {
     if (!parsed.success) return null
     return readBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
   })
-  ipcMain.handle(IPC.brainAttention, (e) => {
+  ipcMain.handle(IPC.brainAttention, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { items: [] }
-    return { items: computeAttention(getSettings()) }
+    const s = getSettings()
+    await loadIndex(s)
+    return { items: computeAttention(s) }
   })
 
   // Periodic best-effort snapshot of an IN-PROGRESS meeting (renderer calls this every ~60s while

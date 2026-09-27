@@ -1,7 +1,10 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, renameSync, statSync, cpSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
+import { storageAt, classifyAll } from '../infra/storage/meetings-storage'
+import type { ContentVersion } from '../infra/storage/gateway'
 import { invalidateMatchKeyDir, resetMatchKeyCacheForTests } from './match-key-cache'
 import {
   BrainGraphSchema,
@@ -17,7 +20,7 @@ import {
   type Confidence,
   type ProvenantField
 } from '@shared/brain'
-import { resolveMeetingsFolder, readSavedFile, writeSaved } from '../transcripts'
+import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSaved } from '../transcripts'
 
 /**
  * Brain store — plain JSON files under `<meetings folder>/.brain/`.
@@ -189,12 +192,10 @@ export const eqVelocity = (a: { signal: string; evidence: string }, b: { signal:
 export const eqAmount = (a: { value: number; currency: string }, b: { value: number; currency: string }): boolean =>
   a.value === b.value && a.currency === b.currency
 
-function ensureDirs(settings: Settings): string {
+async function ensureDirs(settings: Settings): Promise<void> {
   const root = brainDir(settings)
-  for (const d of [root, join(root, 'meetings'), join(root, 'entities', 'person'), join(root, 'entities', 'account'), join(root, 'entities', 'deal')]) {
-    if (!existsSync(d)) mkdirSync(d, { recursive: true })
-  }
-  return root
+  const leaves = ['meetings', join('entities', 'person'), join('entities', 'account'), join('entities', 'deal')]
+  await Promise.all(leaves.map((leaf) => mkdir(join(root, leaf), { recursive: true })))
 }
 
 // Per-file parse cache validated by (mtimeMs, size), mirroring the proven pattern in recall.ts (readCache).
@@ -244,8 +245,84 @@ export function readJson<T>(settings: Settings, rel: string, parse: (v: unknown)
   return value
 }
 
-export async function writeJson(settings: Settings, rel: string, value: unknown): Promise<void> {
-  ensureDirs(settings)
+/** Content identity of a file version (M2-0003's key): what changes when the bytes change. */
+export type ContentIdentity = Pick<ContentVersion, 'mtimeMs' | 'size'>
+
+export type BrainFileRead<Held> =
+  | { status: 'unchanged'; held: Held }
+  | { status: 'ok'; identity: ContentIdentity; bytes: Buffer }
+  | { status: 'missing' }
+  | { status: 'cloud-only' }
+  | { status: 'unreadable'; code: string }
+
+function identityOf({ mtimeMs, size }: ContentIdentity): ContentIdentity {
+  return { mtimeMs, size }
+}
+
+function failureCode(fileClass: { status: string; code?: string }): string {
+  return fileClass.status === 'unavailable' ? fileClass.code ?? fileClass.status : fileClass.status
+}
+
+/** A .brain file through the storage gateway. `held` is what the caller already decoded from some version:
+ *  while that identity still matches, nothing is read and `held` comes back. A file whose bytes may not be
+ *  local is never opened. */
+export async function readBrainFile<Held extends ContentIdentity>(s: Settings, rel: string, held?: Held): Promise<BrainFileRead<Held>> {
+  const gateway = storageAt(resolveMeetingsFolder(s))
+  const path = join('.brain', rel)
+  const fileClass = (await classifyAll(gateway, [path])).get(path) ?? { status: 'degraded' as const }
+  if (fileClass.status === 'missing') return { status: 'missing' }
+  if (!('version' in fileClass)) return { status: 'unreadable', code: failureCode(fileClass) }
+  const { mtimeMs, size } = fileClass.version
+  if (held && held.mtimeMs === mtimeMs && held.size === size) return { status: 'unchanged', held }
+  if (fileClass.status !== 'ok') return { status: 'cloud-only' }
+  const read = await gateway.read(path)
+  if (read.status === 'ok') return { status: 'ok', identity: identityOf(read.version), bytes: read.bytes }
+  if (read.status === 'missing') return { status: 'missing' }
+  if (read.status === 'dataless' || read.status === 'unknown') return { status: 'cloud-only' }
+  return { status: 'unreadable', code: failureCode(read) }
+}
+
+export type JsonLoad<T> = { status: 'ok'; value: T | null } | { status: 'unavailable' }
+
+/** readJson through the storage gateway, sharing its cache. 'unavailable' means the file exists but is not
+ *  readable on this device right now; callers must not treat that as absent. */
+export async function loadJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T): Promise<JsonLoad<T>> {
+  const p = join(brainDir(settings), rel)
+  const file = await readBrainFile(settings, rel, jsonCache.get(p))
+  if (file.status === 'unchanged') return { status: 'ok', value: file.held.value as T | null }
+  if (file.status === 'missing') {
+    jsonCache.delete(p)
+    return { status: 'ok', value: null }
+  }
+  if (file.status !== 'ok') return { status: 'unavailable' }
+  let value: T | null
+  try {
+    value = parse(JSON.parse(decodeSaved(file.bytes)))
+  } catch {
+    value = null
+  }
+  if (jsonCache.size >= JSON_CACHE_MAX) jsonCache.clear()
+  jsonCache.set(p, { ...file.identity, value })
+  return { status: 'ok', value }
+}
+
+/** The value the last read or load of `rel` cached; undefined when none has. Never touches the disk. */
+export function peekJson<T>(settings: Settings, rel: string): T | null | undefined {
+  return jsonCache.get(join(brainDir(settings), rel))?.value as T | null | undefined
+}
+
+/** Entry names of a directory under .brain through the gateway: [] when it does not exist, null when it
+ *  could not be listed. */
+export async function listBrainNames(settings: Settings, relDir: string): Promise<string[] | null> {
+  const listing = await storageAt(resolveMeetingsFolder(settings)).list(join('.brain', relDir))
+  if (listing.status === 'ok') return listing.names
+  return listing.status === 'missing' ? [] : null
+}
+
+/** Writes a .brain JSON file and tells the gateway this version is local. Answers its content identity,
+ *  or null when the file could not be stated after the write (the next load then reads it). */
+export async function persistJson(settings: Settings, rel: string, value: unknown): Promise<ContentIdentity | null> {
+  await ensureDirs(settings)
   const p = join(brainDir(settings), rel)
   await writeSaved(p, JSON.stringify(value, null, 2), !!settings.encryptTranscripts)
   // Invalidate rather than pre-populate: `value` here is the pre-serialize object, not necessarily
@@ -253,6 +330,12 @@ export async function writeJson(settings: Settings, rel: string, value: unknown)
   // and relying on mtime alone risks a same-mtime rapid write-then-read on low-resolution filesystems.
   jsonCache.delete(p)
   _writeGen += 1
+  const noted = await storageAt(resolveMeetingsFolder(settings)).noteWritten(join('.brain', rel))
+  return noted.status === 'ok' ? identityOf(noted.version) : null
+}
+
+export async function writeJson(settings: Settings, rel: string, value: unknown): Promise<void> {
+  await persistJson(settings, rel, value)
 }
 
 // MI-2.5 Fix C: the ONE serialization lane every read-modify-write mutation of `.brain/` entity files

@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSyn
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
+import { storageAt } from '../infra/storage/meetings-storage'
 import {
   BRAIN_SCHEMA_VERSION,
   PersonEntitySchema,
@@ -20,7 +21,7 @@ import {
   type MeetingExtraction,
   type ProvenantField
 } from '@shared/brain'
-import { readSavedFile, decodeSaved } from '../transcripts'
+import { readSavedFile, decodeSaved, resolveMeetingsFolder } from '../transcripts'
 import { mainLog } from '../logger'
 import {
   brainDir,
@@ -92,6 +93,13 @@ function corruptionLockPath(s: Settings): string {
 /** True while corrections are blocked by a previously-detected, not-yet-resolved journal corruption. */
 export function isJournalCorruptionBlocked(s: Settings): boolean {
   return existsSync(corruptionLockPath(s))
+}
+
+/** isJournalCorruptionBlocked through the storage gateway, for the polled brain:status. */
+export async function journalCorruptionBlocked(s: Settings): Promise<boolean> {
+  const rel = join('.brain', CORRUPTION_LOCK_REL)
+  const fileClass = (await storageAt(resolveMeetingsFolder(s)).classify([rel])).get(rel)
+  return fileClass !== undefined && 'version' in fileClass
 }
 
 /** Explicit resolution of a corruption block (Fix 1): removes the sentinel so corrections resume. The
@@ -222,6 +230,11 @@ function isConflictCopyName(f: string): boolean {
     !f.includes('.corrupt-') &&
     !f.includes('.merged-')
   )
+}
+
+/** The .brain files a replay or a conflict merge reads. */
+export function isJournalFile(name: string): boolean {
+  return name === CORRECTIONS_REL || isConflictCopyName(name)
 }
 
 function listConflictCopyNames(s: Settings): string[] {

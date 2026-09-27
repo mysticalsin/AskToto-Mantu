@@ -221,7 +221,7 @@ describe('meetings-root stall-path readers', () => {
     await writePerson(s, 'person-a', PersonEntitySchema.parse({ id: 'person-a', name: 'Person A', meetings: [], quotes: [], stance_trail: [], commitments: [], aliases: [] }))
     await writeGraph(s, BrainGraphSchema.parse({ nodes: [{ id: 'n1', kind: 'person', label: 'Person A' }], edges: [] }))
     await writeIntelligenceIndexState({ lastSuccessAt: 123 }, s)
-    loadIndex(s)
+    await loadIndex(s)
     fsTrap.calls.length = 0
     fsTrap.reads.length = 0
     fsTrap.armed = true
@@ -256,7 +256,7 @@ describe('meetings-root stall-path readers', () => {
     fsTrap.armed = false
     const s = getSettings()
     await writeIndex(s, BrainIndexSchema.parse({ ingested: { 'remembered.md': { at: 1, ok: true } } }))
-    loadIndex(s)
+    await loadIndex(s)
     fsTrap.cloud.add('index.json')
     fsTrap.calls.length = 0
     fsTrap.reads.length = 0

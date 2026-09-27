@@ -7,7 +7,7 @@ import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
 import { intelligenceNoProviderMessage, LOCAL_ONLY_INTELLIGENCE_UNAVAILABLE } from '@shared/intelligence-pass'
 import { getSettings } from '../store'
-import { readJson, writeJson } from './store'
+import { loadJson, peekJson, writeJson } from './store'
 import { requestBackfillRun, type BackfillStartResult, type BackfillCompletion } from './ingest'
 import { auditLog, mainLog } from '../logger'
 
@@ -187,9 +187,10 @@ export function shouldCatchUp(lastSuccessAt: number | null | undefined, now: num
   return last < mostRecentlyElapsedSlot(now, timeZone)
 }
 
-export function readIntelligenceIndexState(s: Settings = getSettings()): IntelligenceIndexState {
-  const v = readJson<IntelligenceIndexState>(s, INTELLIGENCE_INDEX_STATE_FILE, (raw) => StateSchema.parse(raw))
-  return v ?? { lastSuccessAt: 0 }
+export async function loadIntelligenceIndexState(s: Settings = getSettings()): Promise<IntelligenceIndexState | null> {
+  const loaded = await loadJson<IntelligenceIndexState>(s, INTELLIGENCE_INDEX_STATE_FILE, (raw) => StateSchema.parse(raw))
+  if (loaded.status === 'unavailable') return null
+  return loaded.value ?? { lastSuccessAt: 0 }
 }
 
 export async function writeIntelligenceIndexState(
@@ -200,8 +201,8 @@ export async function writeIntelligenceIndexState(
 }
 
 export function lastIndexedAt(s: Settings = getSettings()): number | undefined {
-  const at = readIntelligenceIndexState(s).lastSuccessAt
-  return at > 0 ? at : undefined
+  const at = peekJson<IntelligenceIndexState>(s, INTELLIGENCE_INDEX_STATE_FILE)?.lastSuccessAt
+  return typeof at === 'number' && at > 0 ? at : undefined
 }
 
 let activeRun: object | null = null
@@ -214,8 +215,8 @@ export function resetIntelligenceIndexLockForTests(): void {
   volatileError = null
 }
 
-export function intelligenceIndexStatus(s: Settings = getSettings()): { running: boolean; lastError?: string } {
-  const savedError = readIntelligenceIndexState(s).lastError
+export async function readIntelligenceIndexStatus(s: Settings = getSettings()): Promise<{ running: boolean; lastError?: string }> {
+  const savedError = (await loadIntelligenceIndexState(s))?.lastError
   const safeSavedError = !savedError || [NO_PROVIDER_INDEX_COPY, LOCAL_ONLY_INTELLIGENCE_UNAVAILABLE, INCOMPLETE_INDEX_COPY, SUMMARY_INDEX_RETRY_COPY].includes(savedError)
     ? savedError
     : INCOMPLETE_INDEX_COPY
@@ -239,6 +240,7 @@ export async function runIntelligenceIndex(
   reason: IntelligenceIndexReason,
   s: Settings = getSettings()
 ): Promise<IntelligenceIndexResult> {
+  await loadIntelligenceIndexState(s)
   if (activeRun) {
     mainLog.info(`[intelligence-index] coalesced (${reason}); a pass is already running`)
     return { ran: false, queued: 0, coalesced: true, lastIndexedAt: lastIndexedAt(s) }
@@ -248,9 +250,14 @@ export async function runIntelligenceIndex(
   volatileError = null
   const recordFailure = async (message: string): Promise<void> => {
     volatileError = { folder: s.meetingsFolder, message }
+    const state = await loadIntelligenceIndexState(s)
+    if (state === null) {
+      mainLog.warn('[intelligence-index] could not record the failure: state is not readable on this device')
+      return
+    }
     try {
       await writeIntelligenceIndexState({
-        lastSuccessAt: readIntelligenceIndexState(s).lastSuccessAt,
+        lastSuccessAt: state.lastSuccessAt,
         lastError: message
       }, s)
     } catch (error) {
@@ -331,8 +338,10 @@ export function scheduleIntelligenceIndex(
 export async function catchUpIntelligenceIndexIfNeeded(
   now = Date.now(),
   s: Settings = getSettings()
-): Promise<IntelligenceIndexResult | { ran: false; queued: 0; reason: 'current' }> {
-  const last = readIntelligenceIndexState(s).lastSuccessAt
+): Promise<IntelligenceIndexResult | { ran: false; queued: 0; reason: 'current' | 'unavailable' }> {
+  const state = await loadIntelligenceIndexState(s)
+  if (state === null) return { ran: false, queued: 0, reason: 'unavailable' }
+  const last = state.lastSuccessAt
   if (!shouldCatchUp(last, now)) return { ran: false, queued: 0, reason: 'current' }
   mainLog.info(
     `[intelligence-index] catch-up: last success ${last || 0} is before slot ${mostRecentlyElapsedSlot(now)}`

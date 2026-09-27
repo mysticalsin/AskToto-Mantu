@@ -64,6 +64,7 @@ vi.mock('node:fs', async (importOriginal) => {
 const store = await import('./store')
 const ledger = await import('./ledger')
 const logger = await import('../logger')
+const storage = await import('../infra/storage/meetings-storage')
 // `vi.mock('node:fs', ...)` above replaces EVERY import of the module in this file, including a plain
 // `readFileSync` import — so verifying "the primary index.json's bytes are truly unchanged" while a fault
 // is injected for that exact path needs the real, unwrapped implementation, not another binding of the
@@ -112,6 +113,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
   let primary: string
 
   beforeEach(() => {
+    storage.useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-store-m2-0003-'))
     s = { meetingsFolder: folder } as Settings
     mkdirSync(join(folder, '.brain'), { recursive: true })
@@ -138,6 +140,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
 
     failReadPersistent = mkErr('ETIMEDOUT')
 
+    await ledger.loadIndex(s)
     expect(ledger.readIndex(s).ingested).toEqual({}) // never the swallowed-into-absent behaviour
     expect(ledger.indexUnavailable(s)).toBe('io')
     expect(realFs.readFileSync(primary)).toEqual(before)
@@ -147,29 +150,31 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     expect(realFs.readFileSync(primary)).toEqual(before)
   })
 
-  it('an I/O failure is retried after INDEX_IO_RETRY_MS, and the original ledger is then served', async () => {
-    vi.useFakeTimers()
+  it('an I/O failure is retried by a later load, and the original ledger is then served', async () => {
     const healthy = BrainIndexSchema.parse({})
     healthy.ingested['healed.md'] = { at: 1, ok: true }
     writeFileSync(primary, JSON.stringify(healthy), 'utf8')
 
     failReadPersistent = mkErr('ETIMEDOUT')
+    await ledger.loadIndex(s)
     expect(ledger.indexUnavailable(s)).toBe('io')
-    expect(ledger.indexUnavailable(s)).toBe('io') // still within the retry window: no recovery yet
+    await ledger.loadIndex(s)
+    expect(ledger.indexUnavailable(s)).toBe('io')
 
-    vi.setSystemTime(Date.now() + ledger.INDEX_IO_RETRY_MS + 1)
     failReadPersistent = null // the transient condition (e.g. OneDrive hydrating) has cleared
+    await ledger.loadIndex(s)
 
     expect(ledger.readIndex(s).ingested['healed.md']?.ok).toBe(true)
     expect(ledger.indexUnavailable(s)).toBeNull()
   })
 
-  it('a failed set-aside rename (EPERM) leaves the invalid index in place as \'corrupt-kept\', without spinning on every read', () => {
+  it('a failed set-aside rename (EPERM) leaves the invalid index in place as \'corrupt-kept\', without spinning on every read', async () => {
     const bad = Buffer.from('{"ingested": tru', 'utf8')
     writeFileSync(primary, bad)
     failRenameOnce = mkErr('EPERM')
 
     for (let i = 0; i < 3; i++) {
+      await ledger.loadIndex(s)
       expect(ledger.readIndex(s).ingested).toEqual({})
     }
     expect(ledger.indexUnavailable(s)).toBe('corrupt-kept')
@@ -179,12 +184,12 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     expect(renameSyncSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('unavailability is logged and audited once per classification, not once per poll', () => {
+  it('unavailability is logged and audited once per classification, not once per poll', async () => {
     const warnSpy = vi.spyOn(logger.mainLog, 'warn').mockImplementation(() => undefined as unknown as void)
     const auditSpy = vi.spyOn(logger, 'auditLog').mockImplementation(() => {})
     writeFileSync(primary, foreignKeyIndexBytes())
 
-    for (let i = 0; i < 10; i++) ledger.readIndex(s)
+    for (let i = 0; i < 10; i++) await ledger.loadIndex(s)
 
     const auditCalls = auditSpy.mock.calls.filter((c) => c[0] === 'brain.index.unavailable')
     expect(auditCalls).toHaveLength(1)
@@ -193,7 +198,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
   })
 
   it('indexUnavailableMessage has content-free, non-empty copy for every IndexUnavailableCause', () => {
-    for (const cause of ['io', 'undecryptable', 'unsupported', 'corrupt-kept'] as const) {
+    for (const cause of ['io', 'cloud-only', 'undecryptable', 'unsupported', 'corrupt-kept'] as const) {
       const msg = ledger.indexUnavailableMessage(cause)
       expect(msg.length).toBeGreaterThan(20)
       expect(msg).not.toContain(folder) // never leaks a filesystem path

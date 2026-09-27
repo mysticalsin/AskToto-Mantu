@@ -1,7 +1,7 @@
 /**
- * The process's one Storage (ADR-021: one admission cap per process). Main-process code reaches a folder of
- * meetings (the meetings root, a team transcript folder) only through storageAt(folder), naming the folder on
- * every request because Settings can move it.
+ * The process's one Storage (ADR-021: one admission cap per process). Every reader that has been migrated
+ * onto the gateway reaches a folder of meetings (the meetings root, a team transcript folder) only through
+ * storageAt(folder), naming the folder on every request because Settings can move it.
  */
 import type { ContentPresence, DatalessDetector } from './dataless'
 import { createStorage, type FileClass, type Storage, type StorageGateway, type StorageOptions } from './gateway'

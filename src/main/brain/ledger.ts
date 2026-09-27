@@ -1,12 +1,13 @@
 /** The ingest ledger (.brain/index.json) and its read/replace invariant (M2-0003). */
-import { readdirSync, readFileSync, renameSync, statSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { rename } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
 import { BrainIndexSchema, BRAIN_SCHEMA_VERSION, type BrainIndex, type IndexUnavailableCause } from '@shared/brain'
-import { decodeSavedResult } from '../transcripts'
+import { decodeSavedResult, resolveMeetingsFolder } from '../transcripts'
 import { mainLog, auditLog } from '../logger'
-import { brainDir, writeJson } from './store'
+import { storageAt } from '../infra/storage/meetings-storage'
+import { brainDir, persistJson, readBrainFile, type ContentIdentity } from './store'
 
 // ── Brain index (index.json) ─ M2-0003 read/replace invariant ─────────────────────────────────────
 // index.json is renamed or overwritten ONLY when this process fully decoded its current bytes (plaintext,
@@ -22,9 +23,6 @@ const INDEX_REL = 'index.json'
  *  where it is. Keeps the `.corrupt-` infix every `.brain` reader already excludes from its own scans. */
 const INDEX_AUTO_SNAPSHOT_PREFIX = 'index.corrupt-auto-'
 export const INDEX_AUTO_SNAPSHOT_CAP = 5
-/** Only an I/O failure is retried on a timer (e.g. a OneDrive dataless placeholder hydrating). A decode
- *  failure is not: retrying safeStorage on a timer risks Keychain prompts, and the bytes have not changed. */
-export const INDEX_IO_RETRY_MS = 30_000
 
 type IndexLoad =
   | { kind: 'ready'; index: BrainIndex }
@@ -59,41 +57,51 @@ export function classifyIndexBytes(buf: Buffer): IndexLoad {
   return { kind: 'corrupt' }
 }
 
-// Stat-keyed memo, one entry per `.brain` dir's index.json. NOT session state: an entry is used only
-// while (mtimeMs,size) still match the file on disk — it ends by itself the moment the bytes change
-// (another device/owner rewrites them, an explicit purge), so nothing in memory ever outlives the file.
-// The (-1,-1) key stands for "stat itself failed (non-ENOENT)".
-type IndexCacheEntry = { mtimeMs: number; size: number; at: number; load: ResolvedIndex }
-const indexCache = new Map<string, IndexCacheEntry>()
+// Loading goes through the storage gateway (M2-0031): nothing here reads index.json synchronously, and a
+// cloud-only index.json is never read. readIndex and indexUnavailable answer from the last load and never
+// touch the disk. A decoded outcome holds while the file's content identity (mtimeMs, size) holds, even
+// after an eviction: those bytes are in memory. Availability outcomes ('io', 'cloud-only') are
+// re-evaluated on every load.
 
-/** Node fs errors carry `.code` (ENOENT, ETIMEDOUT, …); anything else has none. */
-function errnoCode(e: unknown): string | undefined {
-  return (e as NodeJS.ErrnoException).code
+/** Causes decided by decoding a version's bytes; they hold while its content identity holds. */
+const DECODED_CAUSES: ReadonlySet<IndexUnavailableCause> = new Set(['undecryptable', 'unsupported', 'corrupt-kept'])
+const ABSENT: ResolvedIndex = { kind: 'absent' }
+
+type LedgerEntry = { identity: ContentIdentity | null; load: ResolvedIndex }
+/** The last load per `.brain` index path. */
+const ledger = new Map<string, LedgerEntry>()
+/** Bumped by every writeIndex: a load that read older bytes never replaces the entry a write set. */
+let writes = 0
+
+function indexPath(s: Settings): string {
+  return join(brainDir(s), INDEX_REL)
 }
 
-/** True once a cached I/O-failure entry is old enough to retry. Decode failures never retry here — the
- *  bytes haven't changed, and polling safeStorage on a timer risks a Keychain-prompt storm. */
-function ioRetryDue(entry: IndexCacheEntry): boolean {
-  return entry.load.kind === 'unavailable' && entry.load.cause === 'io' && Date.now() - entry.at >= INDEX_IO_RETRY_MS
+/** The entry's decoded outcome with the content identity it holds for, or undefined when it holds none. */
+function decodedHeld(entry: LedgerEntry | undefined): (ContentIdentity & { load: ResolvedIndex }) | undefined {
+  if (!entry?.identity) return undefined
+  const { load } = entry
+  const decoded = load.kind === 'ready' || (load.kind === 'unavailable' && DECODED_CAUSES.has(load.cause))
+  return decoded ? { ...entry.identity, load } : undefined
 }
 
-/** Logs and audits a NEW unavailable classification once (not once per poll), then caches it. */
+function settle(p: string, identity: ContentIdentity | null, load: ResolvedIndex): ResolvedIndex {
+  ledger.set(p, { identity, load })
+  return load
+}
+
+/** Logs and audits a NEW unavailable cause once (not once per poll), then records it. */
 function recordUnavailable(
   p: string,
-  hit: IndexCacheEntry | undefined,
-  mtimeMs: number,
-  size: number,
+  identity: ContentIdentity | null,
   load: Extract<ResolvedIndex, { kind: 'unavailable' }>
 ): ResolvedIndex {
-  const alreadyLogged = hit?.load.kind === 'unavailable' && hit.load.cause === load.cause
-  if (!alreadyLogged) {
-    mainLog.warn(
-      `[brain] index.json can't be used on this device (${load.cause}${load.detail ? `: ${load.detail}` : ''}) — left untouched; indexing is paused until it can be read`
-    )
+  const previous = ledger.get(p)?.load
+  if (previous?.kind !== 'unavailable' || previous.cause !== load.cause) {
+    mainLog.warn(`[brain] index.json can't be used on this device (${load.cause}${load.detail ? `: ${load.detail}` : ''}) — left untouched; indexing is paused until it can be read`)
     auditLog('brain.index.unavailable', { cause: load.cause })
   }
-  indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
-  return load
+  return settle(p, identity, load)
 }
 
 /**
@@ -102,84 +110,60 @@ function recordUnavailable(
  * this device holds; they are simply not a valid index for this build), so a rename is safe. Capped at
  * `INDEX_AUTO_SNAPSHOT_CAP` on disk, counting only this scheme's own `index.corrupt-auto-` prefix.
  */
-function setAsideCorruptIndex(p: string): ResolvedIndex {
-  const dir = dirname(p)
-  let kept: number
-  try {
-    kept = readdirSync(dir).filter((f) => f.startsWith(INDEX_AUTO_SNAPSHOT_PREFIX)).length
-  } catch (e) {
-    return { kind: 'unavailable', cause: 'corrupt-kept', detail: errnoCode(e) }
-  }
+async function setAsideCorruptIndex(s: Settings): Promise<ResolvedIndex> {
+  const listing = await storageAt(resolveMeetingsFolder(s)).list('.brain')
+  if (listing.status !== 'ok') return { kind: 'unavailable', cause: 'corrupt-kept', detail: listing.status }
+  const kept = listing.names.filter((f) => f.startsWith(INDEX_AUTO_SNAPSHOT_PREFIX)).length
   if (kept >= INDEX_AUTO_SNAPSHOT_CAP) return { kind: 'unavailable', cause: 'corrupt-kept', detail: 'snapshot cap reached' }
-  const to = join(dir, `${INDEX_AUTO_SNAPSHOT_PREFIX}${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
+  const to = join(brainDir(s), `${INDEX_AUTO_SNAPSHOT_PREFIX}${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
   try {
-    renameSync(p, to)
+    await rename(indexPath(s), to)
   } catch (e) {
-    return { kind: 'unavailable', cause: 'corrupt-kept', detail: errnoCode(e) }
+    return { kind: 'unavailable', cause: 'corrupt-kept', detail: (e as NodeJS.ErrnoException).code }
   }
-  mainLog.warn(
-    `[brain] index.json decoded but was not a valid index — preserved as ${basename(to)} (${kept + 1}/${INDEX_AUTO_SNAPSHOT_CAP}); it will be rebuilt from the transcripts`
-  )
+  mainLog.warn(`[brain] index.json decoded but was not a valid index — preserved as ${basename(to)}`)
   auditLog('brain.index.quarantined', { kept: kept + 1, cap: INDEX_AUTO_SNAPSHOT_CAP })
-  return { kind: 'absent' }
+  return ABSENT
 }
 
-function loadIndex(s: Settings): ResolvedIndex {
-  const p = join(brainDir(s), INDEX_REL)
-  const hit = indexCache.get(p)
-
-  let mtimeMs: number
-  let size: number
-  try {
-    const st = statSync(p)
-    mtimeMs = st.mtimeMs
-    size = st.size
-  } catch (e) {
-    if (errnoCode(e) === 'ENOENT') {
-      indexCache.delete(p)
-      return { kind: 'absent' }
+export async function loadIndex(s: Settings): Promise<ResolvedIndex> {
+  const p = indexPath(s)
+  const writesBefore = writes
+  const file = await readBrainFile(s, INDEX_REL, decodedHeld(ledger.get(p)))
+  const written = ledger.get(p)
+  if (writes !== writesBefore && written) return written.load
+  switch (file.status) {
+    case 'unchanged':
+      return file.held.load
+    case 'missing':
+      return settle(p, null, ABSENT)
+    case 'cloud-only':
+      return recordUnavailable(p, null, { kind: 'unavailable', cause: 'cloud-only' })
+    case 'unreadable':
+      return recordUnavailable(p, null, { kind: 'unavailable', cause: 'io', detail: file.code })
+    case 'ok': {
+      const classified = classifyIndexBytes(file.bytes)
+      if (classified.kind === 'corrupt') {
+        const kept = await setAsideCorruptIndex(s)
+        return kept.kind === 'unavailable' ? recordUnavailable(p, file.identity, kept) : settle(p, null, kept)
+      }
+      if (classified.kind === 'unavailable') return recordUnavailable(p, file.identity, classified)
+      return settle(p, classified.kind === 'ready' ? file.identity : null, classified)
     }
-    return recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: errnoCode(e) })
   }
-
-  if (hit && hit.mtimeMs === mtimeMs && hit.size === size && !ioRetryDue(hit)) return hit.load
-
-  let buf: Buffer
-  try {
-    buf = readFileSync(p)
-  } catch (e) {
-    const code = errnoCode(e)
-    if (code === 'ENOENT') {
-      indexCache.delete(p)
-      return { kind: 'absent' }
-    }
-    return recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: code })
-  }
-
-  const classified = classifyIndexBytes(buf)
-  const load: ResolvedIndex = classified.kind === 'corrupt' ? setAsideCorruptIndex(p) : classified
-
-  if (load.kind === 'absent') {
-    indexCache.delete(p)
-    return load
-  }
-  if (load.kind === 'unavailable') return recordUnavailable(p, hit, mtimeMs, size, load)
-
-  indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
-  return load
 }
 
-/** The index, or an empty stand-in when there is none or it is read-only (see indexUnavailable). The
- *  stand-in can never be persisted over unreadable bytes: writeIndex refuses. Callers still clone before
- *  mutating (see updateIndex) — an unchanged file serves the same cached object on every call. */
-export const readIndex = (s: Settings): BrainIndex => {
-  const load = loadIndex(s)
-  return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
+/** The ledger as of the last load, or the empty stand-in when there is none or it is read-only. Never
+ *  touches the disk. Callers clone before mutating: it is the shared loaded object. */
+export function readIndex(s: Settings): BrainIndex {
+  const load = ledger.get(indexPath(s))?.load
+  return load?.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
 }
 
-/** Non-null while an existing index.json cannot be used here: the index is read-only for the session. */
+/** Non-null while the last load found index.json unusable here, and 'io' before the first load. */
 export function indexUnavailable(s: Settings): IndexUnavailableCause | null {
-  const load = loadIndex(s)
+  const load = ledger.get(indexPath(s))?.load
+  if (!load) return 'io'
   return load.kind === 'unavailable' ? load.cause : null
 }
 
@@ -193,6 +177,10 @@ export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
     case 'io':
       return "Mantu Intelligence couldn't read its index file just now (it may still be downloading from " +
         'OneDrive). Nothing was changed. Indexing resumes automatically once the file can be read.'
+    case 'cloud-only':
+      return 'Some Mantu Intelligence files are in OneDrive but not on this device right now, so Métis ' +
+        "won't open them in the background. Nothing was changed. Indexing is paused until the Métis Meetings " +
+        'folder is kept on this device (in OneDrive, choose "Always keep on this device").'
     case 'unsupported':
       return "Mantu Intelligence's index was written by a newer version of Métis. Nothing was changed. " +
         'Update Métis on this device to resume indexing.'
@@ -206,6 +194,7 @@ export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
 export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
   const blocked = indexUnavailable(s)
   if (blocked) throw new BrainIndexUnavailableError(blocked)
-  await writeJson(s, INDEX_REL, v)
-  indexCache.delete(join(brainDir(s), INDEX_REL))
+  const identity = await persistJson(s, INDEX_REL, v)
+  writes += 1
+  ledger.set(indexPath(s), { identity, load: { kind: 'ready', index: BrainIndexSchema.parse(JSON.parse(JSON.stringify(v))) } })
 }

@@ -16,8 +16,10 @@ import { z } from 'zod'
 export const BRAIN_SCHEMA_VERSION = 2
 
 /** Why an existing .brain/index.json is read-only for this session (M2-0003). Content-free: never a
- *  path, decode-reason string, or filename — see brain/store.ts's read/replace invariant. */
-export type IndexUnavailableCause = 'io' | 'undecryptable' | 'unsupported' | 'corrupt-kept'
+ *  path, decode-reason string, or filename — see brain/store.ts's read/replace invariant.
+ *  cloud-only: the gateway says the bytes are not on this device (M2-0031); nothing reads or downloads
+ *  them in the background. */
+export type IndexUnavailableCause = 'io' | 'cloud-only' | 'undecryptable' | 'unsupported' | 'corrupt-kept'
 
 export const ConfidenceSchema = z.enum(['EXTRACTED', 'INFERRED', 'AMBIGUOUS'])
 export type Confidence = z.infer<typeof ConfidenceSchema>
