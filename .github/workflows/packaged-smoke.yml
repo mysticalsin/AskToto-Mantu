@@ -6,17 +6,15 @@ name: Packaged smoke
 # starts, its renderer reports ready, it quits cleanly through its own Quit path, and nothing it started
 # is alive 5 s after it exits. Each job uploads a content-free report and the tested installer's sha256.
 #
-# Runs when a push on any branch changes this lane, and on demand for any branch once this file is on
-# the default branch: gh workflow run packaged-smoke.yml --ref <branch>. Never on tags. Both hosted
-# runners give the app a real window session, so no virtual display is needed.
+# Runs on every push to m2/integration, and on demand for any branch once this file is on the default
+# branch: gh workflow run packaged-smoke.yml --ref <branch>. Never on tags. Both hosted runners give
+# the app a real window session, so no virtual display is needed.
 on:
   push:
-    branches: ['**']
-    tags-ignore: ['**']
-    paths:
-      - .github/workflows/packaged-smoke.yml
-      - scripts/qa/owned-processes.mjs
-      - scripts/qa/packaged-smoke.mjs
+    branches:
+      - m2/integration
+    tags-ignore:
+      - '**'
   workflow_dispatch:
 
 permissions:
