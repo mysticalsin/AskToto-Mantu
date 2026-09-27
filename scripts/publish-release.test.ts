@@ -103,6 +103,15 @@ function assetsFor(platform: Platform, names = platformAssets(platform, VERSION)
   })
 }
 
+function replacementMutations(platform: Platform, deletedId: number): string[] {
+  return [
+    `delete ${deletedId}`,
+    'create',
+    ...(platformAssets(platform, VERSION) as string[]).map((name) => `upload ${name}`),
+    'publish'
+  ]
+}
+
 class FakeFeed {
   releases: FeedRelease[]
   latest: string | null = null
@@ -248,7 +257,16 @@ describe('publish-release platform rules (M2-0053)', () => {
       expect(feed.mutations).toEqual([])
     })
 
-    it(`refuses a release that already carries ${platformLabels[platform]}, naming the interrupted-upload recovery`, async () => {
+    it(`treats a public release with complete ${platformLabels[platform]} assets as already published`, async () => {
+      const feed = new FakeFeed([release({ assets: assetsFor(platform) })])
+
+      const result = await publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed })
+
+      expect(result.action).toBe('complete')
+      expect(feed.mutations).toEqual([])
+    })
+
+    it(`refuses a release that already carries partial ${platformLabels[platform]}, naming the interrupted-upload recovery`, async () => {
       const other = otherPlatform(platform)
       const partialOwn = (platformAssets(platform, VERSION) as string[]).filter((name) => name !== metadataName[platform])
       const feed = new FakeFeed([release({ assets: [...assetsFor(other), ...assetsFor(platform, partialOwn)] })])
@@ -274,21 +292,66 @@ describe('publish-release platform rules (M2-0053)', () => {
       expect(feed.mutations).toEqual([])
     })
 
-    it(`replaces its own leftover ${platformLabels[platform]} draft, never a foreign one`, async () => {
-      const ownDraft = new FakeFeed([
+    it(`replaces its own partial leftover ${platformLabels[platform]} draft`, async () => {
+      const feed = new FakeFeed([
         release({ id: 44, draft: true, assets: assetsFor(platform, [primaryInstaller[platform]]) })
       ])
-      await publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed: ownDraft })
-      expect(ownDraft.mutations[0]).toBe('delete 44')
-      expect(ownDraft.mutations[1]).toBe('create')
-      expect(ownDraft.releases).toHaveLength(1)
-      expect(ownDraft.releases[0].draft).toBe(false)
 
-      const foreignDraft = new FakeFeed([release({ draft: true, assets: assetsFor(platform, ['SHA256SUMS.txt']) })])
-      await expect(
-        publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed: foreignDraft })
-      ).rejects.toThrow()
-      expect(foreignDraft.mutations).toEqual([])
+      await publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed })
+
+      expect(feed.mutations).toEqual(replacementMutations(platform, 44))
+      expect(feed.releases).toHaveLength(1)
+      expect(feed.releases[0]).toMatchObject({ tag: TAG, draft: false, prerelease: false })
+      expect(feed.releases[0].assets.map((asset) => asset.name)).toEqual(platformAssets(platform, VERSION))
+    })
+
+    it(`replaces the other platform's partial leftover draft before publishing ${platformLabels[platform]}`, async () => {
+      const other = otherPlatform(platform)
+      const feed = new FakeFeed([
+        release({ id: 45, draft: true, assets: assetsFor(other, [primaryInstaller[other]]) })
+      ])
+
+      await publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed })
+
+      expect(feed.mutations).toEqual(replacementMutations(platform, 45))
+      expect(feed.releases).toHaveLength(1)
+      expect(feed.releases[0]).toMatchObject({ tag: TAG, draft: false, prerelease: false })
+      expect(feed.releases[0].assets.map((asset) => asset.name)).toEqual(platformAssets(platform, VERSION))
+    })
+
+    it(`replaces an empty leftover draft before publishing ${platformLabels[platform]}`, async () => {
+      const feed = new FakeFeed([release({ id: 46, draft: true, assets: [] })])
+
+      await publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed })
+
+      expect(feed.mutations).toEqual(replacementMutations(platform, 46))
+      expect(feed.releases).toHaveLength(1)
+      expect(feed.releases[0]).toMatchObject({ tag: TAG, draft: false, prerelease: false })
+      expect(feed.releases[0].assets.map((asset) => asset.name)).toEqual(platformAssets(platform, VERSION))
+    })
+
+    it(`refuses a foreign leftover draft before publishing ${platformLabels[platform]}`, async () => {
+      const feed = new FakeFeed([release({ draft: true, assets: assetsFor(platform, ['SHA256SUMS.txt']) })])
+
+      await expect(publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed })).rejects.toThrow()
+      expect(feed.mutations).toEqual([])
+    })
+
+    it(`re-reads a leftover ${platformLabels[platform]} draft before deleting it`, async () => {
+      class PublishedOnFreshReadFeed extends FakeFeed {
+        release(id: number) {
+          return { ...super.release(id), draft: false }
+        }
+      }
+      const feed = new PublishedOnFreshReadFeed([
+        release({ id: 47, draft: true, assets: assetsFor(platform, [primaryInstaller[platform]]) })
+      ])
+
+      await expect(publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed })).rejects.toThrow(
+        /draft/
+      )
+      expect(feed.mutations).not.toContain('delete 47')
+      expect(feed.mutations).not.toContain('create')
     })
 
     it(`keeps the ${platformLabels[platform]} draft private when GitHub's digest differs from the local bytes`, async () => {
