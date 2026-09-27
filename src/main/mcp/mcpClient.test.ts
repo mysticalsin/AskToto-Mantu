@@ -14,9 +14,10 @@
  * instance (no live reachable instance exists yet). That live check still needs to happen once a real
  * endpoint is reachable.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import type { AddressInfo } from 'node:net'
+import { connect as netConnect, type AddressInfo } from 'node:net'
+import type { Duplex } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -63,6 +64,20 @@ vi.mock('node:dns/promises', async (importOriginal) => {
   }
 })
 
+// M2-0222 — the proxy-route matrix below needs install-proxy.ts's real route selection (installProxyAwareFetch,
+// routeDispatcher's route state), so it mocks 'electron' and '../logger' exactly like install-proxy.test.ts.
+// A per-file vi.mock('electron', ...) here overrides the repo-wide __mocks__/electron.ts (which has no
+// `session`), so it must supply every export install-proxy.ts's OWN import touches — just `session`.
+const resolveProxy = vi.hoisted(() => vi.fn<(url: string) => Promise<string>>())
+vi.mock('electron', () => ({
+  session: { defaultSession: { resolveProxy: (url: string) => resolveProxy(url) } }
+}))
+vi.mock('../logger', () => ({
+  mainLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  auditLog: vi.fn()
+}))
+
+import { installProxyAwareFetch } from '../net/install-proxy'
 import { connectMcp, pushToMcp } from './mcpClient'
 
 const API_KEY = 'test-mcp-key-123'
@@ -217,6 +232,72 @@ async function startTrap(): Promise<{
     state,
     firstHit,
     close: () => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())))
+  }
+}
+
+/**
+ * M2-0222 — a real CONNECT (HTTP tunneling) proxy on 127.0.0.1:0, standing in for both `EnvHttpProxyAgent`'s
+ * and `ProxyAgent`'s proxy hop. `targets` records each CONNECT request's `req.url` EXACTLY as requested — the
+ * proof point for the fix: a pinned session must tunnel to an address, never to the endpoint's host name.
+ *
+ * With `refuse` set, every CONNECT is answered with that status and nothing is dialled onward — for proving a
+ * proxy's own refusal is reported as the proxy's, not as a bad API key or a down server. Otherwise the proxy
+ * dials the requested host:port itself (a real TCP connect — `net.connect` resolves an IP-literal target
+ * without touching DNS, which is what a pinned tunnel always sends) and splices the two sockets together.
+ */
+async function startConnectProxy(refuse?: number): Promise<{
+  url: string
+  targets: string[]
+  close: () => Promise<void>
+}> {
+  const targets: string[] = []
+  // `Duplex`, not `net.Socket`: Node types the http.Server 'connect' event's socket as the more general
+  // `stream.Duplex` (it is a real net.Socket at runtime for a plain, non-TLS http.createServer()), and this
+  // set holds both that socket and the plain net.Socket `netConnect` opens upstream.
+  const sockets = new Set<Duplex>()
+  const track = (socket: Duplex): void => {
+    sockets.add(socket)
+    socket.on('close', () => sockets.delete(socket))
+  }
+
+  const server = createServer()
+  server.on('connect', (req, clientSocket, head) => {
+    const target = req.url ?? ''
+    targets.push(target)
+    track(clientSocket)
+
+    if (refuse) {
+      clientSocket.end(`HTTP/1.1 ${refuse} Refused\r\n\r\n`)
+      return
+    }
+
+    const bracketed = target.startsWith('[')
+    const lastColon = target.lastIndexOf(':')
+    const host = bracketed ? target.slice(1, target.indexOf(']')) : target.slice(0, lastColon)
+    const port = Number(target.slice(lastColon + 1))
+
+    const upstream = netConnect(port, host)
+    track(upstream)
+    upstream.on('error', () => clientSocket.destroy())
+    clientSocket.on('error', () => upstream.destroy())
+    upstream.once('connect', () => {
+      clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+      upstream.write(head)
+      upstream.pipe(clientSocket)
+      clientSocket.pipe(upstream)
+    })
+  })
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address() as AddressInfo
+  return {
+    url: `http://127.0.0.1:${port}`,
+    targets,
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy()
+        server.close(() => resolve())
+      })
   }
 }
 
@@ -512,5 +593,142 @@ describe("mcpClient — refuses every redirect, including the SDK's own event-st
       await mock.close()
       await trap.close()
     }
+  })
+})
+
+// M2-0222 (RF-AUDIT-R3-R1) — M2-0147's pin only covered a socket THIS process dials itself. Through a proxy
+// (system route: every host; env route: every host outside NO_PROXY) undici's ProxyAgent resolves and dials
+// the target itself, so neither the metadata refusal nor the DNS-rebinding pin ran at all. The fix pins the
+// proxy's own tunnel to the address `lookup` resolved instead of letting the proxy resolve the host name.
+const PROXY_ENV_KEYS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']
+
+describe('mcpClient — the metadata refusal and the DNS pin hold on every proxy route (M2-0222)', () => {
+  let mock: Awaited<ReturnType<typeof startMockMcp>>
+  let mockPort: number
+  let proxy: Awaited<ReturnType<typeof startConnectProxy>>
+  let savedEnv: Record<string, string | undefined>
+
+  /** Adopt one of direct/env/env+NO_PROXY/system, exactly as installProxyAwareFetch would find it at boot,
+   *  then (re)install it as the real route so routeDispatcher()/routeDispatcher(lookup) both follow it. */
+  const useRoute = async (opts: { system?: string; env?: string; noProxy?: string } = {}): Promise<void> => {
+    for (const k of PROXY_ENV_KEYS) delete process.env[k]
+    if (opts.env) process.env.HTTP_PROXY = opts.env
+    if (opts.noProxy) process.env.NO_PROXY = opts.noProxy
+    resolveProxy.mockResolvedValue(opts.system ? `PROXY ${new URL(opts.system).host}` : 'DIRECT')
+    await installProxyAwareFetch()
+  }
+
+  // `use` closures read `proxy.url` lazily (at call time, once beforeAll has set it) — the array itself only
+  // needs to exist by the time `it.each` reads its shape, not its captured values.
+  const ROUTES = [
+    { slug: 'direct', tunnels: false, use: () => useRoute({}) },
+    { slug: 'env-noproxy', tunnels: false, use: () => useRoute({ env: proxy.url, noProxy: 'mcp.test' }) },
+    { slug: 'env', tunnels: true, use: () => useRoute({ env: proxy.url }) },
+    { slug: 'system', tunnels: true, use: () => useRoute({ system: proxy.url }) }
+  ]
+
+  beforeAll(async () => {
+    savedEnv = {}
+    for (const k of PROXY_ENV_KEYS) savedEnv[k] = process.env[k]
+    mock = await startMockMcp()
+    mockPort = Number(new URL(mock.url).port)
+    proxy = await startConnectProxy()
+  })
+
+  afterAll(async () => {
+    for (const k of PROXY_ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k]
+      else process.env[k] = savedEnv[k]
+    }
+    await proxy.close()
+    await mock.close()
+  })
+
+  afterEach(async () => {
+    await useRoute({})
+  })
+
+  it.each(ROUTES)(
+    '$slug: refuses a host resolving to a cloud-metadata address before any tunnel or request',
+    async ({ slug, use }) => {
+      await use()
+      const host = `metadata-${slug}.mcp.test`
+      mockDnsHost(host, [['169.254.169.254']])
+      const beforeTargets = proxy.targets.length
+      const beforeRequests = mock.requests()
+
+      const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
+
+      expect(r.ok).toBe(false)
+      expect(r.error).toMatch(/cloud metadata/i)
+      expect(proxy.targets.length).toBe(beforeTargets)
+      expect(mock.requests()).toBe(beforeRequests)
+    }
+  )
+
+  it.each(ROUTES)(
+    '$slug: dials, or tunnels to, only the address it pinned, consulting the resolver once',
+    async ({ slug, tunnels, use }) => {
+      await use()
+      const host = `rebind-${slug}.mcp.test`
+      mockDnsHost(host, [['127.0.0.1'], ['169.254.169.254']])
+      const beforeTargets = proxy.targets.length
+
+      const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
+
+      expect(r.ok).toBe(true)
+      expect(r.tools).toContain('push_meeting_recap')
+      expect(dnsCallCount(host)).toBe(1)
+      const newTargets = proxy.targets.slice(beforeTargets)
+      expect([...new Set(newTargets)]).toEqual(tunnels ? [`127.0.0.1:${mockPort}`] : [])
+    }
+  )
+
+  it('system: tunnels to the IPv4 answer when the host also has an IPv6 one', async () => {
+    await useRoute({ system: proxy.url })
+    const host = 'dual-system.mcp.test'
+    mockDnsHost(host, [['::1', '127.0.0.1']])
+    const beforeTargets = proxy.targets.length
+
+    const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
+
+    expect(r.ok).toBe(true)
+    // Deduped for the same reason as the "consulting the resolver once" case above: the Streamable HTTP
+    // transport keeps its GET SSE stream open while it sends POSTs, so one connectMcp() call legitimately
+    // tunnels more than once (one pooled connection per concurrent request). The property this proves is
+    // that every one of those tunnels landed on the pinned IPv4 answer, never the IPv6 one — not that the
+    // transport happened to open exactly one connection.
+    expect([...new Set(proxy.targets.slice(beforeTargets))]).toEqual([`127.0.0.1:${mockPort}`])
+  })
+
+  it('system: a proxy that refuses the pinned tunnel is named in the error, not the API key or the server', async () => {
+    const refusingProxy = await startConnectProxy(403)
+    try {
+      await useRoute({ system: refusingProxy.url })
+      const host = 'refused-system.mcp.test'
+      mockDnsHost(host, [['127.0.0.1']])
+
+      const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
+
+      expect(r.ok).toBe(false)
+      expect(r.error).toMatch(/proxy refused/i)
+      expect(r.error).not.toMatch(/API key|server is running/i)
+      expect(refusingProxy.targets).toEqual([`127.0.0.1:${mockPort}`])
+    } finally {
+      await refusingProxy.close()
+    }
+  })
+
+  it('env: a SOCKS proxy is refused with an actionable message and sends nothing', async () => {
+    await useRoute({ env: 'socks5://127.0.0.1:1' })
+    const host = 'socks-env.mcp.test'
+    mockDnsHost(host, [['127.0.0.1']])
+    const before = mock.requests()
+
+    const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
+
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/SOCKS/)
+    expect(mock.requests()).toBe(before)
   })
 })
