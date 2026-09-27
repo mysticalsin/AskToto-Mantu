@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -123,5 +123,73 @@ describe('FFmpeg spawn failure', () => {
     await decoder.completed
     expect(failures).toHaveLength(1)
     expect(failures[0].message).toBe(IMPORT_NOT_MEDIA)
+  })
+})
+
+// The stand-in "ffmpeg" below traps SIGTERM (a shell builtin), which no Windows child can do — `kill` there
+// is TerminateProcess, which cannot be ignored. Runs on linux and darwin only.
+describe.skipIf(process.platform === 'win32')('cancel escalation (POSIX)', () => {
+  async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for condition')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+
+  function isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  it('D1: cancel kills the decode and its duration probe at once, even an ffmpeg that ignores SIGTERM', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'asktoto-ffmpeg-cancel-'))
+    temp.push(dir)
+    const pidsFile = join(dir, 'pids')
+    writeFileSync(pidsFile, '')
+    const fakeFfmpeg = join(dir, 'fake-ffmpeg')
+    // trap '' TERM makes the disposition SIGTERM-immune, and it survives exec (a shell builtin, set before
+    // the exec replaces the process image). Only SIGKILL — which cannot be trapped — can end this child.
+    writeFileSync(fakeFfmpeg, `#!/bin/sh\ntrap '' TERM\necho $$ >> '${pidsFile}'\nexec sleep 600\n`)
+    chmodSync(fakeFfmpeg, 0o755)
+    const source = join(dir, 'source.wav')
+    // A RIFF/WAVE header (plus padding) is enough for sniffMediaFile to accept the file; the fake ffmpeg
+    // never actually reads it.
+    writeFileSync(source, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVE'), Buffer.alloc(8)]))
+
+    let errorCalled = false
+    const decoder = startFfmpegDecode(fakeFfmpeg, source, 0, {
+      onChunk: async () => {},
+      onComplete: async () => {},
+      onError: async () => { errorCalled = true }
+    })
+
+    // Two lines: the decode's ffmpeg and the duration probe's ffmpeg, both spawned from the same fake
+    // executable.
+    await waitUntil(() => readFileSync(pidsFile, 'utf8').trim().split('\n').filter(Boolean).length >= 2, 2_000)
+    const pids = readFileSync(pidsFile, 'utf8').trim().split('\n').filter(Boolean).map(Number)
+
+    decoder.cancel()
+
+    let timer: NodeJS.Timeout | undefined
+    const outcome = await Promise.race([
+      decoder.completed.then(() => 'settled' as const),
+      new Promise<'hung'>((resolve) => { timer = setTimeout(() => resolve('hung'), 3_000) })
+    ])
+    clearTimeout(timer)
+    expect(outcome).toBe('settled')
+
+    for (const pid of pids) {
+      await waitUntil(() => !isAlive(pid), 2_000)
+    }
+    for (const pid of pids) {
+      if (isAlive(pid)) process.kill(pid, 'SIGKILL')
+    }
+
+    expect(errorCalled).toBe(false)
   })
 })
