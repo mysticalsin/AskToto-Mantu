@@ -127,9 +127,12 @@ export function countDependencyViolations(violations) {
   /** @type {Counts} */
   const counts = {}
   for (const violation of violations) {
-    const match = violation.rule.name.match(/^ff(\d{2}[ab]?)-/i)
+    const match = violation.rule.name.match(/^ff(\d{2}[ab]?)-/)
     if (!match) throw new Error(`Dependency-cruiser rule lacks ffNN prefix: ${violation.rule.name}`)
     const rule = `FF-${match[1]}`
+    if (!['FF-01', 'FF-02', 'FF-03'].includes(rule)) {
+      throw new Error(`Dependency-cruiser rule reports non-module fitness function ${rule}: ${violation.rule.name}`)
+    }
     counts[rule] ??= {}
     counts[rule][violation.from] = (counts[rule][violation.from] ?? 0) + 1
   }
@@ -244,25 +247,45 @@ function collectFsBindings(sourceFile) {
   const visit = (node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && FS_MODULES.has(node.moduleSpecifier.text)) {
       const clause = node.importClause
-      if (clause && !clause.isTypeOnly && clause.namedBindings) {
-        if (ts.isNamespaceImport(clause.namedBindings)) {
-          bindings.namespaces.add(clause.namedBindings.name.text)
-        } else {
-          for (const specifier of clause.namedBindings.elements) {
-            if (!specifier.isTypeOnly) {
-              bindings.named.set(specifier.name.text, (specifier.propertyName ?? specifier.name).text)
+      if (clause && !clause.isTypeOnly) {
+        if (clause.name) bindings.namespaces.add(clause.name.text)
+        if (clause.namedBindings) {
+          if (ts.isNamespaceImport(clause.namedBindings)) {
+            bindings.namespaces.add(clause.namedBindings.name.text)
+          } else {
+            for (const specifier of clause.namedBindings.elements) {
+              if (!specifier.isTypeOnly) {
+                const imported = (specifier.propertyName ?? specifier.name).text
+                if (imported === 'promises') {
+                  bindings.namespaces.add(specifier.name.text)
+                } else {
+                  bindings.named.set(specifier.name.text, imported)
+                }
+              }
             }
           }
         }
       }
     }
-    if (isRequireCall(node.initializer) && FS_MODULES.has(node.initializer.arguments[0].text)) {
+    const initializer = unwrapExpression(node.initializer)
+    if (isRequireCall(initializer) && FS_MODULES.has(initializer.arguments[0].text)) {
       collectFsRequireBinding(node.name, bindings)
     }
     ts.forEachChild(node, visit)
   }
   ts.forEachChild(sourceFile, visit)
   return bindings
+}
+
+/**
+ * @param {ts.Node | undefined} node Candidate expression.
+ * @returns {ts.Node | undefined} Expression without transparent wrappers.
+ */
+function unwrapExpression(node) {
+  while (node && (ts.isAsExpression(node) || ts.isParenthesizedExpression(node))) {
+    node = node.expression
+  }
+  return node
 }
 
 /**
@@ -294,7 +317,11 @@ function collectFsRequireBinding(name, bindings) {
   for (const element of name.elements) {
     if (ts.isIdentifier(element.name)) {
       const imported = element.propertyName && ts.isIdentifier(element.propertyName) ? element.propertyName.text : element.name.text
-      bindings.named.set(element.name.text, imported)
+      if (imported === 'promises') {
+        bindings.namespaces.add(element.name.text)
+      } else {
+        bindings.named.set(element.name.text, imported)
+      }
     }
   }
 }
@@ -387,8 +414,11 @@ function countNativeDialogs(sourceFile) {
   const localNames = collectLocalNames(sourceFile)
   let count = 0
   const visit = (node) => {
-    if (isNativeDialogPropertyAccess(node) || isNativeDialogElementAccess(node) || isNativeDialogDestructure(node)) {
+    const destructuredDialogs = countNativeDialogDestructure(node)
+    if (isNativeDialogPropertyAccess(node) || isNativeDialogElementAccess(node)) {
       count += 1
+    } else if (destructuredDialogs > 0) {
+      count += destructuredDialogs
     } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && DIALOG_NAMES.has(node.expression.text) && !localNames.has(node.expression.text)) {
       count += 1
     }
@@ -427,16 +457,16 @@ function isNativeDialogElementAccess(node) {
 
 /**
  * @param {ts.Node} node Candidate node.
- * @returns {boolean} Whether it destructures a native dialog from a global object.
+ * @returns {number} Number of native dialogs destructured from a global object.
  */
-function isNativeDialogDestructure(node) {
-  if (!ts.isVariableDeclaration(node) || !ts.isObjectBindingPattern(node.name)) return false
-  if (!node.initializer || !ts.isIdentifier(node.initializer) || !['window', 'globalThis', 'self'].includes(node.initializer.text)) return false
-  return node.name.elements.some((element) => {
+function countNativeDialogDestructure(node) {
+  if (!ts.isVariableDeclaration(node) || !ts.isObjectBindingPattern(node.name)) return 0
+  if (!node.initializer || !ts.isIdentifier(node.initializer) || !['window', 'globalThis', 'self'].includes(node.initializer.text)) return 0
+  return node.name.elements.filter((element) => {
     const property = element.propertyName && ts.isIdentifier(element.propertyName) ? element.propertyName.text : undefined
     const name = ts.isIdentifier(element.name) ? element.name.text : undefined
     return DIALOG_NAMES.has(property ?? name ?? '')
-  })
+  }).length
 }
 
 /**
@@ -446,12 +476,32 @@ function isNativeDialogDestructure(node) {
 function countSourcePathLiterals(sourceFile) {
   let count = 0
   const visit = (node) => {
-    const value = literalText(node)
-    if (value && PATH_LIKE_TS.test(value) && !value.endsWith('.d.ts') && !value.includes('__fixtures__')) count += 1
+    count += sourcePathLiteralCount(node)
     ts.forEachChild(node, visit)
   }
   ts.forEachChild(sourceFile, visit)
   return count
+}
+
+/**
+ * @param {ts.Node} node Candidate node.
+ * @returns {number} Number of source-looking path literals.
+ */
+function sourcePathLiteralCount(node) {
+  const value = literalText(node)
+  if (isSourcePathLiteral(value)) return 1
+  if (ts.isTemplateExpression(node)) {
+    return node.templateSpans.filter((span) => isSourcePathLiteral(span.literal.text)).length
+  }
+  return 0
+}
+
+/**
+ * @param {string | undefined} value Literal text.
+ * @returns {boolean} Whether the literal names a source path counted by FF-07.
+ */
+function isSourcePathLiteral(value) {
+  return Boolean(value && PATH_LIKE_TS.test(value) && !value.endsWith('.d.ts') && !value.includes('__fixtures__'))
 }
 
 /**
@@ -494,7 +544,7 @@ function countProcessSpawning(sourceFile) {
   let count = 0
   const visit = (node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && CHILD_PROCESS_MODULES.has(node.moduleSpecifier.text)) {
-      if (node.importClause && !node.importClause.isTypeOnly) count += 1
+      if (node.importClause && !node.importClause.isTypeOnly && !hasOnlyTypeNamedImports(node.importClause)) count += 1
     }
     if (isRequireCall(node) && CHILD_PROCESS_MODULES.has(node.arguments[0].text)) count += 1
     if (ts.isCallExpression(node)) {
@@ -510,6 +560,20 @@ function countProcessSpawning(sourceFile) {
   }
   ts.forEachChild(sourceFile, visit)
   return count
+}
+
+/**
+ * @param {ts.ImportClause} clause Import clause to inspect.
+ * @returns {boolean} Whether the clause has only inline type named imports.
+ */
+function hasOnlyTypeNamedImports(clause) {
+  return Boolean(
+    !clause.name &&
+      clause.namedBindings &&
+      ts.isNamedImports(clause.namedBindings) &&
+      clause.namedBindings.elements.length > 0 &&
+      clause.namedBindings.elements.every((specifier) => specifier.isTypeOnly)
+  )
 }
 
 /**
@@ -538,10 +602,12 @@ function countBrowserWindowConstruction(sourceFile) {
 function countBackgroundTimers(sourceFile) {
   let count = 0
   const visit = (node) => {
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-      if (node.expression.text === 'setInterval') {
+    if (ts.isCallExpression(node)) {
+      const chain = propertyChain(node.expression)
+      const callee = chain[chain.length - 1]
+      if (callee === 'setInterval') {
         count += 1
-      } else if (node.expression.text === 'setTimeout' && timeoutRearmsEnclosingFunction(node)) {
+      } else if (callee === 'setTimeout' && timeoutRearmsEnclosingFunction(node)) {
         count += 1
       }
     }
@@ -564,8 +630,10 @@ function timeoutRearmsEnclosingFunction(node) {
   let found = false
   const visit = (child) => {
     if (found) return
-    if (ts.isIdentifier(child) && names.has(child.text)) found = true
-    if (ts.isPropertyAccessExpression(child) && ts.isThis(child.expression) && names.has(child.name.text)) found = true
+    if (ts.isCallExpression(child)) {
+      if (ts.isIdentifier(child.expression) && names.has(child.expression.text)) found = true
+      if (ts.isPropertyAccessExpression(child.expression) && ts.isThis(child.expression.expression) && names.has(child.expression.name.text)) found = true
+    }
     ts.forEachChild(child, visit)
   }
   ts.forEachChild(first, visit)
@@ -584,6 +652,8 @@ function enclosingFunctionNames(node) {
     if (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) {
       const parent = current.parent
       if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) names.add(parent.name.text)
+      if (ts.isPropertyAssignment(parent) && ts.isIdentifier(parent.name)) names.add(parent.name.text)
+      if (ts.isPropertyDeclaration(parent) && ts.isIdentifier(parent.name)) names.add(parent.name.text)
     }
     if (ts.isMethodDeclaration(current) && ts.isIdentifier(current.name)) names.add(current.name.text)
     current = current.parent
