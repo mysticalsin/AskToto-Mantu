@@ -8873,13 +8873,13 @@ if (!app.requestSingleInstanceLock()) {
   {
     // Warm only an eligible, downloaded model. Re-read opt-in and policy because either can change
     // while provisioning is in flight. Startup never waits for this optional work.
-    const warmLocalIfReady = (): void | Promise<void> => {
+    const warmLocalIfReady = (): void => {
       try {
         const cur = getSettings()
         if (!speculativeLocalWorkAllowed()) return
         if (!localPrewarmEligible(cur, getAllowedProviders(), publicSettings().providerReady)) return
         if (!localModelDownloaded(cur.localLlm.modelId)) return
-        return prewarmLocal(cur.localLlm.modelId, buildPrewarmMessages('warm', cur), speculativeLocalWorkAllowed).catch((e) =>
+        void prewarmLocal(cur.localLlm.modelId, buildPrewarmMessages('warm', cur), speculativeLocalWorkAllowed).catch((e) =>
           mainLog.warn('[boot] local prewarm failed:', e instanceof Error ? e.message : String(e))
         )
       } catch (e) {
