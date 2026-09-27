@@ -89,17 +89,11 @@ function parseDataSources(dsJson: unknown, spaceId: string): DustProject[] {
   return out
 }
 
-type SpaceDataSourcesResult =
-  | { rejected: false; dataSources: DustProject[] }
-  | { rejected: true; error: string }
-
 /**
- * Fetch one space's data sources. A 401/403 here means the API key itself was rejected (the same key
- * backs every space's call), so it is reported as `rejected` rather than swallowed — silently continuing
- * would return an `ok: true` result with every space showing zero data sources, which reads as "this
- * workspace has no data sources" rather than the true "the connector token was rejected" (AGUC-021).
- * Any other failure (a transient error, or a single space genuinely erroring for its own reason) still
- * must not drop the rest of the space list, so it resolves with an empty data-source list instead.
+ * Fetch one space's data sources. The API key itself is validated once, up front, by the `/spaces` call
+ * in fetchDustProjects — a failure fetching one space's own data sources (a transient error, a non-ok
+ * status, or any other rejection) reports that space as having no data sources rather than failing the
+ * whole listing, so the rest of the workspace's spaces stay usable.
  */
 async function fetchSpaceDataSources(
   fetchImpl: FetchLike,
@@ -107,26 +101,17 @@ async function fetchSpaceDataSources(
   workspaceId: string,
   headers: Record<string, string>,
   space: SpaceEntry
-): Promise<SpaceDataSourcesResult> {
+): Promise<DustProject[]> {
   try {
     const dsRes = await fetchImpl(
       `${base}/api/v1/w/${encodeURIComponent(workspaceId)}/spaces/${encodeURIComponent(space.sId)}/data_sources`,
       { headers }
     )
-    if (dsRes.status === 401 || dsRes.status === 403) {
-      const body = await dsRes.text().catch(() => '')
-      return {
-        rejected: true,
-        error: `Dust rejected the API key while listing "${space.name}"'s data sources (${dsRes.status}${
-          body ? `: ${body.slice(0, 180)}` : ''
-        }). Reconnect Dust.`
-      }
-    }
-    if (!dsRes.ok) return { rejected: false, dataSources: [] }
+    if (!dsRes.ok) return []
     const dsJson = await dsRes.json()
-    return { rejected: false, dataSources: parseDataSources(dsJson, space.sId) }
+    return parseDataSources(dsJson, space.sId)
   } catch {
-    return { rejected: false, dataSources: [] }
+    return []
   }
 }
 
@@ -161,22 +146,17 @@ export async function fetchDustProjects(opts: {
     .map(parseSpace)
     .filter((s): s is SpaceEntry => s !== null)
 
-  // Every space's data-source lookup is an independent round trip against the same workspace — run them
-  // concurrently instead of one at a time (M2-0144 / review finding P4-F6). Neither Dust endpoint here
-  // paginates (verified against the live API reference, 2026-09-26: no cursor/page/limit/has_more field
-  // on GET .../spaces or GET .../spaces/{spaceId}/data_sources), so AGUC-022 does not apply to this pair.
+  // Lookups run concurrently; results stay index-aligned with spaceEntries so they can be zipped back
+  // together below. Neither Dust endpoint here paginates (no cursor/page/limit/has_more field on GET
+  // .../spaces or GET .../spaces/{spaceId}/data_sources), so there is no further page to fetch.
   const dsResults = await Promise.all(
     spaceEntries.map((space) => fetchSpaceDataSources(fetchImpl, base, workspaceId, headers, space))
   )
 
-  const rejected = dsResults.find((r): r is { rejected: true; error: string } => r.rejected)
-  if (rejected) return { ok: false, error: rejected.error }
-
   const projects: DustProject[] = []
   spaceEntries.forEach((space, i) => {
     projects.push({ sId: space.sId, name: space.name, kind: space.kind, source: 'space' })
-    const result = dsResults[i]
-    if (!result.rejected) projects.push(...result.dataSources)
+    projects.push(...dsResults[i])
   })
 
   return { ok: true, projects }

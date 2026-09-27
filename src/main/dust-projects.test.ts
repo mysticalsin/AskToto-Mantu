@@ -104,9 +104,8 @@ describe('fetchDustProjects', () => {
       }
       if (url.includes('/spaces/a/data_sources')) {
         callOrder.push('a-start')
-        // A blocks here until B's own fetch has started. Under the OLD sequential `for`-loop this never
-        // unblocks (B is never even dispatched until A resolves) and the test times out; concurrent
-        // dispatch (Promise.all) starts B immediately, which unblocks A.
+        // A only resolves once B's own fetch has started, so this only completes if both spaces'
+        // data-source lookups are in flight concurrently rather than one waiting for the other.
         await aWaitsForBToStart
         callOrder.push('a-end')
         return { ok: true, status: 200, json: async () => ({ data_sources: [] }), text: async () => '' }
@@ -124,26 +123,38 @@ describe('fetchDustProjects', () => {
     expect(callOrder).toEqual(['a-start', 'b-start', 'a-end'])
   }, 2000)
 
-  it('fails loud instead of silently reporting zero data sources when the key is rejected mid-discovery (AGUC-021)', async () => {
+  it("reports a space with no data sources instead of failing the whole listing when that space's own lookup is rejected", async () => {
     const r = await fetchDustProjects({
-      apiKey: 'sk-revoked',
+      apiKey: 'sk-test',
       workspaceId: 'ws_1',
       fetchImpl: async (url: string) => {
         if (url.endsWith('/spaces')) {
           return {
             ok: true,
             status: 200,
-            json: async () => ({ spaces: [{ sId: 'spc_data', name: 'Data and AI', kind: 'regular' }] }),
+            json: async () => ({
+              spaces: [
+                { sId: 'spc_data', name: 'Data and AI', kind: 'regular' },
+                { sId: 'spc_sales', name: 'Sales', kind: 'regular' }
+              ]
+            }),
             text: async (): Promise<string> => ''
           }
         }
-        return { ok: false, status: 401, json: async () => ({}), text: async () => 'token revoked' }
+        if (url.includes('/spaces/spc_data/data_sources')) {
+          return { ok: false, status: 403, json: async () => ({}), text: async () => 'forbidden' }
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data_sources: [{ sId: 'ds_crm', name: 'CRM notes' }] }),
+          text: async () => ''
+        }
       }
     })
-    expect(r.ok).toBe(false)
-    if (r.ok) return
-    expect(r.error).toMatch(/401/)
-    expect(r.error).toMatch(/reconnect/i)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.projects.map((p) => p.name)).toEqual(['Data and AI', 'Sales', 'CRM notes'])
   })
 })
 

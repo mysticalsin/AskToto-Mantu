@@ -3,10 +3,11 @@
  *
  * Mirrors clickupOAuth.ts (PKCE, CSRF state, loopback 127.0.0.1, 300s timeout, single-flight) — INCLUDING
  * its DCR posture: bind the loopback server first, then register a FRESH confidential client scoped to
- * THIS run's exact `http://127.0.0.1:<port>/callback`, every Connect. A prior version of this module
- * instead registered once with a fixed portless `http://127.0.0.1/callback` and cached that client_id/
- * client_secret indefinitely, sending every later run's real ported redirect_uri to a client that was
- * never registered with it (M2-0144 / review finding P4-F2).
+ * THIS run's exact `http://127.0.0.1:<port>/callback`, every Connect. The freshly-registered client_id/
+ * client_secret are only ever persisted (settings.planeClientId + mcpSecrets) once the token exchange
+ * that used them has actually succeeded: a refresh token only works with the client it was issued to, so
+ * persisting a new client any earlier would strand an existing refresh token against a client it does
+ * not match the moment a Connect is denied, abandoned, or fails after registration.
  *
  * GROUND TRUTH (fetched 2026-09-26, live):
  *   authorization_endpoint: https://mcp.plane.so/authorize
@@ -24,10 +25,8 @@
  * 2026-09-26; the token-exchange step could not be probed the same way — it needs a completed interactive
  * login, which no automated/CI environment can provide — so a stricter check there remains ASSUMED-safe
  * rather than OBSERVED). Registering fresh per run regardless is still the right call: it is proven safe
- * (this run's own redirect_uri is always in the set DCR was just called with), it removes the
- * portless/ported asymmetry entirely rather than leaving it load-bearing on an unverified assumption, and
- * it satisfies AGX-11/AGSTEP-12 (an OAuth scope upgrade goes through a fresh trusted-consent registration,
- * never a reused reference client).
+ * (this run's own redirect_uri is always in the set DCR was just called with), and it removes the
+ * portless/ported asymmetry entirely rather than leaving it load-bearing on an unverified assumption.
  *
  * Official hosted MCP URLs (never user-entered):
  *   OAuth (Connect): https://mcp.plane.so/http/mcp
@@ -83,10 +82,9 @@ const PLANE_GENERIC = 'Plane rejected the sign-in request.'
 
 /**
  * Map a Plane OAuth error code/description to a single human sentence — mirrors
- * humanizeClickupOAuthError. Covers a rejected/expired refresh token (AGUC-021) the same way: Plane's
- * token endpoint answers a bad grant with `{"error":"invalid_grant",...}` on the same shape ClickUp uses,
- * so the generic branch below already turns that into an actionable "Plane rejected the request" sentence
- * rather than a raw JSON blob.
+ * humanizeClickupOAuthError. A plain-text `error_description` (e.g. from a rejected/expired refresh
+ * token) passes through unchanged; only a missing or JSON-shaped description falls back to a generic
+ * "Plane rejected the request (<code>)" sentence, so a raw JSON blob is never shown to the user.
  */
 export function humanizePlaneOAuthError(code: string, description = ''): string {
   const hay = `${code} ${description}`.toLowerCase()
@@ -164,10 +162,9 @@ export async function refreshPlaneToken(refreshToken: string): Promise<TokenResu
  * Dynamic Client Registration (RFC 7591) for THIS run's exact loopback redirect_uri — mirrors
  * registerClickupClient. Always POSTs a fresh confidential client, never reuses a cached client_id/secret
  * for `/authorize` or the token exchange: see the file header (P4-F2) for why a one-time cache bound to a
- * fixed portless URI is wrong regardless of how strictly Plane validates it. The freshly-issued
- * client_id/client_secret are cached afterward (settings.planeClientId + mcpSecrets) only so a later
- * background refreshPlaneToken() call has something to send — the next interactive Connect registers
- * again. Returns null when registration fails; callers must not fabricate a client.
+ * fixed portless URI is wrong regardless of how strictly Plane validates it. Returns the credentials to
+ * the caller without persisting them — persistence happens only once the token exchange that uses them
+ * succeeds (see runPlaneOAuth). Returns null when registration fails; callers must not fabricate a client.
  */
 async function registerPlaneClient(redirectUri: string): Promise<{ clientId: string; clientSecret: string } | null> {
   try {
@@ -192,8 +189,6 @@ async function registerPlaneClient(redirectUri: string): Promise<{ clientId: str
     const clientId = typeof json?.client_id === 'string' ? json.client_id.trim() : ''
     const clientSecret = typeof json?.client_secret === 'string' ? json.client_secret.trim() : ''
     if (!clientId || !clientSecret) return null
-    setSettings({ planeClientId: clientId })
-    setMcpClientSecret('plane', clientSecret)
     return { clientId, clientSecret }
   } catch (e) {
     mainLog.warn('[plane] dynamic client registration request failed', errMsg(e))
@@ -308,6 +303,11 @@ export async function runPlaneOAuth(): Promise<TokenResult> {
       auditLog('plane.oauth.denied', {})
       return result
     }
+    // Persist the client only now: it was just proven to work with a real token exchange, so a
+    // previously-stored client (and the refresh token issued to it) is never replaced by one this run
+    // never actually finished setting up.
+    setSettings({ planeClientId: clientId })
+    setMcpClientSecret('plane', clientSecret)
     return result
   } catch (e) {
     auditLog('plane.oauth.failed', { reason: coarseOAuthFailure(e) })
