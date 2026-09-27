@@ -9,6 +9,10 @@
  *     not free text (it comes from resolveBin), so it is only guarded against the characters quoting
  *     cannot neutralize (isQuotablePath) and is otherwise made safe by explicit quoting +
  *     windowsVerbatimArguments (see cmdShimSpawn).
+ *   - The Windows setup/login script is opened the same way: cmd.exe's `start` builtin is given the
+ *     script path pre-quoted with windowsVerbatimArguments set (see cmdStartSpawn), not left to Node's
+ *     default Windows quoting, which only covers a space or an empty argument — not cmd.exe's own
+ *     command-separator/expansion metacharacters (RF-AUDIT-R3-B1).
  *   - claude-cli: --allowedTools '' --disallowedTools '*' so the agent can never execute arbitrary tools.
  *   - codex-cli: features.shell_tool=false + runs in a throwaway tmp cwd.
  *   - resolveBin() finds the absolute path via the login shell (mac/Linux) or `where` + an APPDATA
@@ -1583,8 +1587,43 @@ export function loginCliInvokeLines(
   return [provider === 'codex-cli' ? 'codex login' : 'claude']
 }
 
+/**
+ * Build the { command, args } to launch `scriptPath` via cmd.exe's `start` builtin on Windows, or null
+ * when the path cannot be made safe for cmd.exe's own command-line parser — the caller then falls back
+ * to shell.openPath, which never hands the path to cmd.exe at all.
+ *
+ * SECURITY (RF-AUDIT-R3-B1): the previous code passed `scriptPath` to spawn() as a plain array element
+ * and relied on Node's own Windows argv-to-command-line quoting to protect it. That quoting adds quotes
+ * only around an argument containing a space/tab or an empty string — it has no notion of cmd.exe's
+ * command-separator/expansion metacharacters (& | ^ < > ( ) !), because for most spawn targets those
+ * characters mean nothing special. Here the target IS cmd.exe, and `/c` makes it re-tokenize its OWN
+ * full command line with those metacharacters live wherever they are not already inside a quote — a
+ * profile/temp scriptPath with no space but an `&` in it (an account folder like `C:\Users\Bob&Co\...`)
+ * reached cmd.exe unquoted and cmd.exe ran whatever followed the `&` as a second, independent command.
+ *
+ * The fix reuses cmdShimSpawn's already-reviewed pattern for the identical class of problem: quote the
+ * path ourselves and pass windowsVerbatimArguments so libuv does not also try to quote it. Quoting
+ * neutralizes cmd.exe's separator/expansion set and spaces (isQuotablePath's own contract, already
+ * relied on above) but not a literal quote, CR/LF, or %, which is exactly why a path containing one of
+ * those is refused here rather than silently mis-launched.
+ */
+function cmdStartSpawn(
+  scriptPath: string
+): { command: string; args: string[]; windowsVerbatimArguments: true } | null {
+  if (!isQuotablePath(scriptPath, 'cmd')) return null
+  return {
+    command: comSpecExe(),
+    // '""' is start's empty-title argument: without it, a quoted target path is itself misread as the
+    // title. Every element here is hand-quoted because windowsVerbatimArguments below tells libuv not
+    // to add or adjust any quoting of its own.
+    args: ['/d', '/c', 'start', '""', `"${scriptPath}"`],
+    windowsVerbatimArguments: true
+  }
+}
+
 async function openCliScript(scriptPath: string, isWin: boolean): Promise<string> {
-  if (isWin) {
+  const spawnSpec = isWin ? cmdStartSpawn(scriptPath) : null
+  if (spawnSpec) {
     const startErr = await new Promise<string>((resolve) => {
       let settled = false
       const done = (msg: string): void => {
@@ -1592,11 +1631,12 @@ async function openCliScript(scriptPath: string, isWin: boolean): Promise<string
         settled = true
         resolve(msg)
       }
-      const child = spawn(comSpecExe(), ['/d', '/c', 'start', '', scriptPath], {
+      const child = spawn(spawnSpec.command, spawnSpec.args, {
         shell: false,
         windowsHide: false,
         detached: true,
-        stdio: 'ignore'
+        stdio: 'ignore',
+        windowsVerbatimArguments: spawnSpec.windowsVerbatimArguments
       })
       child.once('error', (e) => done(e.message))
       child.once('close', (code) => done(code === 0 || code === null ? '' : `start failed (${code})`))
