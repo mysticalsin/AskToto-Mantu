@@ -11,16 +11,13 @@ product with its own distribution.
 
 ## 1. Métis for Windows — Electron `.exe`
 
-- **Build config:** `electron-builder.win.yml` (extends `electron-builder.yml`). The Cahê pilot is
-  `electron-builder.cahe.win.yml` — a separate `appId` (`com.mantu.metis.windows-cahe`) with **no shared
-  update feed**.
+- **Build config:** `electron-builder.win.yml` (extends `electron-builder.yml`).
 - **Artifacts:** NSIS installer `Metis-Setup-<v>.exe`, `Metis-Portable-<v>.exe`, and APPX (Store, built
   into `release-appx/`).
 - **Windows-only code / resources:** `src/main/win-security.ts` (managed-config ACL trust), DPAPI-backed
   keystore, the PowerShell foreground watcher, `resources/llama/win`, and the win `sharp`/sherpa native
   packages. Runtime branch points use `isWindows` / `process.platform === 'win32'`.
-- **Build scripts (`package.json`):** `dist:win`, `release:build:win`, `predist:win`, `installers:win`,
-  `installers:win:cahe`.
+- **Build scripts (`package.json`):** `dist:win`, `release:build:win`, `predist:win`, `installers:win`.
 - **Dispatch / auto-update:** `release/latest.yml` → `electron-updater` (NSIS). Portable + APPX/Store do
   not auto-update via this feed.
 

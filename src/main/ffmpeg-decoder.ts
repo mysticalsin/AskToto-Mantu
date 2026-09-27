@@ -24,20 +24,23 @@ export interface FfmpegDecodeCallbacks {
 }
 
 export interface FfmpegDecoder {
+  /** Kill the decode and its duration probe at once (SIGKILL). Idempotent; `completed` then settles without
+   *  calling onError. */
   cancel(): void
   completed: Promise<void>
 }
 
 /** Read container duration without decoding the recording. FFmpeg prints the stream metadata before the
  * zero-length null output exits, so this adds a short bounded probe and gives the main process a real
- * denominator for progress instead of an indeterminate "Listening for speech" animation. */
-async function probeDurationSeconds(executable: string, sourcePath: string): Promise<number | null> {
+ * denominator for progress instead of an indeterminate "Listening for speech" animation. A probe abandoned
+ * at its deadline is SIGKILLed, so a probe stuck reading a cloud-only file never outlives the import. */
+async function probeDurationSeconds(executable: string, sourcePath: string, signal: AbortSignal): Promise<number | null> {
   let child: ReturnType<typeof spawn>
   try {
     child = spawn(
       executable,
       ['-nostdin', '-hide_banner', '-loglevel', 'info', '-i', sourcePath, '-vn', '-t', '0', '-f', 'null', '-'],
-      { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true }
+      { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, signal, killSignal: 'SIGKILL' }
     )
   } catch {
     return null
@@ -54,7 +57,7 @@ async function probeDurationSeconds(executable: string, sourcePath: string): Pro
       resolve(value)
     }
     timer = setTimeout(() => {
-      if (!child.killed) child.kill('SIGTERM')
+      child.kill('SIGKILL')
       finish(null)
     }, DURATION_PROBE_TIMEOUT_MS)
     child.stderr?.on('data', (chunk: Buffer) => {
@@ -104,13 +107,17 @@ export function startFfmpegDecode(
     const completed = callbacks.onError(new Error(IMPORT_NOT_MEDIA))
     return { cancel: () => {}, completed }
   }
+  // cancel() aborts this, and Node SIGKILLs every ffmpeg this decode started: the decode and its duration
+  // probe. SIGKILL, not SIGTERM: ffmpeg writes only into our pipe, so a graceful stop has nothing to flush, and
+  // SIGTERM is only a request that a child blocked in write() on an unread pipe may never act on. It is also
+  // the only signal that still works on the exit paths, where no escalation timer would ever fire.
+  const abort = new AbortController()
   let child: ChildProcessByStdio<null, Readable, Readable>
-  let cancelled = false
   try {
     child = spawn(
       executable,
       ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', sourcePath, '-vn', '-ac', '1', '-ar', String(FFMPEG_SAMPLE_RATE), '-f', 'f32le', 'pipe:1'],
-      { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }
+      { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, signal: abort.signal, killSignal: 'SIGKILL' }
     )
   } catch (error) {
     const completed = callbacks.onError(error instanceof Error ? error : new Error(String(error)))
@@ -134,8 +141,8 @@ export function startFfmpegDecode(
   close.catch(() => {})
 
   const completed = (async (): Promise<void> => {
-    const durationSeconds = await probeDurationSeconds(executable, sourcePath)
-    if (cancelled) return
+    const durationSeconds = await probeDurationSeconds(executable, sourcePath, abort.signal)
+    if (abort.signal.aborted) return
     const totalSamples = durationSeconds ? Math.max(1, Math.ceil(durationSeconds * FFMPEG_SAMPLE_RATE)) : null
     let decodedSamples = 0
     if (totalSamples) {
@@ -167,7 +174,7 @@ export function startFfmpegDecode(
     }
 
     const [code, signal] = await close
-    if (cancelled) return
+    if (abort.signal.aborted) return
     if (spawnError) throw spawnError
     if (code !== 0) throw new Error(stderr.trim() || `Audio decoder stopped (${signal || `exit ${code}`}).`)
     if (pending.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) throw new Error('Audio decoder returned an incomplete PCM sample.')
@@ -183,14 +190,11 @@ export function startFfmpegDecode(
     }
     await callbacks.onComplete(seq)
   })().catch(async (error) => {
-    if (!cancelled) await callbacks.onError(error instanceof Error ? error : new Error(String(error)))
+    if (!abort.signal.aborted) await callbacks.onError(error instanceof Error ? error : new Error(String(error)))
   })
 
   return {
-    cancel: () => {
-      cancelled = true
-      if (!child.killed) child.kill('SIGTERM')
-    },
+    cancel: () => abort.abort(),
     completed
   }
 }

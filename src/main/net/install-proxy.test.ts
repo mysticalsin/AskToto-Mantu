@@ -29,7 +29,10 @@ vi.mock('../logger', () => ({
 
 const fakes = vi.hoisted(() => {
   class FakeProxyAgent {
-    constructor(public readonly uri: string) {}
+    readonly uri: string
+    constructor(opts: { uri: string; factory?: unknown }) {
+      this.uri = opts.uri
+    }
   }
   class FakeAgent {
     constructor(public readonly opts: unknown) {}
@@ -51,6 +54,10 @@ vi.mock('undici', () => ({
 import { installProxyAwareFetch, routeDispatcher } from './install-proxy'
 
 const PROXY_ENV_KEYS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
+const SOCKS_PROXY_URLS = ['socks5://127.0.0.1:1080', 'socks://127.0.0.1:1080'] as const
+const SOCKS_PROXY_CASES = PROXY_ENV_KEYS.flatMap((proxyEnvKey) =>
+  SOCKS_PROXY_URLS.map((proxyUrl) => [proxyEnvKey, proxyUrl] as const)
+)
 
 describe('MQA-190 — the OS proxy probe must never hold boot open', () => {
   let saved: Record<string, string | undefined>
@@ -184,4 +191,44 @@ describe('routeDispatcher — a second dispatcher that routes like the global on
     expect(d).toBeInstanceOf(FakeProxyAgent)
     expect(d.uri).toBe('http://late-proxy.corp:8080')
   })
+
+  // M2-0222 — a SOCKS proxy is sent the host name by undici, outside any hook a pinned session could use
+  // to hold it to the address `lookup` resolved, so a pinned dispatcher must refuse it outright rather than
+  // silently resolving through it unpinned. Boot itself is unaffected: the SHARED global dispatcher (no
+  // `lookup`) still installs normally.
+  it.each(SOCKS_PROXY_CASES)(
+    'P5: %s %s proxy — boot still installs the global dispatcher, but a pinned session is refused',
+    async (proxyEnvKey, proxyUrl) => {
+      process.env[proxyEnvKey] = proxyUrl
+      await installProxyAwareFetch()
+
+      expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
+      expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeEnvHttpProxyAgent)
+      expect(() => routeDispatcher(lookup)).toThrow(/SOCKS/)
+    }
+  )
+
+  it('P5: a later HTTP_PROXY SOCKS route is refused even when HTTPS_PROXY selected env boot mode', async () => {
+    process.env.HTTPS_PROXY = 'http://env-proxy.corp:8080'
+    process.env.HTTP_PROXY = 'socks5://127.0.0.1:1080'
+    await installProxyAwareFetch()
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
+    expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeEnvHttpProxyAgent)
+    expect(() => routeDispatcher(lookup)).toThrow(/SOCKS/)
+  })
+
+  // process.env keys are case-insensitive on Windows, so setting both names collapses to one variable.
+  it.skipIf(process.platform === 'win32')(
+    'P5: a lowercase https_proxy SOCKS route is refused even when HTTPS_PROXY selected env boot mode',
+    async () => {
+      process.env.HTTPS_PROXY = 'http://env-proxy.corp:8080'
+      process.env.https_proxy = 'socks5://127.0.0.1:1080'
+      await installProxyAwareFetch()
+
+      expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
+      expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeEnvHttpProxyAgent)
+      expect(() => routeDispatcher(lookup)).toThrow(/SOCKS/)
+    }
+  )
 })

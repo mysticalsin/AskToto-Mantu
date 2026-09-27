@@ -5,7 +5,7 @@
  * Pure + dependency-light: only reads already-extracted entity meeting refs and
  * the meetings feed. Never invents edges from embeddings or similarity scores.
  */
-import { slug } from './slug.ts'
+import { slug } from './slug'
 
 export type ConnectionKind = 'person' | 'account' | 'deal' | 'topic'
 

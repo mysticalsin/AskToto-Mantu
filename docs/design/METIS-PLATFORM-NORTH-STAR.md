@@ -270,7 +270,7 @@ Geo is `request.cf` only. The Worker ignores client `lat`, `lon`, `country`, `ci
 | `fundedProviders` list | A use-token that outlives the ask |
 | Operator URL | Ingest secret in a log / screenshot |
 
-`publicSettings` already redacts. Keep it that way. Embedded `METIS_PROXY_KEY` and Cahê Kimi remain documented residuals (`docs/security/AUDIT-20.md`). Do not add new live secrets to the package.
+`publicSettings` already redacts. Keep it that way. Only the embedded `METIS_PROXY_KEY` remains a documented residual (`docs/security/AUDIT-20.md`). Do not add new live secrets to the package.
 
 ### 5.6 Update / Latest only after QA + Ultron
 

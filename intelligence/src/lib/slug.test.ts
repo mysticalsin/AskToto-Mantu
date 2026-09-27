@@ -5,7 +5,7 @@
 // 'node' to tsconfig.app.json's global `types` (which intentionally stays browser-only for app code).
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { slug } from './slug.ts'
+import { slug } from './slug'
 
 /**
  * MQA-174 — byte-for-byte parity against the host store's slugify (src/main/brain/store.ts) is proved in

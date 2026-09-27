@@ -26,7 +26,7 @@
 - Suite: 1454/1455 (one unrelated brain-test temp-dir flake, passes in isolation), tsc clean.
 
 **mac screen-context now:** event-driven trigger (was: none — 6s timer only) + structured OCR context (was: VLM caption only). Latency: OCR replaces a ~360-550ms VLM describe with a sub-second no-inference extract and frees llama-server entirely on text screens.
-**Scope rule:** one source tree. macOS gains the Apple AI stack; Windows (Cahê edition) keeps the existing llama-server + Parakeet stack unchanged. Every capability below lists both platform paths.
+**Scope rule:** one source tree. macOS gains the Apple AI stack; Windows keeps the existing llama-server + Parakeet stack unchanged. Every capability below lists both platform paths.
 
 Research provenance: two adversarially-verified deep-research runs (201 agents, 3-vote refutation per claim, Apple primary sources) + full codebase map. Claims are marked **verified** (survived verification against Apple docs/WWDC sessions), **assumed** (sound inference, not Apple-stated), or **unknown**.
 

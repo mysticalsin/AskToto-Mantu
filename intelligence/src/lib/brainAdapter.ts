@@ -19,7 +19,7 @@ import type {
   StatusCounts
 } from '../types/data'
 import { buildGoingCold } from './goingCold.ts'
-import { slug } from './slug.ts'
+import { slug } from './slug'
 
 /**
  * Adapter: AskToto's live brain (window.intelligence.getData(), IPC brain:read) → this dashboard's

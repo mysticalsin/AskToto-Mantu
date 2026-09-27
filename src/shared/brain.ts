@@ -498,10 +498,13 @@ export const BrainIndexSchema = z.object({
     attempts: z.number().int().nonnegative().optional(),
     /** Earliest time an automatic background scan may retry this unchanged failed source. */
     retryAfter: z.number().optional(),
-    /** True once `attempts` crosses MAX_INGEST_ATTEMPTS (ingest.ts) — a terminal state distinct from an
-     *  ordinary transient failure: the automatic reconcile tick stops requeuing it so a permanently dead
-     *  provider/model can't spin the queue forever. Only an explicit manual retry clears it. */
-    exhausted: z.boolean().optional()
+    /** True once `attempts` reaches MAX_INGEST_ATTEMPTS (infra/scheduler/policy.ts). Automatic triggers
+     *  never requeue it; only an explicit user Retry revives it. */
+    exhausted: z.boolean().optional(),
+    /** Set when this device could not read the source (a cloud-only placeholder, a lock, a vanished or
+     *  undecryptable file). Such a failure spends no attempt; automatic scans retry once the file's ctime
+     *  differs from `changedAtMs`. Replaced by the next outcome. */
+    unreadable: z.object({ changedAtMs: z.number().optional() }).optional()
   })).default({}),
   // Lint findings (contradictions/staleness). Surfaced in the dashboard; never auto-resolved.
   warnings: z.array(z.string()).default([]),
@@ -580,8 +583,8 @@ export interface BrainStatus {
    *  source, and stays nonzero (keeping the BrainView banner up) for as long as any of them do,
    *  regardless of whether a backfill happens to be running right now. */
   failed?: number
-  /** Count of sources that hit MAX_INGEST_ATTEMPTS and stopped being auto-retried by the reconcile
-   *  tick — a manual retry (Retry index) is required to clear it. Disjoint from `failed` above. */
+  /** Count of sources that hit MAX_INGEST_ATTEMPTS and stopped being retried automatically — a manual
+   *  retry (Retry index) is required to clear it. Disjoint from `failed` above. */
   exhausted?: number
   /** The most common error string among current failures, only when at least 3 failing sources share it
    *  — lets the dashboard name the actual blocker ("Your AI provider is failing: <topError>") instead of

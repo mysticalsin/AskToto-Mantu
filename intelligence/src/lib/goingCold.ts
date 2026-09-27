@@ -1,5 +1,5 @@
 import type { BrainRead } from './brainAdapter.ts'
-import { slug } from './slug.ts'
+import { slug } from './slug'
 
 /**
  * Going-Cold engine (innovation #8) — the graph learns time.

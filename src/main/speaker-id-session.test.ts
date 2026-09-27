@@ -31,12 +31,14 @@ beforeEach(() => {
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
+/** An identifier whose user has opted in to saving voiceprints: the behaviour the suites below pin. */
 function makeId(options: { now?: () => number; compute?: (samples: Float32Array) => Promise<Float32Array | null> } = {}) {
   return createSpeakerId({
     createExtractor: () => ({
       compute: options.compute ?? (async (samples) => samples.length ? embeddingFor(Math.round(samples[0])) : null)
     }),
     storePath: () => join(dir, 'voiceprints.json'),
+    canSaveVoiceprints: () => true,
     now: options.now
   })
 }
@@ -239,7 +241,8 @@ describe('keyed transient speaker sessions', () => {
     }))
     const id = createSpeakerId({
       createExtractor,
-      storePath: () => join(dir, 'voiceprints.json')
+      storePath: () => join(dir, 'voiceprints.json'),
+      canSaveVoiceprints: () => true
     })
     expect(id.createSession('live:a')).toBe(true)
     expect(id.createSession('import:b')).toBe(true)

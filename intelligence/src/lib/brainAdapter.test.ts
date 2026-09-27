@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { brainToDashboard, type BrainRead } from './brainAdapter.ts'
-import { slug } from './slug.ts'
+import { slug } from './slug'
 
 /**
  * Synthetic BrainRead fixture exercising every corner brainAdapter.ts touches: 2 accounts, 3 people,

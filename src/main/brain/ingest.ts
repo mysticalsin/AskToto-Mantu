@@ -92,6 +92,7 @@ import {
   extractionSlug,
   type SourceScan
 } from './inputs'
+import type { WorkTrigger } from '../infra/scheduler/policy'
 
 /** Default ingest waterfall, or the Update Intelligence button's local-first then API-once route. */
 export type IngestRoute = 'default' | 'intelligence-pass'
@@ -2355,6 +2356,7 @@ export type BackfillStartOptions = {
   respectRetryBackoff?: boolean
   allowSourceRefresh?: boolean
   force?: boolean
+  trigger?: WorkTrigger
   /** Update Intelligence button: stamp jobs so extraction uses local-first then API once. */
   route?: IngestRoute
 }

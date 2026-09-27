@@ -33,8 +33,8 @@ vi.mock('../llm', () => ({ createStream: createStreamMock }))
 
 /**
  * Meeting-index reliability fix: brain/ingest.ts's cloud failover waterfall (ingest-resilience.test.ts)
- * had nothing to fail over to when only one cloud provider was ever configured (the Cahê pilot's
- * single embedded Kimi key) — a down/unreachable/misconfigured sole provider meant the meeting simply
+ * had nothing to fail over to when only one cloud provider was ever configured (a single-provider
+ * install with one embedded key) — a down/unreachable/misconfigured sole provider meant the meeting simply
  * never got indexed. This suite covers the new `localLlm.fallback` last-resort candidate appended
  * to the END of pickProviderCandidates()'s cloud waterfall.
  */
@@ -114,7 +114,7 @@ describe('brain ingest — local last-resort index fallback', () => {
     expect(createStreamMock.mock.calls[0][0].providerId).toBe('anthropic')
   })
 
-  it('indexes via local when zero cloud providers are configured (the reported Cahê-pilot failure mode)', async () => {
+  it('indexes via local when zero cloud providers are configured (the reported single-provider failure mode)', async () => {
     writeFileSync(join(meetingsFolder, 'no-cloud.md'), '---\ndate: 2026-01-02\n---\nAcme wants a renewal.', 'utf8')
     // Force zero cloud eligibility via a real allowlist rather than relying on "no setApiKey call was
     // made": store.ts's module-level _apiKeyCache is not guaranteed clear across a fresh mkdtempSync
