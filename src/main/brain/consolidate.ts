@@ -15,6 +15,7 @@ import { getSettings } from '../store'
 import { loadJson, writeJson } from './store'
 import { startBackfill, type BackfillStartResult } from './ingest'
 import { auditLog, mainLog } from '../logger'
+import { reportDeferred } from '../infra/scheduler/maintenance'
 
 const STATE_FILE = 'consolidate-state.json'
 
@@ -95,7 +96,10 @@ let consolidating = false
 export async function runConsolidationIfDue(s: Settings = getSettings()): Promise<ConsolidationRunResult> {
   if (!s.brainConsolidation.enabled) return { ran: false, queued: 0, reason: 'disabled' }
   const allowed = await canConsolidateToday(s)
-  if (allowed === null) return { ran: false, queued: 0, reason: 'unavailable' }
+  if (allowed === null) {
+    reportDeferred('consolidation', 'ledger_unavailable')
+    return { ran: false, queued: 0, reason: 'unavailable' }
+  }
   if (allowed === false) return { ran: false, queued: 0, reason: 'budget-spent' }
   if (consolidating) return { ran: false, queued: 0, reason: 'in-flight' }
   consolidating = true

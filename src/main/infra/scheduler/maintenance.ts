@@ -18,7 +18,7 @@ import {
   type MaintenanceDeferral
 } from './policy'
 
-export type SchedulerJobKind = 'backfill' | 'ingest' | 'intelligence-index' | 'model-work'
+export type SchedulerJobKind = 'backfill' | 'ingest' | 'consolidation' | 'intelligence-index' | 'model-work'
 
 const INTERACTIVE_RECHECK_MS = 5_000
 

@@ -10,6 +10,7 @@ import { getSettings } from '../store'
 import { loadJson, peekJson, writeJson } from './store'
 import { requestBackfillRun, type BackfillStartResult, type BackfillCompletion } from './ingest'
 import { auditLog, mainLog } from '../logger'
+import { reportDeferred } from '../infra/scheduler/maintenance'
 
 export const INTELLIGENCE_INDEX_TZ = 'America/Toronto'
 export const INTELLIGENCE_INDEX_HOURS = [6, 12, 18] as const
@@ -240,7 +241,10 @@ export async function runIntelligenceIndex(
   reason: IntelligenceIndexReason,
   s: Settings = getSettings()
 ): Promise<IntelligenceIndexResult> {
-  await loadIntelligenceIndexState(s)
+  if ((await loadIntelligenceIndexState(s)) === null) {
+    reportDeferred('intelligence-index', 'ledger_unavailable')
+    return { ran: false, queued: 0, error: INCOMPLETE_INDEX_COPY, lastIndexedAt: lastIndexedAt(s) }
+  }
   if (activeRun) {
     mainLog.info(`[intelligence-index] coalesced (${reason}); a pass is already running`)
     return { ran: false, queued: 0, coalesced: true, lastIndexedAt: lastIndexedAt(s) }
@@ -340,7 +344,10 @@ export async function catchUpIntelligenceIndexIfNeeded(
   s: Settings = getSettings()
 ): Promise<IntelligenceIndexResult | { ran: false; queued: 0; reason: 'current' | 'unavailable' }> {
   const state = await loadIntelligenceIndexState(s)
-  if (state === null) return { ran: false, queued: 0, reason: 'unavailable' }
+  if (state === null) {
+    reportDeferred('intelligence-index', 'ledger_unavailable')
+    return { ran: false, queued: 0, reason: 'unavailable' }
+  }
   const last = state.lastSuccessAt
   if (!shouldCatchUp(last, now)) return { ran: false, queued: 0, reason: 'current' }
   mainLog.info(

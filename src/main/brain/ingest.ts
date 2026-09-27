@@ -93,6 +93,7 @@ import {
   type SourceScan
 } from './inputs'
 import type { WorkTrigger } from '../infra/scheduler/policy'
+import { reportDeferred } from '../infra/scheduler/maintenance'
 
 /** Default ingest waterfall, or the Update Intelligence button's local-first then API-once route. */
 export type IngestRoute = 'default' | 'intelligence-pass'
@@ -1998,7 +1999,10 @@ export async function enqueueIngest(
   // unreadable index would only re-derive it into readIndex's empty stand-in, which writeIndex/
   // updateIndex then refuse to persist anyway. A backfill picks the file up once the index is usable
   // again (startBackfill scans by content, not by whether enqueueIngest ever ran for it).
-  if ((await loadIndex(s)).kind === 'unavailable') return
+  if ((await loadIndex(s)).kind === 'unavailable') {
+    reportDeferred('ingest', 'ledger_unavailable')
+    return
+  }
   if (!(await brainInputsLocal(s))) return
   const key = basename(file)
   const version = await sourceFileVersion(file)
@@ -2317,7 +2321,10 @@ export async function resumeBackfillIfPending(): Promise<void> {
   try {
     const s = getSettings()
     const load = await loadIndex(s)
-    if (load.kind !== 'ready') return
+    if (load.kind !== 'ready') {
+      if (load.kind === 'unavailable') reportDeferred('backfill', 'ledger_unavailable')
+      return
+    }
     const idx = load.index
     if (idx.sourceRefreshRequested && !idx.replayPending) {
       maybeStartSourceRefresh()
@@ -2501,7 +2508,10 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
   // stand-in would otherwise trigger a full re-extraction of every meeting. Covers resume, reconcile,
   // consolidation, the intelligence pass, dashboard-open and the Index-meetings click: this and
   // enqueueIngest are the only two `queue.push` sites.
-  if ((await loadIndex(s)).kind === 'unavailable') return { queued: 0 }
+  if ((await loadIndex(s)).kind === 'unavailable') {
+    reportDeferred('backfill', 'ledger_unavailable')
+    return { queued: 0 }
+  }
   const scan = await scanMeetingSources(s)
   if (!(await brainInputsLocal(s, scan))) return { queued: 0 }
   const extractions = await listBrainNames(s, 'meetings')
@@ -2690,7 +2700,7 @@ export async function requestBackfill(options: BackfillStartOptions = {}): Promi
 }
 
 async function hasUnextracted(s: Settings): Promise<boolean> {
-  await loadIndex(s)
+  if ((await loadIndex(s)).kind !== 'ready') return false
   return countUnextracted(await scanMeetingSources(s), readIndex(s)) > 0
 }
 
@@ -2707,7 +2717,11 @@ export async function reconcileMeetingsInBackground(): Promise<void> {
     // whose jobs are all parked (provider lost mid-batch) is exactly what this tick has to revive, so it
     // no longer bails on hasActiveBackfill() alone. requestBackfill re-pumps the stalled queue below.
     if (backfillScans > 0 || sourceRefreshRunning || (hasActiveBackfill() && hasJobsInFlight())) return
-    await loadIndex(s)
+    const load = await loadIndex(s)
+    if (load.kind !== 'ready') {
+      if (load.kind === 'unavailable') reportDeferred('backfill', 'ledger_unavailable')
+      return
+    }
     const idx = readIndex(s)
     const scan = await scanMeetingSources(s)
     const drift = hasSourceDrift(scan, idx)
