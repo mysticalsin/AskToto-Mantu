@@ -1,16 +1,33 @@
 import { describe, expect, it } from 'vitest'
-import { findViolations, GUARDED_FILES } from './check-no-scratch-paths.mjs'
+import { BASELINE_VIOLATIONS, findRepoViolations, findViolations } from './check-no-scratch-paths.mjs'
 
-// A pure source-text scan (readFileSync + regex, no module import), safe to run against gates.mjs,
-// preview.mjs, preview-tokens.mjs, preview-motion.mjs, seed-local.mjs and screenshot.mjs whether or
-// not they carry the M2-0055 fix yet — unlike importing those scripts directly (see
-// scratch-paths.contract.test.ts), reading their text never risks running their unguarded main().
-describe('check-no-scratch-paths', () => {
-  it('guards exactly the six scripts named in finding P5-F4', () => {
-    expect(GUARDED_FILES).toEqual(['gates.mjs', 'preview.mjs', 'preview-tokens.mjs', 'preview-motion.mjs', 'seed-local.mjs', 'screenshot.mjs'])
+describe('findViolations', () => {
+  it('reports a past agent-session scratch-path literal as path:line', () => {
+    const files = [{ path: 'fixture.mjs', content: 'const x = "/private/tmp/claude-501/foo"' }]
+    expect(findViolations(files)).toEqual(['fixture.mjs:1'])
   })
 
-  it('finds no hardcoded /private/tmp/claude- or /Users/ literal in the guarded scripts', () => {
-    expect(findViolations()).toEqual([])
+  it('reports an absolute per-user path literal as path:line', () => {
+    const files = [{ path: 'fixture.mjs', content: 'const x = "/Users/someone/foo"' }]
+    expect(findViolations(files)).toEqual(['fixture.mjs:1'])
+  })
+
+  it('gives [] for a clean file', () => {
+    const files = [{ path: 'fixture.mjs', content: 'import { tmpdir } from "node:os"\nconst x = tmpdir()' }]
+    expect(findViolations(files)).toEqual([])
+  })
+})
+
+describe('the repo scan', () => {
+  it('flags no violation outside the baseline', () => {
+    const unexpected = findRepoViolations().filter((v) => !BASELINE_VIOLATIONS.has(v))
+    expect(unexpected).toEqual([])
+  })
+
+  it('keeps every baseline entry a real, current violation (so a fixed file cannot linger unnoticed)', () => {
+    const current = new Set(findRepoViolations())
+    for (const entry of BASELINE_VIOLATIONS) {
+      expect(current.has(entry)).toBe(true)
+    }
   })
 })

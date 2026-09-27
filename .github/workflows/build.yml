@@ -167,6 +167,13 @@ jobs:
             echo "::error::Possible committed secret found"; exit 1
           fi
           echo "No committed secrets found."
+      # Blocks a committed absolute per-user path or agent scratch-session path in tracked source
+      # (finding P5-F4). Scans every tracked file git ls-files reports for the globs
+      # check-no-scratch-paths.mjs declares; a pre-existing, out-of-scope hit is grandfathered in
+      # that script's own BASELINE_VIOLATIONS (asserted still-real by
+      # check-no-scratch-paths.contract.test.ts) rather than silently excluded here.
+      - name: Scratch-path scan
+        run: npm run check:scratch-paths
       # Repo-wide secret scan (gitleaks). The step above is deliberately narrow — it only recognizes this
       # product's OWN provider key-prefix shapes (src/shared/providers.ts). This step runs the SAME
       # checked-out tree through gitleaks's large, community-maintained detection ruleset instead
