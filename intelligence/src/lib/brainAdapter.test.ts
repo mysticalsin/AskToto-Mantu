@@ -573,6 +573,24 @@ describe('MQA-223 — account identity survives display-name drift on the struct
   })
 })
 
+describe('M2-0203 — a meeting node inherits its account entity\'s canonical name/sector, never its own drifted extraction', () => {
+  // A meeting's `account.name` is extracted fresh on every ingest, independently of the account
+  // entity's own canonical `name` — the exact drift MQA-223 fixed for goingCold's people-per-account
+  // map. Reading `ownMeeting.account.name` straight would show 'ACME Corp.' as a phantom account in
+  // GraphView's account filter, distinct from 'Acme Corp' and with no sector at all.
+  const meetingDrift: BrainRead = {
+    ...FIXTURE,
+    meetings: (FIXTURE.meetings ?? []).map((m) => (m.source_file === 'm2.md' ? { ...m, account: { name: 'ACME Corp.' } } : m))
+  }
+  const adapted = brainToDashboard(meetingDrift)
+
+  it('resolves the meeting to its account entity, not the drifted extraction', () => {
+    const sowReview = adapted.account_graph.nodes.find((n) => n.id === 'meeting:m2-md')!
+    expect(sowReview.account).toBe('Acme Corp')
+    expect(sowReview.sector).toBe('technology')
+  })
+})
+
 describe('MQA-224 — a call with no extracted account is unattributed, not "internal"', () => {
   // The bundled local model routinely returns a null account name, and ingest nulls the whole sidecar.
   // Deriving `is_client_facing: !!m.account` turned that silence into a positive claim, so a real client
