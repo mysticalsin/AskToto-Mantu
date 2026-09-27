@@ -82,19 +82,30 @@ jobs:
           mount_dir="$HOME/Library/Developer/DVTDownloads/MetalToolchain/mounts/shim"
           mkdir -p "$mount_dir"
           image="$RUNNER_TEMP/metal-toolchain-shim.dmg"
-          hdiutil create -size 1m -fs HFS+ -volname MetalToolchainShim -ov -quiet "$image"
-          hdiutil attach "$image" -mountpoint "$mount_dir" -readonly -nobrowse -quiet
+          hdiutil create -size 5m -fs HFS+ -volname MetalToolchainShim -ov "$image"
+          hdiutil attach "$image" -mountpoint "$mount_dir" -readonly -nobrowse
           SHIM
           chmod +x "$shim/swift"
 
+          set +e
           PATH="$shim:$PATH" bash scripts/hermetic/run-swift-tests.sh unused
+          run_status=$?
+          set -e
+          echo "run-swift-tests.sh exited $run_status (expected 0)"
 
-          sandbox="$(cat "$RUNNER_TEMP/swift-shim-sandbox-path")"
-          if [ -e "$sandbox" ]; then
-            echo "run-swift-tests.sh left its sandbox behind: $sandbox"; exit 1
+          sandbox="$(cat "$RUNNER_TEMP/swift-shim-sandbox-path" 2>/dev/null || echo '')"
+          fail=0
+          [ "$run_status" -eq 0 ] || fail=1
+          if [ -n "$sandbox" ] && [ -e "$sandbox" ]; then
+            echo "run-swift-tests.sh left its sandbox behind: $sandbox"; fail=1
           fi
-          if mount | grep -qF "$sandbox"; then
-            echo "run-swift-tests.sh left a mount behind under $sandbox:"; mount | grep -F "$sandbox"; exit 1
+          if [ -n "$sandbox" ] && mount | grep -qF "$sandbox"; then
+            echo "run-swift-tests.sh left a mount behind under $sandbox:"; mount | grep -F "$sandbox"; fail=1
+          fi
+          if [ "$fail" -ne 0 ]; then
+            echo "--- mount ---"; mount
+            [ -n "$sandbox" ] && [ -e "$sandbox" ] && { echo "--- sandbox contents ---"; find "$sandbox"; }
+            exit 1
           fi
       # A plain, unmounted failing shim — swift test's own non-zero status must reach run-swift-tests.sh's
       # caller unchanged, including after the fix above adds mount detection to its cleanup.

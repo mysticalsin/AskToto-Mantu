@@ -28,12 +28,14 @@ cleanup() {
   local status=$?
   # Xcode can auto-mount its Metal toolchain disk image under this sandboxed $HOME while `swift test`
   # runs (…/Library/Developer/DVTDownloads/MetalToolchain/mounts/<id>); a mounted, read-only volume must
-  # be detached before `rm -rf` can remove the directory tree containing its mount point. Detach the
-  # deepest mount point first, so a mount nested inside another is never still busy when its parent is
-  # detached.
+  # be detached before `rm -rf` can remove the directory tree containing its mount point. `diskutil
+  # unmount` takes the mount point itself (unlike `hdiutil detach`, which wants the disk image's device
+  # node); `hdiutil detach` is a second attempt for a mount `diskutil` doesn't otherwise resolve. Detach
+  # the deepest mount point first, so a mount nested inside another is never still busy when its parent
+  # is detached.
   local mount_point
   while IFS= read -r mount_point; do
-    hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
+    diskutil unmount force "$mount_point" >/dev/null 2>&1 || hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
   done < <(
     mount | awk -v sandbox="$SANDBOX" '{
       line = $0
