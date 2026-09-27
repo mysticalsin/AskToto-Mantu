@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises'
 import { lookup } from 'node:dns/promises'
 import { tmpdir } from 'node:os'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
-import { basename, join, relative, sep } from 'node:path'
+import { basename, isAbsolute, join, relative, sep } from 'node:path'
 
 vi.mock('../../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 vi.mock('../../mac-helper', () => ({ macStatFlagsSpawnSpec: vi.fn(() => null) }))
@@ -39,6 +39,9 @@ interface HeldCall {
 
 interface TestFs extends StorageFs {
   calls: string[]
+  /** Every call's exact full path, in order — lets a test tell two roots apart even when `calls` (kept
+   *  basename-only for the other tests' assertions) cannot. */
+  paths: string[]
   inFlight(): number
   hold(method: FsMethod, name: string): HeldCall
   fail(method: FsMethod, name: string, code?: string): void
@@ -51,15 +54,19 @@ function errnoError(code?: string): NodeJS.ErrnoException {
   return error
 }
 
-/** An in-memory StorageFs keyed by basename, so a gateway that joins any root with a relative path still
- *  resolves to the fixture registered under that plain filename (P3 exercises two different roots against
- *  one memoryFs this way). `hold`/`fail` gate the NEXT call to (method, name); later calls to the same
- *  pair are unaffected unless gated again. */
+/** An in-memory StorageFs keyed by full path, as the design's harness spec requires (`join(ROOT, rel)`):
+ *  a plain name registers under ROOT, an already-absolute name registers under itself (P3 exercises two
+ *  roots this way). Content lookups use the exact path the gateway passed in, so a gateway that resolved
+ *  the wrong root finds nothing there — 'ENOENT', not another root's file of the same name. `hold`/`fail`
+ *  still gate the NEXT call to (method, basename); later calls to the same pair are unaffected unless
+ *  gated again. */
 function memoryFs(files: Record<string, string>): TestFs {
   const entries = new Map<string, { content: string; mtimeMs: number; ctimeMs: number }>()
-  for (const [name, content] of Object.entries(files)) entries.set(name, { content, mtimeMs: 1_000, ctimeMs: 1_000 })
+  const keyOf = (name: string): string => (isAbsolute(name) ? name : join(ROOT, name))
+  for (const [name, content] of Object.entries(files)) entries.set(keyOf(name), { content, mtimeMs: 1_000, ctimeMs: 1_000 })
 
   const calls: string[] = []
+  const paths: string[] = []
   let inflight = 0
   const gates = new Map<string, Array<() => Promise<void>>>()
 
@@ -73,6 +80,7 @@ function memoryFs(files: Record<string, string>): TestFs {
   async function invoke<T>(method: FsMethod, path: string, produce: () => T): Promise<T> {
     const name = basename(path)
     calls.push(`${method} ${name}`)
+    paths.push(path)
     inflight += 1
     try {
       const gate = gates.get(`${method} ${name}`)?.shift()
@@ -85,6 +93,7 @@ function memoryFs(files: Record<string, string>): TestFs {
 
   return {
     calls,
+    paths,
     inFlight: () => inflight,
     hold(method, name) {
       let resolveFn!: () => void
@@ -100,25 +109,25 @@ function memoryFs(files: Record<string, string>): TestFs {
       pushGate(method, name, () => Promise.reject(errnoError(code)))
     },
     touch(name) {
-      const entry = entries.get(name)
+      const entry = entries.get(keyOf(name))
       if (entry) {
         entry.mtimeMs += 1
         entry.ctimeMs += 1
       }
     },
     async readdir(path) {
-      return invoke('readdir', path, () => [...entries.keys()])
+      return invoke('readdir', path, () => [...entries.keys()].map((key) => basename(key)))
     },
     async stat(path) {
       return invoke('stat', path, () => {
-        const entry = entries.get(basename(path))
+        const entry = entries.get(path)
         if (!entry) throw errnoError('ENOENT')
         return { mtimeMs: entry.mtimeMs, ctimeMs: entry.ctimeMs, size: entry.content.length }
       })
     },
     async readFile(path) {
       return invoke('readFile', path, () => {
-        const entry = entries.get(basename(path))
+        const entry = entries.get(path)
         if (!entry) throw errnoError('ENOENT')
         return Buffer.from(entry.content)
       })
@@ -326,6 +335,34 @@ describe('abort (G4-G6)', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------
+// Listener fan-out — classify's per-path admission/deadline waiters share one AbortSignal
+// ---------------------------------------------------------------------------------------------------
+
+describe('listener fan-out (classify)', () => {
+  it('classifying many paths under a small cap emits no MaxListenersExceededWarning', async () => {
+    const names = Array.from({ length: 50 }, (_, i) => `f${i}.md`)
+    const fs = memoryFs(Object.fromEntries(names.map((name) => [name, 'x'])))
+    const detector = fakeDetector()
+    const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 }) // cap = 2
+
+    const warnings: string[] = []
+    const onWarning = (warning: Error): void => {
+      warnings.push(warning.name)
+    }
+    process.on('warning', onWarning)
+    try {
+      const result = await gateway.classify(names)
+      await flush()
+      expect(result.size).toBe(50)
+    } finally {
+      process.off('warning', onWarning)
+    }
+
+    expect(warnings).not.toContain('MaxListenersExceededWarning')
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
 // D — classification before any read
 // ---------------------------------------------------------------------------------------------------
 
@@ -470,7 +507,7 @@ describe('failure classification (F1)', () => {
 })
 
 describe('failure memory (F2-F3)', () => {
-  it('a read that returned dataless, unknown, unavailable or timeout is answered from memory for 60 s, then tried again', async () => {
+  it('a read that returns dataless is answered from memory for 60 s, then tried again', async () => {
     const fs = memoryFs({ 'cloud.md': 'C' })
     const detector = fakeDetector()
     const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
@@ -478,6 +515,7 @@ describe('failure memory (F2-F3)', () => {
     const first = await gateway.read('cloud.md')
     expect(first).toMatchObject({ status: 'dataless' })
     expect(fs.calls.filter((call) => call === 'stat cloud.md')).toHaveLength(1)
+    expect(detector.classify).toHaveBeenCalledTimes(1)
 
     await vi.advanceTimersByTimeAsync(59_000)
     const second = await gateway.read('cloud.md')
@@ -489,6 +527,79 @@ describe('failure memory (F2-F3)', () => {
     const third = await gateway.read('cloud.md')
     expect(third).toMatchObject({ status: 'dataless' })
     expect(fs.calls.filter((call) => call === 'stat cloud.md')).toHaveLength(2)
+  })
+
+  it('a read that returns unknown is answered from memory for 60 s, then tried again', async () => {
+    const fs = memoryFs({ 'odd.md': 'O' })
+    const detector = fakeDetector()
+    const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
+
+    const first = await gateway.read('odd.md')
+    expect(first).toMatchObject({ status: 'unknown' })
+    expect(fs.calls.filter((call) => call === 'stat odd.md')).toHaveLength(1)
+    expect(detector.classify).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(59_000)
+    const second = await gateway.read('odd.md')
+    expect(second).toEqual(first)
+    expect(fs.calls.filter((call) => call === 'stat odd.md')).toHaveLength(1)
+    expect(detector.classify).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1_000) // total 60 s since the first read
+    const third = await gateway.read('odd.md')
+    expect(third).toMatchObject({ status: 'unknown' })
+    expect(fs.calls.filter((call) => call === 'stat odd.md')).toHaveLength(2)
+  })
+
+  it('a read that returns unavailable is answered from memory for 60 s, then tried again', async () => {
+    const fs = memoryFs({ 'a.md': 'A' })
+    fs.fail('stat', 'a.md', 'EACCES')
+    const detector = fakeDetector()
+    const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
+
+    const first = await gateway.read('a.md')
+    expect(first).toEqual({ status: 'unavailable', code: 'EACCES' })
+    expect(fs.calls.filter((call) => call === 'stat a.md')).toHaveLength(1)
+    expect(detector.classify).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(59_000)
+    const second = await gateway.read('a.md')
+    expect(second).toEqual(first)
+    expect(fs.calls.filter((call) => call === 'stat a.md')).toHaveLength(1)
+    expect(detector.classify).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1_000) // total 60 s since the first read
+    const third = await gateway.read('a.md') // the gate only failed the first stat: this one succeeds
+    expect(third).toMatchObject({ status: 'ok' })
+    expect(fs.calls.filter((call) => call === 'stat a.md')).toHaveLength(2)
+  })
+
+  it('a read that times out is answered from memory for 60 s, then tried again', async () => {
+    const fs = memoryFs({ 'a.md': 'A' })
+    const heldA = fs.hold('readFile', 'a.md')
+    const detector = fakeDetector()
+    const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
+
+    const first = gateway.read('a.md')
+    await flush()
+    await vi.advanceTimersByTimeAsync(5_000) // the content deadline; the readFile stays held throughout
+    await expect(first).resolves.toEqual({ status: 'timeout' })
+    expect(fs.calls.filter((call) => call === 'stat a.md')).toHaveLength(1)
+    expect(detector.classify).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(59_000) // total 64 s: 59 s since the failure was remembered
+    const second = await gateway.read('a.md')
+    expect(second).toEqual({ status: 'timeout' })
+    expect(fs.calls.filter((call) => call === 'stat a.md')).toHaveLength(1)
+    expect(detector.classify).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1_000) // total 65 s: 60 s since the failure was remembered
+    void gateway.read('a.md')
+    await flush()
+    expect(fs.calls.filter((call) => call === 'stat a.md')).toHaveLength(2)
+
+    heldA.release()
+    await flush()
   })
 
   it('missing, degraded, aborted and ok are never remembered', async () => {
@@ -620,7 +731,7 @@ describe('containment (P1-P4)', () => {
   })
 
   it('resolves the root on every call', async () => {
-    const fs = memoryFs({ 'a.md': 'A', 'b.md': 'B' })
+    const fs = memoryFs({ [join(ROOT, 'a.md')]: 'A', [join(ROOT2, 'b.md')]: 'B' })
     let current = ROOT
     const gateway = createStorageGateway({ root: () => current, detector: fakeDetector(), fs, poolSize: 4 })
 
@@ -628,11 +739,21 @@ describe('containment (P1-P4)', () => {
     const resultA = await gateway.read('a.md')
     expect(resultA.status).toBe('ok')
     if (resultA.status === 'ok') expect(resultA.bytes.toString('utf8')).toBe('A')
+    expect(fs.paths).toContain(join(ROOT, 'a.md'))
 
+    // b.md exists only under ROOT2: a gateway that cached root() at construction instead of resolving it
+    // on this call would still ask ROOT for it and find nothing there.
     current = ROOT2
     const resultB = await gateway.read('b.md')
     expect(resultB.status).toBe('ok')
     if (resultB.status === 'ok') expect(resultB.bytes.toString('utf8')).toBe('B')
+    expect(fs.paths).toContain(join(ROOT2, 'b.md'))
+    expect(fs.paths).not.toContain(join(ROOT, 'b.md'))
+
+    // A stale root answering ROOT for 'b.md' is exactly the failure a caching bug would produce: nothing
+    // there, not a false 'ok'.
+    current = ROOT
+    await expect(gateway.read('b.md')).resolves.toEqual({ status: 'missing' })
   })
 
   it("list returns a directory's entry names; a missing directory is 'missing'", async () => {
