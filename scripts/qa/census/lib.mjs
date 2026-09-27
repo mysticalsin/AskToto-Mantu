@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +15,12 @@ export const STATES = [
 ]
 
 export const REQUIRED_TRACE_SCENARIOS = ['parked-bar-orb', 'backdrop-filter', 'threejs-obsidian-orb']
+export const STATES_REQUIRING_ATTACH_PRECONDITION = [
+  'first-inference',
+  'active-transcription',
+  'post-meeting',
+  'post-recovery'
+]
 
 export const DEFAULT_SECONDS = 300
 export const DEFAULT_INTERVAL_MS = 5_000
@@ -74,6 +80,33 @@ export function validateState(state) {
   return state
 }
 
+export function stateRequiresAttachPrecondition(state) {
+  return STATES_REQUIRING_ATTACH_PRECONDITION.includes(validateState(state))
+}
+
+export function validateStatePrecondition({ state, attachMode, evidence }) {
+  const needsPrecondition = stateRequiresAttachPrecondition(state)
+  const trimmed = typeof evidence === 'string' ? evidence.trim() : ''
+  if (!needsPrecondition) {
+    return {
+      required: false,
+      attachMode: Boolean(attachMode),
+      evidence: trimmed || null
+    }
+  }
+  if (!attachMode) {
+    throw new Error(`${state} requires --main-pid attach mode after the state precondition is established`)
+  }
+  if (!trimmed) {
+    throw new Error(`${state} requires --precondition-evidence describing the established non-idle state`)
+  }
+  return {
+    required: true,
+    attachMode: true,
+    evidence: trimmed
+  }
+}
+
 export function missingStates(observedStates) {
   const observed = new Set(observedStates)
   return STATES.filter((state) => !observed.has(state))
@@ -113,6 +146,7 @@ export function sanitizeReport(report) {
       processes: sample.processes.map(sanitizeProcessSample)
     })),
     summary: report.summary,
+    statePrecondition: report.statePrecondition,
     rendererTrace: report.rendererTrace,
     proveLocalTtft: report.proveLocalTtft,
     windowsWorkingSet: report.windowsWorkingSet
@@ -272,6 +306,70 @@ export function resolveInstallTarget(target, platform = process.platform) {
   return { executable: absolute, installRoot: dirname(absolute) }
 }
 
+function cleanProductVersion(version) {
+  const value = String(version ?? '').trim()
+  if (!value) return null
+  return value.replace(/\s+/g, ' ')
+}
+
+function readDarwinProductVersion(installRoot) {
+  const plist = join(installRoot, 'Contents', 'Info.plist')
+  if (!existsSync(plist)) return null
+  try {
+    return cleanProductVersion(
+      execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleShortVersionString', plist], {
+        encoding: 'utf8',
+        timeout: 2_000
+      })
+    )
+  } catch {
+    try {
+      const text = readFileSync(plist, 'utf8')
+      const match = /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(text)
+      return cleanProductVersion(match?.[1])
+    } catch {
+      return null
+    }
+  }
+}
+
+function win32VersionTarget(target) {
+  try {
+    if (statSync(target).isFile()) return target
+  } catch {
+    return target
+  }
+  return join(target, 'Metis.exe')
+}
+
+function readWin32ProductVersion(target) {
+  const executable = win32VersionTarget(target)
+  if (!existsSync(executable)) return null
+  const command = `[Console]::OutputEncoding = [Text.Encoding]::UTF8; (Get-Item -LiteralPath '${executable.replaceAll("'", "''")}').VersionInfo.ProductVersion`
+  return cleanProductVersion(
+    execFileSync(win32PowerShell(), ['-NoProfile', '-NonInteractive', '-Command', command], {
+      encoding: 'utf8',
+      timeout: 4_000
+    })
+  )
+}
+
+/**
+ * @param {{ explicit?: string, installRoot: string, executable?: string | null, platform?: NodeJS.Platform }} options
+ */
+export function resolveProductVersion({ explicit = undefined, installRoot, executable = undefined, platform = process.platform }) {
+  const fromCli = cleanProductVersion(explicit)
+  if (fromCli) return fromCli
+  const detected =
+    platform === 'darwin'
+      ? readDarwinProductVersion(installRoot)
+      : platform === 'win32'
+        ? readWin32ProductVersion(executable ?? installRoot)
+        : null
+  if (detected) return detected
+  throw new Error('--product-version is required when the installed app version cannot be read')
+}
+
 export function ownedProcessPopulation({ mainPid, installRoot, platform = process.platform, table = listProcesses(platform) }) {
   return ownedProcesses(table, { mainPid, installRoot, platform })
 }
@@ -306,6 +404,13 @@ export async function collectCensus(options) {
   if (!(intervalMs > 0)) throw new Error('--interval-ms must be positive')
   if (!options.installRoot) throw new Error('installRoot is required')
   if (!Number.isInteger(options.mainPid)) throw new Error('mainPid is required')
+  const productVersion = cleanProductVersion(options.productVersion)
+  if (!productVersion) throw new Error('productVersion is required')
+  const statePrecondition = validateStatePrecondition({
+    state,
+    attachMode: Boolean(options.attachMode),
+    evidence: options.preconditionEvidence
+  })
 
   const started = Date.now()
   const end = started + seconds * 1000
@@ -321,7 +426,7 @@ export async function collectCensus(options) {
   const processIdentities = samples[0]?.processes ?? []
   const report = {
     generatedAt: new Date().toISOString(),
-    productVersion: options.productVersion ?? '1.9.6',
+    productVersion,
     platform,
     state,
     seconds,
@@ -334,6 +439,7 @@ export async function collectCensus(options) {
     processIdentities,
     samples,
     summary: summarize(samples, Math.max(seconds, (samples.at(-1)?.tMs ?? 0) / 1000)),
+    statePrecondition,
     rendererTrace: options.rendererTrace ?? { captured: false, scenarios: [] },
     proveLocalTtft: options.proveLocalTtft ?? { recorded: false },
     windowsWorkingSet:

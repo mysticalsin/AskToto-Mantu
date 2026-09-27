@@ -11,7 +11,9 @@ import {
   collectCensus,
   defaultOutputPath,
   resolveInstallTarget,
+  resolveProductVersion,
   validateState,
+  validateStatePrecondition,
   writeJson
 } from './lib.mjs'
 
@@ -30,6 +32,10 @@ Inputs:
   --cdp-url <url>          Existing Chromium DevTools endpoint for renderer traces.
   --trace-scenario <name>  Repeatable. Expected names: ${REQUIRED_TRACE_SCENARIOS.join(', ')}.
   --ttft-ms <ms>           Recorded warm TTFT from scripts/prove-local-ttft.mjs.
+  --product-version <ver>  Product version when it cannot be read from the installed app.
+  --precondition-evidence <text>
+                           Required with --main-pid for first-inference, active-transcription,
+                           post-meeting, and post-recovery.
 `
 }
 
@@ -57,6 +63,8 @@ function readArgs(argv) {
     else if (arg === '--cdp-url') args.cdpUrl = next()
     else if (arg === '--trace-scenario') args.traceScenarios.push(next())
     else if (arg === '--ttft-ms') args.ttftMs = Number(next())
+    else if (arg === '--product-version') args.productVersion = next()
+    else if (arg === '--precondition-evidence') args.preconditionEvidence = next()
     else throw new Error(`unknown argument: ${arg}`)
   }
   return args
@@ -162,8 +170,16 @@ async function main() {
   const profile = args.profile ?? process.env.METIS_QA_PROFILE
   let mainPid = args.mainPid ?? null
   let installRoot = args.installRoot ?? null
+  let executable = null
   let child = null
   let cdpUrl = args.cdpUrl ?? null
+  const attachMode = mainPid !== null
+
+  validateStatePrecondition({
+    state,
+    attachMode,
+    evidence: args.preconditionEvidence
+  })
 
   if (mainPid === null) {
     if (!profile) {
@@ -171,6 +187,7 @@ async function main() {
     }
     const target = resolveInstallTarget(args.app ?? process.env.METIS_CENSUS_APP ?? defaultAppPath(platform), platform)
     installRoot = target.installRoot
+    executable = target.executable
     const traceRequested = args.traceScenarios.length > 0
     const port = traceRequested ? await freeLoopbackPort() : null
     if (port) cdpUrl = `http://127.0.0.1:${port}`
@@ -183,6 +200,12 @@ async function main() {
   }
 
   if (!installRoot) throw new Error('--install-root is required when --main-pid is used')
+  const productVersion = resolveProductVersion({
+    explicit: args.productVersion,
+    installRoot,
+    executable,
+    platform
+  })
 
   try {
     const rendererTrace = await captureRendererTrace({
@@ -197,6 +220,9 @@ async function main() {
       platform,
       installRoot,
       mainPid,
+      attachMode,
+      productVersion,
+      preconditionEvidence: args.preconditionEvidence,
       profileKind: 'representative-synthetic',
       rendererTrace,
       proveLocalTtft:

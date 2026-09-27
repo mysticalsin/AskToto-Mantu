@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   REQUIRED_TRACE_SCENARIOS,
+  STATES_REQUIRING_ATTACH_PRECONDITION,
   STATES,
   classifyProcess,
   missingStates,
   oneCoreCpuPercent,
+  resolveProductVersion,
   sanitizeReport,
   defaultOutputPath,
+  stateRequiresAttachPrecondition,
   summarize,
+  validateStatePrecondition,
   validateState
 } from './lib.mjs'
 
@@ -33,6 +40,75 @@ describe('resource census state contract', () => {
 
   it('rejects unknown state names instead of silently creating non-comparable evidence', () => {
     expect(() => validateState('idle')).toThrow(/cold-start/)
+  })
+
+  it('requires attach-mode precondition evidence for every non-idle measured state', () => {
+    expect(STATES_REQUIRING_ATTACH_PRECONDITION).toEqual([
+      'first-inference',
+      'active-transcription',
+      'post-meeting',
+      'post-recovery'
+    ])
+    expect(stateRequiresAttachPrecondition('settled-idle')).toBe(false)
+    expect(stateRequiresAttachPrecondition('first-inference')).toBe(true)
+    expect(() =>
+      validateStatePrecondition({
+        state: 'active-transcription',
+        attachMode: false,
+        evidence: 'fixture audio is already streaming'
+      })
+    ).toThrow(/requires --main-pid attach mode/)
+    expect(() =>
+      validateStatePrecondition({
+        state: 'post-recovery',
+        attachMode: true,
+        evidence: ''
+      })
+    ).toThrow(/requires --precondition-evidence/)
+    expect(
+      validateStatePrecondition({
+        state: 'post-meeting',
+        attachMode: true,
+        evidence: 'fixture meeting ended and review screen is open'
+      })
+    ).toEqual({
+      required: true,
+      attachMode: true,
+      evidence: 'fixture meeting ended and review screen is open'
+    })
+  })
+})
+
+describe('resource census product version contract', () => {
+  it('prefers an explicit product version so candidate gates are not labeled as the baseline', () => {
+    expect(resolveProductVersion({ explicit: ' 2.0.0-qa.4 ', installRoot: '/missing', platform: 'darwin' })).toBe(
+      '2.0.0-qa.4'
+    )
+  })
+
+  it('reads the product version from an installed macOS app bundle when no CLI value is supplied', () => {
+    const root = mkdtempSync(join(tmpdir(), 'metis-census-version-'))
+    try {
+      const app = join(root, 'Metis.app')
+      const contents = join(app, 'Contents')
+      mkdirSync(contents, { recursive: true })
+      writeFileSync(
+        join(contents, 'Info.plist'),
+        `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleShortVersionString</key>
+  <string>1.9.6</string>
+</dict>
+</plist>
+`,
+        'utf8'
+      )
+
+      expect(resolveProductVersion({ installRoot: app, platform: 'darwin' })).toBe('1.9.6')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
