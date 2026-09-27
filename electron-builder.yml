@@ -145,7 +145,7 @@ extraResources:
   # cloudflare-embed/ above: packaging never fails when there is nothing provisioned. A release build must
   # actually write resources/operator/pubkey.json and resources/license-lease/pubkey.json before packaging
   # — scripts/check-provisioned-secrets.mjs --profile release fails the build if either file is absent or
-  # still equals the committed DEV_OPERATOR_PUBLIC_KEY / DEV_LEASE_PUBLIC_KEY placeholder (L05-F1, L05-F7).
+  # still equals the committed DEV_OPERATOR_PUBLIC_KEY / DEV_LEASE_PUBLIC_KEY placeholder (ticket M2-0056).
   - from: resources/operator
     to: operator
   - from: resources/license-lease

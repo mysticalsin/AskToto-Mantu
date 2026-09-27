@@ -235,7 +235,7 @@ describe('direct release signing gates', () => {
   })
 })
 
-describe('embedded-credential placeholder gate (L05-F1, L05-F7)', () => {
+describe('embedded-credential placeholder gate (M2-0056)', () => {
   it('wires check-provisioned-secrets into every release chain that runs check-release-secrets, before electron-builder', () => {
     const releaseChains = Object.entries(pkg.scripts).filter(
       ([name, body]) => name.startsWith('release:') && body.includes('check-release-secrets.mjs')

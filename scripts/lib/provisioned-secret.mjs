@@ -1,11 +1,12 @@
-// provisioned-secret.mjs — the ONE helper behind every "read a build-provisioned public-key resource, or
-// fall back to a committed DEV placeholder" credential family (src/main/operator-skill-key.ts,
-// src/main/license-lease-key.ts — L05-F1, L05-F7, L05-REFACTOR-1). Both modules document the SAME
-// contract: a JSON resource shaped `{ algorithm, publicKey }`, provisioned by electron-builder's
-// extraResources at packaging time; absent that file, the app trusts a public key anyone who clones this
-// repo can find. checkProvisionedPublicKey() answers "did packaging actually provision the real thing, or
-// is this build about to ship the placeholder?" once, instead of three separate
-// existsSync/JSON.parse/placeholder-compare call sites.
+// provisioned-secret.mjs — a build-time check for one invariant: a packaged public-key resource
+// (`<resourcesDir>/<family>/pubkey.json`, written by electron-builder's extraResources at packaging time)
+// must exist, parse as JSON, carry a string `publicKey`, and differ from the committed DEV placeholder
+// constant the app falls back to at runtime when that resource is absent. Used by
+// scripts/check-provisioned-secrets.mjs (ticket M2-0056) for the two credential families that share this
+// exact shape today — src/main/operator-skill-key.ts's DEV_OPERATOR_PUBLIC_KEY and
+// src/main/license-lease-key.ts's DEV_LEASE_PUBLIC_KEY. Neither runtime module imports this file; each
+// declares its own placeholder constant and reads its own resource, and this helper only checks, at build
+// time, that packaging provisioned something else in its place.
 import { existsSync, readFileSync } from 'node:fs'
 
 /**
