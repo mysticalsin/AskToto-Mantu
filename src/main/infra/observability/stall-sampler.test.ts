@@ -10,9 +10,11 @@ import { bundleDir, captureDir, type CaptureOutcome } from './stall-bundle'
 
 const COMMAND = '/x/metis-mac-helper'
 const POSIX = process.platform !== 'win32'
+const TEST_PID = 4242
 
-function fakeChild(): ChildProcess {
+function fakeChild(pid = TEST_PID): ChildProcess {
   const child = new EventEmitter() as unknown as ChildProcess
+  Object.defineProperty(child, 'pid', { value: pid, configurable: true })
   Object.defineProperty(child, 'stdout', { value: new PassThrough(), configurable: true })
   child.kill = vi.fn() as unknown as ChildProcess['kill']
   return child
@@ -82,6 +84,22 @@ describe('startStallSampler', () => {
       { stdio: ['ignore', 'pipe', 'ignore'] }
     )
     if (POSIX) expect(statSync(captureDir(userData)).mode & 0o777).toBe(0o700)
+  })
+
+  it('audits the stall-watch helper spawn with name, pid and null pgid', () => {
+    const child = fakeChild(9876)
+    const audit = vi.fn()
+    const collect = vi.fn(async (): Promise<CaptureOutcome[]> => [])
+    startStallSampler({
+      command: COMMAND,
+      userData,
+      bootId: 'this-boot',
+      aliveIntervalMs: 10_000,
+      audit,
+      deps: { spawn: (() => child) as unknown as typeof nodeSpawn, collect }
+    })
+
+    expect(audit).toHaveBeenCalledWith('sidecar.spawn', { name: 'stall-watch', pid: 9876, pgid: null })
   })
 
   it("collects once at start, before any stdout line — an outcome for a different bootId is audited under that outcome's own bootId", async () => {

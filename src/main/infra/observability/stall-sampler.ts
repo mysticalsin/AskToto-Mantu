@@ -20,6 +20,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { runAlivePath } from '../../boot-sentinel'
 import type { AuditSink } from '../../logger'
+import { observeSidecar } from './sidecar-events'
 import { captureDir, collectStallCaptures, type CaptureOutcome } from './stall-bundle'
 
 /** The ticket's "more than 10 s stale": how far past its scheduled rewrite the marker must be. */
@@ -80,6 +81,7 @@ export function startStallSampler(opts: StallSamplerOptions): StallSampler {
     onWatcherGone()
     return { stop: () => void (stopped = true) }
   }
+  observeSidecar('stall-watch', child, opts.audit)
   child.once('error', onWatcherGone)
   child.once('close', onWatcherGone)
   let partial = ''
