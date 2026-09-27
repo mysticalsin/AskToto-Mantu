@@ -107,6 +107,11 @@ export const OBSERVABILITY_EVENTS = {
     consecutive: 'int',
     recoveryStatus: RECOVERY_STATUSES
   },
+  /** Automatic reload after render-process-gone failed to load and no further automatic retry will run. */
+  'app.error.reload_failed': {
+    message: 'errorText',
+    recoveryStatus: RECOVERY_STATUSES
+  },
   /** Clean-shutdown marker written at will-quit. */
   'app.shutdown.clean': {
     bootId: 'id',
@@ -153,6 +158,11 @@ export const OBSERVABILITY_EVENTS = {
   /** Overlay renderer stopped answering Chromium. */
   'app.unresponsive': {
     kind: ['overlay']
+  },
+  /** render-process-gone's automatic reload loop was halted after the budget was exhausted. */
+  'app.render_loop_halted': {
+    reason: RENDER_GONE_REASONS,
+    exitCode: 'int'
   },
   /** User-visible reveal attempt and outcome. */
   reveal: {

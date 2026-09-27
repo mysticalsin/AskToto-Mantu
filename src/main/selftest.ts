@@ -24,8 +24,8 @@ let redirectedUserData: string | undefined
 
 /** Isolates ASKTOTO_SELFTEST's throwaway profile before Electron — or any of index.ts's own boot work
  *  (settings reads, embedded-key seeding, local-model provisioning, …) — can resolve or touch a default
- *  userData path. Call this before index.ts's own ASKTOTO_USERDATA handling, mirroring
- *  initializeCaheEditionIdentity()'s "must run before the first app.getPath('userData') call" contract.
+ *  userData path. It must run before the first app.getPath('userData') call, so call it before
+ *  index.ts's own ASKTOTO_USERDATA handling.
  *  Setting process.env.ASKTOTO_USERDATA here, rather than calling app.setPath directly, means that
  *  existing handling — and resolveMeetingsFolder()'s own ASKTOTO_USERDATA check (transcripts.ts) — adopt
  *  the throwaway directory through the one isolation mechanism the QA profile already uses, instead of a

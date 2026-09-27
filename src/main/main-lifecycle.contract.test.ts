@@ -285,7 +285,7 @@ describe('MQA-345 — constructor swaps keep the retiring renderer trusted until
     expect(apply).toBeGreaterThan(-1)
     expect(postApplyGuard).toBeGreaterThan(apply)
     expect(rendererGone).toMatch(/showForExclusiveOnboarding\(self\)/)
-    expect(rendererGone).toMatch(/self\.loadURL\(overlayRendererUrl\(\)\)/)
+    expect(rendererGone).toMatch(/reloadOverlay\(self\)/)
     expect(rendererGone).toMatch(/if \(retainedOwnership\) \{[\s\S]*?showForExclusiveOnboarding\(self\)/)
     expect(rendererGone).not.toMatch(/applyExclusiveOnboardingStage\(win\)/)
   })

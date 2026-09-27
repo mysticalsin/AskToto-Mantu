@@ -214,7 +214,7 @@ describe('brain ingest — provider-degradation paths', () => {
 
   it('MQA-018: refuses to purge the brain when the only candidate is a local runtime that cannot run', async () => {
     writeFileSync(join(meetingsFolder, 'indexed.md'), '---\ndate: 2026-02-04\n---\nAcme renewal call.', 'utf8')
-    allowProviders(['local']) // zero cloud candidates: the Cahê pilot with its one key removed
+    allowProviders(['local']) // zero cloud candidates: a single-provider install with its one key removed
     createStreamMock.mockImplementation(respondJson())
     expect(startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()

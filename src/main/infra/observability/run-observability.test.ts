@@ -116,6 +116,24 @@ describe('startRunObservability', () => {
     expect(audit).toHaveBeenCalledWith('app.started', expect.objectContaining({ uvThreadpoolSize: '16' }))
   })
 
+  it("exposes the prior run's shutdown classification", () => {
+    const observability = startRunObservability({
+      userData: '/fake/userData',
+      version: '1.9.7',
+      platform: 'darwin',
+      arch: 'arm64',
+      audit: vi.fn(),
+      powerMonitor: fakePowerMonitor(),
+      deps: {
+        beginRunWatch: () => ({ bootId: 'boot-42', prior: fakePrior({ prevShutdown: 'unclean' }) }),
+        startStallMonitor: vi.fn(() => fakeStallMonitor()),
+        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+        clearIntervalFn: vi.fn()
+      }
+    })
+    expect(observability.priorShutdown).toBe('unclean')
+  })
+
   it('starts a 10s alive timer that calls markAlive with the current bootId', () => {
     const setIntervalFn = vi.fn((_handler: () => void, _ms: number) => 1 as unknown as ReturnType<typeof setInterval>)
     const markAlive = vi.fn()

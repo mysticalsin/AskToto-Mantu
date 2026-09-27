@@ -224,6 +224,9 @@ export type AuditEvent =
   | 'app.error.window_create'
   // M2-0215: safe-start skipped brain resume after repeated early deaths.
   | 'app.error.early_death'
+  // M2-0037/M2-0215: the automatic reload after render-process-gone itself failed to load; the overlay
+  // is left as-is with no further automatic retry.
+  | 'app.error.reload_failed'
   // M2-0006: the clean-shutdown marker — written at the end of will-quit, so the NEXT app.started can
   // report a real prevShutdown classification instead of no evidence at all (see boot-sentinel.ts).
   | 'app.shutdown.clean'
@@ -259,6 +262,9 @@ export type AuditEvent =
   | 'sidecar.exit'
   // M2-0215: History list request timing across renderer and main.
   | 'history.request'
+  // M2-0037 (B3-RC2): render-process-gone's reload budget was exhausted (>=3 reloads within 60s with no
+  // recovered 30s-alive window) — auto-reload stops and a recovery dialog is shown instead.
+  | 'app.render_loop_halted'
   | 'meeting.detect.degraded'
   | 'recall.open'
   | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
@@ -280,6 +286,8 @@ export type AuditEvent =
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'
+  // M2-0033: scheduler decisions (backfill scan counts, deferrals, maintenance window) — counts and enums only, never paths or names.
+  | 'scheduler.job'
   // Wave 3 (main/brain/consolidate.ts): one batched extraction pass actually ran. Distinct from
   // 'brain.ingest' (per-meeting) — this is the per-PASS marker metrics.ts counts against the
   // maxPassesPerDay budget.
@@ -306,7 +314,6 @@ export type AuditEvent =
   | 'local.model.download_ok'
   | 'local.model.download_fail'
   | 'screen.preprocess.describe'
-  | 'cahe.localai.seeded'
   // Support diagnosability: the user exported the log trail to a folder (metadata only — file count).
   | 'diagnostics.export'
   | 'llm.call'

@@ -52,7 +52,7 @@ export interface EmbeddedCloudflareCredential {
   baseUrl: string | null
 }
 
-/** Per-profile marker recording the one-time embedded-key seed already ran (mirrors cahe-embedded-key.ts). */
+/** Per-profile marker recording the one-time embedded-key seed already ran. */
 function seededMarkerPath(): string {
   return join(app.getPath('userData'), '.cloudflare-key-seeded')
 }

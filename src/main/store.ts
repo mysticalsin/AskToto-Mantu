@@ -32,7 +32,6 @@ import {
 } from '@shared/providers'
 import { DUST_EMPTY_AGENTS_ERROR } from '@shared/dust-validate'
 import { mainLog } from './logger'
-import { caheEditionPolicy, isCaheEdition } from './cahe-edition'
 import {
   KeychainKeyRecoveryError,
   decryptSecret,
@@ -66,18 +65,17 @@ const PROFILE_RECOVERY_FIXED_FILES = new Set([
   'auth-configured.flag',
   'msal-cache.bin',
   'google-session.bin',
-  // MQA-260: the one-shot seed markers for the installer-embedded keys. Their job is to stop a later
-  // launch silently overwriting a key the USER chose (embedded-cloudflare-key.ts:18-20) — that job is
-  // about a live profile, and it does not survive into a rebuilt one.
+  // MQA-260: the one-shot seed marker for the installer-embedded Cloudflare key. Its job is to stop a
+  // later launch silently overwriting a key the USER chose (embedded-cloudflare-key.ts:18-20) — that job
+  // is about a live profile, and it does not survive into a rebuilt one.
   //
   // "Create new local profile & retry" runs when secret-key.bin cannot be unwrapped, which means every
   // key-<provider>.bin is already undecryptable. Archiving them destroys nothing that still worked. But
-  // leaving the markers behind carried the OLD profile's "already seeded" verdict into the new one, so
+  // leaving the marker behind carried the OLD profile's "already seeded" verdict into the new one, so
   // the repair produced a profile with no Cloudflare key and no way to ever get one — on a build that
   // ships an embedded key, that turns the repair button into a downgrade to the 12s on-device path.
-  // Clearing them lets the fresh profile seed exactly as a first install does.
-  '.cloudflare-key-seeded',
-  '.cahe-key-seeded'
+  // Clearing it lets the fresh profile seed exactly as a first install does.
+  '.cloudflare-key-seeded'
 ])
 
 function encryptedProfileFiles(): string[] {
@@ -274,8 +272,7 @@ export function validatedManaged(): Record<string, unknown> {
   const admin = adminManagedContent()
   return {
     ...readManagedFrom(join(dir(), 'managed-config.json')),
-    ...(admin ? parseManagedContent(admin) : {}), // machine policy wins over the per-user file (win32: only if admin-trusted)
-    ...caheEditionPolicy().managedDefaults
+    ...(admin ? parseManagedContent(admin) : {}) // machine policy wins over the per-user file (win32: only if admin-trusted)
   }
 }
 
@@ -284,7 +281,7 @@ export function getLockedKeys(): string[] {
   const user = readLockedFrom(join(dir(), 'managed-config.json'))
   const admin = adminManagedContent()
   const machine = admin ? parseLockedContent(admin) : []
-  return [...new Set([...user, ...machine, ...caheEditionPolicy().lockedKeys])]
+  return [...new Set([...user, ...machine])]
 }
 
 /**
@@ -313,12 +310,7 @@ export function getAllowedProviders(): string[] | null {
   // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
   // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
   const admin = adminManagedContent()
-  const configured = (admin ? parseAllowedContent(admin) : null) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
-  const edition = caheEditionPolicy().allowedProviders
-  if (!edition) return configured
-  // Cahê narrows the package surface to Kimi and Dust. An IT allowlist is still authoritative: intersect
-  // rather than widening it, so an org that disallows Kimi fails closed before any cloud egress.
-  return configured ? configured.filter((provider) => edition.includes(provider)) : edition
+  return (admin ? parseAllowedContent(admin) : null) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
 }
 
 /** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a
@@ -560,7 +552,6 @@ interface SettingsCache {
   userMtime: number
   managedMtime: number
   adminMtime: number
-  caheEdition: boolean
 }
 let _settingsCache: SettingsCache | null = null
 let _freshAsrEngine: FreshAsrEngine | null = null
@@ -606,7 +597,7 @@ export function resetSettingsCacheForTests(): void {
 
 function currentSettingsMtimes(): Pick<
   SettingsCache,
-  'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'
+  'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'
 > {
   return {
     // settings.json path is part of the key so a change of profile directory always misses the cache.
@@ -617,8 +608,7 @@ function currentSettingsMtimes(): Pick<
     userMtime: safeMtime(settingsPath()),
 
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
-    adminMtime: safeMtime(adminManagedConfigPath()),
-    caheEdition: isCaheEdition()
+    adminMtime: safeMtime(adminManagedConfigPath())
   }
 }
 
@@ -629,8 +619,7 @@ export function getSettings(): Settings {
     _settingsCache.userPath === m.userPath &&
     _settingsCache.userMtime === m.userMtime &&
     _settingsCache.managedMtime === m.managedMtime &&
-    _settingsCache.adminMtime === m.adminMtime &&
-    _settingsCache.caheEdition === m.caheEdition
+    _settingsCache.adminMtime === m.adminMtime
   ) {
     return _settingsCache.value
   }

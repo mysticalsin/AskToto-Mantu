@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // check-embedded-cloudflare-key.mjs — packaging-time guard for the optional installer-embedded
-// Cloudflare proxy key (docs/CLOUDFLARE.md, src/main/embedded-cloudflare-key.ts). Same disclosed,
-// opt-in posture as scripts/check-cahe-package.mjs's Kimi-key gate: refuses a package that embeds the
-// key unless a human explicitly set METIS_EMBED_CLOUDFLARE_KEY=1, printing a loud warning when it does.
+// Cloudflare proxy key (docs/CLOUDFLARE.md, src/main/embedded-cloudflare-key.ts). Disclosed, opt-in
+// posture: refuses a package that embeds the key unless a human explicitly set
+// METIS_EMBED_CLOUDFLARE_KEY=1, printing a loud warning when it does.
 //
 // The embedded key now ships ENCRYPTED (AES-256-GCM, scripts/embed-cloudflare-key.mjs) rather than as a
 // plaintext {"proxyKey":"…"} file. This gate therefore enforces two additional invariants the old
