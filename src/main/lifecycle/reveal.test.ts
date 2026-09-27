@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createRevealController, type PresenterState, type RevealControllerDeps, type RevealWindow } from './reveal'
+import {
+  createRevealController,
+  legacyRevealWindow,
+  type PresenterState,
+  type RevealControllerDeps,
+  type RevealWindow
+} from './reveal'
 
 function windowStub(visible = true) {
   return {
@@ -99,5 +105,29 @@ describe('M2-0036 reveal controller', () => {
     expect(legacyReveal).toHaveBeenCalledWith('hotkey', { focus: true })
     expect(d.restoreInteractiveLayout).not.toHaveBeenCalled()
     expect(d.disableClickThrough).not.toHaveBeenCalled()
+  })
+
+  it('legacy activate and second-instance stay on the old non-activating showInactive path', () => {
+    for (const reason of ['activate', 'second-instance'] as const) {
+      const w = windowStub()
+      const showForAsk = vi.fn()
+
+      legacyRevealWindow(reason, { focus: true }, w, showForAsk)
+
+      expect(w.showInactive).toHaveBeenCalledTimes(1)
+      expect(showForAsk).not.toHaveBeenCalled()
+      expect(w.show).not.toHaveBeenCalled()
+      expect(w.focus).not.toHaveBeenCalled()
+    }
+  })
+
+  it('legacy explicit ask-style hotkey keeps the pre-change focus path', () => {
+    const w = windowStub()
+    const showForAsk = vi.fn()
+
+    legacyRevealWindow('hotkey', { focus: true }, w, showForAsk)
+
+    expect(showForAsk).toHaveBeenCalledExactlyOnceWith(w)
+    expect(w.showInactive).not.toHaveBeenCalled()
   })
 })

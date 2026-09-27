@@ -35,7 +35,8 @@ import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
-import { createRevealController, type PresenterState, type RevealReason } from './lifecycle/reveal'
+import { createRevealController, legacyRevealWindow, type PresenterState, type RevealReason } from './lifecycle/reveal'
+import { captureActiveForWindowRestart as captureActiveForWindowRestartState } from './lifecycle/window-restart'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
   IPC,
@@ -273,6 +274,11 @@ type ImportSpeakerOwner = {
 const LIVE_SPEAKER_RECEIPT_TTL_MS = 30 * 60_000
 let activeLiveSpeakerStartedAt: number | null = null
 let legacyListeningActive = false
+function setLegacyListeningActive(on: boolean): void {
+  if (legacyListeningActive === on) return
+  legacyListeningActive = on
+  rebuildTrayMenu()
+}
 let liveSpeakerStartedAtHighWater = 0
 const liveSpeakerReceipts = new Map<number, LiveSpeakerReceipt>()
 const importSpeakerOwners = new Map<string, ImportSpeakerOwner>()
@@ -347,7 +353,7 @@ function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
   if (startedAt === undefined) {
     if (activeLiveSpeakerStartedAt !== null) return false
     if (change.on === legacyListeningActive) return false
-    legacyListeningActive = change.on
+    setLegacyListeningActive(change.on)
     return true
   }
 
@@ -356,7 +362,7 @@ function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
     const previous = activeLiveSpeakerStartedAt
     if (previous !== null) closeLiveSpeakerReceipt(previous)
     activeLiveSpeakerStartedAt = startedAt
-    legacyListeningActive = false
+    setLegacyListeningActive(false)
     liveSpeakerStartedAtHighWater = startedAt
 
     if (!speakerIdProcessingEnabled()) return true
@@ -374,7 +380,7 @@ function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
   // release that follows in listening-state-ipc therefore cannot resolve against a replacement.
   closeLiveSpeakerReceipt(startedAt)
   activeLiveSpeakerStartedAt = null
-  legacyListeningActive = false
+  setLegacyListeningActive(false)
   return true
 }
 
@@ -391,7 +397,7 @@ function captureLiveSpeakerKey(rawStartedAt: unknown): string | null {
 function discardActiveLiveSpeakerSession(): void {
   const startedAt = activeLiveSpeakerStartedAt
   activeLiveSpeakerStartedAt = null
-  legacyListeningActive = false
+  setLegacyListeningActive(false)
   if (startedAt === null) return
   const receipt = liveSpeakerReceipts.get(startedAt)
   if (!receipt) return
@@ -1064,6 +1070,12 @@ type CloudSttIpcOwner = { webContentsId: number; generation: number; captureId?:
 let cloudSttIpcGeneration = 0
 let cloudSttIpcOwner: CloudSttIpcOwner | null = null
 
+function setCloudSttIpcOwner(owner: CloudSttIpcOwner | null): void {
+  if (cloudSttIpcOwner === owner) return
+  cloudSttIpcOwner = owner
+  rebuildTrayMenu()
+}
+
 /** Only the renderer that opened the current live-STT session may receive its tail callbacks. */
 function isCurrentCloudSttOwner(
   owner: CloudSttIpcOwner,
@@ -1081,7 +1093,7 @@ function isCurrentCloudSttOwner(
 function invalidateCloudSttOwner(webContentsId?: number): void {
   if (webContentsId !== undefined && cloudSttIpcOwner?.webContentsId !== webContentsId) return
   cloudSttIpcGeneration += 1
-  cloudSttIpcOwner = null
+  setCloudSttIpcOwner(null)
   void stopCloudSttLive()
 }
 // Fresh-question boundary state (written by IPC.listeningState / IPC.askResetContext / IPC.askStart, all
@@ -1090,6 +1102,18 @@ function invalidateCloudSttOwner(webContentsId?: number): void {
 // stuck `listeningActive` disables the boundary for the rest of the app session (MQA-038).
 let listeningActive = false
 
+function setListeningActive(on: boolean): void {
+  if (listeningActive === on) return
+  listeningActive = on
+  rebuildTrayMenu()
+}
+
+function setAudioArmed(on: boolean): void {
+  if (audioArmed === on) return
+  audioArmed = on
+  rebuildTrayMenu()
+}
+
 function presenterState(): PresenterState {
   if (!win || win.isDestroyed() || !win.isVisible()) return { kind: 'HIDDEN' }
   if (islandResting) return { kind: 'PARKED', layout: liveOverlayLayout() }
@@ -1097,7 +1121,12 @@ function presenterState(): PresenterState {
 }
 
 function captureActiveForWindowRestart(): boolean {
-  return listeningActive || audioArmed || legacyListeningActive || cloudSttIpcOwner !== null
+  return captureActiveForWindowRestartState({
+    listeningActive,
+    audioArmed,
+    legacyListeningActive,
+    cloudSttActive: cloudSttIpcOwner !== null
+  })
 }
 let lastPlainAskAt = 0 // 0 = no live follow-up window; the next plain ask always starts clean
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
@@ -2807,9 +2836,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // them as exactly that). Reset the whole set here, mirroring the meeting-start boundary.
     resetDustConversation()
     discardActiveLiveSpeakerSession()
-    listeningActive = false
+    setListeningActive(false)
     lastPlainAskAt = 0
-    audioArmed = false
+    setAudioArmed(false)
     setTrayRecording(false)
     setRecordingPowerSaveBlock(false)
     // MQA-196: the geometry half of the same root cause. If the overlay was collapsed to the mini-pill
@@ -3695,15 +3724,7 @@ function revealLegacyEnabled(): boolean {
 function legacyReveal(reason: RevealReason, options: { focus: boolean }): void {
   const w = ensureWindow()
   if (!w) return
-  if (options.focus) {
-    showForAsk(w)
-    return
-  }
-  if (reason === 'activate') {
-    w.showInactive()
-    return
-  }
-  if (!w.isVisible()) w.showInactive()
+  legacyRevealWindow(reason, options, w, (target) => showForAsk(target as BrowserWindow))
 }
 
 const revealController = createRevealController({
@@ -6761,7 +6782,7 @@ function registerIpc(): void {
       generation: ++cloudSttIpcGeneration,
       captureId
     }
-    cloudSttIpcOwner = owner
+    setCloudSttIpcOwner(owner)
     // A fresh start is an explicit replacement, not a graceful end of the prior capture.
     const result = await replaceCloudSttSessionIfCurrent({
       stop: () => stopCloudSttLive(),
@@ -6799,7 +6820,7 @@ function registerIpc(): void {
         )
     })
     if (!result.ok && cloudSttIpcOwner === owner) {
-      cloudSttIpcOwner = null
+      setCloudSttIpcOwner(null)
     }
     return result
   })
@@ -6814,7 +6835,7 @@ function registerIpc(): void {
     const force = p.force === true
     const result = await stopCloudSttLive({ graceful: !force, timeoutMs: 5_000 })
     if (cloudSttIpcOwner === owner) {
-      cloudSttIpcOwner = null
+      setCloudSttIpcOwner(null)
     }
     return result
   })
@@ -8010,7 +8031,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return
     if (!takeHotPath('arm-audio')) return
-    audioArmed = !!on
+    setAudioArmed(!!on)
   })
 
   // --- Transcript, notes & feedback persistence ---
@@ -8746,7 +8767,7 @@ function registerIpc(): void {
     assertMainWindow,
     requireAuth,
     acceptTransition: acceptLiveSpeakerTransition,
-    setListeningActive: (on) => { listeningActive = on },
+    setListeningActive,
     setTrayRecording,
     setRecordingPowerSaveBlock,
     releaseParakeet: parakeetRelease,

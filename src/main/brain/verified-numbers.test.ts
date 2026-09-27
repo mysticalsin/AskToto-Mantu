@@ -130,7 +130,7 @@ describe('combineWindowExtractions', () => {
   it('unions people/commitments/numeric_facts across windows, deduping repeats from the overlap region', () => {
     const w1 = win({
       people: [{ name: 'Sarah Chen', role: 'CFO', org: null, confidence: 'EXTRACTED' }],
-      commitments: [{ text: 'send the deck', by: 'you', quote: 'I will send the deck', confidence: 'EXTRACTED' }],
+      commitments: [{ text: 'send the deck', by: 'you', quote: 'I will send the deck', confidence: 'EXTRACTED', due_hint: '' }],
       numeric_facts: [{ kind: 'amount', value: 100, unit: 'EUR', quote: 'we agreed on 100 EUR', confidence: 'EXTRACTED' }]
     })
     // w2 restates the SAME commitment/fact (they fell inside the window overlap) plus one genuinely new person.
@@ -139,7 +139,7 @@ describe('combineWindowExtractions', () => {
         { name: 'Sarah Chen', role: 'CFO', org: null, confidence: 'EXTRACTED' },
         { name: 'James Walsh', role: 'IT', org: null, confidence: 'EXTRACTED' }
       ],
-      commitments: [{ text: 'send the deck', by: 'you', quote: 'I will send the deck', confidence: 'EXTRACTED' }],
+      commitments: [{ text: 'send the deck', by: 'you', quote: 'I will send the deck', confidence: 'EXTRACTED', due_hint: '' }],
       numeric_facts: [{ kind: 'amount', value: 100, unit: 'EUR', quote: 'we agreed on 100 EUR', confidence: 'EXTRACTED' }]
     })
     const combined = combineWindowExtractions([w1, w2])

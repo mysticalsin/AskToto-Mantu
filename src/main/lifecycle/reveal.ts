@@ -46,6 +46,23 @@ export interface RevealController {
   hasPendingReveal(): boolean
 }
 
+export function legacyRevealWindow(
+  reason: RevealReason,
+  options: Required<RevealOptions>,
+  w: RevealWindow,
+  showForAsk: (w: RevealWindow) => void
+): void {
+  if (reason === 'activate' || reason === 'second-instance') {
+    w.showInactive()
+    return
+  }
+  if (options.focus) {
+    showForAsk(w)
+    return
+  }
+  if (!w.isVisible()) w.showInactive()
+}
+
 export function createRevealController(deps: RevealControllerDeps): RevealController {
   let bootComplete = false
   let pendingReveal: { reason: RevealReason; options: Required<RevealOptions> } | null = null
