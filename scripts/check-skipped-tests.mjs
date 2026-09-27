@@ -16,7 +16,7 @@
  *
  *   - the count may not exceed the declared baseline for this platform, so a newly-skipped test fails
  *     the build instead of quietly joining the pile;
- *   - every skipped test must be covered by a REASON below, so "why is this skipped?" always has an
+ *   - every skipped test must be covered by a REASON in scripts/skip-reasons.mjs, so "why is this skipped?" always has an
  *     answer that was written down by whoever skipped it;
  *   - a skip that no longer happens fails too, so the baseline cannot rot upward-of-reality.
  *
@@ -73,7 +73,7 @@ if (skipped.length > allowed) {
 if (skipped.length < allowed) {
   problems.push(
     `${skipped.length} skipped on ${platform}, BELOW the baseline of ${allowed}. Good — but lower ` +
-      `BASELINE.${platform} to ${skipped.length} in scripts/check-skipped-tests.mjs so the slack cannot ` +
+      `BASELINE.${platform} to ${skipped.length} in scripts/skip-reasons.mjs so the slack cannot ` +
       'silently absorb a future skip.'
   )
 }
