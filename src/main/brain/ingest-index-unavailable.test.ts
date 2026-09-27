@@ -230,7 +230,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
 
     expect(r).toEqual({
       queued: 0,
-      error: "Unlock this device's keychain or local key, then retry. Nothing was changed."
+      error: "Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. Nothing was changed."
     })
     expect(r.error).toContain('keychain')
     expect(sha256(readFileSync(primary))).toBe(beforeIndex)

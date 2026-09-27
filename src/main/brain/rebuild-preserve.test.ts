@@ -119,6 +119,7 @@ describe('rebuild preserves unreadable indexes', () => {
   })
 
   afterEach(() => {
+    // Tests may leave fs spies throwing; cleanup must run through the real implementations first.
     restoreFsMocks()
     delete process.env.ASKTOTO_LOCAL_KEYSTORE
     resetSecretKeyCache()
@@ -126,7 +127,6 @@ describe('rebuild preserves unreadable indexes', () => {
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.restoreAllMocks()
-    restoreFsMocks()
   })
 
   it('preserves an undecryptable index before rebuild', () => {

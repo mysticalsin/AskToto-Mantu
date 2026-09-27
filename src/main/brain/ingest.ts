@@ -69,6 +69,7 @@ import {
   withEntityLock,
   cloneEntity,
   purgeBrain,
+  BRAIN_INDEX_ERROR_CODE,
   BrainIndexRebuildError
 } from './store'
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
@@ -2256,15 +2257,15 @@ const REBUILD_BUSY_ERROR = 'Intelligence indexing is already running. Wait for i
 
 function rebuildRefusalMessage(code: BrainIndexRebuildError['code']): string {
   switch (code) {
-    case 'brain-index-keystore-unavailable':
-      return "Unlock this device's keychain or local key, then retry. Nothing was changed."
-    case 'brain-index-preserve-failed':
+    case BRAIN_INDEX_ERROR_CODE.keystoreUnavailable:
+      return "Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. Nothing was changed."
+    case BRAIN_INDEX_ERROR_CODE.preserveFailed:
       return 'Could not save a safe copy of the unreadable index (disk full or permissions). Nothing was deleted.'
-    case 'brain-index-changed-during-rebuild':
+    case BRAIN_INDEX_ERROR_CODE.changedDuringRebuild:
       return 'The index changed while rebuilding (another device may be syncing). Nothing was deleted; retry.'
-    case 'brain-index-readable-again':
+    case BRAIN_INDEX_ERROR_CODE.readableAgain:
       return 'The index is readable again; no rebuild needed.'
-    case 'brain-index-unsupported-version':
+    case BRAIN_INDEX_ERROR_CODE.unsupportedVersion:
       return 'This index was written by a newer Métis. Update Métis.'
   }
 }

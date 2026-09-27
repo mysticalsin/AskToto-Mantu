@@ -464,12 +464,24 @@ type IndexLoad =
   | { kind: 'unavailable'; cause: IndexUnavailableCause; detail?: string } // detail: log-only (errno / decode reason)
 type ResolvedIndex = Exclude<IndexLoad, { kind: 'corrupt' }>
 
-// Stable machine-readable refusal codes; the `unavailable` field remains the typed cause.
-const INDEX_UNAVAILABLE_CODE: Record<IndexUnavailableCause, string> = {
+// Stable machine-readable refusal codes. Keep each string defined once here; both read-only and rebuild
+// errors reference these constants so the public error matrix cannot drift by spelling.
+export const BRAIN_INDEX_ERROR_CODE = {
   undecryptable: 'brain-index-undecryptable',
   io: 'brain-index-io',
-  unsupported: 'brain-index-unsupported-version',
-  'corrupt-kept': 'brain-index-corrupt-kept'
+  unsupportedVersion: 'brain-index-unsupported-version',
+  corruptKept: 'brain-index-corrupt-kept',
+  preserveFailed: 'brain-index-preserve-failed',
+  changedDuringRebuild: 'brain-index-changed-during-rebuild',
+  readableAgain: 'brain-index-readable-again',
+  keystoreUnavailable: 'brain-index-keystore-unavailable'
+} as const
+
+const INDEX_UNAVAILABLE_CODE: Record<IndexUnavailableCause, string> = {
+  undecryptable: BRAIN_INDEX_ERROR_CODE.undecryptable,
+  io: BRAIN_INDEX_ERROR_CODE.io,
+  unsupported: BRAIN_INDEX_ERROR_CODE.unsupportedVersion,
+  'corrupt-kept': BRAIN_INDEX_ERROR_CODE.corruptKept
 }
 
 export class BrainIndexUnavailableError extends Error {
@@ -481,11 +493,11 @@ export class BrainIndexUnavailableError extends Error {
 }
 
 export type BrainIndexRebuildErrorCode =
-  | 'brain-index-preserve-failed'
-  | 'brain-index-changed-during-rebuild'
-  | 'brain-index-readable-again'
-  | 'brain-index-keystore-unavailable'
-  | 'brain-index-unsupported-version'
+  | typeof BRAIN_INDEX_ERROR_CODE.preserveFailed
+  | typeof BRAIN_INDEX_ERROR_CODE.changedDuringRebuild
+  | typeof BRAIN_INDEX_ERROR_CODE.readableAgain
+  | typeof BRAIN_INDEX_ERROR_CODE.keystoreUnavailable
+  | typeof BRAIN_INDEX_ERROR_CODE.unsupportedVersion
 
 export class BrainIndexRebuildError extends Error {
   override readonly name = 'BrainIndexRebuildError'
@@ -794,12 +806,12 @@ function assertRebuildKeyContextAllowsPreserve(indexBytes: Buffer): void {
   const kind = envelopeKeyKind(indexBytes)
   if (kind === 'keychain') {
     if (process.env.ASKTOTO_LOCAL_KEYSTORE || !isKeychainAvailable()) {
-      throw new BrainIndexRebuildError('brain-index-keystore-unavailable')
+      throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
     }
     return
   }
   if (kind === 'file' && fileKeyState() === 'locked') {
-    throw new BrainIndexRebuildError('brain-index-keystore-unavailable')
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
   }
 }
 
@@ -811,12 +823,12 @@ function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
     indexBytes = readFileSync(indexPath)
   } catch (e) {
     if (errnoCode(e) === 'ENOENT') return
-    throw new BrainIndexRebuildError('brain-index-keystore-unavailable')
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
   }
   const load = classifyIndexBytes(indexBytes)
   if (load.kind !== 'unavailable') return
-  if (load.cause === 'unsupported') throw new BrainIndexRebuildError('brain-index-unsupported-version')
-  if (load.cause === 'io') throw new BrainIndexRebuildError('brain-index-keystore-unavailable')
+  if (load.cause === 'unsupported') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.unsupportedVersion)
+  if (load.cause === 'io') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
   if (load.cause !== 'undecryptable') return
   assertRebuildKeyContextAllowsPreserve(indexBytes)
 
@@ -832,20 +844,20 @@ function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
       throw new Error('preserved copy hash mismatch')
     }
   } catch {
-    throw new BrainIndexRebuildError('brain-index-preserve-failed')
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.preserveFailed)
   }
 
   let currentBytes: Buffer
   try {
     currentBytes = readFileSync(indexPath)
   } catch {
-    throw new BrainIndexRebuildError('brain-index-keystore-unavailable')
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
   }
-  if (hashBytes(currentBytes) !== classifiedHash) throw new BrainIndexRebuildError('brain-index-changed-during-rebuild')
+  if (hashBytes(currentBytes) !== classifiedHash) throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.changedDuringRebuild)
   const rechecked = classifyIndexBytes(currentBytes)
-  if (rechecked.kind === 'ready' || rechecked.kind === 'corrupt') throw new BrainIndexRebuildError('brain-index-readable-again')
+  if (rechecked.kind === 'ready' || rechecked.kind === 'corrupt') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.readableAgain)
   if (rechecked.kind === 'unavailable' && rechecked.cause === 'unsupported') {
-    throw new BrainIndexRebuildError('brain-index-unsupported-version')
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.unsupportedVersion)
   }
 }
 
