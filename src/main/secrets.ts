@@ -142,7 +142,10 @@ function persistKeyFileAtomically(p: string, key: Buffer): void {
 }
 
 function getOrCreateKey(allowKeychainMigration = false): Buffer {
-  if (_key) return _key
+  if (_key) { // TEMP DEBUG — remove before finishing
+    console.error(`[TEMP DEBUG secrets.getOrCreateKey] cached userData=${app.getPath('userData')} keyBytes=${_key.length}`) // TEMP DEBUG — remove before finishing
+    return _key // TEMP DEBUG — remove before finishing
+  } // TEMP DEBUG — remove before finishing
 
   const p = join(app.getPath('userData'), KEY_FILE)
   // `ASKTOTO_LOCAL_KEYSTORE` is an explicit opt-out of macOS Keychain / Windows DPAPI. It is used
@@ -160,6 +163,7 @@ function getOrCreateKey(allowKeychainMigration = false): Buffer {
 
   if (existsSync(p)) {
     const buf = readFileSync(p)
+    console.error(`[TEMP DEBUG secrets.getOrCreateKey] read-existing userData=${app.getPath('userData')} fileBytes=${buf.length}`) // TEMP DEBUG — remove before finishing
     if (canWrap) {
       if (buf.length === 32) {
         // Legacy raw key written before KEK support — migrate to wrapped format now. Atomic, because
@@ -224,6 +228,7 @@ function getOrCreateKey(allowKeychainMigration = false): Buffer {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
   _key = randomBytes(32)
+  console.error(`[TEMP DEBUG secrets.getOrCreateKey] generated userData=${app.getPath('userData')} keyBytes=${_key.length}`) // TEMP DEBUG — remove before finishing
   if (canWrap) {
     writeFileSync(p, safeStorage.encryptString(_key.toString('base64')), { mode: 0o600 })
   } else {

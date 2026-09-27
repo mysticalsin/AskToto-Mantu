@@ -146,6 +146,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
       if (name === 'userData') return userData
       return join(userData, name)
     })
+    console.error(`[TEMP DEBUG ingest-retry-policy.relaunch] userData=${electron.app.getPath('userData')}`) // TEMP DEBUG — remove before finishing
     const ingest = await import('./ingest')
     const consolidate = await import('./consolidate')
     const intelligence = await import('./intelligence-index')

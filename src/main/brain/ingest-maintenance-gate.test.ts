@@ -187,7 +187,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     uptime = 0
     startGate('clean')
     createStreamMock.mockClear()
-    held = []
+    held.length = 0
     writeMeeting('retry-a.md')
     writeMeeting('retry-b.md')
     writeMeeting('retry-c.md')
