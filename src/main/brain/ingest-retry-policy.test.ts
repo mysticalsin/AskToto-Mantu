@@ -95,8 +95,11 @@ describe('M2-0033 retry policy across backfill callers', () => {
     await ingest.whenIndexWritesSettle()
   }
 
-  const configureSettings = (store: StoreModule = { clearApiKey, setApiKey, setSettings } as StoreModule) => {
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
+  const configureSettings = (
+    store: StoreModule = { clearApiKey, setApiKey, setSettings } as StoreModule,
+    electronApp: typeof app = app
+  ) => {
+    ;(electronApp.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
       if (name === 'userData') return userData
       return join(userData, name)
     })
@@ -139,8 +142,12 @@ describe('M2-0033 retry policy across backfill callers', () => {
     await whenIndexWritesSettle()
     vi.resetModules()
     const electron = await import('electron')
+    ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
+      if (name === 'userData') return userData
+      return join(userData, name)
+    })
     const store = await import('../store')
-    configureSettings(store)
+    configureSettings(store, electron.app)
     const ingest = await import('./ingest')
     const consolidate = await import('./consolidate')
     const intelligence = await import('./intelligence-index')
@@ -148,10 +155,6 @@ describe('M2-0033 retry policy across backfill callers', () => {
     maintenance.resetMaintenanceGateForTests()
     maintenance.startMaintenanceGate({ uptimeMs: () => 121_000, schedule: (_run: () => void, _ms: number) => undefined, interactiveActive: () => false })
     maintenance.settlePriorExit('clean')
-    ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
-      if (name === 'userData') return userData
-      return join(userData, name)
-    })
     ingest.resumeBackfillIfPending()
     ingest.reconcileMeetingsInBackground()
     await consolidate.runConsolidationIfDue()

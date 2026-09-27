@@ -151,6 +151,8 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     expect(createStreamMock).not.toHaveBeenCalled()
     noteUserInput('mouseDown')
     await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(1), { timeout: 10_000 })
+    held.splice(0).forEach((release) => release())
+    await waitForIdle()
   })
 
   it('EX-2: with no settlePriorExit the gate stays closed after 120 s (fail-closed)', () => {

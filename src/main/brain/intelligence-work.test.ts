@@ -1,7 +1,28 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { app } from 'electron'
 import type { BackfillCompletion, BackfillRun, BackfillStartOptions } from './ingest'
 import { resetMaintenanceGateForTests, settlePriorExit, startMaintenanceGate } from '../infra/scheduler/maintenance'
 import { startIntelligenceWork } from './intelligence-work'
+
+vi.mock('electron')
+
+let userData: string
+
+beforeEach(() => {
+  userData = mkdtempSync(join(tmpdir(), 'intel-work-userdata-'))
+  ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
+    if (name === 'userData') return userData
+    return join(userData, name)
+  })
+})
+
+afterEach(() => {
+  resetMaintenanceGateForTests()
+  rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+})
 
 function gate<T>() {
   let resolve!: (value: T) => void

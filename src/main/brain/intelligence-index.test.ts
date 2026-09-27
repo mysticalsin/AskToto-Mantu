@@ -1,7 +1,8 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { app } from 'electron'
 import { DEFAULT_SETTINGS } from '@shared/ipc'
 import * as brainStore from './store'
 import { resetMaintenanceGateForTests, settlePriorExit, startMaintenanceGate } from '../infra/scheduler/maintenance'
@@ -29,6 +30,7 @@ import {
 } from './intelligence-index'
 
 const auditLogMock = vi.hoisted(() => vi.fn())
+vi.mock('electron')
 vi.mock('../logger', async (orig) => ({ ...(await orig()), auditLog: auditLogMock }))
 
 function completedRun(result: IntelligenceIndexResult) {
@@ -42,12 +44,23 @@ function completionGate() {
   return { promise, resolve, reject }
 }
 
+let userData: string
+
+beforeEach(() => {
+  userData = mkdtempSync(join(tmpdir(), 'intel-idx-userdata-'))
+  ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
+    if (name === 'userData') return userData
+    return join(userData, name)
+  })
+})
+
 afterEach(() => {
   vi.restoreAllMocks()
   resetIntelligenceIndexLockForTests()
   setIntelligenceIndexWork(null)
   resetMaintenanceGateForTests()
   auditLogMock.mockReset()
+  rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
 
 function torontoMs(year: number, month: number, day: number, hour: number, minute = 0): number {
