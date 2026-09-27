@@ -35,7 +35,7 @@
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, existsSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 const target = process.argv[2]
 const timeoutIndex = process.argv.indexOf('--timeout-seconds')
@@ -61,7 +61,9 @@ if (process.platform === 'darwin' && process.env.ASKTOTO_MAC_LAUNCH_GATE === '1'
   const auditLog = join(profile, 'logs', 'audit.log')
   // Launch the executable directly rather than via `open`: `open` detaches into launchd, which loses the
   // ASKTOTO_USERDATA environment this gate depends on to find the audit trail it is about to read.
-  const proc = spawn(join(appPath, 'Contents', 'MacOS', 'Metis'), [], {
+  // electron-builder names the executable after the bundle (productFilename), so the QA-identity
+  // variant's Metis QA.app carries "Metis QA", not "Metis" (M2-0187) — derive it rather than assume it.
+  const proc = spawn(join(appPath, 'Contents', 'MacOS', basename(appPath, '.app')), [], {
     stdio: 'ignore',
     detached: true,
     env: { ...process.env, ASKTOTO_USERDATA: profile }
