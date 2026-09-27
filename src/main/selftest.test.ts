@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,7 +10,7 @@ vi.mock('electron')
 // profile it borrowed in that state. Both collaborators are mocked so the failure can be injected exactly
 // where the finder saw it — between the setSettings() that borrows the profile and the one that gives it back.
 const settingsState: Record<string, unknown> = {}
-// Call order across the mocked collaborators below, shared by both describe blocks — lets a test assert
+// Call order across the mocked collaborators below, shared by every describe block — lets a test assert
 // that app.setPath('userData', …) happens strictly before the first settings access (M2-0004's acceptance).
 const callOrder: string[] = []
 vi.mock('./store', () => ({
@@ -33,7 +33,7 @@ vi.mock('./transcripts', () => ({
 }))
 
 import { app } from 'electron'
-import { runSelfTest } from './selftest'
+import { redirectSelfTestUserData, runSelfTest } from './selftest'
 
 /** The shared __mocks__/electron.ts app object has no setPath (nothing else in it needed one), so this
  *  adds it and wires it to getPath: app.getPath('userData') returns whatever the most recent
@@ -52,6 +52,61 @@ function mockRedirectableUserData(initial: string): void {
   )
 }
 
+// devEnv() (imported by selftest.ts) reads process.env.ASKTOTO_SELFTEST and app.isPackaged directly, so
+// every test that touches either must clean up — otherwise a later, unrelated test could inherit a
+// planted env var or a packaged flag left on the shared mock.
+afterEach(() => {
+  delete process.env.ASKTOTO_SELFTEST
+  delete (app as { isPackaged?: boolean }).isPackaged
+})
+
+describe('redirectSelfTestUserData — the boot-time isolation gate (M2-0004)', () => {
+  let priorUd: string
+
+  beforeEach(() => {
+    callOrder.length = 0
+    priorUd = mkdtempSync(join(tmpdir(), 'asktoto-selftest-prior-'))
+    mockRedirectableUserData(priorUd)
+  })
+
+  afterEach(() => {
+    rmSync(priorUd, { recursive: true, force: true })
+  })
+
+  it('does not touch userData when ASKTOTO_SELFTEST is unset', () => {
+    delete process.env.ASKTOTO_SELFTEST
+
+    redirectSelfTestUserData()
+
+    expect(callOrder).toEqual([])
+    expect(app.getPath('userData')).toBe(priorUd)
+  })
+
+  it('does not touch userData in a packaged build even with ASKTOTO_SELFTEST set', () => {
+    // The threat this guards against: a persistent `setx ASKTOTO_SELFTEST out.json` plus a relaunch of a
+    // shipped install must never redirect (and therefore never run self-test against) a real profile.
+    process.env.ASKTOTO_SELFTEST = '/tmp/planted-selftest-out.json'
+    ;(app as { isPackaged?: boolean }).isPackaged = true
+
+    redirectSelfTestUserData()
+
+    expect(callOrder).toEqual([])
+    expect(app.getPath('userData')).toBe(priorUd)
+  })
+
+  it('redirects to a newly created directory, distinct from the prior userData, on an unpackaged run', () => {
+    process.env.ASKTOTO_SELFTEST = '/tmp/selftest-out.json'
+
+    redirectSelfTestUserData()
+
+    const redirected = app.getPath('userData')
+    expect(callOrder).toEqual(['setPath'])
+    expect(redirected).not.toBe(priorUd)
+    expect(existsSync(redirected)).toBe(true)
+    rmSync(redirected, { recursive: true, force: true })
+  })
+})
+
 describe('runSelfTest — borrowed profile state', () => {
   let ud: string
 
@@ -60,6 +115,10 @@ describe('runSelfTest — borrowed profile state', () => {
     callOrder.length = 0
     ud = mkdtempSync(join(tmpdir(), 'asktoto-selftest-test-'))
     mockRedirectableUserData(ud)
+    // Mirrors the real boot order (M2-0004): redirectSelfTestUserData() runs before runSelfTest() ever
+    // gets called, so its refuse-to-run guard sees the throwaway directory it expects.
+    process.env.ASKTOTO_SELFTEST = join(ud, 'out.json')
+    redirectSelfTestUserData()
   })
 
   afterEach(() => {
@@ -99,8 +158,21 @@ describe('runSelfTest — dedicated throwaway userData (M2-0004)', () => {
     rmSync(outDir, { recursive: true, force: true })
   })
 
+  it('refuses to run without redirectSelfTestUserData having redirected userData first, and touches nothing', async () => {
+    // ASKTOTO_SELFTEST is deliberately left unset — redirectSelfTestUserData() is never called, so
+    // userData still resolves to the stand-in live profile seeded above.
+    await expect(runSelfTest(join(outDir, 'out.json'))).rejects.toThrow(/throwaway/)
+
+    expect(callOrder).toEqual([]) // no getSettings/setSettings call ever happened
+    expect(readFileSync(join(realProfileDir, 'settings.json'), 'utf8')).toBe(realSettings)
+    expect(readFileSync(join(realProfileDir, 'managed-config.json'), 'utf8')).toBe(realManaged)
+  })
+
   it("never reads or writes the real profile's settings.json / managed-config.json, even when a suite throws mid-run", async () => {
     // saveMeeting is mocked to throw (module mock above) — the mid-run failure the ticket asks for.
+    process.env.ASKTOTO_SELFTEST = join(outDir, 'out.json')
+    redirectSelfTestUserData()
+
     await runSelfTest(join(outDir, 'out.json'))
 
     expect(readFileSync(join(realProfileDir, 'settings.json'), 'utf8')).toBe(realSettings)
@@ -108,9 +180,15 @@ describe('runSelfTest — dedicated throwaway userData (M2-0004)', () => {
   })
 
   it('redirects userData to a fresh directory strictly before the first settings read', async () => {
+    process.env.ASKTOTO_SELFTEST = join(outDir, 'out.json')
+
+    redirectSelfTestUserData()
+    const redirected = app.getPath('userData')
+    expect(redirected).not.toBe(realProfileDir)
+    expect(existsSync(redirected)).toBe(true)
+
     await runSelfTest(join(outDir, 'out.json'))
 
     expect(callOrder[0]).toBe('setPath')
-    expect(callOrder.indexOf('setPath')).toBeLessThan(callOrder.indexOf('getSettings'))
   })
 })
