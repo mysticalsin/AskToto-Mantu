@@ -98,6 +98,15 @@ export interface VaultKeyRow {
   revoked_at: number | null
 }
 
+/** The one audit row a `putVaultKeys` call records — exactly one per call, covering every row it
+ *  writes, never one per row. `action` is always `'vault-write'`; there is no ask and no request/route. */
+export interface VaultWriteAudit {
+  id: string
+  ts: number
+  actor: string
+  detail: string
+}
+
 export interface AskRow {
   id: string
   device_id: string
@@ -361,7 +370,12 @@ export interface OperatorStore {
   listVaultRows(): Promise<VaultKeyRow[]>
   getVaultKey(id: string): Promise<VaultKeyRow | null>
   putVaultKey(row: VaultKeyRow): Promise<void>
-  supersedeActiveVaultKeys(provider: string, exceptId: string, now: number): Promise<void>
+  /** Persists every row, supersedes its own provider's other active rows, and records exactly one
+   *  'vault-write' audit row and one 'vault' event for the whole call — all as a single
+   *  transaction. Cloudflare provisioning writes a gateway row and an account row together; a
+   *  partial failure must never leave one committed without the other, or either row without its
+   *  audit/event, or the audit/event without its rows. */
+  putVaultKeys(rows: VaultKeyRow[], audit: VaultWriteAudit, event: EventRow): Promise<void>
   clearVaultSecret(id: string): Promise<void>
   putIssuedLicense(row: IssuedLicenseRow): Promise<void>
   getIssuedLicense(jti: string): Promise<IssuedLicenseRow | null>
@@ -690,11 +704,17 @@ export function memoryStore(): OperatorStore {
     async putVaultKey(row) {
       vault.set(row.id, row)
     },
-    async supersedeActiveVaultKeys(provider, exceptId, now) {
-      for (const row of vault.values()) {
-        if (row.provider !== provider || row.id === exceptId || row.status !== 'active') continue
-        vault.set(row.id, { ...row, status: 'superseded', cipher: '', iv: '', rotated_at: now })
+    async putVaultKeys(rows, audit, event) {
+      if (rows.length === 0) return
+      for (const row of rows) {
+        vault.set(row.id, row)
+        for (const other of vault.values()) {
+          if (other.provider !== row.provider || other.id === row.id || other.status !== 'active') continue
+          vault.set(other.id, { ...other, status: 'superseded', cipher: '', iv: '', rotated_at: row.created_at })
+        }
       }
+      audits.push({ ts: audit.ts, actor: audit.actor, action: 'vault-write', ask_id: null, detail: audit.detail, request_id: null, route: null })
+      events.set(event.id, event)
     },
     async clearVaultSecret(id) {
       const row = vault.get(id)
