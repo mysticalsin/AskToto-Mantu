@@ -14,6 +14,17 @@ export const ListeningStatePayloadSchema = z.object({
 })
 export type ListeningStatePayload = z.infer<typeof ListeningStatePayloadSchema>
 
+export type PreservedBrainIndexCopy = {
+  id: string
+  createdAt: number
+  size: number
+  restorable: boolean
+}
+
+export type PreservedBrainIndexListResult = {
+  copies: PreservedBrainIndexCopy[]
+}
+
 export const HistoryTraceSchema = z.object({ requestId: z.string().uuid(), sentAt: z.number().finite().positive() })
 export type HistoryTrace = z.infer<typeof HistoryTraceSchema>
 export const HistorySettledSchema = z.object({
@@ -98,6 +109,9 @@ export const IPC = {
   restoreEmbeddedCloudflareKey: 'settings:restoreEmbeddedCloudflareKey',
   brainOpenDashboard: 'brain:openDashboard',
   brainRebuildAll: 'brain:rebuildAll',
+  brainPreservedIndexesList: 'brain:preservedIndexes:list',
+  brainPreservedIndexRestore: 'brain:preservedIndex:restore',
+  brainPreservedIndexDelete: 'brain:preservedIndex:delete',
   brainClearJournalCorruption: 'brain:clearJournalCorruption',
   authStatus: 'auth:status',
   authSignIn: 'auth:signIn',

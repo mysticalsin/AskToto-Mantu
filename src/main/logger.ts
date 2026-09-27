@@ -191,6 +191,8 @@ export type AuditEvent =
   // counts only, never a path, decode reason, or filename.
   | 'brain.index.unavailable'
   | 'brain.index.quarantined'
+  | 'brain.index.preserved_restore'
+  | 'brain.index.preserved_delete'
   // Task MI-5: the markdown mirror (main/brain/publish.ts).
   | 'transcript.confidential_set'
   | 'brain.publish.consent'

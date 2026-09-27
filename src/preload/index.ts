@@ -70,7 +70,8 @@ import {
   type ProfileRecoveryResult,
   type ScreenCaptureCheckResult,
   type MetisCommandState,
-  type MetisCommandConfirmation
+  type MetisCommandConfirmation,
+  type PreservedBrainIndexListResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
@@ -359,6 +360,12 @@ const api = {
   // Delete every saved meeting + the knowledge graph. Main pops its own (extra-emphatic) confirm dialog.
   recallDeleteAll: (): Promise<{ ok: boolean; deleted: number; failed?: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDeleteAll),
+  preservedBrainIndexesList: (): Promise<PreservedBrainIndexListResult> =>
+    ipcRenderer.invoke(IPC.brainPreservedIndexesList),
+  preservedBrainIndexRestore: (id: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainPreservedIndexRestore, { id }),
+  preservedBrainIndexDelete: (id: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainPreservedIndexDelete, { id }),
   // 90-Second Debrief: append the off-record gut-read to a saved meeting (basename only).
   debriefSave: (file: string, text: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.debriefSave, { file, text }),

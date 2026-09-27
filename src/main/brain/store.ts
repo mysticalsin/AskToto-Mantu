@@ -15,7 +15,7 @@ import {
 } from 'node:fs'
 import { join, basename, dirname } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
-import type { Settings } from '@shared/ipc'
+import type { PreservedBrainIndexCopy, Settings } from '@shared/ipc'
 import { invalidateMatchKeyDir, resetMatchKeyCacheForTests } from './match-key-cache'
 import {
   BrainIndexSchema,
@@ -800,6 +800,121 @@ function fsyncDirectoryIfSupported(p: string): void {
 
 function preservedIndexDir(settings: Settings): string {
   return join(resolveMeetingsFolder(settings), '.brain-preserved')
+}
+
+function preservedIndexPath(settings: Settings, id: string): string {
+  if (id !== basename(id) || !id.endsWith('.json') || !id.startsWith('index.')) {
+    throw new Error('invalid preserved index id')
+  }
+  return join(preservedIndexDir(settings), id)
+}
+
+function isPreservedIndexName(name: string): boolean {
+  return name.startsWith('index.') && name.endsWith('.json')
+}
+
+function preservedIndexRestorable(path: string): boolean {
+  try {
+    return classifyIndexBytes(readFileSync(path)).kind === 'ready'
+  } catch {
+    return false
+  }
+}
+
+export function listPreservedBrainIndexes(settings: Settings): PreservedBrainIndexCopy[] {
+  const dir = preservedIndexDir(settings)
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .filter(isPreservedIndexName)
+    .map((id): PreservedBrainIndexCopy | null => {
+      try {
+        const st = statSync(join(dir, id))
+        if (!st.isFile()) return null
+        return { id, createdAt: st.mtimeMs, size: st.size, restorable: preservedIndexRestorable(join(dir, id)) }
+      } catch {
+        return null
+      }
+    })
+    .filter((copy): copy is PreservedBrainIndexCopy => copy !== null)
+    .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
+}
+
+export function currentBrainIndexIsReadable(settings: Settings): boolean {
+  try {
+    return classifyIndexBytes(readFileSync(join(brainDir(settings), INDEX_REL))).kind === 'ready'
+  } catch {
+    return false
+  }
+}
+
+function preserveCurrentIndexBeforeRestore(settings: Settings): void {
+  const current = join(brainDir(settings), INDEX_REL)
+  if (!existsSync(current)) return
+  const preserveDir = preservedIndexDir(settings)
+  const preservePath = join(preserveDir, `index.before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
+  mkdirSync(preserveDir, { recursive: true })
+  copyFileSync(current, preservePath, constants.COPYFILE_EXCL)
+  fsyncFilePath(preservePath)
+  fsyncDirectoryIfSupported(preserveDir)
+}
+
+export function restorePreservedBrainIndex(
+  settings: Settings,
+  id: string,
+  opts: { allowReplaceReadable: boolean }
+): { ok: boolean; error?: 'not-found' | 'not-restorable' | 'current-readable' | 'failed' } {
+  let source: string
+  try {
+    source = preservedIndexPath(settings, id)
+  } catch {
+    return { ok: false, error: 'not-found' }
+  }
+  let sourceBytes: Buffer
+  try {
+    sourceBytes = readFileSync(source)
+  } catch {
+    return { ok: false, error: 'not-found' }
+  }
+  if (classifyIndexBytes(sourceBytes).kind !== 'ready') return { ok: false, error: 'not-restorable' }
+  if (!opts.allowReplaceReadable && currentBrainIndexIsReadable(settings)) return { ok: false, error: 'current-readable' }
+
+  const root = brainDir(settings)
+  const target = join(root, INDEX_REL)
+  const tmp = join(root, `index.restore-${randomBytes(6).toString('hex')}.tmp`)
+  try {
+    mkdirSync(root, { recursive: true })
+    preserveCurrentIndexBeforeRestore(settings)
+    copyFileSync(source, tmp, constants.COPYFILE_EXCL)
+    fsyncFilePath(tmp)
+    renameSync(tmp, target)
+    fsyncDirectoryIfSupported(root)
+    indexCache.delete(target)
+    _writeGen += 1
+    return { ok: true }
+  } catch {
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* best-effort cleanup */
+    }
+    return { ok: false, error: 'failed' }
+  }
+}
+
+export function deletePreservedBrainIndex(settings: Settings, id: string): { ok: boolean; error?: 'not-found' | 'failed' } {
+  let path: string
+  try {
+    path = preservedIndexPath(settings, id)
+  } catch {
+    return { ok: false, error: 'not-found' }
+  }
+  if (!existsSync(path)) return { ok: false, error: 'not-found' }
+  try {
+    rmSync(path, { force: true })
+    return existsSync(path) ? { ok: false, error: 'failed' } : { ok: true }
+  } catch {
+    return { ok: false, error: 'failed' }
+  }
 }
 
 function assertRebuildKeyContextAllowsPreserve(indexBytes: Buffer): void {

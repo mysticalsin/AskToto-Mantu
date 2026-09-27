@@ -576,6 +576,10 @@ import {
   listMeetingExtractions as listBrainMeetingExtractions,
   readMeetingExtraction as readBrainMeetingExtraction,
   purgeBrain,
+  listPreservedBrainIndexes,
+  currentBrainIndexIsReadable,
+  restorePreservedBrainIndex,
+  deletePreservedBrainIndex,
   setDealOutcome,
   slugify as brainSlugify,
   brainDir as brainStoreDir
@@ -8114,6 +8118,56 @@ function registerIpc(): void {
     }
     auditLog('brain.backfill.start', { queued: r.queued, rebuild: true })
     return r
+  })
+  ipcMain.handle(IPC.brainPreservedIndexesList, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { copies: [] }
+    return { copies: listPreservedBrainIndexes(getSettings()) }
+  })
+  ipcMain.handle(IPC.brainPreservedIndexRestore, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const id = String((raw as { id?: unknown } | null)?.id ?? '')
+    if (!id) return { ok: false, error: 'Missing preserved copy.' }
+    let allowReplaceReadable = false
+    if (currentBrainIndexIsReadable(getSettings())) {
+      const dialogOpts = {
+        type: 'warning' as const,
+        title: 'Restore preserved brain index',
+        message: 'Replace the current Mantu Intelligence index?',
+        detail:
+          'Métis will verify the preserved copy can be decrypted, keep the current index as a preserved copy, then restore the selected index.',
+        buttons: ['Restore', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1
+      }
+      const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+      if (response !== 0) return { ok: false, error: 'cancelled' }
+      allowReplaceReadable = true
+    }
+    const r = restorePreservedBrainIndex(getSettings(), id, { allowReplaceReadable })
+    auditLog('brain.index.preserved_restore', { ok: r.ok, error: r.error })
+    return r.ok ? { ok: true } : { ok: false, error: r.error || 'Restore failed.' }
+  })
+  ipcMain.handle(IPC.brainPreservedIndexDelete, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const id = String((raw as { id?: unknown } | null)?.id ?? '')
+    if (!id) return { ok: false, error: 'Missing preserved copy.' }
+    const dialogOpts = {
+      type: 'warning' as const,
+      title: 'Delete preserved brain index',
+      message: 'Delete this preserved Mantu Intelligence index copy?',
+      detail: 'This removes only the selected preserved copy. Saved meetings and the current index are not changed.',
+      buttons: ['Delete copy', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1
+    }
+    const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+    if (response !== 0) return { ok: false, error: 'cancelled' }
+    const r = deletePreservedBrainIndex(getSettings(), id)
+    auditLog('brain.index.preserved_delete', { ok: r.ok, error: r.error })
+    return r.ok ? { ok: true } : { ok: false, error: r.error || 'Delete failed.' }
   })
   // MI-2.5 review round 3: user-invoked recovery from a durable correction-journal corruption lock —
   // clears the sentinel so corrections resume (the quarantined corrections.corrupt-*.json copy is left
