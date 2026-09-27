@@ -32,7 +32,6 @@ export interface Env {
   CF_OAUTH_CLIENT_SECRET?: string
   CF_OAUTH_AUTHORIZE_URL?: string
   CF_OAUTH_TOKEN_URL?: string
-  CF_OAUTH_SCOPES?: string
   CF_ACCOUNT_ID?: string
 }
 

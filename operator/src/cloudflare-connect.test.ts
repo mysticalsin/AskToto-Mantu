@@ -110,6 +110,22 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     expect(body).not.toContain(TOKEN)
   })
 
+  it('requests only the scopes a named Cloudflare call site needs', async () => {
+    // The call-site-to-scope mapping is documented once, on CF_OAUTH_SCOPES in
+    // cloudflare-connect.ts. EXPECTED_SCOPES is a separate, hand-written list — not derived
+    // from that constant — so a scope added there without a call site still fails here.
+    const EXPECTED_SCOPES = ['account:read', 'ai-gateway:read', 'd1:read', 'workers-ai:run', 'workers:read']
+    const res = await handleRequest(
+      new Request(`https://operator.test${CF_CONNECT_PATH}`),
+      env(),
+      { access: tony },
+      { store: memoryStore(), now: NOW }
+    )
+    const loc = res.headers.get('location') || ''
+    const scope = new URL(loc).searchParams.get('scope') || ''
+    expect(scope.split(' ').filter(Boolean).sort()).toEqual(EXPECTED_SCOPES)
+  })
+
   it('fails loud when the OAuth client is missing', async () => {
     const res = await handleRequest(
       new Request(`https://operator.test${CF_CONNECT_PATH}`),
