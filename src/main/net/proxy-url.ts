@@ -7,9 +7,8 @@
 export type ProxyEnv = Record<string, string | undefined>
 
 /**
- * The env vars that select the env route, in detectProxyFromEnv's precedence order. EnvHttpProxyAgent
- * itself reads only the HTTP(S) pairs per request scheme, lowercase first; ALL_PROXY/all_proxy are
- * included for boot routing only.
+ * Every env var that puts main-process fetch on the env route, in detectProxyFromEnv's precedence order.
+ * EnvHttpProxyAgent itself reads only the HTTP(S) pairs, per request scheme and lowercase first.
  */
 export const PROXY_ENV_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'] as const
 
