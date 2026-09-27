@@ -1,0 +1,167 @@
+name: Promote candidate
+
+# Publishes the exact bytes of one successful qa-candidate run as an owner-channel prerelease on the
+# release feed: a prerelease, never Latest, with no latest*.yml or blockmaps, plus SHA256SUMS.txt
+# and provenance.json. It never builds. It downloads the candidate's artifacts, proves every byte against
+# the candidate's provenance and the promotion evidence, and checks GitHub's digest of every uploaded
+# asset before publishing. The release and its tag are created in the feed repository, which runs no
+# workflows; release.yml runs only on tag pushes to this repository, so promotion cannot start it.
+run-name: Promote candidate run ${{ inputs.candidate_run_id }} (publish ${{ inputs.publish }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Run ID of a successful qa-candidate run on main
+        required: true
+        type: string
+      evidence:
+        description: Evidence records (JSON Lines) bound to that run's bytes; pass them with -F evidence=@file
+        required: true
+        type: string
+      publish:
+        description: Publish the prerelease. When false (a dry run) the draft is verified and then deleted
+        required: true
+        type: boolean
+        default: false
+      confirm_version:
+        description: Required to publish; the candidate's version, exactly
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: promote-candidate
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The public release feed: electron-builder.yml publish.owner/repo and src/main/updater.ts.
+  FEED: mysticalsin/Metis-Releases
+
+jobs:
+  promote:
+    name: Promote the tested bytes
+    if: github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.3
+      - name: Require a fully successful qa-candidate run on main
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          if ! [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::candidate_run_id must be a workflow run ID."; exit 1
+          fi
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")
+          jq -e '.path == ".github/workflows/qa-candidate.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .status == "completed" and .conclusion == "success"' <<<"$run" > /dev/null \
+            || { echo "::error::Run $RUN_ID is not a completed, successful qa-candidate dispatch on main."; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
+            | jq -e '.total_count > 0 and all(.jobs[]; .conclusion == "success")' > /dev/null \
+            || { echo "::error::Every job of run $RUN_ID must have succeeded; a skipped gate is not a pass."; exit 1; }
+          echo "commit=$(jq -r .head_sha <<<"$run")" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: candidate-provenance
+          path: provenance
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: candidate-mac
+          path: downloads
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: candidate-win
+          path: downloads
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - name: Check the evidence and stage exactly the tested bytes
+        id: stage
+        env:
+          EVIDENCE: ${{ inputs.evidence }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run_id }}
+          CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
+        run: |
+          printf '%s' "$EVIDENCE" > "$RUNNER_TEMP/evidence.jsonl"
+          node scripts/qa/provenance.mjs prepare-release provenance/provenance.json "$RUNNER_TEMP/evidence.jsonl" downloads "$RUNNER_TEMP/promotion" \
+            --candidate-run "$CANDIDATE_RUN" --candidate-commit "$CANDIDATE_COMMIT"
+          echo "version=$(jq -r .version provenance/provenance.json)" >> "$GITHUB_OUTPUT"
+      - name: Choose the release tag
+        id: tag
+        env:
+          PUBLISH: ${{ inputs.publish }}
+          CONFIRM: ${{ inputs.confirm_version }}
+          VERSION: ${{ steps.stage.outputs.version }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run_id }}
+        run: |
+          if [ "$PUBLISH" = true ]; then
+            [ "$CONFIRM" = "$VERSION" ] || { echo "::error::To publish, set confirm_version to exactly $VERSION."; exit 1; }
+            echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v$VERSION-dryrun.$CANDIDATE_RUN" >> "$GITHUB_OUTPUT"
+          fi
+      # GITHUB_TOKEN cannot write to another repository; GH_TOKEN is the feed token release.yml also uses.
+      - name: Upload to a draft on the feed and verify every uploaded byte
+        id: draft
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.stage.outputs.version }}
+        run: |
+          if gh api "repos/$FEED/releases?per_page=100" --paginate --jq '.[].tag_name' | grep -Fxq "$TAG"; then
+            echo "::error::$FEED already has a release named $TAG. Versions are never reused."; exit 1
+          fi
+          if lookup=$(gh api "repos/$FEED/git/ref/tags/$TAG" 2>&1); then
+            echo "::error::$FEED already has the tag $TAG. Versions are never reused."; exit 1
+          elif ! grep -q 'HTTP 404' <<<"$lookup"; then
+            echo "::error::Could not confirm that $TAG is unused on $FEED."; exit 1
+          fi
+          gh release create "$TAG" --repo "$FEED" --draft --prerelease --latest=false --target main \
+            --title "Métis $VERSION (owner channel)" --notes-file "$RUNNER_TEMP/promotion/notes.md" \
+            "$RUNNER_TEMP"/promotion/upload/*
+          release_id=$(gh release view "$TAG" --repo "$FEED" --json databaseId --jq .databaseId)
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+          gh api "repos/$FEED/releases/$release_id/assets?per_page=100" > "$RUNNER_TEMP/uploaded.json"
+          node scripts/qa/provenance.mjs check-release "$RUNNER_TEMP/promotion/manifest.json" "$RUNNER_TEMP/uploaded.json"
+      - name: Publish the prerelease (never Latest)
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh api -X PATCH "repos/$FEED/releases/$RELEASE_ID" -F draft=false -F prerelease=true -f make_latest=false > /dev/null
+          gh api "repos/$FEED/releases/$RELEASE_ID" | jq -e --arg tag "$TAG" '.draft == false and .prerelease == true and .tag_name == $tag' > /dev/null \
+            || { echo "::error::$TAG did not become a published prerelease."; exit 1; }
+          latest=$(gh api "repos/$FEED/releases/latest" --jq .tag_name 2>/dev/null || true)
+          [ "$latest" != "$TAG" ] || { echo "::error::$TAG became Latest."; exit 1; }
+          echo "Published $TAG: https://github.com/$FEED/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
+      - name: Delete the draft (dry run or failed promotion)
+        if: always() && steps.draft.outputs.release_id != '' && (failure() || !inputs.publish)
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          [ "$(gh api "repos/$FEED/releases/$RELEASE_ID" --jq .draft)" = true ] \
+            || { echo "::error::Release $RELEASE_ID is not a draft; refusing to delete it."; exit 1; }
+          gh api -X DELETE "repos/$FEED/releases/$RELEASE_ID"
+          echo "Draft $TAG was uploaded, verified against GitHub's digests and deleted." >> "$GITHUB_STEP_SUMMARY"

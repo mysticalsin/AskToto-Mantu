@@ -19,6 +19,16 @@ export function parseAskPathTag(raw: unknown): AskPathTag | null {
   return isAskPathTag(raw) ? raw : null
 }
 
+/** Counts are exact non-negative safe integers or explicitly unknown. Never turn
+ * a malformed provider value into zero, round it, or persist NaN/Infinity to D1.
+ * The `=== 0` branch is deliberate: it normalizes a provider's `-0` to `0` before
+ * it reaches D1 or a JSON response.
+ */
+export function proxyTokenCount(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 0) return null
+  return raw === 0 ? 0 : raw
+}
+
 export async function persistProxyAsk(
   store: OperatorStore,
   input: {
@@ -50,8 +60,8 @@ export async function persistProxyAsk(
     model: input.model,
     ttft_ms: null,
     total_ms: null,
-    input_tokens: typeof input.inputTokens === 'number' ? input.inputTokens : null,
-    output_tokens: typeof input.outputTokens === 'number' ? input.outputTokens : null,
+    input_tokens: proxyTokenCount(input.inputTokens),
+    output_tokens: proxyTokenCount(input.outputTokens),
     cache_read: null,
     cache_write: null,
     cache_uncached: null,
