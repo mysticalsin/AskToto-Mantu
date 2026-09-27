@@ -50,6 +50,75 @@ function asArray(v: unknown): unknown[] {
   return Array.isArray(v) ? v : []
 }
 
+type SpaceEntry = { sId: string; name: string; kind: string }
+
+function parseSpace(raw: unknown): SpaceEntry | null {
+  const s = asRecord(raw)
+  if (!s) return null
+  const sId = typeof s.sId === 'string' ? s.sId : typeof s.id === 'string' ? s.id : ''
+  if (!sId) return null
+  const name = typeof s.name === 'string' ? s.name : sId
+  const kind = typeof s.kind === 'string' ? s.kind : 'space'
+  return { sId, name, kind }
+}
+
+function parseDataSources(dsJson: unknown, spaceId: string): DustProject[] {
+  const sources = asArray(asRecord(dsJson)?.data_sources ?? asRecord(dsJson)?.dataSources)
+  const out: DustProject[] = []
+  for (const raw of sources) {
+    const d = asRecord(raw)
+    if (!d) continue
+    const dsId =
+      typeof d.sId === 'string'
+        ? d.sId
+        : typeof d.id === 'string'
+          ? d.id
+          : typeof d.name === 'string'
+            ? d.name
+            : ''
+    if (!dsId) continue
+    const dsName = typeof d.name === 'string' ? d.name : dsId
+    out.push({
+      sId: dsId,
+      name: dsName,
+      kind: typeof d.connectorProvider === 'string' ? d.connectorProvider : 'data_source',
+      source: 'data_source',
+      spaceId
+    })
+  }
+  return out
+}
+
+/**
+ * Fetch one space's data sources. The API key itself is validated once, up front, by the `/spaces` call
+ * in fetchDustProjects — a failure fetching one space's own data sources (a transient error, a non-ok
+ * status, or any other rejection) reports that space as having no data sources rather than failing the
+ * whole listing, so the rest of the workspace's spaces stay usable.
+ */
+async function fetchSpaceDataSources(
+  fetchImpl: FetchLike,
+  base: string,
+  workspaceId: string,
+  headers: Record<string, string>,
+  spaceId: string
+): Promise<DustProject[]> {
+  try {
+    const dsRes = await fetchImpl(
+      `${base}/api/v1/w/${encodeURIComponent(workspaceId)}/spaces/${encodeURIComponent(spaceId)}/data_sources`,
+      { headers }
+    )
+    if (!dsRes.ok) return []
+    const dsJson = await dsRes.json()
+    return parseDataSources(dsJson, spaceId)
+  } catch {
+    return []
+  }
+}
+
+function spaceProject(space: SpaceEntry): DustProject {
+  return { sId: space.sId, name: space.name, kind: space.kind, source: 'space' }
+}
+
 export async function fetchDustProjects(opts: {
   apiKey: string
   workspaceId: string
@@ -77,51 +146,18 @@ export async function fetchDustProjects(opts: {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
 
-  const spaces = asArray(asRecord(spacesJson)?.spaces ?? asRecord(spacesJson)?.data)
-  const projects: DustProject[] = []
+  const spaceEntries = asArray(asRecord(spacesJson)?.spaces ?? asRecord(spacesJson)?.data)
+    .map(parseSpace)
+    .filter((s): s is SpaceEntry => s !== null)
 
-  for (const raw of spaces) {
-    const s = asRecord(raw)
-    if (!s) continue
-    const sId = typeof s.sId === 'string' ? s.sId : typeof s.id === 'string' ? s.id : ''
-    const name = typeof s.name === 'string' ? s.name : sId
-    if (!sId) continue
-    const kind = typeof s.kind === 'string' ? s.kind : 'space'
-    projects.push({ sId, name, kind, source: 'space' })
+  // Lookups run concurrently; results stay index-aligned with spaceEntries so they can be zipped back
+  // together below. Neither Dust endpoint here paginates (no cursor/page/limit/has_more field on GET
+  // .../spaces or GET .../spaces/{spaceId}/data_sources), so there is no further page to fetch.
+  const dsResults = await Promise.all(
+    spaceEntries.map((space) => fetchSpaceDataSources(fetchImpl, base, workspaceId, headers, space.sId))
+  )
 
-    try {
-      const dsRes = await fetchImpl(
-        `${base}/api/v1/w/${encodeURIComponent(workspaceId)}/spaces/${encodeURIComponent(sId)}/data_sources`,
-        { headers }
-      )
-      if (!dsRes.ok) continue
-      const dsJson = await dsRes.json()
-      const sources = asArray(asRecord(dsJson)?.data_sources ?? asRecord(dsJson)?.dataSources)
-      for (const dRaw of sources) {
-        const d = asRecord(dRaw)
-        if (!d) continue
-        const dsId =
-          typeof d.sId === 'string'
-            ? d.sId
-            : typeof d.id === 'string'
-              ? d.id
-              : typeof d.name === 'string'
-                ? d.name
-                : ''
-        const dsName = typeof d.name === 'string' ? d.name : dsId
-        if (!dsId) continue
-        projects.push({
-          sId: dsId,
-          name: dsName,
-          kind: typeof d.connectorProvider === 'string' ? d.connectorProvider : 'data_source',
-          source: 'data_source',
-          spaceId: sId
-        })
-      }
-    } catch {
-      /* a single space's data sources failing must not drop the space list */
-    }
-  }
+  const projects = spaceEntries.flatMap((space, i) => [spaceProject(space), ...dsResults[i]])
 
   return { ok: true, projects }
 }

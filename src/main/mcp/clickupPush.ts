@@ -3,12 +3,12 @@
  *
  * Main owns the tool name, the list, and the wire args. Review may send a recap title/description;
  * this module never calls attach_task_file and never trusts a renderer-supplied list or workspace.
+ * No call in this module sends `workspace_id` (D-18): ClickUp's hosted MCP tool schemas resolve the
+ * connected account's own workspace whenever the parameter is omitted.
  */
 
 import type { McpConnection } from '@shared/ipc'
 import type { McpPushResult } from './mcpClient'
-
-export const CLICKUP_WORKSPACE_ID = '90141511178'
 
 export type ClickupList = { id: string; name: string }
 
@@ -32,8 +32,7 @@ export function clickupCreateTaskArgs(input: {
 }): Record<string, string> {
   const args: Record<string, string> = {
     name: input.name.trim().slice(0, 300) || 'Untitled meeting',
-    list_id: input.listId.trim(),
-    workspace_id: CLICKUP_WORKSPACE_ID
+    list_id: input.listId.trim()
   }
   const body = (input.description || '').trim()
   if (body) args.markdown_description = body.slice(0, 50_000)
@@ -150,7 +149,7 @@ export async function discoverClickupList(input: {
   if (saved?.id) {
     const getList = pickDiscoveryTool(input.tools, 'get_list')
     if (getList) {
-      const check = await input.callTool(getList, { list_id: saved.id, workspace_id: CLICKUP_WORKSPACE_ID })
+      const check = await input.callTool(getList, { list_id: saved.id })
       if (check.ok) return { ok: true, list: saved }
       // Deleted list — fall through to last-updated rather than pushing into a ghost id.
     } else {
@@ -163,9 +162,7 @@ export async function discoverClickupList(input: {
     return saved?.id ? { ok: true, list: saved } : { ok: false, error: NO_LIST }
   }
   const found = await input.callTool(filter, {
-    workspace_id: CLICKUP_WORKSPACE_ID,
     order_by: 'updated',
-    reverse: true,
     page: 0,
     include_closed: true
   })
