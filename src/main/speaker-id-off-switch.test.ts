@@ -1,8 +1,14 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import vm from 'node:vm'
 import ts from 'typescript'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { app } from 'electron'
+import { getSettings } from './store'
+import { createSpeakerId, type SpeakerId, type SpeakerIdDeps, type SpeakerLabel } from './speaker-id'
+
+vi.mock('electron')
 
 const source = ts.createSourceFile(
   'index.ts',
@@ -277,5 +283,62 @@ describe('Speaker Intelligence hard off-switch wiring', () => {
   it('the settings handlers use the policy-aware persistence and managed-read boundaries', () => {
     expect(ipcHandlerCalls('settingsSet', 'setSettingsWithSpeakerPolicy')).toBe(true)
     expect(ipcHandlerCalls('settingsGet', 'publicSettingsWithSpeakerPolicy')).toBe(true)
+  })
+})
+
+describe('Save voiceprints opt-in wiring', () => {
+  const OPERATOR_VOICE = 4
+  let userData: string
+  const voiceprints = (): string => join(userData, 'voiceprints.json')
+  const windowFor = (axis: number): Float32Array => Float32Array.from([axis])
+  const voice = (axis: number): Float32Array => {
+    const embedding = new Float32Array(8)
+    embedding[axis] = 1
+    embedding[7] = 0.1
+    return embedding
+  }
+
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'metis-voiceprints-'))
+    vi.mocked(app.getPath).mockReturnValue(userData)
+  })
+  afterEach(() => rmSync(userData, { recursive: true, force: true }))
+
+  /** index.ts's own lazy singleton over the real settings and voiceprint stores; only the native embedding is
+   *  replaced. Each call models a new app process. */
+  function startApp(): SpeakerId {
+    const getSpeakerId = actualFunction('getSpeakerId', {
+      speakerIdInstance: null,
+      getSettings,
+      createSpeakerId: (deps: SpeakerIdDeps = {}) =>
+        createSpeakerId({ ...deps, createExtractor: () => ({ compute: async (samples: Float32Array) => voice(samples[0]) }) })
+    })
+    return getSpeakerId()
+  }
+
+  /** One live meeting as index.ts drives it: mic and THEM windows, the post-save snapshot, then the Teams-VTT
+   *  backfill naming "Speaker 1". */
+  async function holdMeeting(
+    id: SpeakerId,
+    key: string,
+    theirVoice: number,
+    theirName: string
+  ): Promise<{ label: SpeakerLabel | null; enrolled: number }> {
+    expect(id.createSession(key)).toBe(true)
+    let label: SpeakerLabel | null = null
+    for (let i = 0; i < 3; i++) {
+      await id.observeSessionOperatorWindow(key, windowFor(OPERATOR_VOICE), 'live')
+      label = await id.labelSessionWindow(key, windowFor(theirVoice), 'live')
+    }
+    const snapshot = id.snapshotSession(key)
+    if (!snapshot) throw new Error(`no enrollment snapshot for ${key}`)
+    return { label, enrolled: id.enrollFromSnapshot(snapshot, [{ clusterLabel: 'Speaker 1', name: theirName }]) }
+  }
+
+  it('a fresh install (nothing on disk) labels a whole meeting but writes no voiceprint', async () => {     // RED
+    const meeting = await holdMeeting(startApp(), 'live:1', 2, 'Jane Doe')
+    expect(meeting.label).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
+    expect(meeting.enrolled).toBe(0)
+    expect(existsSync(voiceprints())).toBe(false)
   })
 })
