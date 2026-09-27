@@ -335,7 +335,12 @@ describe('abort (G4-G6)', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------
-// Listener fan-out — classify's per-path admission/deadline waiters share one AbortSignal
+// Listener fan-out — classify's per-path admission/deadline waiters share one AbortSignal. Verified
+// directly (node -e, outside this suite): a genuine AbortSignal — whether from an AbortController or
+// AbortSignal.any() — defaults to an UNLIMITED listener count, unlike a plain EventTarget (default 10).
+// So this fan-out does not currently emit MaxListenersExceededWarning on Node 22. The explicit
+// setMaxListeners(0, signal) in openRequest documents that invariant and guards it going forward —
+// against a future Node default change, or a caller signal that is not a genuine AbortSignal.
 // ---------------------------------------------------------------------------------------------------
 
 describe('listener fan-out (classify)', () => {

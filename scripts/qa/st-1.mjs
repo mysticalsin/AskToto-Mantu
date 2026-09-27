@@ -19,7 +19,20 @@
  * Exit codes: 0 PASS, 1 FAIL or NOT_EXERCISED, 2 usage.
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { sha256File } from './provenance.mjs'
@@ -100,37 +113,55 @@ function placeFifoFixtures(root, count) {
   return targets
 }
 
-/** SF_DATALESS, <sys/stat.h>: `stat -f %Uf` on macOS. */
-function isDatalessMac(path) {
-  const flags = Number.parseInt(execFileSync('stat', ['-f', '%Uf', path], { encoding: 'utf8' }).trim(), 10)
-  return (flags & 0x4000_0000) !== 0
+/** SF_DATALESS, <sys/stat.h>. */
+const SF_DATALESS = 0x4000_0000
+/** FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
+ *  <winnt.h>. Matches dataless.ts's WIN_PLACEHOLDER_ATTRIBUTES exactly, so ST-1 measures the same
+ *  placeholder signal the gateway checks before every read. */
+const WIN_PLACEHOLDER_ATTRIBUTES = 0x0000_1000 | 0x0004_0000 | 0x0040_0000
+/** Pinned System32 binary, never a bare 'powershell.exe' — win-security.ts's WINDOWS_POWERSHELL rule,
+ *  restated here because this plain script cannot import a TypeScript module. */
+const WIN_POWERSHELL = join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+
+/** dataless.ts's WIN_ATTRIBUTES_SCRIPT wire protocol: NUL-separated UTF-8 paths on stdin (so the console
+ *  code page can never mangle them — this profile's own root is 'Métis Meetings'), one JSON array of
+ *  attribute words out, `null` where GetAttributes failed. -EncodedCommand so no PowerShell quoting rule
+ *  applies either. */
+const WIN_ATTRIBUTES_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  '$bytes = New-Object System.IO.MemoryStream',
+  '[Console]::OpenStandardInput().CopyTo($bytes)',
+  '$paths = [Text.Encoding]::UTF8.GetString($bytes.ToArray()).Split([char]0)',
+  '$words = foreach ($path in $paths) { try { [string][int][IO.File]::GetAttributes($path) } catch { "null" } }',
+  "[Console]::Out.Write('[' + ($words -join ',') + ']')"
+].join('\n')
+
+/** One `stat` exec for the whole batch, never one per file. */
+function datalessFlagsMac(paths) {
+  const output = execFileSync('stat', ['-f', '%Uf', ...paths], { encoding: 'utf8' }).trim()
+  return output.split('\n').map((line) => {
+    const flags = Number.parseInt(line, 10)
+    return Number.isFinite(flags) && (flags & SF_DATALESS) !== 0
+  })
 }
 
-/** FILE_ATTRIBUTE_OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS, <winnt.h>. Mirrors dataless.ts's
- *  WIN_ATTRIBUTES_SCRIPT: the path travels on stdin as raw UTF-8 so the console code page can never mangle
- *  it (this profile's own root is 'Métis Meetings'), and the script itself is -EncodedCommand so no
- *  PowerShell quoting rule applies to it either. */
-function isDatalessWindows(path) {
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    '$bytes = New-Object System.IO.MemoryStream',
-    '[Console]::OpenStandardInput().CopyTo($bytes)',
-    '$path = [Text.Encoding]::UTF8.GetString($bytes.ToArray())',
-    'try { [Console]::Out.Write([string][int][IO.File]::GetAttributes($path)) } catch { [Console]::Out.Write(-1) }'
-  ].join('\n')
-  const attrs = Number.parseInt(
-    execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-      { input: Buffer.from(path, 'utf8'), encoding: 'utf8' }
-    ).trim(),
-    10
+/** One PowerShell spawn for the whole batch, never one per file (and never twice per run). A failed
+ *  GetAttributes (`null`) is never dataless: it means "could not tell", which proves nothing about
+ *  whether the file's bytes are local — the opposite of a proven placeholder. */
+function datalessFlagsWindows(paths) {
+  const output = execFileSync(
+    WIN_POWERSHELL,
+    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(WIN_ATTRIBUTES_SCRIPT, 'utf16le').toString('base64')],
+    { input: Buffer.from(paths.join('\0'), 'utf8'), encoding: 'utf8' }
   )
-  return (attrs & 0x0044_1000) !== 0
+  const words = JSON.parse(output)
+  return words.map((word) => word !== null && (word & WIN_PLACEHOLDER_ATTRIBUTES) !== 0)
 }
 
-function isDataless(path) {
-  return process.platform === 'darwin' ? isDatalessMac(path) : isDatalessWindows(path)
+/** Whether each of `paths` is dataless, in order — one spawn for the whole batch. */
+function datalessFlags(paths) {
+  if (paths.length === 0) return []
+  return process.platform === 'darwin' ? datalessFlagsMac(paths) : datalessFlagsWindows(paths)
 }
 
 /** Every file directly under `dir`, recursively. Node builtins only: `find` does not exist on Windows,
@@ -154,7 +185,9 @@ function placeDatalessFixtures(root, cloudDir) {
     .map((entry) => join(cloudDir, entry.name))
   const brainDir = join(cloudDir, '.brain')
   const brainFiles = existsSync(brainDir) ? listFilesRecursive(brainDir) : []
-  const fixtures = [...topLevelMarkdown, ...brainFiles].filter(isDataless)
+  const candidates = [...topLevelMarkdown, ...brainFiles]
+  const dataless = datalessFlags(candidates)
+  const fixtures = candidates.filter((_, i) => dataless[i])
   if (fixtures.length === 0) throw usageError('no dataless files under --cloud-dir: evict files first')
   return fixtures
 }
@@ -169,16 +202,19 @@ async function launch(exe, profile) {
   let stderr = ''
   const wsUrl = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('no main-process inspector: the EnableNodeCliInspectArguments fuse may be off')), INSPECTOR_WAIT_MS)
-    child.stderr.on('data', (chunk) => {
+    function onData(chunk) {
       stderr += String(chunk)
       const match = /ws:\/\/127\.0\.0\.1:\d+\/[\w-]+/.exec(stderr)
       if (match) {
         clearTimeout(timer)
+        child.stderr.off('data', onData)
         resolve(match[0])
       }
-    })
+    }
+    child.stderr.on('data', onData)
     child.once('exit', (code) => {
       clearTimeout(timer)
+      child.stderr.off('data', onData)
       reject(new Error(`candidate exited before the inspector was ready (code ${code})`))
     })
   })
@@ -257,7 +293,7 @@ function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset) {
     const opened = fixtures.filter((fifo) => releaseFifo(fifo)).length
     return { exercised: opened >= 1 }
   }
-  const stillDataless = fixtures.every(isDataless)
+  const stillDataless = datalessFlags(fixtures).every(Boolean)
   const mainLogTail = mainLogPath && existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').slice(mainLogOffset) : ''
   return { exercised: mainLogTail.includes('[dataless] probed'), stillDataless }
 }
@@ -271,15 +307,45 @@ function stopChild(child) {
   }
 }
 
+/** Tolerates partial state from a failure before everything was created: `root` may never have become a
+ *  junction (a usage error can throw right after resolving --cloud-dir but before placing it), and
+ *  `profile`/`unzipDir` may still be null if resolveExecutable/prepareProfile never ran. */
 function cleanup({ kind, root, profile, unzipDir }) {
-  if (kind === 'dataless') unlinkSync(root) // remove the junction/symlink BEFORE the recursive rmSync below
-  rmSync(profile, { recursive: true, force: true })
+  if (kind === 'dataless' && root) {
+    try {
+      lstatSync(root) // throws if the junction was never created — nothing to remove
+      unlinkSync(root)
+    } catch {
+      /* never created, or already removed */
+    }
+  }
+  if (profile) rmSync(profile, { recursive: true, force: true })
   if (unzipDir) rmSync(unzipDir, { recursive: true, force: true })
+}
+
+/** The launch itself never reached a candidate to measure: report it as a genuine FAIL (inspector: false)
+ *  rather than skip the row or, worse, claim the always-true criterion the report used to hard-code. */
+function buildLaunchFailureReport({ row, args, candidate, fixtures, reason }) {
+  return {
+    harness: 'ST-1',
+    row,
+    platform: process.platform,
+    arch: process.arch,
+    installer: basename(args.installer),
+    build_run_id: candidate.build_run_id,
+    artifact_sha256: candidate.artifact_sha256,
+    fixtures: fixtures.length,
+    exercised: false,
+    criteria: [{ name: 'inspector', pass: false }],
+    reason,
+    verdict: 'FAIL'
+  }
 }
 
 function buildReport({ row, args, candidate, measured, evidence, fixtures }) {
   const criteria = [
-    { name: 'inspector', pass: true },
+    { name: 'inspector', pass: true }, // only reached once launch() actually produced a working inspector
+    { name: 'has-samples', pass: measured.samples.length > 0 },
     { name: 'no-late-samples', pass: measured.lateSamples === 0 },
     { name: 'loop-p99 < 50', pass: measured.loop.p99Ms < 50 },
     { name: 'loop-max < 250', pass: measured.loop.maxMs < 250 },
@@ -326,26 +392,58 @@ async function main() {
     console.error('[st-1] FAIL — --fixtures dataless needs --cloud-dir and --main-log')
     return 2
   }
+  const minutes = Number(args.minutes)
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    console.error(`[st-1] FAIL — --minutes must be a positive number, got ${JSON.stringify(args.minutes)}`)
+    return 2
+  }
+  if (args.fixtures === 'fifo' && args.count !== undefined) {
+    const count = Number(args.count)
+    if (!Number.isInteger(count) || count < MIN_FIFO_COUNT) {
+      console.error(`[st-1] FAIL — --count must be an integer >= ${MIN_FIFO_COUNT}, got ${JSON.stringify(args.count)}`)
+      return 2
+    }
+  }
 
   const candidate = await verifyCandidate(args.installer, args.provenance)
-  const { exe, unzipDir } = resolveExecutable(args.installer, args.exe)
-  const profile = prepareProfile(args.profileTemplate)
-  const root = join(profile, 'Métis Meetings')
 
-  const count = args.fixtures === 'fifo' ? Math.max(MIN_FIFO_COUNT, Number(args.count ?? DEFAULT_FIFO_COUNT)) : undefined
-  const mainLogOffset = args.mainLog && existsSync(args.mainLog) ? statSync(args.mainLog).size : 0
-  const fixtures = args.fixtures === 'fifo' ? placeFifoFixtures(root, count) : placeDatalessFixtures(root, args.cloudDir)
-
-  const { child, wsUrl } = await launch(exe, profile)
-  const cdp = cdpClient(wsUrl)
+  // Everything that creates state to clean up — the unzip dir, the profile, the fixtures/junction and the
+  // child process — lives inside this one try, so a failure anywhere here (a usage error placing
+  // fixtures, a launch that never produces an inspector) still reaches the shared cleanup below instead
+  // of leaking a temp profile, a junction into the cloud folder, or a detached candidate.
+  let unzipDir = null
+  let profile = null
+  let root = null
+  let child = null
+  let cdp = null
   let report
   try {
-    const measured = await measure(cdp, profile, Number(args.minutes))
-    const evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset)
-    report = buildReport({ row: args.fixtures, args, candidate, measured, evidence, fixtures })
+    const resolved = resolveExecutable(args.installer, args.exe)
+    unzipDir = resolved.unzipDir
+    profile = prepareProfile(args.profileTemplate)
+    root = join(profile, 'Métis Meetings')
+
+    const count = args.fixtures === 'fifo' ? Math.max(MIN_FIFO_COUNT, Number(args.count ?? DEFAULT_FIFO_COUNT)) : undefined
+    const mainLogOffset = args.mainLog && existsSync(args.mainLog) ? statSync(args.mainLog).size : 0
+    const fixtures = args.fixtures === 'fifo' ? placeFifoFixtures(root, count) : placeDatalessFixtures(root, args.cloudDir)
+
+    let launched
+    try {
+      launched = await launch(resolved.exe, profile)
+    } catch (error) {
+      report = buildLaunchFailureReport({ row: args.fixtures, args, candidate, fixtures, reason: error.message })
+    }
+
+    if (launched) {
+      child = launched.child
+      cdp = cdpClient(launched.wsUrl)
+      const measured = await measure(cdp, profile, minutes)
+      const evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset)
+      report = buildReport({ row: args.fixtures, args, candidate, measured, evidence, fixtures })
+    }
   } finally {
-    cdp.close()
-    stopChild(child)
+    cdp?.close()
+    if (child) stopChild(child)
     cleanup({ kind: args.fixtures, root, profile, unzipDir })
   }
 
