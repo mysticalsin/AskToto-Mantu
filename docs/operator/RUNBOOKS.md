@@ -128,6 +128,7 @@ npx wrangler@4 secret put <NAME> --env staging
 | `OPERATOR_INGEST_SECRET` | Every desktop seat's HMAC signature stops verifying. `/v1/ingest`, `/v1/heartbeat`, `/v1/use`, `/v1/skills/manifest` all return 401 to every seat until every seat's local secret (Settings -> Privacy -> Ingest secret, or `METIS_OPERATOR_INGEST_SECRET`) is updated to match. Rotate by rolling both sides together, or by accepting a fleet-wide outage window. |
 | `OPERATOR_PROMPT_KEY` | New Asks encrypt fine with the new key, but every previously stored Ask's `prompt_cipher` was encrypted under the OLD key and Reveal on those rows starts failing to decrypt. It is also the fallback source for the session-signing secret (see `OPERATOR_SESSION_SECRET` below): rotating it without setting an explicit `OPERATOR_SESSION_SECRET` first invalidates every signed-in admin session at the same time. |
 | `OPERATOR_SESSION_SECRET` | If unset, the console session cookie is HMAC-signed with an HKDF derivation of `OPERATOR_PROMPT_KEY` (see `operator/src/access.ts`). Rotating this (or the `OPERATOR_PROMPT_KEY` it falls back to) signs everyone out; they simply hit the Access login flow again, no data loss. Prefer setting this explicitly and independently from `OPERATOR_PROMPT_KEY` so the two can be rotated on different schedules. |
+| `ADMIN_EMAILS` | Comma-separated allowlist for the owner's two Access emails. If unset or empty, every admin check fails closed with a clear Worker log line and the console/API deny access. Set once with `npx wrangler@4 secret put ADMIN_EMAILS` (and repeat with `--env staging`) before the next deploy. |
 | `OPERATOR_SKILL_PRIVATE_KEY` | Push (skills/:id/push) starts failing with a 500 ("skill signing key missing"). Existing pushed packs still verify against the public key already bundled in `src/main/operator-skill-key.ts`; only NEW pushes are blocked. Rotating the private key without updating that bundled public half means every desktop stops trusting new pushes until a new app build ships the new public key. |
 | `OPERATOR_VAULT_KEY` | Stored LLM provider keys and the Cloudflare account token in `vault_keys` become undecryptable. Keys and the Cloudflare connection must be re-added after rotation; there is no in-place re-encryption path today. |
 | `POLICY_AUD` | Cloudflare Access JWT verification starts rejecting every JWT (audience mismatch), so a fresh unauthenticated browser session cannot sign in even though Access itself still gates the login page. An already-minted console session cookie (`OPERATOR_SESSION_SECRET` path) keeps working until it expires (max 12 hours), which is why this rotation is safer than it sounds. |
@@ -139,8 +140,8 @@ they are visible in the dashboard and in `wrangler deploy` output by design.
 ## 5. Access policy
 
 - Team: `tony-walteur`, `TEAM_DOMAIN=https://tony-walteur.cloudflareaccess.com`.
-- Self-hosted Access application **Métis Operator** on the Worker's host. Policy: Allow, exactly
-  two emails (`tony.walteur@gmail.com`, `twalteur@amaris.com`), no other identity provider rule.
+- Self-hosted Access application **Métis Operator** on the Worker's host. Policy: Allow exactly
+  the owner's two Access emails, configured as the `ADMIN_EMAILS` secret, no other identity provider rule.
 - Session duration: whatever the Access application policy sets (Access's own session, which
   gates the login step) plus the Worker's own minted session cookie, capped at 12 hours absolute
   from mint time regardless of activity, re-minted only once the current one is over an hour old.

@@ -174,10 +174,7 @@ Dust is never step 2 for general chat. Dust is retrieval: Spotlight Ref, second 
 
 ### 4.2 Operator holds the platform keys
 
-Tony pastes NIM, Anthropic, DeepSeek, and the Cloudflare account token on Operator `#keys`. UI shows **last4 only**. AES-GCM at rest (`OPERATOR_VAULT_KEY`). Allowlist:
-
-- `tony.walteur@gmail.com`
-- `twalteur@amaris.com`
+Tony pastes NIM, Anthropic, DeepSeek, and the Cloudflare account token on Operator `#keys`. UI shows **last4 only**. AES-GCM at rest (`OPERATOR_VAULT_KEY`). Allowlist: the owner's two Access emails, configured as the `ADMIN_EMAILS` secret.
 
 Heartbeat returns `fundedProviders` to an **APPROVED** seat. The seat keeps that list in memory. The renderer never sees a raw key. `hasKeys` booleans and last4 are the only public facts.
 

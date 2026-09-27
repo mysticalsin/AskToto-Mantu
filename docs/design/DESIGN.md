@@ -181,8 +181,8 @@ CRM. **Never** Unique Visitors, pageviews, sneakers, referrers, or
 invented people.
 
 Live host: `https://metis-operator.tony-walteur.workers.dev/`.
-**Cloudflare Access stays** (302 + email-code; `tony.walteur@gmail.com`
-+ `twalteur@amaris.com`). Thin Worker tip only. Do not merge fat
+**Cloudflare Access stays** (302 + email-code; the owner's two Access emails, configured as the
+`ADMIN_EMAILS` secret). Thin Worker tip only. Do not merge fat
 PR151. Generate license stays P0.
 EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
 

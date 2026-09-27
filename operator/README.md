@@ -1,18 +1,19 @@
 # metis-operator
 
-Tony's fleet control plane. How people use Métis, who is live, what Asks cost, whether prompt
+Owner fleet control plane. How people use Métis, who is live, what Asks cost, whether prompt
 cache is hitting, which questions should sharpen a skill, and a signed push of that skill to
 every seat.
 
 This Worker is **not** the AI token proxy (`cloudflare-proxy/`, Worker `metis-cloudflare-proxy`).
 It is **not** the Fly license server. Prompts never go to Fly.
 
-The admin console is for Tony only. Electron devices never see Access; they HMAC-sign every
+The admin console is for the owner only. Electron devices never see Access; they HMAC-sign every
 request.
 
 **Hard rules, never violated:**
 
-- Access is email-code only, allowlist `tony.walteur@gmail.com` and `twalteur@amaris.com`. No
+- Access is email-code only for the owner's two Access emails, configured as the `ADMIN_EMAILS`
+  secret. No
   homemade password form. Unauthenticated console GET is a 302 to Access. Unauthenticated
   `/v1/admin/*` is 401 JSON.
 - Never enable **Protect this Worker**. That would lock every Mac and Windows seat out, along with
@@ -75,8 +76,8 @@ Tony's browser         --Access-> resolve identity (JWT or    --read/--   integr
 
 | Path | Who | Auth |
 | --- | --- | --- |
-| `/`, and the other console paths | Tony in a browser | Unauthenticated GET is a 302 to `{TEAM_DOMAIN}/cdn-cgi/access/login/{host}?redirect_url=...`. After the Access JWT (or a still-valid minted session cookie) and the two-email allowlist. 503 if `TEAM_DOMAIN` is unset. |
-| `/v1/admin/*` | Tony in a browser | Same identity check as the console; JSON 401 (never a redirect) when missing. |
+| `/`, and the other console paths | Owner in a browser | Unauthenticated GET is a 302 to `{TEAM_DOMAIN}/cdn-cgi/access/login/{host}?redirect_url=...`. After the Access JWT (or a still-valid minted session cookie) and the `ADMIN_EMAILS` allowlist. 503 if `TEAM_DOMAIN` is unset. |
+| `/v1/admin/*` | Owner in a browser | Same identity check as the console; JSON 401 (never a redirect) when missing. |
 | `POST /v1/ingest` | Métis desktop | HMAC only. Not Access. |
 | `POST /v1/heartbeat` | Métis desktop | HMAC only. Not Access. |
 | `POST /v1/use` | Métis desktop | HMAC only. Not Access. Brokers a funded Ask; never returns a raw vault secret. |
@@ -241,6 +242,7 @@ Never put these in git, logs, PR bodies, or `wrangler.jsonc`.
 | `OPERATOR_SESSION_SECRET` | Optional. When set, signs the console session cookie instead of deriving from `OPERATOR_PROMPT_KEY`, so the two can rotate on independent schedules. |
 | `OPERATOR_SKILL_PRIVATE_KEY` | Ed25519 PKCS8 PEM (or base64 of that PEM). Signs skill packs. The public half is committed in `src/main/operator-skill-key.ts`. |
 | `OPERATOR_VAULT_KEY` | 32-byte AES-GCM key, base64. Encrypts LLM API keys and the Cloudflare account token in D1. Separate from `OPERATOR_PROMPT_KEY`. |
+| `ADMIN_EMAILS` | Comma-separated allowlist for the owner's two Access emails. Missing or empty fails every admin check closed. |
 | `POLICY_AUD` | The Access application's audience tag, once Tony creates the Zero Trust app. |
 | `CF_OAUTH_CLIENT_ID` / `CF_OAUTH_CLIENT_SECRET` | Optional. Only needed for the Keys page's Cloudflare account connect flow. |
 
@@ -262,6 +264,7 @@ npx wrangler@4 secret put OPERATOR_INGEST_SECRET
 npx wrangler@4 secret put OPERATOR_PROMPT_KEY
 npx wrangler@4 secret put OPERATOR_SKILL_PRIVATE_KEY
 npx wrangler@4 secret put OPERATOR_VAULT_KEY
+npx wrangler@4 secret put ADMIN_EMAILS
 ```
 
 `TEAM_DOMAIN` is a Wrangler var (`https://tony-walteur.cloudflareaccess.com`), not a secret, so an
@@ -353,14 +356,14 @@ node scripts/migrate.mjs --local
 | production | `metis-operator` | `metis-operator` | `https://metis-operator.tony-walteur.workers.dev` |
 | staging | `metis-operator-staging` | `metis-operator-staging` | `https://metis-operator-staging.tony-walteur.workers.dev` |
 
-Both share the same Access team and the same two-email allowlist. Deploy staging first for any
+Both share the same Access team and the same `ADMIN_EMAILS` allowlist. Deploy staging first for any
 change that touches D1 schema, HMAC verification, or Access identity resolution; see the runbook.
 
 ## Cloudflare Access (console and admin API only)
 
 1. Team `tony-walteur`, `TEAM_DOMAIN=https://tony-walteur.cloudflareaccess.com`.
-2. Self-hosted app **Métis Operator** on `metis-operator.tony-walteur.workers.dev` (Allow, the two
-   Tony emails only).
+2. Self-hosted app **Métis Operator** on `metis-operator.tony-walteur.workers.dev` (Allow the
+   owner's two Access emails, configured as the `ADMIN_EMAILS` secret).
 3. Bypass policies on `/health`, `/v1/ingest`, `/v1/heartbeat`, `/v1/use`, `/v1/skills/manifest`,
    `/v1/integrations`, and `/assets/*` (keep in sync with `ACCESS_BYPASS_PATHS` in
    `operator/src/access.ts`). Leave `/v1/admin/*` to the Worker's own 401 JSON, do not wrap it a

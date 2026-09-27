@@ -21,8 +21,8 @@ tokens:
 requirement (MASTER §12.2, §12.9) joins this console is an open scope question owned by M2-0158.
 
 Live URL: `https://metis-operator.tony-walteur.workers.dev/` (`#overview`).
-Access: Cloudflare Access email-code only. Allowlist `tony.walteur@gmail.com` +
-`twalteur@amaris.com`. Never a homemade password form.
+Access: Cloudflare Access email-code only. Allowlist the owner's two Access emails, configured as
+the `ADMIN_EMAILS` secret. Never a homemade password form.
 
 **Hold merge.** Draft only. No pack. No Latest. Ultron green-lit Operator-only
 deploy to `metis-operator` (`tony-walteur.workers.dev`). Do not merge fat PR151.

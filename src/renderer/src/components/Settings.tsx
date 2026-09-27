@@ -149,6 +149,11 @@ import {
   type DustInstantValidateResult
 } from '@shared/dust-validate'
 
+declare const __METIS_FEEDBACK_EMAIL__: string
+
+export const METIS_FEEDBACK_EMAIL =
+  typeof __METIS_FEEDBACK_EMAIL__ === 'string' ? __METIS_FEEDBACK_EMAIL__.trim() : ''
+
 // Name the OS credential facility the way the user's own OS names it — "Keychain" is macOS-only, and
 // telling a Windows user to "restore Keychain access" names something their machine does not have. Two
 // constants, not one, because these are genuinely different facilities on Windows: the Dust CLI session
@@ -7464,40 +7469,27 @@ export function Settings({
                     >
                       Data handling
                     </a>
-                    <span aria-hidden>·</span>
-                    <a
-                      href="mailto:twalteur@amaris.com"
-                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
-                    >
-                      Support
-                    </a>
-                    <span aria-hidden>·</span>
-                    <a
-                      href="mailto:twalteur@amaris.com?subject=M%C3%A9tis%20feedback"
-                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
-                    >
-                      Send feedback
-                    </a>
-                    <span aria-hidden>·</span>
-                    <a
-                      href="https://www.linkedin.com/in/tonywalteur/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
-                    >
-                      LinkedIn
-                    </a>
+                    {METIS_FEEDBACK_EMAIL ? (
+                      <>
+                        <span aria-hidden>·</span>
+                        <a
+                          href={`mailto:${METIS_FEEDBACK_EMAIL}`}
+                          className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                        >
+                          Support
+                        </a>
+                        <span aria-hidden>·</span>
+                        <a
+                          href={`mailto:${METIS_FEEDBACK_EMAIL}?subject=M%C3%A9tis%20feedback`}
+                          className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                        >
+                          Send feedback
+                        </a>
+                      </>
+                    ) : null}
                   </div>
                   <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                    Built at Mantu · Built by{' '}
-                    <a
-                      href="https://www.linkedin.com/in/tonywalteur/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-medium text-[color:var(--cl-primary)] transition-colors hover:underline"
-                    >
-                      Tony Walteur
-                    </a>
+                    Built at Mantu
                   </div>
                 </div>
               </div>
