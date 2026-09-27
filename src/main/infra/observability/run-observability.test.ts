@@ -15,7 +15,7 @@ function fakePowerMonitor() {
 function fakeStallMonitor(overrides: Partial<StallMonitor> = {}): StallMonitor {
   return {
     stop: vi.fn(),
-    resync: vi.fn(),
+    restartIfPaused: vi.fn(),
     pause: vi.fn(),
     // A plain passthrough, not vi.fn(...): timePhase is generic (<T>(label, fn: () => T) => T), and a
     // vi.fn()-wrapped implementation has its own already-concrete Mock type, which a generic method slot
@@ -29,7 +29,7 @@ function fakeStallMonitor(overrides: Partial<StallMonitor> = {}): StallMonitor {
 
 /** A controllable interval + monotonic clock for driving the REAL startStallMonitor (not a fake) through
  *  startRunObservability's own `deps.startStallMonitor` seam, so the unlock-screen tests below exercise the
- *  actual resync()/pause() wiring production runs, not a mock's assumptions about it. `jumpTo` moves the
+ *  actual restartIfPaused()/pause() wiring production runs, not a mock's assumptions about it. `jumpTo` moves the
  *  clock without firing the interval, modelling time passing while the main thread is blocked and the
  *  interval's own tick is still queued behind it; `advanceTo` fires the (possibly overdue) tick. */
 function fakeHeartbeat(): {
@@ -162,9 +162,9 @@ describe('startRunObservability', () => {
     expect(result).toBe(42) // forwards the stall monitor's return value, not just the call
   })
 
-  it('pauses the stall monitor on powerMonitor suspend and resyncs it on resume', () => {
+  it('pauses the stall monitor on powerMonitor suspend and restarts it (if paused) on resume', () => {
     const pause = vi.fn()
-    const resync = vi.fn()
+    const restartIfPaused = vi.fn()
     const powerMonitor = fakePowerMonitor()
     startRunObservability({
       userData: '/fake',
@@ -175,7 +175,7 @@ describe('startRunObservability', () => {
       powerMonitor,
       deps: {
         beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
-        startStallMonitor: vi.fn(() => fakeStallMonitor({ pause, resync })),
+        startStallMonitor: vi.fn(() => fakeStallMonitor({ pause, restartIfPaused })),
         setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
         clearIntervalFn: vi.fn()
       }
@@ -187,15 +187,13 @@ describe('startRunObservability', () => {
     onSuspend()
     expect(pause).toHaveBeenCalledOnce()
     onResume()
-    expect(resync).toHaveBeenCalledOnce()
+    expect(restartIfPaused).toHaveBeenCalledOnce()
   })
 
-  // RED — M2-0220: 'resume' and 'unlock-screen' must reach the SAME StallMonitor method unconditionally, so
-  // the stall monitor itself (not a local flag here) decides whether either call actually restarts
-  // anything. Pre-fix, onUnlockScreen only calls resync() when a local `suspended` flag is set by a prior
-  // 'suspend' — calling it bare (no preceding suspend) must currently do nothing, which this asserts.
+  // M2-0220: 'resume' and 'unlock-screen' must reach the SAME StallMonitor method unconditionally, so the
+  // stall monitor itself (not a local flag here) decides whether either call actually restarts anything.
   it("'resume' and 'unlock-screen' call the SAME StallMonitor method unconditionally — no local flag decides whether either call actually restarts anything", () => {
-    const resync = vi.fn()
+    const restartIfPaused = vi.fn()
     const powerMonitor = fakePowerMonitor()
     startRunObservability({
       userData: '/fake',
@@ -206,7 +204,7 @@ describe('startRunObservability', () => {
       powerMonitor,
       deps: {
         beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
-        startStallMonitor: vi.fn(() => fakeStallMonitor({ resync })),
+        startStallMonitor: vi.fn(() => fakeStallMonitor({ restartIfPaused })),
         setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
         clearIntervalFn: vi.fn()
       }
@@ -215,9 +213,9 @@ describe('startRunObservability', () => {
     const onUnlockScreen = powerMonitor.on.mock.calls.find((c) => c[0] === 'unlock-screen')![1] as () => void
 
     onUnlockScreen()
-    expect(resync).toHaveBeenCalledTimes(1)
+    expect(restartIfPaused).toHaveBeenCalledTimes(1)
     onResume()
-    expect(resync).toHaveBeenCalledTimes(2) // both events reach the same method; no local flag gates either
+    expect(restartIfPaused).toHaveBeenCalledTimes(2) // both events reach the same method; no local flag gates either
   })
 
   it('unlock-screen does not re-baseline a running heartbeat, so lateness already accumulated before it fires is still reported as app.stall', () => {
@@ -303,7 +301,7 @@ describe('startRunObservability', () => {
     expect(audit).toHaveBeenCalledWith('app.stall', expect.objectContaining({ bootId: 'boot-1', durationMs: 1500 }))
   })
 
-  it('RED for the M2-0006 round-3 finding: a resume that arrives after unlock-screen already restarted the heartbeat must not discard the lateness that accrues afterward', () => {
+  it('M2-0006 round-3 finding: a resume that arrives after unlock-screen already restarted the heartbeat must not discard the lateness that accrues afterward', () => {
     // suspend -> unlock-screen restarts the paused heartbeat (no 'resume' has arrived yet) -> the main
     // thread then stalls -> 'resume' itself is only delivered once that stall lets the event loop run, so
     // it arrives WHILE the overdue tick is still pending. A 'resume' handler that unconditionally resyncs
