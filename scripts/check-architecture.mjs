@@ -547,12 +547,9 @@ function countProcessSpawning(sourceFile) {
       if (node.importClause && !node.importClause.isTypeOnly && !hasOnlyTypeNamedImports(node.importClause)) count += 1
     }
     if (isRequireCall(node) && CHILD_PROCESS_MODULES.has(node.arguments[0].text)) count += 1
-    if (ts.isCallExpression(node)) {
-      const chain = propertyChain(node.expression)
-      if (
-        (chain.length === 2 && chain[0] === 'utilityProcess' && chain[1] === 'fork') ||
-        (chain.length === 3 && chain[1] === 'utilityProcess' && chain[2] === 'fork')
-      ) {
+    if (ts.isPropertyAccessExpression(node)) {
+      const chain = propertyChain(node)
+      if (chain.length >= 2 && chain[chain.length - 2] === 'utilityProcess' && chain[chain.length - 1] === 'fork') {
         count += 1
       }
     }
@@ -753,29 +750,22 @@ function printSummary(counts) {
  */
 function readBaseline() {
   const text = readFileSync(BASELINE_PATH, 'utf8').replace(/\r\n/g, '\n')
-  let parsed
+  let parsed, canonical
   try {
     parsed = JSON.parse(text)
+    canonical = formatBaseline(parsed)
   } catch (error) {
     console.log(`[check:architecture] FAIL: scripts/architecture-baseline.json is not canonical; ${error.message}`)
     process.exitCode = 1
     return { ok: false }
   }
-  try {
-    const canonical = formatBaseline(parsed)
-    if (canonical !== text) {
-      console.log('[check:architecture] FAIL: scripts/architecture-baseline.json is not canonical; use the rendering below.')
-      console.log(canonical)
-      process.exitCode = 1
-      return { ok: false }
-    }
-    return { ok: true, baseline: canonicalCounts(parsed) }
-  } catch (error) {
-    console.log(`[check:architecture] FAIL: scripts/architecture-baseline.json is not canonical; ${error.message}`)
-    console.log(formatBaseline({}))
+  if (canonical !== text) {
+    console.log('[check:architecture] FAIL: scripts/architecture-baseline.json is not canonical; use the rendering below.')
+    console.log(canonical)
     process.exitCode = 1
     return { ok: false }
   }
+  return { ok: true, baseline: canonicalCounts(parsed) }
 }
 
 /**
