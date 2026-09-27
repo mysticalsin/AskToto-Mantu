@@ -80,6 +80,71 @@ describe('fetchDustProjects', () => {
     if (r.ok) return
     expect(r.error).toMatch(/401/)
   })
+
+  it("fetches every space's data sources concurrently, not one at a time (P4-F6)", async () => {
+    const callOrder: string[] = []
+    let resolveA: (() => void) | undefined
+    const aWaitsForBToStart = new Promise<void>((resolve) => {
+      resolveA = resolve
+    })
+
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith('/spaces')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            spaces: [
+              { sId: 'a', name: 'A', kind: 'regular' },
+              { sId: 'b', name: 'B', kind: 'regular' }
+            ]
+          }),
+          text: async () => ''
+        }
+      }
+      if (url.includes('/spaces/a/data_sources')) {
+        callOrder.push('a-start')
+        // A blocks here until B's own fetch has started. Under the OLD sequential `for`-loop this never
+        // unblocks (B is never even dispatched until A resolves) and the test times out; concurrent
+        // dispatch (Promise.all) starts B immediately, which unblocks A.
+        await aWaitsForBToStart
+        callOrder.push('a-end')
+        return { ok: true, status: 200, json: async () => ({ data_sources: [] }), text: async () => '' }
+      }
+      if (url.includes('/spaces/b/data_sources')) {
+        callOrder.push('b-start')
+        resolveA?.()
+        return { ok: true, status: 200, json: async () => ({ data_sources: [] }), text: async () => '' }
+      }
+      throw new Error(`unexpected url ${url}`)
+    })
+
+    const r = await fetchDustProjects({ apiKey: 'sk-test', workspaceId: 'ws_1', fetchImpl })
+    expect(r.ok).toBe(true)
+    expect(callOrder).toEqual(['a-start', 'b-start', 'a-end'])
+  }, 2000)
+
+  it('fails loud instead of silently reporting zero data sources when the key is rejected mid-discovery (AGUC-021)', async () => {
+    const r = await fetchDustProjects({
+      apiKey: 'sk-revoked',
+      workspaceId: 'ws_1',
+      fetchImpl: async (url: string) => {
+        if (url.endsWith('/spaces')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ spaces: [{ sId: 'spc_data', name: 'Data and AI', kind: 'regular' }] }),
+            text: async () => ''
+          }
+        }
+        return { ok: false, status: 401, json: async () => ({}), text: async () => 'token revoked' }
+      }
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error).toMatch(/401/)
+    expect(r.error).toMatch(/reconnect/i)
+  })
 })
 
 describe('Devon Totos-Mac click path', () => {

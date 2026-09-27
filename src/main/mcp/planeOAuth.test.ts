@@ -76,9 +76,13 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     return realFetch(u.toString())
   }
 
-  it('registers via DCR once, then reuses cached client_id + client_secret', async () => {
-    fetchMock.mockImplementation(async (url: string) => {
-      if (String(url).includes('/register')) return jsonResponse(DCR_RESPONSE)
+  it("registers a fresh confidential client per run whose DCR body is this run's exact ported loopback URI (never a cached portless one)", async () => {
+    const dcrBodies: Array<{ redirect_uris?: string[] }> = []
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/register')) {
+        dcrBodies.push(JSON.parse(String(init?.body || '{}')))
+        return jsonResponse({ client_id: `plane-client-${dcrBodies.length}`, client_secret: `plane-secret-${dcrBodies.length}` })
+      }
       if (String(url).includes('/token')) return jsonResponse(TOKEN_RESPONSE)
       throw new Error(`unexpected fetch: ${url}`)
     })
@@ -87,18 +91,55 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     const first = runPlaneOAuth()
     await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
     const { redirectUri, state } = capturedAuthorizeParams()
+    expect(redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/)
+    expect(dcrBodies).toHaveLength(1)
+    expect(dcrBodies[0].redirect_uris).toEqual([redirectUri])
     await hitCallback(redirectUri, { code: 'auth-code-1', state })
     expect(await first).toEqual({ ok: true, accessToken: 'plane-at-1', refreshToken: 'plane-rt-1' })
 
-    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/register'))).toHaveLength(1)
-
+    // Second run: a different ephemeral port, so DCR must run again scoped to THAT run's own URI — a
+    // cached client registered with the first run's (or any fixed portless) URI is never reused.
     openExternal.mockClear()
     const second = runPlaneOAuth()
     await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
     const p2 = capturedAuthorizeParams()
+    expect(dcrBodies).toHaveLength(2)
+    expect(dcrBodies[1].redirect_uris).toEqual([p2.redirectUri])
+    expect(p2.redirectUri).not.toBe(redirectUri)
     await hitCallback(p2.redirectUri, { code: 'auth-code-2', state: p2.state })
     await second
-    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/register'))).toHaveLength(1)
+    const secondAuthUrl = new URL(openExternal.mock.calls[0][0] as string)
+    expect(secondAuthUrl.searchParams.get('client_id')).toBe('plane-client-2')
+  })
+
+  it('does not reuse a cached client_id/client_secret registered with a different (portless) URI (P4-F2, AGUC-021)', async () => {
+    // A previously-cached client — e.g. from a one-time registration, or one Plane has since rejected —
+    // must never short-circuit a fresh interactive Connect. Reusing it silently is exactly the bug: this
+    // pre-seeds settings/mcpSecrets the way the OLD ensurePlaneClient() cache would have left them.
+    const { setSettings } = await import('../store')
+    const { setMcpClientSecret } = await import('./mcpSecrets')
+    setSettings({ planeClientId: 'cached-portless-client' })
+    setMcpClientSecret('plane', 'cached-portless-secret')
+
+    let capturedRedirectUris: string[] = []
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/register')) {
+        capturedRedirectUris = (JSON.parse(String(init?.body || '{}')) as { redirect_uris?: string[] }).redirect_uris || []
+        return jsonResponse({ client_id: 'fresh-ported-client', client_secret: 'fresh-ported-secret' })
+      }
+      if (String(url).includes('/token')) return jsonResponse(TOKEN_RESPONSE)
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    const { runPlaneOAuth } = await import('./planeOAuth')
+    const flow = runPlaneOAuth()
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
+    const { redirectUri, state } = capturedAuthorizeParams()
+    expect(capturedRedirectUris).toEqual([redirectUri])
+    expect(capturedRedirectUris).not.toContain('http://127.0.0.1/callback')
+    const authUrl = new URL(openExternal.mock.calls[0][0] as string)
+    expect(authUrl.searchParams.get('client_id')).toBe('fresh-ported-client')
+    await hitCallback(redirectUri, { code: 'auth-code-1', state })
+    await flow
   })
 
   it('sends client_secret + PKCE verifier on the token exchange (confidential client)', async () => {
@@ -212,5 +253,40 @@ describe('refreshPlaneToken', () => {
     const { refreshPlaneToken } = await import('./planeOAuth')
     const r = await refreshPlaneToken('some-refresh-token')
     expect(r.ok).toBe(false)
+  })
+
+  it('surfaces a rejected refresh token as a human sentence, not a raw JSON blob (AGUC-021)', async () => {
+    const { setSettings } = await import('../store')
+    const { setMcpClientSecret } = await import('./mcpSecrets')
+    setSettings({ planeClientId: 'stale-client' })
+    setMcpClientSecret('plane', 'stale-secret')
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ error: 'invalid_grant', error_description: 'refresh token is expired or revoked' }, false, 400)
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { refreshPlaneToken } = await import('./planeOAuth')
+    const r = await refreshPlaneToken('revoked-refresh-token')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error).toBe('refresh token is expired or revoked')
+    expect(r.error).not.toMatch(/[{[]/)
+  })
+})
+
+describe('humanizePlaneOAuthError', () => {
+  it('maps a redirect_uri mismatch and an unrecognized client to human sentences, mirroring humanizeClickupOAuthError', async () => {
+    const { humanizePlaneOAuthError } = await import('./planeOAuth')
+    const blob = '{"error":"invalid_client","error_description":"redirect_uri is not registered for this client"}'
+    const mapped = humanizePlaneOAuthError('', blob)
+    expect(mapped).toMatch(/callback address/i)
+    expect(mapped).toMatch(/Connect again/)
+    expect(mapped).not.toMatch(/[{[]/)
+    expect(humanizePlaneOAuthError('invalid_client', 'redirect_uri is not registered for this client')).toBe(mapped)
+    expect(humanizePlaneOAuthError('invalid_client', '')).toMatch(/did not recognize this sign-in client/i)
+  })
+
+  it('passes through a plain Plane error sentence unchanged', async () => {
+    const { humanizePlaneOAuthError } = await import('./planeOAuth')
+    expect(humanizePlaneOAuthError('', 'refresh token is expired or revoked')).toBe('refresh token is expired or revoked')
   })
 })
