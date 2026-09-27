@@ -157,8 +157,18 @@ jobs:
           curl -sS -X POST \
             -H "Authorization: Bearer ${{ github.token }}" \
             -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -w "\nHTTP_STATUS:%{http_code}\n" \
             "https://api.github.com/repos/${{ github.repository }}/issues/209/comments" \
-            -d @"$RUNNER_TEMP/debug-payload.json"
+            -d @"$RUNNER_TEMP/debug-payload.json" | tee "$RUNNER_TEMP/debug-post-result.txt"
+          grep -q "^HTTP_STATUS:201" "$RUNNER_TEMP/debug-post-result.txt" || {
+            curl -sS -X POST \
+              -H "Authorization: Bearer ${{ github.token }}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/209/comments" \
+              -d "$(jq -Rs '{body: ("DEBUG post failed, see result: " + .)}' "$RUNNER_TEMP/debug-post-result.txt")"
+          }
 
   deny-non-loopback:
     name: deny-non-loopback.cjs denies every connect() shape (hermetic)
