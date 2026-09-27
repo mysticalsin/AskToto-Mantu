@@ -103,6 +103,14 @@ function assetsFor(platform: Platform, names = platformAssets(platform, VERSION)
   })
 }
 
+function assetsFromBundle(bundleDir: string, names: string[]): FeedAsset[] {
+  return names.map((name) => {
+    const path = join(bundleDir, name)
+    const bytes = readFileSync(path)
+    return { name, state: 'uploaded', size: statSync(path).size, digest: `sha256:${sha256Hex(bytes)}` }
+  })
+}
+
 function replacementMutations(platform: Platform, deletedId: number): string[] {
   return [
     `delete ${deletedId}`,
@@ -258,11 +266,25 @@ describe('publish-release platform rules (M2-0053)', () => {
     })
 
     it(`treats a public release with complete ${platformLabels[platform]} assets as already published`, async () => {
-      const feed = new FakeFeed([release({ assets: assetsFor(platform) })])
+      const bundleDir = makeBundle(platform)
+      const feed = new FakeFeed([release({ assets: assetsFromBundle(bundleDir, platformAssets(platform, VERSION) as string[]) })])
 
-      const result = await publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed })
+      const result = await publishPlatform({ platform, tag: TAG, bundleDir, feed })
 
       expect(result.action).toBe('complete')
+      expect(feed.mutations).toEqual([])
+    })
+
+    it(`refuses complete public ${platformLabels[platform]} assets when GitHub's digest differs from the local bytes`, async () => {
+      const bundleDir = makeBundle(platform)
+      const assets = assetsFromBundle(bundleDir, platformAssets(platform, VERSION) as string[]).map((asset) =>
+        asset.name === metadataName[platform]
+          ? { ...asset, digest: `sha256:${sha256Hex(Buffer.from(`wrong-${asset.name}`))}` }
+          : asset
+      )
+      const feed = new FakeFeed([release({ assets })])
+
+      await expect(publishPlatform({ platform, tag: TAG, bundleDir, feed })).rejects.toThrow(/digest/)
       expect(feed.mutations).toEqual([])
     })
 
