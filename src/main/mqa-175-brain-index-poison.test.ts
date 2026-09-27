@@ -6,7 +6,8 @@ import { randomBytes, createCipheriv, createHash } from 'node:crypto'
 import { safeStorage } from 'electron'
 import type { Settings } from '@shared/ipc'
 import { BrainIndexSchema } from '@shared/brain'
-import { brainDir, readIndex, writeIndex, indexUnavailable, purgeBrain, BrainIndexUnavailableError } from './brain/store'
+import { readIndex, writeIndex, indexUnavailable, BrainIndexUnavailableError } from './brain/ledger'
+import { brainDir, purgeBrain } from './brain/store'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 
 vi.mock('electron')
@@ -172,7 +173,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     // the env var on the SAME module instance (whose stat-keyed cache would otherwise mask this).
     vi.unstubAllEnvs()
     vi.resetModules()
-    const fresh = await import('./brain/store')
+    const fresh = await import('./brain/ledger')
     expect(fresh.readIndex(s).ingested['a.md']?.ok).toBe(true)
     expect(fresh.indexUnavailable(s)).toBeNull()
   })

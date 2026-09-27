@@ -15,7 +15,8 @@ import {
   finishRebuildReplay,
   whenIndexWritesSettle
 } from './ingest'
-import { readIndex, writeIndex, readAccount, writeAccount, brainDir, slugify } from './store'
+import { readIndex, writeIndex } from './ledger'
+import { readAccount, writeAccount, brainDir, slugify } from './store'
 import { renameEntity } from './corrections'
 
 vi.mock('electron')

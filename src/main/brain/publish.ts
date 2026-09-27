@@ -16,7 +16,8 @@ import {
   type LedgerCommitment
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, parseRecapMarkdown } from '../transcripts'
-import { listEntities, readPerson, readAccount, readDeal, readIndex, readMeetingExtraction, listMeetingExtractions, slugify } from './store'
+import { readIndex } from './ledger'
+import { listEntities, readPerson, readAccount, readDeal, readMeetingExtraction, listMeetingExtractions, slugify } from './store'
 import { readAliasMap, resolveEntitySlug, type AliasMap } from './corrections'
 
 /**

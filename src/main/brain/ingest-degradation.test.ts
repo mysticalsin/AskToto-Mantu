@@ -14,7 +14,8 @@ import {
   startRebuild,
   whenIndexWritesSettle
 } from './ingest'
-import { listMeetingExtractions, readIndex } from './store'
+import { readIndex } from './ledger'
+import { listMeetingExtractions } from './store'
 
 vi.mock('electron')
 

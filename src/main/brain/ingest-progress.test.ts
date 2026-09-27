@@ -14,7 +14,8 @@ import {
   reconcileMeetingsInBackground,
   ingestExtraction, whenIndexWritesSettle } from './ingest'
 import { MeetingExtractionSchema } from '@shared/brain'
-import { readAccount, readIndex, slugify, writeMeetingExtraction } from './store'
+import { readIndex } from './ledger'
+import { readAccount, slugify, writeMeetingExtraction } from './store'
 
 vi.mock('electron')
 

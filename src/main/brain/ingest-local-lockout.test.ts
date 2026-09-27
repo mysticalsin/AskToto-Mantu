@@ -12,7 +12,7 @@ import {
   startRebuild,
   whenIndexWritesSettle
 } from './ingest'
-import { readIndex } from './store'
+import { readIndex } from './ledger'
 
 vi.mock('electron')
 

@@ -42,6 +42,11 @@ import { auditLog, mainLog } from '../logger'
 import { appendTimeSavedEvent } from '../time-saved-log'
 import { estimateSecondBrainMinutes } from '@shared/time-saved-events'
 import {
+  readIndex,
+  writeIndex,
+  indexUnavailable
+} from './ledger'
+import {
   slugify,
   commitmentKey,
   pushUnique,
@@ -50,9 +55,6 @@ import {
   eqStrict,
   eqVelocity,
   eqAmount,
-  readIndex,
-  writeIndex,
-  indexUnavailable,
   readGraph,
   writeGraph,
   writeMeetingExtraction,

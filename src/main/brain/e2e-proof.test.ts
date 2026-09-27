@@ -7,6 +7,7 @@ import { MeetingExtractionSchema, type MeetingExtraction } from '@shared/brain'
 import { computeSilence } from '@shared/silence'
 import { buildMarsWeek } from '@shared/mars'
 import { ingestExtraction, settleCommitment, whenIndexWritesSettle } from './ingest'
+import { readIndex } from './ledger'
 import {
   slugify,
   readGraph,
@@ -16,8 +17,7 @@ import {
   writeDeal,
   listEntities,
   listMeetingExtractions,
-  readMeetingExtraction,
-  readIndex
+  readMeetingExtraction
 } from './store'
 
 vi.mock('electron')

@@ -1,7 +1,8 @@
 import type { Settings } from '@shared/ipc'
 import type { AttentionItem } from '@shared/ipc'
 import type { ProvenantField } from '@shared/brain'
-import { listEntities, readPerson, readAccount, readDeal, readIndex } from './store'
+import { readIndex } from './ledger'
+import { listEntities, readPerson, readAccount, readDeal } from './store'
 import { lintBrainDetailed, ingestFailureDetails } from './ingest'
 
 /**

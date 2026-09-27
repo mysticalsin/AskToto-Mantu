@@ -10,7 +10,7 @@ import { clearApiKey, getApiKey, getSettings, setSettings } from '../store'
 import type { StreamOptions } from '../llm/shared'
 import { brainBackfillProgress, startBackfill, whenIndexWritesSettle } from './ingest'
 import { startIntelligencePass } from './intelligence-pass'
-import { readIndex } from './store'
+import { readIndex } from './ledger'
 
 vi.mock('electron')
 const hosted = vi.hoisted(() => ({

@@ -14,6 +14,7 @@ import {
   updateIndex,
   readMeetingSourceMode, whenIndexWritesSettle } from './ingest'
 import { buildBrainContext } from './context'
+import { readIndex, writeIndex } from './ledger'
 import {
   brainDir,
   slugify,
@@ -24,8 +25,6 @@ import {
   writePerson,
   readDeal,
   writeDeal,
-  readIndex,
-  writeIndex,
   listEntities,
   purgeBrain
 } from './store'

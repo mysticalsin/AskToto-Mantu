@@ -21,7 +21,8 @@ import {
   updateIndex,
   whenIndexWritesSettle
 } from './ingest'
-import { readDeal, readIndex, setDealOutcome, withEntityLock, writeDeal } from './store'
+import { readIndex } from './ledger'
+import { readDeal, setDealOutcome, withEntityLock, writeDeal } from './store'
 
 vi.mock('electron')
 

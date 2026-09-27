@@ -9,7 +9,7 @@ import { BrainIndexSchema } from '@shared/brain'
 vi.mock('electron')
 
 /**
- * M2-0003 — unit coverage for the read/replace invariant primitives in store.ts that
+ * M2-0003 — unit coverage for the read/replace invariant primitives in ledger.ts that
  * mqa-175-brain-index-poison.test.ts (an integration-shaped suite) does not exercise directly: the pure
  * classifier, the I/O-vs-decode distinction, the io retry window, a failed set-aside rename, and the
  * once-per-classification log/audit contract.
@@ -62,6 +62,7 @@ vi.mock('node:fs', async (importOriginal) => {
 
 // Imported AFTER the mock factory (vi.mock is hoisted above this regardless of source order).
 const store = await import('./store')
+const ledger = await import('./ledger')
 const logger = await import('../logger')
 // `vi.mock('node:fs', ...)` above replaces EVERY import of the module in this file, including a plain
 // `readFileSync` import — so verifying "the primary index.json's bytes are truly unchanged" while a fault
@@ -86,22 +87,22 @@ function foreignKeyIndexBytes(): Buffer {
 
 describe('classifyIndexBytes — pure classification, no filesystem writes', () => {
   it('0 bytes -> absent; a healthy plaintext index -> ready; unparseable JSON -> corrupt', () => {
-    expect(store.classifyIndexBytes(Buffer.alloc(0))).toEqual({ kind: 'absent' })
+    expect(ledger.classifyIndexBytes(Buffer.alloc(0))).toEqual({ kind: 'absent' })
 
     const healthy = BrainIndexSchema.parse({})
-    expect(store.classifyIndexBytes(Buffer.from(JSON.stringify(healthy), 'utf8'))).toEqual({ kind: 'ready', index: healthy })
+    expect(ledger.classifyIndexBytes(Buffer.from(JSON.stringify(healthy), 'utf8'))).toEqual({ kind: 'ready', index: healthy })
 
-    expect(store.classifyIndexBytes(Buffer.from('{"ingested": tru', 'utf8'))).toEqual({ kind: 'corrupt' })
+    expect(ledger.classifyIndexBytes(Buffer.from('{"ingested": tru', 'utf8'))).toEqual({ kind: 'corrupt' })
   })
 
   it('a foreign-key envelope classifies as unavailable/undecryptable', () => {
-    const load = store.classifyIndexBytes(foreignKeyIndexBytes())
+    const load = ledger.classifyIndexBytes(foreignKeyIndexBytes())
     expect(load).toMatchObject({ kind: 'unavailable', cause: 'undecryptable' })
   })
 
   it('a newer schema_version classifies as unavailable/unsupported, never corrupt', () => {
     const bytes = Buffer.from(JSON.stringify({ schema_version: 99, ingested: 'new-shape' }), 'utf8')
-    expect(store.classifyIndexBytes(bytes)).toEqual({ kind: 'unavailable', cause: 'unsupported' })
+    expect(ledger.classifyIndexBytes(bytes)).toEqual({ kind: 'unavailable', cause: 'unsupported' })
   })
 })
 
@@ -137,12 +138,12 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
 
     failReadPersistent = mkErr('ETIMEDOUT')
 
-    expect(store.readIndex(s).ingested).toEqual({}) // never the swallowed-into-absent behaviour
-    expect(store.indexUnavailable(s)).toBe('io')
+    expect(ledger.readIndex(s).ingested).toEqual({}) // never the swallowed-into-absent behaviour
+    expect(ledger.indexUnavailable(s)).toBe('io')
     expect(realFs.readFileSync(primary)).toEqual(before)
 
-    await expect(store.writeIndex(s, store.readIndex(s))).rejects.toBeInstanceOf(store.BrainIndexUnavailableError)
-    await expect(store.writeIndex(s, store.readIndex(s))).rejects.toMatchObject({ unavailable: 'io' })
+    await expect(ledger.writeIndex(s, ledger.readIndex(s))).rejects.toBeInstanceOf(ledger.BrainIndexUnavailableError)
+    await expect(ledger.writeIndex(s, ledger.readIndex(s))).rejects.toMatchObject({ unavailable: 'io' })
     expect(realFs.readFileSync(primary)).toEqual(before)
   })
 
@@ -153,14 +154,14 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     writeFileSync(primary, JSON.stringify(healthy), 'utf8')
 
     failReadPersistent = mkErr('ETIMEDOUT')
-    expect(store.indexUnavailable(s)).toBe('io')
-    expect(store.indexUnavailable(s)).toBe('io') // still within the retry window: no recovery yet
+    expect(ledger.indexUnavailable(s)).toBe('io')
+    expect(ledger.indexUnavailable(s)).toBe('io') // still within the retry window: no recovery yet
 
-    vi.setSystemTime(Date.now() + store.INDEX_IO_RETRY_MS + 1)
+    vi.setSystemTime(Date.now() + ledger.INDEX_IO_RETRY_MS + 1)
     failReadPersistent = null // the transient condition (e.g. OneDrive hydrating) has cleared
 
-    expect(store.readIndex(s).ingested['healed.md']?.ok).toBe(true)
-    expect(store.indexUnavailable(s)).toBeNull()
+    expect(ledger.readIndex(s).ingested['healed.md']?.ok).toBe(true)
+    expect(ledger.indexUnavailable(s)).toBeNull()
   })
 
   it('a failed set-aside rename (EPERM) leaves the invalid index in place as \'corrupt-kept\', without spinning on every read', () => {
@@ -169,9 +170,9 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     failRenameOnce = mkErr('EPERM')
 
     for (let i = 0; i < 3; i++) {
-      expect(store.readIndex(s).ingested).toEqual({})
+      expect(ledger.readIndex(s).ingested).toEqual({})
     }
-    expect(store.indexUnavailable(s)).toBe('corrupt-kept')
+    expect(ledger.indexUnavailable(s)).toBe('corrupt-kept')
     expect(existsSync(primary)).toBe(true)
     expect(realFs.readFileSync(primary)).toEqual(bad)
     // One rename ATTEMPT for the whole run (it failed and was cached) — not one per readIndex call.
@@ -183,7 +184,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     const auditSpy = vi.spyOn(logger, 'auditLog').mockImplementation(() => {})
     writeFileSync(primary, foreignKeyIndexBytes())
 
-    for (let i = 0; i < 10; i++) store.readIndex(s)
+    for (let i = 0; i < 10; i++) ledger.readIndex(s)
 
     const auditCalls = auditSpy.mock.calls.filter((c) => c[0] === 'brain.index.unavailable')
     expect(auditCalls).toHaveLength(1)
@@ -193,7 +194,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
 
   it('indexUnavailableMessage has content-free, non-empty copy for every IndexUnavailableCause', () => {
     for (const cause of ['io', 'undecryptable', 'unsupported', 'corrupt-kept'] as const) {
-      const msg = store.indexUnavailableMessage(cause)
+      const msg = ledger.indexUnavailableMessage(cause)
       expect(msg.length).toBeGreaterThan(20)
       expect(msg).not.toContain(folder) // never leaks a filesystem path
       expect(msg).not.toContain('.json')

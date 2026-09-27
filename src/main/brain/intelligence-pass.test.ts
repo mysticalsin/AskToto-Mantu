@@ -9,7 +9,7 @@ import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
 import { brainBackfillProgress, startBackfill, whenIndexWritesSettle } from './ingest'
 import { startIntelligencePass } from './intelligence-pass'
 import { INTELLIGENCE_PASS_NO_PROVIDER } from './intelligence-pass-route'
-import { readIndex } from './store'
+import { readIndex } from './ledger'
 
 vi.mock('electron')
 

@@ -554,9 +554,10 @@ import {
 } from './intelligence'
 import {
   readIndex as readBrainIndex,
-  writeIndex as writeBrainIndex,
   indexUnavailable,
-  indexUnavailableMessage,
+  indexUnavailableMessage
+} from './brain/ledger'
+import {
   readGraph as readBrainGraph,
   writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,

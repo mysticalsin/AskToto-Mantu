@@ -7,7 +7,8 @@ import { PROVIDER_IDS } from '@shared/providers'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
 import { brainBackfillProgress, enqueueIngest, startBackfill, whenIndexWritesSettle } from './ingest'
-import { readIndex, readMeetingExtraction } from './store'
+import { readIndex } from './ledger'
+import { readMeetingExtraction } from './store'
 
 vi.mock('electron')
 

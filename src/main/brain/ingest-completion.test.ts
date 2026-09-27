@@ -7,6 +7,7 @@ import { getSettings, setSettings, setApiKey, clearApiKey } from '../store'
 import type { StreamOptions, StreamHandlers } from '../llm/shared'
 import { createStream } from '../llm'
 import * as brainStore from './store'
+import * as brainLedger from './ledger'
 import * as publish from './publish'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { requestBackfillRun, requestSourceRefresh, resumeBackfillIfPending, startBackfill, startRebuild, enqueueIngest, brainBackfillProgress, whenIndexWritesSettle } from './ingest'
@@ -83,11 +84,11 @@ describe('backfill run completion observes real work', () => {
     let settled = false
     void run.completion.then(() => { settled = true })
     await vi.waitFor(() => expect(publishing).toBe(true))
-    expect(brainStore.readIndex(getSettings()).ingested['one.md']?.ok).toBe(true)
+    expect(brainLedger.readIndex(getSettings()).ingested['one.md']?.ok).toBe(true)
     expect(settled).toBe(false)
     finalPublication.release()
     await expect(run.completion).resolves.toEqual({ ok: true, total: 1, failed: 0 })
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(false)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(false)
   })
 
   it('coalesces an existing legacy batch without an early callback or duplicate extraction', async () => {
@@ -110,15 +111,15 @@ describe('backfill run completion observes real work', () => {
     meeting('failed.md')
     vi.mocked(createStream).mockImplementation((opts) => { queueMicrotask(() => opts.handlers.onError('synthetic provider failure')); return { abort: () => {} } })
     await expect(requestBackfillRun({ force: true }).completion).resolves.toEqual({ ok: false, error: 'incomplete', total: 1, failed: 1 })
-    expect(brainStore.readIndex(getSettings()).ingested['failed.md']?.ok).toBe(false)
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
+    expect(brainLedger.readIndex(getSettings()).ingested['failed.md']?.ok).toBe(false)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('counts deferred sources without pretending no-provider work succeeded', async () => {
     meeting('a.md'); meeting('b.md')
     clearApiKey('anthropic')
     await expect(requestBackfillRun({ force: true }).completion).resolves.toEqual({ ok: false, error: 'no-provider', total: 2, failed: 0 })
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('settles a provider lost mid-batch without consuming the remaining source', async () => {
@@ -130,8 +131,8 @@ describe('backfill run completion observes real work', () => {
     clearApiKey('anthropic')
     extraction.release()
     await expect(run.completion).resolves.toEqual({ ok: false, error: 'no-provider', total: 4, failed: 0 })
-    expect(Object.values(brainStore.readIndex(getSettings()).ingested).filter((row) => row.ok)).toHaveLength(3)
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
+    expect(Object.values(brainLedger.readIndex(getSettings()).ingested).filter((row) => row.ok)).toHaveLength(3)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('reports a deferred scan failure instead of succeeding or leaving preparation stuck', async () => {
@@ -140,20 +141,20 @@ describe('backfill run completion observes real work', () => {
     setSettings({ teamTranscriptFolders: [blocked] })
     await expect(requestBackfillRun({ force: true }).completion).resolves.toEqual({ ok: false, error: 'scan-failed', total: 0, failed: 0 })
     expect(brainBackfillProgress().preparing).toBeFalsy()
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('observes rejected detached index writes instead of trusting the swallowed lock tail', async () => {
-    vi.spyOn(brainStore, 'writeIndex').mockRejectedValueOnce(new Error('synthetic disk failure'))
+    vi.spyOn(brainLedger, 'writeIndex').mockRejectedValueOnce(new Error('synthetic disk failure'))
     await expect(requestBackfillRun({ force: true }).completion).resolves.toEqual({ ok: false, error: 'write-failed', total: 0, failed: 0 })
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('reports final publication rejection and retains durable retry state', async () => {
     meeting('publish.md')
     vi.mocked(publish.publishIndexes).mockRejectedValueOnce(new Error('synthetic publication failure'))
     await expect(requestBackfillRun({ force: true }).completion).resolves.toEqual({ ok: false, error: 'publication-failed', total: 1, failed: 0 })
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('repairs a local checkpoint without requiring a provider', async () => {
@@ -189,12 +190,12 @@ describe('backfill run completion observes real work', () => {
     const run = requestBackfillRun({ force: true }, recap.promise)
     let settled = false
     void run.completion.then(() => { settled = true })
-    await vi.waitFor(() => expect(brainStore.readIndex(getSettings()).ingested['recap.md']?.ok).toBe(true))
+    await vi.waitFor(() => expect(brainLedger.readIndex(getSettings()).ingested['recap.md']?.ok).toBe(true))
     expect(settled).toBe(false)
     writeFileSync(file, '---\ndate: 2026-01-01\n---\nSynthetic transcript with a newly saved recap.\n')
     recap.release()
     await expect(run.completion).resolves.toEqual({ ok: false, error: 'incomplete', total: 1, failed: 0 })
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('checks source freshness again when a file changes during final publication', async () => {
@@ -216,7 +217,7 @@ describe('backfill run completion observes real work', () => {
     await vi.waitFor(() => expect(brainBackfillProgress().preparing).toBeFalsy())
     const file = meeting('new-live.md')
     await enqueueIngest(file)
-    await vi.waitFor(() => expect(brainStore.readIndex(getSettings()).ingested['new-live.md']?.ok).toBe(true))
+    await vi.waitFor(() => expect(brainLedger.readIndex(getSettings()).ingested['new-live.md']?.ok).toBe(true))
     recap.release()
     await expect(run.completion).resolves.toEqual({ ok: true, total: 1, failed: 0 })
   })
@@ -234,7 +235,7 @@ describe('backfill run completion observes real work', () => {
     expect(settled).toBe(false)
     secondGate.release()
     await expect(first.completion).resolves.toEqual({ ok: false, error: 'incomplete', total: 0, failed: 0 })
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('reports source refresh publication failure without wedging its completion callback', async () => {
@@ -245,11 +246,11 @@ describe('backfill run completion observes real work', () => {
     await requestSourceRefresh()
     await expect(requestBackfillRun({ force: true }).completion).resolves.toEqual({ ok: false, error: 'publication-failed', total: 1, failed: 0 })
     expect(brainBackfillProgress().running).toBe(false)
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('still runs legacy drain callbacks and settles when the index stays unwritable', async () => {
-    vi.spyOn(brainStore, 'writeIndex').mockImplementation(async () => {
+    vi.spyOn(brainLedger, 'writeIndex').mockImplementation(async () => {
       await new Promise<void>((resolve) => setImmediate(resolve))
       throw new Error('synthetic persistent disk failure')
     })
@@ -262,15 +263,15 @@ describe('backfill run completion observes real work', () => {
 
   it('counts a failed durable job even when writing its failure record also rejects', async () => {
     meeting('write-failure.md')
-    const write = brainStore.writeIndex
+    const write = brainLedger.writeIndex
     vi.spyOn(brainStore, 'writeMeetingExtraction').mockRejectedValueOnce(new Error('synthetic extraction disk failure'))
-    vi.spyOn(brainStore, 'writeIndex').mockImplementation(async (settings, idx) => {
+    vi.spyOn(brainLedger, 'writeIndex').mockImplementation(async (settings, idx) => {
       if (idx.ingested['write-failure.md'] && !idx.ingested['write-failure.md'].ok) throw new Error('synthetic failure-ledger write failure')
       return write(settings, idx)
     })
     await expect(requestBackfillRun({ force: true }).completion).resolves.toEqual({ ok: false, error: 'write-failed', total: 1, failed: 1 })
     expect(brainBackfillProgress()).toMatchObject({ running: false, total: 1, done: 1, failed: 1 })
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(true)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(true)
   })
 
   it('waits for a newly joined live job even when final publication fails', async () => {
@@ -304,8 +305,8 @@ describe('backfill run completion observes real work', () => {
     await expect(requestBackfillRun({ force: true }).completion).resolves.toMatchObject({ ok: false, error: 'publication-failed' })
     await expect(requestBackfillRun({ force: true }).completion).resolves.toEqual({ ok: true, total: 0, failed: 0 })
     expect(publish.publishAll).toHaveBeenCalledTimes(2)
-    expect(brainStore.readIndex(getSettings()).replayPending).toBe(false)
-    expect(brainStore.readIndex(getSettings()).backfillRequested).toBe(false)
+    expect(brainLedger.readIndex(getSettings()).replayPending).toBe(false)
+    expect(brainLedger.readIndex(getSettings()).backfillRequested).toBe(false)
   })
 
   it('resumes both pending refresh and replay markers without another purge or duplicate replay', async () => {
@@ -316,7 +317,7 @@ describe('backfill run completion observes real work', () => {
     vi.mocked(publish.publishAll).mockClear().mockRejectedValueOnce(new Error('synthetic interrupted publication'))
     await requestSourceRefresh()
     await expect(requestBackfillRun({ force: true }).completion).resolves.toMatchObject({ ok: false, error: 'publication-failed' })
-    expect(brainStore.readIndex(getSettings())).toMatchObject({ replayPending: true, sourceRefreshRequested: true, backfillRequested: true })
+    expect(brainLedger.readIndex(getSettings())).toMatchObject({ replayPending: true, sourceRefreshRequested: true, backfillRequested: true })
     const publication = trackedGate()
     let retrying = false
     vi.mocked(publish.publishAll).mockImplementationOnce(async () => { retrying = true; await publication.promise })
@@ -324,13 +325,13 @@ describe('backfill run completion observes real work', () => {
     resumeBackfillIfPending()
     const run = requestBackfillRun({ force: true })
     await vi.waitFor(() => expect(retrying).toBe(true))
-    expect(brainStore.readIndex(getSettings())).toMatchObject({ replayPending: true, sourceRefreshRequested: true })
+    expect(brainLedger.readIndex(getSettings())).toMatchObject({ replayPending: true, sourceRefreshRequested: true })
     publication.release()
     await expect(run.completion).resolves.toEqual({ ok: true, total: 0, failed: 0 })
     expect(publish.publishAll).toHaveBeenCalledTimes(2)
     expect(purge).toHaveBeenCalledTimes(1)
     expect(createStream).toHaveBeenCalledTimes(2)
-    expect(brainStore.readIndex(getSettings())).toMatchObject({ replayPending: false, sourceRefreshRequested: false, backfillRequested: false })
+    expect(brainLedger.readIndex(getSettings())).toMatchObject({ replayPending: false, sourceRefreshRequested: false, backfillRequested: false })
   })
 
   it('can retry replay after a refresh scan throws before registering its drain callback', async () => {
@@ -343,7 +344,7 @@ describe('backfill run completion observes real work', () => {
     await expect(requestBackfillRun({ force: true }).completion).resolves.toEqual({ ok: false, error: 'scan-failed', total: 1, failed: 0 })
     setSettings({ teamTranscriptFolders: [] })
     await expect(requestBackfillRun({ force: true }).completion).resolves.toEqual({ ok: true, total: 1, failed: 0 })
-    expect(brainStore.readIndex(getSettings())).toMatchObject({ replayPending: false, sourceRefreshRequested: false, backfillRequested: false })
+    expect(brainLedger.readIndex(getSettings())).toMatchObject({ replayPending: false, sourceRefreshRequested: false, backfillRequested: false })
   })
 
   it('refuses an overlapping rebuild during publication instead of losing its lifecycle callback', async () => {

@@ -8,7 +8,8 @@ import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
 import { mainLog } from '../logger'
 import { startBackfill, brainBackfillProgress, reconcileMeetingsInBackground, whenIndexWritesSettle } from './ingest'
-import { readAccount, readDeal, readIndex, slugify, writeIndex, writeMeetingExtraction } from './store'
+import { readIndex, writeIndex } from './ledger'
+import { readAccount, readDeal, slugify, writeMeetingExtraction } from './store'
 
 vi.mock('electron')
 

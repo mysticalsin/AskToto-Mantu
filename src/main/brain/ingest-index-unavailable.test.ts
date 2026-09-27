@@ -18,7 +18,8 @@ import {
   updateIndex,
   whenIndexWritesSettle
 } from './ingest'
-import { brainDir, indexUnavailable, readIndex } from './store'
+import { indexUnavailable, readIndex } from './ledger'
+import { brainDir } from './store'
 
 vi.mock('electron')
 

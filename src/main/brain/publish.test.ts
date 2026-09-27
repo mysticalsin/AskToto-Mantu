@@ -14,7 +14,8 @@ import {
   type Confidence,
   type MeetingExtraction
 } from '@shared/brain'
-import { writeDeal, writeAccount, writePerson, writeMeetingExtraction, writeIndex, slugify } from './store'
+import { writeIndex } from './ledger'
+import { writeDeal, writeAccount, writePerson, writeMeetingExtraction, slugify } from './store'
 import { readAliasMap } from './corrections'
 import { ingestExtraction, whenIndexWritesSettle } from './ingest'
 import {

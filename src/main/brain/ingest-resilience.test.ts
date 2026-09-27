@@ -8,7 +8,7 @@ import { BrainIndexSchema } from '@shared/brain'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
 import { brainBackfillProgress, ingestFailureCounts, ingestFailureDetails, startBackfill, MAX_INGEST_ATTEMPTS, whenIndexWritesSettle } from './ingest'
-import { readIndex } from './store'
+import { readIndex } from './ledger'
 
 vi.mock('electron')
 

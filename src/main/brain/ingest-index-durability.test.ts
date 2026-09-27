@@ -4,11 +4,12 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import * as store from './store'
+import * as ledger from './ledger'
 import { updateIndex, whenIndexWritesSettle } from './ingest'
 
 vi.mock('electron')
-vi.mock('./store', async (original) => {
-  const actual = await original<typeof import('./store')>()
+vi.mock('./ledger', async (original) => {
+  const actual = await original<typeof import('./ledger')>()
   return { ...actual, writeIndex: vi.fn(actual.writeIndex) }
 })
 
@@ -20,7 +21,7 @@ describe('index mutations own their unpublished snapshot', () => {
     folder = mkdtempSync(join(tmpdir(), 'metis-index-durability-'))
     vi.stubEnv('ASKTOTO_USERDATA', folder)
     settings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
-    await store.writeIndex(settings, store.readIndex(settings))
+    await ledger.writeIndex(settings, ledger.readIndex(settings))
   })
 
   afterEach(async () => {
@@ -31,8 +32,8 @@ describe('index mutations own their unpublished snapshot', () => {
   })
 
   it('does not poison cached state or a later successful write when persistence fails', async () => {
-    const before = store.readIndex(settings)
-    vi.mocked(store.writeIndex).mockRejectedValueOnce(new Error('synthetic disk failure'))
+    const before = ledger.readIndex(settings)
+    vi.mocked(ledger.writeIndex).mockRejectedValueOnce(new Error('synthetic disk failure'))
 
     await expect(updateIndex(settings, (index) => {
       index.ingested['not-saved.md'] = { at: 1, ok: true }
@@ -40,7 +41,7 @@ describe('index mutations own their unpublished snapshot', () => {
     })).rejects.toThrow('synthetic disk failure')
 
     expect(before.ingested).toEqual({})
-    expect(store.readIndex(settings).ingested).toEqual({})
+    expect(ledger.readIndex(settings).ingested).toEqual({})
     await updateIndex(settings, (index) => {
       index.ingested['saved.md'] = { at: 2, ok: true }
       index.revision += 1
@@ -51,12 +52,12 @@ describe('index mutations own their unpublished snapshot', () => {
   })
 
   it('keeps existing readers unchanged when a successful mutation publishes a new index', async () => {
-    const before = store.readIndex(settings)
+    const before = ledger.readIndex(settings)
     await updateIndex(settings, (index) => {
       index.ingested['saved.md'] = { at: 2, ok: true }
     })
     expect(before.ingested).toEqual({})
-    expect(store.readIndex(settings).ingested['saved.md']?.ok).toBe(true)
+    expect(ledger.readIndex(settings).ingested['saved.md']?.ok).toBe(true)
   })
 
   it('discards partial mutation if the mutator throws and keeps the serial lane usable', async () => {
@@ -64,9 +65,9 @@ describe('index mutations own their unpublished snapshot', () => {
       index.ingested['not-saved.md'] = { at: 1, ok: true }
       throw new Error('synthetic mutator failure')
     })).rejects.toThrow('synthetic mutator failure')
-    expect(store.readIndex(settings).ingested).toEqual({})
+    expect(ledger.readIndex(settings).ingested).toEqual({})
     await updateIndex(settings, (index) => { index.revision += 1 })
-    expect(store.readIndex(settings).revision).toBe(1)
-    expect(store.readIndex(settings).ingested).toEqual({})
+    expect(ledger.readIndex(settings).revision).toBe(1)
+    expect(ledger.readIndex(settings).ingested).toEqual({})
   })
 })

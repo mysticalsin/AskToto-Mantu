@@ -7,7 +7,8 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
 import { brainBackfillProgress, extractionSlug, startBackfill, whenIndexWritesSettle } from './ingest'
-import { readIndex, readMeetingExtraction, writeIndex, writeMeetingExtraction } from './store'
+import { readIndex, writeIndex } from './ledger'
+import { readMeetingExtraction, writeMeetingExtraction } from './store'
 
 vi.mock('electron')
 
