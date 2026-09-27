@@ -4,6 +4,9 @@
 **Target:** https://metis-operator.tony-walteur.workers.dev (Worker name `metis-operator`)  
 **NOT:** a second portal/Worker
 
+**Status:** Historical — point-in-time deploy snapshot (20 Sep 2026), superseded by current Operator
+deploy state; kept for lineage.
+
 ## Status
 | Item | Value |
 |------|-------|

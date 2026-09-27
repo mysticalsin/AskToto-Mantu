@@ -464,6 +464,7 @@ describe('bounded close and successful-save receipt join', () => {
       // WebContents is torn down (MQA-340).
       selfWebContentsId: 1,
       commandControl: { revokeForLifecycleEvent },
+      responsiveness: { markGone: vi.fn() },
       overlayRendererUrl: () => 'file:///renderer/index.html',
       process: { env: {} },
       join

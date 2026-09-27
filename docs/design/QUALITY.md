@@ -7,6 +7,8 @@ ship-bar: would Apple ship this overlay?
 
 # Overlay quality hats
 
+**Status:** Active — quality gate for `BAR-PILL.md`; enforced before any Bar-circle change ships.
+
 Every hat must **PASS**. One **REJECT** fails the slice. This is the gate for the Bar circle (`docs/design/BAR-PILL.md`). Hide park 8×2 and Island hover math are out of scope and must stay untouched.
 
 ## Contract

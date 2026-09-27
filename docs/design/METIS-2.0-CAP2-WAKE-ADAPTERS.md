@@ -4,6 +4,10 @@
 **Base tip:** `9568d21ce7ab277d05a6ab34e79b76fc57713a2e` (Ultron Cap1 STAMP)  
 **Pack:** HOLD · **OAuth:** LAST · **Cap3 notch:** NOT started
 
+**Status:** Active — shipped wake-word/command-session increment. One of three overlapping
+voice/orb/bar designs (with `DESIGN.md`+`BAR-PILL.md`+`ORB-SELECTION.md` and
+`METIS-2.0-JARVIS-COMMAND.md`) reconciled by M2-0093 (TASK-030) — see `DESIGN.md` § Bar sphere.
+
 ## What landed
 
 Wake-word command session + video adapter allowlist design. `quick-actions.ts` remains untouched (Ask chips, not OS automation).
