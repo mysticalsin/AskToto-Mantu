@@ -134,6 +134,16 @@ Every phase lands with tests; no phase ships without its verify gate. One logica
 **Touches:** `publish.ts` (new), `ingest.ts`, `transcripts.ts`, `ipc.ts`, `Settings.tsx`, `context.ts`.
 **Verify (end-to-end, blind-spot fix):** a real Dust agent, via the actual OneDrive connector, answers "what is the current amount on deal X and where was it said?" correctly from published pages — the corpus bet validated at its endpoint, not asserted. Plus: confidential-flagged meeting provably absent from every published surface.
 
+---
+
+**2.0 fold-in note (M2-0017).** Phases 6-8 below remain roadmap work (never executed) and are now
+folded into M2-0130 (TASK-040, "Rework Mantu Intelligence into an evidence-first workspace"), which
+supersedes them alongside `docs/design/MANTU-INTELLIGENCE.md` and the kit's MASTER §17
+governed-knowledge contract as the live plan for this territory. Kept below unchanged for lineage;
+do not execute Phases 6-8 from this document directly — read M2-0130 first.
+
+---
+
 ### Phase 6 — Pre-meeting delta
 **Delivers:** "changed since last meeting with X" diff (new facts / changed fields / newly open+overdue commitments) in brain context and a pre-meeting brief block.
 **Touches:** `context.ts`, `BrainView.tsx` or brief surface.

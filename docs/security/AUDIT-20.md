@@ -409,3 +409,11 @@ Capture / `saveTranscript` / `parakeetFeed` / `armAudio` still `takeHotPath`, ne
 ## Out of scope (frozen)
 
 Overlay chrome, island geometry, onboarding, identity card, Intelligence dashboards, latency / time-saved, starfield, orbs, pill, Brain PRs. Pack and GitHub release stay last. Never auto-send.
+
+## Scope note — AI Gateway no-content-retention contract (2.0, M2-0017)
+
+This checklist does not cover the AI Gateway no-content-retention contract (MASTER §16.6: per-route
+readiness states, the three `cf-aig-*` request headers, and drift detection against a configuration
+baseline) — that requirement postdates this audit (2026-08-31) and is out of scope for the general
+application-security controls scored above. See decision D-12 in the program's DECISIONS.md for the
+no-retention claim itself.

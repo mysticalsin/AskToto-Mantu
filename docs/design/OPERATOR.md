@@ -17,6 +17,12 @@ tokens:
 
 # Operator — thin license-generate tip
 
+**Status:** Active — shipped 8-tab Operator console. The kit's 11-surface requirement (MASTER
+§12.2: People, Devices, Usage and cost, Speech, Local models, Decisions, Native Apple, Installation
+and releases, Data health, Administration/audit, plus §12.9's Skills/Knowledge health/Meetings
+pages) is tracked as decision D-16 in the program's DECISIONS.md — default: add the kit's surfaces
+inside this chrome, not a rewrite.
+
 Live URL: `https://metis-operator.tony-walteur.workers.dev/` (`#overview`).
 Access: Cloudflare Access email-code only. Allowlist `tony.walteur@gmail.com` +
 `twalteur@amaris.com`. Never a homemade password form.

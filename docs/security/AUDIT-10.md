@@ -476,3 +476,11 @@ No tonight action plan beyond this PR's patches — the two applicable controls 
 Overlay chrome, island geometry, onboarding, PR 58, identity card PR, Intelligence dashboards, latency / time-saved PRs. Pack and GitHub release stay last. No user-facing copy in this ship claims an AI author.
 
 The 20-point checklist (same PR, do not re-score the ten here) is `docs/security/AUDIT-20.md`.
+
+## Scope note — AI Gateway no-content-retention contract (2.0, M2-0017)
+
+This audit does not cover the AI Gateway no-content-retention contract (MASTER §16.6: per-route
+readiness states, the three `cf-aig-*` request headers, and drift detection against a configuration
+baseline) — that requirement postdates this audit (2026-08-31) and is out of scope for the general
+application-security controls scored above. See decision D-12 in the program's DECISIONS.md for the
+no-retention claim itself.

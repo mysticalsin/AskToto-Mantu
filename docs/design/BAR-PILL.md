@@ -10,6 +10,10 @@ notes: Island/Hide hover hit is the always-on top-edge strip (DESIGN.md + island
 
 # Bar sphere: Jakub thinking-orb
 
+**Status:** Active — shipped Bar/orb visual system. One of three overlapping voice/orb/bar designs
+(with `METIS-2.0-JARVIS-COMMAND.md` and `METIS-2.0-CAP2-WAKE-ADAPTERS.md`) reconciled by M2-0093
+(TASK-030) — see `DESIGN.md` § Bar sphere.
+
 This file is the contract for one slice. Implement only what it names. Hide and Island overlay chrome stay exactly as they are.
 
 ## Consultant (feel)

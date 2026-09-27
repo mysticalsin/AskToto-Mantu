@@ -18,6 +18,16 @@ Facts about the app are drawn directly from the current codebase (branch `codex/
 **"(planned — Phase N)"** rather than describing it as live. Nothing in this pack should be read as
 asserting a control exists unless it is verifiably in the shipped code today.
 
+## Deployment-scope note (2.0 reconciliation, M2-0017)
+
+This pack covers only the single-user deployment described above (one executive, personal use) and
+stays valid and unchanged for that use. The kit's MASTER §16.7 additionally describes a multi-seat,
+Teams-integrated deployment where other employees' meetings are processed automatically — a
+different processing activity that needs its own LIA/DPIA track, not covered here today.
+**Placeholder:** a second compliance track for the multi-seat/Teams-attendance deployment is needed
+once that work (M2-0155, currently zero-code) is scheduled; this section is a pointer for the DPO,
+not that track's content.
+
 ## Documents
 
 | # | File | Purpose | Status |

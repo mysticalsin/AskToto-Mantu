@@ -9,6 +9,9 @@ confidence_legend: [V]=verified from binary  [A]=assumed/inferred  [?]=unknown
 
 # Métis — Cluely Look-and-Feel Spec (reverse-engineered ground truth)
 
+**Status:** Historical reference — ground-truth capture that seeded `DESIGN.md`. `DESIGN.md`, not
+this file, is the operative visual contract going forward.
+
 ## 1. What Cluely is (the thing we clone)
 A frameless, transparent, always-on-top **AI overlay** that floats over every app and is
 **invisible to screen-recording/screen-share**. Three core actions:
