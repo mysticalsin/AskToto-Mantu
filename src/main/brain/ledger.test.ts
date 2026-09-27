@@ -185,6 +185,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
   })
 
   it('an I/O failure is retried by a later load, and the original ledger is then served', async () => {
+    vi.useFakeTimers()
     const healthy = BrainIndexSchema.parse({})
     healthy.ingested['healed.md'] = { at: 1, ok: true }
     writeFileSync(primary, JSON.stringify(healthy), 'utf8')
@@ -196,6 +197,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     expect(ledger.indexUnavailable(s)).toBe('io')
 
     failReadPersistent = null // the transient condition (e.g. OneDrive hydrating) has cleared
+    await vi.advanceTimersByTimeAsync(60_000)
     await ledger.loadIndex(s)
 
     expect(ledger.readIndex(s).ingested['healed.md']?.ok).toBe(true)
