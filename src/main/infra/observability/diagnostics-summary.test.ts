@@ -60,14 +60,14 @@ describe('diagnostics summary', () => {
   })
 
   it('counts event names that collide with Object.prototype keys', () => {
-    const summary = summarizeAuditTrail([
-      line('constructor')
-    ], identity, generatedAt)
+    const summary = summarizeAuditTrail([line('constructor')], identity, generatedAt)
 
     expect(summary.events['constructor']).toBe(1)
     expect(Object.prototype.hasOwnProperty.call(summary.events, 'constructor')).toBe(true)
     expect(Object.keys(summary.events)).toEqual(['constructor'])
+  })
 
+  it('round-trips an empty event list to an empty JSON object', () => {
     const zeroSummaryJson = JSON.parse(JSON.stringify(summarizeAuditTrail([], identity, generatedAt)))
     expect(zeroSummaryJson.events).toEqual({})
   })

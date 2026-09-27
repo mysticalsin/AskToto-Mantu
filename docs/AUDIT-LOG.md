@@ -14,7 +14,10 @@ basename, provider id, counts). Transcript text, prompts, and key material are n
 ## Diagnostic events
 
 `app.*`, `reveal`, `sidecar.*` and `history.*` pass an allowlist projection and carry no actor. Messages
-are scrubbed and capped at 300 chars. The tray's "Copy diagnostics summary" copies summary metadata (`kind`, `schema`, `generatedAt`), app identity (`app`: version, platform, arch), the time window (`window`: first/last record timestamps and record count), and aggregate counts (`boots`, `stalls`, `crashes`, `reveals`, `events`), with no event content.
+are scrubbed and capped at 300 chars. The tray's "Copy diagnostics summary" copies summary metadata
+(`kind`, `schema`, `generatedAt`), app identity (`app`: version, platform, arch), the time window
+(`window`: first/last record timestamps and record count), and aggregate counts (`boots`, `stalls`,
+`crashes`, `reveals`, `events`), with no event content.
 
 ## Tamper evidence (MQA-232)
 

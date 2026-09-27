@@ -25,8 +25,8 @@ export function createHistoryTracer(opts: HistoryTracerOptions): HistoryTracer {
   const remember = (requestId: string): void => {
     unsettled.add(requestId)
     while (unsettled.size > MAX_UNSETTLED) {
-      const oldest = unsettled.values().next().value as string | undefined
-      if (oldest === undefined) return
+      // size > MAX_UNSETTLED > 0 guarantees a first entry exists.
+      const oldest = unsettled.values().next().value!
       unsettled.delete(oldest)
     }
   }
