@@ -132,6 +132,7 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
           ...process.env,
           PATH: `${pathRoot}:${process.env.PATH ?? ''}`,
           M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1',
+          M2_0008_CONTRACT_IDLE_SECONDS: '1',
           M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1'
         },
         timeout: 45_000

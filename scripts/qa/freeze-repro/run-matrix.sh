@@ -575,7 +575,11 @@ if [[ "$DRY_RUN" == 0 ]]; then
   launch_app "$IDLE_PROFILE"
 fi
 row_result=$(prompt_result "row-5-dataless-brain-idle" "Row 5: use the real evicted .brain/index.json fixture and do not open History; wait $MINUTES minute(s) from launch.")
-[[ "$DRY_RUN" == 1 ]] || sleep "$((MINUTES * 60))"
+idle_wait_seconds=$((MINUTES * 60))
+if [[ "${M2_0008_CONTRACT_ALLOW_NON_DARWIN:-0}" == 1 && "${M2_0008_CONTRACT_IDLE_SECONDS:-}" =~ ^[0-9]+$ ]]; then
+  idle_wait_seconds=$M2_0008_CONTRACT_IDLE_SECONDS
+fi
+[[ "$DRY_RUN" == 1 ]] || sleep "$idle_wait_seconds"
 sample_app "row-5-dataless-brain-idle"
 append_jsonl "$OUT/matrix.jsonl" "{\"row\":\"row-5-dataless-brain-idle\",\"operator_result\":$(json_string "$row_result"),\"fixture\":$(json_string "$DATALess_BRAIN_INDEX")}"
 
