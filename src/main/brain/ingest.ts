@@ -1260,6 +1260,7 @@ function isUnattendedModelWork(job: Job): boolean {
 /** An explicit request makes already-queued historical work the user's: it stops waiting for the gate. */
 function promoteQueuedBackfill(): void {
   for (const job of queue) if (job.origin === 'backfill') job.trigger = 'user'
+  if (backfillPreparing) pendingBackfillTrigger = 'user'
   pump()
 }
 
@@ -1291,6 +1292,7 @@ let backfillDone = 0
 // process turn. This lets the renderer immediately show an honest preparation state instead of appearing
 // frozen until readdirSync returns.
 let backfillPreparing = false
+let pendingBackfillTrigger: WorkTrigger = 'automatic'
 // A source refresh is a clean rebuild scheduled by the durable index marker. Keep it distinct from a
 // normal backfill so a later periodic scan cannot start a second rebuild while corrections replay.
 let sourceRefreshRunning = false
@@ -2063,9 +2065,7 @@ function pump(): void {
     // MQA-048: the sidecar cannot run two extractions at once, so starting a second only steals the live
     // meeting's slot. Checked after the search, not in the while condition, so the single-job path never
     // pays for a Settings read it cannot act on.
-    if (extracting.size > 0 && extractConcurrency(s ?? getSettings()) <= extracting.size) {
-      break
-    }
+    if (extracting.size > 0 && extractConcurrency(s ?? getSettings()) <= extracting.size) break
     loggedNoProviderStall = false
     const [job] = queue.splice(idx, 1)
     const endMaintenance = isUnattendedModelWork(job) ? beginMaintenance() : undefined
@@ -2821,11 +2821,12 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
   }
 
   backfillPreparing = true
+  pendingBackfillTrigger = options.trigger ?? 'automatic'
   const idx = readIndex(s)
   if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
   setImmediate(() => {
     try {
-      startBackfill(undefined, options)
+      startBackfill(undefined, { ...options, trigger: pendingBackfillTrigger })
     } catch (error) {
       // Keep the durable request flag intact so a temporary OneDrive/filesystem failure can resume on
       // the next app launch. The source error is still logged rather than silently discarded.
@@ -2833,6 +2834,7 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
       completionError('scan-failed')
     } finally {
       backfillPreparing = false
+      pendingBackfillTrigger = 'automatic'
       if (backfillObserver) backfillObserver.preparing = false
       maybeFinishDrain()
     }
