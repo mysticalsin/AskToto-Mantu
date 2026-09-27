@@ -45,7 +45,7 @@ describe('Cap2 command authority boundary', () => {
     // M2-0037: the destroyed-check guard now leads into the reload-budget decision (reload / halt / ignore)
     // rather than reloading unconditionally — assert order, not exact adjacency, so that branch can grow.
     const destroyedGuard = rendererGone.indexOf('if (win !== self || self.isDestroyed()) return')
-    const reload = rendererGone.indexOf('self.loadURL(overlayRendererUrl())')
+    const reload = rendererGone.indexOf('reloadOverlay(self)')
     expect(destroyedGuard).toBeGreaterThan(-1)
     expect(reload).toBeGreaterThan(destroyedGuard)
   })

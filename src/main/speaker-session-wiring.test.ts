@@ -12,6 +12,7 @@ vi.mock('./logger', () => ({
 }))
 
 import { LiveMeetingStartedAtSchema } from '@shared/ipc'
+import { redactSecrets } from '@shared/redact'
 import { createListeningStateHandler } from './listening-state-ipc'
 import {
   createSpeakerId,
@@ -82,7 +83,14 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
   visit(indexSource)
   expect(callback, 'Actual overlay render-process-gone handler was not found').toBeDefined()
   if (!callback) return () => undefined
-  return runSource(`globalThis.result = (${callback.getText(indexSource)});`, globals)
+  // The handler's automatic-reload branch calls the real reloadOverlay(...) helper — lift it too, so a
+  // reload exercises the shipped loadURL + redact + audit wiring instead of a hand-copied stand-in.
+  const reloadOverlayDecl = indexSource.statements.find(
+    (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'reloadOverlay'
+  )
+  expect(reloadOverlayDecl, 'Actual source function reloadOverlay was not found').toBeDefined()
+  const prefix = reloadOverlayDecl ? `${reloadOverlayDecl.getText(indexSource)}\n` : ''
+  return runSource(`${prefix}globalThis.result = (${callback.getText(indexSource)});`, globals)
 }
 
 interface SessionApi {
@@ -469,6 +477,7 @@ describe('bounded close and successful-save receipt join', () => {
       // M2-0037: within budget — the handler must still reload exactly as before.
       reloadBudget: { onRenderProcessGone: () => 'reload' },
       overlayRendererUrl: () => 'file:///renderer/index.html',
+      redactSecrets,
       process: { env: {} },
       join
     })

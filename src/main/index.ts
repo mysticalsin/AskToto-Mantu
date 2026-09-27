@@ -615,7 +615,8 @@ import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-prefere
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
-import { createReloadBudget, type RenderProcessGoneReason } from './lifecycle/reload-budget'
+import { createReloadBudget } from './lifecycle/reload-budget'
+import { showRenderLoopHaltedDialog } from './lifecycle/render-loop-halted-dialog'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
@@ -2770,9 +2771,6 @@ function createWindow(targetDisplay?: Electron.Display): void {
     commandControl.revokeForLifecycleEvent('renderer_replaced')
     mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
     auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
-    // M2-0037 (B3-RC2): decided up front — consumed at the bottom, once every other guard below has run —
-    // so a halted budget still gets the same window-identity/onboarding bookkeeping a reload would.
-    const reloadDecision = reloadBudget.onRenderProcessGone(details.reason)
     // The content died instead of recovering on its own — any pending unresponsiveSince belongs to a wedge
     // that will never get its matching 'responsive'. Without this, a later 'unresponsive' in the reloaded
     // renderer would be paired with the stale one and report a stallMs of however long it's been since.
@@ -2817,18 +2815,45 @@ function createWindow(targetDisplay?: Electron.Display): void {
       currentWidth = BAR_WIDTH
     }
     if (win !== self || self.isDestroyed()) return
+    // M2-0037 (B3-RC2): consumed only once we know this crash will actually be handled — computing it
+    // any earlier would count a reload against the budget for an event one of the guards above discards.
+    const reloadDecision = reloadBudget.onRenderProcessGone(details.reason)
     // 'ignore' (clean-exit): the content exited on purpose, not a crash — never reload for it.
     if (reloadDecision === 'ignore') return
     if (reloadDecision === 'halt') {
       auditLog('app.render_loop_halted', { reason: details.reason, exitCode: details.exitCode })
-      void showRenderLoopHaltedDialog(self, details.reason, details.exitCode)
+      void showRenderLoopHaltedDialog(
+        details.reason,
+        details.exitCode,
+        () => win !== self || self.isDestroyed(),
+        (opts) => dialog.showMessageBox(self, opts),
+        {
+          reload: () => reloadOverlay(self),
+          quit: () => app.quit(),
+          // Mirrors IPC.openPath's requireAuth() gate for the same shell.openPath(resolveMeetingsFolder(...))
+          // call, so a locked session gets no button rather than one whose click silently does nothing.
+          openMeetingsFolder: requireAuth()
+            ? async () => {
+                const openError = await shell.openPath(resolveMeetingsFolder(getSettings()))
+                if (openError) mainLog.warn('[render-loop-halted] open meetings folder failed:', openError)
+              }
+            : undefined,
+          copyDiagnostics: () =>
+            clipboard.writeText(
+              [
+                'Métis diagnostics',
+                `version: ${app.getVersion()}`,
+                `platform: ${process.platform} ${process.arch}`,
+                `packaged: ${app.isPackaged}`,
+                `render-process-gone reason=${details.reason} exitCode=${details.exitCode}`,
+                new Date().toISOString()
+              ].join('\n')
+            )
+        }
+      )
       return
     }
-    self.loadURL(overlayRendererUrl()).catch((err) => {
-      const message = redactSecrets(err instanceof Error ? err.message : String(err))
-      mainLog.error('[renderer-gone] reload failed:', message)
-      auditLog('app.crash', { kind: 'render-process-gone-reload-failed', message })
-    })
+    reloadOverlay(self)
   })
   // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
   // The same helper is used by crash recovery, so the parser-time Act 1 shell cannot disappear there.
@@ -3601,58 +3626,16 @@ function persistCrash(kind: string, detail: string, shortMessage: string): void 
 }
 
 /**
- * M2-0037 (B3-RC2): render-process-gone's reload budget (lifecycle/reload-budget.ts) gave up — show a
- * real recovery surface instead of the previous silent-forever reload. Parented to `target` so it cannot
- * hide behind another window. "Open meetings folder" and "Copy diagnostics" are non-terminal: re-prompt
- * afterward so the user still gets to choose Reload or Quit.
+ * Reload the overlay's content, catching and auditing a failed loadURL instead of letting it become an
+ * unhandled rejection. Shared by the automatic render-process-gone reload and the halted dialog's manual
+ * Reload button (lifecycle/render-loop-halted-dialog.ts) — both used to duplicate this `.catch`.
  */
-async function showRenderLoopHaltedDialog(
-  target: BrowserWindow,
-  reason: RenderProcessGoneReason,
-  exitCode: number
-): Promise<void> {
-  if (target.isDestroyed()) return
-  const { response } = await dialog.showMessageBox(target, {
-    type: 'error',
-    title: 'Métis keeps crashing',
-    message: "Métis' display crashed repeatedly and stopped reloading automatically.",
-    detail: `Reason: ${reason} (exit code ${exitCode}). A crash report was saved to your Métis data folder.`,
-    buttons: ['Reload', 'Quit', 'Open meetings folder', 'Copy diagnostics'],
-    defaultId: 0,
-    cancelId: 0
+function reloadOverlay(target: BrowserWindow): void {
+  target.loadURL(overlayRendererUrl()).catch((err) => {
+    const message = redactSecrets(err instanceof Error ? err.message : String(err))
+    mainLog.error('[renderer-gone] reload failed:', message)
+    auditLog('app.crash', { kind: 'render-process-gone-reload-failed', message })
   })
-  if (target.isDestroyed()) return
-  switch (response) {
-    case 0:
-      // A deliberate, user-approved retry — bypasses the budget deliberately, the same as any other
-      // manual reload would; the budget only bounds the AUTOMATIC loop above.
-      target.loadURL(overlayRendererUrl()).catch((err) => {
-        const message = redactSecrets(err instanceof Error ? err.message : String(err))
-        mainLog.error('[render-loop-halted] manual reload failed:', message)
-        auditLog('app.crash', { kind: 'render-process-gone-reload-failed', message })
-      })
-      return
-    case 1:
-      app.quit()
-      return
-    case 2: {
-      const openError = await shell.openPath(resolveMeetingsFolder(getSettings()))
-      if (openError) mainLog.warn('[render-loop-halted] open meetings folder failed:', openError)
-      return showRenderLoopHaltedDialog(target, reason, exitCode)
-    }
-    case 3:
-      clipboard.writeText(
-        [
-          `Métis ${app.getVersion()} (${process.platform}/${process.arch})`,
-          `render-process-gone reason=${reason} exitCode=${exitCode}`,
-          `userData: ${app.getPath('userData')}`,
-          new Date().toISOString()
-        ].join('\n')
-      )
-      return showRenderLoopHaltedDialog(target, reason, exitCode)
-    default:
-      return
-  }
 }
 
 let fatalHandled = false

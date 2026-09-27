@@ -5,16 +5,11 @@
  * crash and a clean exit).
  */
 
-/** Electron's `RenderProcessGoneDetails.reason` (see electron.d.ts). */
-export type RenderProcessGoneReason =
-  | 'clean-exit'
-  | 'abnormal-exit'
-  | 'killed'
-  | 'crashed'
-  | 'oom'
-  | 'launch-failed'
-  | 'integrity-failure'
-  | 'memory-eviction'
+import type { RenderProcessGoneDetails } from 'electron'
+
+/** Electron's `RenderProcessGoneDetails.reason` (see electron.d.ts) — type-only, so this module stays
+ *  runtime-pure, with one source of truth instead of a hand-copied union that can drift from Electron's. */
+export type RenderProcessGoneReason = RenderProcessGoneDetails['reason']
 
 export type ReloadDecision =
   // Within budget — the caller should reload.
@@ -39,7 +34,10 @@ export interface ReloadBudget {
   onDidFinishLoad(): void
 }
 
-export function createReloadBudget(now: () => number = Date.now): ReloadBudget {
+// Monotonic by default: a wall-clock jump backwards (NTP sync, DST, a sleeping laptop waking with a
+// corrected clock) must never hold a timestamp "in the future" and extend a halt past when it should
+// have reset. Callers still inject `now` for tests.
+export function createReloadBudget(now: () => number = () => performance.now()): ReloadBudget {
   let reloadTimestamps: number[] = []
   let lastFinishedLoadAt: number | null = null
 

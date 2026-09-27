@@ -201,7 +201,7 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
     expect(main).not.toMatch(/process\.env\[?['"]?ELECTRON_RENDERER_URL/)
     expect(main).toMatch(/const rendererUrl = overlayRendererUrl\(\)/)
     expect(main).toMatch(/win\.loadURL\(rendererUrl\)/)
-    expect(main).toMatch(/self\.loadURL\(overlayRendererUrl\(\)\)/)
+    expect(main).toMatch(/reloadOverlay\(self\)/)
   })
 })
 
