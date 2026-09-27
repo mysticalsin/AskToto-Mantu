@@ -78,8 +78,9 @@ export interface TokenResult {
   error?: string
   accessToken?: string
   refreshToken?: string
-  /** Only set by a successful runPlaneOAuth(), never persisted (see the file header); absent from
-   *  refreshPlaneToken()'s result. */
+  /** Only set by a successful runPlaneOAuth(). runPlaneOAuth() itself never persists this — the caller
+   *  does, through savePlaneClientAndTokens, once mcpPlaneConnect's connectMcp probe succeeds. Absent
+   *  from refreshPlaneToken()'s result. */
   clientId?: string
   clientSecret?: string
 }
@@ -168,9 +169,11 @@ export async function refreshPlaneToken(refreshToken: string): Promise<TokenResu
 }
 
 /**
- * The only code that writes the Plane client and tokens — called only after mcpPlaneConnect's
- * connectMcp probe has confirmed the access token works end-to-end. Not atomic: four independent
- * writes; one failing partway leaves the connection needing a Reconnect.
+ * The only writer of the Plane OAuth client (planeClientId + client secret). It always writes the
+ * client together with the tokens that client was issued, and only after mcpPlaneConnect's connectMcp
+ * probe succeeded. Later token writes (mcpPush's 401 refresh) rotate tokens for the saved client and
+ * never change the client. Not atomic: four independent writes; one failing partway leaves the
+ * connection needing a Reconnect.
  */
 export function savePlaneClientAndTokens(
   client: { clientId: string; clientSecret: string },
