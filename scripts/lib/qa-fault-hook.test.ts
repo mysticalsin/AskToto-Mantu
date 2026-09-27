@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { finished } from 'node:stream/promises'
@@ -116,5 +116,13 @@ describe('assertQaFaultHookMatchesIdentity', () => {
     await rm(src, { recursive: true, force: true })
     await writeStagedPackage(src, archive, QA_IDENTITY_PACKAGE_NAME, 'console.log("qa build")\n')
     expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/QA-identity package lacks the QA fault hook/)
+  })
+
+  it('Q8: a readable ASAR header without flushed payload bytes fails before extracting package JSON', async () => {
+    const archive = await buildArchive('asktoto', `/* ${QA_FAULT_MARKER} */\n`)
+    const { headerSize } = getRawHeader(archive)
+    await truncate(archive, 8 + headerSize)
+
+    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/app\.asar is incomplete/)
   })
 })
