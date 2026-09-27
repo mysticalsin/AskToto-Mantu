@@ -3624,8 +3624,8 @@ function showForExclusiveOnboarding(w: BrowserWindow): void {
 function sendHotkey(action: HotkeyAction): void {
   const w = ensureWindow()
   if (!w) return
+  if (action === 'settings') applySettingsSurface()
   if (action === 'settings') {
-    applySettingsSurface()
     if (!w.isVisible()) w.showInactive()
     w.webContents.send(IPC.hotkey, action)
     return
