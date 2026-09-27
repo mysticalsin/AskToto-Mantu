@@ -591,11 +591,13 @@ export async function main(argv) {
     return usageExit(error.message)
   }
 
+  const hasOutputPaths = values['out-md'] !== undefined && values['out-json'] !== undefined
+  if (!values.check && !hasOutputPaths) {
+    return usageExit('either --check, or both --out-md and --out-json, is required')
+  }
+
   for (const [key, value] of Object.entries(DEFAULT_PATHS)) {
     if (values[key] === undefined) values[key] = value
-  }
-  if (!values.check && !(values['out-md'] && values['out-json'])) {
-    return usageExit('either --check, or both --out-md and --out-json, is required')
   }
 
   const { tickets } = JSON.parse(readFileSync(values.tickets, 'utf8'))
