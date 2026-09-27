@@ -8,8 +8,15 @@ import { app, safeStorage } from 'electron'
 import { BRAIN_SCHEMA_VERSION, BrainIndexSchema } from '@shared/brain'
 import type { Settings } from '@shared/ipc'
 
+const actualFs = vi.hoisted(() => ({
+  copyFileSync: undefined as undefined | typeof import('node:fs').copyFileSync,
+  rmSync: undefined as undefined | typeof import('node:fs').rmSync
+}))
+
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
+  actualFs.copyFileSync = actual.copyFileSync
+  actualFs.rmSync = actual.rmSync
   return {
     ...actual,
     copyFileSync: vi.fn(actual.copyFileSync),
@@ -61,6 +68,38 @@ function expectRebuildError(error: unknown, code: string): void {
   expect(error.code).toBe(code)
 }
 
+function decryptElectronMockBuffer(buf: Buffer): string {
+  const text = buf.toString('utf8')
+  return text.startsWith('enc:') ? text.slice(4) : text
+}
+
+function restoreFsMocks(): void {
+  if (!actualFs.copyFileSync || !actualFs.rmSync) throw new Error('node:fs mock was not initialised')
+  vi.mocked(fs.copyFileSync).mockImplementation(actualFs.copyFileSync)
+  vi.mocked(fs.rmSync).mockImplementation(actualFs.rmSync)
+}
+
+function restoreElectronMocks(userData: string): void {
+  ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
+    if (name === 'userData') return userData
+    return join(userData, name)
+  })
+  ;(app as typeof app & { isPackaged?: boolean }).isPackaged = false
+  ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(true)
+  ;(safeStorage.encryptString as ReturnType<typeof vi.fn>).mockImplementation((value: string) => Buffer.from(`enc:${value}`))
+  ;(safeStorage.decryptString as ReturnType<typeof vi.fn>).mockImplementation(decryptElectronMockBuffer)
+}
+
+function makeKeychainUnavailable(): void {
+  ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(false)
+  ;(safeStorage.encryptString as ReturnType<typeof vi.fn>).mockImplementation(() => {
+    throw new Error('keychain unavailable')
+  })
+  ;(safeStorage.decryptString as ReturnType<typeof vi.fn>).mockImplementation(() => {
+    throw new Error('keychain unavailable')
+  })
+}
+
 describe('rebuild preserves unreadable indexes', () => {
   let userData: string
   let meetingsFolder: string
@@ -68,14 +107,10 @@ describe('rebuild preserves unreadable indexes', () => {
   let primary: string
 
   beforeEach(() => {
+    restoreFsMocks()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-preserve-ud-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-preserve-meetings-'))
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
-      if (name === 'userData') return userData
-      return join(userData, name)
-    })
-    ;(app as typeof app & { isPackaged?: boolean }).isPackaged = false
-    ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(true)
+    restoreElectronMocks(userData)
     resetSecretKeyCache()
     settings = { meetingsFolder } as Settings
     setSettings({ meetingsFolder })
@@ -84,11 +119,14 @@ describe('rebuild preserves unreadable indexes', () => {
   })
 
   afterEach(() => {
+    restoreFsMocks()
     delete process.env.ASKTOTO_LOCAL_KEYSTORE
     resetSecretKeyCache()
-    vi.restoreAllMocks()
+    restoreElectronMocks(userData)
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    vi.restoreAllMocks()
+    restoreFsMocks()
   })
 
   it('preserves an undecryptable index before rebuild', () => {
@@ -127,9 +165,8 @@ describe('rebuild preserves unreadable indexes', () => {
     const bytes = foreignFileEnvelope()
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
-    const realCopyFileSync = vi.mocked(fs.copyFileSync).getMockImplementation() ?? fs.copyFileSync
     vi.spyOn(fs, 'copyFileSync').mockImplementation((from, to, mode) => {
-      realCopyFileSync(from, to, mode)
+      actualFs.copyFileSync!(from, to, mode)
       writeFileSync(primary, foreignFileEnvelope())
     })
 
@@ -174,7 +211,7 @@ describe('rebuild preserves unreadable indexes', () => {
     ;(app as typeof app & { isPackaged?: boolean }).isPackaged = true
     await writeSaved(primary, indexJson(), true)
     const expected = sha256(readFileSync(primary))
-    ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(false)
+    makeKeychainUnavailable()
 
     const error = (() => {
       try {
@@ -192,7 +229,7 @@ describe('rebuild preserves unreadable indexes', () => {
     const bytes = legacyKeychainEnvelope(indexJson())
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
-    ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(false)
+    makeKeychainUnavailable()
 
     const error = (() => {
       try {
@@ -228,7 +265,7 @@ describe('rebuild preserves unreadable indexes', () => {
     await writeSaved(primary, indexJson(), true)
     writeFileSync(join(userData, 'secret-key.bin'), Buffer.from('enc:not-a-local-file-key'))
     resetSecretKeyCache()
-    ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(false)
+    makeKeychainUnavailable()
     const expected = sha256(readFileSync(primary))
 
     const error = (() => {
@@ -291,10 +328,9 @@ describe('rebuild preserves unreadable indexes', () => {
     const bytes = foreignFileEnvelope()
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
-    const realRmSync = fs.rmSync
     vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => {
       if (path === brainDir(settings)) throw new Error('simulated crash')
-      return realRmSync(path, options)
+      return actualFs.rmSync!(path, options)
     })
 
     expect(purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(false)
