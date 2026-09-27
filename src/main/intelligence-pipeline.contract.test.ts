@@ -46,7 +46,6 @@ describe('import idle may start one Intelligence pass', () => {
     expect(indexSrc).toMatch(/runIntelligenceIndex\('import-idle'\)/)
     expect(indexSrc).toMatch(/scheduleIntelligenceIndex\(trackTimer\)/)
     expect(indexSrc).toMatch(/catchUpIntelligenceIndexIfNeeded/)
-    expect(brainView).toMatch(/shouldAutoBackfill/)
     expect(brainView).toMatch(/IntelligenceUpdateButton/)
     expect(brainView).toMatch(/runIntelligenceUpdateClick/)
     expect(brainView).not.toMatch(/setInterval\(\(\) => void startBackfill/)

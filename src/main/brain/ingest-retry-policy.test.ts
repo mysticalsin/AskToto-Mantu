@@ -241,6 +241,29 @@ describe('M2-0033 retry policy across backfill callers', () => {
     expect(record?.exhausted).toBeFalsy()
   })
 
+  it('EX-3: an automatic call (the dashboard-open / Brain-view-open path) leaves an exhausted source untouched; an explicit Retry still revives it', async () => {
+    const seeded = readIndex(getSettings()).ingested['exhausted.md']
+
+    requestBackfill()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    await waitForIdle()
+
+    expect(readIndex(getSettings()).ingested['exhausted.md']).toEqual(seeded)
+    expect(modelMarkers).not.toContain('exhausted')
+
+    modelMarkers = []
+    createStreamMock.mockReset()
+    createStreamMock.mockImplementation(respondError('synthetic model failure', modelMarkers))
+    const { completion } = requestBackfillRun({ force: true, ...userTrigger })
+    await completion
+    await waitForIdle()
+
+    const retried = readIndex(getSettings()).ingested['exhausted.md']
+    expect(modelMarkers).toContain('exhausted')
+    expect(retried?.attempts).toBe(1)
+    expect(retried?.exhausted).toBeFalsy()
+  })
+
   it('EX-3: a transcript that cannot be read spends no attempt, is held by automatic scans while its ctime is unchanged, and is retried after the file changes', async () => {
     const file = join(meetingsFolder, 'unreadable.md')
     await writeIndex(getSettings(), {
