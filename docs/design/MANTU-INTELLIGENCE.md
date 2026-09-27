@@ -7,6 +7,13 @@ Tip baseline: AskToto-Mantu `5c26241` (F CF browser-connect PASS). Do not regres
 
 Name is **Mantu Intelligence** only. Never "Mountain Intelligence".
 
+**2.0 scope note.** This FRAME's four outcomes are the first shipped increment of the kit's larger
+governed-knowledge contract in MASTER section 17 (provenance states, authority hierarchy,
+`knowledge.*` Dust MCP tools) — not a complete design for that contract. M2-0130 (TASK-040, "Rework
+Mantu Intelligence into an evidence-first workspace") owns the fuller workspace design; M2-0128
+(TASK-038, "Deploy and connect the Dust knowledge read tools over remote MCP") owns the
+`knowledge.*` Dust MCP tools within that contract.
+
 ## Outcome (Tony locks)
 
 1. **Setup connects an existing brain.** Onboarding / first-run **scans OneDrive** for an existing second brain / LLM wiki (Tony vault patterns under OneDrive-MantuGroup Documents, plus any already-configured Métis meetings root). User picks the match (or confirms the best hit). Métis **connects** that folder as the Mantu Intelligence brain — not a blank local-only store by default when a brain already exists.

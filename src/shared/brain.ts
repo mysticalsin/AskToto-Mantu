@@ -15,6 +15,10 @@ import { z } from 'zod'
 // replacing the plain role/org/sector/stage/win_likelihood_band/velocity fields in place.
 export const BRAIN_SCHEMA_VERSION = 2
 
+/** Why an existing .brain/index.json is read-only for this session (M2-0003). Content-free: never a
+ *  path, decode-reason string, or filename — see brain/store.ts's read/replace invariant. */
+export type IndexUnavailableCause = 'io' | 'undecryptable' | 'unsupported' | 'corrupt-kept'
+
 export const ConfidenceSchema = z.enum(['EXTRACTED', 'INFERRED', 'AMBIGUOUS'])
 export type Confidence = z.infer<typeof ConfidenceSchema>
 
@@ -598,6 +602,9 @@ export interface BrainStatus {
   intelligenceIndex?: { running: boolean; lastError?: string }
   /** requireAuth / provider failures must surface here instead of a silent null. */
   error?: string
+  /** Set while index.json exists but cannot be used on this device (M2-0003). Indexing is paused and
+   *  nothing was changed. */
+  indexUnavailable?: IndexUnavailableCause
 }
 
 /**

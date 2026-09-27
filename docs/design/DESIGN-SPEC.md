@@ -3,11 +3,14 @@ project: Métis
 goal: A faithful look-and-feel clone of Cluely (AI desktop overlay assistant), rebranded Métis.
 reference: /Users/tony/Downloads/Cluely (New) 2.1.19.dmg  (Cluely v2.1.19, bundle id com.cluely.app.april22)
 extracted_to: $TMPDIR/cluely_asar  (app.asar, read-only analysis)
-status: ground-truth captured — pending scope confirmation, then PLAN -> BUILD loop
+status: historical reference — superseded by DESIGN.md
 confidence_legend: [V]=verified from binary  [A]=assumed/inferred  [?]=unknown
 ---
 
 # Métis — Cluely Look-and-Feel Spec (reverse-engineered ground truth)
+
+**Status:** Historical reference — ground-truth capture that seeded `DESIGN.md`. `DESIGN.md`, not
+this file, is the operative visual contract going forward.
 
 ## 1. What Cluely is (the thing we clone)
 A frameless, transparent, always-on-top **AI overlay** that floats over every app and is

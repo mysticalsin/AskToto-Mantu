@@ -9,6 +9,9 @@ mac-show: Totos-Mac / PR 101
 
 # Onboarding KineticGrid (after the lady)
 
+**Status:** Draft — implement-exactly, ready-to-merge: no, frozen scene contract (see frontmatter
+`status`).
+
 Tony 11:34–35pm America/Toronto. Exclusive first-run is one scene. The first beat is the lady looking at space. After that click, the only bed is a Mantu-purple KineticGrid. No second space shot. No starfield. No Skip. Do not pack. Do not merge. READY TO MERGE stays no. Version stays 1.8.3.
 
 ## Outcome
