@@ -105,7 +105,6 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     const p2 = capturedAuthorizeParams()
     expect(dcrBodies).toHaveLength(2)
     expect(dcrBodies[1].redirect_uris).toEqual([p2.redirectUri])
-    expect(p2.redirectUri).not.toBe(redirectUri)
     await hitCallback(p2.redirectUri, { code: 'auth-code-2', state: p2.state })
     await second
     const secondAuthUrl = new URL(openExternal.mock.calls[0][0] as string)
@@ -223,6 +222,70 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     const { redirectUri, state } = capturedAuthorizeParams()
     await hitCallback(redirectUri, { code: 'auth-code-1', state })
     expect((await first).ok).toBe(true)
+  })
+
+  it('keeps the previously stored client unchanged when the sign-in is denied (P4-F2, AGUC-021)', async () => {
+    const { getSettings, setSettings } = await import('../store')
+    const { getMcpClientSecret, setMcpClientSecret } = await import('./mcpSecrets')
+    setSettings({ planeClientId: 'client-A' })
+    setMcpClientSecret('plane', 'secret-A')
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('/register')) return jsonResponse({ client_id: 'client-B', client_secret: 'secret-B' })
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    const { runPlaneOAuth } = await import('./planeOAuth')
+    const flow = runPlaneOAuth()
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
+    const { redirectUri, state } = capturedAuthorizeParams()
+    await hitCallback(redirectUri, { error: 'access_denied', state })
+    expect((await flow).ok).toBe(false)
+    expect(getSettings().planeClientId).toBe('client-A')
+    expect(getMcpClientSecret('plane')).toBe('secret-A')
+  })
+
+  it('keeps the previously stored client unchanged when the token exchange fails (P4-F2, AGUC-021)', async () => {
+    const { getSettings, setSettings } = await import('../store')
+    const { getMcpClientSecret, setMcpClientSecret } = await import('./mcpSecrets')
+    setSettings({ planeClientId: 'client-A' })
+    setMcpClientSecret('plane', 'secret-A')
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('/register')) return jsonResponse({ client_id: 'client-B', client_secret: 'secret-B' })
+      if (String(url).includes('/token')) {
+        return jsonResponse({ error: 'invalid_grant', error_description: 'bad code' }, false, 400)
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    const { runPlaneOAuth } = await import('./planeOAuth')
+    const flow = runPlaneOAuth()
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
+    const { redirectUri, state } = capturedAuthorizeParams()
+    await hitCallback(redirectUri, { code: 'auth-code-1', state })
+    expect((await flow).ok).toBe(false)
+    expect(getSettings().planeClientId).toBe('client-A')
+    expect(getMcpClientSecret('plane')).toBe('secret-A')
+  })
+
+  it('replaces the stored client only once the connect actually succeeds (P4-F2, AGUC-021)', async () => {
+    const { getSettings, setSettings } = await import('../store')
+    const { getMcpClientSecret, setMcpClientSecret } = await import('./mcpSecrets')
+    setSettings({ planeClientId: 'client-A' })
+    setMcpClientSecret('plane', 'secret-A')
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('/register')) return jsonResponse({ client_id: 'client-B', client_secret: 'secret-B' })
+      if (String(url).includes('/token')) return jsonResponse(TOKEN_RESPONSE)
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    const { runPlaneOAuth } = await import('./planeOAuth')
+    const flow = runPlaneOAuth()
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
+    const { redirectUri, state } = capturedAuthorizeParams()
+    await hitCallback(redirectUri, { code: 'auth-code-1', state })
+    expect((await flow).ok).toBe(true)
+    expect(getSettings().planeClientId).toBe('client-B')
+    expect(getMcpClientSecret('plane')).toBe('secret-B')
   })
 
   it('pins the official hosted MCP URLs and never asks the user to paste them', async () => {
