@@ -327,8 +327,8 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     expect(getMcpApiKey('plane')).toBe('plane-at-B')
     expect(getMcpRefreshToken('plane')).toBe('plane-rt-B')
 
-    // The refresh path a background 401 takes (index.ts:5917-5918): read back whatever was just saved
-    // and send it as one pair — never client-B mismatched with the old RT-A.
+    // The refresh path mcpPush's 401 refresh branch in main/index.ts takes: read back whatever was
+    // just saved and send it as one pair — never client-B mismatched with the old RT-A.
     let refreshBody = ''
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (String(url).includes('/token')) {
@@ -346,15 +346,20 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
   })
 
   it('savePlaneClientAndTokens clears the previously stored refresh token when the new grant has none, so a token-less re-grant cannot leave it paired with the new client (P4-F2, AGUC-021)', async () => {
-    const { setSettings } = await import('../store')
-    const { getMcpRefreshToken, setMcpClientSecret, setMcpRefreshToken } = await import('./mcpSecrets')
+    const { getSettings, setSettings } = await import('../store')
+    const { getMcpClientSecret, getMcpRefreshToken, setMcpClientSecret, setMcpRefreshToken } = await import(
+      './mcpSecrets'
+    )
     const { savePlaneClientAndTokens } = await import('./planeOAuth')
 
     setSettings({ planeClientId: 'client-A' })
     setMcpClientSecret('plane', 'secret-A')
     setMcpRefreshToken('plane', 'plane-rt-A')
+    expect(getMcpRefreshToken('plane')).toBe('plane-rt-A')
 
     savePlaneClientAndTokens({ clientId: 'client-B', clientSecret: 'secret-B' }, { accessToken: 'plane-at-B', refreshToken: '' })
+    expect(getSettings().planeClientId).toBe('client-B')
+    expect(getMcpClientSecret('plane')).toBe('secret-B')
     expect(getMcpRefreshToken('plane')).toBe('')
   })
 

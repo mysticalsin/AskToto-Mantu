@@ -10,8 +10,8 @@
  * alongside the tokens it minted. Persisting the client without also persisting the tokens it was
  * issued with — or vice versa — pairs a refresh token with a client it doesn't match, since a refresh
  * token only works with the client that requested it. The caller (main/index.ts's mcpPlaneConnect
- * handler, via savePlaneClientAndTokens below) saves the two together, in one step, only once it has
- * independently confirmed the access token actually works end-to-end with a live connectMcp probe —
+ * handler, via savePlaneClientAndTokens below) saves the two together, only once it has independently
+ * confirmed the access token actually works end-to-end with a live connectMcp probe —
  * a successful token exchange here proves Plane accepted the client, not that the connection is live.
  *
  * GROUND TRUTH (fetched 2026-09-26, live):
@@ -169,9 +169,8 @@ export async function refreshPlaneToken(refreshToken: string): Promise<TokenResu
 
 /**
  * The only code that writes the Plane client and tokens — called only after mcpPlaneConnect's
- * connectMcp probe has confirmed the access token works end-to-end. Not atomic: it is four independent
- * writes (setSettings, then three writeSecretFile calls), any of which can throw (encryption
- * unavailable, disk write failure); a failure partway through leaves the connection needing a Reconnect.
+ * connectMcp probe has confirmed the access token works end-to-end. Not atomic: four independent
+ * writes; one failing partway leaves the connection needing a Reconnect.
  */
 export function savePlaneClientAndTokens(
   client: { clientId: string; clientSecret: string },
