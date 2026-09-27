@@ -1259,7 +1259,7 @@ function isUnattendedModelWork(job: Job): boolean {
 
 /** An explicit request makes already-queued historical work the user's: it stops waiting for the gate. */
 function promoteQueuedBackfill(): void {
-  for (const job of queue) if (false && job.origin === 'backfill') job.trigger = 'user'
+  for (const job of queue) if (job.origin === 'backfill') job.trigger = 'user'
   if (backfillPreparing) pendingBackfillTrigger = 'user'
   pump()
 }
