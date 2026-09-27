@@ -2445,7 +2445,7 @@ export function LocalAiSection({
           {settings.speakerId.enabled && (
             <ToggleRow
               label="Save voiceprints"
-              desc="Save voiceprints on this device so Métis can name people in later meetings. Off unless you turn it on. Voiceprints saved by earlier versions are kept and still used."
+              desc="Keep voiceprints on this device so Métis can name people in later meetings. Voiceprints saved by earlier versions are kept and still used."
               on={settings.speakerId.saveVoiceprints}
               onChange={(v) => patch({ speakerId: { ...settings.speakerId, saveVoiceprints: v } })}
             />
