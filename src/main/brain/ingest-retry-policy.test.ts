@@ -235,7 +235,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
     expect(record?.exhausted).toBeFalsy()
   })
 
-  it('EX-3: an automatic call (the dashboard-open / Brain-view-open path) leaves an exhausted source untouched; an explicit Retry still revives it', async () => {
+  it('EX-3: an automatic call (the dashboard-open path) leaves an exhausted source untouched; an explicit Retry still revives it', async () => {
     const seeded = readIndex(getSettings()).ingested['exhausted.md']
 
     requestBackfill()
@@ -271,7 +271,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
     expect(failed?.attempts).toBe(0)
     expect(failed?.retryAfter).toBeUndefined()
     expect(failed?.exhausted).toBeUndefined()
-    expect((failed as typeof failed & { unreadable?: { changedAtMs?: number } })?.unreadable?.changedAtMs).toBe(Math.round(statSync(file).ctimeMs))
+    expect(failed?.unreadable?.changedAtMs).toBe(Math.round(statSync(file).ctimeMs))
 
     createStreamMock.mockClear()
     expect(startBackfill().queued).toBe(0)

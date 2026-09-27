@@ -29,11 +29,11 @@ type Waiter = {
   reject: (error: unknown) => void
 }
 
-const DEFAULT_UPTIME_MS = () => process.uptime() * 1000
+const processUptimeMs = () => process.uptime() * 1000
 const DEFAULT_SCHEDULE: Scheduler = (run, ms) => { setTimeout(run, ms).unref() }
 
 let started = false
-let uptimeMs: () => number = DEFAULT_UPTIME_MS
+let uptimeMs: () => number = processUptimeMs
 let schedule: Scheduler = DEFAULT_SCHEDULE
 let interactiveActive: () => boolean = () => false
 let priorExit: PriorShutdown | undefined
@@ -62,7 +62,7 @@ export function startMaintenanceGate(opts: {
   schedule?: Scheduler
 }): void {
   started = true
-  uptimeMs = opts.uptimeMs ?? DEFAULT_UPTIME_MS
+  uptimeMs = opts.uptimeMs ?? processUptimeMs
   schedule = opts.schedule ?? DEFAULT_SCHEDULE
   interactiveActive = opts.interactiveActive
   schedule(wake, Math.max(0, BOOT_QUIET_PERIOD_MS - uptimeMs()))
@@ -137,7 +137,7 @@ export function reportDeferred(kind: SchedulerJobKind, reason: DeferredReason): 
 
 export function resetMaintenanceGateForTests(): void {
   started = false
-  uptimeMs = DEFAULT_UPTIME_MS
+  uptimeMs = processUptimeMs
   schedule = DEFAULT_SCHEDULE
   interactiveActive = () => false
   priorExit = undefined

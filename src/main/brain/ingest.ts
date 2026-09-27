@@ -1259,7 +1259,7 @@ function isUnattendedModelWork(job: Job): boolean {
 
 /** An explicit request makes already-queued historical work the user's: it stops waiting for the gate. */
 function promoteQueuedBackfill(): void {
-  for (const job of queue) if (job.origin === 'backfill') job.trigger = 'user'
+  for (const job of queue) if (false && job.origin === 'backfill') job.trigger = 'user'
   if (backfillPreparing) pendingBackfillTrigger = 'user'
   pump()
 }
@@ -1292,6 +1292,7 @@ let backfillDone = 0
 // process turn. This lets the renderer immediately show an honest preparation state instead of appearing
 // frozen until readdirSync returns.
 let backfillPreparing = false
+/** Trigger captured for the deferred scan; explicit retries upgrade it until the scan finishes and resets it. */
 let pendingBackfillTrigger: WorkTrigger = 'automatic'
 // A source refresh is a clean rebuild scheduled by the durable index marker. Keep it distinct from a
 // normal backfill so a later periodic scan cannot start a second rebuild while corrections replay.
@@ -2269,8 +2270,9 @@ type StartRebuildOptions = {
  * weakest possible evidence: the model files pass a byte-SIZE check that a half-synced or corrupted GGUF
  * also passes, and the failure only surfaces on the cold start that every re-extraction then hits — after
  * the entire `.brain/` tree is already deleted, with no candidate after local to fail over to. Each
- * re-extraction then burns its attempts to `exhausted`, which the automatic reconcile tick skips forever,
- * which every automatic trigger holds until an explicit Retry.
+ * re-extraction then burns its attempts to `exhausted`, which every automatic trigger holds until an
+ * explicit Retry, so a background OneDrive-drift refresh turns a populated graph into 0 people / 0
+ * accounts / 0 deals.
  *
  * So the destructive path asks the stronger question, and only when local is genuinely the sole recourse:
  * re-hash the model against the manifest first. This is not extra work — it is the SAME verifyIntegrity
@@ -2847,10 +2849,10 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
 /**
  * Low-cost periodic reconciliation for folders synced by OneDrive or another device. Fires every 60 s
  * but scans at most DAILY_BACKFILL_RUN_BUDGET times a day; between scans it only re-pumps a stalled queue.
- * Filesystem watchers
- * are not a correctness primitive here: files-on-demand and Windows sync routinely coalesce or omit
- * events. A configured provider enables normal extraction; without one, the loop still repairs any
- * previously-saved extraction because that path is entirely local and never sends meeting content away.
+ * Filesystem watchers are not a correctness primitive here: files-on-demand and Windows sync routinely
+ * coalesce or omit events. A configured provider enables normal extraction; without one, the loop still
+ * repairs any previously-saved extraction because that path is entirely local and never sends meeting
+ * content away.
  */
 export function reconcileMeetingsInBackground(): void {
   try {

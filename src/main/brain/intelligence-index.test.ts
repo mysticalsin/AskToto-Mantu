@@ -288,7 +288,7 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
     await writeIntelligenceIndexState({
       lastSuccessAt: 0,
       lastFinishedAt: torontoMs(2026, 8, 31, 12, 5)
-    } as never, s)
+    }, s)
     let calls = 0
     setIntelligenceIndexWork(async () => {
       calls += 1

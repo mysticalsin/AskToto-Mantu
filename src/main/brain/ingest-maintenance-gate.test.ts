@@ -209,12 +209,23 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     await releaseHeldWork()
   })
 
-  it('EX-2: a user Retry during the quiet period promotes already-queued automatic jobs instead of leaving them waiting', async () => {
+  it('EX-2: a user Retry while an automatic scan is still preparing runs that scan as user work', async () => {
     uptime = 0
     startGate('clean')
     writeMeeting('promote.md')
     requestBackfill()
     expect(brainBackfillProgress().preparing).toBe(true)
+    expect(createStreamMock).not.toHaveBeenCalled()
+    requestBackfillRun({ force: true, ...userTrigger })
+    await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(1), { timeout: 10_000 })
+    await releaseHeldWork()
+  })
+
+  it('EX-2: a user Retry during the quiet period promotes an already-queued automatic job instead of leaving it waiting', async () => {
+    uptime = 0
+    startGate('clean')
+    writeMeeting('queued-promote.md')
+    expect(startBackfill().queued).toBe(1)
     expect(createStreamMock).not.toHaveBeenCalled()
     requestBackfillRun({ force: true, ...userTrigger })
     await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(1), { timeout: 10_000 })
