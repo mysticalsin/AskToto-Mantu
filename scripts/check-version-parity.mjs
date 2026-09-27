@@ -21,7 +21,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { feedRepository, ghFeed, planPublication, PLATFORMS } from './publish-release.mjs'
+import { feedRepository, ghFeed, planBuild, PLATFORMS } from './publish-release.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const platform = process.argv[2]
@@ -64,7 +64,7 @@ if (!token) {
 try {
   const repo = feedRepository(readFileSync(join(here, '..', 'electron-builder.yml'), 'utf8'))
   const releases = ghFeed({ repo, token }).releasesTagged(ref)
-  const plan = planPublication(platform, pkg.version, releases)
+  const plan = planBuild(platform, pkg.version, releases)
   console.log(`[check:version-parity] OK — ${PLATFORMS[platform].label} can ${plan.action} ${ref} on ${repo}.`)
 } catch (err) {
   console.error(`[check:version-parity] FAIL — could not verify that ${PLATFORMS[platform].label} can publish ${ref}.`)

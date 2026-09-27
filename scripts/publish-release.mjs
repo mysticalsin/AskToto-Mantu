@@ -117,6 +117,16 @@ export function planPublication(platform, version, releases) {
   return { action: 'join', release }
 }
 
+export function planBuild(platform, version, releases) {
+  const plan = planPublication(platform, version, releases)
+  if (plan.action === 'complete') {
+    throw new Error(
+      `${PLATFORMS[platform].label} ${version} is already published on the feed; re-run only the failed publish job, or tag a new version.`
+    )
+  }
+  return plan
+}
+
 export function feedRepository(source) {
   const owner = source.match(/^\s*owner:\s*(\S+)\s*$/m)?.[1]
   const repo = source.match(/^\s*repo:\s*(\S+)\s*$/m)?.[1]
