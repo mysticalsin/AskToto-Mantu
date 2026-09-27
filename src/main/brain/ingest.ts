@@ -2041,6 +2041,7 @@ function pump(): void {
   // stay AT THE FRONT of the queue (never removed here) so a live job enqueued behind a stalled backfill
   // still gets picked and processed — the stall must never starve normal per-meeting ingests.
   while (extracting.size < EXTRACT_CONCURRENCY) {
+    console.error(`[TEMP DEBUG ingest.pump] loop queueLength=${queue.length} extractingSize=${extracting.size}`) // TEMP DEBUG — remove before finishing
     let s: Settings | null = null
     const idx = queue.findIndex((j) => {
       if (j.origin !== 'backfill' || j.strategy === 'reconcile') return true
@@ -2050,6 +2051,7 @@ function pump(): void {
         (j.trigger === 'user' || maintenanceDeferral() === null)
     })
     if (idx === -1) {
+      console.error(`[TEMP DEBUG ingest.pump] stop no-qualifying-job queueLength=${queue.length} extractingSize=${extracting.size}`) // TEMP DEBUG — remove before finishing
       // Every queued backfill job is blocked. Two different reasons land here and they need different
       // handling: no configured provider is something only the user can fix (say so, once per stall),
       // while MQA-048's yield to a live local stream clears itself within one meeting — logging that
@@ -2063,11 +2065,16 @@ function pump(): void {
     // MQA-048: the sidecar cannot run two extractions at once, so starting a second only steals the live
     // meeting's slot. Checked after the search, not in the while condition, so the single-job path never
     // pays for a Settings read it cannot act on.
-    if (extracting.size > 0 && extractConcurrency(s ?? getSettings()) <= extracting.size) break
+    if (extracting.size > 0 && extractConcurrency(s ?? getSettings()) <= extracting.size) {
+      console.error(`[TEMP DEBUG ingest.pump] stop concurrency-ceiling queueLength=${queue.length} extractingSize=${extracting.size}`) // TEMP DEBUG — remove before finishing
+      break
+    }
     loggedNoProviderStall = false
     const [job] = queue.splice(idx, 1)
+    console.error(`[TEMP DEBUG ingest.pump] picked file=${job.file} trigger=${job.trigger ?? 'unknown'} queueLength=${queue.length} extractingSizeBeforeAdd=${extracting.size}`) // TEMP DEBUG — remove before finishing
     const endMaintenance = isUnattendedModelWork(job) ? beginMaintenance() : undefined
     extracting.add(job)
+    console.error(`[TEMP DEBUG ingest.pump] added file=${job.file} trigger=${job.trigger ?? 'unknown'} queueLength=${queue.length} extractingSizeAfterAdd=${extracting.size}`) // TEMP DEBUG — remove before finishing
     inFlightJobs.add(job)
     void runExtractionStage(job).then((result) => {
       extracting.delete(job)

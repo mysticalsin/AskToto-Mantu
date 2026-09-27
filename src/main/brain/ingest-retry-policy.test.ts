@@ -9,6 +9,7 @@ import { MeetingExtractionSchema } from '@shared/brain'
 import type { StreamHandle, StreamHandlers, StreamOptions } from '../llm/shared'
 import type { BackfillStartOptions } from './ingest'
 import { MAX_INGEST_ATTEMPTS } from '../infra/scheduler/policy'
+import { resetSecretKeyCache } from '../secrets'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
 import { brainBackfillProgress, reconcileMeetingsInBackground, requestBackfill, requestBackfillRun, resumeBackfillIfPending, startBackfill, whenIndexWritesSettle } from './ingest'
 import { catchUpIntelligenceIndexIfNeeded } from './intelligence-index'
@@ -103,6 +104,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
       if (name === 'userData') return userData
       return join(userData, name)
     })
+    resetSecretKeyCache()
     for (const p of PROVIDER_IDS) store.clearApiKey(p)
     for (const name of Object.keys(process.env)) {
       if (name.endsWith('_API_KEY')) vi.stubEnv(name, undefined)
@@ -146,7 +148,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
       if (name === 'userData') return userData
       return join(userData, name)
     })
-    console.error(`[TEMP DEBUG ingest-retry-policy.relaunch] userData=${electron.app.getPath('userData')}`) // TEMP DEBUG — remove before finishing
+    resetSecretKeyCache()
     const ingest = await import('./ingest')
     const consolidate = await import('./consolidate')
     const intelligence = await import('./intelligence-index')
