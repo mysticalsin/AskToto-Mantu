@@ -45,6 +45,17 @@ jobs:
       # regression test that cites its MQA id, so a re-broken bug fails a named test instead of
       # silently shipping again. Runs before the suite — it is fast and its failure is unambiguous.
       - run: npm run check:bugs
+      # FF-01: production code never imports across a process or layer boundary. Fails the job on any
+      # such import; test-only crossings are warnings held by the ratchet below.
+      - name: Architecture layering
+        if: runner.os == 'Linux'
+        run: npm run check:layering
+      # FF-01 test crossings and FF-02..FF-14 as per-file counts that may only fall
+      # (scripts/architecture-baseline.json). Report-only: a differing count shows here but does not fail the job.
+      - name: Architecture ratchet
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: npm run check:architecture
       - run: npm run build
       # bar-toolbar.layout.test.ts launches Playwright Chromium. `npm ci` installs the npm package
       # only — not the browser binary. Without this step, ubuntu and windows Quality both die at
