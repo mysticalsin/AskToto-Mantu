@@ -110,7 +110,7 @@ describe('createReloadBudget', () => {
     expect(budget.onRenderProcessGone('crashed')).toBe('reload')
   })
 
-  it('defaults now to a monotonic clock when not given', () => {
+  it('works with the default clock when none is given', () => {
     const budget = createReloadBudget()
     expect(budget.onRenderProcessGone('crashed')).toBe('reload')
   })
