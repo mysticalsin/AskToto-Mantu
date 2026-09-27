@@ -33,9 +33,11 @@ function windowFor(axis: number): Float32Array {
 }
 
 function makeId(dir: string, opts: { extractor?: ReturnType<typeof fakeExtractor> | null; now?: () => number } = {}) {
+  /** An identifier whose user has opted in to saving voiceprints: the behaviour the suites below pin. */
   return createSpeakerId({
     createExtractor: () => (opts.extractor === undefined ? fakeExtractor() : opts.extractor),
     storePath: () => join(dir, 'voiceprints.json'),
+    canSaveVoiceprints: () => true,
     now: opts.now
   })
 }
@@ -263,7 +265,8 @@ describe('echo defense — operator buffer + THEM-window echo detection', () => 
       createExtractor: () => ({
         compute: () => new Promise<Float32Array>((resolve) => { pending.push(resolve) })
       }),
-      storePath: () => join(dir, 'voiceprints.json')
+      storePath: () => join(dir, 'voiceprints.json'),
+      canSaveVoiceprints: () => true
     })
 
     const observation = id.observeOperatorWindow(windowFor(2))
@@ -295,7 +298,8 @@ describe('echo defense — operator buffer + THEM-window echo detection', () => 
       createExtractor: () => ({
         compute: () => new Promise<Float32Array>((resolve) => { pending.push(resolve) })
       }),
-      storePath: () => join(dir, 'voiceprints.json')
+      storePath: () => join(dir, 'voiceprints.json'),
+      canSaveVoiceprints: () => true
     })
 
     const label = id.labelWindow(windowFor(1))

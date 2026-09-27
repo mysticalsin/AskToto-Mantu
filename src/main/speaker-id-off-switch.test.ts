@@ -5,7 +5,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from 'electron'
-import { getSettings } from './store'
+import { getSettings, setSettings } from './store'
 import { createSpeakerId, type SpeakerId, type SpeakerIdDeps, type SpeakerLabel } from './speaker-id'
 
 vi.mock('electron')
@@ -340,5 +340,26 @@ describe('Save voiceprints opt-in wiring', () => {
     expect(meeting.label).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
     expect(meeting.enrolled).toBe(0)
     expect(existsSync(voiceprints())).toBe(false)
+  })
+
+  it('after the user turns Save voiceprints on, the next process names the voice it learned', async () => {
+    setSettings({ speakerId: { enabled: true, saveVoiceprints: true } })
+    expect((await holdMeeting(startApp(), 'live:1', 2, 'Jane Doe')).enrolled).toBe(1)
+
+    const restarted = startApp()
+    expect(restarted.createSession('live:2')).toBe(true)
+    await expect(restarted.labelSessionWindow('live:2', windowFor(2), 'live'))
+      .resolves.toMatchObject({ name: 'Jane Doe', source: 'profile' })
+  })
+
+  it('turning Save voiceprints off stops the next write and keeps what was saved', async () => {
+    setSettings({ speakerId: { enabled: true, saveVoiceprints: true } })
+    const id = startApp()
+    await holdMeeting(id, 'live:1', 2, 'Jane Doe')
+    const saved = readFileSync(voiceprints())
+
+    setSettings({ speakerId: { enabled: true, saveVoiceprints: false } })
+    expect((await holdMeeting(id, 'live:2', 5, 'Bob Smith')).enrolled).toBe(0)
+    expect(readFileSync(voiceprints())).toEqual(saved)
   })
 })

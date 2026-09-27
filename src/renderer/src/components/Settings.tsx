@@ -2440,8 +2440,16 @@ export function LocalAiSection({
             label="Speaker identification (beta)"
             desc="Label who's speaking in meetings using on-device voice recognition. Voice data never leaves this device."
             on={settings.speakerId.enabled}
-            onChange={(v) => patch({ speakerId: { enabled: v } })}
+            onChange={(v) => patch({ speakerId: { ...settings.speakerId, enabled: v } })}
           />
+          {settings.speakerId.enabled && (
+            <ToggleRow
+              label="Save voiceprints"
+              desc="Save voiceprints on this device so Métis can name people in later meetings. Off unless you turn it on. Voiceprints saved by earlier versions are kept and still used."
+              on={settings.speakerId.saveVoiceprints}
+              onChange={(v) => patch({ speakerId: { ...settings.speakerId, saveVoiceprints: v } })}
+            />
+          )}
         </div>
       </div>
     </Section>

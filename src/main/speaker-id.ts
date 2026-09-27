@@ -4,8 +4,8 @@
  * Glue between three parts, each independently replaceable:
  *  - a sherpa-onnx SpeakerEmbeddingExtractor (same N-API addon Parakeet already ships — no new native
  *    dependency, identical on macOS and Windows) turning each ≤6s VAD turn into a voice embedding;
- *  - the persistent voiceprint store (userData/voiceprints.json): named profiles built by explicit
- *    enrollment today and by the Teams-VTT auto-enrollment flywheel in P2;
+ *  - the persistent voiceprint store (userData/voiceprints.json): named profiles from explicit enrollment and
+ *    the Teams-VTT auto-enrollment flywheel, written only under the user's opt-in (SpeakerIdDeps.canSaveVoiceprints);
  *  - the pure session clusterer (speaker-cluster.ts) labelling un-enrolled voices "Speaker N".
  *
  * Resolution order per THEM window: echo-bleed check against the operator's own voiceprint (see
@@ -28,10 +28,12 @@
  *    before the next meeting starts to catch it; a missed window just means no auto-enrollment that time,
  *    never a wrong one.
  *
- * Privacy: embeddings and profiles never leave the machine; the store lives in userData and is removed
- * with the profile delete (P2 Settings surface). PLAN §3.6. The operator's own voiceprint is stored under
- * a reserved name (see OPERATOR_PROFILE_NAME) that listProfiles() never surfaces — it exists purely for
- * echo defense, never as a "person" a user could see or delete from a future enrollment UI by mistake.
+ * Privacy: embeddings and profiles never leave the machine. Nothing is added to the store unless
+ * canSaveVoiceprints() is true at the moment of the write, so without the opt-in every label is session-local.
+ * Profiles already on disk are never removed by that gate and are still matched; deleteProfile removes one
+ * regardless of it. PLAN §3.6. The operator's own voiceprint is stored under a reserved name (see
+ * OPERATOR_PROFILE_NAME) that listProfiles() never surfaces — it exists purely for echo defense, never as a
+ * "person" a user could see or delete from a future enrollment UI by mistake.
  */
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -123,6 +125,10 @@ export interface SpeakerIdDeps {
   createExtractor?: () => EmbeddingExtractor | null
   /** Injected store path (tests). */
   storePath?: () => string
+  /** True only while the user has opted in to saving voiceprints (Settings → Save voiceprints). Asked at every
+   *  write, so turning it off stops the next one. Absent means never, so a caller cannot persist a voiceprint by
+   *  omission. Matching against profiles already on disk does not depend on it. */
+  canSaveVoiceprints?: () => boolean
   now?: () => number
   clusterer?: SpeakerClusterer
 }
@@ -182,7 +188,7 @@ export interface SpeakerId {
    *  a label with `echo: true` (see isEchoBleed) when this is the operator's own voice leaking through
    *  the loopback rather than a real THEM utterance — `name`/`source` carry no information in that case. */
   labelWindow: (samples: Float32Array, owner?: SpeakerEmbeddingOwner) => Promise<SpeakerLabel | null>
-  /** Enroll (or reinforce) a named voice profile from one or more turn embeddings' raw audio. */
+  /** Enroll (or reinforce) a named voice profile from one or more turn embeddings' raw audio. False without the save opt-in. */
   enroll: (name: string, sampleWindows: readonly Float32Array[]) => Promise<boolean>
   /** Echo defense + operator profile upkeep (SPEAKER-INTELLIGENCE-PLAN §3.3): feed a 'you' (mic) window's
    *  raw audio so the operator's own voiceprint keeps improving across the session. Same degrade-to-noop
@@ -193,7 +199,7 @@ export interface SpeakerId {
    *  least AUTO_ENROLL_MIN_WINDOWS windows (quality gate — see its own comment). Called by
    *  main/index.ts's backfillSpeakerNames right after the Teams-VTT alignment resolves a live session
    *  cluster label to a real name. Returns the number of names actually enrolled (0 is a normal outcome,
-   *  not a failure — e.g. every candidate cluster was below the quality gate).*/
+   *  not a failure — e.g. every candidate cluster was below the quality gate, or saving voiceprints is off).*/
   autoEnrollFromLabeledWindows: (pairs: readonly { clusterLabel: string; name: string }[]) => number
   listProfiles: () => Array<{ name: string; samples: number }>
   deleteProfile: (name: string) => boolean
@@ -235,6 +241,7 @@ export interface SpeakerId {
 export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
   const now = deps.now ?? (() => Date.now())
   const storePath = deps.storePath ?? (() => join(app.getPath('userData'), 'voiceprints.json'))
+  const canSaveVoiceprints = deps.canSaveVoiceprints ?? (() => false)
   const legacyClusterer = deps.clusterer ?? createSpeakerClusterer()
   const createExtractor = deps.createExtractor ?? buildSherpaExtractor
 
@@ -314,8 +321,10 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
   // Shared centroid-merge logic behind enroll() (raw audio, the public/manual-enrollment API) and
   // autoEnrollFromLabeledWindows() (already-computed embeddings, the flywheel's internal API) — both
   // ultimately do the same "average this batch into the stored profile, weighted by sample counts" work.
+  // Every write that adds a voiceprint (enroll, the flywheel, both operator flushes, enrollFromSnapshot) passes
+  // through here, so this is the one place the save opt-in is enforced.
   const enrollEmbeddings = (name: string, embeddings: readonly Float32Array[]): boolean => {
-    if (!name.trim() || embeddings.length === 0) return false
+    if (!canSaveVoiceprints() || !name.trim() || embeddings.length === 0) return false
     const centroid = meanEmbedding(embeddings)
     if (!centroid) return false
     const list = loadProfiles()
