@@ -8,32 +8,48 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { BASELINE, REASONS, extractSkippedTests, reasonFor, relFileFromVitestName } from '../skip-reasons.mjs'
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 /**
- * Summarize a Vitest JSON-reporter object shaped as:
+ * Summarizes a Vitest JSON-reporter object shaped as:
  * `{ testResults: Array<{ name: string, assertionResults: Array<{ title: string, status: string }> }> }`.
  *
- * Intended contract: count every assertionResult across every testResults entry and return
- * `{ total, passed, failed, skipped }`; `pending` counts as skipped; an empty or missing testResults
- * array returns all-zero counts.
+ * Counts every assertion result, treats non-running statuses as skipped, and records named failed
+ * assertions or file-level collection failures.
  *
  * @param {unknown} report
- * @returns {{ total: number, passed: number, failed: number, skipped: number }}
+ * @returns {{ total: number, passed: number, failed: number, skipped: number, failedIds: string[] }}
  */
 export function summarizeVitestReport(report) {
-  const counts = { total: 0, passed: 0, failed: 0, skipped: 0 }
+  const counts = { total: 0, passed: 0, failed: 0, skipped: 0, failedIds: [] }
   if (!report || typeof report !== 'object' || !Array.isArray(report.testResults)) return counts
 
   for (const file of report.testResults) {
-    if (!file || typeof file !== 'object' || !Array.isArray(file.assertionResults)) continue
+    if (!file || typeof file !== 'object') continue
+    const relFile = relFileFromVitestName(file.name)
+    if (!Array.isArray(file.assertionResults) || file.assertionResults.length === 0) {
+      if (file.status === 'failed') {
+        counts.total += 1
+        counts.failed += 1
+        counts.failedIds.push(`${relFile} (failed to collect)`)
+      }
+      continue
+    }
     for (const assertion of file.assertionResults) {
-      const status = assertion && typeof assertion === 'object' ? assertion.status : undefined
+      const status = assertion.status
       counts.total += 1
-      if (status === 'passed') counts.passed += 1
-      else if (status === 'failed') counts.failed += 1
-      else if (status === 'pending' || status === 'skipped') counts.skipped += 1
+      if (status === 'passed') {
+        counts.passed += 1
+      } else if (status === 'failed') {
+        counts.failed += 1
+        counts.failedIds.push(`${relFile} :: ${assertion.title}`)
+      } else {
+        counts.skipped += 1
+      }
     }
   }
 
@@ -41,64 +57,16 @@ export function summarizeVitestReport(report) {
 }
 
 /**
- * Parse Node's built-in test runner TAP summary lines from arbitrary captured stdout/stderr.
+ * Renders a Markdown CI verification-baseline report.
  *
- * Intended contract: parse `# pass N`, `# fail N`, and `# skipped N` lines and return
- * `{ pass, fail, skipped }`; return `null` when no such summary lines are present.
- *
- * @param {string} text
- * @returns {{ pass: number, fail: number, skipped: number } | null}
- */
-export function parseNodeTestSummary(text) {
-  const summary = { pass: null, fail: null, skipped: null }
-  for (const line of String(text).split(/\r?\n/)) {
-    const match = /^# (pass|fail|skipped) (\d+)$/.exec(line.trim())
-    if (match) summary[match[1]] = Number(match[2])
-  }
-
-  if (summary.pass === null && summary.fail === null && summary.skipped === null) return null
-  return {
-    pass: summary.pass ?? 0,
-    fail: summary.fail ?? 0,
-    skipped: summary.skipped ?? 0
-  }
-}
-
-/**
- * Parse XCTest's `swift test` summary line.
- *
- * Intended contract: parse the documented XCTest form
- * `Executed N test(s), with F failure(s) (U unexpected) in S.sss (S.sss) seconds` and the plain
- * `F failure(s)` variant, returning `{ executed, failures }`; return `null` when absent. No captured
- * MetisKit summary fixture was present in this repository, so the contract uses the XCTest summary
- * format documented by the runner output itself.
- *
- * @param {string} text
- * @returns {{ executed: number, failures: number } | null}
- */
-export function parseSwiftTestSummary(text) {
-  const summary =
-    /Executed (\d+) tests?, with (\d+) failures?(?: \(\d+ unexpected\))? in [0-9.]+(?: \([0-9.]+\))? seconds/g
-  let match
-  let last = null
-  while ((match = summary.exec(String(text))) !== null) {
-    last = { executed: Number(match[1]), failures: Number(match[2]) }
-  }
-  return last
-}
-
-/**
- * Render a Markdown CI verification-baseline report.
- *
- * Intended contract: `entries` is an array of suite results, one per CI verification suite. PASS and
- * FAIL entries render their status, exit code, and `{ total, passed, failed, skipped }` counts.
- * UNAVAILABLE entries render their note instead of fabricating counts.
+ * PASS and FAIL entries render status, exit code, and Vitest counts. UNAVAILABLE or command-only
+ * entries render notes without fabricated counts. Named failed tests are listed after the table.
  *
  * @param {Array<{
  *   suite: string,
  *   status: 'PASS' | 'FAIL' | 'UNAVAILABLE',
  *   exitCode: number | null,
- *   counts: { total: number, passed: number, failed: number, skipped: number } | null,
+ *   counts: { total: number, passed: number, failed: number, skipped: number, failedIds?: string[] } | null,
  *   note?: string
  * }>} entries
  * @returns {string}
@@ -127,12 +95,46 @@ export function renderBaselineReport(entries) {
     )
   }
 
+  const failedIds = entries.flatMap((entry) => (entry.counts?.failedIds ?? []).map((id) => ({ suite: entry.suite, id })))
+  if (failedIds.length > 0) {
+    lines.push('', '## Failing tests', '')
+    for (const entry of failedIds) lines.push(`- ${entry.suite}: ${entry.id}`)
+  }
+
   return `${lines.join('\n')}\n`
+}
+
+/**
+ * Renders the skipped tests inventory collected from the root Vitest report.
+ *
+ * @param {Array<{ id: string, reason: string }>} inventory
+ * @returns {string}
+ */
+export function renderSkipInventory(inventory) {
+  if (inventory.length === 0) return ''
+  const lines = ['## Skipped tests', '', '| Test | Reason |', '| --- | --- |']
+  for (const entry of inventory) {
+    lines.push(`| ${escapeTableCell(entry.id)} | ${escapeTableCell(entry.reason)} |`)
+  }
+  return `${lines.join('\n')}\n`
+}
+
+/**
+ * Redacts user-specific home directory prefixes from display text while preserving the remaining path.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function redactAbsolutePaths(text) {
+  return String(text)
+    .replace(/\/Users\/[^/\s]+/g, '~')
+    .replace(/[A-Za-z]:\\Users\\[^\\\s]+/g, '~')
 }
 
 function main() {
   let tmp
   const entries = []
+  let skipInventory = []
 
   try {
     const outputDir = resolve(process.argv[2] ?? process.cwd())
@@ -155,7 +157,9 @@ function main() {
     entries.push(vitestEntry('root vitest', root.exitCode, rootReportPath))
 
     const skips = runCommand('node', ['scripts/check-skipped-tests.mjs', rootReportPath])
-    entries.push(skipEntry(skips.exitCode, rootReportPath))
+    const skipSummary = skipEntry(skips.exitCode, rootReportPath)
+    entries.push(skipSummary.entry)
+    skipInventory = skipSummary.inventory
 
     const proxy = runCommand('npx', [
       'vitest',
@@ -178,12 +182,10 @@ function main() {
     entries.push(vitestEntry('operator vitest', operator.exitCode, operatorReportPath))
 
     mkdirSync(outputDir, { recursive: true })
-    const markdown = renderBaselineReport(entries)
+    const markdown = `${renderBaselineReport(entries)}${renderSkipInventory(skipInventory)}`
     writeFileSync(join(outputDir, 'verification-baseline.md'), markdown)
     writeFileSync(join(outputDir, 'verification-baseline.json'), `${JSON.stringify(entries, null, 2)}\n`)
     process.stdout.write(markdown)
-  } catch (error) {
-    console.error(`[verification-baseline] unable to complete report: ${error instanceof Error ? error.message : error}`)
   } finally {
     if (tmp) rmSync(tmp, { recursive: true, force: true })
   }
@@ -216,19 +218,37 @@ function skipEntry(exitCode, reportPath) {
   const report = readJsonReport(reportPath)
   if (!report) {
     return {
+      entry: {
+        suite: 'check:skips',
+        status: exitCode === 0 ? 'PASS' : 'FAIL',
+        exitCode,
+        counts: null,
+        note: 'root vitest JSON report was not readable; skip count was not measured'
+      },
+      inventory: []
+    }
+  }
+  const skipped = extractSkippedTests(report)
+  const undeclared = skipped.filter((skip) => !reasonFor(skip.id))
+  const allowed = BASELINE[process.platform]
+  const baselineNote =
+    allowed === undefined ? `no declared baseline for ${process.platform}` : `declared baseline ceiling ${allowed}`
+  const inventory = skipped.map((skip) => ({
+    id: redactAbsolutePaths(skip.id),
+    reason: reasonFor(skip.id) ?? 'UNDECLARED'
+  }))
+
+  return {
+    entry: {
       suite: 'check:skips',
       status: exitCode === 0 ? 'PASS' : 'FAIL',
       exitCode,
       counts: null,
-      note: 'root vitest JSON report was not readable; skip count was not measured'
-    }
-  }
-  return {
-    suite: 'check:skips',
-    status: exitCode === 0 ? 'PASS' : 'FAIL',
-    exitCode,
-    counts: summarizeVitestReport(report),
-    note: 'counts reuse the root vitest JSON report from this run'
+      note:
+        `${skipped.length} skipped tests found in the root vitest report; ${baselineNote}; ` +
+        `${undeclared.length} undeclared; ${REASONS.length} declared reason patterns available`
+    },
+    inventory
   }
 }
 
@@ -243,7 +263,7 @@ function readJsonReport(reportPath) {
 
 function runCommand(file, args) {
   try {
-    execFileSync(file, args, { stdio: 'inherit', shell: process.platform === 'win32' })
+    execFileSync(file, args, { cwd: REPO_ROOT, stdio: 'inherit', shell: process.platform === 'win32' })
     return { exitCode: 0 }
   } catch (error) {
     return { exitCode: typeof error.status === 'number' ? error.status : 1 }

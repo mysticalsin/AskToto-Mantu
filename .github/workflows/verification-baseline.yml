@@ -42,4 +42,4 @@ jobs:
         with:
           name: verification-baseline-${{ matrix.os }}
           path: verification-baseline-report/
-          if-no-files-found: warn
+          if-no-files-found: error

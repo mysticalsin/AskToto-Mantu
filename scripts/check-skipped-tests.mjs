@@ -27,65 +27,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
+import { BASELINE, extractSkippedTests, reasonFor } from './skip-reasons.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-
-/**
- * Why each skip exists, keyed by a substring of `<file> :: <test title>`.
- *
- * Deliberately prose, not a boolean: the point is that a human wrote down why this path is untested on
- * this platform, so the next person can judge whether it still holds rather than inheriting a silent gap.
- */
-const REASONS = [
-  {
-    match: 'dustcli.test.ts',
-    why: 'Drives the REAL macOS login keychain through `security add-generic-password`. Faking it would test the fake — the whole point is that Metis reads the session `dust login` actually wrote. The region-mapping and partial-session LOGIC is covered cross-platform in dustcli.logic.test.ts.'
-  },
-  {
-    match: 'mac-helper.test.ts',
-    why: 'Pipes an image through the real compiled Swift helper. The binary only exists and only runs on macOS.'
-  },
-  {
-    match: 'apple-speech.test.ts',
-    why: 'Spawns the real macOS speech subcommand end to end (spawn -> temp wav -> cleanup). No Windows equivalent exists.'
-  },
-  {
-    match: 'check-ffmpeg-sidecar.test.ts',
-    why: 'Reads the LGPL/GPL banner out of a real mac ffmpeg build. The licence check is the assertion, so a stubbed banner would assert nothing.'
-  },
-  {
-    match: 'local-runtime.test.ts',
-    why: 'Spawns a real mac llama-server against real weights. Its spawn-ARGUMENT contract is covered cross-platform by buildSpawnArgs tests in the same file, which is the part that regressed as `-c undefined`.'
-  },
-  {
-    match: 'fetch-llama-server.test.ts',
-    why: 'Exercises Windows zip/bsdtar extraction of the llama-server release asset. On linux/darwin the platform-specific zip path is skipped; cross-platform unpack logic is covered by the same file’s non-skipped cases where tar is available.'
-  },
-  {
-    match: 'cli-win.test.ts',
-    why: 'Drives cmd.exe argument quoting on Windows only. Empty-arg delivery through cmd.exe has no equivalent on posix shells.'
-  },
-  {
-    match: 'ffmpeg-decoder.test.ts',
-    why: "Needs the packaged ffmpeg sidecar binary for this OS. CI linux images without the sidecar skip the live decode; contract tests cover window sizing without spawning ffmpeg. The cancel test's SIGTERM-immune stand-in is a POSIX shell script; Windows has no signals to ignore (kill is TerminateProcess), so it runs on linux and darwin only."
-  },
-  {
-    match: 'win-security.test.ts',
-    why: 'Probes Windows ACL owner SIDs and admin-managed policy files. No-op / skipped on non-Windows hosts by design.'
-  },
-  {
-    match: 'dataless.test.ts',
-    why: 'Runs the real Windows PowerShell attribute probe against an NTFS file carrying FILE_ATTRIBUTE_OFFLINE. The binary and the attribute exist only on Windows; the shared wire protocol, decoding and failure policy run on every platform through a stand-in probe.'
-  },
-  {
-    match: 'gateway.test.ts',
-    why: 'Pins libuv pool threads with real FIFOs, the kernel-blocking stand-in for a cloud-only read. Windows has no FIFOs; the admission, deadline, sharing and dataless rules run on every platform through an in-memory fs whose calls can be held open.'
-  }
-]
-
-/** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
- *  Lower it when a skip is retired; never raise it for an undeclared skip. */
-const BASELINE = { win32: 16, darwin: 2, linux: 19 }
 
 const platform = process.platform
 const allowed = BASELINE[platform]
@@ -115,15 +59,7 @@ if (!existsSync(reportPath)) {
 }
 
 const report = JSON.parse(readFileSync(reportPath, 'utf8'))
-const skipped = []
-for (const file of report.testResults ?? []) {
-  for (const t of file.assertionResults ?? []) {
-    if (t.status === 'pending' || t.status === 'skipped') {
-      const rel = String(file.name ?? '').split(/[\\/]/).slice(-2).join('/')
-      skipped.push({ id: `${rel} :: ${t.title}`, file: rel })
-    }
-  }
-}
+const skipped = extractSkippedTests(report)
 if (tmp) rmSync(tmp, { recursive: true, force: true })
 
 const problems = []
@@ -142,7 +78,7 @@ if (skipped.length < allowed) {
   )
 }
 
-const unexplained = skipped.filter((s) => !REASONS.some((r) => s.id.includes(r.match)))
+const unexplained = skipped.filter((s) => !reasonFor(s.id))
 for (const s of unexplained) {
   problems.push(`no declared reason for: ${s.id}`)
 }
@@ -160,6 +96,6 @@ console.log(`[check:skips] OK — ${skipped.length} skipped on ${platform}, all 
 const byFile = new Map()
 for (const s of skipped) byFile.set(s.file, (byFile.get(s.file) ?? 0) + 1)
 for (const [file, n] of byFile) {
-  const reason = REASONS.find((r) => file.includes(r.match))
-  console.log(`    ${String(n).padStart(2)}  ${file} — ${reason.why.split('.')[0]}.`)
+  const reason = reasonFor(file)
+  console.log(`    ${String(n).padStart(2)}  ${file} — ${reason.split('.')[0]}.`)
 }
