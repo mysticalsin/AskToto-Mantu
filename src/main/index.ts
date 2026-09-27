@@ -6053,9 +6053,7 @@ function registerIpc(): void {
     const r = await connectMcp(PLANE_MCP_OAUTH_ENDPOINT, tokens.accessToken, {}, 'Plane')
     if (!r.ok) return r
     try {
-      // Save the client and the tokens together, only now that connectMcp has proven the access token
-      // actually works end-to-end (P4-F2) — see planeOAuth.ts's file header for why saving the client
-      // any earlier can pair a new client with a stale refresh token the moment this probe fails.
+      // Save client + tokens together only now that connectMcp has proven the access token works (P4-F2; see planeOAuth.ts's file header).
       savePlaneClientAndTokens(
         { clientId: tokens.clientId, clientSecret: tokens.clientSecret },
         { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken ?? '' }

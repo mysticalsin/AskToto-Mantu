@@ -274,13 +274,9 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     expect(getMcpClientSecret('plane')).toBe('secret-A')
   })
 
-  it('never persists the client itself on success — it only returns it alongside the tokens (P4-F2, AGUC-021, round 2)', async () => {
-    // runPlaneOAuth proving a token exchange worked is not the same as main/index.ts's mcpPlaneConnect
-    // handler proving the access token actually works end-to-end (a live connectMcp probe still has to
-    // run first). So a successful run must leave the previously-stored client exactly as it was and
-    // hand the freshly-registered client back to the caller instead — persistence is entirely the
-    // caller's job, done together with the tokens, only once that probe has also succeeded (see
-    // savePlaneClientAndTokens).
+  it('never persists the client itself on success — it only returns it alongside the tokens (P4-F2, AGUC-021)', async () => {
+    // A successful token exchange isn't the same as connectMcp proving the connection is live —
+    // persistence is the caller's job (see savePlaneClientAndTokens).
     const { getSettings, setSettings } = await import('../store')
     const { getMcpClientSecret, setMcpClientSecret } = await import('./mcpSecrets')
     setSettings({ planeClientId: 'client-A' })
@@ -308,34 +304,31 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     expect(getMcpClientSecret('plane')).toBe('secret-A')
   })
 
-  it('savePlaneClientAndTokens persists client + tokens together, so a later refresh sends the matching pair (P4-F2, AGUC-021, round 2)', async () => {
-    const { getSettings } = await import('../store')
-    const { getMcpClientSecret } = await import('./mcpSecrets')
+  it('savePlaneClientAndTokens persists client + tokens together, so a later refresh sends the matching pair (P4-F2, AGUC-021)', async () => {
+    const { getSettings, setSettings } = await import('../store')
+    const { getMcpApiKey, getMcpRefreshToken, setMcpClientSecret, setMcpApiKey, setMcpRefreshToken } = await import(
+      './mcpSecrets'
+    )
+    const { savePlaneClientAndTokens, refreshPlaneToken } = await import('./planeOAuth')
 
-    fetchMock.mockImplementation(async (url: string) => {
-      if (String(url).includes('/register')) return jsonResponse({ client_id: 'client-B', client_secret: 'secret-B' })
-      if (String(url).includes('/token')) return jsonResponse({ access_token: 'plane-at-B', refresh_token: 'plane-rt-B', token_type: 'bearer' })
-      throw new Error(`unexpected fetch: ${url}`)
-    })
-    const { runPlaneOAuth, savePlaneClientAndTokens } = await import('./planeOAuth')
-    const flow = runPlaneOAuth()
-    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
-    const { redirectUri, state } = capturedAuthorizeParams()
-    await hitCallback(redirectUri, { code: 'auth-code-1', state })
-    const result = await flow
-    if (!result.ok || !result.clientId || !result.clientSecret || !result.accessToken || !result.refreshToken) {
-      throw new Error('expected a successful result with client + tokens')
-    }
+    // Seed an existing connection at client-A, the way a prior successful Connect would have left it.
+    setSettings({ planeClientId: 'client-A' })
+    setMcpClientSecret('plane', 'secret-A')
+    setMcpApiKey('plane', 'plane-at-A')
+    setMcpRefreshToken('plane', 'plane-rt-A')
 
     // The step main/index.ts's mcpPlaneConnect handler takes only after its own connectMcp probe of
-    // result.accessToken has succeeded — never runPlaneOAuth's job (see the tests above).
+    // the fresh client-B grant's access token has succeeded.
     savePlaneClientAndTokens(
-      { clientId: result.clientId, clientSecret: result.clientSecret },
-      { accessToken: result.accessToken, refreshToken: result.refreshToken }
+      { clientId: 'client-B', clientSecret: 'secret-B' },
+      { accessToken: 'plane-at-B', refreshToken: 'plane-rt-B' }
     )
     expect(getSettings().planeClientId).toBe('client-B')
-    expect(getMcpClientSecret('plane')).toBe('secret-B')
+    expect(getMcpApiKey('plane')).toBe('plane-at-B')
+    expect(getMcpRefreshToken('plane')).toBe('plane-rt-B')
 
+    // The refresh path a background 401 takes (index.ts:5917-5918): read back whatever was just saved
+    // and send it as one pair — never client-B mismatched with the old RT-A.
     let refreshBody = ''
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (String(url).includes('/token')) {
@@ -344,13 +337,25 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
       }
       throw new Error(`unexpected fetch: ${url}`)
     })
-    const { refreshPlaneToken } = await import('./planeOAuth')
-    const refreshed = await refreshPlaneToken(result.refreshToken)
+    const refreshed = await refreshPlaneToken(getMcpRefreshToken('plane'))
     expect(refreshed.ok).toBe(true)
     const body = new URLSearchParams(refreshBody)
     expect(body.get('client_id')).toBe('client-B')
     expect(body.get('client_secret')).toBe('secret-B')
     expect(body.get('refresh_token')).toBe('plane-rt-B')
+  })
+
+  it('savePlaneClientAndTokens clears the previously stored refresh token when the new grant has none, so a token-less re-grant cannot leave it paired with the new client (P4-F2, AGUC-021)', async () => {
+    const { setSettings } = await import('../store')
+    const { getMcpRefreshToken, setMcpClientSecret, setMcpRefreshToken } = await import('./mcpSecrets')
+    const { savePlaneClientAndTokens } = await import('./planeOAuth')
+
+    setSettings({ planeClientId: 'client-A' })
+    setMcpClientSecret('plane', 'secret-A')
+    setMcpRefreshToken('plane', 'plane-rt-A')
+
+    savePlaneClientAndTokens({ clientId: 'client-B', clientSecret: 'secret-B' }, { accessToken: 'plane-at-B', refreshToken: '' })
+    expect(getMcpRefreshToken('plane')).toBe('')
   })
 
   it('pins the official hosted MCP URLs and never asks the user to paste them', async () => {
