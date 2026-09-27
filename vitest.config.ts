@@ -72,6 +72,11 @@ const vitestConfig = defineConfig({
   // Match the renderer's react-jsx compiler setting explicitly. The root config only references
   // tsconfig.web.json, so Vite's standalone test transform does not inherit that JSX option.
   esbuild: { jsx: 'automatic' },
+  // Tests see the shipping value; the QA branch is exercised directly (scripts/lib/qa-fault-hook.test.ts).
+  // electron.vite.config.ts's own `main.define` does not reach here: mergeConfig below merges the
+  // electron-vite config's top-level main/preload/renderer keys verbatim, it does not hoist their nested
+  // Vite sub-config into this flat one.
+  define: { __METIS_QA_IDENTITY__: 'false' },
   test: {
     globals: true,
     environment: 'node',

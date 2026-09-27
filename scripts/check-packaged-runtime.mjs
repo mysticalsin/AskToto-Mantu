@@ -25,6 +25,7 @@ import { REPO_ROOT } from './local-model-assets.mjs'
 import { verifyLocalModelPayload } from './lib/local-model-inventory.mjs'
 import { verifyPackagedSharp } from './verify-packaged-sharp.mjs'
 import { assertMacHelperSpeechUsage } from './lib/mac-helper-privacy.mjs'
+import { assertQaFaultHookMatchesIdentity } from './lib/qa-fault-hook.mjs'
 
 const argv = process.argv.slice(2)
 const target = argv.shift()
@@ -655,6 +656,11 @@ if (target === 'mac') {
 } else {
   verifyPeX64(join(resourcesRoot, '..', executableName || 'Metis.exe'))
 }
+
+const { qaIdentity } = assertQaFaultHookMatchesIdentity(join(resourcesRoot, 'app.asar'))
+console.log(
+  `[check:packaged-runtime] OK ${qaIdentity ? 'the QA-identity package carries' : 'the shipping package lacks'} the QA fault hook`
+)
 
 console.log(
   `[check:packaged-runtime] OK ${target} (${postSign ? 'post-sign' : 'pre-sign'}) — exact reviewed ` +
