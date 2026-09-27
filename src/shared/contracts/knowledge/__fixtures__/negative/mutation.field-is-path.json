@@ -1,0 +1,17 @@
+{
+  "target": {
+    "space": "00000000-0000-4000-8000-000000000010",
+    "id": "00000000-0000-4000-8000-000000000101"
+  },
+  "expectedRevision": 2,
+  "idempotencyKey": "request-000000000004",
+  "reason": "The account moved into consumer goods.",
+  "evidence": [],
+  "patch": [
+    {
+      "op": "set",
+      "field": "sector.value",
+      "value": "retail"
+    }
+  ]
+}
