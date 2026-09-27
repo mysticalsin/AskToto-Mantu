@@ -636,11 +636,14 @@ if (target === 'mac') {
   const contentsDir = dirname(resourcesRoot)
   const appRoot = dirname(contentsDir)
   const macOsDir = join(contentsDir, 'MacOS')
-  requireExactInventory(macOsDir, ['Metis'], 'macOS executable directory')
+  // electron-builder names the executable after the bundle (productFilename), so the QA-identity
+  // variant's Metis QA.app carries "Metis QA", not "Metis" (M2-0187) — derive it rather than assume it.
+  const executable = basename(appRoot, '.app')
+  requireExactInventory(macOsDir, [executable], 'macOS executable directory')
   // Thin during an arch sub-build, fat once lipo has merged them — assert exactly the slices this
   // stage is supposed to have, so a universal package missing a slice fails here rather than on a
   // user's machine.
-  verifyMachOArches(join(macOsDir, 'Metis'), expectedMachoArches)
+  verifyMachOArches(join(macOsDir, executable), expectedMachoArches)
   const speechHelper = join(resourcesRoot, 'mac-helper', 'metis-mac-helper')
   requireRegularFile(speechHelper)
   verifyMachOArches(speechHelper, ['arm64', 'x64'])

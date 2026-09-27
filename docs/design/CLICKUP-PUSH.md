@@ -10,6 +10,8 @@ ready-to-merge: no
 
 # ClickUp post-meeting push
 
+**Status:** Active contract — implement only what this file states (see frontmatter `status`).
+
 Tony cannot push a meeting into ClickUp. The current path calls the wrong MCP tool (`attach_task_file`) with `{title, description, project_id}` and ClickUp answers **invalid parameters**. Destination is a blank "project ID" paste. That is the bug.
 
 This file is the gate. Write it before UI. Overlay, Operator, Listen, appearance, pack, and Aria stay out.

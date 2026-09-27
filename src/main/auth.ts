@@ -477,12 +477,14 @@ function clearSession(): void {
 
 /**
  * Why a cached session should no longer be trusted, or null if it's still valid. Validity = within the
- * max local age AND (when SSO is configured) still matching the allowed domain. Anything past these
- * bounds forces fresh interactive sign-in.
+ * max local age AND (when SSO is configured) still matching the allowed domain and the configured tenant.
+ * The tenant compare is tenantMatches (case-folded, like the sign-in gate), and a session read from disk
+ * without a string tid cannot prove its tenant. Anything past these bounds forces fresh interactive sign-in.
  */
-function expiryReason(s: Session, cfg: AzureConfig | null): 'max_age' | 'domain' | null {
+function expiryReason(s: Session, cfg: AzureConfig | null): 'max_age' | 'domain' | 'tenant' | null {
   if (typeof s.at !== 'number' || Date.now() - s.at > MAX_SESSION_AGE_MS) return 'max_age'
   if (cfg && s.domain !== cfg.allowedDomain) return 'domain'
+  if (cfg && (typeof s.tid !== 'string' || !tenantMatches(s.tid, cfg.tenantId))) return 'tenant'
   return null
 }
 
@@ -524,9 +526,9 @@ async function probeRefreshToken(): Promise<'valid' | 'revoked' | 'unknown'> {
 }
 
 /**
- * Post-startup + periodic re-validation. Checks local max-age + config-domain match first, then probes
- * the persisted MSAL refresh token. Only an EXPLICIT server-side revocation clears the session — an
- * offline or transient failure leaves the user signed in (see probeRefreshToken).
+ * Post-startup + periodic re-validation. Checks local max-age + config domain + tenant match first,
+ * then probes the persisted MSAL refresh token. Only an EXPLICIT server-side revocation clears the
+ * session — an offline or transient failure leaves the user signed in (see probeRefreshToken).
  */
 async function revalidateSession(): Promise<void> {
   loadSession()
@@ -607,7 +609,8 @@ function loadSession(): void {
     session = null
   }
   // Treat the file as a CACHE: a session past the max local age is evicted on read (memory + disk),
-  // forcing fresh interactive sign-in. (Config-domain re-validation needs cfg and runs in authStatus.)
+  // forcing fresh interactive sign-in. (Config re-validation, domain and tenant, needs cfg and runs in
+  // authStatus and the sweep.)
   if (session && (typeof session.at !== 'number' || Date.now() - session.at > MAX_SESSION_AGE_MS)) {
     clearSession()
     auditLog('auth.expired', { reason: 'max_age' })
@@ -639,8 +642,8 @@ export function authStatus(): AuthStatus {
   loadSession()
   const cfg = readConfig()
   // The persisted session is a CACHE, not the authority. Drop it — from memory AND disk — once it
-  // exceeds the max local age OR (config changed) no longer matches the allowed domain, so a stale
-  // session can't linger in auth-session.bin past the `loaded` latch. This also catches a session
+  // exceeds the max local age OR (config changed) no longer matches the allowed domain or tenant, so a
+  // stale session can't linger in auth-session.bin past the `loaded` latch. This also catches a session
   // that crosses the max-age boundary mid-run (loadSession only runs once).
   if (session) {
     const reason = expiryReason(session, cfg)

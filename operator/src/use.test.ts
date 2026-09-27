@@ -1,3 +1,4 @@
+import { reviewedGatewayReply, reviewedGatewayFetch } from './ai-gateway.privacy-fixture'
 import { describe, expect, it, vi } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { hmacHex } from './hmac'
@@ -6,7 +7,7 @@ import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operato
 import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
-import { parseUseBody } from './use'
+import { parseUseBody, withProviderTimeout } from './use'
 import { PORTAL_CF_DEEPSEEK_FLASH, PORTAL_CF_DEEPSEEK_PRO } from '../../src/shared/ask-routing'
 
 const NOW = 1_725_000_000_000
@@ -84,7 +85,7 @@ async function addCloudflareKey(store: ReturnType<typeof memoryStore>) {
     }),
     env(),
     { access: tony },
-    { store, now: NOW }
+    { store, now: NOW, cfFetch: reviewedGatewayFetch }
   )
   expect(res.status).toBe(200)
 }
@@ -233,7 +234,7 @@ describe('HMAC POST /v1/use', () => {
     })
     const providerFetch = vi.fn(async (input) => {
       if (String(input).includes('/ai-gateway/gateways')) {
-        return new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+        return reviewedGatewayReply()
       }
       return provider === 'anthropic'
         ? new Response(JSON.stringify({ content: [{ type: 'text', text: 'unexpected upstream call' }] }), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -288,5 +289,116 @@ describe('HMAC POST /v1/use', () => {
     expect(events.some((e) => e.kind === 'use' && e.detail === 'use anthropic')).toBe(true)
     expect(JSON.stringify(events)).not.toContain(SECRET)
     expect(JSON.stringify(events)).not.toMatch(tokenPatternForTests())
+  })
+
+  it('refuses a cloudflare use when the gateway privacy readback finds an unsafe configuration, and never calls the model', async () => {
+    const store = memoryStore()
+    await addCloudflareKey(store)
+    await approveDevice(store)
+    const calls: string[] = []
+    const providerFetch: typeof fetch = async (input) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.includes('/ai-gateway/gateways')) {
+        return new Response(JSON.stringify({
+          success: true, result: { id: 'default', collect_logs: true, cache_ttl: 0, logpush: false }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error('must not call the chat-completions endpoint when privacy is unverified')
+    }
+    const body = JSON.stringify({
+      provider: 'cloudflare',
+      model: PORTAL_CF_DEEPSEEK_FLASH,
+      tier: 'base',
+      messages: [{ role: 'user', content: 'hi' }]
+    })
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-unsafe-gateway'), env(), {}, {
+      store, now: NOW, providerFetch
+    })
+    expect(res.status).toBe(503)
+    expect(await res.json()).toMatchObject({ ok: false, code: 'GATEWAY_CONFIGURATION_UNSAFE' })
+    expect(calls.some((u) => u.includes('/ai/v1/chat/completions'))).toBe(false)
+  })
+
+  it('binds the persisted ask row to the caller-supplied clientAskId', async () => {
+    const store = memoryStore()
+    await addAnthropicKey(store)
+    await approveDevice(store)
+    const clientAskId = 'client-ask-00000001'
+    const body = JSON.stringify({
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+      clientAskId,
+      messages: [{ role: 'user', content: 'hi' }]
+    })
+    const providerFetch: typeof fetch = async () =>
+      new Response(JSON.stringify({
+        content: [{ type: 'text', text: 'ok' }],
+        usage: { input_tokens: 5, output_tokens: 2 }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-client-ask'), env(), {}, {
+      store, now: NOW, providerFetch
+    })
+    expect(res.status).toBe(200)
+    expect(await store.getAsk(clientAskId)).toMatchObject({
+      device_id: 'device-use',
+      provider: 'anthropic',
+      outcome: 'answered',
+      input_tokens: 5,
+      output_tokens: 2
+    })
+  })
+
+  it('drops fractional or negative provider usage from the response and stores it as null', async () => {
+    const store = memoryStore()
+    await addAnthropicKey(store)
+    await approveDevice(store)
+    const clientAskId = 'client-ask-fractional1'
+    const body = JSON.stringify({
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+      clientAskId,
+      messages: [{ role: 'user', content: 'hi' }]
+    })
+    const providerFetch: typeof fetch = async () =>
+      new Response(JSON.stringify({
+        content: [{ type: 'text', text: 'ok' }],
+        usage: { input_tokens: 12.5, output_tokens: -3 }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-fractional'), env(), {}, {
+      store, now: NOW, providerFetch
+    })
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json).not.toHaveProperty('inputTokens')
+    expect(json).not.toHaveProperty('outputTokens')
+    expect(await store.getAsk(clientAskId)).toMatchObject({ input_tokens: null, output_tokens: null })
+  })
+})
+
+describe('withProviderTimeout', () => {
+  it('honours a shorter caller-supplied signal instead of always widening it to the provider timeout', async () => {
+    const controller = new AbortController()
+    let seenSignal: AbortSignal | undefined
+    const inner: typeof fetch = async (_input, init) => {
+      seenSignal = init?.signal ?? undefined
+      return new Response('{}', { status: 200 })
+    }
+    controller.abort()
+    const wrapped = withProviderTimeout(inner)
+    await wrapped('https://example.test', { signal: controller.signal })
+    expect(seenSignal?.aborted).toBe(true)
+  })
+
+  it('still bounds the call by its own timeout when no caller signal is given', async () => {
+    let seenSignal: AbortSignal | undefined
+    const inner: typeof fetch = async (_input, init) => {
+      seenSignal = init?.signal ?? undefined
+      return new Response('{}', { status: 200 })
+    }
+    const wrapped = withProviderTimeout(inner)
+    await wrapped('https://example.test', {})
+    expect(seenSignal).toBeInstanceOf(AbortSignal)
+    expect(seenSignal?.aborted).toBe(false)
   })
 })

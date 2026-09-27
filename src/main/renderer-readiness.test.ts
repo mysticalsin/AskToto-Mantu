@@ -131,7 +131,9 @@ describe('MQA-318 real renderer readiness signal', () => {
     // not loadFile — so packaged asar getURL() matches expectedUrl. Recovery may still loadFile.
     expect(body.slice(bind, load + 'win.loadURL(rendererUrl)'.length)).toMatch(/win\.loadURL\(rendererUrl\)/)
     expect(body.slice(bind, load + 80)).not.toMatch(/else win\.loadFile\(join\(__dirname, '\.\.\/renderer\/index\.html'\)\)/)
-    expect(body).toContain("auditLog('app.started'")
+    // createWindow's app.started audit lives in infra/observability/run-observability.ts
+    // (startRunObservability); this pins createWindow's call-site into it, not the audit call itself.
+    expect(body).toContain('startRunObservability(')
     expect(body).toContain("auditLog('app.renderer.ready'")
     expect(body).toContain("ASKTOTO_MAC_LAUNCH_GATE === '1'")
   })

@@ -30,12 +30,20 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
 const launchGate = readFileSync(join(root, 'scripts', 'check-packaged-launch.mjs'), 'utf8')
 
 /** Every npm script that actually invokes electron-builder against a mac target. */
-const MAC_BUILD_CHAINS = ['dist', 'dist:local', 'release:build:mac', 'release:mas']
+const MAC_BUILD_CHAINS = ['dist', 'dist:local', 'release:build:mac', 'release:mas', 'dist:qa-identity']
 
-/** A chain plus whatever npm runs ahead of it — `dist` does its provisioning in `predist`. */
+/**
+ * A chain plus whatever npm runs ahead of it. `dist` does its provisioning inline in `predist`;
+ * `dist:qa-identity` (M2-0187) reuses that same provisioning through `predist:qa-identity: "npm run
+ * predist"` instead of duplicating it, so a pre-hook of exactly that `npm run <script>` form is expanded
+ * to the referenced script's own text before counting as provisioning.
+ */
 function chainWithHook(name: string): string {
   const pre = pkg.scripts[`pre${name}`]
-  return pre ? `${pre} && ${pkg.scripts[name]}` : pkg.scripts[name]
+  if (!pre) return pkg.scripts[name]
+  const referencedScript = /^npm run (\S+)$/.exec(pre)?.[1]
+  const expandedPre = referencedScript ? pkg.scripts[referencedScript] : pre
+  return `${expandedPre} && ${pkg.scripts[name]}`
 }
 
 describe('MQA-208 — release:mas stages Electron like every other mac chain', () => {
@@ -164,17 +172,19 @@ describe('MQA-249 — a portable "this build came up" signal, and the macOS gate
   const indexSrc = readFileSync(join(root, 'src', 'main', 'index.ts'), 'utf8')
   const loggerSrc = readFileSync(join(root, 'src', 'main', 'logger.ts'), 'utf8')
 
-  it('MQA-249: createWindow emits app.started unconditionally', () => {
+  it('MQA-249: createWindow starts run observability, and therefore audits app.started, unconditionally', () => {
     const start = indexSrc.indexOf('function createWindow(')
     expect(start).toBeGreaterThan(-1)
     const createWindow = indexSrc.slice(start)
     const body = createWindow.slice(0, createWindow.indexOf('\n}\n'))
-    expect(body).toMatch(/auditLog\('app\.started'/)
+    // createWindow's app.started audit lives in infra/observability/run-observability.ts
+    // (startRunObservability); this pins createWindow's call-site into it, not the audit call itself.
+    expect(body).toMatch(/startRunObservability\(/)
     // Before any early return that could skip it — other than the idempotency guard, which only fires
     // when a window already exists and the app has therefore demonstrably already started.
     const guard = body.indexOf('if (win && !win.isDestroyed()) return')
     expect(guard).toBeGreaterThan(-1)
-    expect(body.indexOf("auditLog('app.started'")).toBeGreaterThan(guard)
+    expect(body.indexOf('startRunObservability(')).toBeGreaterThan(guard)
   })
 
   it('MQA-249: the event is a registered audit event, so it survives the type checker', () => {
