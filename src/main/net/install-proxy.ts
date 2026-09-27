@@ -1,4 +1,5 @@
-import { Agent, EnvHttpProxyAgent, ProxyAgent, setGlobalDispatcher } from 'undici'
+import type { LookupFunction } from 'node:net'
+import { Agent, EnvHttpProxyAgent, ProxyAgent, setGlobalDispatcher, type Dispatcher } from 'undici'
 import { session } from 'electron'
 import { mainLog, auditLog } from '../logger'
 import { detectProxyFromEnv, parseElectronProxy, redactProxyUrl } from './proxy-url'
@@ -31,16 +32,53 @@ import { detectProxyFromEnv, parseElectronProxy, redactProxyUrl } from './proxy-
  */
 const OS_PROXY_DEADLINE_MS = 2_000
 
-/** Direct-connection dispatcher: undici's default agent drops idle sockets after ~4s, so back-to-back
- *  provider asks would re-pay DNS + TCP + TLS (typically 100-300ms of the time-to-first-token). */
-function directAgent(): Agent {
-  return new Agent({ keepAliveTimeout: 30_000, keepAliveMaxTimeout: 60_000 })
+/** How main-process fetch reaches the network. Kept, not just applied, so routeDispatcher() below can
+ *  build ANOTHER dispatcher (for one MCP session's own connect-time DNS pin — see mcpClient.ts) that
+ *  routes exactly like the global one, on whichever of these three the machine turned out to need. */
+type Route = { kind: 'direct' } | { kind: 'env' } | { kind: 'system'; proxy: string }
+
+let route: Route = { kind: 'direct' }
+
+/**
+ * A dispatcher on the CURRENT route (`route`, above), optionally given its own connect-time `lookup`.
+ * `lookup` resolves every connection THIS dispatcher dials to a target itself: on a direct route, or
+ * the NO_PROXY hosts on the env route. Through a proxy, the proxy resolves and dials the target, so
+ * there is nothing local left for `lookup` to apply to (ProxyAgent replaces `connect` with its own
+ * tunnel — checked against undici 7.29's source).
+ *
+ * `setGlobalDispatcher` is deliberately NOT called here — that is useRoute()'s job, once, for the
+ * shared global dispatcher. A caller building its own (e.g. one MCP session's pinned dispatcher) gets
+ * back a dispatcher it alone owns and must destroy.
+ */
+export function routeDispatcher(lookup?: LookupFunction): Dispatcher {
+  const connect = lookup && { lookup }
+  switch (route.kind) {
+    case 'env':
+      // The environment already names a proxy (incl. NO_PROXY handling). EnvHttpProxyAgent reads it
+      // and routes accordingly — belt-and-suspenders even though Electron's fetch honors env proxies
+      // natively. `{ connect: undefined }` is the same as omitting `connect` entirely.
+      return new EnvHttpProxyAgent({ connect })
+    case 'system':
+      return new ProxyAgent(route.proxy)
+    case 'direct':
+      // undici's default agent drops idle sockets after ~4s, so back-to-back provider asks would
+      // re-pay DNS + TCP + TLS (typically 100-300ms of the time-to-first-token) without keep-alive.
+      return new Agent({ keepAliveTimeout: 30_000, keepAliveMaxTimeout: 60_000, connect })
+  }
+}
+
+/** Adopt a new route and (re)install the shared global dispatcher for it — the ONE place that changes
+ *  what main-process `fetch` uses by default. Everything else routeDispatcher() can build for its own
+ *  purposes follows this same `route` state without touching the global dispatcher again. */
+function useRoute(next: Route): void {
+  route = next
+  setGlobalDispatcher(routeDispatcher())
 }
 
 function installSystemProxy(resolved: string, late: boolean): boolean {
   const systemProxy = parseElectronProxy(resolved)
   if (!systemProxy) return false
-  setGlobalDispatcher(new ProxyAgent(systemProxy))
+  useRoute({ kind: 'system', proxy: systemProxy })
   mainLog.info(
     `[net] proxy-aware fetch installed from system config${late ? ' (late — after the boot deadline)' : ''}`,
     systemProxy,
@@ -54,9 +92,7 @@ export async function installProxyAwareFetch(): Promise<void> {
   try {
     const envProxy = detectProxyFromEnv(process.env)
     if (envProxy) {
-      // The environment already names a proxy (incl. NO_PROXY handling). EnvHttpProxyAgent reads it and
-      // routes accordingly — belt-and-suspenders even though Electron's fetch honors env proxies natively.
-      setGlobalDispatcher(new EnvHttpProxyAgent())
+      useRoute({ kind: 'env' })
       const safe = redactProxyUrl(envProxy)
       mainLog.info('[net] proxy-aware fetch installed from environment', safe)
       auditLog('net.proxy', { source: 'env', proxy: safe })
@@ -81,7 +117,7 @@ export async function installProxyAwareFetch(): Promise<void> {
       // appear, but the resolver is left running: when it lands we swap the dispatcher for the real
       // proxy. Dropping it here instead would turn a merely-slow PAC into a whole session of
       // `TypeError: fetch failed` - the exact failure this module was written to remove.
-      setGlobalDispatcher(directAgent())
+      useRoute({ kind: 'direct' })
       mainLog.warn(
         `[net] OS proxy resolution exceeded ${OS_PROXY_DEADLINE_MS}ms; continuing direct and upgrading if it lands`
       )
@@ -92,7 +128,7 @@ export async function installProxyAwareFetch(): Promise<void> {
     if (installSystemProxy(resolved, false)) return
 
     // Direct connection.
-    setGlobalDispatcher(directAgent())
+    useRoute({ kind: 'direct' })
     mainLog.info('[net] no proxy configured (direct); keep-alive fetch agent installed')
   } catch (e) {
     mainLog.warn('[net] could not install proxy-aware fetch; requests stay on the default path', e)
