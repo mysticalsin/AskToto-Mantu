@@ -97,7 +97,7 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     await hitCallback(redirectUri, { code: 'auth-code-1', state })
     expect(await first).toEqual({ ok: true, accessToken: 'plane-at-1', refreshToken: 'plane-rt-1' })
 
-    // Second run: a different ephemeral port, so DCR must run again scoped to THAT run's own URI — a
+    // Second run: its own ephemeral port, so DCR must run again scoped to THAT run's own URI — a
     // cached client registered with the first run's (or any fixed portless) URI is never reused.
     openExternal.mockClear()
     const second = runPlaneOAuth()
@@ -114,7 +114,8 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
   it('does not reuse a cached client_id/client_secret registered with a different (portless) URI (P4-F2, AGUC-021)', async () => {
     // A previously-cached client — e.g. from a one-time registration, or one Plane has since rejected —
     // must never short-circuit a fresh interactive Connect. Reusing it silently is exactly the bug: this
-    // pre-seeds settings/mcpSecrets the way the OLD ensurePlaneClient() cache would have left them.
+    // pre-seeds settings/mcpSecrets the way a leftover cached client would, so the test can prove DCR
+    // registers fresh regardless of what's already stored.
     const { setSettings } = await import('../store')
     const { setMcpClientSecret } = await import('./mcpSecrets')
     setSettings({ planeClientId: 'cached-portless-client' })
@@ -267,7 +268,13 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     expect(getMcpClientSecret('plane')).toBe('secret-A')
   })
 
-  it('replaces the stored client only once the connect actually succeeds (P4-F2, AGUC-021)', async () => {
+  it('never persists the client itself on success — it only returns it alongside the tokens (P4-F2, AGUC-021, round 2)', async () => {
+    // runPlaneOAuth proving a token exchange worked is not the same as main/index.ts's mcpPlaneConnect
+    // handler proving the access token actually works end-to-end (a live connectMcp probe still has to
+    // run first). So a successful run must leave the previously-stored client exactly as it was and
+    // hand the freshly-registered client back to the caller instead — persistence is entirely the
+    // caller's job, done together with the tokens, only once that probe has also succeeded (see
+    // savePlaneClientAndTokens).
     const { getSettings, setSettings } = await import('../store')
     const { getMcpClientSecret, setMcpClientSecret } = await import('./mcpSecrets')
     setSettings({ planeClientId: 'client-A' })
@@ -283,9 +290,16 @@ describe('planeOAuth — OAuth 2.1 + PKCE connect flow', () => {
     await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
     const { redirectUri, state } = capturedAuthorizeParams()
     await hitCallback(redirectUri, { code: 'auth-code-1', state })
-    expect((await flow).ok).toBe(true)
-    expect(getSettings().planeClientId).toBe('client-B')
-    expect(getMcpClientSecret('plane')).toBe('secret-B')
+    const result = await flow
+    expect(result).toEqual({
+      ok: true,
+      accessToken: 'plane-at-1',
+      refreshToken: 'plane-rt-1',
+      clientId: 'client-B',
+      clientSecret: 'secret-B'
+    })
+    expect(getSettings().planeClientId).toBe('client-A')
+    expect(getMcpClientSecret('plane')).toBe('secret-A')
   })
 
   it('pins the official hosted MCP URLs and never asks the user to paste them', async () => {
