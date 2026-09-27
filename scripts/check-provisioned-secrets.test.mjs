@@ -5,7 +5,7 @@
 // it too (vitest's scripts/**/*.{test,spec}.{ts,tsx} include glob never sees a bare .test.mjs).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,6 +21,11 @@ const SCRIPT_PATH = join(HERE, 'check-provisioned-secrets.mjs')
 const REAL_OPERATOR_PLACEHOLDER = '0782eTCPPOCzxP6yQ_LT8qcXS_t7vE-eDh_DpLf0cV0'
 const REAL_LEASE_PLACEHOLDER = 'FzzE8mBXkx36otsurVczzedp9q1_KqGZHYtHbnZOuTY'
 
+// runCheck's own resourcePath layout, mirrored here so a fixture directory looks exactly like a real
+// packaging staging root: <resourcesDir>/operator/pubkey.json, <resourcesDir>/license-lease/pubkey.json.
+const FAMILY_DIRS = { operator: 'operator', 'license-lease': 'license-lease' }
+const FAMILY_PLACEHOLDERS = { operator: REAL_OPERATOR_PLACEHOLDER, 'license-lease': REAL_LEASE_PLACEHOLDER }
+
 function tempFixtureDir() {
   return mkdtempSync(join(tmpdir(), 'metis-provisioned-secret-'))
 }
@@ -29,6 +34,19 @@ function writePubkey(dir, name, publicKey) {
   const path = join(dir, name)
   writeFileSync(path, JSON.stringify({ algorithm: 'ed25519', publicKey }))
   return path
+}
+
+/** Writes (or omits) <resourcesDir>/<family>/pubkey.json in one of runCheck's four observable shapes. */
+function writeFamilyResource(resourcesDir, family, status) {
+  if (status === 'missing') return
+  const dir = join(resourcesDir, FAMILY_DIRS[family])
+  mkdirSync(dir, { recursive: true })
+  if (status === 'unreadable') {
+    writeFileSync(join(dir, 'pubkey.json'), '{ not valid json')
+    return
+  }
+  const publicKey = status === 'placeholder' ? FAMILY_PLACEHOLDERS[family] : `a-real-provisioned-${family}-key`
+  writeFileSync(join(dir, 'pubkey.json'), JSON.stringify({ algorithm: 'ed25519', publicKey }))
 }
 
 function withTempDir(fn) {
@@ -106,119 +124,73 @@ test('readDevPlaceholder: throws a clear, named error when the constant cannot b
   })
 })
 
-// --- runCheck (the release-profile gate, called directly with an injected env) ----------------------
+// --- runCheck (the release-profile gate, called directly with a fixture resourcesDir) -----------------
+//
+// Table-driven over both families × every non-"provisioned" status checkProvisionedPublicKey can report:
+// each one is the identical unsafe outcome (the app falls back to its DEV_* key), so each must FAIL a
+// release-profile build on its own, regardless of what the other family looks like.
 
-test('runCheck: FAILs release profile when the operator resource is still the committed DEV key', () => {
-  withTempDir((dir) => {
-    const operatorPath = writePubkey(dir, 'operator-pubkey.json', REAL_OPERATOR_PLACEHOLDER)
-    const leasePath = writePubkey(dir, 'lease-pubkey.json', 'a-real-provisioned-lease-key')
-    const code = runCheck({
-      profile: 'release',
-      dryRun: false,
-      env: { METIS_OPERATOR_PUBKEY_PATH: operatorPath, METIS_LICENSE_LEASE_PUBKEY_PATH: leasePath }
-    })
-    assert.equal(code, 1)
-  })
-})
+const FAILING_STATUSES = ['missing', 'placeholder', 'unreadable']
 
-test('runCheck: FAILs release profile when the license-lease resource is missing', () => {
-  withTempDir((dir) => {
-    const operatorPath = writePubkey(dir, 'operator-pubkey.json', 'a-real-provisioned-operator-key')
-    const code = runCheck({
-      profile: 'release',
-      dryRun: false,
-      env: {
-        METIS_OPERATOR_PUBKEY_PATH: operatorPath,
-        METIS_LICENSE_LEASE_PUBKEY_PATH: join(dir, 'never-written.json')
-      }
+for (const family of Object.keys(FAMILY_DIRS)) {
+  for (const status of FAILING_STATUSES) {
+    test(`runCheck: FAILs release profile when the ${family} resource is ${status} (other family provisioned)`, () => {
+      withTempDir((resourcesDir) => {
+        for (const other of Object.keys(FAMILY_DIRS)) {
+          writeFamilyResource(resourcesDir, other, other === family ? status : 'provisioned')
+        }
+        const code = runCheck({ profile: 'release', dryRun: false, resourcesDir })
+        assert.equal(code, 1)
+      })
     })
-    assert.equal(code, 1)
-  })
-})
+  }
+}
 
 test('runCheck: OK once both families are genuinely provisioned', () => {
-  withTempDir((dir) => {
-    const operatorPath = writePubkey(dir, 'operator-pubkey.json', 'a-real-provisioned-operator-key')
-    const leasePath = writePubkey(dir, 'lease-pubkey.json', 'a-real-provisioned-lease-key')
-    const code = runCheck({
-      profile: 'release',
-      dryRun: false,
-      env: { METIS_OPERATOR_PUBKEY_PATH: operatorPath, METIS_LICENSE_LEASE_PUBKEY_PATH: leasePath }
-    })
+  withTempDir((resourcesDir) => {
+    writeFamilyResource(resourcesDir, 'operator', 'provisioned')
+    writeFamilyResource(resourcesDir, 'license-lease', 'provisioned')
+    const code = runCheck({ profile: 'release', dryRun: false, resourcesDir })
     assert.equal(code, 0)
   })
 })
 
 test('runCheck: dev profile never fails, even with both resources missing', () => {
-  withTempDir((dir) => {
-    const code = runCheck({
-      profile: 'dev',
-      dryRun: false,
-      env: {
-        METIS_OPERATOR_PUBKEY_PATH: join(dir, 'missing-operator.json'),
-        METIS_LICENSE_LEASE_PUBKEY_PATH: join(dir, 'missing-lease.json')
-      }
-    })
+  withTempDir((resourcesDir) => {
+    const code = runCheck({ profile: 'dev', dryRun: false, resourcesDir })
     assert.equal(code, 0)
   })
 })
 
 test('runCheck: --dry-run never fails release profile, even with a placeholder present', () => {
-  withTempDir((dir) => {
-    const operatorPath = writePubkey(dir, 'operator-pubkey.json', REAL_OPERATOR_PLACEHOLDER)
-    const leasePath = writePubkey(dir, 'lease-pubkey.json', REAL_LEASE_PLACEHOLDER)
-    const code = runCheck({
-      profile: 'release',
-      dryRun: true,
-      env: { METIS_OPERATOR_PUBKEY_PATH: operatorPath, METIS_LICENSE_LEASE_PUBKEY_PATH: leasePath }
-    })
+  withTempDir((resourcesDir) => {
+    writeFamilyResource(resourcesDir, 'operator', 'placeholder')
+    writeFamilyResource(resourcesDir, 'license-lease', 'placeholder')
+    const code = runCheck({ profile: 'release', dryRun: true, resourcesDir })
     assert.equal(code, 0)
   })
 })
 
-// --- CLI (end-to-end subprocess, exercising the exact invocation shape release:build:* uses) --------
+// --- CLI (end-to-end subprocess, exercising the exact invocation shape release:build:* uses) ---------
+//
+// runCheck no longer accepts a resourcesDir override from the CLI (production always inspects the exact
+// files electron-builder.yml packages), so these exercise argument parsing and exit-code mapping only,
+// against the real checkout: resources/operator/ and resources/license-lease/ are real, tracked,
+// .gitkeep-only directories with no pubkey.json, so a release-profile run here is deterministically
+// "missing" for both families, exactly like a plain clone.
 
-function runCli(args, extraEnv = {}) {
-  return spawnSync(process.execPath, [SCRIPT_PATH, ...args], {
-    encoding: 'utf8',
-    timeout: 10_000,
-    env: { ...process.env, ...extraEnv }
-  })
+function runCli(args) {
+  return spawnSync(process.execPath, [SCRIPT_PATH, ...args], { encoding: 'utf8', timeout: 10_000 })
 }
 
-test('CLI: --profile release --dry-run always exits 0, even against a plain checkout with no provisioned resources', () => {
-  const result = runCli(['--profile', 'release', '--dry-run'], {
-    METIS_OPERATOR_PUBKEY_PATH: '',
-    METIS_LICENSE_LEASE_PUBKEY_PATH: ''
-  })
+test('CLI: --profile release exits 1 against the real checkout (resources/* are not provisioned)', () => {
+  const result = runCli(['--profile', 'release'])
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`)
+})
+
+test('CLI: --profile release --dry-run exits 0 even though the real checkout is not provisioned', () => {
+  const result = runCli(['--profile', 'release', '--dry-run'])
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
-})
-
-test('CLI: no flags (dev profile default) exits 0 even when both resources are missing', () => {
-  const result = runCli([], { METIS_OPERATOR_PUBKEY_PATH: '', METIS_LICENSE_LEASE_PUBKEY_PATH: '' })
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
-})
-
-test('CLI: --profile release exits 1 when a provisioned resource is missing', () => {
-  withTempDir((dir) => {
-    const result = runCli(['--profile', 'release'], {
-      METIS_OPERATOR_PUBKEY_PATH: join(dir, 'missing-operator.json'),
-      METIS_LICENSE_LEASE_PUBKEY_PATH: join(dir, 'missing-lease.json')
-    })
-    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`)
-  })
-})
-
-test('CLI: --profile release exits 0 once both families are genuinely provisioned', () => {
-  withTempDir((dir) => {
-    const operatorPath = writePubkey(dir, 'operator-pubkey.json', 'a-real-production-operator-key')
-    const leasePath = writePubkey(dir, 'lease-pubkey.json', 'a-real-production-lease-key')
-    const result = runCli(['--profile', 'release'], {
-      METIS_OPERATOR_PUBKEY_PATH: operatorPath,
-      METIS_LICENSE_LEASE_PUBKEY_PATH: leasePath
-    })
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
-  })
 })
 
 test('CLI: rejects an unrecognized --profile value with a usage error (exit 2)', () => {
