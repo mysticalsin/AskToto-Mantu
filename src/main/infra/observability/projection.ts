@@ -257,7 +257,7 @@ function projectValue(kind: FieldKind, value: unknown): unknown {
 }
 
 function scrubErrorText(value: unknown): string {
-  const normalized = value instanceof Error ? `${value.name}: ${value.message}` : typeof value === 'string' ? value : JSON.stringify(value)
+  const normalized = value instanceof Error ? `${value.name}: ${value.message}` : typeof value === 'string' ? value : stringifyErrorText(value)
   const scrubbed = redactSecrets(normalized)
     .replace(URL_RE, '<url>')
     .replace(EMAIL_RE, '<email>')
@@ -266,4 +266,13 @@ function scrubErrorText(value: unknown): string {
     .replace(/\s+/g, ' ')
     .trim()
   return scrubbed.length > MAX_MESSAGE_CHARS ? `${scrubbed.slice(0, MAX_MESSAGE_CHARS - 1)}…` : scrubbed
+}
+
+function stringifyErrorText(value: unknown): string {
+  try {
+    const serialized = JSON.stringify(value)
+    return typeof serialized === 'string' ? serialized : `<unserializable ${typeof value}>`
+  } catch {
+    return `<unserializable ${typeof value}>`
+  }
 }

@@ -6,6 +6,7 @@ import {
   type ObservabilityDetail,
   type ObservabilityEvent
 } from './projection'
+import { RECOVERY_STATUSES } from './crash-taxonomy'
 
 const uuid = '123e4567-e89b-12d3-a456-426614174000'
 const isoTime = '2026-01-01T00:00:00.000Z'
@@ -125,6 +126,20 @@ describe('observability projection', () => {
     const projected = projectEvent('app.crash', { message: `prefix ${'x'.repeat(400)}` }) as { message: string }
     expect(projected.message).toHaveLength(MAX_MESSAGE_CHARS)
     expect(projected.message.endsWith('…')).toBe(true)
+  })
+
+  it('keeps an app.error.boot_step record when message is circular', () => {
+    const message: Record<string, unknown> = {}
+    message.self = message
+
+    const projected = projectEvent('app.error.boot_step', {
+      step: 'x',
+      message,
+      recoveryStatus: RECOVERY_STATUSES[0]
+    }) as { message: string }
+
+    expect(projected.message).toBeTruthy()
+    expect(typeof projected.message).toBe('string')
   })
 
   it('keeps null and omits undefined', () => {
