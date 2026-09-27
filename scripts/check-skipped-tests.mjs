@@ -76,12 +76,16 @@ const REASONS = [
   {
     match: 'dataless.test.ts',
     why: 'Runs the real Windows PowerShell attribute probe against an NTFS file carrying FILE_ATTRIBUTE_OFFLINE. The binary and the attribute exist only on Windows; the shared wire protocol, decoding and failure policy run on every platform through a stand-in probe.'
+  },
+  {
+    match: 'RF-AUDIT-R3-B1: a real cmd.exe cannot split',
+    why: 'Spawns a real cmd.exe to prove an unquoted `&` in the Windows script path cannot append a second command (RF-AUDIT-R3-B1). Depends on cmd.exe\'s own parsing; the quoting/verbatim-args contract it exercises is covered cross-platform by the captured-argv tests in the same describe block.'
   }
 ]
 
 /** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
  *  Lower it when a skip is retired; never raise it for an undeclared skip. */
-const BASELINE = { win32: 12, darwin: 2, linux: 19 }
+const BASELINE = { win32: 12, darwin: 3, linux: 20 }
 
 const platform = process.platform
 const allowed = BASELINE[platform]

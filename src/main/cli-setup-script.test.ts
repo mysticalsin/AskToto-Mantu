@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { EventEmitter } from 'node:events'
+import type { spawn as SpawnFn, spawnSync as SpawnSyncFn } from 'node:child_process'
 
 // The temp dir the app writes its setup/login script into. Hoisted so the electron mock (which is
 // itself hoisted above the imports) can read it lazily, once beforeAll has created the real dir.
@@ -18,6 +20,25 @@ vi.mock('./cli-installer', () => ({
   managedCliCommand: vi.fn(() => null),
   installManagedCli: vi.fn()
 }))
+
+// RF-AUDIT-R3-B1's own tests (below) need to see and, for one real behaviour test, actually run the
+// exact { command, args, options } openCliScript hands to spawn() — a mocked spawn cannot tell us
+// whether cmd.exe would still split an unquoted `&` into a second command. Every OTHER test in this
+// file must keep spawning for real exactly as it did before this mock existed (real success on a
+// genuine Windows host, a harmless real ENOENT everywhere else, already tolerated by openCliScript's
+// own fallback to shell.openPath) — so the default implementation below simply delegates to the real
+// spawn, and only the RF-AUDIT-R3-B1 tests override it per-call.
+const spawnH = vi.hoisted(() => ({
+  impl: vi.fn(),
+  real: null as typeof SpawnFn | null,
+  realSync: null as typeof SpawnSyncFn | null
+}))
+vi.mock('node:child_process', async (importActual) => {
+  const actual = await importActual<typeof import('node:child_process')>()
+  spawnH.real = actual.spawn
+  spawnH.realSync = actual.spawnSync
+  return { ...actual, spawn: spawnH.impl }
+})
 
 import { setupCli, loginCli, loginCliInvokeLines, cmdShimSpawn } from './cli'
 
@@ -48,6 +69,13 @@ beforeAll(() => {
 afterAll(() => {
   setPlatform(REAL_PLATFORM)
   rmSync(h.dir, { recursive: true, force: true })
+})
+beforeEach(() => {
+  // See the mock's own comment: every test outside the RF-AUDIT-R3-B1 describe block below relies on
+  // spawn behaving exactly as it did with no mock at all, so this default is (re-)applied before every
+  // test, and only the RF-AUDIT-R3-B1 tests install their own one-off override on top of it.
+  spawnH.impl.mockReset()
+  spawnH.impl.mockImplementation((...args: Parameters<typeof SpawnFn>) => spawnH.real!(...args))
 })
 afterEach(() => {
   setPlatform(REAL_PLATFORM)
@@ -212,4 +240,104 @@ describe('cmdShimSpawn and the Windows login script share one quoted-path rule (
       expect(loginCliInvokeLines('claude-cli', true, null, bin)).toEqual([`call "${bin}"`])
     }
   })
+})
+
+/** A minimal fake ChildProcess: a real EventEmitter (readline/close listeners behave exactly as they
+ *  would against a real spawn), settled asynchronously so callers awaiting the real Promise chain in
+ *  openCliScript never resolve synchronously inside their own executor. */
+function fakeChild(settle: (emitter: EventEmitter) => void): EventEmitter {
+  const emitter = new EventEmitter()
+  queueMicrotask(() => settle(emitter))
+  return emitter
+}
+
+// RF-AUDIT-R3-B1 — openCliScript passed the generated scriptPath to spawn() exactly as generated. Node's
+// own Windows argv-to-command-line quoting only wraps an argument that contains a space/tab or is empty;
+// it has no notion of cmd.exe's own command-separator/expansion metacharacters. Because the target here
+// IS cmd.exe (via `/c`), an unquoted `&`, `^`, `(`, `)` or `%` in a profile/temp scriptPath reached
+// cmd.exe's own line parser live, letting cmd.exe treat text after it as a second, independent command.
+describe('openCliScript (via setupCli) — the Windows script path cannot let cmd.exe re-parse it (RF-AUDIT-R3-B1)', () => {
+  it('quotes a scriptPath containing cmd.exe metacharacters and sets windowsVerbatimArguments', async () => {
+    setPlatform('win32')
+    const savedDir = h.dir
+    const evilDir = mkdtempSync(join(tmpdir(), 'asktoto-cli-script-evil & (paren) ^caret-'))
+    h.dir = evilDir
+    let captured: { command: string; args: string[]; options: Record<string, unknown> } | null = null
+    spawnH.impl.mockImplementationOnce((command: string, args: string[], options: Record<string, unknown>) => {
+      captured = { command, args, options }
+      return fakeChild((emitter) => emitter.emit('close', 0))
+    })
+
+    try {
+      const res = await setupCli('claude-cli')
+      expect(res).toEqual({ ok: true })
+      expect(captured).not.toBeNull()
+      const scriptPath = join(evilDir, readdirSync(evilDir)[0]!)
+      // The path must survive as ONE quoted token: if cmd.exe ever re-parsed it, '&', '^', '(' and ')'
+      // outside a quote would end the `start` statement and begin a new one.
+      expect(captured!.args).toEqual(['/d', '/c', 'start', '""', `"${scriptPath}"`])
+      expect(captured!.options.windowsVerbatimArguments).toBe(true)
+    } finally {
+      h.dir = savedDir
+      rmSync(evilDir, { recursive: true, force: true })
+    }
+  })
+
+  it('never hands cmd.exe a scriptPath it cannot safely quote (%) — falls back to shell.openPath', async () => {
+    setPlatform('win32')
+    const savedDir = h.dir
+    const evilDir = mkdtempSync(join(tmpdir(), 'asktoto-cli-script-100% off-'))
+    h.dir = evilDir
+
+    try {
+      const res = await setupCli('claude-cli')
+      expect(res).toEqual({ ok: true })
+      // % is not neutralized by quoting (cmd.exe expands it even inside quotes) — the only safe move is
+      // to never hand this path to cmd.exe at all and let shell.openPath (mocked above) open it instead.
+      expect(spawnH.impl).not.toHaveBeenCalled()
+    } finally {
+      h.dir = savedDir
+      rmSync(evilDir, { recursive: true, force: true })
+    }
+  })
+
+  // A captured-args assertion (above) cannot prove cmd.exe itself would not split the path — the
+  // previous command line looked plausible too, and cmd.exe still ran whatever followed an unquoted
+  // `&`. This spawns a REAL cmd.exe with the exact args openCliScript builds and proves the segment
+  // after the embedded `&` never runs as an independent command. No space appears anywhere in the
+  // crafted path: Node's OWN default Windows quoting already quotes an argument containing a space
+  // even without windowsVerbatimArguments, which would mask exactly the gap this test exists to catch.
+  // Windows-only: it depends on cmd.exe's own parsing (declared in scripts/check-skipped-tests.mjs).
+  it.skipIf(process.platform !== 'win32')(
+    'RF-AUDIT-R3-B1: a real cmd.exe cannot split an unquoted `&` in the script path into a second command',
+    async () => {
+      setPlatform('win32')
+      const savedDir = h.dir
+      const evilDir = mkdtempSync(join(tmpdir(), 'asktoto-cli-script-evil&hack.cmd&rem-'))
+      const sandbox = mkdtempSync(join(tmpdir(), 'asktoto-argv-sandbox-'))
+      // If cmd.exe ever treats the `&` in evilDir's name as a separator, the text between the two `&`s
+      // runs as a second, independent command — a bare relative filename cmd.exe looks up in its own
+      // cwd (set to `sandbox` below), needing no space, which would trigger Node's own quoting.
+      writeFileSync(join(sandbox, 'hack.cmd'), '@echo off\r\nmd hacked-marker\r\n', 'ascii')
+      h.dir = evilDir
+
+      spawnH.impl.mockImplementationOnce((command: string, args: string[], options: Record<string, unknown>) =>
+        fakeChild((emitter) => {
+          const r = spawnH.realSync!(command, args, { ...(options as object), cwd: sandbox })
+          if (r.error) emitter.emit('error', r.error)
+          else emitter.emit('close', r.status ?? 0)
+        })
+      )
+
+      try {
+        const res = await setupCli('claude-cli')
+        expect(res).toEqual({ ok: true })
+        expect(existsSync(join(sandbox, 'hacked-marker'))).toBe(false)
+      } finally {
+        h.dir = savedDir
+        rmSync(evilDir, { recursive: true, force: true })
+        rmSync(sandbox, { recursive: true, force: true })
+      }
+    }
+  )
 })
