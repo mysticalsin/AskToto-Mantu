@@ -1,19 +1,24 @@
 #!/usr/bin/env node
 /**
  * check-no-scratch-paths.mjs — CI gate. Fails when a tracked source file contains an absolute
- * per-user path or a past agent-session scratch path: both are local-machine specifics that must
- * never be committed.
+ * per-user path or an agent-session scratch path. The scratch-path pattern matches both the
+ * symlinked form macOS resolves it to and the plain form agents actually receive as $TMPDIR —
+ * both local-machine specifics that must never be committed. (Deliberately not spelled out here
+ * as a literal: this file is itself scanned, and a literal would be its own new violation.)
  *
- * Scans every tracked .ts/.tsx/.js/.mjs/.cjs/.json/.yml file, except *.test.ts/*.test.tsx, whose
- * fixtures deliberately use such literals to exercise this exact check.
+ * Scans every tracked .ts/.tsx/.js/.mjs/.cjs/.json/.yml/.sh/.command/.ps1/.py/.yaml/.swift file —
+ * committed scripts and source, not just the JS/TS/JSON family — except *.test.ts/*.test.tsx/
+ * *.test.mjs. Of those exclusions, only check-no-scratch-paths.contract.test.ts deliberately
+ * carries such literals to exercise this exact check; the rest are redaction and path-handling
+ * fixtures that need realistic home-directory paths to test what they test.
  *
  * BASELINE_VIOLATIONS grandfathers hits that predate this gate, keyed by file path to an expected
- * hit COUNT rather than exact line numbers: a file's line numbers drift on every unrelated edit
- * (package.json alone changed 15 times in three weeks), and a line-keyed baseline would go stale
- * — and this gate red — on every one of them. Tracked by ticket M2-0225. compareViolations() fails
- * on a file whose actual count exceeds its baseline (a genuinely new violation) and on one whose
- * count has dropped below it (the file was fixed; the baseline must shrink to match), so the set
- * can only ever track reality, never drift from it silently in either direction.
+ * hit COUNT rather than exact line numbers: a file's line numbers drift on every unrelated edit to
+ * it, and a line-keyed baseline would go stale — and this gate red — on every one of them. Tracked
+ * by ticket M2-0225. compareViolations() fails on a file whose actual count exceeds its baseline (a
+ * genuinely new violation) and on one whose count has dropped below it (the file was fixed; the
+ * baseline must shrink to match), so the set can only ever track reality, never drift from it
+ * silently in either direction.
  *
  * Run: `npm run check:scratch-paths`
  */
@@ -23,10 +28,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const TRACKED_GLOBS = ['*.ts', '*.tsx', '*.js', '*.mjs', '*.cjs', '*.json', '*.yml']
+const TRACKED_GLOBS = [
+  '*.ts', '*.tsx', '*.js', '*.mjs', '*.cjs', '*.json', '*.yml',
+  '*.sh', '*.command', '*.ps1', '*.py', '*.yaml', '*.swift'
+]
 
 const FORBIDDEN = [
-  /\/private\/tmp\/claude-/,
+  /\/tmp\/claude-/,
   /\/Users\/[A-Za-z]/
 ]
 
@@ -91,7 +99,7 @@ export function compareViolations(violations, baseline) {
 function trackedFiles(root) {
   return execFileSync('git', ['ls-files', '-z', '--', ...TRACKED_GLOBS], { cwd: root, encoding: 'utf8' })
     .split('\0')
-    .filter((path) => path && !path.endsWith('.test.ts') && !path.endsWith('.test.tsx'))
+    .filter((path) => path && !path.endsWith('.test.ts') && !path.endsWith('.test.tsx') && !path.endsWith('.test.mjs'))
 }
 
 /** findViolations() over every tracked file in the repo at `root`. */
@@ -112,7 +120,7 @@ if (isMain) {
     if (unexpected.length) {
       console.error('Absolute per-user path or agent scratch-path literal(s) found outside the baseline:\n')
       for (const v of unexpected) console.error('  ' + v)
-      console.error('\nUse an os.tmpdir()-based default (see operator/scripts/qa-dirs.mjs) instead.')
+      console.error('\nUse an env override, a repo-relative path, or os.tmpdir() instead.')
     }
     if (stale.length) {
       if (unexpected.length) console.error('')

@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * qa-dirs.mjs — the one place gates.mjs, preview.mjs, preview-tokens.mjs, preview-motion.mjs,
  * seed-local.mjs and screenshot.mjs get their preview/scratch directory from. preview.mjs writes
