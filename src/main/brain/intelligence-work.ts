@@ -12,7 +12,7 @@ interface IntelligenceWorkDependencies {
   list(): Promise<MissingSummary[]>
   generate(meeting: MissingSummary): Promise<string | undefined>
   save(file: string, recap: string, recapStatus: 'complete'): Promise<{ ok: boolean }>
-  backfill(options: BackfillStartOptions, beforeComplete: Promise<unknown>): BackfillRun
+  backfill(options: BackfillStartOptions, beforeComplete: Promise<unknown>): Promise<BackfillRun>
   logFailure(error: unknown): void
 }
 
@@ -42,11 +42,11 @@ async function recapMissingMeetings(deps: IntelligenceWorkDependencies): Promise
 }
 
 /** Dispatch quickly, keep independent model work parallel, and join actual terminal outcomes. */
-export function startIntelligenceWork(deps: IntelligenceWorkDependencies): IntelligenceIndexRun {
+export async function startIntelligenceWork(deps: IntelligenceWorkDependencies): Promise<IntelligenceIndexRun> {
   const recaps = recapMissingMeetings(deps)
   // Recaps rewrite the source Markdown. Extraction can start immediately, but its final source-version
   // verification must wait for these writes so a later recap cannot invalidate a claimed success.
-  const backfill = deps.backfill({ force: true }, recaps)
+  const backfill = await deps.backfill({ force: true }, recaps)
   return {
     result: { ...backfill.result, ran: !backfill.result.deferred, recapped: 0 },
     completion: Promise.all([backfill.completion, recaps]).then(([index, summaries]) => {

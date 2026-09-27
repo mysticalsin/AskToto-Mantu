@@ -7923,7 +7923,7 @@ function registerIpc(): void {
       try {
         // Source versions, not only a count of successful filenames, decide whether Intelligence is
         // current. requestBackfill detects changed/deleted sources and schedules the clean rebuild.
-        const r = requestBackfill()
+        const r = await requestBackfill()
         auditLog('brain.backfill.start', { queued: r.queued, deferred: r.deferred, automatic: true })
       } catch (err) {
         mainLog.warn('[brain] automatic dashboard backfill check failed:', err)
@@ -9323,25 +9323,18 @@ if (!app.requestSingleInstanceLock()) {
     // for this session only, so the user reaches a working app instead of a sixth silent vanish. The
     // watch is cleared in `finally` either way (FITO-185-E), so a throw from any brain step cannot leave
     // boot-incomplete.json stuck for the next launch.
+    void (async () => {
     try {
       if (earlyDeath) {
         mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${describeEarlyDeath(earlyDeath)}`)
         auditLog('app.crash', { kind: 'safe_start', consecutive: earlyDeath.consecutive })
       } else {
-        // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
-        try {
-          resumeBackfillIfPending()
-        } catch (e) {
-          mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
-        }
-        try {
-          reconcileMeetingsInBackground()
-        } catch (e) {
-          mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
-        }
+        // These helpers never reject; they log and return so boot can keep one clear ordering.
+        await resumeBackfillIfPending()
+        await reconcileMeetingsInBackground()
         // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
         // not just the single resume — the reconcile tick reads the same index.json.
-        trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
+        trackTimer(setInterval(() => void reconcileMeetingsInBackground(), BRAIN_RECONCILE_MS))
         // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
         // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
         try {
@@ -9349,13 +9342,9 @@ if (!app.requestSingleInstanceLock()) {
         } catch (e) {
           mainLog.warn('[boot] wireIntelligenceIndexWork failed:', e)
         }
-        try {
-          void catchUpIntelligenceIndexIfNeeded().catch((e) =>
-            mainLog.error('[intelligence-index] launch catch-up failed:', e)
-          )
-        } catch (e) {
-          mainLog.warn('[boot] catchUpIntelligenceIndexIfNeeded failed:', e)
-        }
+        await catchUpIntelligenceIndexIfNeeded().catch((e) =>
+          mainLog.error('[intelligence-index] launch catch-up failed:', e)
+        )
         try {
           scheduleIntelligenceIndex(trackTimer)
         } catch (e) {
@@ -9364,11 +9353,7 @@ if (!app.requestSingleInstanceLock()) {
         // Hourly consolidation is demoted: the named slots own the extract pass. The helper stays
         // imported so existing settings/tests keep compiling, and a manual budget check still no-ops
         // when the feature is off.
-        try {
-          void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
-        } catch (e) {
-          mainLog.warn('[boot] runConsolidationIfDue failed:', e)
-        }
+        await runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
       }
     } finally {
       // Power-save stays until here so the 15s brain step is not App-Napped; sentinel may already
@@ -9376,6 +9361,7 @@ if (!app.requestSingleInstanceLock()) {
       setBootPowerSaveBlock(false)
       clearBootWatchOnce('mqa-175')
     }
+    })()
   }, 15_000)
 
   app.on('activate', () => {

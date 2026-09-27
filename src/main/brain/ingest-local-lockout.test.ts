@@ -130,7 +130,7 @@ describe('brain ingest — exclusive local summary vs runtime lockout (MQA-271, 
     // fully intact, so the guard only bites the genuine lockout and nothing else.
     localRuntimeStateMock.mockReturnValue('stopped')
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await vi.waitFor(
       () => {
         expect(brainBackfillProgress().running).toBe(false)

@@ -85,7 +85,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
 
     createStreamMock.mockImplementationOnce(respondError('503 Service Unavailable')).mockImplementationOnce(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['failover.md']?.ok).toBe(true)
@@ -101,7 +101,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
 
     createStreamMock.mockImplementationOnce(respondError('404 page not found')).mockImplementationOnce(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['dead-model.md']?.ok).toBe(true)
@@ -117,7 +117,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     // Not valid JSON — a parse failure, not a transport one, so failover must NOT engage here.
     createStreamMock.mockImplementationOnce(respondJson('not json at all')).mockImplementationOnce(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['parse-fail.md']?.ok).toBe(true)
@@ -132,7 +132,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     setApiKey('openai', 'fake-openai-key')
     createStreamMock.mockImplementation(respondError('503 Service Unavailable'))
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['all-down.md']?.ok).toBe(false)
@@ -153,7 +153,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockImplementation(respondError('404 page not found'))
 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i++) {
-      expect(startBackfill().queued).toBe(1)
+      expect((await startBackfill()).queued).toBe(1)
       await waitForIdle()
     }
 
@@ -165,7 +165,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     // The automatic reconcile tick (respectRetryBackoff) must never touch an exhausted record, even
     // once its own backoff window has already elapsed.
     createStreamMock.mockClear()
-    expect(startBackfill(undefined, { respectRetryBackoff: true }).queued).toBe(0)
+    expect((await startBackfill(undefined, { respectRetryBackoff: true })).queued).toBe(0)
     expect(createStreamMock).not.toHaveBeenCalled()
   })
 
@@ -175,7 +175,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockImplementation(respondError('404 page not found'))
 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i++) {
-      startBackfill()
+      await startBackfill()
       await waitForIdle()
     }
     expect(readIndex(getSettings()).ingested['always-fails-2.md']?.exhausted).toBe(true)
@@ -183,7 +183,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     // Manual retry (bare startBackfill — the exact call the Retry-index button's IPC handler makes)
     // requeues it despite `exhausted`, and clears the flag + resets attempts before this next failure
     // — one more failure afterward must land at attempts:1, never attempts:7 / re-exhausted.
-    expect(startBackfill().queued).toBe(1)
+    expect((await startBackfill()).queued).toBe(1)
     await waitForIdle()
 
     const record = readIndex(getSettings()).ingested['always-fails-2.md']
@@ -197,7 +197,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockImplementation(respondError('404 page not found'))
 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i++) {
-      startBackfill()
+      await startBackfill()
       await waitForIdle()
     }
     expect(readIndex(getSettings()).ingested['always-fails-3.md']?.exhausted).toBe(true)
@@ -205,7 +205,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockReset()
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill().queued).toBe(1)
+    expect((await startBackfill()).queued).toBe(1)
     await waitForIdle()
 
     const record = readIndex(getSettings()).ingested['always-fails-3.md']

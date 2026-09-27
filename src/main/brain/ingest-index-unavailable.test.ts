@@ -111,7 +111,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     const beforeIndex = sha256(readFileSync(primary))
     const beforeSentinel = readFileSync(sentinelPath)
 
-    expect(startBackfill()).toEqual({ queued: 0 })
+    expect(await startBackfill()).toEqual({ queued: 0 })
     await waitForIdle()
 
     expect(createStreamMock).not.toHaveBeenCalled()
@@ -122,7 +122,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
   it('I2: the 60s reconcile tick (reconcileMeetingsInBackground) does not re-ingest the vault behind an unreadable index', async () => {
     const beforeIndex = sha256(readFileSync(primary))
 
-    reconcileMeetingsInBackground()
+    await reconcileMeetingsInBackground()
     await waitForIdle()
 
     expect(createStreamMock).not.toHaveBeenCalled()
@@ -159,8 +159,8 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     expect(sha256(readFileSync(primary))).toBe(beforeIndex)
   })
 
-  it('I6: requestBackfillRun({force:true}).completion settles (no hang) with queued 0 while the index is unreadable', async () => {
-    const { result, completion } = requestBackfillRun({ force: true })
+  it('I6: (await requestBackfillRun({force:true})).completion settles (no hang) with queued 0 while the index is unreadable', async () => {
+    const { result, completion } = await requestBackfillRun({ force: true })
     expect(result.queued).toBe(0)
 
     const settled = await Promise.race([

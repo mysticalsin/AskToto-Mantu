@@ -17,12 +17,12 @@ export type IntelligencePassStartResult = BackfillStartResult & {
  * Start one Intelligence pass from an explicit click. Local-first routing is stamped on each
  * queued job. This function is not called from boot, reconcile, consolidation, or a view mount.
  */
-export function startIntelligencePass(): IntelligencePassStartResult {
+export async function startIntelligencePass(): Promise<IntelligencePassStartResult> {
   const s = getSettings()
   if (pickIntelligencePassCandidates(s).length === 0) {
     return { queued: 0, error: intelligenceNoProviderMessage(s, INTELLIGENCE_PASS_NO_PROVIDER) }
   }
-  const result = startBackfill(undefined, { route: 'intelligence-pass' })
+  const result = await startBackfill(undefined, { route: 'intelligence-pass' })
   if (result.deferred === 'no-provider') {
     return { queued: 0, error: intelligenceNoProviderMessage(s, INTELLIGENCE_PASS_NO_PROVIDER) }
   }

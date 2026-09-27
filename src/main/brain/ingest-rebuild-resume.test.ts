@@ -103,7 +103,7 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
     idx.replayPending = true
     await writeIndex(s, idx)
 
-    resumeBackfillIfPending()
+    await resumeBackfillIfPending()
 
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).replayPending).toBe(false)
@@ -119,7 +119,7 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
     idx.replayPending = true
     await writeIndex(s, idx)
 
-    resumeBackfillIfPending()
+    await resumeBackfillIfPending()
 
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
@@ -131,8 +131,8 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
     expect(readIndex(getSettings()).backfillRequested).toBe(false)
   })
 
-  it('does nothing when neither flag is set', () => {
-    expect(() => resumeBackfillIfPending()).not.toThrow()
+  it('does nothing when neither flag is set', async () => {
+    await expect(resumeBackfillIfPending()).resolves.toBeUndefined()
     expect(brainBackfillProgress().running).toBe(false)
   })
 })

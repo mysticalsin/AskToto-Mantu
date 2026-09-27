@@ -1,5 +1,4 @@
 import { basename, join } from 'node:path'
-import { existsSync, readdirSync, statSync } from 'node:fs'
 import type { Settings, AskStart } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -24,7 +23,6 @@ import {
 } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
 import { redactSecrets } from '@shared/redact'
-import { fnv1a } from '@shared/hash'
 import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
 import { getSettings, getApiKey, getAllowedProviders, setApiKey, setSettings } from '../store'
 import { createStream } from '../llm'
@@ -34,7 +32,6 @@ import { localBaseReady } from '../llm/local-routing'
 import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@shared/intelligence-pass'
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
-import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
 // Static (eager) import — NOT `await import()`: the main process is bytecode-compiled and dynamic import
 // throws there (see llm/dust.ts's own note). dustcli.ts imports nothing from brain/, so no cycle.
 import { refreshDustCliSession } from '../dustcli'
@@ -44,7 +41,9 @@ import { estimateSecondBrainMinutes } from '@shared/time-saved-events'
 import {
   readIndex,
   writeIndex,
-  indexUnavailable
+  indexUnavailable,
+  loadIndex,
+  indexUnavailableMessage
 } from './ledger'
 import {
   slugify,
@@ -70,12 +69,29 @@ import {
   readMeetingExtraction,
   withEntityLock,
   cloneEntity,
-  purgeBrain
+  purgeBrain,
+  loadJson,
+  listBrainNames
 } from './store'
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { pickIntelligencePassCandidates, type IntelligencePassCandidate } from './intelligence-pass-route'
+import {
+  scanMeetingSources,
+  sourceVersions,
+  hasSourceDrift,
+  hasIncompleteSource,
+  countUnextracted,
+  hasSavedReconciliationCandidate,
+  readSourceText,
+  sourceFileVersion,
+  formatSourceVersion,
+  brainInputsLocal,
+  isMeetingTranscriptFile,
+  extractionSlug,
+  type SourceScan
+} from './inputs'
 
 /** Default ingest waterfall, or the Update Intelligence button's local-first then API-once route. */
 export type IngestRoute = 'default' | 'intelligence-pass'
@@ -695,7 +711,7 @@ export { commitmentKey }
 
 // ── Provenant field merge (A1 fix: D1 "latest-INGESTED-wins" → "latest-MEETING-DATE-wins") ──────────
 //
-// Backfill enqueues files in readdirSync order and completes in extraction-COMPLETION order, so a
+// Backfill enqueues files in source scan order and completes in extraction-COMPLETION order, so a
 // chronologically OLD meeting processed LAST could silently overwrite a NEWER meeting's deal state
 // (defect D1). This is the single implementation every provenant field (role/org, sector, stage,
 // win_likelihood_band, velocity) goes through, so the rule is enforced exactly once, everywhere.
@@ -710,7 +726,7 @@ export { commitmentKey }
 //      a one-directional guard would let the winner depend on arrival order in mixed-confidence
 //      sets), then meeting date, then source_file as the final tiebreak. Without the source_file
 //      tiebreak, two same-day meetings with bare `date:` frontmatter (common) or two blank-date
-//      meetings (the statSync-failure fallback) would resolve by arrival order — and backfill's
+//      meetings (the file-metadata date fallback) would resolve by arrival order — and backfill's
 //      completion order is nondeterministic.
 //   3. A value-identical incoming (same fact re-confirmed) refreshes the field's metadata only when
 //      it OUTRANKS the evidence already held; it is never a superseded push.
@@ -1241,15 +1257,7 @@ const queue: Job[] = []
 /** Ingest-index identity for a job: the user's own meetings key by basename (unchanged); team jobs carry
  *  an explicit folder-namespaced key so they never collide with a same-named own meeting or member file. */
 const jobKey = (j: Job): string => j.key ?? basename(j.file)
-
-/** Storage slug for a meeting's extraction file (.brain/meetings/<slug>.json) — the on-disk identity that
- *  writeMeetingExtraction/readMeetingExtraction and the reconcile-strategy detection all key on. Own
- *  meetings keep slugify(basename), UNCHANGED. A namespaced team key ("team/<owner>/<file>") appends a
- *  short content hash of the full key, because slugify() collapses every "/" to "-" — without the hash a
- *  team key would slugify to the same string as an own file literally named "team-<owner>-<file>.md" and
- *  the two extractions would overwrite each other on disk (silent cross-meeting misattribution). */
-export const extractionSlug = (key: string): string =>
-  key.includes('/') ? `${slugify(key)}-${fnv1a(key).toString(16)}` : slugify(key)
+export { extractionSlug }
 
 // The network-bound stage (extractMeeting, seconds-to-a-minute per call) is what a 100-meeting backfill
 // was burning wall-clock time on serially, so up to EXTRACT_CONCURRENCY of those calls now run at once.
@@ -1264,8 +1272,8 @@ let backfillTotal = 0
 let backfillDone = 0
 // A renderer-originated Index request defers the potentially slow OneDrive folder scan to the next main
 // process turn. This lets the renderer immediately show an honest preparation state instead of appearing
-// frozen until readdirSync returns.
-let backfillPreparing = false
+// frozen until folder enumeration returns.
+let backfillScans = 0
 // A source refresh is a clean rebuild scheduled by the durable index marker. Keep it distinct from a
 // normal backfill so a later periodic scan cannot start a second rebuild while corrections replay.
 let sourceRefreshRunning = false
@@ -1344,11 +1352,9 @@ const inFlightJobs = new Set<Job>()
 let indexLock: Promise<void> = Promise.resolve()
 export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Promise<void> {
   const run = indexLock.then(async () => {
-    // M2-0003: an existing index.json this process cannot use is read-only for the session. Drop the
-    // mutation rather than persist a ledger derived from readIndex's empty stand-in. Quiet on purpose:
-    // the unavailability was already logged/audited once by indexUnavailable/loadIndex.
-    if (indexUnavailable(s)) return
-    // readIndex returns a shared cached snapshot. Only publish mutations after the durable write;
+    const load = await loadIndex(s)
+    if (load.kind === 'unavailable') return
+    // readIndex returns a shared cached snapshot. Clone before mutating, then publish after the durable write;
     // a failed mutator or disk write must not leak unsaved records into later reads/writes.
     const idx = cloneEntity(readIndex(s))
     mutate(idx)
@@ -1454,8 +1460,8 @@ export function brainBackfillProgress(): { total: number; done: number; failed?:
     total: backfillTotal,
     done: backfillDone,
     ...(backfillFailed > 0 ? { failed: backfillFailed } : {}),
-    ...(backfillPreparing ? { preparing: true } : {}),
-    running: backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayQueued || !!rebuildReplayTask || hasActiveBackfill() || backfillLintPending
+    ...(backfillScans > 0 ? { preparing: true } : {}),
+    running: backfillScans > 0 || sourceRefreshRunning || rebuildStarting || rebuildReplayQueued || !!rebuildReplayTask || hasActiveBackfill() || backfillLintPending
   }
 }
 
@@ -1561,19 +1567,6 @@ export function readMeetingSourceMode(md: string): string {
   return mode.length <= 100 ? mode : ''
 }
 
-/**
- * Cheap source identity for OneDrive-backed folders. mtime plus size detects normal edits without
- * re-reading every transcript on each background scan; a missing snapshot is treated as stale.
- */
-function meetingSourceVersion(file: string): string | undefined {
-  try {
-    const stat = statSync(file)
-    return `${Math.round(stat.mtimeMs)}:${stat.size}`
-  } catch {
-    return undefined
-  }
-}
-
 const retryDelayMs = (attempts: number): number => Math.min(30 * 60_000, 60_000 * 2 ** Math.max(0, attempts - 1))
 
 /** Consecutive-failure ceiling per source. Crossing it marks the record `exhausted` (finishJob) — a
@@ -1621,12 +1614,9 @@ export async function ingestExtraction(
     return raw && !Number.isNaN(Date.parse(raw)) ? raw : null
   }
   let date = readFrontmatterDate('date') ?? readFrontmatterDate('start')
+  const version = sourceVersion === undefined || !date ? await sourceFileVersion(file) : null
   if (!date) {
-    try {
-      date = statSync(file).mtime.toISOString()
-    } catch {
-      date = ''
-    }
+    date = version ? new Date(version.mtimeMs).toISOString() : ''
     mainLog.warn(`[brain] ${key}: no usable date/start frontmatter, falling back to ${date || 'an empty date'}`)
   }
   const ref: MeetingRef = { file: key, date, title: x.title24 || key }
@@ -1680,9 +1670,9 @@ export async function ingestExtraction(
   // below, which mirrors exactly how lintBrain itself batches). No-ops entirely when publishBrainPages
   // is off, so this costs nothing when the mirror isn't in use.
   await trackedPublication(() => publishForExtraction(s, x, ref, aliasMap))
+  const recorded = sourceVersion ?? (version ? formatSourceVersion(version) : undefined)
   await updateIndex(s, (idx) => {
-    const version = sourceVersion ?? meetingSourceVersion(file)
-    idx.ingested[key] = { at: Date.now(), ok: true, ...(version ? { sourceVersion: version } : {}), attempts: 0 }
+    idx.ingested[key] = { at: Date.now(), ok: true, ...(recorded ? { sourceVersion: recorded } : {}), attempts: 0 }
     idx.revision += 1
   })
 }
@@ -1693,6 +1683,7 @@ export async function ingestExtraction(
 type JobResult =
   | { job: Job; s: Settings; ok: true; x: MeetingExtraction; md: string; preparedText?: string }
   | { job: Job; s: Settings; ok: false; error: unknown }
+  | { job: Job; s: Settings; ok: false; notOnDevice: true }
 
 async function runExtractionStage(job: Job): Promise<JobResult> {
   // One Settings snapshot per job, taken at the moment its extraction starts, reused for its ingest and
@@ -1700,14 +1691,18 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
   // re-reading (and risking a mid-job change) between the extraction and ingest stages.
   const s = getSettings()
   try {
-    const md = readSavedFile(job.file)
+    const source = await readSourceText(job.file)
+    if (source.status === 'missing') throw new Error('Meeting file not found.')
+    if (source.status === 'not-on-device') return { job, s, ok: false, notOnDevice: true }
+    const md = source.text
     if (job.strategy === 'reconcile') {
       // Extraction persistence happens before entity/graph merge so a crash can leave a valid meeting
       // JSON alongside an `ok:false` (or absent) index entry. Re-use that exact deterministic result:
       // no second LLM call, no cloud cost, and mergeExtraction's per-meeting de-dup makes the repair
       // safe even if a previous attempt wrote some entities before it was interrupted.
-      const savedExtraction = readMeetingExtraction(s, extractionSlug(jobKey(job)))
-      if (savedExtraction) return { job, s, ok: true, x: savedExtraction, md, preparedText: prepareMeetingText(s, md) }
+      const saved = await loadJson(s, join('meetings', `${extractionSlug(jobKey(job))}.json`), (v) => MeetingExtractionSchema.parse(v))
+      if (saved.status === 'unavailable') return { job, s, ok: false, notOnDevice: true }
+      if (saved.value) return { job, s, ok: true, x: saved.value, md, preparedText: prepareMeetingText(s, md) }
     }
     const { extraction, preparedText } = await extractMeeting(s, md, job.file, job.route ?? 'default')
     return { job, s, ok: true, x: extraction, md, preparedText }
@@ -1726,6 +1721,12 @@ async function finishJob(result: JobResult): Promise<void> {
   const { job, s } = result
   let failed = false
   try {
+    if (!result.ok && 'notOnDevice' in result) {
+      failed = true
+      completionError('incomplete')
+      mainLog.info('[brain] a meeting is not on this device; its ledger record is left as it was')
+      return
+    }
     try {
       if (!result.ok) throw result.error
       await ingestExtraction(s, result.x, result.md, job.file, result.preparedText, job.sourceVersion, job.key, job.label)
@@ -1744,10 +1745,11 @@ async function finishJob(result: JobResult): Promise<void> {
     } catch (e) {
       failed = true
       completionError(e instanceof PublicationFailure ? 'publication-failed' : result.ok ? 'write-failed' : 'incomplete')
+      const fileVersion = job.sourceVersion ? null : await sourceFileVersion(job.file)
+      const version = job.sourceVersion ?? (fileVersion ? formatSourceVersion(fileVersion) : undefined)
       await updateIndex(s, (idx) => {
         const key = jobKey(job)
         const attempts = (idx.ingested[key]?.attempts ?? 0) + 1
-        const version = job.sourceVersion ?? meetingSourceVersion(job.file)
         idx.ingested[key] = {
           at: Date.now(),
           ok: false,
@@ -1791,7 +1793,7 @@ let backfillLintPending = false
 let loggedNoProviderStall = false
 
 // brain:rebuildAll needs to run replayCorrections() only once its purge-then-startBackfill re-extraction
-// has FULLY drained — startBackfill() itself only synchronously queues work; completion happens later,
+// has FULLY drained — startBackfill() only queues work; completion happens later,
 // across pump()'s async extraction/ingest chain. Callbacks registered here fire the next time the whole
 // queue (not just this one caller's jobs — see registerDrainCallback's doc comment) goes idle.
 const pendingDrainCallbacks: Array<() => void | Promise<void>> = []
@@ -1815,9 +1817,10 @@ function maybeFinishBackfill(): void {
       await updateIndex(sx, (i) => { i.warnings = lintBrain(sx) })
       await trackedPublication(() => publishIndexes(sx))
       if (backfillObserver) backfillObserver.published = true
+      const scan = await scanMeetingSources(sx)
       await updateIndex(sx, (i) => {
         // Checkpoint repairs may drain while other sources still await a configured provider.
-        if (!backfillObserver && !hasIncompleteMeetingSource(sx, i)) i.backfillRequested = false
+        if (!backfillObserver && !hasIncompleteSource(scan, i)) i.backfillRequested = false
       })
     }).catch((error) => {
       completionError(error instanceof PublicationFailure ? 'publication-failed' : 'write-failed')
@@ -1830,137 +1833,12 @@ function maybeFinishBackfill(): void {
   }
 }
 
-/** The meeting files that are source material for Intelligence. Keeping this predicate in one place is
- * important: the durable-request cleanup below must inspect the exact same set that Index meetings scans. */
-function isMeetingTranscriptFile(file: string): boolean {
-  return file.endsWith('.md') && !file.startsWith('.') && file !== 'index.md' && file !== 'README.md'
-}
-
-/** Returns null when OneDrive/the filesystem cannot be inspected safely; never infer a deletion then. */
-function currentMeetingSourceVersions(s: Settings): Map<string, string> | null {
-  const folder = resolveMeetingsFolder(s)
-  try {
-    if (!existsSync(folder)) return null
-    const versions = new Map<string, string>()
-    for (const file of readdirSync(folder)) {
-      if (!isMeetingTranscriptFile(file)) continue
-      const version = meetingSourceVersion(join(folder, file))
-      if (!version) return null
-      versions.set(file, version)
-    }
-    // Team transcripts drift exactly like own meetings — a teammate edits or deletes a file in the
-    // shared folder and OneDrive syncs it here — so their namespaced keys ("team/<owner>/<file>", the
-    // same identity startBackfill's team scan writes into idx.ingested) belong in this same map.
-    // A shared folder that is momentarily unavailable is unreadable, NOT empty: fail the whole scan
-    // rather than report its transcripts as deleted (same conservative rule as hasIncompleteMeetingSource).
-    for (const teamFolder of s.teamTranscriptFolders ?? []) {
-      if (!teamFolder) continue
-      if (!existsSync(teamFolder)) return null
-      const owner = basename(teamFolder) || 'team'
-      for (const file of readdirSync(teamFolder)) {
-        if (!isMeetingTranscriptFile(file)) continue
-        const version = meetingSourceVersion(join(teamFolder, file))
-        if (!version) return null
-        versions.set(`team/${owner}/${file}`, version)
-      }
-    }
-    return versions
-  } catch (error) {
-    mainLog.warn(`[brain] could not inspect meeting source versions: ${error instanceof Error ? error.message : String(error)}`)
-    return null
-  }
-}
-
-/**
- * An existing successful source changed or disappeared. Incremental merge cannot remove stale facts,
- * so retain the source and request a clean derived-store rebuild instead.
- */
-function hasMeetingSourceDrift(s: Settings, idx: BrainIndex): boolean {
-  const current = currentMeetingSourceVersions(s)
-  if (!current) return false
-  for (const [file, record] of Object.entries(idx.ingested)) {
-    if (!record.ok) continue
-    const version = current.get(file)
-    if (!version || !record.sourceVersion || record.sourceVersion !== version) return true
-  }
-  return false
-}
-
-/**
- * A request flag is a durability promise, not merely a UI hint. Never clear it while a meeting source
- * still lacks a successful index record. Treat an unavailable folder conservatively too: OneDrive
- * Files On-Demand can make it disappear briefly, and clearing the flag then would strand the work.
- */
-/** Saved meeting files that do not yet have a successful ingest record. Used by Update Intelligence
- *  so queued:0 + upToDate is illegal when the vault has meetings and the brain is empty. */
-export function countUnextractedMeetings(s: Settings = getSettings()): number {
-  const idx = readIndex(s)
-  let n = 0
-  const folder = resolveMeetingsFolder(s)
-  try {
-    if (existsSync(folder)) {
-      for (const f of readdirSync(folder)) {
-        if (isMeetingTranscriptFile(f) && !idx.ingested[f]?.ok) n++
-      }
-    }
-    for (const teamFolder of s.teamTranscriptFolders ?? []) {
-      if (!teamFolder || !existsSync(teamFolder)) continue
-      const owner = basename(teamFolder) || 'team'
-      for (const f of readdirSync(teamFolder)) {
-        if (isMeetingTranscriptFile(f) && !idx.ingested[`team/${owner}/${f}`]?.ok) n++
-      }
-    }
-  } catch {
-    /* unreadable folder: treat as unknown, not empty */
-  }
-  return n
-}
-
-export function hasUnextractedMeetings(s: Settings = getSettings()): boolean {
-  return countUnextractedMeetings(s) > 0
-}
-
-function hasIncompleteMeetingSource(s: Settings, idx: BrainIndex): boolean {
-  const folder = resolveMeetingsFolder(s)
-  try {
-    if (!existsSync(folder)) return true
-    if (readdirSync(folder).some((file) => isMeetingTranscriptFile(file) && !idx.ingested[file]?.ok)) return true
-    // Team transcripts count too: a team file that was deferred (no provider) gets no idx.ingested entry
-    // at all, so without this the durable backfillRequested flag could be cleared before it's ever ingested,
-    // losing the resume-on-next-boot guarantee (recovery would fall solely to the periodic reconcile timer).
-    for (const teamFolder of s.teamTranscriptFolders ?? []) {
-      if (!teamFolder) continue
-      if (!existsSync(teamFolder)) return true // unavailable (OneDrive blip): treat conservatively
-      const owner = basename(teamFolder) || 'team'
-      if (readdirSync(teamFolder).some((f) => isMeetingTranscriptFile(f) && !idx.ingested[`team/${owner}/${f}`]?.ok)) return true
-    }
-    return false
-  } catch (error) {
-    mainLog.warn(`[brain] could not inspect meeting sources while preserving reconciliation state: ${error instanceof Error ? error.message : String(error)}`)
-    return true
-  }
-}
-
-/**
- * A persisted extraction is already local, deterministic work. It must be eligible for background
- * repair even if a provider/keychain is temporarily unavailable, because no model call is involved.
- */
-function hasSavedReconciliationCandidate(s: Settings): boolean {
-  const folder = resolveMeetingsFolder(s)
-  if (!existsSync(folder)) return false
-  const idx = readIndex(s)
-  const extractedSlugs = new Set(listMeetingExtractions(s))
-  return readdirSync(folder).some((file) =>
-    isMeetingTranscriptFile(file) && !idx.ingested[file]?.ok && extractedSlugs.has(extractionSlug(file))
-  )
-}
-
 /** Runs after every state change (a job dequeued, an extraction settled, an ingest completed) to check
  *  for a TRUE worker drain. A stall (jobs stuck in `queue` because no provider is configured) must never
  *  trip this — inFlightJobs and queue both being empty is what makes it "true". */
 function maybeFinishDrain(): void {
   maybeFinishBackfill()
-  if (queue.length === 0 && inFlightJobs.size === 0 && !backfillPreparing && !rebuildStarting && !backfillLintPending && !backfillFinalization && !drainTask) {
+  if (queue.length === 0 && inFlightJobs.size === 0 && backfillScans === 0 && !rebuildStarting && !backfillLintPending && !backfillFinalization && !drainTask) {
     // A just-saved meeting persists `backfillRequested` before its background job starts so a quit or
     // crash cannot strand it. Once every job truly drains, clear that durable marker only when none of
     // the persisted records remain failed/pending. A failed job therefore survives restart and the next
@@ -1968,9 +1846,10 @@ function maybeFinishDrain(): void {
     const s = getSettings()
     drainTask = (async () => {
       try {
+        const scan = await scanMeetingSources(s)
         await updateIndex(s, (idx) => {
           if (backfillObserver) return // observer owns the final source/gate-aware durability decision
-          if (!idx.backfillRequested || Object.values(idx.ingested).some((entry) => !entry.ok) || hasIncompleteMeetingSource(s, idx)) return
+          if (!idx.backfillRequested || Object.values(idx.ingested).some((entry) => !entry.ok) || hasIncompleteSource(scan, idx)) return
           idx.backfillRequested = false
         })
       } catch (error) {
@@ -2086,9 +1965,12 @@ export async function enqueueIngest(
   // unreadable index would only re-derive it into readIndex's empty stand-in, which writeIndex/
   // updateIndex then refuse to persist anyway. A backfill picks the file up once the index is usable
   // again (startBackfill scans by content, not by whether enqueueIngest ever ran for it).
-  if (indexUnavailable(s)) return
+  if ((await loadIndex(s)).kind === 'unavailable') return
+  if (!(await brainInputsLocal(s))) return
   const key = basename(file)
-  const sourceVersion = meetingSourceVersion(file)
+  const version = await sourceFileVersion(file)
+  const sourceVersion = version ? formatSourceVersion(version) : undefined
+  if (indexUnavailable(s)) return
   const previous = readIndex(s).ingested[key]
   // Match by the namespaced jobKey, not bare basename: enqueueIngest only ever runs for own-meeting paths
   // (key = basename), but queue/inFlightJobs now also hold team jobs (jobKey "team/<owner>/<file>"). A
@@ -2168,9 +2050,9 @@ function replayAfterDrain(s: Settings, onFinished?: () => void | Promise<void>):
   }
 }
 
-function startReplayBackfill(s: Settings, options: BackfillStartOptions, onFinished?: () => void | Promise<void>): BackfillStartResult {
+async function startReplayBackfill(s: Settings, options: BackfillStartOptions, onFinished?: () => void | Promise<void>): Promise<BackfillStartResult> {
   const callback = replayAfterDrain(s, onFinished)
-  try { return startBackfill(callback, options) } catch (error) {
+  try { return await startBackfill(callback, options) } catch (error) {
     // startBackfill registers its callback only AFTER scanning. A failed scan must not leave a phantom
     // queued replay that prevents a later repaired-folder retry from registering the real callback.
     if (callback) rebuildReplayQueued = false
@@ -2180,6 +2062,10 @@ function startReplayBackfill(s: Settings, options: BackfillStartOptions, onFinis
 }
 
 async function performRebuildReplay(s: Settings): Promise<void> {
+  if ((await loadIndex(s)).kind === 'unavailable' || !(await brainInputsLocal(s))) {
+    mainLog.warn('[brain] rebuild replay waits: the ledger or the files it reads are not usable on this device')
+    return
+  }
   const r = await replayCorrections(s)
   if (r.error) {
     mainLog.error(`[brain] rebuild replay could not run: ${r.error}`)
@@ -2195,6 +2081,7 @@ async function performRebuildReplay(s: Settings): Promise<void> {
   // Page regeneration is part of replay completion. Keep the durable replay marker until it succeeds,
   // so a retry regenerates ALL entity pages rather than mistakenly publishing only index pages.
   await trackedPublication(() => publishAll(s))
+  const scan = await scanMeetingSources(s)
   await updateIndex(s, (i) => {
     i.replayPending = false
     i.replayError = undefined
@@ -2202,7 +2089,7 @@ async function performRebuildReplay(s: Settings): Promise<void> {
     // Only a rebuild begun for source freshness owns this marker. A normal correction-replay resume can
     // legitimately contain synthetic/legacy index entries without a source file; periodic source scans
     // still discover real drift, but must not turn that replay into an unrelated purge.
-    if (i.sourceRefreshRequested) i.sourceRefreshRequested = hasMeetingSourceDrift(s, i)
+    if (i.sourceRefreshRequested) i.sourceRefreshRequested = hasSourceDrift(scan, i)
   })
   queueMicrotask(maybeStartSourceRefresh)
 }
@@ -2256,7 +2143,7 @@ async function localOnlyRebuildBlocked(s: Settings): Promise<string | null> {
 const REBUILD_BUSY_ERROR = 'Intelligence indexing is already running. Wait for it to finish before rebuilding; nothing was reset.'
 
 function rebuildWorkBusy(): boolean {
-  return queue.length > 0 || inFlightJobs.size > 0 || backfillPreparing || backfillLintPending ||
+  return queue.length > 0 || inFlightJobs.size > 0 || backfillScans > 0 || backfillLintPending ||
     !!backfillFinalization || !!drainTask || rebuildReplayQueued || !!rebuildReplayTask || !!backfillObserver?.settling
 }
 
@@ -2278,6 +2165,8 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   }
   const localOnlyError = await localOnlyRebuildBlocked(s)
   if (localOnlyError) return { queued: 0, error: localOnlyError }
+  if (!(await brainInputsLocal(s))) return { queued: 0, error: indexUnavailableMessage('cloud-only') }
+  await loadIndex(s)
   const before = readIndex(s)
   const preserveSourceRefresh = options.sourceRefresh || before.sourceRefreshRequested
   // Fix 2 (sync guard): a corrupt/blocked journal fails the gate — refuse before touching the store.
@@ -2312,7 +2201,7 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
     i.revision = before.revision + 1
     i.sourceRefreshRequested = preserveSourceRefresh
   })
-  const r = startReplayBackfill(s, { allowSourceRefresh: true }, options.onFinished)
+  const r = await startReplayBackfill(s, { allowSourceRefresh: true }, options.onFinished)
   return { queued: r.queued }
 }
 
@@ -2382,16 +2271,18 @@ function maybeStartSourceRefresh(): void {
  * clear backfillRequested) BEFORE a crash interrupts the replay step itself, so checking backfillRequested
  * alone would miss that window entirely.
  */
-export function resumeBackfillIfPending(): void {
+export async function resumeBackfillIfPending(): Promise<void> {
   try {
     const s = getSettings()
-    const idx = readIndex(s)
+    const load = await loadIndex(s)
+    if (load.kind !== 'ready') return
+    const idx = load.index
     if (idx.sourceRefreshRequested && !idx.replayPending) {
       maybeStartSourceRefresh()
       return
     }
     if (idx.backfillRequested) {
-      const r = idx.replayPending ? startReplayBackfill(s, { allowSourceRefresh: true }) : startBackfill()
+      const r = idx.replayPending ? await startReplayBackfill(s, { allowSourceRefresh: true }) : await startBackfill()
       if (r.queued > 0) mainLog.info(`[brain] resuming interrupted backfill: ${r.queued} transcripts remaining`)
     } else if (idx.replayPending) {
       // The backfill portion of an interrupted rebuild already finished (or never had any work) before
@@ -2440,7 +2331,7 @@ export interface BackfillRun {
 
 /** A run observes the shared worker lane, not merely the synchronous scan/queue dispatch. A recap
  * prerequisite may run in parallel: only the final source-version check waits for it. */
-export function requestBackfillRun(options: BackfillStartOptions = {}, beforeComplete?: Promise<unknown>): BackfillRun {
+export async function requestBackfillRun(options: BackfillStartOptions = {}, beforeComplete?: Promise<unknown>): Promise<BackfillRun> {
   if (backfillObserver) {
     addCompletionGate(backfillObserver, beforeComplete)
     return { result: { queued: 0, preparing: true }, completion: backfillObserver.run.completion }
@@ -2452,16 +2343,17 @@ export function requestBackfillRun(options: BackfillStartOptions = {}, beforeCom
   for (const job of [...queue, ...inFlightJobs]) observeSource(jobKey(job))
   addCompletionGate(observer, beforeComplete)
   try {
-    run.result = requestBackfill(options)
-    if (readIndex(observer.s).replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
+    run.result = await requestBackfill(options)
+    const idx = (await loadIndex(observer.s)).kind === 'ready' ? readIndex(observer.s) : undefined
+    if (idx?.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     if (run.result.deferred) completionError('no-provider')
     // A capped request can return "preparing" without dispatching anything. That is not completed work.
-    if (run.result.preparing && !backfillPreparing && !sourceRefreshRunning && !rebuildStarting && !rebuildReplayTask && !hasActiveBackfill() && !backfillLintPending) completionError('incomplete')
+    if (run.result.preparing && backfillScans === 0 && !sourceRefreshRunning && !rebuildStarting && !rebuildReplayTask && !hasActiveBackfill() && !backfillLintPending) completionError('incomplete')
   } catch (error) {
     completionError('scan-failed')
     mainLog.error('[brain] backfill request scan failed:', error)
   } finally {
-    observer.preparing = backfillPreparing
+    observer.preparing = backfillScans > 0
     maybeFinishDrain()
   }
   return run
@@ -2483,7 +2375,7 @@ function addCompletionGate(observer: BackfillObserver, prerequisite?: Promise<un
 function maybeCompleteBackfillRun(): void {
   const observer = backfillObserver
   if (!observer || observer.settling) return
-  const busy = (): boolean => observer.preparing || backfillPreparing || observer.gates > 0 || sourceRefreshRunning || rebuildStarting || !!drainTask || !!backfillFinalization || !!rebuildReplayTask || inFlightJobs.size > 0
+  const busy = (): boolean => observer.preparing || backfillScans > 0 || observer.gates > 0 || sourceRefreshRunning || rebuildStarting || !!drainTask || !!backfillFinalization || !!rebuildReplayTask || inFlightJobs.size > 0
   const providerBlocked = (): boolean => queue.length > 0 && !hasUsableProvider(getSettings()) && queue.every((job) => job.origin === 'backfill' && job.strategy !== 'reconcile')
   if (busy() || (queue.length > 0 && !providerBlocked())) return
   observer.settling = true
@@ -2503,10 +2395,11 @@ function maybeCompleteBackfillRun(): void {
     // A new live job or coalesced prerequisite can arrive while publication is pending. Its completion
     // will re-enter this check; never clear retry intent or resolve under that new work.
     if (busy() || (queue.length > 0 && !providerBlocked())) return
-    const current = currentMeetingSourceVersions(observer.s)
+    const current = sourceVersions(await scanMeetingSources(observer.s))
     if (!current) {
       completionError('scan-failed')
     } else {
+      await loadIndex(observer.s)
       const idx = readIndex(observer.s)
       for (const [key, version] of current) {
         const record = idx.ingested[key]
@@ -2539,28 +2432,47 @@ function finishCompletionObserver(observer: BackfillObserver): void {
   observer.resolve({ ok: !observer.error, ...(observer.error ? { error: observer.error } : {}), total: observer.sources.size, failed: [...observer.sources.values()].filter(Boolean).length })
 }
 
+let scanLane: Promise<unknown> = Promise.resolve()
 
-export function startBackfill(onDrained?: () => void | Promise<void>, options: BackfillStartOptions = {}): BackfillStartResult {
+/** Queues every not-yet-ingested local transcript. Scans run one at a time, so a re-entrant call tops up
+ *  the queue from the state the previous one left. */
+export function startBackfill(onDrained?: () => void | Promise<void>, options: BackfillStartOptions = {}): Promise<BackfillStartResult> {
+  backfillScans += 1
+  const run = scanLane.then(async () => {
+    const result = await scanAndQueue(options)
+    registerDrainCallback(onDrained)
+    return result
+  })
+  scanLane = run.catch(() => {})
+  return run.finally(() => {
+    backfillScans -= 1
+    if (backfillScans === 0 && backfillObserver) backfillObserver.preparing = false
+    maybeFinishDrain()
+  })
+}
+
+async function scanAndQueue(options: BackfillStartOptions = {}): Promise<BackfillStartResult> {
   const s = getSettings()
   // M2-0003: an unreadable index.json must never be treated as "nothing left to index" — that empty
   // stand-in would otherwise trigger a full re-extraction of every meeting. Covers resume, reconcile,
   // consolidation, the intelligence pass, dashboard-open and the Index-meetings click: this and
   // enqueueIngest are the only two `queue.push` sites.
+  if ((await loadIndex(s)).kind === 'unavailable') return { queued: 0 }
+  const scan = await scanMeetingSources(s)
+  if (!(await brainInputsLocal(s, scan))) return { queued: 0 }
+  const extractions = await listBrainNames(s, 'meetings')
+  const extractedSlugs = new Set((extractions ?? []).filter((n) => n.endsWith('.json')).map((n) => n.replace(/\.json$/, '')))
   if (indexUnavailable(s)) return { queued: 0 }
   const idx = readIndex(s)
   const route = options.route ?? 'default'
   const providerAvailable =
     route === 'intelligence-pass' ? pickIntelligencePassCandidates(s).length > 0 : hasUsableProvider(s)
-  if (!options.force && !options.allowSourceRefresh && (idx.sourceRefreshRequested || hasMeetingSourceDrift(s, idx))) {
+  if (!options.force && !options.allowSourceRefresh && (idx.sourceRefreshRequested || hasSourceDrift(scan, idx))) {
     void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
     return providerAvailable ? { queued: 0 } : { queued: 0, deferred: 'no-provider' }
   }
   if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
   const already = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([k]) => k))
-  // An extraction file is a resumable checkpoint, not proof of a successful ingest: a crash can land
-  // between writeMeetingExtraction and the entity merge/index update. Those entries are re-merged from
-  // disk below without another LLM call.
-  const extractedSlugs = new Set(listMeetingExtractions(s))
   // pump() has already spliced any currently-extracting-or-ingesting job out of `queue` by the time it's
   // mid-flight — omitting those here would let a re-click of "Index meetings" queue the exact same file
   // a second time while it's still being extracted (or is sitting in the withEntityLock lane). inFlightJobs covers
@@ -2581,107 +2493,57 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   }
   const candidates: Job[] = []
   let deferredByProvider = false
-  const folder = resolveMeetingsFolder(s)
+  let notOnDevice = 0
   const now = Date.now()
   // MAX_INGEST_ATTEMPTS: keys whose exhausted record is being requeued this call — only ever populated
   // when respectRetryBackoff is FALSE (i.e. every caller other than the automatic reconcile tick: the
   // Index/Retry button, the dashboard-open check, boot resume, a rebuild). Cleared durably below so a
   // later automatic tick doesn't immediately re-skip a source this call just gave a fresh attempts budget.
   const toUnexhaust: string[] = []
-  for (const f of existsSync(folder) ? readdirSync(folder) : []) {
-    if (isMeetingTranscriptFile(f) && !already.has(f) && !inFlight.has(f)) {
-      observeSource(f)
-      const file = join(folder, f)
-      const record = idx.ingested[f]
-      const sourceVersion = meetingSourceVersion(file)
-      if (
-        options.respectRetryBackoff &&
-        record &&
-        !record.ok &&
-        sourceVersion &&
-        record.sourceVersion === sourceVersion &&
-        (record.retryAfter ?? 0) > now
-      ) {
-        continue
+  if (extractions === null || scan.some((folder) => folder.status === 'failed')) throw new Error('a meetings folder could not be listed')
+  for (const source of scan.flatMap((folder) => folder.sources)) {
+    if (already.has(source.key) || inFlight.has(source.key)) continue
+    if (!source.local) {
+      notOnDevice += 1
+      continue
+    }
+    observeSource(source.key)
+    const record = idx.ingested[source.key]
+    if (
+      options.respectRetryBackoff &&
+      record &&
+      !record.ok &&
+      source.version &&
+      record.sourceVersion === source.version &&
+      (record.retryAfter ?? 0) > now
+    ) {
+      continue
+    }
+    // A record that hit MAX_INGEST_ATTEMPTS stops the automatic reconcile tick from ever requeuing it
+    // again. Every other caller gives it back a fresh attempts budget.
+    if (record?.exhausted) {
+      if (options.respectRetryBackoff) continue
+      toUnexhaust.push(source.key)
+    }
+    const strategy = extractedSlugs.has(extractionSlug(source.key)) ? 'reconcile' as const : undefined
+    if (providerAvailable || strategy === 'reconcile') {
+      const job = {
+        file: source.file,
+        source: source.source,
+        origin: 'backfill' as const,
+        ...(source.source === 'team' ? { key: source.key, label: source.label } : {}),
+        ...(source.version ? { sourceVersion: source.version } : {}),
+        ...(strategy ? { strategy } : {}),
+        ...(route !== 'default' ? { route } : {})
       }
-      // A record that hit MAX_INGEST_ATTEMPTS stops the automatic reconcile tick from ever requeuing it
-      // again (a dead provider/model must not spin the queue on the same doomed transcript forever).
-      // Every other caller already ignores the retryAfter backoff above the same way — that's the
-      // deliberate "try again" path, so give it back a fresh attempts budget instead of re-exhausting
-      // after a single extra try.
-      if (record?.exhausted) {
-        if (options.respectRetryBackoff) continue
-        toUnexhaust.push(f)
-      }
-      // A saved extraction proves the LLM phase completed, not that the entity merge and durable
-      // `ingested[file].ok` write completed. Requeue it through the deterministic merge path rather
-      // than treating Index meetings as a no-op forever, while avoiding another provider call.
-      const strategy = extractedSlugs.has(extractionSlug(f)) ? 'reconcile' as const : undefined
-      if (providerAvailable || strategy === 'reconcile') {
-        candidates.push({
-          file,
-          source: 'meetings',
-          origin: 'backfill',
-          ...(sourceVersion ? { sourceVersion } : {}),
-          ...(strategy ? { strategy } : {}),
-          ...(route !== 'default' ? { route } : {})
-        })
-      } else {
-        // Leave the durable request flag in place. The source still needs a first extraction, but
-        // queueing it now would only generate a guaranteed provider error (and its retry).
-        deferredByProvider = true
-      }
+      candidates.push(job)
+    } else {
+      // Leave the durable request flag in place. The source still needs a first extraction, but queueing
+      // it now would only generate a guaranteed provider error.
+      deferredByProvider = true
     }
   }
-  // Team transcripts (settings.teamTranscriptFolders): the same OneDrive-friendly scan, extended to each
-  // configured shared folder. Deliberately PARALLELS the own-meetings loop above rather than refactoring it,
-  // so the own path stays byte-identical. Team files are namespaced in the index ("team/<owner>/<file>") so
-  // they never collide with the user's own meetings — or another member's same-named file — and carry the
-  // folder's name as source_team attribution. `already`/`inFlight` already hold namespaced keys, so a team
-  // file is deduped independently of any own meeting.
-  for (const teamFolder of s.teamTranscriptFolders ?? []) {
-    if (!teamFolder) continue
-    const owner = basename(teamFolder) || 'team'
-    for (const f of existsSync(teamFolder) ? readdirSync(teamFolder) : []) {
-      if (!isMeetingTranscriptFile(f)) continue
-      const key = `team/${owner}/${f}`
-      if (already.has(key) || inFlight.has(key)) continue
-      observeSource(key)
-      const file = join(teamFolder, f)
-      const record = idx.ingested[key]
-      const sourceVersion = meetingSourceVersion(file)
-      if (
-        options.respectRetryBackoff &&
-        record &&
-        !record.ok &&
-        sourceVersion &&
-        record.sourceVersion === sourceVersion &&
-        (record.retryAfter ?? 0) > now
-      ) {
-        continue
-      }
-      // Same MAX_INGEST_ATTEMPTS gate as the own-meetings loop above — see its comment.
-      if (record?.exhausted) {
-        if (options.respectRetryBackoff) continue
-        toUnexhaust.push(key)
-      }
-      const strategy = extractedSlugs.has(extractionSlug(key)) ? ('reconcile' as const) : undefined
-      if (providerAvailable || strategy === 'reconcile') {
-        candidates.push({
-          file,
-          source: 'team',
-          origin: 'backfill',
-          key,
-          label: owner,
-          ...(sourceVersion ? { sourceVersion } : {}),
-          ...(strategy ? { strategy } : {}),
-          ...(route !== 'default' ? { route } : {})
-        })
-      } else {
-        deferredByProvider = true
-      }
-    }
-  }
+  if (notOnDevice > 0) mainLog.info(`[brain] ${notOnDevice} meetings are not on this device; Intelligence skips them until they are`)
   if (deferredByProvider) {
     mainLog.warn('[brain] backfill has meetings awaiting a configured AI provider; locally saved extractions will still be repaired')
   }
@@ -2712,19 +2574,13 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   // above before scanning, so clear it again through the same serialized index lane.
   if (providerAvailable && candidates.length === 0 && !backfillInFlight && !hasActiveLiveIngest()) {
     updateIndexDetached(s, (i) => {
-      if (!backfillObserver && !hasIncompleteMeetingSource(s, i)) i.backfillRequested = false
+      if (!backfillObserver && !hasIncompleteSource(scan, i)) i.backfillRequested = false
     })
   }
-  registerDrainCallback(onDrained)
   return deferredByProvider ? { queued: candidates.length, deferred: 'no-provider' } : { queued: candidates.length }
 }
 
-/**
- * Schedules the historical-meeting scan after the current IPC turn so an Index click renders its
- * preparation feedback immediately, even when OneDrive takes time to enumerate a large folder.
- * Rebuild/resume paths keep using startBackfill() directly because they need the actual queued count
- * synchronously for their durable journal semantics.
- */
+/** Kicks off a gateway-backed historical-meeting scan without waiting for the queue to drain. */
 /** Local calendar day as 'YYYY-MM-DD' — the unit dailyBackfillRunsRemaining buckets against.
  *  Must use the LOCAL timezone (en-CA), not UTC: a 6pm Pacific pass must not burn "tomorrow"'s budget. */
 function todayKey(now = Date.now()): string {
@@ -2754,19 +2610,16 @@ function consumeDailyBackfillRun(s: Settings): boolean {
   return true
 }
 
-export function requestBackfill(options: BackfillStartOptions = {}): BackfillStartResult {
+export async function requestBackfill(options: BackfillStartOptions = {}): Promise<BackfillStartResult> {
   const s = getSettings()
-  const unextracted = hasUnextractedMeetings(s)
   // Preserve the existing synchronous no-provider contract so the renderer can show the actionable
   // setup guidance immediately, while retaining the durable resume flag.
   if (!hasUsableProvider(s)) {
-    const r = startBackfill(undefined, options)
-    if (unextracted && r.queued === 0 && r.deferred !== 'no-provider') {
-      return { queued: 0, deferred: 'no-provider' }
-    }
+    const r = await startBackfill(undefined, options)
+    if (r.queued === 0 && r.deferred !== 'no-provider' && (await hasUnextracted(s))) return { queued: 0, deferred: 'no-provider' }
     return r
   }
-  if (backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayTask) return { queued: 0, preparing: true }
+  if (backfillScans > 0 || sourceRefreshRunning || rebuildStarting || rebuildReplayTask) return { queued: 0, preparing: true }
   // A control cannot normally be clicked during an active run, but keep this guard authoritative for
   // re-entrant IPC callers too. There is already a real batch whose progress will be reported.
   if (hasActiveBackfill() || backfillLintPending) {
@@ -2781,29 +2634,20 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
   // bypass the old 3-per-day reconcile budget. queued:0 + upToDate is illegal when meetings
   // exist but have not been extracted.
   if (!options.force && !consumeDailyBackfillRun(s)) {
-    if (unextracted) return { queued: 0, preparing: true }
+    if (await hasUnextracted(s)) return { queued: 0, preparing: true }
     return { queued: 0, upToDate: true }
   }
 
-  backfillPreparing = true
-  const idx = readIndex(s)
-  if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
-  setImmediate(() => {
-    try {
-      startBackfill(undefined, options)
-    } catch (error) {
-      // Keep the durable request flag intact so a temporary OneDrive/filesystem failure can resume on
-      // the next app launch. The source error is still logged rather than silently discarded.
-      mainLog.error('[brain] deferred backfill scan failed:', error)
-      completionError('scan-failed')
-    } finally {
-      backfillPreparing = false
-      if (backfillObserver) backfillObserver.preparing = false
-      maybeFinishDrain()
-    }
+  void startBackfill(undefined, options).catch((error) => {
+    mainLog.error('[brain] deferred backfill scan failed:', error)
+    completionError('scan-failed')
   })
-  if (unextracted) return { queued: 0, preparing: true }
   return { queued: 0, preparing: true }
+}
+
+async function hasUnextracted(s: Settings): Promise<boolean> {
+  await loadIndex(s)
+  return countUnextracted(await scanMeetingSources(s), readIndex(s)) > 0
 }
 
 /**
@@ -2812,22 +2656,28 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
  * events. A configured provider enables normal extraction; without one, the loop still repairs any
  * previously-saved extraction because that path is entirely local and never sends meeting content away.
  */
-export function reconcileMeetingsInBackground(): void {
+export async function reconcileMeetingsInBackground(): Promise<void> {
   try {
     const s = getSettings()
     // MQA-023: a backfill with jobs still in flight owns the queue and must not be disturbed — but one
     // whose jobs are all parked (provider lost mid-batch) is exactly what this tick has to revive, so it
     // no longer bails on hasActiveBackfill() alone. requestBackfill re-pumps the stalled queue below.
-    if (backfillPreparing || sourceRefreshRunning || (hasActiveBackfill() && hasJobsInFlight())) return
+    if (backfillScans > 0 || sourceRefreshRunning || (hasActiveBackfill() && hasJobsInFlight())) return
+    await loadIndex(s)
     const idx = readIndex(s)
-    if (idx.sourceRefreshRequested || hasMeetingSourceDrift(s, idx)) {
+    const scan = await scanMeetingSources(s)
+    const drift = hasSourceDrift(scan, idx)
+    if (idx.sourceRefreshRequested || drift) {
       // The try/catch below only catches synchronous throws; an async rejection escaping here would be
       // reported as an unhandledRejection → a false app.crash record on EVERY 60s tick (same as MQA-155).
       void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
       return
     }
-    if (!hasUsableProvider(s) && !hasSavedReconciliationCandidate(s)) return
-    requestBackfill({ respectRetryBackoff: true })
+    const extractions = await listBrainNames(s, 'meetings')
+    const extractedSlugs = new Set((extractions ?? []).map((n) => n.replace(/\.json$/, '')))
+    const candidate = extractions === null ? false : hasSavedReconciliationCandidate(scan, idx, extractedSlugs)
+    if (!hasUsableProvider(s) && !candidate) return
+    await requestBackfill({ respectRetryBackoff: true })
   } catch (error) {
     mainLog.warn(`[brain] background meeting reconciliation skipped: ${error instanceof Error ? error.message : String(error)}`)
   }

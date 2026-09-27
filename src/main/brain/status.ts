@@ -17,6 +17,7 @@ import {
   ingestFailureDetails,
   isPendingIngestRecord
 } from './ingest'
+import { pausedForCloudOnlyInputs } from './inputs'
 
 type BrainCounts = { people: number; accounts: number; deals: number; nodes: number; edges: number }
 const countsCache = new Map<string, { revision: number; counts: BrainCounts }>()
@@ -59,6 +60,7 @@ export async function readBrainStatus(s: Settings): Promise<BrainStatus> {
   ])
   const failure = ingestFailureCounts(idx)
   const failureDetails = ingestFailureDetails(idx)
+  const pausedReason = unavailable ?? (pausedForCloudOnlyInputs(s) ? 'cloud-only' : null)
   return {
     meetings: Object.values(idx.ingested).filter((v) => v.ok).length,
     ingestedFiles: Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file),
@@ -79,6 +81,7 @@ export async function readBrainStatus(s: Settings): Promise<BrainStatus> {
     cleanupPending: idx.sourceRefreshRequested === true,
     lastIndexedAt: lastIndexedAt(s),
     intelligenceIndex,
-    ...(unavailable ? { indexUnavailable: unavailable, error: indexUnavailableMessage(unavailable) } : {})
+    ...(unavailable ? { indexUnavailable: unavailable } : {}),
+    ...(pausedReason !== null ? { error: indexUnavailableMessage(pausedReason) } : {})
   }
 }

@@ -84,7 +84,7 @@ describe('automatic brain ingest with Métis Local', () => {
   })
 
   it('uses the bundled local model to process a saved meeting when no cloud provider is configured', async () => {
-    const result = startBackfill()
+    const result = await startBackfill()
 
     expect(result).toEqual({ queued: 1 })
     await vi.waitFor(() => {
@@ -116,7 +116,7 @@ describe('automatic brain ingest with Métis Local', () => {
       return { abort: () => {} }
     })
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
     }, { timeout: 10_000 })
@@ -133,7 +133,7 @@ describe('automatic brain ingest with Métis Local', () => {
     setSettings({ provider: 'dust', dustWorkspaceId: 'test-workspace' })
     setApiKey('dust', 'test-dust-key')
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
@@ -146,7 +146,7 @@ describe('automatic brain ingest with Métis Local', () => {
   it('does not treat the meetings README as a transcript candidate', async () => {
     writeFileSync(join(meetingsFolder, 'README.md'), '# Métis meeting folder', 'utf8')
 
-    const result = startBackfill()
+    const result = await startBackfill()
 
     expect(result).toEqual({ queued: 1 })
     await vi.waitFor(() => {
