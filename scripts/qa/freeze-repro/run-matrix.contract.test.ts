@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -21,16 +21,18 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       expect(readFileSync(join(out, 'environment.json'), 'utf8')).toContain('"dry_run": 1')
       expect(readFileSync(join(out, 'node-options-fuse.json'), 'utf8')).toContain('NOT_EXERCISED')
       expect(readFileSync(join(out, 'dataless-fixtures.json'), 'utf8')).toContain('"fixtures"')
+      expect(readFileSync(join(out, 'launch-plan.json'), 'utf8')).toContain('"electron_user_data_dir_switch":true')
 
       const fixtures = JSON.parse(readFileSync(join(out, 'fifo-fixtures.json'), 'utf8')) as {
         kind: string
         count: number
-        fixtures: string[]
+        fixtures: { path: string; opened_by_1_9_6: boolean | null }[]
       }
       expect(fixtures.kind).toBe('fifo')
       expect(fixtures.count).toBeGreaterThanOrEqual(6)
-      expect(fixtures.fixtures.some((path) => path.endsWith('.brain/index.json'))).toBe(true)
-      expect(fixtures.fixtures.filter((path) => path.endsWith('.md'))).toHaveLength(4)
+      expect(fixtures.fixtures.some((fixture) => fixture.path.endsWith('.brain/index.json'))).toBe(true)
+      expect(fixtures.fixtures.filter((fixture) => fixture.path.endsWith('.md'))).toHaveLength(4)
+      expect(fixtures.fixtures.every((fixture) => Object.hasOwn(fixture, 'opened_by_1_9_6'))).toBe(true)
 
       const matrix = readFileSync(join(out, 'matrix.jsonl'), 'utf8')
       expect(matrix).toContain('row-1-history-open')
@@ -61,6 +63,93 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       expect(result.stderr).toContain('--qa-account is required')
     } finally {
       rmSync(out, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a live run without mandatory dataless fixtures', () => {
+    const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
+    const profile = mkdtempSync(join(tmpdir(), 'm2-0008-profile-'))
+    const app = join(out, 'Metis')
+    try {
+      writeFileSync(app, '#!/usr/bin/env bash\nexit 0\n', 'utf8')
+      chmodSync(app, 0o700)
+      const result = spawnSync('bash', [
+        SCRIPT,
+        '--artifact', SHA,
+        '--build-run-id', '123',
+        '--out', out,
+        '--app', app,
+        '--profile-template', profile,
+        '--implementer-session-id', 'impl-1',
+        '--validator-session-id', 'valid-1',
+        '--qa-account'
+      ], {
+        encoding: 'utf8',
+        env: { ...process.env, M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1' },
+        timeout: 30_000
+      })
+      expect(result.status).toBe(2)
+      expect(result.stderr).toContain('--dataless-brain-index is required')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+      rmSync(profile, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses PASS evidence when a live run cannot collect both main and renderer samples', () => {
+    const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
+    const profile = mkdtempSync(join(tmpdir(), 'm2-0008-profile-'))
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'm2-0008-fixtures-'))
+    const pathRoot = mkdtempSync(join(tmpdir(), 'm2-0008-path-'))
+    const app = join(out, 'Metis')
+    const fakeStat = join(pathRoot, 'stat')
+    const brainIndex = join(fixtureRoot, 'index.json')
+    const meeting = join(fixtureRoot, 'meeting.md')
+    try {
+      writeFileSync(app, '#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nsleep 120\n', 'utf8')
+      chmodSync(app, 0o700)
+      writeFileSync(brainIndex, '{}\n', 'utf8')
+      writeFileSync(meeting, '# synthetic\n', 'utf8')
+      writeFileSync(fakeStat, '#!/usr/bin/env bash\nprintf "1073741824\\n"\n', 'utf8')
+      chmodSync(fakeStat, 0o700)
+
+      const result = spawnSync('bash', [
+        SCRIPT,
+        '--artifact', SHA,
+        '--build-run-id', '123',
+        '--out', out,
+        '--app', app,
+        '--profile-template', profile,
+        '--dataless-brain-index', brainIndex,
+        '--dataless-meeting', meeting,
+        '--implementer-session-id', 'impl-1',
+        '--validator-session-id', 'valid-1',
+        '--qa-account'
+      ], {
+        encoding: 'utf8',
+        input: '\n\n\n\n\n\n\n\n\n',
+        env: {
+          ...process.env,
+          PATH: `${pathRoot}:${process.env.PATH ?? ''}`,
+          M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1',
+          M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1'
+        },
+        timeout: 45_000
+      })
+
+      expect(result.status).toBe(2)
+      expect(result.stderr).toContain('required main and renderer samples')
+      const manifest = readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8')
+      expect(manifest).toContain('"result": "FAIL"')
+      expect(manifest).not.toContain('"result": "PASS"')
+      expect(manifest).toContain('"required_evidence_level": "LIVE_VERIFIED"')
+      expect(readFileSync(join(out, 'owner-bug-records.json'), 'utf8')).toContain('"history-freeze"')
+      expect(readFileSync(join(out, 'owner-bug-records.json'), 'utf8')).toContain('"no-reopen"')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+      rmSync(profile, { recursive: true, force: true })
+      rmSync(fixtureRoot, { recursive: true, force: true })
+      rmSync(pathRoot, { recursive: true, force: true })
     }
   })
 })

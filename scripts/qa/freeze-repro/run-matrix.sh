@@ -13,15 +13,18 @@ Required for live QA:
   --build-run-id <id>          build/provenance run id that produced the artifact
   --app <path>                 installed Metis.app or executable
   --profile-template <dir>     representative synthetic userData profile from M2-0007
+  --dataless-brain-index <p>   real evicted .brain/index.json fixture for the idle row
+  --dataless-meeting <p>       real evicted meeting fixture for the network/flapping row
+  --implementer-session-id <id> opaque implementer session id for the LIVE_VERIFIED record
+  --validator-session-id <id>   opaque validator session id for the LIVE_VERIFIED record
   --qa-account                 explicit assertion that this is not the owner's primary account
 
 Options:
   --out <dir>                  output bundle directory (default: ${TMPDIR:-/tmp}/metis-freeze-repro/<timestamp>)
   --minutes <n>                dataless idle row duration in minutes (default: 5)
-  --dataless-brain-index <p>   real evicted .brain/index.json fixture for the idle row
-  --dataless-meeting <p>       real evicted meeting fixture for the network/flapping row
-  --implementer-session-id <id> opaque implementer session id for the LIVE_VERIFIED record
-  --validator-session-id <id>   opaque validator session id for the LIVE_VERIFIED record
+  --qa-host-label <label>      public QA host label for the evidence record (default: qa-mac-1)
+  --implementer-model <id>     implementer model label for the evidence record
+  --validator-model <id>       validator model label for the evidence record
   --dry-run                    create fixtures and reports without launching or sampling
 USAGE
 }
@@ -125,7 +128,7 @@ prompt_result() {
   if [[ "$DRY_RUN" == 0 ]]; then
     printf '\n[M2-0008] %s\n' "$prompt" >&2
     printf '[M2-0008] result for %s (observed/pass/fail/not-exercised): ' "$id" >&2
-    read -r value
+    read -r value || value="not-recorded"
     [[ -n "$value" ]] || value="not-recorded"
   fi
   printf '%s' "$value"
@@ -136,16 +139,25 @@ sample_pid() {
   local label=$2
   local raw="$SAMPLE_DIR/${label}.raw.sample.txt"
   local redacted="$SAMPLE_DIR/${label}.sample.txt"
-  /usr/bin/sample "$pid" 10 -file "$raw" >/dev/null 2>&1 || true
-  [[ -f "$raw" ]] && redact_to_file "$raw" "$redacted"
+  if ! /usr/bin/sample "$pid" 10 -file "$raw" >/dev/null 2>&1; then
+    rm -f "$raw"
+    return 1
+  fi
+  [[ -s "$raw" ]] || {
+    rm -f "$raw"
+    return 1
+  }
+  redact_to_file "$raw" "$redacted"
   rm -f "$raw"
+  [[ -s "$redacted" ]]
 }
 
 launch_app() {
   local profile=$1
-  ASKTOTO_USERDATA="$profile" "$EXE" --remote-debugging-port=9334 >/dev/null 2>"$OUT/app.stderr.txt" &
+  write_launch_plan "$profile"
+  ASKTOTO_USERDATA="$profile" "$EXE" "--user-data-dir=$profile" --remote-debugging-port=9334 >/dev/null 2>"$OUT/app.stderr.txt" &
   APP_PID=$!
-  sleep 10
+  sleep "$LAUNCH_SETTLE_SECONDS"
 }
 
 stop_app() {
@@ -167,14 +179,32 @@ sample_app() {
     append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":false,\"reason\":\"dry-run-or-no-app\"}"
     return
   fi
-  sample_pid "$APP_PID" "$row-main"
-  local rp sampled_renderers=0
+  local main_sampled=true
+  if ! sample_pid "$APP_PID" "$row-main"; then
+    main_sampled=false
+    SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
+  fi
+  local rp renderer_successes=0 renderer_attempts=0
   while IFS= read -r rp; do
     [[ -n "$rp" ]] || continue
-    sample_pid "$rp" "$row-renderer-$rp"
-    sampled_renderers=$((sampled_renderers + 1))
+    renderer_attempts=$((renderer_attempts + 1))
+    if sample_pid "$rp" "$row-renderer-$rp"; then
+      renderer_successes=$((renderer_successes + 1))
+    else
+      SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
+    fi
   done < <(renderer_pids "$APP_PID")
-  append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":true,\"main_pid\":$APP_PID,\"renderer_samples\":$sampled_renderers}"
+  if (( renderer_successes == 0 )); then
+    SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
+  fi
+  append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":$([[ "$main_sampled" == true && "$renderer_successes" -gt 0 ]] && printf true || printf false),\"main_pid\":$APP_PID,\"main_sample\":$main_sampled,\"renderer_attempts\":$renderer_attempts,\"renderer_samples\":$renderer_successes}"
+}
+
+write_launch_plan() {
+  local profile=$1
+  cat > "$OUT/launch-plan.json" <<EOF_LAUNCH
+{"asktoto_userdata_env":true,"electron_user_data_dir_switch":true,"profile":$(json_string "$(redact_string "$profile")"),"argv":["--user-data-dir=<profile>","--remote-debugging-port=9334"]}
+EOF_LAUNCH
 }
 
 copy_diagnostic_reports() {
@@ -217,11 +247,16 @@ write_fixture_manifest() {
   local opened=0
   local placeholders=0
   local item
+  local -a opened_states=()
   for item in "${FIFO_FIXTURES[@]}"; do
     if [[ ! -p "$item" ]]; then
       placeholders=$((placeholders + 1))
+      opened_states+=("placeholder")
     elif release_fifo_once "$item"; then
       opened=$((opened + 1))
+      opened_states+=("true")
+    else
+      opened_states+=("false")
     fi
   done
   {
@@ -232,10 +267,15 @@ write_fixture_manifest() {
     printf '  "opened_by_1_9_6": %s,\n' "$opened"
     printf '  "fixtures": [\n'
     local first=1
+    local index=0
     for item in "${FIFO_FIXTURES[@]}"; do
       [[ "$first" == 1 ]] || printf ',\n'
       first=0
-      printf '    %s' "$(json_string "$(rel_to_profile "$item")")"
+      local state=${opened_states[$index]}
+      printf '    {"path":%s,"opened_by_1_9_6":%s}' \
+        "$(json_string "$(rel_to_profile "$item")")" \
+        "$([[ "$state" == placeholder ]] && printf null || printf '%s' "$state")"
+      index=$((index + 1))
     done
     printf '\n  ]\n}\n'
   } > "$OUT/fifo-fixtures.json"
@@ -248,6 +288,16 @@ link_os_fixture() {
   [[ -e "$src" ]] || fail "OS fixture does not exist"
   rm -f "$dest"
   ln -s "$src" "$dest"
+}
+
+copy_profile_template() {
+  local src=$1
+  local dest=$2
+  if command -v ditto >/dev/null 2>&1; then
+    ditto "$src" "$dest"
+  else
+    cp -R "$src"/. "$dest"/
+  fi
 }
 
 make_fifo_fixtures() {
@@ -278,6 +328,8 @@ write_environment() {
     printf '  "dry_run": %s,\n' "$DRY_RUN"
     printf '  "app_executable_sha256": %s,\n' "$(json_string "${APP_EXE_SHA:-not-recorded}")"
     printf '  "profile_template_used": %s,\n' "$(json_string "$([[ -n "${PROFILE_TEMPLATE:-}" ]] && echo yes || echo no)")"
+    printf '  "dataless_brain_index_required": %s,\n' "$([[ "$DRY_RUN" == 1 || -n "$DATALess_BRAIN_INDEX" ]] && printf true || printf false)"
+    printf '  "dataless_meeting_required": %s,\n' "$([[ "$DRY_RUN" == 1 || -n "$DATALess_MEETING" ]] && printf true || printf false)"
     printf '  "minutes": %s\n' "$MINUTES"
     printf '}\n'
   } > "$OUT/environment.json"
@@ -317,18 +369,35 @@ write_evidence_records() {
   local result=${1:-PASS}
   if [[ "$DRY_RUN" == 1 ]]; then
     cat > "$OUT/M2-0008.records.README.md" <<'EOF_RECORD_DRY'
-# Evidence Record Not Emitted
+# Evidence Import Not Emitted
 
-This was a dry run. LIVE_VERIFIED evidence is emitted only by a QA-account live run against the unmodified installed artifact.
+This was a dry run. Evidence import metadata is emitted only by a QA-account live run against the unmodified installed artifact.
 EOF_RECORD_DRY
     return
   fi
-  local output_hash
+  local output_hash bug_hash
   output_hash=$(sha256_file "$OUT/matrix.jsonl")
   local now
   now=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   local bundle_id
   bundle_id=$(basename "$OUT")
+  cat > "$OUT/owner-bug-records.json" <<EOF_BUGS
+{
+  "ticket": "M2-0008",
+  "artifact_sha256": "$ARTIFACT",
+  "owner_bug_records": [
+    {"bug": "history-freeze", "artifact_sha256": "$ARTIFACT", "matrix_rows": ["row-1-history-open", "row-2-brain-status-blocked-brain", "row-5-dataless-brain-idle", "row-9-network-off-flapping"]},
+    {"bug": "no-reopen", "artifact_sha256": "$ARTIFACT", "matrix_rows": ["row-3-macos-activate", "row-4-second-instance-reopen"]}
+  ]
+}
+EOF_BUGS
+  bug_hash=$(sha256_file "$OUT/owner-bug-records.json")
+  local commit
+  commit=$(git rev-parse HEAD 2>/dev/null || printf '0000000000000000000000000000000000000000')
+  local command
+  command="bash scripts/qa/freeze-repro/run-matrix.sh --artifact <1.9.6-sha256> --build-run-id $BUILD_RUN_ID --app <installed-1.9.6-app> --profile-template <m2-0007-synthetic-userdata> --dataless-brain-index <evicted-brain-index> --dataless-meeting <evicted-meeting> --implementer-session-id <opaque> --validator-session-id <opaque> --qa-account"
+  local exit_code=0
+  [[ "$result" == PASS ]] || exit_code=2
   cat > "$OUT/M2-0008.evidence-import.json" <<EOF_IMPORT
 {
   "ticket": "M2-0008",
@@ -338,8 +407,20 @@ EOF_RECORD_DRY
   "build_run_id": $BUILD_RUN_ID,
   "bundle_id": "$bundle_id",
   "matrix_sha256": "$output_hash",
+  "owner_bug_records_sha256": "$bug_hash",
   "implementer_session_id": "$(json_escape "$IMPLEMENTER_SESSION_ID")",
   "validator_session_id": "$(json_escape "$VALIDATOR_SESSION_ID")",
+  "implementer_model": "$(json_escape "$IMPLEMENTER_MODEL")",
+  "validator_model": "$(json_escape "$VALIDATOR_MODEL")",
+  "qa_host_label": "$(json_escape "$QA_HOST_LABEL")",
+  "commit": "$commit",
+  "command": $(json_string "$command"),
+  "exit_code": $exit_code,
+  "required_evidence_level": "LIVE_VERIFIED",
+  "outputs": [
+    {"kind": "matrix", "path": "matrix.jsonl", "sha256": "$output_hash"},
+    {"kind": "owner-bug-records", "path": "owner-bug-records.json", "sha256": "$bug_hash"}
+  ],
   "owner_bug_records": [
     {"bug": "history-freeze", "artifact_sha256": "$ARTIFACT", "matrix_rows": ["row-1-history-open", "row-2-brain-status-blocked-brain", "row-5-dataless-brain-idle", "row-9-network-off-flapping"]},
     {"bug": "no-reopen", "artifact_sha256": "$ARTIFACT", "matrix_rows": ["row-3-macos-activate", "row-4-second-instance-reopen"]}
@@ -347,10 +428,23 @@ EOF_RECORD_DRY
 }
 EOF_IMPORT
   cat > "$OUT/M2-0008.records.README.md" <<'EOF_RECORDS'
-# Evidence Import Ready
+# Evidence Import Manifest
 
-The public bundle contains a content-free import manifest. Create the formal LIVE_VERIFIED record in the controlled program evidence store after validating this bundle and its paired baseline record.
+This live QA bundle emitted `M2-0008.evidence-import.json` and `owner-bug-records.json`.
+Use those content-free files to file the controlled program evidence records after validating this bundle and its paired M2-0009 baseline record.
 EOF_RECORDS
+}
+
+live_result() {
+  [[ "$DRY_RUN" == 1 ]] && {
+    printf 'PASS'
+    return
+  }
+  if (( SAMPLE_FAILURES > 0 )); then
+    printf 'FAIL'
+    return
+  fi
+  printf 'PASS'
 }
 
 ARTIFACT=""
@@ -365,6 +459,11 @@ DATALess_BRAIN_INDEX=""
 DATALess_MEETING=""
 IMPLEMENTER_SESSION_ID=""
 VALIDATOR_SESSION_ID=""
+IMPLEMENTER_MODEL="claude-sonnet-4-6"
+VALIDATOR_MODEL="claude-opus-4-6"
+QA_HOST_LABEL="qa-mac-1"
+SAMPLE_FAILURES=0
+LAUNCH_SETTLE_SECONDS="${M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS:-10}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -378,6 +477,9 @@ while [[ $# -gt 0 ]]; do
     --dataless-meeting) DATALess_MEETING=${2:-}; shift 2 ;;
     --implementer-session-id) IMPLEMENTER_SESSION_ID=${2:-}; shift 2 ;;
     --validator-session-id) VALIDATOR_SESSION_ID=${2:-}; shift 2 ;;
+    --implementer-model) IMPLEMENTER_MODEL=${2:-}; shift 2 ;;
+    --validator-model) VALIDATOR_MODEL=${2:-}; shift 2 ;;
+    --qa-host-label) QA_HOST_LABEL=${2:-}; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --qa-account) QA_ACCOUNT=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -389,11 +491,19 @@ done
 [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]] || fail "--build-run-id must be a positive integer"
 [[ "$MINUTES" =~ ^[0-9]+$ && "$MINUTES" -gt 0 ]] || fail "--minutes must be a positive integer"
 [[ "$DRY_RUN" == 1 || "$QA_ACCOUNT" == 1 ]] || fail "--qa-account is required for live runs"
-[[ "$DRY_RUN" == 1 || "$(uname -s)" == "Darwin" ]] || fail "live M2-0008 sampling currently runs on macOS QA only"
 [[ "$DRY_RUN" == 1 || -n "$APP" ]] || fail "--app is required for live runs"
 [[ "$DRY_RUN" == 1 || -d "$PROFILE_TEMPLATE" ]] || fail "--profile-template must exist for live runs"
+[[ "$DRY_RUN" == 1 || -n "$DATALess_BRAIN_INDEX" ]] || fail "--dataless-brain-index is required for live runs"
+[[ "$DRY_RUN" == 1 || -n "$DATALess_MEETING" ]] || fail "--dataless-meeting is required for live runs"
+[[ "$DRY_RUN" == 1 || -n "$IMPLEMENTER_SESSION_ID" ]] || fail "--implementer-session-id is required for live runs"
+[[ "$DRY_RUN" == 1 || -n "$VALIDATOR_SESSION_ID" ]] || fail "--validator-session-id is required for live runs"
+[[ "$DRY_RUN" == 1 || "$(uname -s)" == "Darwin" || "${M2_0008_CONTRACT_ALLOW_NON_DARWIN:-0}" == 1 ]] || fail "live M2-0008 sampling currently runs on macOS QA only"
 [[ -z "$IMPLEMENTER_SESSION_ID" || "$IMPLEMENTER_SESSION_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || fail "--implementer-session-id has unsupported characters"
 [[ -z "$VALIDATOR_SESSION_ID" || "$VALIDATOR_SESSION_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || fail "--validator-session-id has unsupported characters"
+[[ "$IMPLEMENTER_MODEL" =~ ^[a-z0-9][a-z0-9.-]{0,63}$ ]] || fail "--implementer-model has unsupported characters"
+[[ "$VALIDATOR_MODEL" =~ ^[a-z0-9][a-z0-9.-]{0,63}$ ]] || fail "--validator-model has unsupported characters"
+[[ "$QA_HOST_LABEL" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] || fail "--qa-host-label has unsupported characters"
+[[ "$DRY_RUN" == 1 || "$IMPLEMENTER_SESSION_ID" != "$VALIDATOR_SESSION_ID" ]] || fail "validator session must differ from implementer session"
 
 timestamp=$(date -u '+%Y%m%dT%H%M%SZ')
 [[ -n "$OUT" ]] || OUT="${TMPDIR:-/tmp}/metis-freeze-repro/$timestamp"
@@ -419,8 +529,8 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ -n "$PROFILE_TEMPLATE" ]]; then
-  ditto "$PROFILE_TEMPLATE" "$PROFILE"
-  ditto "$PROFILE_TEMPLATE" "$IDLE_PROFILE"
+  copy_profile_template "$PROFILE_TEMPLATE" "$PROFILE"
+  copy_profile_template "$PROFILE_TEMPLATE" "$IDLE_PROFILE"
 fi
 MEETINGS_ROOT="$PROFILE/Métis Meetings"
 make_fifo_fixtures "$MEETINGS_ROOT"
@@ -438,6 +548,7 @@ if [[ "$DRY_RUN" == 0 ]]; then
 else
   APP_EXE_SHA="dry-run"
   printf '{"node_options_fuse":"NOT_EXERCISED","detail":"dry-run"}\n' > "$OUT/node-options-fuse.json"
+  write_launch_plan "$PROFILE"
 fi
 
 write_environment
@@ -459,17 +570,13 @@ row_result=$(prompt_result "row-4-second-instance-reopen" "Row 4: launch a secon
 sample_app "row-4-second-instance-reopen"
 append_jsonl "$OUT/matrix.jsonl" "{\"row\":\"row-4-second-instance-reopen\",\"operator_result\":$(json_string "$row_result")}"
 
-if [[ -n "$DATALess_BRAIN_INDEX" ]]; then
-  if [[ "$DRY_RUN" == 0 ]]; then
-    stop_app
-    launch_app "$IDLE_PROFILE"
-  fi
-  row_result=$(prompt_result "row-5-dataless-brain-idle" "Row 5: use the real evicted .brain/index.json fixture and do not open History; wait $MINUTES minute(s) from launch.")
-  [[ "$DRY_RUN" == 1 ]] || sleep "$((MINUTES * 60))"
-  sample_app "row-5-dataless-brain-idle"
-else
-  row_result="not-exercised-missing-dataless-brain-index"
+if [[ "$DRY_RUN" == 0 ]]; then
+  stop_app
+  launch_app "$IDLE_PROFILE"
 fi
+row_result=$(prompt_result "row-5-dataless-brain-idle" "Row 5: use the real evicted .brain/index.json fixture and do not open History; wait $MINUTES minute(s) from launch.")
+[[ "$DRY_RUN" == 1 ]] || sleep "$((MINUTES * 60))"
+sample_app "row-5-dataless-brain-idle"
 append_jsonl "$OUT/matrix.jsonl" "{\"row\":\"row-5-dataless-brain-idle\",\"operator_result\":$(json_string "$row_result"),\"fixture\":$(json_string "$DATALess_BRAIN_INDEX")}"
 
 row_result=$(prompt_result "row-9-network-off-flapping" "Row 9: with a real hydrating/dataless fixture, turn network off, then flap it on/off once; record whether the blocked read interrupts or remains pinned.")
@@ -485,7 +592,8 @@ append_jsonl "$OUT/interrupt-results.jsonl" "{\"interrupt\":\"process-signal\",\
 
 write_fixture_manifest
 copy_diagnostic_reports "$STAMP"
-write_evidence_records PASS
+RESULT=$(live_result)
+write_evidence_records "$RESULT"
 
 cat > "$OUT/README.md" <<EOF_README
 # M2-0008 Freeze Repro Bundle
@@ -499,6 +607,8 @@ cat > "$OUT/README.md" <<EOF_README
 - Main/renderer samples: \`samples/\`
 - DiagnosticReports .spin/.hang copies, if any: \`diagnostic-reports/\`
 - Evidence import manifest: \`M2-0008.evidence-import.json\`
+- Owner-bug record summary: \`owner-bug-records.json\`
 EOF_README
 
 printf '[M2-0008] wrote content-free bundle: %s\n' "$OUT"
+[[ "$RESULT" == PASS ]] || fail "live run did not produce required main and renderer samples"
