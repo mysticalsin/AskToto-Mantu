@@ -799,18 +799,16 @@ describe('one Storage, many gateways (S1-S5)', () => {
     await flush()
     expect(fs.calls).not.toContain('readFile c.md') // ROOT2's read never started: no free permit anywhere
 
-    await vi.advanceTimersByTimeAsync(5_000)
-    await expect(readC).resolves.toEqual({ status: 'degraded' })
-
+    // Release both ROOT reads without ever advancing the fake clock, so nothing's own deadline can fire.
+    // Releasing frees the shared cap, which is exactly what should let the queued ROOT2 read proceed —
+    // proving the cap is the same one, not an independent cap per gateway.
     heldA.release()
     heldB.release()
     await flush()
-    const [resultA, resultB] = await Promise.all([readA, readB])
+    const [resultA, resultB, resultC] = await Promise.all([readA, readB, readC])
     expect(resultA.status).toBe('ok')
     expect(resultB.status).toBe('ok')
-
-    // The cap is free again — a fresh ROOT2 read now succeeds.
-    await expect(gwRoot2.read('c.md')).resolves.toMatchObject({ status: 'ok' })
+    expect(resultC.status).toBe('ok')
   })
 
   it('each gateway reads only under its own root (S2)', async () => {
