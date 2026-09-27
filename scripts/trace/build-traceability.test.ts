@@ -1,7 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { KIT_STATUSES, RECORD_SCHEMA } from '../evidence/record.mjs'
 import {
   KIT_REQUIREMENT_ID_RE,
   PROGRAM_TICKET_ID_RE,
@@ -47,6 +48,36 @@ function ticket(overrides = {}) {
     evidence: null,
     ...overrides
   }
+}
+
+// ---- ADR-017 evidence record fixtures (schema-valid per scripts/evidence/record.mjs, M2-0002) ----
+
+const RECORD_SHA1 = '1'.repeat(40)
+const session = (id: string) => ({ model: 'claude-sonnet-5', id })
+
+/** A schema-valid DESIGNED-level record by default; pass evidence_level/kit_refs/etc to vary it. */
+function evidenceRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    schema: RECORD_SCHEMA,
+    ticket: 'M2-9001',
+    evidence_level: 'DESIGNED',
+    recorded_at: '2026-09-26T00:00:00Z',
+    kit_refs: { 'FOO-01': 'MET' },
+    finding_refs: [],
+    commit: RECORD_SHA1,
+    result: 'PASS',
+    implementer_session: session('impl-1'),
+    validator_session: session('valid-1'),
+    pr: 1,
+    ...overrides
+  }
+}
+
+/** Writes one ticket's JSONL record file into `<dir>/records/`, as scripts/evidence/record.mjs reads it. */
+function writeRecords(dir: string, ticketId: string, records: unknown[]) {
+  const recordsDir = join(dir, 'records')
+  mkdirSync(recordsDir, { recursive: true })
+  writeFileSync(join(recordsDir, `${ticketId}.jsonl`), `${records.map((r) => JSON.stringify(r)).join('\n')}\n`, 'utf8')
 }
 
 describe('classifyM2Id — kit requirement vs program ticket, never a bare M2- prefix', () => {
@@ -170,6 +201,13 @@ describe('applyEvidenceOverride — the one ADR-017 kit-status mapping', () => {
 
   it('fails closed on an unrecognized kit status rather than guessing', () => {
     expect(() => applyEvidenceOverride('WAT', 'DONE')).toThrow()
+  })
+
+  it('drift guard: accepts every status record.mjs\'s KIT_STATUSES exports, so a status added upstream fails a CI run here instead of throwing at runtime', () => {
+    expect(KIT_STATUSES.length).toBeGreaterThan(0)
+    for (const kitStatus of KIT_STATUSES) {
+      expect(() => applyEvidenceOverride(kitStatus, 'DONE')).not.toThrow()
+    }
   })
 })
 
@@ -758,5 +796,101 @@ describe('main() — the CLI contract', () => {
     writeFixture({ tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })], inventory: [row({ id: 'FOO-01', kit: 'kitA' })] })
     await expect(main(argv(['--check', '--evidence', join(dir, 'records')]))).rejects.toThrow()
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('record.mjs'))
+  })
+
+  describe('--evidence wired to the real ADR-017 record store (scripts/evidence/record.mjs, M2-0002)', () => {
+    function outputPaths() {
+      return { outMd: join(dir, 'TRACEABILITY.md'), outJson: join(dir, 'traceability.json') }
+    }
+
+    it('a governing record whose kit_ref is BLOCKED makes the row BLOCKED_EXTERNAL', async () => {
+      writeFixture({
+        tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'IN_PROGRESS' })],
+        inventory: [row({ id: 'FOO-01', kit: 'kitA' })]
+      })
+      writeRecords(dir, 'M2-9001', [
+        evidenceRecord({
+          kit_refs: { 'FOO-01': 'BLOCKED' },
+          wired: {
+            client: 'scripts/trace/build-traceability.mjs',
+            contract_fake: 'scripts/trace/build-traceability.test.ts',
+            probe: 'true',
+            capability: 'trace-generator',
+            unblock_step: 'Waiting on the upstream fix.'
+          }
+        })
+      ])
+      const { outMd, outJson } = outputPaths()
+      await main(argv(['--out-md', outMd, '--out-json', outJson, '--evidence', join(dir, 'records')]))
+      expect(JSON.parse(readFileSync(outJson, 'utf8')).rows[0].status).toBe('BLOCKED_EXTERNAL')
+    })
+
+    it('PASS PARTIAL at one level plus PASS MET at another merges to MET (mergeGoverningKitRefs), which then leaves the ticket\'s own status unchanged', async () => {
+      writeFixture({
+        tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })],
+        inventory: [row({ id: 'FOO-01', kit: 'kitA' })]
+      })
+      writeRecords(dir, 'M2-9001', [
+        evidenceRecord({ evidence_level: 'DESIGNED', kit_refs: { 'FOO-01': 'PARTIAL' } }),
+        evidenceRecord({
+          evidence_level: 'LOCALLY_TESTED',
+          kit_refs: { 'FOO-01': 'MET' },
+          ci_run_id: 1,
+          environment: { kind: 'ci', host: 'ubuntu-latest' },
+          command: 'npm test',
+          exit_code: 0
+        })
+      ])
+      const { outMd, outJson } = outputPaths()
+      await main(argv(['--out-md', outMd, '--out-json', outJson, '--evidence', join(dir, 'records')]))
+      expect(JSON.parse(readFileSync(outJson, 'utf8')).rows[0].status).toBe('DONE')
+    })
+
+    it('a later record at the same level supersedes an earlier one (ADR-017 INV-2), through the real latestByLevel', async () => {
+      writeFixture({
+        tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })],
+        inventory: [row({ id: 'FOO-01', kit: 'kitA' })]
+      })
+      writeRecords(dir, 'M2-9001', [
+        evidenceRecord({ evidence_level: 'DESIGNED', kit_refs: { 'FOO-01': 'NOT_MET' }, result: 'FAIL' }),
+        evidenceRecord({
+          evidence_level: 'DESIGNED',
+          kit_refs: { 'FOO-01': 'MET' },
+          result: 'PASS',
+          recorded_at: '2026-09-26T01:00:00Z'
+        })
+      ])
+      const { outMd, outJson } = outputPaths()
+      await main(argv(['--out-md', outMd, '--out-json', outJson, '--evidence', join(dir, 'records')]))
+      // The withdrawn earlier FAIL NOT_MET must not count: only the later, governing PASS MET does. A
+      // fixture where merging every record (ignoring which one is later) or letting the first record
+      // govern would both also land on DONE could not tell "latest wins" apart from either bug — here
+      // both alternatives instead merge the withdrawn FAIL in and cap the row at IN_PROGRESS, so only
+      // the real latestByLevel selection reaches DONE.
+      expect(JSON.parse(readFileSync(outJson, 'utf8')).rows[0].status).toBe('DONE')
+    })
+
+    it('an invalid record line makes main exit 1 naming the record problem', async () => {
+      writeFixture({
+        tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })],
+        inventory: [row({ id: 'FOO-01', kit: 'kitA' })]
+      })
+      const { ticket: _omittedTicket, ...recordWithoutTicket } = evidenceRecord()
+      writeRecords(dir, 'M2-9001', [recordWithoutTicket])
+      await expect(main(argv(['--check', '--evidence', join(dir, 'records')]))).rejects.toThrow(EXIT)
+      expect(process.exit).toHaveBeenCalledWith(1)
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('ticket: required'))
+    })
+
+    it('a non-existent --evidence directory exits 1, naming the missing path', async () => {
+      writeFixture({
+        tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })],
+        inventory: [row({ id: 'FOO-01', kit: 'kitA' })]
+      })
+      const missing = join(dir, 'does-not-exist')
+      await expect(main(argv(['--check', '--evidence', missing]))).rejects.toThrow(EXIT)
+      expect(process.exit).toHaveBeenCalledWith(1)
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining(missing))
+    })
   })
 })
