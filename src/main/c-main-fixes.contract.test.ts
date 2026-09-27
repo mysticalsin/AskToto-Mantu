@@ -127,7 +127,7 @@ describe('finding 9: renderer crash recovery on the main overlay window', () => 
     const listenerEnd = source.indexOf('\n  })', listenerStart)
     const body = source.slice(listenerStart, listenerEnd)
     expect(body).toMatch(/mainLog\.error\(/)
-    expect(body).toMatch(/auditLog\('app\.crash', \{ kind: 'render-process-gone'/)
+    expect(body).toMatch(/auditLog\('app\.crash', crashDetail\('render-process-gone'/)
     expect(body).toMatch(/if \(win !== self\) return/)
     expect(body).toMatch(/if \(win !== self \|\| self\.isDestroyed\(\)\) return/)
     expect(body).toMatch(/reloadOverlay\(self\)/)

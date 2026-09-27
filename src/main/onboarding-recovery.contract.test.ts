@@ -4,6 +4,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import { redactSecrets } from '@shared/redact'
+import { crashDetail } from './infra/observability/crash-taxonomy'
 import { createReloadBudget } from './lifecycle/reload-budget'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
@@ -110,6 +111,7 @@ describe('exclusive onboarding renderer recovery', () => {
     const gone = actualRendererGoneHandler({
       mainLog: { error: vi.fn() },
       auditLog: vi.fn(),
+      crashDetail,
       resetDustConversation: vi.fn(),
       discardActiveLiveSpeakerSession: vi.fn(),
       invalidateCloudSttOwner: vi.fn(),
@@ -156,6 +158,7 @@ describe('render-process-gone reload budget wiring', () => {
     const globals: Record<string, unknown> = {
       mainLog,
       auditLog,
+      crashDetail,
       resetDustConversation: vi.fn(),
       discardActiveLiveSpeakerSession: vi.fn(),
       invalidateCloudSttOwner: vi.fn(),
@@ -248,7 +251,7 @@ describe('render-process-gone reload budget wiring', () => {
     expect(showRenderLoopHaltedDialog).not.toHaveBeenCalled()
   })
 
-  it('a rejected reload is caught, redacted and audited as a crash — never an unhandled rejection', async () => {
+  it('a rejected reload is caught, redacted and audited as app.error.reload_failed — never an unhandled rejection', async () => {
     const { globals, loadURL, auditLog, mainLog } = baseGlobals({
       reloadBudget: { onRenderProcessGone: () => 'reload' }
     })
@@ -266,9 +269,9 @@ describe('render-process-gone reload budget wiring', () => {
 
     expect(unhandled).not.toHaveBeenCalled()
     expect(mainLog.error).toHaveBeenCalledWith('[renderer-gone] reload failed:', 'offline near [redacted key]')
-    expect(auditLog).toHaveBeenCalledWith('app.crash', {
-      kind: 'render-process-gone-reload-failed',
-      message: 'offline near [redacted key]'
+    expect(auditLog).toHaveBeenCalledWith('app.error.reload_failed', {
+      message: 'offline near [redacted key]',
+      recoveryStatus: 'unrecovered'
     })
   })
 

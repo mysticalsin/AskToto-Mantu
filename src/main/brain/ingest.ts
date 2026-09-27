@@ -1242,6 +1242,7 @@ type Job = {
   file: string
   source: 'meetings' | 'team'
   origin: 'live' | 'backfill'
+  trigger?: WorkTrigger
   /** Update Intelligence button only — Local first, configured API once. Live saves stay default. */
   route?: IngestRoute
   /** Ingest-index identity. Undefined for the user's own meetings → basename(file), UNCHANGED. A team job
@@ -1453,8 +1454,15 @@ function hasActiveBackfill(): boolean {
  * zero throughput while occupying the slot the live meeting's own summary/recap needs. One at a time is
  * all the sidecar can actually do, and it leaves the live path a slot to land on.
  */
-function extractConcurrency(s: Settings): number {
+function extractConcurrency(s: Settings, job?: Job): number {
+  if (job?.origin === 'backfill' && job.trigger !== 'user') return 1
   return pickProviderCandidates(s)[0]?.provider === 'local' ? 1 : EXTRACT_CONCURRENCY
+}
+
+function promoteQueuedBackfillToUser(): void {
+  for (const job of queue) {
+    if (job.origin === 'backfill') job.trigger = 'user'
+  }
 }
 
 /**
@@ -1965,7 +1973,7 @@ function pump(): void {
     // MQA-048: the sidecar cannot run two extractions at once, so starting a second only steals the live
     // meeting's slot. Checked after the search, not in the while condition, so the single-job path never
     // pays for a Settings read it cannot act on.
-    if (extracting.size > 0 && extractConcurrency(s ?? getSettings()) <= extracting.size) break
+    if (extracting.size > 0 && extractConcurrency(s ?? getSettings(), queue[idx]) <= extracting.size) break
     loggedNoProviderStall = false
     const [job] = queue.splice(idx, 1)
     extracting.add(job)
@@ -2382,7 +2390,9 @@ export async function resumeBackfillIfPending(): Promise<void> {
       return
     }
     if (idx.backfillRequested) {
-      const r = idx.replayPending ? await startReplayBackfill(s, { allowSourceRefresh: true }) : await startBackfill()
+      const r = idx.replayPending
+        ? await startReplayBackfill(s, { allowSourceRefresh: true, trigger: 'automatic' })
+        : await startBackfill(undefined, { trigger: 'automatic' })
       if (r.queued > 0) mainLog.info(`[brain] resuming interrupted backfill: ${r.queued} transcripts remaining`)
     } else if (idx.replayPending) {
       // The backfill portion of an interrupted rebuild already finished (or never had any work) before
@@ -2605,7 +2615,7 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
   // gave a fresh attempts budget.
   const toUnexhaust: string[] = []
   const held = { exhausted: 0, backedOff: 0, unreadable: 0 }
-  const trigger: WorkTrigger = options.trigger ?? (options.force ? 'user' : 'automatic')
+  const trigger: WorkTrigger = options.trigger ?? (options.force || !options.respectRetryBackoff ? 'user' : 'automatic')
   if (extractions === null || scan.some((folder) => folder.status === 'failed')) throw new Error('a meetings folder could not be listed')
   for (const source of scan.flatMap((folder) => folder.sources)) {
     if (already.has(source.key) || inFlight.has(source.key)) continue
@@ -2635,6 +2645,7 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
         ...(source.version ? { sourceVersion: source.version } : {}),
         ...(source.changedAtMs ? { sourceChangedAtMs: source.changedAtMs } : {}),
         ...(strategy ? { strategy } : {}),
+        trigger,
         ...(route !== 'default' ? { route } : {})
       }
       candidates.push(job)
@@ -2718,13 +2729,16 @@ function consumeDailyBackfillRun(s: Settings): boolean {
 
 export async function requestBackfill(options: BackfillStartOptions = {}): Promise<BackfillStartResult> {
   const s = getSettings()
+  const trigger: WorkTrigger = options.trigger ?? 'automatic'
+  const scanOptions = { ...options, trigger }
   // Preserve the existing synchronous no-provider contract so the renderer can show the actionable
   // setup guidance immediately, while retaining the durable resume flag.
   if (!hasUsableProvider(s)) {
-    const r = await startBackfill(undefined, options)
+    const r = await startBackfill(undefined, scanOptions)
     if (r.queued === 0 && r.deferred !== 'no-provider' && (await hasUnextracted(s))) return { queued: 0, deferred: 'no-provider' }
     return r
   }
+  if (trigger === 'user') promoteQueuedBackfillToUser()
   if (backfillScans > 0 || sourceRefreshRunning || rebuildStarting || rebuildReplayTask) return { queued: 0, preparing: true }
   // A control cannot normally be clicked during an active run, but keep this guard authoritative for
   // re-entrant IPC callers too. There is already a real batch whose progress will be reported.
@@ -2744,7 +2758,7 @@ export async function requestBackfill(options: BackfillStartOptions = {}): Promi
     return { queued: 0, upToDate: true }
   }
 
-  void startBackfill(undefined, options).catch((error) => {
+  void startBackfill(undefined, scanOptions).catch((error) => {
     mainLog.error('[brain] deferred backfill scan failed:', error)
     completionError('scan-failed')
   })
@@ -2787,7 +2801,7 @@ export async function reconcileMeetingsInBackground(): Promise<void> {
     const extractedSlugs = new Set((extractions ?? []).map((n) => n.replace(/\.json$/, '')))
     const candidate = extractions === null ? false : hasSavedReconciliationCandidate(scan, idx, extractedSlugs)
     if (!hasUsableProvider(s) && !candidate) return
-    await requestBackfill({ respectRetryBackoff: true })
+    await requestBackfill({ respectRetryBackoff: true, trigger: 'automatic' })
   } catch (error) {
     mainLog.warn(`[brain] background meeting reconciliation skipped: ${error instanceof Error ? error.message : String(error)}`)
   }

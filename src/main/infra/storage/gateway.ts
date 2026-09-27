@@ -112,7 +112,7 @@ export interface StorageOptions {
 
 /** Read outcomes that describe the file itself: repeating the read inside the TTL would only pin another
  *  pool thread or spawn another probe. */
-const REMEMBERED: ReadonlySet<ReadResult['status']> = new Set<ReadResult['status']>(['dataless', 'unknown', 'timeout'])
+const REMEMBERED: ReadonlySet<ReadResult['status']> = new Set<ReadResult['status']>(['dataless', 'unknown', 'unavailable', 'timeout'])
 
 /** The libuv pool size for a UV_THREADPOOL_SIZE value, never above libuv's own reading of it (libuv reads
  *  a negative value as a huge unsigned one; here it counts as 1). */

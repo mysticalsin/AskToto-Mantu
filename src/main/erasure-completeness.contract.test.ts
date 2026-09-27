@@ -44,6 +44,13 @@ describe('MQA-149 — a full erasure takes the published wiki mirror with it', (
     expect(body).toMatch(/\.\.\.result,[\s\S]*?ok: false,[\s\S]*?error:/)
   })
 
+  it('reports preserved brain-index removal failure instead of returning transcript-delete success', () => {
+    const body = deleteAll()
+    expect(body).toMatch(/brainPurged: brainPurge\.ok/)
+    expect(body).toMatch(/if \(!brainPurge\.ok\)/)
+    expect(body).toMatch(/\.\.\.result,[\s\S]*?ok: false,[\s\S]*?Mantu Intelligence data could not be fully removed/)
+  })
+
   it('still purges the derived artifacts when the meetings were already deleted one-by-one', () => {
     // The old `if (meetings.length === 0) return { ok: true, deleted: 0 }` returned BEFORE purgeBrain,
     // purgeGraphArtifacts and the wiki removal — an empty meetings folder is not an empty profile.
