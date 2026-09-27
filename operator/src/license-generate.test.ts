@@ -6,7 +6,7 @@ import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operato
 import { verifyOperatorLicense } from '../../src/shared/operator-license'
 import { buildDashboard } from './dashboard'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
 const SECRET = 'sk-ant-api03-OPERATOR-VAULT-TEST-only-xx99'
@@ -15,12 +15,13 @@ function env(): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 async function signed(
   path: string,
@@ -255,7 +256,7 @@ describe('Operator generate license', () => {
     expect(wipe.status).toBe(200)
     expect((await store.getSeat('baa2dc6edd670a9894ed402b5a9b9246'))?.license).toBe(`licensed · ${lic.last4}`)
 
-    const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    const dash = await buildDashboard(store, 'owner@example.test', NOW)
     const row = dash.licenses.rows.find((r) => r.device === 'baa2dc6edd670a9894ed402b5a9b9246')
     expect(row?.hostname).toBe('Totos-Mac.local')
     expect(row?.license).toBe(`licensed · ${lic.last4}`)

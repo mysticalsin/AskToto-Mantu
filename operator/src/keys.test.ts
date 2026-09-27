@@ -2,7 +2,7 @@ import { reviewedGatewayReply } from './ai-gateway.privacy-fixture'
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { FORBIDDEN_VAULT_PROVIDERS } from './vault'
 
@@ -12,12 +12,13 @@ function env(): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 describe('admin keys write / rotate / revoke', () => {
   it('adds a key, returns last4 only, and never echoes the secret', async () => {
@@ -93,7 +94,7 @@ describe('admin keys write / rotate / revoke', () => {
   it('accepts provider=cloudflare with accountId and shows last4 only', async () => {
     const store = memoryStore()
     const secret = 'cf-api-token-TESTKEYONLY-not-a-real-secret-66fd'
-    const accountId = '294885a27b3cc0a1cbe5d0ccbe38de4f'
+    const accountId = '00000000000000000000000000000000'
     const missing = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', {
         method: 'POST',
@@ -154,7 +155,7 @@ describe('admin keys write / rotate / revoke', () => {
   it('paste provider=cloudflare + accountId calls verifyDefaultGatewayPrivacy before Ask can run', async () => {
     const store = memoryStore()
     const secret = 'cf-api-token-TESTKEYONLY-not-a-real-secret-66fd'
-    const accountId = '294885a27b3cc0a1cbe5d0ccbe38de4f'
+    const accountId = '00000000000000000000000000000000'
     const gatewayReads: { url: string; method?: string; auth?: string; body?: string }[] = []
     const cfFetch: typeof fetch = async (input, init) => {
       const url = String(input)
@@ -410,13 +411,13 @@ describe('admin keys write / rotate / revoke', () => {
     expect(home.status).toBe(200)
     const setCookie = home.headers.get('set-cookie') || ''
     expect(setCookie).toContain('metis_operator_session=')
-    expect(setCookie).toContain('tony.walteur%40gmail.com')
+    expect(setCookie).toContain('owner.email%40gmail.com')
     expect(setCookie).toMatch(/HttpOnly/)
     expect(setCookie).toMatch(/SameSite=Lax/)
     const sessionPair = setCookie.split(';')[0]
     const token = home.headers.get('X-Metis-Session') || ''
     expect(token).toMatch(/^v1\|/)
-    expect(token).toContain('tony.walteur@gmail.com')
+    expect(token).toContain('owner@example.test')
     const html = await home.text()
     expect(html).not.toContain('name="metis-session"')
     expect(html).not.toContain(token)
@@ -475,7 +476,7 @@ describe('admin keys write / rotate / revoke', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          cookie: 'metis_operator_session=v1|9999999999999|tony.walteur@gmail.com|deadbeef'
+          cookie: 'metis_operator_session=v1|9999999999999|owner@example.test|deadbeef'
         },
         body: JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-api03-TESTKEYONLY-nope' })
       }),

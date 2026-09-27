@@ -4,7 +4,7 @@ import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from './test-fixtures'
 import { findBandSubpaths } from './map-bands'
 import { FORBIDDEN_NAV, NAV_IDS } from './nav'
 import { tokenPatternForTests } from './redact'
@@ -16,12 +16,13 @@ function env(): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused'
   }
 }
 
 const tonyAccess = {
-  getIdentity: async () => ({ email: 'tony.walteur@gmail.com' })
+  getIdentity: async () => ({ email: 'owner@example.test' })
 }
 
 async function signedRequest(
@@ -197,7 +198,7 @@ describe('product sidebar (#105)', () => {
       lon: -73.5,
       last_index_at: null,
       hostname: 'Tonys-MacBook-Pro',
-      sso_email: 'twalteur@amaris.com',
+      sso_email: 'admin@example.test',
       license: 'licensed',
       approval: 'pending'
     })
@@ -235,7 +236,7 @@ describe('product sidebar (#105)', () => {
         os: 'darwin',
         appVersion: '1.8.3',
         hostname: 'Tonys-MacBook-Pro',
-        ssoEmail: 'twalteur@amaris.com',
+        ssoEmail: 'admin@example.test',
         license: 'licensed'
       })
     )
@@ -264,7 +265,7 @@ describe('product sidebar (#105)', () => {
     expect(overview).toContain('class="ago"')
     expect(overview).toMatch(/>now</)
     expect(overview).toContain('city Longueuil')
-    expect(overview).toContain('twalteur@amaris.com')
+    expect(overview).toContain('admin@example.test')
   })
 })
 
@@ -340,7 +341,7 @@ describe('events never render token-like strings', () => {
       id: 'tok-1',
       ts: NOW,
       kind: 'ask',
-      actor: 'twalteur@amaris.com',
+      actor: 'admin@example.test',
       device_id: 'device-a',
       country: 'CA',
       detail: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signaturexx'
@@ -358,7 +359,7 @@ describe('events never render token-like strings', () => {
       lon: -73.5,
       last_index_at: null,
       hostname: 'Tonys-MacBook-Pro',
-      sso_email: 'twalteur@amaris.com',
+      sso_email: 'admin@example.test',
       license: 'approved'
     })
     const ingest = await signedRequest(
@@ -401,14 +402,14 @@ describe('licenses pane is real seats with Tony approval, not Shoey demo rows', 
       lon: -73.5,
       last_index_at: null,
       hostname: 'Tonys-MacBook-Pro',
-      sso_email: 'twalteur@amaris.com',
+      sso_email: 'admin@example.test',
       license: 'licensed',
       approval: 'pending'
     })
     const html = await page(store)
     const licenses = html.slice(html.indexOf('data-page="licenses"'), html.indexOf('data-page="notifications"'))
     expect(licenses).toContain('Tonys-MacBook-Pro')
-    expect(licenses).toContain('twalteur@amaris.com')
+    expect(licenses).toContain('admin@example.test')
     expect(licenses).toContain('licensed')
     expect(licenses).toContain('pending')
     expect(licenses).toContain('data-license-approve="device-a"')
@@ -438,7 +439,7 @@ describe('profiles hostname and SSO email', () => {
         os: 'darwin',
         appVersion: '1.8.2',
         hostname: 'Tonys-MacBook-Pro',
-        ssoEmail: 'Twalteur@amaris.com'
+        ssoEmail: 'Admin@Example.test'
       })
     )
     expect((await handleRequest(req, env(), {}, { store, now: NOW })).status).toBe(200)
@@ -449,12 +450,12 @@ describe('profiles hostname and SSO email', () => {
       { store, now: NOW }
     ).then((r) => r.text())
     expect(html).toContain('Tonys-MacBook-Pro')
-    expect(html).toContain('twalteur@amaris.com')
+    expect(html).toContain('admin@example.test')
     expect(html).toContain('data-page="sessions"')
     expect(html).toContain('data-page="licenses"')
     const seats = await store.listSeats()
     expect(seats[0]?.hostname).toBe('Tonys-MacBook-Pro')
-    expect(seats[0]?.sso_email).toBe('twalteur@amaris.com')
+    expect(seats[0]?.sso_email).toBe('admin@example.test')
   })
 
   it('uses an em dash when hostname or email is missing, never invented people', async () => {
@@ -492,7 +493,7 @@ describe('realtime and map use live heartbeats, not leftover OpenPanel', () => {
       lon: -73.518,
       last_index_at: null,
       hostname: 'Tonys-MacBook-Pro',
-      sso_email: 'twalteur@amaris.com',
+      sso_email: 'admin@example.test',
       license: 'licensed',
       approval: 'approved'
     })

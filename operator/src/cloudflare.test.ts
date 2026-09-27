@@ -2,15 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { CF_TOKEN_MISSING, CF_TOKEN_REJECTED } from './cloudflare'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function env(): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY
   }
@@ -54,7 +55,7 @@ describe('Cloudflare Overview fail-loud', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           provider: 'cloudflare-account',
-          accountId: '294885a27b3cc0a1cbe5d0ccbe38de4f',
+          accountId: '00000000000000000000000000000000',
           token
         })
       }),
@@ -121,7 +122,7 @@ describe('Cloudflare Overview fail-loud', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           provider: 'cloudflare-account',
-          accountId: '294885a27b3cc0a1cbe5d0ccbe38de4f',
+          accountId: '00000000000000000000000000000000',
           token: 'dead-token-aaaa'
         })
       }),

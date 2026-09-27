@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from '../index'
 import { memoryStore, type SeatRow } from '../store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from '../test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from '../test-fixtures'
 
 const NOW = 1_725_000_000_000
 
 function env(): Env {
-  return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY, OPERATOR_SKILL_PRIVATE_KEY: '' }
+  return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tonyAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow {
   return {
@@ -25,7 +26,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lon: null,
     last_index_at: null,
     hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'twalteur@amaris.com',
+    sso_email: 'admin@example.test',
     license: 'approved',
     approval: 'approved',
     ...overrides
@@ -153,7 +154,7 @@ function integrationRow(overrides: Partial<import('../store').IntegrationRow> & 
     scope_json: '{}',
     status: 'active',
     created_at: NOW,
-    created_by: 'tony.walteur@gmail.com',
+    created_by: 'owner@example.test',
     rotated_at: null,
     revoked_at: null,
     last_used_at: null,
@@ -171,7 +172,7 @@ function issuedLicense(overrides: Partial<import('../store').IssuedLicenseRow> &
     exp: Math.floor(NOW / 1000) + 30 * 24 * 60 * 60,
     revoked: 0,
     created_at: NOW,
-    created_by: 'tony.walteur@gmail.com',
+    created_by: 'owner@example.test',
     ...overrides
   }
 }
@@ -242,7 +243,7 @@ describe('GET /v1/admin/search.json', () => {
     const store = memoryStore()
     await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Tonys-MacBook-Pro' }))
     await store.putIssuedLicense(issuedLicense({ jti: 'lic-1', last4: 'zz99', tier: 'metis' }))
-    await store.putGroup({ id: 'grp-1', name: 'Amaris team', tier: 'metis', notes: null, created_at: NOW, created_by: 'tony.walteur@gmail.com' })
+    await store.putGroup({ id: 'grp-1', name: 'Amaris team', tier: 'metis', notes: null, created_at: NOW, created_by: 'owner@example.test' })
     await store.putIntegration(integrationRow({ id: 'int-1', kind: 'hubspot', label: 'HubSpot production' }))
 
     const res = await handleRequest(
@@ -258,7 +259,7 @@ describe('GET /v1/admin/search.json', () => {
       integrations: unknown[]
     }
     expect(body.seats).toEqual([
-      { id: 'dev-a', label: 'Tonys-MacBook-Pro', sublabel: 'twalteur@amaris.com', page: 'sessions', rowKey: 'dev-a' }
+      { id: 'dev-a', label: 'Tonys-MacBook-Pro', sublabel: 'admin@example.test', page: 'sessions', rowKey: 'dev-a' }
     ])
 
     const byLast4 = await handleRequest(

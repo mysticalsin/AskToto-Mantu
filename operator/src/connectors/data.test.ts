@@ -66,7 +66,7 @@ function baseRow(id: string): IntegrationRow {
     scope_json: '{}',
     status: 'active',
     created_at: 1000,
-    created_by: 'tony.walteur@gmail.com',
+    created_by: 'owner@example.test',
     rotated_at: null,
     revoked_at: null,
     last_used_at: null,

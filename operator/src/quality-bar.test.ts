@@ -2,14 +2,14 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { ADMIN_EMAILS } from './access'
+import { adminEmailsFromEnv } from './access'
 import { CLIENT_GEO_KEYS } from './geo'
 import { handleRequest, type Env } from './index'
 import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { SPA_CSS_PATH } from './spa/manifest'
 
@@ -25,6 +25,7 @@ function env(): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused'
   }
 }
@@ -81,7 +82,8 @@ describe('quality bar: overlay chrome stays a separate slice', () => {
 
 describe('quality bar: login', () => {
   it('302s unauth console GET to Access and keeps admin APIs at 401 JSON', async () => {
-    expect([...ADMIN_EMAILS].sort()).toEqual(['tony.walteur@gmail.com', 'twalteur@amaris.com'].sort())
+    const adminEmails = adminEmailsFromEnv(env()) ?? []
+    expect([...adminEmails].sort()).toEqual(['owner@example.test', 'admin@example.test'].sort())
     const store = memoryStore()
     const configured = {
       ...env(),
@@ -144,7 +146,7 @@ describe('quality bar: login', () => {
     )
     expect(other.status).toBe(401)
 
-    for (const email of ADMIN_EMAILS) {
+    for (const email of adminEmails) {
       const ok = await handleRequest(
         new Request('https://operator.test/'),
         env(),
@@ -169,7 +171,7 @@ describe('quality bar: map data contract', () => {
     const emptyHome = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: access('tony.walteur@gmail.com') },
+      { access: access('owner@example.test') },
       { store, now: NOW }
     )
     const emptyHtml = await emptyHome.text()
@@ -181,7 +183,7 @@ describe('quality bar: map data contract', () => {
       await handleRequest(
         new Request('https://operator.test/v1/admin/dashboard'),
         env(),
-        { access: access('tony.walteur@gmail.com') },
+        { access: access('owner@example.test') },
         { store, now: NOW }
       )
     ).json()) as { map: { empty: boolean; countries: unknown[]; dots: unknown[] } }
@@ -216,7 +218,7 @@ describe('quality bar: map data contract', () => {
     const live = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: access('twalteur@amaris.com') },
+      { access: access('admin@example.test') },
       { store, now: NOW }
     )
     const html = await live.text()
@@ -246,7 +248,7 @@ describe('quality bar: map data contract', () => {
       await handleRequest(
         new Request('https://operator.test/v1/admin/dashboard'),
         env(),
-        { access: access('twalteur@amaris.com') },
+        { access: access('admin@example.test') },
         { store, now: NOW }
       )
     ).json()) as { map: { empty: boolean; countries: { iso: string; devices: number }[]; dots: { country: string }[] } }
@@ -263,7 +265,7 @@ describe('quality bar: token-free events', () => {
       id: 'qb-tok',
       ts: NOW,
       kind: 'ask',
-      actor: 'tony.walteur@gmail.com',
+      actor: 'owner@example.test',
       device_id: 'device-qb',
       country: 'CA',
       detail: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaa.bbb sk-ant-api03-abcdefghijklmnop'
@@ -271,7 +273,7 @@ describe('quality bar: token-free events', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: access('tony.walteur@gmail.com') },
+      { access: access('owner@example.test') },
       { store, now: NOW }
     ).then((r) => r.text())
     const events = eventsHtml(html)
@@ -288,7 +290,7 @@ describe('quality bar: keys last4 and Cloudflare fail-loud', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: access('tony.walteur@gmail.com') },
+      { access: access('owner@example.test') },
       { store, now: NOW }
     ).then((r) => r.text())
     expect(html).not.toContain('Seats keep their own keys')

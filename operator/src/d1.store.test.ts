@@ -77,7 +77,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lon: -73.5,
     last_index_at: null,
     hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'twalteur@amaris.com',
+    sso_email: 'admin@example.test',
     license: 'licensed',
     approval: 'approved',
     license_jti: null,
@@ -285,10 +285,10 @@ describe('groups, tiers, integrations', () => {
     const g: GroupRow = { id: 'g1', name: 'Amaris', tier: 'metis', notes: null, created_at: 1, created_by: 'tony' }
     await store.putGroup(g)
     expect(await store.getGroup('g1')).toMatchObject({ name: 'Amaris' })
-    const member: GroupMemberRow = { group_id: 'g1', member: 'a@amaris.com', kind: 'email', added_at: 1, added_by: 'tony' }
+    const member: GroupMemberRow = { group_id: 'g1', member: 'member@example.test', kind: 'email', added_at: 1, added_by: 'tony' }
     await store.putGroupMember(member)
     expect(await store.listGroupMembers('g1')).toHaveLength(1)
-    await store.deleteGroupMember('g1', 'a@amaris.com')
+    await store.deleteGroupMember('g1', 'member@example.test')
     expect(await store.listGroupMembers('g1')).toHaveLength(0)
     await store.deleteGroup('g1')
     expect(await store.getGroup('g1')).toBeNull()
@@ -414,12 +414,12 @@ describe('issued license update/revoke and group fields', () => {
       created_by: 'tony',
       group_id: 'g1',
       tier: 'metis',
-      member: 'a@amaris.com',
+      member: 'member@example.test',
       activated_device: null,
       activated_at: null
     }
     await store.putIssuedLicense(lic)
-    expect(await store.getIssuedLicense('j1')).toMatchObject({ group_id: 'g1', tier: 'metis', member: 'a@amaris.com' })
+    expect(await store.getIssuedLicense('j1')).toMatchObject({ group_id: 'g1', tier: 'metis', member: 'member@example.test' })
     expect(await store.updateIssuedLicense('j1', { activated_device: 'dev-a', activated_at: 5 })).toBe(true)
     expect(await store.getIssuedLicense('j1')).toMatchObject({ activated_device: 'dev-a', activated_at: 5 })
     expect(await store.updateIssuedLicense('missing', { revoked: 1 })).toBe(false)

@@ -9,7 +9,7 @@ import { verifyGatewayToken } from '../connectors/gateway-token'
 import { readIntegrationExtra, INTEGRATION_ALTERS } from '../connectors/data'
 import { hmacHex } from '../hmac'
 import { memoryStore, type IntegrationRow, type SeatRow } from '../store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from '../test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from '../test-fixtures'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../../src/shared/operator-hmac'
 import { handleIntegrationsSeat, refreshDirectOAuthCredential } from './integrations-seat'
 
@@ -56,6 +56,7 @@ function env(overrides: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: '',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY,
     ...overrides
@@ -92,7 +93,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lon: null,
     last_index_at: null,
     hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'twalteur@amaris.com',
+    sso_email: 'admin@example.test',
     license: 'approved',
     approval: 'approved',
     ...overrides
@@ -118,7 +119,7 @@ async function integration(
     scope_json: '{}',
     status: 'active',
     created_at: NOW - 1000,
-    created_by: 'tony.walteur@gmail.com',
+    created_by: 'owner@example.test',
     rotated_at: null,
     revoked_at: null,
     last_used_at: null,
@@ -274,7 +275,7 @@ async function oauthIntegration(overrides: Partial<IntegrationRow> & Pick<Integr
     scope_json: '{}',
     status: 'active',
     created_at: NOW - 1000,
-    created_by: 'tony.walteur@gmail.com',
+    created_by: 'owner@example.test',
     rotated_at: null,
     revoked_at: null,
     last_used_at: null,

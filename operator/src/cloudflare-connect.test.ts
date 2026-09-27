@@ -14,20 +14,21 @@ import {
 import { d1Store, type D1DatabaseLike } from './d1'
 import { handleRequest, type Env } from './index'
 import { memoryStore, type OperatorStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_TEAM_DOMAIN, TEST_VAULT_KEY } from './test-fixtures'
 import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 
 const NOW = 1_725_000_000_000
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 const TOKEN = 'cf-oauth-access-token-xx42'
-const ACCOUNT = '294885a27b3cc0a1cbe5d0ccbe38de4f'
+const ACCOUNT = '00000000000000000000000000000000'
 
 function env(extra: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY,
     TEAM_DOMAIN: TEST_TEAM_DOMAIN,
@@ -232,7 +233,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
       lon: -73.5,
       last_index_at: null,
       hostname: 'Tonys-MacBook-Pro',
-      sso_email: 'tony.walteur@gmail.com',
+      sso_email: 'owner@example.test',
       license: 'licensed',
       approval: 'approved'
     })
@@ -376,7 +377,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
       // of each per row.
       const { audits, events } = await vaultWriteAuditAndEvents(store)
       expect(audits).toHaveLength(1)
-      expect(audits[0]).toMatchObject({ actor: 'tony.walteur@gmail.com' })
+      expect(audits[0]).toMatchObject({ actor: 'owner@example.test' })
       expect((audits[0] as { detail: string }).detail).toContain('cloudflare ·')
       expect((audits[0] as { detail: string }).detail).toContain('cloudflare-account ·')
       expect(events).toHaveLength(1)

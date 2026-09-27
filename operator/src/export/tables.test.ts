@@ -24,7 +24,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lon: null,
     last_index_at: null,
     hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'twalteur@amaris.com',
+    sso_email: 'admin@example.test',
     license: 'approved',
     approval: 'approved',
     license_jti: null,
@@ -41,7 +41,7 @@ function issued(overrides: Partial<IssuedLicenseRow> & Pick<IssuedLicenseRow, 'j
     exp: Math.floor(NOW / 1000) + 30 * 24 * 60 * 60,
     revoked: 0,
     created_at: NOW,
-    created_by: 'tony.walteur@gmail.com',
+    created_by: 'owner@example.test',
     ...overrides
   }
 }
@@ -57,7 +57,7 @@ function integration(overrides: Partial<IntegrationRow> & Pick<IntegrationRow, '
     scope_json: '{}',
     status: 'active',
     created_at: NOW,
-    created_by: 'tony.walteur@gmail.com',
+    created_by: 'owner@example.test',
     rotated_at: null,
     revoked_at: null,
     last_used_at: null,
@@ -79,11 +79,11 @@ describe('isExportTable', () => {
 describe('audit table', () => {
   it('projects the audited columns and applies since/actor/action/q', async () => {
     const store = memoryStore()
-    await store.audit('a-1', NOW, 'tony.walteur@gmail.com', 'revoke-license', null, 'jti-1')
+    await store.audit('a-1', NOW, 'owner@example.test', 'revoke-license', null, 'jti-1')
     await store.audit('a-2', NOW - 1000, 'system', 'platform.heartbeat', null, 'events 0')
-    const rows = await collectAll(exportTableDef('audit').rows(store, { actor: 'tony.walteur@gmail.com' }))
+    const rows = await collectAll(exportTableDef('audit').rows(store, { actor: 'owner@example.test' }))
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ actor: 'tony.walteur@gmail.com', action: 'revoke-license', detail: 'jti-1' })
+    expect(rows[0]).toMatchObject({ actor: 'owner@example.test', action: 'revoke-license', detail: 'jti-1' })
   })
 })
 

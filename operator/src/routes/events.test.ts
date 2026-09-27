@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from '../index'
 import { memoryStore, type SeatRow } from '../store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from '../test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from '../test-fixtures'
 import { parseKinds, parseLimit, resolveRange } from './events'
 
 const NOW = 1_725_000_000_000
@@ -55,10 +55,11 @@ describe('resolveRange', () => {
 })
 
 function env(): Env {
-  return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY, OPERATOR_SKILL_PRIVATE_KEY: '' }
+  return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tonyAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow {
   return {
@@ -74,7 +75,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lon: null,
     last_index_at: null,
     hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'twalteur@amaris.com',
+    sso_email: 'admin@example.test',
     license: 'approved',
     approval: 'approved',
     ...overrides
@@ -116,7 +117,7 @@ describe('GET /v1/admin/events.json', () => {
       counts: Record<string, number>
     }
     expect(body1.rows).toHaveLength(2)
-    expect(body1.rows[0]).toMatchObject({ hostname: 'Tonys-MacBook-Pro', email: 'twalteur@amaris.com', os: 'darwin', appVersion: '1.8.5' })
+    expect(body1.rows[0]).toMatchObject({ hostname: 'Tonys-MacBook-Pro', email: 'admin@example.test', os: 'darwin', appVersion: '1.8.5' })
     expect(body1.nextCursor).toBeTruthy()
     expect(body1.counts.heartbeat).toBe(3)
 

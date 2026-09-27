@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from '../index'
 import { encryptVault } from '../crypto'
 import { memoryStore, type IntegrationRow } from '../store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from '../test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from '../test-fixtures'
 import { readIntegrationExtra } from '../connectors/data'
 
 const NOW = 1_725_000_000_000
@@ -11,13 +11,14 @@ function env(overrides: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY,
     ...overrides
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function post(path: string, body: unknown, headers: Record<string, string> = {}): Request {
   return new Request(`https://operator.test${path}`, {
@@ -305,7 +306,7 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
       scope_json: '{}',
       status: 'active',
       created_at: NOW,
-      created_by: 'tony.walteur@gmail.com',
+      created_by: 'owner@example.test',
       rotated_at: null,
       revoked_at: null,
       last_used_at: null,

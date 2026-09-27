@@ -33,7 +33,7 @@ describe('sanitizeSeatHostname', () => {
 
 describe('sanitizeSeatSsoEmail', () => {
   it('lowercases a real address', () => {
-    expect(sanitizeSeatSsoEmail('Tony.Walteur@Mantu.com')).toBe('tony.walteur@mantu.com')
+    expect(sanitizeSeatSsoEmail('Owner@Example.test')).toBe('owner@example.test')
   })
   it('rejects malformed or oversized input', () => {
     expect(sanitizeSeatSsoEmail('not-an-email')).toBeUndefined()

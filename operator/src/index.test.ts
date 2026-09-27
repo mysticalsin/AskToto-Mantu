@@ -5,7 +5,7 @@ import { hmacHex } from './hmac'
 import { sha256Hex, verifySkillPack } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
 
@@ -25,13 +25,14 @@ function env(overrides: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: SKILL_KEYS.privateKeyPem,
     ...overrides
   }
 }
 
 const tonyAccess = {
-  getIdentity: async () => ({ email: 'tony.walteur@gmail.com' })
+  getIdentity: async () => ({ email: 'owner@example.test' })
 }
 
 async function signedRequest(
@@ -298,7 +299,7 @@ describe('health', () => {
       lon: null,
       last_index_at: null,
       hostname: 'box',
-      sso_email: 'tony.walteur@gmail.com',
+      sso_email: 'owner@example.test',
       license: 'approved',
       approval: 'approved',
       license_jti: null
@@ -316,7 +317,7 @@ describe('health', () => {
     const res = await handleRequest(new Request('https://operator.test/health'), env(), {}, { store: memoryStore() })
     const text = await res.text()
     expect(text).not.toContain(TEST_INGEST_SECRET)
-    expect(text).not.toContain(TEST_PROMPT_KEY)
+    expect(text).not.toContain(TEST_PROMPT_KEY, TEST_ADMIN_EMAILS)
   })
 })
 

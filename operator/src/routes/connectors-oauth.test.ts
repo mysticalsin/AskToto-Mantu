@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from '../index'
 import { decryptVault } from '../crypto'
 import { memoryStore } from '../store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from '../test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from '../test-fixtures'
 import { readIntegrationExtra } from '../connectors/data'
 import { mintOAuthState } from '../connectors/oauth'
 
@@ -14,13 +14,14 @@ function env(overrides: Record<string, unknown> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY,
     ...overrides
   } as Env
 }
 
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function get(path: string): Request {
   return new Request(`${ORIGIN}${path}`)
@@ -215,7 +216,7 @@ describe('GET /v1/admin/connectors/oauth/callback', () => {
 
   it('rejects a replayed state (the same state used twice)', async () => {
     const store = memoryStore()
-    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'tony.walteur@gmail.com', crypto.randomUUID(), NOW)
+    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'owner@example.test', crypto.randomUUID(), NOW)
     const e = env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'secret' })
     const fakeFetch = (async () =>
       new Response(JSON.stringify({ access_token: 'tok', refresh_token: 'ref', expires_in: 3600 }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
@@ -243,7 +244,7 @@ describe('GET /v1/admin/connectors/oauth/callback', () => {
 
   it('rejects an expired state', async () => {
     const store = memoryStore()
-    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'tony.walteur@gmail.com', crypto.randomUUID(), NOW - 11 * 60_000)
+    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'owner@example.test', crypto.randomUUID(), NOW - 11 * 60_000)
     const res = await handleRequest(
       get(`/v1/admin/connectors/oauth/callback?code=abc&state=${encodeURIComponent(state)}`),
       env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'secret' }),
@@ -257,7 +258,7 @@ describe('GET /v1/admin/connectors/oauth/callback', () => {
   it('successfully exchanges the code and stores the tokens encrypted, mode brokered, last4 of the access token only - never the raw token in any JSON', async () => {
     const store = memoryStore()
     const nonce = crypto.randomUUID()
-    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'tony.walteur@gmail.com', nonce, NOW)
+    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'owner@example.test', nonce, NOW)
     const fakeFetch = (async (_url: string, init: RequestInit) => {
       const body = new URLSearchParams(String(init.body))
       expect(body.get('client_secret')).toBe('g-client-secret')
@@ -301,7 +302,7 @@ describe('GET /v1/admin/connectors/oauth/callback', () => {
 
   it('a failed exchange (upstream rejects the code) shows a failure page and stores nothing', async () => {
     const store = memoryStore()
-    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'tony.walteur@gmail.com', crypto.randomUUID(), NOW)
+    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'owner@example.test', crypto.randomUUID(), NOW)
     const fakeFetch = (async () => new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 })) as typeof fetch
     const res = await handleRequest(
       get(`/v1/admin/connectors/oauth/callback?code=bad-code&state=${encodeURIComponent(state)}`),

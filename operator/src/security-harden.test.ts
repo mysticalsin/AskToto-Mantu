@@ -6,7 +6,7 @@ import { sha256Hex } from './crypto'
 import { verifyAccessJwt } from './access'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
 
 /**
  * P0.3 security pass (2026-09-06): the request-plumbing hardening from
@@ -21,6 +21,7 @@ function env(overrides: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY,
     ...overrides
@@ -51,7 +52,7 @@ async function signed(
   })
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tonyAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 describe('nonce is consumed only after the signature verifies', () => {
   it('a forged request cannot burn a nonce that a real request then presents', async () => {
@@ -155,7 +156,7 @@ describe('Cloudflare Access JWT fallback checks the time claims', () => {
 
   it('accepts a live token and lowercases the email', async () => {
     stubJwks()
-    expect(await verifyAccessJwt(mint(good), TEAM, AUD, NOW)).toBe('tony.walteur@gmail.com')
+    expect(await verifyAccessJwt(mint(good), TEAM, AUD, NOW)).toBe('owner@example.test')
   })
 
   it('rejects expired, not-yet-valid, missing-exp, wrong-issuer and wrong-audience tokens', async () => {

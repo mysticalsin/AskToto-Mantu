@@ -55,7 +55,7 @@ describe('approval gate', () => {
       exp: 1_725_000_000 + 7 * 24 * 60 * 60,
       revoked: 0,
       created_at: 1_725_000_000_000,
-      created_by: 'tony.walteur@gmail.com'
+      created_by: 'owner@example.test'
     })
     const now = 1_725_000_000_000
     expect(
