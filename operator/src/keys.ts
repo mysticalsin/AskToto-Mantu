@@ -133,10 +133,24 @@ async function prepareVaultKeyRow(
 
 export type VaultKeyWrite = { id: string; last4: string; status: string }
 
+/** One 'vault-write' audit row's detail for every row this call writes, matching the single-row
+ *  format (`provider ·last4`) exactly when there is only one. */
+function vaultWriteAuditDetail(rows: VaultKeyRow[]): string {
+  return rows.map((row) => `${row.provider} ·${row.last4}`).join(', ')
+}
+
+/** One 'vault' event's detail for every row this call writes, matching the single-row format
+ *  (`write provider`) exactly when there is only one. */
+function vaultWriteEventDetail(rows: VaultKeyRow[]): string {
+  return `write ${rows.map((row) => row.provider).join(', ')}`
+}
+
 /** Writes several vault rows as one D1 transaction: every row is validated, privacy-checked and
- *  encrypted first, then all rows commit together or none do. Cloudflare provisioning uses this
- *  so a failure on the account row can never strand its gateway row (or vice versa); a single-row
- *  write (`writeVaultKey`) goes through here too, so there is exactly one persistence path. */
+ *  encrypted first, then all rows commit together with exactly one audit row and one event, or
+ *  none of it does. Cloudflare provisioning uses this so a failure on the account row can never
+ *  strand its gateway row (or vice versa) or a misleading audit/event without its rows; a
+ *  single-row write (`writeVaultKey`) goes through here too, so there is exactly one persistence
+ *  path. */
 export async function writeVaultKeysAtomically(
   store: OperatorStore,
   env: { OPERATOR_VAULT_KEY?: string },
@@ -153,19 +167,19 @@ export async function writeVaultKeysAtomically(
   }
   // Every row's provider is superseded against the others already committed under it, so one
   // active row per provider survives even when this call carries several rows for one provider.
-  await store.putVaultKeys(rows)
-  for (const row of rows) {
-    await store.audit(crypto.randomUUID(), now, email, 'vault-write', null, `${row.provider} ·${row.last4}`)
-    await store.insertEvent({
+  await store.putVaultKeys(
+    rows,
+    { id: crypto.randomUUID(), ts: now, actor: email, detail: vaultWriteAuditDetail(rows) },
+    {
       id: crypto.randomUUID(),
       ts: now,
       kind: 'vault',
       actor: email,
       device_id: null,
       country: null,
-      detail: `write ${row.provider}`
-    })
-  }
+      detail: vaultWriteEventDetail(rows)
+    }
+  )
   return { ok: true, rows: rows.map((row) => ({ id: row.id, last4: row.last4, status: row.status })) }
 }
 

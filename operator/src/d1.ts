@@ -25,7 +25,8 @@ import type {
   SessionsPage,
   SessionsQueryOpts,
   TierRow,
-  VaultKeyRow
+  VaultKeyRow,
+  VaultWriteAudit
 } from './store'
 import { toIntegrationMeta, toVaultMeta } from './store'
 
@@ -264,6 +265,31 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
 
   async function writeSession(row: SessionState): Promise<void> {
     await sessionWriteStatement(row).run()
+  }
+
+  /** The one place that builds an audit insert, so `audit()` and the vault-write batch
+   *  (`putVaultKeys`) never drift apart. */
+  function auditInsertStatement(row: {
+    id: string
+    ts: number
+    actor: string
+    action: string
+    askId: string | null
+    detail: string | null
+    requestId: string | null
+    route: string | null
+  }): D1Stmt {
+    return db
+      .prepare('INSERT INTO audit (id, ts, actor, action, ask_id, detail, request_id, route) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(row.id, row.ts, row.actor, row.action, row.askId, row.detail, row.requestId, row.route)
+  }
+
+  /** The one place that builds an events upsert, so `insertEvent()` and the vault-write batch
+   *  (`putVaultKeys`) never drift apart. */
+  function eventInsertStatement(row: EventRow): D1Stmt {
+    return db
+      .prepare('INSERT OR REPLACE INTO events (id, ts, kind, actor, device_id, country, detail) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(row.id, row.ts, row.kind, row.actor, row.device_id, row.country, row.detail)
   }
 
   /** The one place that builds a vault_keys upsert, so a single row write (`putVaultKey`, used by
@@ -658,10 +684,16 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       return r.results.map(normalizeCrmRow)
     },
     async audit(id, ts, actor, action, askId, detail, meta) {
-      await db
-        .prepare('INSERT INTO audit (id, ts, actor, action, ask_id, detail, request_id, route) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(id, ts, actor, action, askId, detail, meta?.requestId ?? null, meta?.route ?? null)
-        .run()
+      await auditInsertStatement({
+        id,
+        ts,
+        actor,
+        action,
+        askId,
+        detail,
+        requestId: meta?.requestId ?? null,
+        route: meta?.route ?? null
+      }).run()
     },
     async listAudit(limit, opts) {
       const where: string[] = []
@@ -686,12 +718,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       return r.results.map((row) => ({ ...row, request_id: row.request_id ?? null, route: row.route ?? null }))
     },
     async insertEvent(row) {
-      await db
-        .prepare(
-          'INSERT OR REPLACE INTO events (id, ts, kind, actor, device_id, country, detail) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        )
-        .bind(row.id, row.ts, row.kind, row.actor, row.device_id, row.country, row.detail)
-        .run()
+      await eventInsertStatement(row).run()
     },
     listEvents: listEventsImpl,
     async countEventsByKind(since, until) {
@@ -735,10 +762,11 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     async putVaultKey(row) {
       await vaultKeyUpsertStatement(row).run()
     },
-    async putVaultKeys(rows) {
+    async putVaultKeys(rows, audit: VaultWriteAudit, event) {
       if (rows.length === 0) return
       // A missing transactional D1 API must fail closed: separate writes can strand one
-      // provider's vault row without its sibling's when the Worker is interrupted between them.
+      // provider's vault row without its sibling's when the Worker is interrupted between them,
+      // or leave the audit/event recording a write that never (fully) happened.
       if (!db.batch) throw new Error('D1 batch transaction is unavailable')
       const statements: D1Stmt[] = rows.flatMap((row) => [
         vaultKeyUpsertStatement(row),
@@ -749,6 +777,19 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           )
           .bind(row.created_at, row.provider, row.id)
       ])
+      statements.push(
+        auditInsertStatement({
+          id: audit.id,
+          ts: audit.ts,
+          actor: audit.actor,
+          action: 'vault-write',
+          askId: null,
+          detail: audit.detail,
+          requestId: null,
+          route: null
+        }),
+        eventInsertStatement(event)
+      )
       const results = await db.batch(statements)
       if (results.length !== statements.length || results.some((result) => result?.success !== true)) {
         throw new Error('D1 vault key transaction did not complete')
