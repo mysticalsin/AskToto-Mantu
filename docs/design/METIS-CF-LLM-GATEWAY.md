@@ -95,7 +95,9 @@ This FRAME does not merge those Workers.
   anything else fails closed with `GATEWAY_CONFIGURATION_UNSAFE`. A failed check surfaces as a
   503 on `POST /v1/use`, `/v1/ask` and the `/v1/admin/keys` routes, and as a redirect to
   `/?cf=failed#keys` from the OAuth callback card.
-- OAuth scopes already include `workers-ai:run`, `ai-gateway:read`, `ai-gateway:edit`.
+- OAuth scopes: the fixed, least-privilege set in `CF_OAUTH_SCOPES`
+  (`operator/src/cloudflare-connect.ts`) — one scope per named call site, no `ai-gateway:edit`
+  (the gateway is only ever read back, never provisioned or edited) and no env override.
 - Missing `CF_OAUTH_CLIENT_ID` / `CF_OAUTH_CLIENT_SECRET` → fail loud on Keys (503 after Access).
   License generate must still work. OAuth stays LAST.
 - Forbidden in vault: `claude-cli`, `codex-cli`, `dust`, `local`.
