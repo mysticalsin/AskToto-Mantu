@@ -113,6 +113,21 @@ describe('boot sidecar reaper', () => {
     })
   })
 
+  it('skips ambiguous registry entries for the same PID and never kills either record', async () => {
+    const ad = adapters({
+      records: [spawned(), spawned({ osStartTime: '2026-09-27T09:59:00.000Z' })],
+      live: proc()
+    })
+
+    await run(ad)
+
+    expect(ad.killed).toEqual([])
+    expect(ad.audits).toContainEqual({
+      event: 'sidecar.reap.skipped',
+      detail: expect.objectContaining({ reason: 'ambiguous-entry', pid: 42 })
+    })
+  })
+
   it('REAP-4: never applies the legacy orphan rule to /usr/bin/fm', async () => {
     const ad = adapters({
       list: [

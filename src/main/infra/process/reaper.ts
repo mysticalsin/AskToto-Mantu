@@ -46,11 +46,52 @@ type SkipReason =
 export async function reapBootSidecars(options: ReaperOptions): Promise<void> {
   const adapters = { ...defaultAdapters(), ...options.adapters }
   const runDir = join(options.userData, 'run')
-  for (const record of adapters.readRegistryRecords(runDir)) {
-    if (record.kind !== 'spawned') continue
+  await reapRegistryRecords(adapters.readRegistryRecords(runDir), adapters)
+  await reapLegacyLlamaOrphans(options, adapters)
+}
+
+async function reapRegistryRecords(records: SidecarRecord[], adapters: ReaperAdapters): Promise<void> {
+  const spawnedRecords = records.filter((record) => record.kind === 'spawned')
+  const ambiguousPids = new Set<number>()
+  const recordsByPid = new Map<number, SidecarRecord[]>()
+  const duplicatePids = new Set<number>()
+  const processedDuplicatePids = new Set<number>()
+  for (const record of spawnedRecords) {
+    if (typeof record.pid !== 'number') continue
+    const group = recordsByPid.get(record.pid) ?? []
+    group.push(record)
+    recordsByPid.set(record.pid, group)
+  }
+  for (const [pid, group] of recordsByPid) {
+    if (group.length <= 1) continue
+    if (sameRegisteredIdentity(group)) duplicatePids.add(pid)
+    else ambiguousPids.add(pid)
+  }
+  for (const record of spawnedRecords) {
+    if (typeof record.pid === 'number' && ambiguousPids.has(record.pid)) {
+      skip(adapters, 'ambiguous-entry', { pid: record.pid, name: record.name })
+      continue
+    }
+    if (typeof record.pid === 'number' && duplicatePids.has(record.pid)) {
+      if (processedDuplicatePids.has(record.pid)) continue
+      processedDuplicatePids.add(record.pid)
+    }
     await reapRegistryRecord(record, adapters)
   }
-  await reapLegacyLlamaOrphans(options, adapters)
+}
+
+function sameRegisteredIdentity(records: readonly SidecarRecord[]): boolean {
+  const [first] = records
+  if (!first) return true
+  if ((first as SidecarRecord & { corrupt?: boolean }).corrupt) return false
+  return records.every(
+    (record) =>
+      !(record as SidecarRecord & { corrupt?: boolean }).corrupt &&
+      record.name === first.name &&
+      record.osStartTime === first.osStartTime &&
+      record.exeRealpath === first.exeRealpath &&
+      record.argsFingerprint === first.argsFingerprint
+  )
 }
 
 async function reapRegistryRecord(record: SidecarRecord, adapters: ReaperAdapters): Promise<void> {
