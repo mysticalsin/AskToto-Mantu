@@ -106,6 +106,26 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     expect(body).not.toContain(TOKEN)
   })
 
+  it('requests only the scopes a named Cloudflare call site needs [M2-0219]', async () => {
+    // Each entry here is backed by exactly one call site: account:read by
+    // resolveCloudflareAccount() (GET /accounts), workers-ai:run by ask.ts/use.ts
+    // (POST .../ai/v1/chat/completions), ai-gateway:read by verifyDefaultGatewayPrivacy()
+    // (GET .../ai-gateway/gateways/default), and workers:read + d1:read by
+    // pullCloudflareOverview() (GET .../workers/scripts, GET .../d1/database). A scope with
+    // no call site (user:read, ai-gateway:edit — the gateway is only ever read, never edited)
+    // must never come back.
+    const EXPECTED_SCOPES = ['account:read', 'ai-gateway:read', 'd1:read', 'workers-ai:run', 'workers:read']
+    const res = await handleRequest(
+      new Request(`https://operator.test${CF_CONNECT_PATH}`),
+      env(),
+      { access: tony },
+      { store: memoryStore(), now: NOW }
+    )
+    const loc = res.headers.get('location') || ''
+    const scope = new URL(loc).searchParams.get('scope') || ''
+    expect(scope.split(' ').filter(Boolean).sort()).toEqual([...EXPECTED_SCOPES].sort())
+  })
+
   it('fails loud when the OAuth client is missing', async () => {
     const res = await handleRequest(
       new Request(`https://operator.test${CF_CONNECT_PATH}`),
