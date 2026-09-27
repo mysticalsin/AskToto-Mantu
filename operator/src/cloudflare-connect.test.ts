@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { reviewedGatewayReply } from './ai-gateway.privacy-fixture'
 import { describe, expect, it } from 'vitest'
 import {
@@ -8,6 +11,7 @@ import {
   CF_OAUTH_MISSING,
   CF_OAUTH_TOKEN
 } from './cloudflare-connect'
+import { d1Store, type D1DatabaseLike } from './d1'
 import { handleRequest, type Env } from './index'
 import { memoryStore, type OperatorStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN, TEST_VAULT_KEY } from './test-fixtures'
@@ -267,5 +271,95 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     expect(html).toContain('name="accountId"')
     expect(html).toContain('placeholder="API token"')
     expect(html).not.toContain('id="cf-add"')
+  })
+})
+
+/** A real (in-memory) D1 that fails the `failOnNthVaultInsert`-th `INSERT ... INTO vault_keys`
+ *  inside whatever D1 transaction it runs in — 0 never fails. Lets a test prove what a D1 batch
+ *  either commits or rolls back together, the same way pulse-session-integrity.test.ts does. */
+function sqliteD1WithOneFailedVaultInsert(db: DatabaseSync, failOnNthVaultInsert: number): D1DatabaseLike {
+  let vaultInserts = 0
+  return {
+    prepare(sql) {
+      const stmt = db.prepare(sql)
+      let bound: unknown[] = []
+      const wrapper = {
+        bind(...values: unknown[]) { bound = values; return wrapper },
+        async first<T>() { return (stmt.get(...(bound as never[])) as T) ?? null },
+        async all<T>() { return { results: stmt.all(...(bound as never[])) as T[] } },
+        async run() {
+          if (sql.includes('INTO vault_keys') && ++vaultInserts === failOnNthVaultInsert) {
+            throw new Error('transient vault write failure')
+          }
+          const result = stmt.run(...(bound as never[]))
+          return { success: true, meta: { changes: Number(result.changes) } }
+        }
+      }
+      return wrapper
+    },
+    async batch(statements) {
+      db.exec('BEGIN')
+      try {
+        const results = []
+        for (const statement of statements) results.push(await statement.run() as { success: boolean })
+        db.exec('COMMIT')
+        return results
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+    }
+  }
+}
+
+function d1StoreWithSchema(db: DatabaseSync, failOnNthVaultInsert = 0): OperatorStore {
+  db.exec(readFileSync(join(__dirname, '..', 'schema.sql'), 'utf8'))
+  return d1Store(sqliteD1WithOneFailedVaultInsert(db, failOnNthVaultInsert))
+}
+
+describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
+  it('provisions both cloudflare vault rows together against a real D1 schema', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      const store = d1StoreWithSchema(db)
+      const { cookie, state } = await startCloudflareOAuth(store)
+      const cb = await handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-d1&state=${state}`, {
+          headers: { cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW, cfFetch }
+      )
+      expect(cb.status).toBe(303)
+      expect(cb.headers.get('location')).toBe('/?cf=connected#keys')
+      expect((await store.listVaultMeta()).map((v) => v.provider).sort()).toEqual(['cloudflare', 'cloudflare-account'])
+    } finally {
+      db.close()
+    }
+  })
+
+  it('a write failure on the account row leaves no cloudflare vault row behind', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      // The 2nd INSERT INTO vault_keys is the account row; the gateway row is the 1st.
+      const store = d1StoreWithSchema(db, 2)
+      const { cookie, state } = await startCloudflareOAuth(store)
+      const cb = handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-fail&state=${state}`, {
+          headers: { cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW, cfFetch }
+      )
+      await expect(cb).rejects.toThrow('transient vault write failure')
+      // Before this ticket, the gateway row committed as its own independent write and stayed
+      // behind when the account row's independent write failed. Atomic provisioning must roll
+      // both rows back together, not just fail to add the second one.
+      expect(await store.listVaultMeta()).toEqual([])
+    } finally {
+      db.close()
+    }
   })
 })
