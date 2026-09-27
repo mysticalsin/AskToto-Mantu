@@ -17,12 +17,17 @@ export const QA_IDENTITY_PACKAGE_NAME = 'asktoto-qa'
 export function assertQaFaultHookMatchesIdentity(archive) {
   const qaIdentity = JSON.parse(extractFile(archive, 'package.json').toString('utf8')).name === QA_IDENTITY_PACKAGE_NAME
   // listPackage returns entries with the packing host's separator (backslash on Windows) and a leading
-  // separator; normalize to a leading-slash-free POSIX form before matching or extracting, or a
-  // Windows-packed archive silently fails to match here (see verifyPackagedDependencyPruning).
-  const mainFiles = listPackage(archive)
-    .map((entry) => entry.replace(/\\/g, '/').replace(/^\/+/, ''))
-    .filter((entry) => /^out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
-  const carriesHook = mainFiles.some((entry) => extractFile(archive, entry).includes(QA_FAULT_MARKER))
+  // separator. Normalize to a leading-slash POSIX form to match against, but extractFile takes the RAW key
+  // with only its leading separator stripped — the same two-step normalization
+  // verifyPackagedDependencyPruning uses in check-packaged-runtime.mjs, or a Windows-packed archive fails
+  // every extract here.
+  const rawEntries = listPackage(archive)
+  const toPosix = (entry) => `/${entry.split('\\').join('/').replace(/^\/+/, '')}`
+  const rawByPosix = new Map(rawEntries.map((entry) => [toPosix(entry), entry]))
+  const mainFiles = [...rawByPosix.keys()].filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
+  const carriesHook = mainFiles.some((entry) =>
+    extractFile(archive, rawByPosix.get(entry).replace(/^[\\/]+/, '')).includes(QA_FAULT_MARKER)
+  )
   if (carriesHook !== qaIdentity) {
     throw new Error(
       qaIdentity
