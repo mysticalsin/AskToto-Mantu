@@ -77,7 +77,10 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
       node.expression.expression.getText(indexSource) === 'win.webContents' &&
       node.expression.name.text === 'on' &&
       node.arguments[0]?.getText(indexSource) === "'render-process-gone'"
-    ) callback = node.arguments[1]
+    ) {
+      const candidate = node.arguments[1]
+      if (candidate?.getText(indexSource).includes('discardActiveLiveSpeakerSession')) callback = candidate
+    }
     ts.forEachChild(node, visit)
   }
   visit(indexSource)

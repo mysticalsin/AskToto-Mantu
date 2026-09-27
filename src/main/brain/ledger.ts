@@ -192,6 +192,7 @@ export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
 
 /** Fail-closed write: never replaces bytes this process could not fully decode. */
 export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
+  if (!ledger.has(indexPath(s))) await loadIndex(s)
   const blocked = indexUnavailable(s)
   if (blocked) throw new BrainIndexUnavailableError(blocked)
   const identity = await persistJson(s, INDEX_REL, v)

@@ -39,7 +39,7 @@ function actualFunction(name: string, globals: Record<string, unknown>): (...arg
   return runSource(`${declaration.getText(indexSource)}\nglobalThis.result = ${name};`, globals)
 }
 
-function webContentsOnCallback(target: string, eventName: string): ts.Expression | undefined {
+function webContentsOnCallback(target: string, eventName: string, bodyIncludes?: string): ts.Expression | undefined {
   let callback: ts.Expression | undefined
   const visit = (node: ts.Node): void => {
     if (
@@ -48,7 +48,10 @@ function webContentsOnCallback(target: string, eventName: string): ts.Expression
       node.expression.expression.getText(indexSource) === target &&
       node.expression.name.text === 'on' &&
       node.arguments[0]?.getText(indexSource) === `'${eventName}'`
-    ) callback = node.arguments[1]
+    ) {
+      const candidate = node.arguments[1]
+      if (!bodyIncludes || candidate?.getText(indexSource).includes(bodyIncludes)) callback = candidate
+    }
     ts.forEachChild(node, visit)
   }
   visit(indexSource)
@@ -60,7 +63,7 @@ function actualRendererRecoveryHandlers(globals: Record<string, unknown>): {
   renderProcessGone: (...args: any[]) => any
 } {
   const didFinishLoad = webContentsOnCallback('self.webContents', 'did-finish-load')
-  const renderProcessGone = webContentsOnCallback('win.webContents', 'render-process-gone')
+  const renderProcessGone = webContentsOnCallback('win.webContents', 'render-process-gone', 'revokeForLifecycleEvent')
   expect(didFinishLoad, 'Actual overlay did-finish-load handler was not found').toBeDefined()
   expect(renderProcessGone, 'Actual overlay render-process-gone handler was not found').toBeDefined()
   if (!didFinishLoad || !renderProcessGone) {
