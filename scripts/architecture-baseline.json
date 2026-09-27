@@ -327,6 +327,7 @@
     "src/main/llm/local-runtime.ts": 1,
     "src/main/mac-helper.ts": 1,
     "src/main/managed-node.ts": 1,
+    "src/main/parakeet-extract.ts": 1,
     "src/main/parakeet.ts": 1,
     "src/main/speaker-embedding-client.ts": 1,
     "src/main/whisper-import.ts": 1,
