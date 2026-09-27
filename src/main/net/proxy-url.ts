@@ -3,8 +3,14 @@
  * vitest environment. `install-proxy.ts` composes these with the real global-dispatcher side effect.
  */
 
-/** The proxy env vars undici's EnvHttpProxyAgent honors, in the precedence order we report. */
+/** A subset of process.env, typed for testability. */
 export type ProxyEnv = Record<string, string | undefined>
+
+/**
+ * The env vars that select the env route, in detectProxyFromEnv's precedence order. EnvHttpProxyAgent
+ * itself reads only the HTTP(S) pairs per request scheme, lowercase first; ALL_PROXY/all_proxy are
+ * included for boot routing only.
+ */
 export const PROXY_ENV_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'] as const
 
 /** Return the effective proxy URL from the environment, or null when none is configured (direct). */
