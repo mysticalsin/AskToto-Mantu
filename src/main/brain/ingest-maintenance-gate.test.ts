@@ -194,6 +194,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     writeMeeting('retry-c.md')
     requestBackfillRun({ force: true, ...userTrigger })
     await vi.waitFor(() => expect(createStreamMock.mock.calls.length).toBeGreaterThan(1), { timeout: 10_000 })
+    await releaseHeldWork()
   })
 
   it('EX-2: an active interactive local stream holds automatic extraction; once it ends, the next nudge (requestBackfill) starts it', async () => {
@@ -204,6 +205,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     interactiveActive = false
     requestBackfill()
     await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(1), { timeout: 10_000 })
+    await releaseHeldWork()
   })
 
   it('EX-2: a user Retry during the quiet period promotes already-queued automatic jobs instead of leaving them waiting', async () => {
@@ -214,6 +216,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     expect(createStreamMock).not.toHaveBeenCalled()
     requestBackfillRun({ force: true, ...userTrigger })
     await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(1), { timeout: 10_000 })
+    await releaseHeldWork()
   })
 
   it('EX-2: live saves (enqueueIngest) and reconcile-strategy repairs are never held by the gate', async () => {
