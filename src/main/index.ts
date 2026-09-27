@@ -729,7 +729,7 @@ import {
   sweepExpiredMeetings
 } from './recall'
 import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './updater'
-import { runSelfTest } from './selftest'
+import { runSelfTest, redirectSelfTestUserData } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
@@ -889,6 +889,12 @@ function makeRefreshDustAuth(current: {
 freezeAsciiUserAgent(app)
 initializeCaheEditionIdentity()
 if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
+
+// Self-test must own a throwaway userData before anything resolves userData; no-op unless
+// devEnv(ASKTOTO_SELFTEST). Setting ASKTOTO_USERDATA lets the ASKTOTO_USERDATA handling immediately
+// below, and resolveMeetingsFolder()'s own ASKTOTO_USERDATA check (transcripts.ts), apply the throwaway
+// directory through the one QA-isolation mechanism instead of a second, self-test-only one (M2-0004).
+redirectSelfTestUserData()
 
 // Select the final user-data profile before crashReporter (or any other Electron service) can resolve
 // a default path. In particular, ASKTOTO_USERDATA must isolate physical QA from a real encrypted profile.
@@ -8979,9 +8985,8 @@ if (!app.requestSingleInstanceLock()) {
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
   process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
   process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
-  // The self-test suite runs destructively against the LIVE profile (it overwrites, then deletes,
-  // settings.json and managed-config.json), so devEnv() keeps it out of packaged builds — otherwise a
-  // persistent `setx ASKTOTO_SELFTEST out.json` re-wipes the profile and quits on every launch.
+  // devEnv(ASKTOTO_SELFTEST) keeps self-test out of packaged builds; runSelfTest() itself refuses to run
+  // unless userData is exactly the throwaway directory redirectSelfTestUserData() created (M2-0004).
   const selfTestOut = devEnv('ASKTOTO_SELFTEST')
   if (selfTestOut) {
     try {
