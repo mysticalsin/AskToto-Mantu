@@ -256,6 +256,7 @@ const SAFE_ERROR_WORDS = new Set([
   'token',
   'text',
   'typeerror',
+  'unexpected',
   'unknown',
   'unserializable',
   'url',
@@ -318,7 +319,9 @@ function scrubErrorText(value: unknown): string {
     .replace(EMAIL_RE, '<email>')
     .replace(QUOTED_RE, '<text>')
     .replace(PATH_RE, '<path>')
-    .replace(ERROR_WORD_RE, (word) => (SAFE_ERROR_WORDS.has(word.toLowerCase()) ? word : '<text>'))
+    .replace(ERROR_WORD_RE, (word) =>
+      SAFE_ERROR_WORDS.has(word.toLowerCase()) || word.length > MAX_MESSAGE_CHARS ? word : '<text>'
+    )
     .replace(/(?:<text>\s*){2,}/g, '<text> ')
     .replace(/\s+/g, ' ')
     .trim()
