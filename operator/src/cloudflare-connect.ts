@@ -11,14 +11,15 @@ export const CF_CONNECT_PATH = '/cloudflare/connect'
 export const CF_CALLBACK_PATH = '/cloudflare/callback'
 export const CF_OAUTH_COOKIE = 'metis_cf_oauth'
 export const CF_OAUTH_MISSING = 'Cloudflare OAuth is not configured. Set CF_OAUTH_CLIENT_ID and CF_OAUTH_CLIENT_SECRET.'
+// Every scope below is backed by exactly one call site (locked by the scope-lock test in
+// cloudflare-connect.test.ts); a scope with no call site — 'user:read', 'ai-gateway:edit' — must
+// stay out, not be re-added on spec [M2-0219, RF-AUDIT-R2-R2].
 export const CF_OAUTH_SCOPES = [
-  'account:read',
-  'user:read',
-  'workers-ai:run',
-  'ai-gateway:read',
-  'ai-gateway:edit',
-  'workers:read',
-  'd1:read'
+  'account:read', // resolveCloudflareAccount(): GET /accounts
+  'workers-ai:run', // ask.ts/use.ts upstreamUrl('cloudflare'): POST /accounts/{id}/ai/v1/chat/completions
+  'ai-gateway:read', // ai-gateway.ts verifyDefaultGatewayPrivacy(): GET /accounts/{id}/ai-gateway/gateways/default
+  'workers:read', // cloudflare.ts pullCloudflareOverview(): GET /accounts/{id}/workers/scripts
+  'd1:read' // cloudflare.ts pullCloudflareOverview(): GET /accounts/{id}/d1/database
 ].join(' ')
 
 export type CloudflareOAuthEnv = {
