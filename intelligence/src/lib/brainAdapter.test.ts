@@ -35,11 +35,12 @@ const FIXTURE: BrainRead = {
       { id: 'deal:globex-renewal', type: 'deal', label: 'Globex Renewal' },
       { id: 'sector:technology', type: 'sector', label: 'technology' },
       { id: 'sector:banking', type: 'sector', label: 'banking' },
-      // Meeting nodes: present in the raw brain graph, must be dropped from the DISPLAY graph.
-      { id: 'meeting:m1', type: 'meeting', label: 'Acme Kickoff Call' },
-      { id: 'meeting:m2', type: 'meeting', label: 'Acme SOW Review' },
-      { id: 'meeting:m3', type: 'meeting', label: 'Acme Expansion Chat' },
-      { id: 'meeting:m4', type: 'meeting', label: 'Globex Renewal Sync' }
+      // Meeting nodes, id'd the same way ingest.ts mints them (`meeting:${slugify(file)}`) — the
+      // display graph carries these through now, same as every other node type.
+      { id: 'meeting:m1-md', type: 'meeting', label: 'Acme Kickoff Call' },
+      { id: 'meeting:m2-md', type: 'meeting', label: 'Acme SOW Review' },
+      { id: 'meeting:m3-md', type: 'meeting', label: 'Acme Expansion Chat' },
+      { id: 'meeting:m4-md', type: 'meeting', label: 'Globex Renewal Sync' }
     ],
     edges: [
       { from: 'person:jane-doe', to: 'account:acme-corp', rel: 'works-at', confidence: 'EXTRACTED' },
@@ -53,11 +54,11 @@ const FIXTURE: BrainRead = {
       // A single cross-account bridge: makes the display graph ONE connected component so the
       // community test below actually proves label propagation beats connected-components.
       { from: 'account:acme-corp', to: 'account:globex-inc', rel: 'related-account', confidence: 'INFERRED' },
-      // Meeting-node edges: must be dropped along with their nodes.
-      { from: 'meeting:m1', to: 'account:acme-corp', rel: 'discussed-in', confidence: 'EXTRACTED' },
-      { from: 'meeting:m1', to: 'person:jane-doe', rel: 'attends', confidence: 'EXTRACTED' },
-      { from: 'meeting:m2', to: 'deal:acme-platform-deal', rel: 'discussed-in', confidence: 'EXTRACTED' },
-      { from: 'meeting:m4', to: 'deal:globex-renewal', rel: 'discussed-in', confidence: 'EXTRACTED' }
+      // Meeting-node edges: carried through along with their nodes now.
+      { from: 'meeting:m1-md', to: 'account:acme-corp', rel: 'discussed-in', confidence: 'EXTRACTED' },
+      { from: 'meeting:m1-md', to: 'person:jane-doe', rel: 'attends', confidence: 'EXTRACTED' },
+      { from: 'meeting:m2-md', to: 'deal:acme-platform-deal', rel: 'discussed-in', confidence: 'EXTRACTED' },
+      { from: 'meeting:m4-md', to: 'deal:globex-renewal', rel: 'discussed-in', confidence: 'EXTRACTED' }
     ]
   },
   people: [
@@ -293,19 +294,43 @@ describe('brainToDashboard — scope summaries', () => {
 })
 
 describe('brainToDashboard — display graph', () => {
-  it('drops meeting nodes/edges from the display graph', () => {
-    expect(dashboard.account_graph.nodes).toHaveLength(10) // 2 accounts + 3 people + 3 deals + 2 sectors
-    expect(dashboard.account_graph.nodes.some((n) => n.type === 'meeting' as never)).toBe(false)
-    // 9 non-meeting edges defined in the fixture; the 4 meeting-attached edges are dropped.
-    expect(dashboard.account_graph.edges).toHaveLength(9)
+  // Meetings used to be dropped here on density grounds ("61 meeting nodes would drown the entity
+  // structure"), which made the SOURCE of every relationship invisible: the graph asserted two people
+  // were connected while hiding the note that proves it. Density is a filter problem, not a deletion
+  // problem — GraphView's account/sector filters already apply to any node carrying those fields, so
+  // the fix is to stop deleting meetings and start attributing them, not to add a second code path.
+  it('keeps meeting nodes and their edges in the display graph', () => {
+    expect(dashboard.account_graph.nodes).toHaveLength(14) // 10 entities + 4 meetings
+    expect(dashboard.account_graph.nodes.filter((n) => n.type === 'meeting')).toHaveLength(4)
+    // All 13 fixture edges survive: 9 between entities + 4 attached to meetings.
+    expect(dashboard.account_graph.edges).toHaveLength(13)
   })
 
-  it('computes degree from the filtered edge set', () => {
+  it("a meeting node carries its OWN source file and date, not some other entity's latest meeting", () => {
+    const kickoff = dashboard.account_graph.nodes.find((n) => n.id === 'meeting:m1-md')!
+    // Acme Corp's own LATEST meeting is m2 (2026-02-01) — a node that fell back to the entity lookup
+    // instead of resolving its own record would report that date, not its own (m1, 2026-01-10).
+    expect(kickoff.ref).toBe('m1.md')
+    expect(kickoff.date).toBe('2026-01-10')
+    expect(kickoff.is_client_facing).toBe(true)
+  })
+
+  it('attributes a meeting node to its own account and sector, so it answers to the same filters as the account it belongs to', () => {
+    const kickoff = dashboard.account_graph.nodes.find((n) => n.id === 'meeting:m1-md')!
+    expect(kickoff.account).toBe('Acme Corp')
+    expect(kickoff.sector).toBe('technology')
+    const renewalSync = dashboard.account_graph.nodes.find((n) => n.id === 'meeting:m4-md')!
+    expect(renewalSync.account).toBe('Globex Inc')
+    expect(renewalSync.sector).toBe('banking')
+  })
+
+  it('computes degree from the edge set, meetings included', () => {
     const acme = dashboard.account_graph.nodes.find((n) => n.id === 'account:acme-corp')!
-    // jane, john, 2 deals, sector, globex-inc bridge = 6
-    expect(acme.degree).toBe(6)
+    // jane, john, 2 deals, sector, globex-inc bridge, meeting:m1-md = 7
+    expect(acme.degree).toBe(7)
     const jane = dashboard.account_graph.nodes.find((n) => n.id === 'person:jane-doe')!
-    expect(jane.degree).toBe(1)
+    // works-at account, attends meeting:m1-md = 2
+    expect(jane.degree).toBe(2)
   })
 
   it('finds more than one community via label propagation even though the graph is one connected component', () => {
@@ -435,7 +460,7 @@ describe('brainToDashboard — warnings, ingest errors, status', () => {
       people: 3,
       accounts: 2,
       deals: 3,
-      nodes: 14, // full raw graph, including the 4 meeting nodes the display graph drops
+      nodes: 14, // full raw graph — the display graph now keeps all 14, meetings included
       edges: 13
     })
     expect(dashboard.status.people).toBe(dashboard.people.length)

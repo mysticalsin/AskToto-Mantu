@@ -159,7 +159,11 @@ export interface Deal {
 export interface GraphNode {
   id: string
   label: string
-  type: 'account' | 'deal' | 'person' | 'strategic_group' | 'sector'
+  // 'meeting' is a note/meeting node: the evidence a relationship edge was drawn from. brainAdapter.ts
+  // carries it into the display graph so that evidence is visible and clickable rather than an
+  // invisible join the graph only implies, and it answers to the same account/sector fields (below)
+  // as every other node type — GraphView's existing filters apply to it for free.
+  type: 'account' | 'deal' | 'person' | 'strategic_group' | 'sector' | 'meeting'
   account?: string
   strategic_group?: string
   sector?: string
