@@ -13,6 +13,7 @@
  * trade a boot stall for a provider outage on exactly the networks this module exists to serve.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { LookupFunction } from 'node:net'
 
 const resolveProxy = vi.fn<(url: string) => Promise<string>>()
 const setGlobalDispatcher = vi.fn()
@@ -47,14 +48,7 @@ vi.mock('undici', () => ({
   setGlobalDispatcher: (d: unknown) => setGlobalDispatcher(d)
 }))
 
-import { installProxyAwareFetch } from './install-proxy'
-import * as installProxyModule from './install-proxy'
-// `routeDispatcher` does not exist yet on this branch's first (tests-only) commit — accessed through an
-// untyped indirection so this file stays clean under `npm run typecheck:tests`'s exact-count ratchet
-// (scripts/check-test-types.mjs) instead of adding a static "no exported member" error there. Pre-fix,
-// P1-P4 below fail at runtime with "routeDispatcher is not a function" — still a genuine red run.
-const routeDispatcher = (installProxyModule as unknown as { routeDispatcher: (lookup?: unknown) => unknown })
-  .routeDispatcher
+import { installProxyAwareFetch, routeDispatcher } from './install-proxy'
 
 const PROXY_ENV_KEYS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
 
@@ -133,7 +127,7 @@ describe('MQA-190 — the OS proxy probe must never hold boot open', () => {
  * function: same route, a fresh dispatcher, parameterized by `lookup`.
  */
 describe('routeDispatcher — a second dispatcher that routes like the global one', () => {
-  const lookup = vi.fn() as unknown as Parameters<typeof routeDispatcher>[0]
+  const lookup = vi.fn() as unknown as LookupFunction
 
   beforeEach(() => {
     vi.useFakeTimers()
@@ -150,7 +144,7 @@ describe('routeDispatcher — a second dispatcher that routes like the global on
     resolveProxy.mockResolvedValue('DIRECT')
     await Promise.all([installProxyAwareFetch(), vi.advanceTimersByTimeAsync(0)])
 
-    const d = routeDispatcher(lookup) as InstanceType<typeof FakeAgent>
+    const d = routeDispatcher(lookup) as unknown as InstanceType<typeof FakeAgent>
     expect(d).toBeInstanceOf(FakeAgent)
     expect(d.opts).toMatchObject({ connect: { lookup } })
   })
@@ -159,7 +153,7 @@ describe('routeDispatcher — a second dispatcher that routes like the global on
     process.env.HTTPS_PROXY = 'http://env-proxy.corp:8080'
     await installProxyAwareFetch()
 
-    const d = routeDispatcher(lookup) as InstanceType<typeof FakeEnvHttpProxyAgent>
+    const d = routeDispatcher(lookup) as unknown as InstanceType<typeof FakeEnvHttpProxyAgent>
     expect(d).toBeInstanceOf(FakeEnvHttpProxyAgent)
     expect(d.opts).toMatchObject({ connect: { lookup } })
   })
@@ -168,7 +162,7 @@ describe('routeDispatcher — a second dispatcher that routes like the global on
     resolveProxy.mockResolvedValue('PROXY system-proxy.corp:3128')
     await Promise.all([installProxyAwareFetch(), vi.advanceTimersByTimeAsync(0)])
 
-    const d = routeDispatcher(lookup) as InstanceType<typeof FakeProxyAgent>
+    const d = routeDispatcher(lookup) as unknown as InstanceType<typeof FakeProxyAgent>
     expect(d).toBeInstanceOf(FakeProxyAgent)
     expect(d.uri).toBe('http://system-proxy.corp:3128')
   })
@@ -186,7 +180,7 @@ describe('routeDispatcher — a second dispatcher that routes like the global on
     land('PROXY late-proxy.corp:8080')
     await vi.advanceTimersByTimeAsync(0)
 
-    const d = routeDispatcher(lookup) as InstanceType<typeof FakeProxyAgent>
+    const d = routeDispatcher(lookup) as unknown as InstanceType<typeof FakeProxyAgent>
     expect(d).toBeInstanceOf(FakeProxyAgent)
     expect(d.uri).toBe('http://late-proxy.corp:8080')
   })
