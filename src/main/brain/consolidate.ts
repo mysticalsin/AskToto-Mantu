@@ -4,10 +4,10 @@
  * active day ≤ 2") instead of a network round trip after every single saved meeting.
  *
  * This module owns exactly two things: counting today's passes (durably, so a quit/restart doesn't
- * reset the budget) and deciding whether another pass is due right now. The actual extraction work is
+ * reset the budget) and deciding whether another pass is due on launch. The actual extraction work is
  * unchanged — `runConsolidationIfDue` reuses `startBackfill` (ingest.ts), the same "queue every
- * not-yet-ingested transcript" scan the "Index meetings" button and boot resume already use, so a
- * consolidation pass and a manual rebuild can never disagree about what counts as pending work.
+ * not-yet-ingested transcript" scan the "Index meetings" button and boot resume already use. It runs once
+ * per launch from the boot brain step; the named Intelligence slots own the recurring pass.
  */
 import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
@@ -52,8 +52,8 @@ function readState(s: Settings, now = Date.now()): ConsolidateState {
 
 /** Whether `settings.brainConsolidation` currently permits another pass: the feature is on, and today's
  *  count (readState, which itself resets on a day change) hasn't reached the daily cap. Pure and
- *  synchronous on purpose — this is the gate `runConsolidationIfDue`'s hourly timer checks on every
- *  tick, and every one of those ticks must cost nothing beyond one small JSON read. */
+ *  synchronous on purpose — this is the gate `runConsolidationIfDue` checks, and each check must cost
+ *  nothing beyond one small JSON read. */
 export function canConsolidateToday(s: Settings, now = Date.now()): boolean {
   if (!s.brainConsolidation.enabled) return false
   return readState(s, now).passes < s.brainConsolidation.maxPassesPerDay
@@ -62,7 +62,7 @@ export function canConsolidateToday(s: Settings, now = Date.now()): boolean {
 /** Durably record that one consolidation pass just ran, and audit-log it (metrics.ts's
  *  brainConsolidationPasses counter reads the 'brain.consolidation' event this writes). Callers decide
  *  WHEN to call this — `runConsolidationIfDue` only calls it after `startBackfill` actually found and
- *  queued something, so an hourly tick with nothing pending never spends the daily budget on a no-op. */
+ *  queued something, so a launch with nothing pending never spends the daily budget on a no-op. */
 export async function recordConsolidationPass(s: Settings, now = Date.now()): Promise<ConsolidateState> {
   const prev = readState(s, now)
   const next: ConsolidateState = { date: todayKey(now), passes: prev.passes + 1, lastRunAt: now }
@@ -84,10 +84,11 @@ export interface ConsolidationRunResult {
 let consolidating = false
 
 /**
- * The one entry point the timer below (and any manual "consolidate now" trigger) calls: if consolidation
- * is enabled and under today's cap, queue every not-yet-ingested meeting via the existing backfill scan.
- * A pass is only durably recorded when `startBackfill` actually found work — an hourly tick landing on
- * an already-fully-indexed vault must not burn the daily budget on nothing.
+ * The one entry point boot calls: if consolidation is enabled and under today's cap, queue every
+ * not-yet-ingested meeting via the existing backfill scan. A pass is only durably recorded when
+ * `startBackfill` actually found work — a launch landing on an already-fully-indexed vault must not burn
+ * the daily budget on nothing. An automatic trigger: exhausted and backed-off sources stay held
+ * (infra/scheduler/policy.ts).
  */
 export async function runConsolidationIfDue(s: Settings = getSettings()): Promise<ConsolidationRunResult> {
   if (!s.brainConsolidation.enabled) return { ran: false, queued: 0, reason: 'disabled' }
@@ -114,27 +115,4 @@ export async function runConsolidationIfDue(s: Settings = getSettings()): Promis
 /** Test-only: clear the in-flight lock between suites. */
 export function resetConsolidationLockForTests(): void {
   consolidating = false
-}
-
-/**
- * Starts the hourly check that drives twice-daily (by default) consolidation. Deliberately simple: an
- * hourly tick against a small per-day counter, not a scheduled-for-exact-noon-and-midnight cron — the
- * budget in canConsolidateToday is what actually caps the count, so checking more often than the budget
- * allows costs nothing but a JSON read that immediately says "no".
- *
- * `registerTimer` lets index.ts fold this into its own `trackTimer` shutdown-safety list (every other
- * long-lived interval in main is tracked there so will-quit can cancel them all before teardown) without
- * this module importing anything from index.ts. Defaults to a no-op passthrough for tests. Returns a
- * disposer either way.
- */
-export function scheduleConsolidation(
-  intervalMs = 60 * 60 * 1000,
-  registerTimer: (t: ReturnType<typeof setInterval>) => ReturnType<typeof setInterval> = (t) => t
-): () => void {
-  const timer = registerTimer(
-    setInterval(() => {
-      void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] consolidation tick failed:', e))
-    }, intervalMs)
-  )
-  return () => clearInterval(timer)
 }
