@@ -129,7 +129,7 @@ function parseWorkflow(source: string): WorkflowModel {
   }
 
   for (const [name, job] of Object.entries(jobs)) {
-    if (job.concurrency && (!job.concurrency.group || job.concurrency.cancelInProgress === undefined)) {
+    if (job.concurrency && !job.concurrency.group) {
       throw new Error(`${name} has incomplete concurrency; model it before adding it`)
     }
   }

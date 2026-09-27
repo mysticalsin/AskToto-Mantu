@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Release preflight gate: the pushed tag must exactly match package.json's version.
+// Release preflight gate: the pushed tag must match package.json's version, and this
+// platform must be allowed to publish to the release feed.
 //
 // Why this exists: electron-builder derives the published release tag, artifact filenames, and the
 // `version:` field written into latest.yml/latest-mac.yml entirely from package.json's `version`, never
@@ -8,14 +9,14 @@
 // creating a new one — clobbering its assets and leaving every already-installed v1.0.0 client with no
 // version increase to update to. Fail here, before any build work starts, not after.
 //
+// When a token is available, this gate re-derives the same per-platform publication plan that
+// scripts/publish-release.mjs will use later. A refused feed state stops this platform before any build
+// work starts. Network and auth failures against the feed fail closed.
+//
 // CI integration: run as the FIRST step of every release job (right after checkout, before the
 // ffmpeg-sidecar / signing-secret gates) — see .github/workflows/release.yml.
 //
-// Self-test locally: GITHUB_REF_NAME=v1.0.0 node scripts/check-version-parity.mjs
-//
-// Optional duplicate-release guard: when a token is available, reject an already-public release but
-// allow the workflow to resume its own incomplete draft. Network/auth failures fail closed; only an
-// explicit GitHub 404 means the tag has no release yet.
+// Self-test locally: GITHUB_REF_NAME=v1.0.0 node scripts/check-version-parity.mjs mac
 
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

@@ -10,9 +10,9 @@
 // Functions named *Problems return string[]; empty means OK. Mutating functions throw one Error whose
 // message lists every problem.
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { sha256File, uploadProblems } from './qa/provenance.mjs'
 import { verifyUpdateMetadata } from './check-update-metadata.mjs'
 
@@ -43,7 +43,7 @@ export const PLATFORMS = Object.freeze({
 })
 
 export const RELEASE_NOTES =
-  'Métis desktop installers: Developer ID-signed and notarized macOS, plus Authenticode-signed Windows.'
+  'Signed Métis desktop installers. A platform appears here only once its own release gates pass: macOS builds are Developer ID-signed and notarized, Windows builds are Authenticode-signed.'
 
 export function platformAssets(platform, version) {
   const config = PLATFORMS[platform]
@@ -63,6 +63,10 @@ export function bundleProblems(platform, version, names) {
     if (!expectedSet.has(name)) problems.push(`unexpected ${PLATFORMS[platform].label} release asset: ${name}`)
   }
   return problems
+}
+
+function isWithinBothPlatforms(names, expectedOwn, expectedOther) {
+  return names.every((name) => expectedOwn.has(name) || expectedOther.has(name))
 }
 
 export function planPublication(platform, version, releases) {
@@ -86,7 +90,7 @@ export function planPublication(platform, version, releases) {
   const foreignNames = names.filter((name) => !expectedOwn.has(name) && !expectedOther.has(name))
 
   if (release.draft) {
-    if (ownNames.length > 0 && foreignNames.length === 0 && otherNames.length === 0) {
+    if (isWithinBothPlatforms(names, expectedOwn, expectedOther)) {
       return { action: 'replace-draft', release }
     }
     throw new Error(
@@ -95,6 +99,7 @@ export function planPublication(platform, version, releases) {
   }
 
   if (ownNames.length > 0) {
+    if (ownNames.length === expectedOwn.size) return { action: 'complete', release }
     throw new Error(
       `Refusing to publish ${config.label} ${version}: the public release already has ${ownNames.join(', ')} but not ${config.metadata}; if a previous upload was interrupted, delete those assets before retrying.`
     )
@@ -139,12 +144,14 @@ export function toRelease(value) {
   }
 }
 
-function runGh(repo, args, options = {}) {
+function runGh(args, options = {}) {
   const result = spawnSync('gh', args, {
     encoding: 'utf8',
     env: { ...process.env, GH_TOKEN: options.token ?? process.env.GH_TOKEN },
-    stdio: options.stdio ?? 'pipe'
+    stdio: options.stdio ?? 'pipe',
+    maxBuffer: 64 * 1024 * 1024
   })
+  if (result.error) throw result.error
   if (result.status === 0) return result.stdout
   const output = `${result.stderr || ''}\n${result.stdout || ''}`.trim()
   throw new Error(output || `gh exited with status ${result.status}`)
@@ -153,16 +160,15 @@ function runGh(repo, args, options = {}) {
 export function ghFeed({ repo, token }) {
   const api = {
     releasesTagged(tag) {
-      const pages = JSON.parse(runGh(repo, ['api', '--paginate', '--slurp', `repos/${repo}/releases?per_page=100`], { token }))
+      const pages = JSON.parse(runGh(['api', '--paginate', '--slurp', `repos/${repo}/releases?per_page=100`], { token }))
       const releases = pages.flat()
       return releases.filter((release) => release.tag_name === tag).map(toRelease)
     },
     release(id) {
-      return toRelease(JSON.parse(runGh(repo, ['api', `repos/${repo}/releases/${id}`], { token })))
+      return toRelease(JSON.parse(runGh(['api', `repos/${repo}/releases/${id}`], { token })))
     },
     createDraft(tag) {
       runGh(
-        repo,
         [
           'release',
           'create',
@@ -182,16 +188,16 @@ export function ghFeed({ repo, token }) {
       return release
     },
     upload(tag, paths) {
-      runGh(repo, ['release', 'upload', tag, ...paths, '--repo', repo], { token, stdio: 'pipe' })
+      runGh(['release', 'upload', tag, ...paths, '--repo', repo], { token })
     },
     publish(id) {
-      runGh(repo, ['api', `repos/${repo}/releases/${id}`, '--method', 'PATCH', '-F', 'draft=false', '-F', 'prerelease=false', '-f', 'make_latest=true'], { token })
+      runGh(['api', `repos/${repo}/releases/${id}`, '--method', 'PATCH', '-F', 'draft=false', '-F', 'prerelease=false', '-f', 'make_latest=true'], { token })
     },
     deleteDraft(id) {
-      runGh(repo, ['api', `repos/${repo}/releases/${id}`, '--method', 'DELETE'], { token })
+      runGh(['api', `repos/${repo}/releases/${id}`, '--method', 'DELETE'], { token })
     },
     latestTag() {
-      const json = runGh(repo, ['api', `repos/${repo}/releases/latest`, '--jq', '.tag_name'], { token })
+      const json = runGh(['api', `repos/${repo}/releases/latest`, '--jq', '.tag_name'], { token })
       return json.trim()
     }
   }
@@ -229,7 +235,7 @@ function digestProblems(release, manifest) {
   )
 }
 
-async function createRelease({ tag, feed, bundle, repo = '<the feed>' }) {
+function createRelease({ tag, feed, bundle, repo = '<the feed>' }) {
   let draft = feed.createDraft(tag)
   feed.upload(tag, bundle.manifest.map((asset) => asset.path))
   draft = feed.release(draft.id)
@@ -243,7 +249,7 @@ async function createRelease({ tag, feed, bundle, repo = '<the feed>' }) {
   return { action: 'create', release: feed.release(draft.id) }
 }
 
-async function joinRelease({ platform, tag, feed, release, bundle }) {
+function joinRelease({ platform, tag, feed, release, bundle }) {
   const metadata = PLATFORMS[platform].metadata
   const installers = bundle.manifest.filter((asset) => asset.name !== metadata)
   const metadataAsset = bundle.manifest.find((asset) => asset.name === metadata)
@@ -265,12 +271,20 @@ export async function publishPlatform({ platform, tag, bundleDir, feed, repo = '
   const bundle = await readBundle(platform, version, bundleDir)
   const releases = feed.releasesTagged(tag)
   const plan = planPublication(platform, version, releases)
+  if (plan.action === 'complete') return { action: 'complete', release: plan.release }
   if (plan.action === 'replace-draft') {
+    const expectedOwn = new Set(platformAssets(platform, version))
+    const expectedOther = new Set(platformAssets(PLATFORMS[platform].other, version))
+    const fresh = feed.release(plan.release.id)
+    const names = fresh.assets.map((asset) => asset.name)
+    if (!fresh.draft || !isWithinBothPlatforms(names, expectedOwn, expectedOther)) {
+      throw new Error(`Refusing to replace ${PLATFORMS[platform].label} ${version}: the release is no longer a replaceable leftover draft.`)
+    }
     feed.deleteDraft(plan.release.id)
-    return await createRelease({ tag, feed, bundle, repo })
+    return createRelease({ tag, feed, bundle, repo })
   }
-  if (plan.action === 'create') return await createRelease({ tag, feed, bundle, repo })
-  return await joinRelease({ platform, tag, feed, release: plan.release, bundle })
+  if (plan.action === 'create') return createRelease({ tag, feed, bundle, repo })
+  return joinRelease({ platform, tag, feed, release: plan.release, bundle })
 }
 
 async function main() {
@@ -287,6 +301,8 @@ async function main() {
   const message =
     result.action === 'create'
       ? `${PLATFORMS[platform].label} ${tag} published to ${repo} as a new Latest release.`
+      : result.action === 'complete'
+        ? `${PLATFORMS[platform].label} ${tag} is already published on ${repo}; nothing to do.`
       : `${PLATFORMS[platform].label} ${tag} joined the public release on ${repo}.`
   console.log(message)
 }
