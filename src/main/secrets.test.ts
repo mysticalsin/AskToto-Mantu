@@ -1,9 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
-import { encryptSecret, decryptSecret } from './secrets'
+import {
+  KeychainKeyRecoveryError,
+  decryptSecret,
+  encryptSecret,
+  prepareFileKeyForWrite,
+  resetSecretKeyCache
+} from './secrets'
 
 vi.mock('electron')
 
@@ -55,5 +62,46 @@ describe('secrets — AES-256-GCM file keystore', () => {
     const env = encryptSecret('secret-payload')
     env[env.length - 1] ^= 0xff // flip a ciphertext byte → tag check fails
     expect(() => decryptSecret(env)).toThrow()
+  })
+
+  describe('the key file — only a write creates it', () => {
+    const keyFile = (): string => join(userData, 'secret-key.bin')
+    /** IV + tag + 16 ciphertext bytes under a key this profile never held: a file synced from another install. */
+    const envelopeFromAnotherInstall = (): Buffer => randomBytes(12 + 16 + 16)
+
+    // Each case starts as a new process would: nothing cached, so every key access goes to disk.
+    beforeEach(() => resetSecretKeyCache())
+
+    it('a decrypt on a profile with no key file fails and writes nothing', () => {
+      expect(() => decryptSecret(envelopeFromAnotherInstall())).toThrow('no file key')
+      expect(readdirSync(userData)).toEqual([])
+    })
+
+    it('a decrypt treats a zero-byte key file as no key and leaves it empty', () => {
+      writeFileSync(keyFile(), Buffer.alloc(0))
+      expect(() => decryptSecret(envelopeFromAnotherInstall())).toThrow('no file key')
+      expect(readFileSync(keyFile())).toHaveLength(0)
+    })
+
+    it('a decrypt against a key file it cannot unwrap fails closed with KeychainKeyRecoveryError, bytes intact', () => {
+      const wrapped = Buffer.from('a-key-wrapped-by-an-older-signed-build')
+      writeFileSync(keyFile(), wrapped)
+      expect(() => decryptSecret(envelopeFromAnotherInstall())).toThrow(KeychainKeyRecoveryError)
+      expect(readFileSync(keyFile())).toEqual(wrapped)
+    })
+
+    it('the first encrypt creates the key, and the next process decrypts with that same key', () => {
+      const envelope = encryptSecret('first-write')
+      const key = readFileSync(keyFile())
+      expect(key).toHaveLength(32) // unpackaged mock: canWrap is false, so the key is raw
+      resetSecretKeyCache()
+      expect(decryptSecret(envelope)).toBe('first-write')
+      expect(readFileSync(keyFile())).toEqual(key)
+    })
+
+    it('prepareFileKeyForWrite creates the key on a keyless file-backend profile', () => {
+      prepareFileKeyForWrite()
+      expect(readFileSync(keyFile())).toHaveLength(32)
+    })
   })
 })
