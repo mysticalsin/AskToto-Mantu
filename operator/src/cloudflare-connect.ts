@@ -11,14 +11,24 @@ export const CF_CONNECT_PATH = '/cloudflare/connect'
 export const CF_CALLBACK_PATH = '/cloudflare/callback'
 export const CF_OAUTH_COOKIE = 'metis_cf_oauth'
 export const CF_OAUTH_MISSING = 'Cloudflare OAuth is not configured. Set CF_OAUTH_CLIENT_ID and CF_OAUTH_CLIENT_SECRET.'
-// Each scope below is required by the call site(s) named beside it (locked by the scope-lock
-// test in cloudflare-connect.test.ts): add a scope only together with its call site.
+// Each scope is required by the call site(s) named beside it (locked by the scope-lock test in
+// cloudflare-connect.test.ts): add a scope only together with its call site.
+//   account:read     resolveCloudflareAccount(): GET /accounts; pullCloudflareOverview()'s
+//                     account analytics: POST /client/v4/graphql
+//   workers-ai:run    ask.ts upstreamUrl('cloudflare') and use.ts callCloudflareGateway():
+//                     POST /accounts/{id}/ai/v1/chat/completions
+//   ai-gateway:read   ai-gateway.ts verifyDefaultGatewayPrivacy():
+//                     GET /accounts/{id}/ai-gateway/gateways/default
+//   workers:read      cloudflare.ts pullCloudflareOverview(): GET /accounts/{id}/workers/scripts
+//   d1:read           cloudflare.ts pullCloudflareOverview(): GET /accounts/{id}/d1/database
+// (Kept out of the array literal below, not as trailing comments, so esbuild's client bundle
+// — which inlines this constant — carries the scope list only, not this mapping.)
 export const CF_OAUTH_SCOPES = [
-  'account:read', // resolveCloudflareAccount(): GET /accounts; pullCloudflareOverview()'s account analytics: POST /client/v4/graphql
-  'workers-ai:run', // ask.ts upstreamUrl('cloudflare') and use.ts callCloudflareGateway(): POST /accounts/{id}/ai/v1/chat/completions
-  'ai-gateway:read', // ai-gateway.ts verifyDefaultGatewayPrivacy(): GET /accounts/{id}/ai-gateway/gateways/default
-  'workers:read', // cloudflare.ts pullCloudflareOverview(): GET /accounts/{id}/workers/scripts
-  'd1:read' // cloudflare.ts pullCloudflareOverview(): GET /accounts/{id}/d1/database
+  'account:read',
+  'workers-ai:run',
+  'ai-gateway:read',
+  'workers:read',
+  'd1:read'
 ].join(' ')
 
 export type CloudflareOAuthEnv = {
