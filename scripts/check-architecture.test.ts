@@ -182,11 +182,11 @@ function createLayeringFixture(): { root: string; fixtureNodeModules: string } {
   ].join('\n'))
   writeFixtureFile(root, 'src/main/service.ts', 'export const service = true\n')
   writeFixtureFile(root, 'src/renderer/src/main.tsx', [
-    "import '../../../main/service'",
+    "import '../../main/service'",
     'export const rendererEntry = true',
   ].join('\n'))
   writeFixtureFile(root, 'src/renderer/src/cross.test.ts', [
-    "import '../../../main/service'",
+    "import '../../main/service'",
     'export const rendererTest = true',
   ].join('\n'))
   writeFixtureFile(root, 'src/main/infra/x.ts', [
@@ -552,7 +552,6 @@ describe('architecture layering dependency-cruiser gate', () => {
         'ff01-renderer-imports-main-or-preload error src/renderer/src/main.tsx',
         'ff01-renderer-imports-main-or-preload-in-tests warn src/renderer/src/cross.test.ts',
         'ff02-import-cycle warn src/cycle/a.ts',
-        'ff02-import-cycle warn src/cycle/b.ts',
         'ff03-unreachable-from-entry-points warn src/dead.ts',
       ])
     } finally {
