@@ -70,10 +70,6 @@ jobs:
       # `swift test` runs (a read-only volume `rm -rf` cannot remove) with a PATH-shimmed `swift`, so this
       # is exercised on every push instead of only on whichever run happens to trigger a real toolchain
       # download.
-      # This step's own exit code is the only diagnosis available for a failure here (this repository's
-      # CI logs are not readable through this session's credentials): the shim itself exits 101/102/103
-      # for which of its own setup commands failed, and this step re-throws that unchanged; a shim that
-      # ran cleanly but a leftover sandbox/mount exits 111/112, so which one happened is never ambiguous.
       - name: A shimmed swift that mounts a disk image under HOME leaves no mount or sandbox behind
         run: |
           set -euo pipefail
@@ -81,39 +77,24 @@ jobs:
           mkdir -p "$shim"
           cat > "$shim/swift" <<'SHIM'
           #!/usr/bin/env bash
+          set -euo pipefail
           echo "$HOME" > "$RUNNER_TEMP/swift-shim-sandbox-path"
           mount_dir="$HOME/Library/Developer/DVTDownloads/MetalToolchain/mounts/shim"
-          mkdir -p "$mount_dir" || exit 101
+          mkdir -p "$mount_dir"
           image="$RUNNER_TEMP/metal-toolchain-shim.dmg"
-          hdiutil create -size 5m -fs APFS -volname MetalToolchainShim -ov "$image" || exit 102
-          hdiutil attach "$image" -mountpoint "$mount_dir" -readonly -nobrowse || exit 103
+          hdiutil create -size 5m -fs APFS -volname MetalToolchainShim -ov "$image"
+          hdiutil attach "$image" -mountpoint "$mount_dir" -readonly -nobrowse
           SHIM
           chmod +x "$shim/swift"
 
-          set +e
           PATH="$shim:$PATH" bash scripts/hermetic/run-swift-tests.sh unused
-          run_status=$?
-          set -e
 
-          if [ "$run_status" -ge 101 ] && [ "$run_status" -le 103 ]; then
-            echo "the shim's own setup failed (mkdir/hdiutil create/hdiutil attach) with code $run_status"
-            exit "$run_status"
+          sandbox="$(cat "$RUNNER_TEMP/swift-shim-sandbox-path")"
+          if [ -e "$sandbox" ]; then
+            echo "run-swift-tests.sh left its sandbox behind: $sandbox"; exit 1
           fi
-          if [ "$run_status" -ne 0 ]; then
-            echo "run-swift-tests.sh did not exit 0 (got $run_status)"
-            exit 110
-          fi
-
-          sandbox="$(cat "$RUNNER_TEMP/swift-shim-sandbox-path" 2>/dev/null || echo '')"
-          if [ -n "$sandbox" ] && [ -e "$sandbox" ]; then
-            echo "run-swift-tests.sh left its sandbox behind: $sandbox"
-            # DEBUG (temporary): distinguishes "the volume is still mounted" (113 — detach never worked)
-            # from "it's unmounted but rm -rf still failed some other way" (114).
-            if mount | grep -qF "$sandbox"; then exit 113; else exit 114; fi
-          fi
-          if [ -n "$sandbox" ] && mount | grep -qF "$sandbox"; then
-            echo "run-swift-tests.sh left a mount behind under $sandbox"
-            exit 112
+          if mount | grep -qF "$sandbox"; then
+            echo "run-swift-tests.sh left a mount behind under $sandbox:"; mount | grep -F "$sandbox"; exit 1
           fi
       # A plain, unmounted failing shim — swift test's own non-zero status must reach run-swift-tests.sh's
       # caller unchanged, including after the fix above adds mount detection to its cleanup.
@@ -218,48 +199,34 @@ jobs:
           # Asserts not just that `check` failed, but that it failed for the expected reason — the same
           # pattern owner-sandbox-profile uses with "Operation not permitted" — so a check that fails
           # closed for the wrong reason (or prints nothing, as it did before honeypot.sh wrote its
-          # diagnostics to stderr) cannot pass this silently. `code` distinguishes each case's own two
-          # failure modes (wrong-exit-status vs wrong-reason) by this step's own exit code, since this
-          # repository's CI logs are not otherwise readable from this session.
+          # diagnostics to stderr) cannot pass this silently.
           assert_check_fails() {
-            local label="$1" expected="$2" code="$3"
+            local label="$1" expected="$2"
             if bash scripts/hermetic/honeypot.sh check "$dir" 2>err.log; then
-              echo "expected '$label' to make check fail, but it exited 0"; cat err.log
-              # DEBUG (temporary): find's -newer comparison is what "exited 0" here means went wrong;
-              # encode the mtime ordering it saw (dir's newest entry minus ref, whole seconds, clamped
-              # to ±25) as 200+diff so a same-second (or backwards) race is visible without log access.
-              local newest_mtime ref_mtime diff
-              newest_mtime="$(find "$dir" -printf '%T@\n' | cut -d. -f1 | sort -rn | head -1)"
-              ref_mtime="$(stat -c %Y "$ref")"
-              diff=$((newest_mtime - ref_mtime))
-              [ "$diff" -gt 25 ] && diff=25
-              [ "$diff" -lt -25 ] && diff=-25
-              exit "$((200 + diff))"
+              echo "expected '$label' to make check fail, but it exited 0"; cat err.log; exit 1
             fi
             if ! grep -q "$expected" err.log; then
-              echo "'$label' failed for the wrong reason:"; cat err.log; exit "$((code + 1))"
+              echo "'$label' failed for the wrong reason:"; cat err.log; exit 1
             fi
             echo "ok: $label made check fail — $(head -1 err.log)"
           }
 
           reseed
-          if ! bash scripts/hermetic/honeypot.sh check "$dir"; then
-            echo "an untouched, freshly seeded honeypot unexpectedly failed check"; exit 50
-          fi
+          bash scripts/hermetic/honeypot.sh check "$dir"
           echo "ok: an untouched honeypot passes"
 
           reseed
           touch "$dir/new-file"
-          assert_check_fails "a new file inside the honeypot" "touched the real-home honeypot" 61
+          assert_check_fails "a new file inside the honeypot" "touched the real-home honeypot"
 
           reseed
           echo rewritten > "$dir/sentinel"
-          assert_check_fails "an in-place rewrite of the sentinel" "touched the real-home honeypot" 63
+          assert_check_fails "an in-place rewrite of the sentinel" "touched the real-home honeypot"
 
           reseed
           rm -rf "$dir"
-          assert_check_fails "a deleted honeypot directory" "the honeypot directory is gone" 65
+          assert_check_fails "a deleted honeypot directory" "the honeypot directory is gone"
 
           reseed
           rm -f "$ref"
-          assert_check_fails "a missing reference timestamp" "no reference timestamp" 67
+          assert_check_fails "a missing reference timestamp" "no reference timestamp"
