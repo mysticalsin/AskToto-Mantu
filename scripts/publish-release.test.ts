@@ -5,6 +5,7 @@ import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   feedRepository,
+  planBuild,
   platformAssets,
   publishPlatform,
   toRelease
@@ -207,6 +208,33 @@ afterEach(() => {
 })
 
 describe('publish-release platform rules (M2-0053)', () => {
+  describe('planBuild', () => {
+    for (const platform of ['mac', 'win'] as Platform[]) {
+      it(`refuses to build ${platformLabels[platform]} when the platform is already fully published`, () => {
+        const build = () => planBuild(platform, VERSION, [release({ platform })])
+
+        expect(build).toThrow(/already published/i)
+        expect(build).toThrow(/re-run only the failed publish job.*tag a new version/i)
+      })
+
+      it(`allows ${platformLabels[platform]} to create the release when no release exists for the tag`, () => {
+        expect(planBuild(platform, VERSION, [])).toEqual({ action: 'create' })
+      })
+
+      it(`allows ${platformLabels[platform]} to join when the other platform is already published`, () => {
+        expect(planBuild(platform, VERSION, [release({ platform: otherPlatform(platform) })]).action).toBe('join')
+      })
+
+      it(`allows ${platformLabels[platform]} to replace its own partial leftover draft`, () => {
+        expect(
+          planBuild(platform, VERSION, [
+            release({ draft: true, assets: assetsFor(platform, [primaryInstaller[platform]]) })
+          ]).action
+        ).toBe('replace-draft')
+      })
+    }
+  })
+
   for (const platform of ['mac', 'win'] as Platform[]) {
     it(`MQA-292: the first ${platformLabels[platform]} platform reaches the feed through a draft that becomes public and Latest only after its exact assets and digests are verified`, async () => {
       const feed = new FakeFeed()
