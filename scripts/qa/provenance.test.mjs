@@ -377,7 +377,7 @@ test('verify accepts the exact bytes and names a changed byte, a missing file an
   }
 })
 
-test('evidence needs at least one PASS record bound to this run and its bytes', async () => {
+test('evidence needs a PASS record bound to this run for every promotable asset', async () => {
   const { root, releaseDir } = fixture()
   try {
     const { records, env: e } = await stageAll(root, releaseDir)
@@ -385,13 +385,16 @@ test('evidence needs at least one PASS record bound to this run and its bytes', 
     assert.deepEqual(evidenceProblems('', provenance), [
       'no evidence records: promotion needs at least one passing record bound to these bytes'
     ])
-    const sha = provenance.builds[0].assets[0].sha256
-    const line = JSON.stringify({ ticket: 'M2-0028', result: 'PASS', build_run_id: provenance.run.id, artifact_sha256: sha })
-    assert.deepEqual(evidenceProblems(line, provenance), [])
-    assert.deepEqual(evidenceProblems(`${line}\n`, provenance), [])
+    const promotableAssets = provenance.builds
+      .filter((build) => PROMOTABLE_VARIANTS.includes(build.variant))
+      .flatMap((build) => build.assets)
+    const fullCoverage = promotableAssets.map((asset) => passEvidenceLine(provenance, asset.sha256)).join('')
+    assert.deepEqual(evidenceProblems(fullCoverage, provenance), [])
+    assert.deepEqual(evidenceProblems(fullCoverage.trimEnd(), provenance), [])
     // A CRLF file (the schema explicitly allows one) can end in a repeated line ending; every repetition
-    // must be stripped, not just the last one, or the leftover 'x\r\n' misreports as a blank line 2.
-    assert.deepEqual(evidenceProblems(`${line}\r\n\r\n`, provenance), [])
+    // must be stripped, not just the last one, or the leftover 'x\r\n' misreports as a blank line.
+    const crlf = fullCoverage.trimEnd().split('\n').join('\r\n')
+    assert.deepEqual(evidenceProblems(`${crlf}\r\n\r\n`, provenance), [])
   } finally {
     cleanup(root)
   }
@@ -406,31 +409,55 @@ test('evidence problems name the line', async () => {
     const good = (overrides = {}) =>
       JSON.stringify({ ticket: 'M2-0028', result: 'PASS', build_run_id: provenance.run.id, artifact_sha256: sha, ...overrides })
 
+    // Every promotable asset besides `sha` is uncovered here (these lines test per-line validation, not
+    // coverage), so a defect is checked by presence, not by problems.length: coverage adds its own entries.
     let problems = evidenceProblems(good({ result: 'FAIL' }), provenance)
-    assert.equal(problems.length, 1)
-    assert.match(problems[0], /line 1/)
-    assert.match(problems[0], /FAIL/)
+    assert.ok(problems.some((p) => /line 1/.test(p) && /FAIL/.test(p)))
 
     problems = evidenceProblems(good({ build_run_id: provenance.run.id + 1 }), provenance)
-    assert.equal(problems.length, 1)
-    assert.match(problems[0], new RegExp(`run ${provenance.run.id + 1}`))
-    assert.match(problems[0], new RegExp(`run ${provenance.run.id}\\b`))
+    assert.ok(problems.some((p) => new RegExp(`run ${provenance.run.id + 1}`).test(p) && new RegExp(`run ${provenance.run.id}\\b`).test(p)))
 
     problems = evidenceProblems(good({ artifact_sha256: 'f'.repeat(64) }), provenance)
-    assert.equal(problems.length, 1)
-    assert.match(problems[0], /line 1/)
+    assert.ok(problems.some((p) => /line 1/.test(p)))
 
     problems = evidenceProblems(good({ ticket: 'not-a-ticket' }), provenance)
-    assert.equal(problems.length, 1)
-    assert.match(problems[0], /ticket/)
+    assert.ok(problems.some((p) => /ticket/.test(p)))
 
     problems = evidenceProblems('{not json', provenance)
-    assert.equal(problems.length, 1)
-    assert.match(problems[0], /not valid JSON/)
+    assert.ok(problems.some((p) => /not valid JSON/.test(p)))
 
     problems = evidenceProblems([good(), good(), '', good()].join('\n'), provenance)
+    assert.ok(problems.some((p) => /line 3 is blank/.test(p)))
+  } finally {
+    cleanup(root)
+  }
+})
+
+test('a PASS record for one promotable asset never covers a different asset or platform', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    const { records, env: e } = await stageAll(root, releaseDir)
+    const provenance = assembleProvenance(records, e)
+    const promotableAssets = provenance.builds
+      .filter((build) => PROMOTABLE_VARIANTS.includes(build.variant))
+      .flatMap((build) => build.assets)
+    assert.equal(promotableAssets.length, 4, 'fixture must stage both mac and win assets to exercise cross-asset coverage')
+
+    const [missing, ...covered] = promotableAssets
+    const partialCoverage = covered.map((asset) => passEvidenceLine(provenance, asset.sha256)).join('')
+    let problems = evidenceProblems(partialCoverage, provenance)
     assert.equal(problems.length, 1)
-    assert.match(problems[0], /line 3 is blank/)
+    assert.ok(problems[0].includes(missing.name))
+    assert.ok(problems[0].includes(missing.sha256))
+
+    // Two PASS records bound to the SAME asset never substitute for the others.
+    const sameAssetTwice =
+      passEvidenceLine(provenance, missing.sha256, 'M2-0028') + passEvidenceLine(provenance, missing.sha256, 'M2-0060')
+    problems = evidenceProblems(sameAssetTwice, provenance)
+    assert.equal(problems.length, covered.length)
+    for (const asset of covered) {
+      assert.ok(problems.some((p) => p.includes(asset.name)), `expected a problem naming ${asset.name}`)
+    }
   } finally {
     cleanup(root)
   }
@@ -470,7 +497,13 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
     const placeholder = evidenceBytes.indexOf('X'.charCodeAt(0))
     assert.notEqual(placeholder, -1)
     evidenceBytes[placeholder] = 0x80
-    writeFileSync(evidencePath, evidenceBytes)
+    // Promotion needs a PASS record for every promotable asset, not just the mac one above.
+    const otherAssets = provenance.builds
+      .filter((b) => PROMOTABLE_VARIANTS.includes(b.variant))
+      .flatMap((b) => b.assets)
+      .filter((asset) => asset.sha256 !== macSha)
+    const restOfEvidence = Buffer.from(otherAssets.map((asset) => passEvidenceLine(provenance, asset.sha256)).join(''), 'utf8')
+    writeFileSync(evidencePath, Buffer.concat([evidenceBytes, restOfEvidence]))
 
     const outDir = join(root, 'promotion')
     await prepareRelease({
@@ -699,7 +732,10 @@ test('the CLI stages, assembles, verifies and prepares a release end to end', as
     mkdirSync(downloadsDir, { recursive: true })
     copyPromotableAssetsToDownloads(root, provenance, downloadsDir)
     const evidencePath = join(root, 'evidence.jsonl')
-    writeFileSync(evidencePath, passEvidenceLine(provenance, macAsset.sha256))
+    const promotableAssets = provenance.builds
+      .filter((b) => PROMOTABLE_VARIANTS.includes(b.variant))
+      .flatMap((b) => b.assets)
+    writeFileSync(evidencePath, promotableAssets.map((asset) => passEvidenceLine(provenance, asset.sha256)).join(''))
     const prepareResult = run([
       'prepare-release',
       join('provenance', 'provenance.json'),
