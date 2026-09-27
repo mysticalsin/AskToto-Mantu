@@ -409,3 +409,8 @@ Capture / `saveTranscript` / `parakeetFeed` / `armAudio` still `takeHotPath`, ne
 ## Out of scope (frozen)
 
 Overlay chrome, island geometry, onboarding, identity card, Intelligence dashboards, latency / time-saved, starfield, orbs, pill, Brain PRs. Pack and GitHub release stay last. Never auto-send.
+
+## Scope note — AI Gateway no-content-retention contract
+
+This checklist does not cover the AI Gateway no-content-retention contract, which is owned by
+M2-0149.

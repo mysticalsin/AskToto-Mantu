@@ -661,7 +661,7 @@ describe('checkCliSession — the zero-token liveness probe behind MQA-062', () 
   // below could never be reached.
   let checkCliSession: typeof import('./cli').checkCliSession
 
-  /** Route resolveBin (`$SHELL -lc "command -v <bin>"`) and the status probe to separate fakes. */
+  /** Route resolveBin (`$SHELL -lc 'command -v "$METIS_RESOLVE_BIN"'`) and the status probe to separate fakes. */
   const wire = (status: () => Promise<{ stdout: string }>, bin: string | null = '/usr/local/bin/tool'): void => {
     h.execFileImpl.mockImplementation((_cmd: string, args: string[]) => {
       if (args?.[0] === '-lc') return Promise.resolve({ stdout: bin ? `${bin}\n` : '   \n', stderr: '' })

@@ -9,9 +9,10 @@
  *
  * Prerequisites (the app must already be running with CDP + an isolated profile):
  *   npm run build
- *   ASKTOTO_USERDATA=<dir> ./node_modules/electron/dist/electron.exe . --remote-debugging-port=9334
+ *   ASKTOTO_USERDATA=<dir under the OS temp dir> ./node_modules/electron/dist/electron.exe . --remote-debugging-port=9334
  * Note: --user-data-dir does NOT move app.getPath('userData') — the app appends "-dev" when unpackaged,
- * so ASKTOTO_USERDATA (honored in main/index.ts) is the only reliable isolation switch.
+ * so ASKTOTO_USERDATA (honored in main/index.ts) is the only reliable isolation switch, and only a
+ * directory under the OS temp dir passes assertAttachedAppIsSandboxed's check below.
  *
  * Usage:
  *   node scripts/qa/e2e-workflows.mjs                        # everything
@@ -29,6 +30,11 @@ import { join } from 'node:path'
 // CSP-restricted renderer. `rejectUnauthorized: false` is safe and necessary here: the mock serves a
 // throwaway self-signed cert on 127.0.0.1, and this is test tooling, never shipped code.
 import { request as httpsRequest } from 'node:https'
+// W0-HERMETIC (M2-0190) — see this file's own header: ASKTOTO_USERDATA is "the only reliable isolation
+// switch" for the real app this harness drives. This asks the ATTACHED APP whether it took effect —
+// checking this harness's own process.env only proves the operator's shell saw the variable, never that
+// the app it launched did, since the documented launch sets it only on the spawned app process.
+import { assertAttachedAppIsSandboxed } from './lib/sandbox-guard.mjs'
 
 const CDP = process.env.METIS_CDP ?? 'http://127.0.0.1:9334'
 const OUT = process.env.METIS_QA_OUT ?? 'D:\\tmp-metis-e2e\\qa-report.json'
@@ -1620,6 +1626,17 @@ if (args.includes('--list')) {
 
 const browser = await chromium.connectOverCDP(CDP)
 page = await findTotoPage(browser)
+
+// W0-HERMETIC (M2-0190) — before touching the connected app's real settings/brain on disk, ask the
+// ATTACHED APP whether it is actually sandboxed (its own resolvedMeetingsFolder), not just whether this
+// harness's own shell followed the documented prerequisite. Refuses to run rather than silently mutating
+// a real developer profile.
+try {
+  await assertAttachedAppIsSandboxed(page)
+} catch (e) {
+  console.error(`[e2e-workflows] ${e.message}`)
+  process.exit(2)
+}
 
 const selected = only ? only.split(',').map((s) => s.trim()).filter((s) => GROUPS[s]) : Object.keys(GROUPS)
 if (only && !selected.length) {

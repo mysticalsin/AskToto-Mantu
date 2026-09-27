@@ -1,0 +1,217 @@
+{
+  "key": {
+    "tenant": "00000000-0000-4000-8000-000000000001",
+    "space": "00000000-0000-4000-8000-000000000010",
+    "id": "00000000-0000-4000-8000-000000000102"
+  },
+  "type": "deal",
+  "revision": 4,
+  "owner": {
+    "kind": "user",
+    "id": "00000000-0000-4000-8000-0000000000a1"
+  },
+  "committedBy": {
+    "type": "user",
+    "principal": {
+      "kind": "user",
+      "id": "00000000-0000-4000-8000-0000000000a1"
+    }
+  },
+  "committedAt": "2026-09-22T10:30:00Z",
+  "access": {
+    "epoch": 1,
+    "readers": [
+      {
+        "kind": "user",
+        "id": "00000000-0000-4000-8000-0000000000a1"
+      },
+      {
+        "kind": "group",
+        "id": "00000000-0000-4000-8000-0000000000b1"
+      }
+    ],
+    "editors": [
+      {
+        "kind": "user",
+        "id": "00000000-0000-4000-8000-0000000000a1"
+      }
+    ]
+  },
+  "sensitivity": "internal",
+  "retention": {
+    "policy": "standard"
+  },
+  "dates": {
+    "observed": "2026-09-21T14:00:00Z",
+    "effective": "2026-09-22T10:30:00Z"
+  },
+  "fields": {
+    "stage": {
+      "current": {
+        "value": "negotiation",
+        "state": "EXTRACTED",
+        "observedAt": "2026-09-21T14:00:00Z",
+        "evidence": [
+          {
+            "kind": "source",
+            "source": {
+              "system": "metis-meeting",
+              "id": "meeting-2026-09-21-northwind-pricing",
+              "revision": "sha256-91c2"
+            },
+            "quote": "We are now negotiating the final terms."
+          }
+        ],
+        "confidence": "high"
+      },
+      "history": [
+        {
+          "value": "proposal",
+          "state": "SUPERSEDED",
+          "observedAt": "2026-09-14T09:00:00Z",
+          "evidence": [
+            {
+              "kind": "source",
+              "source": {
+                "system": "metis-meeting",
+                "id": "meeting-2026-09-14-northwind-kickoff",
+                "revision": "sha256-7f3a"
+              },
+              "quote": "We will send the proposal next week."
+            }
+          ]
+        }
+      ],
+      "disputes": []
+    },
+    "amount": {
+      "current": {
+        "value": {
+          "value": 240000,
+          "currency": "EUR"
+        },
+        "state": "PINNED",
+        "observedAt": "2026-09-14T09:00:00Z",
+        "evidence": [
+          {
+            "kind": "source",
+            "source": {
+              "system": "metis-meeting",
+              "id": "meeting-2026-09-14-northwind-kickoff",
+              "revision": "sha256-7f3a"
+            },
+            "quote": "The budget is 240,000 euros."
+          }
+        ],
+        "attestation": {
+          "by": {
+            "kind": "user",
+            "id": "00000000-0000-4000-8000-0000000000a1"
+          },
+          "at": "2026-09-15T08:00:00Z",
+          "revision": 2
+        }
+      },
+      "history": [],
+      "disputes": [
+        {
+          "value": {
+            "value": 250000,
+            "currency": "EUR"
+          },
+          "state": "DISPUTED",
+          "observedAt": "2026-09-21T14:00:00Z",
+          "evidence": [
+            {
+              "kind": "source",
+              "source": {
+                "system": "metis-meeting",
+                "id": "meeting-2026-09-21-northwind-pricing",
+                "revision": "sha256-91c2"
+              },
+              "quote": "Maybe 250,000 if the scope grows."
+            }
+          ],
+          "confidence": "low"
+        }
+      ]
+    },
+    "close_date": {
+      "current": {
+        "value": "2026-12-31",
+        "state": "STALE",
+        "observedAt": "2026-09-14T09:00:00Z",
+        "evidence": [
+          {
+            "kind": "source",
+            "source": {
+              "system": "metis-meeting",
+              "id": "meeting-2026-09-14-northwind-kickoff",
+              "revision": "sha256-7f3a"
+            },
+            "quote": "We want to sign before the end of the year."
+          }
+        ]
+      },
+      "history": [],
+      "disputes": []
+    },
+    "win_likelihood": {
+      "current": {
+        "value": "mixed",
+        "state": "INFERRED",
+        "observedAt": "2026-09-21T14:00:00Z",
+        "evidence": [
+          {
+            "kind": "source",
+            "source": {
+              "system": "metis-meeting",
+              "id": "meeting-2026-09-21-northwind-pricing",
+              "revision": "sha256-91c2"
+            }
+          }
+        ],
+        "confidence": "low"
+      },
+      "history": [],
+      "disputes": []
+    },
+    "decision_maker": {
+      "current": {
+        "value": "Head of procurement",
+        "state": "DISPUTED",
+        "observedAt": "2026-09-14T09:00:00Z",
+        "evidence": [
+          {
+            "kind": "source",
+            "source": {
+              "system": "metis-meeting",
+              "id": "meeting-2026-09-14-northwind-kickoff",
+              "revision": "sha256-7f3a"
+            },
+            "quote": "Procurement will make the final call."
+          }
+        ]
+      },
+      "history": [],
+      "disputes": [
+        {
+          "value": "Chief financial officer",
+          "state": "DISPUTED",
+          "observedAt": "2026-09-21T14:00:00Z",
+          "evidence": [
+            {
+              "kind": "source",
+              "source": {
+                "system": "metis-meeting",
+                "id": "meeting-2026-09-21-northwind-pricing",
+                "revision": "sha256-91c2"
+              },
+              "quote": "The CFO signs anything above 200,000."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

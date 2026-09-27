@@ -6,12 +6,15 @@
  *     cmd.exe as the *target executable* (see resolveSpawnTarget) — that is not shell:true, and any
  *     free-text ARG containing a quote, newline, or a cmd.exe command-separator/expansion
  *     metacharacter (&|^%<>()!) is rejected first (see cmdShimSpawn). The resolved bin path itself is
- *     not free text (it comes from resolveBin), so it is only guarded against quote/newline/% and is
- *     otherwise made safe by explicit quoting + windowsVerbatimArguments (see cmdShimSpawn).
+ *     not free text (it comes from resolveBin), so it is only guarded against the characters quoting
+ *     cannot neutralize (isQuotablePath) and is otherwise made safe by explicit quoting +
+ *     windowsVerbatimArguments (see cmdShimSpawn).
  *   - claude-cli: --allowedTools '' --disallowedTools '*' so the agent can never execute arbitrary tools.
  *   - codex-cli: features.shell_tool=false + runs in a throwaway tmp cwd.
  *   - resolveBin() finds the absolute path via the login shell (mac/Linux) or `where` + an APPDATA
- *     probe (Windows) — never relies on a minimal GUI PATH.
+ *     probe (Windows) — never relies on a minimal GUI PATH. On mac/Linux the binary name reaches the
+ *     login shell only as an environment variable under a constant script, never spliced into the
+ *     script text (see resolveBin).
  */
 
 import { spawn, execFile } from 'node:child_process'
@@ -203,6 +206,13 @@ function cacheResolved(bin: string, resolved: string): string {
   return resolved
 }
 
+/** The login shell reads the binary name from this variable. The script is a constant, so `bin` is
+ *  only ever data to the shell (expanded quoted), never spliced into the script text itself — so no
+ *  shell separator or backtick in `bin` can run as shell SYNTAX. An env var, not `"$1"`: fish (a real
+ *  macOS login shell) has no positional `$1` here, but `"$VAR"` expands in sh, bash, zsh and fish alike. */
+const RESOLVE_BIN_VAR = 'METIS_RESOLVE_BIN'
+const RESOLVE_BIN_SCRIPT = `command -v "$${RESOLVE_BIN_VAR}"`
+
 /**
  * Resolve a CLI binary to its absolute path.
  * A packaged Electron app runs with a minimal PATH. On macOS/Linux the login shell loads the full
@@ -240,7 +250,9 @@ export async function resolveBin(bin: string): Promise<string | null> {
 
   const shell = process.env.SHELL || '/bin/zsh'
   try {
-    const { stdout } = await execFileAsync(shell, ['-lc', `command -v ${bin}`])
+    const { stdout } = await execFileAsync(shell, ['-lc', RESOLVE_BIN_SCRIPT], {
+      env: { ...process.env, [RESOLVE_BIN_VAR]: bin }
+    })
     const resolved = stdout.trim() || null
     // Only cache positive hits; null (not-found) must not be cached so that a subsequent
     // in-app install is picked up immediately without requiring an app restart.
@@ -305,6 +317,25 @@ export function isCmdShim(bin: string): boolean {
   return /\.cmd$/i.test(bin)
 }
 
+/** How a script embeds a resolved path: always inside double quotes. */
+type QuotingDialect = 'cmd' | 'bash'
+
+/**
+ * Characters double quotes do not neutralize, per dialect. A resolved path is never free text, so what
+ * quoting does neutralize stays launchable: spaces and & | ^ < > ( ) ! in cmd.exe (`C:\Users\R&D\…`,
+ * `C:\Program Files (x86)\…`). cmd: a quote or line break ends the token; % expands even inside quotes.
+ * bash: a quote or line break ends it; $ ` and \ stay live inside double quotes.
+ */
+const UNQUOTABLE: Record<QuotingDialect, RegExp> = { cmd: /["\r\n%]/, bash: /["$`\\\r\n]/ }
+
+/** Is `path` safe to embed inside double quotes for `dialect`? Shared by cmdShimSpawn's resolved bin,
+ *  the login script's resolved bin, and the login script's managed launcher paths — one rule instead
+ *  of separate copies that can silently drift apart. Free-text ARGUMENTS keep their own, stricter rule
+ *  (cmdShimSpawn's `["\r\n&|^%<>()!]`); this is only ever applied to a resolved path. */
+function isQuotablePath(path: string, dialect: QuotingDialect): boolean {
+  return !UNQUOTABLE[dialect].test(path)
+}
+
 /**
  * Build the { command, args } to launch a `.cmd` shim via cmd.exe. Node/Electron builds patched for
  * CVE-2024-27980 throw EINVAL when spawn() is given a `.cmd`/`.bat` target directly with shell:false —
@@ -348,11 +379,10 @@ export function cmdShimSpawn(
       )
     }
   }
-  // bin is the RESOLVED absolute .cmd path from resolveBin — never free text — so it only needs
-  // guarding against the characters explicit quoting below cannot neutralize: a quote/newline would
-  // break out of the wrapping quotes, and % triggers cmd.exe %VAR% expansion even inside quotes.
-  // Spaces, &, |, ^, <, >, (, ), ! in bin are all made safe by the explicit outer+inner quoting.
-  if (/["\r\n%]/.test(bin)) {
+  // bin is the RESOLVED absolute .cmd path from resolveBin — never free text — so it is guarded by
+  // isQuotablePath, not the free-text argument rule above (spaces/&|^<>()! are made safe by the
+  // explicit outer+inner quoting below).
+  if (!isQuotablePath(bin, 'cmd')) {
     throw new Error(
       'refusing to spawn: the resolved binary path contains a quote, newline, or % (unsafe for cmd.exe)'
     )
@@ -1499,17 +1529,15 @@ export async function installCli(
 
 // ─── loginCli ────────────────────────────────────────────────────────────────────
 
-/**
- * Open a Terminal (macOS) or console (Windows) window for interactive CLI login only (no npm
- * install step). The user has already installed the CLI in-app via installCli; this is the
- * companion step for providers that require an interactive login flow. Mirrors setupCli's pattern.
- */
-function loginScriptPathSafe(bin: string): boolean {
-  return !/["\r\n%]/.test(bin)
-}
-
-function invokeResolvedBinLines(bin: string, extra: string[], isWin: boolean): string[] | null {
-  if (!loginScriptPathSafe(bin) || isWindowsDesktopAlias(bin)) return null
+/** Build the script line(s) that invoke the resolved `bin` directly, appending `extra` args. A Windows
+ *  `.cmd` shim needs `call` so cmd.exe returns control to the script afterward. */
+function invokeResolvedBinLines(
+  bin: string,
+  extra: string[],
+  isWin: boolean,
+  dialect: QuotingDialect
+): string[] | null {
+  if (!isQuotablePath(bin, dialect) || isWindowsDesktopAlias(bin)) return null
   const extraQ = extra.map((a) => `"${a}"`).join(' ')
   if (isWin) {
     if (isCmdShim(bin)) {
@@ -1528,12 +1556,13 @@ export function loginCliInvokeLines(
   resolvedBin?: string | null
 ): string[] {
   const extra = provider === 'codex-cli' ? ['login'] : []
+  const dialect: QuotingDialect = isWin ? 'cmd' : 'bash'
   // A real Claude Code / Codex exe on disk is the license the user already paid for.
   if (resolvedBin && !isManagedCliEntry(resolvedBin)) {
-    const native = invokeResolvedBinLines(resolvedBin, extra, isWin)
+    const native = invokeResolvedBinLines(resolvedBin, extra, isWin, dialect)
     if (native) return native
   }
-  if (managed?.command) {
+  if (managed?.command && [managed.command, ...managed.args].every((p) => isQuotablePath(p, dialect))) {
     const quoted = [`"${managed.command}"`, ...managed.args.map((a) => `"${a}"`), ...extra.map((a) => `"${a}"`)].join(
       ' '
     )
@@ -1547,7 +1576,7 @@ export function loginCliInvokeLines(
     return [env ? `${env} ${quoted}` : quoted]
   }
   if (resolvedBin && isManagedCliEntry(resolvedBin)) {
-    const managedJs = invokeResolvedBinLines(resolvedBin, extra, isWin)
+    const managedJs = invokeResolvedBinLines(resolvedBin, extra, isWin, dialect)
     if (managedJs) return managedJs
   }
   if (isWin) return [provider === 'codex-cli' ? 'call codex login' : 'call claude']
@@ -1578,6 +1607,11 @@ async function openCliScript(scriptPath: string, isWin: boolean): Promise<string
   return (await shell.openPath(scriptPath)) || ''
 }
 
+/**
+ * Open a Terminal (macOS) or console (Windows) window for interactive CLI login only (no npm
+ * install step). The user has already installed the CLI in-app via installCli; this is the
+ * companion step for providers that require an interactive login flow. Mirrors setupCli's pattern.
+ */
 export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; error?: string }> {
   if (process.platform !== 'darwin' && process.platform !== 'win32') {
     return {

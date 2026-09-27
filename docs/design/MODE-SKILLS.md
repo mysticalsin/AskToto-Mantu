@@ -8,6 +8,9 @@ ready-to-merge: no until Devon Mac-shows Interview + Cold Calling + Support answ
 
 # Locked mode skills
 
+**Status:** Draft — ready-to-merge: no until Devon Mac-shows Interview + Cold Calling + Support
+answers that use the skill (see frontmatter).
+
 Tony's rule: the visible prompt in Settings → Personalize stays user-editable. The thing that actually makes the LLM sharp is a **shipped skill** that runs in the background. Nobody can change that skill unless Tony ships a Métis release of that specific file.
 
 This file is the contract. Implement only what it names.

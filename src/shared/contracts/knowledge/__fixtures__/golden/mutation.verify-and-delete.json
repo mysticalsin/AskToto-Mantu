@@ -1,0 +1,20 @@
+{
+  "target": {
+    "space": "00000000-0000-4000-8000-000000000010",
+    "id": "00000000-0000-4000-8000-000000000105"
+  },
+  "expectedRevision": 2,
+  "idempotencyKey": "request-000000000003",
+  "reason": "The commitment was made, but no due date was agreed.",
+  "evidence": [],
+  "patch": [
+    {
+      "op": "verify",
+      "field": "text"
+    },
+    {
+      "op": "delete",
+      "field": "due"
+    }
+  ]
+}

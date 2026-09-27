@@ -37,6 +37,9 @@ motion:
 
 # Métis Design Contract
 
+**Status:** Active — the operative overlay visual contract (see § Platform for the north star this
+file implements pixels for).
+
 ## Platform (Fable 5.1)
 
 The one product story is [`METIS-PLATFORM-NORTH-STAR.md`](METIS-PLATFORM-NORTH-STAR.md). Slice
@@ -143,6 +146,10 @@ dashboard. The button is the trigger. Never auto-send. Not leftover PR 61.
 
 ## Operator
 See [OPERATOR.md](./OPERATOR.md). Cloudflare Access packed ops console (`operator/`, Worker `metis-operator`). Client keeps prompt cache on. Map geo comes from `request.cf`, never from the app. Not overlay chrome. Not the Fly license-server. Not `cloudflare-proxy`.
+
+**2.0 reconciliation.** The kit specifies 11 named portal surfaces (MASTER §12.2) against this
+file's 8-tab rail below. Whether and how those additional surfaces join this console is an open
+scope question owned by M2-0158 — see [OPERATOR.md](./OPERATOR.md).
 
 ## Operator — Shoey OpenPanel bar, Métis seats (Fable lock 6 Sep 2026)
 
@@ -371,6 +378,8 @@ See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a Jakub thinking-orb (`thinking-orbs`, theme `dark`): canvas 64, 2x backing, visible 41×41. Idle `solving` with no caption, listen `listening`, think `working`, fact-check `searching`, connecting `connecting`. Same circle when minimized. Left Settings M stays a circle (no-squash M). Not stuffed into overlay Hide/Island. Not a Fit Studio magenta core.
 
 Bar rest look (power choice): [ORB-SELECTION.md](./ORB-SELECTION.md). Full bar (default, Jarvis circle docked) or Circle (Jarvis particle rest). Hide/Island ignore it. Never Obsidian.
+
+**2.0 reconciliation.** This file's Bar/orb pixel contract (together with [BAR-PILL.md](BAR-PILL.md) and [ORB-SELECTION.md](ORB-SELECTION.md)), [METIS-2.0-JARVIS-COMMAND.md](METIS-2.0-JARVIS-COMMAND.md)'s pill/sidecar placement, and [METIS-2.0-CAP2-WAKE-ADAPTERS.md](METIS-2.0-CAP2-WAKE-ADAPTERS.md)'s shipped wake path are three overlapping designs that do not fully agree. M2-0093 (TASK-030) owns reconciling all three into one committed design; until it lands, this file remains the operative shipped visual contract for Bar/orb pixels.
 
 ## Auto-answer
 Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send) or a new question replaces it. Not an ephemeral 4s/7s card.
