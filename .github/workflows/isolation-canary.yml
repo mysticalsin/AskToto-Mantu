@@ -107,7 +107,9 @@ jobs:
           sandbox="$(cat "$RUNNER_TEMP/swift-shim-sandbox-path" 2>/dev/null || echo '')"
           if [ -n "$sandbox" ] && [ -e "$sandbox" ]; then
             echo "run-swift-tests.sh left its sandbox behind: $sandbox"
-            exit 111
+            # DEBUG (temporary): distinguishes "the volume is still mounted" (113 — detach never worked)
+            # from "it's unmounted but rm -rf still failed some other way" (114).
+            if mount | grep -qF "$sandbox"; then exit 113; else exit 114; fi
           fi
           if [ -n "$sandbox" ] && mount | grep -qF "$sandbox"; then
             echo "run-swift-tests.sh left a mount behind under $sandbox"
@@ -222,7 +224,17 @@ jobs:
           assert_check_fails() {
             local label="$1" expected="$2" code="$3"
             if bash scripts/hermetic/honeypot.sh check "$dir" 2>err.log; then
-              echo "expected '$label' to make check fail, but it exited 0"; cat err.log; exit "$code"
+              echo "expected '$label' to make check fail, but it exited 0"; cat err.log
+              # DEBUG (temporary): find's -newer comparison is what "exited 0" here means went wrong;
+              # encode the mtime ordering it saw (dir's newest entry minus ref, whole seconds, clamped
+              # to ±25) as 200+diff so a same-second (or backwards) race is visible without log access.
+              local newest_mtime ref_mtime diff
+              newest_mtime="$(find "$dir" -printf '%T@\n' | cut -d. -f1 | sort -rn | head -1)"
+              ref_mtime="$(stat -c %Y "$ref")"
+              diff=$((newest_mtime - ref_mtime))
+              [ "$diff" -gt 25 ] && diff=25
+              [ "$diff" -lt -25 ] && diff=-25
+              exit "$((200 + diff))"
             fi
             if ! grep -q "$expected" err.log; then
               echo "'$label' failed for the wrong reason:"; cat err.log; exit "$((code + 1))"
