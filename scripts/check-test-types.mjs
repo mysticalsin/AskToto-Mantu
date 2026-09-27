@@ -42,8 +42,8 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * 2026-09-06: 29 → 26 after merging origin/release/1.8.3 KineticGrid onto this tip.
  * 2026-09-27: 26 → 50, red-first for M2-0026: stop-all.test.ts, exit-paths.test.ts,
  * qa-fault-hook.test.ts and fault-fatal-relaunch.test.ts import infra/process/stop-all,
- * lifecycle/exit-paths, qa-identity, lib/qa-fault-hook.mjs and qa/fault-fatal-relaunch.mjs, which this
- * PR's implementation commits create. Falls back to 26 once those land — never a permanent raise.
+ * lifecycle/exit-paths, qa-identity, lib/qa-fault-hook.mjs and qa/fault-fatal-relaunch.mjs. 50 → 26 once
+ * this ticket's implementation commit creates those modules.
  *
  * The last pass typed the mocks to the signatures production actually calls, rather than letting them be
  * inferred from a stub body — which is what had made `mock.calls[0][0]` a type error against a call the
@@ -51,7 +51,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * providerId that does not exist ('claude-api'), and FIVE more `{ gguf, mmproj }` omissions — the same
  * `-c undefined` shape, in a third file.
  */
-const BASELINE = 50
+const BASELINE = 26
 
 let output = ''
 try {
