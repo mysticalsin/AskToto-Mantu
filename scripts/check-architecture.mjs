@@ -181,7 +181,15 @@ export function lowerBaseline(baseline, current) {
       }
     }
   }
-  return canonicalCounts(lowered)
+  /** @type {Counts} */
+  const sorted = {}
+  for (const rule of RULE_IDS) {
+    const files = Object.keys(lowered[rule] ?? {}).sort()
+    if (files.length === 0) continue
+    sorted[rule] = {}
+    for (const file of files) sorted[rule][file] = lowered[rule][file]
+  }
+  return sorted
 }
 
 /**

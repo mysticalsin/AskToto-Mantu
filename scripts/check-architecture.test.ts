@@ -115,9 +115,9 @@ module.exports = {
 
 function sortedViolationLines(stdout: string): string[] {
   const report = JSON.parse(stdout) as {
-    violations: Array<{ rule: { name: string; severity: string }; from: string }>
+    summary: { violations: Array<{ rule: { name: string; severity: string }; from: string }> }
   }
-  return report.violations
+  return report.summary.violations
     .map((violation) => `${violation.rule.name} ${violation.rule.severity} ${violation.from}`)
     .sort()
 }
@@ -379,7 +379,6 @@ describe('architecture source detectors', () => {
         "import { readFileSync as rf } from 'fs'",
         "import * as fs from 'node:fs'",
         "const { mkdirSync } = require('node:fs')",
-        "import { execFileSync } from 'node:child_process'",
         'function writeRunStateSync() {}',
         'readFileSync("a")',
         'rf("b")',
@@ -468,8 +467,8 @@ describe('architecture source detectors', () => {
         'void source',
       ].join('\n'))).toEqual({})
       expect(countSourceFile('src/main/x.ts', [
-        "import { readFileSync } from 'node:fs'",
-        "readFileSync('index.ts', 'utf8')",
+        "import { readFile } from 'node:fs'",
+        "readFile('index.ts', 'utf8', () => {})",
       ].join('\n'))).toEqual({})
     })
   })
