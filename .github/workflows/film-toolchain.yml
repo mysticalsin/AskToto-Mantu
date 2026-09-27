@@ -1,0 +1,54 @@
+name: Film toolchain
+
+# Proves the launch film's render path (M2-0212) on a GitHub-hosted runner, the machine film renders use
+# instead of a developer Mac (D-28): renders the synthetic 5-second 3840x2160 spike with the pinned
+# toolchain and verifies the MP4.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - m2/M2-0212-film-toolchain-spike
+
+permissions:
+  contents: read
+
+concurrency:
+  group: film-toolchain-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+    working-directory: film/toolchain
+
+jobs:
+  spike:
+    name: Render and verify the 4K spike
+    # Named, not ubuntu-latest: the FFmpeg pin below is a package version of this Ubuntu release.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # Ubuntu 24.04 ships exactly this FFmpeg build in its release pocket, which is never rewritten.
+      FFMPEG_VERSION: 7:6.1.1-3ubuntu5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.3
+      - name: Install the pinned FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            "ffmpeg=$FFMPEG_VERSION" \
+            "libavcodec60=$FFMPEG_VERSION" \
+            "libavdevice60=$FFMPEG_VERSION" \
+            "libavfilter9=$FFMPEG_VERSION" \
+            "libavformat60=$FFMPEG_VERSION" \
+            "libavutil58=$FFMPEG_VERSION" \
+            "libpostproc57=$FFMPEG_VERSION" \
+            "libswresample4=$FFMPEG_VERSION" \
+            "libswscale7=$FFMPEG_VERSION"
+      - name: Verify the spike
+        run: node --test spike.test.mjs
