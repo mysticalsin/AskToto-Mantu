@@ -337,11 +337,19 @@ describe('openCliScript (via loginCli) — the Windows script path cannot let cm
       } finally {
         h.dir = savedDir
         // The command line above is real: `start` hands the login script to a genuine detached cmd.exe
-        // (its console window ends in `pause`) with `sandbox` as its inherited cwd. That process can still
-        // be releasing its handle on cwd/script file the instant this test resumes, so a plain rmSync can
-        // observe a transient EBUSY here that has nothing to do with the assertions above — retry it the
-        // way Node's own recursive rm is designed to (maxRetries/retryDelay), rather than failing the test
-        // on an unrelated OS-timing race.
+        // whose console ends in `pause` — it is still alive, holding `sandbox` as its inherited cwd,
+        // long after this test resumes (nothing ever sends it a keypress). Reap it before deleting the
+        // directories it is using, or Windows refuses the rmdir with EBUSY forever, not just transiently.
+        // Matching on evilDir's own path — unique to this test run — can only hit the process this test
+        // just spawned.
+        const needle = evilDir.replace(/'/g, "''")
+        spawnH.realSync!('powershell.exe', [
+          '-NoProfile',
+          '-Command',
+          `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${needle}') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`
+        ])
+        // Belt and suspenders: Stop-Process returns before Windows has necessarily released the file
+        // handles, so retry the way Node's own recursive rm is designed to for exactly that gap.
         rmSync(evilDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
         rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
       }
