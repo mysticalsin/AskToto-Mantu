@@ -32,6 +32,7 @@ import {
   meetingDurationMin,
   decryptToTemp
 } from './transcripts'
+import { useStorageForTests } from './infra/storage/meetings-storage'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
 const V2_MARKER = 'ATKENC2\n'
@@ -657,6 +658,7 @@ describe('recoverOrphanDrafts (crash-recovery promotion)', () => {
 
   beforeEach(() => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recover-test-'))
+    useStorageForTests()
     settings = { ...baseSettings(), meetingsFolder: folder }
   })
 
