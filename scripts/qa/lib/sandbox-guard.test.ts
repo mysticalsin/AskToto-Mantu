@@ -7,9 +7,8 @@ import { assertAttachedAppIsSandboxed, assertSandboxedMeetingsFolder } from './s
 // right after connecting to the CDP-attached app, before either touches its settings/brain/API-keys on
 // disk. This is an allow-list (under the OS temp dir), not a deny-list, so it accepts exactly one shape —
 // resolving under `tmpDir` — and every other case, including one that resolves anywhere inside the real
-// home directory (a fixed deny-list missed some of these) and one that resolves outside the home
-// directory entirely (which is not proof of isolation: an explicit settings.meetingsFolder can point
-// anywhere), throws.
+// home directory and one that resolves outside the home directory entirely (which is not proof of
+// isolation: an explicit settings.meetingsFolder can point anywhere), throws.
 describe('assertSandboxedMeetingsFolder', () => {
   const homeDir = '/Users/fake-dev'
   const tmpDir = '/private/var/folders/fake/T'
@@ -57,12 +56,6 @@ describe('assertSandboxedMeetingsFolder', () => {
     // on that profile if "outside home" were treated as sandboxed.
     expect(() =>
       assertSandboxedMeetingsFolder({ meetingsFolder: '/Volumes/Data/Métis Meetings', homeDir, tmpDir })
-    ).toThrow(/does not resolve under the OS temp/)
-  })
-
-  it('throws for a resolvedMeetingsFolder outside home that used to be treated as sandboxed', () => {
-    expect(() =>
-      assertSandboxedMeetingsFolder({ meetingsFolder: '/opt/metis-qa-userdata/Meetings', homeDir, tmpDir })
     ).toThrow(/does not resolve under the OS temp/)
   })
 

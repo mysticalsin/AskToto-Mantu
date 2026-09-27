@@ -181,7 +181,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      # R2 negative control — proves `check` cannot pass by accident: a fresh, untouched honeypot is the
+      # Negative control — proves `check` cannot pass by accident: a fresh, untouched honeypot is the
       # only case in this file expected to succeed; every mutation below (a new file, an in-place rewrite
       # of the sentinel, deleting the honeypot outright) must make it fail, and none of them may be
       # swallowed into a silent "nothing to report".
@@ -196,12 +196,19 @@ jobs:
             bash scripts/hermetic/honeypot.sh seed "$dir"
           }
 
+          # Asserts not just that `check` failed, but that it failed for the expected reason — the same
+          # pattern owner-sandbox-profile uses with "Operation not permitted" — so a check that fails
+          # closed for the wrong reason (or prints nothing, as it did before honeypot.sh wrote its
+          # diagnostics to stderr) cannot pass this silently.
           assert_check_fails() {
-            local label="$1"
+            local label="$1" expected="$2"
             if bash scripts/hermetic/honeypot.sh check "$dir" 2>err.log; then
               echo "expected '$label' to make check fail, but it exited 0"; cat err.log; exit 1
             fi
-            echo "ok: $label made check fail — $(cat err.log | head -1)"
+            if ! grep -q "$expected" err.log; then
+              echo "'$label' failed for the wrong reason:"; cat err.log; exit 1
+            fi
+            echo "ok: $label made check fail — $(head -1 err.log)"
           }
 
           reseed
@@ -210,16 +217,16 @@ jobs:
 
           reseed
           touch "$dir/new-file"
-          assert_check_fails "a new file inside the honeypot"
+          assert_check_fails "a new file inside the honeypot" "touched the real-home honeypot"
 
           reseed
           echo rewritten > "$dir/sentinel"
-          assert_check_fails "an in-place rewrite of the sentinel"
+          assert_check_fails "an in-place rewrite of the sentinel" "touched the real-home honeypot"
 
           reseed
           rm -rf "$dir"
-          assert_check_fails "a deleted honeypot directory"
+          assert_check_fails "a deleted honeypot directory" "the honeypot directory is gone"
 
           reseed
           rm -f "$ref"
-          assert_check_fails "a missing reference timestamp"
+          assert_check_fails "a missing reference timestamp" "no reference timestamp"

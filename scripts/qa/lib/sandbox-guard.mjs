@@ -36,8 +36,13 @@ function isInside(parent, child) {
 /**
  * Throws unless `meetingsFolder` — the ATTACHED APP's own reported
  * `getSettings().resolvedMeetingsFolder`, never a launching shell's environment — resolves under
- * `tmpDir`. An explicit settings.meetingsFolder can point anywhere, so resolving outside `homeDir` is
- * never itself proof of isolation; only `tmpDir` (where an ASKTOTO_USERDATA-launched profile lives) is.
+ * `tmpDir`. This is a necessary condition that fails closed: it rejects every profile whose
+ * meetingsFolder was never redirected under `tmpDir` at all, including one that merely resolves outside
+ * `homeDir` (an explicit settings.meetingsFolder can point anywhere — a mounted volume, a network share —
+ * so that alone is never proof of isolation). It is not sufficient: resolveMeetingsFolder honors an
+ * explicit settings.meetingsFolder before any ASKTOTO_USERDATA-derived default, so a real, unsandboxed
+ * profile whose meetingsFolder happens to already be set under `tmpDir` still passes this check with
+ * every other real setting, API key and brain index on it untouched.
  *
  * `homeDir` and `tmpDir` are parameters (never read internally via `os.homedir()`/`os.tmpdir()`) so a
  * test can exercise every case without a real home or temp directory.

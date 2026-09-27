@@ -3,8 +3,11 @@ import { writeFileSync } from 'node:fs'
 // W0-HERMETIC (M2-0190) — this harness attaches over CDP and clears EVERY stored API key of the attached
 // app (see the clearAllKeys step below), then rewrites its settings, so it must confirm the ATTACHED APP
 // is sandboxed before touching any of that. The hazard is mutating whatever profile happens to be
-// attached, regardless of which env var this harness's own shell does or doesn't reference — only the
-// app's own reported resolvedMeetingsFolder proves it launched with ASKTOTO_USERDATA under the OS temp dir.
+// attached, regardless of which env var this harness's own shell does or doesn't reference — the app's
+// own reported resolvedMeetingsFolder is the only signal available here, and rejecting anything outside
+// the OS temp dir fails closed on every profile never redirected there. It does not fully prove an
+// ASKTOTO_USERDATA launch: resolveMeetingsFolder honors an explicit settings.meetingsFolder first, so a
+// real profile whose meetingsFolder was independently set under the temp dir would still pass.
 import { assertAttachedAppIsSandboxed } from './lib/sandbox-guard.mjs'
 
 const CDP = 'http://127.0.0.1:9334'

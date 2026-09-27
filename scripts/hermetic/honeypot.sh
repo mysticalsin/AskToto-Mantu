@@ -30,24 +30,24 @@ case "$cmd" in
   check)
     ref="$(honeypot_ref)"
     if [ ! -e "$ref" ]; then
-      echo "no reference timestamp at $ref — run 'seed $dir' before 'check $dir'"
+      echo "no reference timestamp at $ref — run 'seed $dir' before 'check $dir'" >&2
       exit 1
     fi
     if [ ! -d "$dir" ]; then
-      echo "the honeypot directory is gone: $dir (the suite may have deleted it)"
+      echo "the honeypot directory is gone: $dir (the suite may have deleted it)" >&2
       exit 1
     fi
     if [ ! -f "$dir/sentinel" ]; then
-      echo "the honeypot sentinel file is gone: $dir/sentinel (the suite may have deleted it)"
+      echo "the honeypot sentinel file is gone: $dir/sentinel (the suite may have deleted it)" >&2
       exit 1
     fi
     if ! touched="$(find "$dir" -newer "$ref")"; then
-      echo "find failed while scanning the honeypot at $dir"
+      echo "find failed while scanning the honeypot at $dir" >&2
       exit 1
     fi
     if [ -n "$touched" ]; then
-      echo "the suite touched the real-home honeypot it must never reach:"
-      echo "$touched"
+      echo "the suite touched the real-home honeypot it must never reach:" >&2
+      echo "$touched" >&2
       exit 1
     fi
     ;;
