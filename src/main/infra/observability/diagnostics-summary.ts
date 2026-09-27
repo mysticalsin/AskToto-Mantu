@@ -69,7 +69,11 @@ export async function copyDiagnosticsSummary(opts: {
     text = ''
   }
   const summary = summarizeAuditTrail(text.split(/\r?\n/), opts.identity, (opts.now ?? (() => new Date()))())
-  opts.writeText(JSON.stringify(summary, null, 2))
+  try {
+    opts.writeText(JSON.stringify(summary, null, 2))
+  } catch {
+    // Last-resort tray action: keep the documented never-rejects contract even if clipboard writes fail.
+  }
 }
 
 const EVENT_RE = /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){0,4}$/

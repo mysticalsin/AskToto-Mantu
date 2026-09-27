@@ -115,4 +115,15 @@ describe('diagnostics summary', () => {
       boots: { started: 0 }
     })
   })
+
+  it('copyDiagnosticsSummary resolves when writeText throws', async () => {
+    await expect(copyDiagnosticsSummary({
+      auditTrailPath: join(tmpdir(), 'does-not-exist', 'audit.log'),
+      identity,
+      now: () => generatedAt,
+      writeText: () => {
+        throw new Error('clipboard unavailable')
+      }
+    })).resolves.toBeUndefined()
+  })
 })
