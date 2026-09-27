@@ -485,25 +485,21 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   // The display graph is the whole brain graph: GraphView narrows it by account/sector/community/band,
   // never by node type. A meeting node carries its own ref/date and its owning account's canonical
   // name/sector so those filters apply to it.
-  // A meeting node resolves its own record by the SAME slug ingest.ts minted its id from
-  // (`meeting:${slugify(file)}`, slug() mirrors slugify() byte-for-byte) — a Map keyed by that slug,
-  // distinct from meetingsByFile's raw-filename key.
+  // A meeting node resolves itself via `meetingBySlug`, keyed by the same slug ingest.ts minted its
+  // id from (`meeting:${slugify(file)}`, slug() mirrors slugify() byte-for-byte) — giving it its own
+  // ref/date, never another entity's latest meeting. It resolves its owning account via
+  // `accountByMeetingFile`, the SAME join ingest.ts performs when it resolves `x.account.name`
+  // through resolveEntitySlug and pushes the ref into that account's own `meetings` list — giving it
+  // that account's canonical name/sector even after a manual merge/rename correction, never a
+  // name-equality/slug guess against the meeting's own (independently extracted, possibly drifted)
+  // account field.
   const meetingBySlug = new Map(indexedMeetings.map((m) => [slug(m.source_file), m]))
-  // Every meeting file → its owning account entity. This is the SAME join ingest.ts performs when it
-  // resolves `x.account.name` via resolveEntitySlug and pushes the ref into that account's own
-  // `meetings` list — so a meeting node inherits its account's canonical name/sector even after a
-  // manual merge/rename correction, never a name-equality/slug guess against the meeting's own
-  // (independently extracted, possibly drifted) account field.
   const accountByMeetingFile = new Map(b.accounts.flatMap((a) => a.meetings.map((m) => [m.file, a] as const)))
   const nodes: GraphNode[] = b.graph.nodes
     .map((n) => {
       const bare = n.id.replace(/^[a-z_]+:/, '')
       const t = cold.touch.get(n.id)
-      // A meeting node IS its own source: its ref/date are its own record, never another entity's
-      // latest meeting.
       const ownMeeting = n.type === 'meeting' ? meetingBySlug.get(bare) : undefined
-      // Resolved once: the account entity that owns this meeting, keyed by the meeting's own source
-      // file (see accountByMeetingFile above) — never the meeting's own drifted account.name string.
       const owner = ownMeeting ? accountByMeetingFile.get(ownMeeting.source_file) : undefined
       const entityMeetings =
         n.type === 'account' ? accountBySlug.get(bare)?.meetings
