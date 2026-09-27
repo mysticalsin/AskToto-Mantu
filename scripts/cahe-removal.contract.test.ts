@@ -5,16 +5,16 @@ import { describe, expect, it } from 'vitest'
 const root = join(__dirname, '..')
 
 /**
- * cahe-removal.contract.test.ts — M2-0214. Owner decision D-30 (2026-09-26): the Cahê pilot edition —
- * edition code, the embedded Kimi-key build path, its electron-builder config, its GitHub Actions
- * workflow, its packaging gate and its docs — is removed entirely. The Kimi key it used to embed was
+ * cahe-removal.contract.test.ts — M2-0214. 2026-09-26: the Cahê pilot edition —
+ * edition code, its embedded-key build path, its electron-builder config, its GitHub Actions
+ * workflow, its packaging gate and its docs — is removed entirely. The secret it used to embed was
  * already revoked at the vendor before this ticket; this file's job is to pin that no build path can
  * ever embed an edition key again, by proving no trace of the edition itself remains.
  *
  * A single case-insensitive git-grep over the whole tracked tree covers this: every removed file path,
- * the CAHE_KIMI_JSON secret and the METIS_CAHE_EMBED_KEY flag all contain "cahe-" or "cahe_", so a
- * separate existsSync check on the deleted paths or a separate literal search for those two identifiers
- * can never fail on its own — either would already show up here first.
+ * the removed secret and the removed env flag all contain "cahe-" or "cahe_", so a separate existsSync
+ * check on the deleted paths or a separate literal search for those two identifiers can never fail on
+ * its own — either would already show up here first.
  *
  * Historical audit records are deliberately exempt from the tracked-tree scan below, the same carve-out
  * the ticket's own acceptance criterion states ("outside CHANGELOG/removal notes"): docs/qa/BUG-LEDGER.md
@@ -25,7 +25,7 @@ const root = join(__dirname, '..')
  */
 
 // Historical records this file's own scan must not flag (see the file header), PLUS this file itself:
-// its own doc comment above necessarily quotes the removed identifiers as string literals.
+// both the regex pattern literal above and this header's own prose self-match the scan.
 const EXCLUDE_PATHS = [
   ':!docs/qa/BUG-LEDGER.md',
   ':!docs/qa/audit-2026-08-10.md',

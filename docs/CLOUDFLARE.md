@@ -21,8 +21,7 @@ seconds. There is no build flag, no obfuscation and no keychain trick that chang
 compiled into the app is published with the app.
 
 This repo already treats that as settled: `scripts/check-embedded-cloudflare-key.mjs` refuses to build a
-package carrying an embedded key unless a human sets an explicit override, and it exists because the
-alternative was tried and rejected.
+package carrying an embedded key unless a human sets an explicit override.
 
 A Cloudflare account token is a worse thing to embed than an ordinary model key. It is not scoped to one
 model vendor: through the AI REST API it reaches Workers AI *and* OpenAI, Anthropic, Google AI Studio

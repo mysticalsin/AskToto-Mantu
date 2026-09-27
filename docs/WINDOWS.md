@@ -5,7 +5,7 @@ Electron 39.8.10, electron-builder 26.15.3 — on 2026-07-15/16, covering the st
 (`electron-builder.win.yml`).
 
 The Cahê pilot edition, previously built from its own separate electron-builder config, was retired on
-2026-09-26 (owner decision D-30, ticket M2-0214) and removed from this repository entirely.
+2026-09-26 (ticket M2-0214) and removed from this repository entirely.
 
 ## Why Windows Must Build On Windows
 

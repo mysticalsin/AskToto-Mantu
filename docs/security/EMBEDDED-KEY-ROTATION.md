@@ -2,13 +2,13 @@
 
 Installer-embedded `METIS_PROXY_KEY` (`src/main/embedded-cloudflare-key.ts`) is a **disclosed, scoped, revocable product key**. `npx asar extract` recovers it. That is the documented residual on audit item 2, not a hidden leak.
 
-The Cahê pilot edition, which used to embed a Kimi key the same way, was retired on 2026-09-26 (owner decision D-30, ticket M2-0214) and removed from the repository entirely.
-
-They must never become:
+It must never become:
 
 - the Cloudflare **account** token (`CLOUDFLARE_API_TOKEN`)
 - the operator's own `METIS_PROXY_KEY`
 - a license admin token, Graph token, or MCP bearer
+
+The Cahê pilot edition, which used to embed a Kimi key the same way, was retired on 2026-09-26 (ticket M2-0214) and removed from the repository entirely.
 
 ## One command
 
