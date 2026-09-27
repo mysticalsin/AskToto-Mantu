@@ -616,7 +616,7 @@ import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentine
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
 import { createReloadBudget } from './lifecycle/reload-budget'
-import { showRenderLoopHaltedDialog } from './lifecycle/render-loop-halted-dialog'
+import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './lifecycle/render-loop-halted-dialog'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
@@ -2846,18 +2846,17 @@ function createWindow(targetDisplay?: Electron.Display): void {
               }
             : undefined,
           copyDiagnostics: () =>
-            clipboard.writeText(
-              [
-                'Métis diagnostics',
-                `version: ${app.getVersion()}`,
-                `platform: ${process.platform} ${process.arch}`,
-                `packaged: ${app.isPackaged}`,
-                `render-process-gone reason=${details.reason} exitCode=${details.exitCode}`,
-                new Date().toISOString()
-              ].join('\n')
-            )
+            clipboard.writeText(formatRenderLoopDiagnostics({
+              version: app.getVersion(),
+              platform: process.platform,
+              arch: process.arch,
+              packaged: app.isPackaged,
+              reason: details.reason,
+              exitCode: details.exitCode,
+              at: new Date().toISOString()
+            }))
         }
-      )
+      ).catch((err) => mainLog.warn('[render-loop-halted] dialog failed:', err))
       return
     }
     reloadOverlay(self)

@@ -29,7 +29,26 @@ export interface RenderLoopHaltedDialogActions {
 }
 
 const TITLE = 'Métis keeps crashing'
-const MESSAGE = "Métis' display crashed repeatedly and stopped reloading automatically."
+const MESSAGE = "Métis' display stopped responding and stopped reloading automatically."
+
+export function formatRenderLoopDiagnostics(input: {
+  version: string
+  platform: string
+  arch: string
+  packaged: boolean
+  reason: string
+  exitCode: number
+  at: string
+}): string {
+  return [
+    'Métis diagnostics',
+    `version: ${input.version}`,
+    `platform: ${input.platform} ${input.arch}`,
+    `packaged: ${input.packaged}`,
+    `render-process-gone reason=${input.reason} exitCode=${input.exitCode}`,
+    input.at
+  ].join('\n')
+}
 
 /**
  * Shows the halted-recovery dialog and dispatches the chosen action. "Open meetings folder" and "Copy
@@ -52,7 +71,7 @@ export async function showRenderLoopHaltedDialog(
       type: 'error',
       title: TITLE,
       message: MESSAGE,
-      detail: `Reason: ${reason} (exit code ${exitCode}). A crash report was saved to your Métis data folder.`,
+      detail: `Reason: ${reason} (exit code ${exitCode}). Diagnostics were recorded in the audit log and main.log.`,
       buttons,
       defaultId: 0,
       cancelId: 0

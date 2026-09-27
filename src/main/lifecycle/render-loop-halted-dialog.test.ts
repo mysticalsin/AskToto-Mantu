@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { showRenderLoopHaltedDialog } from './render-loop-halted-dialog'
+import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './render-loop-halted-dialog'
 
 /** Resolves with whichever button label the message box was actually asked to show. */
 function respondingWith(label: string) {
@@ -129,5 +129,28 @@ describe('showRenderLoopHaltedDialog', () => {
     const opts = showMessageBox.mock.calls[0][0]
     expect(opts.detail).toContain('oom')
     expect(opts.detail).toContain('137')
+  })
+})
+
+describe('formatRenderLoopDiagnostics', () => {
+  it('formats the diagnostics fields in the halted dialog copy order', () => {
+    const at = '2026-09-27T12:34:56.789Z'
+
+    expect(formatRenderLoopDiagnostics({
+      version: '2.0.0',
+      platform: 'darwin',
+      arch: 'arm64',
+      packaged: true,
+      reason: 'oom',
+      exitCode: 137,
+      at
+    }).split('\n')).toEqual([
+      'Métis diagnostics',
+      'version: 2.0.0',
+      'platform: darwin arm64',
+      'packaged: true',
+      'render-process-gone reason=oom exitCode=137',
+      at
+    ])
   })
 })

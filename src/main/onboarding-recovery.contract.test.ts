@@ -26,38 +26,59 @@ function runSource(sourceText: string, globals: Record<string, unknown>): any {
   return context.result
 }
 
-function actualFunction(name: string, globals: Record<string, unknown>): (...args: any[]) => any {
-  const declaration = indexSource.statements.find(
-    node => ts.isFunctionDeclaration(node) && node.name?.text === name
+function topLevelFunctionDeclaration(name: string): ts.FunctionDeclaration | undefined {
+  return indexSource.statements.find(
+    (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === name
   )
+}
+
+function actualFunction(name: string, globals: Record<string, unknown>): (...args: any[]) => any {
+  const declaration = topLevelFunctionDeclaration(name)
   expect(declaration, `Actual source function ${name} was not found`).toBeDefined()
   if (!declaration) return () => undefined
   return runSource(`${declaration.getText(indexSource)}\nglobalThis.result = ${name};`, globals)
 }
 
-function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: any[]) => any {
+function webContentsOnCallback(target: string, eventName: string): ts.Expression | undefined {
   let callback: ts.Expression | undefined
   const visit = (node: ts.Node): void => {
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
-      node.expression.expression.getText(indexSource) === 'win.webContents' &&
+      node.expression.expression.getText(indexSource) === target &&
       node.expression.name.text === 'on' &&
-      node.arguments[0]?.getText(indexSource) === "'render-process-gone'"
+      node.arguments[0]?.getText(indexSource) === `'${eventName}'`
     ) callback = node.arguments[1]
     ts.forEachChild(node, visit)
   }
   visit(indexSource)
-  expect(callback, 'Actual overlay render-process-gone handler was not found').toBeDefined()
-  if (!callback) return () => undefined
+  return callback
+}
+
+function actualRendererRecoveryHandlers(globals: Record<string, unknown>): {
+  didFinishLoad: () => void
+  renderProcessGone: (...args: any[]) => any
+} {
+  const didFinishLoad = webContentsOnCallback('self.webContents', 'did-finish-load')
+  const renderProcessGone = webContentsOnCallback('win.webContents', 'render-process-gone')
+  expect(didFinishLoad, 'Actual overlay did-finish-load handler was not found').toBeDefined()
+  expect(renderProcessGone, 'Actual overlay render-process-gone handler was not found').toBeDefined()
+  if (!didFinishLoad || !renderProcessGone) {
+    return { didFinishLoad: () => undefined, renderProcessGone: () => undefined }
+  }
   // The handler's automatic-reload branch calls the real reloadOverlay(...) helper — lift it too, so a
   // reload exercises the shipped loadURL + redact + audit wiring instead of a hand-copied stand-in.
-  const reloadOverlayDecl = indexSource.statements.find(
-    (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'reloadOverlay'
-  )
+  const reloadOverlayDecl = topLevelFunctionDeclaration('reloadOverlay')
   expect(reloadOverlayDecl, 'Actual source function reloadOverlay was not found').toBeDefined()
   const prefix = reloadOverlayDecl ? `${reloadOverlayDecl.getText(indexSource)}\n` : ''
-  return runSource(`${prefix}globalThis.result = (${callback.getText(indexSource)});`, globals)
+  return runSource(
+    `${prefix}globalThis.result = { didFinishLoad: (${didFinishLoad.getText(indexSource)}), renderProcessGone: (${renderProcessGone.getText(indexSource)}) };`,
+    globals
+  )
+}
+
+function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: any[]) => any {
+  return actualRendererRecoveryHandlers(globals).renderProcessGone
 }
 
 describe('exclusive onboarding renderer recovery', () => {
@@ -158,7 +179,7 @@ describe('render-process-gone reload budget wiring', () => {
 
   it('reloads within budget, then halts and opens the recovery surface on the 4th crash inside 60s', () => {
     let t = 0
-    const showRenderLoopHaltedDialog = vi.fn()
+    const showRenderLoopHaltedDialog = vi.fn().mockResolvedValue(undefined)
     const { globals, loadURL, auditLog } = baseGlobals({
       reloadBudget: createReloadBudget(() => t),
       requireAuth: () => true,
@@ -185,8 +206,34 @@ describe('render-process-gone reload budget wiring', () => {
     expect(showRenderLoopHaltedDialog.mock.calls[0][1]).toBe(1)
   })
 
+  it('resets the reload budget after did-finish-load stays alive for 30s', () => {
+    let t = 0
+    const showRenderLoopHaltedDialog = vi.fn().mockResolvedValue(undefined)
+    const { globals, loadURL } = baseGlobals({
+      reloadBudget: createReloadBudget(() => t),
+      requireAuth: () => true,
+      showRenderLoopHaltedDialog
+    })
+    const { didFinishLoad, renderProcessGone } = actualRendererRecoveryHandlers(globals)
+
+    renderProcessGone({}, { reason: 'crashed', exitCode: 1 })
+    t = 1
+    renderProcessGone({}, { reason: 'crashed', exitCode: 1 })
+    t = 2
+    renderProcessGone({}, { reason: 'crashed', exitCode: 1 })
+    expect(loadURL).toHaveBeenCalledTimes(3)
+
+    t = 3
+    didFinishLoad()
+    t = 30_003
+    renderProcessGone({}, { reason: 'crashed', exitCode: 1 })
+
+    expect(loadURL).toHaveBeenCalledTimes(4)
+    expect(showRenderLoopHaltedDialog).not.toHaveBeenCalled()
+  })
+
   it('a clean exit calls neither loadURL nor the recovery dialog', () => {
-    const showRenderLoopHaltedDialog = vi.fn()
+    const showRenderLoopHaltedDialog = vi.fn().mockResolvedValue(undefined)
     const { globals, loadURL } = baseGlobals({
       reloadBudget: { onRenderProcessGone: () => 'ignore' },
       showRenderLoopHaltedDialog
@@ -228,7 +275,7 @@ describe('render-process-gone reload budget wiring', () => {
     const resolveMeetingsFolder = vi.fn(() => '/meetings/resolved')
 
     // Locked session: no button rather than one whose click would silently do nothing.
-    const lockedDialog = vi.fn()
+    const lockedDialog = vi.fn().mockResolvedValue(undefined)
     const { globals: lockedGlobals } = baseGlobals({
       reloadBudget: { onRenderProcessGone: () => 'halt' },
       requireAuth: () => false,
@@ -241,7 +288,7 @@ describe('render-process-gone reload budget wiring', () => {
     expect(lockedDialog.mock.calls[0][4].openMeetingsFolder).toBeUndefined()
 
     // Authorized session: the button's action really does shell.openPath(resolveMeetingsFolder(getSettings())).
-    const unlockedDialog = vi.fn()
+    const unlockedDialog = vi.fn().mockResolvedValue(undefined)
     const { globals: unlockedGlobals } = baseGlobals({
       reloadBudget: { onRenderProcessGone: () => 'halt' },
       requireAuth: () => true,
@@ -274,12 +321,8 @@ describe('onFatal — async relaunch dialog', () => {
         ts.isVariableStatement(node) &&
         node.declarationList.declarations.some(d => ts.isIdentifier(d.name) && d.name.text === 'fatalHandled')
     )
-    const onFatalDecl = indexSource.statements.find(
-      (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'onFatal'
-    )
-    const showFatalDialogDecl = indexSource.statements.find(
-      (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'showFatalDialog'
-    )
+    const onFatalDecl = topLevelFunctionDeclaration('onFatal')
+    const showFatalDialogDecl = topLevelFunctionDeclaration('showFatalDialog')
     expect(fatalHandledDecl, 'Actual source declaration fatalHandled was not found').toBeDefined()
     expect(onFatalDecl, 'Actual source function onFatal was not found').toBeDefined()
     expect(showFatalDialogDecl, 'Actual source function showFatalDialog was not found').toBeDefined()
