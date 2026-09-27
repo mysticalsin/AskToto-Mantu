@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { readFile as readFileAsync } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app } from 'electron'
@@ -25,6 +26,18 @@ const unreadablePaths = vi.hoisted(() => new Set<string>())
 
 vi.mock('../llm', () => ({ createStream: createStreamMock }))
 vi.mock('../logger', async (orig) => ({ ...(await orig()), auditLog: auditLogMock }))
+vi.mock('node:fs/promises', async (orig) => {
+  const actual = await orig<typeof import('node:fs/promises')>()
+  const readFile = (async (file: Parameters<typeof actual.readFile>[0], ...rest: unknown[]) => {
+    if (typeof file === 'string' && unreadablePaths.has(file)) {
+      const error = new Error('synthetic cloud placeholder timeout') as NodeJS.ErrnoException
+      error.code = 'ETIMEDOUT'
+      throw error
+    }
+    return (actual.readFile as (...args: never[]) => Promise<unknown>)(file as never, ...(rest as never[]))
+  }) as unknown as typeof actual.readFile
+  return { ...actual, default: { ...actual, readFile }, readFile }
+})
 vi.mock('../transcripts', async (orig) => {
   const actual = await orig<typeof import('../transcripts')>()
   return {
@@ -261,11 +274,13 @@ describe('M2-0033 retry policy across backfill callers', () => {
 
   it('EX-3: a transcript that cannot be read spends no attempt, is held by automatic scans while its ctime is unchanged, and is retried after the file changes', async () => {
     const file = join(meetingsFolder, 'unreadable.md')
+    await expect(readFileAsync(file)).resolves.toBeInstanceOf(Buffer)
     await writeIndex(getSettings(), {
       ...readIndex(getSettings()),
       ingested: {}
     } as never)
     unreadablePaths.add(file)
+    await expect(readFileAsync(file)).rejects.toMatchObject({ code: 'ETIMEDOUT' })
     expect((await await startBackfill(undefined, { force: true })).queued).toBe(5)
     await waitForIdle()
     const failed = readIndex(getSettings()).ingested['unreadable.md']

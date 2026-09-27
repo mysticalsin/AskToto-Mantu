@@ -28,10 +28,10 @@ describe('MQA-115 — brainEntityNames returns a flat { names }, not { people, a
       indexSrc.indexOf('ipcMain.handle(IPC.brainSetDealOutcome')
     )
     // Both sources feed the one array…
-    expect(handler).toMatch(/const people = listBrainEntities\(s, 'person'\)/)
-    expect(handler).toMatch(/const accounts = listBrainEntities\(s, 'account'\)/)
+    expect(handler).toMatch(/loadBrainEntitySlugs\(s, 'person'\)/)
+    expect(handler).toMatch(/loadBrainEntitySlugs\(s, 'account'\)/)
     // …merged + deduped into a single { names } return, never a { people, accounts } object.
-    expect(handler).toMatch(/return \{ names: Array\.from\(new Set\(\[\.\.\.people, \.\.\.accounts\]\)\)/)
+    expect(handler).toMatch(/return \{ names: Array\.from\(new Set\(\[\.\.\.personNames, \.\.\.accountNames\]\)\)/)
     expect(handler).not.toMatch(/return \{\s*people,\s*accounts\s*\}/)
   })
 })

@@ -8032,7 +8032,7 @@ function registerIpc(): void {
     //  - a corrupt/blocked-journal guard (MI-2.5 review Fix 2 — refuse rather than rebuild atop a store
     //    onto which zero corrections could be replayed, which would silently revert every human fix);
     //  - the replayPending flag (Fix E) + the onDrained replay that clears it only on a clean replay.
-    const r = await startRebuild(getSettings())
+    const r = await startRebuild(getSettings(), { trigger: 'user' })
     if (r.error) {
       auditLog('brain.rebuild.aborted', {})
       return r

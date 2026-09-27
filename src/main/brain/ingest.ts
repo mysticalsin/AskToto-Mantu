@@ -2145,6 +2145,7 @@ async function performRebuildReplay(s: Settings): Promise<void> {
  */
 type StartRebuildOptions = {
   sourceRefresh?: boolean
+  trigger?: WorkTrigger
   onFinished?: () => void | Promise<void>
 }
 
