@@ -18,6 +18,7 @@ import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
 import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
 import { mainLog, auditLog } from './logger'
 import { resolveMeetingsFolder } from './infra/storage/paths'
+import { storageAt } from './infra/storage/meetings-storage'
 import { devEnv, isPackagedBuild } from './dev-env'
 import { safeMeetingBasename } from './meeting-path'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
@@ -898,11 +899,11 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
   let recovered = 0
   try {
     const folder = resolveMeetingsFolder(settings)
-    if (!existsSync(folder)) return { recovered }
-    for (const dirent of readdirSync(folder, { withFileTypes: true })) {
-      const f = dirent.name
+    const gateway = storageAt(folder)
+    const listing = await gateway.list('')
+    if (listing.status !== 'ok') return { recovered }
+    for (const f of listing.names) {
       if (!f.startsWith('.autosave-draft-') || !f.endsWith('.md')) continue
-      if (!dirent.isFile()) continue // never follow a symlink planted with a draft-shaped name
       const draftPath = join(folder, f)
       try {
         const stampPart = f.slice('.autosave-draft-'.length, -'.md'.length)
@@ -924,8 +925,11 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
         // on holds recorded third-party speech; promoting it under a since-disabled toggle would rewrite
         // it as unmarked cleartext into the (OneDrive-synced) meetings folder — a silent at-rest
         // downgrade, with no prompt and no way back.
-        const wasEncrypted = isEncryptedFile(draftPath)
-        const text = decodeSaved(readFileSync(draftPath))
+        const read = await gateway.read(f)
+        if (read.status !== 'ok') continue
+        const head = read.bytes.subarray(0, MARKER_LEN)
+        const wasEncrypted = head.equals(ENC_MARKER) || head.equals(ENC_MARKER_V2)
+        const text = decodeSaved(read.bytes)
         if (!text) continue // undecryptable on this device — leave it alone
         const promoted = text
           .replace('type: meeting-transcript-draft', 'type: meeting-transcript')
