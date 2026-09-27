@@ -802,17 +802,20 @@ function preservedIndexDir(settings: Settings): string {
   return join(resolveMeetingsFolder(settings), '.brain-preserved')
 }
 
-function assertRebuildKeyContextAllowsPreserve(indexBytes: Buffer): void {
+function classifyIndexBytesForRebuild(indexBytes: Buffer): IndexLoad {
   const kind = envelopeKeyKind(indexBytes)
   if (kind === 'keychain') {
     if (process.env.ASKTOTO_LOCAL_KEYSTORE || !isKeychainAvailable()) {
       throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
     }
-    return
+    return classifyIndexBytes(indexBytes)
   }
-  if (kind === 'file' && fileKeyState() === 'locked') {
-    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
+  if (kind === 'file') {
+    const state = fileKeyState()
+    if (state === 'locked') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
+    if (state === 'absent') return { kind: 'unavailable', cause: 'undecryptable', detail: 'file key absent' }
   }
+  return classifyIndexBytes(indexBytes)
 }
 
 function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
@@ -825,12 +828,11 @@ function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
     if (errnoCode(e) === 'ENOENT') return
     throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
   }
-  const load = classifyIndexBytes(indexBytes)
+  const load = classifyIndexBytesForRebuild(indexBytes)
   if (load.kind !== 'unavailable') return
   if (load.cause === 'unsupported') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.unsupportedVersion)
   if (load.cause === 'io') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
   if (load.cause !== 'undecryptable') return
-  assertRebuildKeyContextAllowsPreserve(indexBytes)
 
   const classifiedHash = hashBytes(indexBytes)
   const preserveDir = preservedIndexDir(settings)
@@ -866,19 +868,19 @@ function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
  *
  * Part of "Delete all Métis data": the brain IS the knowledge graph now (the old userData/graph
  * artifacts are legacy), and it holds the most sensitive derived data — named people, verbatim
- * commitment quotes, stance trails. A wipe that leaves it on disk would break the dialog's promise
- * that "every transcript, note, and the knowledge graph" is removed. Best-effort: never throws, so a
- * locked file can't abort the surrounding meeting wipe. Returns whether the directory is gone.
+ * commitment quotes, stance trails. An erase-mode wipe that leaves it on disk would break the dialog's
+ * promise that "every transcript, note, and the knowledge graph" is removed. Best-effort: never throws,
+ * so a locked file can't abort the surrounding meeting wipe. Returns whether the target state was reached.
  *
  * `preserveCorrections` (Task MI-2): brain:rebuildAll purges the DERIVED store and re-extracts
  * everything, but the human correction journal (`.brain/corrections.json`) is not derived data — it's
  * the record of explicit human actions the rebuild's own replayCorrections() step depends on to
  * reproduce the live-corrected state. A rebuild that let this wipe destroy the journal would replay
  * nothing and resurrect every misheard/merged-away entity the journal had already fixed — exactly the
- * divergence the correction engine exists to prevent. recallDeleteAll's full-erasure call site leaves
- * this false on purpose: that flow's explicit promise is "every transcript, note, and the knowledge
- * graph" gone, corrections included. Copies the journal's raw on-disk bytes (respects encryption,
- * mirroring ensureV1Backup's cpSync convention above) rather than decrypting/re-encrypting it.
+ * divergence the correction engine exists to prevent. Erase mode removes corrections on purpose: that
+ * flow's explicit promise is "every transcript, note, and the knowledge graph" gone, corrections included.
+ * Copies the journal's raw on-disk bytes (respects encryption, mirroring ensureV1Backup's cpSync convention
+ * above) rather than decrypting/re-encrypting it.
  */
 export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserveCorrections: boolean } | { mode: 'erase' }): { ok: boolean } {
   const root = brainDir(settings)

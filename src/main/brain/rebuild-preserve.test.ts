@@ -283,13 +283,15 @@ describe('rebuild preserves unreadable indexes', () => {
   it('preserves a file-key index this install has no key for before rebuild', async () => {
     await writeSaved(primary, indexJson(), true)
     const expected = sha256(readFileSync(primary))
-    rmSync(join(userData, 'secret-key.bin'), { force: true })
+    const keyPath = join(userData, 'secret-key.bin')
+    rmSync(keyPath, { force: true })
     resetSecretKeyCache()
 
     expect(purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
 
     const preserved = join(meetingsFolder, '.brain-preserved', fs.readdirSync(join(meetingsFolder, '.brain-preserved'))[0])
     expectBytesUnchanged(preserved, expected)
+    expect(existsSync(keyPath)).toBe(false)
   })
 
   it('refuses rebuild while the index cannot be read', () => {
