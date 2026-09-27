@@ -262,3 +262,112 @@ describe('render-process-gone reload budget wiring', () => {
     expect(shellOpenPath).toHaveBeenCalledWith('/meetings/resolved')
   })
 })
+
+describe('onFatal — async relaunch dialog', () => {
+  /** Lifts `fatalHandled`, `onFatal` and `showFatalDialog` together so `onFatal` closes over the real
+   *  latch and calls the real dialog — a fresh vm context per call, so `fatalHandled` starts false again
+   *  for each test. `persistCrash` is injected rather than lifted: this test is about the async-dialog
+   *  half of the ticket, and persistCrash's own redact/log/write behaviour has its own coverage. */
+  function actualOnFatal(globals: Record<string, unknown>): (kind: 'uncaughtException' | 'unhandledRejection', err: unknown) => void {
+    const fatalHandledDecl = indexSource.statements.find(
+      (node): node is ts.VariableStatement =>
+        ts.isVariableStatement(node) &&
+        node.declarationList.declarations.some(d => ts.isIdentifier(d.name) && d.name.text === 'fatalHandled')
+    )
+    const onFatalDecl = indexSource.statements.find(
+      (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'onFatal'
+    )
+    const showFatalDialogDecl = indexSource.statements.find(
+      (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'showFatalDialog'
+    )
+    expect(fatalHandledDecl, 'Actual source declaration fatalHandled was not found').toBeDefined()
+    expect(onFatalDecl, 'Actual source function onFatal was not found').toBeDefined()
+    expect(showFatalDialogDecl, 'Actual source function showFatalDialog was not found').toBeDefined()
+    if (!fatalHandledDecl || !onFatalDecl || !showFatalDialogDecl) return () => undefined
+    const source = [
+      fatalHandledDecl.getText(indexSource),
+      onFatalDecl.getText(indexSource),
+      showFatalDialogDecl.getText(indexSource),
+      'globalThis.result = onFatal;'
+    ].join('\n')
+    return runSource(source, globals)
+  }
+
+  /** A `dialog.showMessageBox` whose promise the test resolves itself, plus the `persistCrash`/`app`/`win`
+   *  stubs the lifted `onFatal`/`showFatalDialog` need. */
+  function pendingDialogGlobals(overrides: Record<string, unknown> = {}) {
+    let resolveDialog!: (result: { response: number }) => void
+    const showMessageBox = vi.fn(() => new Promise<{ response: number }>((resolve) => { resolveDialog = resolve }))
+    const persistCrash = vi.fn()
+    const win = {}
+    const globals: Record<string, unknown> = {
+      persistCrash,
+      dialog: { showMessageBox },
+      app: { relaunch: vi.fn(), exit: vi.fn() },
+      win,
+      ...overrides
+    }
+    return { globals, showMessageBox, persistCrash, win, resolve: (response: number) => resolveDialog({ response }) }
+  }
+
+  it('returns while the relaunch dialog is still pending, parented to win', () => {
+    const { globals, showMessageBox, persistCrash, win } = pendingDialogGlobals()
+    const onFatal = actualOnFatal(globals)
+
+    onFatal('uncaughtException', new Error('boom'))
+
+    // onFatal is synchronous and returns immediately: showFatalDialog only reaches its first `await` after
+    // showMessageBox has already been called, so the assertion below runs before that promise settles.
+    expect(persistCrash).toHaveBeenCalledExactlyOnceWith('uncaughtException', expect.stringContaining('boom'), 'boom')
+    expect(showMessageBox).toHaveBeenCalledExactlyOnceWith(win, expect.objectContaining({ buttons: ['Relaunch Métis', 'Continue'] }))
+  })
+
+  it('relaunches then exits, once each, when the user picks "Relaunch Métis" (response 0)', async () => {
+    const order: string[] = []
+    const relaunch = vi.fn(() => order.push('relaunch'))
+    const exit = vi.fn((code: number) => order.push(`exit:${code}`))
+    const { globals, resolve } = pendingDialogGlobals({ app: { relaunch, exit } })
+    const onFatal = actualOnFatal(globals)
+
+    onFatal('uncaughtException', new Error('boom'))
+    resolve(0)
+    await new Promise((r) => setImmediate(r))
+
+    expect(order).toEqual(['relaunch', 'exit:0'])
+  })
+
+  it('calls neither relaunch nor exit when the user picks "Continue" (response 1)', async () => {
+    const relaunch = vi.fn()
+    const exit = vi.fn()
+    const { globals, resolve } = pendingDialogGlobals({ app: { relaunch, exit } })
+    const onFatal = actualOnFatal(globals)
+
+    onFatal('uncaughtException', new Error('boom'))
+    resolve(1)
+    await new Promise((r) => setImmediate(r))
+
+    expect(relaunch).not.toHaveBeenCalled()
+    expect(exit).not.toHaveBeenCalled()
+  })
+
+  it('a second uncaughtException calls persistCrash again but opens no second dialog', () => {
+    const { globals, showMessageBox, persistCrash } = pendingDialogGlobals()
+    const onFatal = actualOnFatal(globals)
+
+    onFatal('uncaughtException', new Error('first'))
+    onFatal('uncaughtException', new Error('second'))
+
+    expect(persistCrash).toHaveBeenCalledTimes(2)
+    expect(showMessageBox).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unhandledRejection persists the crash but never opens the dialog', () => {
+    const { globals, showMessageBox, persistCrash } = pendingDialogGlobals()
+    const onFatal = actualOnFatal(globals)
+
+    onFatal('unhandledRejection', 'a rejected promise reason')
+
+    expect(persistCrash).toHaveBeenCalledExactlyOnceWith('unhandledRejection', 'a rejected promise reason', 'a rejected promise reason')
+    expect(showMessageBox).not.toHaveBeenCalled()
+  })
+})
