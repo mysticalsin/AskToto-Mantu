@@ -8,6 +8,14 @@ import { app, safeStorage } from 'electron'
 import { BRAIN_SCHEMA_VERSION, BrainIndexSchema } from '@shared/brain'
 import type { Settings } from '@shared/ipc'
 
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    copyFileSync: vi.fn(actual.copyFileSync),
+    rmSync: vi.fn(actual.rmSync)
+  }
+})
 vi.mock('electron')
 
 import { resetSecretKeyCache } from '../secrets'
@@ -99,7 +107,7 @@ describe('rebuild preserves unreadable indexes', () => {
     const bytes = foreignFileEnvelope()
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
-    vi.spyOn(fs, 'cpSync').mockImplementation(() => {
+    vi.spyOn(fs, 'copyFileSync').mockImplementation(() => {
       throw new Error('copy failed')
     })
 
@@ -119,9 +127,9 @@ describe('rebuild preserves unreadable indexes', () => {
     const bytes = foreignFileEnvelope()
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
-    const realCpSync = fs.cpSync
-    vi.spyOn(fs, 'cpSync').mockImplementation((from, to, options) => {
-      realCpSync(from, to, options)
+    const realCopyFileSync = vi.mocked(fs.copyFileSync).getMockImplementation() ?? fs.copyFileSync
+    vi.spyOn(fs, 'copyFileSync').mockImplementation((from, to, mode) => {
+      realCopyFileSync(from, to, mode)
       writeFileSync(primary, foreignFileEnvelope())
     })
 

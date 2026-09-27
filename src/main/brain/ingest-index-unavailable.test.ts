@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash, randomBytes } from 'node:crypto'
-import { app } from 'electron'
+import { app, safeStorage } from 'electron'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { getSettings, setApiKey, setSettings } from '../store'
 import {
@@ -19,6 +19,7 @@ import {
   whenIndexWritesSettle
 } from './ingest'
 import { brainDir, indexUnavailable, readIndex } from './store'
+import { writeSaved } from '../transcripts'
 
 vi.mock('electron')
 
@@ -56,6 +57,8 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
   }
 
   const sha256 = (buf: Buffer): string => createHash('sha256').update(buf).digest('hex')
+
+  const indexJson = (): string => JSON.stringify(readIndex(s))
 
   /** FOREIGN-F — same incident fixture as mqa-175-brain-index-poison.test.ts / store.test.ts: a v2
    *  envelope whose `kLocal` is not a key any process holds. */
@@ -184,5 +187,24 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     const preserved = readdirSync(preservedDir)
     expect(preserved).toHaveLength(1)
     expect(sha256(readFileSync(join(preservedDir, preserved[0])))).toBe(beforeIndex)
+  })
+
+  it('I8: startRebuild reports a keychain refusal message and leaves a keychain-wrapped index unchanged', async () => {
+    ;(app as typeof app & { isPackaged?: boolean }).isPackaged = true
+    ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(true)
+    await writeSaved(primary, indexJson(), true)
+    const beforeIndex = sha256(readFileSync(primary))
+    ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(false)
+
+    const r = await startRebuild(s)
+    await waitForIdle()
+
+    expect(r).toEqual({
+      queued: 0,
+      error: "Unlock this device's keychain or local key, then retry. Nothing was changed."
+    })
+    expect(r.error).toContain('keychain')
+    expect(sha256(readFileSync(primary))).toBe(beforeIndex)
+    expect(createStreamMock).not.toHaveBeenCalled()
   })
 })

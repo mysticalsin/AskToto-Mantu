@@ -68,7 +68,8 @@ import {
   readMeetingExtraction,
   withEntityLock,
   cloneEntity,
-  purgeBrain
+  purgeBrain,
+  BrainIndexRebuildError
 } from './store'
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
@@ -2253,6 +2254,21 @@ async function localOnlyRebuildBlocked(s: Settings): Promise<string | null> {
 
 const REBUILD_BUSY_ERROR = 'Intelligence indexing is already running. Wait for it to finish before rebuilding; nothing was reset.'
 
+function rebuildRefusalMessage(code: BrainIndexRebuildError['code']): string {
+  switch (code) {
+    case 'brain-index-keystore-unavailable':
+      return "Unlock this device's keychain or local key, then retry. Nothing was changed."
+    case 'brain-index-preserve-failed':
+      return 'Could not save a safe copy of the unreadable index (disk full or permissions). Nothing was deleted.'
+    case 'brain-index-changed-during-rebuild':
+      return 'The index changed while rebuilding (another device may be syncing). Nothing was deleted; retry.'
+    case 'brain-index-readable-again':
+      return 'The index is readable again; no rebuild needed.'
+    case 'brain-index-unsupported-version':
+      return 'This index was written by a newer Métis. Update Métis.'
+  }
+}
+
 function rebuildWorkBusy(): boolean {
   return queue.length > 0 || inFlightJobs.size > 0 || backfillPreparing || backfillLintPending ||
     !!backfillFinalization || !!drainTask || rebuildReplayQueued || !!rebuildReplayTask || !!backfillObserver?.settling
@@ -2295,7 +2311,15 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   // Fix F: preserveCorrections copies the journal to escrow and restores it even if the wipe fails —
   // check the result and abort (nothing re-extracted, corrections safe) rather than rebuild atop a
   // half-deleted store.
-  const purge = purgeBrain(s, { mode: 'rebuild', preserveCorrections: true })
+  let purge: { ok: boolean }
+  try {
+    purge = purgeBrain(s, { mode: 'rebuild', preserveCorrections: true })
+  } catch (error) {
+    if (error instanceof BrainIndexRebuildError) {
+      return { queued: 0, error: rebuildRefusalMessage(error.code) }
+    }
+    throw error
+  }
   if (!purge.ok) {
     return {
       queued: 0,
