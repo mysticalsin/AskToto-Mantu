@@ -15,7 +15,7 @@ import {
   finishRebuildReplay,
   whenIndexWritesSettle
 } from './ingest'
-import { readIndex, writeIndex } from './ledger'
+import { loadIndex, readIndex, writeIndex } from './ledger'
 import { readAccount, writeAccount, brainDir, slugify } from './store'
 import { renameEntity } from './corrections'
 
@@ -98,6 +98,7 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
     const working = readAccount(s, accountSlug)!
     working.name = 'Acme Corp'
     await writeAccount(s, accountSlug, working)
+    await loadIndex(s)
     const idx = readIndex(s)
     idx.backfillRequested = false
     idx.replayPending = true
@@ -114,6 +115,7 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
   it('finishes a resumed backfill AND still runs the pending replay once it drains, clearing both flags (backfillRequested=true, replayPending=true)', async () => {
     writeFileSync(join(meetingsFolder, 'leftover.md'), '---\ndate: 2026-01-01\n---\nhello', 'utf8')
     const s = getSettings()
+    await loadIndex(s)
     const idx = readIndex(s)
     idx.backfillRequested = true
     idx.replayPending = true

@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 // is exercised through runImportedRecap/provider callbacks in import-recap.test.ts.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const recapSrc = readFileSync(join(__dirname, 'import-recap.ts'), 'utf8')
+const statusSrc = readFileSync(join(__dirname, 'brain', 'status.ts'), 'utf8')
 
 // Diarized import lines carry line.name ("Jane Doe" / "Speaker N"). The recap prompt asks the model to
 // attribute by those labels — flattening every line to bare "SPEAKER:" erased attribution and made every
@@ -42,7 +43,7 @@ describe('ASR echo defense returns echo:true so the renderer can act (Parakeet /
 
 describe('brain status failedFiles excludes pending deferred ingest', () => {
   it('filters with isPendingIngestRecord so consolidation-queued meetings are not red "failed"', () => {
-    expect(indexSrc).toMatch(/failedFiles: Object\.entries\(idx\.ingested\)/)
-    expect(indexSrc).toMatch(/!v\.ok && !isPendingIngestRecord\(v\)/)
+    expect(statusSrc).toMatch(/failedFiles: Object\.entries\(idx\.ingested\)/)
+    expect(statusSrc).toMatch(/!v\.ok && !isPendingIngestRecord\(v\)/)
   })
 })

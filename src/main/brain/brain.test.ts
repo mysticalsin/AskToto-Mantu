@@ -14,7 +14,7 @@ import {
   updateIndex,
   readMeetingSourceMode, whenIndexWritesSettle } from './ingest'
 import { buildBrainContext } from './context'
-import { readIndex, writeIndex } from './ledger'
+import { loadIndex, readIndex, writeIndex } from './ledger'
 import {
   brainDir,
   slugify,
@@ -389,6 +389,7 @@ describe('brain', () => {
   })
 
   it('store writes plaintext JSON when encryption is off and index round-trips', async () => {
+    await loadIndex(s)
     const idx = readIndex(s)
     idx.ingested['m1.md'] = { at: 123, ok: true }
     await writeIndex(s, idx)
@@ -424,6 +425,7 @@ describe('brain', () => {
 
   it('store encrypts brain files at rest when encryptTranscripts is on', async () => {
     const enc = { ...s, encryptTranscripts: true } as Settings
+    await loadIndex(enc)
     const idx = readIndex(enc)
     idx.ingested['secret-meeting.md'] = { at: 1, ok: true }
     await writeIndex(enc, idx)

@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest'
  * brain/publish.test.ts, purgeGraphArtifacts in graphify.test.ts, purgeBrain in brain/brain.test.ts.
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const statusSrc = readFileSync(join(__dirname, 'brain', 'status.ts'), 'utf8')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
@@ -104,8 +105,7 @@ describe('MQA-230 — single-meeting delete erases its derived data without wait
   })
 
   it('the pending entity residue is visible, not silent: brainStatus carries cleanupPending', () => {
-    const status = sliceBetween('ipcMain.handle(IPC.brainStatus', 'ipcMain.handle(IPC.brainRead')
-    expect(status).toMatch(/cleanupPending: idx\.sourceRefreshRequested === true/)
+    expect(statusSrc).toMatch(/cleanupPending: idx\.sourceRefreshRequested === true/)
   })
 
   it('the confirm dialog now names the extracted knowledge it deletes', () => {

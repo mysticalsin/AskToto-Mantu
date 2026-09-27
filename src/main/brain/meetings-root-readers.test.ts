@@ -217,6 +217,7 @@ describe('meetings-root stall-path readers', () => {
   it('brain:status reads the ledger, counts and state files through the gateway, never synchronously', async () => {
     fsTrap.armed = false
     const s = getSettings()
+    await loadIndex(s)
     await writeIndex(s, BrainIndexSchema.parse({ ingested: { 'local-meeting.md': { at: 1, ok: true } } }))
     await writePerson(s, 'person-a', PersonEntitySchema.parse({ id: 'person-a', name: 'Person A', meetings: [], quotes: [], stance_trail: [], commitments: [], aliases: [] }))
     await writeGraph(s, BrainGraphSchema.parse({ nodes: [{ id: 'n1', kind: 'person', label: 'Person A' }], edges: [] }))
@@ -237,6 +238,7 @@ describe('meetings-root stall-path readers', () => {
   it("brain:status reports a cloud-only index.json as indexUnavailable 'cloud-only' without reading it", async () => {
     fsTrap.armed = false
     const s = getSettings()
+    await loadIndex(s)
     await writeIndex(s, BrainIndexSchema.parse({ ingested: { 'local-meeting.md': { at: 1, ok: true } } }))
     const markedAt = fsTrap.reads.length
     writeFileSync(join(brainDir(s), 'index.json'), JSON.stringify({ schema_version: 0, ingested: {} }), 'utf8')
@@ -255,6 +257,7 @@ describe('meetings-root stall-path readers', () => {
   it('an index.json evicted with unchanged content stays usable from memory', async () => {
     fsTrap.armed = false
     const s = getSettings()
+    await loadIndex(s)
     await writeIndex(s, BrainIndexSchema.parse({ ingested: { 'remembered.md': { at: 1, ok: true } } }))
     await loadIndex(s)
     fsTrap.cloud.add('index.json')
@@ -276,6 +279,7 @@ describe('meetings-root stall-path readers', () => {
     writeFileSync(join(meetingsFolder, 'cloud-meeting.md'), transcriptMd('2026-01-02', 'cloud'), 'utf8')
     await seedExtraction(s, 'local-meeting.md')
     await seedExtraction(s, 'cloud-meeting.md')
+    await loadIndex(s)
     await writeIndex(s, BrainIndexSchema.parse({ backfillRequested: true }))
     fsTrap.cloud.add('cloud-meeting.md')
     fsTrap.calls.length = 0
@@ -297,6 +301,7 @@ describe('meetings-root stall-path readers', () => {
     const s = getSettings()
     const file = join(meetingsFolder, 'drift-meeting.md')
     writeFileSync(file, transcriptMd('2026-01-03', 'drift'), 'utf8')
+    await loadIndex(s)
     await writeIndex(s, BrainIndexSchema.parse({ ingested: { 'drift-meeting.md': { at: 1, ok: true, sourceVersion: 'old-version' } } }))
     utimesSync(file, new Date(), new Date(Date.now() + 10_000))
     fsTrap.cloud.add('drift-meeting.md')
@@ -335,6 +340,7 @@ describe('meetings-root stall-path readers', () => {
     fsTrap.armed = false
     const s = getSettings()
     setSettings({ brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: true } })
+    mkdirSync(brainDir(s), { recursive: true })
     writeFileSync(join(brainDir(s), 'consolidate-state.json'), JSON.stringify({ date: '2026-01-01', passes: 0, lastRunAt: 1 }), 'utf8')
     fsTrap.cloud.add('consolidate-state.json')
     fsTrap.calls.length = 0

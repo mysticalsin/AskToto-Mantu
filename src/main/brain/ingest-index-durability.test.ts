@@ -21,6 +21,7 @@ describe('index mutations own their unpublished snapshot', () => {
     folder = mkdtempSync(join(tmpdir(), 'metis-index-durability-'))
     vi.stubEnv('ASKTOTO_USERDATA', folder)
     settings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+    await ledger.loadIndex(settings)
     await ledger.writeIndex(settings, ledger.readIndex(settings))
   })
 

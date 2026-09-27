@@ -6,7 +6,7 @@ import { randomBytes, createCipheriv, createHash } from 'node:crypto'
 import { safeStorage } from 'electron'
 import type { Settings } from '@shared/ipc'
 import { BrainIndexSchema } from '@shared/brain'
-import { readIndex, writeIndex, indexUnavailable, BrainIndexUnavailableError } from './brain/ledger'
+import { loadIndex, readIndex, writeIndex, indexUnavailable, BrainIndexUnavailableError } from './brain/ledger'
 import { brainDir, purgeBrain } from './brain/store'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 
@@ -100,7 +100,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
 
-  it('MQA-175: never hands the native keychain a truncated OSCrypt blob (the C++ throw no JS catch can hold)', () => {
+  it('MQA-175: never hands the native keychain a truncated OSCrypt blob (the C++ throw no JS catch can hold)', async () => {
     // Chromium's os_crypt_win.cc reaches past the 'v10' prefix with std::string::substr(15) and NO
     // length check: a shorter blob raises std::out_of_range, a native C++ exception (0xE06D7363) that
     // unwinds straight past V8 — no try/catch, no handler, no diagnostics, process gone.
@@ -117,6 +117,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     writeFileSync(primary, bytes)
     const before = sha256(bytes)
 
+    await loadIndex(s)
     expect(() => readIndex(s)).not.toThrow()
 
     // M2-0003: an unusable-here index is never rewritten — this is a decode failure like any other.
@@ -127,12 +128,13 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     expect(impossible).toHaveLength(0)
   })
 
-  it('M2-0003: a foreign-key index.json is byte-identical after readIndex, and readIndex returns an empty stand-in', () => {
+  it('M2-0003: a foreign-key index.json is byte-identical after readIndex, and readIndex returns an empty stand-in', async () => {
     const bytes = foreignKeyIndexBytes()
     const primary = join(brainDir(s), 'index.json')
     writeFileSync(primary, bytes)
     const before = sha256(bytes)
 
+    await loadIndex(s)
     const idx = readIndex(s)
     expect(idx.ingested).toEqual({})
 
@@ -147,6 +149,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     writeFileSync(primary, bytes)
     const before = sha256(bytes)
 
+    await loadIndex(s)
     const idx = readIndex(s)
     idx.ingested['new.md'] = { at: 1, ok: true }
 
@@ -164,6 +167,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     // ASKTOTO_LOCAL_KEYSTORE forces the 'S:'-wrapped path closed (transcripts.ts's decryptEnvelopeV2) —
     // the same real-world case as a device whose OS keychain is unavailable this session.
     vi.stubEnv('ASKTOTO_LOCAL_KEYSTORE', '1')
+    await loadIndex(s)
     const idx = readIndex(s)
     expect(idx.ingested).toEqual({})
     expect(indexUnavailable(s)).toBe('undecryptable')
@@ -174,11 +178,12 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     vi.unstubAllEnvs()
     vi.resetModules()
     const fresh = await import('./brain/ledger')
+    await fresh.loadIndex(s)
     expect(fresh.readIndex(s).ingested['a.md']?.ok).toBe(true)
     expect(fresh.indexUnavailable(s)).toBeNull()
   })
 
-  it('M2-0003: damaged own ciphertext is no longer auto-quarantined — left in place, read-only', () => {
+  it('M2-0003: damaged own ciphertext is no longer auto-quarantined — left in place, read-only', async () => {
     // MQA-175's original fixture (M2-0003): a decode failure this device caused itself (a torn write)
     // is indistinguishable from FOREIGN-F under AES-GCM, so this device's own damaged ciphertext gets
     // the same read-only treatment as a foreign key — never a rename, never auto-quarantined.
@@ -187,6 +192,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     writeFileSync(primary, poisoned)
     const before = sha256(poisoned)
 
+    await loadIndex(s)
     const idx = readIndex(s)
     expect(idx.ingested).toEqual({})
 
@@ -201,6 +207,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     const primary = join(brainDir(s), 'index.json')
     writeFileSync(primary, bad)
 
+    await loadIndex(s)
     const idx = readIndex(s)
     expect(idx.ingested).toEqual({})
     expect(existsSync(primary)).toBe(false) // moved aside, not left in place — decoded fine, just invalid
@@ -215,11 +222,12 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     expect(readIndex(s).ingested['meeting-b.md']?.ok).toBe(true)
   })
 
-  it('M2-0003: decoded-but-invalid content inside an authenticated envelope is set aside the same way', () => {
+  it('M2-0003: decoded-but-invalid content inside an authenticated envelope is set aside the same way', async () => {
     const { buf } = envelopeV2('not json')
     const primary = join(brainDir(s), 'index.json')
     writeFileSync(primary, buf)
 
+    await loadIndex(s)
     const idx = readIndex(s)
     expect(idx.ingested).toEqual({})
     expect(existsSync(primary)).toBe(false)
@@ -229,7 +237,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     expect(readFileSync(join(brainDir(s), preserved[0]))).toEqual(buf)
   })
 
-  it('M2-0003: legacy index.corrupt-<ISO>.json snapshots are never counted, renamed or deleted', () => {
+  it('M2-0003: legacy index.corrupt-<ISO>.json snapshots are never counted, renamed or deleted', async () => {
     const legacyNames = [
       'index.corrupt-2026-08-20T00-00-00-000Z.json',
       'index.corrupt-2026-09-05T00-00-00-000Z.json',
@@ -243,6 +251,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
 
     const bad = Buffer.from('{"ingested": tru', 'utf8')
     writeFileSync(join(brainDir(s), 'index.json'), bad)
+    await loadIndex(s)
     readIndex(s)
 
     // The new auto- scheme still quarantines decoded-but-invalid bytes...
@@ -270,6 +279,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     const primary = join(brainDir(s), 'index.json')
     writeFileSync(primary, bad)
 
+    await loadIndex(s)
     const idx = readIndex(s)
     expect(idx.ingested).toEqual({})
     expect(indexUnavailable(s)).toBe('corrupt-kept')
@@ -283,11 +293,12 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     await expect(writeIndex(s, idx)).rejects.toMatchObject({ unavailable: 'corrupt-kept' })
   })
 
-  it("M2-0003: an index from a newer schema_version is never quarantined ('unsupported')", () => {
+  it("M2-0003: an index from a newer schema_version is never quarantined ('unsupported')", async () => {
     const bytes = Buffer.from(JSON.stringify({ schema_version: 99, ingested: 'new-shape' }), 'utf8')
     const primary = join(brainDir(s), 'index.json')
     writeFileSync(primary, bytes)
 
+    await loadIndex(s)
     const idx = readIndex(s)
     expect(idx.ingested).toEqual({})
     expect(indexUnavailable(s)).toBe('unsupported')
@@ -299,6 +310,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     // Regression guard (M2-0003): purgeBrain must clear the in-memory read-only state along with the
     // file, so no in-memory ledger from before the purge can outlive it.
     writeFileSync(join(brainDir(s), 'index.json'), foreignKeyIndexBytes())
+    await loadIndex(s)
     readIndex(s)
     expect(indexUnavailable(s)).toBe('undecryptable')
 
@@ -315,6 +327,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
   it('M2-0003: the read-only state ends when the bytes become readable, with no restart', async () => {
     const primary = join(brainDir(s), 'index.json')
     writeFileSync(primary, foreignKeyIndexBytes())
+    await loadIndex(s)
     readIndex(s)
     expect(indexUnavailable(s)).toBe('undecryptable')
 
@@ -322,6 +335,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
     healthy.ingested['healed.md'] = { at: 1, ok: true }
     writeFileSync(primary, JSON.stringify(healthy))
 
+    await loadIndex(s)
     expect(readIndex(s).ingested['healed.md']?.ok).toBe(true)
     expect(indexUnavailable(s)).toBeNull()
 
@@ -332,6 +346,7 @@ describe('MQA-175 — a poisoned .brain/index.json must degrade, not kill the ap
   })
 
   it('MQA-175: leaves a healthy index.json alone (no quarantine, no data loss)', async () => {
+    await loadIndex(s)
     const idx = readIndex(s)
     idx.ingested['healthy.md'] = { at: 3, ok: true }
     await writeIndex(s, idx)

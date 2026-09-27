@@ -8,7 +8,7 @@ import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
 import { mainLog } from '../logger'
 import { startBackfill, brainBackfillProgress, reconcileMeetingsInBackground, whenIndexWritesSettle } from './ingest'
-import { readIndex, writeIndex } from './ledger'
+import { loadIndex, readIndex, writeIndex } from './ledger'
 import { readAccount, readDeal, slugify, writeMeetingExtraction } from './store'
 
 vi.mock('electron')
@@ -47,12 +47,12 @@ describe('startBackfill with no configured provider', () => {
     // the on-disk key — a real ANTHROPIC_API_KEY etc. in the test runner's shell would silently make a
     // provider resolve and defeat the whole point of this test. Clear every provider's env var.
     for (const p of PROVIDER_IDS) {
-      const envVar = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', grok: 'XAI_API_KEY', nvidia: 'NVIDIA_API_KEY',
+      const envVar = ({ anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', grok: 'XAI_API_KEY', nvidia: 'NVIDIA_API_KEY',
         deepseek: 'DEEPSEEK_API_KEY', qwen: 'DASHSCOPE_API_KEY', minimax: 'MINIMAX_API_KEY',
         kimi: 'KIMI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY',
         together: 'TOGETHER_API_KEY', fireworks: 'FIREWORKS_API_KEY', mistral: 'MISTRAL_API_KEY',
         dust: 'DUST_API_KEY', 'claude-cli': '', 'codex-cli': '', gemini: 'GEMINI_API_KEY',
-        custom: 'ASKTOTO_CUSTOM_API_KEY' }[p]
+        custom: 'ASKTOTO_CUSTOM_API_KEY' } as Partial<Record<string, string>>)[p]
       if (envVar) vi.stubEnv(envVar, '')
     }
     setSettings({ meetingsFolder })
@@ -173,6 +173,7 @@ describe('startBackfill with no configured provider', () => {
 
   it('marks a changed successfully indexed source for a clean rebuild instead of silently keeping stale intelligence', async () => {
     const file = 'meeting-1.md'
+    await loadIndex(getSettings())
     await writeIndex(getSettings(), {
       ...readIndex(getSettings()),
       ingested: {
@@ -188,6 +189,7 @@ describe('startBackfill with no configured provider', () => {
 
   it('marks a deleted successfully indexed source for a clean rebuild instead of retaining its derived facts', async () => {
     unlinkSync(join(meetingsFolder, 'meeting-1.md'))
+    await loadIndex(getSettings())
     await writeIndex(getSettings(), {
       ...readIndex(getSettings()),
       ingested: {
@@ -206,6 +208,7 @@ describe('startBackfill with no configured provider', () => {
     vi.stubEnv('ANTHROPIC_API_KEY', 'test-key')
     const source = statSync(join(meetingsFolder, 'meeting-1.md'))
     const sourceVersion = `${Math.round(source.mtimeMs)}:${source.size}`
+    await loadIndex(getSettings())
     await writeIndex(getSettings(), {
       ...readIndex(getSettings()),
       ingested: {

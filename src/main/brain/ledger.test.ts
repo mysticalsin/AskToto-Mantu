@@ -60,6 +60,22 @@ vi.mock('node:fs', async (importOriginal) => {
   }
 })
 
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      renameSyncSpy(...args)
+      if (isPrimaryIndexPath(args[0]) && failRenameOnce) {
+        const err = failRenameOnce
+        failRenameOnce = null
+        throw err
+      }
+      return actual.rename(...args)
+    }
+  }
+})
+
 // Imported AFTER the mock factory (vi.mock is hoisted above this regardless of source order).
 const store = await import('./store')
 const ledger = await import('./ledger')
@@ -70,6 +86,7 @@ const storage = await import('../infra/storage/meetings-storage')
 // is injected for that exact path needs the real, unwrapped implementation, not another binding of the
 // same mock.
 const realFs = await vi.importActual<typeof import('node:fs')>('node:fs')
+const realFsp = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
 
 const ENC_MARKER_V2 = Buffer.from('ATKENC2\n', 'utf8')
 
@@ -113,7 +130,24 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
   let primary: string
 
   beforeEach(() => {
-    storage.useStorageForTests()
+    storage.useStorageForTests({
+      fs: {
+        readdir: realFsp.readdir,
+        realpath: realFsp.realpath,
+        stat: realFsp.stat,
+        async readFile(path) {
+          if (isPrimaryIndexPath(path)) {
+            if (failReadOnce) {
+              const err = failReadOnce
+              failReadOnce = null
+              throw err
+            }
+            if (failReadPersistent) throw failReadPersistent
+          }
+          return realFsp.readFile(path)
+        }
+      }
+    })
     folder = mkdtempSync(join(tmpdir(), 'asktoto-store-m2-0003-'))
     s = { meetingsFolder: folder } as Settings
     mkdirSync(join(folder, '.brain'), { recursive: true })

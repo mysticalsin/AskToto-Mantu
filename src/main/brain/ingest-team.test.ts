@@ -7,7 +7,7 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
 import { brainBackfillProgress, extractionSlug, startBackfill, whenIndexWritesSettle } from './ingest'
-import { readIndex, writeIndex } from './ledger'
+import { loadIndex, readIndex, writeIndex } from './ledger'
 import { readMeetingExtraction, writeMeetingExtraction } from './store'
 
 vi.mock('electron')
@@ -34,14 +34,14 @@ describe('team-transcript ingest', () => {
     // Clear every provider env var so no provider silently resolves (a real key in the runner's shell
     // would defeat the no-provider reconcile path). Mirrors ingest-backfill.test.ts.
     for (const p of PROVIDER_IDS) {
-      const envVar = {
+      const envVar = ({
         anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', nvidia: 'NVIDIA_API_KEY',
         deepseek: 'DEEPSEEK_API_KEY', qwen: 'DASHSCOPE_API_KEY', minimax: 'MINIMAX_API_KEY',
         kimi: 'KIMI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', grok: 'XAI_API_KEY',
         together: 'TOGETHER_API_KEY', fireworks: 'FIREWORKS_API_KEY', mistral: 'MISTRAL_API_KEY',
         dust: 'DUST_API_KEY', 'claude-cli': '', 'codex-cli': '', gemini: 'GEMINI_API_KEY',
         custom: 'ASKTOTO_CUSTOM_API_KEY'
-      }[p]
+      } as Partial<Record<string, string>>)[p]
       if (envVar) vi.stubEnv(envVar, '')
     }
   })
@@ -121,6 +121,7 @@ describe('team-transcript ingest', () => {
     // Ingested successfully against bytes that no longer match what is on disk — Alice edited her own
     // transcript (a debrief append, a corrected name) and OneDrive synced the change into this brain.
     // Same shape ingest-backfill.test.ts pins for an own meeting; a team file must drift identically.
+    await loadIndex(getSettings())
     await writeIndex(getSettings(), {
       ...readIndex(getSettings()),
       ingested: { [key]: { at: Date.now(), ok: true, sourceVersion: 'stale-version' } }
@@ -136,6 +137,7 @@ describe('team-transcript ingest', () => {
     const teamFolder = join(sharedRoot, 'carol')
     setSettings({ meetingsFolder, teamTranscriptFolders: [teamFolder] })
     const key = `team/carol/offsite.md`
+    await loadIndex(getSettings())
     await writeIndex(getSettings(), {
       ...readIndex(getSettings()),
       ingested: { [key]: { at: Date.now(), ok: true, sourceVersion: '1:1' } }

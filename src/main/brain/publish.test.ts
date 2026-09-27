@@ -14,7 +14,7 @@ import {
   type Confidence,
   type MeetingExtraction
 } from '@shared/brain'
-import { writeIndex } from './ledger'
+import { loadIndex, writeIndex } from './ledger'
 import { writeDeal, writeAccount, writePerson, writeMeetingExtraction, slugify } from './store'
 import { readAliasMap } from './corrections'
 import { ingestExtraction, whenIndexWritesSettle } from './ingest'
@@ -462,7 +462,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
             superseded: []
           },
           commitments: [
-            { text: 'send the revised pricing', by: 'you', meeting: 'acme-pricing.md', date: '2026-02-01', status: 'open' }
+            { text: 'send the revised pricing', by: 'you', meeting: 'acme-pricing.md', date: '2026-02-01', status: 'open', confidence: 'EXTRACTED', quote: 'send the revised pricing', due_hint: '' }
           ]
         })
       )
@@ -680,7 +680,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
             { file: teamKey, date: '2026-02-01', title: 'Alice Pricing Negotiation' }
           ],
           commitments: [
-            { text: 'drop the floor price to 40k', by: 'Alice', meeting: teamKey, date: '2026-02-01', status: 'open' }
+            { text: 'drop the floor price to 40k', by: 'Alice', meeting: teamKey, date: '2026-02-01', status: 'open', confidence: 'EXTRACTED', quote: 'drop the floor price to 40k', due_hint: '' }
           ]
         })
       )
@@ -701,6 +701,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
     it('MQA-159 — an unreachable team folder fails CLOSED: an already-ingested team meeting stays unpublished', async () => {
       // The refs live in .brain and outlive the share; the ingest index is the only durable record that
       // this key is a team key at all once the folder is gone (revoked, offline, not yet synced).
+      await loadIndex(s)
       await writeIndex(s, BrainIndexSchema.parse({ ingested: { [teamKey]: { at: 1, ok: true } } }))
       await seedDealFromTeamMeeting()
       rmSync(teamFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })

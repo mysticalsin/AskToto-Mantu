@@ -18,7 +18,7 @@ import {
   updateIndex,
   whenIndexWritesSettle
 } from './ingest'
-import { indexUnavailable, readIndex } from './ledger'
+import { indexUnavailable, loadIndex, readIndex } from './ledger'
 import { brainDir } from './store'
 
 vi.mock('electron')
@@ -72,7 +72,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     return Buffer.concat([marker, Buffer.from(JSON.stringify(env), 'utf8')])
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     userData = mkdtempSync(join(tmpdir(), 'metis-index-unavailable-ud-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'metis-index-unavailable-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -97,6 +97,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
       'utf8'
     )
     writeFileSync(primary, foreignKeyIndexBytes())
+    await loadIndex(s)
     expect(indexUnavailable(s)).toBe('undecryptable') // sanity: the fixture is actually unreadable here
   })
 
