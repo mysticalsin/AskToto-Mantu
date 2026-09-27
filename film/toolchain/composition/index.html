@@ -94,6 +94,7 @@
       tl.fromTo('#caption', { opacity: 0 }, { opacity: 1, duration: 0.6 }, 0.6)
       // Frame 150 of 150 samples t = 149/30, never t = 5, so the fill completes on that last frame.
       tl.fromTo('#progress-fill', { scaleX: 0 }, { scaleX: 1, duration: 149 / 30, ease: 'none' }, 0)
+      window.__timelines = window.__timelines || {}
       window.__timelines['spike'] = tl
     </script>
   </body>
