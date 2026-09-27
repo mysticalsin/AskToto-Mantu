@@ -403,7 +403,7 @@ describe('brain', () => {
     expect(existsSync(brainDir(s))).toBe(true)
     expect(listEntities(s, 'person').length).toBeGreaterThan(0)
 
-    const r = purgeBrain(s)
+    const r = purgeBrain(s, { mode: 'erase' })
     expect(r.ok).toBe(true)
     expect(existsSync(brainDir(s))).toBe(false) // nothing left on disk — no lingering quotes/entities
     expect(listEntities(s, 'person')).toHaveLength(0)
@@ -411,7 +411,7 @@ describe('brain', () => {
 
   it('purgeBrain is a no-op that succeeds when no brain has been built yet', () => {
     expect(existsSync(brainDir(s))).toBe(false)
-    expect(purgeBrain(s).ok).toBe(true)
+    expect(purgeBrain(s, { mode: 'erase' }).ok).toBe(true)
   })
 
   it('updateIndex serializes concurrent mutations — no lost writes (production bug: idx.ingested went empty despite every extraction succeeding, because index.json has several independent writers — job completions, the queue-drained cleanup, a re-entrant startBackfill() call — and an unserialized read-mutate-write on each silently dropped whichever wrote last with a stale snapshot)', async () => {

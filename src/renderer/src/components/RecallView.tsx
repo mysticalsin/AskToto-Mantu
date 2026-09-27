@@ -21,6 +21,7 @@ import { WorkProgressMeter } from './WorkProgressMeter'
 import { describeMeetingIndexProgress } from './work-progress'
 import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
 import { runIntelligenceUpdateClick } from '../lib/intelligence-update'
+import { beginHistoryRequest, type HistoryRequest } from '../lib/history-trace'
 import { brainStatusError, brainStatusIsWorking } from './brain-status-refresh'
 import { INTELLIGENCE_STATUS_UNAVAILABLE } from '@shared/intelligence-pass'
 import { accelLabel } from '../lib/keys'
@@ -772,6 +773,8 @@ export function RecallView({
   // slow earlier response (or an import's refresh landing well after the user kept typing/searching) can
   // never clobber a fresher result already on screen.
   const fetchSeqRef = useRef(0)
+  // The traced list request whose response is waiting to be painted.
+  const unpaintedRequestRef = useRef<HistoryRequest | null>(null)
   // The value actually sent to the IPC search / used for grouping — updates 250ms after `q` settles (same
   // delay the search IPC call itself already waited for below), so every keystroke's re-render groups
   // against this stable value instead of re-running groupByLocalDate synchronously on each keystroke.
@@ -1098,17 +1101,24 @@ export function RecallView({
     const run = (): void => {
       setLoading(true)
       const seq = ++fetchSeqRef.current
-      const p = q.trim() ? window.toto.recallSearch(q.trim()) : window.toto.recallList()
+      const query = q.trim()
+      const request = query ? null : beginHistoryRequest()
+      const p = query ? window.toto.recallSearch(query) : window.toto.recallList(request?.trace)
       p.then((l) => {
+        request?.resolved()
         // fetchSeqRef guards against refreshList's post-import fetch (or another run of this same effect)
         // resolving out of order; `stale` additionally covers this effect's own cleanup (q changed again
         // before this particular run resolved).
         if (!stale && seq === fetchSeqRef.current) {
           setItems(l)
           setDebouncedQ(q)
-        }
+          if (request) {
+            unpaintedRequestRef.current?.discarded()
+            unpaintedRequestRef.current = request
+          }
+        } else request?.discarded()
       })
-        .catch(() => {})
+        .catch(() => request?.failed())
         .finally(() => {
           if (!stale) setLoading(false)
         })
@@ -1125,6 +1135,13 @@ export function RecallView({
       clearTimeout(t)
     }
   }, [q])
+
+  useEffect(() => {
+    unpaintedRequestRef.current?.painted()
+    unpaintedRequestRef.current = null
+  }, [items])
+
+  useEffect(() => () => unpaintedRequestRef.current?.discarded(), [])
 
   /** Open the selected file (or the first item as a fallback) — in-app recap when wired, else OS-open. */
   const openMeeting = useCallback(

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash, randomBytes } from 'node:crypto'
-import { app } from 'electron'
+import { app, safeStorage } from 'electron'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { getSettings, setApiKey, setSettings } from '../store'
 import {
@@ -19,6 +19,8 @@ import {
   whenIndexWritesSettle
 } from './ingest'
 import { brainDir, indexUnavailable, readIndex } from './store'
+import { writeSaved } from '../transcripts'
+import { resetSecretKeyCache } from '../secrets'
 
 vi.mock('electron')
 
@@ -57,6 +59,34 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
 
   const sha256 = (buf: Buffer): string => createHash('sha256').update(buf).digest('hex')
 
+  const indexJson = (): string => JSON.stringify(readIndex(s))
+
+  const decryptElectronMockBuffer = (buf: Buffer): string => {
+    const text = buf.toString('utf8')
+    return text.startsWith('enc:') ? text.slice(4) : text
+  }
+
+  const restoreElectronMocks = (nextUserData: string): void => {
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
+      if (name === 'userData') return nextUserData
+      return join(nextUserData, name)
+    })
+    ;(app as typeof app & { isPackaged?: boolean }).isPackaged = false
+    ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(true)
+    ;(safeStorage.encryptString as ReturnType<typeof vi.fn>).mockImplementation((value: string) => Buffer.from(`enc:${value}`))
+    ;(safeStorage.decryptString as ReturnType<typeof vi.fn>).mockImplementation(decryptElectronMockBuffer)
+  }
+
+  const makeKeychainUnavailable = (): void => {
+    ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(false)
+    ;(safeStorage.encryptString as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('keychain unavailable')
+    })
+    ;(safeStorage.decryptString as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('keychain unavailable')
+    })
+  }
+
   /** FOREIGN-F — same incident fixture as mqa-175-brain-index-poison.test.ts / store.test.ts: a v2
    *  envelope whose `kLocal` is not a key any process holds. */
   const foreignKeyIndexBytes = (): Buffer => {
@@ -72,12 +102,11 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
   }
 
   beforeEach(() => {
+    delete process.env.ASKTOTO_LOCAL_KEYSTORE
+    resetSecretKeyCache()
     userData = mkdtempSync(join(tmpdir(), 'metis-index-unavailable-ud-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'metis-index-unavailable-meetings-'))
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
-      if (name === 'userData') return userData
-      return join(userData, name)
-    })
+    restoreElectronMocks(userData)
     setSettings({ meetingsFolder })
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockReset()
@@ -101,6 +130,9 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
 
   afterEach(async () => {
     await waitForIdle()
+    delete process.env.ASKTOTO_LOCAL_KEYSTORE
+    resetSecretKeyCache()
+    restoreElectronMocks(userData)
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.restoreAllMocks()
@@ -171,6 +203,8 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
   })
 
   it('I7: explicit rebuild (startRebuild) is the repair path — it purges and writes a readable index', async () => {
+    const beforeIndex = sha256(readFileSync(primary))
+
     const r = await startRebuild(s)
     await waitForIdle()
 
@@ -178,5 +212,28 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     expect(createStreamMock).toHaveBeenCalled()
     expect(indexUnavailable(s)).toBeNull()
     expect(readIndex(s).ingested['unreachable-a.md']?.ok).toBe(true)
+    const preservedDir = join(meetingsFolder, '.brain-preserved')
+    const preserved = readdirSync(preservedDir)
+    expect(preserved).toHaveLength(1)
+    expect(sha256(readFileSync(join(preservedDir, preserved[0])))).toBe(beforeIndex)
+  })
+
+  it('I8: startRebuild reports a keychain refusal message and leaves a keychain-wrapped index unchanged', async () => {
+    ;(app as typeof app & { isPackaged?: boolean }).isPackaged = true
+    ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(true)
+    await writeSaved(primary, indexJson(), true)
+    const beforeIndex = sha256(readFileSync(primary))
+    makeKeychainUnavailable()
+
+    const r = await startRebuild(s)
+    await waitForIdle()
+
+    expect(r).toEqual({
+      queued: 0,
+      error: "Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. Nothing was changed."
+    })
+    expect(r.error).toContain('keychain')
+    expect(sha256(readFileSync(primary))).toBe(beforeIndex)
+    expect(createStreamMock).not.toHaveBeenCalled()
   })
 })
