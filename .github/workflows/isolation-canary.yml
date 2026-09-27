@@ -56,6 +56,9 @@ jobs:
     name: MetisKit swift test (hermetic)
     runs-on: macos-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v4
       - name: Seed a real-home honeypot the suite must never touch
@@ -127,6 +130,35 @@ jobs:
           if [ "$status" -ne 37 ]; then
             echo "expected run-swift-tests.sh to exit 37 (swift test's own status), got $status"; exit 1
           fi
+      # TEMPORARY (M2-0190 round 4 debug) — remove once the mount-cleanup proof above is green. Job logs
+      # for this repo are not readable through this session's available credentials, so this posts the
+      # runner's post-failure state to the PR instead.
+      - name: DEBUG - post diagnostics to the PR on failure
+        if: failure()
+        run: |
+          set +e
+          {
+            echo "### DEBUG (temporary, run ${{ github.run_id }}, job ${{ github.job }})"
+            echo '```'
+            echo "-- recorded sandbox path --"
+            cat "$RUNNER_TEMP/swift-shim-sandbox-path" 2>&1
+            echo "-- mount --"
+            mount
+            echo "-- hdiutil info --"
+            hdiutil info
+            sandbox="$(cat "$RUNNER_TEMP/swift-shim-sandbox-path" 2>/dev/null)"
+            if [ -n "$sandbox" ]; then
+              echo "-- find \$sandbox --"
+              find "$sandbox" 2>&1
+            fi
+            echo '```'
+          } > "$RUNNER_TEMP/debug-body.txt"
+          jq -Rs '{body: .}' "$RUNNER_TEMP/debug-body.txt" > "$RUNNER_TEMP/debug-payload.json"
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/209/comments" \
+            -d @"$RUNNER_TEMP/debug-payload.json"
 
   deny-non-loopback:
     name: deny-non-loopback.cjs denies every connect() shape (hermetic)
