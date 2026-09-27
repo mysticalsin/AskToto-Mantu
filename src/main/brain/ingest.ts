@@ -71,7 +71,9 @@ import {
   cloneEntity,
   purgeBrain,
   loadJson,
-  listBrainNames
+  listBrainNames,
+  BRAIN_INDEX_ERROR_CODE,
+  BrainIndexRebuildError
 } from './store'
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
@@ -2179,6 +2181,22 @@ async function localOnlyRebuildBlocked(s: Settings): Promise<string | null> {
 
 const REBUILD_BUSY_ERROR = 'Intelligence indexing is already running. Wait for it to finish before rebuilding; nothing was reset.'
 
+function rebuildRefusalMessage(code: BrainIndexRebuildError['code']): string {
+  switch (code) {
+    case BRAIN_INDEX_ERROR_CODE.keystoreUnavailable:
+      return "Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. Nothing was changed."
+    case BRAIN_INDEX_ERROR_CODE.preserveFailed:
+      return 'Could not save a safe copy of the unreadable index (disk full or permissions). Nothing was deleted.'
+    case BRAIN_INDEX_ERROR_CODE.changedDuringRebuild:
+      return 'The index changed while rebuilding (another device may be syncing). Nothing was deleted; retry.'
+    case BRAIN_INDEX_ERROR_CODE.readableAgain:
+      return 'The index is readable again; no rebuild needed.'
+    case BRAIN_INDEX_ERROR_CODE.unsupportedVersion:
+      return 'This index was written by a newer Métis. Update Métis.'
+  }
+  return 'The existing index cannot be safely rebuilt on this device. Nothing was changed.'
+}
+
 function rebuildWorkBusy(): boolean {
   return queue.length > 0 || inFlightJobs.size > 0 || backfillScans > 0 || backfillLintPending ||
     !!backfillFinalization || !!drainTask || rebuildReplayQueued || !!rebuildReplayTask || !!backfillObserver?.settling
@@ -2225,7 +2243,15 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   // Fix F: preserveCorrections copies the journal to escrow and restores it even if the wipe fails —
   // check the result and abort (nothing re-extracted, corrections safe) rather than rebuild atop a
   // half-deleted store.
-  const purge = purgeBrain(s, { preserveCorrections: true })
+  let purge: { ok: boolean }
+  try {
+    purge = purgeBrain(s, { mode: 'rebuild', preserveCorrections: true })
+  } catch (error) {
+    if (error instanceof BrainIndexRebuildError) {
+      return { queued: 0, error: rebuildRefusalMessage(error.code) }
+    }
+    throw error
+  }
   if (!purge.ok) {
     return {
       queued: 0,

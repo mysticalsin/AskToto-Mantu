@@ -3,11 +3,17 @@ import { rename } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
-import { BrainIndexSchema, BRAIN_SCHEMA_VERSION, type BrainIndex, type IndexUnavailableCause } from '@shared/brain'
-import { decodeSavedResult, resolveMeetingsFolder } from '../transcripts'
+import { BrainIndexSchema, type BrainIndex, type IndexUnavailableCause } from '@shared/brain'
+import { resolveMeetingsFolder } from '../transcripts'
 import { mainLog, auditLog } from '../logger'
 import { storageAt } from '../infra/storage/meetings-storage'
 import { brainDir, persistJson, readBrainFile, type ContentIdentity } from './store'
+import {
+  BrainIndexUnavailableError,
+  INDEX_REL,
+  classifyIndexBytes,
+  type ResolvedIndex
+} from './index-state'
 
 // ── Brain index (index.json) ─ M2-0003 read/replace invariant ─────────────────────────────────────
 // index.json is renamed or overwritten ONLY when this process fully decoded its current bytes (plaintext,
@@ -17,45 +23,13 @@ import { brainDir, persistJson, readBrainFile, type ContentIdentity } from './st
 // and the index is read-only for the session. Decoded-but-invalid bytes are set aside, capped. Mirrors
 // corrections.ts's parseJournalFile (absent / unreadable / corrupt / ok). See ticket M2-0003.
 
-const INDEX_REL = 'index.json'
 /** Only snapshots made by this scheme are counted. Legacy `index.corrupt-<ISO>.json` files (the pre-
  *  M2-0003 quarantine name) are never counted, renamed or deleted — every existing one stays exactly
  *  where it is. Keeps the `.corrupt-` infix every `.brain` reader already excludes from its own scans. */
 const INDEX_AUTO_SNAPSHOT_PREFIX = 'index.corrupt-auto-'
 export const INDEX_AUTO_SNAPSHOT_CAP = 5
 
-type IndexLoad =
-  | { kind: 'ready'; index: BrainIndex }
-  | { kind: 'absent' }
-  | { kind: 'corrupt' } // decoded, but not a valid index for this build
-  | { kind: 'unavailable'; cause: IndexUnavailableCause; detail?: string } // detail: log-only (errno / decode reason)
-type ResolvedIndex = Exclude<IndexLoad, { kind: 'corrupt' }>
-
-export class BrainIndexUnavailableError extends Error {
-  override readonly name = 'BrainIndexUnavailableError'
-  // NOT `cause` — that is Error.cause (ES2022).
-  constructor(readonly unavailable: IndexUnavailableCause) {
-    super(`brain index is read-only on this device (${unavailable})`)
-  }
-}
-
-/** Pure classification of index.json bytes. No filesystem writes. */
-export function classifyIndexBytes(buf: Buffer): IndexLoad {
-  if (buf.length === 0) return { kind: 'absent' } // torn to zero bytes: nothing to preserve (unchanged)
-  const decoded = decodeSavedResult(buf)
-  if (!decoded.ok) return { kind: 'unavailable', cause: 'undecryptable', detail: decoded.reason }
-  let raw: unknown
-  try {
-    raw = JSON.parse(decoded.text)
-  } catch {
-    return { kind: 'corrupt' }
-  }
-  const parsed = BrainIndexSchema.safeParse(raw)
-  if (parsed.success) return { kind: 'ready', index: parsed.data }
-  const v = (raw as { schema_version?: unknown } | null)?.schema_version
-  if (typeof v === 'number' && v > BRAIN_SCHEMA_VERSION) return { kind: 'unavailable', cause: 'unsupported' }
-  return { kind: 'corrupt' }
-}
+export { BrainIndexUnavailableError, classifyIndexBytes } from './index-state'
 
 // Loading goes through the storage gateway (M2-0031): nothing here reads index.json synchronously, and a
 // cloud-only index.json is never read. readIndex and indexUnavailable answer from the last load and never

@@ -6468,7 +6468,8 @@ function registerIpc(): void {
     if (response !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteAllMeetings()
     purgeGraphArtifacts() // legacy userData/graph artifacts + the runner's graphify-out/ manifest
-    const brainPurge = purgeBrain(getSettings()) // the `.brain/` knowledge store — entities, quotes, graph
+    const settings = getSettings()
+    const brainPurge = purgeBrain(settings, { mode: 'erase' }) // the `.brain/` knowledge store — entities, quotes, graph
     // The wiki mirror is that same derived knowledge in CLEARTEXT (publish.ts writes it with
     // `encrypt: false` by design), so an erasure that skipped it would leave a readable copy of every
     // meeting, person and open commitment behind — and, with the brain gone, one nothing can ever prune.
