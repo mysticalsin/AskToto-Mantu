@@ -6,6 +6,12 @@ resources/local-ai/licenses/Qwen3-0.6B-Apache-2.0.txt whitespace=cr-at-eol
 resources/local-ai/candidates.json text eol=lf
 resources/local-ai/licenses/*.md text eol=lf
 
+# electron-builder configs are hashed per-checkout into scripts/qa/provenance.mjs's provenance record.
+# Pin them LF-only so a Windows runner's builder_config sha256 matches the same commit's macOS/Linux
+# checkout instead of drifting via core.autocrlf.
+electron-builder*.yml text eol=lf
+build/*.electron-builder.yml text eol=lf
+
 # The local-model license was renamed from resources/local-ai/licenses/* to resources/local-llm/*.
 # Keep its upstream LF bytes intact so the hash pin in scripts/local-model-assets.mjs verifies on
 # Windows checkouts where core.autocrlf would otherwise rewrite it (LF->CRLF) and fail check:local-model.

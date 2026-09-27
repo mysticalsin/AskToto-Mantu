@@ -64,6 +64,11 @@ function stripTrailingNewlines(text) {
   return text.replace(/(\r?\n)+$/, '')
 }
 
+/** Every line of an evidence file, in order, with every trailing line ending removed first. */
+function evidenceLines(text) {
+  return stripTrailingNewlines(text).split(/\r?\n/)
+}
+
 /**
  * win is always unsigned, whatever the environment holds. mac is signed with the lane's stable QA
  * identity when the owner has stored one, and ad-hoc otherwise — never a Developer ID.
@@ -175,7 +180,7 @@ export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, n
   return record
 }
 
-/** Binds every per-variant build record to one commit and run, and returns the section-4 provenance object. */
+/** Binds every per-variant build record to one commit and run, and returns the object written to provenance.json. */
 export function assembleProvenance(records, env) {
   const problems = []
 
@@ -220,6 +225,24 @@ export function assembleProvenance(records, env) {
         problems.push(`asset name ${asset.name} appears in both ${ownerOfAsset.get(asset.name)} and ${record.variant}`)
       } else {
         ownerOfAsset.set(asset.name, record.variant)
+      }
+    }
+  }
+
+  // One commit means one config: two variants that both list the same builder_config path must have
+  // hashed the same bytes. A disagreement means at least one runner's checkout rewrote the file (for
+  // example CRLF line endings on Windows), and the resulting provenance would misreport what config
+  // built which asset.
+  const configHashesByPath = new Map()
+  for (const record of byVariant.values()) {
+    for (const config of record.builder_config) {
+      const seen = configHashesByPath.get(config.path)
+      if (!seen) {
+        configHashesByPath.set(config.path, { sha256: config.sha256, variant: record.variant })
+      } else if (seen.sha256 !== config.sha256) {
+        problems.push(
+          `${config.path}: ${seen.variant} recorded sha256 ${seen.sha256} but ${record.variant} recorded ${config.sha256} — one commit means one config`
+        )
       }
     }
   }
@@ -294,15 +317,15 @@ export async function directoryProblems(provenance, dir, variants) {
  * build_run_id and artifact_sha256 are read — full record validation belongs to M2-0002's checker.
  */
 export function evidenceProblems(evidenceText, provenance) {
-  const trimmed = stripTrailingNewlines(evidenceText)
-  if (trimmed === '') {
+  const lines = evidenceLines(evidenceText)
+  if (lines.length === 1 && lines[0] === '') {
     return ['no evidence records: promotion needs at least one passing record bound to these bytes']
   }
 
   const knownHashes = new Set(provenance.builds.flatMap((build) => build.assets.map((asset) => asset.sha256)))
   const problems = []
 
-  trimmed.split(/\r?\n/).forEach((line, index) => {
+  lines.forEach((line, index) => {
     const n = index + 1
     if (line.trim() === '') {
       problems.push(`line ${n} is blank`)
@@ -415,10 +438,7 @@ export async function prepareRelease({ provenancePath, evidencePath, downloadsDi
   manifest.sort((a, b) => a.name.localeCompare(b.name))
   writeFileSync(join(outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
 
-  const evidenceRecords = stripTrailingNewlines(evidenceText)
-    .split(/\r?\n/)
-    .filter((line) => line.trim() !== '')
-    .map((line) => JSON.parse(line))
+  const evidenceRecords = evidenceLines(evidenceText).map((line) => JSON.parse(line))
   const tickets = [...new Set(evidenceRecords.map((record) => record.ticket))].sort()
   const evidence = { count: evidenceRecords.length, tickets, sha256: sha256Bytes(evidenceBytes) }
   const promotionRunUrl = `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`

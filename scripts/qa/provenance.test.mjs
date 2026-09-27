@@ -455,7 +455,22 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
 
     const evidencePath = join(root, 'evidence.jsonl')
     const macSha = provenance.builds.find((b) => b.variant === 'mac').assets[0].sha256
-    writeFileSync(evidencePath, passEvidenceLine(provenance, macSha))
+    // An extra field holding a byte that is not valid UTF-8 on its own: Buffer#toString('utf8') decodes it
+    // as U+FFFD, so JSON.parse still accepts the line, but the raw bytes readFileSync sees differ from
+    // Buffer.from(the re-decoded string, 'utf8'). The published evidence hash must match the former, or it
+    // would not verify against `shasum -a 256` on the file the owner actually passed in.
+    const evidenceLine = `${JSON.stringify({
+      ticket: 'M2-0028',
+      result: 'PASS',
+      build_run_id: provenance.run.id,
+      artifact_sha256: macSha,
+      note: 'X'
+    })}\n`
+    const evidenceBytes = Buffer.from(evidenceLine, 'utf8')
+    const placeholder = evidenceBytes.indexOf('X'.charCodeAt(0))
+    assert.notEqual(placeholder, -1)
+    evidenceBytes[placeholder] = 0x80
+    writeFileSync(evidencePath, evidenceBytes)
 
     const outDir = join(root, 'promotion')
     await prepareRelease({
@@ -490,7 +505,8 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
       assert.ok(typeof entry.name === 'string' && typeof entry.size === 'number' && /^[0-9a-f]{64}$/.test(entry.sha256))
     }
 
-    assert.ok(existsSync(join(outDir, 'notes.md')))
+    const notes = readFileSync(join(outDir, 'notes.md'), 'utf8')
+    assert.ok(notes.includes(sha256(readFileSync(evidencePath))), 'notes.md must hash the raw evidence bytes, not the decoded string')
   } finally {
     cleanup(root)
   }
