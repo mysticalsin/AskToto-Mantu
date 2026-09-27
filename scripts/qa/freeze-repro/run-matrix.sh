@@ -79,7 +79,11 @@ resolve_exe() {
 make_fifo() {
   local path=$1
   rm -f "$path"
-  mkfifo -m 600 "$path"
+  if mkfifo -m 600 "$path" 2>/dev/null; then
+    return 0
+  fi
+  [[ "$DRY_RUN" == 1 ]] || fail "could not create FIFO fixture: $path"
+  : > "$path"
 }
 
 release_fifo_once() {
@@ -177,6 +181,7 @@ copy_diagnostic_reports() {
   local stamp=$1
   local reports="$OUT/diagnostic-reports"
   mkdir -p "$reports"
+  [[ -d /Library/Logs/DiagnosticReports ]] || return 0
   find /Library/Logs/DiagnosticReports -type f \( -name '*.spin' -o -name '*.hang' \) -newer "$stamp" -print 2>/dev/null |
     while IFS= read -r report; do
       local dest="$reports/$(basename "$report").txt"
@@ -210,9 +215,12 @@ PROBE
 
 write_fixture_manifest() {
   local opened=0
+  local placeholders=0
   local item
   for item in "${FIFO_FIXTURES[@]}"; do
-    if release_fifo_once "$item"; then
+    if [[ ! -p "$item" ]]; then
+      placeholders=$((placeholders + 1))
+    elif release_fifo_once "$item"; then
       opened=$((opened + 1))
     fi
   done
@@ -220,6 +228,7 @@ write_fixture_manifest() {
     printf '{\n'
     printf '  "kind": "fifo",\n'
     printf '  "count": %s,\n' "${#FIFO_FIXTURES[@]}"
+    printf '  "dry_run_placeholders": %s,\n' "$placeholders"
     printf '  "opened_by_1_9_6": %s,\n' "$opened"
     printf '  "fixtures": [\n'
     local first=1
