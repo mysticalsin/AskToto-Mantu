@@ -1,6 +1,6 @@
 // check-provisioned-secrets.test.mjs — dependency-free node:test suite for the release-build gate that
 // unifies the operator skill-pack and license-lease "provisioned resource or committed DEV placeholder"
-// families (L05-F1, L05-F7, L05-REFACTOR-1). Run directly with `node --test scripts/check-provisioned-
+// families (ticket M2-0056). Run directly with `node --test scripts/check-provisioned-
 // secrets.test.mjs`; scripts/check-provisioned-secrets.test.ts spawns this same file so `npm test` covers
 // it too (vitest's scripts/**/*.{test,spec}.{ts,tsx} include glob never sees a bare .test.mjs).
 import { test } from 'node:test'
@@ -152,6 +152,33 @@ test('runCheck: OK once both families are genuinely provisioned', () => {
     writeFamilyResource(resourcesDir, 'license-lease', 'provisioned')
     const code = runCheck({ profile: 'release', dryRun: false, resourcesDir })
     assert.equal(code, 0)
+  })
+})
+
+// The most common real case: the first release attempt after this gate merges, with nothing provisioned
+// yet. Both families fail together, so the operator reading the FAIL output needs the fix path for both
+// on the same run — not just the first one, with the second only surfacing on their next attempt.
+test('runCheck: FAIL hint names every unprovisioned family, not just the first', () => {
+  withTempDir((resourcesDir) => {
+    writeFamilyResource(resourcesDir, 'operator', 'missing')
+    writeFamilyResource(resourcesDir, 'license-lease', 'missing')
+    const operatorPath = join(resourcesDir, 'operator', 'pubkey.json')
+    const leasePath = join(resourcesDir, 'license-lease', 'pubkey.json')
+
+    const originalError = console.error
+    const stderrLines = []
+    console.error = (...args) => stderrLines.push(args.join(' '))
+    let code
+    try {
+      code = runCheck({ profile: 'release', dryRun: false, resourcesDir })
+    } finally {
+      console.error = originalError
+    }
+    const stderr = stderrLines.join('\n')
+
+    assert.equal(code, 1)
+    assert.ok(stderr.includes(operatorPath), `expected the FAIL hint to name ${operatorPath}:\n${stderr}`)
+    assert.ok(stderr.includes(leasePath), `expected the FAIL hint to name ${leasePath}:\n${stderr}`)
   })
 })
 
