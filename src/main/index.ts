@@ -801,6 +801,7 @@ import {
 import {
   runPlaneOAuth,
   refreshPlaneToken,
+  savePlaneClientAndTokens,
   PLANE_MCP_OAUTH_ENDPOINT,
   PLANE_MCP_PAT_ENDPOINT,
   tryAcquirePlaneTokenLock,
@@ -6038,12 +6039,17 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const tokens = await runPlaneOAuth()
-    if (!tokens.ok || !tokens.accessToken) return { ok: false, error: tokens.error || 'Could not connect Plane.' }
+    if (!tokens.ok || !tokens.accessToken || !tokens.clientId || !tokens.clientSecret) {
+      return { ok: false, error: tokens.error || 'Could not connect Plane.' }
+    }
     const r = await connectMcp(PLANE_MCP_OAUTH_ENDPOINT, tokens.accessToken, {}, 'Plane')
     if (!r.ok) return r
     try {
-      setMcpApiKey('plane', tokens.accessToken)
-      setMcpRefreshToken('plane', tokens.refreshToken ?? '')
+      // Save client + tokens together only now that connectMcp has proven the access token works (P4-F2; see planeOAuth.ts's file header).
+      savePlaneClientAndTokens(
+        { clientId: tokens.clientId, clientSecret: tokens.clientSecret },
+        { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken ?? '' }
+      )
       const s = getSettings()
       const entry: McpConnection = {
         id: 'plane',
