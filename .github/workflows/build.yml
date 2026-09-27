@@ -167,13 +167,6 @@ jobs:
             echo "::error::Possible committed secret found"; exit 1
           fi
           echo "No committed secrets found."
-      # Blocks a committed absolute per-user path or agent scratch-session path in tracked source
-      # (finding P5-F4). Scans every tracked file git ls-files reports for the globs
-      # check-no-scratch-paths.mjs declares; a pre-existing, out-of-scope hit is grandfathered in
-      # that script's own BASELINE_VIOLATIONS (asserted still-real by
-      # check-no-scratch-paths.contract.test.ts) rather than silently excluded here.
-      - name: Scratch-path scan
-        run: npm run check:scratch-paths
       # Repo-wide secret scan (gitleaks). The step above is deliberately narrow — it only recognizes this
       # product's OWN provider key-prefix shapes (src/shared/providers.ts). This step runs the SAME
       # checked-out tree through gitleaks's large, community-maintained detection ruleset instead
@@ -200,6 +193,14 @@ jobs:
           docker run --rm -v "$PWD:/repo" -w /repo \
             zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             detect --source=/repo --config=/repo/.gitleaks.toml --redact -v --no-banner --exit-code=1
+      # Blocks a committed absolute per-user path or agent scratch-session path in tracked source.
+      # Scans every tracked file git ls-files reports for the globs check-no-scratch-paths.mjs
+      # declares; a pre-existing hit outside this gate's own scope is grandfathered in that
+      # script's own BASELINE_VIOLATIONS (a per-file expected-count map, so an unrelated edit that
+      # only shifts lines in a baselined file does not turn this step red) and tracked by ticket
+      # M2-0221, not silently excluded here.
+      - name: Scratch-path scan
+        run: npm run check:scratch-paths
       # SBOM (CycloneDX) for the supply-chain evidence package.
       - name: Generate SBOM
         run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.json || echo "SBOM step skipped"

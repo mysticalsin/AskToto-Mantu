@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BASELINE_VIOLATIONS, findRepoViolations, findViolations } from './check-no-scratch-paths.mjs'
+import { BASELINE_VIOLATIONS, compareViolations, findRepoViolations, findViolations } from './check-no-scratch-paths.mjs'
 
 describe('findViolations', () => {
   it('reports a past agent-session scratch-path literal as path:line', () => {
@@ -18,16 +18,37 @@ describe('findViolations', () => {
   })
 })
 
-describe('the repo scan', () => {
-  it('flags no violation outside the baseline', () => {
-    const unexpected = findRepoViolations().filter((v) => !BASELINE_VIOLATIONS.has(v))
-    expect(unexpected).toEqual([])
+describe('compareViolations', () => {
+  it('passes a baselined file whose one violation moved to a different line', () => {
+    const baseline = new Map([['fixture.mjs', 1]])
+    expect(compareViolations(['fixture.mjs:42'], baseline)).toEqual({ unexpected: [], stale: [] })
   })
 
-  it('keeps every baseline entry a real, current violation (so a fixed file cannot linger unnoticed)', () => {
-    const current = new Set(findRepoViolations())
-    for (const entry of BASELINE_VIOLATIONS) {
-      expect(current.has(entry)).toBe(true)
-    }
+  it('flags an extra hit in a grandfathered file as unexpected', () => {
+    const baseline = new Map([['fixture.mjs', 1]])
+    const { unexpected, stale } = compareViolations(['fixture.mjs:5', 'fixture.mjs:9'], baseline)
+    expect(unexpected).toEqual(['fixture.mjs:5', 'fixture.mjs:9'])
+    expect(stale).toEqual([])
+  })
+
+  it('reports a fixed file (its violation gone) as stale', () => {
+    const baseline = new Map([['fixture.mjs', 1]])
+    const { unexpected, stale } = compareViolations([], baseline)
+    expect(unexpected).toEqual([])
+    expect(stale).toEqual(['fixture.mjs (expected 1, found 0)'])
+  })
+
+  it('flags a violation in a file the baseline never mentions', () => {
+    const { unexpected, stale } = compareViolations(['unbaselined.mjs:1'], new Map())
+    expect(unexpected).toEqual(['unbaselined.mjs:1'])
+    expect(stale).toEqual([])
+  })
+})
+
+describe('the repo scan', () => {
+  it('flags no violation outside the baseline and no stale baseline entry', () => {
+    const { unexpected, stale } = compareViolations(findRepoViolations(), BASELINE_VIOLATIONS)
+    expect(unexpected).toEqual([])
+    expect(stale).toEqual([])
   })
 })

@@ -2,20 +2,23 @@
 /**
  * check-no-scratch-paths.mjs — CI gate. Fails when a tracked source file contains an absolute
  * per-user path or a past agent-session scratch path: both are local-machine specifics that must
- * never be committed (finding P5-F4).
+ * never be committed.
  *
  * Scans every tracked .ts/.tsx/.js/.mjs/.cjs/.json/.yml file, except *.test.ts/*.test.tsx, whose
  * fixtures deliberately use such literals to exercise this exact check.
  *
- * BASELINE_VIOLATIONS grandfathers hits that predate this gate (tracked by a follow-up ticket).
- * The gate fails on any violation NOT in that set; it never fails on one that is, but
- * check-no-scratch-paths.contract.test.ts asserts every baseline entry still matches a real
- * violation, so a fixed file's entry cannot linger unnoticed — shrink the set as each one lands.
+ * BASELINE_VIOLATIONS grandfathers hits that predate this gate, keyed by file path to an expected
+ * hit COUNT rather than exact line numbers: a file's line numbers drift on every unrelated edit
+ * (package.json alone changed 15 times in three weeks), and a line-keyed baseline would go stale
+ * — and this gate red — on every one of them. Tracked by ticket M2-0221. compareViolations() fails
+ * on a file whose actual count exceeds its baseline (a genuinely new violation) and on one whose
+ * count has dropped below it (the file was fixed; the baseline must shrink to match), so the set
+ * can only ever track reality, never drift from it silently in either direction.
  *
  * Run: `npm run check:scratch-paths`
  */
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -27,16 +30,15 @@ const FORBIDDEN = [
   /\/Users\/[A-Za-z]/
 ]
 
-/** Pre-existing hits outside finding P5-F4's six operator/scripts files. Each entry is
- *  "<path>:<line>"; remove an entry the moment its file is fixed. */
-export const BASELINE_VIOLATIONS = new Set([
-  'operator/scripts/build-css.mjs:28',
-  'intelligence/scripts/build-data.mjs:14',
-  '.scratch/render-preview.mjs:68',
-  'scripts/prove-local-ttft.mjs:13',
-  'scripts/prove-local-ttft.mjs:20',
-  'src/main/cli.ts:149',
-  'package.json:64'
+/** Pre-existing hits this gate grandfathers, one entry per file with its expected violation
+ *  COUNT — tracked by ticket M2-0221. Remove a file's entry the moment its count reaches zero. */
+export const BASELINE_VIOLATIONS = new Map([
+  ['operator/scripts/build-css.mjs', 1],
+  ['intelligence/scripts/build-data.mjs', 1],
+  ['.scratch/render-preview.mjs', 1],
+  ['scripts/prove-local-ttft.mjs', 2],
+  ['src/main/cli.ts', 1],
+  ['package.json', 1]
 ])
 
 /** One "path:line" string per line in `files` (an array of {path, content}) matching a forbidden
@@ -53,9 +55,42 @@ export function findViolations(files) {
   return violations
 }
 
+/**
+ * Compares `violations` ("path:line" strings, e.g. from findViolations()) against a per-file
+ * `baseline` (path -> expected hit count) and returns:
+ *  - unexpected: every "path:line" belonging to a file whose current hit count exceeds its
+ *    baseline count (0 for a file the baseline does not mention at all) — a real new violation.
+ *  - stale: "path (expected N, found M)" for a baselined file whose current count is BELOW N, so
+ *    the entry no longer matches reality and must shrink or be dropped.
+ * A file whose current count still equals its baseline produces neither, however its specific
+ * line numbers moved. Pure and dependency-free so a fixture can exercise it directly.
+ */
+export function compareViolations(violations, baseline) {
+  const linesByPath = new Map()
+  for (const violation of violations) {
+    const path = violation.slice(0, violation.lastIndexOf(':'))
+    const lines = linesByPath.get(path) ?? []
+    lines.push(violation)
+    linesByPath.set(path, lines)
+  }
+
+  const unexpected = []
+  for (const [path, lines] of linesByPath) {
+    if (lines.length > (baseline.get(path) ?? 0)) unexpected.push(...lines)
+  }
+
+  const stale = []
+  for (const [path, expected] of baseline) {
+    const found = linesByPath.get(path)?.length ?? 0
+    if (found < expected) stale.push(`${path} (expected ${expected}, found ${found})`)
+  }
+
+  return { unexpected, stale }
+}
+
 function trackedFiles(root) {
-  return execFileSync('git', ['ls-files', '--', ...TRACKED_GLOBS], { cwd: root, encoding: 'utf8' })
-    .split('\n')
+  return execFileSync('git', ['ls-files', '-z', '--', ...TRACKED_GLOBS], { cwd: root, encoding: 'utf8' })
+    .split('\0')
     .filter((path) => path && !path.endsWith('.test.ts') && !path.endsWith('.test.tsx'))
 }
 
@@ -65,14 +100,30 @@ export function findRepoViolations(root = REPO_ROOT) {
   return findViolations(files)
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
+// realpathSync() both sides before comparing: import.meta.url is Node's own resolution of the
+// main module's path, which resolves a symlink in it (e.g. macOS's /tmp -> /private/tmp), while
+// process.argv[1] is the argument exactly as invoked, unresolved. Comparing the two raw mismatches
+// — and silently no-ops (exit 0, nothing runs) — the instant this script is invoked through a
+// symlinked path, which is a CI gate failing open.
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])
 if (isMain) {
-  const unexpected = findRepoViolations().filter((v) => !BASELINE_VIOLATIONS.has(v))
-  if (unexpected.length) {
-    console.error('Absolute per-user path or agent scratch-path literal(s) found outside the baseline:\n')
-    for (const v of unexpected) console.error('  ' + v)
-    console.error('\nUse an os.tmpdir()-based default (see operator/scripts/qa-dirs.mjs) instead.')
+  const { unexpected, stale } = compareViolations(findRepoViolations(), BASELINE_VIOLATIONS)
+  if (unexpected.length || stale.length) {
+    if (unexpected.length) {
+      console.error('Absolute per-user path or agent scratch-path literal(s) found outside the baseline:\n')
+      for (const v of unexpected) console.error('  ' + v)
+      console.error('\nUse an os.tmpdir()-based default (see operator/scripts/qa-dirs.mjs) instead.')
+    }
+    if (stale.length) {
+      if (unexpected.length) console.error('')
+      console.error('Baseline entries no longer match reality — shrink BASELINE_VIOLATIONS to match:\n')
+      for (const s of stale) console.error('  ' + s)
+    }
     process.exit(1)
   }
-  console.log(`No unexpected scratch/user-path literals (${BASELINE_VIOLATIONS.size} baseline entr${BASELINE_VIOLATIONS.size === 1 ? 'y' : 'ies'} grandfathered).`)
+  const total = [...BASELINE_VIOLATIONS.values()].reduce((sum, n) => sum + n, 0)
+  console.log(
+    `No unexpected scratch/user-path literals (${total} baseline hit${total === 1 ? '' : 's'} across ` +
+      `${BASELINE_VIOLATIONS.size} file${BASELINE_VIOLATIONS.size === 1 ? '' : 's'} grandfathered, tracked by M2-0221).`
+  )
 }
