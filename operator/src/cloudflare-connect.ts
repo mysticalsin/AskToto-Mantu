@@ -191,7 +191,8 @@ export async function provisionCloudflareKeys(
     fetchImpl
   )
   if (!written.ok) return written
-  return { ok: true, last4: written.rows[0].last4 }
+  const [gateway] = written.rows
+  return { ok: true, last4: gateway.last4 }
 }
 
 export async function handleCloudflareCallback(

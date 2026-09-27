@@ -292,8 +292,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       .bind(row.id, row.ts, row.kind, row.actor, row.device_id, row.country, row.detail)
   }
 
-  /** The one place that builds a vault_keys upsert, so a single row write (`putVaultKey`, used by
-   *  rotate and revoke) and a multi-row transactional write (`putVaultKeys`) never drift apart. */
+  /** The one builder for every `vault_keys` upsert, so no two callers can drift apart. */
   function vaultKeyUpsertStatement(row: VaultKeyRow): D1Stmt {
     return db
       .prepare(

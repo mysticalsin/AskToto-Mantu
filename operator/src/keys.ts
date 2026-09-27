@@ -165,8 +165,8 @@ export async function writeVaultKeysAtomically(
     if (!prepared.ok) return prepared
     rows.push(prepared.row)
   }
-  // Every row's provider is superseded against the others already committed under it, so one
-  // active row per provider survives even when this call carries several rows for one provider.
+  // Each row supersedes every other active row of its provider, including earlier rows in this
+  // call, so exactly one active row per provider survives.
   await store.putVaultKeys(
     rows,
     { id: crypto.randomUUID(), ts: now, actor: email, detail: vaultWriteAuditDetail(rows) },
