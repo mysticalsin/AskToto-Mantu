@@ -238,10 +238,7 @@ function uploadedSubset(release, manifest) {
 }
 
 function digestProblems(release, manifest) {
-  return uploadProblems(
-    manifest.map(({ name, size, sha256 }) => ({ name, size, sha256 })),
-    uploadedSubset(release, manifest)
-  )
+  return uploadProblems(manifest, uploadedSubset(release, manifest))
 }
 
 function createRelease({ tag, feed, bundle, repo = '<the feed>' }) {
@@ -249,10 +246,7 @@ function createRelease({ tag, feed, bundle, repo = '<the feed>' }) {
   feed.upload(tag, bundle.manifest.map((asset) => asset.path))
   draft = feed.release(draft.id)
   // A fresh draft must contain exactly this platform's upload set before it can go public.
-  const problems = uploadProblems(
-    bundle.manifest.map(({ name, size, sha256 }) => ({ name, size, sha256 })),
-    draft.assets.map(({ name, state, size, digest }) => ({ name, state, size, digest }))
-  )
+  const problems = uploadProblems(bundle.manifest, draft.assets)
   if (problems.length) throw new Error(problems.join('\n'))
   feed.publish(draft.id)
   const latest = feed.latestTag()
