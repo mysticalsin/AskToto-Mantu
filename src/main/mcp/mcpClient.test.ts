@@ -693,7 +693,12 @@ describe('mcpClient — the metadata refusal and the DNS pin hold on every proxy
     const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
 
     expect(r.ok).toBe(true)
-    expect(proxy.targets.slice(beforeTargets)).toEqual([`127.0.0.1:${mockPort}`])
+    // Deduped for the same reason as the "consulting the resolver once" case above: the Streamable HTTP
+    // transport keeps its GET SSE stream open while it sends POSTs, so one connectMcp() call legitimately
+    // tunnels more than once (one pooled connection per concurrent request). The property this proves is
+    // that every one of those tunnels landed on the pinned IPv4 answer, never the IPv6 one — not that the
+    // transport happened to open exactly one connection.
+    expect([...new Set(proxy.targets.slice(beforeTargets))]).toEqual([`127.0.0.1:${mockPort}`])
   })
 
   it('system: a proxy that refuses the pinned tunnel is named in the error, not the API key or the server', async () => {
