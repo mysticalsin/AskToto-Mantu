@@ -596,15 +596,9 @@ function foldForNumerals(span: string): string {
  *  unit is '%', an ISO-ish currency ('EUR','USD','GBP'), or null. */
 export function extractNumerals(span: string): NumeralHit[] {
   const s = foldForNumerals(span)
-  const hits: NumeralHit[] = []
-  // Parallel to `hits`: each hit's real start offset in `span`, recorded at push time. The two
-  // extraction passes below append in their own left-to-right order but interleave with each other
-  // (word-based hits are appended only after every digit-based one, regardless of which actually
-  // comes first in the text), so the result needs a final sort into transcript reading order. That
-  // sort must use THIS offset, never `span.indexOf(hit.raw)`: raw text routinely recurs (a bare "5"
-  // is also the leading digits of "500k"), and indexOf always resolves to the substring's FIRST
-  // occurrence anywhere in the whole span, not the occurrence a given hit actually came from.
-  const starts: number[] = []
+  // Each hit keeps its own start offset: pass 2 appends after pass 1, and a hit's raw text can recur
+  // elsewhere in the span, so reading order cannot be recovered from the text afterwards.
+  const located: { start: number; hit: NumeralHit }[] = []
   const consumedTo: boolean[] = new Array(s.length + 1).fill(false)
 
   const mark = (from: number, to: number): void => {
@@ -627,8 +621,7 @@ export function extractNumerals(span: string): NumeralHit[] {
     const end = post.end
     if (!isFree(start, end)) continue
     mark(start, end)
-    hits.push({ value: base * post.magnitude, unit: pre.unit ?? post.unit, raw: span.slice(start, end) })
-    starts.push(start)
+    located.push({ start, hit: { value: base * post.magnitude, unit: pre.unit ?? post.unit, raw: span.slice(start, end) } })
   }
 
   // Pass 2: word-based numerals (English then French), skipping ranges already consumed by pass 1.
@@ -662,15 +655,14 @@ export function extractNumerals(span: string): NumeralHit[] {
       continue
     }
     mark(fullStart, fullEnd)
-    hits.push({ value: parsed.value * post.magnitude, unit: pre.unit ?? post.unit, raw: span.slice(fullStart, fullEnd) })
-    starts.push(fullStart)
+    located.push({
+      start: fullStart,
+      hit: { value: parsed.value * post.magnitude, unit: pre.unit ?? post.unit, raw: span.slice(fullStart, fullEnd) }
+    })
     i = parsed.next
   }
 
-  return hits
-    .map((hit, idx) => ({ hit, start: starts[idx] }))
-    .sort((a, b) => a.start - b.start)
-    .map((x) => x.hit)
+  return located.sort((a, b) => a.start - b.start).map(({ hit }) => hit)
 }
 
 // ── numeralDerivable / verifyNumericFact ────────────────────────────────────────────────────────
