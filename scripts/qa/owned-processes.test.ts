@@ -93,6 +93,10 @@ describe('isInside', () => {
     expect(isInside('/opt/smoke/Metis.app', '/opt/smoke/Metis.app', 'darwin')).toBe(false)
   })
 
+  it('does not misclassify a child directory whose name merely starts with ".."', () => {
+    expect(isInside('/opt/smoke', '/opt/smoke/..foo/bar', 'darwin')).toBe(true)
+  })
+
   it('is case-insensitive and accepts either separator on win32', () => {
     expect(isInside('d:/a/_temp/smoke', 'D:\\A\\_TEMP\\SMOKE\\metis.exe', 'win32')).toBe(true)
     expect(isInside('D:\\a\\_temp\\smoke', 'd:/a/_temp/smoke-other/metis.exe', 'win32')).toBe(false)
@@ -101,7 +105,7 @@ describe('isInside', () => {
 
 describe('ownedProcesses', () => {
   // main and a descendant chain (child, grandchild) live outside the root on purpose here, so this
-  // fixture can tell the descendant-walk rule (INV-6) apart from the root-residency rule below.
+  // fixture can tell the descendant-walk rule apart from the root-residency rule below.
   const main = { pid: 100, ppid: 1, startedMs: 1000, exe: `${ROOT}/Contents/MacOS/Metis`, role: 'Metis' }
   const child = { pid: 101, ppid: 100, startedMs: 1001, exe: '/opt/elsewhere/helper', role: 'helper' }
   const grandchild = { pid: 102, ppid: 101, startedMs: 1002, exe: '/opt/elsewhere/helper', role: 'helper' }

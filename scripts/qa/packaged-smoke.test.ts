@@ -1,7 +1,19 @@
 import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { LIFECYCLE_EVENTS, isOverlayUrl, parseAuditLog, smokeReport, smokeVerdict } from './packaged-smoke.mjs'
+import {
+  LIFECYCLE_EVENTS,
+  childPidReserved,
+  computeCleanupTargets,
+  isOverlayUrl,
+  parseAuditLog,
+  readObservationTail,
+  smokeReport,
+  smokeVerdict
+} from './packaged-smoke.mjs'
 
 interface ProcessEntry {
   pid: number
@@ -170,12 +182,12 @@ describe('smokeVerdict', () => {
 
 describe('smokeReport', () => {
   it('returns exactly the schema-1 key set and leaks no path, command-line or free-text content', () => {
-    const secretPath = '/Users/qa/should-not-leak/crash.log'
+    const secretPath = '/opt/smoke/should-not-leak/crash.log'
     const secretBootId = 'BOOT-SECRET-1234'
     const observation = {
       ...goodObservation(),
       ownedAtQuit: [
-        { pid: 100, ppid: 1, startedMs: 1000, exe: `/Users/qa/secret/Metis.app/Contents/MacOS/Metis`, role: 'Metis' }
+        { pid: 100, ppid: 1, startedMs: 1000, exe: `/opt/smoke/secret/Metis.app/Contents/MacOS/Metis`, role: 'Metis' }
       ],
       survivors: [],
       audit: [
@@ -211,7 +223,7 @@ describe('smokeReport', () => {
     expect(Object.keys(report.events)).toEqual(LIFECYCLE_EVENTS)
     expect(serialized).not.toContain(secretPath)
     expect(serialized).not.toContain(secretBootId)
-    expect(serialized).not.toContain('/Users/qa/secret')
+    expect(serialized).not.toContain('/opt/smoke/secret')
   })
 
   it('counts each lifecycle event and reports null timings/process maps for stages that did not run', () => {
@@ -250,12 +262,102 @@ describe('smokeReport', () => {
 })
 
 describe('CLI', () => {
-  it('exits 2 with usage and writes no report when called with no arguments', () => {
+  it('exits 2 with usage when called with no arguments', () => {
     const scriptPath = fileURLToPath(new URL('./packaged-smoke.mjs', import.meta.url))
 
     const result = spawnSync(process.execPath, [scriptPath], { encoding: 'utf8' })
 
     expect(result.status).toBe(2)
     expect(result.stderr).toContain('usage')
+  })
+})
+
+describe('readObservationTail', () => {
+  it('returns an empty audit and a null marker when this run never created a profile', () => {
+    expect(readObservationTail(null)).toEqual({ audit: [], marker: null })
+  })
+
+  it('reads back the audit log and the clean-shutdown marker from a real profile directory', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'metis-smoke-test-'))
+    try {
+      mkdirSync(join(profile, 'logs'), { recursive: true })
+      writeFileSync(join(profile, 'logs', 'audit.log'), '{"event":"app.started"}\n{"event":"app.shutdown.clean"}\n')
+      writeFileSync(join(profile, 'run-state.json'), JSON.stringify({ clean: true }))
+
+      expect(readObservationTail(profile)).toEqual({
+        audit: [{ event: 'app.started' }, { event: 'app.shutdown.clean' }],
+        marker: true
+      })
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
+  })
+
+  it('reports marker false, never null, when a profile exists but never wrote a clean run-state', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'metis-smoke-test-'))
+    try {
+      expect(readObservationTail(profile)).toEqual({ audit: [], marker: false })
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('childPidReserved', () => {
+  it('is true only for a child with a numeric pid that has not exited', () => {
+    expect(childPidReserved({ pid: 100, exitCode: null, signalCode: null })).toBe(true)
+    expect(childPidReserved({ pid: 100, exitCode: 0, signalCode: null })).toBe(false)
+    expect(childPidReserved({ pid: 100, exitCode: null, signalCode: 'SIGTERM' })).toBe(false)
+    expect(childPidReserved({ pid: undefined, exitCode: null, signalCode: null })).toBe(false)
+    expect(childPidReserved(null)).toBe(false)
+  })
+})
+
+describe('computeCleanupTargets', () => {
+  const installRoot = '/opt/smoke/Metis.app'
+  const platform = 'darwin'
+
+  it('kills nothing when this run never launched a child, even if the root already has residents', () => {
+    // The install_root_busy path: the pre-launch check found these and refused to own them.
+    const preExisting = { pid: 9, ppid: 1, startedMs: 1, exe: `${installRoot}/Contents/MacOS/Metis`, role: 'Metis' }
+
+    const targets = computeCleanupTargets(
+      { child: null, ownedAtQuit: null, mainPid: null, installRoot, platform },
+      [preExisting]
+    )
+
+    expect(targets).toEqual([])
+  })
+
+  it('does not adopt a recycled pid once the child has already exited', () => {
+    const child = { pid: 100, exitCode: 0, signalCode: null }
+    const recycled = { pid: 100, ppid: 1, startedMs: 5000, exe: '/usr/bin/unrelated', role: 'unrelated' }
+    const recycledChild = {
+      pid: 105,
+      ppid: 100,
+      startedMs: 5001,
+      exe: '/usr/bin/unrelated-child',
+      role: 'unrelated-child'
+    }
+
+    const targets = computeCleanupTargets(
+      { child, ownedAtQuit: [], mainPid: 100, installRoot, platform },
+      [recycled, recycledChild]
+    )
+
+    expect(targets).toEqual([])
+  })
+
+  it('kills survivors of the run baseline, and, while the child pid is still live, its current owned set', () => {
+    const child = { pid: 100, exitCode: null, signalCode: null }
+    const main = { pid: 100, ppid: 1, startedMs: 1000, exe: `${installRoot}/Contents/MacOS/Metis`, role: 'Metis' }
+    const helper = { pid: 101, ppid: 100, startedMs: 1001, exe: '/opt/elsewhere/helper', role: 'helper' }
+
+    const targets = computeCleanupTargets(
+      { child, ownedAtQuit: [main], mainPid: 100, installRoot, platform },
+      [main, helper]
+    )
+
+    expect(targets.map((t) => t.pid).sort((a, b) => a - b)).toEqual([100, 101])
   })
 })
