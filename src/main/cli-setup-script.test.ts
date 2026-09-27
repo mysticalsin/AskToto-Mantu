@@ -256,7 +256,8 @@ function fakeChild(settle: (emitter: EventEmitter) => void): EventEmitter {
 // it has no notion of cmd.exe's own command-separator/expansion metacharacters. Because the target here
 // IS cmd.exe (via `/c`), an unquoted `&`, `^`, `(`, `)` or `%` in a profile/temp scriptPath reached
 // cmd.exe's own line parser live, letting cmd.exe treat text after it as a second, independent command.
-describe('openCliScript (via setupCli) — the Windows script path cannot let cmd.exe re-parse it (RF-AUDIT-R3-B1)', () => {
+// loginCli is the caller that reaches openCliScript (setupCli always uses shell.openPath directly).
+describe('openCliScript (via loginCli) — the Windows script path cannot let cmd.exe re-parse it (RF-AUDIT-R3-B1)', () => {
   it('quotes a scriptPath containing cmd.exe metacharacters and sets windowsVerbatimArguments', async () => {
     setPlatform('win32')
     const savedDir = h.dir
@@ -269,7 +270,7 @@ describe('openCliScript (via setupCli) — the Windows script path cannot let cm
     })
 
     try {
-      const res = await setupCli('claude-cli')
+      const res = await loginCli('claude-cli')
       expect(res).toEqual({ ok: true })
       expect(captured).not.toBeNull()
       const scriptPath = join(evilDir, readdirSync(evilDir)[0]!)
@@ -290,7 +291,7 @@ describe('openCliScript (via setupCli) — the Windows script path cannot let cm
     h.dir = evilDir
 
     try {
-      const res = await setupCli('claude-cli')
+      const res = await loginCli('claude-cli')
       expect(res).toEqual({ ok: true })
       // % is not neutralized by quoting (cmd.exe expands it even inside quotes) — the only safe move is
       // to never hand this path to cmd.exe at all and let shell.openPath (mocked above) open it instead.
@@ -330,7 +331,7 @@ describe('openCliScript (via setupCli) — the Windows script path cannot let cm
       )
 
       try {
-        const res = await setupCli('claude-cli')
+        const res = await loginCli('claude-cli')
         expect(res).toEqual({ ok: true })
         expect(existsSync(join(sandbox, 'hacked-marker'))).toBe(false)
       } finally {
