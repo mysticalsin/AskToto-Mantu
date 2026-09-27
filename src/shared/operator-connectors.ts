@@ -2,8 +2,8 @@
  * Connector catalog core (plan section 4, D9 "Connector catalog is code"). Pure data and types only, no
  * Worker and no Node/Electron imports, so this one module compiles under both the operator Worker
  * tsconfig and the desktop app's tsconfig. `operator/src/connectors/catalog.ts` extends every entry here
- * with Worker-only detail (fields, probes); the desktop's entitlement layer (`operator-entitlements.ts`)
- * is meant to derive its own kind list from `CONNECTOR_KINDS` so the two lists cannot drift (DT1, later).
+ * with Worker-only detail (fields, probes); the desktop integrations parser (`operator-entitlements.ts`)
+ * accepts exactly `CONNECTOR_KINDS`.
  *
  * Kind ids match `operator/src/connectors/logo-slugs.ts` exactly, one to one, since a kind id is also the
  * logo file name (`operator/public/logos/<kind>.svg`).

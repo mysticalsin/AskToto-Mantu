@@ -52,6 +52,7 @@ import {
   eqAmount,
   readIndex,
   writeIndex,
+  indexUnavailable,
   readGraph,
   writeGraph,
   writeMeetingExtraction,
@@ -1341,6 +1342,10 @@ const inFlightJobs = new Set<Job>()
 let indexLock: Promise<void> = Promise.resolve()
 export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Promise<void> {
   const run = indexLock.then(async () => {
+    // M2-0003: an existing index.json this process cannot use is read-only for the session. Drop the
+    // mutation rather than persist a ledger derived from readIndex's empty stand-in. Quiet on purpose:
+    // the unavailability was already logged/audited once by indexUnavailable/loadIndex.
+    if (indexUnavailable(s)) return
     // readIndex returns a shared cached snapshot. Only publish mutations after the durable write;
     // a failed mutator or disk write must not leak unsaved records into later reads/writes.
     const idx = cloneEntity(readIndex(s))
@@ -2075,6 +2080,11 @@ export async function enqueueIngest(
   // path directly. See @shared/demo-guard.
   refuseIfDemoTagged('enqueueIngest', basename(file))
   const s = getSettings()
+  // M2-0003: the transcript is already durably saved on disk; queueing an extraction against an
+  // unreadable index would only re-derive it into readIndex's empty stand-in, which writeIndex/
+  // updateIndex then refuse to persist anyway. A backfill picks the file up once the index is usable
+  // again (startBackfill scans by content, not by whether enqueueIngest ever ran for it).
+  if (indexUnavailable(s)) return
   const key = basename(file)
   const sourceVersion = meetingSourceVersion(file)
   const previous = readIndex(s).ingested[key]
@@ -2530,6 +2540,11 @@ function finishCompletionObserver(observer: BackfillObserver): void {
 
 export function startBackfill(onDrained?: () => void | Promise<void>, options: BackfillStartOptions = {}): BackfillStartResult {
   const s = getSettings()
+  // M2-0003: an unreadable index.json must never be treated as "nothing left to index" — that empty
+  // stand-in would otherwise trigger a full re-extraction of every meeting. Covers resume, reconcile,
+  // consolidation, the intelligence pass, dashboard-open and the Index-meetings click: this and
+  // enqueueIngest are the only two `queue.push` sites.
+  if (indexUnavailable(s)) return { queued: 0 }
   const idx = readIndex(s)
   const route = options.route ?? 'default'
   const providerAvailable =
