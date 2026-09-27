@@ -427,6 +427,23 @@ describe('publish-release platform rules (M2-0053)', () => {
       expect(feed.mutations).not.toContain('publish')
     })
 
+    it(`refuses to publish ${platformLabels[platform]} when the freshly created draft carries a stray asset`, async () => {
+      class StrayAssetFeed extends FakeFeed {
+        createDraft(tag: string) {
+          const draft = super.createDraft(tag)
+          draft.assets.push({ name: 'notes.txt', state: 'uploaded', size: 4, digest: 'sha256:deadbeef' })
+          return draft
+        }
+      }
+      const feed = new StrayAssetFeed()
+
+      await expect(publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed })).rejects.toThrow(
+        /not in the manifest/
+      )
+      expect(feed.releases[0].draft).toBe(true)
+      expect(feed.mutations).not.toContain('publish')
+    })
+
     it(`never uploads ${platformLabels[platform]} update metadata after an installer whose digest does not match`, async () => {
       const feed = new FakeFeed([release({ platform: otherPlatform(platform) })])
       feed.corruptDigests.add(primaryInstaller[platform])
