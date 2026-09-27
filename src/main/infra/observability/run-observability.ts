@@ -1,9 +1,10 @@
 /**
  * run-observability.ts — owns the whole life of one boot's observability: claims the run watch, audits
- * `app.started`, runs the liveness heartbeat and the stall monitor, and closes out with
- * `app.shutdown.clean`. index.ts's job is only to call `startRunObservability` once, `observability.timePhase`
- * around each boot step, and `observability.shutdownClean(...)` once, from `will-quit` — every other line
- * here is this module's, not index.ts's, so a change to any of these invariants shows up in one place.
+ * `app.started`, runs the liveness heartbeat, the out-of-process stall sampler (stall-sampler.ts) and the
+ * stall monitor, and closes out with `app.shutdown.clean`. index.ts's job is only to call
+ * `startRunObservability` once, `observability.timePhase` around each boot step, and
+ * `observability.shutdownClean(...)` once, from `will-quit` — every other line here is this module's, not
+ * index.ts's, so a change to any of these invariants shows up in one place.
  *
  * Deliberately takes `powerMonitor` as a parameter rather than importing it from `electron` — same
  * "inject everything Electron-specific" shape as stall-monitor.ts's test seams, so this module stays
@@ -12,6 +13,7 @@
 import { beginRunWatch, markAlive, markShutdownClean } from '../../boot-sentinel'
 import type { AuditEvent } from '../../logger'
 import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from './stall-monitor'
+import type { StallSampler, StallSamplerOptions } from './stall-sampler'
 
 type Timer = ReturnType<typeof setInterval>
 
@@ -32,12 +34,17 @@ export interface RunObservabilityOptions {
    *  restarts that heartbeat on 'unlock-screen' as a fallback for a sleep whose matching 'resume' never
    *  arrives — see the `suspended`-gated handler below for why that resync is conditional. */
   powerMonitor: PowerMonitorSource
+  /** The metis-mac-helper binary that runs this boot's out-of-process stall sampler (stall-sampler.ts).
+   *  Absent or null means no sampler (no helper on this platform, or flag `diagnostics.stall_sampler`
+   *  off), and then this module behaves exactly as it did before M2-0192. */
+  stallWatchCommand?: string | null
   /** Test seams only — production wires the real fs-backed boot-sentinel functions and real timers. */
   deps?: {
     beginRunWatch?: typeof beginRunWatch
     markAlive?: typeof markAlive
     markShutdownClean?: typeof markShutdownClean
     startStallMonitor?: (opts: StallMonitorOptions) => StallMonitor
+    startStallSampler?: (opts: StallSamplerOptions) => StallSampler
     setIntervalFn?: (handler: () => void, ms: number) => Timer
     clearIntervalFn?: (handle: Timer) => void
   }
@@ -81,6 +88,11 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   const aliveTimer = setIntervalFn(() => {
     void doMarkAlive(opts.userData, bootId)
   }, ALIVE_INTERVAL_MS)
+
+  // M2-0192 red commit: stallWatchCommand/deps.startStallSampler are declared on the options type (see
+  // above) so stall-sampler.test.ts and this module's own tests type-check against their final shape, but
+  // actually starting and stopping the sampler lands in the next commit.
+  const stallSampler = undefined as StallSampler | undefined
 
   const stallMonitor = doStartStallMonitor({
     bootId,
@@ -145,6 +157,9 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
     shutdownClean(uptimeS: number): void {
       if (stopped) return
       stopped = true
+      // Before the heartbeat stops, so the helper can never see the marker go stale during the rest of
+      // will-quit.
+      stallSampler?.stop()
       clearIntervalFn(aliveTimer)
       powerMonitor.removeListener('suspend', onSuspend)
       powerMonitor.removeListener('resume', onResume)
