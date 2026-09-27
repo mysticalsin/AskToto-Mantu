@@ -237,6 +237,9 @@ export type AuditEvent =
   // The overlay renderer stopped answering Chromium (event loop wedged, not crashed). Logged so a stuck
   // island is diagnosable from the support bundle; the app does not reload or kill it on this signal.
   | 'app.unresponsive'
+  // M2-0037 (B3-RC2): render-process-gone's reload budget was exhausted (>=3 reloads within 60s with no
+  // recovered 30s-alive window) — auto-reload stops and a recovery dialog is shown instead.
+  | 'app.render_loop_halted'
   | 'meeting.detect.degraded'
   | 'recall.open'
   | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
@@ -258,6 +261,8 @@ export type AuditEvent =
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'
+  // M2-0033: scheduler decisions (backfill scan counts, deferrals, maintenance window) — counts and enums only, never paths or names.
+  | 'scheduler.job'
   // Wave 3 (main/brain/consolidate.ts): one batched extraction pass actually ran. Distinct from
   // 'brain.ingest' (per-meeting) — this is the per-PASS marker metrics.ts counts against the
   // maxPassesPerDay budget.
@@ -284,7 +289,6 @@ export type AuditEvent =
   | 'local.model.download_ok'
   | 'local.model.download_fail'
   | 'screen.preprocess.describe'
-  | 'cahe.localai.seeded'
   // Support diagnosability: the user exported the log trail to a folder (metadata only — file count).
   | 'diagnostics.export'
   | 'llm.call'

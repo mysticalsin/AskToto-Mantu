@@ -39,8 +39,7 @@ import type { Settings } from '@shared/ipc'
 
 /** The shared __mocks__/electron.ts app object has no setPath (nothing else in it needed one), so this
  *  adds it and wires it to getPath: app.getPath('userData') returns whatever the most recent
- *  app.setPath('userData', …) set, defaulting to `initial` — the same pattern cahe-edition.test.ts
- *  already uses (`app.setPath = (() => …) as typeof app.setPath`) for this exact mock. */
+ *  app.setPath('userData', …) set, defaulting to `initial`. */
 function mockRedirectableUserData(initial: string): void {
   let current = initial
   ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>

@@ -2,11 +2,10 @@
  * cloudflare-provider.contract.test.ts — structural proof that Cloudflare is wired as a first-class
  * provider AND that the "no embedded account token" design survives future edits.
  *
- * The design (product owner, not negotiable here): Métis never ships a Cloudflare account token. A
- * packaged Electron app cannot keep a secret — `npx asar extract` recovers any embedded string, which is
- * why scripts/check-cahe-package.mjs already refuses a build with a key in it. So the account token lives
- * as a Wrangler secret on a Worker the OPERATOR deploys, and each install holds only that Worker's URL
- * (settings.cloudflareBaseUrl) plus a per-user METIS_PROXY_KEY in the encrypted key store.
+ * The design (product owner, not negotiable here): Métis never ships a Cloudflare account token. A packaged
+ * Electron app cannot keep a secret — `npx asar extract` recovers any embedded string. So the account
+ * token lives as a Wrangler secret on a Worker the OPERATOR deploys, and each install holds only that
+ * Worker's URL (settings.cloudflareBaseUrl) plus a per-user METIS_PROXY_KEY in the encrypted key store.
  *
  * index.ts is ~313 KB of Electron main wired to app/BrowserWindow singletons and cannot be imported in a
  * unit test, so — following index-audit-fixes.contract.test.ts / Settings.contract.test.ts's established

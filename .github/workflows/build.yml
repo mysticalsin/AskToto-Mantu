@@ -45,6 +45,17 @@ jobs:
       # regression test that cites its MQA id, so a re-broken bug fails a named test instead of
       # silently shipping again. Runs before the suite — it is fast and its failure is unambiguous.
       - run: npm run check:bugs
+      # FF-01: production code never imports across a process or layer boundary. Fails the job on any
+      # such import; test-only crossings are warnings held by the ratchet below.
+      - name: Architecture layering
+        if: runner.os == 'Linux'
+        run: npm run check:layering
+      # FF-01 test crossings and FF-02..FF-14 as per-file counts that may only fall
+      # (scripts/architecture-baseline.json). Report-only: a differing count shows here but does not fail the job.
+      - name: Architecture ratchet
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: npm run check:architecture
       - run: npm run build
       # bar-toolbar.layout.test.ts launches Playwright Chromium. `npm ci` installs the npm package
       # only — not the browser binary. Without this step, ubuntu and windows Quality both die at
@@ -149,17 +160,17 @@ jobs:
       #
       # The prefix list is not hand-picked: it is every prefix src/shared/providers.ts declares as a
       # `keyPattern`, folded into one dashed-prefix term (sk-<vendor>-) plus the non-sk prefixes. The old
-      # literal list named only sk-ant- and sk-or-, so it could not match sk-kimi- — the format this
-      # product embeds itself (src/main/cahe-embedded-key.ts, build/cahe-kimi.local.json) — and the gate
-      # went green on the one credential it exists to stop. \b keeps the generic sk- term off ordinary
-      # dashed words ("risk-management-…"). scripts/ci-secret-scan.contract.test.ts executes this exact
-      # regex against those declared prefixes, so the two lists cannot drift apart again.
+      # literal list named only sk-ant- and sk-or-, so it could not match sk-kimi- — a first-class
+      # provider key shape (src/shared/providers.ts's `kimi` entry) — and the gate went green on a
+      # credential it should have caught. \b keeps the generic sk- term off ordinary dashed words
+      # ("risk-management-…"). scripts/ci-secret-scan.contract.test.ts executes this exact regex against
+      # those declared prefixes, so the two lists cannot drift apart again.
       #
       # Roots cover where keys actually live, not just src/: scripts/ (the .mjs build and release chain,
-      # hence --include='*.mjs'), build/ (the Cahê key file), intelligence/src (a real source tree shipped
-      # as extraResources), and both packaging overlays. Excluded: *.test.ts and scripts/qa, which plant
-      # deliberately dead key-shaped fixtures to exercise the redaction and degrade paths — that is the
-      # harness working, not a leak.
+      # hence --include='*.mjs'), build/ (the installer-embedded Cloudflare key material), intelligence/src
+      # (a real source tree shipped as extraResources), and the packaging overlay. Excluded: *.test.ts and
+      # scripts/qa, which plant deliberately dead key-shaped fixtures to exercise the redaction and
+      # degrade paths — that is the harness working, not a leak.
       - name: Secret scan
         run: |
           if grep -rInE '\b(nvapi-|sk-[A-Za-z0-9]+-|gsk_|xai-|AIza|eyJ|fw_|tgp_v1_)[A-Za-z0-9_-]{16,}' \
@@ -167,7 +178,7 @@ jobs:
             --include='*.json' --include='*.yml' \
             --exclude='*.test.ts' --exclude='*.test.tsx' --exclude-dir=qa \
             src scripts build intelligence/src .github \
-            electron-builder.yml electron-builder.win.yml electron-builder.cahe.win.yml package.json 2>/dev/null; then
+            electron-builder.yml electron-builder.win.yml package.json 2>/dev/null; then
             echo "::error::Possible committed secret found"; exit 1
           fi
           echo "No committed secrets found."

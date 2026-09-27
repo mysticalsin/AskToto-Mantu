@@ -1,6 +1,7 @@
 import type { TranscriptLine } from '@shared/ipc'
 import type { BackfillRun, BackfillStartOptions } from './ingest'
-import { backfillCompletionError, SUMMARY_INDEX_RETRY_COPY, type IntelligenceIndexRun } from './intelligence-index'
+import { backfillCompletionError, SUMMARY_INDEX_RETRY_COPY, triggerForReason, type IntelligenceIndexReason, type IntelligenceIndexRun } from './intelligence-index'
+import { runAsMaintenance } from '../infra/scheduler/maintenance'
 
 interface MissingSummary {
   file: string
@@ -41,12 +42,17 @@ async function recapMissingMeetings(deps: IntelligenceWorkDependencies): Promise
   return { recapped, failed }
 }
 
-/** Dispatch quickly, keep independent model work parallel, and join actual terminal outcomes. */
-export function startIntelligenceWork(deps: IntelligenceWorkDependencies): IntelligenceIndexRun {
-  const recaps = recapMissingMeetings(deps)
+/** Dispatch quickly, route work by trigger, and join actual terminal outcomes. */
+export function startIntelligenceWork(deps: IntelligenceWorkDependencies, reason: IntelligenceIndexReason): IntelligenceIndexRun {
+  const trigger = triggerForReason(reason)
+  // Unattended recaps are model work nobody is waiting on: each one takes the maintenance slot.
+  const generate = trigger === 'user'
+    ? deps.generate
+    : (meeting: MissingSummary) => runAsMaintenance(() => deps.generate(meeting))
+  const recaps = recapMissingMeetings({ ...deps, generate })
   // Recaps rewrite the source Markdown. Extraction can start immediately, but its final source-version
   // verification must wait for these writes so a later recap cannot invalidate a claimed success.
-  const backfill = deps.backfill({ force: true }, recaps)
+  const backfill = deps.backfill({ force: true, trigger }, recaps)
   return {
     result: { ...backfill.result, ran: !backfill.result.deferred, recapped: 0 },
     completion: Promise.all([backfill.completion, recaps]).then(([index, summaries]) => {

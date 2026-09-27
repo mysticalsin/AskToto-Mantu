@@ -252,7 +252,9 @@ import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 // until an identified and admitted live/import session needs it (never on the startup path).
 let speakerIdInstance: SpeakerId | null = null
 function getSpeakerId(): SpeakerId {
-  if (!speakerIdInstance) speakerIdInstance = createSpeakerId()
+  if (!speakerIdInstance) {
+    speakerIdInstance = createSpeakerId({ canSaveVoiceprints: () => getSettings().speakerId.saveVoiceprints })
+  }
   return speakerIdInstance
 }
 
@@ -300,8 +302,8 @@ function completeLiveSpeakerReceipt(startedAt: number): void {
   if (!receipt || receipt.closedAt === undefined || !receipt.savedFile) return
 
   // Delete before any fallible work: duplicate saves/stops cannot replay the capability or snapshot a
-  // replacement. snapshotSession intentionally keeps its existing qualified-operator flush behavior;
-  // consent/encrypted operator-profile persistence remains Task 7-P3.
+  // replacement. snapshotSession flushes the qualified operator buffer only under the save-voiceprints opt-in,
+  // which speaker-id.ts enforces; encrypting that store remains Task 7-P3.
   liveSpeakerReceipts.delete(startedAt)
   let snapshot: SpeakerEnrollmentSnapshot | null = null
   try {
@@ -617,7 +619,10 @@ import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
+import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
+import { createReloadBudget } from './lifecycle/reload-budget'
+import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './lifecycle/render-loop-halted-dialog'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
@@ -834,9 +839,7 @@ import { redactSecrets } from '@shared/redact'
 import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
 import { applySpeakerNames, clusterNamePairsFromAlignment } from '@shared/transcript-align'
-import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { freezeAsciiUserAgent } from './app-user-agent'
-import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 import { importEmbeddedCloudflareKey, embeddedCloudflareKeyAvailable, restoreEmbeddedCloudflareKey } from './embedded-cloudflare-key'
 
 /**
@@ -889,9 +892,8 @@ function makeRefreshDustAuth(current: {
 // `??=` on BOTH platforms leaves an explicit QA/operator override (ASKTOTO_LOCAL_KEYSTORE already set
 // in the environment) untouched — including forcing the file keystore on Windows for isolated QA.
 // ENT-029: preserve Métis display branding without putting non-ASCII bytes into Chromium headers.
-// Run before edition/display-name changes and before the first session is initialized.
+// Run before any display-name change and before the first session is initialized.
 freezeAsciiUserAgent(app)
-initializeCaheEditionIdentity()
 if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
 // Self-test must own a throwaway userData before anything resolves userData; no-op unless
@@ -917,7 +919,7 @@ if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
 // stays Electron unless a wrapper .app overrides Info.plist — do not invent
 // a second product name for unpackaged builds. Packaged Metis.app already
 // uses CFBundleDisplayName Métis.
-if (!app.isPackaged && !isCaheEdition()) {
+if (!app.isPackaged) {
   try {
     app.setName('Métis')
   } catch {
@@ -930,7 +932,7 @@ if (!app.isPackaged && !isCaheEdition()) {
 // "Métis Helper" child-process bundles crashed Chromium at launch on macOS 26+/Tahoe; see the
 // productName note in electron-builder.yml). Adopt the newest existing prior profile once so settings,
 // transcripts, and secret-key.bin survive the rename. Must run before anything opens userData.
-if (app.isPackaged && !process.env.ASKTOTO_USERDATA && !isCaheEdition()) {
+if (app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   try {
     const ud = app.getPath('userData')
     if (!existsSync(join(ud, 'settings.json'))) {
@@ -1687,7 +1689,7 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
 }
 
 function wireIntelligenceIndexWork(): void {
-  setIntelligenceIndexWork(() => startIntelligenceWork({
+  setIntelligenceIndexWork((reason) => startIntelligenceWork({
     list: listMeetingsNeedingRecap,
     generate: (meeting) => runImportedRecap({
       jobId: `index-${meeting.file}`,
@@ -1697,7 +1699,7 @@ function wireIntelligenceIndexWork(): void {
     save: (file, recap, status) => updateMeetingRecap(getSettings(), file, recap, status),
     backfill: requestBackfillRun,
     logFailure: (error) => mainLog.error('[intelligence-index] recap failed:', error)
-  }))
+  }, reason))
 }
 
 function initializeImportJobs(): void {
@@ -2566,6 +2568,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
       powerMonitor,
       stallWatchCommand: macStallWatchCommand()
     })
+    settlePriorExit(observability.priorShutdown)
     emittedAppStarted = true
   }
   // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
@@ -2762,6 +2765,14 @@ function createWindow(targetDisplay?: Electron.Display): void {
     const stallMs = responsiveness.markResponsive()
     if (stallMs !== null) auditLog('app.responsive', { kind: 'overlay', stallMs })
   })
+  // M2-0037 (B3-RC2): bounds the render-process-gone reload below to 3 reloads/60s instead of reloading
+  // forever. did-finish-load is the "this reload actually worked" signal the budget resets on once the
+  // content stays up for its own alive window — see lifecycle/reload-budget.ts.
+  const reloadBudget = createReloadBudget()
+  self.webContents.on('did-finish-load', () => {
+    if (win !== self) return
+    reloadBudget.onDidFinishLoad()
+  })
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
   // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
   // dead renderer and the overlay sits permanently blank. Previously this was only logged via
@@ -2817,7 +2828,45 @@ function createWindow(targetDisplay?: Electron.Display): void {
       currentWidth = BAR_WIDTH
     }
     if (win !== self || self.isDestroyed()) return
-    self.loadURL(overlayRendererUrl())
+    // M2-0037 (B3-RC2): consumed only once we know this crash will actually be handled — computing it
+    // any earlier would count a reload against the budget for an event one of the guards above discards.
+    const reloadDecision = reloadBudget.onRenderProcessGone(details.reason)
+    // 'ignore' (clean-exit): the content exited on purpose, not a crash — never reload for it.
+    if (reloadDecision === 'ignore') return
+    if (reloadDecision === 'halt') {
+      auditLog('app.render_loop_halted', { reason: details.reason, exitCode: details.exitCode })
+      void showRenderLoopHaltedDialog(
+        details.reason,
+        details.exitCode,
+        () => win !== self || self.isDestroyed(),
+        (opts) => dialog.showMessageBox(self, opts),
+        {
+          reload: () => reloadOverlay(self),
+          quit: () => app.quit(),
+          // Mirrors the openPath IPC handler's requireAuth() gate for the same
+          // shell.openPath(resolveMeetingsFolder(...)) call, so a locked session gets no button rather
+          // than one whose click silently does nothing.
+          openMeetingsFolder: requireAuth()
+            ? async () => {
+                const openError = await shell.openPath(resolveMeetingsFolder(getSettings()))
+                if (openError) mainLog.warn('[render-loop-halted] open meetings folder failed:', openError)
+              }
+            : undefined,
+          copyDiagnostics: () =>
+            clipboard.writeText(formatRenderLoopDiagnostics({
+              version: app.getVersion(),
+              platform: process.platform,
+              arch: process.arch,
+              packaged: app.isPackaged,
+              reason: details.reason,
+              exitCode: details.exitCode,
+              at: new Date().toISOString()
+            }))
+        }
+      ).catch((err) => mainLog.warn('[render-loop-halted] dialog failed:', err))
+      return
+    }
+    reloadOverlay(self)
   })
   // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
   // The same helper is used by crash recovery, so the parser-time Act 1 shell cannot disappear there.
@@ -3584,6 +3633,19 @@ function persistCrash(kind: string, detail: string, shortMessage: string): void 
   }
 }
 
+/**
+ * Reload the overlay's content, catching and auditing a failed loadURL instead of letting it become an
+ * unhandled rejection. Shared by the automatic render-process-gone reload and the halted dialog's manual
+ * Reload button (lifecycle/render-loop-halted-dialog.ts).
+ */
+function reloadOverlay(target: BrowserWindow): void {
+  target.loadURL(overlayRendererUrl()).catch((err) => {
+    const message = redactSecrets(err instanceof Error ? err.message : String(err))
+    mainLog.error('[renderer-gone] reload failed:', message)
+    auditLog('app.crash', { kind: 'render-process-gone-reload-failed', message })
+  })
+}
+
 let fatalHandled = false
 /**
  * For a fatal exception, offer a ONE-TIME relaunch — but default to "Continue" so a benign async error
@@ -3594,17 +3656,25 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
   persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
   if (kind !== 'uncaughtException' || fatalHandled) return
   fatalHandled = true
+  void showFatalDialog()
+}
+
+// M2-0037: split out of onFatal so the main thread is never blocked showing this — a synchronous native
+// dialog (showMessageBoxSync) froze every window, including whatever else the user was mid-click in,
+// until they dismissed it.
+async function showFatalDialog(): Promise<void> {
   try {
-    const choice = dialog.showMessageBoxSync({
-      type: 'error',
+    const dialogOpts = {
+      type: 'error' as const,
       title: 'Métis hit a problem',
       message: 'Métis ran into an unexpected error.',
       detail: 'A crash report was saved to your Métis data folder. Relaunch now, or keep going.',
       buttons: ['Relaunch Métis', 'Continue'],
       defaultId: 1,
       cancelId: 1
-    })
-    if (choice === 0) exitAndRelaunch()
+    }
+    const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+    if (response === 0) exitAndRelaunch()
   } catch {
     /* if the dialog itself fails, leave the app running */
   }
@@ -8021,7 +8091,7 @@ function registerIpc(): void {
     //  - a corrupt/blocked-journal guard (MI-2.5 review Fix 2 — refuse rather than rebuild atop a store
     //    onto which zero corrections could be replayed, which would silently revert every human fix);
     //  - the replayPending flag (Fix E) + the onDrained replay that clears it only on a clean replay.
-    const r = await startRebuild(getSettings())
+    const r = await startRebuild(getSettings(), { trigger: 'user' })
     if (r.error) {
       auditLog('brain.rebuild.aborted', {})
       return r
@@ -8802,6 +8872,11 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  // M2-0033: unattended model work waits for the maintenance gate.
+  startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
+  app.on('web-contents-created', (_event, contents) => {
+    contents.on('input-event', (_inputEvent, input) => noteUserInput(input.type))
+  })
   // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
   // proxy/CLI/key seeding before first paint — hoist tray+IPC+window for wiped-profile exclusive.
   // Call createTray/registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared
@@ -8838,17 +8913,9 @@ if (!app.requestSingleInstanceLock()) {
   } catch {
     /* best-effort warm-up */
   }
-  // Cahê pilot only (a no-op everywhere else): seed the installer-embedded Kimi key into the normal
-  // encrypted keystore, exactly once per profile. Settings/the keystore are safe to touch here — same
-  // phase as the first getSettings() read just above. See cahe-embedded-key.ts for the one-time-seed
-  // design that lets a user's later key change/removal stick.
-  importEmbeddedCaheKey()
-  // Cahê M13: one-time enable of the on-device model so the background screen reader works out of the box
-  // (own marker → also migrates existing pilot profiles upgraded from 1.0.7). See cahe-embedded-key.ts.
-  seedCaheLocalAiForBackgroundScreen()
-  // Every build (not just Cahê): seed an optional installer-embedded Cloudflare proxy key, once per
-  // profile, so a fresh install of the default provider can answer with zero paste-a-key setup when the
-  // operator chose to embed one. See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
+  // Seed an optional installer-embedded Cloudflare proxy key, once per profile, so a fresh install of
+  // the default provider can answer with zero paste-a-key setup when the operator chose to embed one.
+  // See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
   importEmbeddedCloudflareKey()
   {
     setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
@@ -8879,14 +8946,15 @@ if (!app.requestSingleInstanceLock()) {
         mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
       }
     }
+    // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
     void provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
       .then((ready) => {
         if (!ready) return
         refreshScreenPreprocess()
-        warmLocalIfReady()
+        void runAsMaintenance(warmLocalIfReady)
       })
       .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
-    setTimeout(warmLocalIfReady, 4000).unref?.()
+    void runAsMaintenance(warmLocalIfReady)
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
   // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
@@ -9406,9 +9474,7 @@ if (!app.requestSingleInstanceLock()) {
         } catch (e) {
           mainLog.warn('[boot] scheduleIntelligenceIndex failed:', e)
         }
-        // Hourly consolidation is demoted: the named slots own the extract pass. The helper stays
-        // imported so existing settings/tests keep compiling, and a manual budget check still no-ops
-        // when the feature is off.
+        // Consolidation runs once per launch; the named slots own the recurring pass. Both are automatic triggers (infra/scheduler/policy.ts).
         try {
           void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
         } catch (e) {

@@ -16,8 +16,6 @@ describe('BrainView Intelligence Update wiring', () => {
 
   it('does not auto-start this pass on mount or from the backlog gate', () => {
     expect(INTELLIGENCE_PASS_AUTO_START).toBe(false)
-    expect(brainView).toMatch(/shouldAutoBackfill/)
-    expect(brainView).not.toMatch(/shouldAutoBackfill[\s\S]{0,400}brainIntelligencePass/)
     expect(brainView).not.toMatch(/useEffect\([\s\S]{0,200}runIntelligencePass/)
     expect(brainView).not.toMatch(/useEffect\([\s\S]{0,200}brainIntelligencePass/)
   })

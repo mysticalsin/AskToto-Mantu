@@ -36,7 +36,6 @@ import { AgentStatus, InlineOrb } from './AgentStatus'
 import { WorkProgressMeter } from './WorkProgressMeter'
 import { useFlash } from '../lib/useFlash'
 import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
-import { shouldAutoBackfill } from './brain-auto'
 import { brainStatusError, brainStatusIsWorking, brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-status-refresh'
 import { createBrainRefresh } from './brain-refresh'
 import { INTELLIGENCE_STATUS_UNAVAILABLE, startIntelligenceUpdateFromClick } from '@shared/intelligence-pass'
@@ -485,10 +484,6 @@ export function BrainView({
   // payload for responsive progress, then hydrate the complete dashboard once the batch settles.
   const statusWasWorkingRef = useRef(false)
   const statusRevisionRef = useRef<number | undefined>(undefined)
-  // Opening Mantu Intelligence is an explicit request for current knowledge. Start one automatic pass
-  // for saved transcripts that predate the brain, without re-triggering it on each progress poll.
-  const autoBackfillAttemptedRef = useRef(false)
-
   const refresh = useMemo(() => createBrainRefresh(
     async () => {
       const [read, st, list, att, settings] = await Promise.all([
@@ -642,27 +637,6 @@ export function BrainView({
       setBackfilling(false)
     }
   }, [refresh])
-
-  // Existing meetings used to wait indefinitely for a manual "Index meetings" click. New saves already
-  // enqueue themselves in the main process; this covers the backlog when the in-app Intelligence view is
-  // opened and keeps the manual button as an explicit retry/recovery path.
-  useEffect(() => {
-    if (!status) return
-    if (
-      shouldAutoBackfill({
-        attempted: autoBackfillAttemptedRef.current,
-        loading,
-        running: statusWorking,
-        savedMeetings: meetings.length,
-        ingestedMeetings: status.meetings,
-        savedMeetingFiles: meetings.map(({ file }) => file),
-        ingestedFiles: status.ingestedFiles
-      })
-    ) {
-      autoBackfillAttemptedRef.current = true
-      void startBackfill()
-    }
-  }, [statusWorking, loading, meetings.length, startBackfill, status])
 
   // Undo a just-completed merge (the record page's post-merge banner) — restores both sides from the
   // journal snapshot and lands back on the just-restored (fromId) record.
