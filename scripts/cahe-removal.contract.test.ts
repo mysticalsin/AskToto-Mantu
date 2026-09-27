@@ -5,6 +5,16 @@ import { describe, expect, it } from 'vitest'
 
 const root = join(__dirname, '..')
 
+// Historical records this file's own scans must not flag (see the file header), PLUS this file itself:
+// its assertions necessarily quote the removed identifiers as string literals to check for them.
+const EXCLUDE_PATHS = [
+  ':!docs/qa/BUG-LEDGER.md',
+  ':!docs/qa/audit-2026-08-10.md',
+  ':!docs/security/AUDIT-10.md',
+  ':!docs/security/AUDIT-20.md',
+  ':!scripts/cahe-removal.contract.test.ts'
+]
+
 /**
  * cahe-removal.contract.test.ts — M2-0214. Owner decision D-30 (2026-09-26): the Cahê pilot edition —
  * edition code, the embedded Kimi-key build path, its electron-builder config, its GitHub Actions
@@ -23,17 +33,7 @@ describe('M2-0214 — the Cahê edition is removed entirely', () => {
   it('leaves no cahe-/CAHE_ identifier in the tracked tree, outside historical audit records', () => {
     const result = spawnSync(
       'git',
-      [
-        'grep',
-        '-iE',
-        'cahe-|cahe_|CAHE_|edition.*cah',
-        '--',
-        '.',
-        ':!docs/qa/BUG-LEDGER.md',
-        ':!docs/qa/audit-2026-08-10.md',
-        ':!docs/security/AUDIT-10.md',
-        ':!docs/security/AUDIT-20.md'
-      ],
+      ['grep', '-iE', 'cahe-|cahe_|CAHE_|edition.*cah', '--', '.', ...EXCLUDE_PATHS],
       { cwd: root, encoding: 'utf8' }
     )
     // `git grep` exits 1 for "no matches" — that is the PASSING case here, not an error. Exit 0 means it
@@ -63,20 +63,7 @@ describe('M2-0214 — the Cahê edition is removed entirely', () => {
   it('carries no reference to the revoked CAHE_KIMI_JSON secret or the METIS_CAHE_EMBED_KEY flag', () => {
     const result = spawnSync(
       'git',
-      [
-        'grep',
-        '-F',
-        '-e',
-        'CAHE_KIMI_JSON',
-        '-e',
-        'METIS_CAHE_EMBED_KEY',
-        '--',
-        '.',
-        ':!docs/qa/BUG-LEDGER.md',
-        ':!docs/qa/audit-2026-08-10.md',
-        ':!docs/security/AUDIT-10.md',
-        ':!docs/security/AUDIT-20.md'
-      ],
+      ['grep', '-F', '-e', 'CAHE_KIMI_JSON', '-e', 'METIS_CAHE_EMBED_KEY', '--', '.', ...EXCLUDE_PATHS],
       { cwd: root, encoding: 'utf8' }
     )
     expect(result.status, `git grep found:\n${result.stdout}`).toBe(1)
