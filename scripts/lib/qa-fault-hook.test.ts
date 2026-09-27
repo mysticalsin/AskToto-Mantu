@@ -1,12 +1,19 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { finished } from 'node:stream/promises'
-import { createPackage } from '@electron/asar'
+import { createPackage, getRawHeader, uncache } from '@electron/asar'
 import type { Writable } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
 import { installQaFaultHook } from '../../src/main/qa-identity'
 import { assertQaFaultHookMatchesIdentity, QA_FAULT_MARKER, QA_IDENTITY_PACKAGE_NAME } from './qa-fault-hook.mjs'
+
+type AsarHeaderEntry = {
+  files?: Record<string, AsarHeaderEntry>
+  offset?: string
+  size?: number
+  unpacked?: boolean
+}
 
 const dirs: string[] = []
 
@@ -31,10 +38,31 @@ async function writeStagedPackage(src: string, dest: string, name: string, mainS
   await mkdir(join(src, 'out', 'main'), { recursive: true })
   await writeFile(join(src, 'package.json'), JSON.stringify({ name }))
   await writeFile(join(src, 'out', 'main', 'index.js'), mainSource)
-  // @electron/asar resolves with the writable stream returned by out.end(); wait for finish so
-  // immediate synchronous package reads cannot race buffered archive bytes.
+  // @electron/asar resolves with the writable stream returned by out.end(), before the stream
+  // lifecycle has finished. Wait for the real writable completion before any synchronous asar read.
   const output = await createPackage(src, dest)
   await finished(output as unknown as Writable)
+  await assertArchiveBytesComplete(dest)
+}
+
+async function assertArchiveBytesComplete(archive: string): Promise<void> {
+  uncache(archive)
+  try {
+    const { header, headerSize } = getRawHeader(archive)
+    const expectedSize = 8 + headerSize + packedPayloadSize(header)
+    const actualSize = (await stat(archive)).size
+    expect(actualSize).toBe(expectedSize)
+  } finally {
+    uncache(archive)
+  }
+}
+
+function packedPayloadSize(entry: AsarHeaderEntry): number {
+  if (entry.files) {
+    return Math.max(0, ...Object.values(entry.files).map((child) => packedPayloadSize(child)))
+  }
+  if (entry.unpacked || entry.size === undefined || entry.offset === undefined) return 0
+  return Number(entry.offset) + entry.size
 }
 
 describe('assertQaFaultHookMatchesIdentity', () => {
