@@ -139,6 +139,17 @@ extraResources:
   # into the package. The blob is OBFUSCATION, not secrecy — extractable with effort; see docs/CLOUDFLARE.md.
   - from: build/cloudflare-embed
     to: cloudflare-embed
+  # Operator skill-pack signing public key (src/main/operator-skill-key.ts) and license-lease public key
+  # (src/main/license-lease-key.ts) — both mandatory-in-release credential families, both real, always-
+  # present directories (tracked via .gitkeep) that are EMPTY on a normal build, exactly like
+  # cloudflare-embed/ above: packaging never fails when there is nothing provisioned. A release build must
+  # actually write resources/operator/pubkey.json and resources/license-lease/pubkey.json before packaging
+  # — scripts/check-provisioned-secrets.mjs --profile release fails the build if either file is absent or
+  # still equals the committed DEV_OPERATOR_PUBLIC_KEY / DEV_LEASE_PUBLIC_KEY placeholder (ticket M2-0056).
+  - from: resources/operator
+    to: operator
+  - from: resources/license-lease
+    to: license-lease
 mac:
   category: public.app-category.productivity
   # electron-builder treats a target-specific `files` override as the complete app allowlist. Keep the

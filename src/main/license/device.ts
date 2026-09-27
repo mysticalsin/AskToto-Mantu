@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { DEVICE_HASH_PREFIX, type SerialKind } from '@shared/license-types'
+import { WINDOWS_POWERSHELL } from '../win-security'
 
 const PLACEHOLDER = new Set([
   '',
@@ -71,30 +72,21 @@ function macModel(): string {
   return execText('sysctl', ['-n', 'hw.model'])
 }
 
+/** Windows identity facts come from PowerShell, always the pinned System32 binary (see win-security.ts):
+ *  Windows' CreateProcess search order includes the current working directory, so a bare 'powershell.exe'
+ *  could execute an attacker-planted binary if Métis is ever launched from an attacker-writable cwd. */
+function runPowerShell(command: string): string {
+  return execText(WINDOWS_POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', command])
+}
+
 function winSerial(): string {
-  const bios = execText('powershell.exe', [
-    '-NoProfile',
-    '-NonInteractive',
-    '-Command',
-    '(Get-CimInstance -ClassName Win32_BIOS).SerialNumber'
-  ])
+  const bios = runPowerShell('(Get-CimInstance -ClassName Win32_BIOS).SerialNumber')
   if (isUsableSerial(bios)) return bios
-  const guid = execText('powershell.exe', [
-    '-NoProfile',
-    '-NonInteractive',
-    '-Command',
-    '(Get-ItemProperty -Path HKLM:\\SOFTWARE\\Microsoft\\Cryptography).MachineGuid'
-  ])
-  return guid
+  return runPowerShell('(Get-ItemProperty -Path HKLM:\\SOFTWARE\\Microsoft\\Cryptography).MachineGuid')
 }
 
 function winModel(): string {
-  return execText('powershell.exe', [
-    '-NoProfile',
-    '-NonInteractive',
-    '-Command',
-    '(Get-CimInstance -ClassName Win32_ComputerSystem).Model'
-  ])
+  return runPowerShell('(Get-CimInstance -ClassName Win32_ComputerSystem).Model')
 }
 
 function linuxSerial(): string {

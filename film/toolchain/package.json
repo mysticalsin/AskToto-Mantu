@@ -1,0 +1,8 @@
+{
+  "name": "metis-film-toolchain",
+  "private": true,
+  "description": "Pinned BRAG/Hyperframes render toolchain for the Métis launch film (M2-0212)",
+  "dependencies": {
+    "hyperframes": "0.8.79"
+  }
+}

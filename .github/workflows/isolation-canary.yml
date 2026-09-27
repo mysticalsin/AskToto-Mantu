@@ -1,0 +1,232 @@
+name: isolation-canary
+
+# M2-0190 — hermetic-test canaries for the runners build.yml's `quality`/`operator` jobs never exercise:
+# swift test (native-app/MetisKit has no vitest equivalent), license-server's `node --test` (a separate
+# npm project, its own package-lock), the deny-non-loopback.cjs network preload, and the owner-account.sb
+# OS sandbox profile. Kept in a separate workflow file rather than a new job in build.yml.
+#
+# operator/scripts/wrangler-local-sandbox.contract.test.ts, scripts/qa/lib/sandbox-guard.test.ts and
+# scripts/hermetic/sandbox-env.test.ts need no job here: they are plain `*.test.ts` files already run by
+# build.yml's `quality` job (root `npm test`) and `operator` job.
+on:
+  push:
+    branches:
+      - '**'
+    tags-ignore:
+      - 'v*'
+      - 'ffmpeg-sidecar-*'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  license-server:
+    name: license-server node --test (hermetic)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: license-server/package-lock.json
+      # M2-0190 acceptance #4 — proves the isolation against the runner's REAL home, not a fresh
+      # (and therefore trivially empty) sandbox dir. Two honeypots: detectOneDrive()'s macOS-shaped check
+      # (~/Library/CloudStorage/OneDrive-*) runs on every platform, not only darwin, so it's a real hazard
+      # here too; ~/OneDrive is the separate bare fallback path that check falls through to on this
+      # (ubuntu) runner specifically.
+      - name: Seed real-home honeypots the suite must never touch
+        run: |
+          bash scripts/hermetic/honeypot.sh seed "$HOME/Library/CloudStorage/OneDrive-Honeypot"
+          bash scripts/hermetic/honeypot.sh seed "$HOME/OneDrive"
+      - run: npm ci
+        working-directory: license-server
+      - run: npm test
+        working-directory: license-server
+      - name: Fail if the suite touched either real-home honeypot
+        run: |
+          bash scripts/hermetic/honeypot.sh check "$HOME/Library/CloudStorage/OneDrive-Honeypot"
+          bash scripts/hermetic/honeypot.sh check "$HOME/OneDrive"
+
+  metiskit-swift-test:
+    name: MetisKit swift test (hermetic)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seed a real-home honeypot the suite must never touch
+        run: bash scripts/hermetic/honeypot.sh seed "$HOME/Library/CloudStorage/OneDrive-Honeypot"
+      # Never bare `swift test` (M2-0190) — this wrapper is what provides HermeticHomeTests' sandbox
+      # (HOME, CFFIXED_USER_HOME); running `swift test` directly here would leave both unset and the
+      # canary would fail loudly.
+      - run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
+      - name: Fail if the suite touched the real-home honeypot
+        run: bash scripts/hermetic/honeypot.sh check "$HOME/Library/CloudStorage/OneDrive-Honeypot"
+      # Reproduces Xcode auto-mounting its Metal toolchain disk image under the sandboxed $HOME while
+      # `swift test` runs (a read-only volume `rm -rf` cannot remove) with a PATH-shimmed `swift`, so this
+      # is exercised on every push instead of only on whichever run happens to trigger a real toolchain
+      # download.
+      - name: A shimmed swift that mounts a disk image under HOME leaves no mount or sandbox behind
+        run: |
+          set -euo pipefail
+          shim="$RUNNER_TEMP/swift-shim-mount"
+          mkdir -p "$shim"
+          cat > "$shim/swift" <<'SHIM'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo "$HOME" > "$RUNNER_TEMP/swift-shim-sandbox-path"
+          mount_dir="$HOME/Library/Developer/DVTDownloads/MetalToolchain/mounts/shim"
+          mkdir -p "$mount_dir"
+          image="$RUNNER_TEMP/metal-toolchain-shim.dmg"
+          hdiutil create -size 5m -fs APFS -volname MetalToolchainShim -ov "$image"
+          hdiutil attach "$image" -mountpoint "$mount_dir" -readonly -nobrowse
+          SHIM
+          chmod +x "$shim/swift"
+
+          PATH="$shim:$PATH" bash scripts/hermetic/run-swift-tests.sh unused
+
+          sandbox="$(cat "$RUNNER_TEMP/swift-shim-sandbox-path")"
+          if [ -e "$sandbox" ]; then
+            echo "run-swift-tests.sh left its sandbox behind: $sandbox"; exit 1
+          fi
+          if mount | grep -qF "$sandbox"; then
+            echo "run-swift-tests.sh left a mount behind under $sandbox:"; mount | grep -F "$sandbox"; exit 1
+          fi
+      # A plain, unmounted failing shim — swift test's own non-zero status reaches the caller unchanged by
+      # the cleanup trap.
+      - name: A shimmed swift's own non-zero exit code passes through run-swift-tests.sh
+        run: |
+          set -euo pipefail
+          shim="$RUNNER_TEMP/swift-shim-fail"
+          mkdir -p "$shim"
+          cat > "$shim/swift" <<'SHIM'
+          #!/usr/bin/env bash
+          exit 37
+          SHIM
+          chmod +x "$shim/swift"
+
+          set +e
+          PATH="$shim:$PATH" bash scripts/hermetic/run-swift-tests.sh unused
+          status=$?
+          set -e
+          if [ "$status" -ne 37 ]; then
+            echo "expected run-swift-tests.sh to exit 37 (swift test's own status), got $status"; exit 1
+          fi
+
+  deny-non-loopback:
+    name: deny-non-loopback.cjs denies every connect() shape (hermetic)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+      # No npm ci: this test only uses node:net/http/tls/child_process/test — no third-party dependency.
+      - run: node --test scripts/hermetic/deny-non-loopback.test.mjs
+
+  owner-sandbox-profile:
+    name: owner-account.sb denies real user state (hermetic)
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # Every root this asserts on is EXTRACTED from scripts/hermetic/owner-account.sb's own
+      # `(subpath (string-append (param "HOME") "..."))` literals below — never a hand-kept list — so a
+      # root added to (or renamed in) the profile is exercised here automatically, and this job cannot
+      # silently drift out of sync with the profile it proves. The accented "Library/Application
+      # Support/Métis" literal needs this proof most: SBPL subpath matching is a string compare against
+      # the syscall's own path argument (unconfirmed against Seatbelt's own source — treat this as a
+      # precaution, not a guarantee), so whether that literal actually matches is otherwise unverified.
+      - name: Seed a probe in every denied root and assert both read and write are refused
+        run: |
+          set -euo pipefail
+          roots=()
+          while IFS= read -r root; do
+            roots+=("$root")
+          done < <(grep -o '(param "HOME") "[^"]*"' scripts/hermetic/owner-account.sb | sed -E 's/.*"HOME"\) "(.*)"/\1/')
+          [ "${#roots[@]}" -ge 1 ] || { echo "no (subpath ...) literals found in scripts/hermetic/owner-account.sb"; exit 1; }
+
+          fail=0
+          for root in "${roots[@]}"; do
+            dir="$HOME$root"
+            probe="$dir/probe"
+            mkdir -p "$dir"
+            echo probe > "$probe"
+
+            echo "-- $root --"
+            if bash scripts/hermetic/run-under-owner-sandbox.sh cat "$probe" 2>err.log; then
+              echo "expected the read of '$root' to be denied"; cat err.log; fail=1
+            elif ! grep -q "Operation not permitted" err.log; then
+              echo "read of '$root' was denied for the wrong reason:"; cat err.log; fail=1
+            fi
+
+            if bash scripts/hermetic/run-under-owner-sandbox.sh sh -c "echo x >> '$probe'" 2>err.log; then
+              echo "expected the write to '$root' to be denied"; cat err.log; fail=1
+            elif ! grep -q "Operation not permitted" err.log; then
+              echo "write to '$root' was denied for the wrong reason:"; cat err.log; fail=1
+            fi
+          done
+          exit "$fail"
+      - name: Positive control — reading a repository file still works under the profile
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh cat AGENTS.md > /dev/null
+
+  honeypot-check-fails-closed:
+    name: honeypot.sh check fails closed (hermetic)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # Negative control — proves `check` cannot pass by accident: a fresh, untouched honeypot is the
+      # only case in this file expected to succeed; every mutation below (a new file, an in-place rewrite
+      # of the sentinel, deleting the honeypot outright) must make it fail, and none of them may be
+      # swallowed into a silent "nothing to report".
+      - name: check exits non-zero for every way a suite can defeat the honeypot, and zero for none of them
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/honeypot-self-test"
+          ref="$RUNNER_TEMP/metis-honeypot-ref"
+
+          reseed() {
+            rm -rf "$dir" "$ref"
+            bash scripts/hermetic/honeypot.sh seed "$dir"
+          }
+
+          # Asserts not just that `check` failed, but that it failed for the expected reason — the same
+          # pattern owner-sandbox-profile uses with "Operation not permitted" — so a check that fails
+          # closed for the wrong reason (or prints nothing, as it did before honeypot.sh wrote its
+          # diagnostics to stderr) cannot pass this silently.
+          assert_check_fails() {
+            local label="$1" expected="$2"
+            if bash scripts/hermetic/honeypot.sh check "$dir" 2>err.log; then
+              echo "expected '$label' to make check fail, but it exited 0"; cat err.log; exit 1
+            fi
+            if ! grep -q "$expected" err.log; then
+              echo "'$label' failed for the wrong reason:"; cat err.log; exit 1
+            fi
+            echo "ok: $label made check fail — $(head -1 err.log)"
+          }
+
+          reseed
+          bash scripts/hermetic/honeypot.sh check "$dir"
+          echo "ok: an untouched honeypot passes"
+
+          reseed
+          touch "$dir/new-file"
+          assert_check_fails "a new file inside the honeypot" "touched the real-home honeypot"
+
+          reseed
+          echo rewritten > "$dir/sentinel"
+          assert_check_fails "an in-place rewrite of the sentinel" "touched the real-home honeypot"
+
+          reseed
+          rm -rf "$dir"
+          assert_check_fails "a deleted honeypot directory" "the honeypot directory is gone"
+
+          reseed
+          rm -f "$ref"
+          assert_check_fails "a missing reference timestamp" "no reference timestamp"

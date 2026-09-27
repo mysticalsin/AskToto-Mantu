@@ -33,7 +33,7 @@ import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, creat
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
-import { bindRendererReadiness } from './renderer-readiness'
+import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
@@ -613,6 +613,8 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
+import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
+import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
@@ -727,7 +729,7 @@ import {
   sweepExpiredMeetings
 } from './recall'
 import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './updater'
-import { runSelfTest } from './selftest'
+import { runSelfTest, redirectSelfTestUserData } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
@@ -887,6 +889,12 @@ function makeRefreshDustAuth(current: {
 freezeAsciiUserAgent(app)
 initializeCaheEditionIdentity()
 if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
+
+// Self-test must own a throwaway userData before anything resolves userData; no-op unless
+// devEnv(ASKTOTO_SELFTEST). Setting ASKTOTO_USERDATA lets the ASKTOTO_USERDATA handling immediately
+// below, and resolveMeetingsFolder()'s own ASKTOTO_USERDATA check (transcripts.ts), apply the throwaway
+// directory through the one QA-isolation mechanism instead of a second, self-test-only one (M2-0004).
+redirectSelfTestUserData()
 
 // Select the final user-data profile before crashReporter (or any other Electron service) can resolve
 // a default path. In particular, ASKTOTO_USERDATA must isolate physical QA from a real encrypted profile.
@@ -2087,6 +2095,9 @@ function overlayRendererUrl(): string {
  */
 let overlayWindowTransparent = true
 let emittedAppStarted = false
+// M2-0006: set once, at the same point app.started fires — will-quit calls observability.shutdownClean()
+// on it, and it is meaningless before that first createWindow() has run.
+let observability: RunObservability | null = null
 /** Consumed by the next transparent window created when Act 6 finishes. Never persisted. */
 let postOnboardingDestination: 'answer' | 'settings' = 'answer'
 const ONBOARDING_EXIT_FALLBACK_MS = 5_000
@@ -2539,7 +2550,16 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // Emitted here rather than at app-ready because reaching createWindow means the main process survived
   // module load, bytecode load, and boot — which is exactly the class of failure that shipped DOA twice.
   if (!emittedAppStarted) {
-    auditLog('app.started', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+    // M2-0006: app.started/app.stall/app.shutdown.clean and the run/liveness/stall-monitor lifecycle
+    // behind them — see infra/observability/run-observability.ts for the invariant this enforces.
+    observability = startRunObservability({
+      userData: app.getPath('userData'),
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      audit: auditLog,
+      powerMonitor
+    })
     emittedAppStarted = true
   }
   // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
@@ -2721,14 +2741,20 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // A renderer that is wedged (event loop stuck) never fires render-process-gone below, so the island can
   // sit blank with no trace in any log. Record it, and record the recovery. No automatic reload: Chromium
   // recovers most stalls on its own, and a forced reload mid-meeting would drop the live transcript.
+  // M2-0006: when the overlay recovers on its own, pair it with how long it was wedged — 'app.unresponsive'
+  // alone cannot tell a stall Chromium recovered from a wedge that never did.
+  const responsiveness = createResponsivenessTracker()
   win.on('unresponsive', () => {
     if (win !== self) return
+    responsiveness.markUnresponsive()
     mainLog.warn('[renderer-unresponsive] overlay renderer stopped responding')
     auditLog('app.unresponsive', { kind: 'overlay' })
   })
   win.on('responsive', () => {
     if (win !== self) return
     mainLog.info('[renderer-responsive] overlay renderer recovered')
+    const stallMs = responsiveness.markResponsive()
+    if (stallMs !== null) auditLog('app.responsive', { kind: 'overlay', stallMs })
   })
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
   // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
@@ -2741,6 +2767,10 @@ function createWindow(targetDisplay?: Electron.Display): void {
     commandControl.revokeForLifecycleEvent('renderer_replaced')
     mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
     auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
+    // The content died instead of recovering on its own — any pending unresponsiveSince belongs to a wedge
+    // that will never get its matching 'responsive'. Without this, a later 'unresponsive' in the reloaded
+    // renderer would be paired with the stale one and report a stallMs of however long it's been since.
+    responsiveness.markGone()
     // A dead/reloading renderer cannot receive final STT messages or issue Stop. Force-close the live
     // socket before reload so provider callbacks cannot bleed into the new renderer session.
     invalidateCloudSttOwner(selfWebContentsId)
@@ -2789,13 +2819,6 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // The one-time onboarding destination belongs to this replacement only. Later renderer recovery
   // should preserve the user's current surface rather than repeatedly forcing Settings.
   postOnboardingDestination = 'answer'
-  // MQA-318: opt-in release diagnostics only. Preserve app.started's boot semantics and never
-  // equate entering createWindow with a loaded, responsive renderer. Register before navigation.
-  if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
-    bindRendererReadiness(win.webContents, rendererUrl, () => {
-      auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
-    })
-  }
   // Bounded launch evidence only. Normal onboarding never serializes renderer state to disk.
   if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
     bindAct1DomProbe(win.webContents, {
@@ -2804,9 +2827,11 @@ function createWindow(targetDisplay?: Electron.Display): void {
       audit: (summary) => auditLog('app.act1.dom', summary)
     })
   }
-  // FITO-185-B: always loadURL(rendererUrl) — same string bindRendererReadiness expects — so packaged
-  // asar file:// getURL() cannot miss the strict equality check that loadFile alone can mismatch.
-  win.loadURL(rendererUrl)
+  // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
+  // above. A session with app.started but no renderer.ready must always be visible in the audit log.
+  bindReadinessThenNavigate(win, rendererUrl, () => {
+    auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+  })
   const overlay = win
   let exclusiveRevealed = false
   const revealExclusiveWhenPainted = (): void => {
@@ -8955,9 +8980,8 @@ if (!app.requestSingleInstanceLock()) {
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
   process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
   process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
-  // The self-test suite runs destructively against the LIVE profile (it overwrites, then deletes,
-  // settings.json and managed-config.json), so devEnv() keeps it out of packaged builds — otherwise a
-  // persistent `setx ASKTOTO_SELFTEST out.json` re-wipes the profile and quits on every launch.
+  // devEnv(ASKTOTO_SELFTEST) keeps self-test out of packaged builds; runSelfTest() itself refuses to run
+  // unless userData is exactly the throwaway directory redirectSelfTestUserData() created (M2-0004).
   const selfTestOut = devEnv('ASKTOTO_SELFTEST')
   if (selfTestOut) {
     try {
@@ -9007,14 +9031,23 @@ if (!app.requestSingleInstanceLock()) {
   // below — previously registered unguarded — run inside it too: a throw during any of those must not
   // take out createTray/registerShortcuts/createWindow further down the boot sequence.
   const runStep = (name: string, fn: () => void): void => {
-    try {
-      fn()
-    } catch (e) {
-      // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
-      // boot-step failure is actually diagnosable and shows up in the audit trail.
-      mainLog.error(`[boot] ${name} failed:`, e)
-      auditLog('app.crash', { kind: 'boot_step', step: name })
+    const run = (): void => {
+      try {
+        fn()
+      } catch (e) {
+        // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
+        // boot-step failure is actually diagnosable and shows up in the audit trail.
+        mainLog.error(`[boot] ${name} failed:`, e)
+        auditLog('app.crash', { kind: 'boot_step', step: name })
+      }
     }
+    // M2-0006: timePhase measures how long this step actually took, so a late app.stall tick can name
+    // whichever one really blocked it. Boot steps run synchronously back to back with no await between
+    // them, so no tick can ever fire in the middle of that sequence — only measured duration, never call
+    // order, tells them apart. observability is still null for every boot step ahead of createWindow
+    // (it starts inside createWindow itself); those run un-timed since no heartbeat exists yet to blame.
+    if (observability) observability.timePhase(name, run)
+    else run()
   }
 
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
@@ -9521,5 +9554,12 @@ app.on('will-quit', () => {
     fmRuntime.stop()
   } catch (e) {
     mainLog.warn('[will-quit] fmRuntime.stop failed', e)
+  }
+  // M2-0006: last, so it only fires once every other teardown step above has run. This is the one signal
+  // that distinguishes THIS quit from a hard kill on the next boot's app.started.prevShutdown.
+  try {
+    observability?.shutdownClean(process.uptime())
+  } catch (e) {
+    mainLog.warn('[will-quit] observability.shutdownClean failed', e)
   }
 })

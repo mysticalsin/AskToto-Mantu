@@ -1,0 +1,31 @@
+{
+  "target": {
+    "space": "00000000-0000-4000-8000-000000000010",
+    "id": "00000000-0000-4000-8000-000000000102"
+  },
+  "expectedRevision": 4,
+  "idempotencyKey": "request-000000000001",
+  "reason": "The signed order form states the amount.",
+  "evidence": [
+    {
+      "kind": "source",
+      "source": {
+        "system": "metis-meeting",
+        "id": "meeting-2026-09-21-northwind-pricing",
+        "revision": "sha256-91c2"
+      },
+      "quote": "The budget is confirmed at 240,000 euros."
+    }
+  ],
+  "patch": [
+    {
+      "op": "set",
+      "field": "amount",
+      "value": {
+        "value": 240000,
+        "currency": "EUR"
+      },
+      "pin": true
+    }
+  ]
+}
