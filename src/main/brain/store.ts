@@ -468,10 +468,10 @@ export function classifyIndexBytes(buf: Buffer): IndexLoad {
   } catch {
     return { kind: 'corrupt' }
   }
-  const parsed = BrainIndexSchema.safeParse(raw)
-  if (parsed.success) return { kind: 'ready', index: parsed.data }
   const v = (raw as { schema_version?: unknown } | null)?.schema_version
   if (typeof v === 'number' && v > BRAIN_SCHEMA_VERSION) return { kind: 'unavailable', cause: 'unsupported' }
+  const parsed = BrainIndexSchema.safeParse(raw)
+  if (parsed.success) return { kind: 'ready', index: parsed.data }
   return { kind: 'corrupt' }
 }
 
@@ -621,6 +621,7 @@ export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
 /** Fail-closed write: never replaces bytes this process could not fully decode. */
 export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
   const blocked = indexUnavailable(s)
+  if (blocked === 'unsupported') throw new Error('brain-index-unsupported-version')
   if (blocked) throw new BrainIndexUnavailableError(blocked)
   await writeJson(s, INDEX_REL, v)
   indexCache.delete(join(brainDir(s), INDEX_REL))
