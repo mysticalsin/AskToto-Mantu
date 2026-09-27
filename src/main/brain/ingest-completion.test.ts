@@ -344,7 +344,8 @@ describe('backfill run completion observes real work', () => {
     await requestSourceRefresh()
     await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: false, error: 'scan-failed', total: 1, failed: 0 })
     setSettings({ teamTranscriptFolders: [] })
-    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: true, total: 1, failed: 0 })
+    // The source-refresh rebuild replay already completed during the scan-failed call; this retry only settles markers.
+    await expect((await requestBackfillRun({ force: true })).completion).resolves.toEqual({ ok: true, total: 0, failed: 0 })
     expect(brainLedger.readIndex(getSettings())).toMatchObject({ replayPending: false, sourceRefreshRequested: false, backfillRequested: false })
   })
 
