@@ -752,15 +752,16 @@ function printSummary(counts) {
  * @returns {{ ok: true, baseline: Counts } | { ok: false }} Baseline read result.
  */
 function readBaseline() {
-  let text = ''
+  const text = readFileSync(BASELINE_PATH, 'utf8').replace(/\r\n/g, '\n')
+  let parsed
   try {
-    text = readFileSync(BASELINE_PATH, 'utf8').replace(/\r\n/g, '\n')
+    parsed = JSON.parse(text)
   } catch (error) {
-    if (error?.code === 'ENOENT') return { ok: false }
-    throw error
+    console.log(`[check:architecture] FAIL: scripts/architecture-baseline.json is not canonical; ${error.message}`)
+    process.exitCode = 1
+    return { ok: false }
   }
   try {
-    const parsed = JSON.parse(text)
     const canonical = formatBaseline(parsed)
     if (canonical !== text) {
       console.log('[check:architecture] FAIL: scripts/architecture-baseline.json is not canonical; use the rendering below.')

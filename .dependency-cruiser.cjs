@@ -63,7 +63,7 @@ module.exports = {
     },
     {
       name: 'ff02-import-cycle',
-      comment: 'Every module on a cycle loads, tests and changes together with all the others.',
+      comment: 'Each cycle is reported once, attributed to one representative module in it.',
       severity: 'warn',
       from: { path: '^src/' },
       to: { circular: true },
