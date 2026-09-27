@@ -86,6 +86,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
       held.splice(0).forEach((release) => release())
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
+    await whenIndexWritesSettle()
   }
 
   const writeMeeting = (name: string, body = name) => {
