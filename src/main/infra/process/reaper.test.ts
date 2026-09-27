@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { reapBootSidecars, testOnly, type ProcessIdentity, type ReaperAdapters } from './reaper'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { reapBootSidecars, readRegistryRecords, testOnly, type ProcessIdentity, type ReaperAdapters } from './reaper'
 import { argsFingerprint, type SidecarRecord } from './registry'
 
 const USER_DATA = '/profile'
@@ -125,6 +128,38 @@ describe('boot sidecar reaper', () => {
     })
   })
 
+  it('skips a registry entry when process info returns a different PID than the one looked up', async () => {
+    const ad = adapters({ records: [spawned()], live: proc({ pid: 99 }) })
+
+    await run(ad)
+
+    expect(ad.killed).toEqual([])
+    expect(ad.audits).toContainEqual({
+      event: 'sidecar.reap.skipped',
+      detail: expect.objectContaining({ reason: 'pid-mismatch', pid: 42 })
+    })
+  })
+
+  it('logs a process-info failure and still applies the legacy orphan rule to unregistered llama-server orphans', async () => {
+    const ad = adapters({
+      records: [spawned()],
+      list: [proc({ pid: 74, osStartTime: '2026-09-27T09:00:00.000Z' })]
+    })
+    vi.mocked(ad.processInfo).mockRejectedValueOnce(new Error('proc table unavailable'))
+
+    await run(ad)
+
+    expect(ad.killed).toEqual([74])
+    expect(ad.audits).toContainEqual({
+      event: 'sidecar.reap.skipped',
+      detail: expect.objectContaining({ reason: 'process-info-failed', pid: 42 })
+    })
+    expect(ad.audits).toContainEqual({
+      event: 'sidecar.reaped',
+      detail: { name: 'llama-server', pid: 74, reason: 'legacy-orphan' }
+    })
+  })
+
   it('accepts helper argv that includes argv[0] before the recorded spawn arguments', async () => {
     const ad = adapters({ records: [spawned()], live: proc({ args: [LLAMA, '-m', '/profile/local-llm/models/qwen/model.gguf'] }) })
 
@@ -243,5 +278,50 @@ describe('boot sidecar reaper', () => {
       event: 'sidecar.reaped',
       detail: { name: 'llama-server', pid: 42, reason: 'registry' }
     })
+  })
+
+  it('reads append-only registries in order, preserving the before-spawn intent and complete spawned identity', () => {
+    const root = mkdtempSync(join(tmpdir(), 'metis-reaper-'))
+    try {
+      const runDir = join(root, 'run')
+      mkdirSync(runDir)
+      const args = ['-m', '/profile/local-llm/models/qwen/model.gguf']
+      const spawnedRecord = spawned()
+      writeFileSync(
+        join(runDir, 'sidecars-s1.json'),
+        [
+          JSON.stringify({
+            kind: 'intent',
+            sessionId: 's1',
+            name: 'llama-server',
+            argsFingerprint: argsFingerprint(args),
+            recordedAt: '2026-09-27T09:58:00.000Z'
+          }),
+          JSON.stringify(spawnedRecord)
+        ].join('\n') + '\n'
+      )
+
+      const records = readRegistryRecords(runDir)
+
+      expect(records).toEqual([
+        expect.objectContaining({
+          kind: 'intent',
+          sessionId: 's1',
+          name: 'llama-server',
+          argsFingerprint: argsFingerprint(args)
+        }),
+        expect.objectContaining({
+          kind: 'spawned',
+          name: 'llama-server',
+          pid: 42,
+          pgid: 42,
+          osStartTime: '2026-09-27T09:58:00.000Z',
+          exeRealpath: LLAMA,
+          argsFingerprint: argsFingerprint(args)
+        })
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

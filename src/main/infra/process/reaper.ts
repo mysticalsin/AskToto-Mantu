@@ -41,6 +41,8 @@ type SkipReason =
   | 'start-time-mismatch'
   | 'exe-mismatch'
   | 'args-mismatch'
+  | 'pid-mismatch'
+  | 'process-info-failed'
   | 'kill-failed'
   | 'ambiguous-entry'
 
@@ -119,9 +121,19 @@ async function reapRegistryRecord(record: SidecarRecord, adapters: ReaperAdapter
     skip(adapters, 'incomplete-entry', { pid: record.pid, name: record.name })
     return
   }
-  const live = await adapters.processInfo(record.pid!)
+  let live: ProcessIdentity | null
+  try {
+    live = await adapters.processInfo(record.pid!)
+  } catch (error) {
+    skip(adapters, 'process-info-failed', { pid: record.pid, name: record.name, error: errorMessage(error) })
+    return
+  }
   if (!live) {
     skip(adapters, 'pid-not-alive', { pid: record.pid, name: record.name })
+    return
+  }
+  if (live.pid !== record.pid) {
+    skip(adapters, 'pid-mismatch', { pid: record.pid, name: record.name })
     return
   }
   if (live.osStartTime !== record.osStartTime) {

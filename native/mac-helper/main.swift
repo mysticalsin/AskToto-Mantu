@@ -336,8 +336,8 @@ struct ProcInfo: Codable {
 }
 
 func processStartIso(_ info: kinfo_proc) -> String {
-    let seconds = TimeInterval(info.kp_proc.p_un.__p_starttime.tv_sec)
-    let micros = TimeInterval(info.kp_proc.p_un.__p_starttime.tv_usec) / 1_000_000
+    let seconds = TimeInterval(info.kp_proc.p_starttime.tv_sec)
+    let micros = TimeInterval(info.kp_proc.p_starttime.tv_usec) / 1_000_000
     let date = Date(timeIntervalSince1970: seconds + micros)
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

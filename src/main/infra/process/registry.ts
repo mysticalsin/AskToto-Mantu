@@ -67,14 +67,18 @@ export function createSidecarRegistry(userData: string, sessionId = randomUUID()
       const pid = child.pid
       if (typeof pid !== 'number') return
       const identity = await getProcessIdentity(pid, executable)
+      const exeRealpath = safeRealpath(executable)
+      if (!identity || !exeRealpath) return
+      if (identity.pid !== pid || identity.exeRealpath !== exeRealpath) return
+      if (!identityArgsMatchFingerprint(identity.args, argsFingerprint(args))) return
       appendRecord(path, {
         kind: 'spawned',
         sessionId,
         name,
         pid,
-        pgid: identity?.pgid ?? pid,
-        osStartTime: identity?.osStartTime,
-        exeRealpath: identity?.exeRealpath ?? safeRealpath(executable),
+        pgid: identity.pgid ?? pid,
+        osStartTime: identity.osStartTime,
+        exeRealpath,
         argsFingerprint: argsFingerprint(args),
         recordedAt: new Date().toISOString()
       })
@@ -155,6 +159,12 @@ function safeRealpath(path: string): string | undefined {
   } catch {
     return undefined
   }
+}
+
+function identityArgsMatchFingerprint(args: readonly string[], expected: string): boolean {
+  if (argsFingerprint(args) === expected) return true
+  if (args.length > 0 && argsFingerprint(args.slice(1)) === expected) return true
+  return false
 }
 
 function splitCommand(command: string): string[] {
