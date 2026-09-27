@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // check-provisioned-secrets.mjs — the release-build gate for every embedded-credential family that falls
 // back to a committed DEV placeholder key when packaging did not provision the real thing
-// (L05-F1, L05-F7, L05-REFACTOR-1). A release build that ships src/main/operator-skill-key.ts's or
+// (ticket M2-0056). A release build that ships src/main/operator-skill-key.ts's or
 // src/main/license-lease-key.ts's DEV_* fallback is trusting a public key with no matching private half
 // this project controls — every packaged skill-pack signature check, and every offline license lease,
 // would verify against a key anyone who clones this repo can find.
@@ -52,13 +52,15 @@ function resolveFamilies(resourcesDir) {
       label: 'operator skill-pack public key',
       resourcePath: join(resourcesDir, 'operator', 'pubkey.json'),
       devSourcePath: join(REPO_ROOT, 'src', 'main', 'operator-skill-key.ts'),
-      devConstName: 'DEV_OPERATOR_PUBLIC_KEY'
+      devConstName: 'DEV_OPERATOR_PUBLIC_KEY',
+      fixDetail: ''
     },
     {
       label: 'license-lease public key',
       resourcePath: join(resourcesDir, 'license-lease', 'pubkey.json'),
       devSourcePath: join(REPO_ROOT, 'src', 'main', 'license-lease-key.ts'),
-      devConstName: 'DEV_LEASE_PUBLIC_KEY'
+      devConstName: 'DEV_LEASE_PUBLIC_KEY',
+      fixDetail: ' — for license-lease that JSON is exactly the body GET /license/pubkey returns'
     }
   ]
 }
@@ -88,33 +90,35 @@ function parseArgs(argv) {
  * @returns {number}
  */
 export function runCheck({ profile, dryRun, resourcesDir = join(REPO_ROOT, 'resources') }) {
-  let anyMandatoryFailure = false
-  let firstFailingFamily = null
+  const unprovisionedFamilies = []
 
   for (const family of resolveFamilies(resourcesDir)) {
     const placeholder = readDevPlaceholder(family.devSourcePath, family.devConstName)
     const result = checkProvisionedPublicKey({ resourcePath: family.resourcePath, placeholder })
     const mandatoryFailure = result.status !== 'provisioned'
     if (mandatoryFailure) {
-      anyMandatoryFailure = true
-      firstFailingFamily ??= family
+      unprovisionedFamilies.push(family)
     }
     const tag = mandatoryFailure ? (profile === 'release' ? 'FAIL' : 'WARN') : 'OK'
     console.log(`[check:provisioned-secrets] ${tag} — ${family.label}: ${result.message}`)
   }
 
-  const shouldFail = profile === 'release' && anyMandatoryFailure
+  const shouldFail = profile === 'release' && unprovisionedFamilies.length > 0
   if (shouldFail && dryRun) {
     console.log('[check:provisioned-secrets] DRY RUN — the FAIL above would stop a real release-profile build; exiting 0 anyway.')
     return 0
   }
   if (shouldFail) {
     console.error(
-      '[check:provisioned-secrets] FAIL — release profile requires the operator and license-lease families to ' +
-        'both be provisioned, not the committed DEV placeholder. See FAIL lines above. Fix: write the shape ' +
-        `{ "algorithm": "ed25519", "publicKey": "<base64url>" } to ${firstFailingFamily.resourcePath} — for ` +
-        'license-lease that JSON is exactly the body GET /license/pubkey returns.'
+      '[check:provisioned-secrets] FAIL — release profile requires every family below to be provisioned, not ' +
+        'the committed DEV placeholder. See FAIL lines above. Fix:'
     )
+    for (const family of unprovisionedFamilies) {
+      console.error(
+        `[check:provisioned-secrets]   - ${family.label}: write { "algorithm": "ed25519", "publicKey": ` +
+          `"<base64url>" } to ${family.resourcePath}${family.fixDetail}`
+      )
+    }
     return 1
   }
   console.log(`[check:provisioned-secrets] OK — profile=${profile}${dryRun ? ' (dry-run)' : ''}`)
