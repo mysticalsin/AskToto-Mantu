@@ -99,7 +99,7 @@ describe('fetchDustProjects', () => {
               { sId: 'b', name: 'B', kind: 'regular' }
             ]
           }),
-          text: async () => ''
+          text: async (): Promise<string> => ''
         }
       }
       if (url.includes('/spaces/a/data_sources')) {
