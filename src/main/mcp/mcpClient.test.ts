@@ -16,7 +16,8 @@
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { connect as netConnect, type AddressInfo, type Socket } from 'node:net'
+import { connect as netConnect, type AddressInfo } from 'node:net'
+import type { Duplex } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -250,8 +251,11 @@ async function startConnectProxy(refuse?: number): Promise<{
   close: () => Promise<void>
 }> {
   const targets: string[] = []
-  const sockets = new Set<Socket>()
-  const track = (socket: Socket): void => {
+  // `Duplex`, not `net.Socket`: Node types the http.Server 'connect' event's socket as the more general
+  // `stream.Duplex` (it is a real net.Socket at runtime for a plain, non-TLS http.createServer()), and this
+  // set holds both that socket and the plain net.Socket `netConnect` opens upstream.
+  const sockets = new Set<Duplex>()
+  const track = (socket: Duplex): void => {
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
   }
