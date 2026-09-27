@@ -8,7 +8,7 @@ import type { Settings } from '@shared/ipc'
 
 vi.mock('electron')
 
-import { brainDir, classifyIndexBytes, indexUnavailable, readIndex, writeIndex } from './store'
+import { BrainIndexUnavailableError, brainDir, classifyIndexBytes, indexUnavailable, readIndex, writeIndex } from './store'
 
 function futureSchemaIndexBytes(): Buffer {
   const index = {
@@ -24,7 +24,7 @@ function sha256(buf: Buffer): string {
 }
 
 function expectBytesUnchanged(path: string, expectedSha256: string): void {
-  expect(createHash('sha256').update(readFileSync(path)).digest('hex')).toBe(expectedSha256)
+  expect(sha256(readFileSync(path))).toBe(expectedSha256)
 }
 
 describe('future schema index safety', () => {
@@ -52,12 +52,16 @@ describe('future schema index safety', () => {
   it('writeIndex refuses to overwrite a future-schema index', async () => {
     const bytes = futureSchemaIndexBytes()
     writeFileSync(primary, bytes)
-    const before = sha256(bytes)
 
     expect(readIndex(settings).ingested).toEqual({})
     expect(indexUnavailable(settings)).toBe('unsupported')
 
-    await expect(writeIndex(settings, BrainIndexSchema.parse({}))).rejects.toThrow('brain-index-unsupported-version')
-    expectBytesUnchanged(primary, before)
+    const error = await writeIndex(settings, BrainIndexSchema.parse({})).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(BrainIndexUnavailableError)
+    if (!(error instanceof BrainIndexUnavailableError)) throw error
+    expect(error.unavailable).toBe('unsupported')
+    expect(error.message).toContain('brain-index-unsupported-version')
+    expectBytesUnchanged(primary, sha256(bytes))
   })
 })

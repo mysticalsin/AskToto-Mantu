@@ -449,11 +449,19 @@ type IndexLoad =
   | { kind: 'unavailable'; cause: IndexUnavailableCause; detail?: string } // detail: log-only (errno / decode reason)
 type ResolvedIndex = Exclude<IndexLoad, { kind: 'corrupt' }>
 
+// Stable machine-readable refusal codes; the `unavailable` field remains the typed cause.
+const INDEX_UNAVAILABLE_CODE: Record<IndexUnavailableCause, string> = {
+  undecryptable: 'brain-index-undecryptable',
+  io: 'brain-index-io',
+  unsupported: 'brain-index-unsupported-version',
+  'corrupt-kept': 'brain-index-corrupt-kept'
+}
+
 export class BrainIndexUnavailableError extends Error {
   override readonly name = 'BrainIndexUnavailableError'
   // NOT `cause` — that is Error.cause (ES2022).
   constructor(readonly unavailable: IndexUnavailableCause) {
-    super(`brain index is read-only on this device (${unavailable})`)
+    super(`brain index is read-only on this device (${INDEX_UNAVAILABLE_CODE[unavailable]})`)
   }
 }
 
@@ -621,7 +629,6 @@ export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
 /** Fail-closed write: never replaces bytes this process could not fully decode. */
 export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
   const blocked = indexUnavailable(s)
-  if (blocked === 'unsupported') throw new Error('brain-index-unsupported-version')
   if (blocked) throw new BrainIndexUnavailableError(blocked)
   await writeJson(s, INDEX_REL, v)
   indexCache.delete(join(brainDir(s), INDEX_REL))
