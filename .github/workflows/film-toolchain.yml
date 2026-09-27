@@ -2,7 +2,8 @@ name: Film toolchain
 
 # Proves the launch film's render path (M2-0212) on a GitHub-hosted runner, the machine film renders use
 # instead of a developer Mac (D-28): renders the synthetic 5-second 3840x2160 spike with the pinned
-# toolchain, measures render time and runner load, uploads the MP4 with a contact sheet and verifies it.
+# toolchain, runs BRAG step 4's delivery tail on it (poster pick, frame-0 bake), measures render time,
+# bake time and runner load, uploads the MP4 with its poster and a contact sheet, and verifies them.
 on:
   workflow_dispatch:
   push:
@@ -68,10 +69,10 @@ jobs:
           echo "Runner: $ImageOS $ImageVersion, $(nproc) vCPU, $(free -m | awk '/^Mem:/ { print $2 }') MiB memory"
           vmstat -n 1 > "$RUNNER_TEMP/vmstat.log" &
           sampler=$!
-          /usr/bin/time -v -o "$RUNNER_TEMP/time.log" \
+          /usr/bin/time -v -o "$RUNNER_TEMP/render-time.log" \
             npx hyperframes render composition --quality high --output spike.mp4
           kill "$sampler"
-          grep -E 'Elapsed|Percent of CPU|Maximum resident' "$RUNNER_TEMP/time.log"
+          grep -E 'Elapsed|Percent of CPU|Maximum resident' "$RUNNER_TEMP/render-time.log"
           # vmstat's first sample averages since boot, so the render's samples start on line 4.
           awk -v total_kib="$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)" '
             NR > 3 {
@@ -87,6 +88,19 @@ jobs:
                 cpu / samples, cpu_peak, memory_peak / 1024, samples
             }' "$RUNNER_TEMP/vmstat.log"
           echo "Load average after the render: $(cut -d ' ' -f 1-3 /proc/loadavg)"
+      # BRAG step 4's commands at the pinned commit, with its file names changed. The poster beat must be
+      # settled: the title is fully in at 1.0 s, the caption at 1.2 s, and nothing exits.
+      - name: Pick the poster at a settled beat
+        run: ffmpeg -ss 3 -i spike.mp4 -frames:v 1 -q:v 2 poster.jpg
+      - name: Bake the poster as frame 0 and measure the bake
+        run: |
+          /usr/bin/time -v -o "$RUNNER_TEMP/bake-time.log" \
+            ffmpeg -y -i spike.mp4 -i poster.jpg \
+              -filter_complex "[0:v][1:v]overlay=0:0:enable='eq(n,0)'[v]" \
+              -map "[v]" -map 0:a? -c:v libx264 -crf 18 -preset slow -pix_fmt yuv420p \
+              -c:a copy -movflags +faststart spike.poster.mp4 \
+            && mv spike.poster.mp4 spike.mp4
+          grep -E 'Elapsed|Percent of CPU|Maximum resident' "$RUNNER_TEMP/bake-time.log"
       - name: Probe the spike
         run: ffprobe -hide_banner spike.mp4
       - name: Draw a contact sheet of the spike, one frame per second
@@ -96,6 +110,7 @@ jobs:
           name: film-toolchain-spike
           path: |
             film/toolchain/spike.mp4
+            film/toolchain/poster.jpg
             film/toolchain/contact-sheet.png
           if-no-files-found: error
       - name: Verify the spike
