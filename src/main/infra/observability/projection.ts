@@ -2,12 +2,13 @@ import type { RenderProcessGoneDetails } from 'electron'
 import type { AuditEvent } from '../../logger'
 import { OVERLAY_LAYOUTS } from '@shared/overlay-chrome'
 import { RENDERER_VIEWS } from '@shared/renderer-view'
+import { redactSecrets } from '@shared/redact'
 import { CRASH_KINDS, RECOVERY_STATUSES } from './crash-taxonomy'
 
 /**
  * INV-PROJECTED: observability events pass through an event-specific allowlist.
  * INV-CONTENT-FREE: values are kind-checked, and error text is scrubbed before persistence.
- * Residual: this commit declares contracts only; runtime projection logic lands in the next commit.
+ * Residual: unquoted prose that our own code interpolates into an Error message would survive.
  */
 export type ObservabilityEvent = Extract<AuditEvent, `app.${string}` | `sidecar.${string}` | `history.${string}` | 'reveal'>
 export type FieldKind =
@@ -29,7 +30,7 @@ export const REVEAL_OUTCOMES = ['created', 'shown', 'already-visible', 'failed']
 export const SIDECAR_NAMES = ['llama-server', 'fm-serve'] as const
 export const HISTORY_STAGES = ['received', 'served', 'settled'] as const
 export const HISTORY_OUTCOMES = ['ok', 'failed', 'discarded'] as const
-export const RENDER_GONE_REASONS = [
+const RENDER_GONE_REASONS = [
   'clean-exit',
   'abnormal-exit',
   'killed',
@@ -89,6 +90,22 @@ export const OBSERVABILITY_EVENTS = {
     view: RENDERER_VIEWS,
     listening: 'flag'
   },
+  /** Handled boot-step failure; boot continued without that step's work. */
+  'app.error.boot_step': {
+    step: 'token',
+    message: 'errorText',
+    recoveryStatus: RECOVERY_STATUSES
+  },
+  /** Handled window-create failure; the next reveal retries creation. */
+  'app.error.window_create': {
+    message: 'errorText',
+    recoveryStatus: RECOVERY_STATUSES
+  },
+  /** Safe-start path after repeated early deaths. */
+  'app.error.early_death': {
+    consecutive: 'int',
+    recoveryStatus: RECOVERY_STATUSES
+  },
   /** Clean-shutdown marker written at will-quit. */
   'app.shutdown.clean': {
     bootId: 'id',
@@ -124,6 +141,41 @@ export const OBSERVABILITY_EVENTS = {
   /** Overlay renderer stopped answering Chromium. */
   'app.unresponsive': {
     kind: ['overlay']
+  },
+  /** User-visible reveal attempt and outcome. */
+  reveal: {
+    reason: REVEAL_REASONS,
+    isVisible: 'flag',
+    parked: 'flag',
+    layout: OVERLAY_LAYOUTS,
+    outcome: REVEAL_OUTCOMES,
+    ms: 'ms'
+  },
+  /** Long-lived local sidecar spawned. */
+  'sidecar.spawn': {
+    name: SIDECAR_NAMES,
+    pid: 'int',
+    pgid: 'int'
+  },
+  /** Long-lived local sidecar exited. */
+  'sidecar.exit': {
+    name: SIDECAR_NAMES,
+    pid: 'int',
+    pgid: 'int',
+    code: 'int',
+    signal: 'token',
+    uptimeMs: 'ms'
+  },
+  /** History list request timing across renderer and main. */
+  'history.request': {
+    requestId: 'id',
+    stage: HISTORY_STAGES,
+    outcome: HISTORY_OUTCOMES,
+    queueMs: 'ms',
+    mainMs: 'ms',
+    ipcMs: 'ms',
+    renderMs: 'ms',
+    resultCount: 'int'
   }
 } as const satisfies { readonly [E in ObservabilityEvent]: EventFields }
 
@@ -132,15 +184,70 @@ export type ObservabilityDetail<E extends ObservabilityEvent> = {
   readonly [F in keyof (typeof OBSERVABILITY_EVENTS)[E]]?: FieldValue<(typeof OBSERVABILITY_EVENTS)[E][F]> | null
 }
 
-export function isObservabilityEvent(_event: AuditEvent): _event is ObservabilityEvent {
-  // Scaffolding: the real event membership check lands in the next commit (M2-0215).
-  throw new Error('M2-0215: not implemented until the next commit')
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.]{1,32})?$/
+const ISO_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/
+const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
+const URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>]*/gi
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g
+const QUOTED_RE = /"[^"\n]*"|'[^'\n]*'|`[^`\n]*`|“[^”\n]*”|‘[^’\n]*’/g
+const PATH_RE = /(?:\b[A-Za-z]:[\\/]|\\\\|~[\\/]|(?<![\w.])\/)[^'"`\n,;()<>]*/g
+
+export function isObservabilityEvent(event: AuditEvent): event is ObservabilityEvent {
+  return Object.hasOwn(OBSERVABILITY_EVENTS, event)
 }
 
 export function projectEvent(
-  _event: ObservabilityEvent,
-  _detail: Readonly<Record<string, unknown>>
+  event: ObservabilityEvent,
+  detail: Readonly<Record<string, unknown>>
 ): Record<string, unknown> {
-  // Scaffolding: the real scrub/allowlist logic lands in the next commit (M2-0215).
-  throw new Error('M2-0215: not implemented until the next commit')
+  const fields = OBSERVABILITY_EVENTS[event]
+  const projected: Record<string, unknown> = {}
+  for (const [field, kind] of Object.entries(fields)) {
+    const value = detail[field]
+    if (value === undefined) continue
+    if (value === null) {
+      projected[field] = null
+      continue
+    }
+    const admitted = projectValue(kind, value)
+    if (admitted !== undefined) projected[field] = admitted
+  }
+  return projected
+}
+
+function projectValue(kind: FieldKind, value: unknown): unknown {
+  if (Array.isArray(kind)) return typeof value === 'string' && kind.includes(value) ? value : undefined
+  switch (kind) {
+    case 'flag':
+      return typeof value === 'boolean' ? value : undefined
+    case 'int':
+      return Number.isSafeInteger(value) ? value : undefined
+    case 'num':
+      return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+    case 'ms':
+      return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+    case 'id':
+      return typeof value === 'string' && UUID_RE.test(value) ? value : undefined
+    case 'version':
+      return typeof value === 'string' && VERSION_RE.test(value) ? value : undefined
+    case 'isoTime':
+      return typeof value === 'string' && ISO_TIME_RE.test(value) ? value : undefined
+    case 'token':
+      return typeof value === 'string' && TOKEN_RE.test(value) ? value : undefined
+    case 'errorText':
+      return scrubErrorText(value)
+  }
+}
+
+function scrubErrorText(value: unknown): string {
+  const normalized = value instanceof Error ? `${value.name}: ${value.message}` : typeof value === 'string' ? value : String(value)
+  const scrubbed = redactSecrets(normalized)
+    .replace(URL_RE, '<url>')
+    .replace(EMAIL_RE, '<email>')
+    .replace(QUOTED_RE, '<text>')
+    .replace(PATH_RE, '<path>')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return scrubbed.length > MAX_MESSAGE_CHARS ? `${scrubbed.slice(0, MAX_MESSAGE_CHARS - 1)}…` : scrubbed
 }

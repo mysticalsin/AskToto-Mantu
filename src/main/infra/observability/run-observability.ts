@@ -10,7 +10,7 @@
  * importable and testable outside a real Electron process.
  */
 import { beginRunWatch, markAlive, markShutdownClean } from '../../boot-sentinel'
-import type { AuditEvent } from '../../logger'
+import type { AuditSink } from '../../logger'
 import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from './stall-monitor'
 
 type Timer = ReturnType<typeof setInterval>
@@ -28,7 +28,7 @@ export interface RunObservabilityOptions {
   arch: string
   /** UV_THREADPOOL_SIZE as this process started with it (ADR-021); absent or empty means libuv's default. */
   uvThreadpoolSize?: string
-  audit: (event: AuditEvent, detail?: Record<string, unknown>) => void
+  audit: AuditSink
   /** Electron's `powerMonitor` (or any object shaped like it) — pauses the stall monitor's heartbeat
    *  across sleep and resyncs it on resume; see stall-monitor.ts for why both events are needed. Also
    *  restarts that heartbeat on 'unlock-screen' as a fallback for a sleep whose matching 'resume' never
@@ -77,7 +77,8 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
     bootId,
     prevBootId: prior.prevBootId,
     prevShutdown: prior.prevShutdown,
-    prevLastAliveAt: prior.prevLastAliveAt
+    prevLastAliveAt: prior.prevLastAliveAt,
+    uvThreadpoolSize: opts.uvThreadpoolSize || 'default'
   })
 
   const aliveTimer = setIntervalFn(() => {

@@ -25,6 +25,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { auditLog, mainLog } from '../logger'
+import { observeSidecar } from '../infra/observability/sidecar-events'
 import { errMsg } from './shared'
 
 export const FM_BINARY_PATH = '/usr/bin/fm'
@@ -286,6 +287,7 @@ async function spawnAndWaitHealthy(generation: number): Promise<void> {
     stdio: ['ignore', 'pipe', 'pipe']
   })
   child = proc
+  observeSidecar('fm-serve', proc, auditLog)
   let exited = false
   let exitDetail = ''
   let outputTail = ''

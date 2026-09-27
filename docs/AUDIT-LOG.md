@@ -7,9 +7,14 @@ Métis keeps a security audit log separate from the diagnostic log: one JSON rec
 ## What a record carries
 
 Metadata only, never content: event type (`transcript.deleted`, `key.set`, `capture.screen`, …), a
-timestamp, the signed-in actor's email, and event-specific metadata (file basename, provider id,
-counts). Transcript text, prompts, and key material are never written — `auditLog`'s contract and the
-crash path's `redactSecrets` enforce it.
+timestamp, the signed-in actor's email (security and data events), and event-specific metadata (file
+basename, provider id, counts). Transcript text, prompts, and key material are never written —
+`auditLog`'s contract and the crash path's `redactSecrets` enforce it.
+
+## Diagnostic events
+
+`app.*`, `reveal`, `sidecar.*` and `history.*` pass an allowlist projection and carry no actor. Messages
+are scrubbed and capped at 300 chars. The tray's "Copy diagnostics summary" copies counts only.
 
 ## Tamper evidence (MQA-232)
 

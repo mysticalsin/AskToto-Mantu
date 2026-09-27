@@ -26,7 +26,51 @@ export interface RevealTrace {
   trace<T>(reason: RevealReason, reveal: () => T): T
 }
 
-export function createRevealTrace(_opts: RevealTraceOptions): RevealTrace {
-  // Scaffolding: the real reveal tracing state machine lands in the next commit (M2-0215).
-  throw new Error('M2-0215: not implemented until the next commit')
+type Snapshot = { live: boolean; visible: boolean }
+
+export function createRevealTrace(opts: RevealTraceOptions): RevealTrace {
+  const now = opts.now ?? (() => performance.now())
+  return {
+    trace<T>(reason: RevealReason, reveal: () => T): T {
+      const before = snapshot(opts.window())
+      const parked = opts.parked()
+      let layout: OverlayLayout | undefined
+      try {
+        layout = opts.layout()
+      } catch {
+        /* layout is unavailable before settings load */
+      }
+      const startedAt = now()
+      let thrown = false
+      try {
+        return reveal()
+      } catch (error) {
+        thrown = true
+        throw error
+      } finally {
+        const after = snapshot(opts.window())
+        opts.audit('reveal', {
+          reason,
+          isVisible: before.visible,
+          parked,
+          ...(layout !== undefined ? { layout } : {}),
+          outcome: outcome(before, after, thrown),
+          ms: Math.max(0, now() - startedAt)
+        })
+      }
+    }
+  }
+}
+
+function snapshot(window: RevealWindow | null): Snapshot {
+  const live = window !== null && !window.isDestroyed()
+  return { live, visible: live && window.isVisible() }
+}
+
+function outcome(before: Snapshot, after: Snapshot, thrown: boolean): RevealOutcome {
+  if (thrown || !after.live) return 'failed'
+  if (!before.live) return 'created'
+  if (before.visible) return 'already-visible'
+  if (after.visible) return 'shown'
+  return 'failed'
 }

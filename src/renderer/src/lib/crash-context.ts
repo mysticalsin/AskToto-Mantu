@@ -1,16 +1,22 @@
 import type { RendererCrashContext, RendererCrashReport } from '@shared/ipc'
 
-/** Record what App is rendering. Called from App's render body, before any effect can commit stale state. */
-export function noteCrashContext(_context: RendererCrashContext): void {
-  // Scaffolding: the real renderer crash context cache lands in the next commit (M2-0215).
-  throw new Error('M2-0215: not implemented until the next commit')
+let lastContext: RendererCrashContext | null = null
+
+/** Record what App is rendering. Called from App's render body, not an effect: a render that throws never
+ *  commits, so an effect would still hold the previous view — the wrong one when a view switch is what crashed. */
+export function noteCrashContext(context: RendererCrashContext): void {
+  lastContext = context
 }
 
-/** The ErrorBoundary's report: the error plus the last noted context. */
+/** The ErrorBoundary's report: the error plus the last noted context (absent before App first renders). */
 export function crashReport(
-  _error: Error | null | undefined,
-  _componentStack: string | null | undefined
+  error: Error | null | undefined,
+  componentStack: string | null | undefined
 ): RendererCrashReport {
-  // Scaffolding: the real renderer crash report builder lands in the next commit (M2-0215).
-  throw new Error('M2-0215: not implemented until the next commit')
+  return {
+    ...(lastContext ?? {}),
+    message: error?.message ?? 'Unknown renderer error',
+    ...(error?.stack ? { stack: error.stack } : {}),
+    ...(componentStack ? { componentStack } : {})
+  }
 }

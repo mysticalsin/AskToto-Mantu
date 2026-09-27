@@ -33,6 +33,7 @@ import { OperatorGateToast } from './components/OperatorGateToast'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
+import { noteCrashContext } from './lib/crash-context'
 import {
   AUTO_HIDE_GRACE_MS,
   REVEAL_DWELL_MS,
@@ -462,6 +463,8 @@ export function App(): JSX.Element {
   const setView = useCallback((v: View | ((prev: View) => View)): void => {
     startTransition(() => setViewRaw(v))
   }, [])
+  // See crash-context.ts for why this runs in render rather than an effect.
+  noteCrashContext({ view, listening: listen.listening })
 
   // Same #426 hazard as the view-switch fix above, but for the Answer/Copilot chunks themselves — see
   // state.ts useAsk().run()/fail(), which now wrap their first-mount setAnswer in startTransition (the

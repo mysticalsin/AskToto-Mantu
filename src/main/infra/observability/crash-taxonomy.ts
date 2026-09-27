@@ -15,11 +15,13 @@ export const CRASH_KINDS = [
 export type CrashKind = (typeof CRASH_KINDS)[number]
 export const RECOVERY_STATUSES = ['continued', 'retry_pending', 'safe_start'] as const
 
+/** Kinds recorded after the failing process died: the renderer, or the previous main. */
+const FATAL_KINDS: ReadonlySet<CrashKind> = new Set(['render-process-gone', 'boot-early-death'])
+
 /** The app.crash detail for `kind`; `fatal` is decided here and nowhere else (B3-RC1). */
 export function crashDetail(
-  _kind: CrashKind,
-  _facts: Omit<ObservabilityDetail<'app.crash'>, 'kind' | 'fatal'> = {}
+  kind: CrashKind,
+  facts: Omit<ObservabilityDetail<'app.crash'>, 'kind' | 'fatal'> = {}
 ): ObservabilityDetail<'app.crash'> {
-  // Scaffolding: the real fatal-kind decision logic lands in the next commit (M2-0215).
-  throw new Error('M2-0215: not implemented until the next commit')
+  return { ...facts, kind, fatal: FATAL_KINDS.has(kind) }
 }

@@ -9,13 +9,27 @@ export interface SidecarProcess {
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown
 }
 
-/** Audit a sidecar's spawn and its exit, paired by pid; exit can be absent if the app exits first. */
+/** Audit a sidecar's spawn and its exit, paired by pid. `pgid` is null: every sidecar today shares the main
+ *  process's group (non-detached spawn; Node exposes no getpgid) — M2-0028's supervisor will lead its own.
+ *  Exit can land after `app.shutdown.clean`, or never land because the process exits first. */
 export function observeSidecar(
-  _name: SidecarName,
-  _child: SidecarProcess,
-  _audit: AuditSink,
-  _clock = (): number => performance.now()
+  name: SidecarName,
+  child: SidecarProcess,
+  audit: AuditSink,
+  clock = (): number => performance.now()
 ): void {
-  // Scaffolding: the real sidecar lifecycle audit logic lands in the next commit (M2-0215).
-  throw new Error('M2-0215: not implemented until the next commit')
+  const pid = child.pid
+  if (pid === undefined) return
+  const startedAt = clock()
+  audit('sidecar.spawn', { name, pid, pgid: null })
+  child.once('exit', (code, signal) => {
+    audit('sidecar.exit', {
+      name,
+      pid,
+      pgid: null,
+      code,
+      signal,
+      uptimeMs: Math.max(0, clock() - startedAt)
+    })
+  })
 }

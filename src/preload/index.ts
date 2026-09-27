@@ -61,6 +61,9 @@ import {
   type ImportAudioPickResult,
   type ImportAudioProgress,
   type ImportAssetsProgress,
+  type HistorySettled,
+  type HistoryTrace,
+  type RendererCrashReport,
   type AsrAssetsStatus,
   type ImportJobView,
   type LocalModelSummary,
@@ -318,7 +321,7 @@ const api = {
   // string to surface a failure (e.g. a deleted/unmounted meetings folder), not just fire-and-forget it.
   openMeetingsFolder: (): Promise<string> => ipcRenderer.invoke(IPC.openPath),
   openBrainForClaude: (): Promise<{ ok: boolean; path: string }> => ipcRenderer.invoke(IPC.openBrainForClaude),
-  recallList: (): Promise<MeetingSummary[]> => ipcRenderer.invoke(IPC.recallList),
+  recallList: (trace?: HistoryTrace): Promise<MeetingSummary[]> => ipcRenderer.invoke(IPC.recallList, trace),
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
   recallRead: (file: string): Promise<RecallReadResult> => ipcRenderer.invoke(IPC.recallRead, file),
@@ -444,8 +447,8 @@ const api = {
   parkAfterHide: (force = false): Promise<void> => ipcRenderer.invoke(IPC.overlayParkAfterHide, force === true),
   // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
   // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
-  reportCrash: (message: string, stack?: string, componentStack?: string): Promise<void> =>
-    ipcRenderer.invoke(IPC.rendererCrash, { message, stack, componentStack }),
+  reportHistorySettled: (settled: HistorySettled): Promise<void> => ipcRenderer.invoke(IPC.historySettled, settled),
+  reportCrash: (report: RendererCrashReport): Promise<void> => ipcRenderer.invoke(IPC.rendererCrash, report),
   hide: (): Promise<void> => ipcRenderer.invoke(IPC.windowHide),
   toggle: (): Promise<void> => ipcRenderer.invoke(IPC.windowToggle),
   quit: (): Promise<void> => ipcRenderer.invoke(IPC.windowQuit),
