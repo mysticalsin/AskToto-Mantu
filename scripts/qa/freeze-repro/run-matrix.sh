@@ -67,7 +67,15 @@ redact_string() {
 }
 
 sha256_file() {
-  shasum -a 256 "$1" | awk '{print $1}'
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+    return
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+    return
+  fi
+  fail "no sha256 tool available"
 }
 
 resolve_exe() {
@@ -139,6 +147,9 @@ sample_pid() {
   local label=$2
   local raw="$SAMPLE_DIR/${label}.raw.sample.txt"
   local redacted="$SAMPLE_DIR/${label}.sample.txt"
+  if ! command -v /usr/bin/sample >/dev/null 2>&1; then
+    return 1
+  fi
   if ! /usr/bin/sample "$pid" 10 -file "$raw" >/dev/null 2>&1; then
     rm -f "$raw"
     return 1
