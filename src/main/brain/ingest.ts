@@ -95,7 +95,7 @@ import {
   type SourceScan
 } from './inputs'
 import { admitSource, retryStateAfterFailure, reviveExhausted, type WorkTrigger } from '../infra/scheduler/policy'
-import { reportDeferred } from '../infra/scheduler/maintenance'
+import { reportDeferred, runAsMaintenance } from '../infra/scheduler/maintenance'
 
 /** Default ingest waterfall, or the Update Intelligence button's local-first then API-once route. */
 export type IngestRoute = 'default' | 'intelligence-pass'
@@ -1455,7 +1455,7 @@ function hasActiveBackfill(): boolean {
  * all the sidecar can actually do, and it leaves the live path a slot to land on.
  */
 function extractConcurrency(s: Settings, job?: Job): number {
-  if (job?.origin === 'backfill' && job.trigger !== 'user') return 1
+  if (job?.origin === 'backfill' && job.trigger !== 'user' && job.strategy !== 'reconcile') return 1
   return pickProviderCandidates(s)[0]?.provider === 'local' ? 1 : EXTRACT_CONCURRENCY
 }
 
@@ -1491,6 +1491,13 @@ function hasJobsInFlight(): boolean {
 /** Live saves/imports are separate from a historical Index batch, but still need visible status. */
 function hasActiveLiveIngest(): boolean {
   return queue.some((job) => job.origin === 'live') || [...inFlightJobs].some((job) => job.origin === 'live')
+}
+
+function extractionStage(job: Job): Promise<JobResult> {
+  if (job.origin === 'backfill' && job.trigger !== 'user' && job.strategy !== 'reconcile') {
+    return runAsMaintenance(() => runExtractionStage(job))
+  }
+  return runExtractionStage(job)
 }
 
 export function brainLiveIngestProgress(): { pending: number; running: boolean } {
@@ -1978,7 +1985,7 @@ function pump(): void {
     const [job] = queue.splice(idx, 1)
     extracting.add(job)
     inFlightJobs.add(job)
-    void runExtractionStage(job).then((result) => {
+    void extractionStage(job).then((result) => {
       extracting.delete(job)
       pump() // a slot just freed — start the next eligible extraction now, without waiting on this job's ingest
       void withEntityLock(() => finishJob(result))
@@ -2670,7 +2677,7 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
   // Durably clear the exhausted state for everything toUnexhaust just gave back a fresh attempts budget
   // to — same serialized index lane as every other index.json write (see updateIndex's doc comment).
   if (toUnexhaust.length > 0) {
-    updateIndexDetached(s, (i) => {
+    await updateIndex(s, (i) => {
       for (const k of toUnexhaust) {
         if (i.ingested[k]) reviveExhausted(i.ingested[k])
       }

@@ -235,11 +235,11 @@ export function createStorage({
 
   function currentGeneration(path: string): number {
     const entry = writeGenerations.get(path)
-    return entry && entry.expiresAt > performance.now() ? entry.generation : 0
+    return entry && entry.expiresAt > Date.now() ? entry.generation : 0
   }
 
   function bumpGeneration(path: string): void {
-    const now = performance.now()
+    const now = Date.now()
     for (const [key, entry] of writeGenerations) {
       if (entry.expiresAt > now) break
       writeGenerations.delete(key)
@@ -298,7 +298,7 @@ export function createStorage({
   }
 
   function remember(path: string, result: Unread): void {
-    const now = performance.now()
+    const now = Date.now()
     for (const [key, entry] of failures) {
       if (entry.expiresAt > now) break
       failures.delete(key)
@@ -400,7 +400,10 @@ export function createStorage({
         const path = underRoot(base, relPath)
         if (!path) return outsideRoot()
         const remembered = failures.get(path)
-        if (remembered && remembered.expiresAt > performance.now()) return remembered.result
+        if (remembered) {
+          if (remembered.expiresAt > Date.now()) return remembered.result
+          failures.delete(path)
+        }
         const generation = currentGeneration(path)
         const request = openRequest(CONTENT_DEADLINE_MS, signal)
         try {

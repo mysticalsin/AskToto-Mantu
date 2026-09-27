@@ -765,13 +765,13 @@ export async function appendDebrief(
   const safeName = safeMeetingBasename(file)
   if (!safeName) return { ok: false, error: 'Invalid meeting file name.' }
   const path = join(folder, safeName)
-  if (!existsSync(path)) return { ok: false, error: 'Meeting file not found.' }
   let md: string
-  try {
-    md = readSavedFile(path)
-  } catch {
+  const read = await storageAt(folder).read(safeName)
+  if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
+  if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
   }
+  md = decodeSaved(read.bytes)
   if (!/^type: meeting-transcript$/m.test(md)) return { ok: false, error: 'Not a meeting transcript.' }
   const safeText = escapeHeadingLines(text.trim())
   const section =
