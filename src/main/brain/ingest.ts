@@ -1417,6 +1417,14 @@ export function whenIndexWritesSettle(): Promise<void> {
   )
 }
 
+/**
+ * Resolve once queue-drain tail work has fully settled, including any drain task scheduled by the
+ * previous task's own completion handlers.
+ */
+export async function whenDrainSettles(): Promise<void> {
+  while (drainTask) await drainTask.catch(() => {})
+}
+
 /** Record any derived-brain mutation so both Intelligence surfaces can refresh same-count changes. */
 export function markBrainChanged(s: Settings = getSettings()): Promise<void> {
   return updateIndex(s, (idx) => {
@@ -1829,7 +1837,6 @@ const pendingDrainCallbacks: Array<() => void | Promise<void>> = []
  *  else in flight) has actually finished. */
 function registerDrainCallback(cb?: () => void | Promise<void>): void {
   if (!cb) return
-  mainLog.error('[M2-0031-DIAG] registerDrainCallback queued', { pendingBefore: pendingDrainCallbacks.length, queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey), rebuildStarting, rebuildReplayQueued, hasRebuildReplayTask: !!rebuildReplayTask })
   pendingDrainCallbacks.push(cb)
   maybeFinishDrain()
 }
@@ -1851,7 +1858,6 @@ function maybeFinishBackfill(): void {
       completionError(error instanceof PublicationFailure ? 'publication-failed' : 'write-failed')
       mainLog.error('[brain] backfill finalization failed:', error)
     }).finally(() => {
-      mainLog.error('[M2-0031-DIAG] maybeFinishBackfill clear backfillLintPending', { from: true, to: false })
       backfillLintPending = false
       backfillFinalization = null
       maybeFinishDrain()
@@ -1864,9 +1870,7 @@ function maybeFinishBackfill(): void {
  *  trip this — inFlightJobs and queue both being empty is what makes it "true". */
 function maybeFinishDrain(): void {
   maybeFinishBackfill()
-  mainLog.error('[M2-0031-DIAG] maybeFinishDrain check', { queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey), backfillScans, rebuildStarting, backfillLintPending, hasBackfillFinalization: !!backfillFinalization, hasDrainTask: !!drainTask, pendingDrainCallbacks: pendingDrainCallbacks.length })
   if (queue.length === 0 && inFlightJobs.size === 0 && backfillScans === 0 && !rebuildStarting && !backfillLintPending && !backfillFinalization && !drainTask) {
-    mainLog.error('[M2-0031-DIAG] maybeFinishDrain starting drainTask', { pendingDrainCallbacks: pendingDrainCallbacks.length })
     // A just-saved meeting persists `backfillRequested` before its background job starts so a quit or
     // crash cannot strand it. Once every job truly drains, clear that durable marker only when none of
     // the persisted records remain failed/pending. A failed job therefore survives restart and the next
@@ -1888,7 +1892,6 @@ function maybeFinishDrain(): void {
       }
       while (pendingDrainCallbacks.length > 0 && queue.length === 0 && inFlightJobs.size === 0) {
         const cbs = pendingDrainCallbacks.splice(0, pendingDrainCallbacks.length)
-        mainLog.error('[M2-0031-DIAG] maybeFinishDrain running callbacks', { count: cbs.length })
         for (const cb of cbs) {
           try {
             await cb()
@@ -1902,7 +1905,6 @@ function maybeFinishDrain(): void {
       completionError('write-failed')
       mainLog.error('[brain] queue drain failed:', error)
     }).finally(() => {
-      mainLog.error('[M2-0031-DIAG] maybeFinishDrain clearing drainTask', { pendingDrainCallbacks: pendingDrainCallbacks.length, queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey) })
       drainTask = null
       maybeStartSourceRefresh()
       maybeCompleteBackfillRun()
@@ -1945,11 +1947,9 @@ function pump(): void {
     if (extracting.size > 0 && extractConcurrency(s ?? getSettings()) <= extracting.size) break
     loggedNoProviderStall = false
     const [job] = queue.splice(idx, 1)
-    mainLog.error('[M2-0031-DIAG] pump job start', { key: jobKey(job), origin: job.origin, strategy: job.strategy, queueKeys: queue.map(jobKey), extracting: extracting.size, inFlightKeys: [...inFlightJobs].map(jobKey) })
     extracting.add(job)
     inFlightJobs.add(job)
     void runExtractionStage(job).then((result) => {
-      mainLog.error('[M2-0031-DIAG] pump extraction finished', { key: jobKey(job), ok: result.ok, notOnDevice: !result.ok && 'notOnDevice' in result, extracting: extracting.size, inFlightKeys: [...inFlightJobs].map(jobKey) })
       extracting.delete(job)
       pump() // a slot just freed — start the next eligible extraction now, without waiting on this job's ingest
       void withEntityLock(() => finishJob(result))
@@ -1961,7 +1961,6 @@ function pump(): void {
         // this is belt-and-suspenders.
         .catch((e) => mainLog.error('[brain] unexpected error finishing a brain ingest job:', e))
         .finally(() => {
-          mainLog.error('[M2-0031-DIAG] pump job finish', { key: jobKey(job), queueKeys: queue.map(jobKey), extracting: extracting.size, inFlightKeysBeforeDelete: [...inFlightJobs].map(jobKey) })
           inFlightJobs.delete(job)
           pump() // this job's ingest just completed — re-check for a drain, and for newly-eligible backfill work
         })
@@ -2063,11 +2062,8 @@ const REPLAY_FAILED_WARNING_PREFIX = 'Rebuild could not re-apply your saved corr
  * task must not touch) would fail typecheck — the warnings list is the existing, renderer-safe surface.
  */
 export function finishRebuildReplay(s: Settings): Promise<void> {
-  mainLog.error('[M2-0031-DIAG] finishRebuildReplay entry', { hasRebuildReplayTask: !!rebuildReplayTask, rebuildReplayQueued, queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey) })
   if (rebuildReplayTask) return rebuildReplayTask
-  mainLog.error('[M2-0031-DIAG] finishRebuildReplay set rebuildReplayTask', { from: false, to: true })
   rebuildReplayTask = performRebuildReplay(s).finally(() => {
-    mainLog.error('[M2-0031-DIAG] finishRebuildReplay clear rebuildReplayTask', { from: true, to: false })
     rebuildReplayTask = null
     maybeCompleteBackfillRun()
   })
@@ -2076,13 +2072,10 @@ export function finishRebuildReplay(s: Settings): Promise<void> {
 
 /** One replay callback per drain, including a boot resume coalescing an already-running replay. */
 function replayAfterDrain(s: Settings, onFinished?: () => void | Promise<void>): (() => Promise<void>) | undefined {
-  mainLog.error('[M2-0031-DIAG] replayAfterDrain entry', { rebuildReplayQueued, hasRebuildReplayTask: !!rebuildReplayTask, hasOnFinished: !!onFinished })
   if (rebuildReplayQueued || rebuildReplayTask) return undefined
-  mainLog.error('[M2-0031-DIAG] replayAfterDrain set rebuildReplayQueued', { from: false, to: true })
   rebuildReplayQueued = true
   return async () => {
     try { await finishRebuildReplay(s) } finally {
-      mainLog.error('[M2-0031-DIAG] replayAfterDrain clear rebuildReplayQueued', { from: true, to: false })
       rebuildReplayQueued = false
       await onFinished?.()
     }
@@ -2091,11 +2084,9 @@ function replayAfterDrain(s: Settings, onFinished?: () => void | Promise<void>):
 
 async function startReplayBackfill(s: Settings, options: BackfillStartOptions, onFinished?: () => void | Promise<void>): Promise<BackfillStartResult> {
   const callback = replayAfterDrain(s, onFinished)
-  mainLog.error('[M2-0031-DIAG] startReplayBackfill entry', { options, hasCallback: !!callback, queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey), rebuildReplayQueued, hasRebuildReplayTask: !!rebuildReplayTask })
   try { return await startBackfill(callback, options) } catch (error) {
     // startBackfill registers its callback only AFTER scanning. A failed scan must not leave a phantom
     // queued replay that prevents a later repaired-folder retry from registering the real callback.
-    if (callback) mainLog.error('[M2-0031-DIAG] startReplayBackfill clear rebuildReplayQueued after scan failure', { from: true, to: false })
     if (callback) rebuildReplayQueued = false
     completionError('scan-failed')
     throw new BackfillScanFailure(error)
@@ -2121,7 +2112,6 @@ async function performRebuildReplay(s: Settings): Promise<void> {
   }
   // Page regeneration is part of replay completion. Keep the durable replay marker until it succeeds,
   // so a retry regenerates ALL entity pages rather than mistakenly publishing only index pages.
-  mainLog.error('[M2-0031-DIAG] performRebuildReplay before publishAll', { ingestedKeys: Object.keys(readIndex(s).ingested), replayPending: readIndex(s).replayPending, sourceRefreshRequested: readIndex(s).sourceRefreshRequested })
   await trackedPublication(() => publishAll(s))
   const scan = await scanMeetingSources(s)
   await updateIndex(s, (i) => {
@@ -2192,13 +2182,9 @@ function rebuildWorkBusy(): boolean {
 export async function startRebuild(s: Settings, options: StartRebuildOptions = {}): Promise<{ queued: number; error?: string }> {
   // Own asynchronous preflight as well as the queue. A second rebuild must not purge active work or
   // have its onFinished lifecycle owner dropped by the already-queued replay callback.
-  mainLog.error('[M2-0031-DIAG] startRebuild guard check', { options, rebuildStarting, rebuildWorkBusy: rebuildWorkBusy(), queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey), backfillScans, backfillLintPending, hasBackfillFinalization: !!backfillFinalization, hasDrainTask: !!drainTask, rebuildReplayQueued, hasRebuildReplayTask: !!rebuildReplayTask, observerSettling: !!backfillObserver?.settling })
   if (rebuildStarting || rebuildWorkBusy()) return { queued: 0, error: REBUILD_BUSY_ERROR }
-  mainLog.error('[M2-0031-DIAG] startRebuild guard accepted', { options })
-  mainLog.error('[M2-0031-DIAG] startRebuild set rebuildStarting', { from: false, to: true })
   rebuildStarting = true
   try { return await performStartRebuild(s, options) } finally {
-    mainLog.error('[M2-0031-DIAG] startRebuild clear rebuildStarting', { from: true, to: false })
     rebuildStarting = false
     maybeFinishDrain()
   }
@@ -2206,25 +2192,19 @@ export async function startRebuild(s: Settings, options: StartRebuildOptions = {
 
 async function performStartRebuild(s: Settings, options: StartRebuildOptions): Promise<{ queued: number; error?: string }> {
   const beforeEntry = readIndex(s)
-  mainLog.error('[M2-0031-DIAG] performStartRebuild entry', { options, sourceRefreshRequested: beforeEntry.sourceRefreshRequested, replayPending: beforeEntry.replayPending, ingestedKeys: Object.keys(beforeEntry.ingested), rebuildStarting, rebuildWorkBusy: rebuildWorkBusy() })
   // Do not wipe usable derived data just to discover that no configured provider can recreate it.
   if (!hasUsableProvider(s)) {
-    mainLog.error('[M2-0031-DIAG] performStartRebuild no provider', { options })
     return { queued: 0, error: intelligenceNoProviderMessage(s, 'Connect an AI provider in Settings → AI, or enable Métis Local summaries before rebuilding Mantu Intelligence.') }
   }
   const localOnlyError = await localOnlyRebuildBlocked(s)
-  if (localOnlyError) mainLog.error('[M2-0031-DIAG] performStartRebuild local-only blocked', { error: localOnlyError })
   if (localOnlyError) return { queued: 0, error: localOnlyError }
-  mainLog.error('[M2-0031-DIAG] performStartRebuild checking brain inputs local', { options })
   if (!(await brainInputsLocal(s))) return { queued: 0, error: indexUnavailableMessage('cloud-only') }
   await loadIndex(s)
   const before = readIndex(s)
-  mainLog.error('[M2-0031-DIAG] performStartRebuild before purge snapshot', { sourceRefreshRequested: before.sourceRefreshRequested, replayPending: before.replayPending, ingestedKeys: Object.keys(before.ingested), revision: before.revision })
   const preserveSourceRefresh = options.sourceRefresh || before.sourceRefreshRequested
   if (preserveSourceRefresh) observeSourceRefreshWork(before)
   // Fix 2 (sync guard): a corrupt/blocked journal fails the gate — refuse before touching the store.
   const gate = await readCorrectionsJournalSafe(s)
-  mainLog.error('[M2-0031-DIAG] performStartRebuild journal gate', { ok: gate.ok, error: gate.ok ? undefined : gate.error })
   if (!gate.ok) return { queued: 0, error: gate.error }
   // MQA-046: an index.json write can still be mid tmp+rename right now — maybeFinishDrain fires a
   // DETACHED one and calls maybeStartSourceRefresh on the very next statement, so purgeBrain's rmSync
@@ -2236,13 +2216,11 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   // last writer; everything queued after this point is startRebuild's own work on the fresh store.
   await whenIndexWritesSettle()
   // Live work can arrive while integrity/journal checks await IO. Refuse before the destructive step.
-  mainLog.error('[M2-0031-DIAG] performStartRebuild pre-purge busy guard', { rebuildWorkBusy: rebuildWorkBusy(), queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey), backfillScans, backfillLintPending, hasBackfillFinalization: !!backfillFinalization, hasDrainTask: !!drainTask, rebuildReplayQueued, hasRebuildReplayTask: !!rebuildReplayTask, observerSettling: !!backfillObserver?.settling })
   if (rebuildWorkBusy()) return { queued: 0, error: REBUILD_BUSY_ERROR }
   // Fix F: preserveCorrections copies the journal to escrow and restores it even if the wipe fails —
   // check the result and abort (nothing re-extracted, corrections safe) rather than rebuild atop a
   // half-deleted store.
   const purge = purgeBrain(s, { preserveCorrections: true })
-  mainLog.error('[M2-0031-DIAG] performStartRebuild purge result', { ok: purge.ok })
   if (!purge.ok) {
     return {
       queued: 0,
@@ -2260,10 +2238,8 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   })
   {
     const afterPurge = readIndex(s)
-    mainLog.error('[M2-0031-DIAG] performStartRebuild after purge index reset', { ingestedKeys: Object.keys(afterPurge.ingested), replayPending: afterPurge.replayPending, sourceRefreshRequested: afterPurge.sourceRefreshRequested, revision: afterPurge.revision })
   }
   const r = await startReplayBackfill(s, { allowSourceRefresh: true }, options.onFinished)
-  mainLog.error('[M2-0031-DIAG] performStartRebuild startReplayBackfill result', { queued: r.queued, deferred: r.deferred, preparing: r.preparing, upToDate: r.upToDate })
   return { queued: r.queued }
 }
 
@@ -2295,18 +2271,14 @@ export async function requestSourceRefresh(s: Settings = getSettings()): Promise
 }
 
 function maybeStartSourceRefresh(): void {
-  mainLog.error('[M2-0031-DIAG] maybeStartSourceRefresh entry', { sourceRefreshRunning, rebuildStarting, rebuildWorkBusy: rebuildWorkBusy(), queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey) })
   if (sourceRefreshRunning || rebuildStarting || rebuildWorkBusy()) return
   const s = getSettings()
   const idx = readIndex(s)
-  mainLog.error('[M2-0031-DIAG] maybeStartSourceRefresh index gate', { sourceRefreshRequested: idx.sourceRefreshRequested, replayPending: idx.replayPending, hasUsableProvider: hasUsableProvider(s), ingestedKeys: Object.keys(idx.ingested) })
   if (!idx.sourceRefreshRequested || idx.replayPending || !hasUsableProvider(s)) return
-  mainLog.error('[M2-0031-DIAG] maybeStartSourceRefresh set sourceRefreshRunning', { from: false, to: true })
   sourceRefreshRunning = true
   void startRebuild(s, {
     sourceRefresh: true,
     onFinished: () => {
-      mainLog.error('[M2-0031-DIAG] maybeStartSourceRefresh onFinished clear sourceRefreshRunning', { from: true, to: false })
       sourceRefreshRunning = false
       clearSourceRefreshWork()
       maybeStartSourceRefresh()
@@ -2315,7 +2287,6 @@ function maybeStartSourceRefresh(): void {
   })
     .then((result) => {
       if (!result.error) return
-      mainLog.error('[M2-0031-DIAG] maybeStartSourceRefresh result error clear sourceRefreshRunning', { from: true, to: false, error: result.error })
       sourceRefreshRunning = false
       clearSourceRefreshWork()
       completionError('incomplete')
@@ -2323,7 +2294,6 @@ function maybeStartSourceRefresh(): void {
       maybeCompleteBackfillRun()
     })
     .catch((error) => {
-      mainLog.error('[M2-0031-DIAG] maybeStartSourceRefresh catch clear sourceRefreshRunning', { from: true, to: false })
       sourceRefreshRunning = false
       clearSourceRefreshWork()
       completionError(error instanceof BackfillScanFailure ? 'scan-failed' : 'write-failed')
@@ -2418,16 +2388,13 @@ export async function requestBackfillRun(options: BackfillStartOptions = {}, bef
     const idx = (await loadIndex(observer.s)).kind === 'ready' ? readIndex(observer.s) : undefined
     if (sourceRefreshRunning) observeClaimedSourceRefreshWork(sourceRefreshWorkKeys)
     if (idx?.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
-    mainLog.error('[M2-0031-DIAG] requestBackfillRun after requestBackfill', { result: run.result, idxReplayPending: idx?.replayPending, sourceRefreshRunning, observerSourceKeys: [...observer.sources.keys()], queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey) })
     if (run.result.deferred) completionError('no-provider')
     // A capped request can return "preparing" without dispatching anything. That is not completed work.
     if (run.result.preparing && backfillScans === 0 && !sourceRefreshRunning && !rebuildStarting && !rebuildReplayTask && !hasActiveBackfill() && !backfillLintPending) completionError('incomplete')
   } catch (error) {
-    mainLog.error('[M2-0031-DIAG] requestBackfillRun caught request error', { options, observerSourceKeys: [...observer.sources.keys()], queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey) })
     completionError('scan-failed')
     mainLog.error('[brain] backfill request scan failed:', error)
   } finally {
-    mainLog.error('[M2-0031-DIAG] requestBackfillRun finalizing prepare state', { backfillScans, sourceRefreshRunning, rebuildStarting, hasRebuildReplayTask: !!rebuildReplayTask, activeBackfill: hasActiveBackfill(), backfillLintPending, observerSourceKeys: [...observer.sources.keys()] })
     observer.preparing = backfillScans > 0
     maybeFinishDrain()
   }
@@ -2452,7 +2419,6 @@ function maybeCompleteBackfillRun(): void {
   if (!observer || observer.settling) return
   const busy = (): boolean => observer.preparing || backfillScans > 0 || observer.gates > 0 || sourceRefreshRunning || rebuildStarting || !!drainTask || !!backfillFinalization || !!rebuildReplayTask || inFlightJobs.size > 0
   const providerBlocked = (): boolean => queue.length > 0 && !hasUsableProvider(getSettings()) && queue.every((job) => job.origin === 'backfill' && job.strategy !== 'reconcile')
-  mainLog.error('[M2-0031-DIAG] maybeCompleteBackfillRun check', { observerSourceKeys: [...observer.sources.keys()], observerPreparing: observer.preparing, observerGates: observer.gates, observerPublished: observer.published, observerError: observer.error, busy: busy(), providerBlocked: providerBlocked(), queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey), sourceRefreshRunning, rebuildStarting, hasDrainTask: !!drainTask, hasBackfillFinalization: !!backfillFinalization, hasRebuildReplayTask: !!rebuildReplayTask })
   if (busy() || (queue.length > 0 && !providerBlocked())) return
   observer.settling = true
   void (async () => {
@@ -2504,7 +2470,6 @@ function maybeCompleteBackfillRun(): void {
 
 function finishCompletionObserver(observer: BackfillObserver): void {
   if (backfillObserver !== observer) return
-  mainLog.error('[M2-0031-DIAG] finishCompletionObserver resolving', { observerError: observer.error, total: observer.sources.size, failed: [...observer.sources.values()].filter(Boolean).length, sourceKeys: [...observer.sources.keys()] })
   backfillObserver = null
   observer.resolve({ ok: !observer.error, ...(observer.error ? { error: observer.error } : {}), total: observer.sources.size, failed: [...observer.sources.values()].filter(Boolean).length })
 }
@@ -2514,20 +2479,15 @@ let scanLane: Promise<unknown> = Promise.resolve()
 /** Queues every not-yet-ingested local transcript. Scans run one at a time, so a re-entrant call tops up
  *  the queue from the state the previous one left. */
 export function startBackfill(onDrained?: () => void | Promise<void>, options: BackfillStartOptions = {}): Promise<BackfillStartResult> {
-  mainLog.error('[M2-0031-DIAG] startBackfill entry', { options, hasOnDrained: !!onDrained, backfillScansBefore: backfillScans, queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey) })
-  mainLog.error('[M2-0031-DIAG] startBackfill increment backfillScans', { from: backfillScans, to: backfillScans + 1 })
   backfillScans += 1
   const run = scanLane.then(async () => {
     const result = await scanAndQueue(options)
-    mainLog.error('[M2-0031-DIAG] startBackfill scanAndQueue result', { queued: result.queued, deferred: result.deferred, preparing: result.preparing, upToDate: result.upToDate, queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey) })
     registerDrainCallback(onDrained)
     return result
   })
   scanLane = run.catch(() => {})
   return run.finally(() => {
-    mainLog.error('[M2-0031-DIAG] startBackfill decrement backfillScans', { from: backfillScans, to: backfillScans - 1 })
     backfillScans -= 1
-    if (backfillScans === 0 && backfillObserver) mainLog.error('[M2-0031-DIAG] startBackfill clear observer preparing', { from: backfillObserver.preparing, to: false })
     if (backfillScans === 0 && backfillObserver) backfillObserver.preparing = false
     maybeFinishDrain()
   })
@@ -2535,14 +2495,12 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
 
 async function scanAndQueue(options: BackfillStartOptions = {}): Promise<BackfillStartResult> {
   const s = getSettings()
-  mainLog.error('[M2-0031-DIAG] scanAndQueue entry', { options, queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey), backfillTotal, backfillDone, backfillFailed })
   // M2-0003: an unreadable index.json must never be treated as "nothing left to index" — that empty
   // stand-in would otherwise trigger a full re-extraction of every meeting. Covers resume, reconcile,
   // consolidation, the intelligence pass, dashboard-open and the Index-meetings click: this and
   // enqueueIngest are the only two `queue.push` sites.
   if ((await loadIndex(s)).kind === 'unavailable') return { queued: 0 }
   const scan = await scanMeetingSources(s)
-  mainLog.error('[M2-0031-DIAG] scanAndQueue scan complete', { sourceKeys: scan.flatMap((folder) => folder.sources).map((source) => source.key), failedFolders: scan.filter((folder) => folder.status === 'failed').length })
   if (!(await brainInputsLocal(s, scan))) return { queued: 0 }
   const extractions = await listBrainNames(s, 'meetings')
   const extractedSlugs = new Set((extractions ?? []).filter((n) => n.endsWith('.json')).map((n) => n.replace(/\.json$/, '')))
@@ -2551,9 +2509,7 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
   const route = options.route ?? 'default'
   const providerAvailable =
     route === 'intelligence-pass' ? pickIntelligencePassCandidates(s).length > 0 : hasUsableProvider(s)
-  mainLog.error('[M2-0031-DIAG] scanAndQueue provider and index state', { route, providerAvailable, sourceRefreshRequested: idx.sourceRefreshRequested, replayPending: idx.replayPending, ingestedKeys: Object.keys(idx.ingested), extractedSlugs: [...extractedSlugs] })
   if (!options.force && !options.allowSourceRefresh && (idx.sourceRefreshRequested || hasSourceDrift(scan, idx))) {
-    mainLog.error('[M2-0031-DIAG] scanAndQueue source refresh gate return', { force: !!options.force, allowSourceRefresh: !!options.allowSourceRefresh, sourceRefreshRequested: idx.sourceRefreshRequested, hasSourceDrift: hasSourceDrift(scan, idx), providerAvailable })
     void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
     return providerAvailable ? { queued: 0 } : { queued: 0, deferred: 'no-provider' }
   }
@@ -2566,7 +2522,6 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
   // content, but checking it unconditionally is simpler than branching on origin and costs nothing).
   const inFlight = new Set(queue.map(jobKey))
   for (const j of inFlightJobs) inFlight.add(jobKey(j))
-  mainLog.error('[M2-0031-DIAG] scanAndQueue skip sets', { alreadyKeys: [...already], inFlightKeys: [...inFlight] })
   // A fresh run: no backfill-origin work left queued or in flight from a previous batch. Reset the
   // progress counters here rather than accumulate onto a finished run's stale total/done — otherwise a
   // live meeting save processed after backfill #1 finished (which left backfillTotal > 0 behind) would
@@ -2650,20 +2605,16 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
   // Accumulate rather than overwrite: a re-entrant call must extend an in-flight backfill's progress
   // tracking, not reset it out from under the jobs already queued.
   if (candidates.length > 0) {
-    mainLog.error('[M2-0031-DIAG] scanAndQueue set backfillLintPending', { from: backfillLintPending, to: true, candidateKeys: candidates.map(jobKey) })
     backfillLintPending = true
     if (backfillObserver) backfillObserver.published = false
   }
-  mainLog.error('[M2-0031-DIAG] scanAndQueue queue decision', { candidateKeys: candidates.map(jobKey), candidateCount: candidates.length, deferredByProvider, notOnDevice, toUnexhaust, providerAvailable, backfillInFlight, hasActiveLiveIngest: hasActiveLiveIngest(), sourceKeys: scan.flatMap((folder) => folder.sources).map((source) => source.key) })
   backfillTotal += candidates.length
   queue.push(...candidates)
-  mainLog.error('[M2-0031-DIAG] scanAndQueue after queue push', { queueKeys: queue.map(jobKey), backfillTotal, backfillDone, backfillFailed })
   pump()
   // There is nothing to resume when every historical meeting was already indexed, or when the only
   // matching meeting is currently being handled by automatic live ingestion. The request flag was set
   // above before scanning, so clear it again through the same serialized index lane.
   if (providerAvailable && candidates.length === 0 && !backfillInFlight && !hasActiveLiveIngest()) {
-    mainLog.error('[M2-0031-DIAG] scanAndQueue zero candidates clearing request check', { providerAvailable, backfillInFlight, hasActiveLiveIngest: hasActiveLiveIngest(), sourceKeys: scan.flatMap((folder) => folder.sources).map((source) => source.key), ingestedKeys: Object.keys(idx.ingested), queueKeys: queue.map(jobKey), inFlightKeys: [...inFlightJobs].map(jobKey) })
     updateIndexDetached(s, (i) => {
       if (!backfillObserver && !hasIncompleteSource(scan, i)) i.backfillRequested = false
     })

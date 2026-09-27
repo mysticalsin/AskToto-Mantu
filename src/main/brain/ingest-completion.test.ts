@@ -10,7 +10,7 @@ import * as brainStore from './store'
 import * as brainLedger from './ledger'
 import * as publish from './publish'
 import { MeetingExtractionSchema } from '@shared/brain'
-import { requestBackfillRun, requestSourceRefresh, resumeBackfillIfPending, startBackfill, startRebuild, enqueueIngest, brainBackfillProgress, whenIndexWritesSettle } from './ingest'
+import { requestBackfillRun, requestSourceRefresh, resumeBackfillIfPending, startBackfill, startRebuild, enqueueIngest, brainBackfillProgress, whenDrainSettles, whenIndexWritesSettle } from './ingest'
 
 vi.mock('electron')
 vi.mock('../llm', () => ({ createStream: vi.fn() }))
@@ -59,6 +59,7 @@ describe('backfill run completion observes real work', () => {
     setSettings({ meetingsFolder: folder, teamTranscriptFolders: [] })
     await startBackfill(undefined, { force: true })
     await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
+    await whenDrainSettles()
     await whenIndexWritesSettle()
     rmSync(profile, { recursive: true, force: true })
     rmSync(folder, { recursive: true, force: true })
