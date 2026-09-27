@@ -1298,6 +1298,7 @@ let drainTask: Promise<void> | null = null
 let rebuildReplayTask: Promise<void> | null = null
 let rebuildReplayQueued = false
 let rebuildStarting = false
+let sourceRefreshWorkKeys = new Set<string>()
 
 function completionError(error: CompletionError): void {
   const observer = backfillObserver
@@ -1308,6 +1309,15 @@ function completionError(error: CompletionError): void {
 
 function observeSource(key: string): void {
   if (backfillObserver && !backfillObserver.sources.has(key)) backfillObserver.sources.set(key, false)
+}
+
+function observeSourceRefreshWork(idx: BrainIndex): void {
+  sourceRefreshWorkKeys = new Set(
+    Object.entries(idx.ingested)
+      .filter(([, record]) => record.ok)
+      .map(([key]) => key)
+  )
+  for (const key of sourceRefreshWorkKeys) observeSource(key)
 }
 
 class PublicationFailure extends Error {
@@ -2169,6 +2179,7 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   await loadIndex(s)
   const before = readIndex(s)
   const preserveSourceRefresh = options.sourceRefresh || before.sourceRefreshRequested
+  if (preserveSourceRefresh) observeSourceRefreshWork(before)
   // Fix 2 (sync guard): a corrupt/blocked journal fails the gate — refuse before touching the store.
   const gate = await readCorrectionsJournalSafe(s)
   if (!gate.ok) return { queued: 0, error: gate.error }
@@ -2345,9 +2356,7 @@ export async function requestBackfillRun(options: BackfillStartOptions = {}, bef
   try {
     run.result = await requestBackfill(options)
     const idx = (await loadIndex(observer.s)).kind === 'ready' ? readIndex(observer.s) : undefined
-    if (idx?.sourceRefreshRequested || idx?.replayPending) {
-      for (const [key, record] of Object.entries(idx.ingested)) if (record.ok) observeSource(key)
-    }
+    if (sourceRefreshRunning) for (const key of sourceRefreshWorkKeys) observeSource(key)
     if (idx?.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     if (run.result.deferred) completionError('no-provider')
     // A capped request can return "preparing" without dispatching anything. That is not completed work.
