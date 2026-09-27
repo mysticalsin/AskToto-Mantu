@@ -533,15 +533,27 @@ export function ensureV1Backup(settings: Settings): void {
 // ── Typed accessors ──────────────────────────────────────────────────────────
 export const readGraph = (s: Settings): BrainGraph =>
   readJson(s, 'graph.json', (v) => BrainGraphSchema.parse(v)) ?? BrainGraphSchema.parse({})
+export const loadGraph = async (s: Settings): Promise<BrainGraph> => {
+  const loaded = await loadJson(s, 'graph.json', (v) => BrainGraphSchema.parse(v))
+  return loaded.status === 'ok' && loaded.value ? loaded.value : BrainGraphSchema.parse({})
+}
 export const writeGraph = (s: Settings, v: BrainGraph): Promise<void> => writeJson(s, 'graph.json', v)
 
 export const readMeetingExtraction = (s: Settings, fileSlug: string): MeetingExtraction | null =>
   readJson(s, join('meetings', `${fileSlug}.json`), (v) => MeetingExtractionSchema.parse(v))
+export const loadMeetingExtraction = async (s: Settings, fileSlug: string): Promise<MeetingExtraction | null> => {
+  const loaded = await loadJson(s, join('meetings', `${fileSlug}.json`), (v) => MeetingExtractionSchema.parse(v))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writeMeetingExtraction = (s: Settings, fileSlug: string, v: MeetingExtraction): Promise<void> =>
   writeJson(s, join('meetings', `${fileSlug}.json`), v)
 
 export const readPerson = (s: Settings, slug: string): PersonEntity | null =>
   readJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
+export const loadPerson = async (s: Settings, slug: string): Promise<PersonEntity | null> => {
+  const loaded = await loadJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writePerson = async (s: Settings, slug: string, v: PersonEntity): Promise<void> => {
   ensureV1Backup(s)
   await writeJson(s, join('entities', 'person', `${slug}.json`), v)
@@ -551,6 +563,10 @@ export const writePerson = async (s: Settings, slug: string, v: PersonEntity): P
 
 export const readAccount = (s: Settings, slug: string): AccountEntity | null =>
   readJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
+export const loadAccount = async (s: Settings, slug: string): Promise<AccountEntity | null> => {
+  const loaded = await loadJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writeAccount = async (s: Settings, slug: string, v: AccountEntity): Promise<void> => {
   ensureV1Backup(s)
   await writeJson(s, join('entities', 'account', `${slug}.json`), v)
@@ -559,6 +575,10 @@ export const writeAccount = async (s: Settings, slug: string, v: AccountEntity):
 
 export const readDeal = (s: Settings, slug: string): DealEntity | null =>
   readJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
+export const loadDeal = async (s: Settings, slug: string): Promise<DealEntity | null> => {
+  const loaded = await loadJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writeDeal = async (s: Settings, slug: string, v: DealEntity): Promise<void> => {
   ensureV1Backup(s)
   await writeJson(s, join('entities', 'deal', `${slug}.json`), v)
@@ -604,12 +624,20 @@ export function listEntities(s: Settings, kind: 'person' | 'account' | 'deal'): 
     .sort()
 }
 
+export async function loadEntitySlugs(s: Settings, kind: 'person' | 'account' | 'deal'): Promise<string[]> {
+  return (await listBrainNames(s, join('entities', kind)))?.filter((f) => f.endsWith('.json')).map((f) => basename(f, '.json')).sort() ?? []
+}
+
 export function listMeetingExtractions(s: Settings): string[] {
   const dir = join(brainDir(s), 'meetings')
   if (!existsSync(dir)) return []
   return readdirSync(dir)
     .filter((f) => f.endsWith('.json'))
     .map((f) => basename(f, '.json'))
+}
+
+export async function loadMeetingExtractionSlugs(s: Settings): Promise<string[]> {
+  return (await listBrainNames(s, 'meetings'))?.filter((f) => f.endsWith('.json')).map((f) => basename(f, '.json')) ?? []
 }
 
 /**

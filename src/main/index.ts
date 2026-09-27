@@ -552,17 +552,21 @@ import {
 } from './brain/ledger'
 import { readBrainStatus } from './brain/status'
 import {
-  readGraph as readBrainGraph,
+  loadGraph as loadBrainGraph,
   writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
+  loadPerson as loadBrainPerson,
   writePerson as writeBrainPerson,
   readAccount as readBrainAccount,
+  loadAccount as loadBrainAccount,
   writeAccount as writeBrainAccount,
   readDeal as readBrainDeal,
+  loadDeal as loadBrainDeal,
   writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
-  listMeetingExtractions as listBrainMeetingExtractions,
-  readMeetingExtraction as readBrainMeetingExtraction,
+  loadEntitySlugs as loadBrainEntitySlugs,
+  loadMeetingExtraction as loadBrainMeetingExtraction,
+  loadMeetingExtractionSlugs as loadBrainMeetingExtractionSlugs,
   purgeBrain,
   setDealOutcome,
   slugify as brainSlugify,
@@ -610,6 +614,8 @@ import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-prefere
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
+import { createReloadBudget } from './lifecycle/reload-budget'
+import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './lifecycle/render-loop-halted-dialog'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
@@ -2725,6 +2731,11 @@ function createWindow(targetDisplay?: Electron.Display): void {
     const stallMs = responsiveness.markResponsive()
     if (stallMs !== null) auditLog('app.responsive', { kind: 'overlay', stallMs })
   })
+  const reloadBudget = createReloadBudget()
+  self.webContents.on('did-finish-load', () => {
+    if (win !== self) return
+    reloadBudget.onDidFinishLoad()
+  })
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
   // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
   // dead renderer and the overlay sits permanently blank. Previously this was only logged via
@@ -2780,7 +2791,39 @@ function createWindow(targetDisplay?: Electron.Display): void {
       currentWidth = BAR_WIDTH
     }
     if (win !== self || self.isDestroyed()) return
-    self.loadURL(overlayRendererUrl())
+    const reloadDecision = reloadBudget.onRenderProcessGone(details.reason)
+    if (reloadDecision === 'ignore') return
+    if (reloadDecision === 'halt') {
+      auditLog('app.render_loop_halted', { reason: details.reason, exitCode: details.exitCode })
+      void showRenderLoopHaltedDialog(
+        details.reason,
+        details.exitCode,
+        () => win !== self || self.isDestroyed(),
+        (opts) => dialog.showMessageBox(self, opts),
+        {
+          reload: () => reloadOverlay(self),
+          quit: () => app.quit(),
+          openMeetingsFolder: requireAuth()
+            ? async () => {
+                const openError = await shell.openPath(resolveMeetingsFolder(getSettings()))
+                if (openError) mainLog.warn('[render-loop-halted] open meetings folder failed:', openError)
+              }
+            : undefined,
+          copyDiagnostics: () =>
+            clipboard.writeText(formatRenderLoopDiagnostics({
+              version: app.getVersion(),
+              platform: process.platform,
+              arch: process.arch,
+              packaged: app.isPackaged,
+              reason: details.reason,
+              exitCode: details.exitCode,
+              at: new Date().toISOString()
+            }))
+        }
+      ).catch((err) => mainLog.warn('[render-loop-halted] dialog failed:', err))
+      return
+    }
+    reloadOverlay(self)
   })
   // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
   // The same helper is used by crash recovery, so the parser-time Act 1 shell cannot disappear there.
@@ -3547,6 +3590,14 @@ function persistCrash(kind: string, detail: string, shortMessage: string): void 
   }
 }
 
+function reloadOverlay(target: BrowserWindow): void {
+  target.loadURL(overlayRendererUrl()).catch((err) => {
+    const message = redactSecrets(err instanceof Error ? err.message : String(err))
+    mainLog.error('[renderer-gone] reload failed:', message)
+    auditLog('app.crash', { kind: 'render-process-gone-reload-failed', message })
+  })
+}
+
 let fatalHandled = false
 /**
  * For a fatal exception, offer a ONE-TIME relaunch — but default to "Continue" so a benign async error
@@ -3557,8 +3608,12 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
   persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
   if (kind !== 'uncaughtException' || fatalHandled) return
   fatalHandled = true
+  void showFatalDialog()
+}
+
+async function showFatalDialog(): Promise<void> {
   try {
-    const choice = dialog.showMessageBoxSync({
+    const opts: Electron.MessageBoxOptions = {
       type: 'error',
       title: 'Métis hit a problem',
       message: 'Métis ran into an unexpected error.',
@@ -3566,11 +3621,9 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
       buttons: ['Relaunch Métis', 'Continue'],
       defaultId: 1,
       cancelId: 1
-    })
-    if (choice === 0) {
-      app.relaunch()
-      app.exit(0)
     }
+    const { response } = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+    if (response === 0) exitAndRelaunch()
   } catch {
     /* if the dialog itself fails, leave the app running */
   }
@@ -4205,6 +4258,11 @@ function forceQuitMétis(): void {
   }, EMERGENCY_FORCE_QUIT_GRACE_MS)
   // Never let the watchdog itself be the handle that keeps a quitting process alive.
   emergencyQuitWatchdog.unref?.()
+}
+
+function exitAndRelaunch(): void {
+  app.relaunch()
+  app.exit(0)
 }
 
 function registerEmergencyForceQuitShortcut(): boolean {
@@ -8000,14 +8058,26 @@ function registerIpc(): void {
     const s = getSettings()
     await loadIndex(s)
     const index = readBrainIndex(s)
+    const [graph, personSlugs, accountSlugs, dealSlugs, meetingSlugs] = await Promise.all([
+      loadBrainGraph(s),
+      loadBrainEntitySlugs(s, 'person'),
+      loadBrainEntitySlugs(s, 'account'),
+      loadBrainEntitySlugs(s, 'deal'),
+      loadBrainMeetingExtractionSlugs(s)
+    ])
+    const [people, accounts, deals, meetings] = await Promise.all([
+      Promise.all(personSlugs.map((slug) => loadBrainPerson(s, slug))),
+      Promise.all(accountSlugs.map((slug) => loadBrainAccount(s, slug))),
+      Promise.all(dealSlugs.map((slug) => loadBrainDeal(s, slug))),
+      Promise.all(meetingSlugs.map((slug) => loadBrainMeetingExtraction(s, slug)))
+    ])
     return {
       index,
-      graph: readBrainGraph(s),
-      people: listBrainEntities(s, 'person').map((slug) => readBrainPerson(s, slug)).filter(Boolean),
-      accounts: listBrainEntities(s, 'account').map((slug) => readBrainAccount(s, slug)).filter(Boolean),
-      deals: listBrainEntities(s, 'deal').map((slug) => readBrainDeal(s, slug)).filter(Boolean),
-      meetings: listBrainMeetingExtractions(s)
-        .map((slug) => readBrainMeetingExtraction(s, slug))
+      graph,
+      people: people.filter((person): person is NonNullable<typeof person> => !!person),
+      accounts: accounts.filter((account): account is NonNullable<typeof account> => !!account),
+      deals: deals.filter((deal): deal is NonNullable<typeof deal> => !!deal),
+      meetings: meetings
         .filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
     }
   })
@@ -8015,17 +8085,21 @@ function registerIpc(): void {
   // the renderer's ASR entity-casing bias (lib/entity-casing.ts) so a live transcript can spell a known
   // name correctly. Read-only, best-effort: an unsigned-in/empty brain just yields no names, never throws,
   // since this runs opportunistically (mount + after a meeting saves), not in response to a user action.
-  ipcMain.handle(IPC.brainEntityNames, (e) => {
+  ipcMain.handle(IPC.brainEntityNames, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { names: [] }
     const s = getSettings()
-    const people = listBrainEntities(s, 'person')
-      .map((slug) => readBrainPerson(s, slug)?.name)
-      .filter((n): n is string => !!n)
-    const accounts = listBrainEntities(s, 'account')
-      .map((slug) => readBrainAccount(s, slug)?.name)
-      .filter((n): n is string => !!n)
-    return { names: Array.from(new Set([...people, ...accounts])).slice(0, 500) }
+    const [personSlugs, accountSlugs] = await Promise.all([
+      loadBrainEntitySlugs(s, 'person'),
+      loadBrainEntitySlugs(s, 'account')
+    ])
+    const [people, accounts] = await Promise.all([
+      Promise.all(personSlugs.map((slug) => loadBrainPerson(s, slug))),
+      Promise.all(accountSlugs.map((slug) => loadBrainAccount(s, slug)))
+    ])
+    const personNames = people.map((person) => person?.name).filter((n): n is string => !!n)
+    const accountNames = accounts.map((account) => account?.name).filter((n): n is string => !!n)
+    return { names: Array.from(new Set([...personNames, ...accountNames])).slice(0, 500) }
   })
   // Deal outcome — the human closes the loop the LLM never may (see DealEntitySchema.outcome). Main-window
   // only: it's a brain WRITE, like brainCommitmentSettle. Same slug convention too: the renderer sends the
@@ -8191,12 +8265,12 @@ function registerIpc(): void {
 
   // Task MI-3: two read-only channels feeding the CRM record pages, the Review.tsx entity strip, and the
   // needs-attention queue. Same guard pattern as the other brain reads — no audit event (nothing mutates).
-  ipcMain.handle(IPC.brainMeetingExtraction, (e, raw) => {
+  ipcMain.handle(IPC.brainMeetingExtraction, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) return null
     const parsed = MeetingExtractionQuerySchema.safeParse(raw)
     if (!parsed.success) return null
-    return readBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
+    return loadBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
   })
   ipcMain.handle(IPC.brainAttention, async (e) => {
     assertMainWindow(e)
