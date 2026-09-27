@@ -8817,8 +8817,7 @@ protocol.registerSchemesAsPrivileged([
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () =>
-    reveals.trace('second-instance', () => {
+  app.on('second-instance', () => reveals.trace('second-instance', () => {
     // Relaunching the shortcut is the user's "bring it back" gesture, so it must self-heal a null `win`
     // (a boot-time createWindow() throw leaves the app alive in the tray with no window) instead of
     // no-opping forever. ensureWindow() also filters a destroyed-but-non-null window.
@@ -8827,8 +8826,7 @@ if (!app.requestSingleInstanceLock()) {
     // Non-activating, same island contract as every other reveal (see showForAsk's doc comment) — a
     // second launch attempt surfaces the overlay without stealing focus from the foreground app.
     if (!w.isVisible()) w.showInactive()
-    })
-  )
+  }))
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
