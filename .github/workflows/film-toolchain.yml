@@ -52,7 +52,7 @@ jobs:
             "libswresample4=$FFMPEG_VERSION" \
             "libswscale7=$FFMPEG_VERSION"
       - name: Install the pinned Hyperframes
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       # Hyperframes pins its own chrome-headless-shell build; fetching it here keeps the download out of
       # the measured render.
       - name: Install the pinned Chrome
@@ -92,9 +92,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: film-toolchain-spike
-          path: |
-            film/toolchain/spike.mp4
-            film/toolchain/package-lock.json
+          path: film/toolchain/spike.mp4
           if-no-files-found: error
       - name: Verify the spike
         run: node --test spike.test.mjs
