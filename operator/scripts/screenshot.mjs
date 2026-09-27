@@ -22,24 +22,12 @@
  */
 import { execFileSync } from 'node:child_process'
 import { mkdir, readdir } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { resolvePreviewDir, resolveScratchDir } from './qa-dirs.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..', '..')
-
-/** Directory preview.mjs already wrote HTML into. Same default as preview.mjs's resolvePreviewDir()
- *  (os.tmpdir()-based), so this script reads the same place preview.mjs just wrote. */
-export function resolvePreviewDir(env = process.env) {
-  return env.METIS_QA_PREVIEW_DIR || join(tmpdir(), 'metis-operator-preview')
-}
-
-/** Scratch working directory for this script's shots/ and npmcache/ output. A plain os.tmpdir()
- *  path so this runs on any machine/CI, never a committed absolute path tied to one past session. */
-export function resolveScratchDir(env = process.env) {
-  return env.METIS_QA_SCRATCH || join(tmpdir(), 'metis-operator-preview')
-}
 
 const PREVIEW_DIR = resolvePreviewDir()
 const SCRATCH_DIR = resolveScratchDir()
@@ -144,12 +132,7 @@ async function main() {
   for (const f of written) console.log(`  ${basename(f)}`)
 }
 
-// Decode import.meta.url before comparing to argv (matches migrate.mjs): a raw
-// `file://${process.argv[1]}` comparison breaks on paths with spaces (PR #168).
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
-if (isMain) {
-  main().catch((err) => {
-    console.error(err)
-    process.exit(1)
-  })
-}
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})

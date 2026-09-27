@@ -17,6 +17,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { resolvePreviewDir } from './qa-dirs.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OPERATOR_ROOT = join(__dirname, '..')
@@ -24,12 +25,6 @@ const CSS_ENTRY = join(OPERATOR_ROOT, 'src', 'spa', 'css.ts')
 const FONTS_DIR = join(OPERATOR_ROOT, 'public', 'fonts')
 const LOGOS_DIR = join(OPERATOR_ROOT, 'public', 'logos')
 const FLAGS_DIR = join(OPERATOR_ROOT, 'public', 'flags')
-
-/** Rendered-preview output directory. A plain os.tmpdir() path so this runs on any machine/CI,
- *  never a committed absolute path tied to one past session. */
-export function resolvePreviewDir(env = process.env) {
-  return env.METIS_QA_PREVIEW_DIR || join(tmpdir(), 'metis-operator-preview')
-}
 
 const OUT_DIR = resolvePreviewDir()
 

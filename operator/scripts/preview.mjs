@@ -28,24 +28,12 @@
 import { build } from 'esbuild'
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { resolvePreviewDir, resolveScratchDir } from './qa-dirs.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OPERATOR_ROOT = join(__dirname, '..')
-
-/** Scratch working directory for this script's esbuild-tmp bundle output. A plain os.tmpdir() path
- *  so this runs on any machine/CI, never a committed absolute path tied to one past session. */
-export function resolveScratchDir(env = process.env) {
-  return env.METIS_QA_SCRATCH || join(tmpdir(), 'metis-operator-preview')
-}
-
-/** Rendered-preview output directory. Same reasoning as resolveScratchDir(); same default root
- *  unless overridden independently. */
-export function resolvePreviewDir(env = process.env) {
-  return env.METIS_QA_PREVIEW_DIR || join(tmpdir(), 'metis-operator-preview')
-}
 
 const SCRATCH_DIR = resolveScratchDir()
 const OUT_DIR = resolvePreviewDir()
@@ -158,12 +146,7 @@ async function main() {
   }
 }
 
-// Decode import.meta.url before comparing to argv (matches migrate.mjs): a raw
-// `file://${process.argv[1]}` comparison breaks on paths with spaces (PR #168).
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
-if (isMain) {
-  main().catch((err) => {
-    console.error(err)
-    process.exit(1)
-  })
-}
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})
