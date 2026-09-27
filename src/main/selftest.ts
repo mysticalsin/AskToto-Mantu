@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { writeFileSync, rmSync, existsSync, readFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, rmSync, existsSync, readFileSync, mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { getSettings, setSettings } from './store'
@@ -16,14 +16,29 @@ interface R {
 
 const EMPTY_PROFILE = { name: '', role: '', company: '', resume: '', jobDescription: '', notes: '' }
 
-/** Executes the REAL main-process logic inside the Electron runtime and writes pass/fail JSON. */
+/** Executes the REAL main-process logic inside the Electron runtime and writes pass/fail JSON.
+ *
+ *  Every suite below drives the real settings layer (getSettings/setSettings) and the real transcript
+ *  writer — exactly the code that a live profile's settings.json, managed-config.json and
+ *  meetingsFolder sit behind. So the first thing this function does, before any of that runs, is give
+ *  itself a disposable userData directory: nothing past that line can name the owner's real profile,
+ *  even if a suite throws (P4-F1). */
 export async function runSelfTest(outPath: string): Promise<void> {
   const r: R[] = []
   const ok = (test: string, cond: boolean, detail = ''): void => {
     r.push({ test, pass: !!cond, detail })
   }
+
+  // Must run before the first getSettings()/setSettings() call. mkdtempSync both creates the directory
+  // and guarantees a fresh one per run, so two self-tests (or a self-test racing a real launch) never
+  // collide. The read-back refuses to proceed if the redirect somehow didn't take, instead of silently
+  // falling through to the profile app.getPath('userData') resolved to before this line.
+  const sandboxUserData = mkdtempSync(join(tmpdir(), 'asktoto-selftest-userdata-'))
+  app.setPath('userData', sandboxUserData)
   const ud = app.getPath('userData')
-  mkdirSync(ud, { recursive: true })
+  if (ud !== sandboxUserData) {
+    throw new Error("self-test refused to run: app.setPath('userData', …) did not take effect")
+  }
   const settingsFile = join(ud, 'settings.json')
   const managedFile = join(ud, 'managed-config.json')
 

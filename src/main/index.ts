@@ -8979,9 +8979,10 @@ if (!app.requestSingleInstanceLock()) {
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
   process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
   process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
-  // The self-test suite runs destructively against the LIVE profile (it overwrites, then deletes,
-  // settings.json and managed-config.json), so devEnv() keeps it out of packaged builds — otherwise a
-  // persistent `setx ASKTOTO_SELFTEST out.json` re-wipes the profile and quits on every launch.
+  // runSelfTest() redirects userData to a disposable directory before it reads or writes anything, so
+  // it never touches the live profile's settings.json or managed-config.json (M2-0004). devEnv() still
+  // keeps it out of packaged builds — a persistent `setx ASKTOTO_SELFTEST out.json` must never re-trigger
+  // this on every launch of a shipped build.
   const selfTestOut = devEnv('ASKTOTO_SELFTEST')
   if (selfTestOut) {
     try {
