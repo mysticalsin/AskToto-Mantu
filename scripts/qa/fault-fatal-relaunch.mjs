@@ -33,12 +33,20 @@ const OLD_MAIN_EXIT_TIMEOUT_MS = 15_000
 const SIGTERM_EXIT_TIMEOUT_MS = 20_000
 const POST_EXIT_SETTLE_MS = 10_000
 
+/**
+ * @typedef {{ pid: number, ppid: number, started: string, command: string }} PsRow
+ */
+
 /** One row of `ps -axo pid=,ppid=,lstart=,command=` under LC_ALL=C. lstart has a fixed shape, which anchors
  *  the split between the start time and a command that may contain spaces. */
 const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/
 
-/** Parse `ps -axo pid=,ppid=,lstart=,command=` output into rows. A line that does not match the fixed
- *  lstart shape is dropped rather than misread. */
+/**
+ * Parse `ps -axo pid=,ppid=,lstart=,command=` output into rows. A line that does not match the fixed
+ * lstart shape is dropped rather than misread.
+ * @param {string} text
+ * @returns {PsRow[]}
+ */
 export function parsePs(text) {
   const rows = []
   for (const line of text.split('\n')) {
@@ -49,14 +57,21 @@ export function parsePs(text) {
   return rows
 }
 
-/** Every process below `rootPid`, any depth, root excluded. */
+/**
+ * Every process below `rootPid`, any depth, root excluded.
+ * @param {PsRow[]} processes
+ * @param {number} rootPid
+ * @returns {PsRow[]}
+ */
 export function descendantsOf(processes, rootPid) {
+  /** @type {Map<number, PsRow[]>} */
   const byPpid = new Map()
   for (const proc of processes) {
     const siblings = byPpid.get(proc.ppid) ?? []
     siblings.push(proc)
     byPpid.set(proc.ppid, siblings)
   }
+  /** @type {PsRow[]} */
   const found = []
   const queue = [rootPid]
   while (queue.length) {
@@ -69,14 +84,24 @@ export function descendantsOf(processes, rootPid) {
   return found
 }
 
-/** Entries of `before` still alive in `now`: same pid AND the same start time, so a reused pid never
- *  counts as a survivor. */
+/**
+ * Entries of `before` still alive in `now`: same pid AND the same start time, so a reused pid never
+ * counts as a survivor.
+ * @param {PsRow[]} before
+ * @param {PsRow[]} now
+ * @returns {PsRow[]}
+ */
 export function survivors(before, now) {
   const alive = new Set(now.map((proc) => `${proc.pid}\u0000${proc.started}`))
   return before.filter((proc) => alive.has(`${proc.pid}\u0000${proc.started}`))
 }
 
-/** A content-free class for one process's command line — never the command itself. */
+/**
+ * A content-free class for one process's command line — never the command itself.
+ * @param {string} command
+ * @param {string} bundle
+ * @returns {string}
+ */
 export function classify(command, bundle) {
   if (command.includes(`${bundle}/Contents/Resources/llama/`)) return 'llama-server'
   if (command.includes(`${bundle}/Contents/Resources/mac-helper/`)) return 'mac-helper'
@@ -88,8 +113,13 @@ export function classify(command, bundle) {
   return 'other'
 }
 
-/** Owned processes reparented to launchd (ppid 1): orphans from the bundle or fm serve. Never the
- *  relaunched main itself (class 'main'), and never an unrelated system process (class 'other'). */
+/**
+ * Owned processes reparented to launchd (ppid 1): orphans from the bundle or fm serve. Never the
+ * relaunched main itself (class 'main'), and never an unrelated system process (class 'other').
+ * @param {PsRow[]} now
+ * @param {string} bundle
+ * @returns {PsRow[]}
+ */
 export function strays(now, bundle) {
   return now.filter((proc) => {
     if (proc.ppid !== 1) return false
