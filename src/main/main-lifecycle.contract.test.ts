@@ -91,10 +91,8 @@ describe('MQA-155 — a failed post-sweep source refresh is observed, never fabr
 })
 
 describe('MQA-172 — a second launch after a failed boot window recreates it instead of doing nothing', () => {
-  type Win = { isVisible: () => boolean; isDestroyed: () => boolean; showInactive: () => void }
-
   /** Execute the real `app.on('second-instance', ...)` registration and hand back the handler it installs. */
-  const secondInstanceHandler = (win: Win | null, ensureWindow: () => Win | null): (() => void) => {
+  const secondInstanceHandler = (reveal: (reason: string, options: { focus?: boolean }) => void): (() => void) => {
     const src = sliceBetween("app.on('second-instance'", 'app.whenReady()')
     let handler: (() => void) | null = null
     const app = {
@@ -102,38 +100,25 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
         handler = fn
       }
     }
-    ;(new Function('app', 'win', 'ensureWindow', src) as (...args: unknown[]) => void)(app, win, ensureWindow)
+    ;(new Function('app', 'reveal', src) as (...args: unknown[]) => void)(app, reveal)
     expect(handler, 'second-instance handler was never registered').not.toBeNull()
     return handler as unknown as () => void
   }
 
-  it('MQA-172 — self-heals a null window through ensureWindow() rather than silently returning', () => {
-    const recovered: Win = {
-      isVisible: () => false,
-      isDestroyed: () => false,
-      showInactive: vi.fn()
-    }
-    const ensureWindow = vi.fn(() => recovered)
+  it('M2-0036 — routes second-instance through the unified explicit reveal path', () => {
+    const reveal = vi.fn()
 
-    // `win === null` is the state a boot-time createWindow() throw leaves behind (index.ts nulls it and
-    // rethrows into runStep, which swallows). The app then lives on in the tray with no window at all.
-    secondInstanceHandler(null, ensureWindow)()
+    secondInstanceHandler(reveal)()
 
-    expect(ensureWindow).toHaveBeenCalledTimes(1)
-    // Non-activating reveal (island Phase 1 showInactive() audit) — a second launch must not steal focus.
-    expect(recovered.showInactive).toHaveBeenCalledTimes(1)
+    expect(reveal).toHaveBeenCalledWith('second-instance', { focus: true })
   })
 
-  it('MQA-172 — still just raises an existing hidden window without rebuilding it', () => {
-    const existing: Win = { isVisible: () => false, isDestroyed: () => false, showInactive: vi.fn() }
-    secondInstanceHandler(existing, () => existing)()
-    expect(existing.showInactive).toHaveBeenCalledTimes(1)
-  })
-
-  it('MQA-172 — an already-visible window is left alone (no redundant showInactive)', () => {
-    const visible: Win = { isVisible: () => true, isDestroyed: () => false, showInactive: vi.fn() }
-    secondInstanceHandler(visible, () => visible)()
-    expect(visible.showInactive).not.toHaveBeenCalled()
+  it('M2-0036 — even an already-visible parked hairline is an explicit reopen, not a no-op', () => {
+    const reveal = vi.fn()
+    secondInstanceHandler(reveal)()
+    secondInstanceHandler(reveal)()
+    expect(reveal).toHaveBeenCalledTimes(2)
+    expect(reveal).toHaveBeenNthCalledWith(2, 'second-instance', { focus: true })
   })
 
   it('MQA-172 — createWindow() is idempotent, so the boot step cannot orphan a recovered window', () => {
