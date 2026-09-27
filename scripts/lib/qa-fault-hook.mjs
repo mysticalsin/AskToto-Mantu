@@ -3,8 +3,8 @@
  * the package's declared identity, in both directions. A shipping package must never carry the hook, and the
  * QA-identity package must always carry it — otherwise scripts/qa/fault-fatal-relaunch.mjs cannot drive it.
  */
-import { statSync } from 'node:fs'
-import { extractFile, getRawHeader, listPackage, uncache } from '@electron/asar'
+import { closeSync, openSync, readSync, statSync } from 'node:fs'
+import { getRawHeader, uncache } from '@electron/asar'
 
 /** The string only the QA fault hook (src/main/qa-identity.ts) puts into a main-process bundle. */
 export const QA_FAULT_MARKER = 'METIS_QA_FAULT_HOOK'
@@ -19,21 +19,15 @@ export function assertQaFaultHookMatchesIdentity(archive) {
   // @electron/asar caches headers by archive path. This gate may inspect the same path after a repack.
   uncache(archive)
   try {
-    assertArchiveBytesComplete(archive)
-    // listPackage returns entries with the packing host's separator (backslash on Windows) and a leading
-    // separator. Normalize to a leading-slash POSIX form to match against, but extractFile takes the RAW key
-    // with only its leading separator stripped — the same two-step normalization
-    // verifyPackagedDependencyPruning uses in check-packaged-runtime.mjs, or a Windows-packed archive fails
-    // every extract here.
-    const rawEntries = listPackage(archive)
-    const toPosix = (entry) => `/${entry.split('\\').join('/').replace(/^\/+/, '')}`
-    const rawByPosix = new Map(rawEntries.map((entry) => [toPosix(entry), entry]))
-    const packageJson = rawByPosix.get('/package.json')
+    const { header, headerSize } = getRawHeader(archive)
+    assertArchiveBytesComplete(archive, header, headerSize)
+    const filesByPosix = new Map(listPackedFiles(header).map((entry) => [entry.path, entry.file]))
+    const packageJson = filesByPosix.get('/package.json')
     if (!packageJson) throw new Error('app.asar has no package.json — the packaged app identity is missing')
-    const qaIdentity = JSON.parse(extractFile(archive, packageJson.replace(/^[\\/]+/, '')).toString('utf8')).name === QA_IDENTITY_PACKAGE_NAME
-    const mainFiles = [...rawByPosix.keys()].filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
+    const qaIdentity = JSON.parse(readPackedFile(archive, headerSize, packageJson, 'package.json').toString('utf8')).name === QA_IDENTITY_PACKAGE_NAME
+    const mainFiles = [...filesByPosix.keys()].filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
     const carriesHook = mainFiles.some((entry) =>
-      extractFile(archive, rawByPosix.get(entry).replace(/^[\\/]+/, '')).includes(QA_FAULT_MARKER)
+      readPackedFile(archive, headerSize, filesByPosix.get(entry), entry).includes(QA_FAULT_MARKER)
     )
     if (carriesHook !== qaIdentity) {
       throw new Error(
@@ -48,19 +42,50 @@ export function assertQaFaultHookMatchesIdentity(archive) {
   }
 }
 
-function assertArchiveBytesComplete(archive) {
-  const { header, headerSize } = getRawHeader(archive)
-  const expectedSize = 8 + headerSize + packedPayloadSize(header)
+function assertArchiveBytesComplete(archive, header, headerSize) {
+  const expectedSize = 8 + headerSize + packedPayloadSize(listPackedFiles(header).map(({ file }) => file))
   const actualSize = statSync(archive).size
   if (actualSize !== expectedSize) {
     throw new Error(`app.asar is incomplete: expected ${expectedSize} bytes from the ASAR header, found ${actualSize}`)
   }
 }
 
-function packedPayloadSize(entry) {
-  if (entry.files) {
-    return Math.max(0, ...Object.values(entry.files).map((child) => packedPayloadSize(child)))
+function listPackedFiles(entry, prefix = '') {
+  const files = []
+  for (const [name, child] of Object.entries(entry.files || {})) {
+    const path = `${prefix}/${name.split('\\').join('/').replace(/^\/+/, '')}`
+    if (child.files) {
+      files.push(...listPackedFiles(child, path))
+    } else if (!child.unpacked && child.offset !== undefined && child.size !== undefined) {
+      files.push({ path, file: child })
+    }
   }
-  if (entry.unpacked || entry.size === undefined || entry.offset === undefined) return 0
-  return Number(entry.offset) + entry.size
+  return files
+}
+
+function packedPayloadSize(files) {
+  return Math.max(0, ...files.map((file) => Number(file.offset) + file.size))
+}
+
+function readPackedFile(archive, headerSize, file, path) {
+  if (file?.offset === undefined || file?.size === undefined) {
+    throw new Error(`app.asar entry is not a packed file: ${path}`)
+  }
+  const buffer = Buffer.alloc(file.size)
+  const fd = openSync(archive, 'r')
+  try {
+    let bytesRead = 0
+    const position = 8 + headerSize + Number(file.offset)
+    while (bytesRead < file.size) {
+      // @electron/asar's extractFile ignores short reads, leaving Buffer.alloc's NUL bytes for JSON.parse.
+      const count = readSync(fd, buffer, bytesRead, file.size - bytesRead, position + bytesRead)
+      if (count === 0) {
+        throw new Error(`app.asar is incomplete: could not read ${path} from the packed payload`)
+      }
+      bytesRead += count
+    }
+    return buffer
+  } finally {
+    closeSync(fd)
+  }
 }
