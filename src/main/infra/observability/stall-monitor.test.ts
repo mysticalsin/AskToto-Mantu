@@ -232,30 +232,6 @@ describe('startStallMonitor', () => {
     }
   })
 
-  it('restartIfPaused() re-arms the schedule from the current tick, absorbing a resume-from-sleep gap on platforms whose monotonic clock keeps counting through sleep', () => {
-    const clock = fakeTimer()
-    const onStall = vi.fn()
-    const monitor = startStallMonitor({
-      bootId: 'boot-1',
-      onStall,
-      onSummary: vi.fn(),
-      tickMs: 1000,
-      summaryIntervalMs: 10_000,
-      now: clock.now,
-      setIntervalFn: clock.setIntervalFn,
-      clearIntervalFn: clock.clearIntervalFn,
-      histogram: fakeHistogram(0)
-    })
-    clock.advanceTo(1000) // expectedAt -> 2000
-    monitor.pause() // powerMonitor 'suspend'
-    // The machine sleeps for an hour; this platform's monotonic clock keeps counting through it, so the
-    // clock jumps forward with no tick ever firing during the sleep itself.
-    clock.jumpTo(3_601_000)
-    monitor.restartIfPaused() // called from the powerMonitor 'resume' handler
-    clock.advanceTo(3_602_000) // exactly one tick after restarting — on schedule relative to the new baseline
-    expect(onStall).not.toHaveBeenCalled()
-  })
-
   it('pause() removes the heartbeat entirely, so no tick can fire during sleep regardless of event order; restartIfPaused() restarts it from a fresh baseline', () => {
     // This is the fake-stall race: an overdue heartbeat tick and powerMonitor's 'resume' are delivered by
     // independent sources, so which one the event loop processes first is not guaranteed. pause() (called

@@ -96,25 +96,15 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
     onSummary: (detail) => opts.audit('app.stall.summary', { bootId: detail.bootId, p99Ms: detail.p99Ms })
   })
 
-  // Order-independent by construction (see stall-monitor.ts): 'suspend' removes the heartbeat outright, so
-  // there is no tick left pending to race 'resume' or 'unlock-screen' no matter which the event loop
-  // processes first. Needed even though stall-monitor.ts's own clock does not advance during sleep on
-  // macOS, because some platforms' monotonic clock does.
-  //
-  // 'resume' and 'unlock-screen' share one handler and one StallMonitor method instead of this module
-  // tracking its own suspended/resumed flag: the stall monitor already knows whether it is paused, and
-  // restartIfPaused() is a no-op whenever it is not. A screen lock usually leaves the machine awake with
-  // the heartbeat still running, so 'unlock-screen' is a no-op then — it only restarts a heartbeat that
-  // 'suspend' actually paused and no earlier 'resume'/'unlock-screen' has already restarted (the fallback
-  // for a sleep whose matching 'resume' never arrives). And when 'resume' itself arrives after
-  // 'unlock-screen' has already restarted a heartbeat 'suspend' paused, 'resume's call is *also* a no-op —
-  // unlike an unconditional resync, it cannot re-baseline a heartbeat that is already running, so it cannot
-  // discard whatever real lateness has accrued since that restart.
+  // 'suspend' clears the heartbeat so no tick can race the wake-up events; 'resume' and 'unlock-screen'
+  // (the fallback when 'resume' never arrives) both call restartIfPaused(), a no-op on a running heartbeat,
+  // so neither event order nor an unlock after a plain screen lock can re-baseline it and discard accruing
+  // lateness.
   const onSuspend = (): void => stallMonitor.pause()
-  const onPowerResume = (): void => stallMonitor.restartIfPaused()
+  const onWake = (): void => stallMonitor.restartIfPaused()
   powerMonitor.on('suspend', onSuspend)
-  powerMonitor.on('resume', onPowerResume)
-  powerMonitor.on('unlock-screen', onPowerResume)
+  powerMonitor.on('resume', onWake)
+  powerMonitor.on('unlock-screen', onWake)
 
   let stopped = false
   return {
@@ -126,8 +116,8 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
       stopped = true
       clearIntervalFn(aliveTimer)
       powerMonitor.removeListener('suspend', onSuspend)
-      powerMonitor.removeListener('resume', onPowerResume)
-      powerMonitor.removeListener('unlock-screen', onPowerResume)
+      powerMonitor.removeListener('resume', onWake)
+      powerMonitor.removeListener('unlock-screen', onWake)
       stallMonitor.stop()
       opts.audit('app.shutdown.clean', doMarkShutdownClean(opts.userData, bootId, uptimeS))
     }

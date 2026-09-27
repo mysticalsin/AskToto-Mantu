@@ -162,7 +162,7 @@ describe('startRunObservability', () => {
     expect(result).toBe(42) // forwards the stall monitor's return value, not just the call
   })
 
-  it('pauses the stall monitor on powerMonitor suspend and restarts it (if paused) on resume', () => {
+  it("suspend calls pause(); resume and unlock-screen each call restartIfPaused(), unconditionally and with no local flag gating either", () => {
     const pause = vi.fn()
     const restartIfPaused = vi.fn()
     const powerMonitor = fakePowerMonitor()
@@ -182,39 +182,18 @@ describe('startRunObservability', () => {
     })
     expect(powerMonitor.on).toHaveBeenCalledWith('suspend', expect.any(Function))
     expect(powerMonitor.on).toHaveBeenCalledWith('resume', expect.any(Function))
+    expect(powerMonitor.on).toHaveBeenCalledWith('unlock-screen', expect.any(Function))
     const onSuspend = powerMonitor.on.mock.calls.find((c) => c[0] === 'suspend')![1] as () => void
-    const onResume = powerMonitor.on.mock.calls.find((c) => c[0] === 'resume')![1] as () => void
-    onSuspend()
-    expect(pause).toHaveBeenCalledOnce()
-    onResume()
-    expect(restartIfPaused).toHaveBeenCalledOnce()
-  })
-
-  // M2-0220: 'resume' and 'unlock-screen' must reach the SAME StallMonitor method unconditionally, so the
-  // stall monitor itself (not a local flag here) decides whether either call actually restarts anything.
-  it("'resume' and 'unlock-screen' call the SAME StallMonitor method unconditionally — no local flag decides whether either call actually restarts anything", () => {
-    const restartIfPaused = vi.fn()
-    const powerMonitor = fakePowerMonitor()
-    startRunObservability({
-      userData: '/fake',
-      version: '1.9.7',
-      platform: 'darwin',
-      arch: 'arm64',
-      audit: vi.fn(),
-      powerMonitor,
-      deps: {
-        beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
-        startStallMonitor: vi.fn(() => fakeStallMonitor({ restartIfPaused })),
-        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
-        clearIntervalFn: vi.fn()
-      }
-    })
     const onResume = powerMonitor.on.mock.calls.find((c) => c[0] === 'resume')![1] as () => void
     const onUnlockScreen = powerMonitor.on.mock.calls.find((c) => c[0] === 'unlock-screen')![1] as () => void
 
-    onUnlockScreen()
-    expect(restartIfPaused).toHaveBeenCalledTimes(1)
+    onSuspend()
+    expect(pause).toHaveBeenCalledOnce()
+
     onResume()
+    expect(restartIfPaused).toHaveBeenCalledTimes(1)
+
+    onUnlockScreen()
     expect(restartIfPaused).toHaveBeenCalledTimes(2) // both events reach the same method; no local flag gates either
   })
 
@@ -258,7 +237,7 @@ describe('startRunObservability', () => {
     expect(audit).toHaveBeenCalledWith('app.stall', expect.objectContaining({ bootId: 'boot-1', durationMs: 6000 }))
   })
 
-  it('unlock-screen restarts a heartbeat that suspend paused and no resume re-armed, proven by a correctly-timed app.stall firing afterward — not by counting setInterval calls', () => {
+  it('unlock-screen restarts a heartbeat that suspend paused and no resume re-armed, proven by a correctly-timed app.stall firing afterward', () => {
     const audit = vi.fn()
     const heartbeat = fakeHeartbeat()
     const powerMonitor = fakePowerMonitor()
@@ -288,26 +267,24 @@ describe('startRunObservability', () => {
     const onSuspend = powerMonitor.on.mock.calls.find((c) => c[0] === 'suspend')![1] as () => void
     const onUnlockScreen = powerMonitor.on.mock.calls.find((c) => c[0] === 'unlock-screen')![1] as () => void
 
-    heartbeat.jumpTo(5000) // asleep
     onSuspend() // clears the heartbeat's interval
-    onUnlockScreen() // no 'resume' arrived — this is the fallback path; restarts from a baseline of 5000
+    heartbeat.jumpTo(3_600_000) // asleep for an hour, on a clock that keeps counting through sleep
+    onUnlockScreen() // no 'resume' arrived — this is the fallback path; restarts from a baseline of 3_600_000
 
-    // A heartbeat that was never actually restarted (still paused) would leave no tick to fire, and
-    // app.stall could never be audited no matter how far the clock moves. Firing one — timed correctly
-    // relative to the restart, not to whatever baseline the heartbeat had before 'suspend' — is only
-    // possible if 'unlock-screen' genuinely restarted it.
-    heartbeat.jumpTo(6000) // on schedule relative to the restart (5000 + tickMs)
-    heartbeat.advanceTo(7500) // the next tick fires 1500ms late relative to that same restart baseline
+    heartbeat.advanceTo(3_601_000) // on schedule relative to the restart — the sleep gap was absorbed
+    expect(audit).not.toHaveBeenCalledWith('app.stall', expect.anything())
+
+    heartbeat.advanceTo(3_603_500) // the next tick fires 1500ms late relative to that same restart baseline
     expect(audit).toHaveBeenCalledWith('app.stall', expect.objectContaining({ bootId: 'boot-1', durationMs: 1500 }))
   })
 
   it('M2-0006 round-3 finding: a resume that arrives after unlock-screen already restarted the heartbeat must not discard the lateness that accrues afterward', () => {
     // suspend -> unlock-screen restarts the paused heartbeat (no 'resume' has arrived yet) -> the main
-    // thread then stalls -> 'resume' itself is only delivered once that stall lets the event loop run, so
-    // it arrives WHILE the overdue tick is still pending. A 'resume' handler that unconditionally resyncs
-    // (the pre-fix behaviour) re-baselines expectedAt at that point and erases the lateness already
-    // building since unlock-screen's restart; restartIfPaused() is a no-op here instead, because the
-    // heartbeat unlock-screen restarted is still running.
+    // thread then stalls, so the overdue tick and 'resume' are both queued behind it, in unspecified
+    // order. Model 'resume' being processed first: a handler that unconditionally resyncs (the pre-fix
+    // behaviour) would re-baseline expectedAt at that point and erase the lateness already building since
+    // unlock-screen's restart; restartIfPaused() is a no-op here instead, because the heartbeat
+    // unlock-screen restarted is still running.
     const audit = vi.fn()
     const heartbeat = fakeHeartbeat()
     const powerMonitor = fakePowerMonitor()
@@ -338,15 +315,15 @@ describe('startRunObservability', () => {
     const onResume = powerMonitor.on.mock.calls.find((c) => c[0] === 'resume')![1] as () => void
     const onUnlockScreen = powerMonitor.on.mock.calls.find((c) => c[0] === 'unlock-screen')![1] as () => void
 
-    heartbeat.jumpTo(8000) // asleep
     onSuspend()
+    heartbeat.jumpTo(8000) // asleep
     onUnlockScreen() // restarts from a baseline of 8000; expectedAt -> 9000
 
-    heartbeat.jumpTo(8400) // 400ms into the new period — the main thread then starts stalling
-    onResume() // arrives late, while the overdue tick is still pending — must be a no-op here
+    heartbeat.jumpTo(12_000) // main thread blocked: the overdue tick and 'resume' are both queued behind it
+    onResume() // processed first — must be a no-op on the heartbeat unlock-screen already restarted
 
-    heartbeat.advanceTo(10_000) // the overdue tick finally fires: 1000ms late relative to the 9000 baseline
-    expect(audit).toHaveBeenCalledWith('app.stall', expect.objectContaining({ bootId: 'boot-1', durationMs: 1000 }))
+    heartbeat.advanceTo(12_000) // the overdue tick finally fires: 3000ms late relative to the 9000 baseline
+    expect(audit).toHaveBeenCalledWith('app.stall', expect.objectContaining({ bootId: 'boot-1', durationMs: 3000 }))
   })
 
   it("shutdownClean stops the alive timer and stall monitor, unsubscribes from suspend, resume and unlock-screen, and audits app.shutdown.clean with markShutdownClean's detail", () => {
