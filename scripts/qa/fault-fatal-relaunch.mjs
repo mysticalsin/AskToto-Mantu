@@ -172,7 +172,7 @@ function ps() {
 async function waitFor(predicate, timeoutMs, intervalMs = 200) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
-    const value = predicate()
+    const value = await predicate()
     if (value) return value
     if (Date.now() > deadline) return undefined
     await sleep(intervalMs)
@@ -188,14 +188,14 @@ function isAlive(pid) {
   }
 }
 
-/** The bundle's own main process: no `--type=`, class 'main', started no earlier than `afterStarted`
- *  (string `ps` lstart comparison — later starts sort later lexically for a fixed-width format sharing a
- *  year, which the QA harness's own single run always does). */
-function findMainPid(bundle, afterStarted) {
+/** The bundle's own main process: no `--type=`, class 'main'. Without `old`, the precondition check at the
+ *  top of `main()` (no "Metis QA" main already running) makes any match the one this run just launched.
+ *  With `old` (a process this function already returned), returns the candidate whose pid AND start time
+ *  both differ from it — the relaunched main, never the instance that just exited. */
+function findMainPid(bundle, old) {
   const candidates = ps().filter((proc) => classify(proc.command, bundle) === 'main')
-  const newer = afterStarted ? candidates.filter((proc) => proc.started > afterStarted) : candidates
-  newer.sort((a, b) => (a.started < b.started ? 1 : a.started > b.started ? -1 : 0))
-  return newer[0]
+  if (!old) return candidates[0]
+  return candidates.find((proc) => proc.pid !== old.pid || proc.started !== old.started)
 }
 
 function countByClass(processes, bundle) {
@@ -221,19 +221,38 @@ async function findTotoPage(browser) {
   return null
 }
 
+/** Connects over CDP and finds the page exposing `window.toto`, retrying the connect itself as well as the
+ *  page search within one deadline: right after `open -n`, the remote-debugging port is not yet guaranteed
+ *  to be listening, so `connectOverCDP` can throw on the first attempts, and the page is almost never ready
+ *  the instant the port opens either. Returns the still-open browser and page for the caller to use and
+ *  then close; a connection that yields no page is closed before the next attempt. */
+async function connectAndFindTotoPage(port, timeoutMs, intervalMs = 500) {
+  return waitFor(async () => {
+    let browser
+    try {
+      browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+      const page = await findTotoPage(browser)
+      if (page) return { browser, page }
+      await browser.close()
+    } catch {
+      if (browser) await browser.close().catch(() => {})
+    }
+    return undefined
+  }, timeoutMs, intervalMs)
+}
+
 async function prewarmAndWaitForLlamaServer(port, mainPid, bundle) {
-  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+  const found = await connectAndFindTotoPage(port, MAIN_PID_TIMEOUT_MS, 500)
+  if (!found) throw new Precondition('No page exposing window.toto was found over CDP.')
   try {
-    const page = await waitFor(() => findTotoPage(browser), MAIN_PID_TIMEOUT_MS, 500)
-    if (!page) throw new Precondition('No page exposing window.toto was found over CDP.')
-    await page.evaluate(() => window.toto.localPrewarm('M2-0026 fault proof'))
+    await found.page.evaluate(() => window.toto.localPrewarm('M2-0026 fault proof'))
   } finally {
-    await browser.close()
+    await found.browser.close()
   }
   const descendants = await waitFor(
     () => {
-      const found = descendantsOf(ps(), mainPid).filter((proc) => classify(proc.command, bundle) === 'llama-server')
-      return found.length ? found : undefined
+      const matches = descendantsOf(ps(), mainPid).filter((proc) => classify(proc.command, bundle) === 'llama-server')
+      return matches.length ? matches : undefined
     },
     LLAMA_SERVER_TIMEOUT_MS,
     500
@@ -316,7 +335,7 @@ async function main() {
     await sleep(POST_EXIT_SETTLE_MS)
 
     const censusAfterRelaunch = ps()
-    const relaunched = findMainPid(bundle, oldMain.started)
+    const relaunched = findMainPid(bundle, oldMain)
     if (!relaunched) throw new Failure('no relaunch: no newer main process appeared after the fatal fault.')
 
     phases.push({

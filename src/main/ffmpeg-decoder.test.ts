@@ -128,15 +128,7 @@ describe('FFmpeg spawn failure', () => {
 
 // The stand-in "ffmpeg" below traps SIGTERM (a shell builtin), which no Windows child can do — `kill` there
 // is TerminateProcess, which cannot be ignored. Runs on linux and darwin only.
-describe.skipIf(process.platform === 'win32')('cancel escalation (POSIX)', () => {
-  async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {
-    const deadline = Date.now() + timeoutMs
-    while (!predicate()) {
-      if (Date.now() > deadline) throw new Error('timed out waiting for condition')
-      await new Promise((resolve) => setTimeout(resolve, 20))
-    }
-  }
-
+describe.skipIf(process.platform === 'win32')('cancel (POSIX)', () => {
   function isAlive(pid: number): boolean {
     try {
       process.kill(pid, 0)
@@ -145,6 +137,24 @@ describe.skipIf(process.platform === 'win32')('cancel escalation (POSIX)', () =>
       return false
     }
   }
+
+  async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for condition')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+
+  // Registered as soon as each pid is read from disk, before anything that could throw — a failed
+  // assertion or a waitUntil timeout must never leak a SIGTERM-immune `sleep 600` stand-in past this test.
+  let spawnedPids: number[] = []
+
+  afterEach(() => {
+    for (const pid of spawnedPids.splice(0)) {
+      if (isAlive(pid)) process.kill(pid, 'SIGKILL')
+    }
+  })
 
   it('D1: cancel kills the decode and its duration probe at once, even an ffmpeg that ignores SIGTERM', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'asktoto-ffmpeg-cancel-'))
@@ -172,6 +182,7 @@ describe.skipIf(process.platform === 'win32')('cancel escalation (POSIX)', () =>
     // executable.
     await waitUntil(() => readFileSync(pidsFile, 'utf8').trim().split('\n').filter(Boolean).length >= 2, 2_000)
     const pids = readFileSync(pidsFile, 'utf8').trim().split('\n').filter(Boolean).map(Number)
+    spawnedPids.push(...pids)
 
     decoder.cancel()
 
@@ -185,9 +196,6 @@ describe.skipIf(process.platform === 'win32')('cancel escalation (POSIX)', () =>
 
     for (const pid of pids) {
       await waitUntil(() => !isAlive(pid), 2_000)
-    }
-    for (const pid of pids) {
-      if (isAlive(pid)) process.kill(pid, 'SIGKILL')
     }
 
     expect(errorCalled).toBe(false)

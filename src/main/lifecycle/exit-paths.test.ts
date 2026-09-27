@@ -122,12 +122,13 @@ describe('installExitPaths', () => {
     })
 
     it("F2: stays polite through before-quit's own 2s flush window", () => {
-      const { calls, forceQuit } = harness()
+      const { calls, children, forceQuit } = harness()
 
       forceQuit()
       vi.advanceTimersByTime(2_000)
 
       expect(calls.some((call) => call.startsWith('exit:'))).toBe(false)
+      expect(children.every((child) => child.killed === false)).toBe(true)
     })
 
     it('F3: hard-exits once the polite quit has plainly failed', async () => {

@@ -40,10 +40,6 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * 2026-08-24: 159 → 139 → 129 → 36 → 30.
  * 2026-09-06: 30 → 29 (updater.test.ts delete-on-required Process fields).
  * 2026-09-06: 29 → 26 after merging origin/release/1.8.3 KineticGrid onto this tip.
- * 2026-09-27: 26 → 50, red-first for M2-0026: stop-all.test.ts, exit-paths.test.ts,
- * qa-fault-hook.test.ts and fault-fatal-relaunch.test.ts import infra/process/stop-all,
- * lifecycle/exit-paths, qa-identity, lib/qa-fault-hook.mjs and qa/fault-fatal-relaunch.mjs. 50 → 26 once
- * this ticket's implementation commit creates those modules.
  *
  * The last pass typed the mocks to the signatures production actually calls, rather than letting them be
  * inferred from a stub body — which is what had made `mock.calls[0][0]` a type error against a call the
