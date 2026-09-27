@@ -5,18 +5,14 @@
 
 /** The proxy env vars undici's EnvHttpProxyAgent honors, in the precedence order we report. */
 export type ProxyEnv = Record<string, string | undefined>
+export const PROXY_ENV_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'] as const
 
 /** Return the effective proxy URL from the environment, or null when none is configured (direct). */
 export function detectProxyFromEnv(env: ProxyEnv): string | null {
-  return (
-    env.HTTPS_PROXY ||
-    env.https_proxy ||
-    env.HTTP_PROXY ||
-    env.http_proxy ||
-    env.ALL_PROXY ||
-    env.all_proxy ||
-    null
-  )
+  for (const key of PROXY_ENV_VARS) {
+    if (env[key]) return env[key]
+  }
+  return null
 }
 
 /** Strip credentials (user:pass@) from a proxy URL so it is safe to log. */
