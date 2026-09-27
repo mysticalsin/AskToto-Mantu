@@ -435,7 +435,7 @@ describe('classify-before-read (D1-D6)', () => {
       await firstAnswer
       return new Map(probed.map((file): [string, ContentPresence] => [file.path, 'local']))
     })
-    const gateway = gatewayOver(ROOT, { detector: { classify }, fs, poolSize: 12 })
+    const gateway = gatewayOver(ROOT, { detector: { classify, markLocal: vi.fn() }, fs, poolSize: 12 })
 
     const reads = Array.from({ length: 10 }, (_, i) => gateway.read(`f${i}.md`))
     await flush()
@@ -452,7 +452,7 @@ describe('classify-before-read (D1-D6)', () => {
   it('a probe that does not answer in time leaves files unknown and unread', async () => {
     const fs = memoryFs({ 'a.md': 'A', 'b.md': 'B' })
     const classify = vi.fn(() => new Promise<Map<string, ContentPresence>>(() => {}))
-    const gateway = gatewayOver(ROOT, { detector: { classify }, fs, poolSize: 4 })
+    const gateway = gatewayOver(ROOT, { detector: { classify, markLocal: vi.fn() }, fs, poolSize: 4 })
 
     const classifyResult = gateway.classify(['a.md', 'b.md'])
     await vi.advanceTimersByTimeAsync(2_000)
@@ -479,7 +479,7 @@ describe('classify-before-read (D1-D6)', () => {
         }
         return Promise.resolve(new Map(files.map((file): [string, ContentPresence] => [file.path, 'local'])))
       })
-      const gateway = gatewayOver(ROOT, { detector: { classify }, fs, poolSize: 4 })
+      const gateway = gatewayOver(ROOT, { detector: { classify, markLocal: vi.fn() }, fs, poolSize: 4 })
 
       const first = await gateway.read('a.md')
       expect(first).toEqual({ status: 'unknown', version: { mtimeMs: 1_000, ctimeMs: 1_000, size: 1 } })

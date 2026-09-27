@@ -9,14 +9,16 @@
  * fill it.
  *
  * Invariants:
- *   - Async only. Every method resolves, never rejects, and settles by its deadline (2 s for list and
- *     classify, 5 s for read) whatever the fs or the probe does.
- *   - At most `poolSize - 2` (at least 1) meetings-root fs calls run at once (admission.ts), so two pool
- *     threads stay free. The cap is per gateway: create one per process and share it.
+ *   - Async only. Every method resolves, never rejects, and settles by its deadline (2 s for list,
+ *     classify and noteWritten, 5 s for read) whatever the fs or the probe does.
+ *   - At most `poolSize - 2` (at least 1) fs calls run at once across every gateway of one Storage
+ *     (admission.ts), so two pool threads stay free. Create one Storage per process (meetings-storage.ts)
+ *     and reach each folder through `at(root)`.
  *   - A deadline or an abort releases the caller; the fs call keeps its permit until it settles.
- *   - Content is read only after the dataless detector says the bytes are on this device. 'dataless' and
- *     'unknown' files are never opened, and at most one detector probe runs at a time.
- *   - Paths are relative to the injected root and never leave it. A read resolves symlinks only after
+ *   - Content is read only after the dataless detector says the bytes are on this device, or after this
+ *     process wrote that exact version (noteWritten). 'dataless' and 'unknown' files are never opened, and
+ *     at most one detector probe runs at a time.
+ *   - Paths are relative to the gateway's root and never leave it. A read resolves symlinks only after
  *     classification (on Windows, resolving a path opens the file) and reads the resolved path only if it
  *     lies inside the resolved root.
  *   - Only ENOENT and ENOTDIR are 'missing'. 'unavailable', 'timeout' and 'degraded' say nothing about
@@ -77,6 +79,9 @@ export interface StorageGateway {
   /** A file's bytes, read only when they are on this device. Concurrent reads of one version share one fs
    *  call and one buffer: treat it as read-only. */
   read(relPath: string, options?: RequestOptions): Promise<ReadResult>
+  /** Records that this process has just written `relPath`: its current version counts as local, so reading
+   *  it back needs no probe, and any remembered read failure for it is forgotten. */
+  noteWritten(relPath: string, options?: RequestOptions): Promise<{ status: 'ok'; version: ContentVersion } | StorageFailure>
 }
 
 /** The fs calls the gateway makes; each is one libuv pool request. Injectable so tests can hold a call
@@ -88,20 +93,22 @@ export interface StorageFs {
   stat(path: string): Promise<{ mtimeMs: number; ctimeMs: number; size: number }>
 }
 
-export interface StorageGatewayOptions {
-  /** The meetings root, called on every request because Settings can move it (infra/storage/paths.ts).
-   *  Must not throw: list/classify/read call it unguarded, and a throw there would reject the method,
-   *  breaking the never-rejects invariant. */
-  root: () => string
-  detector?: DatalessDetector
-  fs?: StorageFs
-  /** The libuv pool size; this process's by default. */
-  poolSize?: number
+export interface Storage {
+  /** The gateway over `root`, an absolute folder. Every gateway of one Storage shares its admission cap,
+   *  probe queue, running reads and failure memory; asking for a root again returns the same gateway. */
+  at(root: string): StorageGateway
 }
 
 type Settled<T> = { status: 'ok'; value: T } | StorageFailure
 type Unread = Exclude<ReadResult, { status: 'ok' }>
 type PresenceOf = (files: readonly FileVersion[]) => Promise<Map<string, ContentPresence>>
+
+export interface StorageOptions {
+  detector?: DatalessDetector
+  fs?: StorageFs
+  /** The libuv pool size; this process's by default. */
+  poolSize?: number
+}
 
 /** Read outcomes that describe the file itself: repeating the read inside the TTL would only pin another
  *  pool thread or spawn another probe. */
@@ -212,19 +219,17 @@ function createPresenceQueue(detector: DatalessDetector): PresenceOf {
     })
 }
 
-export function createStorageGateway({
-  root,
+export function createStorage({
   detector = createDatalessDetector(),
   fs = { readdir, readFile, realpath, stat },
   poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE)
-}: StorageGatewayOptions): StorageGateway {
+}: StorageOptions = {}): Storage {
   const admission = createAdmission(Math.max(1, poolSize - RESERVED_POOL_THREADS))
   const presenceOf = createPresenceQueue(detector)
-  /** Running content reads, by resolved path and version. */
+  /** Running content reads, by resolved path and version — shared by every gateway of this Storage. */
   const reads = new Map<string, Promise<Settled<Buffer>>>()
   /** Recent reads that returned no content, by path. The TTL is constant, so insertion order is expiry order. */
   const failures = new Map<string, { result: Unread; expiresAt: number }>()
-  let resolvedRoot: { root: string; real: string } | undefined
 
   /** null once the request holds a permit, else why it got none. */
   async function admit(lane: Lane, request: Request): Promise<StorageFailure | null> {
@@ -257,22 +262,6 @@ export function createStorageGateway({
     return verdicts instanceof Map ? verdicts : new Map<string, ContentPresence>()
   }
 
-  async function resolveRoot(base: string, request: Request): Promise<Settled<string>> {
-    if (resolvedRoot?.root === base) return { status: 'ok', value: resolvedRoot.real }
-    const real = await call('metadata', request, () => fs.realpath(base))
-    if (real.status === 'ok') resolvedRoot = { root: base, real: real.value }
-    return real
-  }
-
-  /** The symlink-free path of `path`, if it lies inside the symlink-free root. */
-  async function resolveInside(base: string, path: string, request: Request): Promise<Settled<string>> {
-    const realBase = await resolveRoot(base, request)
-    if (realBase.status !== 'ok') return realBase
-    const real = await call('metadata', request, () => fs.realpath(path))
-    if (real.status !== 'ok') return real
-    return leavesBase(relative(realBase.value, real.value)) ? outsideRoot() : real
-  }
-
   /** Reads `real` once per version, however many callers ask while that read runs. */
   async function readShared(real: string, version: ContentVersion, request: Request): Promise<Settled<Buffer>> {
     const key = [real, version.mtimeMs, version.ctimeMs, version.size].join('\0')
@@ -290,19 +279,6 @@ export function createStorageGateway({
     return untilEnded(reading, request, 'running')
   }
 
-  async function readLocal(base: string, path: string, request: Request): Promise<ReadResult> {
-    const file = await statFile(path, request)
-    if (file.status !== 'ok') return file
-    const version = versionOf(file.value)
-    const presence = (await presenceWithin([file.value], request)).get(path)
-    if (request.signal.aborted) return request.ended('waiting')
-    if (presence !== 'local') return { status: presence ?? 'unknown', version }
-    const real = await resolveInside(base, path, request)
-    if (real.status !== 'ok') return real
-    const bytes = await readShared(real.value, version, request)
-    return bytes.status === 'ok' ? { status: 'ok', version, bytes: bytes.value } : bytes
-  }
-
   function remember(path: string, result: Unread): void {
     const now = performance.now()
     for (const [key, entry] of failures) {
@@ -313,57 +289,115 @@ export function createStorageGateway({
     failures.set(path, { result, expiresAt: now + FAILURE_TTL_MS })
   }
 
+  function gatewayAt(base: string): StorageGateway {
+    let realRoot: string | undefined
+
+    async function resolveRoot(request: Request): Promise<Settled<string>> {
+      if (realRoot !== undefined) return { status: 'ok', value: realRoot }
+      const real = await call('metadata', request, () => fs.realpath(base))
+      if (real.status === 'ok') realRoot = real.value
+      return real
+    }
+
+    /** The symlink-free path of `path`, if it lies inside the symlink-free root. */
+    async function resolveInside(path: string, request: Request): Promise<Settled<string>> {
+      const realBase = await resolveRoot(request)
+      if (realBase.status !== 'ok') return realBase
+      const real = await call('metadata', request, () => fs.realpath(path))
+      if (real.status !== 'ok') return real
+      return leavesBase(relative(realBase.value, real.value)) ? outsideRoot() : real
+    }
+
+    async function readLocal(path: string, request: Request): Promise<ReadResult> {
+      const file = await statFile(path, request)
+      if (file.status !== 'ok') return file
+      const version = versionOf(file.value)
+      const presence = (await presenceWithin([file.value], request)).get(path)
+      if (request.signal.aborted) return request.ended('waiting')
+      if (presence !== 'local') return { status: presence ?? 'unknown', version }
+      const real = await resolveInside(path, request)
+      if (real.status !== 'ok') return real
+      const bytes = await readShared(real.value, version, request)
+      return bytes.status === 'ok' ? { status: 'ok', version, bytes: bytes.value } : bytes
+    }
+
+    return {
+      async list(relDir, { signal } = {}) {
+        const dir = underRoot(base, relDir)
+        if (!dir) return outsideRoot()
+        const request = openRequest(METADATA_DEADLINE_MS, signal)
+        try {
+          const names = await call('metadata', request, () => fs.readdir(dir))
+          return names.status === 'ok' ? { status: 'ok', names: names.value } : names
+        } finally {
+          request.close()
+        }
+      },
+
+      async classify(relPaths, { signal } = {}) {
+        const request = openRequest(METADATA_DEADLINE_MS, signal)
+        try {
+          const stats = await Promise.all(
+            relPaths.map(async (rel): Promise<[string, Settled<FileVersion>]> => {
+              const path = underRoot(base, rel)
+              return [rel, path ? await statFile(path, request) : outsideRoot()]
+            })
+          )
+          const files = stats.flatMap(([, file]) => (file.status === 'ok' ? [file.value] : []))
+          const presence = files.length > 0 ? await presenceWithin(files, request) : new Map<string, ContentPresence>()
+          return new Map(
+            stats.map(([rel, file]): [string, FileClass] => {
+              if (file.status !== 'ok') return [rel, file]
+              const verdict = presence.get(file.value.path)
+              return [rel, { status: verdict === 'local' ? 'ok' : (verdict ?? 'unknown'), version: versionOf(file.value) }]
+            })
+          )
+        } finally {
+          request.close()
+        }
+      },
+
+      async read(relPath, { signal } = {}) {
+        const path = underRoot(base, relPath)
+        if (!path) return outsideRoot()
+        const remembered = failures.get(path)
+        if (remembered && remembered.expiresAt > performance.now()) return remembered.result
+        const request = openRequest(CONTENT_DEADLINE_MS, signal)
+        try {
+          const result = await readLocal(path, request)
+          if (result.status !== 'ok' && REMEMBERED.has(result.status)) remember(path, result)
+          return result
+        } finally {
+          request.close()
+        }
+      },
+
+      async noteWritten(relPath, { signal } = {}) {
+        const path = underRoot(base, relPath)
+        if (!path) return outsideRoot()
+        failures.delete(path)
+        const request = openRequest(METADATA_DEADLINE_MS, signal)
+        try {
+          const file = await statFile(path, request)
+          if (file.status !== 'ok') return file
+          detector.markLocal([file.value])
+          return { status: 'ok', version: versionOf(file.value) }
+        } finally {
+          request.close()
+        }
+      }
+    }
+  }
+
+  const gateways = new Map<string, StorageGateway>()
   return {
-    async list(relDir, { signal } = {}) {
-      const dir = underRoot(root(), relDir)
-      if (!dir) return outsideRoot()
-      const request = openRequest(METADATA_DEADLINE_MS, signal)
-      try {
-        const names = await call('metadata', request, () => fs.readdir(dir))
-        return names.status === 'ok' ? { status: 'ok', names: names.value } : names
-      } finally {
-        request.close()
+    at(root) {
+      let gateway = gateways.get(root)
+      if (!gateway) {
+        gateway = gatewayAt(root)
+        gateways.set(root, gateway)
       }
-    },
-
-    async classify(relPaths, { signal } = {}) {
-      const base = root()
-      const request = openRequest(METADATA_DEADLINE_MS, signal)
-      try {
-        const stats = await Promise.all(
-          relPaths.map(async (rel): Promise<[string, Settled<FileVersion>]> => {
-            const path = underRoot(base, rel)
-            return [rel, path ? await statFile(path, request) : outsideRoot()]
-          })
-        )
-        const files = stats.flatMap(([, file]) => (file.status === 'ok' ? [file.value] : []))
-        const presence = files.length > 0 ? await presenceWithin(files, request) : new Map<string, ContentPresence>()
-        return new Map(
-          stats.map(([rel, file]): [string, FileClass] => {
-            if (file.status !== 'ok') return [rel, file]
-            const verdict = presence.get(file.value.path)
-            return [rel, { status: verdict === 'local' ? 'ok' : (verdict ?? 'unknown'), version: versionOf(file.value) }]
-          })
-        )
-      } finally {
-        request.close()
-      }
-    },
-
-    async read(relPath, { signal } = {}) {
-      const base = root()
-      const path = underRoot(base, relPath)
-      if (!path) return outsideRoot()
-      const remembered = failures.get(path)
-      if (remembered && remembered.expiresAt > performance.now()) return remembered.result
-      const request = openRequest(CONTENT_DEADLINE_MS, signal)
-      try {
-        const result = await readLocal(base, path, request)
-        if (result.status !== 'ok' && REMEMBERED.has(result.status)) remember(path, result)
-        return result
-      } finally {
-        request.close()
-      }
+      return gateway
     }
   }
 }

@@ -41,6 +41,9 @@ export interface DatalessDetector {
   /** Resolves with an entry for every path in `files` and never rejects. Only files whose version is not
    *  cached are probed, all in one batch. */
   classify(files: readonly FileVersion[]): Promise<Map<string, ContentPresence>>
+  /** Records `files` as local at their given version without probing: this process has just written them.
+   *  Eviction changes ctime, so an evicted file can never answer from this entry. */
+  markLocal(files: readonly FileVersion[]): void
 }
 
 /** SF_DATALESS, <sys/stat.h>. */
@@ -198,6 +201,9 @@ export function createDatalessDetector(probe: PresenceProbe = presenceProbeFor(p
         if (presence !== 'unknown') remember(file, presence)
       })
       return verdicts
+    },
+    markLocal(files) {
+      for (const file of files) remember(file, 'local')
     }
   }
 }
