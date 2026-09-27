@@ -830,9 +830,7 @@ import { redactSecrets } from '@shared/redact'
 import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
 import { applySpeakerNames, clusterNamePairsFromAlignment } from '@shared/transcript-align'
-import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { freezeAsciiUserAgent } from './app-user-agent'
-import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 import { importEmbeddedCloudflareKey, embeddedCloudflareKeyAvailable, restoreEmbeddedCloudflareKey } from './embedded-cloudflare-key'
 
 /**
@@ -885,9 +883,8 @@ function makeRefreshDustAuth(current: {
 // `??=` on BOTH platforms leaves an explicit QA/operator override (ASKTOTO_LOCAL_KEYSTORE already set
 // in the environment) untouched — including forcing the file keystore on Windows for isolated QA.
 // ENT-029: preserve Métis display branding without putting non-ASCII bytes into Chromium headers.
-// Run before edition/display-name changes and before the first session is initialized.
+// Run before any display-name change and before the first session is initialized.
 freezeAsciiUserAgent(app)
-initializeCaheEditionIdentity()
 if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
 // Self-test must own a throwaway userData before anything resolves userData; no-op unless
@@ -913,7 +910,7 @@ if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
 // stays Electron unless a wrapper .app overrides Info.plist — do not invent
 // a second product name for unpackaged builds. Packaged Metis.app already
 // uses CFBundleDisplayName Métis.
-if (!app.isPackaged && !isCaheEdition()) {
+if (!app.isPackaged) {
   try {
     app.setName('Métis')
   } catch {
@@ -926,7 +923,7 @@ if (!app.isPackaged && !isCaheEdition()) {
 // "Métis Helper" child-process bundles crashed Chromium at launch on macOS 26+/Tahoe; see the
 // productName note in electron-builder.yml). Adopt the newest existing prior profile once so settings,
 // transcripts, and secret-key.bin survive the rename. Must run before anything opens userData.
-if (app.isPackaged && !process.env.ASKTOTO_USERDATA && !isCaheEdition()) {
+if (app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   try {
     const ud = app.getPath('userData')
     if (!existsSync(join(ud, 'settings.json'))) {
@@ -8865,17 +8862,9 @@ if (!app.requestSingleInstanceLock()) {
   } catch {
     /* best-effort warm-up */
   }
-  // Cahê pilot only (a no-op everywhere else): seed the installer-embedded Kimi key into the normal
-  // encrypted keystore, exactly once per profile. Settings/the keystore are safe to touch here — same
-  // phase as the first getSettings() read just above. See cahe-embedded-key.ts for the one-time-seed
-  // design that lets a user's later key change/removal stick.
-  importEmbeddedCaheKey()
-  // Cahê M13: one-time enable of the on-device model so the background screen reader works out of the box
-  // (own marker → also migrates existing pilot profiles upgraded from 1.0.7). See cahe-embedded-key.ts.
-  seedCaheLocalAiForBackgroundScreen()
-  // Every build (not just Cahê): seed an optional installer-embedded Cloudflare proxy key, once per
-  // profile, so a fresh install of the default provider can answer with zero paste-a-key setup when the
-  // operator chose to embed one. See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
+  // Seed an optional installer-embedded Cloudflare proxy key, once per profile, so a fresh install of
+  // the default provider can answer with zero paste-a-key setup when the operator chose to embed one.
+  // See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
   importEmbeddedCloudflareKey()
   {
     setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))

@@ -4,7 +4,7 @@
  *
  * Why this exists at all. Métis is a packaged Electron app: `npx asar extract` recovers every string
  * it ships, so any embedded credential is a published credential. This repo already refuses to build
- * with an embedded key (scripts/check-cahe-package.mjs), and a Cloudflare account token is a worse
+ * with an embedded key (scripts/check-embedded-cloudflare-key.mjs), and a Cloudflare account token is a worse
  * thing to embed than a per-vendor model key — it reaches Workers AI, every third-party model behind
  * Unified Billing, and whatever else the token's scopes allow, all billed to the operator.
  *
