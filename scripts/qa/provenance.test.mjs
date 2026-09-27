@@ -107,7 +107,7 @@ function passEvidenceLine(provenance, assetSha256, ticket = 'M2-0028') {
   return `${JSON.stringify({ ticket, result: 'PASS', build_run_id: provenance.run.id, artifact_sha256: assetSha256 })}\n`
 }
 
-/** Full-coverage PASS evidence text (JSON Lines) for exactly the given assets, bound to `provenance`'s run. */
+/** PASS evidence text (JSON Lines) with one record per given asset, bound to `provenance`'s run. Also used to build partial coverage. */
 function passEvidenceFor(provenance, assets) {
   return assets.map((asset) => passEvidenceLine(provenance, asset.sha256)).join('')
 }
@@ -390,8 +390,7 @@ test('evidence needs a PASS record bound to this run for every promotable asset'
     const provenance = assembleProvenance(records, e)
     const assets = promotableAssets(provenance)
 
-    // An empty file leaves every promotable asset uncovered — the refusal must name each one, not
-    // report a single stale "no evidence records" line.
+    // An empty file leaves every promotable asset uncovered, and the refusal names each one.
     assert.deepEqual(
       evidenceProblems('', provenance),
       assets.map((asset) => `no PASS record bound to run ${provenance.run.id} covers ${asset.name} (sha256 ${asset.sha256})`)
@@ -449,13 +448,9 @@ test('evidence problems name the line', async () => {
 
     // The blank line stays at line 3; lines 1, 2, 4 and 5 cover every promotable asset, so coverage adds
     // nothing and the blank line is the only problem.
-    const [first, second, ...rest] = assets
-    const blankAtLine3 = [
-      passEvidenceLine(provenance, first.sha256).trimEnd(),
-      passEvidenceLine(provenance, second.sha256).trimEnd(),
-      '',
-      ...rest.map((asset) => passEvidenceLine(provenance, asset.sha256).trimEnd())
-    ].join('\n')
+    const evidenceLines = passEvidenceFor(provenance, assets).trimEnd().split('\n')
+    evidenceLines.splice(2, 0, '')
+    const blankAtLine3 = evidenceLines.join('\n')
     problems = evidenceProblems(blankAtLine3, provenance)
     assert.equal(problems.length, 1)
     assert.match(problems[0], /line 3 is blank/)
@@ -488,9 +483,8 @@ test('a PASS record for one promotable asset never covers a different asset or p
       assert.ok(problems.some((p) => p.includes(asset.name)), `expected a problem naming ${asset.name}`)
     }
 
-    // The macOS QA-identity build is built but never shipped (ARCHITECTURE §7.1 is the realistic route
-    // to this: it is the one variant the owner's primary signing account can produce). A PASS record
-    // naming its asset is not a PASS record for any promotable asset, even alongside full coverage.
+    // The macOS QA-identity build is built and tested but never shipped: a PASS record naming its
+    // asset covers no promotable asset, and alongside full coverage it is still a refusal.
     const qaAsset = provenance.builds.find((build) => build.variant === 'mac-qa-identity').assets[0]
     const fullCoveragePlusQa = passEvidenceFor(provenance, assets) + passEvidenceLine(provenance, qaAsset.sha256)
     problems = evidenceProblems(fullCoveragePlusQa, provenance)

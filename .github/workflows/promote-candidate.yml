@@ -16,7 +16,7 @@ on:
         required: true
         type: string
       evidence:
-        description: Evidence records (JSON Lines), one PASS record per promotable asset bound to that run's bytes; pass them with -F evidence=@file
+        description: Evidence records (JSON Lines), one PASS record per promotable asset bound to that run's bytes; pass them with -F evidence=@file. Records naming a non-promotable asset, such as the QA-identity build, are refused.
         required: true
         type: string
       publish:

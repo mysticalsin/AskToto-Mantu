@@ -327,13 +327,12 @@ export async function directoryProblems(provenance, dir, variants) {
  * artifact_sha256 are read — full record validation belongs to M2-0002's checker.
  */
 export function evidenceProblems(evidenceText, provenance) {
-  const lines = evidenceLines(evidenceText)
-
   const assets = promotableAssets(provenance)
   const promotableHashes = new Set(assets.map((asset) => asset.sha256))
   const problems = []
   const coveredHashes = new Set()
 
+  const lines = evidenceLines(evidenceText)
   lines.forEach((line, index) => {
     const n = index + 1
     if (line.trim() === '') {
@@ -392,7 +391,7 @@ export function releaseNotes({ provenance, evidence, promotionRunUrl }) {
       ? `The macOS app is signed with the program's self-signed QA certificate (SHA-1 \`${macBuild.signing.certificate_sha1}\`), not a Developer ID, and it is not notarized.`
       : 'The macOS app is ad-hoc signed and not notarized.'
 
-  const assets = [...promotableAssets(provenance)].sort((a, b) => a.name.localeCompare(b.name))
+  const assets = promotableAssets(provenance).sort((a, b) => a.name.localeCompare(b.name))
   const rows = assets.map((asset) => `| \`${asset.name}\` | \`${asset.sha256}\` |`).join('\n')
 
   return `Owner-channel prerelease of Métis ${provenance.version}. These files are the exact bytes of QA candidate run [${provenance.run.id}](${provenance.run.url}), built once from commit \`${provenance.commit}\` and promoted by [this run](${promotionRunUrl}) without rebuilding.
