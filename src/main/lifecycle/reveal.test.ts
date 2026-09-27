@@ -17,9 +17,9 @@ function windowStub(visible = true) {
   } satisfies RevealWindow
 }
 
-function deps(overrides: Partial<RevealControllerDeps> = {}) {
+function deps(overrides: Partial<RevealControllerDeps> = {}, initialState: PresenterState = { kind: 'PARKED', layout: 'hide' }) {
   const w = windowStub()
-  let state: PresenterState = { kind: 'PARKED', layout: 'hide' }
+  let state: PresenterState = initialState
   const base: RevealControllerDeps = {
     ensureWindow: vi.fn(() => w),
     legacyRevealEnabled: vi.fn(() => false),
@@ -31,6 +31,10 @@ function deps(overrides: Partial<RevealControllerDeps> = {}) {
     disableClickThrough: vi.fn()
   }
   return { w, deps: { ...base, ...overrides } }
+}
+
+function firstCallOrder(fn: () => void): number {
+  return vi.mocked(fn).mock.invocationCallOrder[0] ?? 0
 }
 
 describe('M2-0036 reveal controller', () => {
@@ -77,6 +81,24 @@ describe('M2-0036 reveal controller', () => {
     expect(w.show).toHaveBeenCalledTimes(1)
     expect(w.focus).toHaveBeenCalledTimes(1)
     expect(w.showInactive).not.toHaveBeenCalled()
+    expect(firstCallOrder(d.cancelPendingRepark)).toBeLessThan(firstCallOrder(d.restoreInteractiveLayout))
+    expect(firstCallOrder(d.restoreInteractiveLayout)).toBeLessThan(firstCallOrder(d.repairOffscreenBounds))
+    expect(firstCallOrder(d.repairOffscreenBounds)).toBeLessThan(firstCallOrder(d.disableClickThrough))
+    expect(firstCallOrder(d.disableClickThrough)).toBeLessThan(firstCallOrder(w.show))
+    expect(firstCallOrder(w.show)).toBeLessThan(firstCallOrder(w.focus))
+  })
+
+  it.each(['hide', 'island', 'bar'] as const)('reports parked %s state until an explicit reveal exits it', (layout) => {
+    const { deps: d } = deps({}, { kind: 'PARKED', layout })
+    const reveal = createRevealController(d)
+
+    expect(reveal.reveal('activate', { focus: true })).toEqual({
+      state: { kind: 'PARKED', layout },
+      action: 'ignored-boot'
+    })
+
+    reveal.markBootComplete()
+    expect(reveal.reveal('activate', { focus: true })).toEqual({ state: { kind: 'REVEALED' }, action: 'revealed' })
   })
 
   it('notification click uses the same reveal path without stealing focus', () => {
