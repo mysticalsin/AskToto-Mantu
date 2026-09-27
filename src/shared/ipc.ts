@@ -1113,9 +1113,7 @@ export const BaseSettingsSchema = z.object({
    *  the ON-DEVICE model and cache the description, so "What's on my screen" answers from pre-computed text
    *  instead of a cold capture + full-image round trip. On-device only — nothing extra is sent to the cloud;
    *  Private View hard-blocks it. Default OFF — explicit opt-in. Continuous screen reading is its own
-   *  consent decision, and it also requires Local AI to be enabled (itself off by default). (The Cahê
-   *  pilot still seeds both true explicitly — cahe-embedded-key.ts — which is an explicit per-edition
-   *  choice, not a default.) */
+   *  consent decision, and it also requires Local AI to be enabled (itself off by default). */
   backgroundScreenContext: z.boolean().default(false),
   // How see-through the overlay's glass background is. A multiplier on the default glass alpha values
   // (see --glass-fill etc. in styles.css) — 1 = today's default look, lower = more transparent (see more

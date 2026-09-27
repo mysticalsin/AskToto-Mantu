@@ -15,9 +15,7 @@ useDefault = true
 # Verified 2026-08-21 by running gitleaks (docker run zricethezav/gitleaks:latest detect --source=.)
 # against this exact repo history. Before this allowlist, it reported 5 leaks — all deliberately-fake
 # credentials that exist ONLY to exercise this app's OWN redaction/detection code paths, never real
-# secrets:
-#   - scripts/check-cahe-package.test.ts:28   sk-kimi-QA165abcdefghijklmnop   (fixture, "QA165"-tagged)
-#   - src/main/cahe-embedded-key.test.ts:21   sk-kimi-test0123456789abcdefghij (fixture, "-test-" tagged)
+# secrets. Three remain in the tree; the other two were sk-kimi- fixtures in test files since deleted:
 #   - src/shared/redact.test.ts:34,59         ABCDEF123456                    (redactSecrets() unit fixtures)
 #   - license-server/ops.test.mjs:286         ATK-HY2JVMZ3P3JF8CGAQWPR        (license-server test fixture)
 # scripts/qa/e2e-workflows.mjs's own 'qa-proxy-key' (the physical QA harness's deliberately-invalid
