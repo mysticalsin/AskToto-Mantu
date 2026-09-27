@@ -4,6 +4,7 @@ import { LocalVisionEvidenceSchema } from './local-ai'
 import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
+import { RENDERER_VIEWS } from './renderer-view'
 
 /** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
 export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
@@ -12,6 +13,23 @@ export const ListeningStatePayloadSchema = z.object({
   startedAt: LiveMeetingStartedAtSchema.optional()
 })
 export type ListeningStatePayload = z.infer<typeof ListeningStatePayloadSchema>
+
+export const HistoryTraceSchema = z.object({ requestId: z.string().uuid(), sentAt: z.number().finite().positive() })
+export type HistoryTrace = z.infer<typeof HistoryTraceSchema>
+export const HistorySettledSchema = z.object({
+  requestId: z.string().uuid(),
+  outcome: z.enum(['ok', 'failed', 'discarded']),
+  ipcMs: z.number().finite().nonnegative(),
+  renderMs: z.number().finite().nonnegative().optional()
+})
+export type HistorySettled = z.infer<typeof HistorySettledSchema>
+export const RendererCrashContextSchema = z.object({ view: z.enum(RENDERER_VIEWS), listening: z.boolean() })
+export type RendererCrashContext = z.infer<typeof RendererCrashContextSchema>
+export interface RendererCrashReport extends Partial<RendererCrashContext> {
+  message: string
+  stack?: string
+  componentStack?: string
+}
 
 export const ProviderIdSchema = z.enum([
   'anthropic',
@@ -147,6 +165,7 @@ export const IPC = {
   openBrainForClaude: 'brain:open-for-claude',
   recallList: 'recall:list',
   recallSearch: 'recall:search',
+  historySettled: 'history:settled',
   recallOpen: 'recall:open',
   recallRead: 'recall:read',
   recallExportPlain: 'recall:export-plain', // user-initiated decrypted md copy of ONE meeting

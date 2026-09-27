@@ -333,6 +333,8 @@ export function auditLog(event: AuditEvent, detail: Record<string, unknown> = {}
   }
 }
 
+export type AuditSink = typeof auditLog
+
 /** Test seam: the current chain tip, so a behavioral test can prove continuity without parsing files. */
 export function auditChainTip(): { seq: number; prev: string } {
   if (!chainLoaded) loadChainTip()

@@ -26,6 +26,8 @@ export interface RunObservabilityOptions {
   version: string
   platform: string
   arch: string
+  /** UV_THREADPOOL_SIZE as this process started with it (ADR-021); absent or empty means libuv's default. */
+  uvThreadpoolSize?: string
   audit: (event: AuditEvent, detail?: Record<string, unknown>) => void
   /** Electron's `powerMonitor` (or any object shaped like it) — pauses the stall monitor's heartbeat
    *  across sleep and resyncs it on resume; see stall-monitor.ts for why both events are needed. Also
