@@ -71,9 +71,11 @@ function stripTrailingNewlines(text) {
   return text.replace(/(\r?\n)+$/, '')
 }
 
-/** Every line of an evidence file, in order, with every trailing line ending removed first. */
+/** Every line of an evidence file, in order, with every trailing line ending removed first. An empty
+ *  file (or one holding only line endings) has zero lines, not one empty line. */
 function evidenceLines(text) {
-  return stripTrailingNewlines(text).split(/\r?\n/)
+  const stripped = stripTrailingNewlines(text)
+  return stripped === '' ? [] : stripped.split(/\r?\n/)
 }
 
 /**
@@ -326,9 +328,6 @@ export async function directoryProblems(provenance, dir, variants) {
  */
 export function evidenceProblems(evidenceText, provenance) {
   const lines = evidenceLines(evidenceText)
-  if (lines.length === 1 && lines[0] === '') {
-    return ['no evidence records: promotion needs at least one passing record bound to these bytes']
-  }
 
   const assets = promotableAssets(provenance)
   const promotableHashes = new Set(assets.map((asset) => asset.sha256))
