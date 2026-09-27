@@ -280,6 +280,21 @@ const UNDECRYPTABLE_MSG =
  *  can be taken down by whatever the envelope happens to contain. */
 export type SavedDecode = { ok: true; text: string } | { ok: false; reason: string }
 
+/** Classify an at-rest envelope by marker only. No decryption, key access, or filesystem writes. */
+export function envelopeKeyKind(buf: Buffer): 'plain' | 'keychain' | 'file' | 'malformed' {
+  if (buf.length >= MARKER_LEN && buf.subarray(0, MARKER_LEN).equals(ENC_MARKER_V2)) {
+    try {
+      const env = JSON.parse(buf.subarray(MARKER_LEN).toString('utf8')) as { kLocal?: unknown }
+      if (typeof env.kLocal !== 'string') return 'malformed'
+      return env.kLocal.startsWith('F:') ? 'file' : 'keychain'
+    } catch {
+      return 'malformed'
+    }
+  }
+  if (buf.length >= ENC_MARKER.length && buf.subarray(0, ENC_MARKER.length).equals(ENC_MARKER)) return 'keychain'
+  return 'plain'
+}
+
 /** Decode saved bytes, decrypting if the at-rest marker is present.
  *  `allowKeychainRecovery`/`filePath` are forwarded to decryptEnvelopeV2 — see its doc comment; the v1
  *  legacy branch below gets the same recovery bypass but never self-heals (no envelope kLocal to rewrap). */

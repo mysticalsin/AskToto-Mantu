@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash, randomBytes } from 'node:crypto'
@@ -171,6 +171,8 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
   })
 
   it('I7: explicit rebuild (startRebuild) is the repair path — it purges and writes a readable index', async () => {
+    const beforeIndex = sha256(readFileSync(primary))
+
     const r = await startRebuild(s)
     await waitForIdle()
 
@@ -178,5 +180,9 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     expect(createStreamMock).toHaveBeenCalled()
     expect(indexUnavailable(s)).toBeNull()
     expect(readIndex(s).ingested['unreachable-a.md']?.ok).toBe(true)
+    const preservedDir = join(meetingsFolder, '.brain-preserved')
+    const preserved = readdirSync(preservedDir)
+    expect(preserved).toHaveLength(1)
+    expect(sha256(readFileSync(join(preservedDir, preserved[0])))).toBe(beforeIndex)
   })
 })

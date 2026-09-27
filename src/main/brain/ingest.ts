@@ -2295,7 +2295,7 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   // Fix F: preserveCorrections copies the journal to escrow and restores it even if the wipe fails —
   // check the result and abort (nothing re-extracted, corrections safe) rather than rebuild atop a
   // half-deleted store.
-  const purge = purgeBrain(s, { preserveCorrections: true })
+  const purge = purgeBrain(s, { mode: 'rebuild', preserveCorrections: true })
   if (!purge.ok) {
     return {
       queued: 0,
