@@ -28,7 +28,9 @@ export interface RunObservabilityOptions {
   arch: string
   audit: (event: AuditEvent, detail?: Record<string, unknown>) => void
   /** Electron's `powerMonitor` (or any object shaped like it) — pauses the stall monitor's heartbeat
-   *  across sleep and resyncs it on resume; see stall-monitor.ts for why both events are needed. */
+   *  across sleep and resyncs it on resume; see stall-monitor.ts for why both events are needed. Also
+   *  restarts that heartbeat on 'unlock-screen' as a fallback for a sleep whose matching 'resume' never
+   *  arrives — see the `suspended`-gated handler below for why that resync is conditional. */
   powerMonitor: PowerMonitorSource
   /** Test seams only — production wires the real fs-backed boot-sentinel functions and real timers. */
   deps?: {
