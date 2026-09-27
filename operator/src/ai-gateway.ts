@@ -141,11 +141,14 @@ export async function verifyDefaultGatewayPrivacy(
   const race = <T>(pending: Promise<T>): Promise<T> => Promise.race([pending, timedOut])
 
   try {
+    // The Workers runtime accepts only 'follow' or 'manual' for `redirect`; 'error' is a TypeError
+    // at fetch time, not a rejected promise. A 3xx is still never trusted or followed: 'manual'
+    // returns it as an ordinary response, which the explicit status check below refuses outright.
     const pending = Promise.resolve().then(() =>
       fetchImpl(url, {
         method: 'GET',
         headers: { authorization: `Bearer ${secret}`, accept: 'application/json' },
-        redirect: 'error',
+        redirect: 'manual',
         cache: 'no-store',
         credentials: 'omit',
         signal: controller.signal
@@ -161,6 +164,10 @@ export async function verifyDefaultGatewayPrivacy(
     )
     const response = await race(pending)
     if (response.redirected || (response.url && response.url !== url)) {
+      cancelResponse(response)
+      throw new GatewayPrivacyError('GATEWAY_RESPONSE_UNVERIFIED')
+    }
+    if (response.status >= 300 && response.status < 400) {
       cancelResponse(response)
       throw new GatewayPrivacyError('GATEWAY_RESPONSE_UNVERIFIED')
     }
