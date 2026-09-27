@@ -6,14 +6,17 @@ import { app } from 'electron'
 import { PROVIDER_IDS } from '@shared/providers'
 import { BrainIndexSchema } from '@shared/brain'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
+import { MAX_INGEST_ATTEMPTS } from '../infra/scheduler/policy'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, ingestFailureCounts, ingestFailureDetails, startBackfill, MAX_INGEST_ATTEMPTS, whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress, ingestFailureCounts, ingestFailureDetails, startBackfill, whenIndexWritesSettle, type BackfillStartOptions } from './ingest'
 import { readIndex } from './store'
 
 vi.mock('electron')
 
 const createStreamMock = vi.hoisted(() => vi.fn())
 vi.mock('../llm', () => ({ createStream: createStreamMock }))
+
+const userTrigger = { trigger: 'user' } as unknown as BackfillStartOptions
 
 /**
  * T6 6a (cross-provider extraction failover) + 6b (MAX_INGEST_ATTEMPTS / exhausted terminal state).
@@ -153,7 +156,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockImplementation(respondError('404 page not found'))
 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i++) {
-      expect(startBackfill().queued).toBe(1)
+      expect(startBackfill(undefined, userTrigger).queued).toBe(1)
       await waitForIdle()
     }
 
@@ -162,10 +165,10 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     expect(record?.attempts).toBe(MAX_INGEST_ATTEMPTS)
     expect(record?.exhausted).toBe(true)
 
-    // The automatic reconcile tick (respectRetryBackoff) must never touch an exhausted record, even
-    // once its own backoff window has already elapsed.
+    // The automatic default must never touch an exhausted record, even once its own backoff window has
+    // already elapsed.
     createStreamMock.mockClear()
-    expect(startBackfill(undefined, { respectRetryBackoff: true }).queued).toBe(0)
+    expect(startBackfill().queued).toBe(0)
     expect(createStreamMock).not.toHaveBeenCalled()
   })
 
@@ -175,15 +178,14 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockImplementation(respondError('404 page not found'))
 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i++) {
-      startBackfill()
+      startBackfill(undefined, userTrigger)
       await waitForIdle()
     }
     expect(readIndex(getSettings()).ingested['always-fails-2.md']?.exhausted).toBe(true)
 
-    // Manual retry (bare startBackfill — the exact call the Retry-index button's IPC handler makes)
-    // requeues it despite `exhausted`, and clears the flag + resets attempts before this next failure
-    // — one more failure afterward must land at attempts:1, never attempts:7 / re-exhausted.
-    expect(startBackfill().queued).toBe(1)
+    // Manual retry requeues it despite `exhausted`, and clears the flag + resets attempts before this
+    // next failure — one more failure afterward must land at attempts:1, never attempts:7 / re-exhausted.
+    expect(startBackfill(undefined, userTrigger).queued).toBe(1)
     await waitForIdle()
 
     const record = readIndex(getSettings()).ingested['always-fails-2.md']
@@ -197,7 +199,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockImplementation(respondError('404 page not found'))
 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i++) {
-      startBackfill()
+      startBackfill(undefined, userTrigger)
       await waitForIdle()
     }
     expect(readIndex(getSettings()).ingested['always-fails-3.md']?.exhausted).toBe(true)
@@ -205,7 +207,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockReset()
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill().queued).toBe(1)
+    expect(startBackfill(undefined, userTrigger).queued).toBe(1)
     await waitForIdle()
 
     const record = readIndex(getSettings()).ingested['always-fails-3.md']
