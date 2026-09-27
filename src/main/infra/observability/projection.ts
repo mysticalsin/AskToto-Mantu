@@ -20,6 +20,7 @@ export type FieldKind =
   | 'version'
   | 'isoTime'
   | 'token'
+  | 'bundleName'
   | 'errorText'
   | readonly string[]
 export type EventFields = Readonly<Record<string, FieldKind>>
@@ -124,6 +125,17 @@ export const OBSERVABILITY_EVENTS = {
     bootId: 'id',
     p99Ms: 'ms'
   },
+  /** Out-of-process sampler captures a content-free stall bundle. */
+  'app.stall.sampled': {
+    bootId: 'id',
+    stalledMs: 'ms',
+    bundle: 'bundleName'
+  },
+  /** Out-of-process sampler reports a sampling, bundling, or watcher failure. */
+  'app.stall.sample_failed': {
+    bootId: 'id',
+    reason: ['sample', 'bundle', 'watcher']
+  },
   /** Overlay renderer became responsive again after a wedge. */
   'app.responsive': {
     kind: ['overlay'],
@@ -184,10 +196,12 @@ export type ObservabilityDetail<E extends ObservabilityEvent> = {
   readonly [F in keyof (typeof OBSERVABILITY_EVENTS)[E]]?: FieldValue<(typeof OBSERVABILITY_EVENTS)[E][F]> | null
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+const UUID_RE = new RegExp(`^${UUID_PATTERN}$`, 'i')
 const VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.]{1,32})?$/
 const ISO_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/
 const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
+const STALL_BUNDLE_NAME_RE = new RegExp(`^${UUID_PATTERN}\\.\\d{1,15}\\.\\d{1,15}\\.txt$`, 'i')
 const URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>]*/gi
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g
 const QUOTED_RE = /"[^"\n]*"|'[^'\n]*'|`[^`\n]*`|“[^”\n]*”|‘[^’\n]*’/g
@@ -235,6 +249,8 @@ function projectValue(kind: FieldKind, value: unknown): unknown {
       return typeof value === 'string' && ISO_TIME_RE.test(value) ? value : undefined
     case 'token':
       return typeof value === 'string' && TOKEN_RE.test(value) ? value : undefined
+    case 'bundleName':
+      return typeof value === 'string' && STALL_BUNDLE_NAME_RE.test(value) ? value : undefined
     case 'errorText':
       return scrubErrorText(value)
   }

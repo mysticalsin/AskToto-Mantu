@@ -29,6 +29,8 @@ function canonical(kind: unknown): unknown {
       return isoTime
     case 'token':
       return 'safe-token_1'
+    case 'bundleName':
+      return `${uuid}.1700000000000.12000.txt`
     case 'errorText':
       return 'TypeError: failed before content'
     default:
@@ -83,6 +85,18 @@ describe('observability projection', () => {
         }
       }
     }
+  })
+
+  it('keeps maximum-shape stall bundle filenames longer than token fields', () => {
+    // UUID 36 + two dots 2 + two 15-digit fields 30 + ".txt" 4 = 72 chars; token caps at 64.
+    const stalledMs = 123456789012345
+    const bundle = `${uuid}.123456789012345.${stalledMs}.txt`
+
+    expect(projectEvent('app.stall.sampled', { bootId: uuid, stalledMs, bundle })).toEqual({
+      bootId: uuid,
+      stalledMs,
+      bundle
+    })
   })
 
   it.each([

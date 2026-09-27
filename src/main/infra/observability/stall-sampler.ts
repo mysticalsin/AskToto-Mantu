@@ -19,7 +19,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { runAlivePath } from '../../boot-sentinel'
-import type { AuditEvent } from '../../logger'
+import type { AuditSink } from '../../logger'
 import { captureDir, collectStallCaptures, type CaptureOutcome } from './stall-bundle'
 
 /** The ticket's "more than 10 s stale": how far past its scheduled rewrite the marker must be. */
@@ -34,7 +34,7 @@ export interface StallSamplerOptions {
   bootId: string
   /** How often the caller rewrites run-alive.json. */
   aliveIntervalMs: number
-  audit: (event: AuditEvent, detail?: Record<string, unknown>) => void
+  audit: AuditSink
   /** Test seams only; production uses the real spawn and collector. */
   deps?: { spawn?: typeof spawn; collect?: typeof collectStallCaptures }
 }
