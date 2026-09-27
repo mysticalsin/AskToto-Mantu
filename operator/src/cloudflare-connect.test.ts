@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { reviewedGatewayReply } from './ai-gateway.privacy-fixture'
 import { describe, expect, it } from 'vitest'
 import {
@@ -8,6 +11,7 @@ import {
   CF_OAUTH_MISSING,
   CF_OAUTH_TOKEN
 } from './cloudflare-connect'
+import { d1Store, type D1DatabaseLike } from './d1'
 import { handleRequest, type Env } from './index'
 import { memoryStore, type OperatorStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN, TEST_VAULT_KEY } from './test-fixtures'
@@ -267,5 +271,287 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     expect(html).toContain('name="accountId"')
     expect(html).toContain('placeholder="API token"')
     expect(html).not.toContain('id="cf-add"')
+  })
+})
+
+/** A real (in-memory) D1 that fails the `failOnNthMatch`-th statement whose SQL satisfies `match`,
+ *  inside whatever D1 transaction it runs in — `failOnNthMatch <= 0` never fails. Lets a test prove
+ *  what a D1 batch either commits or rolls back together, the same way
+ *  pulse-session-integrity.test.ts does, for any statement the batch contains (a vault_keys insert,
+ *  its audit row, or its event). */
+function sqliteD1WithOneFailedStatement(
+  db: DatabaseSync,
+  match: (sql: string) => boolean,
+  failOnNthMatch: number
+): D1DatabaseLike {
+  let matches = 0
+  return {
+    prepare(sql) {
+      const stmt = db.prepare(sql)
+      let bound: unknown[] = []
+      const wrapper = {
+        bind(...values: unknown[]) { bound = values; return wrapper },
+        async first<T>() { return (stmt.get(...(bound as never[])) as T) ?? null },
+        async all<T>() { return { results: stmt.all(...(bound as never[])) as T[] } },
+        async run() {
+          if (match(sql) && ++matches === failOnNthMatch) {
+            throw new Error('transient vault write failure')
+          }
+          const result = stmt.run(...(bound as never[]))
+          return { success: true, meta: { changes: Number(result.changes) } }
+        }
+      }
+      return wrapper
+    },
+    async batch(statements) {
+      db.exec('BEGIN')
+      try {
+        const results = []
+        for (const statement of statements) results.push(await statement.run() as { success: boolean })
+        db.exec('COMMIT')
+        return results
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+    }
+  }
+}
+
+const matchesVaultInsert = (sql: string): boolean => sql.includes('INTO vault_keys')
+const matchesAuditInsert = (sql: string): boolean => sql.includes('INTO audit')
+const matchesEventInsert = (sql: string): boolean => sql.includes('INTO events')
+
+function d1StoreWithSchema(
+  db: DatabaseSync,
+  failure: { match: (sql: string) => boolean; nth: number } = { match: matchesVaultInsert, nth: 0 }
+): OperatorStore {
+  db.exec(readFileSync(join(__dirname, '..', 'schema.sql'), 'utf8'))
+  return d1Store(sqliteD1WithOneFailedStatement(db, failure.match, failure.nth))
+}
+
+/** The provisioning's own audit/event rows, isolated from anything else a test wrote. */
+async function vaultWriteAuditAndEvents(store: OperatorStore): Promise<{ audits: unknown[]; events: unknown[] }> {
+  return {
+    audits: await store.listAudit(20, { action: 'vault-write' }),
+    events: (await store.listEvents(20)).filter((e) => e.kind === 'vault')
+  }
+}
+
+describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
+  it('provisions both cloudflare vault rows together against a real D1 schema, with one audit row and one event', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      const store = d1StoreWithSchema(db)
+      const { cookie, state } = await startCloudflareOAuth(store)
+      const cb = await handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-d1&state=${state}`, {
+          headers: { cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW, cfFetch }
+      )
+      expect(cb.status).toBe(303)
+      expect(cb.headers.get('location')).toBe('/?cf=connected#keys')
+      expect((await store.listVaultMeta()).map((v) => v.provider).sort()).toEqual(['cloudflare', 'cloudflare-account'])
+
+      // AC2: the provisioning writes both rows and exactly one audit row and one event, not one
+      // of each per row.
+      const { audits, events } = await vaultWriteAuditAndEvents(store)
+      expect(audits).toHaveLength(1)
+      expect(audits[0]).toMatchObject({ actor: 'tony.walteur@gmail.com' })
+      expect((audits[0] as { detail: string }).detail).toContain('cloudflare ·')
+      expect((audits[0] as { detail: string }).detail).toContain('cloudflare-account ·')
+      expect(events).toHaveLength(1)
+      expect((events[0] as { detail: string | null }).detail).toBe('write cloudflare, cloudflare-account')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('a write failure on the account row leaves no cloudflare vault row, audit row or event behind', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      // The 2nd INSERT INTO vault_keys is the account row; the gateway row is the 1st.
+      const store = d1StoreWithSchema(db, { match: matchesVaultInsert, nth: 2 })
+      const { cookie, state } = await startCloudflareOAuth(store)
+      const cb = handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-fail&state=${state}`, {
+          headers: { cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW, cfFetch }
+      )
+      await expect(cb).rejects.toThrow('transient vault write failure')
+      // Invariant: both rows, the audit row and the event commit in one D1 transaction. A failure
+      // on any of them rolls back every statement in the batch, so nothing is ever left committed
+      // on its own — no orphaned vault row and no audit/event recording a write that never happened.
+      expect(await store.listVaultMeta()).toEqual([])
+      const { audits, events } = await vaultWriteAuditAndEvents(store)
+      expect(audits).toEqual([])
+      expect(events).toEqual([])
+    } finally {
+      db.close()
+    }
+  })
+
+  it('a failed reconnect rolls back its own supersede, leaving the previous rows, audit row and event untouched', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      // The 4th INSERT INTO vault_keys overall is the reconnect's account row (1st connect: 2
+      // inserts; reconnect: gateway insert, then this one).
+      const store = d1StoreWithSchema(db, { match: matchesVaultInsert, nth: 4 })
+      const first = await startCloudflareOAuth(store)
+      await handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-first&state=${first.state}`, {
+          headers: { cookie: first.cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW, cfFetch }
+      )
+      const before = await store.listVaultRows()
+      expect(before).toHaveLength(2)
+      expect(before.every((row) => row.status === 'active' && row.cipher && row.iv)).toBe(true)
+      const beforeAuditAndEvents = await vaultWriteAuditAndEvents(store)
+      expect(beforeAuditAndEvents.audits).toHaveLength(1)
+      expect(beforeAuditAndEvents.events).toHaveLength(1)
+
+      const second = await startCloudflareOAuth(store)
+      const reconnect = handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-second&state=${second.state}`, {
+          headers: { cookie: second.cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW + 1, cfFetch }
+      )
+      await expect(reconnect).rejects.toThrow('transient vault write failure')
+
+      // The reconnect's batch supersedes the previous gateway row before its account insert fails;
+      // the rollback must undo that supersede too, or a crashed reconnect would wipe the working
+      // secret without ever completing the new one. Its would-be audit row and event never commit.
+      expect(await store.listVaultRows()).toEqual(before)
+      expect(await vaultWriteAuditAndEvents(store)).toEqual(beforeAuditAndEvents)
+    } finally {
+      db.close()
+    }
+  })
+
+  describe.each([
+    ['audit', matchesAuditInsert],
+    ['event', matchesEventInsert]
+  ] as const)('a %s-insert failure fails the whole vault-write batch', (kind, matchStatement) => {
+    it('leaves no cloudflare vault row behind on the first connect', async () => {
+      const db = new DatabaseSync(':memory:')
+      try {
+        // The provisioning's own audit/event insert is the 1st (and only) match.
+        const store = d1StoreWithSchema(db, { match: matchStatement, nth: 1 })
+        const { cookie, state } = await startCloudflareOAuth(store)
+        const cb = handleRequest(
+          new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-${kind}-fail&state=${state}`, {
+            headers: { cookie }
+          }),
+          env(),
+          { access: tony },
+          { store, now: NOW, cfFetch }
+        )
+        await expect(cb).rejects.toThrow('transient vault write failure')
+        expect(await store.listVaultMeta()).toEqual([])
+        const { audits, events } = await vaultWriteAuditAndEvents(store)
+        expect(audits).toEqual([])
+        expect(events).toEqual([])
+      } finally {
+        db.close()
+      }
+    })
+
+    it('leaves the previous rows, audit row and event untouched on a failed reconnect', async () => {
+      const db = new DatabaseSync(':memory:')
+      try {
+        // The 1st connect's own audit/event insert is the 1st match; the reconnect's is the 2nd.
+        const store = d1StoreWithSchema(db, { match: matchStatement, nth: 2 })
+        const first = await startCloudflareOAuth(store)
+        await handleRequest(
+          new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-${kind}-first&state=${first.state}`, {
+            headers: { cookie: first.cookie }
+          }),
+          env(),
+          { access: tony },
+          { store, now: NOW, cfFetch }
+        )
+        const before = await store.listVaultRows()
+        expect(before).toHaveLength(2)
+        const beforeAuditAndEvents = await vaultWriteAuditAndEvents(store)
+        expect(beforeAuditAndEvents.audits).toHaveLength(1)
+        expect(beforeAuditAndEvents.events).toHaveLength(1)
+
+        const second = await startCloudflareOAuth(store)
+        const reconnect = handleRequest(
+          new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-${kind}-second&state=${second.state}`, {
+            headers: { cookie: second.cookie }
+          }),
+          env(),
+          { access: tony },
+          { store, now: NOW + 1, cfFetch }
+        )
+        await expect(reconnect).rejects.toThrow('transient vault write failure')
+
+        expect(await store.listVaultRows()).toEqual(before)
+        expect(await vaultWriteAuditAndEvents(store)).toEqual(beforeAuditAndEvents)
+      } finally {
+        db.close()
+      }
+    })
+  })
+
+  it('a successful reconnect leaves exactly one active row per provider, with the previous rows superseded', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      const store = d1StoreWithSchema(db)
+      const first = await startCloudflareOAuth(store)
+      await handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-first&state=${first.state}`, {
+          headers: { cookie: first.cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW, cfFetch }
+      )
+      const before = await store.listVaultRows()
+      expect(before).toHaveLength(2)
+      const previousIds = new Set(before.map((row) => row.id))
+
+      const second = await startCloudflareOAuth(store)
+      const cb = await handleRequest(
+        new Request(`https://operator.test${CF_CALLBACK_PATH}?code=auth-code-second&state=${second.state}`, {
+          headers: { cookie: second.cookie }
+        }),
+        env(),
+        { access: tony },
+        { store, now: NOW + 1, cfFetch }
+      )
+      expect(cb.status).toBe(303)
+      expect(cb.headers.get('location')).toBe('/?cf=connected#keys')
+
+      const rows = await store.listVaultRows()
+      expect(rows).toHaveLength(4)
+      for (const provider of ['cloudflare', 'cloudflare-account']) {
+        const active = rows.filter((row) => row.provider === provider && row.status === 'active')
+        expect(active).toHaveLength(1)
+      }
+      const superseded = rows.filter((row) => previousIds.has(row.id))
+      expect(superseded).toHaveLength(2)
+      expect(superseded.every((row) => row.status === 'superseded' && row.cipher === '' && row.iv === '')).toBe(true)
+
+      // One audit row and one event per successful call: two calls, two of each, never one per row.
+      const { audits, events } = await vaultWriteAuditAndEvents(store)
+      expect(audits).toHaveLength(2)
+      expect(events).toHaveLength(2)
+    } finally {
+      db.close()
+    }
   })
 })

@@ -1,6 +1,6 @@
 /** Cloudflare · AI Gateway: OAuth login, then Operator provisions vault keys. No paste. */
 
-import { writeVaultKey } from './keys'
+import { writeVaultKeysAtomically } from './keys'
 import type { OperatorStore } from './store'
 import { CF_ACCOUNT_PROVIDER } from './vault'
 
@@ -176,37 +176,22 @@ export async function provisionCloudflareKeys(
   creds: { token: string; accountId: string; name: string },
   fetchImpl: typeof fetch = fetch
 ): Promise<{ ok: true; last4: string } | { ok: false; error: string; status: number }> {
-  // writeVaultKey already certifies gateway privacy before writing a 'cloudflare' row (see
-  // isCloudflareVaultPaste), so writing that row first gives one readback and leaves no row
-  // behind at all when it fails.
-  const gateway = await writeVaultKey(
+  // Both rows are validated, privacy-checked (the 'cloudflare' row only — see isCloudflareVaultPaste)
+  // and encrypted before either is persisted, then committed as one D1 transaction: a failure on
+  // either row can never leave the other one behind.
+  const written = await writeVaultKeysAtomically(
     store,
     env,
     email,
     now,
-    {
-      provider: 'cloudflare',
-      accountId: creds.accountId,
-      token: creds.token,
-      label: 'AI Gateway'
-    },
+    [
+      { provider: 'cloudflare', accountId: creds.accountId, token: creds.token, label: 'AI Gateway' },
+      { provider: CF_ACCOUNT_PROVIDER, accountId: creds.accountId, token: creds.token, label: creds.name }
+    ],
     fetchImpl
   )
-  if (!gateway.ok) return gateway
-  const account = await writeVaultKey(
-    store,
-    env,
-    email,
-    now,
-    {
-      provider: CF_ACCOUNT_PROVIDER,
-      accountId: creds.accountId,
-      token: creds.token,
-      label: creds.name
-    },
-    fetchImpl
-  )
-  if (!account.ok) return account
+  if (!written.ok) return written
+  const [gateway] = written.rows
   return { ok: true, last4: gateway.last4 }
 }
 
@@ -230,8 +215,8 @@ export async function handleCloudflareCallback(
   const account = await resolveCloudflareAccount(exchanged.token, env, fetchImpl)
   if (!account.ok) return redirectToKeysAfterCloudflareLogin('failed')
   // A rejected privacy check or invalid input comes back as { ok: false } here and redirects
-  // like any other provisioning failure below; a D1 or crypto failure inside writeVaultKey
-  // still propagates, since none of its store/encryptVault calls are caught.
+  // like any other provisioning failure below; a D1 or crypto failure inside
+  // writeVaultKeysAtomically still propagates, since none of its store/encryptVault calls are caught.
   const written = await provisionCloudflareKeys(
     store,
     env,
