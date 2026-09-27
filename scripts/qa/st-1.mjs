@@ -22,7 +22,6 @@ import { execFileSync, spawn } from 'node:child_process'
 import {
   cpSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -119,9 +118,11 @@ const SF_DATALESS = 0x4000_0000
  *  <winnt.h>. Matches dataless.ts's WIN_PLACEHOLDER_ATTRIBUTES exactly, so ST-1 measures the same
  *  placeholder signal the gateway checks before every read. */
 const WIN_PLACEHOLDER_ATTRIBUTES = 0x0000_1000 | 0x0004_0000 | 0x0040_0000
-/** Pinned System32 binary, never a bare 'powershell.exe' — win-security.ts's WINDOWS_POWERSHELL rule,
- *  restated here because this plain script cannot import a TypeScript module. */
-const WIN_POWERSHELL = join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+/** Pinned System32 binaries, never a bare name — win-security.ts's WINDOWS_POWERSHELL rule, restated
+ *  here because this plain script cannot import a TypeScript module. */
+const SYS32 = join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32')
+const WIN_POWERSHELL = join(SYS32, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+const WIN_TASKKILL = join(SYS32, 'taskkill.exe')
 
 /** dataless.ts's WIN_ATTRIBUTES_SCRIPT wire protocol: NUL-separated UTF-8 paths on stdin (so the console
  *  code page can never mangle them — this profile's own root is 'Métis Meetings'), one JSON array of
@@ -192,33 +193,55 @@ function placeDatalessFixtures(root, cloudDir) {
   return fixtures
 }
 
-/** Spawns the candidate with an inspector on an OS-assigned port and returns its ws:// URL. */
-async function launch(exe, profile) {
-  const child = spawn(exe, ['--inspect=127.0.0.1:0'], {
+/** Spawns the candidate with an inspector on an OS-assigned port. Never throws (spawn's own failure modes
+ *  surface later, as an 'error' event): the caller must take ownership of the returned child — and be
+ *  ready to stop it — before calling inspectorUrl, so every way that wait can end still leaves the child
+ *  killable by the caller's cleanup. */
+function spawnCandidate(exe, profile) {
+  return spawn(exe, ['--inspect=127.0.0.1:0'], {
     env: { ...process.env, ASKTOTO_USERDATA: profile },
     stdio: ['ignore', 'ignore', 'pipe'],
     detached: process.platform !== 'win32'
   })
+}
+
+/** The candidate's ws:// inspector URL, read off its stderr. Settles on whichever comes first: the URL,
+ *  the child's 'error' event (a mistyped or non-executable --exe emits this with no other listener and
+ *  would otherwise crash the harness), its 'exit' event, or the 60 s timeout (the
+ *  EnableNodeCliInspectArguments fuse may be off). */
+async function inspectorUrl(child) {
   let stderr = ''
-  const wsUrl = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('no main-process inspector: the EnableNodeCliInspectArguments fuse may be off')), INSPECTOR_WAIT_MS)
+  return new Promise((resolve, reject) => {
+    function cleanup() {
+      clearTimeout(timer)
+      child.stderr.off('data', onData)
+      child.off('error', onError)
+      child.off('exit', onExit)
+    }
     function onData(chunk) {
       stderr += String(chunk)
       const match = /ws:\/\/127\.0\.0\.1:\d+\/[\w-]+/.exec(stderr)
       if (match) {
-        clearTimeout(timer)
-        child.stderr.off('data', onData)
+        cleanup()
         resolve(match[0])
       }
     }
-    child.stderr.on('data', onData)
-    child.once('exit', (code) => {
-      clearTimeout(timer)
-      child.stderr.off('data', onData)
+    function onError(error) {
+      cleanup()
+      reject(new Error(`candidate failed to start: ${error.message}`))
+    }
+    function onExit(code) {
+      cleanup()
       reject(new Error(`candidate exited before the inspector was ready (code ${code})`))
-    })
+    }
+    const timer = setTimeout(() => {
+      cleanup()
+      reject(new Error('no main-process inspector: the EnableNodeCliInspectArguments fuse may be off'))
+    }, INSPECTOR_WAIT_MS)
+    child.stderr.on('data', onData)
+    child.once('error', onError)
+    child.once('exit', onExit)
   })
-  return { child, wsUrl }
 }
 
 /** A minimal Chrome DevTools Protocol client: Runtime.evaluate with a per-call answer budget. */
@@ -300,7 +323,7 @@ function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset) {
 
 function stopChild(child) {
   try {
-    if (process.platform === 'win32') execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'])
+    if (process.platform === 'win32') execFileSync(WIN_TASKKILL, ['/pid', String(child.pid), '/T', '/F'])
     else process.kill(-child.pid, 'SIGKILL')
   } catch {
     /* already gone */
@@ -313,10 +336,12 @@ function stopChild(child) {
 function cleanup({ kind, root, profile, unzipDir }) {
   if (kind === 'dataless' && root) {
     try {
-      lstatSync(root) // throws if the junction was never created — nothing to remove
-      unlinkSync(root)
-    } catch {
-      /* never created, or already removed */
+      unlinkSync(root) // ENOENT: never created, or already removed — nothing to do
+    } catch (error) {
+      // Any other failure to remove the junction stops here, before rmSync(profile, { recursive: true }),
+      // rather than risk that recursive removal ever following the still-linked junction into the cloud
+      // folder.
+      if (error.code !== 'ENOENT') throw error
     }
   }
   if (profile) rmSync(profile, { recursive: true, force: true })
@@ -344,7 +369,7 @@ function buildLaunchFailureReport({ row, args, candidate, fixtures, reason }) {
 
 function buildReport({ row, args, candidate, measured, evidence, fixtures }) {
   const criteria = [
-    { name: 'inspector', pass: true }, // only reached once launch() actually produced a working inspector
+    { name: 'inspector', pass: true }, // only reached once inspectorUrl() actually produced a working inspector
     { name: 'has-samples', pass: measured.samples.length > 0 },
     { name: 'no-late-samples', pass: measured.lateSamples === 0 },
     { name: 'loop-p99 < 50', pass: measured.loop.p99Ms < 50 },
@@ -382,6 +407,10 @@ async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (!args.installer || !args.provenance || !args.fixtures) {
     console.error('usage: node scripts/qa/st-1.mjs --installer <path> --provenance <path> --fixtures fifo|dataless [options]')
+    return 2
+  }
+  if (args.fixtures !== 'fifo' && args.fixtures !== 'dataless') {
+    console.error(`[st-1] FAIL — --fixtures must be fifo or dataless, got ${JSON.stringify(args.fixtures)}`)
     return 2
   }
   if (args.fixtures === 'fifo' && process.platform === 'win32') {
@@ -423,20 +452,24 @@ async function main() {
     profile = prepareProfile(args.profileTemplate)
     root = join(profile, 'Métis Meetings')
 
-    const count = args.fixtures === 'fifo' ? Math.max(MIN_FIFO_COUNT, Number(args.count ?? DEFAULT_FIFO_COUNT)) : undefined
+    const count = args.fixtures === 'fifo' ? Number(args.count ?? DEFAULT_FIFO_COUNT) : undefined
     const mainLogOffset = args.mainLog && existsSync(args.mainLog) ? statSync(args.mainLog).size : 0
     const fixtures = args.fixtures === 'fifo' ? placeFifoFixtures(root, count) : placeDatalessFixtures(root, args.cloudDir)
 
-    let launched
+    // `child` is assigned before anything can fail waiting for it, so the shared `finally` below always
+    // owns a child to stop — including when the inspector never answers (fuse off), the exe is bad
+    // ('error') or the candidate dies early ('exit'): every one of those becomes a launch-failure report
+    // instead of a detached, unkillable process.
+    child = spawnCandidate(resolved.exe, profile)
+    let wsUrl
     try {
-      launched = await launch(resolved.exe, profile)
+      wsUrl = await inspectorUrl(child)
     } catch (error) {
       report = buildLaunchFailureReport({ row: args.fixtures, args, candidate, fixtures, reason: error.message })
     }
 
-    if (launched) {
-      child = launched.child
-      cdp = cdpClient(launched.wsUrl)
+    if (wsUrl) {
+      cdp = cdpClient(wsUrl)
       const measured = await measure(cdp, profile, minutes)
       const evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset)
       report = buildReport({ row: args.fixtures, args, candidate, measured, evidence, fixtures })
