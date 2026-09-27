@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import {
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -10,25 +11,16 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import * as architecture from './check-architecture.mjs'
-
-type Counts = Record<string, Record<string, number>>
-type Difference = { rule: string; file: string; baseline: number; current: number }
-type ArchitectureModule = {
-  countSourceFile: (file: string, text: string) => Record<string, number>
-  countDependencyViolations: (violations: Array<{ rule: { name: string }; from: string }>) => Counts
-  compareCounts: (baseline: Counts, current: Counts) => { regressions: Difference[]; stale: Difference[] }
-  lowerBaseline: (baseline: Counts, current: Counts) => Counts
-  formatBaseline: (counts: Counts) => string
-}
-
-const {
+import {
   compareCounts,
   countDependencyViolations,
   countSourceFile,
   formatBaseline,
   lowerBaseline,
-} = architecture as unknown as ArchitectureModule
+} from './check-architecture.mjs'
+
+type Counts = Record<string, Record<string, number>>
+type Difference = { rule: string; file: string; baseline: number; current: number }
 
 const RULE_IDS = [
   'FF-01',
@@ -44,74 +36,6 @@ const RULE_IDS = [
   'FF-11',
   'FF-14',
 ]
-
-const DEPENDENCY_CRUISER_CONFIG = `/**
- * Architecture fitness functions FF-01..FF-03: the rules that need the resolved module graph.
- * Every rule name starts with its fitness-function id (\`ff01-\`, \`ff02-\`, \`ff03-\`).
- */
-const TEST_FILE = '\\\\.(test|spec)\\\\.tsx?$'
-const ENTRY_POINTS = [
-  '^src/main/(index|parakeet-asr-host|parakeet-extract-host|speaker-embedding-host|whisper-asr-host)\\\\.ts$',
-  '^src/preload/(index|intelligence|import-decoder)\\\\.ts$',
-  '^src/renderer/src/(main\\\\.tsx|import-decoder\\\\.ts)$',
-  '^src/renderer/src/lib/whisper\\\\.worker\\\\.ts$',
-]
-function boundary(name, comment, fromPath, to) {
-  return [
-    { name: \`ff01-\${name}\`, comment, severity: 'error', from: { path: fromPath, pathNot: TEST_FILE }, to },
-    { name: \`ff01-\${name}-in-tests\`, comment, severity: 'warn', from: { path: \`\${fromPath}.*\${TEST_FILE}\` }, to },
-  ]
-}
-module.exports = {
-  forbidden: [
-    ...boundary('renderer-imports-main-or-preload',
-      'The renderer reaches main only through the preload bridge and src/shared.',
-      '^src/renderer/', { path: '^src/(main|preload)/' }),
-    ...boundary('preload-imports-main-or-renderer',
-      'The preload bundle imports only src/shared, Electron and Node.',
-      '^src/preload/', { path: '^src/(main|renderer)/' }),
-    ...boundary('main-imports-renderer-or-preload',
-      'The main bundle never contains renderer or preload code.',
-      '^src/main/', { path: '^src/(renderer|preload)/' }),
-    ...boundary('shared-imports-a-process',
-      'src/shared is imported by every process, so it imports none of them.',
-      '^src/shared/', { path: '^src/(main|renderer|preload)/' }),
-    ...boundary('infra-imports-features',
-      'Features depend on infrastructure, never the reverse.',
-      '^src/main/infra/', { path: '^src/main/features/' }),
-    ...boundary('feature-imports-feature-internals',
-      'Another feature is reached only through its index.ts.',
-      '^src/main/features/([^/]+)/',
-      { path: '^src/main/features/[^/]+/', pathNot: ['^src/main/features/$1/', '^src/main/features/[^/]+/index\\\\.ts$'] }),
-    {
-      name: 'ff01-contracts-import-beyond-zod',
-      comment: 'Contracts are plain zod schemas: they import zod and each other, nothing else.',
-      severity: 'error',
-      from: { path: '^src/shared/contracts/', pathNot: TEST_FILE },
-      to: { pathNot: ['^src/shared/contracts/', '(^|/)node_modules/zod/'] },
-    },
-    {
-      name: 'ff02-import-cycle',
-      comment: 'Every module on a cycle loads, tests and changes together with all the others.',
-      severity: 'warn',
-      from: { path: '^src/' },
-      to: { circular: true },
-    },
-    {
-      name: 'ff03-unreachable-from-entry-points',
-      comment: 'No entry point reaches this module, so it is dead code (being imported by a test does not count).',
-      severity: 'warn',
-      from: { path: ENTRY_POINTS },
-      to: { path: '^src/.+\\\\.tsx?$', pathNot: [TEST_FILE, '\\\\.d\\\\.ts$', '/__fixtures__/', ...ENTRY_POINTS], reachable: false },
-    },
-  ],
-  options: {
-    doNotFollow: { path: 'node_modules' },
-    tsPreCompilationDeps: true,
-    tsConfig: { fileName: 'tsconfig.web.json' },
-  },
-}
-`
 
 function sortedViolationLines(stdout: string): string[] {
   const report = JSON.parse(stdout) as {
@@ -145,16 +69,44 @@ function writeFixtureFile(root: string, path: string, text: string): void {
   writeFileSync(absolute, text)
 }
 
-function createLayeringFixture(): { root: string; fixtureNodeModules: string } {
+function readTrailingJson(stdout: string): Counts {
+  const trimmed = stdout.trimEnd()
+  for (let index = trimmed.lastIndexOf('\n{'); index >= 0; index = trimmed.lastIndexOf('\n{', index - 1)) {
+    const candidate = trimmed.slice(index + 1)
+    try {
+      return JSON.parse(candidate) as Counts
+    } catch {
+      continue
+    }
+  }
+  return JSON.parse(trimmed) as Counts
+}
+
+function runArchitectureCli(fixtureRoot: string): { code: number; out: string } {
+  try {
+    return {
+      code: 0,
+      out: execFileSync(process.execPath, [join(fixtureRoot, 'scripts', 'check-architecture.mjs')], {
+        cwd: fixtureRoot,
+        encoding: 'utf8',
+      }),
+    }
+  } catch (e) {
+    const err = e as { status?: number; stdout?: string; stderr?: string }
+    return { code: err.status ?? 1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` }
+  }
+}
+
+function createLayeringFixture(): { root: string } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'metis-architecture-')))
-  const fixtureNodeModules = join(root, 'node_modules')
+  const nodeModules = join(root, 'node_modules')
   symlinkSync(
     join(__dirname, '..', 'node_modules'),
-    fixtureNodeModules,
+    nodeModules,
     process.platform === 'win32' ? 'junction' : 'dir',
   )
 
-  writeFixtureFile(root, '.dependency-cruiser.cjs', DEPENDENCY_CRUISER_CONFIG)
+  copyFileSync(join(__dirname, '..', '.dependency-cruiser.cjs'), join(root, '.dependency-cruiser.cjs'))
   writeFixtureFile(root, 'tsconfig.web.json', JSON.stringify({
     compilerOptions: {
       baseUrl: '.',
@@ -220,7 +172,40 @@ function createLayeringFixture(): { root: string; fixtureNodeModules: string } {
   writeFixtureFile(root, 'src/alias-root.ts', 'export const rootAlias = true\n')
   writeFixtureFile(root, 'src/renderer/src/lib/whisper.worker.ts', 'export const workerEntry = true\n')
 
-  return { root, fixtureNodeModules }
+  return { root }
+}
+
+function createArchitectureFixture(): { root: string } {
+  const fixture = createLayeringFixture()
+  mkdirSync(join(fixture.root, 'intelligence', 'src'), { recursive: true })
+  mkdirSync(join(fixture.root, 'scripts'), { recursive: true })
+  copyFileSync(
+    join(__dirname, 'check-architecture.mjs'),
+    join(fixture.root, 'scripts', 'check-architecture.mjs'),
+  )
+  writeFixtureFile(fixture.root, 'src/new-cycle/a.ts', [
+    "import './b'",
+    'export const newCycleA = true',
+  ].join('\n'))
+  writeFixtureFile(fixture.root, 'src/new-cycle/b.ts', 'export const newCycleB = true\n')
+  writeFixtureFile(fixture.root, 'src/main/index.ts', [
+    "import './infra/x'",
+    "import './features/a/use-b'",
+    "import '../shared/contracts/schema'",
+    "import '../cycle/a'",
+    "import '../new-cycle/a'",
+    "import './long'",
+    "import './fs'",
+    "import '@shared/alias-target'",
+    "import '@/alias-root'",
+    'export const entry = true',
+  ].join('\n'))
+  writeFixtureFile(fixture.root, 'src/main/long.ts', `${Array.from({ length: 801 }, (_, index) => `export const line${index + 1} = ${index + 1}`).join('\n')}\n`)
+  writeFixtureFile(fixture.root, 'src/main/fs.ts', [
+    "import { readFileSync } from 'node:fs'",
+    "readFileSync('a')",
+  ].join('\n'))
+  return fixture
 }
 
 function removeLayeringErrors(root: string): void {
@@ -342,17 +327,19 @@ describe('architecture ratchet pure functions', () => {
       { rule: { name: 'ff01-renderer-imports-main-or-preload-in-tests' }, from: 'src/renderer/src/main.tsx' },
       { rule: { name: 'ff02-import-cycle' }, from: 'src/cycle/a.ts' },
       { rule: { name: 'ff03-unreachable-from-entry-points' }, from: 'src/dead.ts' },
-      { rule: { name: 'ff05a-sync-fs' }, from: 'src/main/a.ts' },
-      { rule: { name: 'ff05b-meeting-root-fs' }, from: 'src/main/brain/store.ts' },
     ])).toEqual({
       'FF-01': { 'src/renderer/src/main.tsx': 2 },
       'FF-02': { 'src/cycle/a.ts': 1 },
       'FF-03': { 'src/dead.ts': 1 },
-      'FF-05a': { 'src/main/a.ts': 1 },
-      'FF-05b': { 'src/main/brain/store.ts': 1 },
     })
     expect(() => countDependencyViolations([
       { rule: { name: 'layering-renderer-imports-main' }, from: 'src/renderer/src/main.tsx' },
+    ])).toThrow()
+    expect(() => countDependencyViolations([
+      { rule: { name: 'ff08-some-rule' }, from: 'src/main/a.ts' },
+    ])).toThrow()
+    expect(() => countDependencyViolations([
+      { rule: { name: 'FF01-example' }, from: 'src/main/a.ts' },
     ])).toThrow()
   })
 })
@@ -379,6 +366,7 @@ describe('architecture source detectors', () => {
         "import { readFileSync as rf } from 'fs'",
         "import * as fs from 'node:fs'",
         "const { mkdirSync } = require('node:fs')",
+        "import { execFileSync } from 'node:child_process'",
         'function writeRunStateSync() {}',
         'readFileSync("a")',
         'rf("b")',
@@ -386,7 +374,7 @@ describe('architecture source detectors', () => {
         'mkdirSync("e")',
         'writeRunStateSync()',
         'execFileSync("node")',
-      ].join('\n'))).toEqual({ 'FF-05a': 4 })
+      ].join('\n'))).toEqual({ 'FF-05a': 4, 'FF-10': 1 })
       expect(countSourceFile('src/main/async.ts', [
         "import { readFile } from 'node:fs'",
         "import type { readFileSync } from 'node:fs'",
@@ -397,6 +385,23 @@ describe('architecture source detectors', () => {
         "import { readFileSync } from 'node:fs'",
         'readFileSync("a")',
       ].join('\n'))).toEqual({})
+    })
+  })
+
+  describe('collectFsBindings gaps', () => {
+    it('recognizes default imports, promises aliases, and typed require bindings', () => {
+      expect(countSourceFile('src/main/fs-default.ts', [
+        "import fs from 'node:fs'",
+        "fs.readFileSync('a')",
+      ].join('\n'))).toEqual({ 'FF-05a': 1 })
+      expect(countSourceFile('scripts/check.promises.test.ts', [
+        "import { promises as fsp } from 'node:fs'",
+        "fsp.readFile('src/main/index.ts', 'utf8', () => {})",
+      ].join('\n'))).toEqual({ 'FF-07': 1 })
+      expect(countSourceFile('src/main/fs-as.ts', [
+        "const fs = require('node:fs') as typeof import('node:fs')",
+        "fs.readFileSync('a')",
+      ].join('\n'))).toEqual({ 'FF-05a': 1 })
     })
   })
 
@@ -428,6 +433,7 @@ describe('architecture source detectors', () => {
       ].join('\n')
       expect(countSourceFile('src/renderer/src/App.tsx', text)).toEqual({ 'FF-06': 5 })
       expect(countSourceFile('intelligence/src/App.tsx', text)).toEqual({ 'FF-06': 5 })
+      expect(countSourceFile('src/renderer/src/multi-dialog.tsx', 'const { confirm, alert } = window\n')).toEqual({ 'FF-06': 2 })
       expect(countSourceFile('src/renderer/src/shadow.tsx', [
         'const confirm = () => true',
         'confirm()',
@@ -456,6 +462,11 @@ describe('architecture source detectors', () => {
         "fs.readFileSync(`src/main/index.ts`, 'utf8')",
         "fs.readFile('src/renderer/src/App.tsx', 'utf8', () => {})",
       ].join('\n'))).toEqual({ 'FF-07': 2 })
+      expect(countSourceFile('scripts/check.test.ts', [
+        "import { readFileSync } from 'node:fs'",
+        "const dir = 'src/renderer/src'",
+        "readFileSync(`${dir}/App.tsx`, 'utf8')",
+      ].join('\n'))).toEqual({ 'FF-07': 1 })
       expect(countSourceFile('scripts/check.test.ts', [
         "import { readFileSync } from 'node:fs'",
         "readFileSync('__fixtures__/a.ts', 'utf8')",
@@ -499,6 +510,7 @@ describe('architecture source detectors', () => {
       ].join('\n')
       expect(countSourceFile('src/main/spawn.ts', text)).toEqual({ 'FF-10': 4 })
       expect(countSourceFile('src/main/types.ts', "import type { ChildProcess } from 'node:child_process'\n")).toEqual({})
+      expect(countSourceFile('src/main/spawn-inline-type.ts', "import { type ChildProcess } from 'node:child_process'\n")).toEqual({})
       expect(countSourceFile('src/main/infra/process/spawn.ts', text)).toEqual({})
     })
   })
@@ -531,6 +543,21 @@ describe('architecture source detectors', () => {
         '}',
       ].join('\n')
       expect(countSourceFile('src/main/timers.ts', text)).toEqual({ 'FF-14': 4 })
+      expect(countSourceFile('src/main/timers-member.ts', 'globalThis.setInterval(f, 1)\n')).toEqual({ 'FF-14': 1 })
+      expect(countSourceFile('src/main/timers-field.ts', [
+        'class A {',
+        '  poll = () => {',
+        '    setTimeout(() => this.poll(), 5)',
+        '  }',
+        '}',
+      ].join('\n'))).toEqual({ 'FF-14': 1 })
+      expect(countSourceFile('src/main/timers-false-positive.ts', [
+        'class A {',
+        '  tick() {',
+        '    setTimeout(() => obj.tick(), 5)',
+        '  }',
+        '}',
+      ].join('\n'))).toEqual({})
       expect(countSourceFile('src/main/oneshot.ts', 'setTimeout(done, 5)\n')).toEqual({})
       expect(countSourceFile('src/main/infra/scheduler/timers.ts', text)).toEqual({})
       expect(countSourceFile('src/renderer/src/timers.ts', text)).toEqual({})
@@ -542,7 +569,6 @@ describe('architecture layering dependency-cruiser gate', () => {
   it('reports the exact module-graph violations for architecture fitness functions FF-01 through FF-03', () => {
     const fixture = createLayeringFixture()
     try {
-      expect(fixture.fixtureNodeModules).toBe(join(fixture.root, 'node_modules'))
       const result = runDependencyCruiser(fixture.root, 'json')
       expect(result.code, result.out).toBe(0)
       expect(sortedViolationLines(result.out)).toEqual([
@@ -576,9 +602,94 @@ describe('architecture layering dependency-cruiser gate', () => {
 })
 
 describe('architecture ratchet CLI', () => {
-  it.todo('with no baseline file: exits 1, stdout ends with a seed whose parsed JSON has at least one entry each under FF-02, FF-03, FF-04 and FF-05a for this fixture')
-  it.todo("with that seed written as the baseline: exits 0, output contains 'OK:'")
-  it.todo("adding one import that creates a new cycle: exits 1 with a line naming FF-02 and '0 -> 1', no JSON printed because nothing fell")
-  it.todo("deleting the dead file: exits 1, the FF-03 line reads '1 -> 0 (fell', and the printed JSON parses, lacks that file, and equals the seed minus that entry")
-  it.todo("reordering two keys of a valid baseline: exits 1 'not canonical'")
+  it('with no baseline file: exits 1, stdout ends with a seed whose parsed JSON has at least one entry each under FF-02, FF-03, FF-04 and FF-05a for this fixture', () => {
+    const fixture = createArchitectureFixture()
+    try {
+      const result = runArchitectureCli(fixture.root)
+      expect(result.code, result.out).toBe(1)
+
+      const seed = readTrailingJson(result.out)
+      expect(Object.keys(seed['FF-02'] ?? {}).length).toBeGreaterThan(0)
+      expect(Object.keys(seed['FF-03'] ?? {}).length).toBeGreaterThan(0)
+      expect(Object.keys(seed['FF-04'] ?? {}).length).toBeGreaterThan(0)
+      expect(Object.keys(seed['FF-05a'] ?? {}).length).toBeGreaterThan(0)
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it("with that seed written as the baseline: exits 0, output contains 'OK:'", () => {
+    const fixture = createArchitectureFixture()
+    try {
+      const seed = readTrailingJson(runArchitectureCli(fixture.root).out)
+      writeFixtureFile(fixture.root, 'scripts/architecture-baseline.json', formatBaseline(seed))
+
+      const result = runArchitectureCli(fixture.root)
+      expect(result.code, result.out).toBe(0)
+      expect(result.out).toContain('OK:')
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it("adding one import that creates a new cycle: exits 1 with a line naming FF-02 and '0 -> 1', no JSON printed because nothing fell", () => {
+    const fixture = createArchitectureFixture()
+    try {
+      const seed = readTrailingJson(runArchitectureCli(fixture.root).out)
+      writeFixtureFile(fixture.root, 'scripts/architecture-baseline.json', formatBaseline(seed))
+
+      writeFixtureFile(fixture.root, 'src/new-cycle/b.ts', [
+        "import './a'",
+        'export const newCycleB = true',
+      ].join('\n'))
+
+      const result = runArchitectureCli(fixture.root)
+      expect(result.code, result.out).toBe(1)
+      expect(result.out).toMatch(/FF-02 src\/new-cycle\/[ab]\.ts: 0 -> 1 \(rose/)
+      expect(result.out).not.toContain('"FF-01":')
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it("deleting the dead file: exits 1, the FF-03 line reads '1 -> 0 (fell', and the printed JSON parses, lacks that file, and equals the seed minus that entry", () => {
+    const fixture = createArchitectureFixture()
+    try {
+      const seed = readTrailingJson(runArchitectureCli(fixture.root).out)
+      writeFixtureFile(fixture.root, 'scripts/architecture-baseline.json', formatBaseline(seed))
+
+      rmSync(join(fixture.root, 'src', 'dead.ts'))
+
+      const result = runArchitectureCli(fixture.root)
+      expect(result.code, result.out).toBe(1)
+      expect(result.out).toContain('FF-03 src/dead.ts: 1 -> 0 (fell')
+
+      const expected = JSON.parse(JSON.stringify(seed)) as Counts
+      delete expected['FF-03']['src/dead.ts']
+      const lowered = readTrailingJson(result.out)
+      expect(lowered['FF-03']).not.toHaveProperty('src/dead.ts')
+      expect(lowered).toEqual(expected)
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it("reordering two keys of a valid baseline: exits 1 'not canonical'", () => {
+    const fixture = createArchitectureFixture()
+    try {
+      const seed = readTrailingJson(runArchitectureCli(fixture.root).out)
+      const reordered = {
+        'FF-02': seed['FF-02'],
+        'FF-01': seed['FF-01'],
+        ...Object.fromEntries(RULE_IDS.slice(2).map((rule) => [rule, seed[rule]])),
+      }
+      writeFixtureFile(fixture.root, 'scripts/architecture-baseline.json', `${JSON.stringify(reordered, null, 2)}\n`)
+
+      const result = runArchitectureCli(fixture.root)
+      expect(result.code, result.out).toBe(1)
+      expect(result.out).toContain('not canonical')
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
 })
