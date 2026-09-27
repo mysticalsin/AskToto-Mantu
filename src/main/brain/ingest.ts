@@ -2345,6 +2345,9 @@ export async function requestBackfillRun(options: BackfillStartOptions = {}, bef
   try {
     run.result = await requestBackfill(options)
     const idx = (await loadIndex(observer.s)).kind === 'ready' ? readIndex(observer.s) : undefined
+    if (idx?.sourceRefreshRequested || idx?.replayPending) {
+      for (const [key, record] of Object.entries(idx.ingested)) if (record.ok) observeSource(key)
+    }
     if (idx?.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     if (run.result.deferred) completionError('no-provider')
     // A capped request can return "preparing" without dispatching anything. That is not completed work.
