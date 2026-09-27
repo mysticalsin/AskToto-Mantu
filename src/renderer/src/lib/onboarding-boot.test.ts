@@ -202,7 +202,7 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
     expect(main).toMatch(/const rendererUrl = overlayRendererUrl\(\)/)
     // createWindow navigates via bindReadinessThenNavigate with this same rendererUrl.
     expect(main).toMatch(/bindReadinessThenNavigate\(win, rendererUrl,/)
-    expect(main).toMatch(/self\.loadURL\(overlayRendererUrl\(\)\)/)
+    expect(main).toMatch(/reloadOverlay\(self\)/)
   })
 })
 

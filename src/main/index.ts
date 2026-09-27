@@ -618,6 +618,8 @@ import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-prefere
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
+import { createReloadBudget } from './lifecycle/reload-budget'
+import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './lifecycle/render-loop-halted-dialog'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
@@ -2762,6 +2764,14 @@ function createWindow(targetDisplay?: Electron.Display): void {
     const stallMs = responsiveness.markResponsive()
     if (stallMs !== null) auditLog('app.responsive', { kind: 'overlay', stallMs })
   })
+  // M2-0037 (B3-RC2): bounds the render-process-gone reload below to 3 reloads/60s instead of reloading
+  // forever. did-finish-load is the "this reload actually worked" signal the budget resets on once the
+  // content stays up for its own alive window — see lifecycle/reload-budget.ts.
+  const reloadBudget = createReloadBudget()
+  self.webContents.on('did-finish-load', () => {
+    if (win !== self) return
+    reloadBudget.onDidFinishLoad()
+  })
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
   // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
   // dead renderer and the overlay sits permanently blank. Previously this was only logged via
@@ -2817,7 +2827,45 @@ function createWindow(targetDisplay?: Electron.Display): void {
       currentWidth = BAR_WIDTH
     }
     if (win !== self || self.isDestroyed()) return
-    self.loadURL(overlayRendererUrl())
+    // M2-0037 (B3-RC2): consumed only once we know this crash will actually be handled — computing it
+    // any earlier would count a reload against the budget for an event one of the guards above discards.
+    const reloadDecision = reloadBudget.onRenderProcessGone(details.reason)
+    // 'ignore' (clean-exit): the content exited on purpose, not a crash — never reload for it.
+    if (reloadDecision === 'ignore') return
+    if (reloadDecision === 'halt') {
+      auditLog('app.render_loop_halted', { reason: details.reason, exitCode: details.exitCode })
+      void showRenderLoopHaltedDialog(
+        details.reason,
+        details.exitCode,
+        () => win !== self || self.isDestroyed(),
+        (opts) => dialog.showMessageBox(self, opts),
+        {
+          reload: () => reloadOverlay(self),
+          quit: () => app.quit(),
+          // Mirrors the openPath IPC handler's requireAuth() gate for the same
+          // shell.openPath(resolveMeetingsFolder(...)) call, so a locked session gets no button rather
+          // than one whose click silently does nothing.
+          openMeetingsFolder: requireAuth()
+            ? async () => {
+                const openError = await shell.openPath(resolveMeetingsFolder(getSettings()))
+                if (openError) mainLog.warn('[render-loop-halted] open meetings folder failed:', openError)
+              }
+            : undefined,
+          copyDiagnostics: () =>
+            clipboard.writeText(formatRenderLoopDiagnostics({
+              version: app.getVersion(),
+              platform: process.platform,
+              arch: process.arch,
+              packaged: app.isPackaged,
+              reason: details.reason,
+              exitCode: details.exitCode,
+              at: new Date().toISOString()
+            }))
+        }
+      ).catch((err) => mainLog.warn('[render-loop-halted] dialog failed:', err))
+      return
+    }
+    reloadOverlay(self)
   })
   // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
   // The same helper is used by crash recovery, so the parser-time Act 1 shell cannot disappear there.
@@ -3584,6 +3632,19 @@ function persistCrash(kind: string, detail: string, shortMessage: string): void 
   }
 }
 
+/**
+ * Reload the overlay's content, catching and auditing a failed loadURL instead of letting it become an
+ * unhandled rejection. Shared by the automatic render-process-gone reload and the halted dialog's manual
+ * Reload button (lifecycle/render-loop-halted-dialog.ts).
+ */
+function reloadOverlay(target: BrowserWindow): void {
+  target.loadURL(overlayRendererUrl()).catch((err) => {
+    const message = redactSecrets(err instanceof Error ? err.message : String(err))
+    mainLog.error('[renderer-gone] reload failed:', message)
+    auditLog('app.crash', { kind: 'render-process-gone-reload-failed', message })
+  })
+}
+
 let fatalHandled = false
 /**
  * For a fatal exception, offer a ONE-TIME relaunch — but default to "Continue" so a benign async error
@@ -3594,17 +3655,25 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
   persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
   if (kind !== 'uncaughtException' || fatalHandled) return
   fatalHandled = true
+  void showFatalDialog()
+}
+
+// M2-0037: split out of onFatal so the main thread is never blocked showing this — a synchronous native
+// dialog (showMessageBoxSync) froze every window, including whatever else the user was mid-click in,
+// until they dismissed it.
+async function showFatalDialog(): Promise<void> {
   try {
-    const choice = dialog.showMessageBoxSync({
-      type: 'error',
+    const dialogOpts = {
+      type: 'error' as const,
       title: 'Métis hit a problem',
       message: 'Métis ran into an unexpected error.',
       detail: 'A crash report was saved to your Métis data folder. Relaunch now, or keep going.',
       buttons: ['Relaunch Métis', 'Continue'],
       defaultId: 1,
       cancelId: 1
-    })
-    if (choice === 0) exitAndRelaunch()
+    }
+    const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+    if (response === 0) exitAndRelaunch()
   } catch {
     /* if the dialog itself fails, leave the app running */
   }
