@@ -241,7 +241,7 @@ function projectValue(kind: FieldKind, value: unknown): unknown {
 }
 
 function scrubErrorText(value: unknown): string {
-  const normalized = value instanceof Error ? `${value.name}: ${value.message}` : typeof value === 'string' ? value : String(value)
+  const normalized = value instanceof Error ? `${value.name}: ${value.message}` : typeof value === 'string' ? value : JSON.stringify(value)
   const scrubbed = redactSecrets(normalized)
     .replace(URL_RE, '<url>')
     .replace(EMAIL_RE, '<email>')

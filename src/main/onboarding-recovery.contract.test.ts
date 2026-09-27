@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
+import { crashDetail } from './infra/observability/crash-taxonomy'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
@@ -72,6 +73,7 @@ describe('exclusive onboarding renderer recovery', () => {
     const gone = actualRendererGoneHandler({
       mainLog: { error: vi.fn() },
       auditLog: vi.fn(),
+      crashDetail,
       resetDustConversation: vi.fn(),
       discardActiveLiveSpeakerSession: vi.fn(),
       invalidateCloudSttOwner: vi.fn(),
