@@ -350,7 +350,7 @@ export function writeJson(path, value) {
 }
 
 export function defaultOutputPath({ state, platform, dir = 'metis-census-output' }) {
-  return join(dir, `${platform}-${state}.json`)
+  return join(dir, `${platform}-${state}.json`).replaceAll('\\', '/')
 }
 
 export function repoRootFromHere() {
