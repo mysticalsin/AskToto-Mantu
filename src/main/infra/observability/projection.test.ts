@@ -6,7 +6,6 @@ import {
   type ObservabilityDetail,
   type ObservabilityEvent
 } from './projection'
-import { RECOVERY_STATUSES } from './crash-taxonomy'
 
 const uuid = '123e4567-e89b-12d3-a456-426614174000'
 const isoTime = '2026-01-01T00:00:00.000Z'
@@ -128,18 +127,20 @@ describe('observability projection', () => {
     expect(projected.message.endsWith('…')).toBe(true)
   })
 
-  it('keeps an app.error.boot_step record when message is circular', () => {
-    const message: Record<string, unknown> = {}
-    message.self = message
+  const circularMessage: Record<string, unknown> = {}
+  circularMessage.self = circularMessage
 
-    const projected = projectEvent('app.error.boot_step', {
+  it.each([
+    ['function', () => undefined],
+    ['Symbol', Symbol('unserializable')],
+    ['BigInt', 1n],
+    ['circular object', circularMessage]
+  ])('keeps an app.error.boot_step record when message is an unserializable %s', (_name, input) => {
+    expect(projectEvent('app.error.boot_step', { step: 'x', message: input, recoveryStatus: 'continued' })).toEqual({
       step: 'x',
-      message,
-      recoveryStatus: RECOVERY_STATUSES[0]
-    }) as { message: string }
-
-    expect(projected.message).toBeTruthy()
-    expect(typeof projected.message).toBe('string')
+      message: `<unserializable ${typeof input}>`,
+      recoveryStatus: 'continued'
+    })
   })
 
   it('keeps null and omits undefined', () => {
