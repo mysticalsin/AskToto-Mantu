@@ -134,7 +134,7 @@ describe('fetchDustProjects', () => {
             ok: true,
             status: 200,
             json: async () => ({ spaces: [{ sId: 'spc_data', name: 'Data and AI', kind: 'regular' }] }),
-            text: async () => ''
+            text: async (): Promise<string> => ''
           }
         }
         return { ok: false, status: 401, json: async () => ({}), text: async () => 'token revoked' }
