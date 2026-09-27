@@ -13,18 +13,18 @@ function child(pid?: number): SidecarProcess & { exit: (code: number | null, sig
 }
 
 describe('observeSidecar', () => {
-  it('audits spawn with name, pid and null pgid', () => {
+  it('audits spawn with name, pid and resolved pgid', () => {
     const audit = vi.fn()
-    observeSidecar('llama-server', child(4242), audit)
+    observeSidecar('llama-server', child(4242), audit, undefined, () => 5151)
 
-    expect(audit).toHaveBeenCalledWith('sidecar.spawn', { name: 'llama-server', pid: 4242, pgid: null })
+    expect(audit).toHaveBeenCalledWith('sidecar.spawn', { name: 'llama-server', pid: 4242, pgid: 5151 })
   })
 
-  it('audits exit with the same pid, code, signal and uptimeMs', () => {
+  it('audits exit with the same pid, pgid, code, signal and uptimeMs', () => {
     const audit = vi.fn()
     const proc = child(4242)
     let now = 100
-    observeSidecar('fm-serve', proc, audit, () => now)
+    observeSidecar('fm-serve', proc, audit, () => now, () => 5151)
 
     now = 175
     proc.exit(0, 'SIGTERM')
@@ -32,11 +32,18 @@ describe('observeSidecar', () => {
     expect(audit).toHaveBeenCalledWith('sidecar.exit', {
       name: 'fm-serve',
       pid: 4242,
-      pgid: null,
+      pgid: 5151,
       code: 0,
       signal: 'SIGTERM',
       uptimeMs: 75
     })
+  })
+
+  it('audits null pgid only when the platform cannot resolve it', () => {
+    const audit = vi.fn()
+    observeSidecar('llama-server', child(4242), audit, undefined, () => null)
+
+    expect(audit).toHaveBeenCalledWith('sidecar.spawn', { name: 'llama-server', pid: 4242, pgid: null })
   })
 
   it('emits nothing when the process has no pid', () => {

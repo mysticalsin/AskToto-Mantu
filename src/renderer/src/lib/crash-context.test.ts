@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { crashReport, noteCrashContext } from './crash-context'
 
 describe('renderer crash context', () => {
-  it('omits context before App first notes it and preserves message defaults', () => {
+  it('uses safe default context before App first notes it and preserves message defaults', () => {
     const report = crashReport(null, undefined)
 
-    expect(report.view).toBeUndefined()
-    expect(report.listening).toBeUndefined()
+    expect(report.view).toBe('answer')
+    expect(report.listening).toBe(false)
     expect(report.message).toBe('Unknown renderer error')
     expect(report.stack).toBeUndefined()
     expect(report.componentStack).toBeUndefined()

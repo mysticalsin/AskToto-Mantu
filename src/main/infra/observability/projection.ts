@@ -8,7 +8,6 @@ import { CRASH_KINDS, RECOVERY_STATUSES } from './crash-taxonomy'
 /**
  * INV-PROJECTED: observability events pass through an event-specific allowlist.
  * INV-CONTENT-FREE: values are kind-checked, and error text is scrubbed before persistence.
- * Residual: unquoted prose that our own code interpolates into an Error message would survive.
  */
 export type ObservabilityEvent = Extract<AuditEvent, `app.${string}` | `sidecar.${string}` | `history.${string}` | 'reveal'>
 export type FieldKind =
@@ -216,6 +215,52 @@ const URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>]*/gi
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g
 const QUOTED_RE = /"[^"\n]*"|'[^'\n]*'|`[^`\n]*`|“[^”\n]*”|‘[^’\n]*’/g
 const PATH_RE = /(?:\b[A-Za-z]:[\\/]|\\\\|~[\\/]|(?<![\w.])\/)[^'"`\n,;()<>]*/g
+const ERROR_WORD_RE = /[A-Za-z][A-Za-z0-9_-]*/g
+const SAFE_ERROR_WORDS = new Set([
+  'aborted',
+  'after',
+  'before',
+  'bigint',
+  'cannot',
+  'content',
+  'crash',
+  'directory',
+  'email',
+  'enoent',
+  'eperm',
+  'error',
+  'failed',
+  'fetch',
+  'file',
+  'function',
+  'in',
+  'json',
+  'key',
+  'no',
+  'not',
+  'notify',
+  'object',
+  'open',
+  'operation',
+  'or',
+  'permitted',
+  'present',
+  'path',
+  'render',
+  'redacted',
+  'renderer',
+  'spawn',
+  'such',
+  'symbol',
+  'syntaxerror',
+  'token',
+  'text',
+  'typeerror',
+  'unknown',
+  'unserializable',
+  'url',
+  'was'
+])
 
 export function isObservabilityEvent(event: AuditEvent): event is ObservabilityEvent {
   return Object.hasOwn(OBSERVABILITY_EVENTS, event)
@@ -273,6 +318,8 @@ function scrubErrorText(value: unknown): string {
     .replace(EMAIL_RE, '<email>')
     .replace(QUOTED_RE, '<text>')
     .replace(PATH_RE, '<path>')
+    .replace(ERROR_WORD_RE, (word) => (SAFE_ERROR_WORDS.has(word.toLowerCase()) ? word : '<text>'))
+    .replace(/(?:<text>\s*){2,}/g, '<text> ')
     .replace(/\s+/g, ' ')
     .trim()
   return scrubbed.length > MAX_MESSAGE_CHARS ? `${scrubbed.slice(0, MAX_MESSAGE_CHARS - 1)}…` : scrubbed

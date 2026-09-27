@@ -80,7 +80,6 @@ describe('observability projection', () => {
     for (const [event, fields] of Object.entries(OBSERVABILITY_EVENTS) as [ObservabilityEvent, Record<string, unknown>][]) {
       for (const [field, kind] of Object.entries(fields)) {
         for (const sentinel of sentinelDetails) {
-          if (kind === 'errorText' && (sentinel.label === 'title' || sentinel.label === 'transcript')) continue
           expectContentFree(projectEvent(event, { [field]: sentinel.value }))
         }
       }
@@ -106,6 +105,8 @@ describe('observability projection', () => {
     ['email', 'Cannot notify jane.doe@acme.example after crash', 'Cannot notify <email> after crash'],
     ['url', 'Fetch failed https://example.test/crash?title=Board%20budget', 'Fetch failed <url>'],
     ['spawn path', 'spawn /opt/Metis Helper.app/Contents/MacOS/helper ENOENT', 'spawn <path>'],
+    ['bare title', 'Board budget review failed', '<text> failed'],
+    ['bare transcript', 'Acme said the budget is approved', '<text>'],
     ['typed error', new TypeError('Cannot render "Board budget"'), 'TypeError: Cannot render <text>']
   ])('scrubs realistic errorText shape: %s', (_name, input, prefix) => {
     const projected = projectEvent('app.crash', { message: input }) as { message: string }

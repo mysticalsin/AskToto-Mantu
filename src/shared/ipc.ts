@@ -25,7 +25,7 @@ export const HistorySettledSchema = z.object({
 export type HistorySettled = z.infer<typeof HistorySettledSchema>
 export const RendererCrashContextSchema = z.object({ view: z.enum(RENDERER_VIEWS), listening: z.boolean() })
 export type RendererCrashContext = z.infer<typeof RendererCrashContextSchema>
-export interface RendererCrashReport extends Partial<RendererCrashContext> {
+export interface RendererCrashReport extends RendererCrashContext {
   message: string
   stack?: string
   componentStack?: string
