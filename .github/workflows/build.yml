@@ -198,7 +198,7 @@ jobs:
       # declares; a pre-existing hit outside this gate's own scope is grandfathered in that
       # script's own BASELINE_VIOLATIONS (a per-file expected-count map, so an unrelated edit that
       # only shifts lines in a baselined file does not turn this step red) and tracked by ticket
-      # M2-0221, not silently excluded here.
+      # M2-0225, not silently excluded here.
       - name: Scratch-path scan
         run: npm run check:scratch-paths
       # SBOM (CycloneDX) for the supply-chain evidence package.

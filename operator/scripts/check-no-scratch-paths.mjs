@@ -10,7 +10,7 @@
  * BASELINE_VIOLATIONS grandfathers hits that predate this gate, keyed by file path to an expected
  * hit COUNT rather than exact line numbers: a file's line numbers drift on every unrelated edit
  * (package.json alone changed 15 times in three weeks), and a line-keyed baseline would go stale
- * — and this gate red — on every one of them. Tracked by ticket M2-0221. compareViolations() fails
+ * — and this gate red — on every one of them. Tracked by ticket M2-0225. compareViolations() fails
  * on a file whose actual count exceeds its baseline (a genuinely new violation) and on one whose
  * count has dropped below it (the file was fixed; the baseline must shrink to match), so the set
  * can only ever track reality, never drift from it silently in either direction.
@@ -31,7 +31,7 @@ const FORBIDDEN = [
 ]
 
 /** Pre-existing hits this gate grandfathers, one entry per file with its expected violation
- *  COUNT — tracked by ticket M2-0221. Remove a file's entry the moment its count reaches zero. */
+ *  COUNT — tracked by ticket M2-0225. Remove a file's entry the moment its count reaches zero. */
 export const BASELINE_VIOLATIONS = new Map([
   ['operator/scripts/build-css.mjs', 1],
   ['intelligence/scripts/build-data.mjs', 1],
@@ -124,6 +124,6 @@ if (isMain) {
   const total = [...BASELINE_VIOLATIONS.values()].reduce((sum, n) => sum + n, 0)
   console.log(
     `No unexpected scratch/user-path literals (${total} baseline hit${total === 1 ? '' : 's'} across ` +
-      `${BASELINE_VIOLATIONS.size} file${BASELINE_VIOLATIONS.size === 1 ? '' : 's'} grandfathered, tracked by M2-0221).`
+      `${BASELINE_VIOLATIONS.size} file${BASELINE_VIOLATIONS.size === 1 ? '' : 's'} grandfathered, tracked by M2-0225).`
   )
 }
