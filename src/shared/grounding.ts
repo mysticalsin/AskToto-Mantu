@@ -596,7 +596,9 @@ function foldForNumerals(span: string): string {
  *  unit is '%', an ISO-ish currency ('EUR','USD','GBP'), or null. */
 export function extractNumerals(span: string): NumeralHit[] {
   const s = foldForNumerals(span)
-  const hits: NumeralHit[] = []
+  // Each hit keeps its own start offset: pass 2 appends after pass 1, and a hit's raw text can recur
+  // elsewhere in the span, so reading order cannot be recovered from the text afterwards.
+  const located: { start: number; hit: NumeralHit }[] = []
   const consumedTo: boolean[] = new Array(s.length + 1).fill(false)
 
   const mark = (from: number, to: number): void => {
@@ -619,7 +621,7 @@ export function extractNumerals(span: string): NumeralHit[] {
     const end = post.end
     if (!isFree(start, end)) continue
     mark(start, end)
-    hits.push({ value: base * post.magnitude, unit: pre.unit ?? post.unit, raw: span.slice(start, end) })
+    located.push({ start, hit: { value: base * post.magnitude, unit: pre.unit ?? post.unit, raw: span.slice(start, end) } })
   }
 
   // Pass 2: word-based numerals (English then French), skipping ranges already consumed by pass 1.
@@ -653,11 +655,14 @@ export function extractNumerals(span: string): NumeralHit[] {
       continue
     }
     mark(fullStart, fullEnd)
-    hits.push({ value: parsed.value * post.magnitude, unit: pre.unit ?? post.unit, raw: span.slice(fullStart, fullEnd) })
+    located.push({
+      start: fullStart,
+      hit: { value: parsed.value * post.magnitude, unit: pre.unit ?? post.unit, raw: span.slice(fullStart, fullEnd) }
+    })
     i = parsed.next
   }
 
-  return hits.sort((a, b) => span.indexOf(a.raw) - span.indexOf(b.raw))
+  return located.sort((a, b) => a.start - b.start).map(({ hit }) => hit)
 }
 
 // ── numeralDerivable / verifyNumericFact ────────────────────────────────────────────────────────

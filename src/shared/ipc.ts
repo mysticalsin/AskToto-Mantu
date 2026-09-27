@@ -1168,7 +1168,7 @@ export const BaseSettingsSchema = z.object({
    */
   cloudSttProvider: z.enum(['cloudflare-nova3', 'soniox', 'unconfigured']).default('unconfigured'),
   /**
-   * Cloudflare AI Gateway id for Nova-3 live WS (Operator ensureDefaultAiGateway uses `default`).
+   * Cloudflare AI Gateway id for Nova-3 live WS (Operator verifyDefaultGatewayPrivacy uses `default`).
    * Blank → resolveCloudSttGatewayId falls through env then `default`. Not a secret.
    */
   cfAiGatewayId: z.string().max(128).default(''),

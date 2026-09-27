@@ -1546,7 +1546,7 @@ function AiSection({
             <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
               Nova live speech uses the same vault shape as Operator Keys: a Cloudflare account API token
               (seated above or via Operator), an account id, and an optional AI Gateway id. Blank gateway
-              uses default (same as Operator ensureDefaultAiGateway).
+              uses default (same as Operator verifyDefaultGatewayPrivacy).
             </p>
             <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
               Cloudflare account id
