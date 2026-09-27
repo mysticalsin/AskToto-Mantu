@@ -1,15 +1,18 @@
 name: Release
 
-# Publishes only verified customer installers to this repository's public GitHub Releases page on a
-# version tag push (v1.2.3). macOS requires Developer ID signing plus notarization and Windows requires
-# trusted Authenticode signing. Missing signing inputs fail the workflow before artifacts can reach the
-# public draft/publish stage; local ad-hoc builds remain a separate, non-public developer workflow.
+# Publishes only verified customer installers to the public Metis-Releases feed (electron-builder.yml
+# publish.owner/repo) on a version tag push (v1.2.3). macOS requires Developer ID signing plus notarization
+# and Windows requires trusted Authenticode signing; missing signing inputs fail that platform's build
+# before it produces an artifact. Each platform publishes as soon as its own gates pass, so a held or
+# failed macOS lane never blocks a signed Windows release, and vice versa (M2-0053). This workflow never
+# publishes unsigned bytes: local ad-hoc builds stay local, and owner-channel prereleases come only from
+# promote-candidate.yml.
 on:
   push:
     tags:
       - "v*"
 
-# A retry for the same tag must never race another run while both mutate the same draft release.
+# A retry for the same tag must never race another run while both mutate the same feed release.
 concurrency:
   group: metis-release-${{ github.ref }}
   cancel-in-progress: false
@@ -61,9 +64,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # First step, before any build work starts: a tag that doesn't match package.json's version would
       # make electron-builder publish onto/overwrite an existing release instead of creating a new one -
-      # see scripts/check-version-parity.mjs for the full failure mode.
+      # see scripts/check-version-parity.mjs for the full failure mode. It also verifies this platform
+      # can either start the feed release or safely join the other platform's already-published release.
       - name: Verify tag matches package.json version
-        run: node scripts/check-version-parity.mjs
+        run: node scripts/check-version-parity.mjs mac
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
       # Restore the reviewed LGPL ffmpeg decoder binary (the manifest/license stay tracked in git) from
@@ -207,7 +211,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Verify tag matches package.json version
         shell: bash
-        run: node scripts/check-version-parity.mjs
+        run: node scripts/check-version-parity.mjs win
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
       # Restore the reviewed LGPL ffmpeg decoder binary (the manifest/license stay tracked in git) from
@@ -305,124 +309,55 @@ jobs:
             release/*.blockmap
             release/latest.yml
 
-  # Publish only after notarized Electron macOS + signed Windows installers both pass.
-  # Assets first land on an invisible draft; the draft becomes public only after the complete set
-  # is verified in that same release.
-  release-verify:
-    name: Publish verified Mac + Windows release
-    needs: [release-macos, release-windows]
+  # Each platform publishes on its own gates (M2-0053, MASTER 20.5): a held or failed macOS lane never
+  # blocks a signed Windows release, and vice versa. Both jobs write the same feed release for this tag,
+  # so they take turns on one concurrency group. scripts/publish-release.mjs owns the release states:
+  # the first platform goes draft -> verified -> public and Latest; the second joins that release with
+  # its update metadata uploaded last, after GitHub's digests of its installers match.
+  publish-macos:
+    name: Publish macOS release
+    needs: release-macos
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    concurrency:
+      group: metis-release-publish-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: metis-release-macos
-          path: release-bundle/macos
+          path: release-bundle
+      - name: Publish the verified macOS installers
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: node scripts/publish-release.mjs mac release-bundle
+
+  publish-windows:
+    name: Publish Windows release
+    needs: release-windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: metis-release-publish-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: metis-release-windows
-          path: release-bundle/windows
-      - name: Resolve publish repo
-        id: publish-repo
-        run: |
-          owner=$(grep -oE '^\s*owner:\s*\S+' electron-builder.yml | awk '{print $2}')
-          repo=$(grep -oE '^\s*repo:\s*\S+' electron-builder.yml | awk '{print $2}')
-          echo "owner=$owner" >> "$GITHUB_OUTPUT"
-          echo "repo=$repo" >> "$GITHUB_OUTPUT"
-      - name: Verify bundle, upload to draft, then publish atomically
+          path: release-bundle
+      - name: Publish the verified Windows installers
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-          set -euo pipefail
-          repo="${{ steps.publish-repo.outputs.owner }}/${{ steps.publish-repo.outputs.repo }}"
-          tag="$GITHUB_REF_NAME"
-          version="${tag#v}"
-          shopt -s nullglob
-
-          required_files=(
-            "release-bundle/macos/Metis-${version}.dmg"
-            "release-bundle/macos/Metis-${version}.dmg.blockmap"
-            "release-bundle/macos/Metis-${version}.zip"
-            "release-bundle/macos/Metis-${version}.zip.blockmap"
-            "release-bundle/macos/latest-mac.yml"
-            "release-bundle/windows/Metis-Setup-${version}.exe"
-            "release-bundle/windows/Metis-Setup-${version}.exe.blockmap"
-            "release-bundle/windows/Metis-Portable-${version}.exe"
-            "release-bundle/windows/latest.yml"
-          )
-          for file in "${required_files[@]}"; do
-            [ -f "$file" ] || { echo "::error::Missing required release asset: $file"; exit 1; }
-          done
-
-          node scripts/check-update-metadata.mjs \
-            release-bundle/macos/latest-mac.yml \
-            release-bundle/windows/latest.yml
-
-          mapfile -t files < <(
-            find release-bundle/macos release-bundle/windows -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort
-          )
-          [ "${#files[@]}" -eq "${#required_files[@]}" ] || {
-            echo "::error::Release bundle contains missing or unexpected files."
-            printf '  %s\n' "${files[@]}"
-            exit 1
-          }
-          expected_assets=$(printf '%s\n' "${files[@]##*/}" | LC_ALL=C sort)
-          required_assets=$(printf '%s\n' "${required_files[@]##*/}" | LC_ALL=C sort)
-          [ "$expected_assets" = "$required_assets" ] || {
-            echo "::error::Release bundle does not exactly match the allowed asset set for $tag."
-            diff -u <(printf '%s\n' "$required_assets") <(printf '%s\n' "$expected_assets") || true
-            exit 1
-          }
-
-          assert_draft() {
-            local draft
-            draft=$(gh release view "$tag" --repo "$repo" --json isDraft --jq '.isDraft')
-            [ "$draft" = "true" ] || {
-              echo "::error::Refusing to mutate public release $tag on $repo."
-              exit 1
-            }
-          }
-
-          set +e
-          lookup=$(gh api "repos/$repo/releases/tags/$tag" --jq '.draft' 2>&1)
-          lookup_status=$?
-          set -e
-          if [ "$lookup_status" -eq 0 ]; then
-            [ "$lookup" = "true" ] || { echo "::error::Refusing to overwrite public release $tag"; exit 1; }
-            # A failed prior run can leave stale assets in its draft. Delete only the confirmed draft;
-            # retain the tag, then recreate a clean draft so no unreviewed asset can survive a retry.
-            assert_draft
-            gh release delete "$tag" --repo "$repo" --yes
-          elif ! grep -qi 'HTTP 404' <<<"$lookup"; then
-            echo "::error::Could not safely determine whether $tag already exists on $repo."
-            echo "$lookup"
-            exit 1
-          fi
-
-          notes="Métis desktop installers: Developer ID-signed and notarized macOS, plus Authenticode-signed Windows."
-          gh release create "$tag" --repo "$repo" --draft --title "Métis $tag" --notes "$notes"
-
-          # Recheck immediately before both remote mutations. Tag-scoped workflow concurrency prevents
-          # another Actions retry from entering this critical section at the same time.
-          assert_draft
-          gh release upload "$tag" "${files[@]}" --repo "$repo"
-
-          actual_assets=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' | LC_ALL=C sort)
-          [ "$actual_assets" = "$expected_assets" ] || {
-            echo "::error::Draft release asset set differs from the reviewed local bundle."
-            diff -u <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$actual_assets") || true
-            exit 1
-          }
-
-          assert_draft
-          # --latest is load-bearing, not belt-and-braces. GitHub resolves /releases/latest as the most
-          # recent non-prerelease by created_at, and EVERY release on Metis-Releases shares
-          # created_at=2026-07-18T14:54:45Z because all seven tags point at the same commit. The sort key
-          # is degenerate and the tie-break is undocumented. Both update paths read that one pointer —
-          # updater.ts's About check hits api.github.com/.../releases/latest, and electron-updater's
-          # GitHubProvider hits github.com/.../releases/latest — so pin it explicitly.
-          gh release edit "$tag" --repo "$repo" --draft=false --latest
-          published=$(gh release view "$tag" --repo "$repo" --json isDraft --jq '.isDraft')
-          [ "$published" = "false" ] || { echo "::error::Release $tag did not become public."; exit 1; }
-          echo "Published complete Mac + Windows release $tag on $repo with an exact ${#files[@]}-asset set."
+        run: node scripts/publish-release.mjs win release-bundle

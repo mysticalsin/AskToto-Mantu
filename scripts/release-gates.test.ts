@@ -245,7 +245,6 @@ describe('direct release signing gates', () => {
   it('release.yml publishes only notarized Electron macOS artifacts and excludes the unsigned native ZIP', () => {
     const workflow = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8')
     const macGate = workflow.slice(workflow.indexOf('  release-macos:'), workflow.indexOf('  release-windows:'))
-    const publishGate = workflow.slice(workflow.indexOf('  release-verify:'))
     expect(macGate).toContain('node scripts/check-release-secrets.mjs mac')
     expect(macGate).toContain('node scripts/verify-signing.mjs --require-notarized')
     expect(macGate).not.toContain('ASKTOTO_ALLOW_ADHOC_MAC')
@@ -257,7 +256,6 @@ describe('direct release signing gates', () => {
     expect(verifier).toMatch(/const REQUIRE_NOTARIZED = process\.argv\.includes\(['"]--require-notarized['"]\)/)
     expect(verifier).not.toContain('ASKTOTO_ALLOW_ADHOC_MAC')
     expect(workflow).not.toContain('release-macos-native:')
-    expect(publishGate).not.toContain('Metis-Native-${version}.zip')
     const winGate = workflow.slice(workflow.indexOf('release-windows:'))
     expect(winGate).toContain('refusing to publish an unsigned Windows release')
     expect(winGate).toContain('WIN_CSC_EXPECTED_SUBJECT')

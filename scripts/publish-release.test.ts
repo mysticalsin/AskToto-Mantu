@@ -109,6 +109,7 @@ class FakeFeed {
   mutations: string[] = []
   listings = 0
   corruptDigests = new Set<string>()
+  staleLatestAfterPublish: string | null = null
   private nextId = 100
 
   constructor(releases: FeedRelease[] = []) {
@@ -155,7 +156,7 @@ class FakeFeed {
     const release = this.release(id)
     release.draft = false
     release.prerelease = false
-    this.latest = release.tag
+    this.latest = this.staleLatestAfterPublish ?? release.tag
     this.mutations.push('publish')
   }
 
@@ -334,6 +335,20 @@ describe('publish-release platform rules (M2-0053)', () => {
       expect(feed.mutations).toEqual([])
     })
   }
+
+  it("refuses to call the release published when GitHub's Latest pointer does not move to it", async () => {
+    for (const platform of ['mac', 'win'] as Platform[]) {
+      const feed = new FakeFeed()
+      feed.staleLatestAfterPublish = 'v9.9.9'
+
+      await expect(publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed })).rejects.toThrow(
+        /Latest/
+      )
+      expect(feed.releases[0]).toMatchObject({ tag: TAG, draft: false, prerelease: false })
+      expect(feed.latest).toBe('v9.9.9')
+      expect(feed.mutations).toContain('publish')
+    }
+  })
 
   it('refuses a tag that is not a plain vX.Y.Z', async () => {
     for (const tag of ['v1.2.3-beta.1', '1.2.3']) {
