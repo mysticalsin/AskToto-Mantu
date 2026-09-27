@@ -40,6 +40,11 @@
 //                     (cloud-only) file cannot materialize it. src/main/infra/storage/dataless.ts owns
 //                     the protocol and decodes SF_DATALESS; this command reports the raw word.
 //
+//   proc-info <pid>   One-shot. Prints process identity JSON for PID if alive:
+//                     {pid, ppid, pgid, osStartTime, exeRealpath, args}. osStartTime is the kernel start
+//                     time in ISO-8601 UTC. Used by the sidecar registry/reaper; name is deliberately not
+//                     part of the identity, because names are not safe across PID reuse.
+//
 //   stall-watch       Long-running, one per boot. --pid <main> --alive <file> --capture-prefix <path>
 //                     --stale-after-ms <ms>. Every 5 s it stats <file>; when its mtime has not changed
 //                     for more than <ms> of awake time it runs /usr/bin/sample on <main> into
@@ -48,6 +53,7 @@
 //                     <main> is no longer its parent. src/main/infra/observability/stall-sampler.ts owns
 //                     the protocol; all redaction, retention and auditing happen there, not here.
 import AppKit
+import Darwin
 import Speech
 import Vision
 
@@ -318,6 +324,85 @@ func runStatFlags() -> Never {
     exit(0)
 }
 
+// MARK: - proc-info
+
+struct ProcInfo: Codable {
+    let pid: Int32
+    let ppid: Int32
+    let pgid: Int32
+    let osStartTime: String
+    let exeRealpath: String
+    let args: [String]
+}
+
+func processStartIso(_ info: kinfo_proc) -> String {
+    let seconds = TimeInterval(info.kp_proc.p_un.__p_starttime.tv_sec)
+    let micros = TimeInterval(info.kp_proc.p_un.__p_starttime.tv_usec) / 1_000_000
+    let date = Date(timeIntervalSince1970: seconds + micros)
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    return formatter.string(from: date)
+}
+
+func kinfoForPid(_ pid: Int32) -> kinfo_proc? {
+    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.stride
+    let rc = mib.withUnsafeMutableBufferPointer { ptr in
+        sysctl(ptr.baseAddress, u_int(ptr.count), &info, &size, nil, 0)
+    }
+    return rc == 0 && size > 0 ? info : nil
+}
+
+func argsForPid(_ pid: Int32) -> [String] {
+    var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+    var size = 0
+    guard sysctl(&mib, u_int(mib.count), nil, &size, nil, 0) == 0, size > 0 else { return [] }
+    var buffer = [UInt8](repeating: 0, count: size)
+    guard sysctl(&mib, u_int(mib.count), &buffer, &size, nil, 0) == 0, size >= MemoryLayout<Int32>.size else { return [] }
+    let argc = buffer.withUnsafeBytes { $0.load(as: Int32.self) }
+    var offset = MemoryLayout<Int32>.size
+    while offset < size && buffer[offset] != 0 { offset += 1 }
+    while offset < size && buffer[offset] == 0 { offset += 1 }
+    var args: [String] = []
+    for _ in 0..<argc {
+        if offset >= size { break }
+        let start = offset
+        while offset < size && buffer[offset] != 0 { offset += 1 }
+        if offset > start {
+            args.append(String(decoding: buffer[start..<offset], as: UTF8.self))
+        }
+        while offset < size && buffer[offset] == 0 { offset += 1 }
+    }
+    return args
+}
+
+func runProcInfo(pidText: String) -> Never {
+    guard let pid = Int32(pidText), let info = kinfoForPid(pid) else { exit(0) }
+    var pathBuffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN))
+    let pathLength = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
+    guard pathLength > 0 else { exit(0) }
+    let exePath = String(cString: pathBuffer)
+    let real = URL(fileURLWithPath: exePath).resolvingSymlinksInPath().path
+    let result = ProcInfo(
+        pid: pid,
+        ppid: info.kp_eproc.e_ppid,
+        pgid: getpgid(pid),
+        osStartTime: processStartIso(info),
+        exeRealpath: real,
+        args: argsForPid(pid)
+    )
+    do {
+        let encoded = try JSONEncoder().encode(result)
+        FileHandle.standardOutput.write(encoded)
+        FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+    } catch {
+        fail("proc-info: could not encode result: \(error.localizedDescription)")
+    }
+    exit(0)
+}
+
 // MARK: - stall-watch
 
 let stallPollSeconds: UInt32 = 5
@@ -414,7 +499,7 @@ func runStallWatch(_ options: [String]) -> Never {
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|stall-watch> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|stall-watch> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -430,6 +515,11 @@ case "screen-metrics":
     runScreenMetrics()
 case "stat-flags":
     runStatFlags()
+case "proc-info":
+    guard arguments.count >= 3 else {
+        fail("usage: metis-mac-helper proc-info <pid>")
+    }
+    runProcInfo(pidText: arguments[2])
 case "stall-watch":
     runStallWatch(Array(arguments.dropFirst(2)))
 default:

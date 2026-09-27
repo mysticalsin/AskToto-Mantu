@@ -1,0 +1,272 @@
+import { execFile } from 'node:child_process'
+import { readdirSync, readFileSync, realpathSync } from 'node:fs'
+import { basename, join, resolve } from 'node:path'
+import { promisify } from 'node:util'
+import { app } from 'electron'
+import { auditLog, mainLog } from '../../logger'
+import { resolveBinaryPath } from '../../llm/local-runtime'
+import { argsFingerprint, getProcessIdentity, type SidecarRecord } from './registry'
+
+const execFileAsync = promisify(execFile)
+
+export interface ProcessIdentity {
+  readonly pid: number
+  readonly ppid?: number
+  readonly pgid?: number
+  readonly osStartTime: string
+  readonly exeRealpath: string
+  readonly args: readonly string[]
+}
+
+export interface ReaperAdapters {
+  readonly readRegistryRecords: (runDir: string) => SidecarRecord[]
+  readonly processInfo: (pid: number) => Promise<ProcessIdentity | null>
+  readonly listProcesses: () => Promise<ProcessIdentity[]>
+  readonly kill: (pid: number) => void
+  readonly audit: (event: 'sidecar.reaped' | 'sidecar.reap.skipped', detail: Record<string, unknown>) => void
+  readonly logSkip: (detail: Record<string, unknown>) => void
+}
+
+export interface ReaperOptions {
+  readonly userData: string
+  readonly currentMain: ProcessIdentity
+  readonly llamaServerRealpath: string
+  readonly adapters?: Partial<ReaperAdapters>
+}
+
+type SkipReason =
+  | 'corrupt-registry'
+  | 'incomplete-entry'
+  | 'pid-not-alive'
+  | 'start-time-mismatch'
+  | 'exe-mismatch'
+  | 'kill-failed'
+  | 'ambiguous-entry'
+
+export async function reapBootSidecars(options: ReaperOptions): Promise<void> {
+  const adapters = { ...defaultAdapters(), ...options.adapters }
+  const runDir = join(options.userData, 'run')
+  for (const record of adapters.readRegistryRecords(runDir)) {
+    if (record.kind !== 'spawned') continue
+    await reapRegistryRecord(record, adapters)
+  }
+  await reapLegacyLlamaOrphans(options, adapters)
+}
+
+async function reapRegistryRecord(record: SidecarRecord, adapters: ReaperAdapters): Promise<void> {
+  if ((record as SidecarRecord & { corrupt?: boolean }).corrupt) {
+    skip(adapters, 'corrupt-registry', { pid: record.pid, name: record.name })
+    return
+  }
+  const incomplete =
+    typeof record.pid !== 'number' ||
+    !record.osStartTime ||
+    !record.exeRealpath ||
+    !record.argsFingerprint ||
+    !record.name
+  if (incomplete) {
+    skip(adapters, 'incomplete-entry', { pid: record.pid, name: record.name })
+    return
+  }
+  const live = await adapters.processInfo(record.pid!)
+  if (!live) {
+    skip(adapters, 'pid-not-alive', { pid: record.pid, name: record.name })
+    return
+  }
+  if (live.osStartTime !== record.osStartTime) {
+    skip(adapters, 'start-time-mismatch', { pid: record.pid, name: record.name })
+    return
+  }
+  if (live.exeRealpath !== record.exeRealpath) {
+    skip(adapters, 'exe-mismatch', { pid: record.pid, name: record.name })
+    return
+  }
+  try {
+    adapters.kill(record.pid!)
+    adapters.audit('sidecar.reaped', { name: record.name, pid: record.pid, reason: 'registry' })
+  } catch (error) {
+    skip(adapters, 'kill-failed', { pid: record.pid, name: record.name, error: errorMessage(error) })
+  }
+}
+
+async function reapLegacyLlamaOrphans(options: ReaperOptions, adapters: ReaperAdapters): Promise<void> {
+  const modelRoot = withTrailingSeparator(resolve(options.userData, 'local-llm'))
+  const procs = await adapters.listProcesses()
+  for (const proc of procs) {
+    if (proc.exeRealpath !== options.llamaServerRealpath) continue
+    if (proc.ppid !== 1) continue
+    if (proc.osStartTime >= options.currentMain.osStartTime) continue
+    if (!legacyArgsPointAtUserModel(proc.args, modelRoot)) continue
+    try {
+      adapters.kill(proc.pid)
+      adapters.audit('sidecar.reaped', { name: 'llama-server', pid: proc.pid, reason: 'legacy-orphan' })
+    } catch (error) {
+      skip(adapters, 'kill-failed', { pid: proc.pid, name: 'llama-server', error: errorMessage(error) })
+    }
+  }
+}
+
+function legacyArgsPointAtUserModel(args: readonly string[], modelRoot: string): boolean {
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] !== '-m') continue
+    const modelPath = resolve(args[i + 1])
+    if (withTrailingSeparator(modelPath).startsWith(modelRoot)) return true
+  }
+  return false
+}
+
+function withTrailingSeparator(path: string): string {
+  return path.endsWith('/') || path.endsWith('\\') ? path : `${path}/`
+}
+
+function skip(adapters: ReaperAdapters, reason: SkipReason, detail: Record<string, unknown>): void {
+  const payload = { reason, ...safeDetail(detail) }
+  adapters.logSkip(payload)
+  adapters.audit('sidecar.reap.skipped', payload)
+}
+
+function safeDetail(detail: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (typeof detail.name === 'string') out.name = detail.name
+  if (typeof detail.pid === 'number') out.pid = detail.pid
+  if (typeof detail.error === 'string') out.error = detail.error
+  return out
+}
+
+export function readRegistryRecords(runDir: string): SidecarRecord[] {
+  const records: SidecarRecord[] = []
+  let files: string[]
+  try {
+    files = readdirSync(runDir).filter((f) => /^sidecars-[a-zA-Z0-9-]+\.json$/.test(f))
+  } catch {
+    return records
+  }
+  for (const file of files) {
+    const path = join(runDir, file)
+    let lines: string[]
+    try {
+      lines = readFileSync(path, 'utf8').split('\n').filter((line) => line.trim().length > 0)
+    } catch {
+      records.push({ kind: 'spawned', sessionId: basename(file), name: '', recordedAt: '', corrupt: true } as SidecarRecord & { corrupt: true })
+      continue
+    }
+    for (const line of lines) {
+      try {
+        records.push(JSON.parse(line) as SidecarRecord)
+      } catch {
+        records.push({ kind: 'spawned', sessionId: basename(file), name: '', recordedAt: '', corrupt: true } as SidecarRecord & { corrupt: true })
+      }
+    }
+  }
+  return records
+}
+
+export async function runBootSidecarReaper(userData = app.getPath('userData')): Promise<void> {
+  try {
+    const currentMain = await getProductionProcessInfo(process.pid)
+    const llama = productionLlamaRealpath()
+    if (!currentMain || !llama) return
+    await reapBootSidecars({ userData, currentMain, llamaServerRealpath: llama })
+  } catch (error) {
+    mainLog.warn('[sidecar.reaper] boot reaper failed', error)
+  }
+}
+
+function defaultAdapters(): ReaperAdapters {
+  return {
+    readRegistryRecords,
+    processInfo: getProductionProcessInfo,
+    listProcesses: listProductionProcesses,
+    kill(pid) {
+      process.kill(pid, 'SIGKILL')
+    },
+    audit(event, detail) {
+      auditLog(event, detail)
+    },
+    logSkip(detail) {
+      mainLog.warn('[sidecar.reap.skipped]', detail)
+    }
+  }
+}
+
+async function getProductionProcessInfo(pid: number): Promise<ProcessIdentity | null> {
+  if (process.platform === 'darwin' || process.platform === 'win32') return getProcessIdentity(pid)
+  return getPosixProcessInfo(pid)
+}
+
+async function listProductionProcesses(): Promise<ProcessIdentity[]> {
+  if (process.platform === 'win32') return listWindowsProcesses()
+  return listPosixProcesses()
+}
+
+async function getPosixProcessInfo(pid: number): Promise<ProcessIdentity | null> {
+  const procs = await listPosixProcesses([pid])
+  return procs[0] ?? null
+}
+
+async function listPosixProcesses(pids?: readonly number[]): Promise<ProcessIdentity[]> {
+  const args = pids?.length
+    ? ['-o', 'pid=,ppid=,pgid=,lstart=,command=', '-p', pids.join(',')]
+    : ['-axo', 'pid=,ppid=,pgid=,lstart=,command=']
+  const { stdout } = await execFileAsync('/bin/ps', args, { encoding: 'utf8', timeout: 5_000 })
+  const out: ProcessIdentity[] = []
+  for (const line of stdout.split('\n')) {
+    const parsed = parsePosixPsLine(line)
+    if (parsed) out.push(parsed)
+  }
+  return out
+}
+
+function parsePosixPsLine(line: string): ProcessIdentity | null {
+  const match = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(.{24})\s+(.+)$/.exec(line)
+  if (!match) return null
+  const command = match[5].trim()
+  const exe = command.split(/\s+/)[0]
+  let exeRealpath: string
+  try {
+    exeRealpath = realpathSync(exe)
+  } catch {
+    return null
+  }
+  return {
+    pid: Number(match[1]),
+    ppid: Number(match[2]),
+    pgid: Number(match[3]),
+    osStartTime: new Date(match[4]).toISOString(),
+    exeRealpath,
+    args: splitCommand(command)
+  }
+}
+
+async function listWindowsProcesses(): Promise<ProcessIdentity[]> {
+  return []
+}
+
+function splitCommand(command: string): string[] {
+  const out: string[] = []
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(command))) out.push(match[1] ?? match[2] ?? match[3])
+  return out
+}
+
+function productionLlamaRealpath(): string | null {
+  for (const candidate of resolveBinaryPath()) {
+    try {
+      return realpathSync(candidate.path)
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return null
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+export const testOnly = {
+  argsFingerprint,
+  legacyArgsPointAtUserModel,
+  parsePosixPsLine
+}

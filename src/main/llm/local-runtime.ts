@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { auditLog, mainLog } from '../logger'
 import { errMsg } from './shared'
+import { recordSidecarIntent, recordSidecarSpawned } from '../infra/process/registry'
 
 export type LlamaPlatform = 'mac' | 'win'
 export type WinVariant = 'vulkan' | 'cpu'
@@ -359,11 +360,13 @@ function spawnAndWaitHealthy(
     try {
       // The per-session api key travels via env, never argv (see module doc comment) — `ps`/the process
       // table can see the flag list of every local process but not another process's environment.
+      recordSidecarIntent('llama-server', args)
       proc = spawn(binaryPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         env: { ...process.env, LLAMA_API_KEY: apiKey }
       })
+      recordSidecarSpawned('llama-server', proc, binaryPath, args)
     } catch (err) {
       reject(err instanceof Error ? err : new Error(String(err)))
       return

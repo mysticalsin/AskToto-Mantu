@@ -282,6 +282,8 @@ export type AuditEvent =
   | 'local.runtime.crash'
   | 'local.runtime.restart'
   | 'local.runtime.missing'
+  | 'sidecar.reaped'
+  | 'sidecar.reap.skipped'
   | 'local.model.checksum_fail'
   // First-run weight download (local-model-download.ts). The weights are no longer bundled, so these
   // are the audit trail for the only network fetch installed code makes for model files.
