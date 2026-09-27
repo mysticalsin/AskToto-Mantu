@@ -137,7 +137,8 @@ function sessionApi(options: {
     LiveMeetingStartedAtSchema,
     Date: class extends Date { static now(): number { return options.now?.() ?? Date.now() } },
     backfillSpeakerNames: options.backfill ?? (async () => ({ ok: true, named: 0 })),
-    mainLog: { warn: vi.fn(), error: vi.fn() }
+    mainLog: { warn: vi.fn(), error: vi.fn() },
+    rebuildTrayMenu: vi.fn()
   })
 }
 
@@ -223,6 +224,7 @@ describe('authoritative live speaker identity', () => {
       requireAuth: () => true,
       acceptLiveSpeakerTransition: api.acceptLiveSpeakerTransition,
       listeningActive: false,
+      setListeningActive: vi.fn(),
       setTrayRecording: tray,
       setRecordingPowerSaveBlock: power,
       parakeetRelease: releaseParakeet,
