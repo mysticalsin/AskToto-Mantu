@@ -62,7 +62,7 @@ export function parseAuditLog(text) {
   return records
 }
 
-/** True iff `url` is the trusted overlay's own `file:` document (overlayRendererUrl, index.ts:2067). */
+/** True iff `url` is the trusted overlay's own `file:` document (overlayRendererUrl). */
 export function isOverlayUrl(url) {
   let parsed
   try {
@@ -113,7 +113,7 @@ export function smokeVerdict(observation) {
   return { result: failures.length === 0 ? 'pass' : 'fail', failures }
 }
 
-/** The schema-1, content-free report (INV-9): no paths, command lines, env values, audit detail or free text. */
+/** The schema-1, content-free report: no paths, command lines, env values, audit detail or free text. */
 export function smokeReport(observation) {
   const { result, failures } = smokeVerdict(observation)
   const started = observation.audit.find((record) => record.event === 'app.started')
@@ -165,6 +165,51 @@ function readCleanMarker(userData) {
   }
 }
 
+/**
+ * Reads back what this run's own app process recorded: the audit log and the clean-shutdown marker, from
+ * `profile` (`null` when this run never created one, e.g. the install-root-busy path). Called exactly
+ * once, at the top of `finally`, before any cleanup kill or the profile's removal — a kill that lands on a
+ * still-live renderer, or the removed directory, must never be able to change what gets reported.
+ */
+export function readObservationTail(profile) {
+  if (!profile) return { audit: [], marker: null }
+  return {
+    audit: parseAuditLog(readAuditLog(join(profile, 'logs', 'audit.log'))),
+    marker: readCleanMarker(profile)
+  }
+}
+
+/**
+ * True while Node still holds `child`'s pid unreaped — an un-reaped zombie on POSIX, an open handle on
+ * Windows. Once false, the OS is free to hand the pid to an unrelated process, so it must never again be
+ * treated as this run's identity.
+ */
+export function childPidReserved(child) {
+  return child !== null && typeof child.pid === 'number' && child.exitCode === null && child.signalCode === null
+}
+
+/**
+ * Pure: the processes this run's best-effort cleanup should kill. `[]` when this run never launched a
+ * child (e.g. the install-root-busy path) — cleanup must never touch processes a run that launched
+ * nothing merely found resident under the root, since those are exactly what the pre-launch clean-root
+ * check just refused to own. Otherwise, the survivors of whatever baseline census this run took (empty
+ * when none was ever taken) unioned with this run's currently-owned processes — walked from `mainPid`
+ * only while the child's pid is still reserved (`childPidReserved`), so a pid the child has already been
+ * reaped from, and which may already belong to an unrelated process, is never adopted as "main".
+ */
+export function computeCleanupTargets({ child, ownedAtQuit, mainPid, installRoot, platform }, table) {
+  if (child === null) return []
+  const targets = new Map()
+  for (const entry of computeSurvivors(ownedAtQuit ?? [], table, { installRoot, platform })) {
+    targets.set(`${entry.pid}:${entry.startedMs}`, entry)
+  }
+  const livePid = childPidReserved(child) ? mainPid : null
+  for (const entry of ownedProcesses(table, { mainPid: livePid, installRoot, platform })) {
+    targets.set(`${entry.pid}:${entry.startedMs}`, entry)
+  }
+  return [...targets.values()]
+}
+
 function freeLoopbackPort() {
   return new Promise((resolve, reject) => {
     const server = createServer()
@@ -191,7 +236,6 @@ async function main() {
   if (!target || !reportPath || (process.platform !== 'darwin' && process.platform !== 'win32')) {
     console.error('usage: node scripts/qa/packaged-smoke.mjs <installed app> <report.json>')
     process.exit(2)
-    return
   }
 
   const platform = process.platform
@@ -227,7 +271,7 @@ async function main() {
   let child = null
 
   try {
-    // INV-7: the root must be clean before launch, or the root-residency rule in INV-6 is unsound.
+    // The root must be clean before launch, or the root-residency rule below is unsound.
     const rootBefore = ownedProcesses(listProcesses(platform), { mainPid: null, installRoot, platform })
     if (rootBefore.length > 0) {
       observation.installRootBusy = true
@@ -292,12 +336,10 @@ async function main() {
       // The quit stage never ran, so exitMs (time from quit request to exit) stays null.
       observation.exitedEarly = true
       observation.exit = { code: exitInfo.code, signal: exitInfo.signal }
-      observation.audit = parseAuditLog(readAuditLog(auditLogPath))
-      observation.marker = readCleanMarker(profile)
       return
     }
 
-    // INV-8: the census must be non-vacuous before a quit is even requested.
+    // The census must be non-vacuous before a quit is even requested.
     observation.ownedAtQuit = ownedProcesses(listProcesses(platform), { mainPid: child.pid, installRoot, platform })
     const vacuous =
       !observation.ownedAtQuit.some((entry) => entry.pid === child.pid) || observation.ownedAtQuit.length < 2
@@ -341,23 +383,22 @@ async function main() {
     }
     observation.survivors = latestSurvivors
     observation.survivorsGoneMs = latestSurvivors.length === 0 ? Date.now() - survivorsGoneStart : null
-
-    observation.audit = parseAuditLog(readAuditLog(auditLogPath))
-    observation.marker = readCleanMarker(profile)
   } catch (err) {
     observation.error = true
     console.error(err?.stack ?? String(err))
   } finally {
+    // Read back what actually happened before any kill or the profile's removal can change it.
+    const tail = readObservationTail(profile)
+    observation.audit = tail.audit
+    observation.marker = tail.marker
+
     try {
       const table = listProcesses(platform)
-      const toKill = new Map()
-      for (const entry of computeSurvivors(observation.ownedAtQuit ?? [], table, { installRoot, platform })) {
-        toKill.set(`${entry.pid}:${entry.startedMs}`, entry)
-      }
-      for (const entry of ownedProcesses(table, { mainPid: observation.mainPid, installRoot, platform })) {
-        toKill.set(`${entry.pid}:${entry.startedMs}`, entry)
-      }
-      killOwned([...toKill.values()])
+      const targets = computeCleanupTargets(
+        { child, ownedAtQuit: observation.ownedAtQuit, mainPid: observation.mainPid, installRoot, platform },
+        table
+      )
+      killOwned(targets)
     } catch {
       /* best effort — the report still reflects what was actually observed */
     }

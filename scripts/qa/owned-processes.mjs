@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Process-ownership primitive for the packaged smoke lanes (M2-0007). Also usable by M2-0009's resource
  * census and the hard-kill suites (M2-0028/0029).
@@ -17,7 +16,7 @@ import path from 'node:path'
 
 /** @typedef {{ pid: number, ppid: number, startedMs: number, exe: string | null, role: string }} ProcessEntry */
 
-const DARWIN_ROW = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(.+)$/
+const DARWIN_ROW = /^\s*(\d+)\s+(\d+)\s+(?:\S+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(.+)$/
 
 function parseDarwinTable(output) {
   /** @type {ProcessEntry[]} */
@@ -26,7 +25,7 @@ function parseDarwinTable(output) {
     if (!row.trim()) continue
     const match = DARWIN_ROW.exec(row)
     if (!match) continue
-    const [, pidText, ppidText, , month, day, time, year, exe] = match
+    const [, pidText, ppidText, month, day, time, year, exe] = match
     // Built in this order (never the row's own "Day Mon DD HH:MM:SS YYYY") because Date.parse is
     // reliable on "Mon DD YYYY HH:MM:SS" across engines; never guess a start time it cannot parse.
     const startedMs = Date.parse(`${month} ${day} ${year} ${time}`)
@@ -58,7 +57,7 @@ function parseWin32Table(output) {
     const startedMs = typeof row.started === 'number' ? row.started : 0
     let role = exe !== null ? path.win32.basename(exe) : 'unknown'
     // The role names the Chromium process kind when present. The command line itself is dropped right
-    // after this: it must never leave this function, let alone reach the report (INV-9).
+    // after this: it must never leave this function, let alone reach the report.
     if (typeof row.cmd === 'string') {
       const type = /--type=(\S+)/.exec(row.cmd)
       if (type) role += ` (${type[1]})`
@@ -112,13 +111,17 @@ function pathModuleFor(platform) {
   return platform === 'win32' ? path.win32 : path.posix
 }
 
-/** True iff `candidate` resolves strictly below `root` — the root itself never counts as inside. */
+/**
+ * True iff `candidate` resolves strictly below `root` — the root itself never counts as inside. Checks
+ * for an actual ".." parent-traversal segment, never a leading-dots prefix, so a child directory whose
+ * name happens to start with ".." (e.g. "..foo") is still inside.
+ */
 export function isInside(root, candidate, platform) {
   const p = pathModuleFor(platform)
   const a = platform === 'win32' ? root.toLowerCase() : root
   const b = platform === 'win32' ? candidate.toLowerCase() : candidate
   const rel = p.relative(a, b)
-  return rel !== '' && !rel.startsWith('..') && !p.isAbsolute(rel)
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${p.sep}`) && !p.isAbsolute(rel)
 }
 
 function entryKey(entry) {
@@ -127,8 +130,9 @@ function entryKey(entry) {
 
 /**
  * Main plus its transitive descendants (a child only counts once its recorded start time is at or after
- * its parent's — INV-6's defence against stale Windows parent ids and pid reuse), unioned with every
- * root resident. With `mainPid: null` the result is root residents only, the INV-7 precondition.
+ * its parent's — the defence against stale Windows parent ids and pid reuse), unioned with every
+ * root resident. With `mainPid: null` the result is root residents only — the precondition for the
+ * clean-root check before launch.
  */
 export function ownedProcesses(table, { mainPid, installRoot, platform }) {
   const owned = new Map()
@@ -174,7 +178,7 @@ export function survivors(owned, table, { installRoot, platform }) {
   )
 }
 
-/** `{ [role]: count }`, keys sorted, for the content-free report (INV-9). */
+/** `{ [role]: count }`, keys sorted, for the content-free report. */
 export function roleCounts(entries) {
   const counts = {}
   for (const entry of entries) counts[entry.role] = (counts[entry.role] ?? 0) + 1
