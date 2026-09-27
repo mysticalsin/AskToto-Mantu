@@ -30,12 +30,20 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
 const launchGate = readFileSync(join(root, 'scripts', 'check-packaged-launch.mjs'), 'utf8')
 
 /** Every npm script that actually invokes electron-builder against a mac target. */
-const MAC_BUILD_CHAINS = ['dist', 'dist:local', 'release:build:mac', 'release:mas']
+const MAC_BUILD_CHAINS = ['dist', 'dist:local', 'release:build:mac', 'release:mas', 'dist:qa-identity']
 
-/** A chain plus whatever npm runs ahead of it — `dist` does its provisioning in `predist`. */
+/**
+ * A chain plus whatever npm runs ahead of it. `dist` does its provisioning inline in `predist`;
+ * `dist:qa-identity` (M2-0187) reuses that same provisioning through `predist:qa-identity: "npm run
+ * predist"` instead of duplicating it, so a pre-hook of exactly that `npm run <script>` form is expanded
+ * to the referenced script's own text before counting as provisioning.
+ */
 function chainWithHook(name: string): string {
   const pre = pkg.scripts[`pre${name}`]
-  return pre ? `${pre} && ${pkg.scripts[name]}` : pkg.scripts[name]
+  if (!pre) return pkg.scripts[name]
+  const referencedScript = /^npm run (\S+)$/.exec(pre)?.[1]
+  const expandedPre = referencedScript ? pkg.scripts[referencedScript] : pre
+  return `${expandedPre} && ${pkg.scripts[name]}`
 }
 
 describe('MQA-208 — release:mas stages Electron like every other mac chain', () => {
