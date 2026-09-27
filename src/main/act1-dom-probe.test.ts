@@ -198,8 +198,11 @@ describe('FITO-185-U wiring in createWindow', () => {
   })
 
   it('probe registers before loadURL', () => {
+    // M2-0224: createWindow no longer calls win.loadURL(rendererUrl) itself — bindReadinessThenNavigate
+    // (src/main/renderer-readiness.ts) does, right after binding renderer readiness. That single call is
+    // now the navigation this probe must still precede.
     expect(create.indexOf('bindAct1DomProbe(')).toBeGreaterThan(-1)
-    expect(create.indexOf('bindAct1DomProbe(')).toBeLessThan(create.indexOf('win.loadURL(rendererUrl)'))
+    expect(create.indexOf('bindAct1DomProbe(')).toBeLessThan(create.indexOf('bindReadinessThenNavigate('))
   })
 
   it('keeps FITO-185-N exclusiveOnboarding=1 on packaged loadURL', () => {

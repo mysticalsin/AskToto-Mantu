@@ -200,7 +200,9 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
     // MQA-339: a stale user environment variable must not route packaged onboarding or imports to Vite.
     expect(main).not.toMatch(/process\.env\[?['"]?ELECTRON_RENDERER_URL/)
     expect(main).toMatch(/const rendererUrl = overlayRendererUrl\(\)/)
-    expect(main).toMatch(/win\.loadURL\(rendererUrl\)/)
+    // M2-0224: the navigation itself moved into bindReadinessThenNavigate (renderer-readiness.ts), which
+    // createWindow calls with this same rendererUrl — no separate win.loadURL(rendererUrl) call remains.
+    expect(main).toMatch(/bindReadinessThenNavigate\(win, rendererUrl,/)
     expect(main).toMatch(/self\.loadURL\(overlayRendererUrl\(\)\)/)
   })
 })
