@@ -28,7 +28,7 @@ Tony's challenge: make this very beautiful, scalable, solidly secure, and user-f
 This file is the one platform story. Slice contracts stay the law for their pixels. This file is the law for how those slices become one product a stranger can install and a fleet of ten thousand can later join.
 
 **Status:** Draft — design-only, ready-to-merge: no (see frontmatter). This is the 2.0 platform
-target `docs/asktoto-architecture.md`'s currency banner now points to.
+target; `docs/asktoto-architecture.md` predates it (see that file's 2.0 platform pointer).
 
 **READY TO MERGE: no.** Design only. No product code in the change that lands this file.
 

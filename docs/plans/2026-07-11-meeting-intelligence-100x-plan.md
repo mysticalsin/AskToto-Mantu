@@ -136,11 +136,22 @@ Every phase lands with tests; no phase ships without its verify gate. One logica
 
 ---
 
-**2.0 fold-in note (M2-0017).** Phases 6-8 below remain roadmap work (never executed) and are now
-folded into M2-0130 (TASK-040, "Rework Mantu Intelligence into an evidence-first workspace"), which
-supersedes them alongside `docs/design/MANTU-INTELLIGENCE.md` and the kit's MASTER §17
-governed-knowledge contract as the live plan for this territory. Kept below unchanged for lineage;
-do not execute Phases 6-8 from this document directly — read M2-0130 first.
+**2.0 fold-in note.** Phase 6 (pre-meeting delta) below remains roadmap work and is folded into
+M2-0130 (TASK-040, "Rework Mantu Intelligence into an evidence-first workspace"), which supersedes
+it alongside `docs/design/MANTU-INTELLIGENCE.md` and the kit's MASTER §17 governed-knowledge
+contract as the live plan for that territory.
+
+Phase 7 (ASR entity biasing) remains roadmap work; no 2.0 ticket owns it yet.
+
+Phase 8 (enterprise hardening + compliance pack) is partly landed, independent of this plan's own
+phase numbering: the tamper-evident hash-chained audit log exists (`src/main/audit-log-chain.test.ts`,
+MQA-232), the erasure seams exist (`src/main/erasure-completeness.contract.test.ts`), and
+`docs/compliance/*` is Phase 8's own paper pack, which cites this plan as its plan of record. The
+remaining governance, subject-rights and multi-seat/Teams-track work is owned by M2-0150 (TASK-058,
+"Complete governance, subject rights and sharing qualification and add the multi-seat/Teams
+compliance track"); no ticket yet owns the central IPC registrar, key custody or consent-UX items.
+
+Kept below unchanged for lineage.
 
 ---
 

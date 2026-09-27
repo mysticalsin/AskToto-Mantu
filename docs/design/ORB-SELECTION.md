@@ -18,9 +18,10 @@ notes: DESIGN before UI. Tony lock 2026-09-06 live fail on 286ff55. Default Circ
 
 # Orb selection (Bar rest look)
 
-**Status:** Active — shipped Settings orb-rest picker. One of three overlapping voice/orb/bar
-designs (with `METIS-2.0-JARVIS-COMMAND.md` and `METIS-2.0-CAP2-WAKE-ADAPTERS.md`) reconciled by
-M2-0093 (TASK-030) — see `DESIGN.md` § Bar sphere.
+**Status:** Active — shipped Settings orb-rest picker. Part of design A (`DESIGN.md` +
+`BAR-PILL.md` + this file), one of three overlapping voice/orb/bar designs (with
+`METIS-2.0-JARVIS-COMMAND.md` and `METIS-2.0-CAP2-WAKE-ADAPTERS.md`) reconciled by M2-0093
+(TASK-030) — see `DESIGN.md` § Bar sphere.
 
 This file is the contract for one Settings power choice. Hide / Island / Bar overlay chrome stays frozen.
 

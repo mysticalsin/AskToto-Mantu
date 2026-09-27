@@ -5,8 +5,8 @@
 **Pack:** HOLD · **OAuth:** LAST · **Cap3 notch:** NOT started
 
 **Status:** Active — shipped wake-word/command-session increment. One of three overlapping
-voice/orb/bar designs (with `DESIGN.md`+`BAR-PILL.md` and `METIS-2.0-JARVIS-COMMAND.md`) reconciled
-by M2-0093 (TASK-030) — see `DESIGN.md` § Bar sphere.
+voice/orb/bar designs (with `DESIGN.md`+`BAR-PILL.md`+`ORB-SELECTION.md` and
+`METIS-2.0-JARVIS-COMMAND.md`) reconciled by M2-0093 (TASK-030) — see `DESIGN.md` § Bar sphere.
 
 ## What landed
 

@@ -147,9 +147,9 @@ dashboard. The button is the trigger. Never auto-send. Not leftover PR 61.
 ## Operator
 See [OPERATOR.md](./OPERATOR.md). Cloudflare Access packed ops console (`operator/`, Worker `metis-operator`). Client keeps prompt cache on. Map geo comes from `request.cf`, never from the app. Not overlay chrome. Not the Fly license-server. Not `cloudflare-proxy`.
 
-**2.0 reconciliation (M2-0017).** The kit specifies 11 named portal surfaces (MASTER §12.2) against
-this file's 8-tab rail below. Open question, tracked as decision D-16 in the program's private
-DECISIONS.md — see [OPERATOR.md](./OPERATOR.md).
+**2.0 reconciliation.** The kit specifies 11 named portal surfaces (MASTER §12.2) against this
+file's 8-tab rail below. Closed by M2-0158, which adds the missing portal surfaces inside the
+existing chrome per the owner's scope decision — see [OPERATOR.md](./OPERATOR.md).
 
 ## Operator — Shoey OpenPanel bar, Métis seats (Fable lock 6 Sep 2026)
 
@@ -379,7 +379,7 @@ See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a Jakub thinking-orb (`thin
 
 Bar rest look (power choice): [ORB-SELECTION.md](./ORB-SELECTION.md). Full bar (default, Jarvis circle docked) or Circle (Jarvis particle rest). Hide/Island ignore it. Never Obsidian.
 
-**2.0 reconciliation (M2-0017).** This Bar/orb pixel contract, [METIS-2.0-JARVIS-COMMAND.md](METIS-2.0-JARVIS-COMMAND.md)'s pill/sidecar placement, and [METIS-2.0-CAP2-WAKE-ADAPTERS.md](METIS-2.0-CAP2-WAKE-ADAPTERS.md)'s shipped wake path are three overlapping designs that do not fully agree. M2-0093 (TASK-030) owns reconciling all three into one committed design; until it lands, this file remains the operative shipped visual contract for Bar/orb pixels.
+**2.0 reconciliation.** This file's Bar/orb pixel contract (together with [BAR-PILL.md](BAR-PILL.md) and [ORB-SELECTION.md](ORB-SELECTION.md)), [METIS-2.0-JARVIS-COMMAND.md](METIS-2.0-JARVIS-COMMAND.md)'s pill/sidecar placement, and [METIS-2.0-CAP2-WAKE-ADAPTERS.md](METIS-2.0-CAP2-WAKE-ADAPTERS.md)'s shipped wake path are three overlapping designs that do not fully agree. M2-0093 (TASK-030) owns reconciling all three into one committed design; until it lands, this file remains the operative shipped visual contract for Bar/orb pixels.
 
 ## Auto-answer
 Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send) or a new question replaces it. Not an ephemeral 4s/7s card.

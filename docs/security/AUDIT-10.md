@@ -477,10 +477,7 @@ Overlay chrome, island geometry, onboarding, PR 58, identity card PR, Intelligen
 
 The 20-point checklist (same PR, do not re-score the ten here) is `docs/security/AUDIT-20.md`.
 
-## Scope note — AI Gateway no-content-retention contract (2.0, M2-0017)
+## Scope note — AI Gateway no-content-retention contract
 
-This audit does not cover the AI Gateway no-content-retention contract (MASTER §16.6: per-route
-readiness states, the three `cf-aig-*` request headers, and drift detection against a configuration
-baseline) — that requirement postdates this audit (2026-08-31) and is out of scope for the general
-application-security controls scored above. See decision D-12 in the program's DECISIONS.md for the
-no-retention claim itself.
+This audit does not cover the AI Gateway no-content-retention contract. M2-0149 closes the
+no-content-retention gates.
