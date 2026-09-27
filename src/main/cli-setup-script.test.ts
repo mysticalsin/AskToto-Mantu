@@ -336,8 +336,14 @@ describe('openCliScript (via loginCli) — the Windows script path cannot let cm
         expect(existsSync(join(sandbox, 'hacked-marker'))).toBe(false)
       } finally {
         h.dir = savedDir
-        rmSync(evilDir, { recursive: true, force: true })
-        rmSync(sandbox, { recursive: true, force: true })
+        // The command line above is real: `start` hands the login script to a genuine detached cmd.exe
+        // (its console window ends in `pause`) with `sandbox` as its inherited cwd. That process can still
+        // be releasing its handle on cwd/script file the instant this test resumes, so a plain rmSync can
+        // observe a transient EBUSY here that has nothing to do with the assertions above — retry it the
+        // way Node's own recursive rm is designed to (maxRetries/retryDelay), rather than failing the test
+        // on an unrelated OS-timing race.
+        rmSync(evilDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+        rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
       }
     }
   )
