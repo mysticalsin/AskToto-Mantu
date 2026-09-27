@@ -59,6 +59,19 @@ describe('diagnostics summary', () => {
     expect(summary.events).toEqual({ 'app.started': 1 })
   })
 
+  it('counts event names that collide with Object.prototype keys', () => {
+    const summary = summarizeAuditTrail([
+      line('constructor')
+    ], identity, generatedAt)
+
+    expect(summary.events['constructor']).toBe(1)
+    expect(Object.prototype.hasOwnProperty.call(summary.events, 'constructor')).toBe(true)
+    expect(Object.keys(summary.events)).toEqual(['constructor'])
+
+    const zeroSummaryJson = JSON.parse(JSON.stringify(summarizeAuditTrail([], identity, generatedAt)))
+    expect(zeroSummaryJson.events).toEqual({})
+  })
+
   it('copies no actor, title, path, request id, boot id or message content into JSON', () => {
     const summary = summarizeAuditTrail([
       line('app.crash', {

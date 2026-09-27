@@ -90,7 +90,7 @@ function zeroSummary(identity: DiagnosticsIdentity, generatedAt: Date): Diagnost
     stalls: { under2s: 0, '2to5s': 0, '5to30s': 0, '30sPlus': 0 },
     crashes: { fatal: 0, nonFatal: 0, unclassified: 0 },
     reveals: { created: 0, shown: 0, 'already-visible': 0, failed: 0 },
-    events: {}
+    events: Object.create(null) as Record<string, number>
   }
 }
 
