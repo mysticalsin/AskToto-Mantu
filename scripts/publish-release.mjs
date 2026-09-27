@@ -94,7 +94,7 @@ export function planPublication(platform, version, releases) {
       return { action: 'replace-draft', release }
     }
     throw new Error(
-      `Refusing to publish ${config.label} ${version}: a draft release already exists but is not this platform's leftover draft. Delete or inspect the draft before retrying.`
+      `Refusing to publish ${config.label} ${version}: a draft release already exists holding assets that belong to neither platform's release. Delete or inspect the draft before retrying.`
     )
   }
 
@@ -144,11 +144,10 @@ export function toRelease(value) {
   }
 }
 
-function runGh(args, options = {}) {
+function runGh(args, token) {
   const result = spawnSync('gh', args, {
     encoding: 'utf8',
-    env: { ...process.env, GH_TOKEN: options.token ?? process.env.GH_TOKEN },
-    stdio: options.stdio ?? 'pipe',
+    env: { ...process.env, GH_TOKEN: token },
     maxBuffer: 64 * 1024 * 1024
   })
   if (result.error) throw result.error
@@ -160,12 +159,12 @@ function runGh(args, options = {}) {
 export function ghFeed({ repo, token }) {
   const api = {
     releasesTagged(tag) {
-      const pages = JSON.parse(runGh(['api', '--paginate', '--slurp', `repos/${repo}/releases?per_page=100`], { token }))
+      const pages = JSON.parse(runGh(['api', '--paginate', '--slurp', `repos/${repo}/releases?per_page=100`], token))
       const releases = pages.flat()
       return releases.filter((release) => release.tag_name === tag).map(toRelease)
     },
     release(id) {
-      return toRelease(JSON.parse(runGh(['api', `repos/${repo}/releases/${id}`], { token })))
+      return toRelease(JSON.parse(runGh(['api', `repos/${repo}/releases/${id}`], token)))
     },
     createDraft(tag) {
       runGh(
@@ -181,23 +180,23 @@ export function ghFeed({ repo, token }) {
           '--notes',
           RELEASE_NOTES
         ],
-        { token }
+        token
       )
       const release = api.releasesTagged(tag).find((candidate) => candidate.draft)
       if (!release) throw new Error(`created draft ${tag} on ${repo}, but could not read it back`)
       return release
     },
     upload(tag, paths) {
-      runGh(['release', 'upload', tag, ...paths, '--repo', repo], { token })
+      runGh(['release', 'upload', tag, ...paths, '--repo', repo], token)
     },
     publish(id) {
-      runGh(['api', `repos/${repo}/releases/${id}`, '--method', 'PATCH', '-F', 'draft=false', '-F', 'prerelease=false', '-f', 'make_latest=true'], { token })
+      runGh(['api', `repos/${repo}/releases/${id}`, '--method', 'PATCH', '-F', 'draft=false', '-F', 'prerelease=false', '-f', 'make_latest=true'], token)
     },
     deleteDraft(id) {
-      runGh(['api', `repos/${repo}/releases/${id}`, '--method', 'DELETE'], { token })
+      runGh(['api', `repos/${repo}/releases/${id}`, '--method', 'DELETE'], token)
     },
     latestTag() {
-      const json = runGh(['api', `repos/${repo}/releases/latest`, '--jq', '.tag_name'], { token })
+      const json = runGh(['api', `repos/${repo}/releases/latest`, '--jq', '.tag_name'], token)
       return json.trim()
     }
   }
@@ -239,7 +238,11 @@ function createRelease({ tag, feed, bundle, repo = '<the feed>' }) {
   let draft = feed.createDraft(tag)
   feed.upload(tag, bundle.manifest.map((asset) => asset.path))
   draft = feed.release(draft.id)
-  const problems = digestProblems(draft, bundle.manifest)
+  // A fresh draft must contain exactly this platform's upload set before it can go public.
+  const problems = uploadProblems(
+    bundle.manifest.map(({ name, size, sha256 }) => ({ name, size, sha256 })),
+    draft.assets.map(({ name, state, size, digest }) => ({ name, state, size, digest }))
+  )
   if (problems.length) throw new Error(problems.join('\n'))
   feed.publish(draft.id)
   const latest = feed.latestTag()
@@ -271,7 +274,11 @@ export async function publishPlatform({ platform, tag, bundleDir, feed, repo = '
   const bundle = await readBundle(platform, version, bundleDir)
   const releases = feed.releasesTagged(tag)
   const plan = planPublication(platform, version, releases)
-  if (plan.action === 'complete') return { action: 'complete', release: plan.release }
+  if (plan.action === 'complete') {
+    const problems = digestProblems(plan.release, bundle.manifest)
+    if (problems.length) throw new Error(problems.join('\n'))
+    return { action: 'complete', release: plan.release }
+  }
   if (plan.action === 'replace-draft') {
     const expectedOwn = new Set(platformAssets(platform, version))
     const expectedOther = new Set(platformAssets(PLATFORMS[platform].other, version))

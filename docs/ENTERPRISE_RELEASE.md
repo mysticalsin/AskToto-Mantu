@@ -150,9 +150,11 @@ no manual seeding step for this one, unlike the ffmpeg sidecar above.
   metadata against the bytes. The first platform for a tag goes to a fresh draft, is read back (asset set and
   GitHub's sha256 digest of every asset), then becomes public and Latest. The second platform joins that public
   release: installers first, then, only once GitHub's digests of those installers match, its update metadata.
-  Latest does not change. It refuses a prerelease (the owner channel), a release that already carries this
-  platform, and a release holding anything else, and it deletes only its own leftover drafts. The two publish jobs
-  of one tag take turns, so they never write the release at the same time.
+  Latest does not change. It refuses a prerelease (the owner channel), a release holding a foreign asset, and a
+  release holding this platform's assets only partially; a release already carrying this platform's complete,
+  verified assets is a no-op. It deletes leftover drafts only when every asset belongs to one of the two platform
+  release sets, including the other platform's leftover draft or an empty draft. The two publish jobs of one tag
+  take turns, so they never write the release at the same time.
 - A single-platform release is honest about what shipped: installed apps on the other platform find no update
   metadata in it and keep their version, and the in-app check says the latest release is not yet published for
   their platform.
