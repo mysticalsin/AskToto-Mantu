@@ -94,7 +94,7 @@ import {
   extractionSlug,
   type SourceScan
 } from './inputs'
-import { admitSource, reviveExhausted, type WorkTrigger } from '../infra/scheduler/policy'
+import { admitSource, retryStateAfterFailure, reviveExhausted, type WorkTrigger } from '../infra/scheduler/policy'
 import { reportDeferred } from '../infra/scheduler/maintenance'
 
 /** Default ingest waterfall, or the Update Intelligence button's local-first then API-once route. */
@@ -1253,6 +1253,8 @@ type Job = {
   label?: string
   /** mtime/size snapshot at queue time; a later edit must not be merged incrementally. */
   sourceVersion?: string
+  /** ctime snapshot at queue time; cloud hydration/eviction changes it even when mtime/size do not. */
+  sourceChangedAtMs?: number
   /** Re-merge a durable extraction left behind by a crash after extraction but before index success. */
   strategy?: 'reconcile'
 }
@@ -1760,7 +1762,22 @@ async function finishJob(result: JobResult): Promise<void> {
     if (!result.ok && 'notOnDevice' in result) {
       failed = true
       completionError('incomplete')
-      mainLog.info('[brain] a meeting is not on this device; its ledger record is left as it was')
+      const fileVersion = job.sourceVersion ? null : await sourceFileVersion(job.file)
+      const version = job.sourceVersion ?? (fileVersion ? formatSourceVersion(fileVersion) : undefined)
+      const changedAtMs = job.sourceChangedAtMs ?? (fileVersion ? Math.round(fileVersion.ctimeMs) : undefined)
+      await updateIndex(s, (idx) => {
+        const key = jobKey(job)
+        idx.ingested[key] = {
+          at: Date.now(),
+          ok: false,
+          error: 'Meeting file is not available on this device.',
+          ...(version ? { sourceVersion: version } : {}),
+          ...retryStateAfterFailure(idx.ingested[key], { unreadable: true, source: { version, changedAtMs } }, Date.now())
+        }
+        idx.revision += 1
+      })
+      auditLog('brain.ingest', { ok: false, source: job.source })
+      mainLog.info('[brain] a meeting is not on this device; no model attempt was spent')
       return
     }
     try {
@@ -2009,6 +2026,7 @@ export async function enqueueIngest(
   const key = basename(file)
   const version = await sourceFileVersion(file)
   const sourceVersion = version ? formatSourceVersion(version) : undefined
+  const sourceChangedAtMs = version ? Math.round(version.ctimeMs) : undefined
   if (indexUnavailable(s)) return
   const previous = readIndex(s).ingested[key]
   // Match by the namespaced jobKey, not bare basename: enqueueIngest only ever runs for own-meeting paths
@@ -2045,7 +2063,13 @@ export async function enqueueIngest(
     mainLog.warn(`[brain] could not persist live ingest intent for ${key}: ${error instanceof Error ? error.message : String(error)}`)
   }
   if (deferred) return
-  queue.push({ file, source: 'meetings', origin: 'live', ...(sourceVersion ? { sourceVersion } : {}) })
+  queue.push({
+    file,
+    source: 'meetings',
+    origin: 'live',
+    ...(sourceVersion ? { sourceVersion } : {}),
+    ...(sourceChangedAtMs ? { sourceChangedAtMs } : {})
+  })
   pump()
 }
 
@@ -2609,6 +2633,7 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
         origin: 'backfill' as const,
         ...(source.source === 'team' ? { key: source.key, label: source.label } : {}),
         ...(source.version ? { sourceVersion: source.version } : {}),
+        ...(source.changedAtMs ? { sourceChangedAtMs: source.changedAtMs } : {}),
         ...(strategy ? { strategy } : {}),
         ...(route !== 'default' ? { route } : {})
       }

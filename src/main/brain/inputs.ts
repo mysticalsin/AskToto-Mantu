@@ -9,7 +9,7 @@ import type { Settings } from '@shared/ipc'
 import type { BrainIndex } from '@shared/brain'
 import { fnv1a } from '@shared/hash'
 import { storageAt, classifyAll } from '../infra/storage/meetings-storage'
-import type { StorageGateway } from '../infra/storage/gateway'
+import type { ContentVersion, StorageGateway } from '../infra/storage/gateway'
 import { decodeSaved, resolveMeetingsFolder } from '../transcripts'
 import { isJournalFile } from './corrections'
 import { brainDir, slugify } from './store'
@@ -127,7 +127,7 @@ export async function readSourceText(file: string): Promise<SourceText> {
 }
 
 /** Presence is irrelevant here — only the version, when the gateway could get one. */
-export async function sourceFileVersion(file: string): Promise<{ mtimeMs: number; size: number } | null> {
+export async function sourceFileVersion(file: string): Promise<ContentVersion | null> {
   const name = basename(file)
   const classes = await classifyAll(storageAt(dirname(file)), [name])
   const fileClass = classes.get(name)

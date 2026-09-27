@@ -25,7 +25,22 @@ export const BRAIN_INDEX_ERROR_CODE = {
 export class BrainIndexUnavailableError extends Error {
   override readonly name = 'BrainIndexUnavailableError'
   constructor(readonly unavailable: IndexUnavailableCause) {
-    super(`brain index is read-only on this device (${unavailable})`)
+    super(`brain index is read-only on this device (${indexUnavailableCode(unavailable)})`)
+  }
+}
+
+function indexUnavailableCode(cause: IndexUnavailableCause): string {
+  switch (cause) {
+    case 'unsupported':
+      return BRAIN_INDEX_ERROR_CODE.unsupportedVersion
+    case 'undecryptable':
+      return BRAIN_INDEX_ERROR_CODE.undecryptable
+    case 'corrupt-kept':
+      return BRAIN_INDEX_ERROR_CODE.corruptKept
+    case 'io':
+      return BRAIN_INDEX_ERROR_CODE.io
+    case 'cloud-only':
+      return 'brain-index-cloud-only'
   }
 }
 
@@ -60,4 +75,3 @@ export function classifyIndexBytes(buf: Buffer): IndexLoad {
   if (parsed.success) return { kind: 'ready', index: parsed.data }
   return { kind: 'corrupt' }
 }
-
