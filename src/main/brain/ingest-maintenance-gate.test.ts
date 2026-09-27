@@ -183,6 +183,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     expect(held).toHaveLength(1)
     held.shift()?.()
     await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(2), { timeout: 10_000 })
+    await releaseHeldWork()
 
     uptime = 0
     startGate('clean')
