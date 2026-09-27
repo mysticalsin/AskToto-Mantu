@@ -1,0 +1,146 @@
+name: Packaged smoke
+
+# Builds the unsigned app on the hosted macOS and Windows runners with no repository secret (macOS
+# carries electron-builder's ad-hoc signature, Windows is unsigned), installs it from the shipped
+# installer into a fresh directory, and runs scripts/qa/packaged-smoke.mjs on a fresh profile: the app
+# starts, its renderer reports ready, it quits cleanly through its own Quit path, and nothing it started
+# is alive 5 s after it exits. Each job uploads a content-free report and the tested installer's sha256.
+#
+# Runs when a push on any branch changes this lane, and on demand for any branch once this file is on
+# the default branch: gh workflow run packaged-smoke.yml --ref <branch>. Never on tags. Both hosted
+# runners give the app a real window session, so no virtual display is needed.
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['**']
+    paths:
+      - .github/workflows/packaged-smoke.yml
+      - scripts/qa/owned-processes.mjs
+      - scripts/qa/packaged-smoke.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packaged-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  mac:
+    name: Packaged smoke (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # predist's check-ffmpeg-sidecar.mjs verifies each binary against resources/ffmpeg/manifest.json
+      # before running it, so trust comes from that hash, not from the download or from Gatekeeper.
+      - name: Provision the reviewed ffmpeg sidecars
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" --pattern 'ffmpeg-darwin-*' --dir resources/ffmpeg
+          for arch in arm64 x64; do
+            mkdir -p "resources/ffmpeg/darwin-$arch"
+            mv "resources/ffmpeg/ffmpeg-darwin-$arch" "resources/ffmpeg/darwin-$arch/ffmpeg"
+            chmod +x "resources/ffmpeg/darwin-$arch/ffmpeg"
+            xattr -d com.apple.quarantine "resources/ffmpeg/darwin-$arch/ffmpeg" 2>/dev/null || true
+          done
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      # Same key as build.yml and qa-candidate.yml. fetch-models.mjs reuses cached files only after its
+      # exact manifest gate.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            resources/models
+            resources/asr
+            resources/ort
+            resources/llama
+            resources/local-llm
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+      - name: Build the unsigned app
+        run: npm run dist
+      - name: Install from the DMG into a fresh directory
+        run: |
+          mkdir -p smoke-report
+          shasum -a 256 release/Metis-*.dmg > smoke-report/SHA256SUMS.txt
+          volume="$RUNNER_TEMP/volume"
+          hdiutil attach -nobrowse -readonly -mountpoint "$volume" release/Metis-*.dmg > /dev/null
+          ditto "$volume/Metis.app" "$RUNNER_TEMP/smoke/Metis.app"
+          hdiutil detach "$volume" > /dev/null
+      - name: Launch, quit cleanly, and check that nothing survives
+        id: smoke
+        timeout-minutes: 10
+        run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/packaged-smoke.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() && steps.smoke.outcome != 'skipped' }}
+        with:
+          name: packaged-smoke-macos
+          path: smoke-report/
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Packaged smoke (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Provision the reviewed ffmpeg sidecar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" --pattern 'ffmpeg-win32-x64.exe' --dir resources/ffmpeg
+          mkdir -p resources/ffmpeg/win32-x64
+          mv resources/ffmpeg/ffmpeg-win32-x64.exe resources/ffmpeg/win32-x64/ffmpeg.exe
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            resources/models
+            resources/asr
+            resources/ort
+            resources/llama
+            resources/local-llm
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+      # No signing secret reaches this job, so electron-builder leaves the installers unsigned.
+      - name: Build the unsigned installers
+        run: npm run dist:win
+      - name: Record the installer's sha256
+        run: |
+          mkdir -p smoke-report
+          sha256sum release/Metis-Setup-*.exe > smoke-report/SHA256SUMS.txt
+      - name: Install the Setup silently into a fresh directory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Get-Item release/Metis-Setup-*.exe
+          $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$env:RUNNER_TEMP\smoke" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+      - name: Launch, quit cleanly, and check that nothing survives
+        id: smoke
+        timeout-minutes: 10
+        run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.exe" smoke-report/packaged-smoke.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() && steps.smoke.outcome != 'skipped' }}
+        with:
+          name: packaged-smoke-windows
+          path: smoke-report/
+          if-no-files-found: error
+          retention-days: 14
