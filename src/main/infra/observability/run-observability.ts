@@ -13,7 +13,7 @@
 import { beginRunWatch, markAlive, markShutdownClean } from '../../boot-sentinel'
 import type { AuditEvent } from '../../logger'
 import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from './stall-monitor'
-import type { StallSampler, StallSamplerOptions } from './stall-sampler'
+import { startStallSampler, type StallSampler, type StallSamplerOptions } from './stall-sampler'
 
 type Timer = ReturnType<typeof setInterval>
 
@@ -70,6 +70,7 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   const doMarkAlive = deps.markAlive ?? markAlive
   const doMarkShutdownClean = deps.markShutdownClean ?? markShutdownClean
   const doStartStallMonitor = deps.startStallMonitor ?? startStallMonitor
+  const doStartStallSampler = deps.startStallSampler ?? startStallSampler
   const setIntervalFn = deps.setIntervalFn ?? setInterval
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval
   const powerMonitor = opts.powerMonitor
@@ -89,10 +90,15 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
     void doMarkAlive(opts.userData, bootId)
   }, ALIVE_INTERVAL_MS)
 
-  // M2-0192 red commit: stallWatchCommand/deps.startStallSampler are declared on the options type (see
-  // above) so stall-sampler.test.ts and this module's own tests type-check against their final shape, but
-  // actually starting and stopping the sampler lands in the next commit.
-  const stallSampler = undefined as StallSampler | undefined
+  const stallSampler = opts.stallWatchCommand
+    ? doStartStallSampler({
+        command: opts.stallWatchCommand,
+        userData: opts.userData,
+        bootId,
+        aliveIntervalMs: ALIVE_INTERVAL_MS,
+        audit: opts.audit
+      })
+    : undefined
 
   const stallMonitor = doStartStallMonitor({
     bootId,
