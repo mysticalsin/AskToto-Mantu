@@ -1,3 +1,4 @@
+import { reviewedGatewayReply, reviewedGatewayFetch } from './ai-gateway.privacy-fixture'
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { ACCESS_BYPASS_PATHS } from './access'
@@ -75,7 +76,7 @@ function gatewayOkFetch(): typeof fetch {
   return async (input) => {
     const url = String(input)
     if (url.includes('/ai-gateway/gateways')) {
-      return new Response(JSON.stringify({ success: true }), { status: 200 })
+      return reviewedGatewayReply()
     }
     return new Response('{"success":false}', { status: 404 })
   }
@@ -164,11 +165,13 @@ function sseUpstream(text = 'hello from CF'): typeof fetch {
     `data: ${JSON.stringify({ usage: { prompt_tokens: 9, completion_tokens: 4 } })}\n\n`,
     'data: [DONE]\n\n'
   ]
-  return async () =>
-    new Response(frames.join(''), {
+  return async (input, init) => {
+    if (String(input).includes('/ai-gateway/gateways')) return reviewedGatewayFetch(input, init)
+    return new Response(frames.join(''), {
       status: 200,
       headers: { 'content-type': 'text/event-stream; charset=utf-8' }
     })
+  }
 }
 
 describe('MQA-301 managed screenshot Ask', () => {
@@ -241,7 +244,7 @@ describe('MQA-301 managed screenshot Ask', () => {
     const seen: { url: string; init?: RequestInit }[] = []
     const providerFetch: typeof fetch = async (url, init) => {
       seen.push({ url: String(url), init })
-      if (String(url).includes('/ai-gateway/gateways')) return new Response('{"success":true}')
+      if (String(url).includes('/ai-gateway/gateways')) return reviewedGatewayReply()
       return new Response(JSON.stringify(provider === 'anthropic'
         ? { content: [{ type: 'text', text: 'The supplied pixel is visible.' }], stop_reason: 'end_turn', usage: { input_tokens: 9, output_tokens: 4 } }
         : { choices: [{ message: { content: 'The supplied pixel is visible.' }, finish_reason: 'stop' }], usage: { prompt_tokens: 9, completion_tokens: 4 } }
@@ -443,6 +446,36 @@ describe('G5 POST /v1/ask SSE', () => {
     expect(asks.some((a) => a.path_tag === 'portal-cf' && a.provider === 'cloudflare')).toBe(true)
   })
 
+  it('refuses an ask when the gateway privacy readback finds an unsafe configuration, and never calls the model', async () => {
+    const store = memoryStore()
+    await addCloudflareKey(store)
+    await approveDevice(store)
+    const calls: string[] = []
+    const providerFetch: typeof fetch = async (input) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.includes('/ai-gateway/gateways')) {
+        return new Response(JSON.stringify({
+          success: true, result: { id: 'default', collect_logs: true, cache_ttl: 0, logpush: false }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error('must not call the chat-completions endpoint when privacy is unverified')
+    }
+    const body = JSON.stringify({
+      provider: 'cloudflare',
+      model: PORTAL_CF_DEEPSEEK_FLASH,
+      messages: [{ role: 'user', content: 'hi' }]
+    })
+    const res = await handleRequest(await signedRequest('/v1/ask', body, 'ask-unsafe-gateway'), env(), {}, {
+      store,
+      now: NOW,
+      providerFetch
+    })
+    expect(res.status).toBe(503)
+    expect(await res.json()).toMatchObject({ ok: false, code: 'GATEWAY_CONFIGURATION_UNSAFE' })
+    expect(calls.some((u) => u.includes('/ai/v1/chat/completions'))).toBe(false)
+  })
+
   it('502 provider refused includes redacted upstream status + snippet, never the vault secret or prompt', async () => {
     const store = memoryStore()
     await addCloudflareKey(store)
@@ -459,7 +492,7 @@ describe('G5 POST /v1/ask SSE', () => {
       providerFetch: async (input) => {
         const url = String(input)
         if (url.includes('/ai-gateway/gateways')) {
-          return new Response(JSON.stringify({ success: true }), { status: 200 })
+          return reviewedGatewayReply()
         }
         return new Response(
           JSON.stringify({
