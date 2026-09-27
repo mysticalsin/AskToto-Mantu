@@ -23,6 +23,35 @@ permissions:
   contents: read
 
 jobs:
+  # TEMPORARY (M2-0190 round 4 debug) — isolates whether github.token can post a PR comment in this repo
+  # at all, decoupled from the slow macOS jobs below. Remove alongside the other DEBUG steps.
+  debug-probe-pr-comment:
+    name: DEBUG - probe github.token PR-comment permission
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Post a probe comment and report the HTTP status
+        run: |
+          set +e
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -o "$RUNNER_TEMP/probe-response.json" \
+            -w "HTTP_STATUS:%{http_code}" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/209/comments" \
+            -d '{"body":"DEBUG probe comment (M2-0190 round 4, remove-me) — testing github.token issues:write in run '"${{ github.run_id }}"'"}' \
+            > "$RUNNER_TEMP/probe-status.txt"
+          cat "$RUNNER_TEMP/probe-status.txt"
+          echo
+          echo "-- response body --"
+          cat "$RUNNER_TEMP/probe-response.json"
+          echo
+          grep -q "HTTP_STATUS:201" "$RUNNER_TEMP/probe-status.txt" || exit 1
+
   license-server:
     name: license-server node --test (hermetic)
     runs-on: ubuntu-latest
@@ -232,6 +261,9 @@ jobs:
     name: honeypot.sh check fails closed (hermetic)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v4
       # Negative control — proves `check` cannot pass by accident: a fresh, untouched honeypot is the
@@ -283,3 +315,25 @@ jobs:
           reseed
           rm -f "$ref"
           assert_check_fails "a missing reference timestamp" "no reference timestamp"
+      # TEMPORARY (M2-0190 round 4 debug) — remove once this job is reliably green. Same reasoning as the
+      # MetisKit job's debug step: this session has no working access to this job's own CI logs.
+      - name: DEBUG - post err.log to the PR on failure
+        if: failure()
+        run: |
+          set +e
+          {
+            echo "### DEBUG honeypot-check-fails-closed (temporary, run ${{ github.run_id }})"
+            echo '```'
+            echo "-- err.log --"
+            cat err.log 2>&1
+            echo "-- ls -la \$RUNNER_TEMP --"
+            ls -la "$RUNNER_TEMP"
+            echo '```'
+          } > "$RUNNER_TEMP/honeypot-debug-body.txt"
+          jq -Rs '{body: .}' "$RUNNER_TEMP/honeypot-debug-body.txt" > "$RUNNER_TEMP/honeypot-debug-payload.json"
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/209/comments" \
+            -d @"$RUNNER_TEMP/honeypot-debug-payload.json"
