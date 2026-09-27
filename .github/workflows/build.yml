@@ -122,6 +122,14 @@ jobs:
         with:
           node-version: 22.22.3
           cache: npm
+      # Supply-chain gate (M2-0223, RF-AUDIT-R3-R3/R4): every third-party action in .github/workflows
+      # must be pinned to a full commit SHA, not a mutable tag. release.yml's macOS/Windows release jobs
+      # run with Developer ID / Authenticode signing secrets and a repo-publishing GH_TOKEN — a mutable
+      # `@v4` there would let whatever commit the tag currently resolves to run inside that trust
+      # boundary, with no diff in this repository to review. Runs before `npm ci`: it is pure Node
+      # against .github/workflows/ text and needs no installed dependency.
+      - name: Workflow action pins
+        run: npm run check:workflow-pins
       - run: npm ci
       # SCA gate: block on CRITICAL and HIGH. Sharp's 4 bundled libvips CVEs (CVE-2026-33327,
       # CVE-2026-33328, CVE-2026-35590, CVE-2026-35591 — GHSA-f88m-g3jw-g9cj) were the concrete case

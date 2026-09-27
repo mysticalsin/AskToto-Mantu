@@ -77,6 +77,7 @@
     "check:embedded-cloudflare-key": "node scripts/check-embedded-cloudflare-key.mjs",
     "check:mode-skills": "node scripts/lock-mode-skills.mjs --check",
     "check:bugs": "node scripts/check-bug-ledger.mjs",
+    "check:workflow-pins": "node scripts/ci/check-workflow-pins.mjs",
     "check:build-host": "node scripts/check-build-host.mjs",
     "typecheck:tests": "node scripts/check-test-types.mjs",
     "check:skips": "node scripts/check-skipped-tests.mjs",
