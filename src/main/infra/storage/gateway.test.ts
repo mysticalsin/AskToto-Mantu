@@ -335,12 +335,8 @@ describe('abort (G4-G6)', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------
-// Listener fan-out — classify's per-path admission/deadline waiters share one AbortSignal. Verified
-// directly (node -e, outside this suite): a genuine AbortSignal — whether from an AbortController or
-// AbortSignal.any() — defaults to an UNLIMITED listener count, unlike a plain EventTarget (default 10).
-// So this fan-out does not currently emit MaxListenersExceededWarning on Node 22. The explicit
-// setMaxListeners(0, signal) in openRequest documents that invariant and guards it going forward —
-// against a future Node default change, or a caller signal that is not a genuine AbortSignal.
+// Listener fan-out — classify adds one abort listener per path to a single request signal, and that
+// must never warn.
 // ---------------------------------------------------------------------------------------------------
 
 describe('listener fan-out (classify)', () => {
@@ -457,18 +453,32 @@ describe('classify-before-read (D1-D6)', () => {
     expect(fs.calls).not.toContain('readFile a.md')
   })
 
-  it('a rejecting detector leaves files unknown and unread', async () => {
-    const fs = memoryFs({ 'a.md': 'A' })
-    const classify = vi.fn(async (): Promise<Map<string, ContentPresence>> => {
-      throw new Error('probe crashed')
-    })
-    const gateway = createStorageGateway({ root: () => ROOT, detector: { classify }, fs, poolSize: 4 })
+  it.each(['throws synchronously', 'rejects'] as const)(
+    'a detector whose classify %s on its first call leaves that read unknown and unread, and probes again for the next read',
+    async (mode) => {
+      const fs = memoryFs({ 'a.md': 'A', 'b.md': 'B' })
+      let calls = 0
+      const classify = vi.fn((files: readonly FileVersion[]): Promise<Map<string, ContentPresence>> => {
+        calls += 1
+        if (calls === 1) {
+          if (mode === 'throws synchronously') throw new Error('probe crashed')
+          return Promise.reject(new Error('probe crashed'))
+        }
+        return Promise.resolve(new Map(files.map((file): [string, ContentPresence] => [file.path, 'local'])))
+      })
+      const gateway = createStorageGateway({ root: () => ROOT, detector: { classify }, fs, poolSize: 4 })
 
-    const result = await gateway.read('a.md')
+      const first = await gateway.read('a.md')
+      expect(first).toEqual({ status: 'unknown', version: { mtimeMs: 1_000, ctimeMs: 1_000, size: 1 } })
+      expect(fs.calls).not.toContain('readFile a.md')
 
-    expect(result).toEqual({ status: 'unknown', version: { mtimeMs: 1_000, ctimeMs: 1_000, size: 1 } })
-    expect(fs.calls).not.toContain('readFile a.md')
-  })
+      // Proves `probing` did not stay stuck true after the first probe failed: the second file still
+      // gets its own probe, and that probe succeeds.
+      const second = await gateway.read('b.md')
+      expect(second).toMatchObject({ status: 'ok' })
+      expect(classify).toHaveBeenCalledTimes(2)
+    }
+  )
 })
 
 // ---------------------------------------------------------------------------------------------------

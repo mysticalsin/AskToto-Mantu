@@ -22,7 +22,6 @@
  *   - Only ENOENT and ENOTDIR are 'missing'. 'unavailable', 'timeout' and 'degraded' say nothing about
  *     whether a file exists; callers must never treat them as a deletion.
  */
-import { setMaxListeners } from 'node:events'
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { createAdmission, type Lane } from './admission'
@@ -158,15 +157,6 @@ function openRequest(deadlineMs: number, caller: AbortSignal | undefined): Reque
   const deadline = new AbortController()
   const timer = setTimeout(() => deadline.abort(DEADLINE), deadlineMs)
   const signal = caller ? AbortSignal.any([deadline.signal, caller]) : deadline.signal
-  // classify/list fan out to one statFile per path, and each contending call adds its own 'abort'
-  // listener to this ONE shared signal (admission's waiter, then untilEnded's runner) — classifying a
-  // whole directory can add far more listeners than a plain EventTarget's default limit of 10. None of
-  // these listeners leaks: each is {once: true} or removed the moment its own promise settles. A
-  // genuine AbortSignal already defaults to unlimited listeners (unlike EventTarget), so this does not
-  // currently warn — setMaxListeners(0, ...) makes that invariant explicit rather than implicit, and
-  // holds even if a caller's signal is not a standard AbortSignal or a future Node version changes the
-  // default.
-  setMaxListeners(0, signal)
   return {
     signal,
     ended(phase) {
