@@ -33,6 +33,8 @@ motion:
 
 # Time saved
 
+**Status:** Active — shipped design reference for the Time Saved surface.
+
 A calm, factual record of work Métis actually finished. Never a vanity dashboard. Never a percentage
 that was not measured. Every minute on screen is an **estimate**, labeled as one.
 
