@@ -100,8 +100,11 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   // not advance during sleep on macOS, because some platforms' monotonic clock does.
   //
   // `suspended` tracks whether a 'suspend' has paused the heartbeat with no 'resume' having re-armed it
-  // since. Only 'unlock-screen' below reads it — 'resume' always resyncs unconditionally, since it is
-  // paired 1:1 with 'suspend' by the OS.
+  // since; it is cleared by whichever of 'resume' or 'unlock-screen' re-arms the heartbeat first. Only
+  // 'unlock-screen' below reads it — 'resume' always resyncs unconditionally, because after any real sleep
+  // the gap on the stall clock is sleep, not a main-thread stall: on a platform whose monotonic clock counts
+  // through sleep that gap must be discarded, and resync() also restarts the heartbeat that 'suspend'
+  // paused. Either way, a 'resume' re-baseline never hides a genuine stall.
   let suspended = false
   const onSuspend = (): void => {
     suspended = true

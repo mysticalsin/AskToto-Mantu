@@ -225,7 +225,7 @@ describe('startRunObservability', () => {
     expect(resync).toHaveBeenCalledTimes(2) // one more call, this time from unlock-screen itself
   })
 
-  it('unlock-screen does not re-baseline a running heartbeat, so lateness already accumulated before it fires is still reported as app.stall (round-4 fix: the previous unconditional resync() erased it)', () => {
+  it('unlock-screen does not re-baseline a running heartbeat, so lateness already accumulated before it fires is still reported as app.stall', () => {
     const audit = vi.fn()
     const heartbeat = fakeHeartbeat()
     const powerMonitor = fakePowerMonitor()
@@ -301,7 +301,7 @@ describe('startRunObservability', () => {
     expect(setIntervalSpy).toHaveBeenCalledTimes(2) // resync() restarted it
   })
 
-  it("shutdownClean stops the alive timer and stall monitor, unsubscribes from suspend and resume, and audits app.shutdown.clean with markShutdownClean's detail", () => {
+  it("shutdownClean stops the alive timer and stall monitor, unsubscribes from suspend, resume and unlock-screen, and audits app.shutdown.clean with markShutdownClean's detail", () => {
     const audit = vi.fn()
     const clearIntervalFn = vi.fn()
     const stop = vi.fn()
