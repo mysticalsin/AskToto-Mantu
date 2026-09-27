@@ -24,8 +24,12 @@ case "$cmd" in
     mkdir -p "$dir"
     echo sentinel > "$dir/sentinel"
     # Created strictly after the honeypot's own contents above, so anything the honeypot held before this
-    # line is guaranteed at least as old as the reference — never falsely reported as "touched".
+    # line is guaranteed at least as old as the reference — never falsely reported as "touched". The
+    # sleep guarantees that ordering survives `find -newer`'s whole-second comparison even on a
+    # filesystem with only one-second mtime resolution: without it, a mutation applied immediately after
+    # `seed` returns can land in the same second as this touch and register as no newer than it.
     touch "$(honeypot_ref)"
+    sleep 1
     ;;
   check)
     ref="$(honeypot_ref)"
