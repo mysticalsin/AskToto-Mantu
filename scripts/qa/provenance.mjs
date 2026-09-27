@@ -6,7 +6,8 @@
 // provenance.json before using it — evidence binds to bytes by (build_run_id, artifact_sha256).
 // Published = tested: promotion uploads exactly the promotable installers, SHA256SUMS.txt and
 // the unmodified provenance.json — no build, install or npm step ever runs here.
-// Evidence required: promotion needs at least one PASS evidence record bound to this run's bytes.
+// Evidence required: promotion needs a PASS evidence record bound to this run's bytes for every
+// promotable asset it stages (see evidenceProblems below for the exact rule).
 //
 // A function reports what it found. Functions named *Problems return string[]; empty means OK.
 // stageBuild, assembleProvenance and prepareRelease throw an Error listing every problem, one per line,
@@ -40,6 +41,12 @@ export const VARIANTS = Object.freeze({
 
 export const PROMOTABLE_VARIANTS = Object.keys(VARIANTS).filter((variant) => VARIANTS[variant].promotable)
 
+/** Every asset a provenance's promotable builds produced, in build order. Never includes the QA-identity
+ *  build: it is built but never shipped, so evidence naming it never counts toward promotion. */
+export function promotableAssets(provenance) {
+  return provenance.builds.filter((build) => PROMOTABLE_VARIANTS.includes(build.variant)).flatMap((build) => build.assets)
+}
+
 /** Streaming sha256, so a multi-GB installer is never read fully into memory. */
 export async function sha256File(path) {
   return await new Promise((resolve, reject) => {
@@ -64,9 +71,11 @@ function stripTrailingNewlines(text) {
   return text.replace(/(\r?\n)+$/, '')
 }
 
-/** Every line of an evidence file, in order, with every trailing line ending removed first. */
+/** Every line of an evidence file, in order, with every trailing line ending removed first. An empty
+ *  file (or one holding only line endings) has zero lines, not one empty line. */
 function evidenceLines(text) {
-  return stripTrailingNewlines(text).split(/\r?\n/)
+  const stripped = stripTrailingNewlines(text)
+  return stripped === '' ? [] : stripped.split(/\r?\n/)
 }
 
 /**
@@ -312,19 +321,18 @@ export async function directoryProblems(provenance, dir, variants) {
 }
 
 /**
- * Checks that evidence text binds at least one PASS record to this candidate's run and its bytes.
- * Trailing newlines are ignored; an interior blank line is a problem. Only ticket, result,
- * build_run_id and artifact_sha256 are read — full record validation belongs to M2-0002's checker.
+ * Checks that evidence text binds a PASS record to this candidate's run and to every promotable
+ * asset's bytes — one record naming one asset never covers a different asset or platform. Trailing
+ * newlines are ignored; an interior blank line is a problem. Only ticket, result, build_run_id and
+ * artifact_sha256 are read — full record validation belongs to M2-0002's checker.
  */
 export function evidenceProblems(evidenceText, provenance) {
-  const lines = evidenceLines(evidenceText)
-  if (lines.length === 1 && lines[0] === '') {
-    return ['no evidence records: promotion needs at least one passing record bound to these bytes']
-  }
-
-  const knownHashes = new Set(provenance.builds.flatMap((build) => build.assets.map((asset) => asset.sha256)))
+  const assets = promotableAssets(provenance)
+  const promotableHashes = new Set(assets.map((asset) => asset.sha256))
   const problems = []
+  const coveredHashes = new Set()
 
+  const lines = evidenceLines(evidenceText)
   lines.forEach((line, index) => {
     const n = index + 1
     if (line.trim() === '') {
@@ -356,10 +364,18 @@ export function evidenceProblems(evidenceText, provenance) {
       )
       return
     }
-    if (!knownHashes.has(record.artifact_sha256)) {
-      problems.push(`line ${n} (${record.ticket}) names a sha256 that is not one of this candidate's assets`)
+    if (!promotableHashes.has(record.artifact_sha256)) {
+      problems.push(`line ${n} (${record.ticket}) names a sha256 that is not one of this candidate's promotable assets`)
+      return
     }
+    coveredHashes.add(record.artifact_sha256)
   })
+
+  for (const asset of assets) {
+    if (!coveredHashes.has(asset.sha256)) {
+      problems.push(`no PASS record bound to run ${provenance.run.id} covers ${asset.name} (sha256 ${asset.sha256})`)
+    }
+  }
 
   return problems
 }
@@ -375,11 +391,8 @@ export function releaseNotes({ provenance, evidence, promotionRunUrl }) {
       ? `The macOS app is signed with the program's self-signed QA certificate (SHA-1 \`${macBuild.signing.certificate_sha1}\`), not a Developer ID, and it is not notarized.`
       : 'The macOS app is ad-hoc signed and not notarized.'
 
-  const promotableAssets = provenance.builds
-    .filter((build) => PROMOTABLE_VARIANTS.includes(build.variant))
-    .flatMap((build) => build.assets)
-    .sort((a, b) => a.name.localeCompare(b.name))
-  const rows = promotableAssets.map((asset) => `| \`${asset.name}\` | \`${asset.sha256}\` |`).join('\n')
+  const assets = promotableAssets(provenance).sort((a, b) => a.name.localeCompare(b.name))
+  const rows = assets.map((asset) => `| \`${asset.name}\` | \`${asset.sha256}\` |`).join('\n')
 
   return `Owner-channel prerelease of Métis ${provenance.version}. These files are the exact bytes of QA candidate run [${provenance.run.id}](${provenance.run.url}), built once from commit \`${provenance.commit}\` and promoted by [this run](${promotionRunUrl}) without rebuilding.
 
@@ -420,13 +433,11 @@ export async function prepareRelease({ provenancePath, evidencePath, downloadsDi
   const uploadDir = join(outDir, 'upload')
   mkdirSync(uploadDir, { recursive: true })
 
-  const promotableAssets = provenance.builds
-    .filter((build) => PROMOTABLE_VARIANTS.includes(build.variant))
-    .flatMap((build) => build.assets)
-  for (const asset of promotableAssets) {
+  const assets = promotableAssets(provenance)
+  for (const asset of assets) {
     renameSync(join(downloadsDir, asset.name), join(uploadDir, asset.name))
   }
-  writeFileSync(join(uploadDir, 'SHA256SUMS.txt'), sha256Sums(promotableAssets))
+  writeFileSync(join(uploadDir, 'SHA256SUMS.txt'), sha256Sums(assets))
   writeFileSync(join(uploadDir, 'provenance.json'), provenanceBytes)
 
   const manifest = []

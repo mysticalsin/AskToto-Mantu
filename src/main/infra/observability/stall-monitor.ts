@@ -14,11 +14,15 @@
  * all, which would otherwise manufacture a fake `app.stall` whose `durationMs` equals the sleep length or
  * the clock step and corrupts the "brief stall vs wedge" evidence this module exists to produce. Some
  * platforms' monotonic clock keeps counting through sleep regardless, which would report the sleep gap
- * itself as one giant stall. `pause()`/`resync()` handle that case and are order-independent by
+ * itself as one giant stall. `pause()`/`restartIfPaused()` handle that case and are order-independent by
  * construction: call `pause()` from Electron's `powerMonitor` `'suspend'` event — this clears the
  * heartbeat entirely, so there is no tick left pending to race `'resume'` no matter which of the two the
- * event loop happens to process first — and call `resync()` from `'resume'`, which re-arms the schedule
- * from the current tick and restarts the heartbeat if `pause()` had stopped it.
+ * event loop happens to process first — and call `restartIfPaused()` from both `'resume'` and
+ * `'unlock-screen'` (the latter is the fallback for a sleep whose matching `'resume'` never arrives).
+ * `restartIfPaused()` re-arms the schedule from the current tick and restarts the heartbeat, but only when
+ * `pause()` had actually stopped it — a no-op otherwise. That makes the two events order-independent too:
+ * whichever one restarts a paused heartbeat first, the other's call lands on an already-running heartbeat
+ * and does nothing, so it cannot re-baseline it and discard lateness that has genuinely accrued since.
  *
  * `timePhase(label, fn)` is the boot sequence's phase trace: many boot steps run synchronously back to
  * back with no `await` between them, so no heartbeat tick can ever fire in the middle of that sequence —
@@ -82,9 +86,13 @@ export interface StallMonitorOptions {
 export interface StallMonitor {
   /** Stop the heartbeat and release the histogram. Idempotent. */
   stop(): void
-  /** Re-arm the schedule from the current tick, discarding any lateness accrued before this call, and
-   *  restart the heartbeat if `pause()` had stopped it. Call on `powerMonitor`'s `'resume'` event. */
-  resync(): void
+  /** Re-arm the schedule from the current tick and restart the heartbeat, but only when `pause()` had
+   *  actually stopped it — a no-op on an already-running heartbeat. Call on both `powerMonitor`'s
+   *  `'resume'` and `'unlock-screen'` events: being a no-op whenever nothing is paused is what makes the
+   *  two events order-independent — whichever restarts a paused heartbeat first, the other's call finds it
+   *  already running and cannot re-baseline it, so neither can discard lateness that has genuinely accrued
+   *  since the restart. */
+  restartIfPaused(): void
   /** Stop delivering heartbeat ticks without releasing the histogram — call on `powerMonitor`'s
    *  `'suspend'` event so no tick can be pending to fire during sleep. A no-op once stopped or already
    *  paused. */
@@ -148,9 +156,10 @@ export function startStallMonitor(opts: StallMonitorOptions): StallMonitor {
       timer = undefined
       histogram.disable()
     },
-    resync(): void {
+    restartIfPaused(): void {
+      if (stopped || timer !== undefined) return
       expectedAt = now() + tickMs
-      if (!stopped && timer === undefined) timer = setIntervalFn(tick, tickMs)
+      timer = setIntervalFn(tick, tickMs)
     },
     pause(): void {
       if (stopped || timer === undefined) return

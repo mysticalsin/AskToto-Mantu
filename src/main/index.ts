@@ -33,7 +33,7 @@ import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, creat
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
-import { bindRendererReadiness } from './renderer-readiness'
+import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
@@ -168,7 +168,7 @@ import {
 } from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
-import { extractScreenText } from './mac-helper'
+import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,
@@ -507,6 +507,9 @@ import { ensureLocalModel, localModelDownloadState } from './llm/local-model-dow
 import { provisionLocalModel } from './local-model-provisioning'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
+import { createStopAll } from './infra/process/stop-all'
+import { installExitPaths } from './lifecycle/exit-paths'
+import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
@@ -735,7 +738,7 @@ import {
   sweepExpiredMeetings
 } from './recall'
 import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './updater'
-import { runSelfTest } from './selftest'
+import { runSelfTest, redirectSelfTestUserData } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
@@ -804,6 +807,7 @@ import {
 import {
   runPlaneOAuth,
   refreshPlaneToken,
+  savePlaneClientAndTokens,
   PLANE_MCP_OAUTH_ENDPOINT,
   PLANE_MCP_PAT_ENDPOINT,
   tryAcquirePlaneTokenLock,
@@ -895,6 +899,12 @@ function makeRefreshDustAuth(current: {
 freezeAsciiUserAgent(app)
 initializeCaheEditionIdentity()
 if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
+
+// Self-test must own a throwaway userData before anything resolves userData; no-op unless
+// devEnv(ASKTOTO_SELFTEST). Setting ASKTOTO_USERDATA lets the ASKTOTO_USERDATA handling immediately
+// below, and resolveMeetingsFolder()'s own ASKTOTO_USERDATA check (transcripts.ts), apply the throwaway
+// directory through the one QA-isolation mechanism instead of a second, self-test-only one (M2-0004).
+redirectSelfTestUserData()
 
 // Select the final user-data profile before crashReporter (or any other Electron service) can resolve
 // a default path. In particular, ASKTOTO_USERDATA must isolate physical QA from a real encrypted profile.
@@ -1431,7 +1441,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
       onError: async (error) => {
         // A transcription failure inside onChunk (acceptDecodedChunk throwing) reaches here via the
         // decoder's own uncaught-rejection path with the ffmpeg child still alive and blocked on
-        // write() (nothing is reading its stdout anymore) — cancel() sends SIGTERM so it can't leak as
+        // write() (nothing is reading its stdout anymore) — cancel() kills it so it cannot leak as
         // an orphaned OS process. Read from the map rather than closing over `decoder` directly: in the
         // rare case spawn() itself throws synchronously, onError can fire before `decoder` is assigned.
         ffmpegDecoders.get(job.jobId)?.cancel()
@@ -2551,7 +2561,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // module load, bytecode load, and boot — which is exactly the class of failure that shipped DOA twice.
   if (!emittedAppStarted) {
     // M2-0006: app.started/app.stall/app.shutdown.clean and the run/liveness/stall-monitor lifecycle
-    // behind them — see infra/observability/run-observability.ts for the invariant this enforces.
+    // behind them, and the out-of-process stall sampler (M2-0192) — see
+    // infra/observability/run-observability.ts for the invariant this enforces.
     observability = startRunObservability({
       userData: app.getPath('userData'),
       version: app.getVersion(),
@@ -2559,7 +2570,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
       arch: process.arch,
       uvThreadpoolSize: process.env.UV_THREADPOOL_SIZE,
       audit: auditLog,
-      powerMonitor
+      powerMonitor,
+      stallWatchCommand: macStallWatchCommand()
     })
     emittedAppStarted = true
   }
@@ -2820,13 +2832,6 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // The one-time onboarding destination belongs to this replacement only. Later renderer recovery
   // should preserve the user's current surface rather than repeatedly forcing Settings.
   postOnboardingDestination = 'answer'
-  // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
-  // below. A session with app.started but no renderer.ready must always be visible in the audit log.
-  // Preserve app.started's boot semantics and never equate entering createWindow with a loaded,
-  // responsive renderer. Register before navigation.
-  bindRendererReadiness(win.webContents, rendererUrl, () => {
-    auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
-  })
   // Bounded launch evidence only. Normal onboarding never serializes renderer state to disk.
   if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
     bindAct1DomProbe(win.webContents, {
@@ -2835,9 +2840,11 @@ function createWindow(targetDisplay?: Electron.Display): void {
       audit: (summary) => auditLog('app.act1.dom', summary)
     })
   }
-  // FITO-185-B: always loadURL(rendererUrl) — same string bindRendererReadiness expects — so packaged
-  // asar file:// getURL() cannot miss the strict equality check that loadFile alone can mismatch.
-  win.loadURL(rendererUrl)
+  // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
+  // above. A session with app.started but no renderer.ready must always be visible in the audit log.
+  bindReadinessThenNavigate(win, rendererUrl, () => {
+    auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+  })
   const overlay = win
   let exclusiveRevealed = false
   const revealExclusiveWhenPainted = (): void => {
@@ -3608,10 +3615,7 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
       defaultId: 1,
       cancelId: 1
     })
-    if (choice === 0) {
-      app.relaunch()
-      app.exit(0)
-    }
+    if (choice === 0) exitAndRelaunch()
   } catch {
     /* if the dialog itself fails, leave the app running */
   }
@@ -4190,63 +4194,28 @@ const shortcutActions: Record<string, () => void> = {
 // itself is unresponsive, macOS's native Option+Command+Escape remains the recovery path.
 const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command+Control+Escape'
 
-// `before-quit` gives a live meeting 2s to flush before it re-quits, so the polite path needs longer
-// than that to finish. Past it, being polite is the bug: a renderer wedged mid-onboarding never answers
-// the flush hotkey and its unresponsive window can keep the quit from completing at all — which is the
-// exact freeze this accelerator exists to escape. The user pressed the escape hatch; it must escape.
-const EMERGENCY_FORCE_QUIT_GRACE_MS = 4000
+// Every child process this app spawns that the OS does not end with it, in teardown order: the producers of
+// local-model work (screen pre-analysis, which owns the foreground watcher, and import decodes) before the
+// runtimes they feed. utilityProcess hosts (Parakeet, Whisper, speaker embedding) are not here: Electron ends
+// them on quit and exit alike (ADR-003), and the packaged census checks it.
+const stopAllSidecars = createStopAll(
+  [
+    { name: 'screen-preprocess', stop: () => screenPreprocess.stop() },
+    { name: 'import-decoders', stop: () => ffmpegDecoders.forEach((decoder) => decoder.cancel()) },
+    { name: 'local-runtime', stop: () => localRuntime.stop() },
+    { name: 'fm-runtime', stop: () => fmRuntime.stop() }
+  ],
+  (name, error) => mainLog.warn(`[stop-all] ${name} failed to stop`, error)
+)
 
-let emergencyQuitWatchdog: NodeJS.Timeout | null = null
-
-/** Kill what outlives the process when it dies without `will-quit`. `app.exit()` never emits that event,
- *  so the hard path has to repeat its sidecar teardown here: an orphaned llama-server, fm-serve loopback
- *  or screen-watcher child outliving the app is strictly worse than the freeze the user just escaped.
- *  Deliberately a copy rather than a shared helper — several source-contract tests pin these exact calls
- *  inside the `will-quit` handler body, and each step keeps its own try so one throw cannot skip a kill. */
-function stopSidecarsForHardExit(): void {
-  try {
-    screenPreprocess.stop()
-  } catch (e) {
-    mainLog.warn('[force-quit] screenPreprocess.stop failed', e)
-  }
-  try {
-    localRuntime.stop()
-  } catch (e) {
-    mainLog.warn('[force-quit] localRuntime.stop failed', e)
-  }
-  try {
-    fmRuntime.stop()
-  } catch (e) {
-    mainLog.warn('[force-quit] fmRuntime.stop failed', e)
-  }
-  // A deliberate quit is a normal exit, not an early death — close the boot watch so the NEXT launch is
-  // not pushed into safe start by a user who simply escaped a hung window (mirrors `will-quit`).
-  try {
+const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
+  stopAll: stopAllSidecars,
+  closeBootWatch: () => {
     setBootPowerSaveBlock(false)
     endBootWatch(app.getPath('userData'))
-  } catch (e) {
-    mainLog.warn('[force-quit] endBootWatch failed', e)
-  }
-}
-
-function forceQuitMétis(): void {
-  // Second press means the first one did not get the process down. Stop asking.
-  if (emergencyQuitWatchdog) {
-    mainLog.warn('[lifecycle] emergency quit pressed again — exiting now')
-    stopSidecarsForHardExit()
-    app.exit(0)
-    return
-  }
-  mainLog.warn('[lifecycle] emergency graceful quit requested')
-  app.quit()
-  emergencyQuitWatchdog = setTimeout(() => {
-    mainLog.warn('[lifecycle] graceful quit did not complete — forcing exit')
-    stopSidecarsForHardExit()
-    app.exit(0)
-  }, EMERGENCY_FORCE_QUIT_GRACE_MS)
-  // Never let the watchdog itself be the handle that keeps a quitting process alive.
-  emergencyQuitWatchdog.unref?.()
-}
+  },
+  warn: (...args) => mainLog.warn(...args)
+})
 
 function registerEmergencyForceQuitShortcut(): boolean {
   if (process.platform !== 'darwin') return false
@@ -6085,12 +6054,17 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const tokens = await runPlaneOAuth()
-    if (!tokens.ok || !tokens.accessToken) return { ok: false, error: tokens.error || 'Could not connect Plane.' }
+    if (!tokens.ok || !tokens.accessToken || !tokens.clientId || !tokens.clientSecret) {
+      return { ok: false, error: tokens.error || 'Could not connect Plane.' }
+    }
     const r = await connectMcp(PLANE_MCP_OAUTH_ENDPOINT, tokens.accessToken, {}, 'Plane')
     if (!r.ok) return r
     try {
-      setMcpApiKey('plane', tokens.accessToken)
-      setMcpRefreshToken('plane', tokens.refreshToken ?? '')
+      // Save client + tokens together only now that connectMcp has proven the access token works (P4-F2; see planeOAuth.ts's file header).
+      savePlaneClientAndTokens(
+        { clientId: tokens.clientId, clientSecret: tokens.clientSecret },
+        { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken ?? '' }
+      )
       const s = getSettings()
       const entry: McpConnection = {
         id: 'plane',
@@ -9008,9 +8982,11 @@ if (!app.requestSingleInstanceLock()) {
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
   process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
   process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
-  // The self-test suite runs destructively against the LIVE profile (it overwrites, then deletes,
-  // settings.json and managed-config.json), so devEnv() keeps it out of packaged builds — otherwise a
-  // persistent `setx ASKTOTO_SELFTEST out.json` re-wipes the profile and quits on every launch.
+  // QA-identity builds only (compiled out of every other bundle): the packaged exit-path proof sends SIGUSR2
+  // to raise a real uncaughtException through onFatal.
+  if (QA_IDENTITY_BUILD) installQaFaultHook()
+  // devEnv(ASKTOTO_SELFTEST) keeps self-test out of packaged builds; runSelfTest() itself refuses to run
+  // unless userData is exactly the throwaway directory redirectSelfTestUserData() created (M2-0004).
   const selfTestOut = devEnv('ASKTOTO_SELFTEST')
   if (selfTestOut) {
     try {
@@ -9543,8 +9519,8 @@ app.on('will-quit', () => {
   // startup sequence, an automation/Playwright app.close(), or an early abort. Calling globalShortcut in
   // that window throws "globalShortcut cannot be used before the app is ready" as an UNCAUGHT exception
   // (the observed crash), and there is nothing registered to unregister anyway — so gate it on isReady().
-  // Each cleanup step is independent (its own try): a throw in one must never skip the sidecar kill
-  // below, because an orphaned llama-server outliving the app the user just quit is the worse failure.
+  // Each cleanup step is independent (its own try), so one throw never skips the rest. Owned sidecars are
+  // already stopped: installExitPaths registered the first will-quit listener (lifecycle/exit-paths.ts).
   if (app.isReady()) {
     try {
       globalShortcut.unregisterAll()
@@ -9563,27 +9539,6 @@ app.on('will-quit', () => {
     }
   }
   backgroundTimers.length = 0
-  // Stop the background screen-preprocess watcher (kills its long-lived powershell child) before the
-  // sidecar kill — an orphaned watcher process outliving the app would keep polling the foreground window.
-  try {
-    screenPreprocess.stop()
-  } catch (e) {
-    mainLog.warn('[will-quit] screenPreprocess.stop failed', e)
-  }
-  // Kill the llama-server sidecar synchronously (SIGKILL, F3 hardening) — without this an on-device
-  // suggest/summary/vision sidecar could outlive the app the user just quit.
-  try {
-    localRuntime.stop()
-  } catch (e) {
-    mainLog.warn('[will-quit] localRuntime.stop failed', e)
-  }
-  // Same F3 contract for the Apple fm-serve sidecar (macOS 27+ text engine) — an orphaned unauthenticated
-  // loopback server outliving the app is strictly worse than an orphaned llama-server.
-  try {
-    fmRuntime.stop()
-  } catch (e) {
-    mainLog.warn('[will-quit] fmRuntime.stop failed', e)
-  }
   // M2-0006: last, so it only fires once every other teardown step above has run. This is the one signal
   // that distinguishes THIS quit from a hard kill on the next boot's app.started.prevShutdown.
   try {

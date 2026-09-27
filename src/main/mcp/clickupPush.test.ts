@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  CLICKUP_WORKSPACE_ID,
   clickupCreateTaskArgs,
   clickupTaskDescriptionFromArgs,
   clickupTaskNameFromArgs,
@@ -32,17 +31,17 @@ describe('pickClickupCreateTask — never attach a file', () => {
   })
 })
 
-describe('clickupCreateTaskArgs — ClickUp wire names, pinned workspace', () => {
-  it('sends name + list_id + workspace_id, never title/project_id', () => {
+describe('clickupCreateTaskArgs — ClickUp wire names, no workspace_id', () => {
+  it('sends name + list_id, never title/project_id/workspace_id', () => {
     const args = clickupCreateTaskArgs({ name: 'Acme recap', listId: '901419032720', description: '## Notes' })
     expect(args).toEqual({
       name: 'Acme recap',
       list_id: '901419032720',
-      markdown_description: '## Notes',
-      workspace_id: CLICKUP_WORKSPACE_ID
+      markdown_description: '## Notes'
     })
     expect(args).not.toHaveProperty('title')
     expect(args).not.toHaveProperty('project_id')
+    expect(args).not.toHaveProperty('workspace_id')
     expect(args).not.toHaveProperty('description')
   })
 })
@@ -102,7 +101,7 @@ describe('prepareClickupPush — remaps Review args and ignores attach', () => {
       expect(r.args.name).toBe('Kickoff')
       expect(r.args.list_id).toBe('901419032720')
       expect(r.args.markdown_description).toBe('Ship it')
-      expect(r.args.workspace_id).toBe(CLICKUP_WORKSPACE_ID)
+      expect(r.args).not.toHaveProperty('workspace_id')
       expect(r.args).not.toHaveProperty('title')
       expect(r.args).not.toHaveProperty('project_id')
       expect(r.args).not.toHaveProperty('confidential')
@@ -136,13 +135,14 @@ describe('discoverClickupList', () => {
     expect(calls).toEqual([])
   })
 
-  it('falls back to last-updated filter_tasks when nothing is saved', async () => {
+  it('falls back to last-updated filter_tasks, newest-updated first, when nothing is saved', async () => {
     const r = await discoverClickupList({
       tools,
       callTool: async (name, args) => {
         expect(name).toBe('clickup_filter_tasks')
-        expect(args.workspace_id).toBe(CLICKUP_WORKSPACE_ID)
+        expect(args).not.toHaveProperty('workspace_id')
         expect(args.order_by).toBe('updated')
+        expect(args).not.toHaveProperty('reverse')
         return {
           ok: true,
           result: {

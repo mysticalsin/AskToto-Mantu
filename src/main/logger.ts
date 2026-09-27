@@ -232,6 +232,13 @@ export type AuditEvent =
   // p99 summary.
   | 'app.stall'
   | 'app.stall.summary'
+  // M2-0192: the out-of-process stall sampler (infra/observability/stall-sampler.ts). `sampled` names a
+  // content-free bundle in userData/diagnostics/stalls/ by file name; `sample_failed` carries only a
+  // reason ("sample" | "bundle" | "watcher") — double-quoted so audit-event-coverage.contract.test.ts's
+  // single-quote scan for declared event names does not mistake them for members of this union.
+  // bootId is the boot that stalled.
+  | 'app.stall.sampled'
+  | 'app.stall.sample_failed'
   // M2-0006: pairs app.unresponsive with how long the renderer stayed wedged before it recovered.
   | 'app.responsive'
   // A main-process, state-checked repair completed a renderer handoff after durable setup save.

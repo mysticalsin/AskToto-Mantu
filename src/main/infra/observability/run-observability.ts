@@ -1,9 +1,10 @@
 /**
  * run-observability.ts — owns the whole life of one boot's observability: claims the run watch, audits
- * `app.started`, runs the liveness heartbeat and the stall monitor, and closes out with
- * `app.shutdown.clean`. index.ts's job is only to call `startRunObservability` once, `observability.timePhase`
- * around each boot step, and `observability.shutdownClean(...)` once, from `will-quit` — every other line
- * here is this module's, not index.ts's, so a change to any of these invariants shows up in one place.
+ * `app.started`, runs the liveness heartbeat, the out-of-process stall sampler (stall-sampler.ts) and the
+ * stall monitor, and closes out with `app.shutdown.clean`. index.ts's job is only to call
+ * `startRunObservability` once, `observability.timePhase` around each boot step, and
+ * `observability.shutdownClean(...)` once, from `will-quit` — every other line here is this module's, not
+ * index.ts's, so a change to any of these invariants shows up in one place.
  *
  * Deliberately takes `powerMonitor` as a parameter rather than importing it from `electron` — same
  * "inject everything Electron-specific" shape as stall-monitor.ts's test seams, so this module stays
@@ -12,6 +13,7 @@
 import { beginRunWatch, markAlive, markShutdownClean } from '../../boot-sentinel'
 import type { AuditSink } from '../../logger'
 import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from './stall-monitor'
+import { startStallSampler, type StallSampler, type StallSamplerOptions } from './stall-sampler'
 
 type Timer = ReturnType<typeof setInterval>
 
@@ -30,16 +32,21 @@ export interface RunObservabilityOptions {
   uvThreadpoolSize?: string
   audit: AuditSink
   /** Electron's `powerMonitor` (or any object shaped like it) — pauses the stall monitor's heartbeat
-   *  across sleep and resyncs it on resume; see stall-monitor.ts for why both events are needed. Also
-   *  restarts that heartbeat on 'unlock-screen' as a fallback for a sleep whose matching 'resume' never
-   *  arrives — see the `suspended`-gated handler below for why that resync is conditional. */
+   *  across sleep on 'suspend', and restarts it on both 'resume' and 'unlock-screen' (the latter is the
+   *  fallback for a sleep whose matching 'resume' never arrives); see stall-monitor.ts for why one
+   *  restart-if-paused method shared by both events is what makes them order-independent. */
   powerMonitor: PowerMonitorSource
+  /** The metis-mac-helper binary that runs this boot's out-of-process stall sampler (stall-sampler.ts).
+   *  Absent or null means no sampler (no helper on this platform, or flag `diagnostics.stall_sampler`
+   *  off), and then this module behaves exactly as it did before M2-0192. */
+  stallWatchCommand?: string | null
   /** Test seams only — production wires the real fs-backed boot-sentinel functions and real timers. */
   deps?: {
     beginRunWatch?: typeof beginRunWatch
     markAlive?: typeof markAlive
     markShutdownClean?: typeof markShutdownClean
     startStallMonitor?: (opts: StallMonitorOptions) => StallMonitor
+    startStallSampler?: (opts: StallSamplerOptions) => StallSampler
     setIntervalFn?: (handler: () => void, ms: number) => Timer
     clearIntervalFn?: (handle: Timer) => void
   }
@@ -65,6 +72,7 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   const doMarkAlive = deps.markAlive ?? markAlive
   const doMarkShutdownClean = deps.markShutdownClean ?? markShutdownClean
   const doStartStallMonitor = deps.startStallMonitor ?? startStallMonitor
+  const doStartStallSampler = deps.startStallSampler ?? startStallSampler
   const setIntervalFn = deps.setIntervalFn ?? setInterval
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval
   const powerMonitor = opts.powerMonitor
@@ -85,6 +93,16 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
     void doMarkAlive(opts.userData, bootId)
   }, ALIVE_INTERVAL_MS)
 
+  const stallSampler = opts.stallWatchCommand
+    ? doStartStallSampler({
+        command: opts.stallWatchCommand,
+        userData: opts.userData,
+        bootId,
+        aliveIntervalMs: ALIVE_INTERVAL_MS,
+        audit: opts.audit
+      })
+    : undefined
+
   const stallMonitor = doStartStallMonitor({
     bootId,
     // The stall monitor decides what phase (if any) a tick names and clears it every tick — this module
@@ -99,46 +117,15 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
     onSummary: (detail) => opts.audit('app.stall.summary', { bootId: detail.bootId, p99Ms: detail.p99Ms })
   })
 
-  // Order-independent by construction (see stall-monitor.ts): 'suspend' removes the heartbeat outright, so
-  // there is no tick left pending to race 'resume' no matter which the event loop processes first; 'resume'
-  // re-arms the schedule and restarts the heartbeat. Needed even though stall-monitor.ts's own clock does
-  // not advance during sleep on macOS, because some platforms' monotonic clock does.
-  //
-  // `suspended` tracks whether a 'suspend' has paused the heartbeat with no 'resume' having re-armed it
-  // since; it is cleared by whichever of 'resume' or 'unlock-screen' re-arms the heartbeat first. Only
-  // 'unlock-screen' below reads it — 'resume' always resyncs unconditionally, because after any real sleep
-  // the gap on the stall clock is sleep, not a main-thread stall: on a platform whose monotonic clock counts
-  // through sleep that gap must be discarded, and resync() also restarts the heartbeat that 'suspend'
-  // paused. The cost: 'resume' can still arrive after 'unlock-screen' has already restarted a heartbeat
-  // 'suspend' had paused (see onUnlockScreen below); that unconditional resync() then re-baselines a
-  // heartbeat that is already running, discarding whatever real lateness accrued since it restarted — the
-  // same class of bug onUnlockScreen's own `suspended` guard exists to prevent, just from 'resume' arriving
-  // second instead of first.
-  let suspended = false
-  const onSuspend = (): void => {
-    suspended = true
-    stallMonitor.pause()
-  }
-  const onResume = (): void => {
-    suspended = false
-    stallMonitor.resync()
-  }
+  // 'suspend' clears the heartbeat so no tick can race the wake-up events; 'resume' and 'unlock-screen'
+  // (the fallback when 'resume' never arrives) both call restartIfPaused(), a no-op on a running heartbeat,
+  // so neither event order nor an unlock after a plain screen lock can re-baseline it and discard accruing
+  // lateness.
+  const onSuspend = (): void => stallMonitor.pause()
+  const onWake = (): void => stallMonitor.restartIfPaused()
   powerMonitor.on('suspend', onSuspend)
-  powerMonitor.on('resume', onResume)
-  // Fallback for the case 'resume' itself never arrives (an aborted sleep, or a platform that raises
-  // 'suspend' without a matching 'resume'): only resync here when 'suspend' actually paused the heartbeat
-  // and no 'resume' has re-armed it since. resync() unconditionally re-baselines expectedAt from now(), and
-  // a screen lock usually leaves the machine awake with the heartbeat still running — calling it on a
-  // running heartbeat would discard any real lateness already accumulated (e.g. the main thread blocked in
-  // a synchronous OneDrive read while the screen was locked), silently erasing the exact evidence this
-  // module exists to produce. Gating on `suspended` makes this a no-op whenever the heartbeat never
-  // stopped ticking, so it can only ever restart one that 'suspend' actually stopped.
-  const onUnlockScreen = (): void => {
-    if (!suspended) return
-    suspended = false
-    stallMonitor.resync()
-  }
-  powerMonitor.on('unlock-screen', onUnlockScreen)
+  powerMonitor.on('resume', onWake)
+  powerMonitor.on('unlock-screen', onWake)
 
   let stopped = false
   return {
@@ -148,10 +135,13 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
     shutdownClean(uptimeS: number): void {
       if (stopped) return
       stopped = true
+      // Before the heartbeat stops, so the helper can never see the marker go stale during the rest of
+      // will-quit.
+      stallSampler?.stop()
       clearIntervalFn(aliveTimer)
       powerMonitor.removeListener('suspend', onSuspend)
-      powerMonitor.removeListener('resume', onResume)
-      powerMonitor.removeListener('unlock-screen', onUnlockScreen)
+      powerMonitor.removeListener('resume', onWake)
+      powerMonitor.removeListener('unlock-screen', onWake)
       stallMonitor.stop()
       opts.audit('app.shutdown.clean', doMarkShutdownClean(opts.userData, bootId, uptimeS))
     }

@@ -27,8 +27,14 @@ import tailwindcss from '@tailwindcss/vite'
 // instead of bytecode. An app that starts beats an app that is obfuscated and does not.
 const MAC_UNIVERSAL = process.env.ASKTOTO_MAC_UNIVERSAL === '1'
 
+// The QA-identity build and no other (package.json dist:qa-identity sets METIS_QA_IDENTITY=1). Compiled in as
+// a literal, so every branch guarded by QA_IDENTITY_BUILD (src/main/qa-identity.ts) is dropped from shipping
+// bytes; scripts/check-packaged-runtime.mjs verifies that on every package.
+const QA_IDENTITY = process.env.METIS_QA_IDENTITY === '1'
+
 export default defineConfig({
   main: {
+    define: { __METIS_QA_IDENTITY__: JSON.stringify(QA_IDENTITY) },
     // electron-vite compiles the main-process bundle to V8 bytecode (.jsc): the shipped app carries
     // no readable main-process JS at all — prompts, brain/ingest logic, and LLM orchestration can't be
     // read out of the asar. Renderer/preload stay minified-only (a sandboxed preload and a Chromium

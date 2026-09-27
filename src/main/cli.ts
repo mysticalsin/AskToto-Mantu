@@ -9,6 +9,15 @@
  *     not free text (it comes from resolveBin), so it is only guarded against the characters quoting
  *     cannot neutralize (isQuotablePath) and is otherwise made safe by explicit quoting +
  *     windowsVerbatimArguments (see cmdShimSpawn).
+ *   - The Windows setup/login script is opened with shell.openPath (Electron's ShellExecuteExW
+ *     wrapper) — as setupCli does — never through a Node-built cmd.exe command line.
+ *     A `start`-spawned cmd.exe cannot make that safe on its own: `start` launches a `.cmd` file
+ *     through a SECOND, independent cmd.exe (its own `/K`), whose quote-retention rule strips the outer
+ *     quotes whenever the quoted text contains `&`, `^`, `<`, `>`, `(`, `)`, `@` or `|`, so a
+ *     profile/temp path containing any of those would reach that second parser unquoted. shell.openPath's
+ *     ShellExecute still runs cmd.exe for a `.cmd` file's default "open" verb (as `cmd.exe /c
+ *     ""<path>" "`, still expanding a literal `%NAME%` inside the quotes), but its quote-retention rule
+ *     keeps that whole path as one token (RF-AUDIT-R3-B1).
  *   - claude-cli: --allowedTools '' --disallowedTools '*' so the agent can never execute arbitrary tools.
  *   - codex-cli: features.shell_tool=false + runs in a throwaway tmp cwd.
  *   - resolveBin() finds the absolute path via the login shell (mac/Linux) or `where` + an APPDATA
@@ -1583,30 +1592,6 @@ export function loginCliInvokeLines(
   return [provider === 'codex-cli' ? 'codex login' : 'claude']
 }
 
-async function openCliScript(scriptPath: string, isWin: boolean): Promise<string> {
-  if (isWin) {
-    const startErr = await new Promise<string>((resolve) => {
-      let settled = false
-      const done = (msg: string): void => {
-        if (settled) return
-        settled = true
-        resolve(msg)
-      }
-      const child = spawn(comSpecExe(), ['/d', '/c', 'start', '', scriptPath], {
-        shell: false,
-        windowsHide: false,
-        detached: true,
-        stdio: 'ignore'
-      })
-      child.once('error', (e) => done(e.message))
-      child.once('close', (code) => done(code === 0 || code === null ? '' : `start failed (${code})`))
-      child.unref?.()
-    })
-    if (!startErr) return ''
-  }
-  return (await shell.openPath(scriptPath)) || ''
-}
-
 /**
  * Open a Terminal (macOS) or console (Windows) window for interactive CLI login only (no npm
  * install step). The user has already installed the CLI in-app via installCli; this is the
@@ -1683,7 +1668,7 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
     const script = scriptLines.join(eol) + eol
     const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-login-${randomBytes(8).toString('hex')}.${isWin ? 'cmd' : 'command'}`)
     writeFileSync(scriptPath, script, { mode: 0o755, flag: 'wx' })
-    const err = await openCliScript(scriptPath, isWin)
+    const err = await shell.openPath(scriptPath)
     if (err) return { ok: false, error: err }
     return { ok: true }
   } catch (e) {

@@ -367,7 +367,8 @@ export async function start(): Promise<void> {
   }
 }
 
-/** Kill the server and clear bookkeeping. Idempotent. Wired into will-quit beside localRuntime.stop(). */
+/** Kill the server and clear bookkeeping. Idempotent. Every exit path stops it through the stopAll() list in
+ *  index.ts. */
 export function stop(): void {
   clearIdleTimer()
   const wasUp = state === 'running' || state === 'starting'
