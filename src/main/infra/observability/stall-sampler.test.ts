@@ -282,7 +282,8 @@ describe('startStallSampler', () => {
     writeFileSync(capture, MINIMAL_REPORT)
     writeStdout(child, 'sampled\n')
     const bundle = `${bootId}.1790000000000.12345.txt`
-    await waitFor(() => existsSync(join(bundleDir(userData), bundle)))
+    await waitFor(() => audit.mock.calls.some(([event]) => event === 'app.stall.sampled'))
+    expect(existsSync(join(bundleDir(userData), bundle))).toBe(true)
     expect(audit).toHaveBeenCalledWith('app.stall.sampled', { bootId, stalledMs: 12345, bundle })
   })
 })
