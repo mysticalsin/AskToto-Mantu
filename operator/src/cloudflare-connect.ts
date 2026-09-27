@@ -11,12 +11,11 @@ export const CF_CONNECT_PATH = '/cloudflare/connect'
 export const CF_CALLBACK_PATH = '/cloudflare/callback'
 export const CF_OAUTH_COOKIE = 'metis_cf_oauth'
 export const CF_OAUTH_MISSING = 'Cloudflare OAuth is not configured. Set CF_OAUTH_CLIENT_ID and CF_OAUTH_CLIENT_SECRET.'
-// Every scope below is backed by exactly one call site (locked by the scope-lock test in
-// cloudflare-connect.test.ts); a scope with no call site — 'user:read', 'ai-gateway:edit' — must
-// stay out, not be re-added on spec [M2-0219, RF-AUDIT-R2-R2].
+// Each scope below is required by the call site(s) named beside it (locked by the scope-lock
+// test in cloudflare-connect.test.ts): add a scope only together with its call site.
 export const CF_OAUTH_SCOPES = [
-  'account:read', // resolveCloudflareAccount(): GET /accounts
-  'workers-ai:run', // ask.ts/use.ts upstreamUrl('cloudflare'): POST /accounts/{id}/ai/v1/chat/completions
+  'account:read', // resolveCloudflareAccount(): GET /accounts; pullCloudflareOverview()'s account analytics: POST /client/v4/graphql
+  'workers-ai:run', // ask.ts upstreamUrl('cloudflare') and use.ts callCloudflareGateway(): POST /accounts/{id}/ai/v1/chat/completions
   'ai-gateway:read', // ai-gateway.ts verifyDefaultGatewayPrivacy(): GET /accounts/{id}/ai-gateway/gateways/default
   'workers:read', // cloudflare.ts pullCloudflareOverview(): GET /accounts/{id}/workers/scripts
   'd1:read' // cloudflare.ts pullCloudflareOverview(): GET /accounts/{id}/d1/database
@@ -27,7 +26,6 @@ export type CloudflareOAuthEnv = {
   CF_OAUTH_CLIENT_SECRET?: string
   CF_OAUTH_AUTHORIZE_URL?: string
   CF_OAUTH_TOKEN_URL?: string
-  CF_OAUTH_SCOPES?: string
   CF_ACCOUNT_ID?: string
   OPERATOR_VAULT_KEY?: string
 }
@@ -57,7 +55,7 @@ export function cloudflareAuthorizeLocation(request: Request, env: CloudflareOAu
   authorize.searchParams.set('response_type', 'code')
   authorize.searchParams.set('client_id', oauthClientId(env))
   authorize.searchParams.set('redirect_uri', callbackUrl(request))
-  authorize.searchParams.set('scope', (env.CF_OAUTH_SCOPES || CF_OAUTH_SCOPES).trim() || CF_OAUTH_SCOPES)
+  authorize.searchParams.set('scope', CF_OAUTH_SCOPES)
   authorize.searchParams.set('state', state)
   return authorize.toString()
 }
