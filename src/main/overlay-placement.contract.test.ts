@@ -282,6 +282,8 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       'const onboardingExclusiveLive = () => false',
       'const islandResting = false',
       'const createRevealTrace = () => ({ trace: (_reason, reveal) => reveal() })',
+      'const auditLog = () => {}',
+      'const liveOverlayLayout = () => "bar"',
       'const resolvedOverlayPlacementForDisplay = () => "top-center"',
       ''
     ].join('\n')
