@@ -100,19 +100,23 @@ async function fetchSpaceDataSources(
   base: string,
   workspaceId: string,
   headers: Record<string, string>,
-  space: SpaceEntry
+  spaceId: string
 ): Promise<DustProject[]> {
   try {
     const dsRes = await fetchImpl(
-      `${base}/api/v1/w/${encodeURIComponent(workspaceId)}/spaces/${encodeURIComponent(space.sId)}/data_sources`,
+      `${base}/api/v1/w/${encodeURIComponent(workspaceId)}/spaces/${encodeURIComponent(spaceId)}/data_sources`,
       { headers }
     )
     if (!dsRes.ok) return []
     const dsJson = await dsRes.json()
-    return parseDataSources(dsJson, space.sId)
+    return parseDataSources(dsJson, spaceId)
   } catch {
     return []
   }
+}
+
+function spaceProject(space: SpaceEntry): DustProject {
+  return { sId: space.sId, name: space.name, kind: space.kind, source: 'space' }
 }
 
 export async function fetchDustProjects(opts: {
@@ -150,14 +154,10 @@ export async function fetchDustProjects(opts: {
   // together below. Neither Dust endpoint here paginates (no cursor/page/limit/has_more field on GET
   // .../spaces or GET .../spaces/{spaceId}/data_sources), so there is no further page to fetch.
   const dsResults = await Promise.all(
-    spaceEntries.map((space) => fetchSpaceDataSources(fetchImpl, base, workspaceId, headers, space))
+    spaceEntries.map((space) => fetchSpaceDataSources(fetchImpl, base, workspaceId, headers, space.sId))
   )
 
-  const projects: DustProject[] = []
-  spaceEntries.forEach((space, i) => {
-    projects.push({ sId: space.sId, name: space.name, kind: space.kind, source: 'space' })
-    projects.push(...dsResults[i])
-  })
+  const projects = spaceEntries.flatMap((space, i) => [spaceProject(space), ...dsResults[i]])
 
   return { ok: true, projects }
 }
