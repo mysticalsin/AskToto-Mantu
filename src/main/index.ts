@@ -33,7 +33,7 @@ import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, creat
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
-import { bindRendererReadiness } from './renderer-readiness'
+import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
@@ -2813,13 +2813,6 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // The one-time onboarding destination belongs to this replacement only. Later renderer recovery
   // should preserve the user's current surface rather than repeatedly forcing Settings.
   postOnboardingDestination = 'answer'
-  // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
-  // below. A session with app.started but no renderer.ready must always be visible in the audit log.
-  // Preserve app.started's boot semantics and never equate entering createWindow with a loaded,
-  // responsive renderer. Register before navigation.
-  bindRendererReadiness(win.webContents, rendererUrl, () => {
-    auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
-  })
   // Bounded launch evidence only. Normal onboarding never serializes renderer state to disk.
   if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
     bindAct1DomProbe(win.webContents, {
@@ -2828,9 +2821,16 @@ function createWindow(targetDisplay?: Electron.Display): void {
       audit: (summary) => auditLog('app.act1.dom', summary)
     })
   }
-  // FITO-185-B: always loadURL(rendererUrl) — same string bindRendererReadiness expects — so packaged
-  // asar file:// getURL() cannot miss the strict equality check that loadFile alone can mismatch.
-  win.loadURL(rendererUrl)
+  // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
+  // above. A session with app.started but no renderer.ready must always be visible in the audit log.
+  // Preserve app.started's boot semantics and never equate entering createWindow with a loaded,
+  // responsive renderer. bindReadinessThenNavigate binds the listener and only then calls
+  // loadURL(rendererUrl) — same string the listener expects, so a packaged asar file:// getURL() cannot
+  // miss the strict equality check that loadFile alone can mismatch (FITO-185-B) — the invariant is
+  // structural: there is no separate loadURL call site left to reorder ahead of the bind.
+  bindReadinessThenNavigate(win, rendererUrl, () => {
+    auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+  })
   const overlay = win
   let exclusiveRevealed = false
   const revealExclusiveWhenPainted = (): void => {

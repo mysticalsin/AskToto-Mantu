@@ -24,6 +24,11 @@ interface RendererReadyTarget {
   executeJavaScript(source: string): Promise<unknown>
 }
 
+interface NavigableWindow {
+  webContents: RendererReadyTarget
+  loadURL(url: string): unknown
+}
+
 /** Bind before navigation. A reload, failed load, or destroyed renderer invalidates an older probe. */
 export function bindRendererReadiness(
   target: RendererReadyTarget,
@@ -71,4 +76,14 @@ export function bindRendererReadiness(
   target.on('did-finish-load', loaded)
   for (const event of ['did-start-loading', 'did-fail-load', 'render-process-gone']) target.on(event, cancel)
   target.on('destroyed', dispose)
+}
+
+/**
+ * Binds readiness, then navigates. The only way to navigate through this function is after the
+ * readiness listener is already attached, so the invariant above (bind before load) cannot regress by
+ * reordering two separate call sites — there is only one call site.
+ */
+export function bindReadinessThenNavigate(win: NavigableWindow, rendererUrl: string, ready: () => void): void {
+  bindRendererReadiness(win.webContents, rendererUrl, ready)
+  win.loadURL(rendererUrl)
 }
