@@ -86,7 +86,7 @@ describe('Speaker identification in Local AI', () => {
     return renderToStaticMarkup(<LocalAiSection settings={publicSettingsWith({ speakerId })} patch={() => {}} />)
   }
 
-  it('offers Save voiceprints, off, on a fresh install and says voiceprints from earlier versions are kept', () => { // RED
+  it('offers Save voiceprints, off, on a fresh install and says voiceprints from earlier versions are kept', () => {
     const html = renderWithSpeakerId(DEFAULT_SETTINGS.speakerId)
     expect(html).toContain('aria-checked="false" aria-label="Save voiceprints"')
     expect(html).toContain('Voiceprints saved by earlier versions are kept and still used.')

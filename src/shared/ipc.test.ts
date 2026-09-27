@@ -264,14 +264,14 @@ describe('SettingsSchema', () => {
     ).toBe(false)
   })
 
-  it('a fresh install labels speakers in the meeting but saves no voiceprints', () => {                     // RED
+  it('a fresh install labels speakers in the meeting but saves no voiceprints', () => {
     const fresh = { enabled: true, saveVoiceprints: false }
     expect(SettingsSchema.parse(DEFAULT_SETTINGS).speakerId).toEqual(fresh)
     const { speakerId: _omit, ...withoutSpeakerId } = DEFAULT_SETTINGS
     expect(SettingsSchema.parse(withoutSpeakerId).speakerId).toEqual(fresh)
   })
 
-  it('a profile saved before the voiceprint opt-in keeps its speaker-ID choice and saves no voiceprints', () => { // RED
+  it('a profile saved before the voiceprint opt-in keeps its speaker-ID choice and saves no voiceprints', () => {
     for (const enabled of [true, false]) {
       expect(SettingsSchema.parse({ ...DEFAULT_SETTINGS, speakerId: { enabled } }).speakerId)
         .toEqual({ enabled, saveVoiceprints: false })

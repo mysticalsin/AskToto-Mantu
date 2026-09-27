@@ -335,7 +335,7 @@ describe('Save voiceprints opt-in wiring', () => {
     return { label, enrolled: id.enrollFromSnapshot(snapshot, [{ clusterLabel: 'Speaker 1', name: theirName }]) }
   }
 
-  it('a fresh install (nothing on disk) labels a whole meeting but writes no voiceprint', async () => {     // RED
+  it('a fresh install (nothing on disk) labels a whole meeting but writes no voiceprint', async () => {
     const meeting = await holdMeeting(startApp(), 'live:1', 2, 'Jane Doe')
     expect(meeting.label).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
     expect(meeting.enrolled).toBe(0)

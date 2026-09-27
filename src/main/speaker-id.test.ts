@@ -32,8 +32,8 @@ function windowFor(axis: number): Float32Array {
   return Float32Array.from([axis, 0.5, 0.5])
 }
 
+/** An identifier whose user has opted in to saving voiceprints: the behaviour the suites below pin. */
 function makeId(dir: string, opts: { extractor?: ReturnType<typeof fakeExtractor> | null; now?: () => number } = {}) {
-  /** An identifier whose user has opted in to saving voiceprints: the behaviour the suites below pin. */
   return createSpeakerId({
     createExtractor: () => (opts.extractor === undefined ? fakeExtractor() : opts.extractor),
     storePath: () => join(dir, 'voiceprints.json'),
@@ -117,7 +117,7 @@ describe('voiceprints are saved only after the user opts in', () => {
   const withoutOptIn = () =>
     createSpeakerId({ createExtractor: fakeExtractor, storePath: () => join(dir, 'voiceprints.json') })
 
-  it('without the opt-in, a meeting still gets session labels but writes no voiceprint', async () => {        // RED
+  it('without the opt-in, a meeting still gets session labels but writes no voiceprint', async () => {
     const id = withoutOptIn()
     for (let i = 0; i < 4; i++) {
       expect(await id.labelWindow(windowFor(2))).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
@@ -139,7 +139,7 @@ describe('voiceprints are saved only after the user opts in', () => {
     expect(readdirSync(dir)).toEqual([])
   })
 
-  it('keeps a voiceprint store from an earlier version byte-for-byte and still names its voices', async () => { // RED
+  it('keeps a voiceprint store from an earlier version byte-for-byte and still names its voices', async () => {
     const store = join(dir, 'voiceprints.json')
     const earlier = JSON.stringify({
       version: 1,

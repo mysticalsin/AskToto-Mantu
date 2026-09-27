@@ -31,8 +31,8 @@ beforeEach(() => {
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
+/** An identifier whose user has opted in to saving voiceprints: the behaviour the suites below pin. */
 function makeId(options: { now?: () => number; compute?: (samples: Float32Array) => Promise<Float32Array | null> } = {}) {
-  /** An identifier whose user has opted in to saving voiceprints: the behaviour the suites below pin. */
   return createSpeakerId({
     createExtractor: () => ({
       compute: options.compute ?? (async (samples) => samples.length ? embeddingFor(Math.round(samples[0])) : null)
