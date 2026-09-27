@@ -79,9 +79,10 @@ export function bindRendererReadiness(
 }
 
 /**
- * Binds readiness, then navigates. The only way to navigate through this function is after the
- * readiness listener is already attached, so the invariant above (bind before load) cannot regress by
- * reordering two separate call sites — there is only one call site.
+ * Binds readiness, then navigates, so two invariants hold:
+ * - Readiness is bound before navigation, so even a load that completes synchronously is observed.
+ * - Navigation uses exactly the URL the probe matches, so loadFile's getURL mismatch cannot happen
+ *   (FITO-185-B).
  */
 export function bindReadinessThenNavigate(win: NavigableWindow, rendererUrl: string, ready: () => void): void {
   bindRendererReadiness(win.webContents, rendererUrl, ready)

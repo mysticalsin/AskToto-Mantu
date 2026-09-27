@@ -138,10 +138,9 @@ describe('MQA-318 real renderer readiness signal', () => {
       expect(ready).toHaveBeenCalledOnce()
     })
 
-    // Names the failure this guards against: calling loadURL before the bind (the bug the old
-    // readFileSync/regex contract could only detect by reading createWindow's source text) misses the
-    // synchronous completion above entirely, because no listener is attached yet to observe it.
-    it('would miss that same synchronous completion if navigation ran before the bind', async () => {
+    // The fake's synchronous load is invisible to a late bind, so this test discriminates order: it
+    // never calls bindReadinessThenNavigate, only bindRendererReadiness after the load already ran.
+    it("the fake's synchronous load is invisible to a late bind, so the test above discriminates order", async () => {
       const win = new SynchronouslyNavigatingWindow()
       const ready = vi.fn()
       win.loadURL(expectedUrl)

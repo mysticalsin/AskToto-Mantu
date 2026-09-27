@@ -2823,11 +2823,6 @@ function createWindow(targetDisplay?: Electron.Display): void {
   }
   // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
   // above. A session with app.started but no renderer.ready must always be visible in the audit log.
-  // Preserve app.started's boot semantics and never equate entering createWindow with a loaded,
-  // responsive renderer. bindReadinessThenNavigate binds the listener and only then calls
-  // loadURL(rendererUrl) — same string the listener expects, so a packaged asar file:// getURL() cannot
-  // miss the strict equality check that loadFile alone can mismatch (FITO-185-B) — the invariant is
-  // structural: there is no separate loadURL call site left to reorder ahead of the bind.
   bindReadinessThenNavigate(win, rendererUrl, () => {
     auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
   })
