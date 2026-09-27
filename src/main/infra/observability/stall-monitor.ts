@@ -46,7 +46,10 @@ export interface StallDetail {
   durationMs: number
   /** The `timePhase` label with the longest measured duration since the previous tick, or `undefined` when
    *  none ran, or an intervening on-time tick already consumed it. Every tick — late or not — reads this
-   *  and clears it, so a stall never names an operation that had already finished before the stall began. */
+   *  and clears it, so `phase` only ever names an operation that finished since the previous tick — never
+   *  one still running, and never one from before that window. It can still have finished before an
+   *  untimed block that ran after it started the stall; compare `phaseMs` with `durationMs` to see whether
+   *  the named phase actually accounts for the lateness or merely preceded an uninstrumented one that did. */
   phase: string | undefined
   /** That phase's own measured duration, in ms. Present exactly when `phase` is. */
   phaseMs: number | undefined
@@ -83,9 +86,11 @@ export interface StallMonitor {
    *  `'suspend'` event so no tick can be pending to fire during sleep. A no-op once stopped or already
    *  paused. */
   pause(): void
-  /** Run `fn` and measure its wall time on this monitor's own clock. If that duration is the longest of
-   *  any `timePhase` call since the previous tick, the NEXT tick — whether or not that tick is itself late
-   *  — names this `label`. Call around any operation worth naming on a late tick; returns `fn`'s result. */
+  /** Run `fn` and measure its own synchronous duration on this monitor's monotonic clock (never
+   *  `Date.now()` — see the module header). For a function that returns a promise, only the part before
+   *  its first `await` is measured. If that duration is the longest of any `timePhase` call since the
+   *  previous tick, the NEXT tick — whether or not that tick is itself late — names this `label`. Call
+   *  around any operation worth naming on a late tick; returns `fn`'s result. */
   timePhase<T>(label: string, fn: () => T): T
 }
 

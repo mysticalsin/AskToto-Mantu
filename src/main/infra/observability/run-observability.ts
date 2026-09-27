@@ -98,15 +98,34 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   // there is no tick left pending to race 'resume' no matter which the event loop processes first; 'resume'
   // re-arms the schedule and restarts the heartbeat. Needed even though stall-monitor.ts's own clock does
   // not advance during sleep on macOS, because some platforms' monotonic clock does.
-  const onSuspend = (): void => stallMonitor.pause()
-  const onResume = (): void => stallMonitor.resync()
+  //
+  // `suspended` tracks whether a 'suspend' has paused the heartbeat with no 'resume' having re-armed it
+  // since. Only 'unlock-screen' below reads it — 'resume' always resyncs unconditionally, since it is
+  // paired 1:1 with 'suspend' by the OS.
+  let suspended = false
+  const onSuspend = (): void => {
+    suspended = true
+    stallMonitor.pause()
+  }
+  const onResume = (): void => {
+    suspended = false
+    stallMonitor.resync()
+  }
   powerMonitor.on('suspend', onSuspend)
   powerMonitor.on('resume', onResume)
   // Fallback for the case 'resume' itself never arrives (an aborted sleep, or a platform that raises
-  // 'suspend' without a matching 'resume'): resync() is safe to call whether or not pause() ever fired —
-  // it only re-arms the schedule and restarts the heartbeat if it was stopped — so wiring it to another
-  // wake-adjacent signal costs nothing and closes that gap.
-  const onUnlockScreen = (): void => stallMonitor.resync()
+  // 'suspend' without a matching 'resume'): only resync here when 'suspend' actually paused the heartbeat
+  // and no 'resume' has re-armed it since. resync() unconditionally re-baselines expectedAt from now(), and
+  // a screen lock usually leaves the machine awake with the heartbeat still running — calling it on a
+  // running heartbeat would discard any real lateness already accumulated (e.g. the main thread blocked in
+  // a synchronous OneDrive read while the screen was locked), silently erasing the exact evidence this
+  // module exists to produce. Gating on `suspended` makes this a no-op whenever the heartbeat never
+  // stopped ticking, so it can only ever restart one that 'suspend' actually stopped.
+  const onUnlockScreen = (): void => {
+    if (!suspended) return
+    suspended = false
+    stallMonitor.resync()
+  }
   powerMonitor.on('unlock-screen', onUnlockScreen)
 
   let stopped = false
