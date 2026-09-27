@@ -10,7 +10,7 @@
  * "inject everything Electron-specific" shape as stall-monitor.ts's test seams, so this module stays
  * importable and testable outside a real Electron process.
  */
-import { beginRunWatch, markAlive, markShutdownClean } from '../../boot-sentinel'
+import { beginRunWatch, markAlive, markShutdownClean, type PriorShutdown } from '../../boot-sentinel'
 import type { AuditEvent } from '../../logger'
 import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from './stall-monitor'
 import { startStallSampler, type StallSampler, type StallSamplerOptions } from './stall-sampler'
@@ -51,6 +51,8 @@ export interface RunObservabilityOptions {
 }
 
 export interface RunObservability {
+  /** How the previous run ended, read once by beginRunWatch. */
+  readonly priorShutdown: PriorShutdown
   /** Run `fn`, measuring its duration so a late stall tick can name whichever phase actually ran longest
    *  since the previous tick. Forwarded straight to the stall monitor, which owns that measurement and
    *  clearing it every tick (stall-monitor.ts). Wrap any boot step or background-timer callback worth
@@ -126,6 +128,7 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
 
   let stopped = false
   return {
+    priorShutdown: prior.prevShutdown,
     timePhase<T>(label: string, fn: () => T): T {
       return stallMonitor.timePhase(label, fn)
     },

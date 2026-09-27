@@ -16,7 +16,7 @@ vi.mock('electron')
 const createStreamMock = vi.hoisted(() => vi.fn())
 vi.mock('../llm', () => ({ createStream: createStreamMock }))
 
-const userTrigger = { trigger: 'user' } as unknown as BackfillStartOptions
+const userTrigger: BackfillStartOptions = { trigger: 'user' }
 
 /**
  * T6 6a (cross-provider extraction failover) + 6b (MAX_INGEST_ATTEMPTS / exhausted terminal state).

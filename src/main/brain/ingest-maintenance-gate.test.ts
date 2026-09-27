@@ -33,7 +33,7 @@ const auditLogMock = vi.hoisted(() => vi.fn())
 vi.mock('../llm', () => ({ createStream: createStreamMock }))
 vi.mock('../logger', async (orig) => ({ ...(await orig()), auditLog: auditLogMock }))
 
-const userTrigger = { trigger: 'user' } as unknown as BackfillStartOptions
+const userTrigger: BackfillStartOptions = { trigger: 'user' }
 
 function heldStream(held: Array<() => void>): (opts: StreamOptions & { handlers: StreamHandlers }) => StreamHandle {
   return (opts) => {

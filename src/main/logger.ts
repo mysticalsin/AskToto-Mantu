@@ -258,6 +258,8 @@ export type AuditEvent =
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'
+  // M2-0033: scheduler decisions (backfill scan counts, deferrals, maintenance window) — counts and enums only, never paths or names.
+  | 'scheduler.job'
   // Wave 3 (main/brain/consolidate.ts): one batched extraction pass actually ran. Distinct from
   // 'brain.ingest' (per-meeting) — this is the per-PASS marker metrics.ts counts against the
   // maxPassesPerDay budget.

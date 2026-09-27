@@ -376,7 +376,7 @@ describe('Intelligence completion, not dispatch, owns success', () => {
     await runIntelligenceIndex('click', s)
     gate.resolve({ ok: false, error: `${stage} could not finish. Retry Update Intelligence.` })
     await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
-    expect(readIntelligenceIndexState(s)).toEqual({ lastSuccessAt: 123, lastError: `${stage} could not finish. Retry Update Intelligence.` })
+    expect(readIntelligenceIndexState(s)).toEqual({ lastSuccessAt: 123, lastFinishedAt: expect.any(Number), lastError: `${stage} could not finish. Retry Update Intelligence.` })
   })
 
   it('does not promote a deferred dispatch even if its local subset completes', async () => {

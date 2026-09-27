@@ -617,6 +617,7 @@ import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
+import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
@@ -1687,7 +1688,7 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
 }
 
 function wireIntelligenceIndexWork(): void {
-  setIntelligenceIndexWork(() => startIntelligenceWork({
+  setIntelligenceIndexWork((reason) => startIntelligenceWork({
     list: listMeetingsNeedingRecap,
     generate: (meeting) => runImportedRecap({
       jobId: `index-${meeting.file}`,
@@ -1697,7 +1698,7 @@ function wireIntelligenceIndexWork(): void {
     save: (file, recap, status) => updateMeetingRecap(getSettings(), file, recap, status),
     backfill: requestBackfillRun,
     logFailure: (error) => mainLog.error('[intelligence-index] recap failed:', error)
-  }))
+  }, reason))
 }
 
 function initializeImportJobs(): void {
@@ -2566,6 +2567,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
       powerMonitor,
       stallWatchCommand: macStallWatchCommand()
     })
+    settlePriorExit(observability.priorShutdown)
     emittedAppStarted = true
   }
   // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
@@ -8021,7 +8023,7 @@ function registerIpc(): void {
     //  - a corrupt/blocked-journal guard (MI-2.5 review Fix 2 — refuse rather than rebuild atop a store
     //    onto which zero corrections could be replayed, which would silently revert every human fix);
     //  - the replayPending flag (Fix E) + the onDrained replay that clears it only on a clean replay.
-    const r = await startRebuild(getSettings())
+    const r = await startRebuild(getSettings(), { trigger: 'user' })
     if (r.error) {
       auditLog('brain.rebuild.aborted', {})
       return r
@@ -8802,6 +8804,11 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  // M2-0033: unattended model work waits for the maintenance gate.
+  startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
+  app.on('web-contents-created', (_event, contents) => {
+    contents.on('input-event', (_inputEvent, input) => noteUserInput(input.type))
+  })
   // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
   // proxy/CLI/key seeding before first paint — hoist tray+IPC+window for wiped-profile exclusive.
   // Call createTray/registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared
@@ -8879,14 +8886,15 @@ if (!app.requestSingleInstanceLock()) {
         mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
       }
     }
+    // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
     void provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
       .then((ready) => {
         if (!ready) return
         refreshScreenPreprocess()
-        warmLocalIfReady()
+        void runAsMaintenance(warmLocalIfReady)
       })
       .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
-    setTimeout(warmLocalIfReady, 4000).unref?.()
+    void runAsMaintenance(warmLocalIfReady)
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
   // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
@@ -9406,9 +9414,7 @@ if (!app.requestSingleInstanceLock()) {
         } catch (e) {
           mainLog.warn('[boot] scheduleIntelligenceIndex failed:', e)
         }
-        // Hourly consolidation is demoted: the named slots own the extract pass. The helper stays
-        // imported so existing settings/tests keep compiling, and a manual budget check still no-ops
-        // when the feature is off.
+        // Consolidation runs once per launch; the named slots own the recurring pass. Both are automatic triggers (infra/scheduler/policy.ts).
         try {
           void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
         } catch (e) {

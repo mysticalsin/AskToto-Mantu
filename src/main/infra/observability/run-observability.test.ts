@@ -109,7 +109,7 @@ describe('startRunObservability', () => {
         clearIntervalFn: vi.fn()
       }
     })
-    expect((observability as typeof observability & { priorShutdown: 'unclean' }).priorShutdown).toBe('unclean')
+    expect(observability.priorShutdown).toBe('unclean')
   })
 
   it('starts a 10s alive timer that calls markAlive with the current bootId', () => {

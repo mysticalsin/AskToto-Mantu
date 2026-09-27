@@ -42,7 +42,7 @@ type IngestModule = typeof import('./ingest')
 type StoreModule = typeof import('../store')
 type BrainStoreModule = typeof import('./store')
 
-const userTrigger = { trigger: 'user' } as unknown as BackfillStartOptions
+const userTrigger: BackfillStartOptions = { trigger: 'user' }
 
 function respondJson(markerCalls: string[], json = '{}') {
   return (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
