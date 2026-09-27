@@ -40,6 +40,18 @@ function sqliteD1(db: DatabaseSync): D1DatabaseLike {
         }
       }
       return wrapper
+    },
+    async batch(statements) {
+      db.exec('BEGIN')
+      try {
+        const results = []
+        for (const statement of statements) results.push(await statement.run() as { success: boolean })
+        db.exec('COMMIT')
+        return results
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
     }
   }
 }
@@ -337,8 +349,8 @@ describe('audit with request/route meta, listAudit filters', () => {
   })
 })
 
-describe('vault supersede and clear', () => {
-  it('supersedeActiveVaultKeys marks other active rows superseded and clears their secret', async () => {
+describe('vault put, supersede-on-write, and clear', () => {
+  it('putVaultKeys inserts the new row, supersedes the other active rows for its provider, and records one audit row and one event', async () => {
     await store.putVaultKey({
       id: 'v1',
       provider: 'anthropic',
@@ -352,20 +364,23 @@ describe('vault supersede and clear', () => {
       rotated_at: null,
       revoked_at: null
     })
-    await store.putVaultKey({
-      id: 'v2',
-      provider: 'anthropic',
-      label: 'new',
-      last4: 'bbbb',
-      cipher: 'c2',
-      iv: 'i2',
-      status: 'active',
-      created_at: 2,
-      created_by: 'tony',
-      rotated_at: null,
-      revoked_at: null
-    })
-    await store.supersedeActiveVaultKeys('anthropic', 'v2', 500)
+    await store.putVaultKeys(
+      [{
+        id: 'v2',
+        provider: 'anthropic',
+        label: 'new',
+        last4: 'bbbb',
+        cipher: 'c2',
+        iv: 'i2',
+        status: 'active',
+        created_at: 2,
+        created_by: 'tony',
+        rotated_at: null,
+        revoked_at: null
+      }],
+      { id: 'audit-1', ts: 2, actor: 'tony', detail: 'anthropic ·bbbb' },
+      { id: 'event-1', ts: 2, kind: 'vault', actor: 'tony', device_id: null, country: null, detail: 'write anthropic' }
+    )
     const v1 = await store.getVaultKey('v1')
     expect(v1?.status).toBe('superseded')
     expect(v1?.cipher).toBe('')
@@ -375,6 +390,13 @@ describe('vault supersede and clear', () => {
     expect(v2?.cipher).toBe('c2')
     await store.clearVaultSecret('v2')
     expect((await store.getVaultKey('v2'))?.cipher).toBe('')
+
+    const audits = await store.listAudit(10, { action: 'vault-write' })
+    expect(audits).toHaveLength(1)
+    expect(audits[0]).toMatchObject({ actor: 'tony', detail: 'anthropic ·bbbb' })
+    const events = await store.listEvents(10)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ id: 'event-1', kind: 'vault', detail: 'write anthropic' })
   })
 })
 
