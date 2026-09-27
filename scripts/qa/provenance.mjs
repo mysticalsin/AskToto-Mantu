@@ -6,7 +6,8 @@
 // provenance.json before using it — evidence binds to bytes by (build_run_id, artifact_sha256).
 // Published = tested: promotion uploads exactly the promotable installers, SHA256SUMS.txt and
 // the unmodified provenance.json — no build, install or npm step ever runs here.
-// Evidence required: promotion needs at least one PASS evidence record bound to this run's bytes.
+// Evidence required: promotion needs a PASS evidence record bound to this run's bytes for every
+// promotable asset it stages — one record naming one asset never covers a different asset or platform.
 //
 // A function reports what it found. Functions named *Problems return string[]; empty means OK.
 // stageBuild, assembleProvenance and prepareRelease throw an Error listing every problem, one per line,
@@ -312,9 +313,10 @@ export async function directoryProblems(provenance, dir, variants) {
 }
 
 /**
- * Checks that evidence text binds at least one PASS record to this candidate's run and its bytes.
- * Trailing newlines are ignored; an interior blank line is a problem. Only ticket, result,
- * build_run_id and artifact_sha256 are read — full record validation belongs to M2-0002's checker.
+ * Checks that evidence text binds a PASS record to this candidate's run and to every promotable
+ * asset's bytes — one record naming one asset never covers a different asset or platform. Trailing
+ * newlines are ignored; an interior blank line is a problem. Only ticket, result, build_run_id and
+ * artifact_sha256 are read — full record validation belongs to M2-0002's checker.
  */
 export function evidenceProblems(evidenceText, provenance) {
   const lines = evidenceLines(evidenceText)
@@ -322,8 +324,12 @@ export function evidenceProblems(evidenceText, provenance) {
     return ['no evidence records: promotion needs at least one passing record bound to these bytes']
   }
 
-  const knownHashes = new Set(provenance.builds.flatMap((build) => build.assets.map((asset) => asset.sha256)))
+  const promotableAssets = provenance.builds
+    .filter((build) => PROMOTABLE_VARIANTS.includes(build.variant))
+    .flatMap((build) => build.assets)
+  const promotableHashes = new Set(promotableAssets.map((asset) => asset.sha256))
   const problems = []
+  const coveredHashes = new Set()
 
   lines.forEach((line, index) => {
     const n = index + 1
@@ -356,10 +362,18 @@ export function evidenceProblems(evidenceText, provenance) {
       )
       return
     }
-    if (!knownHashes.has(record.artifact_sha256)) {
-      problems.push(`line ${n} (${record.ticket}) names a sha256 that is not one of this candidate's assets`)
+    if (!promotableHashes.has(record.artifact_sha256)) {
+      problems.push(`line ${n} (${record.ticket}) names a sha256 that is not one of this candidate's promotable assets`)
+      return
     }
+    coveredHashes.add(record.artifact_sha256)
   })
+
+  for (const asset of promotableAssets) {
+    if (!coveredHashes.has(asset.sha256)) {
+      problems.push(`no PASS record bound to run ${provenance.run.id} covers ${asset.name} (sha256 ${asset.sha256})`)
+    }
+  }
 
   return problems
 }
