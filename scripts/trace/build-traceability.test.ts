@@ -227,23 +227,22 @@ describe('mergeGoverningKitRefs — most-advanced PASS, capped by least-advanced
     expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'NOT_MET' })
   })
 
-  it('the SCHEMA.md M2-9000 worked example: three governing PASS records at increasing statuses merge to the most advanced (MET)', () => {
+  it('three governing PASS records at increasing statuses across levels merge to the most advanced (MET)', () => {
     // DESIGNED PASS {PARTIAL} -> LOCALLY_TESTED PASS {PARTIAL} -> LIVE_VERIFIED PASS {MET}. All
-    // three are governing (one per level, INV-2) and none is a FAIL, so the most-advanced PASS
-    // wins outright — the old least-advanced-of-all-levels rule stuck this at PARTIAL forever.
+    // three are governing and none is a FAIL, so the most-advanced governing PASS wins outright.
     const byLevel = new Map<string, Rec>([
-      ['DESIGNED', { result: 'PASS', kit_refs: { 'EXAMPLE-01': 'PARTIAL' } }],
-      ['LOCALLY_TESTED', { result: 'PASS', kit_refs: { 'EXAMPLE-01': 'PARTIAL' } }],
-      ['LIVE_VERIFIED', { result: 'PASS', kit_refs: { 'EXAMPLE-01': 'MET' } }]
+      ['DESIGNED', { result: 'PASS', kit_refs: { 'FOO-01': 'PARTIAL' } }],
+      ['LOCALLY_TESTED', { result: 'PASS', kit_refs: { 'FOO-01': 'PARTIAL' } }],
+      ['LIVE_VERIFIED', { result: 'PASS', kit_refs: { 'FOO-01': 'MET' } }]
     ])
-    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'EXAMPLE-01': 'MET' })
+    expect(mergeGoverningKitRefs(byLevel)).toEqual({ 'FOO-01': 'MET' })
   })
 
   it('an ENGINEERING_COMPLETE-to-DONE path: a BLOCKED PASS record does not cap a later-recorded MET PASS at another level', () => {
     // LOCALLY_TESTED PASS {BLOCKED} (recorded while an external blocker still applied) followed,
     // after the unblock, by LIVE_VERIFIED PASS {MET}. Both records passed — BLOCKED here is the
-    // kit_ref's own reported status, not a FAIL — so the most-advanced PASS (MET) governs; L9/L10
-    // never require LOCALLY_TESTED to be re-recorded once LIVE_VERIFIED reports MET.
+    // kit_ref's own reported status, not a FAIL — so the most-advanced PASS (MET) governs, and
+    // nothing requires re-recording LOCALLY_TESTED once LIVE_VERIFIED reports MET.
     const byLevel = new Map<string, Rec>([
       ['LOCALLY_TESTED', { result: 'PASS', kit_refs: { 'FOO-01': 'BLOCKED' } }],
       ['LIVE_VERIFIED', { result: 'PASS', kit_refs: { 'FOO-01': 'MET' } }]
@@ -351,66 +350,66 @@ describe('extractDecisionIds — a table row\'s first cell only, never OD-N, PD-
   const md = `
 | # | Decision |
 |---|---|
-| D-3 | How does X behave? |
-| D-28 | May agents run tests? |
+| D-901 | How should the lantern dim? |
+| D-902 | Which color names label the samples? |
 
-## A. Owner decisions
+## A. Workshop choices
 
-| OD-1 | Something already decided |
+| OD-91 | Archive the spare ribbon |
 
-## B. Program decisions
+## B. Catalog choices
 
-| PD-06 | Something Opus decided |
+| PD-91 | Label the mock shelf |
 
-Note: this will need to be raised as D-31 once the pattern repeats.
+Note: this will need to be raised as D-903 once the pattern repeats.
 `
 
   it('extracts decision ids defined as a table row', () => {
     const ids = extractDecisionIds(md)
-    expect(ids.has('D-3')).toBe(true)
-    expect(ids.has('D-28')).toBe(true)
+    expect(ids.has('D-901')).toBe(true)
+    expect(ids.has('D-902')).toBe(true)
   })
 
   it('never matches the D-N suffix embedded inside OD-N or PD-N', () => {
     const ids = extractDecisionIds(md)
-    expect(ids.has('D-1')).toBe(false)
-    expect(ids.has('D-06')).toBe(false)
-    expect(ids.has('D-6')).toBe(false)
+    expect(ids.has('D-91')).toBe(false)
+    expect(ids.has('D-091')).toBe(false)
+    expect(ids.has('D-9')).toBe(false)
   })
 
   it('never resolves a decision id that is only mentioned in prose', () => {
     const ids = extractDecisionIds(md)
-    expect(ids.has('D-31')).toBe(false)
+    expect(ids.has('D-903')).toBe(false)
   })
 })
 
 describe('extractBlockerTicketRefs — ticket-bearing columns (every item) plus every bare M2-NNNN token', () => {
   it('collects every ticket referenced by a Ticket column, across multiple tables', () => {
     const md = `
-## 1. Start now
+## Alpha queue
 
-| B | Owner role | Ticket |
+| B | Steward label | Ticket |
 |---|---|---|
-| B-01 | Program owner | 0010 |
+| B-91 | Lantern keeper | 9101 |
 
-## 2. By role
+## Beta queue
 
-### Program owner
+### Lantern keeper
 
-| B | Ticket | Exact unblock step |
+| B | Ticket | Notes |
 |---|---|---|
-| B-02 | 0012 | Do the thing |
+| B-92 | 9102 | Polish the sample |
 `
     const { refs, malformed } = extractBlockerTicketRefs(md)
-    expect(refs.has('M2-0010')).toBe(true)
-    expect(refs.has('M2-0012')).toBe(true)
+    expect(refs.has('M2-9101')).toBe(true)
+    expect(refs.has('M2-9102')).toBe(true)
     expect(refs.size).toBe(2)
     expect(malformed).toEqual([])
   })
 
   it('parses the real "NNNN: <description>" cell form used in the by-role tables', () => {
     const md = `
-| B | Ticket | Exact unblock step |
+| B | Ticket | Notes |
 |---|---|---|
 | B-03 | 9007: Provision a test host | Set up a clean environment |
 `
@@ -421,7 +420,7 @@ describe('extractBlockerTicketRefs — ticket-bearing columns (every item) plus 
 
   it('parses a described cell whose own description contains commas, without misreading them as more ticket items', () => {
     const md = `
-| B | Ticket | Exact unblock step |
+| B | Ticket | Notes |
 |---|---|---|
 | B-99 | 9007: Order parts: bolts (M3, M4, M5), washers (M4), and a spare | Check the catalogue |
 `
@@ -435,30 +434,30 @@ describe('extractBlockerTicketRefs — ticket-bearing columns (every item) plus 
     const md = `
 | Decision | Class | Affected tickets |
 |---|---|---|
-| D-3 | escalate | 0066, 0097, 0098 |
+| D-904 | escalate | 9201, 9202, 9203 |
 `
     const { refs } = extractBlockerTicketRefs(md)
-    expect(refs.has('M2-0066')).toBe(true)
-    expect(refs.has('M2-0097')).toBe(true)
-    expect(refs.has('M2-0098')).toBe(true)
+    expect(refs.has('M2-9201')).toBe(true)
+    expect(refs.has('M2-9202')).toBe(true)
+    expect(refs.has('M2-9203')).toBe(true)
     expect(refs.size).toBe(3)
   })
 
   it('collects a bare M2-NNNN token anywhere in the document, outside any ticket-bearing column', () => {
     const md = `
-## 4. Prior blockers
+## Sample archive
 
 | # | Issue | Notes |
 |---|---|---|
-| 1 | Contracts design-only | Engineering in M2-0061; decisions via D-4 |
+| 1 | Lantern polish | Move the blue crate near M2-9301; catalogue via D-905 |
 `
     const { refs } = extractBlockerTicketRefs(md)
-    expect(refs.has('M2-0061')).toBe(true)
+    expect(refs.has('M2-9301')).toBe(true)
   })
 
   it('reports a non-empty Ticket cell that does not parse as malformed rather than skipping it', () => {
     const md = `
-| B | Ticket | Exact unblock step |
+| B | Ticket | Notes |
 |---|---|---|
 | B-01 | see above | Do the thing |
 `
@@ -469,7 +468,7 @@ describe('extractBlockerTicketRefs — ticket-bearing columns (every item) plus 
 
   it('never accepts a digit run shorter or longer than four digits as a bare ticket number', () => {
     const md = `
-| B | Ticket | Exact unblock step |
+| B | Ticket | Notes |
 |---|---|---|
 | B-01 | 007 | Do the thing |
 `
@@ -482,7 +481,7 @@ describe('extractBlockerTicketRefs — ticket-bearing columns (every item) plus 
     const md = `
 See M2-00123 for background.
 
-| B | Ticket | Exact unblock step |
+| B | Ticket | Notes |
 |---|---|---|
 | B-01 | 00123 | Do the thing |
 `
