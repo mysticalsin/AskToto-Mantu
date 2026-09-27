@@ -28,8 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
           cache: npm
@@ -57,7 +57,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Seed a real-home honeypot the suite must never touch
         run: bash scripts/hermetic/honeypot.sh seed "$HOME/Library/CloudStorage/OneDrive-Honeypot"
       # Never bare `swift test` (M2-0190) — this wrapper is what provides HermeticHomeTests' sandbox
@@ -122,8 +122,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
       # No npm ci: this test only uses node:net/http/tls/child_process/test — no third-party dependency.
@@ -134,7 +134,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # Every root this asserts on is EXTRACTED from scripts/hermetic/owner-account.sb's own
       # `(subpath (string-append (param "HOME") "..."))` literals below — never a hand-kept list — so a
       # root added to (or renamed in) the profile is exercised here automatically, and this job cannot
@@ -180,7 +180,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # Negative control — proves `check` cannot pass by accident: a fresh, untouched honeypot is the
       # only case in this file expected to succeed; every mutation below (a new file, an in-place rewrite
       # of the sentinel, deleting the honeypot outright) must make it fail, and none of them may be

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,10 +7,26 @@ import { join } from 'node:path'
 // itself hoisted above the imports) can read it lazily, once beforeAll has created the real dir.
 const h = vi.hoisted(() => ({ dir: '' }))
 
+// Hoisted handles onto the electron/child_process mocks below, so tests can assert on calls without
+// re-importing the mocked modules. `openPath` is what RF-AUDIT-R3-B1's fix uses to open every
+// setup/login script: the Windows script opens via shell.openPath with the exact path, and nothing is
+// spawned (see the SECURITY INVARIANTS header in cli.ts). `spawn` is a plain recording stub, so a
+// regression that spawns anything for this path is caught by `expect(mocks.spawn).not.toHaveBeenCalled()`
+// on every OS.
+const mocks = vi.hoisted(() => ({
+  openPath: vi.fn(async () => ''),
+  spawn: vi.fn()
+}))
+
 vi.mock('electron', () => ({
   app: { getPath: () => h.dir },
-  shell: { openPath: vi.fn(async () => '') }
+  shell: { openPath: mocks.openPath }
 }))
+
+vi.mock('node:child_process', async (importActual) => {
+  const actual = await importActual<typeof import('node:child_process')>()
+  return { ...actual, spawn: mocks.spawn }
+})
 
 // The self-contained installer is irrelevant here but is imported by cli.ts at module load.
 vi.mock('./cli-installer', () => ({
@@ -48,6 +64,10 @@ beforeAll(() => {
 afterAll(() => {
   setPlatform(REAL_PLATFORM)
   rmSync(h.dir, { recursive: true, force: true })
+})
+beforeEach(() => {
+  mocks.openPath.mockClear()
+  mocks.spawn.mockClear()
 })
 afterEach(() => {
   setPlatform(REAL_PLATFORM)
@@ -210,6 +230,33 @@ describe('cmdShimSpawn and the Windows login script share one quoted-path rule (
       const bin = `C:\\npm\\cla${ch}ude.cmd`
       expect(() => cmdShimSpawn(bin, [])).not.toThrow()
       expect(loginCliInvokeLines('claude-cli', true, null, bin)).toEqual([`call "${bin}"`])
+    }
+  })
+})
+
+// RF-AUDIT-R3-B1 — the invariant these tests pin (full rationale in the SECURITY INVARIANTS header in
+// cli.ts): for a scriptPath containing cmd.exe metacharacters or a literal `%NAME%`, loginCli opens it
+// via shell.openPath with the exact, unmodified path, and spawns nothing. `spawn` is a recording stub
+// and `openPath` never touches a real shell, so these tests do not exercise cmd.exe's or ShellExecute's
+// own parsing — they only prove which call path loginCli takes.
+describe('loginCli opens the Windows script via shell.openPath, never a spawned cmd.exe (RF-AUDIT-R3-B1)', () => {
+  it.each([
+    ['ampersand + space', 'asktoto-cli-script-evil & co '],
+    ['parens + caret', 'asktoto-cli-script-(evil) ^caret-'],
+    ['percent', 'asktoto-cli-script-100% off-']
+  ])('%s in the temp dir: shell.openPath gets exactly the scriptPath, spawn is never called', async (_label, prefix) => {
+    setPlatform('win32')
+    const savedDir = h.dir
+    const evilDir = mkdtempSync(join(tmpdir(), prefix))
+    h.dir = evilDir
+    try {
+      const { name } = await capture(() => loginCli('claude-cli'))
+      expect(mocks.openPath).toHaveBeenCalledTimes(1)
+      expect(mocks.openPath).toHaveBeenCalledWith(join(evilDir, name))
+      expect(mocks.spawn).not.toHaveBeenCalled()
+    } finally {
+      h.dir = savedDir
+      rmSync(evilDir, { recursive: true, force: true })
     }
   })
 })
