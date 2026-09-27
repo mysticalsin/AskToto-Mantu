@@ -460,6 +460,8 @@ describe('bounded close and successful-save receipt join', () => {
       listeningActive: true,
       lastPlainAskAt: 1,
       audioArmed: true,
+      setListeningActive: vi.fn(),
+      setAudioArmed: vi.fn(),
       setTrayRecording: vi.fn(),
       setRecordingPowerSaveBlock: vi.fn(),
       discardActiveLiveSpeakerSession: api.discardActiveLiveSpeakerSession,

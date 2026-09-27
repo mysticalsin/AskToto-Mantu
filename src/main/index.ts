@@ -2847,6 +2847,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // width — squeezing the recovered bar into a ~130px sliver that resizable:false makes unfixable. Same
     // two lines createWindow's crash guard uses, for the reload path that never reaches it.
     isMinimized = false
+    currentWidth = BAR_WIDTH
     if (onboardingExclusiveLive() && !self.isDestroyed()) {
       const retainedOwnership = applyExclusiveOnboardingStage(self)
       // A transparent renderer can crash after Settings durably re-arms onboarding but before its
