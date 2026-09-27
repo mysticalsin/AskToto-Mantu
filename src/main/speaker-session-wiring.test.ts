@@ -162,7 +162,8 @@ function realSpeakerId(
 ): SpeakerId {
   return createSpeakerId({
     createExtractor: () => ({ compute }),
-    storePath: () => join(dir, 'voiceprints.json')
+    storePath: () => join(dir, 'voiceprints.json'),
+    canSaveVoiceprints: () => true
   })
 }
 
