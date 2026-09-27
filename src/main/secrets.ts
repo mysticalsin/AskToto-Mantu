@@ -108,7 +108,7 @@ export function useFileBackend(): boolean {
  *   Windows account comes back; settings > Recovery (settings:recoverProfile) is the escape hatch
  *   that archives them and starts a fresh local profile without deleting anything.
  */
-function isKeychainAvailable(): boolean {
+export function isKeychainAvailable(): boolean {
   try {
     return safeStorage.isEncryptionAvailable()
   } catch {
@@ -258,6 +258,31 @@ function fileKeyExists(): boolean {
     return existsSync(join(app.getPath('userData'), KEY_FILE))
   } catch {
     return false
+  }
+}
+
+/** Pure-read state of the file backend key. Never creates or rewrites secret-key.bin. */
+export function fileKeyState(): 'absent' | 'locked' | 'available' {
+  let p: string
+  try {
+    p = join(app.getPath('userData'), KEY_FILE)
+  } catch {
+    return 'absent'
+  }
+  if (!existsSync(p)) return 'absent'
+  let buf: Buffer
+  try {
+    buf = readFileSync(p)
+  } catch {
+    return 'locked'
+  }
+  if (buf.length === 0) return 'absent'
+  if (buf.length === 32) return 'available'
+  if (process.env.ASKTOTO_LOCAL_KEYSTORE || !isKeychainAvailable()) return 'locked'
+  try {
+    return Buffer.from(safeStorage.decryptString(buf), 'base64').length === 32 ? 'available' : 'locked'
+  } catch {
+    return 'locked'
   }
 }
 
