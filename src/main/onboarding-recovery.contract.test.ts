@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
+import { redactSecrets } from '@shared/redact'
+import { createReloadBudget } from './lifecycle/reload-budget'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
@@ -44,7 +46,14 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
   visit(indexSource)
   expect(callback, 'Actual overlay render-process-gone handler was not found').toBeDefined()
   if (!callback) return () => undefined
-  return runSource(`globalThis.result = (${callback.getText(indexSource)});`, globals)
+  // The handler's automatic-reload branch calls the real reloadOverlay(...) helper — lift it too, so a
+  // reload exercises the shipped loadURL + redact + audit wiring instead of a hand-copied stand-in.
+  const reloadOverlayDecl = indexSource.statements.find(
+    (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'reloadOverlay'
+  )
+  expect(reloadOverlayDecl, 'Actual source function reloadOverlay was not found').toBeDefined()
+  const prefix = reloadOverlayDecl ? `${reloadOverlayDecl.getText(indexSource)}\n` : ''
+  return runSource(`${prefix}globalThis.result = (${callback.getText(indexSource)});`, globals)
 }
 
 describe('exclusive onboarding renderer recovery', () => {
@@ -82,6 +91,7 @@ describe('exclusive onboarding renderer recovery', () => {
       showForExclusiveOnboarding,
       onboardingExclusiveLive: () => true,
       overlayRendererUrl: () => recoveryUrl,
+      redactSecrets,
       listeningActive: true,
       lastPlainAskAt: 1,
       audioArmed: true,
@@ -105,5 +115,144 @@ describe('exclusive onboarding renderer recovery', () => {
     expect(showForExclusiveOnboarding).toHaveBeenCalledExactlyOnceWith(win)
     expect(loadURL).toHaveBeenCalledExactlyOnceWith(recoveryUrl)
     expect(revokeForLifecycleEvent).toHaveBeenCalledExactlyOnceWith('renderer_replaced')
+  })
+})
+
+describe('render-process-gone reload budget wiring', () => {
+  /** Stubs every scenario below needs; each test supplies `reloadBudget` and overrides only what it tests. */
+  function baseGlobals(overrides: Record<string, unknown>) {
+    const loadURL = vi.fn(() => Promise.resolve())
+    const win = { isDestroyed: () => false, loadURL, webContents: {} }
+    const auditLog = vi.fn()
+    const mainLog = { error: vi.fn(), warn: vi.fn() }
+    const globals: Record<string, unknown> = {
+      mainLog,
+      auditLog,
+      resetDustConversation: vi.fn(),
+      discardActiveLiveSpeakerSession: vi.fn(),
+      invalidateCloudSttOwner: vi.fn(),
+      setTrayRecording: vi.fn(),
+      setRecordingPowerSaveBlock: vi.fn(),
+      onboardingExclusiveLive: () => false,
+      overlayRendererUrl: () => 'file:///renderer/index.html',
+      redactSecrets,
+      listeningActive: true,
+      lastPlainAskAt: 1,
+      audioArmed: true,
+      isMinimized: true,
+      currentWidth: 1,
+      BAR_WIDTH: 600,
+      self: win,
+      selfWebContentsId: 1,
+      commandControl: { revokeForLifecycleEvent: vi.fn() },
+      responsiveness: { markGone: vi.fn() },
+      win,
+      ...overrides
+    }
+    return { globals, win, loadURL, auditLog, mainLog }
+  }
+
+  it('reloads within budget, then halts and opens the recovery surface on the 4th crash inside 60s', () => {
+    let t = 0
+    const showRenderLoopHaltedDialog = vi.fn()
+    const { globals, loadURL, auditLog } = baseGlobals({
+      reloadBudget: createReloadBudget(() => t),
+      requireAuth: () => true,
+      showRenderLoopHaltedDialog
+    })
+    const gone = actualRendererGoneHandler(globals)
+
+    gone({}, { reason: 'crashed', exitCode: 1 })
+    t = 1
+    gone({}, { reason: 'crashed', exitCode: 1 })
+    t = 2
+    gone({}, { reason: 'crashed', exitCode: 1 })
+    expect(loadURL).toHaveBeenCalledTimes(3)
+    expect(showRenderLoopHaltedDialog).not.toHaveBeenCalled()
+
+    t = 3
+    gone({}, { reason: 'crashed', exitCode: 1 })
+
+    // The budget halted — the 4th crash inside the 60s window must not reload.
+    expect(loadURL).toHaveBeenCalledTimes(3)
+    expect(auditLog).toHaveBeenCalledWith('app.render_loop_halted', { reason: 'crashed', exitCode: 1 })
+    expect(showRenderLoopHaltedDialog).toHaveBeenCalledTimes(1)
+    expect(showRenderLoopHaltedDialog.mock.calls[0][0]).toBe('crashed')
+    expect(showRenderLoopHaltedDialog.mock.calls[0][1]).toBe(1)
+  })
+
+  it('a clean exit calls neither loadURL nor the recovery dialog', () => {
+    const showRenderLoopHaltedDialog = vi.fn()
+    const { globals, loadURL } = baseGlobals({
+      reloadBudget: { onRenderProcessGone: () => 'ignore' },
+      showRenderLoopHaltedDialog
+    })
+
+    actualRendererGoneHandler(globals)({}, { reason: 'clean-exit', exitCode: 0 })
+
+    expect(loadURL).not.toHaveBeenCalled()
+    expect(showRenderLoopHaltedDialog).not.toHaveBeenCalled()
+  })
+
+  it('a rejected reload is caught, redacted and audited as a crash — never an unhandled rejection', async () => {
+    const { globals, loadURL, auditLog, mainLog } = baseGlobals({
+      reloadBudget: { onRenderProcessGone: () => 'reload' }
+    })
+    loadURL.mockImplementation(() => Promise.reject(new Error('offline near sk-ant-abcdefghijklmnopqrstuvwxyz1234567890')))
+
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      actualRendererGoneHandler(globals)({}, { reason: 'crashed', exitCode: 1 })
+      // The .catch() is already attached synchronously above; let its microtask run before asserting.
+      await new Promise((resolve) => setImmediate(resolve))
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+
+    expect(unhandled).not.toHaveBeenCalled()
+    expect(mainLog.error).toHaveBeenCalledWith('[renderer-gone] reload failed:', 'offline near [redacted key]')
+    expect(auditLog).toHaveBeenCalledWith('app.crash', {
+      kind: 'render-process-gone-reload-failed',
+      message: 'offline near [redacted key]'
+    })
+  })
+
+  it("gates the halted dialog's 'Open meetings folder' action on requireAuth(), matching IPC.openPath", async () => {
+    const shellOpenPath = vi.fn(() => Promise.resolve(''))
+    const getSettings = vi.fn(() => ({ meetingsFolder: '/meetings' }))
+    const resolveMeetingsFolder = vi.fn(() => '/meetings/resolved')
+
+    // Locked session: no button rather than one whose click would silently do nothing.
+    const lockedDialog = vi.fn()
+    const { globals: lockedGlobals } = baseGlobals({
+      reloadBudget: { onRenderProcessGone: () => 'halt' },
+      requireAuth: () => false,
+      showRenderLoopHaltedDialog: lockedDialog,
+      shell: { openPath: shellOpenPath },
+      getSettings,
+      resolveMeetingsFolder
+    })
+    actualRendererGoneHandler(lockedGlobals)({}, { reason: 'crashed', exitCode: 1 })
+    expect(lockedDialog.mock.calls[0][4].openMeetingsFolder).toBeUndefined()
+
+    // Authorized session: the button's action really does shell.openPath(resolveMeetingsFolder(getSettings())).
+    const unlockedDialog = vi.fn()
+    const { globals: unlockedGlobals } = baseGlobals({
+      reloadBudget: { onRenderProcessGone: () => 'halt' },
+      requireAuth: () => true,
+      showRenderLoopHaltedDialog: unlockedDialog,
+      shell: { openPath: shellOpenPath },
+      getSettings,
+      resolveMeetingsFolder
+    })
+    actualRendererGoneHandler(unlockedGlobals)({}, { reason: 'crashed', exitCode: 1 })
+    const actions = unlockedDialog.mock.calls[0][4]
+    expect(actions.openMeetingsFolder).toBeInstanceOf(Function)
+
+    await actions.openMeetingsFolder()
+    expect(getSettings).toHaveBeenCalled()
+    expect(resolveMeetingsFolder).toHaveBeenCalledWith({ meetingsFolder: '/meetings' })
+    expect(shellOpenPath).toHaveBeenCalledWith('/meetings/resolved')
   })
 })
