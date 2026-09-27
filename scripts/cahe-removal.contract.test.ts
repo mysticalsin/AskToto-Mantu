@@ -6,18 +6,18 @@ const root = join(__dirname, '..')
 
 /**
  * cahe-removal.contract.test.ts — M2-0214. 2026-09-26: the Cahê pilot edition —
- * edition code, its embedded-key build path, its electron-builder config, its GitHub Actions
- * workflow, its packaging gate and its docs — is removed entirely. This file's job is to pin that no
- * build path can ever embed an edition key again, by proving no trace of the edition itself remains.
+ * edition code, its embedded-key build path, its electron-builder config, its GitHub Actions workflow,
+ * its packaging gate and its docs — is removed entirely. This file's job is to pin that no build path
+ * can ever embed an edition key again, by proving no trace of the edition itself remains.
  *
  * A single case-insensitive git-grep over the whole tracked tree covers this. The matches are file
  * contents, not path names: every deleted Cahê file matched the same pattern in its contents 3 to 18
  * times (electron-builder.cahe.win.yml matched 6 times via strings like build/cahe-kimi.local.json and
  * Metis-Windows-Cahe-Setup, even though its own filename contains cahe. rather than cahe-/cahe_). The
- * removed CAHE_KIMI_JSON secret and METIS_CAHE_EMBED_KEY flag both contain CAHE_. That is why restoring
- * any deleted file, or reintroducing either removed identifier anywhere in the tree, fails this scan
- * without needing separate deleted-path existsSync checks or separate literal searches for the two
- * identifiers to catch that class of regression.
+ * removed Actions secret and build-time embed flag both contain CAHE_. That is why restoring any
+ * deleted file, or reintroducing either removed identifier anywhere in the tree, fails this scan without
+ * needing separate deleted-path existsSync checks or separate literal searches for the two identifiers
+ * to catch that class of regression.
  *
  * Historical audit records are deliberately exempt from the tracked-tree scan below, the same carve-out
  * the ticket's own acceptance criterion states ("outside CHANGELOG/removal notes"): docs/qa/BUG-LEDGER.md
