@@ -94,7 +94,7 @@ import {
   extractionSlug,
   type SourceScan
 } from './inputs'
-import type { WorkTrigger } from '../infra/scheduler/policy'
+import { admitSource, reviveExhausted, type WorkTrigger } from '../infra/scheduler/policy'
 import { reportDeferred } from '../infra/scheduler/maintenance'
 
 /** Default ingest waterfall, or the Update Intelligence button's local-first then API-once route. */
@@ -2576,11 +2576,12 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
   let deferredByProvider = false
   let notOnDevice = 0
   const now = Date.now()
-  // MAX_INGEST_ATTEMPTS: keys whose exhausted record is being requeued this call — only ever populated
-  // when respectRetryBackoff is FALSE (i.e. every caller other than the automatic reconcile tick: the
-  // Index/Retry button, the dashboard-open check, boot resume, a rebuild). Cleared durably below so a
-  // later automatic tick doesn't immediately re-skip a source this call just gave a fresh attempts budget.
+  // MAX_INGEST_ATTEMPTS: keys whose exhausted record is being revived by an explicit user retry.
+  // Cleared durably below so a later automatic tick doesn't immediately re-skip a source this call just
+  // gave a fresh attempts budget.
   const toUnexhaust: string[] = []
+  const held = { exhausted: 0, backedOff: 0, unreadable: 0 }
+  const trigger: WorkTrigger = options.trigger ?? (options.force ? 'user' : 'automatic')
   if (extractions === null || scan.some((folder) => folder.status === 'failed')) throw new Error('a meetings folder could not be listed')
   for (const source of scan.flatMap((folder) => folder.sources)) {
     if (already.has(source.key) || inFlight.has(source.key)) continue
@@ -2590,20 +2591,14 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
     }
     observeSource(source.key)
     const record = idx.ingested[source.key]
-    if (
-      options.respectRetryBackoff &&
-      record &&
-      !record.ok &&
-      source.version &&
-      record.sourceVersion === source.version &&
-      (record.retryAfter ?? 0) > now
-    ) {
+    const admission = admitSource(record?.ok ? undefined : record, { version: source.version, changedAtMs: source.changedAtMs }, trigger, now)
+    if (admission.action === 'hold') {
+      if (admission.reason === 'exhausted') held.exhausted += 1
+      else if (admission.reason === 'backed-off') held.backedOff += 1
+      else held.unreadable += 1
       continue
     }
-    // A record that hit MAX_INGEST_ATTEMPTS stops the automatic reconcile tick from ever requeuing it
-    // again. Every other caller gives it back a fresh attempts budget.
-    if (record?.exhausted) {
-      if (options.respectRetryBackoff) continue
+    if (admission.action === 'revive') {
       toUnexhaust.push(source.key)
     }
     const strategy = extractedSlugs.has(extractionSlug(source.key)) ? 'reconcile' as const : undefined
@@ -2625,6 +2620,14 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
     }
   }
   if (notOnDevice > 0) mainLog.info(`[brain] ${notOnDevice} meetings are not on this device; Intelligence skips them until they are`)
+  auditLog('scheduler.job', {
+    kind: 'backfill',
+    trigger,
+    outcome: 'scanned',
+    heldExhausted: held.exhausted,
+    heldBackedOff: held.backedOff,
+    heldUnreadable: held.unreadable
+  })
   if (deferredByProvider) {
     mainLog.warn('[brain] backfill has meetings awaiting a configured AI provider; locally saved extractions will still be repaired')
   }
@@ -2633,10 +2636,7 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
   if (toUnexhaust.length > 0) {
     updateIndexDetached(s, (i) => {
       for (const k of toUnexhaust) {
-        if (i.ingested[k]) {
-          i.ingested[k].exhausted = false
-          i.ingested[k].attempts = 0
-        }
+        if (i.ingested[k]) reviveExhausted(i.ingested[k])
       }
       i.revision += 1
     })

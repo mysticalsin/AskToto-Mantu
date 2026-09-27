@@ -21,6 +21,7 @@ export interface MeetingSource {
   source: 'meetings' | 'team'
   label?: string
   version?: string
+  changedAtMs?: number
   local: boolean
 }
 
@@ -58,7 +59,8 @@ async function scanFolder(root: string, source: 'meetings' | 'team', label?: str
     if (!fileClass || fileClass.status === 'missing') continue
     const key = source === 'meetings' ? name : `team/${label}/${name}`
     const version = 'version' in fileClass ? formatSourceVersion(fileClass.version) : undefined
-    sources.push({ key, file: join(root, name), source, label, version, local: fileClass.status === 'ok' })
+    const changedAtMs = 'version' in fileClass ? Math.round(fileClass.version.ctimeMs) : undefined
+    sources.push({ key, file: join(root, name), source, label, version, changedAtMs, local: fileClass.status === 'ok' })
   }
   return { root, source, label, status: 'ok', sources }
 }

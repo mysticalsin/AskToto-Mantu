@@ -35,6 +35,7 @@ import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
+import { runAsMaintenance } from './infra/scheduler/maintenance'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
   IPC,
@@ -252,7 +253,11 @@ import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 // until an identified and admitted live/import session needs it (never on the startup path).
 let speakerIdInstance: SpeakerId | null = null
 function getSpeakerId(): SpeakerId {
-  if (!speakerIdInstance) speakerIdInstance = createSpeakerId()
+  if (!speakerIdInstance) {
+    speakerIdInstance = createSpeakerId({
+      canSaveVoiceprints: () => !!getSettings().speakerId.saveVoiceprints
+    })
+  }
   return speakerIdInstance
 }
 
@@ -8905,7 +8910,7 @@ if (!app.requestSingleInstanceLock()) {
       .then((ready) => {
         if (!ready) return
         refreshScreenPreprocess()
-        warmLocalIfReady()
+        void runAsMaintenance(warmLocalIfReady)
       })
       .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
     setTimeout(warmLocalIfReady, 4000).unref?.()

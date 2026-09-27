@@ -9,7 +9,7 @@ import type { Settings } from '@shared/ipc'
 vi.mock('electron')
 
 import { brainDir } from './store'
-import { BrainIndexUnavailableError, classifyIndexBytes, indexUnavailable, readIndex, writeIndex } from './ledger'
+import { BrainIndexUnavailableError, classifyIndexBytes, indexUnavailable, loadIndex, readIndex, writeIndex } from './ledger'
 
 function futureSchemaIndexBytes(): Buffer {
   const index = {
@@ -53,6 +53,7 @@ describe('future schema index safety', () => {
   it('writeIndex refuses to overwrite a future-schema index', async () => {
     const bytes = futureSchemaIndexBytes()
     writeFileSync(primary, bytes)
+    await loadIndex(settings)
 
     expect(readIndex(settings).ingested).toEqual({})
     expect(indexUnavailable(settings)).toBe('unsupported')
