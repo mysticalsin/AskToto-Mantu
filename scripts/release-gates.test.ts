@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 const root = join(__dirname, '..')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
   description: string
+  version: string
   scripts: Record<string, string>
   devDependencies: Record<string, string>
   engines: { node: string }
@@ -144,6 +145,34 @@ describe('deterministic packaging toolchain', () => {
 })
 
 describe('direct release signing gates', () => {
+  it('the release pre-flight requires the platform it checks', () => {
+    for (const args of [[], ['linux']]) {
+      const result = spawnSync(process.execPath, [join(__dirname, 'check-version-parity.mjs'), ...args], {
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH || '',
+          GITHUB_REF_NAME: `v${pkg.version}`
+        }
+      })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('<mac|win>')
+    }
+  })
+
+  it('the release pre-flight checks the tag for each platform and skips the feed without a token', () => {
+    for (const platform of ['mac', 'win']) {
+      const result = spawnSync(process.execPath, [join(__dirname, 'check-version-parity.mjs'), platform], {
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH || '',
+          GITHUB_REF_NAME: `v${pkg.version}`
+        }
+      })
+      expect(result.status).toBe(0)
+      expect(result.stdout).toContain('Skipping the release-feed check')
+    }
+  })
+
   it('tests the tagged source on Windows as well as Linux before packaging', () => {
     const workflow = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8')
     const sourceGate = workflow.slice(workflow.indexOf('  release-quality:'), workflow.indexOf('  release-macos:'))
