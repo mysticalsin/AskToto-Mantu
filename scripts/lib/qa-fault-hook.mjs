@@ -3,7 +3,7 @@
  * the package's declared identity, in both directions. A shipping package must never carry the hook, and the
  * QA-identity package must always carry it — otherwise scripts/qa/fault-fatal-relaunch.mjs cannot drive it.
  */
-import { extractFile, listPackage } from '@electron/asar'
+import { extractFile, listPackage, uncache } from '@electron/asar'
 
 /** The string only the QA fault hook (src/main/qa-identity.ts) puts into a main-process bundle. */
 export const QA_FAULT_MARKER = 'METIS_QA_FAULT_HOOK'
@@ -15,7 +15,8 @@ export const QA_IDENTITY_PACKAGE_NAME = 'asktoto-qa'
  * a shipping package must never contain it, and a QA package without it cannot run the packaged exit-path proof.
  */
 export function assertQaFaultHookMatchesIdentity(archive) {
-  const qaIdentity = JSON.parse(extractFile(archive, 'package.json').toString('utf8')).name === QA_IDENTITY_PACKAGE_NAME
+  // @electron/asar caches headers by archive path. This gate may inspect the same path after a repack.
+  uncache(archive)
   // listPackage returns entries with the packing host's separator (backslash on Windows) and a leading
   // separator. Normalize to a leading-slash POSIX form to match against, but extractFile takes the RAW key
   // with only its leading separator stripped — the same two-step normalization
@@ -24,6 +25,9 @@ export function assertQaFaultHookMatchesIdentity(archive) {
   const rawEntries = listPackage(archive)
   const toPosix = (entry) => `/${entry.split('\\').join('/').replace(/^\/+/, '')}`
   const rawByPosix = new Map(rawEntries.map((entry) => [toPosix(entry), entry]))
+  const packageJson = rawByPosix.get('/package.json')
+  if (!packageJson) throw new Error('app.asar has no package.json — the packaged app identity is missing')
+  const qaIdentity = JSON.parse(extractFile(archive, packageJson.replace(/^[\\/]+/, '')).toString('utf8')).name === QA_IDENTITY_PACKAGE_NAME
   const mainFiles = [...rawByPosix.keys()].filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
   const carriesHook = mainFiles.some((entry) =>
     extractFile(archive, rawByPosix.get(entry).replace(/^[\\/]+/, '')).includes(QA_FAULT_MARKER)
