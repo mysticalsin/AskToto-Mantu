@@ -1311,13 +1311,27 @@ function observeSource(key: string): void {
   if (backfillObserver && !backfillObserver.sources.has(key)) backfillObserver.sources.set(key, false)
 }
 
-function observeSourceRefreshWork(idx: BrainIndex): void {
-  sourceRefreshWorkKeys = new Set(
+function claimSourceRefreshWork(idx: BrainIndex): Set<string> {
+  return new Set(
     Object.entries(idx.ingested)
       .filter(([, record]) => record.ok)
       .map(([key]) => key)
   )
-  for (const key of sourceRefreshWorkKeys) observeSource(key)
+}
+
+function observeClaimedSourceRefreshWork(keys: Set<string>): void {
+  for (const key of keys) observeSource(key)
+  keys.clear()
+}
+
+function observeSourceRefreshWork(idx: BrainIndex): void {
+  const keys = claimSourceRefreshWork(idx)
+  if (backfillObserver) observeClaimedSourceRefreshWork(keys)
+  else sourceRefreshWorkKeys = keys
+}
+
+function clearSourceRefreshWork(): void {
+  sourceRefreshWorkKeys.clear()
 }
 
 class PublicationFailure extends Error {
@@ -2253,6 +2267,7 @@ function maybeStartSourceRefresh(): void {
     sourceRefresh: true,
     onFinished: () => {
       sourceRefreshRunning = false
+      clearSourceRefreshWork()
       maybeStartSourceRefresh()
       maybeCompleteBackfillRun()
     }
@@ -2260,12 +2275,14 @@ function maybeStartSourceRefresh(): void {
     .then((result) => {
       if (!result.error) return
       sourceRefreshRunning = false
+      clearSourceRefreshWork()
       completionError('incomplete')
       mainLog.warn(`[brain] source refresh is waiting: ${result.error}`)
       maybeCompleteBackfillRun()
     })
     .catch((error) => {
       sourceRefreshRunning = false
+      clearSourceRefreshWork()
       completionError(error instanceof BackfillScanFailure ? 'scan-failed' : 'write-failed')
       mainLog.error('[brain] source refresh could not start:', error)
       maybeCompleteBackfillRun()
@@ -2356,7 +2373,7 @@ export async function requestBackfillRun(options: BackfillStartOptions = {}, bef
   try {
     run.result = await requestBackfill(options)
     const idx = (await loadIndex(observer.s)).kind === 'ready' ? readIndex(observer.s) : undefined
-    if (sourceRefreshRunning) for (const key of sourceRefreshWorkKeys) observeSource(key)
+    if (sourceRefreshRunning) observeClaimedSourceRefreshWork(sourceRefreshWorkKeys)
     if (idx?.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     if (run.result.deferred) completionError('no-provider')
     // A capped request can return "preparing" without dispatching anything. That is not completed work.
