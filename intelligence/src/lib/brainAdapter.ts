@@ -482,26 +482,47 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   // (single-threaded deals, unmapped accounts). Stamped once at adapt time.
   const cold = buildGoingCold(b, Date.now())
 
-  // Meetings are dropped from the DISPLAY graph (61 meeting nodes would drown the entity structure);
-  // their connectivity survives because people/accounts/deals were already linked during ingest.
-  const keepTypes = new Set(['account', 'person', 'deal', 'sector'])
+  // The display graph is the whole brain graph: GraphView narrows it by account/sector/community/band,
+  // never by node type. A meeting node carries its own ref/date and its owning account's canonical
+  // name/sector so those filters apply to it.
+  // A meeting node resolves itself via `meetingBySlug`, keyed by the same slug ingest.ts minted its
+  // id from (`meeting:${slugify(file)}`, slug() mirrors slugify() byte-for-byte) — giving it its own
+  // ref/date, never another entity's latest meeting. It resolves its owning account via
+  // `accountByMeetingFile`, the SAME join ingest.ts performs when it resolves `x.account.name`
+  // through resolveEntitySlug and pushes the ref into that account's own `meetings` list — giving it
+  // that account's canonical name/sector even after a manual merge/rename correction, never a
+  // name-equality/slug guess against the meeting's own (independently extracted, possibly drifted)
+  // account field.
+  const meetingBySlug = new Map(indexedMeetings.map((m) => [slug(m.source_file), m]))
+  const accountByMeetingFile = new Map(b.accounts.flatMap((a) => a.meetings.map((m) => [m.file, a] as const)))
   const nodes: GraphNode[] = b.graph.nodes
-    .filter((n) => keepTypes.has(n.type))
     .map((n) => {
       const bare = n.id.replace(/^[a-z_]+:/, '')
       const t = cold.touch.get(n.id)
+      const ownMeeting = n.type === 'meeting' ? meetingBySlug.get(bare) : undefined
+      const owner = ownMeeting ? accountByMeetingFile.get(ownMeeting.source_file) : undefined
       const entityMeetings =
         n.type === 'account' ? accountBySlug.get(bare)?.meetings
         : n.type === 'person' ? personBySlug.get(bare)?.meetings
         : n.type === 'deal' ? dealBySlug.get(bare)?.meetings
         : undefined
-      const ref = latestMeetingRef(entityMeetings)
+      const ref = ownMeeting ? { file: ownMeeting.source_file, date: ownMeeting.date } : latestMeetingRef(entityMeetings)
       return {
         id: n.id,
         label: n.label,
         type: n.type as GraphNode['type'],
-        account: n.type === 'person' ? accountByPerson.get(bare) : n.type === 'account' ? n.label : undefined,
-        sector: n.type === 'account' ? sectorByAccount.get(n.label) : n.type === 'sector' ? n.label : undefined,
+        // A meeting answers to its own account/sector, so hiding an account or sector also hides the
+        // notes that belong to it, instead of leaving them floating, unfiltered, on the canvas.
+        account:
+          n.type === 'person' ? accountByPerson.get(bare)
+          : n.type === 'account' ? n.label
+          : n.type === 'meeting' ? owner?.name
+          : undefined,
+        sector:
+          n.type === 'account' ? sectorByAccount.get(n.label)
+          : n.type === 'sector' ? n.label
+          : n.type === 'meeting' ? owner?.sector
+          : undefined,
         win_likelihood_band: n.type === 'deal' ? bandByDeal.get(bare) ?? undefined : undefined,
         bid_id: n.type === 'deal' ? bare : undefined,
         degree: 0,
