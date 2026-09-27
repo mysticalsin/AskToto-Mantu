@@ -59,6 +59,7 @@ import {
 } from '@shared/overlay-chrome'
 import { parseOverlayPlacement } from '@shared/overlay-placement'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
+import type { RendererView } from '@shared/renderer-view'
 import {
   decideCircleRestMinimize,
   parseOverlayOrbStyle,
@@ -130,7 +131,7 @@ function recapWriteKey(ownerId: string, runId: string): string {
   return `${ownerId}\u0000${runId}`
 }
 
-type View = 'answer' | 'copilot' | 'settings' | 'review' | 'history' | 'agenda' | 'brain'
+type View = RendererView
 
 /** Main uses this one-shot launch hint only when Act 6 chose "set up AI" after the save had replied. */
 function initialViewFromLaunch(): View {
