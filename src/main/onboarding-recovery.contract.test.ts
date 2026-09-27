@@ -155,6 +155,7 @@ describe('render-process-gone reload budget wiring', () => {
     const globals: Record<string, unknown> = {
       mainLog,
       auditLog,
+      crashDetail,
       resetDustConversation: vi.fn(),
       discardActiveLiveSpeakerSession: vi.fn(),
       invalidateCloudSttOwner: vi.fn(),

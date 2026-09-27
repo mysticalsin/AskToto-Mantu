@@ -75,7 +75,6 @@
     "src/main/brain/match-key-cache.ts": 4,
     "src/main/brain/publish.ts": 20,
     "src/main/brain/store.ts": 34,
-    "src/main/cahe-embedded-key.ts": 6,
     "src/main/cli-installer.ts": 17,
     "src/main/cli.ts": 4,
     "src/main/dust-cli-chat.ts": 3,
