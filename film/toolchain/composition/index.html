@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=3840, height=2160" />
+    <title>Film toolchain spike</title>
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"
+      integrity="sha256-wXS/zlOnKUGNV6ithiXnJHx5OiL++OKFHjz6PenNgoA="
+      crossorigin="anonymous"
+    ></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #0a0a0a;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: sans-serif;
+      }
+      #scene {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 72px;
+      }
+      #glow {
+        position: absolute;
+        width: 1600px;
+        height: 1600px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(99, 102, 241, 0.4), rgba(99, 102, 241, 0) 70%);
+      }
+      /* Positioned, so they paint above the absolutely positioned #glow. */
+      #title,
+      #caption,
+      #progress {
+        position: relative;
+      }
+      #title {
+        margin: 0;
+        color: #f4f4f5;
+        font-size: 200px;
+        font-weight: 600;
+      }
+      #caption {
+        margin: 0;
+        color: #a1a1aa;
+        font-size: 72px;
+      }
+      #progress {
+        width: 1920px;
+        height: 12px;
+        border-radius: 6px;
+        background: #27272a;
+        overflow: hidden;
+      }
+      #progress-fill {
+        width: 100%;
+        height: 100%;
+        background: #f4f4f5;
+        transform-origin: left center;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="spike"
+      data-start="0"
+      data-duration="5"
+      data-fps="30"
+      data-width="3840"
+      data-height="2160"
+    >
+      <section id="scene" class="clip" data-start="0" data-duration="5">
+        <div id="glow"></div>
+        <h1 id="title">Film toolchain spike</h1>
+        <p id="caption">Synthetic scene with no product, meeting or user content</p>
+        <div id="progress"><div id="progress-fill"></div></div>
+      </section>
+    </div>
+    <script>
+      const tl = gsap.timeline({ paused: true })
+      tl.fromTo('#glow', { xPercent: -30, opacity: 0.3 }, { xPercent: 30, opacity: 1, duration: 5, ease: 'none' }, 0)
+      tl.fromTo('#title', { y: 80, opacity: 0 }, { y: 0, opacity: 1, duration: 0.8, ease: 'power3.out' }, 0.2)
+      tl.fromTo('#caption', { opacity: 0 }, { opacity: 1, duration: 0.6 }, 0.6)
+      // Ends one frame early: a clip's window is [start, start + duration), so t = 5 is never rendered.
+      tl.fromTo('#progress-fill', { scaleX: 0 }, { scaleX: 1, duration: 5 - 1 / 30, ease: 'none' }, 0)
+      window.__timelines['spike'] = tl
+    </script>
+  </body>
+</html>
