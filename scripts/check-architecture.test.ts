@@ -513,6 +513,11 @@ describe('architecture source detectors', () => {
       expect(countSourceFile('src/main/spawn-inline-type.ts', "import { type ChildProcess } from 'node:child_process'\n")).toEqual({})
       expect(countSourceFile('src/main/infra/process/spawn.ts', text)).toEqual({})
     })
+
+    it('counts a utilityProcess.fork reference used as a value, not only as a call', () => {
+      const text = 'function run({ fork = utilityProcess.fork as unknown as F } = {}) {}'
+      expect(countSourceFile('src/main/fork-ref.ts', text)).toEqual({ 'FF-10': 1 })
+    })
   })
 
   describe('FF-11 BrowserWindow construction outside src/main/windows', () => {
@@ -688,6 +693,20 @@ describe('architecture ratchet CLI', () => {
       const result = runArchitectureCli(fixture.root)
       expect(result.code, result.out).toBe(1)
       expect(result.out).toContain('not canonical')
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it('a baseline file that is valid JSON but not an object: exits 1 with only the real error, no unrelated skeleton', () => {
+    const fixture = createArchitectureFixture()
+    try {
+      writeFixtureFile(fixture.root, 'scripts/architecture-baseline.json', 'null\n')
+
+      const result = runArchitectureCli(fixture.root)
+      expect(result.code, result.out).toBe(1)
+      expect(result.out).toContain('not canonical')
+      expect(result.out).not.toContain('"FF-01": {}')
     } finally {
       rmSync(fixture.root, { recursive: true, force: true })
     }
