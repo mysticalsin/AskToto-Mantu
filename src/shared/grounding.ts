@@ -597,6 +597,14 @@ function foldForNumerals(span: string): string {
 export function extractNumerals(span: string): NumeralHit[] {
   const s = foldForNumerals(span)
   const hits: NumeralHit[] = []
+  // Parallel to `hits`: each hit's real start offset in `span`, recorded at push time. The two
+  // extraction passes below append in their own left-to-right order but interleave with each other
+  // (word-based hits are appended only after every digit-based one, regardless of which actually
+  // comes first in the text), so the result needs a final sort into transcript reading order. That
+  // sort must use THIS offset, never `span.indexOf(hit.raw)`: raw text routinely recurs (a bare "5"
+  // is also the leading digits of "500k"), and indexOf always resolves to the substring's FIRST
+  // occurrence anywhere in the whole span, not the occurrence a given hit actually came from.
+  const starts: number[] = []
   const consumedTo: boolean[] = new Array(s.length + 1).fill(false)
 
   const mark = (from: number, to: number): void => {
@@ -620,6 +628,7 @@ export function extractNumerals(span: string): NumeralHit[] {
     if (!isFree(start, end)) continue
     mark(start, end)
     hits.push({ value: base * post.magnitude, unit: pre.unit ?? post.unit, raw: span.slice(start, end) })
+    starts.push(start)
   }
 
   // Pass 2: word-based numerals (English then French), skipping ranges already consumed by pass 1.
@@ -654,10 +663,14 @@ export function extractNumerals(span: string): NumeralHit[] {
     }
     mark(fullStart, fullEnd)
     hits.push({ value: parsed.value * post.magnitude, unit: pre.unit ?? post.unit, raw: span.slice(fullStart, fullEnd) })
+    starts.push(fullStart)
     i = parsed.next
   }
 
-  return hits.sort((a, b) => span.indexOf(a.raw) - span.indexOf(b.raw))
+  return hits
+    .map((hit, idx) => ({ hit, start: starts[idx] }))
+    .sort((a, b) => a.start - b.start)
+    .map((x) => x.hit)
 }
 
 // ── numeralDerivable / verifyNumericFact ────────────────────────────────────────────────────────
