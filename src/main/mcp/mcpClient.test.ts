@@ -600,7 +600,9 @@ describe("mcpClient — refuses every redirect, including the SDK's own event-st
 // (system route: every host; env route: every host outside NO_PROXY) undici's ProxyAgent resolves and dials
 // the target itself, so neither the metadata refusal nor the DNS-rebinding pin ran at all. The fix pins the
 // proxy's own tunnel to the address `lookup` resolved instead of letting the proxy resolve the host name.
-const PROXY_ENV_KEYS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']
+const PROXY_ROUTE_ENV_KEYS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'] as const
+type ProxyRouteEnvKey = (typeof PROXY_ROUTE_ENV_KEYS)[number]
+const PROXY_ENV_KEYS = [...PROXY_ROUTE_ENV_KEYS, 'NO_PROXY', 'no_proxy']
 
 describe('mcpClient — the metadata refusal and the DNS pin hold on every proxy route (M2-0222)', () => {
   let mock: Awaited<ReturnType<typeof startMockMcp>>
@@ -610,9 +612,11 @@ describe('mcpClient — the metadata refusal and the DNS pin hold on every proxy
 
   /** Adopt one of direct/env/env+NO_PROXY/system, exactly as installProxyAwareFetch would find it at boot,
    *  then (re)install it as the real route so routeDispatcher()/routeDispatcher(lookup) both follow it. */
-  const useRoute = async (opts: { system?: string; env?: string; noProxy?: string } = {}): Promise<void> => {
+  const useRoute = async (
+    opts: { system?: string; env?: string; envKey?: ProxyRouteEnvKey; noProxy?: string } = {}
+  ): Promise<void> => {
     for (const k of PROXY_ENV_KEYS) delete process.env[k]
-    if (opts.env) process.env.HTTP_PROXY = opts.env
+    if (opts.env) process.env[opts.envKey ?? 'HTTP_PROXY'] = opts.env
     if (opts.noProxy) process.env.NO_PROXY = opts.noProxy
     resolveProxy.mockResolvedValue(opts.system ? `PROXY ${new URL(opts.system).host}` : 'DIRECT')
     await installProxyAwareFetch()
@@ -731,4 +735,20 @@ describe('mcpClient — the metadata refusal and the DNS pin hold on every proxy
     expect(r.error).toMatch(/SOCKS/)
     expect(mock.requests()).toBe(before)
   })
+
+  it.each(PROXY_ROUTE_ENV_KEYS)(
+    'env %s SOCKS proxy is refused with an actionable message and sends nothing',
+    async (envKey) => {
+      await useRoute({ env: 'socks5://127.0.0.1:1', envKey })
+      const host = `socks-${envKey.toLowerCase().replace(/_/g, '-')}.mcp.test`
+      mockDnsHost(host, [['127.0.0.1']])
+      const before = mock.requests()
+
+      const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
+
+      expect(r.ok).toBe(false)
+      expect(r.error).toMatch(/SOCKS/)
+      expect(mock.requests()).toBe(before)
+    }
+  )
 })

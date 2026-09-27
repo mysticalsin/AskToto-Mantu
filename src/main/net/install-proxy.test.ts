@@ -200,4 +200,16 @@ describe('routeDispatcher — a second dispatcher that routes like the global on
     expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeEnvHttpProxyAgent)
     expect(() => routeDispatcher(lookup)).toThrow(/SOCKS/)
   })
+
+  it.each(PROXY_ENV_KEYS)(
+    '%s SOCKS proxy — boot still installs the global dispatcher, but a pinned session is refused',
+    async (proxyEnvKey) => {
+      process.env[proxyEnvKey] = 'socks5://127.0.0.1:1080'
+      await installProxyAwareFetch()
+
+      expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
+      expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeEnvHttpProxyAgent)
+      expect(() => routeDispatcher(lookup)).toThrow(/SOCKS/)
+    }
+  )
 })
