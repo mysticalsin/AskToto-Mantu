@@ -1,0 +1,45 @@
+name: verification-baseline
+
+# M2-0005 — record a reproducible CI verification baseline without turning the probe into a gate.
+# Kept in a separate workflow file rather than adding more load to build.yml's dense `quality` job; the
+# job is deliberately non-blocking and must never fail a PR by itself.
+on:
+  push:
+    branches:
+      - '**'
+    tags-ignore:
+      - 'v*'
+      - 'ffmpeg-sidecar-*'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verification-baseline:
+    name: Verification baseline (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      # bar-toolbar.layout.test.ts launches a real Playwright Chromium; npm ci does not install it.
+      - name: Install Playwright Chromium
+        run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
+      - run: node scripts/ci/verification-baseline.mjs verification-baseline-report
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verification-baseline-${{ matrix.os }}
+          path: verification-baseline-report/
+          if-no-files-found: warn
