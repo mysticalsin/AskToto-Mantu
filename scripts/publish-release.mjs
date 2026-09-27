@@ -98,15 +98,15 @@ export function planPublication(platform, version, releases) {
     )
   }
 
+  if (foreignNames.length > 0) {
+    throw new Error(
+      `Refusing to publish ${config.label} ${version}: the public release contains unexpected assets: ${foreignNames.join(', ')}.`
+    )
+  }
   if (ownNames.length > 0) {
     if (ownNames.length === expectedOwn.size) return { action: 'complete', release }
     throw new Error(
       `Refusing to publish ${config.label} ${version}: the public release already has ${ownNames.join(', ')} but not ${config.metadata}; if a previous upload was interrupted, delete those assets before retrying.`
-    )
-  }
-  if (foreignNames.length > 0) {
-    throw new Error(
-      `Refusing to publish ${config.label} ${version}: the public release contains unexpected assets: ${foreignNames.join(', ')}.`
     )
   }
   if (otherNames.length !== expectedOther.size) {
