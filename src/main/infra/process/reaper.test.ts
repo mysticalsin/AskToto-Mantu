@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { reapBootSidecars, type ProcessIdentity, type ReaperAdapters } from './reaper'
+import { reapBootSidecars, testOnly, type ProcessIdentity, type ReaperAdapters } from './reaper'
 import { argsFingerprint, type SidecarRecord } from './registry'
 
 const USER_DATA = '/profile'
@@ -164,6 +164,33 @@ describe('boot sidecar reaper', () => {
       event: 'sidecar.reaped',
       detail: { name: 'llama-server', pid: 74, reason: 'legacy-orphan' }
     })
+  })
+
+  it('REAP-5: compares legacy orphan start times as time values, not ISO strings', async () => {
+    const ad = adapters({
+      list: [
+        proc({ pid: 80, osStartTime: '2026-09-27T10:00:00.100Z' }),
+        proc({ pid: 81, osStartTime: '2026-09-27T09:59:59.999Z' })
+      ]
+    })
+
+    await reapBootSidecars({
+      userData: USER_DATA,
+      currentMain: { ...MAIN, osStartTime: '2026-09-27T10:00:00Z' },
+      llamaServerRealpath: LLAMA,
+      adapters: ad
+    })
+
+    expect(ad.killed).toEqual([81])
+    expect(ad.audits).toContainEqual({
+      event: 'sidecar.reaped',
+      detail: { name: 'llama-server', pid: 81, reason: 'legacy-orphan' }
+    })
+  })
+
+  it('requires a provable absolute userData model path for the legacy orphan rule', () => {
+    expect(testOnly.legacyArgsPointAtUserModel(['-m', 'local-llm/models/qwen/model.gguf'], '/profile/local-llm/')).toBe(false)
+    expect(testOnly.legacyArgsPointAtUserModel(['-m', '/profile/local-llm/models/qwen/model.gguf'], '/profile/local-llm/')).toBe(true)
   })
 
   it('kills a registered sidecar only when PID, OS start time, and executable realpath all match', async () => {

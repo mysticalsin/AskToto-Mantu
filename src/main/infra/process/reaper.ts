@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { readdirSync, readFileSync, realpathSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { app } from 'electron'
 import { auditLog, mainLog } from '../../logger'
@@ -136,7 +136,7 @@ async function reapLegacyLlamaOrphans(options: ReaperOptions, adapters: ReaperAd
   for (const proc of procs) {
     if (proc.exeRealpath !== options.llamaServerRealpath) continue
     if (proc.ppid !== 1) continue
-    if (proc.osStartTime >= options.currentMain.osStartTime) continue
+    if (!startedBefore(proc.osStartTime, options.currentMain.osStartTime)) continue
     if (!legacyArgsPointAtUserModel(proc.args, modelRoot)) continue
     try {
       adapters.kill(proc.pid)
@@ -150,10 +150,17 @@ async function reapLegacyLlamaOrphans(options: ReaperOptions, adapters: ReaperAd
 function legacyArgsPointAtUserModel(args: readonly string[], modelRoot: string): boolean {
   for (let i = 0; i < args.length - 1; i++) {
     if (args[i] !== '-m') continue
+    if (!isAbsolute(args[i + 1])) continue
     const modelPath = resolve(args[i + 1])
     if (withTrailingSeparator(modelPath).startsWith(modelRoot)) return true
   }
   return false
+}
+
+function startedBefore(candidate: string, reference: string): boolean {
+  const candidateMs = Date.parse(candidate)
+  const referenceMs = Date.parse(reference)
+  return Number.isFinite(candidateMs) && Number.isFinite(referenceMs) && candidateMs < referenceMs
 }
 
 function withTrailingSeparator(path: string): string {
@@ -309,5 +316,6 @@ function errorMessage(error: unknown): string {
 export const testOnly = {
   argsFingerprint,
   legacyArgsPointAtUserModel,
-  parsePosixPsLine
+  parsePosixPsLine,
+  startedBefore
 }

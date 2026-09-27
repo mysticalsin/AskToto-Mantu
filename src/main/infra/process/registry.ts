@@ -1,10 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { execFile } from 'node:child_process'
 import { appendFileSync, mkdirSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
 import { getProcessIdentity as getMacProcessIdentity } from '../../mac-helper'
 import { mainLog } from '../../logger'
+
+const execFileAsync = promisify(execFile)
 
 export interface SidecarRecord {
   readonly kind: 'intent' | 'spawned'
@@ -82,13 +85,42 @@ export function createSidecarRegistry(userData: string, sessionId = randomUUID()
 export async function getProcessIdentity(pid: number, executable?: string): Promise<ProcessIdentity | null> {
   if (process.platform === 'darwin') return getMacProcessIdentity(pid)
   if (process.platform === 'win32') return getWindowsProcessIdentity(pid)
-  if (!executable) return null
+  return getPosixProcessIdentity(pid, executable)
+}
+
+async function getPosixProcessIdentity(pid: number, executable?: string): Promise<ProcessIdentity | null> {
+  let stdout: string
+  try {
+    const result = await execFileAsync('/bin/ps', ['-o', 'pid=,ppid=,pgid=,lstart=,command=', '-p', String(pid)], {
+      encoding: 'utf8',
+      timeout: 5_000
+    })
+    stdout = result.stdout
+  } catch {
+    return null
+  }
+  const parsed = parsePosixPsLine(stdout)
+  if (!parsed) return null
+  const expected = executable ? safeRealpath(executable) : undefined
+  if (expected && parsed.exeRealpath !== expected) return null
+  return parsed
+}
+
+function parsePosixPsLine(line: string): ProcessIdentity | null {
+  const match = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(.{24})\s+(.+)$/.exec(line.trim())
+  if (!match) return null
+  const exe = match[5].trim().split(/\s+/)[0]
+  const exeRealpath = exe ? safeRealpath(exe) : undefined
+  if (!exeRealpath) return null
+  const started = new Date(match[4])
+  if (Number.isNaN(started.getTime())) return null
   return {
-    pid,
-    pgid: pid,
-    osStartTime: new Date().toISOString(),
-    exeRealpath: safeRealpath(executable) ?? executable,
-    args: []
+    pid: Number(match[1]),
+    ppid: Number(match[2]),
+    pgid: Number(match[3]),
+    osStartTime: started.toISOString(),
+    exeRealpath,
+    args: splitCommand(match[5].trim())
   }
 }
 
@@ -123,6 +155,14 @@ function safeRealpath(path: string): string | undefined {
   } catch {
     return undefined
   }
+}
+
+function splitCommand(command: string): string[] {
+  const out: string[] = []
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(command))) out.push(match[1] ?? match[2] ?? match[3])
+  return out
 }
 
 export function configureSidecarRegistry(registry: SidecarRegistry): void {
