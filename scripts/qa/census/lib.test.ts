@@ -9,13 +9,17 @@ import {
   classifyProcess,
   missingStates,
   oneCoreCpuPercent,
+  parseProveLocalTtftOutput,
+  proveLocalTtftEvidenceFromArtifact,
+  rendererScenarioProbeSource,
   resolveProductVersion,
   sanitizeReport,
   defaultOutputPath,
   stateRequiresAttachPrecondition,
   summarize,
   validateStatePrecondition,
-  validateState
+  validateState,
+  windowsWorkingSetEvidenceFromArtifact
 } from './lib.mjs'
 
 const startedMs = Date.UTC(2026, 8, 27, 12)
@@ -240,10 +244,93 @@ describe('resource census report boundary', () => {
     expect(REQUIRED_TRACE_SCENARIOS).toEqual(['parked-bar-orb', 'backdrop-filter', 'threejs-obsidian-orb'])
   })
 
+  it('emits renderer probes that check the actual requested UI state before tracing', () => {
+    expect(rendererScenarioProbeSource('parked-bar-orb')).toContain('[data-bar-pill-orb]')
+    expect(rendererScenarioProbeSource('backdrop-filter')).toContain('backdropFilter')
+    expect(rendererScenarioProbeSource('threejs-obsidian-orb')).toContain('[data-orb-style="obsidian"] canvas')
+    expect(() => rendererScenarioProbeSource('caller-supplied-label')).toThrow(/unknown trace scenario/)
+  })
+
   it('keeps the reusable tool default output out of program-document paths', () => {
     const output = defaultOutputPath({ state: 'settled-idle', platform: 'darwin' })
 
     expect(output).toBe('metis-census-output/darwin-settled-idle.json')
     expect(output).not.toContain('docs/')
+  })
+})
+
+describe('resource census external proof artifacts', () => {
+  it('extracts TTFT only from the prove-local-ttft output shape', () => {
+    const output = `=== prove-local-ttft: Métis Local warm-suggest TTFT proof (PLAN.md §4.4 / Rock 5) ===
+[prove-local-ttft] model files verified (sha256 match).
+warm TTFT: 842 ms
+`
+    expect(parseProveLocalTtftOutput(output)).toBe(842)
+    expect(() => parseProveLocalTtftOutput('warm TTFT: 842 ms')).toThrow(/not output/)
+    expect(() =>
+      parseProveLocalTtftOutput(`=== prove-local-ttft: Métis Local warm-suggest TTFT proof (PLAN.md §4.4 / Rock 5) ===
+[prove-local-ttft] FAIL — warm TTFT 2000ms exceeds the 1500ms budget.
+warm TTFT: 2000 ms`)
+    ).toThrow(/failed/)
+  })
+
+  it('records TTFT with a checkable artifact path and sha256, not a caller-supplied number', () => {
+    const root = mkdtempSync(join(tmpdir(), 'metis-census-ttft-'))
+    try {
+      mkdirSync(join(root, 'metis-census-output'), { recursive: true })
+      writeFileSync(
+        join(root, 'metis-census-output', 'prove-local-ttft.log'),
+        `=== prove-local-ttft: Métis Local warm-suggest TTFT proof (PLAN.md §4.4 / Rock 5) ===
+warm TTFT: 731 ms
+`,
+        'utf8'
+      )
+
+      const evidence = proveLocalTtftEvidenceFromArtifact('metis-census-output/prove-local-ttft.log', { cwd: root })
+
+      expect(evidence).toMatchObject({
+        recorded: true,
+        command: 'node scripts/prove-local-ttft.mjs',
+        warmTtftMs: 731,
+        artifact: { path: 'metis-census-output/prove-local-ttft.log' }
+      })
+      expect(evidence.artifact.sha256).toMatch(/^[a-f0-9]{64}$/)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not mark Windows working set measured without a Windows lane artifact containing workingSetBytes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'metis-census-winws-'))
+    try {
+      mkdirSync(join(root, 'metis-census-output'), { recursive: true })
+      writeFileSync(
+        join(root, 'metis-census-output', 'win32-settled-idle.json'),
+        JSON.stringify({
+          platform: 'win32',
+          samples: [{ processes: [{ pid: 44, startedMs, workingSetBytes: 123456 }] }]
+        }),
+        'utf8'
+      )
+      writeFileSync(
+        join(root, 'metis-census-output', 'darwin-settled-idle.json'),
+        JSON.stringify({ platform: 'darwin', samples: [{ processes: [{ pid: 44, startedMs, workingSetBytes: null }] }] }),
+        'utf8'
+      )
+
+      const evidence = windowsWorkingSetEvidenceFromArtifact('metis-census-output/win32-settled-idle.json', { cwd: root })
+
+      expect(evidence).toMatchObject({
+        measured: true,
+        metric: 'Win32_Process.WorkingSetSize',
+        lane: 'windows-qa',
+        artifact: { path: 'metis-census-output/win32-settled-idle.json' }
+      })
+      expect(() =>
+        windowsWorkingSetEvidenceFromArtifact('metis-census-output/darwin-settled-idle.json', { cwd: root })
+      ).toThrow(/platform "win32"/)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
