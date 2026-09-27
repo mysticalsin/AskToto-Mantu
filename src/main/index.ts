@@ -891,10 +891,9 @@ initializeCaheEditionIdentity()
 if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
 // Self-test must own a throwaway userData before anything resolves userData; no-op unless
-// devEnv(ASKTOTO_SELFTEST). Setting ASKTOTO_USERDATA (rather than calling app.setPath directly) lets the
-// ASKTOTO_USERDATA handling immediately below, and resolveMeetingsFolder()'s own ASKTOTO_USERDATA check
-// (transcripts.ts), apply the throwaway directory through the one QA-isolation mechanism instead of a
-// second, self-test-only one (M2-0004).
+// devEnv(ASKTOTO_SELFTEST). Setting ASKTOTO_USERDATA lets the ASKTOTO_USERDATA handling immediately
+// below, and resolveMeetingsFolder()'s own ASKTOTO_USERDATA check (transcripts.ts), apply the throwaway
+// directory through the one QA-isolation mechanism instead of a second, self-test-only one (M2-0004).
 redirectSelfTestUserData()
 
 // Select the final user-data profile before crashReporter (or any other Electron service) can resolve
@@ -8986,10 +8985,8 @@ if (!app.requestSingleInstanceLock()) {
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
   process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
   process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
-  // Self-test must own a throwaway userData before anything resolves userData; no-op unless
-  // devEnv(ASKTOTO_SELFTEST). redirectSelfTestUserData() ran near the top of this file, well before app
-  // ready, so nothing above this line ever touched the live profile's settings.json or managed-config.json
-  // (M2-0004). runSelfTest() itself refuses to run if that redirect somehow didn't take.
+  // devEnv(ASKTOTO_SELFTEST) keeps self-test out of packaged builds; runSelfTest() itself refuses to run
+  // unless userData is exactly the throwaway directory redirectSelfTestUserData() created (M2-0004).
   const selfTestOut = devEnv('ASKTOTO_SELFTEST')
   if (selfTestOut) {
     try {

@@ -10,8 +10,9 @@ vi.mock('electron')
 // profile it borrowed in that state. Both collaborators are mocked so the failure can be injected exactly
 // where the finder saw it — between the setSettings() that borrows the profile and the one that gives it back.
 const settingsState: Record<string, unknown> = {}
-// Call order across the mocked collaborators below, shared by every describe block — lets a test assert
-// that app.setPath('userData', …) happens strictly before the first settings access (M2-0004's acceptance).
+// Call order across the mocked collaborators below, shared by every describe block — shows that
+// redirectSelfTestUserData() never calls app.setPath itself, and that the refuse-to-run guard fires
+// before any getSettings or setSettings call.
 const callOrder: string[] = []
 vi.mock('./store', () => ({
   getSettings: vi.fn(() => {
@@ -112,20 +113,22 @@ describe('redirectSelfTestUserData — the boot-time isolation gate (M2-0004)', 
     redirectSelfTestUserData()
 
     const redirected = process.env.ASKTOTO_USERDATA
-    // Applying the redirect to Electron's userData is index.ts's existing ASKTOTO_USERDATA line's job —
-    // one isolation mechanism, not two — so this function itself must never call app.setPath.
-    expect(callOrder).toEqual([])
-    expect(redirected).toBeTruthy()
-    expect(redirected).not.toBe(priorUd)
-    expect(existsSync(redirected!)).toBe(true)
-    expect(app.getPath('userData')).toBe(priorUd)
+    try {
+      // Applying the redirect to Electron's userData is index.ts's existing ASKTOTO_USERDATA line's job —
+      // one isolation mechanism, not two — so this function itself must never call app.setPath.
+      expect(callOrder).toEqual([])
+      expect(redirected).toBeTruthy()
+      expect(redirected).not.toBe(priorUd)
+      expect(existsSync(redirected!)).toBe(true)
+      expect(app.getPath('userData')).toBe(priorUd)
 
-    applyAskTotoUserData()
+      applyAskTotoUserData()
 
-    expect(callOrder).toEqual(['setPath'])
-    expect(app.getPath('userData')).toBe(redirected)
-
-    rmSync(redirected!, { recursive: true, force: true })
+      expect(callOrder).toEqual(['setPath'])
+      expect(app.getPath('userData')).toBe(redirected)
+    } finally {
+      rmSync(redirected!, { recursive: true, force: true })
+    }
   })
 })
 
@@ -184,10 +187,9 @@ describe('runSelfTest — borrowed profile state', () => {
   })
 
   it('leaves the throwaway userData directory in place once the run finishes', async () => {
-    // On Windows this directory is the process's own cwd (index.ts chdir's into userData before
-    // dispatching self-test) and holds Chromium's open lockfile, so deleting it here throws EBUSY/EPERM
-    // after the report is already written — every run of the packaged app failed a `selftest` call on
-    // Windows. Cleaning it up, if wanted, is the caller's job (it created the mkdtemp), not runSelfTest's.
+    // On Windows, userData is the process cwd (index.ts chdir's into it before dispatch) and holds
+    // Chromium's lockfile, so runSelfTest must never delete it; the directory belongs to whoever created
+    // it (redirectSelfTestUserData).
     const throwaway = app.getPath('userData')
 
     await runSelfTest(join(ud, 'out.json'))
@@ -222,9 +224,11 @@ describe('runSelfTest — dedicated throwaway userData (M2-0004)', () => {
     if (redirected) rmSync(redirected, { recursive: true, force: true })
   })
 
-  it('refuses to run without redirectSelfTestUserData having redirected userData first, and touches nothing', async () => {
-    // ASKTOTO_SELFTEST is deliberately left unset — redirectSelfTestUserData() is never called, so
-    // userData still resolves to the stand-in live profile seeded above.
+  it('refuses to run when userData does not match the redirect (stale or never redirected), and touches nothing', async () => {
+    // ASKTOTO_SELFTEST is deliberately left unset here. In normal file order, module-level
+    // redirectedUserData already holds a stale directory from an earlier test, so this exercises the
+    // "redirect went stale" branch rather than "redirect never ran" — either way userData still resolves
+    // to the stand-in live profile seeded above, and the guard must refuse it.
     await expect(runSelfTest(join(outDir, 'out.json'))).rejects.toThrow(/throwaway/)
 
     expect(callOrder).toEqual([]) // no getSettings/setSettings call ever happened

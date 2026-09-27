@@ -56,7 +56,7 @@ export async function runSelfTest(outPath: string): Promise<void> {
   // that has since changed again), instead of silently falling through to whatever profile
   // app.getPath('userData') resolves to.
   const ud = app.getPath('userData')
-  if (!redirectedUserData || ud !== redirectedUserData) {
+  if (ud !== redirectedUserData) {
     throw new Error('self-test refused to run: userData is not the throwaway profile redirectSelfTestUserData() created')
   }
   const settingsFile = join(ud, 'settings.json')
