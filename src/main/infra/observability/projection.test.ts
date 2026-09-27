@@ -131,14 +131,14 @@ describe('observability projection', () => {
   circularMessage.self = circularMessage
 
   it.each([
-    ['function', () => undefined],
-    ['Symbol', Symbol('unserializable')],
-    ['BigInt', 1n],
-    ['circular object', circularMessage]
-  ])('keeps an app.error.boot_step record when message is an unserializable %s', (_name, input) => {
+    ['function', () => undefined, '<unserializable function>'],
+    ['Symbol', Symbol('unserializable'), '<unserializable symbol>'],
+    ['BigInt', 1n, '<unserializable bigint>'],
+    ['circular object', circularMessage, '<unserializable object>']
+  ])('keeps an app.error.boot_step record when message is an unserializable %s', (_name, input, expectedMessage) => {
     expect(projectEvent('app.error.boot_step', { step: 'x', message: input, recoveryStatus: 'continued' })).toEqual({
       step: 'x',
-      message: `<unserializable ${typeof input}>`,
+      message: expectedMessage,
       recoveryStatus: 'continued'
     })
   })
