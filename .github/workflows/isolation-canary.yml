@@ -66,6 +66,56 @@ jobs:
       - run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
       - name: Fail if the suite touched the real-home honeypot
         run: bash scripts/hermetic/honeypot.sh check "$HOME/Library/CloudStorage/OneDrive-Honeypot"
+      # Reproduces Xcode auto-mounting its Metal toolchain disk image under the sandboxed $HOME while
+      # `swift test` runs (a read-only volume `rm -rf` cannot remove) with a PATH-shimmed `swift`, so this
+      # is exercised on every push instead of only on whichever run happens to trigger a real toolchain
+      # download.
+      - name: A shimmed swift that mounts a disk image under HOME leaves no mount or sandbox behind
+        run: |
+          set -euo pipefail
+          shim="$RUNNER_TEMP/swift-shim-mount"
+          mkdir -p "$shim"
+          cat > "$shim/swift" <<'SHIM'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo "$HOME" > "$RUNNER_TEMP/swift-shim-sandbox-path"
+          mount_dir="$HOME/Library/Developer/DVTDownloads/MetalToolchain/mounts/shim"
+          mkdir -p "$mount_dir"
+          image="$RUNNER_TEMP/metal-toolchain-shim.dmg"
+          hdiutil create -size 1m -fs HFS+ -volname MetalToolchainShim -ov -quiet "$image"
+          hdiutil attach "$image" -mountpoint "$mount_dir" -readonly -nobrowse -quiet
+          SHIM
+          chmod +x "$shim/swift"
+
+          PATH="$shim:$PATH" bash scripts/hermetic/run-swift-tests.sh unused
+
+          sandbox="$(cat "$RUNNER_TEMP/swift-shim-sandbox-path")"
+          if [ -e "$sandbox" ]; then
+            echo "run-swift-tests.sh left its sandbox behind: $sandbox"; exit 1
+          fi
+          if mount | grep -qF "$sandbox"; then
+            echo "run-swift-tests.sh left a mount behind under $sandbox:"; mount | grep -F "$sandbox"; exit 1
+          fi
+      # A plain, unmounted failing shim — swift test's own non-zero status must reach run-swift-tests.sh's
+      # caller unchanged, including after the fix above adds mount detection to its cleanup.
+      - name: A shimmed swift's own non-zero exit code passes through run-swift-tests.sh
+        run: |
+          set -euo pipefail
+          shim="$RUNNER_TEMP/swift-shim-fail"
+          mkdir -p "$shim"
+          cat > "$shim/swift" <<'SHIM'
+          #!/usr/bin/env bash
+          exit 37
+          SHIM
+          chmod +x "$shim/swift"
+
+          set +e
+          PATH="$shim:$PATH" bash scripts/hermetic/run-swift-tests.sh unused
+          status=$?
+          set -e
+          if [ "$status" -ne 37 ]; then
+            echo "expected run-swift-tests.sh to exit 37 (swift test's own status), got $status"; exit 1
+          fi
 
   deny-non-loopback:
     name: deny-non-loopback.cjs denies every connect() shape (hermetic)
