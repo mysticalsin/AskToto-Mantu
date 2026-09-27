@@ -146,8 +146,6 @@ describe('M2-0033 retry policy across backfill callers', () => {
       if (name === 'userData') return userData
       return join(userData, name)
     })
-    const store = await import('../store')
-    configureSettings(store, electron.app)
     const ingest = await import('./ingest')
     const consolidate = await import('./consolidate')
     const intelligence = await import('./intelligence-index')

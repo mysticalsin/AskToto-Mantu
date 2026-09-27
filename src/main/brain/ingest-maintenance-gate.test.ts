@@ -81,6 +81,13 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     await whenIndexWritesSettle()
   }
 
+  const releaseHeldWork = async (): Promise<void> => {
+    await vi.waitFor(() => {
+      held.splice(0).forEach((release) => release())
+      expect(brainBackfillProgress().running).toBe(false)
+    }, { timeout: 10_000 })
+  }
+
   const writeMeeting = (name: string, body = name) => {
     writeFileSync(join(meetingsFolder, name), `---\ndate: 2026-01-01\n---\n${body}`, 'utf8')
   }
@@ -109,6 +116,10 @@ describe('M2-0033 maintenance gate for background ingest', () => {
   })
 
   afterEach(async () => {
+    uptime = 121_000
+    interactiveActive = false
+    startGate('clean')
+    await releaseHeldWork()
     await whenIndexWritesSettle()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
