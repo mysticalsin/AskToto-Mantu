@@ -1,8 +1,8 @@
 import { defineConfig, mergeConfig } from 'vitest/config'
-import { mkdtempSync, mkdirSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { homedir } from 'node:os'
 import { join, resolve } from 'path'
 import electronViteConfig from './electron.vite.config'
+import { createHermeticSandbox, hermeticEnv } from './scripts/hermetic/sandbox-env.mjs'
 
 // W0-HERMETIC / MQA-348 — every test worker gets a fresh, empty home directory. Production code derives
 // real user locations from the home directory (detectOneDrive → ~/Library/CloudStorage/OneDrive-*, then
@@ -27,29 +27,15 @@ function playwrightBrowsersPath(realHome: string): string {
   }
   return join(process.env.XDG_CACHE_HOME || join(realHome, '.cache'), 'ms-playwright')
 }
-const testHome = mkdtempSync(join(tmpdir(), 'metis-test-home-'))
-// A handful of existing tests already do mkdtempSync(join(tmpdir(), 'asktoto-...')) — once TMPDIR below
-// is honored by os.tmpdir(), those land inside the sandbox home too, so create it up front.
-const testTmpDir = join(testHome, 'tmp')
-mkdirSync(testTmpDir, { recursive: true })
-const hermeticHomeEnv = {
-  HOME: testHome,
-  USERPROFILE: testHome,
-  // Windows detectOneDrive() trusts these before the home directory; empty means "no OneDrive".
-  OneDrive: '',
-  OneDriveCommercial: '',
-  OneDriveConsumer: '',
-  APPDATA: join(testHome, 'AppData', 'Roaming'),
-  LOCALAPPDATA: join(testHome, 'AppData', 'Local'),
-  TMPDIR: testTmpDir,
-  TMP: testTmpDir,
-  TEMP: testTmpDir,
-  PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath(homedir()),
-  METIS_TEST_HOME: testHome,
-  // Unique per run/worktree — __mocks__/electron.ts derives every app.getPath(...) answer from this, so
-  // a concurrent run (another worktree, a parallel agent) never shares a userData/documents path with us.
-  ASKTOTO_TEST_SANDBOX_ROOT: testHome
-}
+// scripts/hermetic/sandbox-env.mjs is the single implementation every non-vitest runner that shares this
+// mechanism (license-server, operator's wrangler test — scripts/qa and swift test build their sandboxes a
+// different way, see that file's own header) builds its own sandbox from (M2-0190); building this vitest
+// worker's own env from the same two functions, rather than an independent literal copy, makes that
+// true rather than merely documented.
+const sandbox = createHermeticSandbox()
+const hermeticHomeEnv = hermeticEnv(sandbox, {
+  PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath(homedir())
+})
 
 // A `#!/usr/bin/env node` shebang is valid in a file Node's own loader reads directly, but esbuild's
 // transform (which Vitest runs on served modules) PRESERVES it, and Vitest then evaluates the

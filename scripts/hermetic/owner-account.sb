@@ -1,0 +1,38 @@
+;; W0-HERMETIC (M2-0190) §2 — the OS-level sandbox profile for any test/build command run on the owner's
+;; own Mac. Test-framework-level isolation (scripts/hermetic/sandbox-env.mjs and friends) protects
+;; against a test forgetting to isolate itself; this is the second, independent layer, which denies the
+;; operation at the filesystem boundary regardless of what the process above it thinks it is doing.
+;;
+;; (param "HOME") is resolved at invocation time via `sandbox-exec -D HOME=$HOME` (see
+;; run-under-owner-sandbox.sh), so this file itself never hardcodes a machine-specific path.
+(version 1)
+(allow default)
+
+(deny file-read* file-write*
+  ;; Every OneDrive/iCloud Drive mount — the exact path detectOneDrive() resolves into. Named
+  ;; "OneDrive - <Org>" for a business account, not "OneDrive", so this denies the whole CloudStorage
+  ;; directory rather than one literal OneDrive segment name.
+  (subpath (string-append (param "HOME") "/Library/CloudStorage"))
+  ;; The real macOS Keychain safeStorage encrypts against on-device — a test process must never be able
+  ;; to decrypt, or corrupt, a real secret.
+  (subpath (string-append (param "HOME") "/Library/Keychains"))
+  ;; wrangler's real global config and OAuth token store, in every location a wrangler version has used:
+  ;; its long-standing default, its xdg-app-paths fallback when ~/.wrangler does not exist, and the
+  ;; XDG_CONFIG_HOME-style path some versions use instead.
+  (subpath (string-append (param "HOME") "/.wrangler"))
+  (subpath (string-append (param "HOME") "/.config/.wrangler"))
+  (subpath (string-append (param "HOME") "/Library/Preferences/.wrangler"))
+  ;; The real per-device Métis brain/settings store, under every name the app has ever used — what
+  ;; ASKTOTO_USERDATA exists specifically to redirect away from. src/main/index.ts's own profile-migration
+  ;; logic still reads the prior product names ("Métis", "AskToto") from disk, so a test process must be
+  ;; denied every one of them, not only the current "Metis" (electron-builder.yml's productName) and the
+  ;; unpackaged app's "-dev" suffix.
+  (subpath (string-append (param "HOME") "/Library/Application Support/Metis"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Métis"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/AskToto"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/asktoto-dev"))
+  ;; The unpackaged, pre-suffix default — the same directory as "AskToto" on case-insensitive APFS.
+  ;; Denied under both literal spellings, as a precaution: SBPL subpath matching may compare against the
+  ;; syscall's own path argument rather than a case-folded filesystem lookup, so the case actually used
+  ;; might need to match one of the literals here exactly.
+  (subpath (string-append (param "HOME") "/Library/Application Support/asktoto")))
