@@ -1005,8 +1005,9 @@ export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserve
   try {
     preserve = opts.mode === 'rebuild' && opts.preserveCorrections && existsSync(journalPath)
     if (preserve) cpSync(journalPath, preserveTo)
+    const preservedDir = preservedIndexDir(settings)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
-    if (opts.mode === 'erase') rmSync(preservedIndexDir(settings), { recursive: true, force: true })
+    if (opts.mode === 'erase') rmSync(preservedDir, { recursive: true, force: true })
     resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus
     if (preserve) {
       mkdirSync(root, { recursive: true })
@@ -1017,7 +1018,7 @@ export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserve
       const remaining = readdirSync(root)
       return { ok: remaining.length === 1 && remaining[0] === 'corrections.json' }
     }
-    return { ok: !existsSync(root) }
+    return { ok: !existsSync(root) && (opts.mode !== 'erase' || !existsSync(preservedDir)) }
   } catch (e) {
     console.warn('[brain] purgeBrain: could not remove', root, e)
     // MI-2.5 Fix F: a mid-wipe failure (OneDrive/AV holding a file open partway through the recursive

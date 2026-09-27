@@ -371,6 +371,21 @@ describe('rebuild preserves unreadable indexes', () => {
     expect(existsSync(preserved)).toBe(false)
   })
 
+  it('delete-all reports failure when preserved indexes remain after the erase attempt', () => {
+    const preserved = join(meetingsFolder, '.brain-preserved')
+    mkdirSync(preserved, { recursive: true })
+    writeFileSync(join(preserved, 'index.unreadable-sample.json'), foreignFileEnvelope())
+    vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => {
+      if (path === preserved) return
+      return actualFs.rmSync!(path, options)
+    })
+
+    expect(purgeBrain(settings, { mode: 'erase' }).ok).toBe(false)
+
+    expect(existsSync(brainDir(settings))).toBe(false)
+    expect(existsSync(preserved)).toBe(true)
+  })
+
   it('lists preserved indexes with size, date, and restore availability only after they decrypt', async () => {
     const preserved = join(meetingsFolder, '.brain-preserved')
     mkdirSync(preserved, { recursive: true })

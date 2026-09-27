@@ -6576,6 +6576,13 @@ function registerIpc(): void {
       brainPurged: brainPurge.ok,
       wikiRemoved: wiki.ok
     })
+    if (!brainPurge.ok) {
+      return {
+        ...result,
+        ok: false,
+        error: 'Deleted the transcripts, but the Mantu Intelligence data could not be fully removed. Close anything using the meetings folder, then try again.'
+      }
+    }
     if (!wiki.ok) {
       return {
         ...result,
