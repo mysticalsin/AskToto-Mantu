@@ -49,8 +49,9 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * app makes on every request. It surfaced two more real defects on the way: a test asserting against a
  * providerId that does not exist ('claude-api'), and FIVE more `{ gguf, mmproj }` omissions — the same
  * `-c undefined` shape, in a third file.
+ * 2026-09-27: 20 → 19 (M2-0031 lowered the stale ratchet after one existing test-type error was fixed).
  */
-const BASELINE = 20
+const BASELINE = 19
 
 let output = ''
 try {

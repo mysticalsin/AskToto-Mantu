@@ -902,22 +902,21 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
     const gateway = storageAt(folder)
     const listing = await gateway.list('')
     if (listing.status !== 'ok') return { recovered }
+    const occupied = new Set(listing.names)
     for (const f of listing.names) {
       if (!f.startsWith('.autosave-draft-') || !f.endsWith('.md')) continue
       const draftPath = join(folder, f)
       try {
         const stampPart = f.slice('.autosave-draft-'.length, -'.md'.length)
         const primaryOut = join(folder, `${stampPart}-recovered.md`)
-        if (existsSync(primaryOut)) {
+        if (occupied.has(basename(primaryOut))) {
           // Already promoted by a previous run — this draft only still exists because that run's
           // unlink below failed afterward (transient EBUSY/EPERM; this folder is often OneDrive-synced).
           // Re-promoting would write a second, fully duplicate "-recovered-2.md" copy of the same
           // meeting, so just retry the cleanup and move on without touching `recovered`.
-          try {
-            unlinkSync(draftPath)
-          } catch {
-            /* still stale for the next run — harmless; the existsSync(primaryOut) guard prevents a dupe */
-          }
+          await unlink(draftPath).catch(() => {
+            /* still stale for the next run — harmless; the occupied-name guard prevents a dupe */
+          })
           continue
         }
         // Preserve the DRAFT's own at-rest encryption exactly as found (mirrors appendDebrief /
@@ -936,14 +935,13 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
           .replace('status: interrupted', 'status: recovered')
           .replace(IN_PROGRESS_SUFFIX, ' (recovered)')
         let out = primaryOut
-        for (let n = 2; existsSync(out); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
+        for (let n = 2; occupied.has(basename(out)); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
         await writeSaved(out, promoted, wasEncrypted)
-        try {
-          unlinkSync(draftPath)
-        } catch {
+        occupied.add(basename(out))
+        await unlink(draftPath).catch(() => {
           // The promoted copy is already safely on disk; a future run will see primaryOut exists and
           // skip re-promoting this same stale draft (see the guard above), only retrying its cleanup.
-        }
+        })
         recovered++
 
         // Mirror saveMeeting's exact plaintext-mode index.md bookkeeping (same row shape) — a recovered
