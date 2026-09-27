@@ -2221,6 +2221,7 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   }
   // Fix E: replayPending survives a crash independently of backfillRequested; clear any stale replayError.
   await updateIndex(s, (i) => {
+    i.ingested = {}
     i.replayPending = true
     i.replayError = undefined
     i.revision = before.revision + 1
