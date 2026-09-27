@@ -3,6 +3,37 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { LIFECYCLE_EVENTS, isOverlayUrl, parseAuditLog, smokeReport, smokeVerdict } from './packaged-smoke.mjs'
 
+interface ProcessEntry {
+  pid: number
+  ppid: number
+  startedMs: number
+  exe: string | null
+  role: string
+}
+
+interface AuditRecord {
+  event: string
+  [key: string]: unknown
+}
+
+interface Observation {
+  installRootBusy: boolean
+  launchFailed: boolean
+  error: boolean
+  mainPid: number | null
+  readyMs: number | null
+  exitedEarly: boolean
+  ownedAtQuit: ProcessEntry[] | null
+  quitRequested: boolean
+  quitDelivered: boolean
+  exit: { code: number; signal: string | null } | null
+  exitMs: number | null
+  audit: AuditRecord[]
+  marker: boolean | null
+  survivors: ProcessEntry[] | null
+  survivorsGoneMs: number | null
+}
+
 describe('parseAuditLog', () => {
   it('returns records from JSON lines and skips blank and malformed lines', () => {
     const text = [
@@ -35,7 +66,7 @@ describe('isOverlayUrl', () => {
 })
 
 // A fully passing observation: every stage ran and produced a clean, content-free result.
-function goodObservation() {
+function goodObservation(): Observation {
   return {
     installRootBusy: false,
     launchFailed: false,
@@ -115,7 +146,7 @@ describe('smokeVerdict', () => {
   })
 
   it('fails as smoke_incomplete when it stopped before the survivor check with no recorded cause', () => {
-    const observation = {
+    const observation: Observation = {
       installRootBusy: false,
       launchFailed: false,
       error: false,
@@ -176,7 +207,7 @@ describe('smokeReport', () => {
       'shutdown',
       'processes'
     ])
-    expect(Object.keys(report.app)).toEqual(['version', 'platform', 'arch'])
+    expect(Object.keys(report.app ?? {})).toEqual(['version', 'platform', 'arch'])
     expect(Object.keys(report.events)).toEqual(LIFECYCLE_EVENTS)
     expect(serialized).not.toContain(secretPath)
     expect(serialized).not.toContain(secretBootId)
@@ -184,7 +215,7 @@ describe('smokeReport', () => {
   })
 
   it('counts each lifecycle event and reports null timings/process maps for stages that did not run', () => {
-    const observation = {
+    const observation: Observation = {
       installRootBusy: true,
       launchFailed: false,
       error: false,
