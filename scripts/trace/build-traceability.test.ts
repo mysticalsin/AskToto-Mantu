@@ -690,9 +690,11 @@ describe('rendering — structural, not a source-text snapshot', () => {
 
 describe('main() — the CLI contract', () => {
   let dir: string
+  let cwd: string
   const EXIT = new Error('trace gate exit')
 
   beforeEach(() => {
+    cwd = process.cwd()
     dir = mkdtempSync(join(tmpdir(), 'build-traceability-'))
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -702,6 +704,7 @@ describe('main() — the CLI contract', () => {
   })
 
   afterEach(() => {
+    process.chdir(cwd)
     rmSync(dir, { recursive: true, force: true })
     vi.restoreAllMocks()
   })
@@ -711,6 +714,15 @@ describe('main() — the CLI contract', () => {
     writeFileSync(join(dir, 'inventory.json'), JSON.stringify(inventory), 'utf8')
     writeFileSync(join(dir, 'DECISIONS.md'), decisions, 'utf8')
     writeFileSync(join(dir, 'BLOCKERS.md'), blockers, 'utf8')
+  }
+
+  function writeDefaultFixture({ tickets, inventory, decisions = '', blockers = '' }: { tickets: unknown[]; inventory: unknown[]; decisions?: string; blockers?: string }) {
+    mkdirSync(join(dir, 'docs', 'metis-2.0', 'ledger'), { recursive: true })
+    mkdirSync(join(dir, 'docs', 'metis-2.0', 'kit'), { recursive: true })
+    writeFileSync(join(dir, 'docs', 'metis-2.0', 'ledger', 'tickets.json'), JSON.stringify({ tickets }), 'utf8')
+    writeFileSync(join(dir, 'docs', 'metis-2.0', 'kit', 'ID-INVENTORY.json'), JSON.stringify(inventory), 'utf8')
+    writeFileSync(join(dir, 'docs', 'metis-2.0', 'DECISIONS.md'), decisions, 'utf8')
+    writeFileSync(join(dir, 'docs', 'metis-2.0', 'BLOCKERS.md'), blockers, 'utf8')
   }
 
   function argv(extra: string[] = []) {
@@ -765,13 +777,15 @@ describe('main() — the CLI contract', () => {
     expect(() => readFileSync(outJson, 'utf8')).toThrow()
   })
 
-  it('exits 2 with a usage error naming every missing required argument (the ticket\'s own verification command)', async () => {
-    await expect(main(['--check'])).rejects.toThrow(EXIT)
-    expect(process.exit).toHaveBeenCalledWith(2)
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('--tickets'))
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('--inventory'))
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('--decisions'))
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('--blockers'))
+  it('uses the repository default paths for the ticket verification command', async () => {
+    writeDefaultFixture({
+      tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })],
+      inventory: [row({ id: 'FOO-01', kit: 'kitA' })]
+    })
+    process.chdir(dir)
+    await main(['--check'])
+    expect(process.exit).not.toHaveBeenCalled()
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('[trace] OK'))
   })
 
   it('exits 2 with a usage error on an unrecognized flag', async () => {

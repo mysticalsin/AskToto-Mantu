@@ -110,6 +110,9 @@ resources/local-llm/**/*.part
 # Rocket-fuel / relay engagement working notes (not app source)
 .rocket-fuel/
 _relay/
+!_relay/
+_relay/*
+!_relay/HANDOFF.md
 
 # metis-mac-helper Swift sidecar binary (Vision OCR + frontmost watcher) — compiled from
 # native/mac-helper/main.swift by scripts/build-mac-helper.mjs in every mac packaging chain;

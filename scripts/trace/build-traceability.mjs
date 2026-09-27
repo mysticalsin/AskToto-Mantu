@@ -16,7 +16,7 @@
  * its test suite runs anywhere with wholly synthetic fixtures.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { latestByLevel, readRecordStore } from '../evidence/record.mjs'
@@ -498,8 +498,8 @@ export function renderJson(result) {
 // ---- CLI -----------------------------------------------------------------------------------
 
 const USAGE =
-  'usage: build-traceability.mjs --tickets <path> --inventory <path> --decisions <path> ' +
-  '--blockers <path> [--evidence <dir>] (--check | --out-md <path> --out-json <path>)'
+  'usage: build-traceability.mjs [--tickets <path>] [--inventory <path>] [--decisions <path>] ' +
+  '[--blockers <path>] [--evidence <dir>] (--check | --out-md <path> --out-json <path>)'
 
 const CLI_OPTIONS = {
   check: { type: 'boolean', default: false },
@@ -512,7 +512,16 @@ const CLI_OPTIONS = {
   'out-json': { type: 'string' }
 }
 
-const REQUIRED_ARGS = ['tickets', 'inventory', 'decisions', 'blockers']
+const m2Path = (...parts) => join('docs', 'metis-2.0', ...parts)
+
+const DEFAULT_PATHS = {
+  tickets: m2Path('ledger', 'tickets.json'),
+  inventory: m2Path('kit', 'ID-INVENTORY.json'),
+  decisions: m2Path('DECISIONS.md'),
+  blockers: m2Path('BLOCKERS.md'),
+  'out-md': m2Path('TRACEABILITY.md'),
+  'out-json': m2Path('ledger', 'traceability.json')
+}
 
 /** @param {string} message */
 function usageExit(message) {
@@ -582,9 +591,8 @@ export async function main(argv) {
     return usageExit(error.message)
   }
 
-  const missing = REQUIRED_ARGS.filter((key) => typeof values[key] !== 'string')
-  if (missing.length > 0) {
-    return usageExit(`missing required argument(s): ${missing.map((key) => `--${key}`).join(', ')}`)
+  for (const [key, value] of Object.entries(DEFAULT_PATHS)) {
+    if (values[key] === undefined) values[key] = value
   }
   if (!values.check && !(values['out-md'] && values['out-json'])) {
     return usageExit('either --check, or both --out-md and --out-json, is required')
