@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { startRunObservability } from './run-observability'
+import { startStallMonitor } from './stall-monitor'
 import type { PriorRun } from '../../boot-sentinel'
 import type { StallMonitor, StallMonitorOptions } from './stall-monitor'
 
@@ -24,6 +25,43 @@ function fakeStallMonitor(overrides: Partial<StallMonitor> = {}): StallMonitor {
     timePhase: (_label, fn) => fn(),
     ...overrides
   }
+}
+
+/** A controllable interval + monotonic clock for driving the REAL startStallMonitor (not a fake) through
+ *  startRunObservability's own `deps.startStallMonitor` seam, so the unlock-screen tests below exercise the
+ *  actual resync()/pause() wiring production runs, not a mock's assumptions about it. `jumpTo` moves the
+ *  clock without firing the interval, modelling time passing while the main thread is blocked and the
+ *  interval's own tick is still queued behind it; `advanceTo` fires the (possibly overdue) tick. */
+function fakeHeartbeat(): {
+  now: () => number
+  advanceTo: (t: number) => void
+  jumpTo: (t: number) => void
+  setIntervalFn: (handler: () => void, ms: number) => NodeJS.Timeout
+  clearIntervalFn: (handle: NodeJS.Timeout) => void
+} {
+  let current = 0
+  let tick: (() => void) | undefined
+  return {
+    now: () => current,
+    advanceTo: (t) => {
+      current = t
+      tick?.()
+    },
+    jumpTo: (t) => {
+      current = t
+    },
+    setIntervalFn: (handler) => {
+      tick = handler
+      return 1 as unknown as NodeJS.Timeout
+    },
+    clearIntervalFn: () => {
+      tick = undefined
+    }
+  }
+}
+
+function fakeHistogram() {
+  return { enable: vi.fn(() => true), disable: vi.fn(() => true), reset: vi.fn(), percentile: vi.fn(() => 0) }
 }
 
 describe('startRunObservability', () => {
@@ -152,7 +190,7 @@ describe('startRunObservability', () => {
     expect(resync).toHaveBeenCalledOnce()
   })
 
-  it("also resyncs the stall monitor on powerMonitor's unlock-screen, in case 'resume' itself is never delivered (an aborted sleep, or a platform that raises 'suspend' without a matching 'resume')", () => {
+  it("resyncs the stall monitor on powerMonitor's unlock-screen only when 'suspend' actually paused it and no 'resume' re-armed it since — never re-baselining a heartbeat that never stopped ticking, since a screen lock usually leaves the machine awake with the heartbeat still running", () => {
     const resync = vi.fn()
     const powerMonitor = fakePowerMonitor()
     startRunObservability({
@@ -169,9 +207,97 @@ describe('startRunObservability', () => {
         clearIntervalFn: vi.fn()
       }
     })
+    const onSuspend = powerMonitor.on.mock.calls.find((c) => c[0] === 'suspend')![1] as () => void
+    const onResume = powerMonitor.on.mock.calls.find((c) => c[0] === 'resume')![1] as () => void
     const onUnlockScreen = powerMonitor.on.mock.calls.find((c) => c[0] === 'unlock-screen')![1] as () => void
+
+    onUnlockScreen() // no 'suspend' happened — the heartbeat is running; must not resync it
+    expect(resync).not.toHaveBeenCalled()
+
+    onSuspend()
+    onResume() // 'resume' already re-armed it — a later unlock-screen must not resync it again
     onUnlockScreen()
+    expect(resync).not.toHaveBeenCalled()
+
+    onSuspend()
+    onUnlockScreen() // 'resume' never arrived — this is the fallback path unlock-screen exists for
     expect(resync).toHaveBeenCalledOnce()
+  })
+
+  it('unlock-screen does not re-baseline a running heartbeat, so lateness already accumulated before it fires is still reported as app.stall (round-4 fix: the previous unconditional resync() erased it)', () => {
+    const audit = vi.fn()
+    const heartbeat = fakeHeartbeat()
+    const powerMonitor = fakePowerMonitor()
+    startRunObservability({
+      userData: '/fake',
+      version: '1.9.7',
+      platform: 'darwin',
+      arch: 'arm64',
+      audit,
+      powerMonitor,
+      deps: {
+        beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
+        startStallMonitor: (opts) =>
+          startStallMonitor({
+            ...opts,
+            tickMs: 1000,
+            summaryIntervalMs: 10_000,
+            now: heartbeat.now,
+            setIntervalFn: heartbeat.setIntervalFn,
+            clearIntervalFn: heartbeat.clearIntervalFn,
+            histogram: fakeHistogram()
+          }),
+        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+        clearIntervalFn: vi.fn()
+      }
+    })
+    const onUnlockScreen = powerMonitor.on.mock.calls.find((c) => c[0] === 'unlock-screen')![1] as () => void
+
+    heartbeat.advanceTo(1000) // on-time tick — expectedAt -> 2000
+    // The main thread is blocked (e.g. a synchronous OneDrive read); the heartbeat's own overdue tick and
+    // the unlock-screen callback are both queued behind it, in unspecified order. Model the unlock-screen
+    // callback running first, before the overdue tick.
+    heartbeat.jumpTo(8000)
+    onUnlockScreen()
+    heartbeat.advanceTo(8000) // the overdue tick finally runs
+
+    expect(audit).toHaveBeenCalledWith('app.stall', expect.objectContaining({ bootId: 'boot-1', durationMs: 6000 }))
+  })
+
+  it('unlock-screen restarts a heartbeat that suspend paused and no resume re-armed', () => {
+    const heartbeat = fakeHeartbeat()
+    const powerMonitor = fakePowerMonitor()
+    const setIntervalSpy = vi.fn(heartbeat.setIntervalFn)
+    startRunObservability({
+      userData: '/fake',
+      version: '1.9.7',
+      platform: 'darwin',
+      arch: 'arm64',
+      audit: vi.fn(),
+      powerMonitor,
+      deps: {
+        beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
+        startStallMonitor: (opts) =>
+          startStallMonitor({
+            ...opts,
+            tickMs: 1000,
+            summaryIntervalMs: 10_000,
+            now: heartbeat.now,
+            setIntervalFn: setIntervalSpy,
+            clearIntervalFn: heartbeat.clearIntervalFn,
+            histogram: fakeHistogram()
+          }),
+        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+        clearIntervalFn: vi.fn()
+      }
+    })
+    const onSuspend = powerMonitor.on.mock.calls.find((c) => c[0] === 'suspend')![1] as () => void
+    const onUnlockScreen = powerMonitor.on.mock.calls.find((c) => c[0] === 'unlock-screen')![1] as () => void
+
+    expect(setIntervalSpy).toHaveBeenCalledOnce() // the initial heartbeat
+    onSuspend() // clears the heartbeat's interval
+    onUnlockScreen() // no 'resume' arrived — this is the fallback path
+    expect(setIntervalSpy).toHaveBeenCalledTimes(2) // resync() restarted it
   })
 
   it("shutdownClean stops the alive timer and stall monitor, unsubscribes from suspend and resume, and audits app.shutdown.clean with markShutdownClean's detail", () => {
