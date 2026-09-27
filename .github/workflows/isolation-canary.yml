@@ -96,8 +96,8 @@ jobs:
           if mount | grep -qF "$sandbox"; then
             echo "run-swift-tests.sh left a mount behind under $sandbox:"; mount | grep -F "$sandbox"; exit 1
           fi
-      # A plain, unmounted failing shim — swift test's own non-zero status must reach run-swift-tests.sh's
-      # caller unchanged, including after the fix above adds mount detection to its cleanup.
+      # A plain, unmounted failing shim — swift test's own non-zero status reaches the caller unchanged by
+      # the cleanup trap.
       - name: A shimmed swift's own non-zero exit code passes through run-swift-tests.sh
         run: |
           set -euo pipefail
