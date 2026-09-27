@@ -2830,8 +2830,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
         {
           reload: () => reloadOverlay(self),
           quit: () => app.quit(),
-          // Mirrors IPC.openPath's requireAuth() gate for the same shell.openPath(resolveMeetingsFolder(...))
-          // call, so a locked session gets no button rather than one whose click silently does nothing.
+          // Mirrors the openPath IPC handler's requireAuth() gate for the same
+          // shell.openPath(resolveMeetingsFolder(...)) call, so a locked session gets no button rather
+          // than one whose click silently does nothing.
           openMeetingsFolder: requireAuth()
             ? async () => {
                 const openError = await shell.openPath(resolveMeetingsFolder(getSettings()))

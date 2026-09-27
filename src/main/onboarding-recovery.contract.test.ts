@@ -16,6 +16,10 @@ function runSource(sourceText: string, globals: Record<string, unknown>): any {
   const context = vm.createContext({
     URL,
     URLSearchParams,
+    // Shares this realm's Error with the lifted code: vm.createContext() otherwise gives the sandbox its
+    // own fresh intrinsics, so an outer-realm Error (e.g. a rejected mock's Error) would fail an
+    // `err instanceof Error` check inside the sandbox even though it really is one.
+    Error,
     ...globals
   })
   vm.runInContext(compiled, context, { timeout: 2_000 })
@@ -248,7 +252,9 @@ describe('render-process-gone reload budget wiring', () => {
     })
     actualRendererGoneHandler(unlockedGlobals)({}, { reason: 'crashed', exitCode: 1 })
     const actions = unlockedDialog.mock.calls[0][4]
-    expect(actions.openMeetingsFolder).toBeInstanceOf(Function)
+    // Not toBeInstanceOf(Function): the lifted code's closure is a Function from the vm sandbox's own
+    // realm, not this file's — typeof is realm-agnostic.
+    expect(typeof actions.openMeetingsFolder).toBe('function')
 
     await actions.openMeetingsFolder()
     expect(getSettings).toHaveBeenCalled()
