@@ -84,6 +84,9 @@ if (count > BASELINE) {
     console.error(`    ${String(n).padStart(4)}  ${file}`)
   }
   console.error('')
+  console.error('  DEBUG (temporary, M2-0026): every error line')
+  for (const line of lines) console.error(`  ${line}`)
+  console.error('')
   console.error('  Fix the new errors. Do NOT raise the baseline.')
   process.exit(1)
 }
