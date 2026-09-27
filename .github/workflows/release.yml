@@ -24,7 +24,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: Require the tagged commit to be current main
@@ -35,7 +35,7 @@ jobs:
             echo "::error::Release tags must point to the current origin/main commit."
             exit 1
           fi
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
           cache: npm
@@ -58,7 +58,7 @@ jobs:
     # without materially delaying detection of a genuinely stuck job.
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # First step, before any build work starts: a tag that doesn't match package.json's version would
       # make electron-builder publish onto/overwrite an existing release instead of creating a new one -
       # see scripts/check-version-parity.mjs for the full failure mode.
@@ -70,7 +70,7 @@ jobs:
       # the ffmpeg-sidecar-v1 release in this repo. Cache the target binary directory so a
       # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
       # GITHUB_TOKEN, read-only, scoped to this repo) on a cache miss.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         id: ffmpeg-cache
         with:
           path: resources/ffmpeg/darwin-arm64
@@ -108,7 +108,7 @@ jobs:
       # The Intel half of the universal build. Deliberately a SECOND cache entry with its own id and
       # key rather than another path on the arm64 one: with a shared id, an arm64 cache hit would skip
       # this download too, and the gate below would then fail a job that was one step from complete.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         id: ffmpeg-cache-x64
         with:
           path: resources/ffmpeg/darwin-x64
@@ -153,13 +153,13 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
       # Same model cache as build.yml (~1.3 GB fetched by predist -> scripts/fetch-models.mjs).
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             resources/models
@@ -186,7 +186,7 @@ jobs:
           ASKTOTO_ARTIFACTS_DIR: release
       - name: Verify macOS signing
         run: node scripts/verify-signing.mjs --require-notarized
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: metis-release-macos
           retention-days: 1
@@ -204,7 +204,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Verify tag matches package.json version
         shell: bash
         run: node scripts/check-version-parity.mjs
@@ -214,7 +214,7 @@ jobs:
       # the ffmpeg-sidecar-v1 release in this repo. Cache the target binary directory so a
       # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
       # GITHUB_TOKEN, read-only, scoped to this repo) on a cache miss.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         id: ffmpeg-cache
         with:
           path: resources/ffmpeg/win32-x64
@@ -262,13 +262,13 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
       # Same model cache as build.yml / release-macos (~1.3 GB fetched by predist:win -> fetch-models.mjs).
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             resources/models
@@ -294,7 +294,7 @@ jobs:
       - run: node scripts/verify-signing.mjs
         env:
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: metis-release-windows
           retention-days: 1
@@ -314,12 +314,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: metis-release-macos
           path: release-bundle/macos
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: metis-release-windows
           path: release-bundle/windows

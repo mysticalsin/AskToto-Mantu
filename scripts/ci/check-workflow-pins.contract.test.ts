@@ -12,8 +12,9 @@ import { findUnpinnedUses, workflowFiles, WORKFLOWS_DIR } from './check-workflow
  *
  * What is asserted, in two parts. First, that the DETECTOR (findUnpinnedUses, the same function
  * `npm run check:workflow-pins` runs in CI) classifies every reference shape correctly — pinned,
- * unpinned, commented-out, local, Docker. Second, that every workflow file GitHub Actions actually
- * checks out in this repository is clean under that detector, so this suite fails the moment a new
+ * unpinned, commented-out, local, Docker, a step keyed by `name:` rather than `uses:`, and a
+ * job-level reusable-workflow ref. Second, that every workflow file GitHub Actions actually checks
+ * out in this repository is clean under that detector, so this suite fails the moment a new
  * `uses: owner/repo@v4` lands anywhere in .github/workflows, not only in the two files this ticket
  * names.
  */
@@ -29,21 +30,23 @@ describe('findUnpinnedUses — classifies a single uses: reference', () => {
 
   it('flags a full commit SHA with no version comment', () => {
     expect(findUnpinnedUses(`      - uses: actions/checkout@${SHA}\n`)).toEqual([
-      { line: 1, ref: `actions/checkout@${SHA}`, reason: 'missing a trailing "# vX" version comment' }
+      { line: 1, ref: `actions/checkout@${SHA}`, reason: 'missing a trailing "# vX.Y.Z" version comment' }
     ])
   })
 
-  it('accepts a full commit SHA with a trailing major-version comment', () => {
-    expect(findUnpinnedUses(`      - uses: actions/checkout@${SHA} # v4\n`)).toEqual([])
+  it('rejects a bare major-version comment — the version must be exact, not just the major tag', () => {
+    expect(findUnpinnedUses(`      - uses: actions/checkout@${SHA} # v4\n`)).toEqual([
+      { line: 1, ref: `actions/checkout@${SHA}`, reason: 'missing a trailing "# vX.Y.Z" version comment' }
+    ])
   })
 
-  it('accepts a full semantic-version comment too', () => {
+  it('accepts a full commit SHA with a trailing exact vX.Y.Z version comment', () => {
     expect(findUnpinnedUses(`      - uses: actions/checkout@${SHA} # v4.2.2\n`)).toEqual([])
   })
 
   it('rejects a short SHA — it must be the full 40 characters, not an abbreviation', () => {
     const short = SHA.slice(0, 7)
-    expect(findUnpinnedUses(`      - uses: actions/checkout@${short} # v4\n`)).toEqual([
+    expect(findUnpinnedUses(`      - uses: actions/checkout@${short} # v4.2.2\n`)).toEqual([
       { line: 1, ref: `actions/checkout@${short}`, reason: 'not pinned to a full 40-character commit SHA' }
     ])
   })
@@ -52,12 +55,43 @@ describe('findUnpinnedUses — classifies a single uses: reference', () => {
     expect(findUnpinnedUses('      - uses: ./.github/actions/local\n')).toEqual([])
   })
 
-  it('does not flag a Docker image reference — it has no tag to pin either', () => {
-    expect(findUnpinnedUses('      - uses: docker://alpine:3.20\n')).toEqual([])
+  it('flags a "../" path — GitHub resolves a local action only when it starts with "./"', () => {
+    expect(findUnpinnedUses('      - uses: ../shared-actions/local\n')).toEqual([
+      { line: 1, ref: '../shared-actions/local', reason: 'not pinned to a full 40-character commit SHA' }
+    ])
+  })
+
+  it('flags a Docker image reference pinned only by a mutable tag', () => {
+    expect(findUnpinnedUses('      - uses: docker://alpine:3.20\n')).toEqual([
+      {
+        line: 1,
+        ref: 'docker://alpine:3.20',
+        reason: 'docker image ref must be pinned by digest (docker://image@sha256:<64 hex>)'
+      }
+    ])
+  })
+
+  it('accepts a Docker image reference pinned by a sha256 digest', () => {
+    const digest = 'b'.repeat(64)
+    expect(findUnpinnedUses(`      - uses: docker://alpine@sha256:${digest}\n`)).toEqual([])
   })
 
   it('ignores a uses: mentioned inside a comment line', () => {
     expect(findUnpinnedUses('      # uses: actions/checkout@v4\n')).toEqual([])
+  })
+
+  it('flags a step keyed by "name:" whose "uses:" is a bare step-level key, not a sequence item', () => {
+    const yaml = ['      - name: Checkout', '        uses: actions/checkout@v4'].join('\n')
+    expect(findUnpinnedUses(yaml)).toEqual([
+      { line: 2, ref: 'actions/checkout@v4', reason: 'not pinned to a full 40-character commit SHA' }
+    ])
+  })
+
+  it('flags a job-level reusable-workflow ref pinned only to a tag', () => {
+    const ref = 'owner/repo/.github/workflows/x.yml@v1'
+    expect(findUnpinnedUses(`  uses: ${ref}\n`)).toEqual([
+      { line: 1, ref, reason: 'not pinned to a full 40-character commit SHA' }
+    ])
   })
 
   it('reports every violation with its own line number, across multiple lines', () => {
