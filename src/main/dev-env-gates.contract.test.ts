@@ -110,12 +110,19 @@ describe('MQA-167 — the destructive self-test suite must not run in a packaged
       'runSelfTest',
       'app',
       'console',
+      // The sliced region also carries whenReady's very next line, `if (QA_IDENTITY_BUILD)
+      // installQaFaultHook()` (M2-0026's SIGUSR2 fault hook) — unrelated to this branch, so both are
+      // injected only to resolve those two references instead of throwing.
+      'QA_IDENTITY_BUILD',
+      'installQaFaultHook',
       `return (async () => {\n${region}\nreturn 'branch-skipped'\n})()`
     ) as (
       devEnv: DevEnv,
       runSelfTest: (out: string) => Promise<void>,
       app: { quit: () => void },
-      console: Console
+      console: Console,
+      QA_IDENTITY_BUILD: boolean,
+      installQaFaultHook: () => void
     ) => Promise<unknown>
     const result = await lifted(
       env,
@@ -123,7 +130,9 @@ describe('MQA-167 — the destructive self-test suite must not run in a packaged
         ran.push(out)
       },
       { quit: () => { quit += 1 } },
-      console
+      console,
+      false,
+      () => {}
     )
     return { ran, quit, result }
   }
