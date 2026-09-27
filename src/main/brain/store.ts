@@ -11,7 +11,8 @@ import {
   readFileSync,
   rmSync,
   renameSync,
-  statSync
+  statSync,
+  writeFileSync
 } from 'node:fs'
 import { join, basename, dirname } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
@@ -884,7 +885,7 @@ export function restorePreservedBrainIndex(
   try {
     mkdirSync(root, { recursive: true })
     preserveCurrentIndexBeforeRestore(settings)
-    copyFileSync(source, tmp, constants.COPYFILE_EXCL)
+    writeFileSync(tmp, sourceBytes, { flag: 'wx' })
     fsyncFilePath(tmp)
     renameSync(tmp, target)
     fsyncDirectoryIfSupported(root)

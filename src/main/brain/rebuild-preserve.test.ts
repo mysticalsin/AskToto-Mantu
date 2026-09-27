@@ -417,6 +417,26 @@ describe('rebuild preserves unreadable indexes', () => {
     expectBytesUnchanged(join(preserved, beforeRestore[0]), currentBefore)
   })
 
+  it('restores the bytes it verified even if the preserved source changes before replacement', async () => {
+    const preserved = join(meetingsFolder, '.brain-preserved')
+    mkdirSync(preserved, { recursive: true })
+    await writeSaved(primary, indexJson(), false)
+    const copy = join(preserved, 'index.unreadable-readable.json')
+    await writeSaved(copy, JSON.stringify(BrainIndexSchema.parse({ ingested: { 'verified.md': { at: 1, ok: true } } })), true)
+    const verifiedBytes = sha256(readFileSync(copy))
+    const changedBytes = Buffer.from(JSON.stringify(BrainIndexSchema.parse({ ingested: { 'changed.md': { at: 2, ok: true } } })), 'utf8')
+    const changedSha = sha256(changedBytes)
+    vi.spyOn(fs, 'copyFileSync').mockImplementation((from, to, mode) => {
+      actualFs.copyFileSync!(from, to, mode)
+      if (from === primary) writeFileSync(copy, changedBytes)
+    })
+
+    expect(restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: true })).toEqual({ ok: true })
+
+    expectBytesUnchanged(primary, verifiedBytes)
+    expect(sha256(readFileSync(primary))).not.toBe(changedSha)
+  })
+
   it('refuses to restore a preserved index that still cannot decrypt', () => {
     const preserved = join(meetingsFolder, '.brain-preserved')
     mkdirSync(preserved, { recursive: true })
