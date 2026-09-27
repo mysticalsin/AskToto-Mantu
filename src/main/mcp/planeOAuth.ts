@@ -1,19 +1,33 @@
 /**
  * planeOAuth.ts — OAuth 2.1 + PKCE connect flow for Plane's hosted MCP server.
  *
- * Mirrors clickupOAuth.ts (PKCE, CSRF state, loopback 127.0.0.1, 300s timeout, single-flight).
- * Plane's discovery (https://mcp.plane.so/.well-known/oauth-authorization-server, 2026-08-31) is a
- * confidential client: token_endpoint_auth_methods_supported is client_secret_post / client_secret_basic
- * — not "none". DCR therefore returns a client_secret, which this module stores via mcpSecrets
- * (key-mcp-plane-client.bin), never settings.json. client_id is public and lives in settings.planeClientId.
+ * Mirrors clickupOAuth.ts (PKCE, CSRF state, loopback 127.0.0.1, 300s timeout, single-flight) — INCLUDING
+ * its DCR posture: bind the loopback server first, then register a FRESH confidential client scoped to
+ * THIS run's exact `http://127.0.0.1:<port>/callback`, every Connect. A prior version of this module
+ * instead registered once with a fixed portless `http://127.0.0.1/callback` and cached that client_id/
+ * client_secret indefinitely, sending every later run's real ported redirect_uri to a client that was
+ * never registered with it (M2-0144 / review finding P4-F2).
  *
- * GROUND TRUTH (fetched 2026-08-31):
+ * GROUND TRUTH (fetched 2026-09-26, live):
  *   authorization_endpoint: https://mcp.plane.so/authorize
  *   token_endpoint:         https://mcp.plane.so/token
  *   registration_endpoint:  https://mcp.plane.so/register
  *   grant_types_supported:  ["authorization_code", "refresh_token"]
  *   code_challenge_methods_supported: ["S256"]
  *   token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"]
+ *
+ * Unlike mcp.clickup.com (which 401s "redirect_uri is not registered for this client" the instant
+ * `/authorize` sees a redirect_uri outside the registered set), a live probe of mcp.plane.so found
+ * `/authorize` returns 302-to-consent for a client registered with `http://127.0.0.1/callback` even when
+ * called with an entirely different, unregistered `http://127.0.0.1:<port>/callback` — i.e. Plane does
+ * NOT reject an unlisted loopback redirect_uri at the authorize step the way ClickUp does (OBSERVED,
+ * 2026-09-26; the token-exchange step could not be probed the same way — it needs a completed interactive
+ * login, which no automated/CI environment can provide — so a stricter check there remains ASSUMED-safe
+ * rather than OBSERVED). Registering fresh per run regardless is still the right call: it is proven safe
+ * (this run's own redirect_uri is always in the set DCR was just called with), it removes the
+ * portless/ported asymmetry entirely rather than leaving it load-bearing on an unverified assumption, and
+ * it satisfies AGX-11/AGSTEP-12 (an OAuth scope upgrade goes through a fresh trusted-consent registration,
+ * never a reused reference client).
  *
  * Official hosted MCP URLs (never user-entered):
  *   OAuth (Connect): https://mcp.plane.so/http/mcp
@@ -62,6 +76,30 @@ export interface TokenResult {
   refreshToken?: string
 }
 
+const PLANE_REDIRECT_MISMATCH =
+  'Plane rejected this sign-in because the callback address does not match the one Métis registered. Click Connect again.'
+const PLANE_INVALID_CLIENT = 'Plane did not recognize this sign-in client. Click Connect again.'
+const PLANE_GENERIC = 'Plane rejected the sign-in request.'
+
+/**
+ * Map a Plane OAuth error code/description to a single human sentence — mirrors
+ * humanizeClickupOAuthError. Covers a rejected/expired refresh token (AGUC-021) the same way: Plane's
+ * token endpoint answers a bad grant with `{"error":"invalid_grant",...}` on the same shape ClickUp uses,
+ * so the generic branch below already turns that into an actionable "Plane rejected the request" sentence
+ * rather than a raw JSON blob.
+ */
+export function humanizePlaneOAuthError(code: string, description = ''): string {
+  const hay = `${code} ${description}`.toLowerCase()
+  if (/redirect_uri/.test(hay) || /not registered/.test(hay)) return PLANE_REDIRECT_MISMATCH
+  if (code === 'invalid_client' || /invalid_client/.test(hay)) return PLANE_INVALID_CLIENT
+  const desc = description.trim()
+  if (!desc || desc.startsWith('{') || desc.startsWith('[')) {
+    if (/access_denied/.test(hay)) return 'Plane sign-in was denied.'
+    return code ? `Plane rejected the request (${code}).` : PLANE_GENERIC
+  }
+  return desc
+}
+
 async function postTokenRequest(body: URLSearchParams): Promise<TokenResult> {
   try {
     const res = await fetch(TOKEN_URL, {
@@ -76,7 +114,7 @@ async function postTokenRequest(body: URLSearchParams): Promise<TokenResult> {
     if (!res.ok || !accessToken) {
       const desc = typeof json?.error_description === 'string' ? json.error_description : ''
       const code = typeof json?.error === 'string' ? json.error : ''
-      return { ok: false, error: desc || (code ? `Plane rejected the request (${code}).` : 'Plane rejected the sign-in request.') }
+      return { ok: false, error: humanizePlaneOAuthError(code, desc) }
     }
     return {
       ok: true,
@@ -122,17 +160,23 @@ export async function refreshPlaneToken(refreshToken: string): Promise<TokenResu
   )
 }
 
-async function ensurePlaneClient(): Promise<{ clientId: string; clientSecret: string } | null> {
-  const cachedId = (getSettings().planeClientId || '').trim()
-  const cachedSecret = getMcpClientSecret('plane').trim()
-  if (cachedId && cachedSecret) return { clientId: cachedId, clientSecret: cachedSecret }
+/**
+ * Dynamic Client Registration (RFC 7591) for THIS run's exact loopback redirect_uri — mirrors
+ * registerClickupClient. Always POSTs a fresh confidential client, never reuses a cached client_id/secret
+ * for `/authorize` or the token exchange: see the file header (P4-F2) for why a one-time cache bound to a
+ * fixed portless URI is wrong regardless of how strictly Plane validates it. The freshly-issued
+ * client_id/client_secret are cached afterward (settings.planeClientId + mcpSecrets) only so a later
+ * background refreshPlaneToken() call has something to send — the next interactive Connect registers
+ * again. Returns null when registration fails; callers must not fabricate a client.
+ */
+async function registerPlaneClient(redirectUri: string): Promise<{ clientId: string; clientSecret: string } | null> {
   try {
     const res = await fetch(REGISTER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         client_name: 'Métis',
-        redirect_uris: ['http://127.0.0.1/callback'],
+        redirect_uris: [redirectUri],
         grant_types: ['authorization_code', 'refresh_token'],
         response_types: ['code'],
         token_endpoint_auth_method: 'client_secret_post'
@@ -193,21 +237,22 @@ export function releasePlaneTokenLock(): void {
 export async function runPlaneOAuth(): Promise<TokenResult> {
   if (!tryAcquirePlaneTokenLock()) return { ok: false, error: 'A Plane sign-in is already in progress.' }
   try {
-    const client = await ensurePlaneClient()
-    if (!client) {
-      return { ok: false, error: 'Plane did not accept the automatic sign-in registration request. Try again later.' }
-    }
-
     const { verifier, challenge } = generatePkce()
     const state = randomBytes(16).toString('hex')
+    // Set inside server.listen()'s callback once registerPlaneClient() succeeds — mirrors
+    // clickupOAuth.ts's `let clientId = ''`. The promise below only resolves after that assignment (any
+    // earlier failure rejects instead), so both are non-empty by the time they're read after the await.
+    let clientId = ''
+    let clientSecret = ''
 
     const captured = await new Promise<{ code: string; redirectUri: string }>((resolve, reject) => {
       let redirectUri = ''
       const server = createServer((req, res) => {
         const url = new URL(req.url || '/', 'http://localhost')
         const c = url.searchParams.get('code')
-        const err = url.searchParams.get('error_description') || url.searchParams.get('error')
-        if (!c && !err) {
+        const errCode = url.searchParams.get('error') || ''
+        const errDesc = url.searchParams.get('error_description') || ''
+        if (!c && !errCode && !errDesc) {
           res.writeHead(204)
           res.end()
           return
@@ -225,7 +270,7 @@ export async function runPlaneOAuth(): Promise<TokenResult> {
         clearTimeout(timer)
         server.close()
         if (c) resolve({ code: c, redirectUri })
-        else reject(new Error(err || 'No authorization code returned.'))
+        else reject(new Error(humanizePlaneOAuthError(errCode, errDesc || 'No authorization code returned.')))
       })
       server.on('error', reject)
       const timer = setTimeout(() => {
@@ -235,9 +280,20 @@ export async function runPlaneOAuth(): Promise<TokenResult> {
       server.listen(0, '127.0.0.1', async () => {
         const addr = server.address()
         const port = typeof addr === 'object' && addr ? addr.port : 0
+        // Literal 127.0.0.1, not 'localhost' — see clickupOAuth.ts's identical comment (Windows can
+        // resolve 'localhost' to ::1 first, stalling or dropping the browser's callback).
         redirectUri = `http://127.0.0.1:${port}/callback`
         try {
-          const authUrl = buildAuthorizeUrl(client.clientId, redirectUri, challenge, state)
+          const registered = await registerPlaneClient(redirectUri)
+          if (!registered) {
+            clearTimeout(timer)
+            server.close()
+            reject(new Error('Plane did not accept the automatic sign-in registration request. Try again later.'))
+            return
+          }
+          clientId = registered.clientId
+          clientSecret = registered.clientSecret
+          const authUrl = buildAuthorizeUrl(clientId, redirectUri, challenge, state)
           await shell.openExternal(authUrl)
         } catch (e) {
           clearTimeout(timer)
@@ -247,13 +303,7 @@ export async function runPlaneOAuth(): Promise<TokenResult> {
       })
     })
 
-    const result = await exchangeCodeForTokens(
-      client.clientId,
-      client.clientSecret,
-      captured.code,
-      captured.redirectUri,
-      verifier
-    )
+    const result = await exchangeCodeForTokens(clientId, clientSecret, captured.code, captured.redirectUri, verifier)
     if (!result.ok) {
       auditLog('plane.oauth.denied', {})
       return result
@@ -261,7 +311,7 @@ export async function runPlaneOAuth(): Promise<TokenResult> {
     return result
   } catch (e) {
     auditLog('plane.oauth.failed', { reason: coarseOAuthFailure(e) })
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    return { ok: false, error: humanizePlaneOAuthError('', e instanceof Error ? e.message : String(e)) }
   } finally {
     releasePlaneTokenLock()
   }

@@ -8,6 +8,19 @@
 import type { McpConnection } from '@shared/ipc'
 import type { McpPushResult } from './mcpClient'
 
+/**
+ * Single-tenant by deliberate, owner-recorded decision — not a silent literal (M2-0144 / review finding
+ * P4-F4). `docs/design/CLICKUP-PUSH.md`'s frontmatter (`workspace:`, owner: Tony, status: active contract)
+ * pins exactly one ClickUp workspace, and its Destination section states it plainly: "Workspace is
+ * pinned... Never a renderer-supplied workspace." A per-account discovery call (mirroring how Plane
+ * resolves its workspace at Plane's own login page) was evaluated for this ticket and set aside: no tool
+ * on ClickUp's hosted MCP server (the `tools` list this module already works with — see
+ * pickClickupCreateTask, pickDiscoveryTool) is documented or observed anywhere in this codebase to
+ * enumerate the workspaces a connected account can reach, and guessing an unverified tool name in this
+ * write path would risk a silent regression with no live ClickUp account in CI to catch it. If Métis ever
+ * ships to a second ClickUp tenant, resolving this from the connection is a scoped follow-up, not a change
+ * to make blind.
+ */
 export const CLICKUP_WORKSPACE_ID = '90141511178'
 
 export type ClickupList = { id: string; name: string }

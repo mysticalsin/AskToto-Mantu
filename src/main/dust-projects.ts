@@ -50,6 +50,86 @@ function asArray(v: unknown): unknown[] {
   return Array.isArray(v) ? v : []
 }
 
+type SpaceEntry = { sId: string; name: string; kind: string }
+
+function parseSpace(raw: unknown): SpaceEntry | null {
+  const s = asRecord(raw)
+  if (!s) return null
+  const sId = typeof s.sId === 'string' ? s.sId : typeof s.id === 'string' ? s.id : ''
+  if (!sId) return null
+  const name = typeof s.name === 'string' ? s.name : sId
+  const kind = typeof s.kind === 'string' ? s.kind : 'space'
+  return { sId, name, kind }
+}
+
+function parseDataSources(dsJson: unknown, spaceId: string): DustProject[] {
+  const sources = asArray(asRecord(dsJson)?.data_sources ?? asRecord(dsJson)?.dataSources)
+  const out: DustProject[] = []
+  for (const raw of sources) {
+    const d = asRecord(raw)
+    if (!d) continue
+    const dsId =
+      typeof d.sId === 'string'
+        ? d.sId
+        : typeof d.id === 'string'
+          ? d.id
+          : typeof d.name === 'string'
+            ? d.name
+            : ''
+    if (!dsId) continue
+    const dsName = typeof d.name === 'string' ? d.name : dsId
+    out.push({
+      sId: dsId,
+      name: dsName,
+      kind: typeof d.connectorProvider === 'string' ? d.connectorProvider : 'data_source',
+      source: 'data_source',
+      spaceId
+    })
+  }
+  return out
+}
+
+type SpaceDataSourcesResult =
+  | { rejected: false; dataSources: DustProject[] }
+  | { rejected: true; error: string }
+
+/**
+ * Fetch one space's data sources. A 401/403 here means the API key itself was rejected (the same key
+ * backs every space's call), so it is reported as `rejected` rather than swallowed — silently continuing
+ * would return an `ok: true` result with every space showing zero data sources, which reads as "this
+ * workspace has no data sources" rather than the true "the connector token was rejected" (AGUC-021).
+ * Any other failure (a transient error, or a single space genuinely erroring for its own reason) still
+ * must not drop the rest of the space list, so it resolves with an empty data-source list instead.
+ */
+async function fetchSpaceDataSources(
+  fetchImpl: FetchLike,
+  base: string,
+  workspaceId: string,
+  headers: Record<string, string>,
+  space: SpaceEntry
+): Promise<SpaceDataSourcesResult> {
+  try {
+    const dsRes = await fetchImpl(
+      `${base}/api/v1/w/${encodeURIComponent(workspaceId)}/spaces/${encodeURIComponent(space.sId)}/data_sources`,
+      { headers }
+    )
+    if (dsRes.status === 401 || dsRes.status === 403) {
+      const body = await dsRes.text().catch(() => '')
+      return {
+        rejected: true,
+        error: `Dust rejected the API key while listing "${space.name}"'s data sources (${dsRes.status}${
+          body ? `: ${body.slice(0, 180)}` : ''
+        }). Reconnect Dust.`
+      }
+    }
+    if (!dsRes.ok) return { rejected: false, dataSources: [] }
+    const dsJson = await dsRes.json()
+    return { rejected: false, dataSources: parseDataSources(dsJson, space.sId) }
+  } catch {
+    return { rejected: false, dataSources: [] }
+  }
+}
+
 export async function fetchDustProjects(opts: {
   apiKey: string
   workspaceId: string
@@ -77,51 +157,27 @@ export async function fetchDustProjects(opts: {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
 
-  const spaces = asArray(asRecord(spacesJson)?.spaces ?? asRecord(spacesJson)?.data)
+  const spaceEntries = asArray(asRecord(spacesJson)?.spaces ?? asRecord(spacesJson)?.data)
+    .map(parseSpace)
+    .filter((s): s is SpaceEntry => s !== null)
+
+  // Every space's data-source lookup is an independent round trip against the same workspace — run them
+  // concurrently instead of one at a time (M2-0144 / review finding P4-F6). Neither Dust endpoint here
+  // paginates (verified against the live API reference, 2026-09-26: no cursor/page/limit/has_more field
+  // on GET .../spaces or GET .../spaces/{spaceId}/data_sources), so AGUC-022 does not apply to this pair.
+  const dsResults = await Promise.all(
+    spaceEntries.map((space) => fetchSpaceDataSources(fetchImpl, base, workspaceId, headers, space))
+  )
+
+  const rejected = dsResults.find((r): r is { rejected: true; error: string } => r.rejected)
+  if (rejected) return { ok: false, error: rejected.error }
+
   const projects: DustProject[] = []
-
-  for (const raw of spaces) {
-    const s = asRecord(raw)
-    if (!s) continue
-    const sId = typeof s.sId === 'string' ? s.sId : typeof s.id === 'string' ? s.id : ''
-    const name = typeof s.name === 'string' ? s.name : sId
-    if (!sId) continue
-    const kind = typeof s.kind === 'string' ? s.kind : 'space'
-    projects.push({ sId, name, kind, source: 'space' })
-
-    try {
-      const dsRes = await fetchImpl(
-        `${base}/api/v1/w/${encodeURIComponent(workspaceId)}/spaces/${encodeURIComponent(sId)}/data_sources`,
-        { headers }
-      )
-      if (!dsRes.ok) continue
-      const dsJson = await dsRes.json()
-      const sources = asArray(asRecord(dsJson)?.data_sources ?? asRecord(dsJson)?.dataSources)
-      for (const dRaw of sources) {
-        const d = asRecord(dRaw)
-        if (!d) continue
-        const dsId =
-          typeof d.sId === 'string'
-            ? d.sId
-            : typeof d.id === 'string'
-              ? d.id
-              : typeof d.name === 'string'
-                ? d.name
-                : ''
-        const dsName = typeof d.name === 'string' ? d.name : dsId
-        if (!dsId) continue
-        projects.push({
-          sId: dsId,
-          name: dsName,
-          kind: typeof d.connectorProvider === 'string' ? d.connectorProvider : 'data_source',
-          source: 'data_source',
-          spaceId: sId
-        })
-      }
-    } catch {
-      /* a single space's data sources failing must not drop the space list */
-    }
-  }
+  spaceEntries.forEach((space, i) => {
+    projects.push({ sId: space.sId, name: space.name, kind: space.kind, source: 'space' })
+    const result = dsResults[i]
+    if (!result.rejected) projects.push(...result.dataSources)
+  })
 
   return { ok: true, projects }
 }
