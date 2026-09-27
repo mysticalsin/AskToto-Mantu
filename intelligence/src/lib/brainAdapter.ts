@@ -482,10 +482,9 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   // (single-threaded deals, unmapped accounts). Stamped once at adapt time.
   const cold = buildGoingCold(b, Date.now())
 
-  // The display graph keeps every node type ingest mints. A meeting node carries its own source
-  // ref/date and its owning account's canonical name/sector, so the account and sector filters apply
-  // to it like any other node.
-  const keepTypes = new Set(['account', 'person', 'deal', 'sector', 'meeting'])
+  // The display graph is the whole brain graph: GraphView narrows it by account/sector/community/band,
+  // never by node type. A meeting node carries its own ref/date and its owning account's canonical
+  // name/sector so those filters apply to it.
   // A meeting node resolves its own record by the SAME slug ingest.ts minted its id from
   // (`meeting:${slugify(file)}`, slug() mirrors slugify() byte-for-byte) — a Map keyed by that slug,
   // distinct from meetingsByFile's raw-filename key.
@@ -497,7 +496,6 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   // (independently extracted, possibly drifted) account field.
   const accountByMeetingFile = new Map(b.accounts.flatMap((a) => a.meetings.map((m) => [m.file, a] as const)))
   const nodes: GraphNode[] = b.graph.nodes
-    .filter((n) => keepTypes.has(n.type))
     .map((n) => {
       const bare = n.id.replace(/^[a-z_]+:/, '')
       const t = cold.touch.get(n.id)
