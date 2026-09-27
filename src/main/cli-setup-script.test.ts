@@ -237,22 +237,16 @@ describe('cmdShimSpawn and the Windows login script share one quoted-path rule (
   })
 })
 
-// RF-AUDIT-R3-B1 — loginCli used to reach the Windows script through cmdStartSpawn, handing cmd.exe
-// `/d /c start "" <scriptPath>` and relying on Node's own Windows argv-to-command-line quoting to
-// protect it. That quoting only wraps an argument containing a space/tab or an empty string — it has no
-// notion of cmd.exe's own command-separator/expansion metacharacters (& | ^ % < > ( ) !). Because the
-// spawned target WAS cmd.exe, `/c` made it re-tokenize its own command line with those metacharacters
-// live wherever they were not already inside a quote — and even a first parse quoted correctly is not
-// enough, because `start` itself launches a `.cmd` file through a SECOND, independent cmd.exe (its own
+// RF-AUDIT-R3-B1 — loginCli must open the Windows setup/login script via shell.openPath (Electron's
+// ShellExecuteExW wrapper), exactly as setupCli always has, and never through a Node-built cmd.exe
+// command line. A spawned `cmd /d /c start "" <scriptPath>` cannot satisfy that invariant even with a
+// perfectly quoted argv: `start` launches a `.cmd` file through a SECOND, independent cmd.exe (its own
 // `/K`), whose quote-retention rule strips the outer quote pair whenever the quoted text contains `&`,
-// `^`, `<`, `>`, `(`, `)`, `@` or `|`. A profile/temp scriptPath containing any of those reached that
-// second parser unquoted.
-//
-// The fix removes the spawned cmd.exe entirely: loginCli now opens the script exactly the way setupCli
-// always has, via shell.openPath (Electron's ShellExecuteExW wrapper), so there is no Node-built command
-// line left for any cmd.exe to re-parse. (ShellExecute's own default "open" verb for a `.cmd` file does
-// still run cmd.exe, as `cmd.exe /c ""<path>" "`, and cmd.exe still expands a literal `%NAME%` inside
-// those quotes — but its quote-retention rule keeps the whole path as one token.)
+// `^`, `<`, `>`, `(`, `)`, `@` or `|` — a profile/temp scriptPath containing any of those would reach
+// that second parser unquoted. (ShellExecute's own default "open" verb for a `.cmd` file does still run
+// cmd.exe, as `cmd.exe /c ""<path>" "`, and cmd.exe still expands a literal `%NAME%` inside those quotes
+// — but its quote-retention rule keeps the whole path as one token, which is what these tests check
+// for: exactly the scriptPath reaches shell.openPath, and spawn is never called at all.)
 describe('loginCli opens the Windows script via shell.openPath, never a spawned cmd.exe (RF-AUDIT-R3-B1)', () => {
   it.each([
     ['ampersand + space', 'asktoto-cli-script-evil & co '],
