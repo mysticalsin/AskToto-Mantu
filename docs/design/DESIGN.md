@@ -148,8 +148,8 @@ dashboard. The button is the trigger. Never auto-send. Not leftover PR 61.
 See [OPERATOR.md](./OPERATOR.md). Cloudflare Access packed ops console (`operator/`, Worker `metis-operator`). Client keeps prompt cache on. Map geo comes from `request.cf`, never from the app. Not overlay chrome. Not the Fly license-server. Not `cloudflare-proxy`.
 
 **2.0 reconciliation (M2-0017).** The kit specifies 11 named portal surfaces (MASTER §12.2) against
-this file's 8-tab rail below. Tracked as decision D-16 in the program's DECISIONS.md (default: the
-kit's surfaces added inside this chrome, not a rewrite) — see [OPERATOR.md](./OPERATOR.md).
+this file's 8-tab rail below. Open question, tracked as decision D-16 in the program's private
+DECISIONS.md — see [OPERATOR.md](./OPERATOR.md).
 
 ## Operator — Shoey OpenPanel bar, Métis seats (Fable lock 6 Sep 2026)
 
