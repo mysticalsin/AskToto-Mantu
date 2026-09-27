@@ -15,10 +15,11 @@
  * contract for where those come from — and contains no Métis 2.0 program content of its own, so
  * its test suite runs anywhere with wholly synthetic fixtures.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
+import { latestByLevel, readRecordStore } from '../evidence/record.mjs'
 
 // ---- ID classification ------------------------------------------------------------------------
 
@@ -152,6 +153,11 @@ export function mergeStatuses(statuses) {
 const KIT_STATUS_RANK = { BLOCKED: 0, NOT_MET: 1, PARTIAL: 2, MET: 3 }
 const KNOWN_KIT_STATUSES = new Set(Object.keys(KIT_STATUS_RANK))
 
+/** The less-advanced of two ADR-017 kit statuses, per KIT_STATUS_RANK. */
+const lessAdvanced = (a, b) => (KIT_STATUS_RANK[a] < KIT_STATUS_RANK[b] ? a : b)
+/** The more-advanced of two ADR-017 kit statuses, per KIT_STATUS_RANK. */
+const moreAdvanced = (a, b) => (KIT_STATUS_RANK[a] > KIT_STATUS_RANK[b] ? a : b)
+
 /**
  * Maps one per-kit_ref ADR-017 evidence status onto this module's row-status vocabulary, given the
  * citing ticket's own (already normalized) status. One mapping, defined here and nowhere else:
@@ -181,19 +187,21 @@ export function applyEvidenceOverride(kitStatus, ticketStatus) {
  * least-advanced of those. Levels are an unordered set (INV-3): this never treats one level as
  * "later" than another — a record's own `result` (PASS or FAIL), not its `evidence_level`, decides
  * which side of the merge it falls on.
- * @param {Map<string, { result?: string, kit_refs?: Record<string, string> }>} recordsByLevel the
- *   `latestByLevel(records)` result for one ticket (M2-0002's scripts/evidence/record.mjs)
+ * @param {Map<string, { result: 'PASS' | 'FAIL', kit_refs: Record<string, string> }>} recordsByLevel
+ *   the `latestByLevel(records)` result for one ticket (M2-0002's scripts/evidence/record.mjs).
+ *   Every record here has already passed `recordProblems` (via `readRecordStore`), so `result` is
+ *   always `'PASS'` or `'FAIL'` and `kit_refs` is always an object — never read defensively.
  * @returns {Record<string, string>}
  */
 export function mergeGoverningKitRefs(recordsByLevel) {
   const maxPass = {}
   const minFail = {}
   for (const record of recordsByLevel.values()) {
-    for (const [ref, status] of Object.entries(record.kit_refs ?? {})) {
+    for (const [ref, status] of Object.entries(record.kit_refs)) {
       if (record.result === 'FAIL') {
-        if (minFail[ref] === undefined || KIT_STATUS_RANK[status] < KIT_STATUS_RANK[minFail[ref]]) minFail[ref] = status
-      } else if (maxPass[ref] === undefined || KIT_STATUS_RANK[status] > KIT_STATUS_RANK[maxPass[ref]]) {
-        maxPass[ref] = status
+        minFail[ref] = minFail[ref] === undefined ? status : lessAdvanced(status, minFail[ref])
+      } else {
+        maxPass[ref] = maxPass[ref] === undefined ? status : moreAdvanced(status, maxPass[ref])
       }
     }
   }
@@ -201,8 +209,7 @@ export function mergeGoverningKitRefs(recordsByLevel) {
   for (const ref of new Set([...Object.keys(maxPass), ...Object.keys(minFail)])) {
     const pass = maxPass[ref]
     const fail = minFail[ref]
-    merged[ref] =
-      pass === undefined ? fail : fail === undefined ? pass : KIT_STATUS_RANK[pass] < KIT_STATUS_RANK[fail] ? pass : fail
+    merged[ref] = pass && fail ? lessAdvanced(pass, fail) : pass ?? fail
   }
   return merged
 }
@@ -537,24 +544,19 @@ function formatError(error) {
 
 /**
  * Reads per-kit_ref evidence overrides from the ADR-017 record store (M2-0002's
- * scripts/evidence/record.mjs) for every ticket that has at least one governing record, as
- * `mergeGoverningKitRefs` of that ticket's `latestByLevel(records)` — never a hand-picked "latest
- * PASS", which would let a withdrawn PASS keep overriding the row and would never see a later
- * FAIL's own BLOCKED/NOT_MET kit_refs. This never re-parses the JSONL store itself: it delegates
- * entirely to M2-0002's reader and level-selection.
+ * scripts/evidence/record.mjs): for every ticket with at least one governing record, the override
+ * is, per ticket, the merge (`mergeGoverningKitRefs`) of its `latestByLevel(records)`. This never
+ * re-parses the JSONL store itself: it delegates entirely to M2-0002's reader and level-selection.
+ * `readRecordStore` treats a missing directory as an empty store (right for check.mjs, which
+ * always points at the real records directory) but an explicitly given `--evidence <dir>` that
+ * does not exist is a usage error, not silent no-op coverage, so that case is checked here and
+ * named in the thrown error.
  * @param {string | undefined} evidenceDir
- * @returns {Promise<Map<string, Record<string, string>>>}
+ * @returns {Map<string, Record<string, string>>}
  */
-async function loadEvidenceByTicket(evidenceDir) {
+function loadEvidenceByTicket(evidenceDir) {
   if (!evidenceDir) return new Map()
-  let readRecordStore, latestByLevel
-  try {
-    ;({ readRecordStore, latestByLevel } = await import('../evidence/record.mjs'))
-  } catch (error) {
-    throw new Error(
-      `--evidence requires scripts/evidence/record.mjs (M2-0002), which could not be imported: ${error.message}`
-    )
-  }
+  if (!existsSync(evidenceDir)) throw new Error(`--evidence: ${evidenceDir} does not exist`)
   const { recordsByTicket, problems } = readRecordStore(evidenceDir)
   if (problems.length > 0) throw new Error(`--evidence: ${problems.join('; ')}`)
   const evidenceByTicket = new Map()
@@ -597,7 +599,7 @@ export async function main(argv) {
 
   let evidenceByTicket
   try {
-    evidenceByTicket = await loadEvidenceByTicket(values.evidence)
+    evidenceByTicket = loadEvidenceByTicket(values.evidence)
   } catch (error) {
     console.error(`[trace] ${error.message}`)
     process.exit(1)
@@ -622,8 +624,8 @@ export async function main(argv) {
 
   if (values.check) return
 
-  // Reached only when neither --check nor a missing --out-md/--out-json exited above (the guard at
-  // the top of main), so both paths are always set here.
+  // Invariant: the usage guard above guarantees --out-md and --out-json are both set whenever
+  // --check is absent, so both are always defined here.
   writeOutput(values['out-md'], renderMarkdown(result))
   writeOutput(values['out-json'], `${JSON.stringify(renderJson(result), null, 1)}\n`)
 }

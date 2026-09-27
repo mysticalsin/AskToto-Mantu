@@ -792,12 +792,6 @@ describe('main() — the CLI contract', () => {
     expect(process.exit).toHaveBeenCalledWith(2)
   })
 
-  it('rejects with an actionable error when --evidence is given but M2-0002\'s record store reader is not present', async () => {
-    writeFixture({ tickets: [ticket({ id: 'M2-9001', kit_refs: ['FOO-01'], status: 'DONE' })], inventory: [row({ id: 'FOO-01', kit: 'kitA' })] })
-    await expect(main(argv(['--check', '--evidence', join(dir, 'records')]))).rejects.toThrow()
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('record.mjs'))
-  })
-
   describe('--evidence wired to the real ADR-017 record store (scripts/evidence/record.mjs, M2-0002)', () => {
     function outputPaths() {
       return { outMd: join(dir, 'TRACEABILITY.md'), outJson: join(dir, 'traceability.json') }
