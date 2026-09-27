@@ -288,8 +288,8 @@ export interface IngestError {
   error: string
 }
 
-/** Mirrors the host app's BrainStatus counts (src/shared/brain.ts) — the raw brain, not the
- *  display-filtered graph (account_graph drops meeting nodes; these counts don't). */
+/** Mirrors the host app's BrainStatus counts (src/shared/brain.ts) — the raw brain counts, independent
+ *  of account_graph's own node/edge totals below. */
 export interface StatusCounts {
   meetings: number
   people: number

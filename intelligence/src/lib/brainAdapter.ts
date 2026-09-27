@@ -482,16 +482,20 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   // (single-threaded deals, unmapped accounts). Stamped once at adapt time.
   const cold = buildGoingCold(b, Date.now())
 
-  // Meetings USED to be dropped from the DISPLAY graph, on the grounds that dozens of meeting nodes
-  // would drown the entity structure. That is a density problem, not a deletion problem: dropping them
-  // hid the source of every relationship, so the graph could assert two people were connected while
-  // hiding the note that proves it. They are carried through now; GraphView decides whether to show
-  // them, using the same account/sector fields (below) every other node already answers to.
+  // The display graph keeps every node type ingest mints. A meeting node carries its own source
+  // ref/date and its owning account's canonical name/sector, so the account and sector filters apply
+  // to it like any other node.
   const keepTypes = new Set(['account', 'person', 'deal', 'sector', 'meeting'])
   // A meeting node resolves its own record by the SAME slug ingest.ts minted its id from
   // (`meeting:${slugify(file)}`, slug() mirrors slugify() byte-for-byte) — a Map keyed by that slug,
   // distinct from meetingsByFile's raw-filename key.
   const meetingBySlug = new Map(indexedMeetings.map((m) => [slug(m.source_file), m]))
+  // Every meeting file → its owning account entity. This is the SAME join ingest.ts performs when it
+  // resolves `x.account.name` via resolveEntitySlug and pushes the ref into that account's own
+  // `meetings` list — so a meeting node inherits its account's canonical name/sector even after a
+  // manual merge/rename correction, never a name-equality/slug guess against the meeting's own
+  // (independently extracted, possibly drifted) account field.
+  const accountByMeetingFile = new Map(b.accounts.flatMap((a) => a.meetings.map((m) => [m.file, a] as const)))
   const nodes: GraphNode[] = b.graph.nodes
     .filter((n) => keepTypes.has(n.type))
     .map((n) => {
@@ -500,6 +504,9 @@ export function brainToDashboard(b: BrainRead): DashboardData {
       // A meeting node IS its own source: its ref/date are its own record, never another entity's
       // latest meeting.
       const ownMeeting = n.type === 'meeting' ? meetingBySlug.get(bare) : undefined
+      // Resolved once: the account entity that owns this meeting, keyed by the meeting's own source
+      // file (see accountByMeetingFile above) — never the meeting's own drifted account.name string.
+      const owner = ownMeeting ? accountByMeetingFile.get(ownMeeting.source_file) : undefined
       const entityMeetings =
         n.type === 'account' ? accountBySlug.get(bare)?.meetings
         : n.type === 'person' ? personBySlug.get(bare)?.meetings
@@ -515,12 +522,12 @@ export function brainToDashboard(b: BrainRead): DashboardData {
         account:
           n.type === 'person' ? accountByPerson.get(bare)
           : n.type === 'account' ? n.label
-          : n.type === 'meeting' ? ownMeeting?.account?.name
+          : n.type === 'meeting' ? owner?.name
           : undefined,
         sector:
           n.type === 'account' ? sectorByAccount.get(n.label)
           : n.type === 'sector' ? n.label
-          : n.type === 'meeting' ? (ownMeeting?.account?.name ? sectorByAccount.get(ownMeeting.account.name) : undefined)
+          : n.type === 'meeting' ? owner?.sector
           : undefined,
         win_likelihood_band: n.type === 'deal' ? bandByDeal.get(bare) ?? undefined : undefined,
         bid_id: n.type === 'deal' ? bare : undefined,

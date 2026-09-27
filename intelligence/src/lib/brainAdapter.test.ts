@@ -36,7 +36,7 @@ const FIXTURE: BrainRead = {
       { id: 'sector:technology', type: 'sector', label: 'technology' },
       { id: 'sector:banking', type: 'sector', label: 'banking' },
       // Meeting nodes, id'd the same way ingest.ts mints them (`meeting:${slugify(file)}`) — the
-      // display graph carries these through now, same as every other node type.
+      // display graph keeps them, same as every other node type.
       { id: 'meeting:m1-md', type: 'meeting', label: 'Acme Kickoff Call' },
       { id: 'meeting:m2-md', type: 'meeting', label: 'Acme SOW Review' },
       { id: 'meeting:m3-md', type: 'meeting', label: 'Acme Expansion Chat' },
@@ -54,7 +54,7 @@ const FIXTURE: BrainRead = {
       // A single cross-account bridge: makes the display graph ONE connected component so the
       // community test below actually proves label propagation beats connected-components.
       { from: 'account:acme-corp', to: 'account:globex-inc', rel: 'related-account', confidence: 'INFERRED' },
-      // Meeting-node edges: carried through along with their nodes now.
+      // Meeting-node edges: kept along with their nodes.
       { from: 'meeting:m1-md', to: 'account:acme-corp', rel: 'discussed-in', confidence: 'EXTRACTED' },
       { from: 'meeting:m1-md', to: 'person:jane-doe', rel: 'attends', confidence: 'EXTRACTED' },
       { from: 'meeting:m2-md', to: 'deal:acme-platform-deal', rel: 'discussed-in', confidence: 'EXTRACTED' },
@@ -294,11 +294,10 @@ describe('brainToDashboard — scope summaries', () => {
 })
 
 describe('brainToDashboard — display graph', () => {
-  // Meetings used to be dropped here on density grounds ("61 meeting nodes would drown the entity
-  // structure"), which made the SOURCE of every relationship invisible: the graph asserted two people
-  // were connected while hiding the note that proves it. Density is a filter problem, not a deletion
-  // problem — GraphView's account/sector filters already apply to any node carrying those fields, so
-  // the fix is to stop deleting meetings and start attributing them, not to add a second code path.
+  // The display graph keeps meeting nodes so the SOURCE of every relationship stays visible: an edge
+  // between two people is drawn from a specific note, not asserted out of thin air. Density is a
+  // GraphView filter concern — the account/sector fields below let it filter meetings exactly like any
+  // other node type.
   it('keeps meeting nodes and their edges in the display graph', () => {
     expect(dashboard.account_graph.nodes).toHaveLength(14) // 10 entities + 4 meetings
     expect(dashboard.account_graph.nodes.filter((n) => n.type === 'meeting')).toHaveLength(4)
@@ -460,7 +459,7 @@ describe('brainToDashboard — warnings, ingest errors, status', () => {
       people: 3,
       accounts: 2,
       deals: 3,
-      nodes: 14, // full raw graph — the display graph now keeps all 14, meetings included
+      nodes: 14, // full raw graph — the display graph keeps all 14, meetings included
       edges: 13
     })
     expect(dashboard.status.people).toBe(dashboard.people.length)

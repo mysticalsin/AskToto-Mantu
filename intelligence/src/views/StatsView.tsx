@@ -168,8 +168,8 @@ export function StatsView({ data }: Props) {
         <StatTile label="Recurring patterns (n≥2)" value={recurringInsights} />
         <StatTile label="People mapped" value={data.status.people} />
         <StatTile label="Accounts mapped" value={data.status.accounts} />
-        {/* Same filtered account_graph the Relationships tab renders (meetings dropped from the display
-            graph) — not the raw brain graph. The two used to disagree under this identical label. */}
+        {/* Same account_graph the Relationships tab renders — not the raw brain graph, which is why this
+            can differ from status.nodes/edges above under an identical-looking label. */}
         <StatTile
           label="Graph nodes · edges"
           value={`${data.account_graph.nodes.length} · ${data.account_graph.edges.length}`}
