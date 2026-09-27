@@ -198,8 +198,10 @@ describe('FITO-185-U wiring in createWindow', () => {
   })
 
   it('probe registers before loadURL', () => {
+    // createWindow navigates only through bindReadinessThenNavigate, so the act1 probe must be bound
+    // before that call.
     expect(create.indexOf('bindAct1DomProbe(')).toBeGreaterThan(-1)
-    expect(create.indexOf('bindAct1DomProbe(')).toBeLessThan(create.indexOf('win.loadURL(rendererUrl)'))
+    expect(create.indexOf('bindAct1DomProbe(')).toBeLessThan(create.indexOf('bindReadinessThenNavigate('))
   })
 
   it('keeps FITO-185-N exclusiveOnboarding=1 on packaged loadURL', () => {
