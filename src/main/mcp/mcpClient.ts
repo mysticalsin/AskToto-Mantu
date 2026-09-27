@@ -30,9 +30,11 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js'
-import { isIP, isIPv6 } from 'node:net'
-import { promises as dns } from 'node:dns'
+import { lookup } from 'node:dns/promises'
+import type { LookupAddress } from 'node:dns'
+import type { LookupFunction } from 'node:net'
 import { mainLog } from '../logger'
+import { routeDispatcher } from '../net/install-proxy'
 
 /** Bound every round-trip so an unreachable/hung server never blocks the main process. */
 const CONNECT_TIMEOUT_MS = 15_000
@@ -45,6 +47,12 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 // "push" act as an SSRF primitive against the host's own cloud credentials. Localhost/private-LAN
 // addresses are deliberately still allowed: that's a real deployment model for these connections today
 // (e.g. BidStack's own Settings page defaults to http://localhost:4001).
+//
+// Three layers close this off, none of them alone: validateEndpointUrl (scheme, and the literal
+// configured host, before any network call); sessionLookup (every address the session actually dials,
+// pinned once per session, so a DNS-rebinding resolver can't answer differently for a later connection);
+// and the transport's `fetch` override (refuses every redirect and keeps routing through the global
+// fetch, so net/egress-guard.ts's managed allowlist still applies).
 const BLOCKED_HOSTS = new Set([
   '169.254.169.254',
   'metadata.google.internal',
@@ -82,11 +90,22 @@ function ipv4MappedAddress(host: string): string | null {
 }
 
 /**
- * Reject non-http(s) schemes and known cloud-metadata hosts before any network call is made. A
- * hostname that isn't already a literal IP is resolved via DNS so a plain-looking name pointed at a
- * metadata address (rather than the literal address itself) can't sail past the check below.
+ * A cloud-metadata host name or address, including an IPv4-mapped IPv6 spelling of one (the network
+ * stack routes that to the embedded IPv4 host).
  */
-async function validateEndpointUrl(url: string, label: string): Promise<string | null> {
+function isCloudMetadataAddress(host: string): boolean {
+  const ipv4 = ipv4MappedAddress(host) ?? host
+  return BLOCKED_HOSTS.has(host) || BLOCKED_HOSTS.has(ipv4) || isLinkLocalIPv4(ipv4)
+}
+
+/**
+ * Reject non-http(s) schemes and the literal cloud-metadata hosts before any network call is made. A
+ * host name's ADDRESSES are checked where they are used, at connect time in sessionLookup below, never
+ * here — a check on a separate DNS resolution proves nothing about the address the socket later dials
+ * (that separate resolution was the DNS-rebinding TOCTOU window itself: a resolver can answer once for
+ * this check and differently moments later for the real connect).
+ */
+function validateEndpointUrl(url: string, label: string): string | null {
   let parsed: URL
   try {
     parsed = new URL(url)
@@ -98,33 +117,62 @@ async function validateEndpointUrl(url: string, label: string): Promise<string |
   }
   const rawHost = parsed.hostname.toLowerCase()
   const bareHost = rawHost.startsWith('[') && rawHost.endsWith(']') ? rawHost.slice(1, -1) : rawHost
-  const candidates = [bareHost]
-  if (isIPv6(bareHost)) {
-    const mapped = ipv4MappedAddress(bareHost)
-    if (mapped) candidates.push(mapped)
-  }
-  if (candidates.some((h) => BLOCKED_HOSTS.has(h) || isLinkLocalIPv4(h))) {
+  if (isCloudMetadataAddress(bareHost)) {
     return `"${url}" points at a cloud metadata address, which is never a valid ${label} endpoint.`
   }
-  if (!isIP(bareHost)) {
-    try {
-      // dns.lookup has no timeout/signal option, and a black-holing resolver (broken VPN, captive
-      // portal) would otherwise hang the main process here, defeating this file's hard-timeout contract.
-      // Bound it well under CONNECT_TIMEOUT_MS; a timeout falls through to the same catch as a lookup
-      // failure (the real connect below surfaces any genuine problem).
-      const resolved = await Promise.race([
-        dns.lookup(bareHost, { all: true }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('dns lookup timeout')), 3000))
-      ])
-      if (resolved.some((r) => BLOCKED_HOSTS.has(r.address) || isLinkLocalIPv4(r.address))) {
-        return `"${url}" resolves to a cloud metadata address, which is never a valid ${label} endpoint.`
-      }
-    } catch {
-      /* a DNS lookup failure here isn't this guard's concern — the real connect attempt below will
-         surface it as a normal connection error */
-    }
-  }
   return null
+}
+
+/** Raised inside sessionLookup; classifyError turns it into the user-facing refusal. `code` makes it
+ *  genuinely satisfy the NodeJS.ErrnoException shape sessionLookup's callback casts rejections to,
+ *  rather than just asserting a shape it doesn't have. */
+class CloudMetadataAddressError extends Error {
+  readonly code = 'ECLOUDMETADATA'
+}
+
+async function resolveAllowed(hostname: string): Promise<LookupAddress[]> {
+  const addresses = await lookup(hostname, { all: true })
+  if (addresses.some((a) => isCloudMetadataAddress(a.address))) {
+    throw new CloudMetadataAddressError(`${hostname} resolves to a cloud metadata address`)
+  }
+  return addresses
+}
+
+/**
+ * The connect-time `lookup` for one MCP session (one `withClient` call). Each host
+ * is resolved ONCE. The answer is refused if ANY address is a cloud-metadata address; otherwise it is
+ * pinned and handed to every connection the session opens. The address that passed the check is
+ * therefore the only address the session ever dials: a resolver that changes its answer (DNS
+ * rebinding) is never asked a second time, and a failed or stalled resolution dials nothing — it fails
+ * closed and is bounded by the existing abort timer, never by a resolver's own timeout.
+ *
+ * Node's `net` calls this with `{ all: true }` under autoSelectFamily (Node 22's default) and with
+ * `{ all: false }` otherwise; both forms are handled. IP-literal hosts never reach `lookup` at all —
+ * validateEndpointUrl's literal check above covers them.
+ */
+function sessionLookup(): LookupFunction {
+  const pinned = new Map<string, Promise<LookupAddress[]>>()
+  return (hostname, options, callback) => {
+    let answer = pinned.get(hostname)
+    if (!answer) {
+      answer = resolveAllowed(hostname)
+      pinned.set(hostname, answer)
+    }
+    answer.then(
+      (addresses) =>
+        options.all ? callback(null, addresses) : callback(null, addresses[0].address, addresses[0].family),
+      (error: NodeJS.ErrnoException) => callback(error, '')
+    )
+  }
+}
+
+/** `e` and its causes: fetch reports every network failure as `TypeError('fetch failed')` with the real
+ *  reason in `cause` — so a check against only the top-level message (e.g. for "redirect") never sees
+ *  it. Stops at the first cycle so a (pathological) circular `cause` chain can't loop forever. */
+function errorChain(e: unknown): Error[] {
+  const chain: Error[] = []
+  for (let c: unknown = e; c instanceof Error && !chain.includes(c); c = c.cause) chain.push(c)
+  return chain
 }
 
 /**
@@ -134,6 +182,9 @@ async function validateEndpointUrl(url: string, label: string): Promise<string |
 function classifyError(e: unknown, endpointUrl: string, label: string): string {
   const raw = errMsg(e)
   const blob = raw.toLowerCase()
+  if (errorChain(e).some((c) => c instanceof CloudMetadataAddressError)) {
+    return `"${endpointUrl}" resolves to a cloud metadata address, which is never a valid ${label} endpoint.`
+  }
   // 'timed out'/'-32001' are the MCP SDK's own RequestTimeout shape ("MCP error -32001: Request timed
   // out"), which carries no 'abort' — without them a server that stalls mid-request lands in the
   // unknown-reason branch below and points the user at their API key instead of at reachability.
@@ -142,6 +193,12 @@ function classifyError(e: unknown, endpointUrl: string, label: string): string {
   }
   if (blob.includes('401') || blob.includes('unauthor') || blob.includes('forbidden') || blob.includes('403')) {
     return `${label} rejected the API key (401/403). Check the key and its mcp scopes.`
+  }
+  // Redirects are refused outright (see withClient), and fetch's own refusal is
+  // `TypeError('fetch failed', { cause: Error('unexpected redirect') })` — the top-level message never
+  // says "redirect", so this walks the whole error chain rather than checking only the top-level one.
+  if (errorChain(e).some((c) => /redirect/i.test(c.message))) {
+    return `${label} redirected ${endpointUrl} somewhere else. Enter the endpoint's final URL instead.`
   }
   if (
     blob.includes('econnrefused') ||
@@ -154,11 +211,6 @@ function classifyError(e: unknown, endpointUrl: string, label: string): string {
   }
   if (blob.includes('invalid url') || blob.includes('failed to parse url')) {
     return `"${endpointUrl}" is not a valid URL.`
-  }
-  // Redirects are refused outright (see withClient) — tell the user to use the final URL rather than
-  // reporting this as an unreachable server, which would send them looking for the wrong problem.
-  if (blob.includes('redirect')) {
-    return `${label} redirected ${endpointUrl} somewhere else. Enter the endpoint's final URL instead.`
   }
   // Unclassified failure shape — never return stack traces or module paths. ClickUp tool validation
   // (invalid parameters, missing list_id) must stay ClickUp's own sentence, not "unknown reason".
@@ -180,20 +232,30 @@ async function withClient<T>(
   // import throws "A dynamic import callback was not specified" under bytecode, which broke every BidStack
   // action. The SDK ships a CJS build (dist/cjs), so the static import is bytecode-safe.
   const client = new Client({ name: 'asktoto', version: '1.0.0' }, { capabilities: {} })
+  // One dispatcher for this one MCP session: sessionLookup() resolves this session's
+  // endpoint host ONCE and pins the answer for every connection the session opens, closing the
+  // DNS-rebinding window between validateEndpointUrl's literal-host check and the real connect.
+  // routeDispatcher builds it on the SAME proxy route as the global dispatcher, so pinning never
+  // bypasses a corporate proxy Plane/ClickUp MCP are reached through.
+  const dispatcher = routeDispatcher(sessionLookup())
   // Fresh client + transport for this one call — never reused across calls, matching how dust.ts
   // creates a fresh DustAPI per stream.
   const transport = new StreamableHTTPClientTransport(new URL(endpointUrl), {
     requestInit: {
-      headers: { Authorization: `Bearer ${apiKey}`, ...extraHeaders },
-      // validateEndpointUrl() above checks the URL the user configured — and ONLY that one. fetch
-      // defaults to redirect:'follow', so a server answering 302 -> http://169.254.169.254/… would walk
-      // the request straight past a guard whose entire purpose is that this client can never reach a
-      // cloud-metadata address. Refuse redirects instead of re-validating each hop: an MCP endpoint is a
-      // concrete JSON-RPC URL, not a redirector, so following one is never something we want. A server
-      // that genuinely moved surfaces as a clear "endpoint redirected" message (see classifyError) and
-      // the user pastes the final URL.
-      redirect: 'error'
-    }
+      headers: { Authorization: `Bearer ${apiKey}`, ...extraHeaders }
+    },
+    // Every request on this transport, including the SDK's own event-stream GET (which never sees
+    // `requestInit` above), refuses a redirect — forced here, not left to `requestInit`, so it actually
+    // covers that GET too. `fetch` stays the global one (patched by net/egress-guard.ts) so the managed
+    // egress allowlist still applies; `dispatcher` rides through untouched.
+    fetch: (url, init) =>
+      fetch(url, {
+        ...init,
+        redirect: 'error',
+        // Type-only skew: @types/node's RequestInit.dispatcher predates undici 7's Dispatcher shape,
+        // which Node's fetch accepts at runtime. Cast once, here only — never widen this to a repo-wide `any`.
+        dispatcher: dispatcher as unknown as NonNullable<RequestInit['dispatcher']>
+      })
   })
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -211,6 +273,13 @@ async function withClient<T>(
       await client.close()
     } catch {
       /* best-effort teardown — a close failure must never mask the real result/error */
+    }
+    // After close, not before: closing the client aborts the event stream, so nothing is left
+    // in-flight on this dispatcher to cut off when it is destroyed.
+    try {
+      await dispatcher.destroy()
+    } catch {
+      /* best-effort */
     }
   }
 }
@@ -259,7 +328,7 @@ export async function connectMcp(
   const key = (apiKey || '').trim()
   if (!url) return { ok: false, error: `Enter the ${label} MCP endpoint URL first.` }
   if (!key) return { ok: false, error: `Enter the ${label} API key first.` }
-  const urlError = await validateEndpointUrl(url, label)
+  const urlError = validateEndpointUrl(url, label)
   if (urlError) return { ok: false, error: urlError }
 
   const configKey = JSON.stringify([url, key, extraHeaders])
@@ -296,7 +365,7 @@ export async function pushToMcp(
   if (!url) return { ok: false, error: `${label} endpoint is not configured. Set it up in Settings first.` }
   if (!key) return { ok: false, error: `${label} API key is not configured. Set it up in Settings first.` }
   if (!tool) return { ok: false, error: `No ${label} tool selected to push to.` }
-  const urlError = await validateEndpointUrl(url, label)
+  const urlError = validateEndpointUrl(url, label)
   if (urlError) return { ok: false, error: urlError }
   try {
     const result = await withClient(url, key, extraHeaders, CALL_TIMEOUT_MS, (client, opts) =>

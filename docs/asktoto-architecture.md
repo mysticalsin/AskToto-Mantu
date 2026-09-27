@@ -6,6 +6,8 @@ _Author: principal RT-AI engineer / product architect. Grounded in the live Mét
 > A Product · B UX · C Architecture · D Latency · E Caching · F Routing · G System prompt · H Accuracy/Eval · I Privacy · J Stack · K Roadmap · L Artifacts · M Taste
 
 > **Doc currency.** Re-verified against the live codebase 2026-07-10 (meeting-detect removal, native-binary provisioning, license gate, brain/Intelligence dashboard, portable-exe auto-update carve-out, the Bar/Panel layout split, and Section K's roadmap status). Sections A–J describe what is actually implemented today to the depth this pass verified — treat any remaining exact line-number citation as approximate and worth a quick re-check before relying on it, since several had already drifted. Section K (Roadmap) is a mix of shipped, superseded, and genuinely-open items from an earlier planning pass — read its status banner before treating anything there as a live TODO, and cross-check `docs/asktoto-hardening-backlog.md` for what has landed since. Sections L (Artifacts) and M (Taste) are forward-looking design pseudocode for not-yet-built extension points, clearly marked `new`/`build target` inline — they are not a description of shipped code.
+>
+> **2.0 platform pointer.** This file predates the kit's Métis 2.0 platform program. For the current platform target — Operator/HMAC/vault-last4, the Jarvis command session, and the desktop-agent vs Operator-agent sequencing — see [`docs/design/METIS-PLATFORM-NORTH-STAR.md`](design/METIS-PLATFORM-NORTH-STAR.md), the (draft) 2.0 platform target. Sections A–D below remain broadly accurate for the core Ask/Listen/screen-aware loop; re-verify anything more specific against current HEAD.
 
 ---
 

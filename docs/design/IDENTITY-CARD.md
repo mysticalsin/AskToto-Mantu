@@ -9,6 +9,8 @@ accent-name: Mantu Bright Purple
 
 # Métis Member Pass
 
+**Status:** Active — binding contract for the Settings identity surface (see frontmatter `status`).
+
 This is the design and architecture contract for the Settings identity surface.
 UI code implements this file. It does not invent a second visual language.
 
