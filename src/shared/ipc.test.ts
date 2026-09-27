@@ -24,6 +24,9 @@ import {
   MeetingExtractionQuerySchema,
   AttentionItemSchema,
   BrainAttentionResultSchema,
+  HistorySettledSchema,
+  HistoryTraceSchema,
+  RendererCrashContextSchema,
   appendAsrCorrection,
   TranscriptLineSchema,
   stripProvisionalLines,
@@ -975,6 +978,28 @@ describe('local AI IPC channel constants', () => {
     expect(IPC.localTranscriptEnd).toBe('local-ai:transcript:end')
     const values = Object.values(IPC)
     expect(new Set(values).size).toBe(values.length)
+  })
+})
+
+describe('observability IPC schemas', () => {
+  it('rejects a HistoryTrace requestId that is not a UUID', () => {
+    expect(HistoryTraceSchema.safeParse({ requestId: 'history-1', sentAt: 1 }).success).toBe(false)
+    expect(
+      HistoryTraceSchema.safeParse({ requestId: '123e4567-e89b-12d3-a456-426614174000', sentAt: 1 }).success
+    ).toBe(true)
+  })
+
+  it('rejects negative HistorySettled milliseconds and unknown outcomes', () => {
+    const base = { requestId: '123e4567-e89b-12d3-a456-426614174000', outcome: 'ok', ipcMs: 1 }
+    expect(HistorySettledSchema.safeParse({ ...base, ipcMs: -1 }).success).toBe(false)
+    expect(HistorySettledSchema.safeParse({ ...base, outcome: 'cancelled' }).success).toBe(false)
+    expect(HistorySettledSchema.safeParse({ ...base, renderMs: -1 }).success).toBe(false)
+    expect(HistorySettledSchema.safeParse({ ...base, renderMs: 0 }).success).toBe(true)
+  })
+
+  it('rejects an unknown renderer crash context view', () => {
+    expect(RendererCrashContextSchema.safeParse({ view: 'history', listening: false }).success).toBe(true)
+    expect(RendererCrashContextSchema.safeParse({ view: 'admin', listening: false }).success).toBe(false)
   })
 })
 
