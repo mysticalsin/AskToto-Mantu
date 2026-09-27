@@ -6,10 +6,10 @@ import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operato
 import { verifyOperatorLicense } from '../../src/shared/operator-license'
 import { buildDashboard } from './dashboard'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
-const SECRET = 'sk-ant-api03-OPERATOR-VAULT-TEST-only-xx99'
+const SECRET = syntheticProviderKey('anthropic')
 
 function env(): Env {
   return {

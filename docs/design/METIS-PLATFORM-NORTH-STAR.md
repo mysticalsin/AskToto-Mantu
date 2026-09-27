@@ -15,7 +15,7 @@ does-not-own:
   - installer packing / version bump
   - Goldberg Aria
 ready-to-merge: no
-audience: Tony Walteur
+audience: owner
 accent: "#7C8CF8"
 pass-accent: "#7F00DA"
 iron-law: subtract before you add. Intent first. No overengineering. Evidence-grounded.

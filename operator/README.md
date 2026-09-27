@@ -267,15 +267,15 @@ npx wrangler@4 secret put OPERATOR_VAULT_KEY
 npx wrangler@4 secret put ADMIN_EMAILS
 ```
 
-`TEAM_DOMAIN` is a Wrangler var (`https://tony-walteur.cloudflareaccess.com`), not a secret, so an
-unauthenticated console GET can 302 before the Access app even exists. After Tony enables Zero
+`TEAM_DOMAIN` is a Wrangler var (`https://metis-team.cloudflareaccess.com`), not a secret, so an
+unauthenticated console GET can 302 before the Access app even exists. After the owner enables Zero
 Trust and creates **Métis Operator**, set the AUD:
 
 ```sh
 npx wrangler@4 secret put POLICY_AUD
 ```
 
-If the team name is not `tony-walteur`, set `TEAM_DOMAIN` to `https://<team>.cloudflareaccess.com`.
+If the team name is not `metis-team`, set `TEAM_DOMAIN` to `https://<team>.cloudflareaccess.com`.
 An unset team means the Worker returns 503, never a password form. Exact Zero Trust app and
 policy: `docs/design/OPERATOR.md` and `docs/operator/RUNBOOKS.md`.
 
@@ -292,8 +292,8 @@ per-connector path):
 
 | Environment | Redirect URI to paste into the vendor's app registration |
 | --- | --- |
-| production | `https://metis-operator.tony-walteur.workers.dev/v1/admin/connectors/oauth/callback` |
-| staging | `https://metis-operator-staging.tony-walteur.workers.dev/v1/admin/connectors/oauth/callback` |
+| production | `https://metis-operator.example.workers.dev/v1/admin/connectors/oauth/callback` |
+| staging | `https://metis-operator-staging.example.workers.dev/v1/admin/connectors/oauth/callback` |
 
 **Google Drive** (authorization-code, PKCE) - [Google Cloud Console](https://console.cloud.google.com/apis/credentials) > Create Credentials > OAuth client ID > Web application. Paste the redirect URI above. Scope requested: `https://www.googleapis.com/auth/drive.file` (only files Métis itself creates or opens - broaden in `catalog.ts` if the fleet needs to read files it did not create).
 
@@ -353,16 +353,16 @@ node scripts/migrate.mjs --local
 
 | Environment | Worker name | D1 database | URL |
 | --- | --- | --- | --- |
-| production | `metis-operator` | `metis-operator` | `https://metis-operator.tony-walteur.workers.dev` |
-| staging | `metis-operator-staging` | `metis-operator-staging` | `https://metis-operator-staging.tony-walteur.workers.dev` |
+| production | `metis-operator` | `metis-operator` | `https://metis-operator.example.workers.dev` |
+| staging | `metis-operator-staging` | `metis-operator-staging` | `https://metis-operator-staging.example.workers.dev` |
 
 Both share the same Access team and the same `ADMIN_EMAILS` allowlist. Deploy staging first for any
 change that touches D1 schema, HMAC verification, or Access identity resolution; see the runbook.
 
 ## Cloudflare Access (console and admin API only)
 
-1. Team `tony-walteur`, `TEAM_DOMAIN=https://tony-walteur.cloudflareaccess.com`.
-2. Self-hosted app **Métis Operator** on `metis-operator.tony-walteur.workers.dev` (Allow the
+1. Team `metis-team`, `TEAM_DOMAIN=https://metis-team.cloudflareaccess.com`.
+2. Self-hosted app **Métis Operator** on `metis-operator.example.workers.dev` (Allow the
    owner's two Access emails, configured as the `ADMIN_EMAILS` secret).
 3. Bypass policies on `/health`, `/v1/ingest`, `/v1/heartbeat`, `/v1/use`, `/v1/skills/manifest`,
    `/v1/integrations`, and `/assets/*` (keep in sync with `ACCESS_BYPASS_PATHS` in

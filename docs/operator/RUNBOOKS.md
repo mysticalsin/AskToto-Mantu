@@ -139,7 +139,7 @@ they are visible in the dashboard and in `wrangler deploy` output by design.
 
 ## 5. Access policy
 
-- Team: `tony-walteur`, `TEAM_DOMAIN=https://tony-walteur.cloudflareaccess.com`.
+- Team: `metis-team`, `TEAM_DOMAIN=https://metis-team.cloudflareaccess.com`.
 - Self-hosted Access application **Métis Operator** on the Worker's host. Policy: Allow exactly
   the owner's two Access emails, configured as the `ADMIN_EMAILS` secret, no other identity provider rule.
 - Session duration: whatever the Access application policy sets (Access's own session, which

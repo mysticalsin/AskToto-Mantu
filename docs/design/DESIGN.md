@@ -167,10 +167,10 @@ value. Never generic pageviews.
 Chrome / density / placement — WebsiteCloner Shoey OpenPanel. Compare
 every section, not only realtime:
 
-- App: `/Users/tony/Library/CloudStorage/OneDrive-MantuGroup/Documents/Chief of Staff/Apps Source/WebsiteCloner`
+- App: local WebsiteCloner source checkout
 - Live compare: `http://localhost:3112/demo/shoey/realtime` plus
   `/overview` `/events` `/sessions` and the other rail pages
-- Visual refs (Totos-Mac): `/Users/tony/dev/metis-repro/shoey-ref/overview.png`
+- Visual refs: local Shoey overview reference screenshot
   (paired TopLists, device/events tables with inline bars, Countries /
   Regions / Cities + **corner** world map) and
   `…/shoey-ref/realtime.png` (full WorldMap, city/country pills, LIVE
@@ -180,7 +180,7 @@ Numbers — Métis D1 only: heartbeats, seats, licenses, recaps, asks,
 CRM. **Never** Unique Visitors, pageviews, sneakers, referrers, or
 invented people.
 
-Live host: `https://metis-operator.tony-walteur.workers.dev/`.
+Live host: `https://metis-operator.example.workers.dev/`.
 **Cloudflare Access stays** (302 + email-code; the owner's two Access emails, configured as the
 `ADMIN_EMAILS` secret). Thin Worker tip only. Do not merge fat
 PR151. Generate license stays P0.

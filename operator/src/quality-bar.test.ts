@@ -9,12 +9,12 @@ import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_TEAM_DOMAIN, syntheticSecretLikeText } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { SPA_CSS_PATH } from './spa/manifest'
 
 /**
- * Tony 6:17 PM ET quality bar. After every Operator change these four
+ * Owner quality bar. After every Operator change these four
  * contracts must still hold. Overlay Island/Hide files stay frozen — this
  * file proves the Operator slice does not import them.
  */
@@ -87,7 +87,7 @@ describe('quality bar: login', () => {
     const store = memoryStore()
     const configured = {
       ...env(),
-      TEAM_DOMAIN: 'https://tony-walteur.cloudflareaccess.com'
+      TEAM_DOMAIN: TEST_TEAM_DOMAIN
     }
     const denied = await handleRequest(new Request('https://operator.test/'), configured, {}, { store, now: NOW })
     expect(denied.status).toBe(302)
@@ -268,7 +268,7 @@ describe('quality bar: token-free events', () => {
       actor: 'owner@example.test',
       device_id: 'device-qb',
       country: 'CA',
-      detail: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaa.bbb sk-ant-api03-abcdefghijklmnop'
+      detail: `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaa.bbb ${syntheticSecretLikeText('abcdefghijklmnop')}`
     })
     const html = await handleRequest(
       new Request('https://operator.test/'),

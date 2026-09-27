@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from '../index'
 import { memoryStore, type SeatRow } from '../store'
 import { verifyOperatorLicense } from '../../../src/shared/operator-license'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from '../test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, syntheticSecretLikeText } from '../test-fixtures'
 
 const NOW = 1_725_000_000_000
 
@@ -279,7 +279,7 @@ describe('members', () => {
     const groupId = created.group.id
     await call('POST', `/v1/admin/groups/${groupId}/members`, store, { member: 'member@example.test', kind: 'email' })
 
-    const res = await call('DELETE', `/v1/admin/groups/${groupId}/members/A@AMARIS.COM`, store)
+    const res = await call('DELETE', `/v1/admin/groups/${groupId}/members/MEMBER@EXAMPLE.TEST`, store)
     expect(res.status).toBe(200)
     expect(await store.listGroupMembers(groupId)).toHaveLength(0)
   })
@@ -288,7 +288,7 @@ describe('members', () => {
     const store = memoryStore()
     const created = await json<{ group: { id: string } }>(await call('POST', '/v1/admin/groups', store, { name: 'Amaris', tier: 'metis' }))
     const groupId = created.group.id
-    const secretSubstring = 'sk-ant-api03-totallyfakefakefake99'
+    const secretSubstring = syntheticSecretLikeText('totallyfakefakefake99')
     const weirdDeviceId = `dev-weird\n${secretSubstring}`
     await store.upsertSeat(seat({ device_id: weirdDeviceId }))
 

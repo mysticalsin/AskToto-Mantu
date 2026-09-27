@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { syntheticSecretLikeText } from './test-fixtures'
 import {
   approvalOf,
   isApprovedSeat,
@@ -85,7 +86,7 @@ describe('approval gate', () => {
   it('never lets a heartbeat self-approve', () => {
     expect(licenseFromIngest({ license: 'approved' })).toBeNull()
     expect(licenseFromIngest({ license: 'licensed', licenseLast4: 'cfc3' })).toBe('licensed · cfc3')
-    expect(licenseFromIngest({ license: 'sk-ant-secret-value' })).toBeNull()
+    expect(licenseFromIngest({ license: syntheticSecretLikeText('secret-value') })).toBeNull()
   })
 
   it('prefers licensed over member-pass unlicensed when Operator jti or last4 is present', () => {

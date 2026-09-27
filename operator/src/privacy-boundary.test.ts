@@ -7,7 +7,7 @@ import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from './test-f
 const NOW = 1_725_000_000_000
 const PRIVATE_ASK = 'Customer Alpha acquisition plan'
 const PRIVATE_CRM = 'Patient diagnosis and private meeting notes'
-const PRIVATE_EVENT = '/Users/tony/Customer Alpha/private-meeting.md'
+const PRIVATE_EVENT = '/private/synthetic-home/Customer Alpha/private-meeting.md'
 const PRIVATE_EVIDENCE = 'Ask said to acquire Customer Alpha tomorrow'
 
 const tonyAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }

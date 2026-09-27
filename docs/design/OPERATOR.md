@@ -5,7 +5,7 @@ owns: Cloudflare-hosted Operator console, license generate, seat approval, keys 
 does-not-own: overlay chrome, installer pack, Fly license-server, Metis-Releases Latest, Goldberg Aria
 ready-to-merge: no
 this-slice: thin-operator-license-generate
-audience: Tony Walteur only. Two emails. Nobody else.
+audience: owner only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
   live: "#10B981"
@@ -20,12 +20,12 @@ tokens:
 **Status:** Active — shipped 8-tab Operator console. Whether and how the kit's 11-surface
 requirement (MASTER §12.2, §12.9) joins this console is an open scope question owned by M2-0158.
 
-Live URL: `https://metis-operator.tony-walteur.workers.dev/` (`#overview`).
+Live URL: `https://metis-operator.example.workers.dev/` (`#overview`).
 Access: Cloudflare Access email-code only. Allowlist the owner's two Access emails, configured as
 the `ADMIN_EMAILS` secret. Never a homemade password form.
 
 **Hold merge.** Draft only. No pack. No Latest. Ultron green-lit Operator-only
-deploy to `metis-operator` (`tony-walteur.workers.dev`). Do not merge fat PR151.
+deploy to `metis-operator` (`example.workers.dev`). Do not merge fat PR151.
 
 **Tonight's path.** Operator asks stay on this thin Worker tip
 (`cursor/operator-license-thin-cd63`, PR153). Do not grow overlay

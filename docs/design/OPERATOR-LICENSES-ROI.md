@@ -19,7 +19,7 @@ ready-to-merge: no
 
 **Status:** Draft — design before UI, ready-to-merge: no (see frontmatter).
 
-Tony-only console at `https://metis-operator.tony-walteur.workers.dev/`. Cloudflare Access is the door. No homemade password page. Two emails, nobody else.
+Owner-only console at `https://metis-operator.example.workers.dev/`. Cloudflare Access is the door. No homemade password page. Two emails, nobody else.
 
 This slice makes two existing Operator surfaces honest and complete:
 

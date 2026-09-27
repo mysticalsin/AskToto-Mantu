@@ -17,6 +17,7 @@ import type { ProbeDeps } from './probe'
 
 const SECRET = 'operator-ingest-secret-for-tests'
 const NOW = 1_725_000_000_000
+const OPERATOR_BASE_URL = 'https://metis-operator.example.workers.dev'
 
 function jsonResponse(body: unknown, init: { status?: number } = {}): Response {
   return new Response(JSON.stringify(body), { status: init.status ?? 200, headers: { 'content-type': 'application/json' } })
@@ -156,7 +157,7 @@ describe('exchangeAuthorizationCode', () => {
       expect(body.get('code')).toBe('auth-code-123')
       expect(body.get('client_id')).toBe('client-id')
       expect(body.get('client_secret')).toBe('client-secret')
-      expect(body.get('redirect_uri')).toBe('https://metis-operator.tony-walteur.workers.dev/v1/admin/connectors/oauth/callback')
+      expect(body.get('redirect_uri')).toBe(`${OPERATOR_BASE_URL}/v1/admin/connectors/oauth/callback`)
       expect(body.get('code_verifier')).toBe('verifier-value')
       return jsonResponse({ access_token: 'ya29.token', refresh_token: 'refresh-token', expires_in: 3600, token_type: 'Bearer' })
     })
@@ -166,7 +167,7 @@ describe('exchangeAuthorizationCode', () => {
       {},
       {
         code: 'auth-code-123',
-        redirectUri: 'https://metis-operator.tony-walteur.workers.dev/v1/admin/connectors/oauth/callback',
+        redirectUri: `${OPERATOR_BASE_URL}/v1/admin/connectors/oauth/callback`,
         codeVerifier: 'verifier-value'
       },
       { clientId: 'client-id', clientSecret: 'client-secret' },

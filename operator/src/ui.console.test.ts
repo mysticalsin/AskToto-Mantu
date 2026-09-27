@@ -4,7 +4,7 @@ import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, syntheticSecretLikeText } from './test-fixtures'
 import { findBandSubpaths } from './map-bands'
 import { FORBIDDEN_NAV, NAV_IDS } from './nav'
 import { tokenPatternForTests } from './redact'
@@ -367,7 +367,7 @@ describe('events never render token-like strings', () => {
       JSON.stringify({
         id: 'ask-token',
         mode: 'interview',
-        question: 'Bearer sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345',
+        question: `Bearer ${syntheticSecretLikeText('abcdefghijklmnopqrstuvwxyz012345')}`,
         cacheStatus: 'hit'
       })
     )

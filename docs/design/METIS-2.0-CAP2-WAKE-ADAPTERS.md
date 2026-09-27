@@ -63,7 +63,7 @@ npx vitest run src/shared/desktop-actions.test.ts src/shared/metis-wake.test.ts 
 
 ## Cap1 Keys deploy wire (Tony fuse — same Worker, no second portal)
 - Worker name: `metis-operator` (`operator/wrangler.jsonc`)
-- Production URL: `https://metis-operator.tony-walteur.workers.dev` (`operator/scripts/deploy.mjs`)
+- Production URL: `https://metis-operator.example.workers.dev` (`operator/scripts/deploy.mjs`)
 - Keys UI TypeSafe/Jev section: `operator/src/render/pages/keys.ts` (on tip `9568d21`)
 - **Live Worker still:** `version=2b26efa` (built 2026-09-14) — Cap1 Keys **not** live until deploy
 - Deploy (Totos-Mac / CF-authed): `node operator/scripts/deploy.mjs --env production`

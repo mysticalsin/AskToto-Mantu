@@ -5,7 +5,7 @@ import { hmacHex } from './hmac'
 import { sha256Hex, verifySkillPack } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_TEAM_DOMAIN } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
 
@@ -156,7 +156,7 @@ describe('Access on admin routes', () => {
     const homeJson = new Request('https://operator.test/', { headers: { accept: 'application/json' } })
     const home = await handleRequest(
       homeJson,
-      { ...env(), TEAM_DOMAIN: 'https://tony-walteur.cloudflareaccess.com' },
+      { ...env(), TEAM_DOMAIN: TEST_TEAM_DOMAIN },
       {},
       { store, now: NOW }
     )
@@ -486,7 +486,7 @@ describe('CRM send board', () => {
         meetingHash: 'aabbccddeeff0011',
         remoteId: 'deal-99',
         remoteUrl: 'https://crm.example/deal-99',
-        meetingFile: '/Users/tony/secret/Acme.md',
+        meetingFile: '/private/synthetic-home/secret/Acme.md',
         error: 'timeout posting Customer Alpha to https://crm.example/deal-99',
         attempt: 2,
         latencyMs: 345
@@ -509,12 +509,12 @@ describe('CRM send board', () => {
     )
     const body = (await dash.json()) as { crm: { rows: { title: string; error: string; remoteId: string | null; meetingHash: string | null }[] } }
     expect(body.crm.rows[0]).toMatchObject({ title: 'CRM delivery', error: 'transient', remoteId: null, meetingHash: null })
-    expect(JSON.stringify(body)).not.toContain('/Users/tony')
+    expect(JSON.stringify(body)).not.toContain('/private/synthetic-home')
   })
 
   it('projects heartbeat CRM and event detail without path, text, or CRM content', async () => {
     const store = memoryStore()
-    const privatePath = '/Users/tony/Customer Alpha/private-meeting.md'
+    const privatePath = '/private/synthetic-home/Customer Alpha/private-meeting.md'
     const privateText = 'Customer Alpha acquisition plan'
     const req = await signedRequest('/v1/heartbeat', JSON.stringify({
       os: 'darwin', appVersion: '2.0.0', path: privatePath, text: privateText,

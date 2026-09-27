@@ -2,7 +2,7 @@ import { reviewedGatewayReply } from './ai-gateway.privacy-fixture'
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { FORBIDDEN_VAULT_PROVIDERS } from './vault'
 
@@ -23,7 +23,7 @@ const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 describe('admin keys write / rotate / revoke', () => {
   it('adds a key, returns last4 only, and never echoes the secret', async () => {
     const store = memoryStore()
-    const secret = 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-xx99'
+    const secret = syntheticProviderKey('anthropic', 'xx99')
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', {
         method: 'POST',
@@ -265,7 +265,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({
           provider: 'anthropic',
           label: 'Tony cloud',
-          secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-xx99'
+          secret: syntheticProviderKey('anthropic', 'xx99')
         })
       }),
       env(),
@@ -411,7 +411,7 @@ describe('admin keys write / rotate / revoke', () => {
     expect(home.status).toBe(200)
     const setCookie = home.headers.get('set-cookie') || ''
     expect(setCookie).toContain('metis_operator_session=')
-    expect(setCookie).toContain('owner.email%40gmail.com')
+    expect(setCookie).toContain('owner%40example.test')
     expect(setCookie).toMatch(/HttpOnly/)
     expect(setCookie).toMatch(/SameSite=Lax/)
     const sessionPair = setCookie.split(';')[0]
@@ -441,7 +441,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({
           provider: 'anthropic',
           label: 'qa-walk',
-          secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-zz42'
+          secret: syntheticProviderKey('anthropic', 'zz42')
         })
       }),
       env(),
@@ -461,7 +461,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({
           provider: 'anthropic',
           label: 'qa-walk-bearer',
-          secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-aa77'
+          secret: syntheticProviderKey('anthropic', 'aa77')
         })
       }),
       env(),
@@ -478,7 +478,7 @@ describe('admin keys write / rotate / revoke', () => {
           'content-type': 'application/json',
           cookie: 'metis_operator_session=v1|9999999999999|owner@example.test|deadbeef'
         },
-        body: JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-api03-TESTKEYONLY-nope' })
+        body: JSON.stringify({ provider: 'anthropic', secret: syntheticProviderKey('anthropic', 'nope') })
       }),
       env(),
       {},
@@ -488,12 +488,12 @@ describe('admin keys write / rotate / revoke', () => {
     expect(await forged.json()).toEqual({ ok: false, error: 'Access required' })
   })
 
-  it('requires Tony identity and never serves keys to a stranger', async () => {
+  it('requires owner identity and never serves keys to a stranger', async () => {
     const denied = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-nope' })
+        body: JSON.stringify({ provider: 'anthropic', secret: syntheticProviderKey('anthropic', 'nope') })
       }),
       env(),
       {},
@@ -504,7 +504,7 @@ describe('admin keys write / rotate / revoke', () => {
       new Request('https://operator.test/v1/admin/keys', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-nope' })
+        body: JSON.stringify({ provider: 'anthropic', secret: syntheticProviderKey('anthropic', 'nope') })
       }),
       env(),
       { access: { getIdentity: async () => ({ email: 'other@example.com' }) } },

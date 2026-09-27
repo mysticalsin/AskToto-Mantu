@@ -16,8 +16,8 @@ does-not-own:
   - MCP gateway-token
   - Goldberg Aria
 ready-to-merge: no
-audience: Tony Walteur only
-prove-host: https://metis-operator.tony-walteur.workers.dev/
+audience: owner only
+prove-host: https://metis-operator.example.workers.dev/
 tip-baseline: feat/operator-wow 17ccbd9 (PR169 licensed · last4)
 ---
 
@@ -26,7 +26,7 @@ tip-baseline: feat/operator-wow 17ccbd9 (PR169 licensed · last4)
 **Status: FRAME.** DESIGN before UI. No product code in the change that lands this file.
 READY TO MERGE stays no. Pack HOLD. OAuth LAST.
 
-Operator = Portal. Live console: `https://metis-operator.tony-walteur.workers.dev/`.
+Operator = Portal. Live console: `https://metis-operator.example.workers.dev/`.
 Worker name `metis-operator`. Not `cloudflare-proxy`. Not Fly.
 
 ---
@@ -53,7 +53,7 @@ The implement slice makes that copy true end to end. It does not invent a second
 
 ### 2. Prove host
 
-Full E2E prove **only** on `https://metis-operator.tony-walteur.workers.dev/`.
+Full E2E prove **only** on `https://metis-operator.example.workers.dev/`.
 Tony states A–D already proven there. No alternate host. No staging Worker. No localhost
 stand-in as the Ultron stamp. No `cloudflare-proxy` URL as the Portal path.
 
@@ -335,7 +335,7 @@ Do not seed a new embed in this slice. Do not rotate Tony’s account token from
 
 ## 4. Métis Ask E2E (desktop → Operator → CF)
 
-Prove host only: `https://metis-operator.tony-walteur.workers.dev/`.
+Prove host only: `https://metis-operator.example.workers.dev/`.
 
 ```
 Métis desktop (licensed, operator_keys, no seat DeepSeek/CF key)
@@ -344,7 +344,7 @@ Métis desktop (licensed, operator_keys, no seat DeepSeek/CF key)
 nextAskRoute → { provider: 'cloudflare' | 'deepseek' | …, tier: 'operator' }
         │  HMAC headers (ingest secret). No LLM key
         ▼
-POST https://metis-operator.tony-walteur.workers.dev/v1/ask
+POST https://metis-operator.example.workers.dev/v1/ask
         │  Access must NOT wrap this path (same bypass as /v1/use)
         ▼
 seatAuthorizedForKeys + decryptActiveLlmSecret(provider)
@@ -443,7 +443,7 @@ may link; it must not invent per-seat $ from empty D1.
 | G8 | Portal-funded CF default models = `@cf/deepseek-ai/deepseek-v4-*` (live-proven) | **MUST-BUILD** | implement |
 | G9 | Persist Ask path tag + tokens; CF vs direct cost series; list-price rows | **MUST-BUILD** | implement |
 | G10 | Access bypass + rate limit for `/v1/ask` (same family as `/v1/use`) | **MUST-BUILD** | implement |
-| G11 | Live E2E on `metis-operator.tony-walteur.workers.dev` only | **MUST-BUILD** | implement + Ultron |
+| G11 | Live E2E on `metis-operator.example.workers.dev` only | **MUST-BUILD** | implement + Ultron |
 | G12 | Wrangler `ai` binding | **NOT REQUIRED** | later if REST fails |
 | G13 | Unified Billing `deepseek/…` as default | **NOT REQUIRED** | later |
 | G14 | Overlay Settings CF tile / embed key | **OUT** | KineticGrid / pack |
@@ -482,7 +482,7 @@ This FRAME PR ships the doc only.
 
 ### 8.2 Later implement slice (not this PR)
 
-Stamp only if **all** hold on `https://metis-operator.tony-walteur.workers.dev/`:
+Stamp only if **all** hold on `https://metis-operator.example.workers.dev/`:
 
 1. Tony’s Portal key (CF and/or DeepSeek) answers a licensed Métis Ask. The seat
    has **no** local key for that provider. HMAC only.

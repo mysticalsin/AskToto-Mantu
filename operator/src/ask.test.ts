@@ -7,7 +7,7 @@ import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { parseUseBody } from './use'
 import { PORTAL_CF_DEEPSEEK_FLASH, PORTAL_CF_DEEPSEEK_PRO } from '../../src/shared/ask-routing'
@@ -15,7 +15,7 @@ import { PORTAL_CF_DEEPSEEK_FLASH, PORTAL_CF_DEEPSEEK_PRO } from '../../src/shar
 const NOW = 1_725_000_000_000
 const SECRET = 'sk-cf-OPERATOR-VAULT-TEST-only-xx99'
 const OPENAI_SECRET = 'sk-OPENAI-OPERATOR-VAULT-TEST-only-xx99'
-const ANTHROPIC_SECRET = 'sk-ant-api03-OPERATOR-VAULT-TEST-only-xx99'
+const ANTHROPIC_SECRET = syntheticProviderKey('anthropic')
 const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 function env(): Env {

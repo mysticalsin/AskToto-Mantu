@@ -187,13 +187,13 @@ describe('events and sessions tables (cursor-paginated store methods)', () => {
     const store = memoryStore()
     await store.insertEvent({ id: 'ask', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Customer Alpha private ask' })
     await store.insertEvent({ id: 'crm', ts: NOW - 1, kind: 'crm', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Patient diagnosis CRM payload' })
-    await store.insertEvent({ id: 'beat', ts: NOW - 2, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: '/Users/tony/private.md' })
+    await store.insertEvent({ id: 'beat', ts: NOW - 2, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: '/private/synthetic-home/private.md' })
     const rows = await collectAll(exportTableDef('events').rows(store, {}))
     expect(rows).toHaveLength(3)
     expect(rows.map((row) => row.detail)).toEqual([null, null, null])
     expect(JSON.stringify(rows)).not.toContain('Customer Alpha')
     expect(JSON.stringify(rows)).not.toContain('Patient diagnosis')
-    expect(JSON.stringify(rows)).not.toContain('/Users/tony')
+    expect(JSON.stringify(rows)).not.toContain('/private/synthetic-home')
   })
 
   it('event export search cannot reveal hidden legacy details through row selection', async () => {

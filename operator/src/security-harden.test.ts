@@ -6,7 +6,7 @@ import { sha256Hex } from './crypto'
 import { verifyAccessJwt } from './access'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
 
 /**
  * P0.3 security pass (2026-09-06): the request-plumbing hardening from
@@ -146,7 +146,7 @@ describe('Cloudflare Access JWT fallback checks the time claims', () => {
     return `${head}.${body}.${sig}`
   }
   const nowSec = Math.floor(NOW / 1000)
-  const good = { aud: AUD, email: 'Tony.Walteur@gmail.com', iss: TEAM, iat: nowSec - 60, exp: nowSec + 600 }
+  const good = { aud: AUD, email: 'Owner@Example.test', iss: TEAM, iat: nowSec - 60, exp: nowSec + 600 }
 
   afterEach(() => vi.unstubAllGlobals())
 
@@ -191,7 +191,7 @@ describe('Cloudflare Access JWT fallback checks the time claims', () => {
 })
 
 describe('CSRF on every admin POST', () => {
-  const body = () => JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-cs99' })
+  const body = () => JSON.stringify({ provider: 'anthropic', secret: syntheticProviderKey('anthropic', 'cs99') })
 
   it('same-origin (Sec-Fetch-Site) passes', async () => {
     const store = memoryStore()
@@ -286,7 +286,7 @@ describe('per-route HMAC buckets', () => {
 })
 
 describe('admin mutation rate limit', () => {
-  const mutationBody = () => JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-cs99' })
+  const mutationBody = () => JSON.stringify({ provider: 'anthropic', secret: syntheticProviderKey('anthropic', 'cs99') })
   const mutation = () =>
     new Request('https://operator.test/v1/admin/keys', {
       method: 'POST',
