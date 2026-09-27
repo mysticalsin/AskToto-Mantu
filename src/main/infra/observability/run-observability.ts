@@ -1,9 +1,9 @@
 /**
  * run-observability.ts — owns the whole life of one boot's observability: claims the run watch, audits
  * `app.started`, runs the liveness heartbeat and the stall monitor, and closes out with
- * `app.shutdown.clean`. index.ts's job is only to call `startRunObservability` once and
- * `observability.shutdownClean(...)` once, from `will-quit` — every other line here is this module's, not
- * index.ts's, so a change to any of these invariants shows up in one place.
+ * `app.shutdown.clean`. index.ts's job is only to call `startRunObservability` once, `observability.timePhase`
+ * around each boot step, and `observability.shutdownClean(...)` once, from `will-quit` — every other line
+ * here is this module's, not index.ts's, so a change to any of these invariants shows up in one place.
  *
  * Deliberately takes `powerMonitor` as a parameter rather than importing it from `electron` — same
  * "inject everything Electron-specific" shape as stall-monitor.ts's test seams, so this module stays
@@ -106,7 +106,11 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   // 'unlock-screen' below reads it — 'resume' always resyncs unconditionally, because after any real sleep
   // the gap on the stall clock is sleep, not a main-thread stall: on a platform whose monotonic clock counts
   // through sleep that gap must be discarded, and resync() also restarts the heartbeat that 'suspend'
-  // paused. Either way, a 'resume' re-baseline never hides a genuine stall.
+  // paused. The cost: 'resume' can still arrive after 'unlock-screen' has already restarted a heartbeat
+  // 'suspend' had paused (see onUnlockScreen below); that unconditional resync() then re-baselines a
+  // heartbeat that is already running, discarding whatever real lateness accrued since it restarted — the
+  // same class of bug onUnlockScreen's own `suspended` guard exists to prevent, just from 'resume' arriving
+  // second instead of first.
   let suspended = false
   const onSuspend = (): void => {
     suspended = true

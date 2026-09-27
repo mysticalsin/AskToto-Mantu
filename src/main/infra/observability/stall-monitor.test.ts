@@ -94,7 +94,7 @@ describe('startStallMonitor', () => {
     })
     clock.advanceTo(1000) // on time — expectedAt becomes 2000
     clock.advanceTo(3500) // 1500ms late
-    expect(onStall).toHaveBeenCalledExactlyOnceWith({ bootId: 'boot-1', durationMs: 1500, phase: undefined })
+    expect(onStall).toHaveBeenCalledExactlyOnceWith({ bootId: 'boot-1', durationMs: 1500, phase: undefined, phaseMs: undefined })
   })
 
   it('a tick that is late by LESS than a full tick period is not a stall', () => {
@@ -317,7 +317,7 @@ describe('startStallMonitor', () => {
       histogram: fakeHistogram(0)
     })
     // Models a single slow runStep: the step itself takes 3400ms (the clock moves inside the callback,
-    // the way a real synchronous fs call would take real wall time), and the very next tick is late.
+    // the way a real synchronous fs call would take real elapsed time), and the very next tick is late.
     monitor.timePhase('ensureMeetingsFolder', () => clock.jumpTo(3400))
     clock.advanceTo(3500) // late by 2500ms — no on-time tick consumed the phase first
     expect(onStall).toHaveBeenCalledExactlyOnceWith({

@@ -25,7 +25,8 @@
  * a tick only ever runs before it starts or after it ends. Naming a stall after "whichever step called
  * `timePhase` last" would therefore always name the LAST step in that sequence, regardless of which one
  * actually blocked the tick. Measuring each call's own duration and keeping only the longest since the
- * previous tick fixes that: the phase a tick reports is the one that was actually slow.
+ * previous tick fixes that: the phase a tick reports is the slowest timed operation in that window, not
+ * whichever one happened to call `timePhase` last.
  */
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
 
@@ -41,15 +42,17 @@ export interface EventLoopHistogram {
 /** One heartbeat tick that arrived at least one full tick period late. */
 export interface StallDetail {
   bootId: string
-  /** How much later than scheduled this tick fired, in ms. Always >= the configured tickMs — the real
-   *  stall understates by up to one tick period, since lateness is only observable from the next tick. */
+  /** How much later than scheduled this tick fired, in ms. Always >= the configured tickMs — `durationMs`
+   *  understates the real stall by up to one tick period, since lateness is only observable from the next
+   *  tick. */
   durationMs: number
   /** The `timePhase` label with the longest measured duration since the previous tick, or `undefined` when
    *  none ran, or an intervening on-time tick already consumed it. Every tick — late or not — reads this
    *  and clears it, so `phase` only ever names an operation that finished since the previous tick — never
    *  one still running, and never one from before that window. It can still have finished before an
-   *  untimed block that ran after it started the stall; compare `phaseMs` with `durationMs` to see whether
-   *  the named phase actually accounts for the lateness or merely preceded an uninstrumented one that did. */
+   *  untimed block that ran after it and actually caused the stall; compare `phaseMs` with `durationMs` to
+   *  see whether the named phase actually accounts for the lateness or merely preceded an uninstrumented
+   *  one that did. */
   phase: string | undefined
   /** That phase's own measured duration, in ms. Present exactly when `phase` is. */
   phaseMs: number | undefined
@@ -89,8 +92,9 @@ export interface StallMonitor {
   /** Run `fn` and measure its own synchronous duration on this monitor's monotonic clock (never
    *  `Date.now()` — see the module header). For a function that returns a promise, only the part before
    *  its first `await` is measured. If that duration is the longest of any `timePhase` call since the
-   *  previous tick, the NEXT tick — whether or not that tick is itself late — names this `label`. Call
-   *  around any operation worth naming on a late tick; returns `fn`'s result. */
+   *  previous tick, the next tick consumes it — but only reports it on `app.stall` if that next tick is
+   *  itself late; an on-time tick consumes and discards it silently. Call around any operation worth
+   *  naming on a late tick; returns `fn`'s result. */
   timePhase<T>(label: string, fn: () => T): T
 }
 
