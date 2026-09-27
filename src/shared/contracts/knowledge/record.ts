@@ -16,7 +16,9 @@ import { FieldNameSchema, FieldSchema, type Claim, type Field } from './provenan
 /**
  * Canonical knowledge records and their tombstones (ADR-019, M2-0120). The knowledge service is the
  * only writer; every other surface reads them or proposes a mutation. Records and tombstones drop keys
- * they do not know, so an older client keeps reading what a newer service writes.
+ * they do not know, so an older client keeps reading a record that a newer service extends with new keys.
+ * Only new keys are compatible: a new enum value, or a new key inside a strict address, key or principal,
+ * fails an older parser and is therefore a breaking contract change.
  */
 
 /**
@@ -37,6 +39,8 @@ export const RecordTypeSchema = z.enum([
 export type RecordType = z.infer<typeof RecordTypeSchema>
 
 const principalKey = (principal: PrincipalRef): string => `${principal.kind}:${principal.id}`
+const listsAnyPrincipalTwice = (principals: PrincipalRef[]): boolean =>
+  new Set(principals.map(principalKey)).size !== principals.length
 const sameAddress = (a: RecordAddress, b: RecordAddress): boolean => a.space === b.space && a.id === b.id
 
 /**
@@ -50,8 +54,9 @@ export const AccessSchema = z
     editors: z.array(PrincipalRefSchema).max(256)
   })
   .superRefine((access, context) => {
+    if (listsAnyPrincipalTwice(access.readers)) reportIssue(context, 'Each reader is listed once.', ['readers'])
+    if (listsAnyPrincipalTwice(access.editors)) reportIssue(context, 'Each editor is listed once.', ['editors'])
     const readers = new Set(access.readers.map(principalKey))
-    if (readers.size !== access.readers.length) reportIssue(context, 'Each reader is listed once.', ['readers'])
     access.editors.forEach((editor, index) => {
       if (!readers.has(principalKey(editor))) reportIssue(context, 'An editor is also a reader.', ['editors', index])
     })
@@ -71,7 +76,7 @@ export const KnowledgeRecordSchema = z
     key: RecordKeySchema,
     type: RecordTypeSchema,
     revision: RevisionSchema,
-    /** The principal accountable for the source of this record. */
+    /** The principal accountable for the source of this record. It grants no access; only `access` does. */
     owner: PrincipalRefSchema,
     committedBy: ActorSchema,
     committedAt: InstantSchema,

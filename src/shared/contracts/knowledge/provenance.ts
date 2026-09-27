@@ -39,21 +39,31 @@ export const FieldNameSchema = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/)
 /** A byte-exact excerpt of the cited evidence: never trimmed or normalized. */
 const QuoteSchema = z.string().min(1).max(2000)
 
+const RecordEvidenceSchema = z.object({
+  kind: z.literal('record'),
+  record: RecordAddressSchema,
+  revision: RevisionSchema,
+  quote: QuoteSchema.optional()
+})
+const SourceEvidenceSchema = z.object({
+  kind: z.literal('source'),
+  source: SourceRefSchema,
+  quote: QuoteSchema.optional()
+})
+
 /**
  * What a claim rests on: a canonical record at an exact revision (an approved summary is cited as that
  * summary), or a source item at an exact revision. A record reference has no tenant, so evidence can
- * never cross tenants.
+ * never cross tenants. Stored evidence drops keys it does not know, like the record that holds it.
  */
-export const EvidenceRefSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('record'),
-    record: RecordAddressSchema,
-    revision: RevisionSchema,
-    quote: QuoteSchema.optional()
-  }),
-  z.object({ kind: z.literal('source'), source: SourceRefSchema, quote: QuoteSchema.optional() })
-])
+export const EvidenceRefSchema = z.discriminatedUnion('kind', [RecordEvidenceSchema, SourceEvidenceSchema])
 export type EvidenceRef = z.infer<typeof EvidenceRefSchema>
+
+/** Evidence as a request cites it: strict at every level, so an injected key is refused rather than dropped. */
+export const StrictEvidenceRefSchema = z.discriminatedUnion('kind', [
+  RecordEvidenceSchema.strict(),
+  SourceEvidenceSchema.extend({ source: SourceRefSchema.strict() }).strict()
+])
 
 /** An act on a claim by a user or a service: who, when, and the record revision it applies to. */
 export const AttestationSchema = z.object({

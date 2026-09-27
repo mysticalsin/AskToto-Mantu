@@ -8,8 +8,9 @@ import { reportIssue } from './issue'
  * service principals, and service-assigned ids for spaces and records. A record id is never a filename or
  * a display-name slug, so a rename or a move cannot change what a citation points at.
  *
- * The identity tuples are strict: an unexpected key inside one is either an injection attempt or a
- * contract drift, and both must fail loudly.
+ * Addresses, keys and principals are strict: an unexpected key inside one is either an injection attempt
+ * or a contract drift, and both must fail loudly. A source reference is strict only in a request
+ * (`StrictEvidenceRefSchema`); a stored record keeps reading one that a newer service extends.
  */
 
 const GuidSchema = z.string().uuid()

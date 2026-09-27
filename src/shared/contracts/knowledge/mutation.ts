@@ -1,14 +1,15 @@
 import { z } from 'zod'
 import { RecordAddressSchema, RevisionSchema } from './identity'
 import { reportIssue } from './issue'
-import { EvidenceRefSchema, FieldNameSchema, JsonValueSchema } from './provenance'
+import { FieldNameSchema, JsonValueSchema, StrictEvidenceRefSchema } from './provenance'
 import { RecordTypeSchema } from './record'
 
 /**
  * Writes to canonical knowledge (ADR-019, M2-0120). A mutation carries no actor, tenant or claim
  * state: the service takes the actor and tenant from the validated token and derives each resulting state
- * from the operation and that actor. Requests are strict, so an injected key is refused, not ignored;
- * outcomes, like records, drop keys an older client does not know.
+ * from the operation and that actor. Every object in a request is strict, so an injected key is refused,
+ * not ignored; only a `set` value is free-form JSON. Outcomes, like records, drop keys an older client does
+ * not know, but a new status or rejection code is a breaking change.
  */
 
 const IdempotencyKeySchema = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/)
@@ -47,7 +48,7 @@ export const KnowledgeMutationSchema = z
     /** Replaying a key replays its outcome; reusing it for a different body is rejected. */
     idempotencyKey: IdempotencyKeySchema,
     reason: z.string().min(1).max(500),
-    evidence: z.array(EvidenceRefSchema).max(16),
+    evidence: z.array(StrictEvidenceRefSchema).max(16),
     patch: z.array(FieldOperationSchema).min(1).max(64)
   })
   .strict()
@@ -80,10 +81,12 @@ const committedShape = { idempotencyKey: IdempotencyKeySchema, target: RecordAdd
  * - PROJECTION-PENDING: committed and read back, and the projections are refreshing.
  * - VISIBLE: every projection serves `revision` or later.
  * - CONFLICT: the record is at `currentRevision` (0 when absent), not the expected one; nothing was written.
- * - REJECTED: nothing was written. `forbidden`: the actor lacks the right (an agent never approves its own
- *   proposal). `invalid`: the patch breaks the record type's field rules. `deleted`: the target is a
- *   tombstone. `evidence-unavailable`: cited evidence does not resolve or the actor cannot read it.
- *   `idempotency-key-reused`: the key was already used for a different body.
+ * - REJECTED: nothing was written. `forbidden`: the actor lacks the right. For example, a correction
+ *   proposal is approved only by a user who edits the record, never by an agent or a service, and by its
+ *   own proposer only when no other user edits the record. `invalid`: the patch breaks the record type's
+ *   field rules. `deleted`: the target is a tombstone. `evidence-unavailable`: cited evidence does not
+ *   resolve or the actor cannot read it. `idempotency-key-reused`: the key was already used for a
+ *   different body.
  */
 export const MutationOutcomeSchema = z
   .discriminatedUnion('status', [
