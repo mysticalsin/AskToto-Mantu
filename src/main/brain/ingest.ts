@@ -2044,12 +2044,13 @@ function pump(): void {
   // still gets picked and processed — the stall must never starve normal per-meeting ingests.
   while (extracting.size < EXTRACT_CONCURRENCY) {
     let s: Settings | null = null
+    const deferral = maintenanceDeferral()
     const idx = queue.findIndex((j) => {
       if (j.origin !== 'backfill' || j.strategy === 'reconcile') return true
       s ??= getSettings()
       return hasUsableProvider(s) &&
         !localExtractionShouldYield(s) &&
-        (j.trigger === 'user' || maintenanceDeferral() === null)
+        (j.trigger === 'user' || deferral === null)
     })
     if (idx === -1) {
       // Every queued backfill job is blocked. Two different reasons land here and they need different

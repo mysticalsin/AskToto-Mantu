@@ -22,6 +22,7 @@ import {
   runIntelligenceIndex,
   setIntelligenceIndexWork,
   shouldCatchUp,
+  triggerForReason,
   writeIntelligenceIndexState,
   zonedDateTimeToUtc,
   zonedParts,
@@ -342,14 +343,11 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
     expect(click).toMatchObject({ ran: true, queued: 1 })
   })
 
-  it('the fallback path passes trigger: user for click and automatic for schedule', async () => {
-    const mod = await import('./intelligence-index') as typeof import('./intelligence-index') & {
-      triggerForReason(reason: string): 'user' | 'automatic'
-    }
-    expect(mod.triggerForReason('click')).toBe('user')
-    expect(mod.triggerForReason('schedule')).toBe('automatic')
-    expect(mod.triggerForReason('catch-up')).toBe('automatic')
-    expect(mod.triggerForReason('import-idle')).toBe('automatic')
+  it('triggerForReason maps click to user and every other reason to automatic', () => {
+    expect(triggerForReason('click')).toBe('user')
+    expect(triggerForReason('schedule')).toBe('automatic')
+    expect(triggerForReason('catch-up')).toBe('automatic')
+    expect(triggerForReason('import-idle')).toBe('automatic')
   })
 })
 

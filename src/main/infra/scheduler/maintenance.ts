@@ -29,9 +29,12 @@ type Waiter = {
   reject: (error: unknown) => void
 }
 
+const DEFAULT_UPTIME_MS = () => process.uptime() * 1000
+const DEFAULT_SCHEDULE: Scheduler = (run, ms) => { setTimeout(run, ms).unref() }
+
 let started = false
-let uptimeMs: () => number = () => process.uptime() * 1000
-let schedule: Scheduler = (run, ms) => { setTimeout(run, ms).unref() }
+let uptimeMs: () => number = DEFAULT_UPTIME_MS
+let schedule: Scheduler = DEFAULT_SCHEDULE
 let interactiveActive: () => boolean = () => false
 let priorExit: PriorShutdown | undefined
 let interacted = false
@@ -44,10 +47,13 @@ const listeners = new Set<() => void>()
 const reportedDeferrals = new Set<string>()
 
 function windowDeferral(): MaintenanceDeferral | null {
-  const uptime = uptimeMs()
-  if (uptime < BOOT_QUIET_PERIOD_MS) return 'boot_quiet_period'
-  if (!interacted && (priorExit === undefined || priorExit === 'unclean')) return 'awaiting_first_interaction'
-  return null
+  return deferralFor({
+    uptimeMs: uptimeMs(),
+    priorExit,
+    interacted,
+    holding: false,
+    interactiveActive: false
+  })
 }
 
 export function startMaintenanceGate(opts: {
@@ -56,8 +62,8 @@ export function startMaintenanceGate(opts: {
   schedule?: Scheduler
 }): void {
   started = true
-  uptimeMs = opts.uptimeMs ?? (() => process.uptime() * 1000)
-  schedule = opts.schedule ?? ((run, ms) => { setTimeout(run, ms).unref() })
+  uptimeMs = opts.uptimeMs ?? DEFAULT_UPTIME_MS
+  schedule = opts.schedule ?? DEFAULT_SCHEDULE
   interactiveActive = opts.interactiveActive
   schedule(wake, Math.max(0, BOOT_QUIET_PERIOD_MS - uptimeMs()))
   wake()
@@ -131,8 +137,8 @@ export function reportDeferred(kind: SchedulerJobKind, reason: DeferredReason): 
 
 export function resetMaintenanceGateForTests(): void {
   started = false
-  uptimeMs = () => process.uptime() * 1000
-  schedule = (run, ms) => { setTimeout(run, ms).unref() }
+  uptimeMs = DEFAULT_UPTIME_MS
+  schedule = DEFAULT_SCHEDULE
   interactiveActive = () => false
   priorExit = undefined
   interacted = false

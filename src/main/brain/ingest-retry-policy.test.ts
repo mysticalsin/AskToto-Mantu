@@ -39,10 +39,6 @@ vi.mock('../transcripts', async (orig) => {
   }
 })
 
-type IngestModule = typeof import('./ingest')
-type StoreModule = typeof import('../store')
-type BrainStoreModule = typeof import('./store')
-
 const userTrigger: BackfillStartOptions = { trigger: 'user' }
 
 function respondJson(markerCalls: string[], json = '{}') {
@@ -89,28 +85,26 @@ describe('M2-0033 retry policy across backfill callers', () => {
   let meetingsFolder: string
   let modelMarkers: string[]
 
-  const waitForIdle = async (ingest: IngestModule = { brainBackfillProgress, whenIndexWritesSettle } as IngestModule): Promise<void> => {
+  const waitForIdle = async (ingest?: Pick<typeof import('./ingest'), 'brainBackfillProgress' | 'whenIndexWritesSettle'>): Promise<void> => {
+    const idle = ingest ?? { brainBackfillProgress, whenIndexWritesSettle }
     await vi.waitFor(() => {
-      expect(ingest.brainBackfillProgress().running).toBe(false)
+      expect(idle.brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
-    await ingest.whenIndexWritesSettle()
+    await idle.whenIndexWritesSettle()
   }
 
-  const configureSettings = (
-    store: StoreModule = { clearApiKey, setApiKey, setSettings } as StoreModule,
-    electronApp: typeof app = app
-  ) => {
-    ;(electronApp.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
+  const configureSettings = () => {
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
       if (name === 'userData') return userData
       return join(userData, name)
     })
     resetSecretKeyCache()
-    for (const p of PROVIDER_IDS) store.clearApiKey(p)
+    for (const p of PROVIDER_IDS) clearApiKey(p)
     for (const name of Object.keys(process.env)) {
       if (name.endsWith('_API_KEY')) vi.stubEnv(name, undefined)
     }
-    store.setSettings({ meetingsFolder })
-    store.setApiKey('anthropic', 'fake-anthropic-key')
+    setSettings({ meetingsFolder })
+    setApiKey('anthropic', 'fake-anthropic-key')
   }
 
   const seedFiles = () => {
@@ -126,11 +120,11 @@ describe('M2-0033 retry policy across backfill callers', () => {
     return `${Math.round(st.mtimeMs)}:${st.size}`
   }
 
-  const seedLedger = async (store: BrainStoreModule = { readIndex, writeIndex, writeMeetingExtraction } as BrainStoreModule) => {
+  const seedLedger = async () => {
     const now = Date.now()
-    await store.writeMeetingExtraction(getSettings(), 'unacked-md', MeetingExtractionSchema.parse({ title24: 'Unacked synthetic extraction' }))
-    await store.writeIndex(getSettings(), {
-      ...store.readIndex(getSettings()),
+    await writeMeetingExtraction(getSettings(), 'unacked-md', MeetingExtractionSchema.parse({ title24: 'Unacked synthetic extraction' }))
+    await writeIndex(getSettings(), {
+      ...readIndex(getSettings()),
       backfillRequested: true,
       ingested: {
         'backedoff.md': { at: now, ok: false, error: 'synthetic backed off', attempts: 2, retryAfter: now + 60 * 60_000, sourceVersion: sourceVersion('backedoff.md') },
@@ -271,7 +265,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
       ingested: {}
     } as never)
     unreadablePaths.add(file)
-    expect(startBackfill(undefined, { force: true } as BackfillStartOptions).queued).toBe(5)
+    expect(startBackfill(undefined, { force: true }).queued).toBe(5)
     await waitForIdle()
     const failed = readIndex(getSettings()).ingested['unreadable.md']
     expect(failed?.attempts).toBe(0)
@@ -312,5 +306,10 @@ describe('M2-0033 retry policy across backfill callers', () => {
       ['scheduler.job', { kind: 'backfill', outcome: 'deferred', deferredReason: 'ledger_unavailable' }],
       ['scheduler.job', { kind: 'intelligence-index', outcome: 'deferred', deferredReason: 'ledger_unavailable' }]
     ]))
+    const deferred = auditLogMock.mock.calls.filter((call): call is [string, { kind: string, outcome: string }] =>
+      call[0] === 'scheduler.job' && call[1]?.outcome === 'deferred'
+    )
+    expect(deferred.filter(([, payload]) => payload.kind === 'backfill')).toHaveLength(1)
+    expect(deferred.filter(([, payload]) => payload.kind === 'intelligence-index')).toHaveLength(1)
   })
 })

@@ -232,7 +232,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     createStreamMock.mockClear()
     writeMeeting('repair.md')
     await writeMeetingExtraction(getSettings(), 'repair-md', MeetingExtractionSchema.parse({ title24: 'Repair synthetic extraction' }))
-    startBackfill(undefined, { force: true } as BackfillStartOptions)
+    startBackfill(undefined, { force: true })
     await waitForIdle()
     expect(readIndex(getSettings()).ingested['repair.md']?.ok).toBe(true)
     expect(createStreamMock).not.toHaveBeenCalled()
