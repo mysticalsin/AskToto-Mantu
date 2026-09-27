@@ -129,14 +129,14 @@ async function getWindowsProcessIdentity(pid: number): Promise<ProcessIdentity |
   const { WINDOWS_POWERSHELL } = await import('../../win-security')
   const execFileAsync = promisify(execFile)
   const script = [
-    'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class MetisProcTimes { [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetProcessTimes(IntPtr hProcess, out long creation, out long exit, out long kernel, out long user); }\'',
+    'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class MetisProcNative { [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetProcessTimes(IntPtr hProcess, out long creation, out long exit, out long kernel, out long user); [DllImport("shell32.dll", SetLastError=true)] public static extern IntPtr CommandLineToArgvW([MarshalAs(UnmanagedType.LPWStr)] string commandLine, out int argc); [DllImport("kernel32.dll")] public static extern IntPtr LocalFree(IntPtr handle); public static string[] SplitCommandLine(string commandLine) { if (String.IsNullOrWhiteSpace(commandLine)) return new string[0]; int argc = 0; IntPtr argv = CommandLineToArgvW(commandLine, out argc); if (argv == IntPtr.Zero) return new string[] { commandLine }; try { string[] args = new string[argc]; for (int i = 0; i < argc; i++) args[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * IntPtr.Size)) ?? ""; return args; } finally { LocalFree(argv); } } }\'',
     `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
     'if ($null -eq $p) { exit 0 }',
     `$cim = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"`,
     '[long]$creation = 0; [long]$exit = 0; [long]$kernel = 0; [long]$user = 0',
-    'if (-not [MetisProcTimes]::GetProcessTimes($p.Handle, [ref]$creation, [ref]$exit, [ref]$kernel, [ref]$user)) { exit 0 }',
+    'if (-not [MetisProcNative]::GetProcessTimes($p.Handle, [ref]$creation, [ref]$exit, [ref]$kernel, [ref]$user)) { exit 0 }',
     '$start = [DateTime]::FromFileTimeUtc($creation).ToString("o")',
-    '$payload = @{ pid = [int]$p.Id; ppid = [int]$cim.ParentProcessId; pgid = [int]$p.Id; osStartTime = $start; exeRealpath = $p.Path; args = @($cim.CommandLine) }',
+    '$payload = @{ pid = [int]$p.Id; ppid = [int]$cim.ParentProcessId; pgid = [int]$p.Id; osStartTime = $start; exeRealpath = $p.Path; args = @([MetisProcNative]::SplitCommandLine($cim.CommandLine)) }',
     '$payload | ConvertTo-Json -Compress'
   ].join('; ')
   const { stdout } = await execFileAsync(WINDOWS_POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', script], {

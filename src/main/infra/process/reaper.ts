@@ -40,14 +40,16 @@ type SkipReason =
   | 'pid-not-alive'
   | 'start-time-mismatch'
   | 'exe-mismatch'
+  | 'args-mismatch'
   | 'kill-failed'
   | 'ambiguous-entry'
 
 export async function reapBootSidecars(options: ReaperOptions): Promise<void> {
   const adapters = { ...defaultAdapters(), ...options.adapters }
   const runDir = join(options.userData, 'run')
-  await reapRegistryRecords(adapters.readRegistryRecords(runDir), adapters)
-  await reapLegacyLlamaOrphans(options, adapters)
+  const records = adapters.readRegistryRecords(runDir)
+  await reapRegistryRecords(records, adapters)
+  await reapLegacyLlamaOrphans(options, adapters, registeredPids(records))
 }
 
 async function reapRegistryRecords(records: SidecarRecord[], adapters: ReaperAdapters): Promise<void> {
@@ -78,6 +80,14 @@ async function reapRegistryRecords(records: SidecarRecord[], adapters: ReaperAda
     }
     await reapRegistryRecord(record, adapters)
   }
+}
+
+function registeredPids(records: readonly SidecarRecord[]): Set<number> {
+  const out = new Set<number>()
+  for (const record of records) {
+    if (typeof record.pid === 'number') out.add(record.pid)
+  }
+  return out
 }
 
 function sameRegisteredIdentity(records: readonly SidecarRecord[]): boolean {
@@ -122,6 +132,10 @@ async function reapRegistryRecord(record: SidecarRecord, adapters: ReaperAdapter
     skip(adapters, 'exe-mismatch', { pid: record.pid, name: record.name })
     return
   }
+  if (!liveArgsMatchFingerprint(live, record.argsFingerprint)) {
+    skip(adapters, 'args-mismatch', { pid: record.pid, name: record.name })
+    return
+  }
   try {
     adapters.kill(record.pid!)
     adapters.audit('sidecar.reaped', { name: record.name, pid: record.pid, reason: 'registry' })
@@ -130,10 +144,17 @@ async function reapRegistryRecord(record: SidecarRecord, adapters: ReaperAdapter
   }
 }
 
-async function reapLegacyLlamaOrphans(options: ReaperOptions, adapters: ReaperAdapters): Promise<void> {
+function liveArgsMatchFingerprint(live: ProcessIdentity, expected: string): boolean {
+  if (argsFingerprint(live.args) === expected) return true
+  if (live.args.length > 0 && argsFingerprint(live.args.slice(1)) === expected) return true
+  return false
+}
+
+async function reapLegacyLlamaOrphans(options: ReaperOptions, adapters: ReaperAdapters, registryPids: ReadonlySet<number>): Promise<void> {
   const modelRoot = withTrailingSeparator(resolve(options.userData, 'local-llm'))
   const procs = await adapters.listProcesses()
   for (const proc of procs) {
+    if (registryPids.has(proc.pid)) continue
     if (proc.exeRealpath !== options.llamaServerRealpath) continue
     if (proc.ppid !== 1) continue
     if (!startedBefore(proc.osStartTime, options.currentMain.osStartTime)) continue
@@ -287,7 +308,31 @@ function parsePosixPsLine(line: string): ProcessIdentity | null {
 }
 
 async function listWindowsProcesses(): Promise<ProcessIdentity[]> {
-  return []
+  const { WINDOWS_POWERSHELL } = await import('../../win-security')
+  const script = [
+    'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class MetisProcNative { [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetProcessTimes(IntPtr hProcess, out long creation, out long exit, out long kernel, out long user); [DllImport("shell32.dll", SetLastError=true)] public static extern IntPtr CommandLineToArgvW([MarshalAs(UnmanagedType.LPWStr)] string commandLine, out int argc); [DllImport("kernel32.dll")] public static extern IntPtr LocalFree(IntPtr handle); public static string[] SplitCommandLine(string commandLine) { if (String.IsNullOrWhiteSpace(commandLine)) return new string[0]; int argc = 0; IntPtr argv = CommandLineToArgvW(commandLine, out argc); if (argv == IntPtr.Zero) return new string[] { commandLine }; try { string[] args = new string[argc]; for (int i = 0; i < argc; i++) args[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * IntPtr.Size)) ?? ""; return args; } finally { LocalFree(argv); } } }\'',
+    '$items = @()',
+    'foreach ($p in Get-Process) {',
+    '  try {',
+    '    $cim = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)"',
+    '    [long]$creation = 0; [long]$exit = 0; [long]$kernel = 0; [long]$user = 0',
+    '    if (-not [MetisProcNative]::GetProcessTimes($p.Handle, [ref]$creation, [ref]$exit, [ref]$kernel, [ref]$user)) { continue }',
+    '    if ([string]::IsNullOrWhiteSpace($p.Path)) { continue }',
+    '    $items += @{ pid = [int]$p.Id; ppid = [int]$cim.ParentProcessId; pgid = [int]$p.Id; osStartTime = [DateTime]::FromFileTimeUtc($creation).ToString("o"); exeRealpath = $p.Path; args = @([MetisProcNative]::SplitCommandLine($cim.CommandLine)) }',
+    '  } catch { }',
+    '}',
+    '$items | ConvertTo-Json -Compress'
+  ].join('; ')
+  const { stdout } = await execFileAsync(WINDOWS_POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    windowsHide: true
+  })
+  const body = stdout.trim()
+  if (!body) return []
+  const parsed = JSON.parse(body) as ProcessIdentity | ProcessIdentity[]
+  const items = Array.isArray(parsed) ? parsed : [parsed]
+  return items.filter((item) => typeof item.pid === 'number' && !!item.osStartTime && !!item.exeRealpath)
 }
 
 function splitCommand(command: string): string[] {
@@ -316,6 +361,7 @@ function errorMessage(error: unknown): string {
 export const testOnly = {
   argsFingerprint,
   legacyArgsPointAtUserModel,
+  liveArgsMatchFingerprint,
   parsePosixPsLine,
   startedBefore
 }

@@ -113,10 +113,50 @@ describe('boot sidecar reaper', () => {
     })
   })
 
+  it('skips a registered sidecar whose live argv no longer matches the recorded fingerprint', async () => {
+    const ad = adapters({ records: [spawned()], live: proc({ args: ['-m', '/profile/local-llm/other/model.gguf'] }) })
+
+    await run(ad)
+
+    expect(ad.killed).toEqual([])
+    expect(ad.audits).toContainEqual({
+      event: 'sidecar.reap.skipped',
+      detail: expect.objectContaining({ reason: 'args-mismatch', pid: 42 })
+    })
+  })
+
+  it('accepts helper argv that includes argv[0] before the recorded spawn arguments', async () => {
+    const ad = adapters({ records: [spawned()], live: proc({ args: [LLAMA, '-m', '/profile/local-llm/models/qwen/model.gguf'] }) })
+
+    await run(ad)
+
+    expect(ad.killed).toEqual([42])
+    expect(ad.audits).toContainEqual({
+      event: 'sidecar.reaped',
+      detail: { name: 'llama-server', pid: 42, reason: 'registry' }
+    })
+  })
+
   it('skips ambiguous registry entries for the same PID and never kills either record', async () => {
     const ad = adapters({
       records: [spawned(), spawned({ osStartTime: '2026-09-27T09:59:00.000Z' })],
       live: proc()
+    })
+
+    await run(ad)
+
+    expect(ad.killed).toEqual([])
+    expect(ad.audits).toContainEqual({
+      event: 'sidecar.reap.skipped',
+      detail: expect.objectContaining({ reason: 'ambiguous-entry', pid: 42 })
+    })
+  })
+
+  it('does not let the legacy orphan rule kill a PID already present in the registry', async () => {
+    const ad = adapters({
+      records: [spawned(), spawned({ osStartTime: '2026-09-27T09:59:00.000Z' })],
+      live: proc(),
+      list: [proc()]
     })
 
     await run(ad)
