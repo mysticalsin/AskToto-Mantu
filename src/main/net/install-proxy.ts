@@ -89,13 +89,10 @@ export function routeDispatcher(lookup?: LookupFunction): Dispatcher {
   }
 }
 
-/** Whether the HTTP or HTTPS proxy EnvHttpProxyAgent reads from the environment (in its own precedence,
- *  lowercase first) is a SOCKS proxy, which undici tunnels by host name outside the pool factory. */
+/** Whether the effective env proxy route (using detectProxyFromEnv's precedence, shared with boot) is
+ *  a SOCKS proxy, which undici tunnels by host name outside the pool factory. */
 function envProxyIsSocks(): boolean {
-  const { env } = process
-  return [env.http_proxy ?? env.HTTP_PROXY, env.https_proxy ?? env.HTTPS_PROXY].some((proxy) =>
-    /^socks5?:/i.test(proxy ?? '')
-  )
+  return /^socks5?:/i.test(detectProxyFromEnv(process.env) ?? '')
 }
 
 /**
