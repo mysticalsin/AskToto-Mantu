@@ -1,4 +1,4 @@
-import { sha256Hex } from './sha256.ts'
+import { sha256Hex } from './sha256'
 
 // Windows reserved device names — a path whose basename (before the first '.') case-insensitively
 // matches one of these fails to open at all, even for a tmp file, regardless of extension.

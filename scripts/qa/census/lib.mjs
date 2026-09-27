@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { listProcesses, ownedProcesses } from '../owned-processes.mjs'
@@ -26,6 +27,7 @@ export const DEFAULT_SECONDS = 300
 export const DEFAULT_INTERVAL_MS = 5_000
 
 const ONE_CORE_CPU_FORMULA = '100 * sum(delta cpuSeconds) / delta wallSeconds'
+const PROVE_LOCAL_TTFT_COMMAND = 'node scripts/prove-local-ttft.mjs'
 
 function entryKey(entry) {
   return `${entry.pid}:${entry.startedMs}`
@@ -44,6 +46,31 @@ function commandText(enriched) {
   return String(enriched.commandLine ?? enriched.role ?? enriched.exe ?? '').toLowerCase()
 }
 
+function sha256Text(text) {
+  return createHash('sha256').update(text).digest('hex')
+}
+
+function portableEvidencePath(path, cwd = process.cwd()) {
+  const text = String(path ?? '').trim()
+  if (!text) throw new Error('evidence artifact path is required')
+  if (text.includes('\\')) throw new Error(`evidence artifact path must be POSIX-style: ${text}`)
+  const normalized = isAbsolute(text) ? relative(cwd, text).replaceAll('\\', '/') : text
+  if (normalized.startsWith('../') || normalized === '..' || normalized.includes('/../') || normalized.startsWith('/')) {
+    throw new Error(`evidence artifact must be inside the working directory: ${text}`)
+  }
+  if (normalized.split('/').some((part) => part === '' || part === '.')) {
+    throw new Error(`evidence artifact path must not contain empty or "." segments: ${text}`)
+  }
+  return normalized
+}
+
+function readEvidenceArtifact(path, cwd = process.cwd()) {
+  const portablePath = portableEvidencePath(path, cwd)
+  const absolute = resolve(cwd, portablePath)
+  if (!existsSync(absolute)) throw new Error(`evidence artifact does not exist: ${portablePath}`)
+  return { path: portablePath, absolute, text: readFileSync(absolute, 'utf8') }
+}
+
 export function classifyProcess(entry) {
   const role = baseRole(entry)
   const cmd = commandText(entry)
@@ -58,6 +85,61 @@ export function classifyProcess(entry) {
   if (cmd.includes('--type=utility') || role.includes('helper (plugin)')) return 'utility'
   if (role === 'metis' || role === 'metis.exe') return 'main'
   return 'other'
+}
+
+export function parseProveLocalTtftOutput(text) {
+  const output = String(text ?? '')
+  if (!output.includes('prove-local-ttft: Métis Local warm-suggest TTFT proof')) {
+    throw new Error('TTFT artifact is not output from scripts/prove-local-ttft.mjs')
+  }
+  if (/\[prove-local-ttft\]\s+FAIL|FAILED:/i.test(output)) {
+    throw new Error('TTFT artifact records a failed scripts/prove-local-ttft.mjs run')
+  }
+  const match = /^warm TTFT:\s*(\d+)\s*ms\s*$/im.exec(output)
+  if (!match) throw new Error('TTFT artifact is missing "warm TTFT: <n> ms"')
+  const warmTtftMs = Number(match[1])
+  if (!Number.isFinite(warmTtftMs) || warmTtftMs <= 0) {
+    throw new Error('TTFT artifact warm TTFT must be a positive number')
+  }
+  return warmTtftMs
+}
+
+export function proveLocalTtftEvidenceFromArtifact(path, { cwd = process.cwd() } = {}) {
+  const artifact = readEvidenceArtifact(path, cwd)
+  return {
+    recorded: true,
+    command: PROVE_LOCAL_TTFT_COMMAND,
+    warmTtftMs: parseProveLocalTtftOutput(artifact.text),
+    artifact: {
+      path: artifact.path,
+      sha256: sha256Text(artifact.text)
+    }
+  }
+}
+
+export function windowsWorkingSetEvidenceFromArtifact(path, { cwd = process.cwd() } = {}) {
+  const artifact = readEvidenceArtifact(path, cwd)
+  let parsed
+  try {
+    parsed = JSON.parse(artifact.text)
+  } catch {
+    throw new Error('Windows working-set artifact must be JSON')
+  }
+  if (parsed?.platform !== 'win32') throw new Error('Windows working-set artifact must have platform "win32"')
+  const samples = Array.isArray(parsed?.samples) ? parsed.samples : []
+  const hasWorkingSet = samples.some((sample) =>
+    (sample.processes ?? []).some((process) => Number.isFinite(process.workingSetBytes) && process.workingSetBytes > 0)
+  )
+  if (!hasWorkingSet) throw new Error('Windows working-set artifact has no positive workingSetBytes sample')
+  return {
+    measured: true,
+    metric: 'Win32_Process.WorkingSetSize',
+    lane: 'windows-qa',
+    artifact: {
+      path: artifact.path,
+      sha256: sha256Text(artifact.text)
+    }
+  }
 }
 
 export function oneCoreCpuPercent(samples, wallSeconds) {
@@ -172,6 +254,39 @@ export function sanitizeReport(report) {
     proveLocalTtft: report.proveLocalTtft,
     windowsWorkingSet: report.windowsWorkingSet
   }
+}
+
+export function rendererScenarioProbeSource(scenario) {
+  if (!REQUIRED_TRACE_SCENARIOS.includes(scenario)) throw new Error(`unknown trace scenario: ${scenario}`)
+  return `(() => {
+    const visibleBox = (el) => {
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (rect.width <= 0 || rect.height <= 0 || style.visibility === 'hidden' || style.display === 'none') return null;
+      return { width: Math.round(rect.width), height: Math.round(rect.height), tag: el.tagName.toLowerCase(), className: String(el.className || '') };
+    };
+    if (${JSON.stringify(scenario)} === 'parked-bar-orb') {
+      const orb = document.querySelector('[data-bar-pill-orb]');
+      const box = visibleBox(orb);
+      const canvas = orb?.querySelector('canvas');
+      return { ok: Boolean(box && canvas), box, attributes: orb ? { state: orb.getAttribute('data-orb-state'), visible: orb.getAttribute('data-orb-visible'), backing: orb.getAttribute('data-orb-backing') } : null };
+    }
+    if (${JSON.stringify(scenario)} === 'backdrop-filter') {
+      for (const el of document.querySelectorAll('body *')) {
+        const box = visibleBox(el);
+        if (!box) continue;
+        const style = getComputedStyle(el);
+        const filter = style.backdropFilter || style.webkitBackdropFilter || '';
+        if (filter && filter !== 'none') return { ok: true, box, filter };
+      }
+      return { ok: false, filter: null };
+    }
+    const canvas = document.querySelector('[data-orb-style="obsidian"] canvas, .obsidian-orb canvas, .obsidian-orb__canvas');
+    const box = visibleBox(canvas);
+    const host = canvas?.closest('[data-orb-style="obsidian"], .obsidian-orb');
+    return { ok: Boolean(box && host), box, hostClassName: host ? String(host.className || '') : null };
+  })()`
 }
 
 export function summarize(samples, wallSeconds) {
@@ -461,11 +576,12 @@ export async function collectCensus(options) {
     summary: summarize(samples, Math.max(seconds, (samples.at(-1)?.tMs ?? 0) / 1000)),
     statePrecondition,
     rendererTrace: options.rendererTrace ?? { captured: false, scenarios: [] },
-    proveLocalTtft: options.proveLocalTtft ?? { recorded: false },
-    windowsWorkingSet:
-      platform === 'win32'
-        ? { measured: true, metric: 'Win32_Process.WorkingSetSize' }
-        : { measured: false, metric: 'Win32_Process.WorkingSetSize', lane: 'windows-qa' }
+    proveLocalTtft: options.proveLocalTtft ?? { recorded: false, command: PROVE_LOCAL_TTFT_COMMAND },
+    windowsWorkingSet: options.windowsWorkingSet ?? {
+      measured: false,
+      metric: 'Win32_Process.WorkingSetSize',
+      lane: 'windows-qa'
+    }
   }
   return sanitizeReport(report)
 }

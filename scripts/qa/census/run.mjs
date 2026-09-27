@@ -10,10 +10,13 @@ import {
   STATES,
   collectCensus,
   defaultOutputPath,
+  proveLocalTtftEvidenceFromArtifact,
+  rendererScenarioProbeSource,
   resolveInstallTarget,
   resolveProductVersion,
   validateState,
   validateStatePrecondition,
+  windowsWorkingSetEvidenceFromArtifact,
   writeJson
 } from './lib.mjs'
 
@@ -31,7 +34,9 @@ Inputs:
   --output <path>          JSON output. Defaults under metis-census-output/.
   --cdp-url <url>          Existing Chromium DevTools endpoint for renderer traces.
   --trace-scenario <name>  Repeatable. Expected names: ${REQUIRED_TRACE_SCENARIOS.join(', ')}.
-  --ttft-ms <ms>           Recorded warm TTFT from scripts/prove-local-ttft.mjs.
+  --ttft-output <path>     Saved stdout/stderr artifact from scripts/prove-local-ttft.mjs.
+  --windows-working-set-artifact <path>
+                           Windows QA lane census JSON proving positive workingSetBytes samples.
   --product-version <ver>  Product version when it cannot be read from the installed app.
   --precondition-evidence <text>
                            Required with --main-pid for first-inference, active-transcription,
@@ -62,7 +67,9 @@ function readArgs(argv) {
     else if (arg === '--output') args.output = next()
     else if (arg === '--cdp-url') args.cdpUrl = next()
     else if (arg === '--trace-scenario') args.traceScenarios.push(next())
-    else if (arg === '--ttft-ms') args.ttftMs = Number(next())
+    else if (arg === '--ttft-output') args.ttftOutput = next()
+    else if (arg === '--ttft-ms') throw new Error('--ttft-ms is not accepted; pass --ttft-output from scripts/prove-local-ttft.mjs')
+    else if (arg === '--windows-working-set-artifact') args.windowsWorkingSetArtifact = next()
     else if (arg === '--product-version') args.productVersion = next()
     else if (arg === '--precondition-evidence') args.preconditionEvidence = next()
     else throw new Error(`unknown argument: ${arg}`)
@@ -126,6 +133,14 @@ async function captureRendererTrace({ cdpUrl, scenarios, outputDir }) {
 
     for (const scenario of scenarios) {
       if (!REQUIRED_TRACE_SCENARIOS.includes(scenario)) throw new Error(`unknown trace scenario: ${scenario}`)
+      const proof = await page.evaluate(rendererScenarioProbeSource(scenario))
+      if (!proof?.ok) throw new Error(`renderer trace scenario is not established: ${scenario}`)
+      const proofPath = join(outputDir, `${scenario}.proof.json`)
+      writeJson(proofPath, {
+        scenario,
+        observedAt: new Date().toISOString(),
+        proof
+      })
       const session = await page.context().newCDPSession(page)
       await session.send('Tracing.start', {
         categories: 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,gpu',
@@ -148,7 +163,7 @@ async function captureRendererTrace({ cdpUrl, scenarios, outputDir }) {
       const path = join(outputDir, `${scenario}.trace.json`)
       mkdirSync(dirname(path), { recursive: true })
       writeJson(path, JSON.parse(trace))
-      captured.push({ scenario, path })
+      captured.push({ scenario, path, proofPath })
     }
   } finally {
     await browser.close().catch(() => {})
@@ -208,6 +223,12 @@ async function main() {
   })
 
   try {
+    const proveLocalTtft = args.ttftOutput
+      ? proveLocalTtftEvidenceFromArtifact(args.ttftOutput)
+      : { recorded: false, command: 'node scripts/prove-local-ttft.mjs' }
+    const windowsWorkingSet = args.windowsWorkingSetArtifact
+      ? windowsWorkingSetEvidenceFromArtifact(args.windowsWorkingSetArtifact)
+      : undefined
     const rendererTrace = await captureRendererTrace({
       cdpUrl,
       scenarios: args.traceScenarios,
@@ -225,10 +246,8 @@ async function main() {
       preconditionEvidence: args.preconditionEvidence,
       profileKind: 'representative-synthetic',
       rendererTrace,
-      proveLocalTtft:
-        Number.isFinite(args.ttftMs) && args.ttftMs > 0
-          ? { recorded: true, warmTtftMs: args.ttftMs, command: 'node scripts/prove-local-ttft.mjs' }
-          : { recorded: false, command: 'node scripts/prove-local-ttft.mjs' }
+      proveLocalTtft,
+      windowsWorkingSet
     })
     writeJson(output, report)
     console.log(`[census] wrote ${output}`)
