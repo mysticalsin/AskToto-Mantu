@@ -303,6 +303,18 @@ describe('publish-release platform rules (M2-0053)', () => {
       expect(feed.mutations).toEqual([])
     })
 
+    it(`refuses a complete public release for ${platformLabels[platform]} that also carries a foreign asset`, async () => {
+      const bundleDir = makeBundle(platform)
+      const assets = [
+        ...assetsFromBundle(bundleDir, platformAssets(platform, VERSION) as string[]),
+        ...assetsFor(platform, ['notes.txt'])
+      ]
+      const feed = new FakeFeed([release({ assets })])
+
+      await expect(publishPlatform({ platform, tag: TAG, bundleDir, feed })).rejects.toThrow(/unexpected/)
+      expect(feed.mutations).toEqual([])
+    })
+
     it(`refuses complete public ${platformLabels[platform]} assets when GitHub's digest differs from the local bytes`, async () => {
       const bundleDir = makeBundle(platform)
       const assets = assetsFromBundle(bundleDir, platformAssets(platform, VERSION) as string[]).map((asset) =>
