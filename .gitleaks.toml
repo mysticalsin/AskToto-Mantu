@@ -18,8 +18,6 @@ useDefault = true
 # secrets:
 #   - src/shared/redact.test.ts:34,59         ABCDEF123456                    (redactSecrets() unit fixtures)
 #   - license-server/ops.test.mjs:286         ATK-HY2JVMZ3P3JF8CGAQWPR        (license-server test fixture)
-# Two further fixtures of the same kind (an sk-kimi- test key each) lived in the Cahê pilot edition's own
-# test files, removed entirely on 2026-09-26 (owner decision D-30, ticket M2-0214).
 # scripts/qa/e2e-workflows.mjs's own 'qa-proxy-key' (the physical QA harness's deliberately-invalid
 # Cloudflare key — see MISTAKES/QA harness notes) did not trip gitleaks's default ruleset directly, but is
 # allowlisted below on the same basis: it must never be treated as a real credential either.

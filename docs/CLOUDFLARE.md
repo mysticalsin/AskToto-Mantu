@@ -133,7 +133,7 @@ Either shape uses the same disclosed, opt-in embedding mechanism, implemented in
    for the mac/win release jobs, so with the account secrets configured in the repo the DMG/EXE embed the
    credential **by default**; locally you set it explicitly, e.g.
    `METIS_CLOUDFLARE_API_TOKEN=… METIS_CLOUDFLARE_ACCOUNT_ID=… METIS_EMBED_CLOUDFLARE_KEY=1 npm run dist`
-   (or `release:build:mac`, `dist:win`, `release:build:win`, or the Cahê chain). This is a deliberate
+   (or `release:build:mac`, `dist:win`, `release:build:win`). This is a deliberate
    **double opt-in**: the token env supplies the credential, and `METIS_EMBED_CLOUDFLARE_KEY=1` authorizes
    packaging it. Without the second var, `scripts/check-embedded-cloudflare-key.mjs` refuses the package
    outright rather than silently shipping a key nobody meant to embed. That same gate proves the packaged

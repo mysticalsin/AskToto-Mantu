@@ -20,6 +20,10 @@ release-appx/
 # Worker-side label exists) — only .gitkeep is ever meant to be tracked.
 build/cloudflare-embed/*
 !build/cloudflare-embed/.gitkeep
+
+# Operator-local build inputs that may hold credentials are never tracked.
+build/*.local.json
+build/*.ps1
 .vite/
 coverage/
 *.tsbuildinfo

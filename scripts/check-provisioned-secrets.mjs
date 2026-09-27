@@ -11,10 +11,10 @@
 //   1. operator skill-pack public key  — <resources>/operator/pubkey.json       (src/main/operator-skill-key.ts)
 //   2. license-lease public key        — <resources>/license-lease/pubkey.json  (src/main/license-lease-key.ts)
 //
-// The embedded Cloudflare proxy key and the Cahê package key are DELIBERATELY out of this gate: both are
-// opt-in credentials with no committed DEV placeholder to fall back to, so a keyless build is already a
-// valid release for them. Their own invariants are enforced post-pack, against the packaged app, by
-// scripts/check-embedded-cloudflare-key.mjs and scripts/check-cahe-package.mjs respectively.
+// The embedded Cloudflare proxy key is DELIBERATELY out of this gate: it is an opt-in credential with
+// no committed DEV placeholder to fall back to, so a keyless build is already a valid release for it.
+// Its own invariant is enforced post-pack, against the packaged app, by
+// scripts/check-embedded-cloudflare-key.mjs.
 //
 // Usage:
 //   node scripts/check-provisioned-secrets.mjs --profile <dev|release> [--dry-run]

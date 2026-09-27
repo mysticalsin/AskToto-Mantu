@@ -582,11 +582,8 @@ describe('store', () => {
     })
   })
 
-  // M2-0214 — owner decision D-30 (2026-09-26): the Cahê pilot edition was removed entirely. An existing
-  // profile that an old Cahê build once wrote to disk must still load as an ordinary standard-edition
-  // profile — nothing in Cahê's on-disk footprint was edition-specific (its policy was already a no-op:
-  // no allowlist, no locked keys, no forced defaults), so removing the edition code changes nothing about
-  // how this settings.json is read.
+  // A settings.json with provider 'kimi', backgroundScreenContext and Local AI enabled loads with no
+  // allowlist and no locked keys — same as every other build, regardless of which edition wrote it.
   describe('M2-0214: settings written by the retired Cahê edition load as the standard edition', () => {
     it('loads without error, keeping the provider and Local AI choices the pilot made', () => {
       const settingsFile = join(userData, 'settings.json')
