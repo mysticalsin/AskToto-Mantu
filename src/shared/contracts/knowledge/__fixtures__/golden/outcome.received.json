@@ -1,0 +1,4 @@
+{
+  "status": "RECEIVED",
+  "idempotencyKey": "request-000000000001"
+}

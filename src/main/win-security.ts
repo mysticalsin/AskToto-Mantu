@@ -30,7 +30,7 @@ import { mainLog as log } from './logger'
 const SYS32 = join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32')
 /** The ONE name any main-process module may use for powershell. Exported (rather than each caller
  *  re-deriving or, worse, spelling a bare 'powershell.exe') so the invariant above holds repo-wide:
- *  foreground-watcher.ts and dust-secret-store.ts spawn this exact pinned binary. */
+ *  no main-process module spells a bare 'powershell.exe'. */
 export const WINDOWS_POWERSHELL = join(SYS32, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 const ICACLS = join(SYS32, 'icacls.exe')
 

@@ -1,0 +1,28 @@
+{
+  "target": {
+    "space": "00000000-0000-4000-8000-000000000010",
+    "id": "00000000-0000-4000-8000-000000000109"
+  },
+  "expectedRevision": 0,
+  "type": "action",
+  "idempotencyKey": "request-000000000002",
+  "reason": "Commitment spoken in the pricing meeting.",
+  "evidence": [
+    {
+      "kind": "record",
+      "record": {
+        "space": "00000000-0000-4000-8000-000000000010",
+        "id": "00000000-0000-4000-8000-000000000103"
+      },
+      "revision": 2,
+      "quote": "Bob will share the rollout plan."
+    }
+  ],
+  "patch": [
+    {
+      "op": "set",
+      "field": "text",
+      "value": "Share the rollout plan with Northwind"
+    }
+  ]
+}

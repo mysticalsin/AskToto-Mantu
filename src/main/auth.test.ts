@@ -367,3 +367,87 @@ describe('interactive sign-in backoff (sequential-failure rate limit)', () => {
     expect(signInBackoffRemainingMs()).toBe(0)
   })
 })
+
+// M2-0147 — a persisted session was only re-checked against MAX_SESSION_AGE_MS and the allowed domain.
+// An IT tenant rotation (a new Entra tenant ID pushed to env/managed-config) left an old session's `tid`
+// trusted for up to 7 more days: expiryReason never looked at it. Each test gets its own module instance
+// (vi.resetModules() + dynamic import) because auth.ts's `loaded`/`session` state is module-level and
+// would otherwise leak between cases — follows signout-revocation.contract.test.ts's pattern.
+describe('tenant rotation ends a session whose tid no longer matches the configured tenant (M2-0147)', () => {
+  const AZURE_ENV = ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'ASKTOTO_ALLOWED_DOMAIN', 'ASKTOTO_REQUIRE_AUTH']
+  const OTHER_TENANT_GUID = '00000000-0000-4000-8000-000000000001'
+  let ud: string
+  let saved: Record<string, string | undefined>
+
+  beforeEach(async () => {
+    vi.resetModules()
+    ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-tenant-rotate-'))
+    const electron = await import('electron')
+    ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
+      n === 'userData' ? ud : join(ud, n)
+    )
+    saved = {}
+    for (const k of AZURE_ENV) {
+      saved[k] = process.env[k]
+      delete process.env[k]
+    }
+    process.env.AZURE_CLIENT_ID = 'client-id'
+    process.env.ASKTOTO_ALLOWED_DOMAIN = 'example.com'
+  })
+
+  afterEach(() => {
+    rmSync(ud, { recursive: true, force: true })
+    for (const k of AZURE_ENV) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  /** A session file the real loadSession() will accept, for the given tenant id. */
+  async function writeSessionFile(tid: string): Promise<void> {
+    const { encryptSecret } = await import('./secrets')
+    const session = { email: 'user@example.com', domain: 'example.com', tid, at: Date.now() }
+    writeFileSync(join(ud, 'auth-session.bin'), encryptSecret(JSON.stringify(session)), { mode: 0o600 })
+  }
+
+  it('A1: clears a session whose tenant no longer matches the configured tenant on the next status check', async () => {
+    await writeSessionFile(TENANT_GUID)
+    process.env.AZURE_TENANT_ID = TENANT_GUID
+    const auth = await import('./auth')
+    expect(auth.authStatus().signedIn).toBe(true)
+
+    process.env.AZURE_TENANT_ID = OTHER_TENANT_GUID
+    const cleared = vi.fn()
+    auth.setSessionClearedHandler(cleared)
+
+    const status = auth.authStatus()
+    expect(status.signedIn).toBe(false)
+    expect(auth.requireAuth()).toBe(false)
+    expect(cleared).toHaveBeenCalledTimes(1)
+  })
+
+  it('A2: the background re-validation sweep clears it with no user action', async () => {
+    vi.useFakeTimers()
+    await writeSessionFile(TENANT_GUID)
+    process.env.AZURE_TENANT_ID = TENANT_GUID
+    const auth = await import('./auth')
+    expect(auth.authStatus().signedIn).toBe(true) // starts the background sweep
+
+    process.env.AZURE_TENANT_ID = OTHER_TENANT_GUID
+    const cleared = vi.fn()
+    auth.setSessionClearedHandler(cleared)
+
+    // The sweep's first kick fires 10s after authStatus() started it — before any further authStatus().
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(cleared).toHaveBeenCalledTimes(1)
+  })
+
+  it('A3: folds case like the sign-in gate (guards against a raw !== compare)', async () => {
+    await writeSessionFile(TENANT_GUID.toLowerCase())
+    process.env.AZURE_TENANT_ID = TENANT_GUID.toUpperCase()
+    const auth = await import('./auth')
+    expect(auth.authStatus().signedIn).toBe(true)
+  })
+})
