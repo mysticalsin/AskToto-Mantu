@@ -7,9 +7,8 @@ const root = join(__dirname, '..')
 /**
  * cahe-removal.contract.test.ts — M2-0214. 2026-09-26: the Cahê pilot edition —
  * edition code, its embedded-key build path, its electron-builder config, its GitHub Actions
- * workflow, its packaging gate and its docs — is removed entirely. The secret it used to embed was
- * already revoked at the vendor before this ticket; this file's job is to pin that no build path can
- * ever embed an edition key again, by proving no trace of the edition itself remains.
+ * workflow, its packaging gate and its docs — is removed entirely. This file's job is to pin that no
+ * build path can ever embed an edition key again, by proving no trace of the edition itself remains.
  *
  * A single case-insensitive git-grep over the whole tracked tree covers this: every removed file path,
  * the removed secret and the removed env flag all contain "cahe-" or "cahe_", so a separate existsSync

@@ -328,7 +328,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     // Deliberately EMPTY. Cloudflare's REST endpoint is account-scoped
     // (POST /client/v4/accounts/{ACCOUNT_ID}/ai/v1/chat/completions) and authenticates with a Cloudflare
     // ACCOUNT token — a secret that must never ship inside the app, because `npx asar extract` recovers
-    // any embedded string (scripts/check-embedded-cloudflare-key.mjs exists to refuse exactly that build).
+    // any embedded string.
     // So the account token lives as a Wrangler secret on an operator-deployed Worker, and this provider
     // points at that Worker's URL, held per install in settings.cloudflareBaseUrl. See requiresUserBaseUrl().
     baseUrl: '',
@@ -445,8 +445,7 @@ export interface ProviderEndpointSettings {
  *  - 'custom'     — any OpenAI-compatible endpoint the user already runs.
  *  - 'cloudflare' — the operator's own Cloudflare Worker. Cloudflare's REST endpoint authenticates with a
  *    Cloudflare ACCOUNT token, which a packaged Electron app is not a safe place for (`npx asar extract`
- *    recovers any embedded string; scripts/check-embedded-cloudflare-key.mjs already refuses a build that
- *    embeds a key). The account token therefore stays a Wrangler secret on the Worker, and each install
+ *    recovers any embedded string). The account token therefore stays a Wrangler secret on the Worker, and each install
  *    holds only the per-user METIS_PROXY_KEY plus that Worker's URL.
  * Callers use this to fail LOUDLY on a missing endpoint instead of letting the OpenAI SDK fall through to
  * its own default base URL — which would send the user's key and prompt to api.openai.com.
