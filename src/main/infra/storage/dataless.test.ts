@@ -108,6 +108,21 @@ describe('createDatalessDetector', () => {
     expect(result.get('/a/gone.md')).toBe('unknown')
   })
 
+  it('markLocal answers local for that version without probing, and a new version probes again', async () => {
+    const probe = vi.fn<PresenceProbe>(async (paths) => paths.map(byName))
+    const detector = createDatalessDetector(probe)
+    const f = fileVersion('/a/dataless.md') // byName would say 'dataless' if this ever reached the probe
+
+    detector.markLocal([f])
+    const result = await detector.classify([f])
+
+    expect(result.get('/a/dataless.md')).toBe('local')
+    expect(probe).not.toHaveBeenCalled()
+
+    await detector.classify([{ ...f, mtimeMs: f.mtimeMs + 1 }])
+    expect(probe).toHaveBeenCalledTimes(1)
+  })
+
   it('serves an unchanged file from cache without probing again', async () => {
     const probe = vi.fn<PresenceProbe>(async (paths) => paths.map(byName))
     const detector = createDatalessDetector(probe)
