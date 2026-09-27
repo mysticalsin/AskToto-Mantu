@@ -86,14 +86,15 @@ async function verifyGatewayPrivacyForVault(
   }
 }
 
-export async function writeVaultKey(
-  store: OperatorStore,
+/** Validates, privacy-checks and encrypts one vault write without touching the store, so several
+ *  rows (Cloudflare's gateway + account) can all be prepared before any of them is persisted. */
+async function prepareVaultKeyRow(
   env: { OPERATOR_VAULT_KEY?: string },
   email: string,
   now: number,
   body: Record<string, unknown>,
-  fetchImpl: typeof fetch = fetch
-): Promise<{ ok: true; id: string; last4: string; status: string } | VaultKeyFailure> {
+  fetchImpl: typeof fetch
+): Promise<{ ok: true; row: VaultKeyRow } | VaultKeyFailure> {
   if (!env.OPERATOR_VAULT_KEY) return { ok: false, error: 'vault key missing', status: 500 }
   const provider = typeof body.provider === 'string' ? body.provider.trim() : ''
   if (!isVaultProvider(provider) || isForbiddenVaultProvider(provider)) {
@@ -114,9 +115,8 @@ export async function writeVaultKey(
   const label = labelFromBody(body, accountId || provider)
   const last4 = last4OfSecret(secret)
   const enc = await encryptVault(encodeVaultPlaintext(secret, accountId), env.OPERATOR_VAULT_KEY)
-  const id = crypto.randomUUID()
   const row: VaultKeyRow = {
-    id,
+    id: crypto.randomUUID(),
     provider,
     label,
     last4,
@@ -128,11 +128,25 @@ export async function writeVaultKey(
     rotated_at: null,
     revoked_at: null
   }
+  return { ok: true, row }
+}
+
+export async function writeVaultKey(
+  store: OperatorStore,
+  env: { OPERATOR_VAULT_KEY?: string },
+  email: string,
+  now: number,
+  body: Record<string, unknown>,
+  fetchImpl: typeof fetch = fetch
+): Promise<{ ok: true; id: string; last4: string; status: string } | VaultKeyFailure> {
+  const prepared = await prepareVaultKeyRow(env, email, now, body, fetchImpl)
+  if (!prepared.ok) return prepared
+  const { row } = prepared
   await store.putVaultKey(row)
   // Only one active row per provider: an older row left `active` after a fresh write would still be
   // eligible for `use` and dashboard funding checks even though nobody can see or rotate it anymore.
-  await store.supersedeActiveVaultKeys(provider, id, now)
-  await store.audit(crypto.randomUUID(), now, email, 'vault-write', null, `${provider} ·${last4}`)
+  await store.supersedeActiveVaultKeys(row.provider, row.id, now)
+  await store.audit(crypto.randomUUID(), now, email, 'vault-write', null, `${row.provider} ·${row.last4}`)
   await store.insertEvent({
     id: crypto.randomUUID(),
     ts: now,
@@ -140,9 +154,44 @@ export async function writeVaultKey(
     actor: email,
     device_id: null,
     country: null,
-    detail: `write ${provider}`
+    detail: `write ${row.provider}`
   })
-  return { ok: true, id, last4, status: 'active' }
+  return { ok: true, id: row.id, last4: row.last4, status: 'active' }
+}
+
+export type VaultKeyWrite = { id: string; last4: string; status: string }
+
+/** Writes several vault rows as one D1 transaction: every row is validated, privacy-checked and
+ *  encrypted first, then all rows commit together or none do. Cloudflare provisioning uses this
+ *  so a failure on the account row can never strand its gateway row (or vice versa). */
+export async function writeVaultKeysAtomically(
+  store: OperatorStore,
+  env: { OPERATOR_VAULT_KEY?: string },
+  email: string,
+  now: number,
+  bodies: Record<string, unknown>[],
+  fetchImpl: typeof fetch = fetch
+): Promise<{ ok: true; rows: VaultKeyWrite[] } | VaultKeyFailure> {
+  const rows: VaultKeyRow[] = []
+  for (const body of bodies) {
+    const prepared = await prepareVaultKeyRow(env, email, now, body, fetchImpl)
+    if (!prepared.ok) return prepared
+    rows.push(prepared.row)
+  }
+  await store.putVaultKeys(rows)
+  for (const row of rows) {
+    await store.audit(crypto.randomUUID(), now, email, 'vault-write', null, `${row.provider} ·${row.last4}`)
+    await store.insertEvent({
+      id: crypto.randomUUID(),
+      ts: now,
+      kind: 'vault',
+      actor: email,
+      device_id: null,
+      country: null,
+      detail: `write ${row.provider}`
+    })
+  }
+  return { ok: true, rows: rows.map((row) => ({ id: row.id, last4: row.last4, status: row.status })) }
 }
 
 export async function rotateVaultKey(

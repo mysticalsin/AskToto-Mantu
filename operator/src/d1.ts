@@ -739,6 +739,43 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .bind(now, provider, exceptId)
         .run()
     },
+    async putVaultKeys(rows) {
+      if (rows.length === 0) return
+      // A missing transactional D1 API must fail closed: separate writes can strand one
+      // provider's vault row without its sibling's when the Worker is interrupted between them.
+      if (!db.batch) throw new Error('D1 batch transaction is unavailable')
+      const statements: D1Stmt[] = rows.flatMap((row) => [
+        db
+          .prepare(
+            `INSERT OR REPLACE INTO vault_keys (
+              id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            row.id,
+            row.provider,
+            row.label,
+            row.last4,
+            row.cipher,
+            row.iv,
+            row.status,
+            row.created_at,
+            row.created_by,
+            row.rotated_at,
+            row.revoked_at
+          ),
+        db
+          .prepare(
+            `UPDATE vault_keys SET status = 'superseded', cipher = '', iv = '', rotated_at = ?
+             WHERE provider = ? AND id != ? AND status = 'active'`
+          )
+          .bind(row.created_at, row.provider, row.id)
+      ])
+      const results = await db.batch(statements)
+      if (results.length !== statements.length || results.some((result) => result?.success !== true)) {
+        throw new Error('D1 vault key transaction did not complete')
+      }
+    },
     async clearVaultSecret(id) {
       await db.prepare(`UPDATE vault_keys SET cipher = '', iv = '' WHERE id = ?`).bind(id).run()
     },
