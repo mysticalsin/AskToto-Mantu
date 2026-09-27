@@ -32,15 +32,13 @@ cleanup() {
   # whose filesystem device id differs from its immediate parent's IS a mount point boundary — the same
   # test `find -xdev` relies on internally — which needs no assumption about `mount`'s own text layout,
   # unlike grepping its output. `diskutil unmount force <mount point>` is the one detach command CI has
-  # proved works here. `-x` stops `find` descending past a mount boundary once found (it still reports the
-  # boundary directory itself), so a real, large toolchain image is never walked just to locate its own
-  # mount point. Detach the deepest mount point first, so a mount nested inside another is never still
-  # busy when its parent is detached.
+  # proved works here. Detach the deepest mount point first, so a mount nested inside another is never
+  # still busy when its parent is detached.
   local mount_point
   while IFS= read -r mount_point; do
     diskutil unmount force "$mount_point" >/dev/null 2>&1 || true
   done < <(
-    find "$SANDBOX" -x -type d 2>/dev/null | while IFS= read -r d; do
+    find "$SANDBOX" -type d 2>/dev/null | while IFS= read -r d; do
       this_dev="$(stat -f %d "$d" 2>/dev/null)" || continue
       parent_dev="$(stat -f %d "$(dirname "$d")" 2>/dev/null)" || continue
       [ "$this_dev" != "$parent_dev" ] && printf '%s\n' "$d"
