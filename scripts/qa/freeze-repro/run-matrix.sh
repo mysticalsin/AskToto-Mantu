@@ -723,11 +723,11 @@ if [[ "${M2_0008_CONTRACT_ALLOW_NON_DARWIN:-0}" == 1 && "${M2_0008_CONTRACT_IDLE
 fi
 [[ "$DRY_RUN" == 1 ]] || sleep "$idle_wait_seconds"
 sample_app "row-5-dataless-brain-idle"
-record_row_result "row-5-dataless-brain-idle" "$row_result" ",\"fixture\":$(json_string "$DATALess_BRAIN_INDEX")"
+record_row_result "row-5-dataless-brain-idle" "$row_result" ',"fixture":"dataless-brain-index"'
 
 row_result=$(prompt_result "row-9-network-off-flapping" "Row 9: with a real hydrating/dataless fixture, turn network off, then flap it on/off once; record whether the blocked read interrupts or remains pinned.")
 sample_app "row-9-network-off-flapping"
-record_row_result "row-9-network-off-flapping" "$row_result" ",\"fixture\":$(json_string "$DATALess_MEETING")"
+record_row_result "row-9-network-off-flapping" "$row_result" ',"fixture":"dataless-meeting"'
 
 interrupt=$(prompt_result "interrupt-network-off" "Interrupt test: while a kernel-blocked hydrating read is active, turn network off and record whether the read unwinds.")
 record_interrupt_result "network-off" "$interrupt"

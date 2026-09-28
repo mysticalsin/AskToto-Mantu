@@ -47,6 +47,8 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       expect(matrix).toContain('row-4-second-instance-reopen')
       expect(matrix).toContain('row-5-dataless-brain-idle')
       expect(matrix).toContain('row-9-network-off-flapping')
+      expect(matrix).toContain('"fixture":"dataless-brain-index"')
+      expect(matrix).toContain('"fixture":"dataless-meeting"')
 
       const interrupts = readFileSync(join(out, 'interrupt-results.jsonl'), 'utf8')
       expect(interrupts).toContain('network-off')
@@ -153,6 +155,12 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       expect(readFileSync(join(out, 'owner-bug-records.json'), 'utf8')).toContain('"history-freeze"')
       expect(readFileSync(join(out, 'owner-bug-records.json'), 'utf8')).toContain('"no-reopen"')
       expect(readFileSync(join(out, 'diagnostic-reports.json'), 'utf8')).toContain('"consented":false')
+
+      const matrix = readFileSync(join(out, 'matrix.jsonl'), 'utf8')
+      expect(matrix).toContain('"fixture":"dataless-brain-index"')
+      expect(matrix).toContain('"fixture":"dataless-meeting"')
+      expect(matrix).not.toContain(brainIndex)
+      expect(matrix).not.toContain(meeting)
     } finally {
       rmSync(out, { recursive: true, force: true })
       rmSync(profile, { recursive: true, force: true })

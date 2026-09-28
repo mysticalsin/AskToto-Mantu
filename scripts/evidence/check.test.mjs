@@ -428,13 +428,13 @@ test('C27 M2-0008 bundle check requires the content-free freeze repro matrix art
     ]
   })
   writeFileSync(join(root, 'matrix.jsonl'), [
-    'row-1-history-open',
-    'row-2-brain-status-blocked-brain',
-    'row-3-macos-activate',
-    'row-4-second-instance-reopen',
-    'row-5-dataless-brain-idle',
-    'row-9-network-off-flapping'
-  ].map((row) => JSON.stringify({ row })).join('\n') + '\n')
+    { row: 'row-1-history-open' },
+    { row: 'row-2-brain-status-blocked-brain' },
+    { row: 'row-3-macos-activate' },
+    { row: 'row-4-second-instance-reopen' },
+    { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
+    { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
+  ].map((row) => JSON.stringify(row)).join('\n') + '\n')
   writeFileSync(join(root, 'interrupt-results.jsonl'), [
     'network-off',
     'file-provider-cancel',
@@ -470,6 +470,25 @@ test('C27 M2-0008 bundle check requires the content-free freeze repro matrix art
     filter: 'Metis/AskToto process names or sampled process ids only',
     copied: []
   })
+  writeFileSync(join(root, 'matrix.jsonl'), [
+    { row: 'row-1-history-open' },
+    { row: 'row-2-brain-status-blocked-brain' },
+    { row: 'row-3-macos-activate' },
+    { row: 'row-4-second-instance-reopen' },
+    { row: 'row-5-dataless-brain-idle', fixture: 'qa-cloud/.brain/index.json' },
+    { row: 'row-9-network-off-flapping', fixture: 'qa-cloud/meeting.md' }
+  ].map((row) => JSON.stringify(row)).join('\n') + '\n')
+  assertProblem(m2_0008BundleProblems(root), 'row-5-dataless-brain-idle', 'content-free fixture label')
+  assertProblem(m2_0008BundleProblems(root), 'row-9-network-off-flapping', 'content-free fixture label')
+
+  writeFileSync(join(root, 'matrix.jsonl'), [
+    { row: 'row-1-history-open' },
+    { row: 'row-2-brain-status-blocked-brain' },
+    { row: 'row-3-macos-activate' },
+    { row: 'row-4-second-instance-reopen' },
+    { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
+    { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
+  ].map((row) => JSON.stringify(row)).join('\n') + '\n')
   writeFileSync(join(root, 'M2-0008.lead-action.md'), 'LEAD_ACTION: File the evidence records only.\n')
   assertProblem(m2_0008BundleProblems(root), 'hypothesis ranking')
   assertProblem(m2_0008BundleProblems(root), 'OBSERVED/DERIVED')
@@ -505,13 +524,13 @@ test('C28 CLI --ticket M2-0008 validates a freeze repro bundle path', () => {
     ]
   })
   writeFileSync(join(root, 'matrix.jsonl'), [
-    'row-1-history-open',
-    'row-2-brain-status-blocked-brain',
-    'row-3-macos-activate',
-    'row-4-second-instance-reopen',
-    'row-5-dataless-brain-idle',
-    'row-9-network-off-flapping'
-  ].map((row) => JSON.stringify({ row })).join('\n') + '\n')
+    { row: 'row-1-history-open' },
+    { row: 'row-2-brain-status-blocked-brain' },
+    { row: 'row-3-macos-activate' },
+    { row: 'row-4-second-instance-reopen' },
+    { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
+    { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
+  ].map((row) => JSON.stringify(row)).join('\n') + '\n')
   writeFileSync(join(root, 'interrupt-results.jsonl'), [
     'network-off',
     'file-provider-cancel',

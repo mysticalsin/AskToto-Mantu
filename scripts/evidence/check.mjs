@@ -546,6 +546,13 @@ function jsonlRows(path, problems, label) {
   }
 }
 
+function fixtureLabelProblem(row) {
+  if (!Object.hasOwn(row, 'fixture')) return null
+  if (row.row === 'row-5-dataless-brain-idle' && row.fixture === 'dataless-brain-index') return null
+  if (row.row === 'row-9-network-off-flapping' && row.fixture === 'dataless-meeting') return null
+  return `matrix.jsonl: ${row.row ?? '(unknown row)'} fixture must be a content-free fixture label`
+}
+
 export function m2_0008BundleProblems(bundlePath) {
   const root = resolve(bundlePath)
   const problems = []
@@ -620,6 +627,10 @@ export function m2_0008BundleProblems(bundlePath) {
   if (!Array.isArray(diagnosticReports?.copied)) problems.push('diagnostic-reports.json: copied must be an array')
 
   const rowIds = new Set(rows.map((row) => row.row))
+  for (const row of rows) {
+    const problem = fixtureLabelProblem(row)
+    if (problem) problems.push(problem)
+  }
   for (const row of [
     'row-1-history-open',
     'row-2-brain-status-blocked-brain',
