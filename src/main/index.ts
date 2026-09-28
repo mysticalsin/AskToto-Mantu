@@ -9091,7 +9091,7 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 if (!app.requestSingleInstanceLock()) {
-  app.quit()
+  app.exit(0)
 } else {
   app.on('second-instance', (_event, commandLine) => {
     reveal('second-instance', { focus: true })

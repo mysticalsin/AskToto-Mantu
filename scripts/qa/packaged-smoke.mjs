@@ -383,8 +383,15 @@ async function runNavigationStep(rows, id, fn) {
   }
 }
 
-async function runPackagedNavigationGuardRows({ port, rows }) {
+async function revealNavigationSurface({ executable, env, page }) {
+  const result = await runProcess(executable, ['--metis-smoke-reopen=tray-show'], 10_000, { env })
+  if (result.error) throw new Error('smoke tray-show reveal probe failed before navigation')
+  await page.getByRole('button', { name: 'History' }).first().waitFor({ timeout: 15_000 })
+}
+
+async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
   await withOverlayPage(port, async (page) => {
+    await revealNavigationSurface({ executable, env, page })
     const seeded = await seedNavigationMeetings(page)
 
     await runNavigationStep(rows, 'HIST-clean-bar-open', async () => {
@@ -531,7 +538,7 @@ async function runPackagedNavigationGuardRows({ port, rows }) {
   })
 }
 
-function runProcess(file, args, timeoutMs, options = {}) {
+export function runProcess(file, args, timeoutMs, options = {}) {
   return new Promise((resolve) => {
     let settled = false
     const child = spawn(file, args, { stdio: 'ignore', detached: false, ...options })
@@ -543,7 +550,7 @@ function runProcess(file, args, timeoutMs, options = {}) {
       } catch {
         /* already gone */
       }
-      resolve({ code: null, signal: 'timeout', error: false })
+      resolve({ code: null, signal: 'timeout', error: true })
     }, timeoutMs)
     child.once('error', () => {
       if (settled) return
@@ -555,7 +562,7 @@ function runProcess(file, args, timeoutMs, options = {}) {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve({ code, signal, error: false })
+      resolve({ code, signal, error: code !== 0 || signal !== null })
     })
   })
 }
@@ -889,7 +896,7 @@ async function main() {
     if (observation.launchFailed) return
 
     if (observation.readyMs !== null && !observation.exitedEarly) {
-      await runPackagedNavigationGuardRows({ port, rows: observation.navigationGuard })
+      await runPackagedNavigationGuardRows({ port, rows: observation.navigationGuard, executable, env })
       await runPackagedRvRows({ platform, target, executable, auditLogPath, rows: observation.rv, env })
 
       const survivalDeadline = Date.now() + SURVIVAL_MS
