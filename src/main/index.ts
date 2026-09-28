@@ -3779,6 +3779,23 @@ function reveal(reason: RevealReason, options: { focus?: boolean } = {}): void {
   })
 }
 
+function writeSmokeParkState(w: Electron.BrowserWindow): void {
+  try {
+    writeFileSync(
+      join(app.getPath('userData'), 'smoke-park-state.json'),
+      JSON.stringify({
+        at: Date.now(),
+        parked: islandResting === true,
+        visible: !w.isDestroyed() && w.isVisible(),
+        layout: liveOverlayLayout()
+      })
+    )
+  } catch {
+    /* smoke sensor is best-effort */
+  }
+}
+
+/** Park (or hide) for packaged-smoke RV prepare, and latch the park against cursor-watch restore. */
 function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   if (process.env.ASKTOTO_SMOKE_REOPEN_PROBE !== '1') return false
   const action = commandLine
@@ -3789,12 +3806,20 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
 
   const w = ensureWindow()
   if (!w) return true
+  // HIST leaves Settings/History surfaces that refuse park; clear before force-park.
+  if (settingsSurfaceOpen) leaveSettingsSurface()
   if (action === 'park-window' || action === 'hide-window') {
     if (!parkOverlayAfterHideSpring(true)) w.hide()
+    // Hosted macOS keeps the pointer in the top-edge strip; cursor watch would otherwise
+    // restore the bar before the reopen probe snapshots parked===true.
+    stopOverlayCursorWatch()
+    writeSmokeParkState(w)
     return true
   }
 
   if (!parkOverlayAfterHideSpring(true)) w.hide()
+  stopOverlayCursorWatch()
+  writeSmokeParkState(w)
   toggleVisible('tray')
   return true
 }

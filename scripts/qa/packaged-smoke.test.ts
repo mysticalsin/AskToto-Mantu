@@ -7,10 +7,12 @@ import { describe, expect, it } from 'vitest'
 import {
   LIFECYCLE_EVENTS,
   buildWindowsShortcutLauncher,
+  NAVIGATION_GUARD_BOOTSTRAP_PATCH,
   childPidReserved,
   computeCleanupTargets,
   isOverlayUrl,
   isPassingRevealEvidence,
+  waitUntilParked,
   parseAuditLog,
   readObservationTail,
   initialRvRows,
@@ -299,6 +301,38 @@ describe('isPassingRevealEvidence', () => {
   })
 })
 
+describe('waitUntilParked', () => {
+  it('resolves when smoke-park-state.json reports parked after sinceMs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-park-prove-'))
+    try {
+      const since = Date.now() - 1_000
+      writeFileSync(
+        join(dir, 'smoke-park-state.json'),
+        JSON.stringify({ at: Date.now(), parked: true, visible: true, layout: 'hide' })
+      )
+      const state = await waitUntilParked(dir, since, 2_000)
+      expect(state?.parked).toBe(true)
+      expect(state?.layout).toBe('hide')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('times out when the marker stays unparked', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-park-prove-'))
+    try {
+      writeFileSync(
+        join(dir, 'smoke-park-state.json'),
+        JSON.stringify({ at: Date.now(), parked: false, visible: true, layout: 'hide' })
+      )
+      const state = await waitUntilParked(dir, 0, 400)
+      expect(state).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('runRevealRow', () => {
   it('takes the reveal baseline after smoke prep so a prep second-instance cannot satisfy the row', async () => {
     const rows = initialRvRows('darwin')
@@ -521,6 +555,17 @@ describe('buildWindowsShortcutLauncher', () => {
         userData: ''
       })
     ).toThrow(/ASKTOTO_USERDATA/)
+  })
+})
+
+describe('NAVIGATION_GUARD_BOOTSTRAP_PATCH', () => {
+  it('is a completed-onboarding, bar-layout, auto-hide-off settings patch — the same shape a real user leaves after picking the bar layout and finishing onboarding', () => {
+    expect(NAVIGATION_GUARD_BOOTSTRAP_PATCH).toEqual({
+      onboardingDone: true,
+      recordingConsent: true,
+      overlayLayout: 'bar',
+      autoHideOverlay: false
+    })
   })
 })
 

@@ -19,6 +19,27 @@
  * `Stop-Process`) is never a quit, and neither is closing the window: the app stays in the tray by
  * design, so only the product's own Quit IPC counts.
  *
+ * The History navigation-guard rows (HIST-*, M2-0232) need a post-onboarding overlay, not a fresh
+ * profile's exclusive onboarding tour: main stamps `?exclusiveOnboarding=1` on the very first window it
+ * creates whenever `getSettings().onboardingDone` is still false (see `overlayRendererUrl` in
+ * main/index.ts), and exiting that tour destroys and recreates the whole `BrowserWindow`
+ * (`replaceTransparentOverlayWithExclusiveOnboarding` / `recreateOverlayWindow`) rather than merely
+ * reloading it. Driving that exit live over CDP — as the reverted M2-0232 attempt (#271) did — races
+ * Playwright's in-flight `page.evaluate()` against the old page's own destruction and can hang
+ * indefinitely with no report on Windows. Seeding `settings.json` (plaintext-JSON is one of the three
+ * formats `readUserRaw` accepts, see main/store.ts) into the profile BEFORE the app ever launches
+ * sidesteps the whole class of bug: the very first window main creates already has `onboardingDone: true`,
+ * exactly the cold boot of a returning user.
+ *
+ * That seed (`seedOnboardedProfile`) uses `overlayLayout: 'hide'`, the layout the RV-* reopen rows need for
+ * `parked === true` evidence (`parkOverlayAfterHideSpring` only parks a hover layout). The HIST-* rows need
+ * `bar` instead, where History/Settings stay on screen with no hover to drive. A plain settings write never
+ * recreates the `BrowserWindow` — only exiting the exclusive onboarding stage does — so
+ * `runPackagedNavigationGuardRows` switches the already-launched app to `NAVIGATION_GUARD_BOOTSTRAP_PATCH`
+ * over the live IPC settings channel (`ensureNavigationGuardHarnessState`), reveals the window
+ * (`revealNavigationSurface`), runs the HIST-* rows, then restores the hover layout
+ * (`restoreHoverParkableLayout`) before the RV-* rows run.
+ *
  * Usage: node scripts/qa/packaged-smoke.mjs <installed app> <report.json>
  */
 
@@ -38,6 +59,17 @@ const SURVIVOR_BOUND_MS = 5_000 // owned processes must be gone within 5s of mai
 const AUDIT_POLL_MS = 250
 const CENSUS_POLL_MS = 500
 const RV_TIMEOUT_MS = 15_000
+
+// The same patch `appearanceSettingsPatch('bar')` (onboarding-appearance.ts) writes when a real user
+// picks the bar layout, plus the `persistOnboardingCompletion` fields (onboarding-completion.ts) that
+// mark the tour finished — i.e. exactly the durable state of a real user who finished onboarding with
+// the bar layout and left auto-hide off. Never a synthetic in-between state.
+export const NAVIGATION_GUARD_BOOTSTRAP_PATCH = Object.freeze({
+  onboardingDone: true,
+  recordingConsent: true,
+  overlayLayout: 'bar',
+  autoHideOverlay: false
+})
 
 export const LIFECYCLE_EVENTS = Object.freeze([
   'app.started',
@@ -238,16 +270,139 @@ function completeNavigationRow(rows, id, patch) {
   if (row) Object.assign(row, patch)
 }
 
+async function findOverlayPage(browser, timeout = 15_000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const pages = browser.contexts().flatMap((context) => context.pages())
+    const overlay = pages.find((page) => !page.isClosed() && isOverlayUrl(page.url()))
+    if (overlay) return overlay
+    await sleep(100)
+  }
+  throw new Error('overlay page not found')
+}
+
 async function withOverlayPage(port, fn) {
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 30_000 })
-  const pages = browser.contexts().flatMap((context) => context.pages())
-  const overlay = pages.find((page) => isOverlayUrl(page.url()))
-  if (!overlay) throw new Error('overlay page not found')
-  return fn(overlay)
+  try {
+    const overlay = await findOverlayPage(browser)
+    return await fn(overlay, browser)
+  } finally {
+    await browser.close().catch(() => undefined)
+  }
 }
 
 async function waitForText(page, text, timeout = 15_000) {
   await page.getByText(text, { exact: true }).first().waitFor({ timeout })
+}
+
+async function locatorVisible(locator) {
+  return locator.first().isVisible({ timeout: 500 }).catch(() => false)
+}
+
+async function ensureNavigationGuardHarnessState(page, browser) {
+  const state = await page.evaluate(async (patch) => {
+    const before = await window.toto.getSettings()
+    const after = await window.toto.setSettings({ ...patch, onboardingDoneAt: Date.now() })
+    if (!before.onboardingDone) window.toto.onboardingExit('answer')
+    return {
+      beforeOnboardingDone: before.onboardingDone,
+      afterOnboardingDone: after.onboardingDone,
+      overlayLayout: after.overlayLayout,
+      autoHideOverlay: after.autoHideOverlay
+    }
+  }, NAVIGATION_GUARD_BOOTSTRAP_PATCH)
+  const activePage = state.beforeOnboardingDone ? page : await findOverlayPage(browser, 30_000)
+  await activePage.getByRole('button', { name: 'History' }).first().waitFor({ timeout: 15_000 })
+  return { page: activePage, state }
+}
+
+async function restoreHoverParkableLayout(page) {
+  // RV rows require overlayUsesHover (hide/island) for parked===true evidence on m2.
+  await page.evaluate(async () => {
+    await window.toto.setSettings({ overlayLayout: 'hide', autoHideOverlay: true })
+  })
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const ok = await page.evaluate(async () => {
+      const settings = await window.toto.getSettings()
+      return settings.overlayLayout === 'hide' && settings.autoHideOverlay === true
+    })
+    if (ok) return
+    await sleep(100)
+  }
+  throw new Error('hover parkable layout was not applied before RV rows')
+}
+
+function readSmokeParkState(userData) {
+  try {
+    return JSON.parse(readFileSync(join(userData, 'smoke-park-state.json'), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/** Poll the park-window marker until islandResting is proved (not a blind sleep). */
+export async function waitUntilParked(userData, sinceMs, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const state = readSmokeParkState(userData)
+    if (state && typeof state.at === 'number' && state.at >= sinceMs && state.parked === true) {
+      return state
+    }
+    await sleep(AUDIT_POLL_MS)
+  }
+  return null
+}
+
+async function parkAndProve({ executable, env, userData }) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const since = Date.now()
+    const result = await runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
+    if (result.error) return result
+    const proved = await waitUntilParked(userData, since)
+    if (proved) return result
+    await sleep(200)
+  }
+  return { code: null, signal: null, error: true }
+}
+
+async function settleOverlayForRvRows({ page, executable, env, userData }) {
+  await dismissNavigationGuardIfOpen(page)
+  await ensureIdleBar(page)
+  await restoreHoverParkableLayout(page)
+  const parked = await parkAndProve({ executable, env, userData })
+  if (parked.error) throw new Error('park-window after navigation guard failed to prove parked===true')
+}
+
+async function ensureHistory(page) {
+  const search = page.getByLabel('Search past meetings')
+  if (await locatorVisible(search)) return
+
+  const backToHistory = page.getByRole('button', { name: /Back to history/ })
+  if (await locatorVisible(backToHistory)) {
+    await backToHistory.first().click({ timeout: 15_000 })
+    await search.waitFor({ timeout: 15_000 })
+    return
+  }
+
+  await clickHistory(page)
+}
+
+async function ensureIdleBar(page) {
+  const search = page.getByLabel('Search past meetings')
+  if (await locatorVisible(search)) {
+    await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
+    await search.waitFor({ state: 'hidden', timeout: 15_000 })
+    await page.waitForTimeout(450)
+    return
+  }
+
+  const backToHistory = page.getByRole('button', { name: /Back to history/ })
+  if (await locatorVisible(backToHistory)) {
+    await backToHistory.first().click({ timeout: 15_000 })
+    await search.waitFor({ timeout: 15_000 })
+    await ensureIdleBar(page)
+  }
 }
 
 async function seedNavigationMeetings(page) {
@@ -303,11 +458,13 @@ async function openHistoryFromSettings(page) {
 }
 
 async function openMeetingFromHistoryRow(page, title) {
+  await ensureHistory(page)
   await page.getByRole('button', { name: new RegExp(title) }).first().dblclick({ timeout: 15_000 })
   await waitForText(page, 'Summary')
 }
 
 async function openMeetingFromHistoryButton(page, title) {
+  await ensureHistory(page)
   await page.getByRole('button', { name: new RegExp(title) }).first().click({ timeout: 15_000 })
   await page.getByRole('button', { name: /^Open/ }).first().click({ timeout: 15_000 })
   await waitForText(page, 'Summary')
@@ -352,10 +509,26 @@ async function expectSavedRecap(page, file, suffix) {
   }
 }
 
+async function dismissNavigationGuardIfOpen(page) {
+  const dialog = page.getByRole('dialog', { name: 'Save recap changes?' })
+  if (!(await locatorVisible(dialog))) return
+  await dialog.getByRole('button', { name: 'Cancel' }).first().click({ timeout: 15_000 })
+  await dialog.waitFor({ state: 'hidden', timeout: 15_000 })
+}
+
+async function waitForNavigationGuardClosed(page) {
+  await page.getByRole('dialog', { name: 'Save recap changes?' }).waitFor({ state: 'hidden', timeout: 15_000 })
+}
+
 async function chooseDirtyHistoryNavigation(page, choice, trigger) {
+  await dismissNavigationGuardIfOpen(page)
+  // Bar History ignores clicks inside a 400ms toggle debounce; settle after prior History traffic.
+  await page.waitForTimeout(450)
   await trigger()
   await expectGuard(page)
-  await page.getByRole('button', { name: choice }).first().click({ timeout: 15_000 })
+  const dialog = page.getByRole('dialog', { name: 'Save recap changes?' })
+  await dialog.getByRole('button', { name: choice, exact: true }).click({ timeout: 15_000 })
+  await waitForNavigationGuardClosed(page)
 }
 
 async function runNavigationStep(rows, id, fn) {
@@ -371,13 +544,23 @@ async function runNavigationStep(rows, id, fn) {
   }
 }
 
-async function runPackagedNavigationGuardRows({ port, rows }) {
-  await withOverlayPage(port, async (page) => {
+async function revealNavigationSurface({ executable, env, page }) {
+  const result = await runProcess(executable, ['--metis-smoke-reopen=tray-show'], 10_000, { env })
+  if (result.error) throw new Error('smoke tray-show reveal probe failed before navigation')
+  await page.getByRole('button', { name: 'History' }).first().waitFor({ timeout: 15_000 })
+}
+
+async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
+  await withOverlayPage(port, async (initialPage, browser) => {
+    const ready = await ensureNavigationGuardHarnessState(initialPage, browser)
+    const page = ready.page
+    await revealNavigationSurface({ executable, env, page })
     const seeded = await seedNavigationMeetings(page)
 
     await runNavigationStep(rows, 'HIST-clean-bar-open', async () => {
+      await ensureIdleBar(page)
       await clickHistory(page)
-      return { seededMeetings: 2, guardVisible: false }
+      return { seededMeetings: 2, guardVisible: false, harnessState: ready.state }
     })
 
     await runNavigationStep(rows, 'HIST-clean-settings-open', async () => {
@@ -516,6 +699,8 @@ async function runPackagedNavigationGuardRows({ port, rows }) {
       await returnToHistoryFromReview(page)
       return { decision: 'save', entry: 'review-recent-meeting', persistedBeforeNavigation: true }
     })
+
+    await settleOverlayForRvRows({ page, executable, env, userData: env.ASKTOTO_USERDATA })
   })
 }
 
@@ -636,7 +821,8 @@ export function buildWindowsShortcutLauncher({ auditLogDir, executable, userData
 }
 
 async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows, env }) {
-  const hideBeforeReveal = () => runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
+  const userData = env.ASKTOTO_USERDATA
+  const hideBeforeReveal = async () => parkAndProve({ executable, env, userData })
   if (platform === 'darwin') {
     await runRevealRow({
       auditLogPath,
@@ -932,7 +1118,7 @@ async function main() {
     if (observation.launchFailed) return
 
     if (observation.readyMs !== null && !observation.exitedEarly) {
-      await runPackagedNavigationGuardRows({ port, rows: observation.navigationGuard })
+      await runPackagedNavigationGuardRows({ port, rows: observation.navigationGuard, executable, env })
       await runPackagedRvRows({ platform, target, executable, auditLogPath, rows: observation.rv, env })
 
       const survivalDeadline = Date.now() + SURVIVAL_MS
