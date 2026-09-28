@@ -138,6 +138,25 @@ function launch(executable, profile, port) {
   return spawn(executable, [`--remote-debugging-port=${port}`], { env, stdio: 'ignore' })
 }
 
+function seedLocalLlmSettings(profile) {
+  mkdirSync(profile, { recursive: true, mode: 0o700 })
+  writeFileSync(
+    join(profile, 'settings.json'),
+    JSON.stringify(
+      {
+        localLlm: {
+          enabled: true,
+          modelId: 'qwen3.5-0.8b',
+          useFor: { suggest: true, summary: false, vision: false },
+          fallback: true
+        }
+      },
+      null,
+      2
+    )
+  )
+}
+
 async function waitFor(predicate, timeoutMs, intervalMs = POLL_MS) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
@@ -234,6 +253,7 @@ async function main() {
   const installRoot = realpathSync.native(target)
   const executable = join(installRoot, 'Contents', 'MacOS', basename(installRoot, '.app'))
   const profile = mkdtempSync(join(tmpdir(), 'metis-sidecar-reaper-'))
+  seedLocalLlmSettings(profile)
   let first = null
   let second = null
   const observation = {
