@@ -12,7 +12,10 @@ import type { BackfillStartOptions } from './ingest'
 import { MAX_INGEST_ATTEMPTS } from '../infra/scheduler/policy'
 import { resetSecretKeyCache } from '../secrets'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, reconcileMeetingsInBackground, requestBackfill, requestBackfillRun, resumeBackfillIfPending, startBackfill, whenIngestWorkSettles } from './ingest'
+import { brainBackfillProgress, reconcileMeetingsInBackground, requestBackfill, requestBackfillRun, resumeBackfillIfPending, startBackfill } from './ingest'
+import * as ingestModule from './ingest'
+import * as storeModule from './store'
+import { whenIngestWorkSettles } from '../test-helpers/settle-brain-writes'
 import { catchUpIntelligenceIndexIfNeeded, settleIntelligenceIndexForTests } from './intelligence-index'
 import { runConsolidationIfDue } from './consolidate'
 import { brainDir, readIndex, writeIndex, writeMeetingExtraction } from './store'
@@ -73,15 +76,15 @@ describe('M2-0033 retry policy across backfill callers', () => {
   let modelMarkers: string[]
 
   const waitForIdle = async (
-    ingest?: Pick<typeof import('./ingest'), 'brainBackfillProgress' | 'whenIngestWorkSettles'>,
+    ingest?: typeof import('./ingest'),
     intelligenceIndex?: Pick<typeof import('./intelligence-index'), 'settleIntelligenceIndexForTests'>
   ): Promise<void> => {
-    const idle = ingest ?? { brainBackfillProgress, whenIngestWorkSettles }
+    const idle = ingest ?? ingestModule
     const intel = intelligenceIndex ?? { settleIntelligenceIndexForTests }
     await vi.waitFor(() => {
       expect(idle.brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
-    await idle.whenIngestWorkSettles()
+    await whenIngestWorkSettles(idle, ingest ? await import('./store') : storeModule)
     await intel.settleIntelligenceIndexForTests()
   }
 

@@ -99,8 +99,7 @@ import {
   cloneEntity,
   purgeBrain,
   BRAIN_INDEX_ERROR_CODE,
-  BrainIndexRebuildError,
-  whenEntityWritesSettle
+  BrainIndexRebuildError
 } from './store'
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
@@ -1335,12 +1334,12 @@ type BackfillObserver = {
   initialOkSourceVersions: Map<string, string | undefined>
   error?: CompletionError
 }
-let backfillObserver: BackfillObserver | null = null
-let backfillFinalization: Promise<void> | null = null
-let drainTask: Promise<void> | null = null
+export let backfillObserver: BackfillObserver | null = null
+export let backfillFinalization: Promise<void> | null = null
+export let drainTask: Promise<void> | null = null
 let backfillTailDrain: Promise<void> | null = null
 let backfillScans = 0
-let rebuildReplayTask: Promise<void> | null = null
+export let rebuildReplayTask: Promise<void> | null = null
 let rebuildReplayQueued = false
 let rebuildStarting = false
 let sourceRefreshWorkKeys = new Set<string>()
@@ -1426,7 +1425,7 @@ const inFlightJobs = new Set<Job>()
 // last with the staler snapshot. Production symptom: every extraction kept succeeding, but
 // idx.ingested ended up empty because a stale rewrite kept clobbering it. Every mutation of
 // index.json now goes through this single serialized lane.
-let indexLock: Promise<void> = Promise.resolve()
+export let indexLock: Promise<void> = Promise.resolve()
 export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Promise<void> {
   const run = indexLock.then(async () => {
     // M2-0003: an existing index.json this process cannot use is read-only for the session. Drop the
@@ -1474,40 +1473,6 @@ export function whenIndexWritesSettle(): Promise<void> {
 
 export async function whenDrainSettles(): Promise<void> {
   while (drainTask) await drainTask.catch(() => {})
-}
-
-/**
- * Test-only: wait for the WHOLE ingest worker lane — queue drain, backfill finalization, rebuild replay,
- * the completion observer, and every index.json/entity write any of them chain — to go fully idle.
- *
- * `whenIndexWritesSettle` alone only waits for a write already queued on `indexLock` at the moment it's
- * called. A drain/finalization/replay task that hasn't reached its own `updateIndex`/`withEntityLock` call
- * yet is invisible to it — and each stage can start the next (drain completing a backfill run can trigger
- * finalization; finalization can resolve the completion observer), so one pass is not enough either. This
- * loops until a full pass leaves every one of these references unchanged.
- */
-export async function whenIngestWorkSettles(): Promise<void> {
-  for (;;) {
-    const before = { indexLock, drainTask, backfillFinalization, rebuildReplayTask, backfillObserver }
-    const pending: Array<Promise<unknown> | null | undefined> = [
-      indexLock,
-      drainTask,
-      backfillFinalization,
-      rebuildReplayTask,
-      backfillObserver?.run.completion,
-      whenEntityWritesSettle()
-    ]
-    await Promise.allSettled(pending.filter((p): p is Promise<unknown> => !!p))
-    if (
-      before.indexLock === indexLock &&
-      before.drainTask === drainTask &&
-      before.backfillFinalization === backfillFinalization &&
-      before.rebuildReplayTask === rebuildReplayTask &&
-      before.backfillObserver === backfillObserver
-    ) {
-      return
-    }
-  }
 }
 
 /** Record any derived-brain mutation so both Intelligence surfaces can refresh same-count changes. */
