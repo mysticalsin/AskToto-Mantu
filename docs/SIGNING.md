@@ -7,10 +7,11 @@ runs ending before their first step. Re-check the current run before naming that
 repository code cannot prove mutable GitHub billing or secret state. See `docs/MANTU-IT-REQUEST.md`
 for the recorded ask and `docs/ENTERPRISE_RELEASE.md` for the operator checklist.
 
-Métis has two desktop distribution lanes:
+Métis has three desktop distribution lanes:
 
 - Direct enterprise distribution: signed installers from GitHub Releases, with Métis-controlled updates through `electron-updater`.
 - Store distribution: Mac App Store and Microsoft Store packages, with updates handled by the store.
+- Owner-channel QA prereleases: the exact tested bytes of one build-once candidate, published as a prerelease that no installed app updates to (see Owner-Channel QA Prereleases below).
 
 The repo can enforce build gates and package shapes. It cannot create Tony's certificates, App Store Connect account access, Microsoft Partner Center access, or the hosted license-server URL.
 
@@ -23,10 +24,33 @@ The repo can enforce build gates and package shapes. It cannot create Tony's cer
 | Mac App Store | `MAS_PROVISIONING_PROFILE=/path/profile.provisionprofile npm run release:mas` | `CSC_LINK`, `CSC_KEY_PASSWORD`, existing `MAS_PROVISIONING_PROFILE` file |
 | Microsoft Store | `npm run release:win:store` | AppX package builds locally; Microsoft signs Store-submitted packages after upload |
 
-The tag workflow mirrors the direct-release gates with no ad-hoc exception: missing Apple
-`CSC_*` / `APPLE_*` secrets fail the macOS job before it builds or uploads an artifact. The public
-release accepts only Developer ID-signed, notarized macOS artifacts; Windows `WIN_CSC_*` remains a
-hard fail. Local ad-hoc packages are QA-only and must never be uploaded to the public release feed.
+The tag workflow (`.github/workflows/release.yml`) mirrors the direct-release gates with no ad-hoc
+exception, and gates and publishes each platform on its own. Missing Apple `CSC_*` / `APPLE_*`
+secrets fail the macOS build before it produces an artifact; a missing or mismatched `WIN_CSC_*`
+identity fails the Windows build the same way; neither failure stops the other platform from
+publishing. The tag workflow publishes only Developer ID-signed, notarized macOS artifacts and
+Authenticode-signed Windows installers. Local ad-hoc packages never reach the release feed. The only
+unsigned bytes on it are owner-channel prereleases (next section).
+
+## Owner-Channel QA Prereleases (unsigned)
+
+Owner decision D-13 (2026-09-27) publishes 1.9.7 and the owner-channel trains before public signing exists,
+under the same conditions as the 1.9.6 exception of 2026-09-23. These are the only unsigned or ad-hoc-signed
+installers allowed on `mysticalsin/Metis-Releases`, and they arrive only through this lane:
+
+- `.github/workflows/qa-candidate.yml` builds each candidate once from main's current commit, records its
+  provenance (the sha256 of every installer), and installs and launches those exact bytes on hosted macOS and
+  Windows runners. macOS candidates are ad-hoc signed or signed with a stable QA identity, never Developer ID,
+  and are not notarized. Windows candidates are unsigned.
+- `.github/workflows/promote-candidate.yml` publishes the bytes of one fully successful candidate run, and only
+  with a PASS evidence record for every promoted installer. The release is a prerelease, never Latest, carries
+  no `latest*.yml` and no blockmaps, and attaches `SHA256SUMS.txt` and `provenance.json`. GitHub's sha256 digest
+  of every uploaded asset is checked before publication. A version is never reused.
+- Installed apps never update to these builds: the updater reads only the Latest release and never a prerelease
+  (`src/main/updater.ts`), and a prerelease carries no update metadata. People install them by hand; Gatekeeper
+  and SmartScreen warn or block on first open because the bytes are not notarized or not signed.
+- `release.yml` never publishes over an owner-channel prerelease: a tag whose version is already a prerelease on
+  the feed fails each platform's first step.
 
 Every command above also runs two native-binary provisioning gates first: `scripts/check-ffmpeg-sidecar.mjs`
 (the LGPL decoder sidecar) and `scripts/check-sherpa-platform.mjs` (the Parakeet on-device ASR addon for
@@ -58,7 +82,7 @@ export APPLE_TEAM_ID="XXXXXXXXXX"
 npm run release
 ```
 
-The release pipeline signs, notarizes, publishes to the update feed, then runs:
+The macOS release build signs and notarizes, then runs this before anything is published:
 
 ```bash
 node scripts/verify-signing.mjs --require-notarized

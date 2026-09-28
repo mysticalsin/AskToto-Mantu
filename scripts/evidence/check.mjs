@@ -18,6 +18,7 @@ export const TICKET_STATUSES = Object.freeze([
 ])
 export const DECISION_STATES = Object.freeze(['OPEN', 'ANSWERED_AS_DEFAULT', 'ANSWERED_CHANGED'])
 export const TEST_WORKFLOW = '.github/workflows/build.yml'
+export const M2_0008_DEFAULT_BUNDLE = 'out/m2-0008-freeze-repro'
 
 const READY_DEP = new Set(['ENGINEERING_COMPLETE', 'DONE', 'DEFERRED', 'BLOCKED_EXTERNAL'])
 const IN_HOUSE = new Set(['DESIGNED', 'LOCALLY_TESTED'])
@@ -516,11 +517,165 @@ function usageExit(message) {
   process.exit(2)
 }
 
+function readJsonFile(path, problems, label) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'))
+  } catch (error) {
+    problems.push(`${label}: could not read JSON: ${error.message}`)
+    return null
+  }
+}
+
+function jsonlRows(path, problems, label) {
+  try {
+    return readFileSync(path, 'utf8')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line, index) => {
+        try {
+          return JSON.parse(line)
+        } catch (error) {
+          problems.push(`${label}:${index + 1}: invalid JSON: ${error.message}`)
+          return null
+        }
+      })
+      .filter(Boolean)
+  } catch (error) {
+    problems.push(`${label}: could not read: ${error.message}`)
+    return []
+  }
+}
+
+function fixtureLabelProblem(row) {
+  if (!Object.hasOwn(row, 'fixture')) return null
+  if (row.row === 'row-5-dataless-brain-idle' && row.fixture === 'dataless-brain-index') return null
+  if (row.row === 'row-9-network-off-flapping' && row.fixture === 'dataless-meeting') return null
+  return `matrix.jsonl: ${row.row ?? '(unknown row)'} fixture must be a content-free fixture label`
+}
+
+export function m2_0008BundleProblems(bundlePath) {
+  const root = resolve(bundlePath)
+  const problems = []
+  const requiredFiles = [
+    'README.md',
+    'environment.json',
+    'node-options-fuse.json',
+    'dataless-fixtures.json',
+    'external-blockers.json',
+    'fifo-fixtures.json',
+    'diagnostic-reports.json',
+    'matrix.jsonl',
+    'interrupt-results.jsonl',
+    'launch-plan.json',
+    'M2-0008.records.README.md',
+    'M2-0008.lead-action.md'
+  ]
+
+  for (const file of requiredFiles) {
+    if (!existsSync(join(root, file))) problems.push(`${file}: missing from M2-0008 bundle`)
+  }
+  if (problems.length > 0) return problems
+
+  const environment = readJsonFile(join(root, 'environment.json'), problems, 'environment.json')
+  const fuse = readJsonFile(join(root, 'node-options-fuse.json'), problems, 'node-options-fuse.json')
+  const fifo = readJsonFile(join(root, 'fifo-fixtures.json'), problems, 'fifo-fixtures.json')
+  const dataless = readJsonFile(join(root, 'dataless-fixtures.json'), problems, 'dataless-fixtures.json')
+  const blockers = readJsonFile(join(root, 'external-blockers.json'), problems, 'external-blockers.json')
+  const diagnosticReports = readJsonFile(join(root, 'diagnostic-reports.json'), problems, 'diagnostic-reports.json')
+  const rows = jsonlRows(join(root, 'matrix.jsonl'), problems, 'matrix.jsonl')
+  const interrupts = jsonlRows(join(root, 'interrupt-results.jsonl'), problems, 'interrupt-results.jsonl')
+  const leadAction = readFileSync(join(root, 'M2-0008.lead-action.md'), 'utf8')
+
+  if (environment?.ticket !== 'M2-0008') problems.push('environment.json: ticket must be M2-0008')
+  if (typeof environment?.artifact_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(environment.artifact_sha256)) {
+    problems.push('environment.json: artifact_sha256 must be a lowercase sha256')
+  }
+  if (!['ENABLED', 'DISABLED_OR_UNAVAILABLE', 'NOT_EXERCISED'].includes(fuse?.node_options_fuse)) {
+    problems.push('node-options-fuse.json: node_options_fuse must be recorded')
+  }
+  if (fifo?.kind !== 'fifo') problems.push('fifo-fixtures.json: kind must be fifo')
+  if (!Number.isInteger(fifo?.count) || fifo.count < 6) problems.push('fifo-fixtures.json: at least six FIFO fixtures are required')
+  if (!Array.isArray(fifo?.fixtures) || fifo.fixtures.length < 6) problems.push('fifo-fixtures.json: fixtures array is incomplete')
+  if (Array.isArray(fifo?.fixtures)) {
+    if (!fifo.fixtures.some((fixture) => String(fixture.path ?? '').endsWith('.brain/index.json'))) {
+      problems.push('fifo-fixtures.json: missing blocked .brain/index.json fixture')
+    }
+    for (const fixture of fifo.fixtures) {
+      if (!fixture || typeof fixture !== 'object' || !Object.hasOwn(fixture, 'opened_by_1_9_6')) {
+        problems.push('fifo-fixtures.json: every fixture must record opened_by_1_9_6')
+        break
+      }
+    }
+  }
+  if (!Array.isArray(dataless?.fixtures)) problems.push('dataless-fixtures.json: fixtures array is required')
+  if (blockers?.ticket !== 'M2-0008') problems.push('external-blockers.json: ticket must be M2-0008')
+  if (!Array.isArray(blockers?.blockers)) problems.push('external-blockers.json: blockers array is required')
+  if (Array.isArray(blockers?.blockers)) {
+    for (const blocker of blockers.blockers) {
+      if (blocker.status !== 'BLOCKED_EXTERNAL') problems.push('external-blockers.json: blockers must be BLOCKED_EXTERNAL')
+      if (typeof blocker.unblock_step !== 'string' || blocker.unblock_step.trim() === '') {
+        problems.push('external-blockers.json: every blocker needs an unblock_step')
+      }
+    }
+  }
+  if (typeof diagnosticReports?.consented !== 'boolean') {
+    problems.push('diagnostic-reports.json: consented must be recorded')
+  }
+  if (typeof diagnosticReports?.filter !== 'string' || !/Metis\/AskToto process names or sampled process ids only/.test(diagnosticReports.filter)) {
+    problems.push('DiagnosticReports collection filter must be restricted to Metis/AskToto process names or sampled process ids')
+  }
+  if (!Array.isArray(diagnosticReports?.copied)) problems.push('diagnostic-reports.json: copied must be an array')
+
+  const rowIds = new Set(rows.map((row) => row.row))
+  for (const row of rows) {
+    const problem = fixtureLabelProblem(row)
+    if (problem) problems.push(problem)
+  }
+  for (const row of [
+    'row-1-history-open',
+    'row-2-brain-status-blocked-brain',
+    'row-3-macos-activate',
+    'row-4-second-instance-reopen',
+    'row-5-dataless-brain-idle',
+    'row-9-network-off-flapping'
+  ]) {
+    if (!rowIds.has(row)) problems.push(`matrix.jsonl: missing ${row}`)
+  }
+
+  const interruptIds = new Set(interrupts.map((row) => row.interrupt))
+  for (const interrupt of ['network-off', 'file-provider-cancel', 'process-signal']) {
+    if (!interruptIds.has(interrupt)) problems.push(`interrupt-results.jsonl: missing ${interrupt}`)
+  }
+
+  if (!leadAction.includes('LEAD_ACTION:')) problems.push('M2-0008.lead-action.md: missing LEAD_ACTION handoff')
+  if (!leadAction.includes('two M2-0008 owner-bug evidence records')) {
+    problems.push('M2-0008.lead-action.md: must hand off filing the two owner-bug evidence records')
+  }
+  if (!leadAction.includes('hypothesis ranking')) {
+    problems.push('M2-0008.lead-action.md: must hand off hypothesis ranking update')
+  }
+  if (!leadAction.includes('OBSERVED') || !leadAction.includes('DERIVED')) {
+    problems.push('M2-0008.lead-action.md: must require OBSERVED/DERIVED labels')
+  }
+
+  return problems
+}
+
 async function main() {
-  const { values } = parseArgs({ options: { ledger: { type: 'string' }, 'pr-event': { type: 'string' } } })
+  const { values } = parseArgs({
+    options: {
+      ledger: { type: 'string' },
+      'pr-event': { type: 'string' },
+      ticket: { type: 'string' },
+      bundle: { type: 'string' }
+    }
+  })
   const hasLedger = typeof values.ledger === 'string'
   const hasPrEvent = typeof values['pr-event'] === 'string'
-  if (hasLedger === hasPrEvent) return usageExit('usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>')
+  const hasTicket = typeof values.ticket === 'string'
+  if ([hasLedger, hasPrEvent, hasTicket].filter(Boolean).length !== 1) {
+    return usageExit('usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008 [--bundle <path>]')
+  }
 
   if (hasLedger) {
     let program
@@ -540,6 +695,17 @@ async function main() {
     }
     const recordCount = [...program.recordsByTicket.values()].reduce((n, list) => n + list.length, 0)
     console.log(`evidence: OK, ${program.ledger.tickets.length} tickets, ${recordCount} records`)
+    return
+  }
+
+  if (hasTicket) {
+    if (values.ticket !== 'M2-0008') return usageExit('only --ticket M2-0008 is supported in this public-repo checker')
+    const problems = m2_0008BundleProblems(resolve(values.bundle ?? M2_0008_DEFAULT_BUNDLE))
+    if (problems.length > 0) {
+      for (const problem of problems) console.error(`- ${problem}`)
+      process.exit(1)
+    }
+    console.log(`M2-0008 bundle: OK (${values.bundle ?? M2_0008_DEFAULT_BUNDLE})`)
     return
   }
 

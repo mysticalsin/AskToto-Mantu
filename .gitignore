@@ -2,6 +2,8 @@ node_modules/
 out/
 dist/
 release/
+!scripts/release/
+!scripts/release/**
 release-local/
 # The AppX target builds into its own output dir so it can never inherit release/win-unpacked's
 # app-update.yml — a Store package must not carry the auto-updater's config.

@@ -1,12 +1,15 @@
 # Enterprise Release Checklist - Métis
 
-**A public tag is blocked until both production signing lanes pass.**
+**Each platform's public release is blocked until that platform's production signing lane passes.**
+A held or failing macOS lane never blocks a signed Windows release, and a failing Windows lane never
+blocks a notarized macOS release.
 
-`.github/workflows/release.yml` requires the full Apple Developer ID and notarization secret set for
-the macOS Electron DMG and a trusted Authenticode identity for Windows. It does not publish an ad-hoc
-macOS artifact. The native SwiftUI ZIP is excluded from public releases until it has its own verified
-Developer ID signing and notarization pipeline. This repository holds no signing material, and a merged
-version bump is not a published release.
+`.github/workflows/release.yml` requires the full Apple Developer ID and notarization secret set before
+the macOS Electron DMG can publish, and a trusted Authenticode identity before Windows can publish. It
+does not publish an ad-hoc macOS artifact. The native SwiftUI ZIP is excluded from public releases until
+it has its own verified Developer ID signing and notarization pipeline. This repository holds no signing
+material, and a merged version bump is not a published release. Unsigned owner-channel prereleases are a
+separate lane, described in `docs/SIGNING.md`.
 
 Use this before any customer build or public tag.
 
@@ -21,7 +24,7 @@ none of the gates below execute. See `docs/MANTU-IT-REQUEST.md` for the recorded
 - Direct Windows updates publish through the same feed.
 - Windows tagged release scripts fail if `WIN_CSC_*` signing inputs are missing. macOS tagged
   release fails unless Developer ID + notarization inputs are present, then verifies Gatekeeper
-  acceptance before the public publish job can run.
+  acceptance before the macOS publish job can run.
 - `scripts/verify-signing.mjs` checks the produced artifacts on the current platform.
 - Machine-wide managed config can lock SSO, license server, license gate, provider policy, encryption, redaction, and retention.
 - The license server supports activation, heartbeat, revocation, expiry, and seat caps.
@@ -136,13 +139,29 @@ no manual seeding step for this one, unlike the ffmpeg sidecar above.
 
 ## Release CI Gates
 
-- `scripts/check-version-parity.mjs` runs first in every release job: the pushed tag must equal
-  `v<package.json version>` exactly, and (best-effort) must not already exist as a release — otherwise
-  electron-builder would publish onto/overwrite an existing release instead of creating a new one.
-- `release-verify` (needs both `release-macos` and `release-windows`) checks that the resulting GitHub
-  release actually has both platforms' installers + `latest*.yml` metadata, and marks it draft if not —
-  a single-platform failure must never leave a half-published release live. The macOS artifact must be
-  Developer ID-signed and notarized; the unsigned native SwiftUI ZIP is not a public release asset.
+- `scripts/check-version-parity.mjs <mac|win>` runs first in each platform's build job: the pushed tag must equal
+  `v<package.json version>` exactly, and the feed must be able to take this platform's installers for that tag
+  (the rule below); otherwise the job stops before any build work.
+- `publish-macos` needs only `release-macos`, and `publish-windows` needs only `release-windows`; both reach the
+  shared source gate `release-quality` through their build job. A platform whose build fails, or whose signing
+  inputs are missing, is not published for that tag.
+- `scripts/publish-release.mjs` publishes one platform's exact asset set (macOS: DMG, ZIP, their blockmaps,
+  `latest-mac.yml`; Windows: Setup EXE, its blockmap, Portable EXE, `latest.yml`) after checking the update
+  metadata against the bytes. The first platform for a tag goes to a fresh draft, is read back (asset set and
+  GitHub's sha256 digest of every asset), then becomes public and Latest. The second platform joins that public
+  release: installers first, then, only once GitHub's digests of those installers match, its update metadata.
+  Latest does not change. It refuses a prerelease (the owner channel), a release holding a foreign asset, and a
+  release holding this platform's assets only partially; a release already carrying this platform's complete,
+  verified assets is a no-op. It deletes leftover drafts only when every asset belongs to one of the two platform
+  release sets, including the other platform's leftover draft or an empty draft. The two publish jobs of one tag
+  take turns, so they never write the release at the same time.
+- A single-platform release is honest about what shipped: installed apps on the other platform find no update
+  metadata in it and keep their version, and the in-app check says the latest release is not yet published for
+  their platform.
+- Recovery: if a joining platform's upload is interrupted, its job stops before the update metadata is uploaded and
+  names the partial assets. Delete them (`gh release delete-asset v<version> <asset> --repo
+  mysticalsin/Metis-Releases`), then re-run the failed publish job. The build artifact is kept for one day; after
+  that, re-run that platform's build job too.
 
 ## Direct Release Commands
 
@@ -161,6 +180,7 @@ npm run release:win
 Windows releases are not deferred or allowed to publish unsigned. The tagged workflow fails closed
 unless `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`, and `WIN_CSC_EXPECTED_SUBJECT` are provisioned, then
 verifies that the Authenticode certificate subject or common name matches that expected value exactly.
+Unsigned Windows candidates reach people only as owner-channel prereleases (`docs/SIGNING.md`).
 
 ## Store Release Commands
 

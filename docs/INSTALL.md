@@ -20,8 +20,9 @@ Métis ships as normal desktop installers:
      page for each new version.
 
 The SwiftUI native prototype is a local QA artifact, not a public download, until it has a separate
-Developer ID signing and notarization pipeline. Tagged public releases fail closed unless both platforms
-pass their production signing and identity-verification gates.
+Developer ID signing and notarization pipeline. Each platform's tagged public release fails closed on
+that platform's own production signing and identity-verification gates, so a held or failing lane never
+blocks the other platform's signed release.
 
 ## macOS trust check
 

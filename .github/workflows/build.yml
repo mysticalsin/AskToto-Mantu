@@ -57,6 +57,12 @@ jobs:
         continue-on-error: true
         run: npm run check:architecture
       - run: npm run build
+      - name: QA fault-hook deterministic repeat
+        shell: bash
+        run: |
+          for run in 1 2 3; do
+            npx vitest run scripts/lib/qa-fault-hook.test.ts
+          done
       # bar-toolbar.layout.test.ts launches Playwright Chromium. `npm ci` installs the npm package
       # only — not the browser binary. Without this step, ubuntu and windows Quality both die at
       # chromium.launch with `Executable doesn't exist ... chromium_headless_shell`. Chromium only
@@ -137,6 +143,19 @@ jobs:
       # `npm ci`: it is pure Node against .github/workflows/ text and needs no installed dependency.
       - name: Workflow action pins
         run: npm run check:workflow-pins
+      # actionlint checks release.yml's expressions, job graph and needs, and runs the runner's shellcheck
+      # over its scripts (M2-0053). Pinned by version and by the sha256 in that release's checksums file,
+      # like every other third-party tool this job runs.
+      - name: Lint release.yml (actionlint)
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL -o "$archive" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" .github/workflows/release.yml
       - run: npm ci
       # SCA gate: block on CRITICAL and HIGH. Sharp's 4 bundled libvips CVEs (CVE-2026-33327,
       # CVE-2026-33328, CVE-2026-35590, CVE-2026-35591 — GHSA-f88m-g3jw-g9cj) were the concrete case

@@ -112,14 +112,14 @@ describe('asks table', () => {
       rating: null,
       prompt_cipher: 'top-secret-cipher',
       prompt_iv: 'top-secret-iv',
-      preview: 'Customer Alpha private acquisition plan',
+      preview: 'Example Customer private acquisition plan',
       question_type: 'how-to'
     })
     const rows = await collectAll(exportTableDef('asks').rows(store, {}))
     expect(rows).toHaveLength(1)
     expect(JSON.stringify(rows[0])).not.toContain('top-secret')
     expect(rows[0].detail).toBe('answer ask · How to')
-    expect(JSON.stringify(rows[0])).not.toContain('Customer Alpha')
+    expect(JSON.stringify(rows[0])).not.toContain('Example Customer')
   })
 })
 
@@ -185,13 +185,13 @@ describe('events and sessions tables (cursor-paginated store methods)', () => {
 
   it('events table suppresses legacy Ask, CRM, and heartbeat content details', async () => {
     const store = memoryStore()
-    await store.insertEvent({ id: 'ask', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Customer Alpha private ask' })
+    await store.insertEvent({ id: 'ask', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Example Customer private ask' })
     await store.insertEvent({ id: 'crm', ts: NOW - 1, kind: 'crm', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Patient diagnosis CRM payload' })
     await store.insertEvent({ id: 'beat', ts: NOW - 2, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: '/private/synthetic-home/private.md' })
     const rows = await collectAll(exportTableDef('events').rows(store, {}))
     expect(rows).toHaveLength(3)
     expect(rows.map((row) => row.detail)).toEqual([null, null, null])
-    expect(JSON.stringify(rows)).not.toContain('Customer Alpha')
+    expect(JSON.stringify(rows)).not.toContain('Example Customer')
     expect(JSON.stringify(rows)).not.toContain('Patient diagnosis')
     expect(JSON.stringify(rows)).not.toContain('/private/synthetic-home')
   })

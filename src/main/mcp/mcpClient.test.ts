@@ -172,7 +172,9 @@ async function startMockMcp(
         if (!transport && req.method === 'POST' && isInitializeRequest(body)) {
           transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
-            onsessioninitialized: (newSid) => sessions.set(newSid, transport as StreamableHTTPServerTransport)
+            onsessioninitialized: (newSid) => {
+              sessions.set(newSid, transport as StreamableHTTPServerTransport)
+            }
           })
           transport.onclose = () => {
             if (transport?.sessionId) sessions.delete(transport.sessionId)

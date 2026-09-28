@@ -68,6 +68,24 @@ describe('createRevealTrace', () => {
     }))
   })
 
+  it('audits shown when a visible parked hairline becomes an interactive overlay', () => {
+    const audit = vi.fn()
+    const win = windowState(true)
+    let parked = true
+    const trace = createRevealTrace({ audit, window: () => win, layout: () => 'hide', parked: () => parked, now: () => 3 })
+
+    trace.trace('activate', () => {
+      parked = false
+    })
+
+    expect(audit).toHaveBeenCalledWith('reveal', expect.objectContaining({
+      isVisible: true,
+      parked: true,
+      layout: 'hide',
+      outcome: 'shown'
+    }))
+  })
+
   it('audits failed and rethrows when reveal throws', () => {
     const audit = vi.fn()
     const error = new Error('boom')

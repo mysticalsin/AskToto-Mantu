@@ -9,7 +9,7 @@ One processing-record entry for Mantu's Article 30 register. Related:
 |---|---|
 | **Processing name** | AskToto / Métis — AI meeting recording, transcription, and business-intelligence extraction |
 | **Controller** | Mantu — **exact legal entity name and SIREN/registration number: verify with Legal**; task brief names Mantu as an EU (France-HQ) consulting group, but the specific contracting/controller entity is not confirmed in the codebase or this pack |
-| **Controller contact** | Tony Walteur, Chief of Staff (system owner / sole user) |
+| **Controller contact** | Metis Maintainers, Chief of Staff (system owner / sole user) |
 | **DPO contact** | [name/email — to be filled in by DPO's office] |
 | **Purpose(s)** | (1) Produce minutes, action items, and follow-up drafts from the Chief of Staff's meetings; (2) maintain a running account/person/deal record derived from meeting content; (3) *(planned — Phase 5)* make derived, human-reviewed summaries queryable by Dust.tt agents |
 | **Legal basis** | Legitimate interest, Art 6(1)(f) — external/business-counterparty meetings only; **unresolved for internal Mantu-employee meetings** (see [`legitimate-interest-assessment.md`](./legitimate-interest-assessment.md) §6) |

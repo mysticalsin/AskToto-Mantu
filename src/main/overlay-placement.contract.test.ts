@@ -67,6 +67,8 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       'const { mainLog, auditLog, crashDetail, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, commandControl, responsiveness, before } = stubs',
       `const BAR_WIDTH = ${constant('BAR_WIDTH')}`,
       'let { listeningActive, lastPlainAskAt, audioArmed, isMinimized, currentWidth } = before',
+      'const setListeningActive = (on) => { listeningActive = on }',
+      'const setAudioArmed = (on) => { audioArmed = on }',
       'let handler = null',
       // isDestroyed() -> true stops the handler before the reload, which needs a real BrowserWindow. The
       // reload itself is already pinned by c-main-fixes.contract.test.ts; this is about the reset above it.
