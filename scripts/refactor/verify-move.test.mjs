@@ -97,6 +97,39 @@ test('rejects a same-token behavior edit hidden inside a moved file', () => {
   ])
 })
 
+test('rejects same-token behavior edits redistributed across moved files', () => {
+  const entries = [
+    { status: 'D', code: 'D', path: 'src/old/subtract.ts' },
+    { status: 'D', code: 'D', path: 'src/old/add.ts' },
+    { status: 'A', code: 'A', path: 'src/new/subtract.ts' },
+    { status: 'A', code: 'A', path: 'src/new/add.ts' }
+  ]
+  const contents = new Map([
+    ['base:src/old/subtract.ts', 'export function left(a, b) {\n  return a - b\n}\n'],
+    ['base:src/old/add.ts', 'export function right(c, d) {\n  return c + d\n}\n'],
+    ['head:src/new/subtract.ts', 'export function left(b, c) {\n  return b - c\n}\n'],
+    ['head:src/new/add.ts', 'export function right(a, d) {\n  return a + d\n}\n']
+  ])
+
+  const result = verifyPureMove({
+    entries,
+    readAtRevision: (side, path) => contents.get(`${side}:${path}`)
+  })
+
+  assert.equal(result.ok, false)
+  assert.deepEqual(result.tokenProblems, [])
+  assert.deepEqual(result.orderProblems, [
+    {
+      removedPath: 'src/old/subtract.ts',
+      addedPath: null
+    },
+    {
+      removedPath: 'src/old/add.ts',
+      addedPath: null
+    }
+  ])
+})
+
 test('rejects non-import changes in modified files', () => {
   const entries = [{ status: 'M', code: 'M', path: 'src/index.ts' }]
   const contents = new Map([

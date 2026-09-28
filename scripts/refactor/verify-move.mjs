@@ -126,7 +126,13 @@ export function verifyPureMove({ entries, readAtRevision }) {
         removedPath: removedFile.path,
         addedPath: addedFiles[reorderedIndex].path
       })
+      continue
     }
+
+    orderProblems.push({
+      removedPath: removedFile.path,
+      addedPath: null
+    })
   }
 
   const tokenProblems = compareMultisets(removed, added)
