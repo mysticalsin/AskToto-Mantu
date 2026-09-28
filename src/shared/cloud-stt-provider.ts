@@ -48,7 +48,9 @@ export function effectiveCloudSttProvider(
  * Narrows the cloud speech provider to what the fleet policy's `stt` entry (primary + fallbacks)
  * allows. The user's choice stands when the policy permits it; otherwise the policy's primary provider
  * replaces it, or `unconfigured` when the policy names a provider this app cannot start. `unconfigured`
- * stays `unconfigured` — a policy never turns cloud speech on by itself. Evaluated once when a session
+ * stays `unconfigured` — a policy never turns cloud speech on by itself. Only provider ids are compared:
+ * the entry's `model` is not consulted because each speech provider exposes exactly one model; a
+ * provider with several selectable models would need the model checked here too. Evaluated once when a session
  * starts, never against a live one.
  */
 export function enforceSttPolicy(policy: ModelPolicyDocument | null, provider: CloudSttProviderId): CloudSttProviderId {

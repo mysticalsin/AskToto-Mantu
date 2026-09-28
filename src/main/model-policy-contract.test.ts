@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -75,12 +75,11 @@ describe('M2-0412 — every real model call site resolves through the fleet poli
 describe('M2-0412 — capabilities with no model-routed call site are a documented absence, not a silent gap', () => {
   it('there is no text-to-speech call site anywhere in src/main (tts has nothing to enforce)', () => {
     const grep = (pattern: RegExp): boolean => {
-      // Sampling the same directories the earlier program audit checked (main + brain + llm): a real
-      // TTS integration would need a synthesis call site in one of these, not buried elsewhere.
-      for (const path of ['src/main/index.ts', 'src/main/brain/ingest.ts', 'src/main/import-recap.ts']) {
-        if (pattern.test(src(path))) return true
-      }
-      return false
+      // Every non-test source file under src/main, so a synthesis call site cannot hide anywhere.
+      const files = readdirSync(join(root, 'src/main'), { recursive: true, encoding: 'utf8' }).filter(
+        (f) => /\.(ts|tsx|mjs|js)$/.test(f) && !/\.test\.(ts|tsx)$/.test(f)
+      )
+      return files.some((f) => pattern.test(src(join('src/main', f))))
     }
     expect(grep(/text-to-speech|synthesizeSpeech|ttsStream/i)).toBe(false)
   })
