@@ -228,6 +228,18 @@ export function initialNavigationGuardRows() {
   }))
 }
 
+export function seedSmokeProfile(profile, now = Date.now()) {
+  mkdirSync(profile, { recursive: true })
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify({
+    onboardingDone: true,
+    onboardingDoneAt: now,
+    recordingConsent: true,
+    overlayLayout: 'hide',
+    overlayPlacement: 'top-center',
+    autoHideOverlay: true
+  }, null, 2))
+}
+
 function completeRvRow(rows, id, patch) {
   const row = rows.find((entry) => entry.id === id)
   if (row) Object.assign(row, patch)
@@ -835,6 +847,7 @@ async function main() {
     }
 
     profile = mkdtempSync(join(tmpdir(), 'metis-smoke-'))
+    seedSmokeProfile(profile)
     const port = await freeLoopbackPort()
     const auditLogPath = join(profile, 'logs', 'audit.log')
 
