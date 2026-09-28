@@ -37,7 +37,7 @@ vi.mock('./store', async (importOriginal) => {
 
 import { buildBrainContext, resetMatchKeyCacheForTests } from './context'
 import { writePerson, writeAccount, writeDeal } from './store'
-import { whenIndexWritesSettle } from './ingest'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 const settingsFor = (folder: string): Settings => ({ meetingsFolder: folder } as Settings)
 
@@ -79,7 +79,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
   // parallel load the rename then lands on a directory this line already deleted, failing an
   // unrelated test in whichever file happened to be running.
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
   it('MQA-010 — a question that names no entity opens no entity file at all', () => {

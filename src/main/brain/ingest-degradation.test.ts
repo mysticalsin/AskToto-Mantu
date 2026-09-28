@@ -11,10 +11,10 @@ import {
   reconcileMeetingsInBackground,
   requestBackfill,
   startBackfill,
-  startRebuild,
-  whenIndexWritesSettle
+  startRebuild
 } from './ingest'
 import { listMeetingExtractions, readIndex } from './store'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -72,9 +72,9 @@ describe('brain ingest — provider-degradation paths', () => {
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
     // MQA-007: `running` going false is NOT "every write has landed" — the last job's own index record
-    // is still queued on the serialized lane at that moment (see whenIndexWritesSettle's own note). Every
-    // assertion after this reads index.json, so settling here is what makes them deterministic.
-    await whenIndexWritesSettle()
+    // is still queued on the serialized lane at that moment (see settleBrainWritesForTests's own note).
+    // Every assertion after this reads index.json, so settling here is what makes them deterministic.
+    await settleBrainWritesForTests()
   }
 
   const respondError = (message: string) => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
@@ -144,7 +144,7 @@ describe('brain ingest — provider-degradation paths', () => {
   })
 
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()

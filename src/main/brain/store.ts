@@ -308,6 +308,19 @@ export function withEntityLock<T>(fn: () => Promise<T>): Promise<T> {
   return run
 }
 
+/** Test-only: wait for the entity-mutation lane (account/person/deal/graph writes, corrections, publish)
+ *  to go idle. Loops because a write already in flight can chain another (e.g. a correction replay, or
+ *  the publish call inside a backfill's own withEntityLock) before a single await would return — a
+ *  suite's cleanup that deletes the profile right after only the FIRST write settled would still race the
+ *  next one. */
+export async function whenEntityWritesSettle(): Promise<void> {
+  let seen: Promise<void> | null = null
+  while (seen !== entityMutationLock) {
+    seen = entityMutationLock
+    await seen
+  }
+}
+
 // ── v1 → v2 lazy migration (B2) ──────────────────────────────────────────────
 //
 // A v1 entity file has role/org/sector/stage/win_likelihood_band/velocity as plain values with zero
