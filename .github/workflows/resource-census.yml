@@ -55,6 +55,18 @@ jobs:
           app=$(find "$volume" -maxdepth 1 -name '*.app' -print -quit)
           ditto "$app" "$target/Metis.app"
           hdiutil detach "$volume" > /dev/null
+      - name: Measure install footprint
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          node scripts/bench-asr-ttfc.mjs > census-output/bench-asr-ttfc.log 2>&1
+          node scripts/qa/census/footprint.mjs \
+            --artifact release-artifact/Metis-*.dmg \
+            --install-root "$RUNNER_TEMP/resource-census-install/Metis.app" \
+            --temp-dir "$RUNNER_TEMP" \
+            --release-tag "$RELEASE_TAG" \
+            --ttfc-output census-output/bench-asr-ttfc.log \
+            --output census-output/darwin-footprint.json
       - name: Build representative synthetic profile
         run: |
           node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
@@ -85,6 +97,15 @@ jobs:
             fi
             node "${args[@]}"
           done
+      - name: Record run identity and file digests
+        if: always()
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          printf '{"runId":"%s","runAttempt":"%s","commit":"%s","releaseTag":"%s"}\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$RELEASE_TAG" > census-output/run-identity.json
+          (cd census-output && shasum -a 256 $(ls | grep -v '^FILES.sha256$') > FILES.sha256)
+          cat census-output/run-identity.json census-output/FILES.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -124,6 +145,18 @@ jobs:
           $setup = Get-Item release-artifact/Metis-Setup-*.exe
           $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+      - name: Measure install footprint
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          node scripts/bench-asr-ttfc.mjs > census-output/bench-asr-ttfc.log 2>&1
+          node scripts/qa/census/footprint.mjs \
+            --artifact release-artifact/Metis-Setup-*.exe \
+            --install-root "$RUNNER_TEMP/resource-census-install" \
+            --temp-dir "$RUNNER_TEMP" \
+            --release-tag "$RELEASE_TAG" \
+            --ttfc-output census-output/bench-asr-ttfc.log \
+            --output census-output/win32-footprint.json
       - name: Build representative synthetic profile
         run: |
           node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
@@ -139,6 +172,15 @@ jobs:
               --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
               --output "census-output/win32-$state.json"
           done
+      - name: Record run identity and file digests
+        if: always()
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          printf '{"runId":"%s","runAttempt":"%s","commit":"%s","releaseTag":"%s"}\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$RELEASE_TAG" > census-output/run-identity.json
+          (cd census-output && sha256sum $(ls | grep -v '^FILES.sha256$') > FILES.sha256)
+          cat census-output/run-identity.json census-output/FILES.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

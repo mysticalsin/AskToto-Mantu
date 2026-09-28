@@ -599,4 +599,12 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow).toContain('node scripts/prove-local-ttft.mjs')
     expect(workflow).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2')
   })
+
+  it('measures install footprint per OS and records run identity with file digests', () => {
+    expect(workflow.match(/node scripts\/qa\/census\/footprint\.mjs/g)).toHaveLength(2)
+    expect(workflow).toContain('darwin-footprint.json')
+    expect(workflow).toContain('win32-footprint.json')
+    expect(workflow.match(/run-identity\.json/g)?.length).toBeGreaterThanOrEqual(4)
+    expect(workflow.match(/FILES\.sha256/g)?.length).toBeGreaterThanOrEqual(4)
+  })
 })
