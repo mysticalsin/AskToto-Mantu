@@ -6,6 +6,7 @@ import { latestByLevel, readRecordStore } from '../evidence/record.mjs'
 
 const CLOSED_STATUSES = new Set(['DONE', 'ENGINEERING_COMPLETE', 'DEFERRED'])
 const DECISION_ID = 'D-14'
+const TICKET_ID_RE = /^M2-\d{4}$/
 
 export const DEFAULT_DEGRADE_ORDER = Object.freeze(['M2-0155', 'M2-0124', 'M2-0185', 'M2-0161', 'M2-0156'])
 
@@ -59,21 +60,55 @@ function closedEvidence(ticket, records) {
 function decisionEntry(ledger) {
   const raw = isPlainObject(ledger?.decisions) ? ledger.decisions[DECISION_ID] : undefined
   const status = isPlainObject(raw) ? raw.status : raw
+  const changedOrder = changedDegradeOrder(ledger, raw)
   const ownerApproved = raw === true ||
     status === 'ANSWERED_AS_DEFAULT' ||
-    status === 'ANSWERED_CHANGED' ||
     status === 'APPROVED' ||
-    (isPlainObject(raw) && raw.owner_approved === true)
+    (status === 'ANSWERED_CHANGED' && changedOrder.ownerApproved && changedOrder.order.length > 0) ||
+    (isPlainObject(raw) && raw.owner_approved === true && status !== 'ANSWERED_CHANGED')
   return {
     id: DECISION_ID,
     status: status ?? 'UNKNOWN',
     ownerApproved,
+    changedOrder,
     source: raw === undefined ? 'missing' : 'ledger'
   }
 }
 
-function summarizeDegradeOrder() {
-  return DEFAULT_DEGRADE_ORDER.map((ticket, index) => ({
+function normalizeOrder(value) {
+  if (!Array.isArray(value)) return []
+  const seen = new Set()
+  const order = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !TICKET_ID_RE.test(item) || seen.has(item)) return []
+    seen.add(item)
+    order.push(item)
+  }
+  return order
+}
+
+function orderFromEntry(entry) {
+  if (Array.isArray(entry)) return normalizeOrder(entry)
+  if (!isPlainObject(entry)) return []
+  return normalizeOrder(entry.order ?? entry.degrade_order ?? entry.tickets)
+}
+
+function changedDegradeOrder(ledger, decisionRaw) {
+  const entry = isPlainObject(ledger?.degrade_orders) ? ledger.degrade_orders[DECISION_ID] : undefined
+  const entryOrder = orderFromEntry(entry)
+  const decisionOrder = orderFromEntry(decisionRaw)
+  const order = entryOrder.length > 0 ? entryOrder : decisionOrder
+  const ownerApproved = (isPlainObject(entry) && entry.owner_approved === true) ||
+    (isPlainObject(decisionRaw) && decisionRaw.owner_approved === true)
+  return {
+    ownerApproved,
+    order,
+    source: entry === undefined ? (order.length > 0 ? 'decisions' : 'missing') : 'degrade_orders'
+  }
+}
+
+function summarizeDegradeOrder(order = DEFAULT_DEGRADE_ORDER) {
+  return order.map((ticket, index) => ({
     rank: index + 1,
     ticket,
     action: 'Lower evidence level or ship DEFERRED flag-off; keep every traced ID in the ledger.'
@@ -127,6 +162,14 @@ export function analyzeProgram({ ledger, recordsByTicket, asOf, gate = 'm3' }) {
   if (!decision.ownerApproved) {
     problems.push(`${DECISION_ID}: owner-approved degrade order is not recorded as approved in the ledger`)
   }
+  if (decision.status === 'ANSWERED_CHANGED' && decision.changedOrder.order.length === 0) {
+    problems.push(`${DECISION_ID}: ANSWERED_CHANGED requires an explicit changed degrade order in ledger.degrade_orders.${DECISION_ID}`)
+  } else if (decision.status === 'ANSWERED_CHANGED' && !decision.changedOrder.ownerApproved) {
+    problems.push(`${DECISION_ID}: changed degrade order is present but not owner-approved`)
+  }
+  const degradeOrder = decision.status === 'ANSWERED_CHANGED'
+    ? summarizeDegradeOrder(decision.changedOrder.order)
+    : summarizeDegradeOrder()
 
   return {
     gate,
@@ -141,7 +184,7 @@ export function analyzeProgram({ ledger, recordsByTicket, asOf, gate = 'm3' }) {
     closedHoursPerDay,
     remainingHoursByMilestone,
     decision,
-    degradeOrder: summarizeDegradeOrder(),
+    degradeOrder,
     problems
   }
 }

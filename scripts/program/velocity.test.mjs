@@ -141,6 +141,37 @@ test('analyzeProgram records D-14 degrade order and flags an unapproved decision
   assert.ok(forecast.problems.some((problem) => problem.includes('D-14')))
 })
 
+test('analyzeProgram does not approve ANSWERED_CHANGED without an explicit owner-approved changed order', () => {
+  const ledger = {
+    decisions: { 'D-14': 'ANSWERED_CHANGED' },
+    tickets: [ticket('M2-0197', { status: 'IN_PROGRESS', needs_decision: ['D-14'] })]
+  }
+
+  const forecast = analyzeProgram({ ledger, recordsByTicket: new Map(), asOf: '2026-09-24' })
+
+  assert.equal(forecast.decision.status, 'ANSWERED_CHANGED')
+  assert.equal(forecast.decision.ownerApproved, false)
+  assert.deepEqual(forecast.degradeOrder, [])
+  assert.ok(forecast.problems.some((problem) => problem.includes('ANSWERED_CHANGED')))
+})
+
+test('analyzeProgram renders an explicitly owner-approved changed D-14 degrade order', () => {
+  const changedOrder = ['M2-0156', 'M2-0161']
+  const ledger = {
+    decisions: { 'D-14': 'ANSWERED_CHANGED' },
+    degrade_orders: {
+      'D-14': { owner_approved: true, order: changedOrder }
+    },
+    tickets: [ticket('M2-0197', { status: 'IN_PROGRESS', needs_decision: ['D-14'] })]
+  }
+
+  const forecast = analyzeProgram({ ledger, recordsByTicket: new Map(), asOf: '2026-09-24' })
+
+  assert.equal(forecast.decision.ownerApproved, true)
+  assert.deepEqual(forecast.degradeOrder.map((entry) => entry.ticket), changedOrder)
+  assert.deepEqual(forecast.problems, [])
+})
+
 test('renderForecastMarkdown names the gate forecast, remaining milestone hours, and degrade invariant', () => {
   const forecast = analyzeProgram({
     ledger: {
