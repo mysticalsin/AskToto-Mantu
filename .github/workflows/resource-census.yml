@@ -56,24 +56,35 @@ jobs:
           ditto "$app" "$target/Metis.app"
           hdiutil detach "$volume" > /dev/null
       - name: Build representative synthetic profile
-        run: node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
+        run: |
+          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
+          cp "$RUNNER_TEMP/metis-census-profile/resource-census-profile.json" census-output/profile-manifest.json
       - name: Record local TTFT proof
         env:
           ASKTOTO_USERDATA: ${{ runner.temp }}/metis-census-profile
         run: node scripts/prove-local-ttft.mjs > census-output/prove-local-ttft.log 2>&1
-      - name: Measure settled idle census
+      - name: Measure hosted census states
         env:
           METIS_QA_PROFILE: ${{ runner.temp }}/metis-census-profile
         run: |
-          node scripts/qa/census/run.mjs \
-            --state settled-idle \
-            --seconds 300 \
-            --app "$RUNNER_TEMP/resource-census-install/Metis.app" \
-            --output census-output/darwin-settled-idle.json \
-            --ttft-output census-output/prove-local-ttft.log \
-            --trace-scenario parked-bar-orb \
-            --trace-scenario backdrop-filter \
-            --trace-scenario threejs-obsidian-orb
+          for state in cold-start settled-idle; do
+            args=(
+              scripts/qa/census/run.mjs
+              --state "$state"
+              --seconds 300
+              --app "$RUNNER_TEMP/resource-census-install/Metis.app"
+              --output "census-output/darwin-$state.json"
+              --ttft-output census-output/prove-local-ttft.log
+            )
+            if [ "$state" = settled-idle ]; then
+              args+=(
+                --trace-scenario parked-bar-orb
+                --trace-scenario backdrop-filter
+                --trace-scenario threejs-obsidian-orb
+              )
+            fi
+            node "${args[@]}"
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -114,16 +125,20 @@ jobs:
           $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
       - name: Build representative synthetic profile
-        run: node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
-      - name: Measure settled idle census
+        run: |
+          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
+          cp "$RUNNER_TEMP/metis-census-profile/resource-census-profile.json" census-output/profile-manifest.json
+      - name: Measure hosted census states
         env:
           METIS_QA_PROFILE: ${{ runner.temp }}/metis-census-profile
         run: |
-          node scripts/qa/census/run.mjs \
-            --state settled-idle \
-            --seconds 300 \
-            --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
-            --output census-output/win32-settled-idle.json
+          for state in cold-start settled-idle; do
+            node scripts/qa/census/run.mjs \
+              --state "$state" \
+              --seconds 300 \
+              --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
+              --output "census-output/win32-$state.json"
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

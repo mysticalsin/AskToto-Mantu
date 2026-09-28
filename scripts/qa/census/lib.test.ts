@@ -524,8 +524,15 @@ describe('resource census representative profile', () => {
       onboardingDone: true,
       recordingConsent: true,
       autoSaveTranscripts: true,
+      showLiveTranscript: true,
       overlayLayout: 'bar',
       overlayOrbStyle: 'obsidian',
+      overlayPlacement: 'right-edge',
+      instantSuggestions: true,
+      backgroundScreenContext: true,
+      asrEngine: 'whisper',
+      asrQuality: 'best',
+      speakerId: { enabled: true, saveVoiceprints: false },
       routingMode: 'local',
       localLlm: {
         enabled: true,
@@ -542,10 +549,26 @@ describe('resource census representative profile', () => {
     try {
       const profile = writeRepresentativeProfile(root, 1)
       const persisted = JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8'))
+      const manifest = JSON.parse(readFileSync(join(root, 'resource-census-profile.json'), 'utf8'))
+      const brainIndex = JSON.parse(readFileSync(join(root, 'meetings', '.brain', 'index.json'), 'utf8'))
 
       expect(profile.profileDir).toBe(root)
       expect(persisted.meetingsFolder).toBe(join(root, 'meetings'))
       expect(persisted.localLlm.enabled).toBe(true)
+      expect(manifest).toMatchObject({
+        profileKind: 'representative-synthetic',
+        meetingsFolder: join(root, 'meetings'),
+        expectedPopulationHints: ATTRIBUTABLE_PROCESS_KINDS
+      })
+      expect(manifest.meetings.length).toBeGreaterThanOrEqual(2)
+      expect(brainIndex.documents.map((document: { file: string }) => document.file)).toEqual(
+        manifest.meetings.map((meeting: { file: string }) => meeting.file)
+      )
+      for (const meeting of manifest.meetings) {
+        const text = readFileSync(join(root, 'meetings', meeting.file), 'utf8')
+        expect(text).toContain('type: meeting-transcript')
+        expect(text).toContain('## Full transcript')
+      }
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -565,7 +588,13 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow).toContain('runs-on: macos-latest')
     expect(workflow).toContain('runs-on: windows-latest')
     expect(workflow).toContain('node scripts/qa/census/run.mjs')
-    expect(workflow).toContain('--state settled-idle')
+    expect(workflow).toContain('for state in cold-start settled-idle; do')
+    expect(workflow).toContain('--state "$state"')
+    expect(workflow).toContain('darwin-$state.json')
+    expect(workflow).toContain('win32-$state.json')
+    expect(workflow).toContain('profile-manifest.json')
+    expect(workflow).toContain('resource-census-profile.json')
+    expect(workflow).toContain('settled-idle')
     expect(workflow).toContain('--seconds 300')
     expect(workflow).toContain('node scripts/prove-local-ttft.mjs')
     expect(workflow).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2')
