@@ -2096,7 +2096,8 @@ function pump(): void {
   maybeFinishDrain()
 }
 
-onMaintenanceMayBegin(pump)
+// The ingest pump is a production singleton registered at module load; test resets must not remove it.
+onMaintenanceMayBegin(pump, { persistent: true })
 
 /**
  * Durable enqueue for a just-saved meeting. The lightweight index write happens before a network-bound

@@ -44,6 +44,7 @@ let interactiveRecheckArmed = false
 const windowWaiters: Array<() => void> = []
 const waiters: Waiter[] = []
 const listeners = new Set<() => void>()
+const persistentListeners = new Set<() => void>()
 const reportedDeferrals = new Set<string>()
 
 function windowDeferral(): MaintenanceDeferral | null {
@@ -124,8 +125,10 @@ export function whenMaintenanceWindowOpens(): Promise<void> {
   })
 }
 
-export function onMaintenanceMayBegin(listener: () => void): void {
-  listeners.add(listener)
+export function onMaintenanceMayBegin(listener: () => void, options: { persistent?: boolean } = {}): () => void {
+  const target = options.persistent === true ? persistentListeners : listeners
+  target.add(listener)
+  return () => { target.delete(listener) }
 }
 
 export function reportDeferred(kind: SchedulerJobKind, reason: DeferredReason): void {
@@ -180,6 +183,7 @@ function wake(): void {
   }
   if (maintenanceDeferral() === null) queueMicrotask(() => {
     if (maintenanceDeferral() !== null) return
+    for (const listener of persistentListeners) listener()
     for (const listener of listeners) listener()
   })
 }

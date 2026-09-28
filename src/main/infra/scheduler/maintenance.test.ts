@@ -125,6 +125,24 @@ describe('maintenance gate', () => {
     expect(stale).not.toHaveBeenCalled()
   })
 
+  it('test reset keeps persistent production listeners registered once', async () => {
+    const production = vi.fn()
+    const unsubscribe = onMaintenanceMayBegin(production, { persistent: true })
+    try {
+      startOpen()
+
+      resetMaintenanceGateForTests()
+      startOpen()
+      const release = beginMaintenance()
+      release()
+      await Promise.resolve()
+
+      expect(production).toHaveBeenCalledOnce()
+    } finally {
+      unsubscribe()
+    }
+  })
+
   it('interactive re-check is scheduled only while waiters exist', async () => {
     uptime = 121_000
     interactive = true
