@@ -241,10 +241,21 @@ export function isPassingRevealEvidence(reveal) {
   return reveal !== null && reveal.parked === true && (reveal.outcome === 'created' || reveal.outcome === 'shown')
 }
 
-async function runRevealRow({ auditLogPath, rows, id, reason, run, failure }) {
-  const seen = revealCount(auditLogPath, reason)
-  const launched = await run()
-  const reveal = launched.error ? null : await waitForReveal(auditLogPath, reason, seen)
+export async function runRevealRow({
+  auditLogPath,
+  rows,
+  id,
+  reason,
+  prepare,
+  run,
+  failure,
+  countReveals = revealCount,
+  waitForRevealRecord = waitForReveal
+}) {
+  const prepared = prepare ? await prepare() : { error: false }
+  const seen = countReveals(auditLogPath, reason)
+  const launched = prepared.error ? prepared : await run()
+  const reveal = launched.error ? null : await waitForRevealRecord(auditLogPath, reason, seen)
   const pass = isPassingRevealEvidence(reveal)
   completeRvRow(rows, id, {
     status: pass ? 'PASS' : 'FAIL',
@@ -267,10 +278,8 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       rows,
       id: 'RV-1-macos-open-activate',
       reason: 'activate',
-      run: async () => {
-        await hideBeforeReveal()
-        return runProcess('open', [target], 10_000)
-      },
+      prepare: hideBeforeReveal,
+      run: () => runProcess('open', [target], 10_000),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing activate reveal event.'
     })
 
@@ -279,10 +288,8 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       rows,
       id: 'RV-2-macos-open-new-instance',
       reason: 'second-instance',
-      run: async () => {
-        await hideBeforeReveal()
-        return runProcess('open', ['-n', target], 10_000)
-      },
+      prepare: hideBeforeReveal,
+      run: () => runProcess('open', ['-n', target], 10_000),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
     })
 
@@ -291,10 +298,8 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       rows,
       id: 'RV-1-macos-finder-spotlight-launchpad',
       reason: 'activate',
-      run: async () => {
-        await hideBeforeReveal()
-        return runAppleScript(`tell application "Finder" to open POSIX file ${JSON.stringify(target)}`, 10_000)
-      },
+      prepare: hideBeforeReveal,
+      run: () => runAppleScript(`tell application "Finder" to open POSIX file ${JSON.stringify(target)}`, 10_000),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing Finder activate reveal event.'
     })
 
@@ -303,10 +308,8 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       rows,
       id: 'RV-4-global-hotkey',
       reason: 'hotkey',
-      run: async () => {
-        await runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
-        return runAppleScript('tell application "System Events" to keystroke return using {command down, shift down}', 10_000)
-      },
+      prepare: hideBeforeReveal,
+      run: () => runAppleScript('tell application "System Events" to keystroke return using {command down, shift down}', 10_000),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing global-hotkey reveal event.'
     })
   }
@@ -317,10 +320,8 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       rows,
       id: 'RV-3-windows-exe-relaunch',
       reason: 'second-instance',
-      run: async () => {
-        await hideBeforeReveal()
-        return runProcess(executable, [], 10_000, { env })
-      },
+      prepare: hideBeforeReveal,
+      run: () => runProcess(executable, [], 10_000, { env }),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
     })
 
@@ -337,10 +338,8 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       rows,
       id: 'RV-3-windows-shortcut-relaunch',
       reason: 'second-instance',
-      run: async () => {
-        await hideBeforeReveal()
-        return runPowerShell(shortcutScript, 10_000)
-      },
+      prepare: hideBeforeReveal,
+      run: () => runPowerShell(shortcutScript, 10_000),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing Windows shortcut reveal event.'
     })
 
@@ -349,10 +348,8 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       rows,
       id: 'RV-4-global-hotkey',
       reason: 'hotkey',
-      run: async () => {
-        await runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
-        return runPowerShell("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^+{ENTER}')", 10_000)
-      },
+      prepare: hideBeforeReveal,
+      run: () => runPowerShell("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^+{ENTER}')", 10_000),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing global-hotkey reveal event.'
     })
   }

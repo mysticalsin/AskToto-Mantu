@@ -13,6 +13,7 @@ import {
   parseAuditLog,
   readObservationTail,
   initialRvRows,
+  runRevealRow,
   smokeReport,
   smokeVerdict
 } from './packaged-smoke.mjs'
@@ -250,6 +251,40 @@ describe('isPassingRevealEvidence', () => {
     expect(isPassingRevealEvidence({ outcome: 'shown', parked: false })).toBe(false)
     expect(isPassingRevealEvidence({ outcome: 'already-visible', parked: true })).toBe(false)
     expect(isPassingRevealEvidence(null)).toBe(false)
+  })
+})
+
+describe('runRevealRow', () => {
+  it('takes the reveal baseline after smoke prep so a prep second-instance cannot satisfy the row', async () => {
+    const rows = initialRvRows('darwin')
+    const reveals: Array<{ event: string; reason: string; outcome: string; parked: boolean; layout: string }> = []
+    let exercisedReopen = false
+
+    await runRevealRow({
+      auditLogPath: '/tmp/metis-smoke-audit.log',
+      rows,
+      id: 'RV-2-macos-open-new-instance',
+      reason: 'second-instance',
+      prepare: async () => {
+        reveals.push({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' })
+        return { error: false }
+      },
+      run: async () => {
+        exercisedReopen = true
+        return { error: false }
+      },
+      countReveals: (_auditLogPath, reason) => reveals.filter((record) => record.reason === reason).length,
+      waitForRevealRecord: async (_auditLogPath, reason, seenCount) =>
+        reveals.filter((record) => record.reason === reason)[seenCount] ?? null,
+      failure: 'missing second-instance reveal'
+    })
+
+    expect(exercisedReopen).toBe(true)
+    expect(rows.find((row) => row.id === 'RV-2-macos-open-new-instance')).toMatchObject({
+      status: 'FAIL',
+      evidence: null,
+      unblock: 'missing second-instance reveal'
+    })
   })
 })
 
