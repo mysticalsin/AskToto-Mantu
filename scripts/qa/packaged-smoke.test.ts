@@ -61,6 +61,12 @@ interface Observation {
       parked?: boolean
       layout?: string | null
     } | null
+    diagnosis: {
+      rootCause: string
+      revealEventsBefore: number
+      revealEventsAfter: number
+      driverExit: { code: number | null; signal: string | null; error: boolean }
+    } | null
     unblock: string | null
   }>
   navigationGuard: Array<{
@@ -142,6 +148,12 @@ function goodObservation(): Observation {
         automation: 'open-app-path',
         status: 'PASS',
         evidence: { event: 'reveal', reason: 'activate', outcome: 'shown', parked: true, layout: 'hide' },
+        diagnosis: {
+          rootCause: 'reopen_revealed_window',
+          revealEventsBefore: 0,
+          revealEventsAfter: 1,
+          driverExit: { code: 0, signal: null, error: false }
+        },
         unblock: null
       },
       {
@@ -150,6 +162,12 @@ function goodObservation(): Observation {
         automation: 'open-new-instance',
         status: 'PASS',
         evidence: { event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' },
+        diagnosis: {
+          rootCause: 'reopen_revealed_window',
+          revealEventsBefore: 0,
+          revealEventsAfter: 1,
+          driverExit: { code: 0, signal: null, error: false }
+        },
         unblock: null
       },
       {
@@ -158,6 +176,12 @@ function goodObservation(): Observation {
         automation: 'tray-menu',
         status: 'PASS',
         evidence: { event: 'reveal', reason: 'tray', outcome: 'shown', parked: true, layout: 'hide' },
+        diagnosis: {
+          rootCause: 'reopen_revealed_window',
+          revealEventsBefore: 0,
+          revealEventsAfter: 1,
+          driverExit: { code: 0, signal: null, error: false }
+        },
         unblock: null
       },
       {
@@ -166,6 +190,12 @@ function goodObservation(): Observation {
         automation: 'global-hotkey',
         status: 'PASS',
         evidence: { event: 'reveal', reason: 'hotkey', outcome: 'shown', parked: true, layout: 'hide' },
+        diagnosis: {
+          rootCause: 'reopen_revealed_window',
+          revealEventsBefore: 0,
+          revealEventsAfter: 1,
+          driverExit: { code: 0, signal: null, error: false }
+        },
         unblock: null
       },
       {
@@ -174,6 +204,12 @@ function goodObservation(): Observation {
         automation: 'finder-open-app-file',
         status: 'PASS',
         evidence: { event: 'reveal', reason: 'activate', outcome: 'shown', parked: true, layout: 'hide' },
+        diagnosis: {
+          rootCause: 'reopen_revealed_window',
+          revealEventsBefore: 0,
+          revealEventsAfter: 1,
+          driverExit: { code: 0, signal: null, error: false }
+        },
         unblock: null
       }
     ],
@@ -336,7 +372,43 @@ describe('runRevealRow', () => {
     expect(rows.find((row) => row.id === 'RV-2-macos-open-new-instance')).toMatchObject({
       status: 'FAIL',
       evidence: null,
+      diagnosis: {
+        rootCause: 'missing_reveal_audit_event',
+        revealEventsBefore: 1,
+        revealEventsAfter: 1,
+        driverExit: { code: null, signal: null, error: false }
+      },
       unblock: 'missing second-instance reveal'
+    })
+  })
+
+  it('records driver failure as the row root cause instead of blaming app reveal code', async () => {
+    const rows = initialRvRows('darwin')
+
+    await runRevealRow({
+      auditLogPath: '/tmp/metis-smoke-audit.log',
+      rows,
+      id: 'RV-1-macos-open-activate',
+      reason: 'activate',
+      prepare: undefined,
+      run: async () => ({ code: 7, signal: null, error: true }),
+      countReveals: () => 0,
+      waitForRevealRecord: async () => {
+        throw new Error('wait must not run after a failed driver')
+      },
+      failure: 'activate driver failed'
+    })
+
+    expect(rows.find((row) => row.id === 'RV-1-macos-open-activate')).toMatchObject({
+      status: 'FAIL',
+      evidence: null,
+      diagnosis: {
+        rootCause: 'reopen_driver_failed',
+        revealEventsBefore: 0,
+        revealEventsAfter: 0,
+        driverExit: { code: 7, signal: null, error: true }
+      },
+      unblock: 'activate driver failed'
     })
   })
 })

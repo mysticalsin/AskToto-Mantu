@@ -213,6 +213,7 @@ export function initialRvRows(platform) {
       automation: scenario.automation,
       status: 'PENDING',
       evidence: null,
+      diagnosis: null,
       unblock: null
     }))
 }
@@ -252,10 +253,14 @@ function completeNavigationRow(rows, id, patch) {
 
 async function withOverlayPage(port, fn) {
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 30_000 })
-  const pages = browser.contexts().flatMap((context) => context.pages())
-  const overlay = pages.find((page) => isOverlayUrl(page.url()))
-  if (!overlay) throw new Error('overlay page not found')
-  return fn(overlay)
+  try {
+    const pages = browser.contexts().flatMap((context) => context.pages())
+    const overlay = pages.find((page) => isOverlayUrl(page.url()))
+    if (!overlay) throw new Error('overlay page not found')
+    return await fn(overlay)
+  } finally {
+    await browser.close().catch(() => undefined)
+  }
 }
 
 async function waitForText(page, text, timeout = 15_000) {
@@ -590,6 +595,18 @@ function revealCount(auditLogPath, reason) {
   return parseAuditLog(readAuditLog(auditLogPath)).filter((r) => r.event === 'reveal' && r.reason === reason).length
 }
 
+function revealEvidence(reveal) {
+  if (!reveal) return null
+  return {
+    event: 'reveal',
+    reason: typeof reveal.reason === 'string' ? reveal.reason : null,
+    outcome: reveal.outcome ?? null,
+    isVisible: reveal.isVisible === true,
+    parked: reveal.parked === true,
+    layout: typeof reveal.layout === 'string' ? reveal.layout : null
+  }
+}
+
 export function isPassingRevealEvidence(reveal) {
   return reveal !== null &&
     (reveal.outcome === 'created' || reveal.outcome === 'shown') &&
@@ -611,17 +628,30 @@ export async function runRevealRow({
   const seen = countReveals(auditLogPath, reason)
   const launched = prepared.error ? prepared : await run()
   const reveal = launched.error ? null : await waitForRevealRecord(auditLogPath, reason, seen)
+  const after = countReveals(auditLogPath, reason)
   const pass = isPassingRevealEvidence(reveal)
+  const rootCause = pass
+    ? 'reopen_revealed_window'
+    : prepared.error
+      ? 'prep_driver_failed'
+      : launched.error
+        ? 'reopen_driver_failed'
+        : reveal === null
+          ? 'missing_reveal_audit_event'
+          : 'reveal_did_not_make_window_visible'
   completeRvRow(rows, id, {
     status: pass ? 'PASS' : 'FAIL',
-    evidence: reveal ? {
-      event: 'reveal',
-      reason,
-      outcome: reveal.outcome ?? null,
-      isVisible: reveal.isVisible === true,
-      parked: reveal.parked === true,
-      layout: typeof reveal.layout === 'string' ? reveal.layout : null
-    } : null,
+    evidence: revealEvidence(reveal),
+    diagnosis: {
+      rootCause,
+      revealEventsBefore: seen,
+      revealEventsAfter: after,
+      driverExit: {
+        code: launched.code ?? null,
+        signal: launched.signal ?? null,
+        error: launched.error === true
+      }
+    },
     unblock: pass ? null : failure
   })
 }
@@ -931,13 +961,17 @@ async function main() {
     const quitRequestedAt = Date.now()
     try {
       const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 30_000 })
-      const pages = browser.contexts().flatMap((context) => context.pages())
-      const overlay = pages.find((page) => isOverlayUrl(page.url()))
-      if (overlay) {
-        await overlay.evaluate(() => {
-          void window.toto.quit()
-        })
-        observation.quitDelivered = true
+      try {
+        const pages = browser.contexts().flatMap((context) => context.pages())
+        const overlay = pages.find((page) => isOverlayUrl(page.url()))
+        if (overlay) {
+          await overlay.evaluate(() => {
+            void window.toto.quit()
+          })
+          observation.quitDelivered = true
+        }
+      } finally {
+        await browser.close().catch(() => undefined)
       }
     } catch {
       observation.quitDelivered = false
