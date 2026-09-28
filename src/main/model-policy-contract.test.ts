@@ -37,7 +37,7 @@ const WIRED_CALL_SITES = [
 describe('M2-0412 — every real model call site resolves through the fleet policy module', () => {
   it.each(WIRED_CALL_SITES)('%s imports from model-policy-client', (path) => {
     const text = src(path)
-    expect(text).toMatch(/from ['"](\.\/)*model-policy-client['"]/)
+    expect(text).toMatch(/from ['"][./]+model-policy-client['"]/)
   })
 
   it('the interactive ask path (index.ts) narrows providers AND pins the model for the askChat capability', () => {
