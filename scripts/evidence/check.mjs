@@ -593,8 +593,11 @@ export function m2_0008BundleProblems(bundlePath) {
     if (!fifo.fixtures.some((fixture) => String(fixture.path ?? '').endsWith('.brain/index.json'))) {
       problems.push('fifo-fixtures.json: missing blocked .brain/index.json fixture')
     }
-    if (!fifo.fixtures.every((fixture) => Object.hasOwn(fixture, 'opened_by_1_9_6'))) {
-      problems.push('fifo-fixtures.json: every fixture must record whether 1.9.6 opened it')
+    for (const fixture of fifo.fixtures) {
+      if (!fixture || typeof fixture !== 'object' || !Object.hasOwn(fixture, 'opened_by_1_9_6')) {
+        problems.push('fifo-fixtures.json: every fixture must record whether 1.9.6 opened it')
+        break
+      }
     }
   }
   if (!Array.isArray(dataless?.fixtures)) problems.push('dataless-fixtures.json: fixtures array is required')
