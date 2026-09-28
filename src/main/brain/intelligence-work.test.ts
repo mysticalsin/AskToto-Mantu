@@ -6,6 +6,7 @@ import { app } from 'electron'
 import type { BackfillCompletion, BackfillRun, BackfillStartOptions } from './ingest'
 import { resetMaintenanceGateForTests, settlePriorExit, startMaintenanceGate } from '../infra/scheduler/maintenance'
 import { startIntelligenceWork } from './intelligence-work'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -19,7 +20,8 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await settleBrainWritesForTests()
   resetMaintenanceGateForTests()
   rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })

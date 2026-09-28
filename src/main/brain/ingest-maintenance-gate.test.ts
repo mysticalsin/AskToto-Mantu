@@ -13,10 +13,10 @@ import {
   requestBackfill,
   requestBackfillRun,
   resumeBackfillIfPending,
-  startBackfill,
-  whenIndexWritesSettle
+  startBackfill
 } from './ingest'
 import { readIndex, writeIndex, writeMeetingExtraction } from './store'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import { MeetingExtractionSchema } from '@shared/brain'
 import {
   noteUserInput,
@@ -78,7 +78,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
   }
 
   const releaseHeldWork = async (): Promise<void> => {
@@ -86,7 +86,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
       held.splice(0).forEach((release) => release())
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
   }
 
   const writeMeeting = (name: string, body = name) => {
@@ -121,7 +121,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     interactiveActive = false
     startGate('clean')
     await releaseHeldWork()
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()

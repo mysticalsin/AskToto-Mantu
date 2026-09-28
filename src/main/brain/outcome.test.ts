@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { DealEntitySchema, type DealEntity } from '@shared/brain'
 import { brainDir, readDeal, writeDeal, setDealOutcome } from './store'
-import { whenIndexWritesSettle } from './ingest'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -31,7 +31,7 @@ describe.each([
   // parallel load the rename then lands on a directory this line already deleted, failing an
   // unrelated test in whichever file happened to be running.
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
   const DEAL_SLUG = 'acme-core-banking'

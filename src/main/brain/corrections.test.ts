@@ -4,8 +4,9 @@ import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type MeetingExtraction, type CorrectionEntry } from '@shared/brain'
-import { ingestExtraction, whenIndexWritesSettle } from './ingest'
+import { ingestExtraction } from './ingest'
 import { buildBrainContext } from './context'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import {
   brainDir,
   slugify,
@@ -92,7 +93,7 @@ describe('corrections engine', () => {
   // parallel load the rename then lands on a directory this line already deleted, failing an
   // unrelated test in whichever file happened to be running.
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
   // Three synthetic meetings — planted directly through ingestExtraction (the exact production path
