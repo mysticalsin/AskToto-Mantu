@@ -10,6 +10,8 @@
 
 import { spawn } from 'node:child_process'
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -30,6 +32,7 @@ const POLL_MS = 250
 const SCENARIOS = Object.freeze(['idle', 'model-starting', 'active-inference', 'ffmpeg-import', 'registry-write'])
 const LOCAL_MODEL_ROLES = Object.freeze(['llama-server', 'fm'])
 const LOCAL_MODEL_AUDIT_NAMES = Object.freeze(['llama-server', 'fm-serve'])
+const UNRELATED_SAME_NAME_ROLE = 'llama-server'
 
 function usage() {
   console.error('usage: node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20]')
@@ -190,14 +193,115 @@ function hardKill(pid) {
   }
 }
 
+function processIdentity(entry) {
+  return `${entry.pid}:${entry.startedMs}`
+}
+
+function findProcess(table, identity) {
+  return table.find((entry) => processIdentity(entry) === identity) ?? null
+}
+
 function terminalRow(scenario, cycle, status, detail = {}) {
   return { scenario, cycle, status, ...detail }
+}
+
+export function reportResultForRows(rows) {
+  if (rows.some((row) => row.status === 'FAIL')) return 'fail'
+  if (rows.some((row) => row.status === 'BLOCKED_EXTERNAL')) return 'blocked'
+  return 'pass'
+}
+
+export function exitCodeForReportResult(result) {
+  return result === 'pass' ? 0 : 1
+}
+
+function stopUnrelatedFixture(fixture) {
+  if (!fixture?.proc?.pid) return
+  hardKill(fixture.proc.pid)
+  try {
+    fixture.proc.unref()
+  } catch {
+    /* The process may already have exited. */
+  }
+}
+
+async function startUnrelatedSameNameFixture() {
+  const dir = mkdtempSync(join(tmpdir(), 'metis-hk-m-unrelated-'))
+  const executable = join(dir, UNRELATED_SAME_NAME_ROLE)
+  let proc = null
+  try {
+    copyFileSync('/bin/sleep', executable)
+    chmodSync(executable, 0o755)
+    proc = spawn(executable, ['60'], { stdio: 'ignore' })
+    let spawnError = null
+    let exited = false
+    proc.once('error', (error) => {
+      spawnError = error
+    })
+    proc.once('exit', () => {
+      exited = true
+    })
+    const deadline = Date.now() + 2_000
+    while (Date.now() < deadline) {
+      if (spawnError) {
+        stopUnrelatedFixture({ proc })
+        rmSync(dir, { recursive: true, force: true })
+        return {
+          ok: false,
+          failure: 'unrelated_same_name_fixture_unavailable',
+          error: spawnError instanceof Error ? spawnError.message : String(spawnError)
+        }
+      }
+      if (exited) {
+        stopUnrelatedFixture({ proc })
+        rmSync(dir, { recursive: true, force: true })
+        return { ok: false, failure: 'unrelated_same_name_fixture_exited_early' }
+      }
+      const table = listProcesses('darwin')
+      const entry = table.find((candidate) => candidate.pid === proc.pid) ?? null
+      if (entry) {
+        if (entry.role !== UNRELATED_SAME_NAME_ROLE) {
+          stopUnrelatedFixture({ proc })
+          rmSync(dir, { recursive: true, force: true })
+          return {
+            ok: false,
+            failure: 'unrelated_same_name_fixture_role_mismatch',
+            expectedRole: UNRELATED_SAME_NAME_ROLE,
+            actualRole: entry.role
+          }
+        }
+        return { ok: true, proc, dir, identity: processIdentity(entry), role: entry.role }
+      }
+      await sleep(POLL_MS)
+    }
+    stopUnrelatedFixture({ proc })
+    rmSync(dir, { recursive: true, force: true })
+    return { ok: false, failure: 'unrelated_same_name_fixture_not_observed' }
+  } catch (error) {
+    if (proc) stopUnrelatedFixture({ proc })
+    rmSync(dir, { recursive: true, force: true })
+    return {
+      ok: false,
+      failure: 'unrelated_same_name_fixture_unavailable',
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
 }
 
 async function runCycle({ executable, installRoot, scenario, cycle }) {
   const rootResidents = ownedProcesses(listProcesses('darwin'), { mainPid: null, installRoot, platform: 'darwin' })
   if (rootResidents.length > 0) {
     return terminalRow(scenario, cycle, 'FAIL', { failure: 'install_root_busy', before: roleCounts(rootResidents) })
+  }
+
+  const unrelated = await startUnrelatedSameNameFixture()
+  if (!unrelated.ok) {
+    return terminalRow(scenario, cycle, 'FAIL', {
+      failure: unrelated.failure,
+      ...(unrelated.expectedRole ? { expectedRole: unrelated.expectedRole } : {}),
+      ...(unrelated.actualRole ? { actualRole: unrelated.actualRole } : {}),
+      ...(unrelated.error ? { error: unrelated.error } : {})
+    })
   }
 
   const profile = mkdtempSync(join(tmpdir(), 'metis-hk-m-'))
@@ -244,7 +348,17 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
       return terminalRow(scenario, cycle, 'FAIL', { failure: 'main_not_owned' })
     }
 
+    const unrelatedAtKill = findProcess(listProcesses('darwin'), unrelated.identity)
+    if (!unrelatedAtKill) {
+      hardKill(child.pid)
+      return terminalRow(scenario, cycle, 'FAIL', { failure: 'unrelated_same_name_fixture_died_before_kill' })
+    }
+
     const sidecarsAtKill = ownedAtKill.filter((entry) => entry.pid !== child.pid)
+    if (ownedAtKill.some((entry) => processIdentity(entry) === unrelated.identity)) {
+      hardKill(child.pid)
+      return terminalRow(scenario, cycle, 'FAIL', { failure: 'unrelated_same_name_fixture_counted_as_owned' })
+    }
     const scenarioProof = scenarioEvidence(scenario, {
       records: recordsAtKill,
       registry: registryAtKill,
@@ -263,11 +377,19 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
     hardKill(child.pid)
     let survivors = []
     while (Date.now() - killedAt <= SURVIVOR_BOUND_MS) {
-      survivors = computeSurvivors(ownedAtKill, listProcesses('darwin'), { installRoot, platform: 'darwin' })
+      const table = listProcesses('darwin')
+      if (!findProcess(table, unrelated.identity)) {
+        return terminalRow(scenario, cycle, 'FAIL', {
+          failure: 'unrelated_same_name_process_did_not_survive',
+          unrelatedRole: unrelated.role
+        })
+      }
+      survivors = computeSurvivors(ownedAtKill, table, { installRoot, platform: 'darwin' })
       if (survivors.length === 0) {
         return terminalRow(scenario, cycle, 'PASS', {
           timingsMs: { survivorsGone: Date.now() - killedAt },
           processes: { atKill: roleCounts(ownedAtKill), survivors: {} },
+          unrelatedSameName: { role: unrelated.role, survived: true },
           evidence: scenarioProof.evidence
         })
       }
@@ -280,6 +402,8 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
     })
   } finally {
     if (child.pid && !exitInfo.settled) hardKill(child.pid)
+    stopUnrelatedFixture(unrelated)
+    rmSync(unrelated.dir, { recursive: true, force: true })
     rmSync(profile, { recursive: true, force: true })
   }
 }
@@ -303,7 +427,7 @@ async function main() {
       terminalRow('all', 0, 'BLOCKED_EXTERNAL', { unblock: 'Run HK-M on the macos-latest packaged-smoke workflow.' })
     )
     writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)
-    return
+    process.exit(exitCodeForReportResult(report.result))
   }
 
   const installRoot = realpathSync.native(appPath)
@@ -314,11 +438,10 @@ async function main() {
     }
   }
 
-  const failures = report.rows.filter((row) => row.status === 'FAIL')
-  const blocked = report.rows.filter((row) => row.status === 'BLOCKED_EXTERNAL')
-  report.result = failures.length > 0 ? 'fail' : blocked.length > 0 ? 'blocked' : 'pass'
+  report.result = reportResultForRows(report.rows)
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)
-  if (failures.length > 0) process.exit(1)
+  const exitCode = exitCodeForReportResult(report.result)
+  if (exitCode !== 0) process.exit(exitCode)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

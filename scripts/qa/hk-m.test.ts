@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { scenarioEvidence } from './hk-m.mjs'
+import { exitCodeForReportResult, reportResultForRows, scenarioEvidence } from './hk-m.mjs'
 
 const modelSidecar = { pid: 101, ppid: 100, startedMs: 1001, exe: '/tmp/llama-server', role: 'llama-server' }
 const renderer = { pid: 102, ppid: 100, startedMs: 1002, exe: '/tmp/Metis Helper', role: 'Metis Helper (Renderer)' }
@@ -68,5 +68,26 @@ describe('HK-M scenario evidence', () => {
         sidecars: [modelSidecar]
       })
     ).toMatchObject({ ok: true })
+  })
+})
+
+describe('HK-M report result', () => {
+  it('is pass only when every live row passes', () => {
+    expect(reportResultForRows([{ status: 'PASS' }, { status: 'PASS' }])).toBe('pass')
+    expect(exitCodeForReportResult('pass')).toBe(0)
+  })
+
+  it('keeps blocked rows non-passing so the CI acceptance lane fails without 20/20 live proof', () => {
+    const result = reportResultForRows([{ status: 'PASS' }, { status: 'BLOCKED_EXTERNAL' }])
+
+    expect(result).toBe('blocked')
+    expect(exitCodeForReportResult(result)).toBe(1)
+  })
+
+  it('fails when any row fails', () => {
+    const result = reportResultForRows([{ status: 'PASS' }, { status: 'FAIL' }, { status: 'BLOCKED_EXTERNAL' }])
+
+    expect(result).toBe('fail')
+    expect(exitCodeForReportResult(result)).toBe(1)
   })
 })
