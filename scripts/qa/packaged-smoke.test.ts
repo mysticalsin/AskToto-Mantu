@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   LIFECYCLE_EVENTS,
+  NAVIGATION_GUARD_BOOTSTRAP_PATCH,
   childPidReserved,
   computeCleanupTargets,
   isOverlayUrl,
@@ -428,6 +429,15 @@ describe('initialRvRows', () => {
 })
 
 describe('initialNavigationGuardRows', () => {
+  it('bootstraps the disposable smoke profile into the visible post-onboarding bar before HIST automation', () => {
+    expect(NAVIGATION_GUARD_BOOTSTRAP_PATCH).toEqual({
+      onboardingDone: true,
+      recordingConsent: true,
+      overlayLayout: 'bar',
+      autoHideOverlay: false
+    })
+  })
+
   it('tracks clean and dirty History navigation entry points as pending automation', () => {
     const rows = initialNavigationGuardRows()
 
