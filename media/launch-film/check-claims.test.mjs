@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { loadClaims, validateClaims } from './check-claims.mjs'
+import { KIT_BEATS, computeFilmStatus, loadClaims, validateClaims } from './check-claims.mjs'
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -26,12 +26,120 @@ test('forbidden phrases are rejected across scripts and captions', () => {
 
 test('hindsight cannot move live without LIVE_VERIFIED memory evidence', () => {
   const register = clone(validRegister)
-  const hindsight = register.storyboard_scenes.find((scene) => scene.id === 'LF-03')
+  const hindsight = register.storyboard_scenes.find((scene) => scene.requires_live_verified_memory_proof)
+  assert.equal(hindsight.id, 'LF-05')
   hindsight.state = 'live'
   hindsight.visible_label = ''
   const result = validateClaims(register)
   assert.equal(result.ok, false)
-  assert.match(result.failures.join('\n'), /LF-03 cannot be live without LIVE_VERIFIED memory evidence/)
+  assert.match(result.failures.join('\n'), /LF-05 cannot be live without LIVE_VERIFIED memory evidence/)
+})
+
+function failuresOf(register) {
+  const result = validateClaims(register)
+  assert.equal(result.ok, false)
+  return result.failures.join('\n')
+}
+
+test('storyboard has exactly the kit beats LF-01..LF-08 with their titles and timings', () => {
+  assert.deepEqual(
+    validRegister.storyboard_scenes.map((scene) => scene.id),
+    KIT_BEATS.map((beat) => beat.id)
+  )
+})
+
+test('a missing kit beat fails the gate', () => {
+  const register = clone(validRegister)
+  register.storyboard_scenes = register.storyboard_scenes.filter((scene) => scene.id !== 'LF-04')
+  assert.match(failuresOf(register), /missing kit beat LF-04/)
+})
+
+test('an extra beat fails the gate', () => {
+  const register = clone(validRegister)
+  const extra = clone(register.storyboard_scenes[0])
+  extra.id = 'LF-09'
+  register.storyboard_scenes.push(extra)
+  assert.match(failuresOf(register), /unexpected scene LF-09/)
+})
+
+test('a retitled or retimed beat fails the gate', () => {
+  const register = clone(validRegister)
+  register.storyboard_scenes[2].title = 'Toolchain proof card'
+  register.storyboard_scenes[3].end_s += 1
+  const failures = failuresOf(register)
+  assert.match(failures, /LF-03 title must be "Overlay appears"/)
+  assert.match(failures, /LF-04 timing must be 24s-36s/)
+})
+
+test('every claim carries a capability class and a build hash field', () => {
+  const register = clone(validRegister)
+  register.claims[0].capability_class = 'shipping'
+  delete register.claims[1].build_hash
+  const failures = failuresOf(register)
+  assert.match(failures, /CL-01 has invalid capability class shipping/)
+  assert.match(failures, /CL-02 must carry a build_hash/)
+})
+
+test('a verified claim needs a build hash and proof-level evidence', () => {
+  const register = clone(validRegister)
+  register.claims[0].capability_class = 'verified'
+  const failures = failuresOf(register)
+  assert.match(failures, /CL-01 is verified but has no build hash/)
+  assert.match(failures, /CL-01 is verified but its evidence record is not LIVE_VERIFIED/)
+})
+
+test('a live scene needs a verified claim', () => {
+  const register = clone(validRegister)
+  register.storyboard_scenes[2].state = 'live'
+  assert.match(failuresOf(register), /LF-03 cannot be live unless its claim is verified/)
+})
+
+test('film status is computed from the classes: concept while unverified, product preview when all shown scenes are verified and live', () => {
+  const claims = new Map(validRegister.claims.map((claim) => [claim.id, claim]))
+  assert.equal(computeFilmStatus(validRegister.storyboard_scenes, claims), 'concept preview')
+  assert.equal(validateClaims(validRegister).summary.film_status, 'concept preview')
+
+  const verifiedClaims = new Map([['CL-V', { id: 'CL-V', capability_class: 'verified' }]])
+  const liveScenes = [{ state: 'live', claim_id: 'CL-V' }, { state: 'cut', claim_id: null }]
+  assert.equal(computeFilmStatus(liveScenes, verifiedClaims), 'verified product preview')
+  assert.equal(computeFilmStatus([...liveScenes, { state: 'concept', claim_id: null }], verifiedClaims), 'concept preview')
+})
+
+test('a declared film status that disagrees with the computed one fails', () => {
+  const register = clone(validRegister)
+  register.film_status = 'verified product preview'
+  assert.match(failuresOf(register), /film_status must be "concept preview"/)
+})
+
+test('a concept scene must show its label on screen', () => {
+  const register = clone(validRegister)
+  register.storyboard_scenes[0].captions = []
+  assert.match(failuresOf(register), /LF-01 must show its visible label Concept UI sequence on screen/)
+})
+
+test('a platform-availability claim fails without release evidence for that platform', () => {
+  const register = clone(validRegister)
+  const platformScene = register.storyboard_scenes.find((scene) => scene.id === 'LF-07')
+  platformScene.state = 'concept'
+  platformScene.script = 'Available on both platforms.'
+  platformScene.captions = [platformScene.visible_label]
+  const failures = failuresOf(register)
+  assert.match(failures, /LF-07 claims availability on macos without release evidence/)
+  assert.match(failures, /LF-07 claims availability on windows without release evidence/)
+})
+
+test('an unsigned BLOCKED Windows candidate does not make the platform available', () => {
+  const register = clone(validRegister)
+  const platformScene = register.storyboard_scenes.find((scene) => scene.id === 'LF-07')
+  platformScene.state = 'concept'
+  platformScene.script = 'Available on both platforms.'
+  platformScene.captions = [platformScene.visible_label]
+  register.release_evidence.find((entry) => entry.platform === 'macos').status = 'AVAILABLE'
+  register.release_evidence.find((entry) => entry.platform === 'macos').signed = true
+  register.release_evidence.find((entry) => entry.platform === 'macos').evidence_record_id = 'EV-M2-0178-REGISTER'
+  const failures = failuresOf(register)
+  assert.doesNotMatch(failures, /availability on macos/)
+  assert.match(failures, /LF-07 claims availability on windows without release evidence/)
 })
 
 test('claims must carry live, concept and cut storyboard variants', () => {

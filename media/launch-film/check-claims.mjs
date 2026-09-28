@@ -11,6 +11,19 @@ const EVIDENCE_LEVELS = new Set(['DESIGNED', 'LOCALLY_TESTED', 'HOST_CONFIGURED'
 const SCENE_STATES = new Set(['live', 'concept', 'reconstruction', 'cut'])
 const STORYBOARD_VARIANTS = ['live', 'concept', 'cut']
 const CLAIM_KINDS_REQUIRING_COMPETITIVE_PROOF = new Set(['comparative', 'superiority', 'affiliation', 'infallibility'])
+const CAPABILITY_CLASSES = new Set(['verified', 'implemented-unverified', 'planned', 'unavailable'])
+const PROOF_LEVELS = new Set(['LIVE_VERIFIED', 'ACCEPTED', 'MEASURED'])
+const PLATFORMS = new Set(['macos', 'windows'])
+export const KIT_BEATS = [
+  { id: 'LF-01', title: 'Cold open', start_s: 0, end_s: 6 },
+  { id: 'LF-02', title: 'The meeting problem', start_s: 6, end_s: 14 },
+  { id: 'LF-03', title: 'Overlay appears', start_s: 14, end_s: 24 },
+  { id: 'LF-04', title: 'Live capture and notes', start_s: 24, end_s: 36 },
+  { id: 'LF-05', title: 'Hindsight recall', start_s: 36, end_s: 46 },
+  { id: 'LF-06', title: 'Ask and act', start_s: 46, end_s: 54 },
+  { id: 'LF-07', title: 'Runs on Mac and Windows', start_s: 54, end_s: 62 },
+  { id: 'LF-08', title: 'Close', start_s: 62, end_s: 70 }
+]
 const VERIFIED_PRIVACY_SENTENCE = 'Authorized usage metadata is retained for administration'
 const VERIFIED_PRIVACY_SOURCE_TICKET = 'M2-0149'
 
@@ -71,6 +84,18 @@ function requireObject(value, label, failures) {
   return true
 }
 
+// A film is a verified product preview only when every shown scene is live and backed by a verified claim.
+export function computeFilmStatus(scenes, claims) {
+  const shown = scenes.filter((scene) => scene?.state !== 'cut')
+  const verified = shown.length > 0 && shown.every((scene) => scene.state === 'live' && claims.get(scene.claim_id)?.capability_class === 'verified')
+  return verified ? 'verified product preview' : 'concept preview'
+}
+
+function platformAvailable(register, evidence, platform) {
+  const entry = (register.release_evidence ?? []).find((item) => item?.platform === platform)
+  return Boolean(entry && entry.status === 'AVAILABLE' && entry.signed === true && evidence.get(entry.evidence_record_id)?.verified === true)
+}
+
 export function validateClaims(register) {
   const failures = []
   const warnings = []
@@ -101,6 +126,22 @@ export function validateClaims(register) {
     for (const variant of STORYBOARD_VARIANTS) {
       if (!claim?.variants?.[variant]) failures.push(`${claim.id} is missing storyboard variant ${variant}`)
     }
+    if (!CAPABILITY_CLASSES.has(claim.capability_class)) failures.push(`${claim.id} has invalid capability class ${claim.capability_class}`)
+    if (!('build_hash' in claim) || (claim.build_hash !== null && typeof claim.build_hash !== 'string')) {
+      failures.push(`${claim.id} must carry a build_hash (a string, or null when no build exists)`)
+    }
+    if (claim.capability_class === 'verified') {
+      if (!/^[0-9a-f]{7,40}$/.test(claim.build_hash ?? '')) failures.push(`${claim.id} is verified but has no build hash`)
+      if (!PROOF_LEVELS.has(evidence.get(claim.evidence_record_id)?.level)) {
+        failures.push(`${claim.id} is verified but its evidence record is not LIVE_VERIFIED, ACCEPTED or MEASURED`)
+      }
+    }
+    if (claim.type === 'platform-availability') {
+      const platforms = claim.platforms
+      if (!Array.isArray(platforms) || platforms.length === 0 || !platforms.every((platform) => PLATFORMS.has(platform))) {
+        failures.push(`${claim.id} is a platform-availability claim and must list platforms macos and/or windows`)
+      }
+    }
     claims.set(claim.id, claim)
   }
 
@@ -109,6 +150,23 @@ export function validateClaims(register) {
 
   const scenes = register.storyboard_scenes ?? []
   if (scenes.length === 0) failures.push('storyboard_scenes must not be empty')
+
+  const sceneIds = scenes.map((scene) => scene?.id)
+  for (const beat of KIT_BEATS) {
+    const scene = scenes.find((item) => item?.id === beat.id)
+    if (!scene) {
+      failures.push(`missing kit beat ${beat.id}`)
+      continue
+    }
+    if (scene.title !== beat.title) failures.push(`${beat.id} title must be "${beat.title}"`)
+    if (scene.start_s !== beat.start_s || scene.end_s !== beat.end_s) {
+      failures.push(`${beat.id} timing must be ${beat.start_s}s-${beat.end_s}s`)
+    }
+  }
+  for (const id of sceneIds) {
+    if (!KIT_BEATS.some((beat) => beat.id === id)) failures.push(`unexpected scene ${id}: storyboard_scenes must be exactly LF-01..LF-08`)
+  }
+  if (new Set(sceneIds).size !== sceneIds.length) failures.push('storyboard_scenes must not repeat a beat id')
 
   for (const scene of scenes) {
     const label = scene?.id ?? '<missing scene id>'
@@ -134,6 +192,21 @@ export function validateClaims(register) {
 
     if ((scene.state === 'concept' || scene.state === 'reconstruction') && !scene.visible_label) {
       failures.push(`${label} is ${scene.state} but has no visible label`)
+    }
+
+    if (scene.state === 'live' && claims.get(scene.claim_id)?.capability_class !== 'verified') {
+      failures.push(`${label} cannot be live unless its claim is verified`)
+    }
+    if ((scene.state === 'concept' || scene.state === 'reconstruction') && scene.visible_label && !(scene.captions ?? []).includes(scene.visible_label)) {
+      failures.push(`${label} must show its visible label ${scene.visible_label} on screen as a caption`)
+    }
+    const shownClaim = scene.state === 'cut' ? undefined : claims.get(scene.claim_id)
+    if (shownClaim?.type === 'platform-availability') {
+      for (const platform of shownClaim.platforms ?? []) {
+        if (!platformAvailable(register, evidence, platform)) {
+          failures.push(`${label} claims availability on ${platform} without release evidence for that platform`)
+        }
+      }
     }
 
     if (scene.requires_live_verified_memory_proof && scene.state === 'live') {
@@ -184,6 +257,9 @@ export function validateClaims(register) {
     }
   }
 
+  const filmStatus = computeFilmStatus(scenes, claims)
+  if (register.film_status !== filmStatus) failures.push(`film_status must be "${filmStatus}" as computed from the claim classes`)
+
   return {
     ok: failures.length === 0,
     failures,
@@ -193,6 +269,7 @@ export function validateClaims(register) {
       claims: claims.size,
       evidence_records: evidence.size,
       release_claims_approved: register.release_claims_approved,
+      film_status: filmStatus,
       live_scenes: scenes.filter((scene) => scene.state === 'live').length,
       concept_or_reconstruction_scenes: scenes.filter((scene) => scene.state === 'concept' || scene.state === 'reconstruction').length,
       cut_scenes: scenes.filter((scene) => scene.state === 'cut').length

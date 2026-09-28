@@ -19,4 +19,11 @@ Rules enforced by the gate:
 - Comparative, superiority, affiliation and infallibility claims stay cut unless M2-0185 lists the exact claim/scene slice and both final signed Windows and native Mac QA receipts.
 - Every scene and claim carries `live`, `concept` and `cut` storyboard variants, and T2, T3 and rc1 re-evaluations are registered. The rc1 report is filed as M2-0210 evidence.
 
+M2-0349 re-keys the register to the eight storyboard beats and adds:
+
+- `storyboard_scenes` must be exactly `LF-01`..`LF-08` with the titles and `start_s`/`end_s` timings in `KIT_BEATS` (ASSUMED to mirror the kit storyboard; update both together if the kit changes). A missing, extra, retitled or retimed beat fails.
+- Each claim carries a `capability_class` (`verified`, `implemented-unverified`, `planned`, `unavailable`), a `build_hash` (null until a build exists) and an `evidence_record_id`. `verified` needs a build hash and LIVE_VERIFIED, ACCEPTED or MEASURED evidence; a `live` scene needs a verified claim.
+- `film_status` is computed: `verified product preview` only when every shown scene is live on a verified claim, otherwise `concept preview`, where each concept scene must show its label as a caption. The declared value must match.
+- A shown `platform-availability` claim fails unless `release_evidence` has an `AVAILABLE`, signed entry with a verified evidence record for each listed platform. An unsigned BLOCKED Windows candidate (D-29) is not available.
+
 REF-09 and REF-10 are presentation references only. They do not prove product behavior and must not be used as claim evidence.
