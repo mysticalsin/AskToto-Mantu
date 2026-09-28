@@ -98,7 +98,7 @@ export async function runConsolidationIfDue(s: Settings = getSettings()): Promis
   try {
     let result: BackfillStartResult
     try {
-      result = startBackfill()
+      result = await startBackfill(undefined, { trigger: 'automatic' })
     } catch (e) {
       // Never let a scan failure (a locked index file, a missing meetings folder) throw out of the timer
       // — the next hourly tick gets another try, same as every other best-effort background pass in main.

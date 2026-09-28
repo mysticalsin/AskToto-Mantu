@@ -8025,7 +8025,7 @@ function registerIpc(): void {
       try {
         // Source versions, not only a count of successful filenames, decide whether Intelligence is
         // current. requestBackfill detects changed/deleted sources and schedules the clean rebuild.
-        const r = requestBackfill()
+        const r = await requestBackfill()
         auditLog('brain.backfill.start', { queued: r.queued, deferred: r.deferred, automatic: true })
       } catch (err) {
         mainLog.warn('[brain] automatic dashboard backfill check failed:', err)
@@ -9536,18 +9536,20 @@ if (!app.requestSingleInstanceLock()) {
       } else {
         // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
         try {
-          resumeBackfillIfPending()
+          void resumeBackfillIfPending().catch((e) => mainLog.warn('[boot] resumeBackfillIfPending failed:', e))
         } catch (e) {
           mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
         }
         try {
-          reconcileMeetingsInBackground()
+          void reconcileMeetingsInBackground().catch((e) => mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e))
         } catch (e) {
           mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
         }
         // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
         // not just the single resume — the reconcile tick reads the same index.json.
-        trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
+        trackTimer(setInterval(() => {
+          void reconcileMeetingsInBackground().catch((e) => mainLog.warn('[brain] reconcile tick failed:', e))
+        }, BRAIN_RECONCILE_MS))
         // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
         // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
         try {

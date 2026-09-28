@@ -276,8 +276,8 @@ export async function runIntelligenceIndex(
     }
   }
   try {
-    const run: IntelligenceIndexRun = indexWork ? await indexWork(reason) : (() => {
-      const backfill = requestBackfillRun({ force: true, trigger })
+    const run: IntelligenceIndexRun = indexWork ? await indexWork(reason) : await (async () => {
+      const backfill = await requestBackfillRun({ force: true, trigger })
       return {
         result: { ...backfill.result, ran: !backfill.result.deferred },
         completion: backfill.completion.then((outcome) => ({ ok: outcome.ok, error: backfillCompletionError(outcome, settings) }))

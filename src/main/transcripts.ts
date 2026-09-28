@@ -918,24 +918,24 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
   let recovered = 0
   try {
     const folder = resolveMeetingsFolder(settings)
-    const listing = await storageAt(folder).list('')
+    const gateway = storageAt(folder)
+    const listing = await gateway.list('')
     if (listing.status !== 'ok') return { recovered }
+    const occupied = new Set(listing.names)
     for (const f of listing.names) {
       if (!f.startsWith('.autosave-draft-') || !f.endsWith('.md')) continue
       const draftPath = join(folder, f)
       try {
         const stampPart = f.slice('.autosave-draft-'.length, -'.md'.length)
         const primaryOut = join(folder, `${stampPart}-recovered.md`)
-        if (existsSync(primaryOut)) {
+        if (occupied.has(basename(primaryOut))) {
           // Already promoted by a previous run — this draft only still exists because that run's
           // unlink below failed afterward (transient EBUSY/EPERM; this folder is often OneDrive-synced).
           // Re-promoting would write a second, fully duplicate "-recovered-2.md" copy of the same
           // meeting, so just retry the cleanup and move on without touching `recovered`.
-          try {
-            unlinkSync(draftPath)
-          } catch {
-            /* still stale for the next run — harmless; the existsSync(primaryOut) guard prevents a dupe */
-          }
+          await unlink(draftPath).catch(() => {
+            /* still stale for the next run — harmless; the occupied-name guard prevents a dupe */
+          })
           continue
         }
         // Preserve the DRAFT's own at-rest encryption exactly as found (mirrors appendDebrief /
@@ -943,7 +943,7 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
         // on holds recorded third-party speech; promoting it under a since-disabled toggle would rewrite
         // it as unmarked cleartext into the (OneDrive-synced) meetings folder — a silent at-rest
         // downgrade, with no prompt and no way back.
-        const read = await storageAt(folder).read(f)
+        const read = await gateway.read(f)
         if (read.status !== 'ok') continue
         const wasEncrypted = isEncryptedBytes(read.bytes)
         const text = decodeSaved(read.bytes)
@@ -953,10 +953,11 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
           .replace('status: interrupted', 'status: recovered')
           .replace(IN_PROGRESS_SUFFIX, ' (recovered)')
         let out = primaryOut
-        for (let n = 2; existsSync(out); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
+        for (let n = 2; occupied.has(basename(out)); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
         await writeSaved(out, promoted, wasEncrypted)
+        occupied.add(basename(out))
         try {
-          unlinkSync(draftPath)
+          await unlink(draftPath)
         } catch {
           // The promoted copy is already safely on disk; a future run will see primaryOut exists and
           // skip re-promoting this same stale draft (see the guard above), only retrying its cleanup.

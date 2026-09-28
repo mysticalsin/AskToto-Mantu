@@ -853,6 +853,11 @@ export function listMeetingExtractions(s: Settings): string[] {
     .map((f) => basename(f, '.json'))
 }
 
+export async function loadMeetingExtractionSlugs(s: Settings): Promise<string[] | null> {
+  const names = await listBrainNames(s, 'meetings')
+  return names?.filter((f) => f.endsWith('.json')).map((f) => basename(f, '.json')) ?? null
+}
+
 /**
  * MQA-230: remove ONE meeting's stored extraction (.brain/meetings/<slug>.json) — the deleted meeting's
  * own derived cleartext (verbatim quotes, commitments, numeric facts). Needs no provider, so the delete
