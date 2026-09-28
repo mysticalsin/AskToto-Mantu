@@ -1,0 +1,72 @@
+name: Ledger
+
+# Evidence-chain gate for the program ledger (ADR-017, M2-0002, M2-0238). The program ledger and its
+# evidence/records/ store live in the private program repository (AGENTS.md #1: "Program documents
+# never go into this public repository"), so the push that must gate them happens there, not here.
+#
+# This workflow therefore has no `push` trigger of its own. It is a reusable `workflow_call` workflow:
+# the private repository's own "on: push" workflow calls it —
+#   jobs:
+#     ledger:
+#       uses: mysticalsin/AskToto-Mantu/.github/workflows/ledger.yml@main
+#       with:
+#         ledger-path: ledger/tickets.json
+# — which runs this job in the calling (private) repository's context, so the checkout below (no
+# `repository:` input) resolves to the private repo's own tree (GitHub's documented workflow_call
+# context: `github.repository`/`github.sha` follow the caller). A second, explicit checkout fetches
+# scripts/evidence/check.mjs from this public repository, since that file cannot come from the
+# caller's own checkout. `workflow_dispatch` (same inputs) lets this be smoke-run directly against a
+# fixture ledger inside this public repository, since no push here can ever carry a real one.
+on:
+  workflow_call:
+    inputs:
+      ledger-path:
+        description: Path to ledger/tickets.json in the caller's own checkout
+        required: true
+        type: string
+      checker-ref:
+        description: Ref of this repository to fetch scripts/evidence/check.mjs from
+        required: false
+        type: string
+        default: main
+  workflow_dispatch:
+    inputs:
+      ledger-path:
+        description: Path to a ledger/tickets.json for a manual smoke run (for example a fixture)
+        required: true
+        type: string
+      checker-ref:
+        description: Ref of this repository to fetch scripts/evidence/check.mjs from
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ledger-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Evidence ledger check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the caller's ledger and evidence records
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Fetch the public evidence checker
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: mysticalsin/AskToto-Mantu
+          ref: ${{ inputs.checker-ref }}
+          path: .evidence-checker
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Run the ledger + records check (L1-L15)
+        run: node .evidence-checker/scripts/evidence/check.mjs --ledger "${{ inputs.ledger-path }}"

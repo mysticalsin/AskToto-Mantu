@@ -1,0 +1,80 @@
+name: M2-0238 evidence back-fill
+
+# Manual process lane for M2-0238. Re-verifies every merged pull request's evidence blocks the same
+# way evidence.yml verifies one at merge time, groups the valid ones by ticket, and uploads a
+# public-safe out/ bundle (records/<id>.jsonl per backfilled ticket, gaps.jsonl for tickets with no
+# verified record for a required level, and a LEAD_ACTION README). It never writes a ledger or a
+# program-repository file; the lead files the bundle's records into the private evidence store from
+# the uploaded artifact.
+#
+# The ledger itself lives in the private program repository (AGENTS.md #1), which this workflow never
+# names: leave ledger_repository blank to point ledger_path at a fixture already inside this checkout
+# (what the CI run below does), or supply ledger_repository (and a LEDGER_REPO_TOKEN repository secret
+# with read access to it) at dispatch time to back-fill against the real ledger.
+on:
+  workflow_dispatch:
+    inputs:
+      ledger_path:
+        description: Path to ledger/tickets.json, relative to the private repo checkout (or to this checkout when ledger_repository is blank)
+        required: true
+        type: string
+      ledger_repository:
+        description: "owner/repo of the private program repository holding the ledger; blank uses ledger_path inside this checkout"
+        required: false
+        type: string
+      ledger_ref:
+        description: Ref of ledger_repository to check out
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: m2-0238-backfill-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    name: Build the evidence back-fill bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Checkout the private ledger repository
+        if: inputs.ledger_repository != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ inputs.ledger_repository }}
+          ref: ${{ inputs.ledger_ref }}
+          token: ${{ secrets.LEDGER_REPO_TOKEN }}
+          path: .ledger-repo
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Contract-test the back-fill tool
+        run: node --test scripts/evidence/record.test.mjs scripts/evidence/check.test.mjs scripts/evidence/sample.test.mjs scripts/evidence/backfill.test.mjs
+      - name: Build the back-fill bundle
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LEDGER_REPOSITORY: ${{ inputs.ledger_repository }}
+          LEDGER_PATH: ${{ inputs.ledger_path }}
+        run: |
+          if [ -n "$LEDGER_REPOSITORY" ]; then
+            resolved_ledger=".ledger-repo/$LEDGER_PATH"
+          else
+            resolved_ledger="$LEDGER_PATH"
+          fi
+          node scripts/evidence/backfill.mjs --repo "$GITHUB_REPOSITORY" --ledger "$resolved_ledger" --out out/m2-0238-backfill
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: m2-0238-backfill-${{ github.run_attempt }}
+          path: out/m2-0238-backfill/
+          if-no-files-found: error
+          retention-days: 30
