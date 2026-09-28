@@ -71,7 +71,7 @@ const COUNTRIES = [
 ]
 
 const HOSTS = ['MacBook-Pro', 'ThinkPad-X1', 'Surface-Laptop', 'iMac-Studio', 'XPS-15', 'Latitude-7420']
-const FIRST_NAMES = ['tony', 'amara', 'lucas', 'nadia', 'oren', 'priya', 'sasha', 'ines', 'marco', 'yuki', 'elin', 'diego']
+const FIRST_NAMES = ['alex', 'amara', 'lucas', 'nadia', 'oren', 'priya', 'sasha', 'ines', 'marco', 'yuki', 'elin', 'diego']
 const LICENSES = ['licensed', 'trial', 'unlicensed', 'grace']
 const PROVIDERS = ['anthropic', 'claude-cli', 'openai']
 const MODES = ['answer', 'interview', 'screen']

@@ -21,7 +21,7 @@ function env(): Env {
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 async function signed(
   path: string,
@@ -75,7 +75,7 @@ describe('Operator generate license', () => {
         body: JSON.stringify({ days: 30 })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -103,7 +103,7 @@ describe('Operator generate license', () => {
         body: JSON.stringify({ days: 999 })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(badDays.status).toBe(400)
@@ -118,7 +118,7 @@ describe('Operator generate license', () => {
         body: JSON.stringify({ provider: 'anthropic', secret: SECRET })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const minted = await handleRequest(
@@ -128,7 +128,7 @@ describe('Operator generate license', () => {
         body: JSON.stringify({ days: 7 })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const lic = (await minted.json()) as { jti: string; last4: string; exp: number }
@@ -224,7 +224,7 @@ describe('Operator generate license', () => {
         body: JSON.stringify({ days: 7 })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const lic = (await minted.json()) as { jti: string; last4: string }

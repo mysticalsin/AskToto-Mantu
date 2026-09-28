@@ -175,7 +175,7 @@ describe('Cloudflare Access JWT fallback checks the time claims', () => {
     const [h, p, s] = mint(good).split('.')
     const noneHead = Buffer.from(JSON.stringify({ alg: 'none', kid: 'k1' })).toString('base64url')
     expect(await verifyAccessJwt(`${noneHead}.${p}.${s}`, TEAM, AUD, NOW)).toBeNull()
-    const tampered = Buffer.from(JSON.stringify({ ...good, email: 'attacker@example.com' })).toString('base64url')
+    const tampered = Buffer.from(JSON.stringify({ ...good, email: 'attacker.test' })).toString('base64url')
     expect(await verifyAccessJwt(`${h}.${tampered}.${s}`, TEAM, AUD, NOW)).toBeNull()
   })
 

@@ -261,7 +261,7 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
     const res = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: access('other@example.com') },
+      { access: access('other@example.test') },
       { store: memoryStore(), now: NOW }
     )
     expect(res.status).toBe(401)

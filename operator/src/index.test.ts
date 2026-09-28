@@ -176,7 +176,7 @@ describe('Access on admin routes', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/summary'),
       env(),
-      { access: { getIdentity: async () => ({ email: 'other@example.com' }) } },
+      { access: { getIdentity: async () => ({ email: 'other@example.test' }) } },
       { store, now: NOW }
     )
     expect(res.status).toBe(401)

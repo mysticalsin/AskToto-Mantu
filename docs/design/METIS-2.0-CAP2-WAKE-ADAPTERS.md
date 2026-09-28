@@ -1,6 +1,6 @@
 # Métis 2.0 Cap 2 — Wake + desktop adapters (Devon)
 **When:** 20 Sep 2026 ~1:12pm ET (America/Toronto)  
-**Branch:** `implementation branch`  
+**Branch:** `implementation branch`<br>
 **Base tip:** `9568d21ce7ab277d05a6ab34e79b76fc57713a2e` (Ultron Cap1 STAMP)  
 **Pack:** HOLD · **OAuth:** LAST · **Cap3 notch:** NOT started
 

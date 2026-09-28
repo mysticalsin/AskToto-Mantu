@@ -28,7 +28,7 @@ function env(): Env {
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 async function signedRequest(
   path: string,
@@ -91,7 +91,7 @@ async function addCloudflareKey(store: ReturnType<typeof memoryStore>) {
       body: JSON.stringify({ provider: 'cloudflare', secret: SECRET, accountId: 'acct-test' })
     }),
     env(),
-    { access: tony },
+    { access: ownerAccess },
     { store, now: NOW, cfFetch: gatewayOkFetch() }
   )
   expect(res.status).toBe(200)
@@ -109,7 +109,7 @@ async function addProviderKey(
       body: JSON.stringify({ provider, secret })
     }),
     env(),
-    { access: tony },
+    { access: ownerAccess },
     { store, now: NOW }
   )
   expect(res.status).toBe(200)

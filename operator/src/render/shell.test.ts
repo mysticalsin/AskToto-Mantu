@@ -6,7 +6,7 @@ const ctx = { now: 1_725_000_000_000, theme: 'light' as const }
 
 describe('shell', () => {
   it('renders every real nav id once, marks the active page, and includes the mobile toggle + backdrop', () => {
-    const html = shell(ctx, { page: 'overview', title: 'Overview', live: 3, email: 'tony@example.com', bodyHtml: '<section>x</section>' })
+    const html = shell(ctx, { page: 'overview', title: 'Overview', live: 3, email: 'owner@example.test', bodyHtml: '<section>x</section>' })
     const navIds = [...html.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1])
     expect(navIds).toEqual([...NAV_IDS])
     expect(html).toContain('data-nav="overview" href="#overview" aria-current="page"')

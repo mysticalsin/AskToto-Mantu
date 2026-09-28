@@ -18,7 +18,7 @@ function env(): Env {
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 describe('admin keys write / rotate / revoke', () => {
   it('adds a key, returns last4 only, and never echoes the secret', async () => {
@@ -31,7 +31,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'anthropic', label: 'Primary cloud', secret })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -45,7 +45,7 @@ describe('admin keys write / rotate / revoke', () => {
     const list = await handleRequest(
       new Request('https://operator.test/v1/admin/keys'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await list.json()) as {
@@ -63,7 +63,7 @@ describe('admin keys write / rotate / revoke', () => {
     const home = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(home.status).toBe(200)
@@ -102,7 +102,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(missing.status).toBe(400)
@@ -115,7 +115,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret, accountId })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch: async () => reviewedGatewayReply() }
     )
     expect(res.status).toBe(200)
@@ -130,7 +130,7 @@ describe('admin keys write / rotate / revoke', () => {
     const list = await handleRequest(
       new Request('https://operator.test/v1/admin/keys'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await list.json()) as { vault: { provider: string; last4: string; status: string }[] }
@@ -143,7 +143,7 @@ describe('admin keys write / rotate / revoke', () => {
     const home = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const html = await home.text()
@@ -179,7 +179,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret, accountId })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch }
     )
     expect(res.status).toBe(200)
@@ -213,7 +213,7 @@ describe('admin keys write / rotate / revoke', () => {
         })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch }
     )
     expect(res.status).toBe(503)
@@ -231,7 +231,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret, accountId: 'acct-test' })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch: async () => reviewedGatewayReply() }
     )
     expect(added.status).toBe(200)
@@ -245,7 +245,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ secret: 'cf-api-token-TESTKEYONLY-not-a-real-secret-99zz' })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch }
     )
     expect(res.status).toBe(503)
@@ -269,7 +269,7 @@ describe('admin keys write / rotate / revoke', () => {
         })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch: cfFetch as typeof fetch }
     )
     expect(res.status).toBe(200)
@@ -285,7 +285,7 @@ describe('admin keys write / rotate / revoke', () => {
           body: JSON.stringify({ provider, secret: 'not-a-cli-token' })
         }),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW }
       )
       expect(res.status, provider).toBe(400)
@@ -302,7 +302,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'openai', secret: 'sk-proj-oldkey-abcd' })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const id = ((await created.json()) as { id: string }).id
@@ -313,7 +313,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ secret: 'sk-proj-newkey-wxyz' })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW + 1 }
     )
     const rot = (await rotated.json()) as { last4: string; secret?: string }
@@ -355,7 +355,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: '{}'
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW + 2 }
     )
     expect(approved.status).toBe(200)
@@ -389,7 +389,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: '{}'
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW + 3 }
     )
     expect(((await revoked.json()) as { status: string }).status).toBe('revoked')
@@ -405,7 +405,7 @@ describe('admin keys write / rotate / revoke', () => {
     const home = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(home.status).toBe(200)
@@ -425,7 +425,7 @@ describe('admin keys write / rotate / revoke', () => {
     const who = await handleRequest(
       new Request('https://operator.test/session'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(who.status).toBe(200)
@@ -507,7 +507,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'anthropic', secret: syntheticProviderKey('anthropic', 'nope') })
       }),
       env(),
-      { access: { getIdentity: async () => ({ email: 'other@example.com' }) } },
+      { access: { getIdentity: async () => ({ email: 'other@example.test' }) } },
       { store: memoryStore(), now: NOW }
     )
     expect(other.status).toBe(401)

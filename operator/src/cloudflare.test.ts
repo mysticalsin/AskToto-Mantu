@@ -5,7 +5,7 @@ import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
-const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function env(): Env {
   return {
@@ -23,7 +23,7 @@ describe('Cloudflare Overview fail-loud', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     expect(html).toContain('data-cf-overview')
@@ -36,7 +36,7 @@ describe('Cloudflare Overview fail-loud', () => {
       await handleRequest(
         new Request('https://operator.test/v1/admin/dashboard'),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW }
       )
     ).json()) as { cloudflare: { error: string | null; requests: number | null; token?: string } }
@@ -60,7 +60,7 @@ describe('Cloudflare Overview fail-loud', () => {
         })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(((await added.json()) as { last4: string }).last4).toBe('zzzz')
@@ -95,7 +95,7 @@ describe('Cloudflare Overview fail-loud', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch: cfFetch as typeof fetch }
     ).then((r) => r.text())
     expect(html).toContain('metis-operator')
@@ -106,7 +106,7 @@ describe('Cloudflare Overview fail-loud', () => {
       await handleRequest(
         new Request('https://operator.test/v1/admin/dashboard'),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW, cfFetch: cfFetch as typeof fetch }
       )
     ).json()) as { cloudflare: { requests: number; errors: number; cpuMs: number; error: string | null } }
@@ -127,14 +127,14 @@ describe('Cloudflare Overview fail-loud', () => {
         })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const cfFetch = async () => ({ status: 403, json: async () => ({ success: false }) })
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch: cfFetch as typeof fetch }
     ).then((r) => r.text())
     expect(html).toContain(CF_TOKEN_REJECTED)

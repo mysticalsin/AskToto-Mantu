@@ -305,7 +305,7 @@ describe('GET /v1/admin/search.json', () => {
   it('slices an overlong q to 100 characters after trim (security review, low)', async () => {
     const store = memoryStore()
     await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Example-MacBook-Pro' }))
-    const longQuery = `  ${'a'.repeat(150)}tony${'b'.repeat(150)}  `
+    const longQuery = `  ${'a'.repeat(150)}example-mac${'b'.repeat(150)}  `
     const res = await handleRequest(
       new Request(`https://operator.test/v1/admin/search.json?q=${encodeURIComponent(longQuery)}`),
       env(),
@@ -314,7 +314,7 @@ describe('GET /v1/admin/search.json', () => {
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as { seats: unknown[] }
-    // "tony" sits past character 100 of the trimmed, 300+ character query, so once it is sliced to
+    // "example-mac" sits past character 100 of the trimmed, 300+ character query, so once it is sliced to
     // 100 characters the seat search never sees it and finds nothing.
     expect(body.seats).toEqual([])
   })

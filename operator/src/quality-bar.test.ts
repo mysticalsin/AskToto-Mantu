@@ -141,7 +141,7 @@ describe('quality bar: login', () => {
     const other = await handleRequest(
       new Request('https://operator.test/v1/admin/summary'),
       env(),
-      { access: access('other@example.com') },
+      { access: access('other@example.test') },
       { store, now: NOW }
     )
     expect(other.status).toBe(401)

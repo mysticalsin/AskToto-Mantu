@@ -24,7 +24,7 @@ function env(): Env {
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 async function signedRequest(path: string, bodyText: string, nonce = `use-${Math.random().toString(16).slice(2)}`) {
   const ts = String(NOW)
@@ -71,7 +71,7 @@ async function addAnthropicKey(store: ReturnType<typeof memoryStore>) {
       body: JSON.stringify({ provider: 'anthropic', secret: SECRET })
     }),
     env(),
-    { access: tony },
+    { access: ownerAccess },
     { store, now: NOW }
   )
   expect(res.status).toBe(200)
@@ -85,7 +85,7 @@ async function addCloudflareKey(store: ReturnType<typeof memoryStore>) {
       body: JSON.stringify({ provider: 'cloudflare', secret: SECRET, accountId: 'acct-test' })
     }),
     env(),
-    { access: tony },
+    { access: ownerAccess },
     { store, now: NOW, cfFetch: reviewedGatewayFetch }
   )
   expect(res.status).toBe(200)
