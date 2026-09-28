@@ -93,8 +93,15 @@ jobs:
         run: node scripts/qa/sidecar-boot-reaper.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/sidecar-boot-reaper.json
       - name: Verify packaged macOS signature
         run: codesign --verify --deep --strict "$RUNNER_TEMP/smoke/Metis.app"
+      # continue-on-error for the same reason as sidecar-reaper above: HK-M's own report.result already
+      # distinguishes a genuine owned-process leak ('fail') from a scenario this hosted runner cannot yet
+      # trigger live ('blocked', e.g. model-starting/active-inference/ffmpeg-import/registry-write with no
+      # packaged trigger wired in yet) — only the former should ever red the smoke lane. The gate step below
+      # reads smoke-report/hk-m.json (not just the step outcome, since 'blocked' also exits non-zero) to
+      # make that distinction; supervision's default-on decision still requires a genuine 20/20 'pass'.
       - name: Prove HK-M supervised sidecar cleanup after SIGKILL
         id: hk-m
+        continue-on-error: true
         timeout-minutes: 45
         run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles 20
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
@@ -111,6 +118,15 @@ jobs:
       - name: Fail the job if the sidecar boot reaper proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.sidecar-reaper.outcome == 'failure'
         run: exit 1
+      - name: Fail the job if HK-M found a genuine owned-process leak (not a BLOCKED_EXTERNAL row)
+        if: always() && steps.hk-m.outcome == 'failure'
+        run: |
+          result=$(node -e "console.log(JSON.parse(require('fs').readFileSync('smoke-report/hk-m.json','utf8')).result)")
+          if [ "$result" = "fail" ]; then
+            echo "HK-M reported a genuine owned-process cleanup failure (see smoke-report/hk-m.json)" >&2
+            exit 1
+          fi
+          echo "::warning title=HK-M blocked::HK-M result=$result — not a live 20/20 pass, so supervision stays off by default; see smoke-report/hk-m.json for the exact unblock steps."
 
   windows:
     name: Packaged smoke (Windows)

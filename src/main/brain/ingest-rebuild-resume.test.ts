@@ -12,11 +12,11 @@ import {
   brainBackfillProgress,
   resumeBackfillIfPending,
   startRebuild,
-  finishRebuildReplay,
-  whenIndexWritesSettle
+  finishRebuildReplay
 } from './ingest'
 import { readIndex, writeIndex, readAccount, writeAccount, brainDir, slugify } from './store'
 import { renameEntity } from './corrections'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -50,11 +50,11 @@ const waitForIdle = async (): Promise<void> => {
   await vi.waitFor(() => {
     expect(brainBackfillProgress().running).toBe(false)
   }, { timeout: 10_000 })
-  await whenIndexWritesSettle()
-  // running=false only means the QUEUE drained — the last job's own index.json record is still sitting
-  // on the serialized write lane at that instant. resumeBackfillIfPending() is deliberately not awaited
-  // by these tests, so that trailing write is exactly what races rmSync.
-  await whenIndexWritesSettle()
+  // running=false only means the QUEUE drained — the last job's own index.json record, any drain/
+  // finalization/rebuild-replay follow-up, and its entity writes can still be in flight at that instant.
+  // resumeBackfillIfPending() is deliberately not awaited by these tests, so that trailing work is exactly
+  // what races rmSync; settleBrainWritesForTests loops until every one of those lanes is stable.
+  await settleBrainWritesForTests()
 }
 
 describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)', () => {
@@ -123,7 +123,7 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).replayPending).toBe(false)
     }, { timeout: 10_000 })

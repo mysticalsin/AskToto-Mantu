@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type MeetingExtraction } from '@shared/brain'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -32,7 +33,7 @@ vi.mock('../transcripts', async (importOriginal) => {
 })
 
 // Imported AFTER the mock factory is declared (vi.mock is hoisted above this regardless of source order).
-const { mergeExtraction, whenIndexWritesSettle } = await import('./ingest')
+const { mergeExtraction } = await import('./ingest')
 const { readAccount, readDeal, readGraph, readPerson, slugify } = await import('./store')
 
 const extraction = (): MeetingExtraction =>
@@ -71,7 +72,7 @@ describe('mergeExtraction — the cache never serves what the disk refused', () 
 
   afterEach(async () => {
     failWriteTo.suffix = ''
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
 
