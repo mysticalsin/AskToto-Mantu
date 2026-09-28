@@ -1,15 +1,18 @@
 /**
  * Solid Intelligence index: the same work as Update Intelligence, three named slots per day.
- * Timezone is America/Toronto. 06:00, 12:00, 18:00. Catch up on launch if a slot was missed.
+ * Timezone is America/Toronto. 06:00, 12:00, 18:00. Catch up once the maintenance window opens if no
+ * pass finished after the last slot.
  * Never a 60-minute poll. Never auto-send to CRM / Outlook / MCP.
  */
 import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
 import { intelligenceNoProviderMessage, LOCAL_ONLY_INTELLIGENCE_UNAVAILABLE } from '@shared/intelligence-pass'
 import { getSettings } from '../store'
-import { readJson, writeJson } from './store'
+import { indexUnavailable, readJson, writeJson } from './store'
 import { requestBackfillRun, type BackfillStartResult, type BackfillCompletion } from './ingest'
 import { auditLog, mainLog } from '../logger'
+import { reportDeferred, whenMaintenanceWindowOpens } from '../infra/scheduler/maintenance'
+import type { WorkTrigger } from '../infra/scheduler/policy'
 
 export const INTELLIGENCE_INDEX_TZ = 'America/Toronto'
 export const INTELLIGENCE_INDEX_HOURS = [6, 12, 18] as const
@@ -17,11 +20,17 @@ export const INTELLIGENCE_INDEX_STATE_FILE = 'intelligence-index.json'
 
 const StateSchema = z.object({
   lastSuccessAt: z.number().nonnegative(),
+  /** When the last pass ended, success or failure. */
+  lastFinishedAt: z.number().nonnegative().optional(),
   lastError: z.string().optional()
 })
 export type IntelligenceIndexState = z.infer<typeof StateSchema>
 
 export type IntelligenceIndexReason = 'click' | 'schedule' | 'catch-up' | 'import-idle'
+
+export function triggerForReason(reason: IntelligenceIndexReason): WorkTrigger {
+  return reason === 'click' ? 'user' : 'automatic'
+}
 
 export const NO_PROVIDER_INDEX_COPY =
   'Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.'
@@ -181,9 +190,9 @@ export function nextSlotAt(now: number, timeZone = INTELLIGENCE_INDEX_TZ): numbe
   return slotUtcOnDay(next.year, next.month, next.day, INTELLIGENCE_INDEX_HOURS[0], timeZone)
 }
 
-/** Catch up when the app was closed across a named slot. */
-export function shouldCatchUp(lastSuccessAt: number | null | undefined, now: number, timeZone = INTELLIGENCE_INDEX_TZ): boolean {
-  const last = lastSuccessAt && lastSuccessAt > 0 ? lastSuccessAt : 0
+/** Catch up when no pass finished after the last slot. */
+export function shouldCatchUp(lastPassAt: number | null | undefined, now: number, timeZone = INTELLIGENCE_INDEX_TZ): boolean {
+  const last = lastPassAt && lastPassAt > 0 ? lastPassAt : 0
   return last < mostRecentlyElapsedSlot(now, timeZone)
 }
 
@@ -237,38 +246,47 @@ export function setIntelligenceIndexWork(
 
 export async function runIntelligenceIndex(
   reason: IntelligenceIndexReason,
-  s: Settings = getSettings()
+  s?: Settings
 ): Promise<IntelligenceIndexResult> {
+  const trigger = triggerForReason(reason)
+  if (trigger === 'automatic') await whenMaintenanceWindowOpens()
+  const settings = s ?? getSettings()
   if (activeRun) {
     mainLog.info(`[intelligence-index] coalesced (${reason}); a pass is already running`)
-    return { ran: false, queued: 0, coalesced: true, lastIndexedAt: lastIndexedAt(s) }
+    return { ran: false, queued: 0, coalesced: true, lastIndexedAt: lastIndexedAt(settings) }
+  }
+  if (trigger === 'automatic' && indexUnavailable(settings)) {
+    reportDeferred('intelligence-index', 'ledger_unavailable')
+    return { ran: false, queued: 0, lastIndexedAt: lastIndexedAt(settings) }
   }
   const token = {}
   activeRun = token
   volatileError = null
   const recordFailure = async (message: string): Promise<void> => {
-    volatileError = { folder: s.meetingsFolder, message }
+    volatileError = { folder: settings.meetingsFolder, message }
     try {
+      const state = readIntelligenceIndexState(settings)
       await writeIntelligenceIndexState({
-        lastSuccessAt: readIntelligenceIndexState(s).lastSuccessAt,
+        lastSuccessAt: state.lastSuccessAt,
+        lastFinishedAt: Date.now(),
         lastError: message
-      }, s)
+      }, settings)
     } catch (error) {
       mainLog.error('[intelligence-index] could not persist failure state:', error)
     }
   }
   try {
     const run: IntelligenceIndexRun = indexWork ? await indexWork(reason) : (() => {
-      const backfill = requestBackfillRun({ force: true })
+      const backfill = requestBackfillRun({ force: true, trigger })
       return {
         result: { ...backfill.result, ran: !backfill.result.deferred },
-        completion: backfill.completion.then((outcome) => ({ ok: outcome.ok, error: backfillCompletionError(outcome, s) }))
+        completion: backfill.completion.then((outcome) => ({ ok: outcome.ok, error: backfillCompletionError(outcome, settings) }))
       }
     })()
     const result = {
       ...run.result,
-      ...(run.result.deferred === 'no-provider' ? { error: intelligenceNoProviderMessage(s, NO_PROVIDER_INDEX_COPY) } : {}),
-      lastIndexedAt: lastIndexedAt(s)
+      ...(run.result.deferred === 'no-provider' ? { error: intelligenceNoProviderMessage(settings, NO_PROVIDER_INDEX_COPY) } : {}),
+      lastIndexedAt: lastIndexedAt(settings)
     }
     // Attach the terminal handler before returning to IPC. The lock stays owned until every stage
     // has finished AND its success/failure state has been saved, even if the caller closes its window.
@@ -281,7 +299,8 @@ export async function runIntelligenceIndex(
           await recordFailure(error)
           return
         }
-        await writeIntelligenceIndexState({ lastSuccessAt: Date.now() }, s)
+        const now = Date.now()
+        await writeIntelligenceIndexState({ lastSuccessAt: now, lastFinishedAt: now }, settings)
         auditLog('brain.intelligence_index', { reason, queued: result.queued, recapped: outcome.recapped ?? 0 })
         mainLog.info(`[intelligence-index] ${reason} completed; recapped ${outcome.recapped ?? 0}`)
       } catch (error) {
@@ -296,7 +315,7 @@ export async function runIntelligenceIndex(
     mainLog.error(`[intelligence-index] ${reason} dispatch failed:`, error)
     await recordFailure(INCOMPLETE_INDEX_COPY)
     if (activeRun === token) activeRun = null
-    return { ran: false, queued: 0, error: INCOMPLETE_INDEX_COPY, lastIndexedAt: lastIndexedAt(s) }
+    return { ran: false, queued: 0, error: INCOMPLETE_INDEX_COPY, lastIndexedAt: lastIndexedAt(settings) }
   }
 }
 
@@ -329,13 +348,17 @@ export function scheduleIntelligenceIndex(
 }
 
 export async function catchUpIntelligenceIndexIfNeeded(
-  now = Date.now(),
-  s: Settings = getSettings()
+  now?: number,
+  s?: Settings
 ): Promise<IntelligenceIndexResult | { ran: false; queued: 0; reason: 'current' }> {
-  const last = readIntelligenceIndexState(s).lastSuccessAt
-  if (!shouldCatchUp(last, now)) return { ran: false, queued: 0, reason: 'current' }
+  await whenMaintenanceWindowOpens()
+  const at = now ?? Date.now()
+  const settings = s ?? getSettings()
+  const state = readIntelligenceIndexState(settings)
+  const last = state.lastFinishedAt ?? state.lastSuccessAt
+  if (!shouldCatchUp(last, at)) return { ran: false, queued: 0, reason: 'current' }
   mainLog.info(
-    `[intelligence-index] catch-up: last success ${last || 0} is before slot ${mostRecentlyElapsedSlot(now)}`
+    `[intelligence-index] catch-up: last pass ${last || 0} is before slot ${mostRecentlyElapsedSlot(at)}`
   )
-  return runIntelligenceIndex('catch-up', s)
+  return runIntelligenceIndex('catch-up', settings)
 }

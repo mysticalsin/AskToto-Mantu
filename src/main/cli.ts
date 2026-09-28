@@ -151,14 +151,14 @@ export function npmGlobalBinCandidates(bin: string): string[] {
 }
 
 /** Well-known user bin folders a GUI Electron process often misses. Login-shell `command -v` should
- *  already see these when PATH is set in `.zprofile`, but Tony's CLIs live in `~/.local/bin` and a
+ *  already see these when PATH is set in `.zprofile`, but Example's CLIs live in `~/.local/bin` and a
  *  non-interactive `-lc` does not source `.zshrc`. Probe the folders directly so Settings → Connect
  *  does not report "not installed" for a binary the terminal can see. Homebrew paths cover a Mac
  *  GUI that never loaded the login PATH. */
 export function posixUserBinCandidates(bin: string): string[] {
   const home = process.env.HOME ?? ''
   // Always POSIX separators: this probe is for mac/Linux GUI PATH gaps, and Windows CI hosts
-  // still unit-test the helper. path.join() on win32 turned `/Users/tony` into `\\Users\\tony\\...`.
+  // still unit-test the helper. path.join() on win32 turned POSIX home paths into backslash paths.
   const out: string[] = []
   if (home) {
     out.push(posix.join(home, '.local', 'bin', bin), posix.join(home, '.hermes', 'node', 'bin', bin))

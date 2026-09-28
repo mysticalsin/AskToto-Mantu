@@ -7,7 +7,6 @@ import { join } from 'node:path'
 // the electron-log singleton without loading logger.ts silently writes into the real user's log.
 import { mainLog as log } from './logger'
 import { IPC, type UpdateCheckResult } from '@shared/ipc'
-import { shouldDisableAutoUpdate } from './cahe-edition'
 import { readTrustedAdminManaged } from './win-security'
 
 /** Enterprise governance: IT can freeze the version fleet-wide by deploying an admin managed-config with
@@ -61,16 +60,13 @@ function applyAdminUpdateFeed(autoUpdater: { setFeedURL: (opts: { provider: stri
 }
 
 /** Which channel rule forbids this install from consuming the shared Métis release feed, or null. */
-export type BlockedUpdateChannel = 'cahe' | 'store' | 'policy'
+export type BlockedUpdateChannel = 'store' | 'policy'
 
 /**
  * ONE predicate, because BOTH entry points have to honor it: the silent electron-updater flow below and
  * the manual Settings → About check, which auto-fires whenever the About tab mounts. While these lived
  * only inside initAutoUpdate, the manual check queried the shared feed unconditionally and offered a
- * Cahê pilot the standard Métis installer — a different app (appId com.mantu.asktoto, profile
- * %APPDATA%\Metis) with none of the pilot's state — plus an out-of-band download link to a Store package
- * and to a fleet its own IT had frozen.
- * - Cahê is an isolated pilot package distributed as its own installer (see cahe-edition.ts).
+ * Store package an out-of-band download link, and a fleet its own IT had frozen a version it should not see.
  * - The Store (MSIX/AppX) build must never self-update: updating a packaged app is the Store's job, and
  *   a packaged app installing software outside its own package is a certification violation. Electron
  *   sets process.windowsStore for any MSIX/AppX package. Without this the only thing keeping the updater
@@ -82,21 +78,18 @@ export type BlockedUpdateChannel = 'cahe' | 'store' | 'policy'
  * - The IT kill-switch freezes the version fleet-wide (staged-rollout control).
  */
 export function blockedUpdateChannel(): BlockedUpdateChannel | null {
-  if (shouldDisableAutoUpdate()) return 'cahe'
   if ((process as NodeJS.Process & { windowsStore?: boolean }).windowsStore) return 'store'
   if (autoUpdateDisabledByPolicy()) return 'policy'
   return null
 }
 
 const BLOCKED_LOG: Record<BlockedUpdateChannel, string> = {
-  cahe: 'Cahê edition uses its own distribution channel, skipping shared auto-update feed',
   store: "Store package — updates are the Store's job, skipping",
   policy: 'auto-update disabled by managed-config policy'
 }
 
 /** What the Settings → About row says instead of linking to a feed this install must not install from. */
 const BLOCKED_MESSAGE: Record<BlockedUpdateChannel, string> = {
-  cahe: 'This pilot is updated with a new Cahê installer, not from the shared Métis release feed.',
   store: 'Updates for this package come from the Microsoft Store.',
   policy: 'Updates are managed by your organisation.'
 }

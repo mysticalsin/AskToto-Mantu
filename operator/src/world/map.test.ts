@@ -152,7 +152,7 @@ describe('renderRealtimeMapSvg', () => {
     expect(svg).not.toContain('class="empty')
   })
 
-  it('draws country pills and a city label for every distinct place (Tony uplift)', () => {
+  it('draws country pills and a city label for every distinct place (the owner uplift)', () => {
     const svg = renderRealtimeMapSvg({
       points: [
         { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 6 },

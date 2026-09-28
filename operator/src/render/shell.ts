@@ -5,7 +5,7 @@
  * button, title, live dot), and the toast region. Mobile (<1024px): the rail goes off-canvas
  * behind a menu button and a backdrop scrim (SPEC #2).
  *
- * Tony 2026-09-06 ("remove that bar jump to a page, I want a fast search bar for users and
+ * the owner 2026-09-06 ("remove that bar jump to a page, I want a fast search bar for users and
  * licences but not like that"): there is no command palette, no page list, no shortcut sheet.
  * The rail's search field (plan 3.7 item 7) is a plain input with an inline results dropdown
  * (operator/client/search.ts builds the dropdown from the rendered page, this file only ships

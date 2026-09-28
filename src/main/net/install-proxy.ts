@@ -11,7 +11,7 @@ import {
 } from 'undici'
 import { session } from 'electron'
 import { mainLog, auditLog } from '../logger'
-import { detectProxyFromEnv, parseElectronProxy, redactProxyUrl } from './proxy-url'
+import { detectProxyFromEnv, parseElectronProxy, PROXY_ENV_VARS, redactProxyUrl } from './proxy-url'
 
 /**
  * Make the main process' built-in `fetch` reach providers through whatever proxy the machine is behind.
@@ -60,9 +60,10 @@ export class UnpinnableProxyError extends Error {}
  *     through `lookup` at connect time;
  *   - a tunnel a proxy opens (the system route, and every other host on the env route) is requested as
  *     `CONNECT <address>:<port>`, so the proxy dials that address and resolves nothing itself.
- * A SOCKS proxy is sent the host name and cannot be held to an address, so it is refused with
- * UnpinnableProxyError rather than used unpinned. Without `lookup` (the shared global dispatcher) proxies
- * resolve as usual.
+ * A SOCKS proxy is sent the host name and cannot be held to an address, so a pinned env route fails
+ * closed whenever any of the six PROXY_ENV_VARS is SOCKS — the four EnvHttpProxyAgent itself could
+ * read, plus ALL_PROXY/all_proxy refused as a precaution. Without `lookup` (the shared global
+ * dispatcher) proxies resolve as usual.
  *
  * `setGlobalDispatcher` is deliberately NOT called here — that is useRoute()'s job, once, for the
  * shared global dispatcher. A caller building its own (e.g. one MCP session's pinned dispatcher) gets
@@ -89,13 +90,12 @@ export function routeDispatcher(lookup?: LookupFunction): Dispatcher {
   }
 }
 
-/** Whether the HTTP or HTTPS proxy EnvHttpProxyAgent reads from the environment (in its own precedence,
- *  lowercase first) is a SOCKS proxy, which undici tunnels by host name outside the pool factory. */
+/** A pinned env route is refused when any variable in PROXY_ENV_VARS is a SOCKS URL. EnvHttpProxyAgent
+ *  chooses per request scheme (`http_proxy`/`HTTP_PROXY` for http:// and `https_proxy`/`HTTPS_PROXY`
+ *  for https://) with lowercase-first precedence; ALL_PROXY/all_proxy are refused here as a precaution
+ *  even though EnvHttpProxyAgent cannot read them. */
 function envProxyIsSocks(): boolean {
-  const { env } = process
-  return [env.http_proxy ?? env.HTTP_PROXY, env.https_proxy ?? env.HTTPS_PROXY].some((proxy) =>
-    /^socks5?:/i.test(proxy ?? '')
-  )
+  return PROXY_ENV_VARS.some((key) => /^socks5?:/i.test(process.env[key] ?? ''))
 }
 
 /**

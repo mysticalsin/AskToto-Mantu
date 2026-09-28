@@ -10,8 +10,8 @@
  * "inject everything Electron-specific" shape as stall-monitor.ts's test seams, so this module stays
  * importable and testable outside a real Electron process.
  */
-import { beginRunWatch, markAlive, markShutdownClean } from '../../boot-sentinel'
-import type { AuditEvent } from '../../logger'
+import { beginRunWatch, markAlive, markShutdownClean, type PriorShutdown } from '../../boot-sentinel'
+import type { AuditSink } from '../../logger'
 import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from './stall-monitor'
 import { startStallSampler, type StallSampler, type StallSamplerOptions } from './stall-sampler'
 
@@ -28,7 +28,9 @@ export interface RunObservabilityOptions {
   version: string
   platform: string
   arch: string
-  audit: (event: AuditEvent, detail?: Record<string, unknown>) => void
+  /** UV_THREADPOOL_SIZE as this process started with it (ADR-021); absent or empty means libuv's default. */
+  uvThreadpoolSize?: string
+  audit: AuditSink
   /** Electron's `powerMonitor` (or any object shaped like it) — pauses the stall monitor's heartbeat
    *  across sleep on 'suspend', and restarts it on both 'resume' and 'unlock-screen' (the latter is the
    *  fallback for a sleep whose matching 'resume' never arrives); see stall-monitor.ts for why one
@@ -51,6 +53,8 @@ export interface RunObservabilityOptions {
 }
 
 export interface RunObservability {
+  /** How the previous run ended, read once by beginRunWatch. */
+  readonly priorShutdown: PriorShutdown
   /** Run `fn`, measuring its duration so a late stall tick can name whichever phase actually ran longest
    *  since the previous tick. Forwarded straight to the stall monitor, which owns that measurement and
    *  clearing it every tick (stall-monitor.ts). Wrap any boot step or background-timer callback worth
@@ -83,7 +87,8 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
     bootId,
     prevBootId: prior.prevBootId,
     prevShutdown: prior.prevShutdown,
-    prevLastAliveAt: prior.prevLastAliveAt
+    prevLastAliveAt: prior.prevLastAliveAt,
+    uvThreadpoolSize: opts.uvThreadpoolSize || 'default'
   })
 
   const aliveTimer = setIntervalFn(() => {
@@ -126,6 +131,7 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
 
   let stopped = false
   return {
+    priorShutdown: prior.prevShutdown,
     timePhase<T>(label: string, fn: () => T): T {
       return stallMonitor.timePhase(label, fn)
     },

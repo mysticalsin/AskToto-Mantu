@@ -40,14 +40,17 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * 2026-08-24: 159 → 139 → 129 → 36 → 30.
  * 2026-09-06: 30 → 29 (updater.test.ts delete-on-required Process fields).
  * 2026-09-06: 29 → 26 after merging origin/release/1.8.3 KineticGrid onto this tip.
+ * 2026-09-27: 26 → 16 after the M2-0009 branch removed ten stale test-type errors.
  *
  * The last pass typed the mocks to the signatures production actually calls, rather than letting them be
  * inferred from a stub body — which is what had made `mock.calls[0][0]` a type error against a call the
  * app makes on every request. It surfaced two more real defects on the way: a test asserting against a
  * providerId that does not exist ('claude-api'), and FIVE more `{ gguf, mmproj }` omissions — the same
  * `-c undefined` shape, in a third file.
+ * 2026-09-27: 24 → 19 after the M2-0036 test surface stopped contributing additional diagnostics.
+ * 2026-09-28: 19 → 10 after CI proved the lower test-type count on the M2-0036 branch.
  */
-const BASELINE = 26
+const BASELINE = 10
 
 let output = ''
 try {

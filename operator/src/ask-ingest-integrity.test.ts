@@ -10,14 +10,14 @@ import { d1Store, resetD1SchemaProbeForTests, type D1DatabaseLike } from './d1'
 import { hmacHex } from './hmac'
 import { handleRequest, type Env } from './index'
 import { memoryStore, type OperatorStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from './test-fixtures'
 
 // MQA-334: concurrent Ask ownership; MQA-335: activity namespaces; MQA-336: colon-safe cursors.
 
 const NOW = 1_725_000_000_000
 const DEVICE = 'device-integrity-a'
 const ASK_ID = 'ask-integrity-001'
-const ENV: Env = { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY }
+const ENV: Env = { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY, ADMIN_EMAILS: TEST_ADMIN_EMAILS }
 
 function sqliteD1(db: DatabaseSync, omitPulseChanges = false): D1DatabaseLike {
   return {

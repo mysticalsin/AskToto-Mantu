@@ -9,8 +9,11 @@ import {
   childPidReserved,
   computeCleanupTargets,
   isOverlayUrl,
+  isPassingRevealEvidence,
   parseAuditLog,
   readObservationTail,
+  initialRvRows,
+  runRevealRow,
   smokeReport,
   smokeVerdict
 } from './packaged-smoke.mjs'
@@ -42,6 +45,14 @@ interface Observation {
   exitMs: number | null
   audit: AuditRecord[]
   marker: boolean | null
+  rv: Array<{
+    id: string
+    reason: string
+    automation: string
+    status: string
+    evidence: { event: string; reason: string; outcome: string | null; parked?: boolean; layout?: string | null } | null
+    unblock: string | null
+  }>
   survivors: ProcessEntry[] | null
   survivorsGoneMs: number | null
 }
@@ -106,6 +117,48 @@ function goodObservation(): Observation {
       { event: 'app.shutdown.clean' }
     ],
     marker: true,
+    rv: [
+      {
+        id: 'RV-1-macos-open-activate',
+        reason: 'activate',
+        automation: 'open-app-path',
+        status: 'PASS',
+        evidence: { event: 'reveal', reason: 'activate', outcome: 'shown', parked: true, layout: 'hide' },
+        unblock: null
+      },
+      {
+        id: 'RV-2-macos-open-new-instance',
+        reason: 'second-instance',
+        automation: 'open-new-instance',
+        status: 'PASS',
+        evidence: { event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' },
+        unblock: null
+      },
+      {
+        id: 'RV-4-tray-show',
+        reason: 'tray',
+        automation: 'tray-menu',
+        status: 'PASS',
+        evidence: { event: 'reveal', reason: 'tray', outcome: 'shown', parked: true, layout: 'hide' },
+        unblock: null
+      },
+      {
+        id: 'RV-4-global-hotkey',
+        reason: 'hotkey',
+        automation: 'global-hotkey',
+        status: 'PASS',
+        evidence: { event: 'reveal', reason: 'hotkey', outcome: 'shown', parked: true, layout: 'hide' },
+        unblock: null
+      },
+      {
+        id: 'RV-1-macos-finder-spotlight-launchpad',
+        reason: 'activate',
+        automation: 'finder-open-app-file',
+        status: 'PASS',
+        evidence: { event: 'reveal', reason: 'activate', outcome: 'shown', parked: true, layout: 'hide' },
+        unblock: null
+      }
+    ],
     survivors: [],
     survivorsGoneMs: 300
   }
@@ -148,6 +201,16 @@ describe('smokeVerdict', () => {
       'a process survived the bound',
       (o) => { o.survivors = [{ pid: 999, ppid: 1, startedMs: 1, exe: null, role: 'Straggler' }] },
       'processes_survived'
+    ],
+    [
+      'an automated RV row failed',
+      (o) => { o.rv[0] = { ...o.rv[0], status: 'FAIL', evidence: null } },
+      'rv_reopen_failed'
+    ],
+    [
+      'an automated RV row never completed after renderer readiness',
+      (o) => { o.rv[0] = { ...o.rv[0], status: 'PENDING', evidence: null } },
+      'rv_reopen_incomplete'
     ]
   ]
 
@@ -172,6 +235,7 @@ describe('smokeVerdict', () => {
       exitMs: null,
       audit: [{ event: 'app.started', version: '1.9.7', platform: 'darwin', arch: 'arm64' }],
       marker: null,
+      rv: goodObservation().rv,
       survivors: null,
       survivorsGoneMs: null
     }
@@ -180,8 +244,52 @@ describe('smokeVerdict', () => {
   })
 })
 
+describe('isPassingRevealEvidence', () => {
+  it('accepts created and shown reveals only when they started parked', () => {
+    expect(isPassingRevealEvidence({ outcome: 'created', parked: true })).toBe(true)
+    expect(isPassingRevealEvidence({ outcome: 'shown', parked: true })).toBe(true)
+    expect(isPassingRevealEvidence({ outcome: 'shown', parked: false })).toBe(false)
+    expect(isPassingRevealEvidence({ outcome: 'already-visible', parked: true })).toBe(false)
+    expect(isPassingRevealEvidence(null)).toBe(false)
+  })
+})
+
+describe('runRevealRow', () => {
+  it('takes the reveal baseline after smoke prep so a prep second-instance cannot satisfy the row', async () => {
+    const rows = initialRvRows('darwin')
+    const reveals: Array<{ event: string; reason: string; outcome: string; parked: boolean; layout: string }> = []
+    let exercisedReopen = false
+
+    await runRevealRow({
+      auditLogPath: '/tmp/metis-smoke-audit.log',
+      rows,
+      id: 'RV-2-macos-open-new-instance',
+      reason: 'second-instance',
+      prepare: async () => {
+        reveals.push({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' })
+        return { error: false }
+      },
+      run: async () => {
+        exercisedReopen = true
+        return { error: false }
+      },
+      countReveals: (_auditLogPath, reason) => reveals.filter((record) => record.reason === reason).length,
+      waitForRevealRecord: async (_auditLogPath, reason, seenCount) =>
+        reveals.filter((record) => record.reason === reason)[seenCount] ?? null,
+      failure: 'missing second-instance reveal'
+    })
+
+    expect(exercisedReopen).toBe(true)
+    expect(rows.find((row) => row.id === 'RV-2-macos-open-new-instance')).toMatchObject({
+      status: 'FAIL',
+      evidence: null,
+      unblock: 'missing second-instance reveal'
+    })
+  })
+})
+
 describe('smokeReport', () => {
-  it('returns exactly the schema-1 key set and leaks no path, command-line or free-text content', () => {
+  it('returns exactly the schema-1 key set and leaks no path, command-line or audit detail', () => {
     const secretPath = '/opt/smoke/should-not-leak/crash.log'
     const secretBootId = 'BOOT-SECRET-1234'
     const observation = {
@@ -217,6 +325,7 @@ describe('smokeReport', () => {
       'timingsMs',
       'exit',
       'shutdown',
+      'rv',
       'processes'
     ])
     expect(Object.keys(report.app ?? {})).toEqual(['version', 'platform', 'arch'])
@@ -241,6 +350,7 @@ describe('smokeReport', () => {
       exitMs: null,
       audit: [],
       marker: null,
+      rv: initialRvRows('darwin'),
       survivors: null,
       survivorsGoneMs: null
     }
@@ -258,6 +368,35 @@ describe('smokeReport', () => {
     })
     expect(report.timingsMs).toEqual({ ready: null, exit: null, survivorsGone: null })
     expect(report.processes).toEqual({ atQuit: null, survivors: null })
+  })
+})
+
+describe('initialRvRows', () => {
+  it('tracks every macOS hosted reopen row as pending automation', () => {
+    const rows = initialRvRows('darwin')
+
+    expect(rows.map((row) => row.id)).toEqual([
+      'RV-1-macos-open-activate',
+      'RV-2-macos-open-new-instance',
+      'RV-4-tray-show',
+      'RV-4-global-hotkey',
+      'RV-1-macos-finder-spotlight-launchpad'
+    ])
+    expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
+    expect(rows.every((row) => row.unblock === null)).toBe(true)
+  })
+
+  it('tracks every Windows hosted reopen row as pending automation', () => {
+    const rows = initialRvRows('win32')
+
+    expect(rows.map((row) => row.id)).toEqual([
+      'RV-3-windows-exe-relaunch',
+      'RV-4-tray-show',
+      'RV-4-global-hotkey',
+      'RV-3-windows-shortcut-relaunch'
+    ])
+    expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
+    expect(rows.every((row) => row.unblock === null)).toBe(true)
   })
 })
 

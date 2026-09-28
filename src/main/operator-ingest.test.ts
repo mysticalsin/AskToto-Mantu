@@ -436,12 +436,12 @@ describe('recordOperatorCrmSend credentialSource', () => {
       id: 'crm-private-1',
       status: 'failed',
       connector: 'plane',
-      title: 'Customer Alpha renewal',
+      title: 'Example Customer renewal',
       meetingHash: 'abcdef0123456789',
-      action: 'create Customer Alpha opportunity',
+      action: 'create Example Customer opportunity',
       remoteId: 'record-42',
       remoteUrl: 'https://crm.example/record/42',
-      error: 'timeout posting Customer Alpha to https://crm.example/record/42',
+      error: 'timeout posting Example Customer to https://crm.example/record/42',
       attempt: 3,
       latencyMs: 90
     })
@@ -459,7 +459,7 @@ describe('recordOperatorCrmSend credentialSource', () => {
     expect(f.calls[0].body).not.toHaveProperty('action')
     expect(f.calls[0].body).not.toHaveProperty('remoteId')
     expect(f.calls[0].body).not.toHaveProperty('remoteUrl')
-    expect(JSON.stringify(f.calls[0].body)).not.toContain('Customer Alpha')
+    expect(JSON.stringify(f.calls[0].body)).not.toContain('Example Customer')
   })
 
   it('persists only projected CRM metadata when a retryable send fails', async () => {
@@ -470,10 +470,10 @@ describe('recordOperatorCrmSend credentialSource', () => {
       id: 'crm-queued-private',
       status: 'failed',
       connector: 'plane',
-      title: 'Customer Alpha renewal',
+      title: 'Example Customer renewal',
       remoteId: 'record-42',
       remoteUrl: 'https://crm.example/record/42',
-      error: 'Customer Alpha could not be written',
+      error: 'Example Customer could not be written',
       attempt: 2
     })
 
@@ -482,7 +482,7 @@ describe('recordOperatorCrmSend credentialSource', () => {
     expect(queued).not.toHaveProperty('title')
     expect(queued).not.toHaveProperty('remoteId')
     expect(queued).not.toHaveProperty('remoteUrl')
-    expect(JSON.stringify(queued)).not.toContain('Customer Alpha')
+    expect(JSON.stringify(queued)).not.toContain('Example Customer')
   })
 })
 

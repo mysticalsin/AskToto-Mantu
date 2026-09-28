@@ -3,12 +3,12 @@ import { connectionDrawer, detailDrawer } from './detail-drawer'
 
 describe('detailDrawer', () => {
   it('ships hidden by default with a labeled close button and dialog semantics', () => {
-    const html = detailDrawer({ id: 'seat-overlay', title: 'Tonys-MacBook-Pro' })
+    const html = detailDrawer({ id: 'seat-overlay', title: 'Example-MacBook-Pro' })
     expect(html).toContain('id="seat-overlay"')
     expect(html).toContain('hidden')
     expect(html).toContain('role="dialog"')
     expect(html).toContain('aria-label="Close"')
-    expect(html).toContain('Tonys-MacBook-Pro')
+    expect(html).toContain('Example-MacBook-Pro')
   })
 
   it('renders a labeled field grid, wide fields get seat-overlay-wide', () => {

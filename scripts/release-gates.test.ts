@@ -138,7 +138,7 @@ describe('deterministic packaging toolchain', () => {
 
   it('MQA-207: single-architecture Windows chains keep their bytecode', () => {
     const scripts = pkg.scripts as Record<string, string>
-    for (const name of ['dist:win', 'dist:win:appx', 'installers:win:cahe']) {
+    for (const name of ['dist:win', 'dist:win:appx']) {
       if (scripts[name]) expect(scripts[name]).not.toContain('ASKTOTO_MAC_UNIVERSAL')
     }
   })

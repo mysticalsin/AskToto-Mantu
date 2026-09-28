@@ -12,12 +12,14 @@ vi.mock('./logger', () => ({
 }))
 
 import { LiveMeetingStartedAtSchema } from '@shared/ipc'
+import { redactSecrets } from '@shared/redact'
 import { createListeningStateHandler } from './listening-state-ipc'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,
   type SpeakerId
 } from './speaker-id'
+import { crashDetail } from './infra/observability/crash-taxonomy'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
@@ -82,7 +84,14 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
   visit(indexSource)
   expect(callback, 'Actual overlay render-process-gone handler was not found').toBeDefined()
   if (!callback) return () => undefined
-  return runSource(`globalThis.result = (${callback.getText(indexSource)});`, globals)
+  // The handler's automatic-reload branch calls the real reloadOverlay(...) helper — lift it too, so a
+  // reload exercises the shipped loadURL + redact + audit wiring instead of a hand-copied stand-in.
+  const reloadOverlayDecl = indexSource.statements.find(
+    (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'reloadOverlay'
+  )
+  expect(reloadOverlayDecl, 'Actual source function reloadOverlay was not found').toBeDefined()
+  const prefix = reloadOverlayDecl ? `${reloadOverlayDecl.getText(indexSource)}\n` : ''
+  return runSource(`${prefix}globalThis.result = (${callback.getText(indexSource)});`, globals)
 }
 
 interface SessionApi {
@@ -129,7 +138,8 @@ function sessionApi(options: {
     LiveMeetingStartedAtSchema,
     Date: class extends Date { static now(): number { return options.now?.() ?? Date.now() } },
     backfillSpeakerNames: options.backfill ?? (async () => ({ ok: true, named: 0 })),
-    mainLog: { warn: vi.fn(), error: vi.fn() }
+    mainLog: { warn: vi.fn(), error: vi.fn() },
+    rebuildTrayMenu: vi.fn()
   })
 }
 
@@ -154,7 +164,8 @@ function realSpeakerId(
 ): SpeakerId {
   return createSpeakerId({
     createExtractor: () => ({ compute }),
-    storePath: () => join(dir, 'voiceprints.json')
+    storePath: () => join(dir, 'voiceprints.json'),
+    canSaveVoiceprints: () => true
   })
 }
 
@@ -214,6 +225,7 @@ describe('authoritative live speaker identity', () => {
       requireAuth: () => true,
       acceptLiveSpeakerTransition: api.acceptLiveSpeakerTransition,
       listeningActive: false,
+      setListeningActive: vi.fn(),
       setTrayRecording: tray,
       setRecordingPowerSaveBlock: power,
       parakeetRelease: releaseParakeet,
@@ -441,15 +453,19 @@ describe('bounded close and successful-save receipt join', () => {
     for (let i = 0; i < 3; i++) await api.observeOperatorAudio(windowFor(5), 'live:900')
 
     const revokeForLifecycleEvent = vi.fn()
-    const loadURL = vi.fn()
+    // Real BrowserWindow#loadURL returns a Promise; M2-0037 now observes it (`.catch(...)` on the result).
+    const loadURL = vi.fn(() => Promise.resolve())
     const win = { isDestroyed: () => false, loadURL, webContents: { id: 1 } }
     const gone = actualRendererGoneHandler({
       mainLog: { error: vi.fn() },
       auditLog: vi.fn(),
+      crashDetail,
       resetDustConversation: vi.fn(),
       listeningActive: true,
       lastPlainAskAt: 1,
       audioArmed: true,
+      setListeningActive: vi.fn(),
+      setAudioArmed: vi.fn(),
       setTrayRecording: vi.fn(),
       setRecordingPowerSaveBlock: vi.fn(),
       discardActiveLiveSpeakerSession: api.discardActiveLiveSpeakerSession,
@@ -465,7 +481,10 @@ describe('bounded close and successful-save receipt join', () => {
       selfWebContentsId: 1,
       commandControl: { revokeForLifecycleEvent },
       responsiveness: { markGone: vi.fn() },
+      // M2-0037: within budget — the handler must still reload exactly as before.
+      reloadBudget: { onRenderProcessGone: () => 'reload' },
       overlayRendererUrl: () => 'file:///renderer/index.html',
+      redactSecrets,
       process: { env: {} },
       join
     })

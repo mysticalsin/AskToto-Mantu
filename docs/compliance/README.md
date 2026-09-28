@@ -42,7 +42,7 @@ M2-0155. This section is a pointer for the DPO, not that track's content.
 
 ## Owner and review cadence
 
-- **Owner (drafting, product facts):** Tony Walteur — sole user, product owner of AskToto/Métis.
+- **Owner (drafting, product facts):** Metis Maintainers — sole user, product owner of AskToto/Métis.
 - **Approver:** Mantu DPO (name to be filled in by DPO's office — not yet assigned in this pack).
 - **Legal:** Mantu Legal, for the Art 30 controller-entity name and any works-council question below.
 - **Review trigger:** any of — a Phase 5/Phase 8 feature from the 100x plan ships (re-check the doc it

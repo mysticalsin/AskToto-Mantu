@@ -1,7 +1,22 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, renameSync, statSync, cpSync } from 'node:fs'
+import {
+  closeSync,
+  constants,
+  copyFileSync,
+  cpSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  renameSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { join, basename, dirname } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
-import type { Settings } from '@shared/ipc'
+import type { PreservedBrainIndexCopy, Settings } from '@shared/ipc'
 import { invalidateMatchKeyDir, resetMatchKeyCacheForTests } from './match-key-cache'
 import {
   BrainIndexSchema,
@@ -21,8 +36,9 @@ import {
   type ProvenantField,
   type IndexUnavailableCause
 } from '@shared/brain'
-import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult } from '../transcripts'
+import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
 import { mainLog, auditLog } from '../logger'
+import { fileKeyState, isKeychainAvailable } from '../secrets'
 
 /**
  * Brain store — plain JSON files under `<meetings folder>/.brain/`.
@@ -449,11 +465,45 @@ type IndexLoad =
   | { kind: 'unavailable'; cause: IndexUnavailableCause; detail?: string } // detail: log-only (errno / decode reason)
 type ResolvedIndex = Exclude<IndexLoad, { kind: 'corrupt' }>
 
+// Stable machine-readable refusal codes. Keep each string defined once here; both read-only and rebuild
+// errors reference these constants so the public error matrix cannot drift by spelling.
+export const BRAIN_INDEX_ERROR_CODE = {
+  undecryptable: 'brain-index-undecryptable',
+  io: 'brain-index-io',
+  unsupportedVersion: 'brain-index-unsupported-version',
+  corruptKept: 'brain-index-corrupt-kept',
+  preserveFailed: 'brain-index-preserve-failed',
+  changedDuringRebuild: 'brain-index-changed-during-rebuild',
+  readableAgain: 'brain-index-readable-again',
+  keystoreUnavailable: 'brain-index-keystore-unavailable'
+} as const
+
+const INDEX_UNAVAILABLE_CODE: Record<IndexUnavailableCause, string> = {
+  undecryptable: BRAIN_INDEX_ERROR_CODE.undecryptable,
+  io: BRAIN_INDEX_ERROR_CODE.io,
+  unsupported: BRAIN_INDEX_ERROR_CODE.unsupportedVersion,
+  'corrupt-kept': BRAIN_INDEX_ERROR_CODE.corruptKept
+}
+
 export class BrainIndexUnavailableError extends Error {
   override readonly name = 'BrainIndexUnavailableError'
   // NOT `cause` — that is Error.cause (ES2022).
   constructor(readonly unavailable: IndexUnavailableCause) {
-    super(`brain index is read-only on this device (${unavailable})`)
+    super(`brain index is read-only on this device (${INDEX_UNAVAILABLE_CODE[unavailable]})`)
+  }
+}
+
+export type BrainIndexRebuildErrorCode =
+  | typeof BRAIN_INDEX_ERROR_CODE.preserveFailed
+  | typeof BRAIN_INDEX_ERROR_CODE.changedDuringRebuild
+  | typeof BRAIN_INDEX_ERROR_CODE.readableAgain
+  | typeof BRAIN_INDEX_ERROR_CODE.keystoreUnavailable
+  | typeof BRAIN_INDEX_ERROR_CODE.unsupportedVersion
+
+export class BrainIndexRebuildError extends Error {
+  override readonly name = 'BrainIndexRebuildError'
+  constructor(readonly code: BrainIndexRebuildErrorCode) {
+    super(code)
   }
 }
 
@@ -468,10 +518,10 @@ export function classifyIndexBytes(buf: Buffer): IndexLoad {
   } catch {
     return { kind: 'corrupt' }
   }
-  const parsed = BrainIndexSchema.safeParse(raw)
-  if (parsed.success) return { kind: 'ready', index: parsed.data }
   const v = (raw as { schema_version?: unknown } | null)?.schema_version
   if (typeof v === 'number' && v > BRAIN_SCHEMA_VERSION) return { kind: 'unavailable', cause: 'unsupported' }
+  const parsed = BrainIndexSchema.safeParse(raw)
+  if (parsed.success) return { kind: 'ready', index: parsed.data }
   return { kind: 'corrupt' }
 }
 
@@ -726,6 +776,207 @@ export function removeMeetingExtraction(s: Settings, fileSlug: string): { gone: 
   return { gone: !existsSync(p) }
 }
 
+function hashBytes(buf: Buffer): string {
+  return createHash('sha256').update(buf).digest('hex')
+}
+
+function fsyncFilePath(p: string): void {
+  const fd = openSync(p, 'r+')
+  try {
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function fsyncDirectoryIfSupported(p: string): void {
+  if (process.platform === 'win32') return
+  const fd = openSync(p, 'r')
+  try {
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function preservedIndexDir(settings: Settings): string {
+  return join(resolveMeetingsFolder(settings), '.brain-preserved')
+}
+
+function preservedIndexPath(settings: Settings, id: string): string {
+  if (id !== basename(id) || !id.endsWith('.json') || !id.startsWith('index.')) {
+    throw new Error('invalid preserved index id')
+  }
+  return join(preservedIndexDir(settings), id)
+}
+
+function isPreservedIndexName(name: string): boolean {
+  return name.startsWith('index.') && name.endsWith('.json')
+}
+
+function preservedIndexRestorable(path: string): boolean {
+  try {
+    return classifyIndexBytes(readFileSync(path)).kind === 'ready'
+  } catch {
+    return false
+  }
+}
+
+export function listPreservedBrainIndexes(settings: Settings): PreservedBrainIndexCopy[] {
+  const dir = preservedIndexDir(settings)
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .filter(isPreservedIndexName)
+    .map((id): PreservedBrainIndexCopy | null => {
+      try {
+        const st = statSync(join(dir, id))
+        if (!st.isFile()) return null
+        return { id, createdAt: st.mtimeMs, size: st.size, restorable: preservedIndexRestorable(join(dir, id)) }
+      } catch {
+        return null
+      }
+    })
+    .filter((copy): copy is PreservedBrainIndexCopy => copy !== null)
+    .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
+}
+
+export function currentBrainIndexIsReadable(settings: Settings): boolean {
+  try {
+    return classifyIndexBytes(readFileSync(join(brainDir(settings), INDEX_REL))).kind === 'ready'
+  } catch {
+    return false
+  }
+}
+
+function preserveCurrentIndexBeforeRestore(settings: Settings): void {
+  const current = join(brainDir(settings), INDEX_REL)
+  if (!existsSync(current)) return
+  const preserveDir = preservedIndexDir(settings)
+  const preservePath = join(preserveDir, `index.before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
+  mkdirSync(preserveDir, { recursive: true })
+  copyFileSync(current, preservePath, constants.COPYFILE_EXCL)
+  fsyncFilePath(preservePath)
+  fsyncDirectoryIfSupported(preserveDir)
+}
+
+export function restorePreservedBrainIndex(
+  settings: Settings,
+  id: string,
+  opts: { allowReplaceReadable: boolean }
+): { ok: boolean; error?: 'not-found' | 'not-restorable' | 'current-readable' | 'failed' } {
+  let source: string
+  try {
+    source = preservedIndexPath(settings, id)
+  } catch {
+    return { ok: false, error: 'not-found' }
+  }
+  let sourceBytes: Buffer
+  try {
+    sourceBytes = readFileSync(source)
+  } catch {
+    return { ok: false, error: 'not-found' }
+  }
+  if (classifyIndexBytes(sourceBytes).kind !== 'ready') return { ok: false, error: 'not-restorable' }
+  if (!opts.allowReplaceReadable && currentBrainIndexIsReadable(settings)) return { ok: false, error: 'current-readable' }
+
+  const root = brainDir(settings)
+  const target = join(root, INDEX_REL)
+  const tmp = join(root, `index.restore-${randomBytes(6).toString('hex')}.tmp`)
+  try {
+    mkdirSync(root, { recursive: true })
+    preserveCurrentIndexBeforeRestore(settings)
+    writeFileSync(tmp, sourceBytes, { flag: 'wx' })
+    fsyncFilePath(tmp)
+    renameSync(tmp, target)
+    fsyncDirectoryIfSupported(root)
+    indexCache.delete(target)
+    _writeGen += 1
+    return { ok: true }
+  } catch {
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* best-effort cleanup */
+    }
+    return { ok: false, error: 'failed' }
+  }
+}
+
+export function deletePreservedBrainIndex(settings: Settings, id: string): { ok: boolean; error?: 'not-found' | 'failed' } {
+  let path: string
+  try {
+    path = preservedIndexPath(settings, id)
+  } catch {
+    return { ok: false, error: 'not-found' }
+  }
+  if (!existsSync(path)) return { ok: false, error: 'not-found' }
+  try {
+    rmSync(path, { force: true })
+    return existsSync(path) ? { ok: false, error: 'failed' } : { ok: true }
+  } catch {
+    return { ok: false, error: 'failed' }
+  }
+}
+
+function assertRebuildKeyContextAllowsPreserve(indexBytes: Buffer): void {
+  const kind = envelopeKeyKind(indexBytes)
+  if (kind === 'keychain') {
+    if (process.env.ASKTOTO_LOCAL_KEYSTORE || !isKeychainAvailable()) {
+      throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
+    }
+    return
+  }
+  if (kind === 'file' && fileKeyState() === 'locked') {
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
+  }
+}
+
+function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
+  const root = brainDir(settings)
+  const indexPath = join(root, INDEX_REL)
+  let indexBytes: Buffer
+  try {
+    indexBytes = readFileSync(indexPath)
+  } catch (e) {
+    if (errnoCode(e) === 'ENOENT') return
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
+  }
+  const load = classifyIndexBytes(indexBytes)
+  if (load.kind !== 'unavailable') return
+  if (load.cause === 'unsupported') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.unsupportedVersion)
+  if (load.cause === 'io') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
+  if (load.cause !== 'undecryptable') return
+  assertRebuildKeyContextAllowsPreserve(indexBytes)
+
+  const classifiedHash = hashBytes(indexBytes)
+  const preserveDir = preservedIndexDir(settings)
+  const preservePath = join(preserveDir, `index.unreadable-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
+  try {
+    mkdirSync(preserveDir, { recursive: true })
+    copyFileSync(indexPath, preservePath, constants.COPYFILE_EXCL)
+    fsyncFilePath(preservePath)
+    fsyncDirectoryIfSupported(preserveDir)
+    if (hashBytes(readFileSync(preservePath)) !== classifiedHash) {
+      throw new Error('preserved copy hash mismatch')
+    }
+  } catch {
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.preserveFailed)
+  }
+
+  let currentBytes: Buffer
+  try {
+    currentBytes = readFileSync(indexPath)
+  } catch {
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
+  }
+  if (hashBytes(currentBytes) !== classifiedHash) throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.changedDuringRebuild)
+  const rechecked = classifyIndexBytes(currentBytes)
+  if (rechecked.kind === 'ready' || rechecked.kind === 'corrupt') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.readableAgain)
+  if (rechecked.kind === 'unavailable' && rechecked.cause === 'unsupported') {
+    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.unsupportedVersion)
+  }
+}
+
 /**
  * Erase the entire `.brain/` store — every meeting extraction, entity file, the graph, and the index.
  *
@@ -745,15 +996,18 @@ export function removeMeetingExtraction(s: Settings, fileSlug: string): { gone: 
  * graph" gone, corrections included. Copies the journal's raw on-disk bytes (respects encryption,
  * mirroring ensureV1Backup's cpSync convention above) rather than decrypting/re-encrypting it.
  */
-export function purgeBrain(settings: Settings, opts: { preserveCorrections?: boolean } = {}): { ok: boolean } {
+export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserveCorrections: boolean } | { mode: 'erase' }): { ok: boolean } {
   const root = brainDir(settings)
+  if (opts.mode === 'rebuild') preserveUnreadableIndexBeforeRebuild(settings)
   const journalPath = join(root, 'corrections.json')
   const preserveTo = `${root}.corrections-preserve.json`
   let preserve = false
   try {
-    preserve = !!opts.preserveCorrections && existsSync(journalPath)
+    preserve = opts.mode === 'rebuild' && opts.preserveCorrections && existsSync(journalPath)
     if (preserve) cpSync(journalPath, preserveTo)
+    const preservedDir = preservedIndexDir(settings)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
+    if (opts.mode === 'erase') rmSync(preservedDir, { recursive: true, force: true })
     resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus
     if (preserve) {
       mkdirSync(root, { recursive: true })
@@ -764,7 +1018,7 @@ export function purgeBrain(settings: Settings, opts: { preserveCorrections?: boo
       const remaining = readdirSync(root)
       return { ok: remaining.length === 1 && remaining[0] === 'corrections.json' }
     }
-    return { ok: !existsSync(root) }
+    return { ok: !existsSync(root) && (opts.mode !== 'erase' || !existsSync(preservedDir)) }
   } catch (e) {
     console.warn('[brain] purgeBrain: could not remove', root, e)
     // MI-2.5 Fix F: a mid-wipe failure (OneDrive/AV holding a file open partway through the recursive

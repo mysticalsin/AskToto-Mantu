@@ -10,8 +10,8 @@ import { describe, it, expect } from 'vitest'
  * do that except deliberate cases — ask typing (`showForAsk`) and first-run exclusive (`showForExclusiveOnboarding`), see doc
  * comment in index.ts). This test greps the shipped source for every `win.show()`/`w.show()` call (the
  * two identifiers index.ts uses for its BrowserWindow reference) and fails if any sit outside
- * `showForAsk`'s own body — so a future PR that reaches for `.show()` on a reveal path fails loudly here
- * instead of silently reintroducing a focus-theft regression. Same source-contract idiom as
+ * the deliberate focus helpers — so a future PR that reaches for `.show()` on a passive reveal path fails
+ * loudly here instead of silently reintroducing a focus-theft regression. Same source-contract idiom as
  * license-enforcement-drift.contract.test.ts / index-audit-fixes.contract.test.ts.
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
@@ -49,16 +49,18 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
     expect(doc).toContain('no-show-steals-focus.contract.test.ts')
   })
 
-  it('every win.show()/w.show() call site in index.ts sits inside showForAsk or showForExclusiveOnboarding', () => {
+  it('every win.show()/w.show() call site in index.ts sits inside an allowed focus helper', () => {
     const ask = functionBody('showForAsk')
     const exclusive = functionBody('showForExclusiveOnboarding')
+    const legacy = functionBody('legacyReveal')
     const showCall = /\b(?:win|w)\??\.show\(\)/g
     const offenders: number[] = []
     let m: RegExpExecArray | null
     while ((m = showCall.exec(indexSrc))) {
       const insideAsk = m.index >= ask.start && m.index < ask.end
       const insideExclusive = m.index >= exclusive.start && m.index < exclusive.end
-      if (!insideAsk && !insideExclusive) offenders.push(m.index)
+      const insideLegacy = m.index >= legacy.start && m.index < legacy.end
+      if (!insideAsk && !insideExclusive && !insideLegacy) offenders.push(m.index)
     }
     const lines = offenders.map((idx) => indexSrc.slice(0, idx).split('\n').length)
     expect(
@@ -84,9 +86,9 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
     // covered by the sweep above), two tray menu items (now delegate to sendHotkey with no separate
     // show() at all), second-instance, and app.on('activate'). Named here so the intent is explicit even
     // though the sweep test above is what actually enforces it.
-    expect(indexSrc).toContain('win?.showInactive()') // notification click
-    expect(indexSrc).toContain('if (!w.isVisible()) w.showInactive()') // second-instance
-    expect(indexSrc).toContain("else win.showInactive()") // app.on('activate')
+    expect(indexSrc).toContain("reveal('notification-click', { focus: false })") // notification click
+    expect(indexSrc).toContain("reveal('second-instance', { focus: true })") // explicit relaunch
+    expect(indexSrc).toContain("reveal('activate', { focus: true })") // Finder/Dock reopen
     // The two tray menu items (Settings…, Today's agenda) no longer call win.show() at all — they let
     // sendHotkey() reveal (non-activating, since neither action is 'ask').
     expect(indexSrc).not.toMatch(/label: 'Settings…', click: \(\) => \{\s*\n\s*if \(win/)

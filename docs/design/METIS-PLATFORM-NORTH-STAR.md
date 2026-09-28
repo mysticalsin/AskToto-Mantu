@@ -15,7 +15,7 @@ does-not-own:
   - installer packing / version bump
   - Goldberg Aria
 ready-to-merge: no
-audience: Tony Walteur
+audience: owner
 accent: "#7C8CF8"
 pass-accent: "#7F00DA"
 iron-law: subtract before you add. Intent first. No overengineering. Evidence-grounded.
@@ -23,7 +23,7 @@ iron-law: subtract before you add. Intent first. No overengineering. Evidence-gr
 
 # Métis platform north star
 
-Tony's challenge: make this very beautiful, scalable, solidly secure, and user-friendly.
+the owner's challenge: make this very beautiful, scalable, solidly secure, and user-friendly.
 
 This file is the one platform story. Slice contracts stay the law for their pixels. This file is the law for how those slices become one product a stranger can install and a fleet of ten thousand can later join.
 
@@ -37,7 +37,7 @@ predates it (see that file's 2.0 platform pointer).
 
 Métis is the wisdom before the moment. A person opens a meeting. The overlay is already there, quiet, Apple-grade. They press Listen and tell the room. They Ask. The answer lands. Nothing was configured that they did not already own.
 
-Tony holds the platform. Seats do not hold his cloud keys. Operator is how he sees the fleet, funds Asks, and approves who may spend. Native Apple is how a Mac Ask can later cost ~zero. Electron stays the Windows and cross-platform path.
+the owner holds the platform. Seats do not hold his cloud keys. Operator is how he sees the fleet, funds Asks, and approves who may spend. Native Apple is how a Mac Ask can later cost ~zero. Electron stays the Windows and cross-platform path.
 
 Three feelings, in this order:
 
@@ -52,7 +52,7 @@ If a change serves none of those three, subtract it.
 ## 2. One product, two planes
 
 ```
-                    Tony (two emails)
+                    the owner (two emails)
                             │
                             │  Cloudflare Access
                             ▼
@@ -78,7 +78,7 @@ If a change serves none of those three, subtract it.
 | Plane | Job | Who sees it |
 | --- | --- | --- |
 | Overlay | Daily product. Ask, Listen, Capture, Review, Brain. | Every seat. |
-| Operator | Control plane. Keys, approval, cost, skills, CRM retry. | Tony only. |
+| Operator | Control plane. Keys, approval, cost, skills, CRM retry. | the owner only. |
 | Native | Apple flagship. Foundation Models now, PCC later. | Apple-device seats, after Electron is honest. |
 
 There is no third plane. Intelligence is a local dashboard a seat already has. `license-server` on Fly is seats and leases, not prompts. `cloudflare-proxy` is the AI token proxy, not the ops console. Do not merge them.
@@ -113,7 +113,7 @@ A second picker, Settings → Appearance → **Bar rest**, only applies when chr
 
 Unknown / missing / locked-absent → `'jakub'`. Hide and Island ignore the key. No reinstall. Change applies immediately.
 
-Circle is Jakub thinking-orbs. Jarvis is the tonys-jarvis particle orb (Tony lock 2026-09-06, after the 286ff55 live fail). That Jarvis lock overrides QUALITY "no WebGL" for this slot only. Never call Circle Jarvis. Never label Jarvis Obsidian.
+Circle is Jakub thinking-orbs. Jarvis is the tonys-jarvis particle orb (Owner lock 2026-09-06, after the 286ff55 live fail). That Jarvis lock overrides QUALITY "no WebGL" for this slot only. Never call Circle Jarvis. Never label Jarvis Obsidian.
 
 Contracts: `docs/design/BAR-PILL.md`, `docs/design/ORB-SELECTION.md`, `docs/design/THINKING-ORB.md`, `docs/design/QUALITY.md`.
 
@@ -136,7 +136,7 @@ The Identity pass lives here (`docs/design/IDENTITY-CARD.md`). One Settings acce
 | `localLlm.enabled: false` | Local is power. Weights may warm; they do not preempt. |
 | `encryptTranscripts: true` | Fail closed on disk. |
 | Listen off until press | Tell the room. Nothing captured before that. |
-| Operator URL empty | No phone-home until Tony points the seat. |
+| Operator URL empty | No phone-home until the owner points the seat. |
 
 Onboarding already names the ready provider (MQA-263, MQA-279). Do not invent a seventh Act. Do not restyle starfield, Aria, or portal video in a platform PR.
 
@@ -148,7 +148,7 @@ No purple-gradient hero. No emoji UI. No fourth overlay layout. No WebGL marble.
 
 ## 4. User-friendly — install, then it answers
 
-The product promise is one sentence: **a licensed person installs Métis and Asks without pasting Tony's keys.**
+The product promise is one sentence: **a licensed person installs Métis and Asks without pasting the owner's keys.**
 
 ### 4.1 The path
 
@@ -174,20 +174,17 @@ Dust is never step 2 for general chat. Dust is retrieval: Spotlight Ref, second 
 
 ### 4.2 Operator holds the platform keys
 
-Tony pastes NIM, Anthropic, DeepSeek, and the Cloudflare account token on Operator `#keys`. UI shows **last4 only**. AES-GCM at rest (`OPERATOR_VAULT_KEY`). Allowlist:
-
-- `tony.walteur@gmail.com`
-- `twalteur@amaris.com`
+The owner pastes NIM, Anthropic, DeepSeek, and the Cloudflare account token on Operator `#keys`. UI shows **last4 only**. AES-GCM at rest (`OPERATOR_VAULT_KEY`). Allowlist: the owner's two Access emails, configured as the `ADMIN_EMAILS` secret.
 
 Heartbeat returns `fundedProviders` to an **APPROVED** seat. The seat keeps that list in memory. The renderer never sees a raw key. `hasKeys` booleans and last4 are the only public facts.
 
-Forbidden in the vault: `claude-cli`, `codex-cli`, `dust`, `local`. Those are seat sessions, not Tony's spend.
+Forbidden in the vault: `claude-cli`, `codex-cli`, `dust`, `local`. Those are seat sessions, not the owner's spend.
 
 Manual keys remain the power fallback in Settings → AI. Paste, Save, encrypted via `safeStorage` / DPAPI. `setApiKey` / `clearApiKey` / `testApiKey`. No `getApiKey` on preload.
 
 ### 4.3 CLI-first when the user already paid
 
-If Claude Code or Codex is installed and the session probe is live, every user question routes there first. Subscription, not Tony's meter.
+If Claude Code or Codex is installed and the session probe is live, every user question routes there first. Subscription, not the owner's meter.
 
 - Probe is zero-token (`missing` / `signed-out` / `weekly-limit` / `live`). A Claude weekly cap is signed-in, not disconnected. Codex `login status` = Logged in is connected.
 - Both CLIs connected: last-clicked is primary, the other is next, then Operator keys.
@@ -232,13 +229,13 @@ seat checks in (HMAC)
 Operator row: pending
         │
         ▼
-Tony APPROVE (Access, two emails)
+the owner APPROVE (Access, two emails)
         │
         ▼
 heartbeat may return fundedProviders
 ```
 
-Unapproved seats still run. They use CLI, local, or a key they pasted. They do not spend Tony's vault. Revoke returns the seat to pending-or-blocked and stops `fundedProviders`.
+Unapproved seats still run. They use CLI, local, or a key they pasted. They do not spend the owner's vault. Revoke returns the seat to pending-or-blocked and stops `fundedProviders`.
 
 Approval is a column and a button, not a new product. Do not build SSO for every Mantu employee to reach Operator.
 
@@ -270,7 +267,7 @@ Geo is `request.cf` only. The Worker ignores client `lat`, `lon`, `country`, `ci
 | `fundedProviders` list | A use-token that outlives the ask |
 | Operator URL | Ingest secret in a log / screenshot |
 
-`publicSettings` already redacts. Keep it that way. Embedded `METIS_PROXY_KEY` and Cahê Kimi remain documented residuals (`docs/security/AUDIT-20.md`). Do not add new live secrets to the package.
+`publicSettings` already redacts. Keep it that way. Only the embedded `METIS_PROXY_KEY` remains a documented residual (`docs/security/AUDIT-20.md`). Do not add new live secrets to the package.
 
 ### 5.6 Update / Latest only after QA + Ultron
 
@@ -280,7 +277,7 @@ A tag may build. A build may sit. **Latest advances only after:**
 
 1. QA on the target OS (Devon Mac-show for overlay; Windows pack for EXE).
 2. Ultron adversarial pass (the FAIL Worker / QA-file path already in the fleet). Ultron is a veto, not a cheerleader.
-3. Tony's explicit publish.
+3. the owner's explicit publish.
 
 CI does not wrangler-deploy Operator with secrets. CI does not flip Latest because tests are green. Portable EXE never auto-updates; do not pretend it does.
 
@@ -304,7 +301,7 @@ What "posture" means (mention, do not build):
 | Observability | Packed Overview: live seats, DAU/WAU, versions, cache, estimated cost, map from `cf`. | Indexes on D1 `deviceId` / `lastSeen`. Honest empty map. |
 | Skills | Draft / Approve / Push. ed25519. Never auto-apply a draft. | Same. Push is the scale lever, not a new CMS. |
 
-10k is a capacity story, not a rewrite. D1 + Worker + HMAC already has a shape. Do not add Redis, do not add a second console, do not build a seat SSO so Tony can "delegate." Subtract until pack proves the current plane is the bottleneck.
+10k is a capacity story, not a rewrite. D1 + Worker + HMAC already has a shape. Do not add Redis, do not add a second console, do not build a seat SSO so the owner can "delegate." Subtract until pack proves the current plane is the bottleneck.
 
 Prompt caching law (already shipped in spirit):
 
@@ -347,7 +344,7 @@ Electron keeps `fm serve` / llama as the Mac local path. Windows stays llama + P
 | Path | Who pays |
 | --- | --- |
 | Claude / Codex CLI | The user's subscription |
-| Operator vault (NIM / Anthropic / DeepSeek / CF) | Tony, after APPROVAL |
+| Operator vault (NIM / Anthropic / DeepSeek / CF) | the owner, after APPROVAL |
 | Métis Local / on-device AFM | Electricity |
 | Native PCC | ~zero API cost, Apple quota |
 
@@ -386,7 +383,7 @@ Every surface fails closed and speaks in a human sentence. No "Something went wr
 
 ### Operator
 
-| Failure | What Tony sees | What must not happen |
+| Failure | What the owner sees | What must not happen |
 | --- | --- | --- |
 | Access missing | 401 | Password page as the product |
 | HMAC on `/v1/admin` | 401 | Admin via device secret |
@@ -465,7 +462,7 @@ These are the tests a later PR must keep green or add. This file does not add th
 
 This is the sequence. One owner per row. Do not start a later row that needs an earlier one's law. Subtract: if a row is already green on `fix/settings-orb-stability-20260905`, mark it **held** and do not restyle it.
 
-Cross-link only: the live vault board uses rows 1–7 (+ parked 8–10, pack 11, PCC R22). Do not renumber the R01–R22 law mid-flight without Tony. CoS crosswalk: AI Second Brain `_relay/METIS-REQUEST-BOARD.md`.
+Cross-link only: the live vault board uses rows 1–7 (+ parked 8–10, pack 11, PCC R22). Do not renumber the R01–R22 law mid-flight without the owner. CoS crosswalk: AI Second Brain `_relay/METIS-REQUEST-BOARD.md`.
 
 | ID | Slice | Agent | Status on this base | Depends |
 | --- | --- | --- | --- | --- |
@@ -490,7 +487,7 @@ Cross-link only: the live vault board uses rows 1–7 (+ parked 8–10, pack 11,
 | **R19** | Scale posture only: queues, cache honesty, empty map | Operator | Held as posture — do not build 10k infra | — |
 | **R20** | 10k seats parked until pack | Both | Parked | R19 |
 | **R21** | Native PCC seam documented; no Electron toggle | Desktop (native tree only) | Seam exists as comment — do not implement | R11 |
-| **R22** | Ultron + QA veto before Latest | Operator (process) + Tony | Open | — |
+| **R22** | Ultron + QA veto before Latest | Operator (process) + the owner | Open | — |
 
 **Desktop agent** owns R01–R14 and the native comment in R21. Overlay chrome, Settings surface, CLI, Ask routing, HMAC client.
 

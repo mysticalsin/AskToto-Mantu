@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -32,10 +32,12 @@ function windowFor(axis: number): Float32Array {
   return Float32Array.from([axis, 0.5, 0.5])
 }
 
+/** An identifier whose user has opted in to saving voiceprints: the behaviour the suites below pin. */
 function makeId(dir: string, opts: { extractor?: ReturnType<typeof fakeExtractor> | null; now?: () => number } = {}) {
   return createSpeakerId({
     createExtractor: () => (opts.extractor === undefined ? fakeExtractor() : opts.extractor),
     storePath: () => join(dir, 'voiceprints.json'),
+    canSaveVoiceprints: () => true,
     now: opts.now
   })
 }
@@ -107,6 +109,51 @@ describe('labelWindow', () => {
     const id = makeId(dir)
     expect(await id.labelWindow(new Float32Array(0))).toBeNull()
     expect((await id.labelWindow(windowFor(0)))!.name).toBe('Speaker 1')
+  })
+})
+
+describe('voiceprints are saved only after the user opts in', () => {
+  /** What a caller that never asked the user builds: no canSaveVoiceprints. */
+  const withoutOptIn = () =>
+    createSpeakerId({ createExtractor: fakeExtractor, storePath: () => join(dir, 'voiceprints.json') })
+
+  it('without the opt-in, a meeting still gets session labels but writes no voiceprint', async () => {
+    const id = withoutOptIn()
+    for (let i = 0; i < 4; i++) {
+      expect(await id.labelWindow(windowFor(2))).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
+    }
+    for (let i = 0; i < 3; i++) await id.observeOperatorWindow(windowFor(3))
+    expect(await id.labelWindow(windowFor(3))).toMatchObject({ echo: true })
+
+    expect(id.autoEnrollFromLabeledWindows([{ clusterLabel: 'Speaker 1', name: 'Jane Doe' }])).toBe(0)
+    expect(await id.enroll('Jane Doe', [windowFor(2)])).toBe(false)
+    id.resetSession()
+    expect(id.createSession('live:1')).toBe(true)
+    for (let i = 0; i < 3; i++) {
+      await id.observeSessionOperatorWindow('live:1', windowFor(3), 'live')
+      await id.labelSessionWindow('live:1', windowFor(5), 'live')
+    }
+    const snapshot = id.snapshotSession('live:1')
+    expect(snapshot).not.toBeNull()
+    expect(id.enrollFromSnapshot(snapshot!, [{ clusterLabel: 'Speaker 1', name: 'Bob Smith' }])).toBe(0)
+    expect(readdirSync(dir)).toEqual([])
+  })
+
+  it('keeps a voiceprint store from an earlier version byte-for-byte and still names its voices', async () => {
+    const store = join(dir, 'voiceprints.json')
+    const earlier = JSON.stringify({
+      version: 1,
+      profiles: [{ name: 'Jane Doe', centroid: [0, 0, 1, 0, 0, 0, 0, 0.1], samples: 4 }]
+    })
+    writeFileSync(store, earlier)
+    const id = withoutOptIn()
+
+    expect(await id.labelWindow(windowFor(2))).toMatchObject({ name: 'Jane Doe', source: 'profile' })
+    expect(await id.enroll('Jane Doe', [windowFor(2)])).toBe(false)
+    for (let i = 0; i < 3; i++) await id.labelWindow(windowFor(5))
+    expect(id.autoEnrollFromLabeledWindows([{ clusterLabel: 'Speaker 1', name: 'Bob Smith' }])).toBe(0)
+    expect(id.listProfiles()).toEqual([{ name: 'Jane Doe', samples: 4 }])
+    expect(readFileSync(store, 'utf8')).toBe(earlier)
   })
 })
 
@@ -218,7 +265,8 @@ describe('echo defense — operator buffer + THEM-window echo detection', () => 
       createExtractor: () => ({
         compute: () => new Promise<Float32Array>((resolve) => { pending.push(resolve) })
       }),
-      storePath: () => join(dir, 'voiceprints.json')
+      storePath: () => join(dir, 'voiceprints.json'),
+      canSaveVoiceprints: () => true
     })
 
     const observation = id.observeOperatorWindow(windowFor(2))
@@ -250,7 +298,8 @@ describe('echo defense — operator buffer + THEM-window echo detection', () => 
       createExtractor: () => ({
         compute: () => new Promise<Float32Array>((resolve) => { pending.push(resolve) })
       }),
-      storePath: () => join(dir, 'voiceprints.json')
+      storePath: () => join(dir, 'voiceprints.json'),
+      canSaveVoiceprints: () => true
     })
 
     const label = id.labelWindow(windowFor(1))

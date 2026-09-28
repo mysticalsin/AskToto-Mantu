@@ -49,6 +49,8 @@ jobs:
         run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - run: npm test
       - run: npm run build
+        env:
+          METIS_FEEDBACK_EMAIL: ${{ vars.METIS_FEEDBACK_EMAIL }}
       - run: npm audit --audit-level=critical
 
   release-macos:
@@ -177,6 +179,7 @@ jobs:
       - run: npm run release:build:mac
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          METIS_FEEDBACK_EMAIL: ${{ vars.METIS_FEEDBACK_EMAIL }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -286,6 +289,7 @@ jobs:
       - run: npm run release:build:win
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          METIS_FEEDBACK_EMAIL: ${{ vars.METIS_FEEDBACK_EMAIL }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}

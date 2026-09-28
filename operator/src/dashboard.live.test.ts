@@ -16,8 +16,8 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lat: 45.5,
     lon: -73.5,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'twalteur@amaris.com',
+    hostname: 'Example-MacBook-Pro',
+    sso_email: 'admin@example.test',
     license: 'licensed',
     approval: 'approved',
     ...overrides
@@ -67,7 +67,7 @@ describe('buildLiveSnapshot', () => {
     expect(snap.kpis.asksToday).toBe(1)
     expect(snap.events.length).toBeGreaterThan(0)
     expect(snap.liveSeatsTable).toHaveLength(1)
-    expect(snap.liveSeatsTable[0]).toMatchObject({ deviceId: 'dev-a', hostname: 'Tonys-MacBook-Pro', city: 'Longueuil' })
+    expect(snap.liveSeatsTable[0]).toMatchObject({ deviceId: 'dev-a', hostname: 'Example-MacBook-Pro', city: 'Longueuil' })
     expect(snap.liveSeatsTable[0].sessionStarted).toBe(NOW - 60_000)
     expect(typeof snap.generation).toBe('number')
   })
@@ -100,7 +100,7 @@ describe('DashboardPayload.questions', () => {
     await store.insertAsk(ask({ id: 'a3', mode: 'interview', question_type: 'behavioral' }))
     await store.insertAsk(ask({ id: 'a4', mode: 'interview', question_type: null }))
 
-    const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    const dash = await buildDashboard(store, 'owner@example.test', NOW)
     expect(dash.questions.mix.total).toBe(4)
     expect(dash.questions.mix.classified).toBe(3)
     expect(dash.questions.coverage).toBeCloseTo(0.75)
@@ -112,7 +112,7 @@ describe('DashboardPayload.questions', () => {
   })
 
   it('reports zero/null honestly when no asks carry a type', async () => {
-    const dash = await buildDashboard(memoryStore(), 'tony.walteur@gmail.com', NOW)
+    const dash = await buildDashboard(memoryStore(), 'owner@example.test', NOW)
     expect(dash.questions.mix.total).toBe(0)
     expect(dash.questions.mix.coverage).toBeNull()
     expect(dash.questions.byMode).toEqual([])

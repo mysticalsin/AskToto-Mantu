@@ -127,10 +127,10 @@ describe('finding 9: renderer crash recovery on the main overlay window', () => 
     const listenerEnd = source.indexOf('\n  })', listenerStart)
     const body = source.slice(listenerStart, listenerEnd)
     expect(body).toMatch(/mainLog\.error\(/)
-    expect(body).toMatch(/auditLog\('app\.crash', \{ kind: 'render-process-gone'/)
+    expect(body).toMatch(/auditLog\('app\.crash', crashDetail\('render-process-gone'/)
     expect(body).toMatch(/if \(win !== self\) return/)
     expect(body).toMatch(/if \(win !== self \|\| self\.isDestroyed\(\)\) return/)
-    expect(body).toMatch(/self\.loadURL\(overlayRendererUrl\(\)\)/)
+    expect(body).toMatch(/reloadOverlay\(self\)/)
   })
 })
 
@@ -145,7 +145,7 @@ describe('finding 7: brain:rebuildAll stays guarded (assessed, not modified)', (
     // MI-2.5 superseded the direct purgeBrain(getSettings()) call with ingest.ts's startRebuild, which
     // still purges (preserveCorrections: true) but adds a corrupt-journal guard and a checked/resumable
     // corrections replay — same guarantee (guarded, not silently modified), stronger implementation.
-    expect(body).toMatch(/startRebuild\(getSettings\(\)\)/)
+    expect(body).toMatch(/startRebuild\(getSettings\(\), \{ trigger: 'user' \}\)/)
   })
 })
 

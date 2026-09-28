@@ -7,11 +7,12 @@ import {
   tokenPatternForTests,
   UPSTREAM_SNIPPET_CAP
 } from './redact'
+import { syntheticSecretLikeText } from './test-fixtures'
 
 describe('token-free events', () => {
   it('detects bearer, sk-, JWT, HMAC hex, and long base64', () => {
     expect(looksLikeSecret('Bearer abcdefghijklmnop')).toBe(true)
-    expect(looksLikeSecret('sk-ant-api03-abcdefghijklmnopqrstuvwxyz')).toBe(true)
+    expect(looksLikeSecret(syntheticSecretLikeText())).toBe(true)
     expect(looksLikeSecret('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0In0.signaturexx')).toBe(true)
     expect(looksLikeSecret('a'.repeat(64).replace(/a/g, 'ab').slice(0, 64))).toBe(true)
     expect(looksLikeSecret('interview')).toBe(false)
@@ -24,7 +25,7 @@ describe('token-free events', () => {
       mode: 'interview',
       os: 'darwin',
       authorization: 'Bearer abcdefghijklmnop',
-      token: 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz',
+      token: syntheticSecretLikeText(),
       cache: 'hit'
     })
     expect(chips.map((c) => c.key).sort()).toEqual(['cache', 'mode', 'os'])
