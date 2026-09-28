@@ -68,6 +68,9 @@ export const NAVIGATION_GUARD_SCENARIOS = Object.freeze([
   { id: 'HIST-dirty-cancel-bar', state: 'dirty', entry: 'bar-history-cancel' },
   { id: 'HIST-dirty-discard-bar', state: 'dirty', entry: 'bar-history-discard' },
   { id: 'HIST-dirty-save-bar', state: 'dirty', entry: 'bar-history-save' },
+  { id: 'HIST-dirty-cancel-settings-open', state: 'dirty', entry: 'settings-open-full-history-cancel' },
+  { id: 'HIST-dirty-discard-settings-open', state: 'dirty', entry: 'settings-open-full-history-discard' },
+  { id: 'HIST-dirty-save-settings-open', state: 'dirty', entry: 'settings-open-full-history-save' },
   { id: 'HIST-dirty-cancel-back', state: 'dirty', entry: 'review-back-to-history-cancel' },
   { id: 'HIST-dirty-discard-back', state: 'dirty', entry: 'review-back-to-history-discard' },
   { id: 'HIST-dirty-save-back', state: 'dirty', entry: 'review-back-to-history-save' },
@@ -280,10 +283,18 @@ async function clickHistoryButton(page) {
   await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
 }
 
-async function openHistoryFromSettings(page) {
+async function clickSettingsButton(page) {
   await page.getByRole('button', { name: 'Settings' }).first().click({ timeout: 15_000 })
+}
+
+async function clickOpenFullHistoryFromSettings(page) {
   await page.getByRole('tab', { name: 'Brain' }).first().click({ timeout: 15_000 })
   await page.getByRole('button', { name: 'Open full history' }).first().click({ timeout: 15_000 })
+}
+
+async function openHistoryFromSettings(page) {
+  await clickSettingsButton(page)
+  await clickOpenFullHistoryFromSettings(page)
   await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
 }
 
@@ -418,6 +429,34 @@ async function runPackagedNavigationGuardRows({ port, rows }) {
       await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
       await expectSavedRecap(page, seeded.first, suffix)
       return { decision: 'save', entry: 'bar-history', persistedBeforeNavigation: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-cancel-settings-open', async () => {
+      const suffix = 'Cancel keeps this smoke edit from Settings Open full history.'
+      await openDirtyReview(page, 'Smoke navigation alpha', suffix)
+      await chooseDirtyHistoryNavigation(page, 'Cancel', () => clickSettingsButton(page))
+      await assertDirtyDraft(page, suffix)
+      await cancelRecapEdit(page)
+      await returnToHistoryFromReview(page)
+      return { decision: 'cancel', entry: 'settings-open-full-history', draftPreserved: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-discard-settings-open', async () => {
+      await openDirtyReview(page, 'Smoke navigation alpha', 'Discard by Settings Open full history.')
+      await chooseDirtyHistoryNavigation(page, 'Discard', () => clickSettingsButton(page))
+      await clickOpenFullHistoryFromSettings(page)
+      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      return { decision: 'discard', entry: 'settings-open-full-history', returnedToHistory: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-save-settings-open', async () => {
+      const suffix = 'Saved by Settings Open full history navigation guard.'
+      await openDirtyReview(page, 'Smoke navigation alpha', suffix)
+      await chooseDirtyHistoryNavigation(page, 'Save', () => clickSettingsButton(page))
+      await clickOpenFullHistoryFromSettings(page)
+      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await expectSavedRecap(page, seeded.first, suffix)
+      return { decision: 'save', entry: 'settings-open-full-history', persistedBeforeNavigation: true }
     })
 
     await runNavigationStep(rows, 'HIST-dirty-cancel-back', async () => {
