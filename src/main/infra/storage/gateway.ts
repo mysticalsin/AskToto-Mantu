@@ -1,6 +1,10 @@
 /**
- * Storage gateway: the only way main-process code reads the meetings root, the synced folder (OneDrive or
- * Documents) that holds the meetings and `.brain`.
+ * Storage gateway: the only way the verified-stall path (brainStatus IPC, the boot block's backfill/
+ * intelligence-catch-up/consolidation resume, History-open backfill, extraction and draft recovery — the
+ * readers M2-0031 moved) reads the meetings root, the synced folder (OneDrive or Documents) that holds the
+ * meetings and `.brain`. Other meetings-root readers are migrating file by file; the sync node:fs call
+ * sites still outside the gateway are enumerated and ratcheted down in sync-fs-meetings-root.contract.test.ts
+ * (tracked for M2-0047 — do not treat this comment as claiming full coverage).
  *
  * Reading a cloud-only (dataless) file makes the OS download it and blocks the reading thread until the
  * provider answers, for minutes when offline; on the main thread that froze the whole app. Async fs moves
