@@ -7,7 +7,11 @@ import type { D1DatabaseLike } from '../d1'
 import { memoryStore } from '../store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_ADMIN_EMAIL, TEST_OWNER_EMAIL } from '../test-fixtures'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../../src/shared/operator-hmac'
-import { MODEL_POLICY_CAPABILITIES, verifyModelPolicySignature } from '../../../src/shared/model-policy'
+import {
+  canonicalUnmanagedModelPolicyPayload,
+  MODEL_POLICY_CAPABILITIES,
+  verifyModelPolicySignature
+} from '../../../src/shared/model-policy'
 import { MODEL_POLICY_MIGRATIONS } from '../model-policy'
 
 const NOW = 1_725_000_000_000
@@ -207,9 +211,12 @@ describe('GET /v1/model-policy (device-authenticated)', () => {
     const req = await signedGet('/v1/model-policy', 'a'.repeat(32))
     const res = await handleRequest(req, { ...env(), DB: sqliteD1(freshDb()) }, {}, { store: memoryStore(), now: NOW })
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { ok: boolean; policy: unknown }
+    const body = (await res.json()) as { ok: boolean; policy: unknown; issuedAt: number; signature: string }
     expect(body.ok).toBe(true)
     expect(body.policy).toBeNull()
+    // "Not managed" is signed with the device secret so a client can tell it from a forged reply.
+    expect(body.issuedAt).toBe(NOW)
+    expect(body.signature).toBe(await hmacHex(TEST_INGEST_SECRET, canonicalUnmanagedModelPolicyPayload(NOW)))
   })
 
   it('returns a signed policy a device can verify with the same secret it authenticated with', async () => {

@@ -62,6 +62,26 @@ describe('streamOperatorAsk', () => {
     })
   })
 
+  it('labels the request with the fleet policy capability, defaulting to askChat', async () => {
+    const send = async (capability?: 'recap'): Promise<Record<string, unknown>> => {
+      const fetcher = vi.fn(async (_url: Parameters<typeof fetch>[0], _init?: RequestInit) => new Response('data: {"t":"done"}\n\n', {
+        headers: { 'content-type': 'text/event-stream' }
+      }))
+      vi.stubGlobal('fetch', fetcher)
+      const h = handlers()
+      streamOperatorAsk({
+        providerId: 'openai', kind: 'openai', apiKey: '', viaOperator: true,
+        operatorTransport: { url: 'https://operator.test', secret: 'METIS-OP-1.fixture' },
+        model: 'gpt-4o-mini', temperature: 0.2, system: 'sys', req, handlers: h,
+        ...(capability ? { capability } : {})
+      })
+      await vi.waitFor(() => expect(h.onDone).toHaveBeenCalled())
+      return JSON.parse(String((fetcher.mock.calls[0]?.[1] as RequestInit).body)) as Record<string, unknown>
+    }
+    expect((await send('recap')).capability).toBe('recap')
+    expect((await send()).capability).toBe('askChat')
+  })
+
   it.each([
     ['not an image', 'vision'],
     ['A'.repeat(5_500_004), 'vision'],

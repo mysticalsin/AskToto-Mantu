@@ -1201,6 +1201,34 @@ describe('M2-0412 fleet model policy enforcement (server-side, cannot be bypasse
     expect(res.status).toBe(200)
   })
 
+  it('lets a recap request through for the recap model when recap differs from askChat, and refuses it under the askChat label', async () => {
+    const store = memoryStore()
+    await addProviderKey(store, 'openai', OPENAI_SECRET)
+    await approveDevice(store)
+    const db = await dbWithPolicy({ recap: { provider: 'openai', model: 'gpt-4o-mini' } }) // askChat stays anthropic/haiku
+    const upstreamOk = upstream(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), 'application/json')
+    const send = async (capability: string | undefined, nonce: string): Promise<Response> =>
+      handleRequest(
+        await signedRequest(
+          '/v1/ask',
+          JSON.stringify({
+            provider: 'openai',
+            model: 'gpt-4o-mini',
+            ...(capability ? { capability } : {}),
+            messages: [{ role: 'user', content: 'hi' }]
+          }),
+          nonce
+        ),
+        { ...env(), DB: db },
+        {},
+        { store, now: NOW, providerFetch: upstreamOk }
+      )
+    expect((await send('recap', 'policy-recap-ok')).status).toBe(200)
+    const unlabelled = await send(undefined, 'policy-recap-unlabelled')
+    expect(unlabelled.status).toBe(403)
+    expect(((await unlabelled.json()) as { code: string }).code).toBe('model_not_allowed')
+  })
+
   it('does not enforce anything when no fleet policy has ever been set (not managed = today defaults)', async () => {
     const store = memoryStore()
     await addProviderKey(store, 'openai', OPENAI_SECRET)

@@ -15,6 +15,7 @@ vi.mock('./logger', () => ({
 
 import {
   canonicalModelPolicyPayload,
+  canonicalUnmanagedModelPolicyPayload,
   emptyModelPolicyEntry,
   MODEL_POLICY_CAPABILITIES,
   type ModelPolicyDocument
@@ -41,6 +42,11 @@ function policy(overrides: Partial<ModelPolicyDocument['capabilities']> = {}): M
 
 function sign(secret: string, doc: ModelPolicyDocument): string {
   return createHmac('sha256', secret).update(canonicalModelPolicyPayload(doc)).digest('hex')
+}
+
+function signedUnmanaged(issuedAt: number, secret = 'shared-secret'): unknown {
+  const signature = createHmac('sha256', secret).update(canonicalUnmanagedModelPolicyPayload(issuedAt)).digest('hex')
+  return { ok: true, policy: null, issuedAt, signature }
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -100,11 +106,44 @@ describe('refreshModelPolicy / getActiveModelPolicy', () => {
     expect(auditLogMock).toHaveBeenCalledWith('operator.model_policy.rejected', expect.objectContaining({ reason: 'schema' }))
   })
 
-  it('treats policy:null as "not managed", not a rejection — no audit event', async () => {
-    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: null }))
+  it('treats a signed policy:null as "not managed", not a rejection — no audit event', async () => {
+    setModelPolicyFetchForTests(async () => jsonResponse(signedUnmanaged(NOW)))
     await refreshModelPolicy(SETTINGS, NOW)
     expect(getActiveModelPolicy(SETTINGS)).toBeNull()
     expect(auditLogMock).not.toHaveBeenCalled()
+  })
+
+  it('an unsigned policy:null keeps the verified cached policy and audits the rejection', async () => {
+    const doc = policy()
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign('shared-secret', doc) }))
+    await refreshModelPolicy(SETTINGS, NOW)
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: null }))
+    await refreshModelPolicy(SETTINGS, NOW + 60_000)
+    expect(getActiveModelPolicy(SETTINGS)?.version).toBe(NOW)
+    resetModelPolicyStateForTests() // the disk cache survived too
+    expect(getActiveModelPolicy(SETTINGS)?.version).toBe(NOW)
+    expect(auditLogMock).toHaveBeenCalledWith('operator.model_policy.rejected', expect.objectContaining({ reason: 'unmanaged-signature' }))
+  })
+
+  it('a policy:null signed with the wrong secret keeps the cached policy', async () => {
+    const doc = policy()
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign('shared-secret', doc) }))
+    await refreshModelPolicy(SETTINGS, NOW)
+    setModelPolicyFetchForTests(async () => jsonResponse(signedUnmanaged(NOW + 60_000, 'wrong-secret')))
+    await refreshModelPolicy(SETTINGS, NOW + 60_000)
+    expect(getActiveModelPolicy(SETTINGS)?.version).toBe(NOW)
+  })
+
+  it('a replayed signed policy:null older than the cached policy cannot clear it, a newer one does', async () => {
+    const doc = policy()
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign('shared-secret', doc) }))
+    await refreshModelPolicy(SETTINGS, NOW)
+    setModelPolicyFetchForTests(async () => jsonResponse(signedUnmanaged(NOW - 1)))
+    await refreshModelPolicy(SETTINGS, NOW + 60_000)
+    expect(getActiveModelPolicy(SETTINGS)?.version).toBe(NOW)
+    setModelPolicyFetchForTests(async () => jsonResponse(signedUnmanaged(NOW + 120_000)))
+    await refreshModelPolicy(SETTINGS, NOW + 120_000)
+    expect(getActiveModelPolicy(SETTINGS)).toBeNull()
   })
 
   it('a network failure leaves the last verified policy in place (offline use)', async () => {

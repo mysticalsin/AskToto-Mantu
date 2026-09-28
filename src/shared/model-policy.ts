@@ -15,6 +15,10 @@
  * different, unreviewed risk. All seven capabilities are still part of the signed document so the
  * portal, the audit trail and Settings' "managed by your organization" state are complete and honest
  * about what is and is not enforced.
+ *
+ * Native Mac app: LEAD_ACTION / BLOCKED_EXTERNAL. It has no Operator credential flow (its Operator
+ * secret is not yet in the Keychain) and no cloud-model call site to route, so it cannot fetch or enforce
+ * this policy until a native pairing flow lands (M2-0145). Nothing here claims native enforcement.
  */
 import { z } from 'zod'
 
@@ -98,6 +102,21 @@ export function canonicalModelPolicyPayload(policy: ModelPolicyDocument): string
   }).join('|')
   return `metis-model-policy.v1.${policy.version}.${policy.updatedAt}.${policy.updatedBy}.${capString}`
 }
+
+/**
+ * Signed "not managed" reply: the Operator has no fleet policy. Signed like a real document so an
+ * intercepted or forged `{policy:null}` can never clear a verified cached policy. `issuedAt` is the
+ * Operator's clock at reply time; a client only honours it when it is newer than the policy it holds,
+ * so a captured pre-policy reply cannot be replayed to wipe a policy the owner has since set.
+ */
+export function canonicalUnmanagedModelPolicyPayload(issuedAt: number): string {
+  return `metis-model-policy.v1.unmanaged.${issuedAt}`
+}
+
+export const SignedUnmanagedModelPolicySchema = z.object({
+  issuedAt: z.number().int().nonnegative(),
+  signature: z.string().trim().min(16).max(128)
+})
 
 /** HMAC-SHA256 of `canonicalModelPolicyPayload(policy)`, lowercase hex. Uses the WebCrypto global
  *  (`crypto.subtle`) rather than `node:crypto` so this one implementation runs unmodified on the

@@ -16,6 +16,7 @@ import type { D1DatabaseLike } from './d1'
 import { hmacHex, timingSafeEqualHex } from './hmac'
 import {
   canonicalModelPolicyPayload,
+  canonicalUnmanagedModelPolicyPayload,
   resolveModelPolicyCandidates,
   ModelPolicyDocumentSchema,
   type ModelPolicyCapability,
@@ -29,6 +30,11 @@ export const MODEL_POLICY_MIGRATIONS: string[] = [
   id TEXT PRIMARY KEY,
   policy_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
+  updated_by TEXT NOT NULL
+);`,
+  `CREATE TABLE IF NOT EXISTS model_policy_history (
+  version INTEGER PRIMARY KEY,
+  policy_json TEXT NOT NULL,
   updated_by TEXT NOT NULL
 );`
 ]
@@ -95,11 +101,20 @@ export async function writeModelPolicy(
     )
     .bind(FLEET_POLICY_ID, JSON.stringify(policy), now, actor)
     .run()
+  // Append-only copy keyed by version; a same-millisecond re-save is a no-op rather than an error.
+  await db
+    .prepare('INSERT OR IGNORE INTO model_policy_history (version, policy_json, updated_by) VALUES (?, ?, ?)')
+    .bind(now, JSON.stringify(policy), actor)
+    .run()
   return { ok: true, policy }
 }
 
 export async function signModelPolicy(secret: string, policy: ModelPolicyDocument): Promise<string> {
   return hmacHex(secret, canonicalModelPolicyPayload(policy))
+}
+
+export async function signUnmanagedModelPolicy(secret: string, issuedAt: number): Promise<string> {
+  return hmacHex(secret, canonicalUnmanagedModelPolicyPayload(issuedAt))
 }
 
 export async function verifyModelPolicySignature(
@@ -125,7 +140,10 @@ export interface ModelPolicyRefusal {
  * provider+model the request named is one of the capability's declared candidates (primary or a
  * fallback); the MDM `allowedProviders` narrowing is a desktop-only precedence step and is
  * deliberately not re-applied here — this check only ever needs to answer "did the owner actually
- * approve this provider+model for this capability at all".
+ * approve this provider+model for this capability at all". `capability` is client-supplied, so a modified
+ * client can label a request with whichever capability lists the model it wants; the boundary this
+ * guarantees is therefore "the model is one the owner approved for some capability the caller names",
+ * never a per-route guarantee, and the model must still be an exact provider+model match.
  */
 export async function enforceModelPolicy(
   db: D1DatabaseLike | undefined,

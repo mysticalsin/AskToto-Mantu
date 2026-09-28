@@ -244,6 +244,11 @@ async function main() {
       firstApplyMs,
       switchMs,
       switchBoundMs: 60_000,
+      // Observed: the verified policy version the running app cached. NOT observed: the model an ask then
+      // used — the packaged app exposes no non-interactive ask hook and an ask needs a live provider
+      // credential (BLOCKED_EXTERNAL; the per-call routing is covered by the desktop unit/contract tests).
+      evidence: 'cached-policy-version',
+      modelUsedObserved: false,
       passed: switchMs !== null && switchMs <= 60_000
     })
     process.exit(switchMs !== null && switchMs <= 60_000 ? 0 : 1)

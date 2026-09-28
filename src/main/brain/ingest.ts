@@ -275,6 +275,7 @@ function runCompletionOnce(
       apiKey: picked.operatorTransport ? '' : key,
       viaOperator: !!picked.operatorTransport,
       operatorTransport: picked.operatorTransport,
+      capability: 'recap',
       baseURL: picked.operatorTransport ? undefined : providerBaseUrl(provider, s),
       workspaceId: s.dustWorkspaceId,
       refreshDustAuth: provider === 'dust' ? refreshDustAuthForIngest : undefined,

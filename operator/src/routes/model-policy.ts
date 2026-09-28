@@ -20,7 +20,7 @@ import { auditLog, safeAuditText, type AdminCtx } from './admin-ctx'
 import { defineRoute } from './registry'
 import { json } from '../http'
 import type { OperatorStore } from '../store'
-import { readModelPolicy, signModelPolicy, writeModelPolicy } from '../model-policy'
+import { readModelPolicy, signModelPolicy, signUnmanagedModelPolicy, writeModelPolicy } from '../model-policy'
 
 export function registerModelPolicyRoutes(): void {
   defineRoute<AdminCtx>({
@@ -80,15 +80,17 @@ export async function handleModelPolicyFetch(
 ): Promise<Response> {
   void store
   const policy = await readModelPolicy(env.DB)
-  if (!policy) return json({ ok: true, policy: null })
   // The secret this exact request just proved it holds via verifyDeviceRequest: a licensed seat's own
   // token when present, else the fleet-wide ingest secret. Signing with that secret means the seat can
   // verify offline with the same credential it already has, no separate distribution needed.
   const licenseToken = request.headers.get(OPERATOR_LICENSE_HEADER)?.trim()
   const secret = licenseToken || env.OPERATOR_INGEST_SECRET
   if (!secret) return json({ ok: false, error: 'model policy signing is not configured' }, 503)
-  const parsed = ModelPolicyDocumentSchema.safeParse(policy)
-  if (!parsed.success) return json({ ok: true, policy: null })
+  const parsed = policy ? ModelPolicyDocumentSchema.safeParse(policy) : null
+  if (!parsed?.success) {
+    // "Not managed" is signed too, so a client only clears its cache on an authentic reply.
+    return json({ ok: true, policy: null, issuedAt: now, signature: await signUnmanagedModelPolicy(secret, now) })
+  }
   const signature = await signModelPolicy(secret, parsed.data)
   return json({ ok: true, policy: parsed.data, signature })
 }

@@ -78,6 +78,7 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
     messages,
     ...(image ? { mode: 'vision', image } : {}),
     tier: askTier,
+    capability: opts.capability ?? 'askChat',
     // Stable id for Operator metering — matches seat AskStart.id so D1 does not double-count.
     ...(typeof opts.req.id === 'string' && opts.req.id.trim() ? { clientAskId: opts.req.id.trim() } : {}),
     temperature: opts.temperature,

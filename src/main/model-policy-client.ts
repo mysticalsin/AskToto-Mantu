@@ -18,9 +18,11 @@ import { inspectBundleResponse } from '@shared/bundle-response'
 import { resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
 import {
   canonicalModelPolicyPayload,
+  canonicalUnmanagedModelPolicyPayload,
   narrowAllowedProvidersForCapability,
   pinManagedModel,
   SignedModelPolicySchema,
+  SignedUnmanagedModelPolicySchema,
   type ModelPolicyCapability,
   type ModelPolicyDocument
 } from '@shared/model-policy'
@@ -67,12 +69,16 @@ function cachePath(): string {
   return join(policyDir(), CACHE_FILE)
 }
 
-function verifySignatureLocal(secret: string, policy: ModelPolicyDocument, signature: string): boolean {
+function verifyPayloadLocal(secret: string, payload: string, signature: string): boolean {
   if (!secret || !signature) return false
-  const expected = createHmac('sha256', secret).update(canonicalModelPolicyPayload(policy)).digest('hex')
+  const expected = createHmac('sha256', secret).update(payload).digest('hex')
   const a = Buffer.from(expected, 'utf8')
   const b = Buffer.from(signature.toLowerCase().trim(), 'utf8')
   return a.length === b.length && timingSafeEqual(a, b)
+}
+
+function verifySignatureLocal(secret: string, policy: ModelPolicyDocument, signature: string): boolean {
+  return verifyPayloadLocal(secret, canonicalModelPolicyPayload(policy), signature)
 }
 
 function writeCache(policy: ModelPolicyDocument, signature: string): void {
@@ -168,11 +174,20 @@ export async function refreshModelPolicy(settings: ModelPolicyClientSettings, no
   } catch {
     return
   }
-  const body = json as { ok?: boolean; policy?: unknown; signature?: unknown }
+  const body = json as { ok?: boolean; policy?: unknown; signature?: unknown; issuedAt?: unknown }
   if (body.ok !== true) return
   if (body.policy === null) {
-    // The Operator has no fleet policy configured: "not managed", not a rejection.
-    clearCache()
+    // "Not managed" only clears a held policy when the Operator signed it, and only when it is newer
+    // than that policy — an unsigned, forged or replayed reply must never switch enforcement off.
+    const unmanaged = SignedUnmanagedModelPolicySchema.safeParse({ issuedAt: body.issuedAt, signature: body.signature })
+    if (
+      !unmanaged.success ||
+      !verifyPayloadLocal(secret, canonicalUnmanagedModelPolicyPayload(unmanaged.data.issuedAt), unmanaged.data.signature)
+    ) {
+      if (currentPolicy) auditLog('operator.model_policy.rejected', { reason: 'unmanaged-signature' })
+      return
+    }
+    if (currentPolicy && unmanaged.data.issuedAt > currentPolicy.version) clearCache()
     return
   }
   const parsed = SignedModelPolicySchema.safeParse({ policy: body.policy, signature: body.signature })

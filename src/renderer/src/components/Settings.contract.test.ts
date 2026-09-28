@@ -690,6 +690,22 @@ describe('M2-0412 fleet model policy — "managed by your organization" banner',
     expect(source).toContain('askChatPolicy.model')
   })
 
+  it('shows a visible "not managed" state when no policy capability is set', () => {
+    const banners = blockAfter('{Object.keys(settings.modelPolicyCapabilities).length === 0 &&', '{askChatPolicy &&')
+    expect(banners).toMatch(/Object\.keys\(settings\.modelPolicyCapabilities\)\.length === 0/)
+    expect(banners).toMatch(/Models: not managed/)
+    expect(banners).toMatch(/Operator portal/)
+  })
+
+  it('locks the base and thinking model fields while a policy governs askChat, naming the portal as the source', () => {
+    expect(source).toContain('const modelPolicyLocked = !!askChatPolicy')
+    const base = blockAfter('Base model · fast, cheap', 'Thinking model · hard, coding questions')
+    expect(base).toMatch(/modelPolicyLocked \|\| settings\.managedKeys\.includes\('providerModels'\)/)
+    expect(base).toMatch(/modelPolicyLocked && <span className=\{managedChipCls\}>Managed by the Operator portal/)
+    const thinking = blockAfter('Thinking model · hard, coding questions', 'datalist id')
+    expect(thinking).toMatch(/modelPolicyLocked \|\| settings\.managedKeys\.includes\('providerModelsThinking'\)/)
+  })
+
   it('also surfaces the stt and localModel capabilities as managed banners (owner-manageable but not force-applied — src/shared/model-policy.ts)', () => {
     const sttBlock = blockAfter('const sttPolicy = settings.modelPolicyCapabilities.stt', '{sttPolicy &&')
     expect(sttBlock).toMatch(/const localModelPolicy = settings\.modelPolicyCapabilities\.localModel/)

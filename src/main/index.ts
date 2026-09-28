@@ -2003,7 +2003,9 @@ function publicSettings(): PublicSettings {
   // at request time. Folding it in here keeps UI readiness from drifting out of sync with what's actually
   // allowed to answer (previously a blocked provider could show "ready" with no setup CTA, then reject
   // every ask).
-  const allowed = getAllowedProviders()
+  // M2-0412: narrowed by the fleet model policy exactly as askStart narrows it, so the provider picker
+  // and readiness never offer a provider the policy would refuse at request time.
+  const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
   const funded = operatorFundedProviders()
   const managedVisionReady = (p: ProviderId): boolean =>
     !hasApiKey(p) && funded.includes(p) && !!operatorVisionModel(p, resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'base', s.providerModelsDeep))
@@ -7821,6 +7823,7 @@ function registerIpc(): void {
         apiKey: viaOperator ? '' : key,
         viaOperator,
         operatorTransport: operatorTransport ?? undefined,
+        capability: 'askChat',
         baseURL,
         workspaceId: s.dustWorkspaceId,
         // Dust OAuth tokens (imported from the local CLI) expire after ~1h. On a pre-token 401 the

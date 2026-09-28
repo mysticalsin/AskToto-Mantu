@@ -91,6 +91,20 @@ describe('readModelPolicy / writeModelPolicy', () => {
     expect(read?.version).toBe(NOW + 1000)
     expect(read?.capabilities.askChat.provider).toBe('openai')
   })
+
+  it('keeps every saved version in model_policy_history so an older policy can be read back', async () => {
+    const raw = freshDb()
+    const db = sqliteD1(raw)
+    await writeModelPolicy(db, capabilities(), 'owner@example.test', NOW)
+    await writeModelPolicy(db, { ...capabilities(), askChat: { provider: 'openai', model: 'gpt-5', fallbacks: [] } }, 'owner@example.test', NOW + 1000)
+    const rows = raw.prepare('SELECT version, policy_json FROM model_policy_history ORDER BY version').all() as {
+      version: number
+      policy_json: string
+    }[]
+    expect(rows.map((r) => r.version)).toEqual([NOW, NOW + 1000])
+    expect(JSON.parse(rows[0].policy_json).capabilities.askChat.provider).toBe('anthropic')
+    expect(JSON.parse(rows[1].policy_json).capabilities.askChat.provider).toBe('openai')
+  })
 })
 
 describe('signModelPolicy / verifyModelPolicySignature', () => {

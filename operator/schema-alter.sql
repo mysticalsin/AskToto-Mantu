@@ -234,3 +234,10 @@ CREATE TABLE IF NOT EXISTS model_policy (
   updated_at INTEGER NOT NULL,
   updated_by TEXT NOT NULL
 );
+
+-- Every saved fleet model policy, append-only, so an older version can be read back and re-applied.
+CREATE TABLE IF NOT EXISTS model_policy_history (
+  version INTEGER PRIMARY KEY,
+  policy_json TEXT NOT NULL,
+  updated_by TEXT NOT NULL
+);

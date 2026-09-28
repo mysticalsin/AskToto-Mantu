@@ -70,7 +70,7 @@ describe('migrate.mjs statement parsing and idempotency contract', () => {
     // very old D1). operator_settings (task B6) is the one deliberate exception: a wholly new table
     // that has never existed anywhere else, so it is introduced directly in schema-alter.sql with
     // nothing to "agree" with in schema.sql.
-    const ALTER_ONLY_NEW_TABLES = new Set(['operator_settings', 'model_policy'])
+    const ALTER_ONLY_NEW_TABLES = new Set(['operator_settings', 'model_policy', 'model_policy_history'])
     for (const table of fromAlter) {
       if (ALTER_ONLY_NEW_TABLES.has(table)) continue
       expect(fromSchema.has(table)).toBe(true)

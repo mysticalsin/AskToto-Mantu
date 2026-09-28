@@ -955,6 +955,12 @@ function AiSection({
   const modelInputId = useId()
   const baseUrlInputId = useId()
   const locked = settings.managedKeys.includes('provider')
+  // M2-0412: the fleet model policy's effective askChat provider/model, when the owner has set one on
+  // the Operator portal ('not managed' = key absent, computed server-side in publicSettings()). While
+  // it exists the model fields below are read-only: the main process pins the model for the governed
+  // provider, so an edit here could never take effect.
+  const askChatPolicy = settings.modelPolicyCapabilities.askChat
+  const modelPolicyLocked = !!askChatPolicy
 
   useEffect(() => {
     if (skipClearRef.current) {
@@ -1334,15 +1340,16 @@ function AiSection({
                 // field re-populate with the default the instant it's cleared, so backspacing to empty
                 // (→ "use default") was never actually possible.
                 value={settings.providerModels[provider] ?? ''}
-                disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModels')}
+                disabled={provider === 'anthropic' || modelPolicyLocked || settings.managedKeys.includes('providerModels')}
                 onCommit={(v) => patch({ providerModels: { ...settings.providerModels, [provider]: v } })}
                 placeholder={def.fastModel || 'base model id'}
                 className={[
                   'flex-1 min-w-0', ctl,
-                  provider === 'anthropic' || settings.managedKeys.includes('providerModels') ? 'opacity-60' : ''
+                  provider === 'anthropic' || modelPolicyLocked || settings.managedKeys.includes('providerModels') ? 'opacity-60' : ''
                 ].join(' ')}
               />
               <ManagedChip keys={settings.managedKeys} k="providerModels" />
+              {modelPolicyLocked && <span className={managedChipCls}>Managed by the Operator portal</span>}
             </div>
           </div>
           <div className="flex flex-col gap-1">
@@ -1354,7 +1361,7 @@ function AiSection({
               id={`think-${provider}`}
               list={`m-${provider}`}
               value={settings.providerModelsThinking[provider] ?? ''}
-              disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModelsThinking')}
+              disabled={provider === 'anthropic' || modelPolicyLocked || settings.managedKeys.includes('providerModelsThinking')}
               onCommit={(v) =>
                 patch({
                   providerModelsThinking: { ...settings.providerModelsThinking, [provider]: v }
@@ -1363,7 +1370,7 @@ function AiSection({
               placeholder={def.thinkModel || def.defaultModel || 'thinking model id'}
               className={[
                 'w-full', ctl,
-                provider === 'anthropic' || settings.managedKeys.includes('providerModelsThinking') ? 'opacity-60' : ''
+                provider === 'anthropic' || modelPolicyLocked || settings.managedKeys.includes('providerModelsThinking') ? 'opacity-60' : ''
               ].join(' ')}
             />
           </div>
@@ -1415,11 +1422,8 @@ function AiSection({
     </Section>
   ) : null
 
-  // M2-0412: the fleet model policy's effective askChat provider/model, when the owner has set one on
-  // the Operator portal ('not managed' = key absent, computed server-side in publicSettings()). Shown
-  // once, at the top of this whole tab, since it governs which provider/model Ask/chat actually uses
-  // regardless of what is picked below.
-  const askChatPolicy = settings.modelPolicyCapabilities.askChat
+  // M2-0412: the banner below (top of this whole tab) shows the askChat policy, since it governs which
+  // provider/model Ask/chat actually uses regardless of what is picked below.
   // M2-0412: stt/localModel are owner-manageable and audited but not force-applied (see
   // src/shared/model-policy.ts's doc comment for why) — still surfaced here as an informational/
   // managed banner, same convention as askChatPolicy above, so Settings stays honest about every
@@ -1429,6 +1433,12 @@ function AiSection({
 
   return (
     <div className="flex min-w-0 max-w-full flex-col gap-5">
+      {Object.keys(settings.modelPolicyCapabilities).length === 0 && (
+        <div className="flex items-center gap-2 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3 text-[12px] text-[color:var(--cl-muted-foreground)]">
+          <ShieldCheck size={14} className="shrink-0" />
+          <span>Models: not managed. This device uses its own model settings until the owner sets a policy on the Operator portal.</span>
+        </div>
+      )}
       {askChatPolicy && (
         <div className="flex items-center gap-2 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] p-3 text-[12px] text-[color:var(--cl-foreground)]">
           <ShieldCheck size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
