@@ -2586,8 +2586,11 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
     const before = await readIndexAsync(observer.s)
     observeSourceRefreshWorkFromIndex(before)
     if (before.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
-    if (before.sourceRefreshRequested && !before.replayPending && !sourceRefreshRunning) await maybeStartSourceRefreshAsync()
-    run.result = await requestBackfill(options)
+    const startingSourceRefresh = before.sourceRefreshRequested && !before.replayPending && !sourceRefreshRunning
+    if (startingSourceRefresh) await maybeStartSourceRefreshAsync()
+    // A source-refresh rebuild owns the follow-up scan. Do not race it with a plain forced backfill:
+    // startRebuild's async preflight would otherwise see this request's scan as overlapping work.
+    run.result = startingSourceRefresh && sourceRefreshRunning ? { queued: 0, preparing: true } : await requestBackfill(options)
     const idx = await readIndexAsync(observer.s)
     observeSourceRefreshWorkFromIndex(idx)
     if (idx.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
