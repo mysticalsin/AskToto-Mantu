@@ -322,12 +322,21 @@ interface Harness {
   logger: typeof import('../logger')
   procs: FakeProc[]
   calls: Array<{ path: string; args: string[] }>
+  registry: {
+    recordSidecarIntent: ReturnType<typeof vi.fn>
+    recordSidecarSpawned: ReturnType<typeof vi.fn>
+  }
 }
 
-async function loadIsolatedRuntime(): Promise<Harness> {
+async function loadIsolatedRuntime(options: { spawnedRegistryWrite?: Promise<void> } = {}): Promise<Harness> {
   vi.resetModules()
   const procs: FakeProc[] = []
   const calls: Array<{ path: string; args: string[] }> = []
+  const registry = {
+    recordSidecarIntent: vi.fn(),
+    recordSidecarSpawned: vi.fn(() => options.spawnedRegistryWrite ?? Promise.resolve())
+  }
+  vi.doMock('../infra/process/registry', () => registry)
   vi.doMock('node:child_process', async () => {
     const { EventEmitter: EE } = await import('node:events')
     const spawn = vi.fn((path: string, args: string[]) => {
@@ -357,7 +366,7 @@ async function loadIsolatedRuntime(): Promise<Harness> {
   // holds — the module-level vi.mock factories re-run on reset and hand out new vi.fn()s.
   const runtime = await import('./local-runtime')
   const logger = await import('../logger')
-  return { runtime, logger, procs, calls }
+  return { runtime, logger, procs, calls, registry }
 }
 
 function emitListening(h: Harness, procIndex: number, port: number): void {
@@ -424,6 +433,36 @@ describe('port-line timeout — a sidecar that starts but never reports a listen
     expect(h.calls).toHaveLength(1)
     expect(h.runtime.getState()).toBe('stopped')
     expect(h.runtime.isRunning()).toBe(false)
+  })
+})
+
+describe('sidecar registry ordering', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('does not report the sidecar as started until the spawned identity record has landed', async () => {
+    let releaseRegistryWrite!: () => void
+    const registryWrite = new Promise<void>((resolve) => {
+      releaseRegistryWrite = resolve
+    })
+    const h = await loadIsolatedRuntime({ spawnedRegistryWrite: registryWrite })
+    vi.stubGlobal('fetch', async () => ({ status: 200 }))
+
+    let resolved = false
+    const started = h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(() => {
+      resolved = true
+    })
+    emitListening(h, 0, 55901)
+    await waitUntil(() => h.registry.recordSidecarSpawned.mock.calls.length === 1)
+    await Promise.resolve()
+
+    expect(resolved).toBe(false)
+
+    releaseRegistryWrite()
+    await started
+
+    expect(resolved).toBe(true)
   })
 })
 

@@ -305,8 +305,10 @@ async function main() {
     observation.pids.secondMain = second.pid ?? null
     if (!second.pid) throw new Failure('second main pid was unavailable')
 
+    let secondReady = false
     const reaped = await waitFor(() => {
       const audit = readAudit(profile)
+      secondReady ||= audit.filter((record) => record.event === 'app.renderer.ready').length >= 2
       const reason = sidecarReapReason(audit, llama.pid)
       if (!reason || processAlive(llama.pid)) return false
       observation.reapedReason = reason
@@ -318,7 +320,13 @@ async function main() {
       ownedProcesses(listProcesses(process.platform), { mainPid: second.pid, installRoot, platform: process.platform })
     )
 
-    if (!reaped) throw new Failure('llama-server orphan was not reaped within 5 s of relaunch')
+    if (!reaped) {
+      throw new Failure(
+        secondReady
+          ? 'llama-server orphan was not reaped within 5 s of relaunch'
+          : 'second launch did not reach renderer ready before the 5 s reaper deadline'
+      )
+    }
     observation.result = 'pass'
   } catch (error) {
     observation.result = error instanceof Precondition ? 'BLOCKED_EXTERNAL' : 'fail'

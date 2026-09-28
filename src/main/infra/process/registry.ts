@@ -191,10 +191,10 @@ export function recordSidecarIntent(name: string, args: readonly string[]): void
   }
 }
 
-export function recordSidecarSpawned(name: string, child: ChildProcess, executable: string, args: readonly string[]): void {
+export function recordSidecarSpawned(name: string, child: ChildProcess, executable: string, args: readonly string[]): Promise<void> {
   const registry = configuredRegistry
-  if (!registry) return
-  void registry.recordSpawned(name, child, executable, args).catch((error) => {
+  if (!registry) return Promise.resolve()
+  return registry.recordSpawned(name, child, executable, args).catch((error) => {
     mainLog.warn('[sidecar.registry] spawned write failed', error)
   })
 }
