@@ -12,8 +12,9 @@ import {
   commitmentKey,
   buildExtractionSystem,
   updateIndex,
-  readMeetingSourceMode, whenIndexWritesSettle } from './ingest'
+  readMeetingSourceMode } from './ingest'
 import { buildBrainContext } from './context'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import {
   brainDir,
   slugify,
@@ -68,7 +69,7 @@ describe('brain', () => {
   // parallel load the rename then lands on a directory this line already deleted, failing an
   // unrelated test in whichever file happened to be running.
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
   const sampleExtraction = (): MeetingExtraction =>

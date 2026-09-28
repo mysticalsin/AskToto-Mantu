@@ -6,8 +6,9 @@ import { app } from 'electron'
 import { PROVIDER_IDS } from '@shared/providers'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, enqueueIngest, startBackfill, whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress, enqueueIngest, startBackfill } from './ingest'
 import { readIndex, readMeetingExtraction } from './store'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -75,7 +76,7 @@ describe('automatic brain ingest with Métis Local', () => {
     // serialized write lane. Removing the profile under that in-flight tmp+rename both raises an
     // unhandled rejection and lets the stale write land during the NEXT test, where startBackfill()
     // then reports queued:0 because the index it reads is not the one this test just seeded.
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
@@ -136,7 +137,7 @@ describe('automatic brain ingest with Métis Local', () => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
 
     expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
     expect(createStreamMock.mock.calls[0][0].providerId).toBe('local')
