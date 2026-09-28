@@ -144,7 +144,7 @@ for ($n = 1; $n -le $Cycles; $n++) {
   $env:METIS_DISABLE_APPLE_FM = '1'
   Get-ChildItem Env: | Where-Object { $_.Name -match '_API_KEY$' } | ForEach-Object { Remove-Item "Env:$($_.Name)" }
 
-  $record = [ordered]@{ cycle = $n; killed = $false; llamaObserved = $false; descendants = @(); survivors = @(); inJob = @() }
+  $record = [ordered]@{ cycle = $n; killed = $false; prewarmOk = $null; llamaObserved = $false; descendants = @(); survivors = @(); inJob = @() }
   $mainProc = Start-Process -FilePath $appPath -ArgumentList "--remote-debugging-port=$port" -PassThru
   $mainPid = $mainProc.Id
 
@@ -152,7 +152,8 @@ for ($n = 1; $n -le $Cycles; $n++) {
   $ready = Wait-Until { (Test-Path $auditLog) -and (Select-String -Path $auditLog -Pattern 'app.renderer.ready' -Quiet) } $ReadyTimeoutSeconds
   if ($ready) {
     if ($PrewarmScript) {
-      try { & node $PrewarmScript $port | Out-Null } catch { Write-Host "cycle ${n}: prewarm failed" }
+      try { & node $PrewarmScript $port | Out-Null; $record.prewarmOk = ($LASTEXITCODE -eq 0) } catch { $record.prewarmOk = $false }
+      if (-not $record.prewarmOk) { Write-Host "cycle ${n}: prewarm failed" }
       $llama = Wait-Until {
         Get-Owned (Get-ProcessTable) $mainPid $installRoot | Where-Object { $_.role -eq 'llama-server.exe' } | Select-Object -First 1
       } $LlamaTimeoutSeconds

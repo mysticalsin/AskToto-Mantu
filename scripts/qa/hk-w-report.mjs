@@ -15,11 +15,13 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 const LLAMA_UNBLOCK = 'Seed the packaged local model assets so the prewarm starts llama-server.exe.'
+const REGISTRY_UNBLOCK =
+  'Re-run with a release tag built after the M2-0027 process registry so the registry osStartTime is present to compare.'
 
 /**
  * @param {{
  *   requestedCycles: number,
- *   cycles: Array<{ cycle: number, killed: boolean, llamaObserved: boolean,
+ *   cycles: Array<{ cycle: number, killed: boolean, prewarmOk?: boolean | null, llamaObserved: boolean,
  *     descendants: Array<{ pid: number, startedMs: number, role: string }>,
  *     survivors: Array<{ pid: number, startedMs: number, role: string }> }>,
  *   startTime: { checked: number, mismatches: number, registryChecked: number, registryMismatches: number }
@@ -40,6 +42,17 @@ export function summarizeHkW(raw) {
     for (const survivor of cycle.survivors) survivorRoles[survivor.role] = (survivorRoles[survivor.role] ?? 0) + 1
   }
   if (observed.length === 0) failures.push('no cycle observed any descendant of Metis.exe, so the job semantics are unmeasured')
+
+  // Census completeness: in how many cycles each role was alive before the kill. A role absent from every
+  // cycle is reported as unobserved rather than implied covered.
+  const observedRoles = {}
+  for (const cycle of cycles) {
+    for (const role of new Set(cycle.descendants.map((d) => d.role))) observedRoles[role] = (observedRoles[role] ?? 0) + 1
+  }
+  const roleCycles = (pattern) =>
+    Object.entries(observedRoles).reduce((n, [role, count]) => (pattern.test(role) ? n + count : n), 0)
+  const watcherCycles = roleCycles(/powershell|pwsh/i)
+  const utilityCycles = roleCycles(/\(utility\)/)
 
   const llamaCycles = cycles.filter((c) => c.llamaObserved).length
   const startTime = raw?.startTime ?? { checked: 0, mismatches: 0, registryChecked: 0, registryMismatches: 0 }
@@ -67,11 +80,15 @@ export function summarizeHkW(raw) {
       llamaCycles > 0
         ? { observedCycles: llamaCycles }
         : { observedCycles: 0, status: 'BLOCKED_EXTERNAL', unblock: LLAMA_UNBLOCK },
+    observedRoles,
+    watcher: { observedCycles: watcherCycles, ...(watcherCycles === 0 && { status: 'UNOBSERVED' }) },
+    utilityHosts: { observedCycles: utilityCycles, ...(utilityCycles === 0 && { status: 'UNOBSERVED' }) },
     startTimePath: {
       checked: startTime.checked,
       mismatches: startTime.mismatches,
       registryChecked: startTime.registryChecked,
-      registryMismatches: startTime.registryMismatches
+      registryMismatches: startTime.registryMismatches,
+      ...(!startTime.registryChecked && { status: 'BLOCKED_EXTERNAL', unblock: REGISTRY_UNBLOCK })
     }
   }
 }

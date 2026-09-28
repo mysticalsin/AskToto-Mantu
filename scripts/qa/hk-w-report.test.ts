@@ -56,6 +56,25 @@ describe('summarizeHkW', () => {
     expect(summary.failures).toHaveLength(2)
   })
 
+  it('marks the registry start-time path BLOCKED_EXTERNAL when no registry entry was compared', () => {
+    const summary = summarizeHkW({
+      requestedCycles: 1,
+      cycles: [cycle(1)],
+      startTime: { ...goodTimes, registryChecked: 0 }
+    })
+    expect(summary.startTimePath).toMatchObject({ status: 'BLOCKED_EXTERNAL', registryChecked: 0 })
+    expect(summary.startTimePath.unblock).toContain('M2-0027')
+    const verified = summarizeHkW({ requestedCycles: 1, cycles: [cycle(1)], startTime: goodTimes })
+    expect(verified.startTimePath).not.toHaveProperty('status')
+  })
+
+  it('counts observed cycles per role and flags a watcher or utility host never seen', () => {
+    const summary = summarizeHkW({ requestedCycles: 2, cycles: [cycle(1), cycle(2)], startTime: goodTimes })
+    expect(summary.observedRoles).toEqual({ 'llama-server.exe': 2, 'Metis.exe (utility)': 2 })
+    expect(summary.utilityHosts).toEqual({ observedCycles: 2 })
+    expect(summary.watcher).toEqual({ observedCycles: 0, status: 'UNOBSERVED' })
+  })
+
   it('reports a missing llama-server as BLOCKED_EXTERNAL without failing the lane', () => {
     const summary = summarizeHkW({ requestedCycles: 1, cycles: [cycle(1, [], false)], startTime: goodTimes })
     expect(summary.result).toBe('pass')

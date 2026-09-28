@@ -16,8 +16,10 @@ on:
         type: choice
         options:
           - hk-w
+      # The default predates src/main/infra/process/registry.ts; the lead must pass a tag built after the
+      # M2-0027 registry, otherwise the report marks the registry start-time path BLOCKED_EXTERNAL.
       release_tag:
-        description: Release tag whose Windows installer is measured
+        description: Release tag whose Windows installer is measured (must contain the process registry)
         required: true
         default: v1.9.6
         type: string
