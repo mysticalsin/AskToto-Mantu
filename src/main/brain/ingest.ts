@@ -94,7 +94,7 @@ import {
   listMeetingExtractions,
   loadMeetingExtractionSlugs,
   removeMeetingExtraction,
-  readMeetingExtraction,
+  loadMeetingExtraction,
   withEntityLock,
   cloneEntity,
   purgeBrain,
@@ -1431,10 +1431,10 @@ export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Pro
     // M2-0003: an existing index.json this process cannot use is read-only for the session. Drop the
     // mutation rather than persist a ledger derived from readIndex's empty stand-in. Quiet on purpose:
     // the unavailability was already logged/audited once by indexUnavailable/loadIndex.
-    if (indexUnavailable(s)) return
-    // readIndex returns a shared cached snapshot. Only publish mutations after the durable write;
+    if (await indexUnavailableAsync(s)) return
+    // readIndexAsync returns a shared cached snapshot. Only publish mutations after the durable write;
     // a failed mutator or disk write must not leak unsaved records into later reads/writes.
-    const idx = cloneEntity(readIndex(s))
+    const idx = cloneEntity(await readIndexAsync(s))
     mutate(idx)
     await writeIndex(s, idx)
   })
@@ -1793,7 +1793,7 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
       // JSON alongside an `ok:false` (or absent) index entry. Re-use that exact deterministic result:
       // no second LLM call, no cloud cost, and mergeExtraction's per-meeting de-dup makes the repair
       // safe even if a previous attempt wrote some entities before it was interrupted.
-      const savedExtraction = readMeetingExtraction(s, extractionSlug(jobKey(job)))
+      const savedExtraction = await loadMeetingExtraction(s, extractionSlug(jobKey(job)))
       if (savedExtraction) return { job, s, ok: true, x: savedExtraction, md, preparedText: prepareMeetingText(s, md) }
     }
     const { extraction, preparedText } = await extractMeeting(s, md, job.file, job.route ?? 'default')
