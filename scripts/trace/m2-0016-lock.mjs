@@ -210,9 +210,16 @@ export function m2_0016Evidence(traceability) {
   }
 }
 
+function artifactText(value) {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(artifactText).join('\n')
+  if (value && typeof value === 'object') return Object.values(value).map(artifactText).join('\n')
+  return String(value ?? '')
+}
+
 export function m2_0016Problems(artifacts) {
   const problems = []
-  const serialized = JSON.stringify(artifacts)
+  const serialized = artifactText(artifacts)
   const required = [
     'Version | 1.0',
     'Cloudflare-hosted speech through the Operator session broker',
