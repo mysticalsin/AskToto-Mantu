@@ -7,7 +7,7 @@
  *
  * Anchors are function/branch names, never line numbers, so reordering unrelated code doesn't break this.
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { pickReadyProvider, detectHint, licenseErrorMessage, SETTINGS_CONTENT_SCROLL_CLASS, settingsScrollClipsOverflowX } from './Settings'
@@ -17,20 +17,22 @@ import { licenseErrorMessage as gateLicenseErrorMessage } from './LicenseGate'
 // Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
 // newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
 // Normalizing keeps every anchor line-ending-independent without weakening what each one pins.
-const settingsFeatureSources = [
-  'LocalResilience.tsx',
-  'CliIntegration.tsx',
-  'Integrations.tsx',
-  'DustSetup.tsx',
-  'AiSection.tsx',
-  'IntelligenceSection.tsx',
-  'PersonalizationSection.tsx',
-  'PrivacyMeetingsSection.tsx',
-  'SettingsSupport.tsx',
-  'SettingsPanel.tsx'
-]
-const source = settingsFeatureSources
-  .map((file) => readFileSync(join(__dirname, '../features/settings', file), 'utf8'))
+// The Settings panel is split across features/settings and ui/. The contract reads the concatenation of
+// Settings.tsx and every non-test source file in those folders, in sorted order, each behind a file separator.
+const SRC_ROOT = join(__dirname, '..')
+function settingsSourceFiles(): string[] {
+  const out = ['components/Settings.tsx']
+  for (const dir of ['features/settings', 'ui']) {
+    for (const entry of readdirSync(join(SRC_ROOT, dir), { recursive: true }) as string[]) {
+      const rel = `${dir}/${entry.replace(/\\/g, '/')}`
+      if (/\.tsx?$/.test(rel) && !/\.test\.tsx?$/.test(rel)) out.push(rel)
+    }
+  }
+  return out.sort()
+}
+const FILE_SEPARATOR = '// FILE: '
+const source = settingsSourceFiles()
+  .map((file) => `${FILE_SEPARATOR}${file}\n${readFileSync(join(SRC_ROOT, file), 'utf8')}`)
   .join('\n')
   .replace(/\r\n/g, '\n')
 
@@ -61,7 +63,9 @@ function blockAfter(startAnchor: string, endMarker: string): string {
 describe('Local AI distinguishes bundled compact weights from optional downloads (MQA-319)', () => {
   const localAiStart = source.indexOf('function LocalAiSection(')
   expect(localAiStart).toBeGreaterThan(-1)
-  const block = source.slice(localAiStart)
+  // The section is the tail of its own file: the slice ends at the next file separator.
+  const nextFile = source.indexOf(`\n${FILE_SEPARATOR}`, localAiStart)
+  const block = source.slice(localAiStart, nextFile === -1 ? undefined : nextFile)
   // Copy assertions run over the code with `//` comments stripped. The comments explain WHY the old
   // wording was wrong and legitimately quote it; that text never reaches a user.
   const copy = block.replace(/^\s*\/\/.*$/gm, '')
