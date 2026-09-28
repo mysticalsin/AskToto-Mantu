@@ -1,10 +1,19 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createPackage } from '@electron/asar'
+import { finished } from 'node:stream/promises'
+import { createPackage, getRawHeader, uncache } from '@electron/asar'
+import type { Writable } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
 import { installQaFaultHook } from '../../src/main/qa-identity'
 import { assertQaFaultHookMatchesIdentity, QA_FAULT_MARKER, QA_IDENTITY_PACKAGE_NAME } from './qa-fault-hook.mjs'
+
+type AsarHeaderEntry = {
+  files?: Record<string, AsarHeaderEntry>
+  offset?: string
+  size?: number
+  unpacked?: boolean
+}
 
 const dirs: string[] = []
 
@@ -17,14 +26,43 @@ afterEach(async () => {
 /** Pack a temp directory holding a package.json { name } and an out/main/index.js that does or does not
  *  contain the QA fault marker — a stand-in for a real electron-builder app.asar. */
 async function buildArchive(name: string, mainSource: string): Promise<string> {
-  const src = await mkdtemp(join(tmpdir(), 'asktoto-qa-fault-hook-'))
-  dirs.push(src)
-  await writeFile(join(src, 'package.json'), JSON.stringify({ name }))
-  await mkdir(join(src, 'out', 'main'), { recursive: true })
-  await writeFile(join(src, 'out', 'main', 'index.js'), mainSource)
-  const dest = join(src, 'app.asar')
-  await createPackage(src, dest)
+  const root = await mkdtemp(join(tmpdir(), 'asktoto-qa-fault-hook-'))
+  dirs.push(root)
+  const src = join(root, 'stage')
+  const dest = join(root, 'app.asar')
+  await writeStagedPackage(src, dest, name, mainSource)
   return dest
+}
+
+async function writeStagedPackage(src: string, dest: string, name: string, mainSource: string): Promise<void> {
+  await mkdir(join(src, 'out', 'main'), { recursive: true })
+  await writeFile(join(src, 'package.json'), JSON.stringify({ name }))
+  await writeFile(join(src, 'out', 'main', 'index.js'), mainSource)
+  // @electron/asar resolves with the writable stream returned by out.end(), before the stream
+  // lifecycle has finished. Wait for the real writable completion before any synchronous asar read.
+  const output = await createPackage(src, dest)
+  await finished(output as unknown as Writable)
+  await assertArchiveBytesComplete(dest)
+}
+
+async function assertArchiveBytesComplete(archive: string): Promise<void> {
+  uncache(archive)
+  try {
+    const { header, headerSize } = getRawHeader(archive)
+    const expectedSize = 8 + headerSize + packedPayloadSize(header)
+    const actualSize = (await stat(archive)).size
+    expect(actualSize).toBe(expectedSize)
+  } finally {
+    uncache(archive)
+  }
+}
+
+function packedPayloadSize(entry: AsarHeaderEntry): number {
+  if (entry.files) {
+    return Math.max(0, ...Object.values(entry.files).map((child) => packedPayloadSize(child)))
+  }
+  if (entry.unpacked || entry.size === undefined || entry.offset === undefined) return 0
+  return Number(entry.offset) + entry.size
 }
 
 describe('assertQaFaultHookMatchesIdentity', () => {
@@ -58,5 +96,33 @@ describe('assertQaFaultHookMatchesIdentity', () => {
     } finally {
       if (added) process.removeListener('SIGUSR2', added as unknown as (...args: any[]) => void)
     }
+  })
+
+  it('Q6: repeated shipping packages whose main bundle carries the hook fail deterministically', async () => {
+    await Promise.all(Array.from({ length: 64 }, async (_, index) => {
+      const archive = await buildArchive('asktoto', `/* ${QA_FAULT_MARKER} ${index} */\n`)
+      expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/shipping package carries the QA fault hook/)
+    }))
+  })
+
+  it('Q7: replacing an archive at the same path does not reuse a stale asar header', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'asktoto-qa-fault-hook-'))
+    dirs.push(root)
+    const src = join(root, 'stage')
+    const archive = join(root, 'app.asar')
+    await writeStagedPackage(src, archive, 'asktoto', 'console.log("shipping build")\n')
+    expect(assertQaFaultHookMatchesIdentity(archive)).toEqual({ qaIdentity: false })
+
+    await rm(src, { recursive: true, force: true })
+    await writeStagedPackage(src, archive, QA_IDENTITY_PACKAGE_NAME, 'console.log("qa build")\n')
+    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/QA-identity package lacks the QA fault hook/)
+  })
+
+  it('Q8: a readable ASAR header without flushed payload bytes fails before extracting package JSON', async () => {
+    const archive = await buildArchive('asktoto', `/* ${QA_FAULT_MARKER} */\n`)
+    const { headerSize } = getRawHeader(archive)
+    await truncate(archive, 8 + headerSize)
+
+    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/app\.asar is incomplete/)
   })
 })
