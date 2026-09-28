@@ -39,13 +39,6 @@ const AUDIT_POLL_MS = 250
 const CENSUS_POLL_MS = 500
 const RV_TIMEOUT_MS = 15_000
 
-export const NAVIGATION_GUARD_BOOTSTRAP_PATCH = Object.freeze({
-  onboardingDone: true,
-  recordingConsent: true,
-  overlayLayout: 'bar',
-  autoHideOverlay: false
-})
-
 export const LIFECYCLE_EVENTS = Object.freeze([
   'app.started',
   'app.renderer.ready',
@@ -245,77 +238,16 @@ function completeNavigationRow(rows, id, patch) {
   if (row) Object.assign(row, patch)
 }
 
-async function findOverlayPage(browser, timeout = 15_000) {
-  const deadline = Date.now() + timeout
-  while (Date.now() < deadline) {
-    const pages = browser.contexts().flatMap((context) => context.pages())
-    const overlay = pages.find((page) => !page.isClosed() && isOverlayUrl(page.url()))
-    if (overlay) return overlay
-    await sleep(100)
-  }
-  throw new Error('overlay page not found')
-}
-
 async function withOverlayPage(port, fn) {
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 30_000 })
-  const overlay = await findOverlayPage(browser)
-  return fn(overlay, browser)
+  const pages = browser.contexts().flatMap((context) => context.pages())
+  const overlay = pages.find((page) => isOverlayUrl(page.url()))
+  if (!overlay) throw new Error('overlay page not found')
+  return fn(overlay)
 }
 
 async function waitForText(page, text, timeout = 15_000) {
   await page.getByText(text, { exact: true }).first().waitFor({ timeout })
-}
-
-async function locatorVisible(locator) {
-  return locator.first().isVisible({ timeout: 500 }).catch(() => false)
-}
-
-async function ensureNavigationGuardHarnessState(page, browser) {
-  const state = await page.evaluate(async (patch) => {
-    const before = await window.toto.getSettings()
-    const after = await window.toto.setSettings({ ...patch, onboardingDoneAt: Date.now() })
-    if (!before.onboardingDone) window.toto.onboardingExit('answer')
-    return {
-      beforeOnboardingDone: before.onboardingDone,
-      afterOnboardingDone: after.onboardingDone,
-      overlayLayout: after.overlayLayout,
-      autoHideOverlay: after.autoHideOverlay
-    }
-  }, NAVIGATION_GUARD_BOOTSTRAP_PATCH)
-  const activePage = state.beforeOnboardingDone ? page : await findOverlayPage(browser, 30_000)
-  await activePage.getByRole('button', { name: 'History' }).first().waitFor({ timeout: 15_000 })
-  return { page: activePage, state }
-}
-
-async function ensureHistory(page) {
-  const search = page.getByLabel('Search past meetings')
-  if (await locatorVisible(search)) return
-
-  const backToHistory = page.getByRole('button', { name: /Back to history/ })
-  if (await locatorVisible(backToHistory)) {
-    await backToHistory.first().click({ timeout: 15_000 })
-    await search.waitFor({ timeout: 15_000 })
-    return
-  }
-
-  await clickHistory(page)
-}
-
-async function ensureIdleBar(page) {
-  const search = page.getByLabel('Search past meetings')
-  if (await locatorVisible(search)) {
-    await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
-    await search.waitFor({ state: 'hidden', timeout: 15_000 })
-    await page.waitForTimeout(450)
-    return
-  }
-
-  const backToHistory = page.getByRole('button', { name: /Back to history/ })
-  if (await locatorVisible(backToHistory)) {
-    await backToHistory.first().click({ timeout: 15_000 })
-    await search.waitFor({ timeout: 15_000 })
-    await ensureIdleBar(page)
-  }
 }
 
 async function seedNavigationMeetings(page) {
@@ -371,13 +303,11 @@ async function openHistoryFromSettings(page) {
 }
 
 async function openMeetingFromHistoryRow(page, title) {
-  await ensureHistory(page)
   await page.getByRole('button', { name: new RegExp(title) }).first().dblclick({ timeout: 15_000 })
   await waitForText(page, 'Summary')
 }
 
 async function openMeetingFromHistoryButton(page, title) {
-  await ensureHistory(page)
   await page.getByRole('button', { name: new RegExp(title) }).first().click({ timeout: 15_000 })
   await page.getByRole('button', { name: /^Open/ }).first().click({ timeout: 15_000 })
   await waitForText(page, 'Summary')
@@ -442,19 +372,15 @@ async function runNavigationStep(rows, id, fn) {
 }
 
 async function runPackagedNavigationGuardRows({ port, rows }) {
-  await withOverlayPage(port, async (initialPage, browser) => {
-    const ready = await ensureNavigationGuardHarnessState(initialPage, browser)
-    const page = ready.page
+  await withOverlayPage(port, async (page) => {
     const seeded = await seedNavigationMeetings(page)
 
     await runNavigationStep(rows, 'HIST-clean-bar-open', async () => {
-      await ensureIdleBar(page)
       await clickHistory(page)
-      return { seededMeetings: 2, guardVisible: false, harnessState: ready.state }
+      return { seededMeetings: 2, guardVisible: false }
     })
 
     await runNavigationStep(rows, 'HIST-clean-settings-open', async () => {
-      await ensureHistory(page)
       await openHistoryFromSettings(page)
       return { returnedToHistory: true, guardVisible: false }
     })
@@ -471,7 +397,6 @@ async function runPackagedNavigationGuardRows({ port, rows }) {
     })
 
     await runNavigationStep(rows, 'HIST-clean-back', async () => {
-      await openMeetingFromHistoryRow(page, 'Smoke navigation alpha')
       await returnToHistoryFromReview(page)
       return { returnedToHistory: true, guardVisible: false }
     })
