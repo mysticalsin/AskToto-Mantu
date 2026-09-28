@@ -5,16 +5,15 @@
  * and the pure precedence resolution — portal policy > MDM admin-managed `allowedProviders` (can only
  * narrow) > user settings — so the Worker, the desktop app and every test share one definition.
  *
- * Only `askChat` and `recap` are enforced at a real call site today (src/main/index.ts's interactive
- * ask, src/main/import-recap.ts and src/main/brain/ingest.ts's meeting extraction) — the only
- * capabilities that ever route through the Operator's `/v1/ask` proxy. `commandAgent` and `tts` have
- * no model-routed call site in this app version (command parsing is rule-based, there is no
- * text-to-speech path); `stt` and `localModel` are owner-manageable and audited but are surfaced to
- * Settings as informational/managed rather than force-applied, because rewriting the live audio
- * session or triggering an on-device model re-download from a background policy fetch is a materially
- * different, unreviewed risk. All seven capabilities are still part of the signed document so the
- * portal, the audit trail and Settings' "managed by your organization" state are complete and honest
- * about what is and is not enforced.
+ * `askChat` and `recap` are enforced at the real ask/extraction call sites (src/main/index.ts's
+ * interactive ask, src/main/import-recap.ts and src/main/brain/ingest.ts's meeting extraction).
+ * `stt` is enforced where a cloud speech session starts (`enforceSttPolicy` in
+ * src/shared/cloud-stt-provider.ts, checked once at session start so a live session is never
+ * rewritten) and `localModel` where the on-device model is judged ready (`localModelAllowedByPolicy`;
+ * a disallowed model is skipped, never downloaded or swapped). `commandAgent`, `tts` and `embeddings`
+ * have no model-routed call site in this app version (command parsing is rule-based, there is no
+ * text-to-speech path, no embedding model is called): they stay in the signed document so the portal
+ * and audit trail are complete, but nothing enforces them and Settings does not claim otherwise.
  *
  * Native Mac app: LEAD_ACTION / BLOCKED_EXTERNAL. It has no Operator credential flow (its Operator
  * secret is not yet in the Keychain) and no cloud-model call site to route, so it cannot fetch or enforce
@@ -227,6 +226,14 @@ export function pinManagedModel(
   if (entry.provider === provider) return entry.model
   const fallback = entry.fallbacks.find((f) => f.provider === provider)
   return fallback ? fallback.model : currentModel
+}
+
+/** Whether the on-device model `modelId` is permitted by the policy's `localModel` entry (primary and
+ *  fallbacks match on model id). No policy means unrestricted. */
+export function localModelAllowedByPolicy(policy: ModelPolicyDocument | null, modelId: string): boolean {
+  if (!policy) return true
+  const entry = policy.capabilities.localModel
+  return entry.model === modelId || entry.fallbacks.some((f) => f.model === modelId)
 }
 
 /** Default document shape for the Models portal page's "start from today's defaults" affordance —

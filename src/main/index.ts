@@ -158,6 +158,7 @@ import {
   localFallbackEligibleFor,
   localAnswerFloorEligibleFor,
   localBaseReady,
+  setLocalModelGate,
   localPrewarmEligible,
   localVisionPrivacyRequired,
   localPrimaryEligibleFor,
@@ -177,6 +178,7 @@ import {
   workingCliOrder
 } from '@shared/ask-routing'
 import { getActiveModelPolicy, narrowAllowedForCapability, resolveManagedModel } from './model-policy-client'
+import { localModelAllowedByPolicy } from '../shared/model-policy'
 import { MODEL_POLICY_CAPABILITIES } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
@@ -682,7 +684,7 @@ import {
 import { cloudSttRequestBelongsToOwner, replaceCloudSttSessionIfCurrent } from './cloud-stt/session-replacement'
 import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
-import { effectiveCloudSttProvider } from '../shared/cloud-stt-provider'
+import { effectiveCloudSttProvider, enforceSttPolicy } from '../shared/cloud-stt-provider'
 import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
 
 import {
@@ -6833,6 +6835,9 @@ function registerIpc(): void {
   })
 
 
+  // M2-0412: every on-device readiness decision consults the fleet policy's `localModel` entry.
+  setLocalModelGate((modelId) => localModelAllowedByPolicy(getActiveModelPolicy(getSettings()), modelId))
+
   // --- Cloud STT live WebSocket (Nova-3 / Soniox) ---
   // Main holds Operator/CF credentials; renderer only streams Float32 PCM + receives finals.
   ipcMain.handle(IPC.cloudSttStart, async (e, payload: unknown) => {
@@ -6850,7 +6855,12 @@ function registerIpc(): void {
     const profile = resolveEnterpriseLiveProfile(settings.enterpriseLive ?? {})
     // Provider authority is settings/profile only. The renderer may report its UI selection but cannot
     // redirect a live audio stream to another backend by supplying `payload.provider`.
-    const provider = effectiveCloudSttProvider(profile, settings.cloudSttProvider)
+    // M2-0412: the fleet policy's `stt` entry narrows that choice here, at session start only — a live
+    // session is never rewritten when the policy changes; the next start picks it up.
+    const provider = enforceSttPolicy(
+      getActiveModelPolicy(settings),
+      effectiveCloudSttProvider(profile, settings.cloudSttProvider)
+    )
     // An opaque capture identity scopes delayed force-stops to the session that requested them.
     // Keep the bound modest because this comes from the renderer IPC boundary.
     const captureId =

@@ -84,6 +84,7 @@ import {
   localFallbackEligibleFor,
   localAnswerFloorEligibleFor,
   localBaseReady,
+  setLocalModelGate,
   localVisionPrivacyRequired,
   resolveRoutingMode,
   localPrimaryEligibleFor,
@@ -355,6 +356,18 @@ describe('localBaseReady (feeds index.ts localReady, local*Ready, and the vision
 
   it('false when the allowlist excludes local', () => {
     expect(localBaseReady(readySettings(), ['anthropic'])).toBe(false)
+  })
+
+  it('M2-0412: false when the fleet policy does not allow the configured model, without touching the disk or downloading', () => {
+    setLocalModelGate((id) => id === 'policy-approved-model')
+    try {
+      expect(localBaseReady(readySettings(), null)).toBe(false)
+      expect(localBaseReady(readySettings({ modelId: 'policy-approved-model' }), null)).toBe(true)
+      expect(localModelsMock.isDownloaded).toHaveBeenCalledTimes(1)
+    } finally {
+      setLocalModelGate(null)
+    }
+    expect(localBaseReady(readySettings(), null)).toBe(true)
   })
 
   it('false when the runtime binary is missing', () => {

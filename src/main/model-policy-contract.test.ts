@@ -12,13 +12,11 @@ import { describe, expect, it } from 'vitest'
  * each call site actually calls in.
  *
  * "Every call site" means every place that currently picks a cloud provider + model at all (see
- * AGENTS.md scope / M2-0412 ticket notes). Two capabilities in the policy schema — `commandAgent` and
- * `tts` — have NO model-routed call site anywhere in this app (command parsing is rule-based;
- * there is no text-to-speech path), so there is nothing to wire; the negative assertions below pin
- * that absence rather than silently ignoring it. `stt` and `localModel` are owner-manageable and
- * audited but deliberately surfaced to Settings as informational rather than force-applied (see
- * src/shared/model-policy.ts's module doc comment for why) — not asserted here since asserting a
- * TODO would be a fake proof, not a real contract.
+ * AGENTS.md scope / M2-0412 ticket notes). Three capabilities in the policy schema — `commandAgent`,
+ * `tts` and `embeddings` — have NO model-routed call site anywhere in this app (command parsing is
+ * rule-based; there is no text-to-speech path; no embedding model is called), so there is nothing to
+ * wire; the negative assertions below pin that absence rather than silently ignoring it. `stt` is
+ * enforced where a cloud speech session starts and `localModel` in local-routing's readiness gate.
  */
 
 const root = join(__dirname, '..', '..')
@@ -52,6 +50,17 @@ describe('M2-0412 — every real model call site resolves through the fleet poli
       expect(text, path).toContain("'recap'")
       expect(text, path).toMatch(/narrowAllowedForCapability|resolveManagedModel/)
     }
+  })
+
+  it('the cloud STT session start narrows the provider through the stt policy entry', () => {
+    const text = src('src/main/index.ts')
+    expect(text).toMatch(/enforceSttPolicy\(\s*getActiveModelPolicy\(settings\),\s*effectiveCloudSttProvider\(/)
+  })
+
+  it('the on-device readiness gate is installed from the localModel policy entry', () => {
+    expect(src('src/main/index.ts')).toContain('setLocalModelGate((modelId) => localModelAllowedByPolicy(getActiveModelPolicy(getSettings()), modelId))')
+    const routing = src('src/main/llm/local-routing.ts')
+    expect(routing).toContain('if (!localModelGate(s.localLlm.modelId)) return false')
   })
 
   it('CLI providers and local are never narrowed by the fleet policy at any wired call site (own toggles govern them)', () => {

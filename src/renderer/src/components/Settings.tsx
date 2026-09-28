@@ -961,6 +961,9 @@ function AiSection({
   // provider, so an edit here could never take effect.
   const askChatPolicy = settings.modelPolicyCapabilities.askChat
   const modelPolicyLocked = !!askChatPolicy
+  // Provider selection is locked by MDM (managedKeys) or by the portal policy: main narrows/pins the
+  // ask provider under a policy, so a choice made here would be overridden.
+  const providerLocked = locked || modelPolicyLocked
 
   useEffect(() => {
     if (skipClearRef.current) {
@@ -982,7 +985,7 @@ function AiSection({
   const onKeyChange = (value: string): void => {
     setKey(value)
     setTest({ status: 'idle' })
-    if (locked) return
+    if (providerLocked) return
     const id = detectProvider(value)
     // MQA-095: honour the same org allowlist the tile grid and the Anthropic row enforce below. Without
     // it, pasting a key whose prefix belongs to a blocked vendor silently activates that vendor, and
@@ -1424,10 +1427,9 @@ function AiSection({
 
   // M2-0412: the banner below (top of this whole tab) shows the askChat policy, since it governs which
   // provider/model Ask/chat actually uses regardless of what is picked below.
-  // M2-0412: stt/localModel are owner-manageable and audited but not force-applied (see
-  // src/shared/model-policy.ts's doc comment for why) — still surfaced here as an informational/
-  // managed banner, same convention as askChatPolicy above, so Settings stays honest about every
-  // capability the fleet owner has set on the portal, not just the one this app enforces live.
+  // M2-0412: stt and localModel are enforced in main (cloud speech session start; on-device readiness),
+  // so their banners state the managed choice. commandAgent/tts/embeddings have no call site to enforce
+  // and get no banner.
   const sttPolicy = settings.modelPolicyCapabilities.stt
   const localModelPolicy = settings.modelPolicyCapabilities.localModel
 
@@ -1504,7 +1506,7 @@ function AiSection({
           <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
             <CircleCheck size={12} /> Active
           </span>
-        ) : locked ? (
+        ) : providerLocked ? (
           <span className={managedChipCls}>Managed by your organization</span>
         ) : !anthropicAllowed ? (
           // Also fires when provider === 'anthropic': an allowlist that no longer includes anthropic
@@ -1542,12 +1544,12 @@ function AiSection({
               active={id === provider}
               recommended={id === recommended}
               hasKey={!!settings.hasKeys[id]}
-              locked={locked}
+              locked={providerLocked}
               onSelect={() => (id === 'cloudflare' ? connectCloudflare() : patch({ provider: id }))}
             />
           ))}
         </div>
-        {locked && (
+        {providerLocked && (
           <div className="mt-2">
             <span className={managedChipCls}>Managed by your organization</span>
           </div>
@@ -1674,7 +1676,7 @@ function AiSection({
                 active={id === provider}
                 recommended={id === recommended}
                 hasKey={!!settings.hasKeys[id]}
-                locked={locked}
+                locked={providerLocked}
                 onSelect={() =>
                   // Custom's SettingsSchema refine requires customBaseUrl to already be a valid https://
                   // URL whenever provider === 'custom' (shared/ipc.ts); a bare {provider:'custom'} patch
@@ -1691,7 +1693,7 @@ function AiSection({
               />
             ))}
           </div>
-          {locked && (
+          {providerLocked && (
             <div className="mt-2">
               <span className={managedChipCls}>Managed by your organization</span>
             </div>

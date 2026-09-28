@@ -3,6 +3,7 @@ import {
   canonicalModelPolicyPayload,
   emptyModelPolicyEntry,
   isModelPolicyCapability,
+  localModelAllowedByPolicy,
   MODEL_POLICY_CAPABILITIES,
   ModelPolicyDocumentSchema,
   narrowAllowedProvidersForCapability,
@@ -165,6 +166,22 @@ describe('narrowAllowedProvidersForCapability', () => {
 
   it('can narrow an allowlist down to empty when the policy and the allowlist disagree entirely', () => {
     expect(narrowAllowedProvidersForCapability(['dust'], doc, 'askChat')).toEqual([])
+  })
+})
+
+describe('localModelAllowedByPolicy', () => {
+  const doc = policyWith({
+    localModel: { provider: 'local', model: 'qwen3.5-0.8b', fallbacks: [{ provider: 'local', model: 'qwen3.5-2b' }] }
+  })
+
+  it('allows any model when there is no policy', () => {
+    expect(localModelAllowedByPolicy(null, 'anything')).toBe(true)
+  })
+
+  it('allows the policy model and its fallbacks only', () => {
+    expect(localModelAllowedByPolicy(doc, 'qwen3.5-0.8b')).toBe(true)
+    expect(localModelAllowedByPolicy(doc, 'qwen3.5-2b')).toBe(true)
+    expect(localModelAllowedByPolicy(doc, 'some-other-model')).toBe(false)
   })
 })
 

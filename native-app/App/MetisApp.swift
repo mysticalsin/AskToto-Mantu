@@ -43,6 +43,8 @@ struct MetisApp: App {
     /// flow (no Keychain or network credential storage anywhere in `native-app/` today, see
     /// `OperatorDeviceAuth`'s and `ModelPolicyRuntime`'s doc comments). The poller below is real and
     /// tested; it starts fetching and enforcing the fleet policy the moment these three values exist.
+    /// Status: BLOCKED_EXTERNAL — native fleet-policy fetch stays inactive until M2-0145's native pairing
+    /// flow lands and provisions the Operator URL and device secret.
     static let operatorURLDefaultsKey = "metis.operatorURL"
     static let operatorIngestSecretDefaultsKey = "metis.operatorIngestSecret"
     private static let operatorDeviceInstallIDDefaultsKey = "metis.operatorDeviceInstallID"

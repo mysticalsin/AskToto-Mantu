@@ -14,6 +14,7 @@ import {
   type EnterpriseLiveProfile,
   resolveEnterpriseLiveProfile
 } from './enterprise-live-profile'
+import type { ModelPolicyDocument } from './model-policy'
 
 export const CLOUD_STT_PROVIDERS = ['cloudflare-nova3', 'soniox', 'unconfigured'] as const
 export type CloudSttProviderId = (typeof CLOUD_STT_PROVIDERS)[number]
@@ -41,6 +42,20 @@ export function effectiveCloudSttProvider(
   if (id !== 'unconfigured') return id
   if (isCloudOnlyProfile(p)) return DEFAULT_CLOUD_ONLY_STT_PROVIDER
   return 'unconfigured'
+}
+
+/**
+ * Narrows the cloud speech provider to what the fleet policy's `stt` entry (primary + fallbacks)
+ * allows. The user's choice stands when the policy permits it; otherwise the policy's primary provider
+ * replaces it, or `unconfigured` when the policy names a provider this app cannot start. `unconfigured`
+ * stays `unconfigured` — a policy never turns cloud speech on by itself. Evaluated once when a session
+ * starts, never against a live one.
+ */
+export function enforceSttPolicy(policy: ModelPolicyDocument | null, provider: CloudSttProviderId): CloudSttProviderId {
+  if (!policy || provider === 'unconfigured') return provider
+  const entry = policy.capabilities.stt
+  if (entry.provider === provider || entry.fallbacks.some((f) => f.provider === provider)) return provider
+  return resolveCloudSttProvider(entry.provider)
 }
 
 /** True when Listen should use the cloud adapter id instead of Whisper/Parakeet/Apple. */
