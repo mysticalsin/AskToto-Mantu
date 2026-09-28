@@ -58,18 +58,39 @@ function staleReceipts(tickets, recordsByTicket, foreignChanges) {
   return stale
 }
 
-function blockedRows(tickets) {
+/** The nearest transitive dependency that carries its own external_blocker, or null. */
+function rootBlocker(ticket, byId) {
+  const visited = new Set([ticket.id])
+  const queue = [...(ticket.depends_on ?? [])]
+  while (queue.length > 0) {
+    const dep = byId.get(queue.shift())
+    if (!dep || visited.has(dep.id)) continue
+    visited.add(dep.id)
+    if (dep.external_blocker != null) return dep
+    queue.push(...(dep.depends_on ?? []))
+  }
+  return null
+}
+
+/**
+ * A row without its own blocker resolves to its root blocker's owner and unblock step (`via` names that
+ * ticket); with no root either, the row waits on a lead action and `via` is null.
+ */
+function blockedRows(tickets, byId) {
   return tickets
     .filter((ticket) => ticket.status === 'BLOCKED_EXTERNAL' || ticket.status === 'ENGINEERING_COMPLETE')
     .map((ticket) => {
-      const blocker = ticket.external_blocker
+      const own = ticket.external_blocker
+      const root = own == null ? rootBlocker(ticket, byId) : null
+      const blocker = own ?? root?.external_blocker
       return {
         ticket: ticket.id,
         status: ticket.status,
         owner: blocker?.owner ?? null,
         unblock_step: blocker?.unblock_step ?? null,
         needed_by: blocker?.needed_by ?? null,
-        inherited: blocker == null
+        inherited: own == null,
+        via: root?.id ?? null
       }
     })
 }
@@ -135,7 +156,7 @@ export function lintContract({ ledger, recordsByTicket, storeProblems = [], matr
   const byId = new Map(tickets.map((ticket) => [ticket.id, ticket]))
   const missing = missingReceipts(tickets, recordsByTicket)
   const stale = staleReceipts(tickets, recordsByTicket, foreignChanges)
-  const blocked = blockedRows(tickets)
+  const blocked = blockedRows(tickets, byId)
 
   const checks = [
     ['S27-01', 'Every receipt record is well-formed and correctly filed', storeProblems],

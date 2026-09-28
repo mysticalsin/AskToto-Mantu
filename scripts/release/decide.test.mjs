@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RECORD_SCHEMA } from '../evidence/record.mjs'
 import { lintContract } from './contract-lint.mjs'
-import { decide, gitForeignChanges, renderMarkdown } from './decide.mjs'
+import { decide, gitForeignChanges, publicReport, renderMarkdown, renderPublicMarkdown } from './decide.mjs'
 
 const SHA1 = '1'.repeat(40)
 const DECIDE = fileURLToPath(new URL('./decide.mjs', import.meta.url))
@@ -206,4 +206,67 @@ test('the CLI writes the decision files and exits 1 on FAIL', () => {
   )
   assert.equal(JSON.parse(readFileSync(join(out, 'release-decision.json'), 'utf8')).decision, 'FAIL')
   assert.match(readFileSync(join(out, 'release-decision.md'), 'utf8'), /# Release decision: FAIL/)
+})
+
+test('a dependent ENGINEERING_COMPLETE row resolves to its root blocker unblock step', () => {
+  const root = ticket({ id: 'M2-0002', status: 'BLOCKED_EXTERNAL', external_blocker: blocker, required_evidence: ['LIVE_VERIFIED'] })
+  const dependent = ticket({ id: 'M2-0003', status: 'ENGINEERING_COMPLETE', depends_on: ['M2-0002'], required_evidence: ['LOCALLY_TESTED'] })
+  const report = lint({
+    tickets: [ticket(), root, dependent],
+    records: [record(), record({ ticket: 'M2-0003' })],
+    mx: matrix([{ id: 'REQ-1', tickets: ['M2-0001', 'M2-0003'] }])
+  })
+  const row = report.blocked.find((b) => b.ticket === 'M2-0003')
+  assert.equal(row.via, 'M2-0002')
+  assert.equal(row.unblock_step, 'Provide the outside account')
+  assert.match(renderMarkdown({ decision: 'PASS', commit: SHA1, input_problems: [], ...report }), /M2-0003 \(ENGINEERING_COMPLETE, via M2-0002\): owner owner; unblock: Provide the outside account/)
+})
+
+test('an ENGINEERING_COMPLETE row with no root blocker is reported as waiting on a lead action', () => {
+  const report = lint({ tickets: [ticket({ status: 'ENGINEERING_COMPLETE' })] })
+  assert.equal(report.blocked[0].via, null)
+  assert.match(renderMarkdown({ decision: 'PASS', commit: SHA1, input_problems: [], ...report }), /waiting on a lead action/)
+})
+
+test('a dependency on an unknown ticket fails S27-02', () => {
+  assert.ok(failing(lint({ tickets: [ticket({ depends_on: ['M2-9999'] })] })).includes('S27-02'))
+})
+
+test('the public report carries ids, statuses and counts only, never ledger text', () => {
+  const secretRef = 'FINDING-SECRET-7'
+  const secretStep = 'Ask the vendor contact for the sandbox key'
+  const blocked = ticket({
+    id: 'M2-0002',
+    status: 'BLOCKED_EXTERNAL',
+    finding_refs: [secretRef],
+    external_blocker: { ...blocker, owner: 'someone-private', unblock_step: secretStep },
+    required_evidence: ['LIVE_VERIFIED']
+  })
+  const t = ticket({ kit_refs: ['K-1'], finding_refs: [secretRef] })
+  const report = lint({
+    tickets: [t, blocked],
+    records: [record({ kit_refs: { 'K-1': 'NOT_MET' }, finding_refs: [secretRef] })],
+    mx: matrix([{ id: 'REQ-1', tickets: ['M2-0001', 'M2-0002'] }])
+  })
+  const full = { decision: 'FAIL', commit: SHA1, input_problems: [], ...report }
+  assert.ok(JSON.stringify(full).includes(secretStep), 'the detail report keeps the unblock step')
+  const publicDoc = publicReport(full)
+  const text = `${JSON.stringify(publicDoc)}\n${renderPublicMarkdown(publicDoc)}`
+  for (const secret of [secretRef, secretStep, 'someone-private', 'NOT_MET', 'K-1']) assert.ok(!text.includes(secret), `${secret} leaked`)
+  assert.deepEqual(publicDoc.blocked, { count: 1, tickets: ['M2-0002'] })
+  assert.ok(publicDoc.checks.some((c) => c.id === 'S27-07' && c.status === 'FAIL' && c.problem_count === 1))
+})
+
+test('the CLI writes only the public report to --out and the full one to --detail-out', () => {
+  const root = programFixture({ withRecords: false })
+  const out = join(root, 'out')
+  const detail = join(root, 'detail')
+  assert.throws(
+    () => execFileSync(process.execPath, [DECIDE, '--commit', 'HEAD', '--ledger', join(root, 'ledger', 'tickets.json'), '--matrix', join(root, 'matrix.json'), '--out', out, '--detail-out', detail], { stdio: 'pipe' }),
+    (error) => error.status === 1
+  )
+  const publicDoc = JSON.parse(readFileSync(join(out, 'release-decision.json'), 'utf8'))
+  assert.equal(publicDoc.problems, undefined)
+  assert.equal(publicDoc.missing.count, 1)
+  assert.equal(JSON.parse(readFileSync(join(detail, 'release-decision.json'), 'utf8')).missing[0].reason, 'no record')
 })

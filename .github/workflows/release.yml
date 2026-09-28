@@ -67,6 +67,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
+      # The artifact of this public repository is the public-safe report (check ids, statuses, counts,
+      # ticket ids). The full report needs --detail-out and belongs to the private program repository's CI.
       - name: Compute the release decision
         run: node scripts/release/decide.mjs --commit "$GITHUB_SHA" --ledger program/ledger/tickets.json --matrix program/traceability/matrix.json --out out/release-decision
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

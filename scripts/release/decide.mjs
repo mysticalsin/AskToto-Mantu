@@ -3,10 +3,11 @@
 // traceability matrix, never asserted. PASS means engineering-complete; the real-environment column
 // (rows waiting on an outside account, provider or QA machine) is reported beside it, not folded in.
 //
-//   node scripts/release/decide.mjs --commit HEAD [--ledger <tickets.json>] [--matrix <matrix.json>] [--out <dir>]
+//   node scripts/release/decide.mjs --commit HEAD [--ledger <tickets.json>] [--matrix <matrix.json>] [--out <dir>] [--detail-out <dir>]
 //
 // The ledger, its evidence/records store and the matrix live in the private program checkout, so their
-// paths are arguments. Missing or unreadable inputs are a FAIL, not a skip. Exit 0 = PASS, 1 = FAIL.
+// paths are arguments. --out gets the public-safe report (ids, statuses, counts); --detail-out gets the
+// full report and is for private program CI only. Missing or unreadable inputs are a FAIL, not a skip. Exit 0 = PASS, 1 = FAIL.
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -79,9 +80,52 @@ export function renderMarkdown(decision) {
   for (const s of decision.stale) lines.push(`- ${s.ticket} ${s.level}: recorded ${s.recorded_at}, scope changed by ${s.changed_by.join(', ')}`)
   lines.push('', '## BLOCKED_EXTERNAL rows')
   for (const b of decision.blocked) {
-    lines.push(`- ${b.ticket} (${b.status}): ${b.inherited ? 'inherited from a dependency' : `owner ${b.owner}; unblock: ${b.unblock_step}; needed by ${b.needed_by}`}`)
+    const detail = b.unblock_step ? `owner ${b.owner}; unblock: ${b.unblock_step}; needed by ${b.needed_by}` : 'no external blocker recorded; waiting on a lead action'
+    lines.push(`- ${b.ticket} (${b.status}${b.via ? `, via ${b.via}` : ''}): ${detail}`)
   }
   return `${lines.join('\n')}\n`
+}
+
+/**
+ * The document for the public artifact: check ids, statuses, counts and ticket ids only. Ledger text
+ * (problem strings, finding refs, owners, unblock steps) stays out because this repository is public;
+ * the full report goes to --detail-out, which the private program repository's CI supplies.
+ */
+export function publicReport(decision) {
+  return {
+    commit: decision.commit,
+    decision: decision.decision,
+    engineering: decision.engineering,
+    real_environment: decision.real_environment,
+    input_problem_count: decision.input_problems.length,
+    checks: decision.checks.map((check) => ({ id: check.id, status: check.status, problem_count: check.problems.length })),
+    missing: { count: decision.missing.length, tickets: [...new Set(decision.missing.map((m) => m.ticket))] },
+    stale: { count: decision.stale.length, tickets: [...new Set(decision.stale.map((s) => s.ticket))] },
+    blocked: { count: decision.blocked.length, tickets: decision.blocked.map((b) => b.ticket) }
+  }
+}
+
+export function renderPublicMarkdown(report) {
+  const ids = (group) => (group.tickets.length ? group.tickets.join(', ') : 'none')
+  return `${[
+    `# Release decision: ${report.decision}`,
+    '',
+    `Commit: \`${report.commit}\``,
+    `Engineering: ${report.engineering}. Real environment: ${report.real_environment}.`,
+    `Input problems: ${report.input_problem_count}`,
+    '',
+    ...report.checks.map((check) => `- ${check.id} ${check.status} (${check.problem_count})`),
+    '',
+    `Missing receipts (${report.missing.count}): ${ids(report.missing)}`,
+    `Stale receipts (${report.stale.count}): ${ids(report.stale)}`,
+    `BLOCKED_EXTERNAL rows (${report.blocked.count}): ${ids(report.blocked)}`
+  ].join('\n')}\n`
+}
+
+function writeReports(dir, json, markdown) {
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'release-decision.json'), `${JSON.stringify(json, null, 2)}\n`)
+  writeFileSync(join(dir, 'release-decision.md'), markdown)
 }
 
 function main() {
@@ -90,7 +134,8 @@ function main() {
       commit: { type: 'string', default: 'HEAD' },
       ledger: { type: 'string', default: 'ledger/tickets.json' },
       matrix: { type: 'string', default: 'traceability/matrix.json' },
-      out: { type: 'string', default: DEFAULT_OUT }
+      out: { type: 'string', default: DEFAULT_OUT },
+      'detail-out': { type: 'string' }
     }
   })
   const releaseCommit = execFileSync('git', ['rev-parse', '--verify', `${values.commit}^{commit}`], { cwd: REPO_ROOT, encoding: 'utf8' }).trim()
@@ -100,10 +145,9 @@ function main() {
     releaseCommit,
     foreignChanges: gitForeignChanges({ cwd: REPO_ROOT, releaseCommit })
   })
-  const outDir = resolve(values.out)
-  mkdirSync(outDir, { recursive: true })
-  writeFileSync(join(outDir, 'release-decision.json'), `${JSON.stringify(decision, null, 2)}\n`)
-  writeFileSync(join(outDir, 'release-decision.md'), renderMarkdown(decision))
+  const report = publicReport(decision)
+  writeReports(resolve(values.out), report, renderPublicMarkdown(report))
+  if (values['detail-out']) writeReports(resolve(values['detail-out']), decision, renderMarkdown(decision))
   process.stdout.write(`release decision ${decision.decision} on ${releaseCommit}\n`)
   process.exitCode = decision.decision === 'PASS' ? 0 : 1
 }
