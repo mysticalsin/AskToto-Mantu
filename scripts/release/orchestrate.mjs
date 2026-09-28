@@ -18,6 +18,7 @@ function nodeScript(script, args = [], options = {}) {
   return {
     name: options.name ?? script.replace(/^scripts\//, '').replace(/\.mjs$/, ''),
     command: process.execPath,
+    displayCommand: 'node',
     args: [script, ...args],
     env: options.env
   }
@@ -27,6 +28,7 @@ function npmRun(script, options = {}) {
   return {
     name: options.name ?? `npm run ${script}`,
     command: npm,
+    displayCommand: 'npm',
     args: ['run', script],
     env: options.env
   }
@@ -36,6 +38,7 @@ function buildTool(args, options = {}) {
   return {
     name: options.name ?? 'electron-builder',
     command: electronBuilder,
+    displayCommand: 'electron-builder',
     args,
     env: options.env
   }
@@ -185,7 +188,7 @@ function parseArgs(argv) {
 
 function formatCommand(step) {
   const env = Object.entries(step.env ?? {}).map(([key, value]) => `${key}=${value}`)
-  return [...env, step.command, ...step.args].join(' ')
+  return [...env, step.displayCommand ?? step.command, ...step.args].join(' ')
 }
 
 function formatStepResult({ index, total, name, exitCode, durationMs, command, dryRun }) {
