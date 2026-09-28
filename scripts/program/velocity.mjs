@@ -7,6 +7,7 @@ import { latestByLevel, readRecordStore } from '../evidence/record.mjs'
 const CLOSED_STATUSES = new Set(['DONE', 'ENGINEERING_COMPLETE', 'DEFERRED'])
 const DECISION_ID = 'D-14'
 const TICKET_ID_RE = /^M2-\d{4}$/
+const IN_HOUSE_EVIDENCE = new Set(['DESIGNED', 'LOCALLY_TESTED'])
 
 export const DEFAULT_DEGRADE_ORDER = Object.freeze(['M2-0155', 'M2-0124', 'M2-0185', 'M2-0161', 'M2-0156'])
 
@@ -37,17 +38,50 @@ function requiredLevels(ticket) {
   return Array.isArray(ticket.required_evidence) ? ticket.required_evidence : []
 }
 
-function closedEvidence(ticket, records) {
+function latestPassingRecords(latest, levels) {
+  const passing = []
+  for (const level of levels) {
+    const record = latest.get(level)
+    if (!record || record.result !== 'PASS' || typeof record.recorded_at !== 'string') return null
+    passing.push(record)
+  }
+  return passing
+}
+
+function capsOf(id, byId) {
+  const caps = []
+  const visited = new Set([id])
+  const stack = [...(byId.get(id)?.depends_on ?? [])]
+  while (stack.length > 0) {
+    const depId = stack.pop()
+    if (visited.has(depId)) continue
+    visited.add(depId)
+    const dep = byId.get(depId)
+    if (!dep) continue
+    if (dep.status === 'ENGINEERING_COMPLETE' || dep.status === 'BLOCKED_EXTERNAL') caps.push(dep)
+    stack.push(...(dep.depends_on ?? []))
+  }
+  return caps
+}
+
+function closedEvidence(ticket, records, caps = []) {
   if (!CLOSED_STATUSES.has(ticket.status)) return null
   const latest = latestByLevel(records)
   const required = requiredLevels(ticket)
   if (required.length === 0) return null
 
-  const passing = []
-  for (const level of required) {
-    const record = latest.get(level)
-    if (!record || record.result !== 'PASS' || typeof record.recorded_at !== 'string') return null
-    passing.push(record)
+  let passing
+  if (ticket.status === 'ENGINEERING_COMPLETE') {
+    if (!(ticket.external_blocker != null || caps.length > 0)) return null
+    const inHouseRequired = required.filter((level) => IN_HOUSE_EVIDENCE.has(level))
+    passing = latestPassingRecords(latest, inHouseRequired)
+    if (!passing) return null
+    const anyLatestPass = [...latest.values()].find((record) => record.result === 'PASS' && typeof record.recorded_at === 'string')
+    if (!anyLatestPass) return null
+    if (passing.length === 0) passing = [anyLatestPass]
+  } else {
+    passing = latestPassingRecords(latest, required)
+    if (!passing) return null
   }
 
   const closedAt = passing
@@ -128,6 +162,9 @@ function pushHours(map, key, ticket) {
 
 export function analyzeProgram({ ledger, recordsByTicket, asOf, gate = 'm3' }) {
   const tickets = Array.isArray(ledger?.tickets) ? ledger.tickets : []
+  const ticketsById = new Map(tickets
+    .filter((ticket) => isPlainObject(ticket) && typeof ticket.id === 'string')
+    .map((ticket) => [ticket.id, ticket]))
   const analysisDate = asOf ?? new Date().toISOString().slice(0, 10)
   const closedByDay = new Map()
   const remainingByMilestone = new Map()
@@ -136,7 +173,7 @@ export function analyzeProgram({ ledger, recordsByTicket, asOf, gate = 'm3' }) {
 
   for (const ticket of tickets) {
     if (!isPlainObject(ticket) || typeof ticket.id !== 'string') continue
-    const evidence = closedEvidence(ticket, recordsByTicket.get(ticket.id) ?? [])
+    const evidence = closedEvidence(ticket, recordsByTicket.get(ticket.id) ?? [], capsOf(ticket.id, ticketsById))
     if (evidence) {
       closedEstimatedHours += ticketHours(ticket)
       pushHours(closedByDay, evidence.closedDate, ticket)

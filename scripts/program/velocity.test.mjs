@@ -139,6 +139,76 @@ test('analyzeProgram does not count a closed ticket when the latest required evi
   ])
 })
 
+test('analyzeProgram counts externally capped ENGINEERING_COMPLETE with unavailable external evidence', () => {
+  const ledger = {
+    decisions: { 'D-14': 'ANSWERED_AS_DEFAULT' },
+    tickets: [
+      ticket('M2-0001', {
+        status: 'ENGINEERING_COMPLETE',
+        estimate_hours: 7,
+        required_evidence: ['LOCALLY_TESTED', 'LIVE_VERIFIED'],
+        external_blocker: {
+          owner: 'external-owner',
+          unblock_step: 'Run the live verification on the required external environment.',
+          needed_by: '2026-10-09',
+          raised_on: '2026-09-27'
+        }
+      }),
+      ticket('M2-0002', { status: 'TODO', estimate_hours: 3, milestone: 'm5' })
+    ]
+  }
+  const recordsByTicket = new Map([
+    ['M2-0001', [record('M2-0001', 'LOCALLY_TESTED', '2026-09-20T10:00:00Z')]]
+  ])
+
+  const forecast = analyzeProgram({ ledger, recordsByTicket, asOf: '2026-09-24' })
+
+  assert.equal(forecast.closedEstimatedHours, 7)
+  assert.deepEqual(forecast.closedHoursPerDay, [
+    { date: '2026-09-20', estimated_hours: 7, tickets: ['M2-0001'] }
+  ])
+  assert.deepEqual(forecast.remainingHoursByMilestone, [
+    { milestone: 'm5', estimated_hours: 3, tickets: ['M2-0002'] }
+  ])
+})
+
+test('analyzeProgram counts ENGINEERING_COMPLETE capped by a blocked dependency ancestor', () => {
+  const ledger = {
+    decisions: { 'D-14': 'ANSWERED_AS_DEFAULT' },
+    tickets: [
+      ticket('M2-0001', {
+        status: 'BLOCKED_EXTERNAL',
+        estimate_hours: 2,
+        external_blocker: {
+          owner: 'external-owner',
+          unblock_step: 'Provide access to the external system.',
+          needed_by: '2026-10-09',
+          raised_on: '2026-09-27'
+        }
+      }),
+      ticket('M2-0002', {
+        status: 'ENGINEERING_COMPLETE',
+        estimate_hours: 7,
+        depends_on: ['M2-0001'],
+        required_evidence: ['LOCALLY_TESTED', 'LIVE_VERIFIED']
+      })
+    ]
+  }
+  const recordsByTicket = new Map([
+    ['M2-0002', [record('M2-0002', 'LOCALLY_TESTED', '2026-09-21T10:00:00Z')]]
+  ])
+
+  const forecast = analyzeProgram({ ledger, recordsByTicket, asOf: '2026-09-24' })
+
+  assert.equal(forecast.closedEstimatedHours, 7)
+  assert.deepEqual(forecast.closedHoursPerDay, [
+    { date: '2026-09-21', estimated_hours: 7, tickets: ['M2-0002'] }
+  ])
+  assert.deepEqual(forecast.remainingHoursByMilestone, [
+    { milestone: 'm3', estimated_hours: 2, tickets: ['M2-0001'] }
+  ])
+})
+
 test('analyzeProgram records D-14 degrade order and flags an unapproved decision', () => {
   const ledger = {
     decisions: { 'D-14': 'OPEN' },
