@@ -82,6 +82,10 @@ const REASONS = [
     why: 'Pins libuv pool threads with real FIFOs, the kernel-blocking stand-in for a cloud-only read. Windows has no FIFOs; the admission, deadline, sharing and dataless rules run on every platform through an in-memory fs whose calls can be held open.'
   },
   {
+    match: 'transcripts.test.ts',
+    why: 'Plants a real file symlink with a draft-shaped name to prove recovery never follows it. File symlinks need elevation or Developer Mode on Windows; the gateway isSymlink classification itself runs on every platform in gateway.test.ts.'
+  },
+  {
     match: 'OnboardingExperience.browser.test.ts',
     why: 'Opt-in Playwright/Chromium browser check for the onboarding demo (ASKTOTO_BROWSER_QA=1) — mounts the real component in a real browser outside Electron. Off by default so ordinary CI does not spin up a live Chromium session on every push; the source-level navigation and media-failure regressions these tests would catch are covered cross-platform without the browser opt-in (MQA-338), and installed QA remains the place this runs for real.'
   },
@@ -105,7 +109,7 @@ const REASONS = [
 
 /** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
  *  Lower it when a skip is retired; never raise it for an undeclared skip. */
-const BASELINE = { win32: 30, darwin: 2, linux: 28 }
+const BASELINE = { win32: 31, darwin: 2, linux: 28 }
 
 const platform = process.platform
 const allowed = BASELINE[platform]
