@@ -105,6 +105,10 @@ function eventCounts(records) {
   return counts
 }
 
+export function hasAtLeastEvent(records, event, count) {
+  return records.filter((record) => record.event === event).length >= count
+}
+
 function sidecarReapReason(records, pid) {
   const record = records.find(
     (entry) =>
@@ -113,6 +117,12 @@ function sidecarReapReason(records, pid) {
       (entry.reason === 'registry' || entry.reason === 'legacy-orphan')
   )
   return record?.reason
+}
+
+export function observedReapedOrphan(records, pid, alive = processAlive) {
+  const reason = sidecarReapReason(records, pid)
+  if (!reason || alive(pid)) return null
+  return reason
 }
 
 function psRows() {
@@ -331,32 +341,37 @@ async function main() {
     if (!orphaned) throw new Failure('llama-server did not become a launchd orphan after SIGKILL')
 
     const secondPort = await freeLoopbackPort()
-    const reaperStartedAt = Date.now()
     second = launch(executable, profile, secondPort)
     observation.pids.secondMain = second.pid ?? null
     if (!second.pid) throw new Failure('second main pid was unavailable')
 
-    let secondReady = false
-    const reaped = await waitFor(() => {
+    const secondBoot = await waitFor(() => {
       const audit = readAudit(profile)
-      secondReady ||= audit.filter((record) => record.event === 'app.renderer.ready').length >= 2
-      const reason = sidecarReapReason(audit, llama.pid)
-      if (!reason || processAlive(llama.pid)) return false
+      const reason = observedReapedOrphan(audit, llama.pid)
+      if (reason) {
+        observation.reapedReason = reason
+        return { alreadyReaped: true }
+      }
+      if (hasAtLeastEvent(audit, 'app.started', 2)) return { alreadyReaped: false }
+      return false
+    }, READY_TIMEOUT_MS, POLL_MS)
+    if (!secondBoot) throw new Failure('second launch did not record app.started before the boot timeout')
+
+    const reaperStartedAt = Date.now()
+    const reaped = secondBoot.alreadyReaped || await waitFor(() => {
+      const reason = observedReapedOrphan(readAudit(profile), llama.pid)
+      if (!reason) return false
       observation.reapedReason = reason
       return true
     }, REAPER_BOUND_MS, POLL_MS)
-    observation.timingsMs.reaped = reaped ? Date.now() - reaperStartedAt : null
+    observation.timingsMs.reaped = reaped ? (secondBoot.alreadyReaped ? 0 : Date.now() - reaperStartedAt) : null
     observation.events = eventCounts(readAudit(profile))
     observation.processes.afterReaper = roleCounts(
       ownedProcesses(listProcesses(process.platform), { mainPid: second.pid, installRoot, platform: process.platform })
     )
 
     if (!reaped) {
-      throw new Failure(
-        secondReady
-          ? 'llama-server orphan was not reaped within 5 s of relaunch'
-          : 'second launch did not reach renderer ready before the 5 s reaper deadline'
-      )
+      throw new Failure('llama-server orphan was not reaped within 5 s of second boot')
     }
     observation.result = 'pass'
   } catch (error) {

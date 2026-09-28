@@ -380,7 +380,7 @@ func argsForPid(_ pid: Int32) -> [String] {
 
 func runProcInfo(pidText: String) -> Never {
     guard let pid = Int32(pidText), let info = kinfoForPid(pid) else { exit(0) }
-    var pathBuffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN))
+    var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
     let pathLength = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
     guard pathLength > 0 else { exit(0) }
     let exePath = String(cString: pathBuffer)

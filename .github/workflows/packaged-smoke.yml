@@ -86,7 +86,7 @@ jobs:
         timeout-minutes: 10
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/packaged-smoke.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
+        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
         with:
           name: packaged-smoke-macos
           path: smoke-report/
