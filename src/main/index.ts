@@ -93,7 +93,9 @@ import {
   type DiagnosticsExportResult,
   type RecallExportPlainResult,
   ScreenCaptureCheckPayloadSchema,
-  MetisCommandConfirmationSchema
+  MetisCommandConfirmationSchema,
+  RendererCrashContextSchema,
+  type RendererCrashContext
 } from '@shared/ipc'
 import {
   getSettings,
@@ -574,6 +576,10 @@ import {
   listMeetingExtractions as listBrainMeetingExtractions,
   readMeetingExtraction as readBrainMeetingExtraction,
   purgeBrain,
+  listPreservedBrainIndexes,
+  currentBrainIndexIsReadable,
+  restorePreservedBrainIndex,
+  deletePreservedBrainIndex,
   setDealOutcome,
   slugify as brainSlugify,
   brainDir as brainStoreDir
@@ -603,7 +609,7 @@ import { startOperatorOverlayPoll } from './operator-overlay'
 import { activateOperatorLicenseToken } from './operator-license-activate'
 import { operatorGate } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
-import { initLogging, mainLog, auditLog } from './logger'
+import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
 import { CommandControl } from './command-control'
 import { executeDesktopAction } from './desktop-adapters'
 import { ensureMetisCommandRuntime } from './metis-command-register'
@@ -621,6 +627,10 @@ import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentine
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
+import { crashDetail, type CrashKind } from './infra/observability/crash-taxonomy'
+import { createRevealTrace } from './infra/observability/reveal-trace'
+import { createHistoryTracer } from './infra/observability/history-trace'
+import { copyDiagnosticsSummary } from './infra/observability/diagnostics-summary'
 import { createReloadBudget } from './lifecycle/reload-budget'
 import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './lifecycle/render-loop-halted-dialog'
 import { installProxyAwareFetch } from './net/install-proxy'
@@ -2564,6 +2574,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
       version: app.getVersion(),
       platform: process.platform,
       arch: process.arch,
+      uvThreadpoolSize: process.env.UV_THREADPOOL_SIZE,
       audit: auditLog,
       powerMonitor,
       stallWatchCommand: macStallWatchCommand()
@@ -2783,7 +2794,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     if (win !== self) return
     commandControl.revokeForLifecycleEvent('renderer_replaced')
     mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
-    auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
+    auditLog('app.crash', crashDetail('render-process-gone', { reason: details.reason, exitCode: details.exitCode }))
     // The content died instead of recovering on its own — any pending unresponsiveSince belongs to a wedge
     // that will never get its matching 'responsive'. Without this, a later 'unresponsive' in the reloaded
     // renderer would be paired with the stale one and report a stallMs of however long it's been since.
@@ -3547,20 +3558,24 @@ function setWindowMode(): void {
   win.setBounds({ ...position, width: currentWidth, height: nextHeight }, false)
 }
 
+const reveals = createRevealTrace({ audit: auditLog, window: () => win, layout: liveOverlayLayout, parked: () => islandResting })
+
 /** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
  *  creation once at call time, instead of leaving window-dependent hotkeys dead for the process
- *  lifetime. Callers that previously did `if (!win) return` should call this instead. A repeated
- *  failure is logged and swallowed — it just leaves win null again, same as the original no-op. */
+ *  lifetime. Callers that previously did `if (!win) return` should call this instead. A heal is audited
+ *  as `reveal`, and a failed heal as `app.error.window_create`. */
 function ensureWindow(): BrowserWindow | null {
   if (win && !win.isDestroyed()) return win
-  win = null // a destroyed-but-non-null win is just as dead as null — treat it the same before recreating
-  try {
-    createWindow()
-  } catch (e) {
-    mainLog.error('[recover] createWindow retry failed:', e)
-    auditLog('app.crash', { kind: 'boot_step', step: 'createWindow_retry' })
-  }
-  return win
+  return reveals.trace('ensure-window', () => {
+    win = null // a destroyed-but-non-null win is just as dead as null — treat it the same before recreating
+    try {
+      createWindow()
+    } catch (e) {
+      mainLog.error('[recover] createWindow retry failed:', e)
+      auditLog('app.error.window_create', { message: e, recoveryStatus: 'retry_pending' })
+    }
+    return win
+  })
 }
 
 /**
@@ -3618,11 +3633,11 @@ let crashSeq = 0
  * failing operation, so mainLog and auditLog (both persistent) must never see the raw value, same as the
  * crash-*.log dump below. Best-effort: logging must never throw out of a crash handler.
  */
-function persistCrash(kind: string, detail: string, shortMessage: string): void {
+function persistCrash(kind: CrashKind, detail: string, shortMessage: string, context?: RendererCrashContext): void {
   try {
     const redactedDetail = redactSecrets(detail)
     mainLog.error(`[${kind}]`, redactedDetail)
-    auditLog('app.crash', { kind, message: redactSecrets(shortMessage) })
+    auditLog('app.crash', crashDetail(kind, { message: redactSecrets(shortMessage), ...context }))
     writeFileSync(
       join(app.getPath('userData'), `crash-${Date.now()}-${crashSeq++}.log`),
       `${new Date().toISOString()} ${kind}\n${redactedDetail}\n`,
@@ -3642,7 +3657,7 @@ function reloadOverlay(target: BrowserWindow): void {
   target.loadURL(overlayRendererUrl()).catch((err) => {
     const message = redactSecrets(err instanceof Error ? err.message : String(err))
     mainLog.error('[renderer-gone] reload failed:', message)
-    auditLog('app.crash', { kind: 'render-process-gone-reload-failed', message })
+    auditLog('app.error.reload_failed', { message, recoveryStatus: 'unrecovered' })
   })
 }
 
@@ -4480,6 +4495,10 @@ function buildTrayMenu(): Menu {
     } },
     { label: label('New', 'reset'), click: () => sendHotkey('reset') },
     { type: 'separator' },
+    { label: 'Copy diagnostics summary', click: () => void copyDiagnosticsSummary({
+      auditTrailPath: auditLogPath(),
+      identity: { version: app.getVersion(), platform: process.platform, arch: process.arch },
+      writeText: (text) => clipboard.writeText(text) }) },
     {
       label: 'Force Quit Métis',
       accelerator: process.platform === 'darwin' ? EMERGENCY_FORCE_QUIT_ACCELERATOR : undefined,
@@ -6557,6 +6576,13 @@ function registerIpc(): void {
       brainPurged: brainPurge.ok,
       wikiRemoved: wiki.ok
     })
+    if (!brainPurge.ok) {
+      return {
+        ...result,
+        ok: false,
+        error: 'Deleted the transcripts, but the Mantu Intelligence data could not be fully removed. Close anything using the meetings folder, then try again.'
+      }
+    }
     if (!wiki.ok) {
       return {
         ...result,
@@ -8100,6 +8126,56 @@ function registerIpc(): void {
     auditLog('brain.backfill.start', { queued: r.queued, rebuild: true })
     return r
   })
+  ipcMain.handle(IPC.brainPreservedIndexesList, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { copies: [] }
+    return { copies: listPreservedBrainIndexes(getSettings()) }
+  })
+  ipcMain.handle(IPC.brainPreservedIndexRestore, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const id = String((raw as { id?: unknown } | null)?.id ?? '')
+    if (!id) return { ok: false, error: 'Missing preserved copy.' }
+    let allowReplaceReadable = false
+    if (currentBrainIndexIsReadable(getSettings())) {
+      const dialogOpts = {
+        type: 'warning' as const,
+        title: 'Restore preserved brain index',
+        message: 'Replace the current Mantu Intelligence index?',
+        detail:
+          'Métis will verify the preserved copy can be decrypted, keep the current index as a preserved copy, then restore the selected index.',
+        buttons: ['Restore', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1
+      }
+      const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+      if (response !== 0) return { ok: false, error: 'cancelled' }
+      allowReplaceReadable = true
+    }
+    const r = restorePreservedBrainIndex(getSettings(), id, { allowReplaceReadable })
+    auditLog('brain.index.preserved_restore', { ok: r.ok, error: r.error })
+    return r.ok ? { ok: true } : { ok: false, error: r.error || 'Restore failed.' }
+  })
+  ipcMain.handle(IPC.brainPreservedIndexDelete, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const id = String((raw as { id?: unknown } | null)?.id ?? '')
+    if (!id) return { ok: false, error: 'Missing preserved copy.' }
+    const dialogOpts = {
+      type: 'warning' as const,
+      title: 'Delete preserved brain index',
+      message: 'Delete this preserved Mantu Intelligence index copy?',
+      detail: 'This removes only the selected preserved copy. Saved meetings and the current index are not changed.',
+      buttons: ['Delete copy', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1
+    }
+    const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+    if (response !== 0) return { ok: false, error: 'cancelled' }
+    const r = deletePreservedBrainIndex(getSettings(), id)
+    auditLog('brain.index.preserved_delete', { ok: r.ok, error: r.error })
+    return r.ok ? { ok: true } : { ok: false, error: r.error || 'Delete failed.' }
+  })
   // MI-2.5 review round 3: user-invoked recovery from a durable correction-journal corruption lock —
   // clears the sentinel so corrections resume (the quarantined corrections.corrupt-*.json copy is left
   // for inspection). Privileged (mutates correction-engine state) — main-window only + requireAuth, same
@@ -8611,9 +8687,10 @@ function registerIpc(): void {
     return requireAuth() ? shell.openPath(resolveMeetingsFolder(getSettings())) : ''
   })
   // --- Recall (meeting history): list/search/open ---
-  ipcMain.handle(IPC.recallList, (e) => {
+  const history = createHistoryTracer({ audit: auditLog })
+  ipcMain.handle(IPC.recallList, (e, trace: unknown) => {
     assertMainWindow(e)
-    return requireAuth() ? listMeetings() : []
+    return history.traceList(trace, () => (requireAuth() ? listMeetings() : Promise.resolve([])))
   })
   ipcMain.handle(IPC.recallSearch, (e, q: string) => {
     assertMainWindow(e)
@@ -8634,6 +8711,11 @@ function registerIpc(): void {
     // Encrypted transcripts are unreadable in an editor — open a decrypted temp copy instead.
     if (encrypted) return shell.openPath(decryptToTemp(path))
     return shell.openPath(path)
+  })
+  ipcMain.handle(IPC.historySettled, (e, report: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return
+    history.settle(report)
   })
 
   // "Open brain folder for Claude" (the handshake): reveal the published wiki — a plaintext, self-describing
@@ -8764,7 +8846,13 @@ function registerIpc(): void {
     const message = typeof r?.message === 'string' ? r.message : 'unknown renderer error'
     const stack = typeof r?.stack === 'string' ? r.stack : ''
     const componentStack = typeof r?.componentStack === 'string' ? r.componentStack : ''
-    persistCrash('renderer-error-boundary', `${message}\nstack: ${stack}\ncomponentStack: ${componentStack}`, message)
+    const context = RendererCrashContextSchema.safeParse(raw)
+    persistCrash(
+      'renderer-error-boundary',
+      `${message}\nstack: ${stack}\ncomponentStack: ${componentStack}`,
+      message,
+      context.success ? context.data : undefined
+    )
   })
   // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
   ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {
@@ -8861,7 +8949,7 @@ protocol.registerSchemesAsPrivileged([
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', () => reveals.trace('second-instance', () => {
     // Relaunching the shortcut is the user's "bring it back" gesture, so it must self-heal a null `win`
     // (a boot-time createWindow() throw leaves the app alive in the tray with no window) instead of
     // no-opping forever. ensureWindow() also filters a destroyed-but-non-null window.
@@ -8870,7 +8958,7 @@ if (!app.requestSingleInstanceLock()) {
     // Non-activating, same island contract as every other reveal (see showForAsk's doc comment) — a
     // second launch attempt surfaces the overlay without stealing focus from the foreground app.
     if (!w.isVisible()) w.showInactive()
-  })
+  }))
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   // M2-0033: unattended model work waits for the maintenance gate.
@@ -9083,7 +9171,7 @@ if (!app.requestSingleInstanceLock()) {
         // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
         // boot-step failure is actually diagnosable and shows up in the audit trail.
         mainLog.error(`[boot] ${name} failed:`, e)
-        auditLog('app.crash', { kind: 'boot_step', step: name })
+        auditLog('app.error.boot_step', { step: name, message: e, recoveryStatus: 'continued' })
       }
     }
     // M2-0006: timePhase measures how long this step actually took, so a late app.stall tick can name
@@ -9440,7 +9528,7 @@ if (!app.requestSingleInstanceLock()) {
     try {
       if (earlyDeath) {
         mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${describeEarlyDeath(earlyDeath)}`)
-        auditLog('app.crash', { kind: 'safe_start', consecutive: earlyDeath.consecutive })
+        auditLog('app.error.early_death', { consecutive: earlyDeath.consecutive, recoveryStatus: 'safe_start' })
       } else {
         // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
         try {
@@ -9490,7 +9578,7 @@ if (!app.requestSingleInstanceLock()) {
     }
   }, 15_000)
 
-  app.on('activate', () => {
+  app.on('activate', () => reveals.trace('activate', () => {
     if (!win) createWindow()
     else win.showInactive()
     // Bar dock click still opens Settings. Hide/Island launch must stay parked
@@ -9505,13 +9593,13 @@ if (!app.requestSingleInstanceLock()) {
     } catch {
       /* settings store not ready */
     }
-  })
+  }))
   }).catch((e) => {
     // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same
     // redact-before-log discipline as onFatal) so a boot failure is actually diagnosable and audited.
     const detail = e instanceof Error ? e.stack || e.message : String(e)
     mainLog.error('[boot] Métis startup failed:', redactSecrets(detail))
-    auditLog('app.crash', { kind: 'boot', message: redactSecrets(e instanceof Error ? e.message : String(e)) })
+    auditLog('app.crash', crashDetail('boot', { message: redactSecrets(e instanceof Error ? e.message : String(e)) }))
   })
 }
 
