@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { OVERLAY_ORB_COPY, OVERLAY_ORB_PICKER_CARDS, OVERLAY_ORB_STYLES } from '@shared/overlay-orb'
 
 const picker = readFileSync(join(__dirname, './OverlayOrbPicker.tsx'), 'utf8')
-const settings = readFileSync(join(__dirname, '../features/settings/Settings.tsx'), 'utf8')
+const settings = readFileSync(join(__dirname, '../features/settings/SettingsPanel.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const thinking = readFileSync(join(__dirname, './JarvisOrbButton.tsx'), 'utf8')
 const orb = readFileSync(join(__dirname, './ObsidianOrb.tsx'), 'utf8')

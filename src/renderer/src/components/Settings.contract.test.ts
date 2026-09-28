@@ -20,10 +20,14 @@ import { licenseErrorMessage as gateLicenseErrorMessage } from './LicenseGate'
 const settingsFeatureSources = [
   'LocalResilience.tsx',
   'CliIntegration.tsx',
+  'Integrations.tsx',
   'DustSetup.tsx',
   'AiSection.tsx',
+  'IntelligenceSection.tsx',
+  'PersonalizationSection.tsx',
+  'PrivacyMeetingsSection.tsx',
   'SettingsSupport.tsx',
-  'Settings.tsx'
+  'SettingsPanel.tsx'
 ]
 const source = settingsFeatureSources
   .map((file) => readFileSync(join(__dirname, '../features/settings', file), 'utf8'))
@@ -55,7 +59,7 @@ function blockAfter(startAnchor: string, endMarker: string): string {
 }
 
 describe('Local AI distinguishes bundled compact weights from optional downloads (MQA-319)', () => {
-  const block = blockAfter('function LocalAiSection(', '\nfunction StepBadge(')
+  const block = blockAfter('function LocalAiSection(', '\nexport function StepBadge(')
   // Copy assertions run over the code with `//` comments stripped. The comments explain WHY the old
   // wording was wrong and legitimately quote it; that text never reaches a user.
   const copy = block.replace(/^\s*\/\/.*$/gm, '')
@@ -365,7 +369,7 @@ describe('CLI Integration copy — managed install, not npm i -g', () => {
 })
 
 describe('Set up automatically shows an honest status chip', () => {
-  const cli = (): string => blockAfter('function CliIntegration(', '\nfunction McpConnectionCard(')
+  const cli = (): string => blockAfter('function CliIntegration(', '\nexport function McpConnectionCard(')
   const install = (): string =>
     blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = async')
 
@@ -396,7 +400,7 @@ describe('Set up automatically shows an honest status chip', () => {
 // with its own download-page fallback ("Always reachable so the user is never stranded") hidden, because
 // that link renders only in phase 'blocked' or 'idle'.
 describe('MQA-164 — a failed update download leaves the Settings row with a way out', () => {
-  const block = (): string => blockAfter('function UpdatesSection(', '\nfunction ModePromptEditor')
+  const block = (): string => blockAfter('function UpdatesSection(', '\nexport function ModePromptEditor')
 
   it('tells the user only a QA-approved Latest is offered', () => {
     expect(block()).toMatch(/QA-approved Latest from Metis-Releases/)
@@ -431,7 +435,7 @@ describe('Set up Dust installs the managed CLI, then signs in', () => {
   })
 
   it('the Set up Dust button copy is install, not reconnect / No CLI', () => {
-    const block = blockAfter("title={active ? 'Dust CLI · Your agents (active)'", '\nfunction getAudioChoices(')
+    const block = blockAfter("title={active ? 'Dust CLI · Your agents (active)'", '\nexport function getAudioChoices(')
     const copy = block.replace(/^\s*\/\/.*$/gm, '')
     expect(copy).toMatch(/Installing Dust CLI/)
     expect(copy).toMatch(/Installs the Dust CLI, then opens your browser/)
@@ -441,13 +445,13 @@ describe('Set up Dust installs the managed CLI, then signs in', () => {
 })
 
 describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', () => {
-  const product = blockAfter('function ProductConnectCard(', '\nfunction ClickupCard(')
+  const product = blockAfter('function ProductConnectCard(', '\nexport function ClickupCard(')
   const polo = blockAfter('function McpConnectionCard(', '\nconst primaryBtnStyle')
-  const intelligence = blockAfter('function IntelligenceTab(', '\nfunction GraphSection(')
+  const intelligence = blockAfter('function IntelligenceTab(', '\nexport function GraphSection(')
   const productCopy = product.replace(/^\s*\/\/.*$/gm, '')
 
   it('ClickUp and Plane default cards have no MCP URL field', () => {
-    const clickup = blockAfter('function ClickupCard(', '\nfunction PlaneCard(')
+    const clickup = blockAfter('function ClickupCard(', '\nexport function PlaneCard(')
     const plane = blockAfter('function PlaneCard(', '\nexport function AgentPicker(')
     expect(productCopy).not.toMatch(/MCP endpoint URL/)
     expect(clickup).toMatch(/<ClickUpMark/)
@@ -499,7 +503,7 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
 // Instant validate: Dust connect must live-ping and fail loud. No green Connected from a saved key
 // alone, and never an auto-sent chat as the "proof".
 describe('Dust instant validate proves a live connection', () => {
-  const setup = (): string => blockAfter('function DustSetup(', '\nfunction getAudioChoices(')
+  const setup = (): string => blockAfter('function DustSetup(', '\nexport function getAudioChoices(')
   const copy = (): string => setup().replace(/^\s*\/\/.*$/gm, '')
 
   it('CLI import does not paint ok:true / Loading agents before the live prove', () => {

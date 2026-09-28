@@ -9,7 +9,7 @@ import { join } from 'node:path'
  * through a DOM. `onboarding-flow.test.ts` covers the pure scene-transition rules these strings wire up.
  */
 const experienceSrc = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
-const settingsSrc = readFileSync(join(__dirname, '../features/settings/Settings.tsx'), 'utf8')
+const settingsSrc = readFileSync(join(__dirname, '../features/settings/SettingsPanel.tsx'), 'utf8')
 
 describe('MQA-283 — the narrative experience now ends at Ready, not a legacy provider handoff', () => {
   it('persists right-edge position, Island chrome, and auto-hide in one save', () => {

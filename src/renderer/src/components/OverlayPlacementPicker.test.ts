@@ -5,7 +5,7 @@ import { OVERLAY_PLACEMENTS } from '@shared/overlay-placement'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 
 const picker = readFileSync(join(__dirname, './OverlayPlacementPicker.tsx'), 'utf8')
-const settings = readFileSync(join(__dirname, '../features/settings/Settings.tsx'), 'utf8')
+const settings = readFileSync(join(__dirname, '../features/settings/SettingsPanel.tsx'), 'utf8')
 const onboarding = readFileSync(join(__dirname, './OnboardingAppearance.tsx'), 'utf8')
 const experience = readFileSync(join(__dirname, './OnboardingExperience.tsx'), 'utf8')
 

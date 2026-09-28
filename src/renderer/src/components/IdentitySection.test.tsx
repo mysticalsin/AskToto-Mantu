@@ -14,7 +14,7 @@ describe('MQA-304 — one working licence activation surface', () => {
   })
 
   it('Identity uses the verified Operator flow and its live status, not memberLicenseActivate', () => {
-    const source = readFileSync(join(__dirname, '../features/settings/Settings.tsx'), 'utf8')
+    const source = readFileSync(join(__dirname, '../features/settings/SettingsPanel.tsx'), 'utf8')
     const profile = source.slice(source.indexOf("{tab === 'profile' && ("), source.indexOf("{tab === 'about' && ("))
     expect(profile).toContain('<OperatorLicenseCard refreshSettings={refreshSettings} showIdentity />')
     expect(source).toContain('<IdentitySection managedTier={status?.tier ?? null} />')
