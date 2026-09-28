@@ -1337,6 +1337,7 @@ type BackfillObserver = {
 let backfillObserver: BackfillObserver | null = null
 let backfillFinalization: Promise<void> | null = null
 let drainTask: Promise<void> | null = null
+let backfillTailDrain: Promise<void> | null = null
 let backfillScans = 0
 let rebuildReplayTask: Promise<void> | null = null
 let rebuildReplayQueued = false
@@ -1543,7 +1544,7 @@ export function brainBackfillProgress(): { total: number; done: number; failed?:
     ...(backfillFailed > 0 ? { failed: backfillFailed } : {}),
     ...(backfillPreparing ? { preparing: true } : {}),
     running: backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayQueued || !!rebuildReplayTask ||
-      hasActiveBackfill() || backfillLintPending || !!backfillFinalization || !!drainTask
+      hasActiveBackfill() || backfillLintPending || !!backfillFinalization || (!!drainTask && drainTask === backfillTailDrain)
   }
 }
 
@@ -1919,6 +1920,7 @@ function maybeFinishBackfill(): void {
       backfillLintPending = false
       backfillFinalization = null
       maybeFinishDrain()
+      backfillTailDrain = drainTask
     })
   }
 }
@@ -2589,7 +2591,6 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
       if (record.ok) observer.initialOkSourceVersions.set(key, record.sourceVersion)
     }
     observeSourceRefreshWorkFromIndex(before)
-    if (before.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     const startingSourceRefresh = before.sourceRefreshRequested && !before.replayPending && !sourceRefreshRunning
     if (startingSourceRefresh) await maybeStartSourceRefreshAsync()
     // A source-refresh rebuild owns the follow-up scan. Do not race it with a plain forced backfill:

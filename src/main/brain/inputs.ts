@@ -51,7 +51,11 @@ function observationOf(version: ContentVersion): SourceObservation {
 async function scanFolder(root: string, source: 'meetings' | 'team', label?: string): Promise<SourceFolder> {
   const gateway = storageAt(root)
   const listing = await gateway.list('')
-  if (listing.status === 'missing') return { root, source, label, status: 'missing', sources: [] }
+  if (listing.status === 'missing') {
+    // The gateway folds ENOTDIR into "missing"; an existing non-directory root is a failed listing.
+    const self = (await gateway.classify([''])).get('')
+    return { root, source, label, status: self && 'version' in self ? 'failed' : 'missing', sources: [] }
+  }
   if (listing.status !== 'ok') return { root, source, label, status: 'failed', sources: [] }
   const names = listing.names.filter(isMeetingTranscriptFile)
   const classes = await classifyAll(gateway, names)
