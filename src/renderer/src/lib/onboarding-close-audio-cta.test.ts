@@ -14,7 +14,7 @@ import {
 import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
-const settings = readFileSync(join(__dirname, '../features/settings/Settings.tsx'), 'utf8')
+const settings = readFileSync(join(__dirname, '../features/settings/SettingsPanel.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8').replace(/\r\n/g, '\n')
 const production = readFileSync(join(__dirname, './onboarding-music.ts'), 'utf8')
 

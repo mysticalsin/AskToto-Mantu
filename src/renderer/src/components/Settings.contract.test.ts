@@ -59,7 +59,9 @@ function blockAfter(startAnchor: string, endMarker: string): string {
 }
 
 describe('Local AI distinguishes bundled compact weights from optional downloads (MQA-319)', () => {
-  const block = blockAfter('function LocalAiSection(', '\nexport function StepBadge(')
+  const localAiStart = source.indexOf('function LocalAiSection(')
+  expect(localAiStart).toBeGreaterThan(-1)
+  const block = source.slice(localAiStart)
   // Copy assertions run over the code with `//` comments stripped. The comments explain WHY the old
   // wording was wrong and legitimately quote it; that text never reaches a user.
   const copy = block.replace(/^\s*\/\/.*$/gm, '')
@@ -446,7 +448,7 @@ describe('Set up Dust installs the managed CLI, then signs in', () => {
 
 describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', () => {
   const product = blockAfter('function ProductConnectCard(', '\nexport function ClickupCard(')
-  const polo = blockAfter('function McpConnectionCard(', '\nconst primaryBtnStyle')
+  const polo = blockAfter('function McpConnectionCard(', '\n// Shared button styles for McpConnectionCard')
   const intelligence = blockAfter('function IntelligenceTab(', '\nexport function GraphSection(')
   const productCopy = product.replace(/^\s*\/\/.*$/gm, '')
 

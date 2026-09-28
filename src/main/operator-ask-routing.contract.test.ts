@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const ingestSrc = readFileSync(join(__dirname, 'operator-ingest.ts'), 'utf8')
 const operatorAskSrc = readFileSync(join(__dirname, 'llm/operator-ask.ts'), 'utf8')
-const settingsSrc = readFileSync(join(__dirname, '../renderer/src/features/settings/Settings.tsx'), 'utf8')
+const settingsSrc = readFileSync(join(__dirname, '../renderer/src/features/settings/CliIntegration.tsx'), 'utf8')
 
 describe('Operator-funded Ask consumption — seat never stores raw LLM keys', () => {
   it('Ask primary is last-clicked working CLI, then Operator-funded after CLI quota', () => {

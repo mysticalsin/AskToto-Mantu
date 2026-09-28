@@ -59,7 +59,7 @@ describe('formatResetPhrase (MQA-203)', () => {
 })
 
 const settingsSrc = readFileSync(
-  join(__dirname, '..', 'renderer', 'src', 'features', 'settings', 'Settings.tsx'),
+  join(__dirname, '..', 'renderer', 'src', 'features', 'settings', 'LocalResilience.tsx'),
   'utf8'
 )
 const mainSrc = readFileSync(join(__dirname, '..', 'main', 'index.ts'), 'utf8')

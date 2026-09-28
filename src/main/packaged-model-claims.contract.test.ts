@@ -14,7 +14,7 @@ const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8').repl
 
 const builder = read('electron-builder.yml')
 const manifest = read('src/main/llm/local-models.ts')
-const settingsUi = read('src/renderer/src/features/settings/Settings.tsx')
+const settingsUi = read('src/renderer/src/features/settings/LocalResilience.tsx')
 
 /** True when the builder copies the weights directory rather than only the licence file. */
 const weightsArePackaged = /^\s*-\s*from:\s*resources\/local-llm\/models\s*$/m.test(builder)
@@ -42,11 +42,9 @@ describe('MQA-146/319 — local-model provenance follows the actual installer', 
 describe('MQA-188/191 — the in-app copy may not out-run what the installer actually ships', () => {
   const localAi = (): string => {
     const start = settingsUi.indexOf('function LocalAiSection(')
-    const end = settingsUi.indexOf('\nfunction StepBadge(', start)
     expect(start).toBeGreaterThan(-1)
-    expect(end).toBeGreaterThan(start)
     // Strip `//` comments: they quote the old wording to explain why it was wrong, and no user reads them.
-    return settingsUi.slice(start, end).replace(/^\s*\/\/.*$/gm, '')
+    return settingsUi.slice(start).replace(/^\s*\/\/.*$/gm, '')
   }
 
   it('identifies the included compact model and projector instead of claiming every model is included', () => {

@@ -22,7 +22,7 @@ describe('ASR quality ship — stored preference and truthful runtime reporting'
   })
 
   it('Settings identifies the compact packaged live model and labels the large live preference development-only', () => {
-    const settings = read('src/renderer/src/features/settings/Settings.tsx')
+    const settings = read('src/renderer/src/features/settings/LocalResilience.tsx')
     expect(settings).toMatch(/if \(!shouldUseBundledAsr\(import\.meta\.env\.PROD, bundled\)\)/)
     expect(settings).toMatch(/label="Prefer large live Whisper \(development\)"/)
     expect(settings).toMatch(/Live Whisper uses the compact Whisper base model in this build\./)
@@ -35,7 +35,7 @@ describe('ASR quality ship — stored preference and truthful runtime reporting'
       /qualityDegraded: requestedQuality === 'best' && engine !== 'webgpu'/
     )
     expect(read('src/renderer/src/App.tsx')).toMatch(/asrWebgpuFallbackAt/)
-    const settings = read('src/renderer/src/features/settings/Settings.tsx')
+    const settings = read('src/renderer/src/features/settings/SettingsPanel.tsx')
     expect(settings).toMatch(/A recent live session used Whisper base instead of the requested large model\./)
     expect(settings).toMatch(/Packaged builds use Whisper base for live transcription\./)
     expect(settings).toMatch(/The optional larger\s+download changes imported recordings only\./)
@@ -46,7 +46,7 @@ describe('ASR quality ship — stored preference and truthful runtime reporting'
 describe('ASR quality ship — languages, switch, echo, meaning', () => {
   it('detects 60+ spoken languages from one shared list', () => {
     expect(LANGUAGE_NAMES.length).toBeGreaterThanOrEqual(60)
-    expect(read('src/renderer/src/features/settings/Settings.tsx')).toMatch(
+    expect(read('src/renderer/src/features/settings/SettingsPanel.tsx')).toMatch(
       /import \{ LANGUAGE_OPTIONS \} from '@shared\/lang-id'/
     )
     expect(read('src/main/apple-speech.ts')).toMatch(/import \{ APPLE_LOCALES \} from '@shared\/lang-id'/)

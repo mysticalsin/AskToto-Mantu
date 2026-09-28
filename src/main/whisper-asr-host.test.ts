@@ -117,7 +117,7 @@ describe('whisper-asr-host — the isolated transformers child (MQA-234)', () =>
 describe('MQA-246 — an import must not silently run on the floor transcription model', () => {
   const src = readFileSync(join(__dirname, 'whisper-asr-host.ts'), 'utf8')
   const importer = readFileSync(join(__dirname, 'whisper-import.ts'), 'utf8')
-  const settingsUi = readFileSync(join(__dirname, '..', 'renderer', 'src', 'features', 'settings', 'Settings.tsx'), 'utf8')
+  const settingsUi = readFileSync(join(__dirname, '..', 'renderer', 'src', 'features', 'settings', 'SettingsPanel.tsx'), 'utf8')
 
   it('the ready message names the tier it resolved, and whether that is a degradation', () => {
     // Resolvable at init because the tier is decided by file presence alone — the model load is lazy, so

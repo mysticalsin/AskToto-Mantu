@@ -147,7 +147,7 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function createWindow'))
     expect(exit).toMatch(/if \(!overlayWindowTransparent\) \{\s*recreateOverlayWindow\(\)/)
 
-    const settings = readFileSync(join(__dirname, '../../renderer/src/features/settings/Settings.tsx'), 'utf8')
+    const settings = readFileSync(join(__dirname, '../../renderer/src/features/settings/SettingsPanel.tsx'), 'utf8')
     const replay = settings.slice(settings.indexOf('const replayOnboarding = async'))
     expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeGreaterThan(-1)
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
