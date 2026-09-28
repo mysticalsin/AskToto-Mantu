@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,6 +12,7 @@ import {
   isPassingRevealEvidence,
   parseAuditLog,
   readObservationTail,
+  seedSmokeProfile,
   initialRvRows,
   initialNavigationGuardRows,
   runRevealRow,
@@ -473,6 +474,26 @@ describe('initialNavigationGuardRows', () => {
     expect(rows.some((row) => row.state === 'dirty')).toBe(true)
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
+  })
+})
+
+describe('seedSmokeProfile', () => {
+  it('starts packaged smoke in the normal parked overlay, not first-run onboarding', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'metis-smoke-test-'))
+    try {
+      seedSmokeProfile(profile, 1234)
+
+      expect(JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'))).toEqual({
+        onboardingDone: true,
+        onboardingDoneAt: 1234,
+        recordingConsent: true,
+        overlayLayout: 'hide',
+        overlayPlacement: 'top-center',
+        autoHideOverlay: true
+      })
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
   })
 })
 
