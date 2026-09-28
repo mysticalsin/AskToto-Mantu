@@ -24,6 +24,7 @@ import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
 import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-duration'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
+import type { FileClass } from './infra/storage/gateway'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -899,10 +900,12 @@ export async function clearDraftTranscript(settings: Settings, startedAt: number
 }
 
 const IN_PROGRESS_SUFFIX = ' (in progress — autosaved draft)'
-const withFileTypes = false
 
-function isFile(status: unknown): boolean {
-  return !!status || withFileTypes
+// Never follow a symlink planted with a draft-shaped name: `FileClass.isSymlink` is the directory
+// entry's own type (from lstat), not the target's, so a symlink to another meeting already inside the
+// folder is rejected here even though the gateway's `read()` would otherwise follow it.
+function isFile(fileClass: FileClass | undefined): boolean {
+  return !!fileClass && 'isSymlink' in fileClass && !fileClass.isSymlink
 }
 
 /**

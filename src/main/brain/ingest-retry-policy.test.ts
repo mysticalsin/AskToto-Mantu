@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { readdir, readFile, realpath, stat } from 'node:fs/promises'
+import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app } from 'electron'
@@ -153,6 +153,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
         readdir,
         realpath,
         stat,
+        lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() })),
         readFile: async (path) => {
           if (unreadablePaths.has(path)) {
             const error = new Error('synthetic cloud placeholder timeout') as NodeJS.ErrnoException

@@ -22,7 +22,7 @@
  *   - Only ENOENT and ENOTDIR are 'missing'. 'unavailable', 'timeout' and 'degraded' say nothing about
  *     whether a file exists; callers must never treat them as a deletion.
  */
-import { readdir, readFile, realpath, stat } from 'node:fs/promises'
+import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { createAdmission, type Lane } from './admission'
 import { createDatalessDetector, type ContentPresence, type DatalessDetector, type FileVersion } from './dataless'
@@ -53,8 +53,11 @@ export type StorageFailure =
 /** mtime, ctime and size: the version identity the detector keys on (FileVersion in dataless.ts). */
 export type ContentVersion = Omit<FileVersion, 'path'>
 
-/** 'ok': the bytes are on this device. 'dataless' | 'unknown': they may not be, so nothing reads them. */
-export type FileClass = { status: 'ok' | 'dataless' | 'unknown'; version: ContentVersion } | StorageFailure
+/** 'ok': the bytes are on this device. 'dataless' | 'unknown': they may not be, so nothing reads them.
+ *  `isSymlink` is the directory entry's own type, never the target's — a caller that treats a name as
+ *  identity (e.g. promoting a draft-named file into History) must reject `isSymlink: true` rather than
+ *  read through it, even though `read()` itself still follows in-root symlinks. */
+export type FileClass = { status: 'ok' | 'dataless' | 'unknown'; version: ContentVersion; isSymlink: boolean } | StorageFailure
 
 export type ReadResult =
   | { status: 'ok'; version: ContentVersion; bytes: Buffer }
@@ -86,6 +89,11 @@ export interface StorageFs {
   readFile(path: string): Promise<Buffer>
   realpath(path: string): Promise<string>
   stat(path: string): Promise<{ mtimeMs: number; ctimeMs: number; size: number }>
+  /** Unlike `stat`, never follows the final path component: the only way to tell a plain file apart
+   *  from a symlink wearing its name (e.g. a symlink planted with a draft-shaped name that points at
+   *  another meeting already inside the root — `stat`/`realpath`'s in-root check alone would not catch
+   *  that, since the *target* is still inside the root). */
+  lstat(path: string): Promise<{ isSymbolicLink: boolean }>
 }
 
 export interface StorageGatewayOptions {
@@ -218,7 +226,7 @@ function createPresenceQueue(detector: DatalessDetector): PresenceOf {
 export function createStorageGateway({
   root,
   detector = createDatalessDetector(),
-  fs = { readdir, readFile, realpath, stat },
+  fs = { readdir, readFile, realpath, stat, lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() })) },
   poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE)
 }: StorageGatewayOptions): StorageGateway {
   const admission = createAdmission(Math.max(1, poolSize - RESERVED_POOL_THREADS))
@@ -259,6 +267,13 @@ export function createStorageGateway({
     if (stats.status !== 'ok') return stats
     const { mtimeMs, ctimeMs, size } = stats.value
     return { status: 'ok', value: { path, mtimeMs, ctimeMs, size } }
+  }
+
+  /** Whether `path` names a symlink itself. Unreadable (settled failure) counts as a symlink: a caller
+   *  that cannot verify the entry's own type must not treat it as a plain file. */
+  async function isSymlink(path: string, request: Request): Promise<boolean> {
+    const result = await call('metadata', request, () => fs.lstat(path))
+    return result.status !== 'ok' || result.value.isSymbolicLink
   }
 
   /** The detector's verdicts, or none (every file then counts as unknown) when the request ends first. The
@@ -346,18 +361,20 @@ export function createStorageGateway({
       const request = openRequest(METADATA_DEADLINE_MS, signal)
       try {
         const stats = await Promise.all(
-          relPaths.map(async (rel): Promise<[string, Settled<FileVersion>]> => {
+          relPaths.map(async (rel): Promise<[string, Settled<FileVersion>, boolean]> => {
             const path = underRoot(base, rel)
-            return [rel, path ? await statFile(path, request) : outsideRoot()]
+            if (!path) return [rel, outsideRoot(), true]
+            const [file, link] = await Promise.all([statFile(path, request), isSymlink(path, request)])
+            return [rel, file, link]
           })
         )
         const files = stats.flatMap(([, file]) => (file.status === 'ok' ? [file.value] : []))
         const presence = files.length > 0 ? await presenceWithin(files, request) : new Map<string, ContentPresence>()
         return new Map(
-          stats.map(([rel, file]): [string, FileClass] => {
+          stats.map(([rel, file, link]): [string, FileClass] => {
             if (file.status !== 'ok') return [rel, file]
             const verdict = presence.get(file.value.path)
-            return [rel, { status: verdict === 'local' ? 'ok' : (verdict ?? 'unknown'), version: versionOf(file.value) }]
+            return [rel, { status: verdict === 'local' ? 'ok' : (verdict ?? 'unknown'), version: versionOf(file.value), isSymlink: link }]
           })
         )
       } finally {

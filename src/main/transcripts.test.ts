@@ -7,7 +7,8 @@ import {
   writeFileSync,
   renameSync,
   mkdirSync,
-  existsSync
+  existsSync,
+  symlinkSync
 } from 'node:fs'
 import { rename as renameAsync } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -756,6 +757,28 @@ describe('recoverOrphanDrafts (crash-recovery promotion)', () => {
     expect(readFileSync(out, 'utf8')).toContain('Where are we on the migration?')
     expect(readFileSync(join(folder, 'index.md'), 'utf8')).toContain('Crashed standup') // row follows the file
   })
+
+  // A symlink planted with a draft-shaped name must never be followed: it could point at another
+  // meeting already inside the folder, and promoting it would silently duplicate that meeting's
+  // content into a new, unrelated "-recovered.md" file. File symlinks (as opposed to directory
+  // junctions) need elevation or Developer Mode on Windows, same reasoning as asr-model-path.test.ts;
+  // the gateway-level 'isSymlink' behavior itself is exercised platform-independently in gateway.test.ts.
+  it.skipIf(process.platform === 'win32')(
+    'never promotes a symlink planted with a draft-shaped name, even when it targets a real meeting in the folder',
+    async () => {
+      const victimPath = join(folder, 'victim-meeting.md')
+      writeFileSync(victimPath, 'type: meeting-transcript\ntitle: "Victim"\n---\nSensitive content')
+      const plantedDraft = join(folder, '.autosave-draft-000000-1-000.md')
+      symlinkSync(victimPath, plantedDraft)
+
+      const r = await recoverOrphanDrafts(settings)
+
+      expect(r.recovered).toBe(0)
+      expect(promotedFiles().length).toBe(0)
+      expect(existsSync(plantedDraft)).toBe(true) // left alone, not consumed
+      expect(readFileSync(victimPath, 'utf8')).toContain('Sensitive content') // victim untouched
+    }
+  )
 })
 
 describe('parseRecapMarkdown', () => {
