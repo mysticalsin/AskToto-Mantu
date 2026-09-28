@@ -3,8 +3,9 @@ name: Packaged smoke
 # Builds the unsigned app on the hosted macOS and Windows runners with no repository secret (macOS
 # carries electron-builder's ad-hoc signature, Windows is unsigned), installs it from the shipped
 # installer into a fresh directory, and runs scripts/qa/packaged-smoke.mjs on a fresh profile: the app
-# starts, its renderer reports ready, it quits cleanly through its own Quit path, and nothing it started
-# is alive 5 s after it exits. Each job uploads a content-free report and the tested installer's sha256.
+# starts, its renderer reports ready, hosted-runner reopen routes produce reveal audit evidence, it quits
+# cleanly through its own Quit path, and nothing it started is alive 5 s after it exits. Each job uploads a
+# content-free report with the RV matrix and the tested installer's sha256.
 #
 # Runs on every push to m2/integration, and on demand for any branch once this file is on the default
 # branch: gh workflow run packaged-smoke.yml --ref <branch>. Never on tags. Both hosted runners give
@@ -81,7 +82,7 @@ jobs:
         id: sidecar-reaper
         timeout-minutes: 10
         run: node scripts/qa/sidecar-boot-reaper.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/sidecar-boot-reaper.json
-      - name: Launch, quit cleanly, and check that nothing survives
+      - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         timeout-minutes: 10
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/packaged-smoke.json
@@ -137,7 +138,7 @@ jobs:
           $setup = Get-Item release/Metis-Setup-*.exe
           $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$env:RUNNER_TEMP\smoke" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
-      - name: Launch, quit cleanly, and check that nothing survives
+      - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         timeout-minutes: 10
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.exe" smoke-report/packaged-smoke.json

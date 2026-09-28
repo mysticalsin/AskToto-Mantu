@@ -1,6 +1,6 @@
 # Métis — request to Mantu IT (unblocks distribution + Outlook)
 
-**From:** Tony Walteur  **Re:** what's needed to ship Métis (the AI meeting-copilot desktop app) to
+**From:** Metis Maintainers  **Re:** what's needed to ship Métis (the AI meeting-copilot desktop app) to
 real users. The app is built and working locally; the items below are the only blockers to a signed,
 installable build and the Outlook agenda feature. Nothing here exposes secrets in the codebase — all
 credentials are read from environment variables / a managed-config file at build/run time.

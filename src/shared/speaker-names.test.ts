@@ -97,7 +97,7 @@ describe('canUpgradeSpeakerLabel', () => {
   })
   it('never upgrades a confirmed person name', () => {
     expect(canUpgradeSpeakerLabel('Ada Lovelace')).toBe(false)
-    expect(canUpgradeSpeakerLabel('Tony Walteur')).toBe(false)
+    expect(canUpgradeSpeakerLabel('Metis Maintainers')).toBe(false)
   })
 })
 
@@ -106,7 +106,7 @@ describe('micSpeakerLabel / profile you label', () => {
     expect(micSpeakerLabel({ name: '  Ada  ' })).toBe('Ada')
   })
   it('appends role (or title) as Name · role when present', () => {
-    expect(micSpeakerLabel({ name: 'Tony Walteur', role: 'CEO' })).toBe('Tony Walteur · CEO')
+    expect(micSpeakerLabel({ name: 'Metis Maintainers', role: 'CEO' })).toBe('Metis Maintainers · CEO')
     expect(micSpeakerLabel({ name: 'Ada', title: 'Engineer' })).toBe('Ada · Engineer')
     expect(micSpeakerLabel({ name: 'Ada', role: 'CEO', title: 'ignored' })).toBe('Ada · CEO')
   })
@@ -117,9 +117,9 @@ describe('micSpeakerLabel / profile you label', () => {
     expect(micSpeakerLabel(undefined)).toBe('You')
   })
   it('transcriptDisplayName prefers youLabel over generic You', () => {
-    expect(transcriptDisplayName({ speaker: 'you' }, { youLabel: 'Tony Walteur' })).toBe('Tony Walteur')
+    expect(transcriptDisplayName({ speaker: 'you' }, { youLabel: 'Metis Maintainers' })).toBe('Metis Maintainers')
     expect(transcriptDisplayName({ speaker: 'you' }, { youLabel: '' })).toBe('You')
-    expect(transcriptDisplayName({ speaker: 'you', name: 'Override' }, { youLabel: 'Tony' })).toBe(
+    expect(transcriptDisplayName({ speaker: 'you', name: 'Override' }, { youLabel: 'Example' })).toBe(
       'Override'
     )
   })

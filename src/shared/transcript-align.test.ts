@@ -53,18 +53,18 @@ describe('applySpeakerNames', () => {
   it('assigns the operator display name to every "you" line when provided, without text matching', () => {
     const lines = [line('you', 'so where are we on pricing', 0)]
     // No matching entry at all — proves operatorName short-circuits matching rather than depending on it.
-    const { lines: out, named } = applySpeakerNames(lines, [], { operatorName: 'Tony Walteur' })
+    const { lines: out, named } = applySpeakerNames(lines, [], { operatorName: 'Metis Maintainers' })
     expect(named).toBe(1)
-    expect(out[0].name).toBe('Tony Walteur')
+    expect(out[0].name).toBe('Metis Maintainers')
     expect(out[0].speaker).toBe('you')
   })
 
   it('falls back to text matching for "you" lines when no operator name is given', () => {
     const lines = [line('you', 'so where are we on pricing', 0)]
-    const entries = [entry('Tony Walteur', 'so where are we on pricing', 0)]
+    const entries = [entry('Metis Maintainers', 'so where are we on pricing', 0)]
     const { lines: out, named } = applySpeakerNames(lines, entries)
     expect(named).toBe(1)
-    expect(out[0].name).toBe('Tony Walteur')
+    expect(out[0].name).toBe('Metis Maintainers')
   })
 
   it('never assigns a blank/untagged cue name even on a perfect text match', () => {
@@ -146,7 +146,7 @@ describe('clusterNamePairsFromAlignment', () => {
 
   it('ignores a "you" line even if it somehow carried a Speaker-N-shaped name', () => {
     const before = [withName(line('you', 'so about pricing', 0), 'Speaker 1')]
-    const after = [withName(before[0], 'Tony Walteur')]
+    const after = [withName(before[0], 'Metis Maintainers')]
     expect(clusterNamePairsFromAlignment(before, after)).toEqual([])
   })
 

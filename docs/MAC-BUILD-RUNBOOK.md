@@ -238,7 +238,7 @@ publishes onto the OLD release and clobbers its assets:
 
 ```bash
 git checkout main && git pull
-node scripts/check-version-parity.mjs   # self-test: GITHUB_REF_NAME=v1.6.0 node scripts/…
+node scripts/check-version-parity.mjs mac   # self-test: GITHUB_REF_NAME=v1.6.0 node scripts/check-version-parity.mjs mac
 git tag v1.6.0 && git push origin v1.6.0 && git push github v1.6.0
 ```
 

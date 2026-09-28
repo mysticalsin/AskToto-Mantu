@@ -261,7 +261,7 @@ describe('brain ingest — local last-resort index fallback', () => {
         'bad-meeting.md': {
           at: 2,
           ok: false,
-          error: "ENOENT: no such file or directory, open 'C:\\Users\\Tony\\OneDrive\\Meetings\\bad-meeting.md'"
+          error: "ENOENT: no such file or directory, open 'C:\\Users\\Example\\OneDrive\\Meetings\\bad-meeting.md'"
         },
         'mac-meeting.md': {
           at: 1,
@@ -273,7 +273,7 @@ describe('brain ingest — local last-resort index fallback', () => {
     } as never)
     expect(details).toHaveLength(2)
     expect(details[0].error).not.toContain('C:\\Users')
-    expect(details[0].error).not.toContain('Tony')
+    expect(details[0].error).not.toContain('Example')
     expect(details[0].error).toContain('ENOENT')
     expect(details[0].error).toContain('bad-meeting.md') // basename survives — still actionable
     expect(details[1].error).not.toContain('/Users/example-owner')

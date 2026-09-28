@@ -136,7 +136,7 @@ describe('loginCliInvokeLines — managed Node, never PATH-only claude', () => {
   it('Windows uses the managed entry plus ELECTRON_RUN_AS_NODE', () => {
     const lines = loginCliInvokeLines('claude-cli', true, {
       command: 'C:\\Metis\\Metis.exe',
-      args: ['C:\\Users\\tony\\managed-cli\\claude\\cli.js'],
+      args: ['C:\\Users\\example\\managed-cli\\claude\\cli.js'],
       env: { ELECTRON_RUN_AS_NODE: '1' }
     })
     expect(lines).toContain('set ELECTRON_RUN_AS_NODE=1')
@@ -159,8 +159,8 @@ describe('loginCliInvokeLines — managed Node, never PATH-only claude', () => {
   })
 
   it('Windows login invokes a resolved native claude.exe, never call claude', () => {
-    const lines = loginCliInvokeLines('claude-cli', true, null, 'C:\\Users\\tony\\.local\\bin\\claude.exe')
-    expect(lines).toEqual(['"C:\\Users\\tony\\.local\\bin\\claude.exe"'])
+    const lines = loginCliInvokeLines('claude-cli', true, null, 'C:\\Users\\example\\.local\\bin\\claude.exe')
+    expect(lines).toEqual(['"C:\\Users\\example\\.local\\bin\\claude.exe"'])
     expect(lines.join('\n')).not.toMatch(/call claude/)
   })
 
@@ -173,7 +173,7 @@ describe('loginCliInvokeLines — managed Node, never PATH-only claude', () => {
         args: ['C:\\managed\\cli.js'],
         env: { ELECTRON_RUN_AS_NODE: '1' }
       },
-      'C:\\Users\\tony\\.local\\bin\\claude.exe'
+      'C:\\Users\\example\\.local\\bin\\claude.exe'
     )
     expect(lines.join('\n')).toContain('.local\\bin\\claude.exe')
     expect(lines.join('\n')).not.toMatch(/ELECTRON_RUN_AS_NODE/)
@@ -184,7 +184,7 @@ describe('loginCliInvokeLines — managed Node, never PATH-only claude', () => {
       'claude-cli',
       true,
       null,
-      'C:\\Users\\tony\\AppData\\Local\\Microsoft\\WindowsApps\\claude.exe'
+      'C:\\Users\\example\\AppData\\Local\\Microsoft\\WindowsApps\\claude.exe'
     )
     expect(lines).toEqual(['call claude'])
   })

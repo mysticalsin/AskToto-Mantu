@@ -1,0 +1,32 @@
+name: M2-0018 traceability
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m2-0018-traceability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  traceability:
+    name: Targeted review artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Build the public-safe traceability artifact
+        run: node scripts/trace/build-traceability.mjs --check --out out/m2-0018-targeted-review
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: m2-0018-targeted-review
+          path: out/m2-0018-targeted-review/
+          if-no-files-found: error
+          retention-days: 14

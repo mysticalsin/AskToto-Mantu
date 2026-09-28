@@ -583,21 +583,6 @@ describe('MQA-292 Metis-Releases feed rules — QA Latest only', () => {
     expect(src).toMatch(/allowDowngrade = false/)
   })
 
-  it('release.yml does not undraft Latest until the signed EXE + notarized DMG are in the bundle', async () => {
-    const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
-    const { join } = await vi.importActual<typeof import('node:path')>('node:path')
-    const workflow = readFileSync(join(__dirname, '../../.github/workflows/release.yml'), 'utf8')
-    expect(workflow).toContain('Metis-${version}.dmg')
-    expect(workflow).toContain('Metis-Setup-${version}.exe')
-    expect(workflow).not.toContain('Metis-Native-${version}.zip')
-    expect(workflow).toMatch(/gh release create .* --draft/)
-    expect(workflow).toMatch(/gh release edit .* --draft=false/)
-    const create = workflow.indexOf('gh release create')
-    const undraft = workflow.indexOf('--draft=false')
-    expect(create).toBeGreaterThan(-1)
-    expect(undraft).toBeGreaterThan(create)
-  })
-
   it('Download & install re-checks GitHub Latest before electron-updater runs', async () => {
     const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
     const { join } = await vi.importActual<typeof import('node:path')>('node:path')

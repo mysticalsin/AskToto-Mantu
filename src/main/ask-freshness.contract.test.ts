@@ -52,9 +52,7 @@ describe('fresh-question boundary at the askStart choke point', () => {
   it('listeningState keeps the boundary suspended during a live meeting', async () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
     expect(start).toBeGreaterThan(-1)
-    expect(indexSrc.slice(start, start + 500)).toMatch(
-      /setListeningActive:\s*\(on\)\s*=>\s*\{\s*listeningActive = on\s*\}/
-    )
+    expect(indexSrc.slice(start, start + 500)).toMatch(/setListeningActive,/)
 
     let listeningActive = false
     const handler = createListeningStateHandler({

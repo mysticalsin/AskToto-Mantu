@@ -3,7 +3,7 @@ DRAFT — for DPO review, not yet adopted. Prepared 2026-07-11.
 # Data Protection Impact Assessment (GDPR Article 35)
 
 **DPIA ID:** AKT-DPIA-001 (draft) **Date:** 2026-07-11 **DPO:** [name — to be filled in by DPO's office]
-**Project owner:** Tony Walteur (Chief of Staff, sole user and product owner of AskToto/Métis)
+**Project owner:** Metis Maintainers (Chief of Staff, sole user and product owner of AskToto/Métis)
 
 Related documents: [`legitimate-interest-assessment.md`](./legitimate-interest-assessment.md),
 [`article-30-record.md`](./article-30-record.md), [`recording-policy.md`](./recording-policy.md),
@@ -185,7 +185,7 @@ or alongside, the Phase 5 publish work.
 ## 8. Sign-off
 
 - [ ] DPO
-- [ ] Project owner (Tony Walteur)
+- [ ] Project owner (Metis Maintainers)
 - [ ] Legal (controller entity name, Art 30 register entry)
 - [ ] Information Security (key custody plan, audit log hardening)
 - [ ] Supervisory authority (Article 36) — not triggered; no residual risk assessed as HIGH after

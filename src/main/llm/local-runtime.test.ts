@@ -21,6 +21,7 @@ import {
   baseURL
 } from './local-runtime'
 import { LOCAL_MODELS, spawnProfileFor } from './local-models'
+import { formatCommand, releasePlans } from '../../../scripts/release/orchestrate.mjs'
 
 const REPO_ROOT = process.cwd()
 
@@ -194,6 +195,13 @@ describe('packaging wiring (mechanical — missing wiring fails this suite)', ()
   ] as const
 
   function expandScript(key: string, scripts: Record<string, string>, seen = new Set<string>()): string {
+    const releaseTarget: Record<string, keyof typeof releasePlans> = {
+      release: 'mac',
+      'release:win': 'win',
+      'release:mas': 'mas',
+      'release:win:store': 'win-store'
+    }
+    if (releaseTarget[key]) return releasePlans[releaseTarget[key]].map(formatCommand).join(' && ')
     if (seen.has(key)) throw new Error(`Cyclic npm script alias: ${[...seen, key].join(' -> ')}`)
     const script = scripts[key]
     if (!script) return ''

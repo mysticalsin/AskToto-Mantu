@@ -17,6 +17,7 @@ import {
   extractScreenText,
   type OcrResult
 } from './mac-helper'
+import { formatCommand, releasePlans } from '../../scripts/release/orchestrate.mjs'
 
 const REPO_ROOT = process.cwd()
 
@@ -136,8 +137,13 @@ describe('packaging wiring (mechanical — missing wiring fails this suite)', ()
     }
     for (const key of MAC_CHAIN_KEYS) {
       expect(pkg.scripts[key], `scripts.${key} missing`).toBeTruthy()
-      expect(pkg.scripts[key], `scripts.${key} does not build the mac helper`).toContain('build-mac-helper.mjs')
-      expect(pkg.scripts[key], `scripts.${key} does not guard the mac helper`).toContain('check-mac-helper.mjs mac')
+      const body = key === 'release:build:mac'
+        ? releasePlans.mac.map(formatCommand).join(' && ')
+        : key === 'release:mas'
+          ? releasePlans.mas.map(formatCommand).join(' && ')
+          : pkg.scripts[key]
+      expect(body, `scripts.${key} does not build the mac helper`).toContain('build-mac-helper.mjs')
+      expect(body, `scripts.${key} does not guard the mac helper`).toContain('check-mac-helper.mjs mac')
     }
   })
 
