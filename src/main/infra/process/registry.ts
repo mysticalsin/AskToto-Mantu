@@ -1,14 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { execFile } from 'node:child_process'
 import { appendFileSync, mkdirSync, realpathSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
-import type { ChildProcess } from 'node:child_process'
+import type * as childProcess from 'node:child_process'
+import type { ChildProcess, ExecFileOptions } from 'node:child_process'
 import { promisify } from 'node:util'
 import { getProcessIdentity as getMacProcessIdentity } from '../../mac-helper'
 import { mainLog } from '../../logger'
 import { WINDOWS_POWERSHELL } from '../../win-security'
 
-const execFileAsync = promisify(execFile)
+const require = createRequire(import.meta.url)
+
+function execFileAsync(command: string, args: readonly string[], options: ExecFileOptions & { encoding: 'utf8' }): Promise<{ stdout: string; stderr: string }> {
+  const { execFile } = require('node:child_process') as typeof childProcess
+  return promisify(execFile)(command, [...args], options) as Promise<{ stdout: string; stderr: string }>
+}
 
 export interface SidecarRecord {
   readonly kind: 'intent' | 'spawned'

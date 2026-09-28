@@ -1,6 +1,8 @@
-import { execFile } from 'node:child_process'
 import { readdirSync, readFileSync, realpathSync } from 'node:fs'
-import { basename, isAbsolute, join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { basename, join, posix, resolve, win32 } from 'node:path'
+import type * as childProcess from 'node:child_process'
+import type { ExecFileOptions } from 'node:child_process'
 import { promisify } from 'node:util'
 import { app } from 'electron'
 import { auditLog, mainLog } from '../../logger'
@@ -8,7 +10,12 @@ import { resolveBinaryPath } from '../../llm/local-runtime'
 import { WINDOWS_POWERSHELL } from '../../win-security'
 import { argsFingerprint, getProcessIdentity, type SidecarRecord } from './registry'
 
-const execFileAsync = promisify(execFile)
+const require = createRequire(import.meta.url)
+
+function execFileAsync(command: string, args: readonly string[], options: ExecFileOptions & { encoding: 'utf8' }): Promise<{ stdout: string; stderr: string }> {
+  const { execFile } = require('node:child_process') as typeof childProcess
+  return promisify(execFile)(command, [...args], options) as Promise<{ stdout: string; stderr: string }>
+}
 
 export interface ProcessIdentity {
   readonly pid: number
@@ -164,7 +171,7 @@ function liveArgsMatchFingerprint(live: ProcessIdentity, expected: string): bool
 }
 
 async function reapLegacyLlamaOrphans(options: ReaperOptions, adapters: ReaperAdapters, registryPids: ReadonlySet<number>): Promise<void> {
-  const modelRoot = withTrailingSeparator(resolve(options.userData, 'local-llm'))
+  const modelRoot = normalizeModelRoot(options.userData)
   const procs = await adapters.listProcesses()
   for (const proc of procs) {
     if (registryPids.has(proc.pid)) continue
@@ -182,13 +189,31 @@ async function reapLegacyLlamaOrphans(options: ReaperOptions, adapters: ReaperAd
 }
 
 function legacyArgsPointAtUserModel(args: readonly string[], modelRoot: string): boolean {
+  const root = normalizeComparableModelPath(modelRoot)
+  if (!root) return false
   for (let i = 0; i < args.length - 1; i++) {
     if (args[i] !== '-m') continue
-    if (!isAbsolute(args[i + 1])) continue
-    const modelPath = resolve(args[i + 1])
-    if (withTrailingSeparator(modelPath).startsWith(modelRoot)) return true
+    const modelPath = normalizeComparableModelPath(args[i + 1])
+    if (modelPath && modelPath.startsWith(root)) return true
   }
   return false
+}
+
+function normalizeModelRoot(userData: string): string {
+  const flavor = pathFlavor(userData)
+  return (flavor ?? posix).join(userData, 'local-llm')
+}
+
+function normalizeComparableModelPath(path: string): string | null {
+  const flavor = pathFlavor(path)
+  if (!flavor) return null
+  return withTrailingSeparator(flavor.normalize(path))
+}
+
+function pathFlavor(path: string): typeof posix | typeof win32 | null {
+  if (win32.isAbsolute(path) && /^[a-zA-Z]:[\\/]|^\\\\/.test(path)) return win32
+  if (posix.isAbsolute(path)) return posix
+  return null
 }
 
 function startedBefore(candidate: string, reference: string): boolean {
