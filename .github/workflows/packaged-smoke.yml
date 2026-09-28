@@ -95,8 +95,15 @@ jobs:
         id: smoke
         timeout-minutes: 10
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/packaged-smoke.json
+      # continue-on-error, same reason as the sidecar reaper above: a genuine POLICY-01 regression
+      # must never be hidden by aborting the job before the artifact upload/gate steps below run.
+      - name: "M2-0412 POLICY-01: change the fleet model policy on a test Operator, prove the running app switches within 60s"
+        id: policy-smoke
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node scripts/qa/policy-smoke.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/policy-smoke.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
+        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.smoke.outcome != 'skipped' || steps.policy-smoke.outcome != 'skipped') }}
         with:
           name: packaged-smoke-macos
           path: smoke-report/
@@ -104,6 +111,9 @@ jobs:
           retention-days: 14
       - name: Fail the job if the sidecar boot reaper proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.sidecar-reaper.outcome == 'failure'
+        run: exit 1
+      - name: Fail the job if the POLICY-01 proof itself failed (not a BLOCKED_EXTERNAL row)
+        if: always() && steps.policy-smoke.outcome == 'failure'
         run: exit 1
 
   windows:
@@ -162,8 +172,15 @@ jobs:
         id: smoke
         timeout-minutes: 10
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.exe" smoke-report/packaged-smoke.json
+      # continue-on-error, same reason as the sidecar reaper above: a genuine POLICY-01 regression
+      # must never be hidden by aborting the job before the artifact upload/gate steps below run.
+      - name: "M2-0412 POLICY-01: change the fleet model policy on a test Operator, prove the running app switches within 60s"
+        id: policy-smoke
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node scripts/qa/policy-smoke.mjs "$RUNNER_TEMP/smoke/Metis.exe" smoke-report/policy-smoke.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
+        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.smoke.outcome != 'skipped' || steps.policy-smoke.outcome != 'skipped') }}
         with:
           name: packaged-smoke-windows
           path: smoke-report/
@@ -171,4 +188,7 @@ jobs:
           retention-days: 14
       - name: Fail the job if the sidecar boot reaper proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.sidecar-reaper.outcome == 'failure'
+        run: exit 1
+      - name: Fail the job if the POLICY-01 proof itself failed (not a BLOCKED_EXTERNAL row)
+        if: always() && steps.policy-smoke.outcome == 'failure'
         run: exit 1

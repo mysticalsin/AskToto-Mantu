@@ -14,6 +14,10 @@ export type RenderCtx = {
   /** Server-rendered `data-theme`. 'system' means no explicit choice was cookied yet — the
    * client resolves it from prefers-color-scheme and the CSS media queries in spa/css.ts. */
   theme: 'light' | 'dark' | 'system'
+  /** Per-request CSP nonce (http.ts's `newCspNonce`), when the caller minted one. Only the Models
+   *  page (M2-0412) needs this today, for its owner-only inline `<script nonce>` edit form — every
+   *  other page ignores it, so it stays optional rather than forcing every render call site to pass one. */
+  nonce?: string
 }
 
 /** HTML-escape a value for safe interpolation into server- or client-rendered markup. */

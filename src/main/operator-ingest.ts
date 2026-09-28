@@ -24,6 +24,7 @@ import { drainOperatorQueue, enqueueOperatorItem, type QueueSendResult } from '.
 import { operatorEntitled, recordOperatorHeartbeatResult, resetOperatorEntitlementsState } from './operator-entitlements-state'
 import { maybeRefreshOperatorIntegrations, resetOperatorIntegrationsState } from './operator-integrations'
 import { parseOperatorHeartbeatEntitlements } from '@shared/operator-entitlements'
+import { refreshModelPolicy } from './model-policy-client'
 
 const HEARTBEAT_MS = 60_000
 
@@ -372,6 +373,9 @@ export function startOperatorRuntime(
     const beat = await operatorHeartbeat(getSettings())
     if (generation !== runtimeGeneration) return
     hooks?.onReadinessChanged?.()
+    // M2-0412: piggyback the fleet model policy poll on the same <=60s heartbeat cadence rather than a
+    // second timer. Best-effort — a failed fetch never blocks or fails the heartbeat itself.
+    void refreshModelPolicy(getSettings())
     if (beat.retry.length && hooks?.onCrmRetry) {
       await hooks.onCrmRetry(beat.retry)
     }

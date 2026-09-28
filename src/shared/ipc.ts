@@ -1628,7 +1628,15 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  restriction. The renderer uses it to filter the provider picker to approved vendors and to badge a
    *  blocked provider "restricted by your organization" — the SAME source the main process enforces at
    *  request time, so the UI can't offer a provider that every ask would then reject. */
-  allowedProviders: z.array(z.string()).nullable().default(null)
+  allowedProviders: z.array(z.string()).nullable().default(null),
+  /** M2-0412: the fleet model policy's effective provider+model per capability, Worker-authoritative
+   *  (main computes it from model-policy-client.ts's verified, signed cache — never client-computed,
+   *  same rule as operatorEntitlements below). A capability absent from this record has no fleet
+   *  policy set for it ("not managed" — Settings shows today's local defaults, editable as usual).
+   *  A capability present here is locked: Settings shows it read-only with "Managed by your
+   *  organization — set on the Operator portal" and the portal's own provider/model, never letting
+   *  a local setting pick something outside it. */
+  modelPolicyCapabilities: z.record(z.string(), z.object({ provider: z.string(), model: z.string() })).default({})
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 

@@ -1,16 +1,20 @@
 import { reviewedGatewayReply, reviewedGatewayFetch } from './ai-gateway.privacy-fixture'
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { ACCESS_BYPASS_PATHS } from './access'
 import { handleRequest, type Env } from './index'
 import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
+import type { D1DatabaseLike } from './d1'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { parseUseBody } from './use'
 import { PORTAL_CF_DEEPSEEK_FLASH, PORTAL_CF_DEEPSEEK_PRO } from '../../src/shared/ask-routing'
+import { MODEL_POLICY_MIGRATIONS, writeModelPolicy } from './model-policy'
+import { MODEL_POLICY_CAPABILITIES } from '../../src/shared/model-policy'
 
 const NOW = 1_725_000_000_000
 const SECRET = 'sk-cf-OPERATOR-VAULT-TEST-only-xx99'
@@ -1080,5 +1084,143 @@ describe('truthful provider completion', () => {
     expect(providerSawAbort).toBe(true)
     expect(response?.status).toBe(503)
     expect(await response?.json()).toEqual({ ok: false, error: 'Operator cannot issue a use' })
+  })
+})
+
+describe('M2-0412 fleet model policy enforcement (server-side, cannot be bypassed by an old/modified client)', () => {
+  function sqliteD1(db: DatabaseSync): D1DatabaseLike {
+    return {
+      prepare(sql: string) {
+        const stmt = db.prepare(sql)
+        let bound: unknown[] = []
+        const wrapper = {
+          bind(...values: unknown[]) {
+            bound = values
+            return wrapper
+          },
+          async first<T>() {
+            return (stmt.get(...(bound as never[])) as T) ?? null
+          },
+          async all<T>() {
+            return { results: stmt.all(...(bound as never[])) as T[] }
+          },
+          async run() {
+            return stmt.run(...(bound as never[]))
+          }
+        }
+        return wrapper
+      }
+    }
+  }
+
+  async function dbWithPolicy(overrides: Partial<Record<string, { provider: string; model: string }>> = {}): Promise<D1DatabaseLike> {
+    const raw = new DatabaseSync(':memory:')
+    for (const stmt of MODEL_POLICY_MIGRATIONS) raw.exec(stmt)
+    const db = sqliteD1(raw)
+    const capabilities = Object.fromEntries(
+      MODEL_POLICY_CAPABILITIES.map((k) => [k, { provider: 'anthropic', model: 'claude-haiku-4-5-20251001', fallbacks: [] }])
+    )
+    await writeModelPolicy(db, { ...capabilities, ...overrides }, 'owner@example.test', NOW)
+    return db
+  }
+
+  it('allows a request naming exactly the policy-approved provider+model', async () => {
+    const store = memoryStore()
+    await addProviderKey(store, 'anthropic', ANTHROPIC_SECRET)
+    await approveDevice(store)
+    const db = await dbWithPolicy()
+    const body = JSON.stringify({
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'Say ok.' }]
+    })
+    const res = await handleRequest(await signedRequest('/v1/ask', body, 'policy-ok'), { ...env(), DB: db }, {}, {
+      store,
+      now: NOW,
+      providerFetch: upstream(
+        JSON.stringify({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }),
+        'application/json'
+      )
+    })
+    expect(res.status).toBe(200)
+  })
+
+  it('refuses a request naming a provider/model the fleet policy does not allow for that capability, with a typed error and an audit event', async () => {
+    const store = memoryStore()
+    await addProviderKey(store, 'openai', OPENAI_SECRET)
+    await approveDevice(store)
+    const db = await dbWithPolicy() // askChat pinned to anthropic/haiku — openai/gpt-4o-mini is not in it
+    const res = await handleRequest(
+      await signedRequest(
+        '/v1/ask',
+        JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hi' }] }),
+        'policy-blocked'
+      ),
+      { ...env(), DB: db },
+      {},
+      { store, now: NOW, providerFetch: upstream('should never be reached') }
+    )
+    expect(res.status).toBe(403)
+    const body = (await res.json()) as { ok: boolean; code: string }
+    expect(body.ok).toBe(false)
+    expect(body.code).toBe('model_not_allowed')
+    const audited = await store.listAudit(10, { action: 'model-policy.blocked' })
+    expect(audited.length).toBeGreaterThan(0)
+  })
+
+  it('allows a request naming one of the capability fallbacks, not just the primary', async () => {
+    const store = memoryStore()
+    await addProviderKey(store, 'openai', OPENAI_SECRET)
+    await approveDevice(store)
+    const capabilities = Object.fromEntries(
+      MODEL_POLICY_CAPABILITIES.map((k) => [k, { provider: 'anthropic', model: 'claude-haiku-4-5-20251001', fallbacks: [] }])
+    )
+    capabilities.askChat = {
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+      fallbacks: [{ provider: 'openai', model: 'gpt-4o-mini' }]
+    }
+    const raw = new DatabaseSync(':memory:')
+    for (const stmt of MODEL_POLICY_MIGRATIONS) raw.exec(stmt)
+    const db = sqliteD1(raw)
+    await writeModelPolicy(db, capabilities, 'owner@example.test', NOW)
+    const res = await handleRequest(
+      await signedRequest(
+        '/v1/ask',
+        JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hi' }] }),
+        'policy-fallback-ok'
+      ),
+      { ...env(), DB: db },
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch: upstream(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), 'application/json')
+      }
+    )
+    expect(res.status).toBe(200)
+  })
+
+  it('does not enforce anything when no fleet policy has ever been set (not managed = today defaults)', async () => {
+    const store = memoryStore()
+    await addProviderKey(store, 'openai', OPENAI_SECRET)
+    await approveDevice(store)
+    const raw = new DatabaseSync(':memory:')
+    for (const stmt of MODEL_POLICY_MIGRATIONS) raw.exec(stmt)
+    const res = await handleRequest(
+      await signedRequest(
+        '/v1/ask',
+        JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hi' }] }),
+        'policy-unmanaged'
+      ),
+      { ...env(), DB: sqliteD1(raw) },
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch: upstream(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), 'application/json')
+      }
+    )
+    expect(res.status).toBe(200)
   })
 })

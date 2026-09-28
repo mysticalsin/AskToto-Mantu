@@ -34,6 +34,7 @@ export const CONSOLE_PATHS = [
   '/notifications',
   '/session',
   '/connectors',
+  '/models',
   '/audit'
 ] as const
 
@@ -47,6 +48,7 @@ export const ACCESS_BYPASS_PATHS = [
   '/v1/ask',
   '/v1/skills/manifest',
   '/v1/integrations',
+  '/v1/model-policy',
   '/assets/*'
 ] as const
 
@@ -56,6 +58,11 @@ export type AccessCtx = {
 
 export type AdminEnv = {
   ADMIN_EMAILS?: string
+  /** M2-0412: the fleet owner(s) — a subset of ADMIN_EMAILS allowed to change the Models policy.
+   *  Unset (the default) means no address is an owner yet: the Models page stays read-only for
+   *  every admin until an operator explicitly configures this, the same fail-closed default
+   *  ADMIN_EMAILS itself uses. */
+  OWNER_EMAILS?: string
   TEAM_DOMAIN?: string
   POLICY_AUD?: string
   OPERATOR_PROMPT_KEY?: string
@@ -95,6 +102,21 @@ export function adminEmailsFromEnv(env: AdminEnv): readonly string[] | null {
 
 export function isAdminEmail(raw: string, env: AdminEnv): boolean {
   return adminEmailsFromEnv(env)?.includes(normalizeAdminEmail(raw)) ?? false
+}
+
+/** Same shape as `adminEmailsFromEnv`, deliberately silent (no console.warn): an operator who has not
+ *  configured a fleet owner yet is not misconfigured, just not using the Models policy feature. */
+export function ownerEmailsFromEnv(env: AdminEnv): readonly string[] | null {
+  const raw = env.OWNER_EMAILS
+  if (!raw?.trim()) return null
+  const emails = Array.from(new Set(raw.split(',').map(normalizeAdminEmail).filter(Boolean)))
+  return emails.length ? emails : null
+}
+
+/** An owner must also be a plain admin (Access still gates entry to the console at all) — this only
+ *  narrows WHICH admin may change the fleet model policy. */
+export function isOwnerEmail(raw: string, env: AdminEnv): boolean {
+  return isAdminEmail(raw, env) && (ownerEmailsFromEnv(env)?.includes(normalizeAdminEmail(raw)) ?? false)
 }
 
 export function isConsolePath(pathname: string): boolean {

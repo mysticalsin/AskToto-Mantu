@@ -1,0 +1,188 @@
+/**
+ * Fleet model policy (M2-0412): the owner picks a provider + model per capability in the Operator
+ * portal, and every Métis app enforces it. This module owns the wire schema, the canonical byte
+ * string both the Worker (WebCrypto HMAC) and Electron main (node:crypto HMAC) sign/verify against,
+ * and the pure precedence resolution — portal policy > MDM admin-managed `allowedProviders` (can only
+ * narrow) > user settings — so the Worker, the desktop app and every test share one definition.
+ *
+ * Only `askChat` and `recap` are enforced at a real call site today (src/main/index.ts's interactive
+ * ask, src/main/import-recap.ts and src/main/brain/ingest.ts's meeting extraction) — the only
+ * capabilities that ever route through the Operator's `/v1/ask` proxy. `commandAgent` and `tts` have
+ * no model-routed call site in this app version (command parsing is rule-based, there is no
+ * text-to-speech path); `stt` and `localModel` are owner-manageable and audited but are surfaced to
+ * Settings as informational/managed rather than force-applied, because rewriting the live audio
+ * session or triggering an on-device model re-download from a background policy fetch is a materially
+ * different, unreviewed risk. All seven capabilities are still part of the signed document so the
+ * portal, the audit trail and Settings' "managed by your organization" state are complete and honest
+ * about what is and is not enforced.
+ */
+import { z } from 'zod'
+
+export const MODEL_POLICY_CAPABILITIES = [
+  'askChat',
+  'commandAgent',
+  'recap',
+  'stt',
+  'tts',
+  'embeddings',
+  'localModel'
+] as const
+export type ModelPolicyCapability = (typeof MODEL_POLICY_CAPABILITIES)[number]
+
+export const MODEL_POLICY_CAPABILITY_LABELS: Record<ModelPolicyCapability, string> = {
+  askChat: 'Ask / chat',
+  commandAgent: 'Command agent',
+  recap: 'Meeting recap / extraction',
+  stt: 'Speech to text',
+  tts: 'Text to speech',
+  embeddings: 'Embeddings',
+  localModel: 'Local model'
+}
+
+export function isModelPolicyCapability(raw: unknown): raw is ModelPolicyCapability {
+  return typeof raw === 'string' && (MODEL_POLICY_CAPABILITIES as readonly string[]).includes(raw)
+}
+
+export const ModelPolicyFallbackSchema = z.object({
+  provider: z.string().trim().min(1).max(64),
+  model: z.string().trim().min(1).max(200)
+})
+export type ModelPolicyFallback = z.infer<typeof ModelPolicyFallbackSchema>
+
+export const ModelPolicyEntrySchema = z.object({
+  provider: z.string().trim().min(1).max(64),
+  model: z.string().trim().min(1).max(200),
+  fallbacks: z.array(ModelPolicyFallbackSchema).max(8).default([])
+})
+export type ModelPolicyEntry = z.infer<typeof ModelPolicyEntrySchema>
+
+export const ModelPolicyCapabilitiesSchema = z.object({
+  askChat: ModelPolicyEntrySchema,
+  commandAgent: ModelPolicyEntrySchema,
+  recap: ModelPolicyEntrySchema,
+  stt: ModelPolicyEntrySchema,
+  tts: ModelPolicyEntrySchema,
+  embeddings: ModelPolicyEntrySchema,
+  localModel: ModelPolicyEntrySchema
+})
+export type ModelPolicyCapabilities = z.infer<typeof ModelPolicyCapabilitiesSchema>
+
+export const ModelPolicyDocumentSchema = z.object({
+  /** `max(updated_at)` at write time (same convention as operator_settings' settingsVersion) — an
+   *  opaque, monotonic stamp a client compares to its cache, never a semantic version. */
+  version: z.number().int().nonnegative(),
+  updatedAt: z.number().int().nonnegative(),
+  updatedBy: z.string().trim().min(1).max(200),
+  capabilities: ModelPolicyCapabilitiesSchema
+})
+export type ModelPolicyDocument = z.infer<typeof ModelPolicyDocumentSchema>
+
+export const SignedModelPolicySchema = z.object({
+  policy: ModelPolicyDocumentSchema,
+  signature: z.string().trim().min(16).max(128)
+})
+export type SignedModelPolicy = z.infer<typeof SignedModelPolicySchema>
+
+/**
+ * Stable byte-for-byte string both the Worker (WebCrypto HMAC) and Electron main (node:crypto HMAC)
+ * sign/verify against. Built from `MODEL_POLICY_CAPABILITIES` in a fixed order (never
+ * `Object.keys`/JSON field order) so the signature is deterministic regardless of how the document was
+ * constructed or serialized.
+ */
+export function canonicalModelPolicyPayload(policy: ModelPolicyDocument): string {
+  const cap = policy.capabilities
+  const capString = MODEL_POLICY_CAPABILITIES.map((key) => {
+    const entry = cap[key]
+    const fallbacks = entry.fallbacks.map((f) => `${f.provider}:${f.model}`).join(',')
+    return `${key}=${entry.provider}:${entry.model}[${fallbacks}]`
+  }).join('|')
+  return `metis-model-policy.v1.${policy.version}.${policy.updatedAt}.${policy.updatedBy}.${capString}`
+}
+
+export interface ModelPolicyResolution {
+  provider: string
+  model: string
+  /** 'policy': the capability's primary entry. 'policy-fallback': one of its fallbacks, chosen because
+   *  the primary (or an earlier fallback) was narrowed out by the MDM `allowedProviders` file. */
+  source: 'policy' | 'policy-fallback'
+}
+
+/**
+ * Every candidate for `capability`, primary first, narrowed to `allowedProviders` (the MDM
+ * admin-managed file — `null` means unrestricted). Empty when a policy exists but every candidate was
+ * narrowed out: the caller must treat that as "no model available", never silently fall back to user
+ * settings, since an admin file can only NARROW a portal policy, never widen past it.
+ */
+export function resolveModelPolicyCandidates(
+  policy: ModelPolicyDocument,
+  capability: ModelPolicyCapability,
+  allowedProviders: readonly string[] | null
+): ModelPolicyResolution[] {
+  const entry = policy.capabilities[capability]
+  const candidates: { provider: string; model: string; source: ModelPolicyResolution['source'] }[] = [
+    { provider: entry.provider, model: entry.model, source: 'policy' },
+    ...entry.fallbacks.map((f) => ({ provider: f.provider, model: f.model, source: 'policy-fallback' as const }))
+  ]
+  if (!allowedProviders) return candidates
+  return candidates.filter((c) => allowedProviders.includes(c.provider))
+}
+
+/** The single best candidate for `capability`, or `null` when a policy exists but the MDM allowlist
+ *  narrowed out every candidate (blocked, not "unmanaged"). */
+export function resolveModelPolicyChoice(
+  policy: ModelPolicyDocument,
+  capability: ModelPolicyCapability,
+  allowedProviders: readonly string[] | null
+): ModelPolicyResolution | null {
+  return resolveModelPolicyCandidates(policy, capability, allowedProviders)[0] ?? null
+}
+
+/**
+ * Narrow an existing `allowed` provider list (org allowlist, `string[] | null`) to what `capability`'s
+ * policy entry (+fallbacks) actually permits, while unconditionally preserving `alwaysAllow` (CLI
+ * providers and `'local'`) — those are governed by their own toggles (CLI connect state, on-device
+ * routing mode), not by the cloud-model fleet policy, so a portal policy that never mentions them must
+ * never make the CLI-first ask law or on-device processing unreachable.
+ *
+ * `null` in, no policy: returns `allowed` unchanged. Policy present: the result is the intersection of
+ * `allowed` (if any) with the policy's provider set, plus `alwaysAllow` — reusing the exact
+ * `string[] | null` shape every existing eligibility/failover check already consumes.
+ */
+export function narrowAllowedProvidersForCapability(
+  allowed: readonly string[] | null,
+  policy: ModelPolicyDocument | null,
+  capability: ModelPolicyCapability,
+  alwaysAllow: readonly string[] = []
+): string[] | null {
+  if (!policy) return allowed === null ? null : [...allowed]
+  const entry = policy.capabilities[capability]
+  const policySet = new Set<string>([entry.provider, ...entry.fallbacks.map((f) => f.provider), ...alwaysAllow])
+  if (!allowed) return [...policySet]
+  return allowed.filter((p) => policySet.has(p))
+}
+
+/**
+ * Pin the model for a provider that a policy governs: when `provider` is the capability's primary
+ * entry, or one of its fallbacks, return the policy's model string for it; otherwise return
+ * `currentModel` unchanged (the provider isn't named in this capability's policy — e.g. a CLI provider
+ * or `'local'`, which the caller should exempt before calling this, since those are never pinned by
+ * this fleet policy).
+ */
+export function pinManagedModel(
+  policy: ModelPolicyDocument | null,
+  capability: ModelPolicyCapability,
+  provider: string,
+  currentModel: string
+): string {
+  if (!policy) return currentModel
+  const entry = policy.capabilities[capability]
+  if (entry.provider === provider) return entry.model
+  const fallback = entry.fallbacks.find((f) => f.provider === provider)
+  return fallback ? fallback.model : currentModel
+}
+
+/** Default document shape for the Models portal page's "start from today's defaults" affordance —
+ *  never persisted implicitly; the owner must save it before it becomes a real policy. */
+export function emptyModelPolicyEntry(provider: string, model: string): ModelPolicyEntry {
+  return { provider, model, fallbacks: [] }
+}

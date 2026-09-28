@@ -28,6 +28,7 @@ export const titles: Record<string, string> = {
   notifications: 'Notifications',
   keys: 'Keys',
   connectors: 'Connectors',
+  models: 'Models',
   audit: 'Audit',
   settings: 'Settings',
   map: 'Realtime'

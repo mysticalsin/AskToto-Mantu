@@ -247,7 +247,20 @@ export interface DashboardPayload {
   geo: RealtimeGeoRow[]
   geoRegions: GeoRegionRow[]
   questions: QuestionsPayload
+  modelPolicy: DashboardModelPolicy
 }
+
+/** M2-0412: the fleet model policy slice for the Models page. `isOwner` gates the edit form
+ *  (every admin can read; only the configured owner can change it) — computed by the caller
+ *  (route handler) via `isOwnerEmail`, same convention as `keys`/`cloudflare`/`valueSettings`
+ *  above: `buildDashboard` never reaches into `ctx.env` itself. */
+export interface DashboardModelPolicy {
+  policy: import('../../src/shared/model-policy').ModelPolicyDocument | null
+  isOwner: boolean
+  history: { ts: number; actor: string; action: string; detail: string }[]
+}
+type DashboardModelPolicyInput = Pick<DashboardModelPolicy, 'policy' | 'isOwner'>
+const NO_MODEL_POLICY: DashboardModelPolicyInput = { policy: null, isOwner: false }
 
 /** src/shared/question-type.ts owns the taxonomy and the aggregation math; this is just the shape. */
 export interface QuestionsPayload {
@@ -729,7 +742,8 @@ export async function buildDashboard(
     oauthBound: false
   },
   cloudflare: CloudflareOverview = missingCloudflareOverview(),
-  valueSettings: DashboardValueSettings = NO_VALUE_SETTINGS
+  valueSettings: DashboardValueSettings = NO_VALUE_SETTINGS,
+  modelPolicy: DashboardModelPolicyInput = NO_MODEL_POLICY
 ): Promise<DashboardPayload> {
   const [seatsRaw, asksRaw, pulses, proposals, audit, crmRaw, packs, storedEventsRaw, vault, issued, sessionsPage] = await Promise.all([
     store.listSeats(),
@@ -1165,7 +1179,13 @@ export async function buildDashboard(
     },
     geo: realtimeGeoRows(seats, sessions),
     geoRegions: geoRegionRows(seats),
-    questions: buildQuestionsPayload(weekAsks)
+    questions: buildQuestionsPayload(weekAsks),
+    modelPolicy: {
+      ...modelPolicy,
+      history: audit
+        .filter((a) => a.action.startsWith('model-policy.'))
+        .map((a) => ({ ts: a.ts, actor: a.actor, action: a.action, detail: a.detail }))
+    }
   }
 }
 

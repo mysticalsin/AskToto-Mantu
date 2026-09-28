@@ -8,6 +8,7 @@ import { persistProxyAsk } from './ask-meter'
 import { GatewayPrivacyError, verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { json } from './http'
+import { enforceModelPolicy } from './model-policy'
 import { providerRefusedPayload } from './redact'
 import type { OperatorStore } from './store'
 import { seatHasEntitlement } from './tiers'
@@ -490,7 +491,7 @@ function sseResponse(
 
 export async function handleAsk(
   store: OperatorStore,
-  env: { OPERATOR_VAULT_KEY?: string },
+  env: { OPERATOR_VAULT_KEY?: string; DB?: import('./d1').D1DatabaseLike },
   deviceId: string,
   bodyText: string,
   now: number,
@@ -522,6 +523,11 @@ export async function handleAsk(
         req = { ...req, tier: 'base', model: resolvePortalCloudflareModel(req.model, 'base') }
       }
     }
+  }
+  const refusal = await enforceModelPolicy(env.DB, req.capability ?? 'askChat', req.provider, req.model)
+  if (refusal) {
+    await store.audit(crypto.randomUUID(), now, deviceId, 'model-policy.blocked', null, `${req.provider}/${req.model}`)
+    return fail(refusal.error, refusal.status, { code: refusal.code })
   }
   const unlocked = await decryptActiveLlmSecret(store, env.OPERATOR_VAULT_KEY, req.provider)
   if (!unlocked) return fail('Operator cannot issue a use', 503)

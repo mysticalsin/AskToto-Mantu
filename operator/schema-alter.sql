@@ -223,3 +223,14 @@ CREATE TABLE IF NOT EXISTS operator_settings (
   updated_at INTEGER NOT NULL,
   updated_by TEXT NOT NULL
 );
+
+-- Fleet model policy (M2-0412): one row (id='fleet'), the owner's provider+model per capability.
+-- A wholly new table, same documented exception as operator_settings above (migrate.contract.test.ts).
+-- Owned by operator/src/model-policy.ts. `updated_at` doubles as the version a client compares its
+-- cache against. Never pruned by retention.ts (a policy has no natural expiry).
+CREATE TABLE IF NOT EXISTS model_policy (
+  id TEXT PRIMARY KEY,
+  policy_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  updated_by TEXT NOT NULL
+);

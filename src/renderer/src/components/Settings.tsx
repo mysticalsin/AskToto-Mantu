@@ -1414,8 +1414,25 @@ function AiSection({
     </Section>
   ) : null
 
+  // M2-0412: the fleet model policy's effective askChat provider/model, when the owner has set one on
+  // the Operator portal ('not managed' = key absent, computed server-side in publicSettings()). Shown
+  // once, at the top of this whole tab, since it governs which provider/model Ask/chat actually uses
+  // regardless of what is picked below.
+  const askChatPolicy = settings.modelPolicyCapabilities.askChat
+
   return (
     <div className="flex min-w-0 max-w-full flex-col gap-5">
+      {askChatPolicy && (
+        <div className="flex items-center gap-2 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] p-3 text-[12px] text-[color:var(--cl-foreground)]">
+          <ShieldCheck size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
+          <span>
+            Managed by your organization: Ask/chat uses{' '}
+            <strong>{PROVIDERS[askChatPolicy.provider as ProviderId]?.label ?? askChatPolicy.provider}</strong> ({askChatPolicy.model}
+            ), set on the Operator portal.
+          </span>
+        </div>
+      )}
+
       {/* CLI Integration — Claude Code CLI and Codex CLI, first so auto-setup is the first thing offered */}
       <CliIntegration settings={settings} patch={patch} />
 

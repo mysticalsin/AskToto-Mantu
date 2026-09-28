@@ -92,6 +92,7 @@ import {
   type HotkeyAction,
   type ShortcutFailure,
   type PublicSettings,
+  type Settings,
   type CalendarEvent,
   type AskStart,
   type ImportJobView,
@@ -166,6 +167,7 @@ import {
   localRuntimeBinaryPresent
 } from './llm/local-routing'
 import {
+  CLI_PROVIDER_IDS,
   isCliProviderId,
   isDustChatForbidden,
   nextAskRoute,
@@ -174,6 +176,8 @@ import {
   portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
+import { getActiveModelPolicy, narrowAllowedForCapability, resolveManagedModel } from './model-policy-client'
+import { MODEL_POLICY_CAPABILITIES } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
@@ -2112,8 +2116,19 @@ function publicSettings(): PublicSettings {
     envKeys: getEnvKeyProviders(),
     loginItemOpenAtLogin,
     version: app.getVersion(),
-    allowedProviders: allowed // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
+    allowedProviders: allowed, // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
+    modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s)
   }
+}
+
+/** M2-0412: the fleet policy's effective provider+model, per capability, for Settings' managed/locked
+ *  display — {} (nothing locked) when no fleet policy has ever been set ("not managed"). */
+function modelPolicyCapabilitiesForSettings(s: Settings): Record<string, { provider: string; model: string }> {
+  const policy = getActiveModelPolicy(s)
+  if (!policy) return {}
+  return Object.fromEntries(
+    MODEL_POLICY_CAPABILITIES.map((cap) => [cap, { provider: policy.capabilities[cap].provider, model: policy.capabilities[cap].model }])
+  )
 }
 
 /** Wiped-profile / mid-tour: exclusive fullscreen owns the display until onboardingDone. */
@@ -7198,7 +7213,11 @@ function registerIpc(): void {
     // the renderer keeps what run() set (a vision ask carries its own image).
     const screenGrounded =
       req.mode === 'answer' && req.wantsScreenContext ? !!req.screenContext : undefined
-    const allowed = getAllowedProviders() // org allowlist (null = unrestricted)
+    // M2-0412: the fleet model policy (Operator "Models" page) narrows the org allowlist down to what
+    // the owner approved for interactive ask/chat, same shape every eligibility check below already
+    // consumes. CLI providers and 'local' are never narrowed by it — they are governed by their own
+    // connect state / routing-mode toggles, not this cloud-model fleet policy.
+    const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
 
     // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
     // on the selected agent's underlying model (it uploads the shot as a content fragment), so consult the
@@ -7460,6 +7479,12 @@ function registerIpc(): void {
       // regardless of what routeTier or a user's providerModels override picked. Opus stays reachable only
       // through the Graph pipeline (brain/ingest.ts, graphify.ts), which never calls this function.
       model = applyInteractiveGuardrail(provider, tier, model)
+      // M2-0412: once the guardrail's own hard pins are applied, let the fleet policy pin the final
+      // model for a provider it governs (cloud API providers only — CLI kind and 'local' pass through
+      // unchanged, see narrowAllowedForCapability above for why).
+      if (def.kind !== 'cli' && provider !== 'local') {
+        model = resolveManagedModel(s, 'askChat', provider, model)
+      }
       // Dust interactive speed pin: think/deep Dust AGENTS run server-side orchestration before their
       // first token (measured 6.6-28.3s TTFT vs ~2.6s for the base agent) — unusable mid-conversation.
       // Interactive asks (chat/vision/suggest) always use the base agent; recaps, summaries, background

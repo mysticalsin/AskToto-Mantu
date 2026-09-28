@@ -1,8 +1,10 @@
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '../../src/shared/providers'
 import { operatorVisionModel, parseOperatorImage, type OperatorImage } from '../../src/shared/operator-vision'
+import { isModelPolicyCapability, type ModelPolicyCapability } from '../../src/shared/model-policy'
 import { GatewayPrivacyError, verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { decryptVault } from './crypto'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
+import { enforceModelPolicy } from './model-policy'
 import { looksLikeSecret, providerRefusedPayload } from './redact'
 import type { OperatorStore, VaultKeyRow } from './store'
 import { persistProxyAsk, proxyTokenCount } from './ask-meter'
@@ -45,6 +47,10 @@ export type UseRequest = {
   tier?: 'base' | 'deep'
   /** Seat AskStart.id — stable metering key (F10 dedupe). */
   clientAskId?: string
+  /** M2-0412: which fleet model policy capability this request belongs to. Absent (an older client, or
+   *  a request the client did not label) defaults to 'askChat' at the enforcement call site — the
+   *  safest default, since it is the most commonly and most tightly configured capability. */
+  capability?: ModelPolicyCapability
   system: string
   messages: UseMessage[]
   image?: OperatorImage
@@ -209,7 +215,24 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
     const id = String((body as { clientAskId: string }).clientAskId).trim()
     if (id.length >= 8 && id.length <= 128) clientAskId = id
   }
-  return { ok: true, req: { provider, model, system, messages, ...(image ? { image } : {}), ...(tier ? { tier } : {}), ...(clientAskId ? { clientAskId } : {}), temperature, maxTokens } }
+  const capability = isModelPolicyCapability((body as { capability?: unknown }).capability)
+    ? (body as { capability: ModelPolicyCapability }).capability
+    : undefined
+  return {
+    ok: true,
+    req: {
+      provider,
+      model,
+      system,
+      messages,
+      ...(image ? { image } : {}),
+      ...(tier ? { tier } : {}),
+      ...(clientAskId ? { clientAskId } : {}),
+      ...(capability ? { capability } : {}),
+      temperature,
+      maxTokens
+    }
+  }
 }
 
 export function openaiMessages(req: UseRequest): unknown[] {
@@ -387,7 +410,7 @@ async function callOpenAICompat(
 
 export async function handleUse(
   store: OperatorStore,
-  env: { OPERATOR_VAULT_KEY?: string },
+  env: { OPERATOR_VAULT_KEY?: string; DB?: import('./d1').D1DatabaseLike },
   deviceId: string,
   bodyText: string,
   now: number,
@@ -400,6 +423,11 @@ export async function handleUse(
   if (!parsed.ok) return fail(parsed.error, parsed.status)
   if (!(await seatHasEntitlement(store, seat, now, 'operator_keys'))) {
     return fail(OPERATOR_KEYS_NOT_ENTITLED, 403, { code: 'not-entitled' })
+  }
+  const refusal = await enforceModelPolicy(env.DB, parsed.req.capability ?? 'askChat', parsed.req.provider, parsed.req.model)
+  if (refusal) {
+    await store.audit(crypto.randomUUID(), now, deviceId, 'model-policy.blocked', null, `${parsed.req.provider}/${parsed.req.model}`)
+    return fail(refusal.error, refusal.status, { code: refusal.code })
   }
   const unlocked = await decryptActiveLlmSecret(store, env.OPERATOR_VAULT_KEY, parsed.req.provider)
   if (!unlocked) return fail('Operator cannot issue a use', 503)

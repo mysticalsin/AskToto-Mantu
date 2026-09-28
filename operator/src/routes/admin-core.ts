@@ -4,10 +4,11 @@
  * and session routes that don't belong to any other feature module. Realtime/live routes live in
  * `./live`, Events in `./events`, Sessions in `./sessions`.
  */
-import { accessTeamDomain, CONSOLE_PATHS } from '../access'
+import { accessTeamDomain, CONSOLE_PATHS, isOwnerEmail } from '../access'
 import { handleCloudflareCallback, redirectToCloudflareLogin } from '../cloudflare-connect'
 import { sha256Hex, signSkillPack } from '../crypto'
 import { buildDashboard } from '../dashboard'
+import { readModelPolicy } from '../model-policy'
 import { normalizeCrmRow } from '../crm'
 import { html, json, newCspNonce } from '../http'
 import type { D1DatabaseLike } from '../d1'
@@ -25,6 +26,12 @@ import { projectAskTelemetry } from '../privacy'
 async function valueSettings(ctx: AdminCtx): Promise<{ hourlyRate: number | null; currency: string }> {
   const { values } = await readOperatorSettings(ctx.env.DB)
   return { hourlyRate: values.hourlyRate, currency: values.currency }
+}
+
+/** M2-0412: the fleet model policy slice for the Models page, same "route computes it, buildDashboard
+ *  just carries it" convention as valueSettings above. */
+async function modelPolicyForDashboard(ctx: AdminCtx): Promise<{ policy: Awaited<ReturnType<typeof readModelPolicy>>; isOwner: boolean }> {
+  return { policy: await readModelPolicy(ctx.env.DB), isOwner: isOwnerEmail(ctx.email, ctx.env) }
 }
 
 // Exported so `index.ts`'s `/health` (task B6, plan D10) can report `schema` from "the same check
@@ -48,7 +55,8 @@ export const EXPECTED_D1_TABLES = [
   'tiers',
   'integrations',
   'integration_grants',
-  'operator_settings'
+  'operator_settings',
+  'model_policy'
 ] as const
 
 const PLACEHOLDER_DIFF_RE = /^#\s*unified diff against .+\n#\s*edit, then approve\. push is a separate click\.$/i
@@ -219,8 +227,8 @@ export function registerAdminCoreRoutes(): void {
     auth: 'admin',
     handler: async (request, ctx) => {
       const nonce = newCspNonce()
-      const dash = await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now), await valueSettings(ctx))
-      return html(renderConsole(dash, { theme: readThemeCookie(request) }), { nonce })
+      const dash = await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now), await valueSettings(ctx), await modelPolicyForDashboard(ctx))
+      return html(renderConsole(dash, { theme: readThemeCookie(request), nonce }), { nonce })
     }
   })
   defineRoute<AdminCtx>({
@@ -230,7 +238,7 @@ export function registerAdminCoreRoutes(): void {
     handler: async (_request, ctx) =>
       json(
         stripSecrets(
-          await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now), await valueSettings(ctx))
+          await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now), await valueSettings(ctx), await modelPolicyForDashboard(ctx))
         )
       )
   })

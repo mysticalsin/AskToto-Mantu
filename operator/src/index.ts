@@ -26,6 +26,7 @@ import { issuedLicenseActive, licenseFromIngest, parseLicenseId, seatAuthorizedF
 import { matchRoute } from './routes/registry'
 import './routes'
 import { computeIntegrationsVersion, handleIntegrationsSeat } from './routes/integrations-seat'
+import { handleModelPolicyFetch } from './routes/model-policy'
 import { pruneRetention } from './retention'
 import { d1SchemaStatus } from './routes/admin-core'
 import { looksLikeSecret } from './redact'
@@ -51,7 +52,8 @@ const RATE_LIMITS: Record<string, number> = {
   use: 120,
   ask: 120,
   manifest: 5,
-  integrations: 10
+  integrations: 10,
+  modelPolicy: 10
 }
 
 /** Admin console mutations (every non-GET `/v1/admin/*` request), keyed by the signed-in email, same
@@ -67,6 +69,7 @@ function rateBucketFor(pathname: string): { key: string; max: number } | null {
   if (pathname === '/v1/ask') return { key: 'ask', max: RATE_LIMITS.ask }
   if (pathname === '/v1/skills/manifest') return { key: 'manifest', max: RATE_LIMITS.manifest }
   if (pathname === '/v1/integrations') return { key: 'integrations', max: RATE_LIMITS.integrations }
+  if (pathname === '/v1/model-policy') return { key: 'modelPolicy', max: RATE_LIMITS.modelPolicy }
   return null
 }
 
@@ -264,7 +267,8 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     url.pathname === '/v1/skills/manifest' ||
     url.pathname === '/v1/use' ||
     url.pathname === '/v1/ask' ||
-    url.pathname === '/v1/integrations'
+    url.pathname === '/v1/integrations' ||
+    url.pathname === '/v1/model-policy'
   ) {
     const bodyText = request.method === 'GET' ? '' :
       url.pathname === '/v1/ask' || url.pathname === '/v1/use' ? await readUseBody(request) : await request.text()
@@ -281,6 +285,10 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     if (url.pathname === '/v1/integrations') {
       if (request.method !== 'GET') return json({ ok: false, error: 'method not allowed' }, 405)
       return handleIntegrationsSeat(store, env, hmac.deviceId, now)
+    }
+    if (url.pathname === '/v1/model-policy') {
+      if (request.method !== 'GET') return json({ ok: false, error: 'method not allowed' }, 405)
+      return handleModelPolicyFetch(store, env, request, now)
     }
     if (url.pathname === '/v1/use') {
       if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)

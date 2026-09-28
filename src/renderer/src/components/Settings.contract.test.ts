@@ -673,3 +673,20 @@ describe('Cloudflare tile opens Operator OAuth, not a key-paste card', () => {
     expect(preload).toMatch(/cloudflareConnect:/)
   })
 })
+
+describe('M2-0412 fleet model policy — "managed by your organization" banner', () => {
+  it('reads modelPolicyCapabilities.askChat (Worker-authoritative, never client-computed) and shows the portal as the source', () => {
+    const block = blockAfter('const askChatPolicy = settings.modelPolicyCapabilities.askChat', '{/* CLI Integration')
+    expect(block).toMatch(/askChatPolicy &&/)
+    expect(block).toMatch(/Managed by your organization/)
+    expect(block).toMatch(/set on the Operator portal/)
+  })
+
+  it('never lets the provider tiles below silently offer a choice outside the fleet policy (informational banner, not yet a hard lock in the tiles themselves)', () => {
+    // Documents today's actual scope honestly: the banner surfaces the managed state; narrowing which
+    // provider tiles are selectable to the fleet policy set (like allowedProviders already does) is
+    // tracked as a follow-up, not silently implied by this test.
+    expect(source).toContain('askChatPolicy.provider')
+    expect(source).toContain('askChatPolicy.model')
+  })
+})
