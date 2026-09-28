@@ -12,6 +12,7 @@ vi.mock('electron')
 let userData: string
 
 beforeEach(() => {
+  resetMaintenanceGateForTests({ listeners: true })
   userData = mkdtempSync(join(tmpdir(), 'intel-work-userdata-'))
   ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
     if (name === 'userData') return userData
@@ -20,7 +21,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  resetMaintenanceGateForTests()
+  resetMaintenanceGateForTests({ listeners: true })
   rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
 
@@ -126,7 +127,7 @@ describe('complete Intelligence work', () => {
   })
 
   it('an automatic pass generates recaps only through the maintenance gate', async () => {
-    resetMaintenanceGateForTests()
+    resetMaintenanceGateForTests({ listeners: true })
     let uptime = 0
     const scheduled: Array<{ run: () => void; ms: number }> = []
     startMaintenanceGate({
@@ -146,6 +147,6 @@ describe('complete Intelligence work', () => {
     h.recap.resolve('A gated recap')
     h.extraction.resolve({ ok: true, total: 1, failed: 0 })
     await expect(run.completion).resolves.toEqual({ ok: true, recapped: 1 })
-    resetMaintenanceGateForTests()
+    resetMaintenanceGateForTests({ listeners: true })
   })
 })
