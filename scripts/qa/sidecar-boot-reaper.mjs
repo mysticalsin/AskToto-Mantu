@@ -3,7 +3,7 @@
  * Packaged proof for M2-0027. Runs only on hosted macOS QA lanes, against an installed packaged app and
  * a fresh ASKTOTO_USERDATA profile. The proof starts the real llama-server through the product bridge,
  * kills only the main process with SIGKILL, relaunches, and requires the old orphaned llama-server pid to
- * disappear within 5 s of boot with a sidecar.reaped legacy-orphan audit.
+ * disappear within 5 s of boot with a sidecar.reaped safe-ownership audit.
  *
  * Usage:
  *   node scripts/qa/sidecar-boot-reaper.mjs <installed app> <report.json>
@@ -76,8 +76,14 @@ function eventCounts(records) {
   return counts
 }
 
-function hasLegacyReap(records, pid) {
-  return records.some((record) => record.event === 'sidecar.reaped' && record.reason === 'legacy-orphan' && record.pid === pid)
+function sidecarReapReason(records, pid) {
+  const record = records.find(
+    (entry) =>
+      entry.event === 'sidecar.reaped' &&
+      entry.pid === pid &&
+      (entry.reason === 'registry' || entry.reason === 'legacy-orphan')
+  )
+  return record?.reason
 }
 
 function psRows() {
@@ -133,7 +139,7 @@ function processAlive(pid) {
 }
 
 function launch(executable, profile, port) {
-  const env = { ...process.env, ASKTOTO_USERDATA: profile }
+  const env = { ...process.env, ASKTOTO_USERDATA: profile, METIS_DISABLE_APPLE_FM: '1' }
   for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
   return spawn(executable, [`--remote-debugging-port=${port}`], { env, stdio: 'ignore' })
 }
@@ -235,6 +241,7 @@ function summarize(report) {
     failures: report.failures,
     timingsMs: report.timingsMs,
     pids: report.pids,
+    reapedReason: report.reapedReason,
     events: report.events,
     processes: report.processes
   }
@@ -262,6 +269,7 @@ async function main() {
     timingsMs: { firstReady: null, llamaStarted: null, reaped: null },
     pids: { firstMain: null, orphan: null, secondMain: null },
     events: {},
+    reapedReason: null,
     processes: { beforeKill: null, afterReaper: null }
   }
 
@@ -299,7 +307,10 @@ async function main() {
 
     const reaped = await waitFor(() => {
       const audit = readAudit(profile)
-      return !processAlive(llama.pid) && hasLegacyReap(audit, llama.pid)
+      const reason = sidecarReapReason(audit, llama.pid)
+      if (!reason || processAlive(llama.pid)) return false
+      observation.reapedReason = reason
+      return true
     }, REAPER_BOUND_MS, POLL_MS)
     observation.timingsMs.reaped = reaped ? Date.now() - reaperStartedAt : null
     observation.events = eventCounts(readAudit(profile))
@@ -307,7 +318,7 @@ async function main() {
       ownedProcesses(listProcesses(process.platform), { mainPid: second.pid, installRoot, platform: process.platform })
     )
 
-    if (!reaped) throw new Failure('legacy orphan was not reaped within 5 s of relaunch')
+    if (!reaped) throw new Failure('llama-server orphan was not reaped within 5 s of relaunch')
     observation.result = 'pass'
   } catch (error) {
     observation.result = error instanceof Precondition ? 'BLOCKED_EXTERNAL' : 'fail'
