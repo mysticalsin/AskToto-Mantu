@@ -224,13 +224,20 @@ export async function lastIndexedAtAsync(s: Settings = getSettings()): Promise<n
 }
 
 let activeRun: object | null = null
+let activeCompletion: Promise<void> | null = null
 let volatileError: { folder: string; message: string } | null = null
 let indexWork: ((reason: IntelligenceIndexReason) => IntelligenceIndexRun | Promise<IntelligenceIndexRun>) | null = null
 
 /** Test-only: clear the in-flight lock between suites. */
 export function resetIntelligenceIndexLockForTests(): void {
   activeRun = null
+  activeCompletion = null
   volatileError = null
+}
+
+/** Test-only: wait for the detached completion/state-write path before deleting temp profiles. */
+export function settleIntelligenceIndexForTests(): Promise<void> {
+  return activeCompletion ?? Promise.resolve()
 }
 
 export function intelligenceIndexStatus(s: Settings = getSettings()): { running: boolean; lastError?: string } {
@@ -311,7 +318,8 @@ export async function runIntelligenceIndex(
     }
     // Attach the terminal handler before returning to IPC. The lock stays owned until every stage
     // has finished AND its success/failure state has been saved, even if the caller closes its window.
-    void (async () => {
+    let completion!: Promise<void>
+    completion = (async () => {
       try {
         const outcome = await run.completion
         if (activeRun !== token) return
@@ -329,8 +337,11 @@ export async function runIntelligenceIndex(
         if (activeRun === token) await recordFailure(INCOMPLETE_INDEX_COPY)
       } finally {
         if (activeRun === token) activeRun = null
+        if (activeCompletion === completion) activeCompletion = null
       }
     })()
+    activeCompletion = completion
+    void completion
     return result
   } catch (error) {
     mainLog.error(`[intelligence-index] ${reason} dispatch failed:`, error)
