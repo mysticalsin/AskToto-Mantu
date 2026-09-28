@@ -517,15 +517,26 @@ func signalForwarder(_ signal: Int32) {
     }
 }
 
+// Xcode 26's SDK marks WIFEXITED/WIFSIGNALED/WTERMSIG/WEXITSTATUS as function-like C macros,
+// which Swift cannot import. Reimplement them over the raw wait(2) status word.
+private func waitTermSig(_ status: Int32) -> Int32 { status & 0x7f }
+private func waitExited(_ status: Int32) -> Bool { waitTermSig(status) == 0 }
+private func waitSignaled(_ status: Int32) -> Bool {
+    let termsig = waitTermSig(status)
+    return termsig != 0 && termsig != 0x7f
+}
+private func waitExitStatus(_ status: Int32) -> Int32 { (status >> 8) & 0xff }
+
 func exitWithChildStatus(_ status: Int32) -> Never {
-    if WIFEXITED(status) {
-        exit(WEXITSTATUS(status))
+    if waitExited(status) {
+        exit(waitExitStatus(status))
     }
-    if WIFSIGNALED(status) {
+    if waitSignaled(status) {
+        let termsig = waitTermSig(status)
         signal(SIGTERM, SIG_DFL)
-        signal(WTERMSIG(status), SIG_DFL)
-        raise(WTERMSIG(status))
-        exit(128 + WTERMSIG(status))
+        signal(termsig, SIG_DFL)
+        raise(termsig)
+        exit(128 + termsig)
     }
     exit(1)
 }
