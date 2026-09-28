@@ -185,7 +185,7 @@ import {
   type SpeakerId,
   type SpeakerLabel
 } from './speaker-id'
-import { releaseSpeakerEmbedding } from './speaker-embedding-client'
+import { releaseSpeakerEmbedding, killSpeakerEmbeddingHostForQuit } from './speaker-embedding-client'
 import {
   clampAxis,
   clampAxisMargin,
@@ -664,7 +664,8 @@ import {
   ensureParakeetModel,
   parakeetTranscribe,
   parakeetRelease,
-  parakeetAddonError
+  parakeetAddonError,
+  killParakeetHostForQuit
 } from './parakeet'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
@@ -3778,6 +3779,23 @@ function reveal(reason: RevealReason, options: { focus?: boolean } = {}): void {
   })
 }
 
+function writeSmokeParkState(w: Electron.BrowserWindow): void {
+  try {
+    writeFileSync(
+      join(app.getPath('userData'), 'smoke-park-state.json'),
+      JSON.stringify({
+        at: Date.now(),
+        parked: islandResting === true,
+        visible: !w.isDestroyed() && w.isVisible(),
+        layout: liveOverlayLayout()
+      })
+    )
+  } catch {
+    /* smoke sensor is best-effort */
+  }
+}
+
+/** Park (or hide) for packaged-smoke RV prepare, and latch the park against cursor-watch restore. */
 function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   if (process.env.ASKTOTO_SMOKE_REOPEN_PROBE !== '1') return false
   const action = commandLine
@@ -3788,12 +3806,20 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
 
   const w = ensureWindow()
   if (!w) return true
+  // HIST leaves Settings/History surfaces that refuse park; clear before force-park.
+  if (settingsSurfaceOpen) leaveSettingsSurface()
   if (action === 'park-window' || action === 'hide-window') {
     if (!parkOverlayAfterHideSpring(true)) w.hide()
+    // Hosted macOS keeps the pointer in the top-edge strip; cursor watch would otherwise
+    // restore the bar before the reopen probe snapshots parked===true.
+    stopOverlayCursorWatch()
+    writeSmokeParkState(w)
     return true
   }
 
   if (!parkOverlayAfterHideSpring(true)) w.hide()
+  stopOverlayCursorWatch()
+  writeSmokeParkState(w)
   toggleVisible('tray')
   return true
 }
@@ -4406,13 +4432,17 @@ const shortcutActions: Record<string, () => void> = {
 const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command+Control+Escape'
 
 // Every child process this app spawns that the OS does not end with it, in teardown order: the producers of
-// local-model work (screen pre-analysis, which owns the foreground watcher, and import decodes) before the
-// runtimes they feed. utilityProcess hosts (Parakeet, Whisper, speaker embedding) are not here: Electron ends
-// them on quit and exit alike (ADR-003), and the packaged census checks it.
+// local-model work (screen pre-analysis, which owns the foreground watcher, import decodes, and the ASR/
+// speaker-embedding utilityProcess hosts they use) before the runtimes they feed. The packaged smoke
+// (M2-0231) caught these utilityProcess hosts surviving quit on Windows, so each gets its own explicit,
+// signal-only kill here rather than trusting Electron to end them on its own.
 const stopAllSidecars = createStopAll(
   [
     { name: 'screen-preprocess', stop: () => screenPreprocess.stop() },
     { name: 'import-decoders', stop: () => ffmpegDecoders.forEach((decoder) => decoder.cancel()) },
+    { name: 'whisper-import-host', stop: () => void stopWhisperHost().catch(() => undefined) },
+    { name: 'parakeet-host', stop: () => killParakeetHostForQuit() },
+    { name: 'speaker-embedding-host', stop: () => killSpeakerEmbeddingHostForQuit() },
     { name: 'local-runtime', stop: () => localRuntime.stop() },
     { name: 'fm-runtime', stop: () => fmRuntime.stop() }
   ],

@@ -7,10 +7,15 @@ name: Packaged smoke
 # cleanly through its own Quit path, and nothing it started is alive 5 s after it exits. Each job uploads a
 # content-free report with the RV matrix and the tested installer's sha256.
 #
-# Runs on every push to m2/integration, and on demand for any branch once this file is on the default
-# branch: gh workflow run packaged-smoke.yml --ref <branch>. Never on tags. Both hosted runners give
-# the app a real window session, so no virtual display is needed.
+# Runs when a PR into m2/integration is marked ready for review, on every push to m2/integration, and
+# on demand for any branch once this file is on the default branch:
+# gh workflow run packaged-smoke.yml --ref <branch>. Never on tags. Both hosted runners give the app a
+# real window session, so no virtual display is needed.
 on:
+  pull_request:
+    types: [ready_for_review]
+    branches:
+      - m2/integration
   push:
     branches:
       - m2/integration
@@ -22,7 +27,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: packaged-smoke-${{ github.ref }}
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
   cancel-in-progress: true
 
 defaults:
@@ -34,7 +39,7 @@ jobs:
     name: Packaged smoke (macOS)
     runs-on: macos-latest
     timeout-minutes: 120
-    if: startsWith(github.ref, 'refs/heads/')
+    if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/')
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -78,8 +83,12 @@ jobs:
           hdiutil attach -nobrowse -readonly -mountpoint "$volume" release/Metis-*.dmg > /dev/null
           ditto "$volume/Metis.app" "$RUNNER_TEMP/smoke/Metis.app"
           hdiutil detach "$volume" > /dev/null
+      # continue-on-error so a genuine sidecar-boot-reaper defect can never hide the RV/HIST rows below by
+      # aborting the job early (INTEGRATION-SMOKE-RED-2026-09-28); it is still surfaced by the gate step
+      # after the artifact upload, via steps.sidecar-reaper.outcome (unaffected by continue-on-error).
       - name: Prove sidecar boot reaper after SIGKILL
         id: sidecar-reaper
+        continue-on-error: true
         timeout-minutes: 10
         run: node scripts/qa/sidecar-boot-reaper.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/sidecar-boot-reaper.json
       - name: Verify packaged macOS signature
@@ -99,12 +108,15 @@ jobs:
           path: smoke-report/
           if-no-files-found: error
           retention-days: 14
+      - name: Fail the job if the sidecar boot reaper proof itself failed (not a BLOCKED_EXTERNAL row)
+        if: always() && steps.sidecar-reaper.outcome == 'failure'
+        run: exit 1
 
   windows:
     name: Packaged smoke (Windows)
     runs-on: windows-latest
     timeout-minutes: 90
-    if: startsWith(github.ref, 'refs/heads/')
+    if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/')
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -144,8 +156,12 @@ jobs:
           $setup = Get-Item release/Metis-Setup-*.exe
           $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$env:RUNNER_TEMP\smoke" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+      # continue-on-error so a genuine sidecar-boot-reaper defect can never hide the RV/HIST rows below by
+      # aborting the job early (INTEGRATION-SMOKE-RED-2026-09-28); it is still surfaced by the gate step
+      # after the artifact upload, via steps.sidecar-reaper.outcome (unaffected by continue-on-error).
       - name: Prove sidecar boot reaper after hard kill
         id: sidecar-reaper
+        continue-on-error: true
         timeout-minutes: 10
         run: node scripts/qa/sidecar-boot-reaper.mjs "$RUNNER_TEMP/smoke/Metis.exe" smoke-report/sidecar-boot-reaper.json
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
@@ -159,3 +175,6 @@ jobs:
           path: smoke-report/
           if-no-files-found: error
           retention-days: 14
+      - name: Fail the job if the sidecar boot reaper proof itself failed (not a BLOCKED_EXTERNAL row)
+        if: always() && steps.sidecar-reaper.outcome == 'failure'
+        run: exit 1

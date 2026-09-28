@@ -20,6 +20,7 @@ import {
   readIntelligenceIndexState,
   intelligenceIndexStatus,
   runIntelligenceIndex,
+  settleIntelligenceIndexForTests,
   setIntelligenceIndexWork,
   shouldCatchUp,
   triggerForReason,
@@ -55,7 +56,8 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await settleIntelligenceIndexForTests()
   vi.restoreAllMocks()
   resetIntelligenceIndexLockForTests()
   setIntelligenceIndexWork(null)
@@ -320,6 +322,7 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
     uptime = 121_000
     scheduled[0].run()
     await expect(pending).resolves.toMatchObject({ ran: true, queued: 1 })
+    await settleIntelligenceIndexForTests()
     expect(work).toHaveBeenCalledOnce()
   })
 
