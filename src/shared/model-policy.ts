@@ -99,6 +99,35 @@ export function canonicalModelPolicyPayload(policy: ModelPolicyDocument): string
   return `metis-model-policy.v1.${policy.version}.${policy.updatedAt}.${policy.updatedBy}.${capString}`
 }
 
+/** HMAC-SHA256 of `canonicalModelPolicyPayload(policy)`, lowercase hex. Uses the WebCrypto global
+ *  (`crypto.subtle`) rather than `node:crypto` so this one implementation runs unmodified on the
+ *  Worker, in Electron main (Node 22 exposes the same global) and in tests. */
+async function signModelPolicyPayload(secret: string, policy: ModelPolicyDocument): Promise<string> {
+  const enc = new TextEncoder()
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, [
+    'sign'
+  ])
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(canonicalModelPolicyPayload(policy))))
+  return [...sig].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** Verifies a policy's signature against `secret` — the exact check every app runs before it will
+ *  use a fetched policy (ticket acceptance: "a tampered or unsigned policy is rejected"). Constant-time
+ *  compare so a partial-match timing side channel can't help an attacker forge a signature. */
+export async function verifyModelPolicySignature(
+  secret: string,
+  policy: ModelPolicyDocument,
+  signature: string
+): Promise<boolean> {
+  if (!secret || !signature) return false
+  const expected = await signModelPolicyPayload(secret, policy)
+  const actual = signature.toLowerCase().trim()
+  if (expected.length !== actual.length) return false
+  let diff = 0
+  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ actual.charCodeAt(i)
+  return diff === 0
+}
+
 export interface ModelPolicyResolution {
   provider: string
   model: string
