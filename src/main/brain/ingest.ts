@@ -1543,7 +1543,7 @@ export function brainBackfillProgress(): { total: number; done: number; failed?:
     ...(backfillFailed > 0 ? { failed: backfillFailed } : {}),
     ...(backfillPreparing ? { preparing: true } : {}),
     running: backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayQueued || !!rebuildReplayTask ||
-      hasActiveBackfill() || backfillLintPending || !!backfillFinalization
+      hasActiveBackfill() || backfillLintPending || !!backfillFinalization || !!drainTask
   }
 }
 
@@ -2603,6 +2603,7 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
     if (run.result.preparing && !backfillPreparing && !sourceRefreshRunning && !rebuildStarting && !rebuildReplayTask && !hasActiveBackfill() && !backfillLintPending) completionError('incomplete')
   } catch (error) {
     await observeSourcesReachableDuringFailedScan(observer)
+    await preserveSourceRefreshRetryWorkFromObserver(observer)
     completionError('scan-failed')
     mainLog.error('[brain] backfill request scan failed:', error)
   } finally {
@@ -2629,6 +2630,16 @@ async function observeSourcesReachableDuringFailedScan(observer: BackfillObserve
     }
   } catch {
     /* The original scan failure is the useful error; this is only best-effort completion accounting. */
+  }
+}
+
+async function preserveSourceRefreshRetryWorkFromObserver(observer: BackfillObserver): Promise<void> {
+  if (observer.sources.size === 0) return
+  try {
+    const idx = await readIndexAsync(observer.s)
+    if (idx.sourceRefreshRequested) preserveSourceRefreshRetryWork(new Set(observer.sources.keys()))
+  } catch {
+    /* The scan failure still owns the user-visible result; retry bookkeeping is best-effort. */
   }
 }
 
