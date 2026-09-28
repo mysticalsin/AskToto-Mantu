@@ -7,6 +7,7 @@ import {
   STATES_REQUIRING_ATTACH_PRECONDITION,
   STATES,
   classifyProcess,
+  collectCensus,
   missingStates,
   oneCoreCpuPercent,
   parseProveLocalTtftOutput,
@@ -173,6 +174,87 @@ describe('resource census CPU formula', () => {
     ]
 
     expect(oneCoreCpuPercent(samples, 300)).toBe(4)
+  })
+
+  it('takes a terminal sample at the requested wall boundary before computing one-core CPU percent', async () => {
+    let clockMs = 0
+    const report = await collectCensus({
+      state: 'settled-idle',
+      seconds: 300,
+      intervalMs: 120_000,
+      platform: 'darwin',
+      installRoot: '/Applications/Metis.app',
+      mainPid: 100,
+      productVersion: '1.9.6',
+      listProcesses: () => [
+        {
+          pid: 100,
+          ppid: 1,
+          startedMs,
+          exe: '/Applications/Metis.app/Contents/MacOS/Metis',
+          role: 'Metis'
+        }
+      ],
+      sampleOwnedProcesses: () => [
+        {
+          pid: 100,
+          startedMs,
+          role: 'Metis',
+          kind: 'main',
+          rssBytes: 100,
+          physFootprintBytes: 80,
+          workingSetBytes: null,
+          cpuSeconds: clockMs / 1000
+        }
+      ],
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    expect(report.samples.map((sample: { tMs: number }) => sample.tMs)).toEqual([0, 120_000, 240_000, 300_000])
+    expect(report.summary.oneCoreCpuPercent).toBe(100)
+  })
+
+  it('rejects an otherwise successful-looking census when the main process identity is absent', async () => {
+    let clockMs = 0
+    await expect(
+      collectCensus({
+        state: 'settled-idle',
+        seconds: 0.001,
+        intervalMs: 5,
+        platform: 'darwin',
+        installRoot: '/Applications/Metis.app',
+        mainPid: 100,
+        productVersion: '1.9.6',
+        listProcesses: () => [
+          {
+            pid: 200,
+            ppid: 1,
+            startedMs,
+            exe: '/Applications/Metis.app/Contents/Frameworks/Metis Helper (Renderer)',
+            role: 'Metis Helper (Renderer)'
+          }
+        ],
+        sampleOwnedProcesses: () => [
+          {
+            pid: 200,
+            startedMs,
+            role: 'Metis Helper (Renderer)',
+            kind: 'renderer',
+            rssBytes: 100,
+            physFootprintBytes: 80,
+            workingSetBytes: null,
+            cpuSeconds: 0
+          }
+        ],
+        now: () => clockMs,
+        sleep: async (ms: number) => {
+          clockMs += ms
+        }
+      })
+    ).rejects.toThrow(/main process identity/)
   })
 
   it('summarizes GPU sampling by process identity, not by a global machine counter', () => {

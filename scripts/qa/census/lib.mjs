@@ -315,6 +315,15 @@ export function summarize(samples, wallSeconds) {
   }
 }
 
+export function validateCensusIdentity(samples, mainPid) {
+  const identities = observedProcessIdentities(samples)
+  const hasMain = identities.some((process) => process.pid === mainPid && process.kind === 'main')
+  if (!hasMain) {
+    throw new Error('invalid census: main process identity was not observed')
+  }
+  return identities
+}
+
 function parsePsTimeToSeconds(value) {
   const text = String(value).trim()
   const dayParts = text.split('-')
@@ -547,18 +556,24 @@ export async function collectCensus(options) {
     evidence: options.preconditionEvidence
   })
 
-  const started = Date.now()
+  const now = options.now ?? Date.now
+  const sleepFn = options.sleep ?? sleep
+  const listProcessesFn = options.listProcesses ?? listProcesses
+  const sampleOwnedProcessesFn = options.sampleOwnedProcesses ?? sampleOwnedProcesses
+  const started = now()
   const end = started + seconds * 1000
   const samples = []
-  do {
-    const table = listProcesses(platform)
+  while (true) {
+    const table = listProcessesFn(platform)
     const owned = ownedProcessPopulation({ mainPid: options.mainPid, installRoot: options.installRoot, platform, table })
-    samples.push({ tMs: Date.now() - started, processes: sampleOwnedProcesses(owned, platform) })
-    if (Date.now() >= end) break
-    await sleep(Math.min(intervalMs, Math.max(1, end - Date.now())))
-  } while (Date.now() < end)
+    const processes = sampleOwnedProcessesFn(owned, platform)
+    const sampledAt = now()
+    samples.push({ tMs: sampledAt - started, processes })
+    if (sampledAt >= end) break
+    await sleepFn(Math.min(intervalMs, Math.max(1, end - sampledAt)))
+  }
 
-  const processIdentities = observedProcessIdentities(samples)
+  const processIdentities = validateCensusIdentity(samples, options.mainPid)
   const report = {
     generatedAt: new Date().toISOString(),
     productVersion,
