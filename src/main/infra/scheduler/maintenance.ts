@@ -147,6 +147,7 @@ export function resetMaintenanceGateForTests(): void {
   interactiveRecheckArmed = false
   windowWaiters.splice(0, windowWaiters.length)
   waiters.splice(0, waiters.length)
+  listeners.clear()
   reportedDeferrals.clear()
 }
 

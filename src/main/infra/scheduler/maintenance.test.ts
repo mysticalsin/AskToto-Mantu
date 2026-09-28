@@ -111,6 +111,20 @@ describe('maintenance gate', () => {
     expect(maintenanceDeferral()).toBeNull()
   })
 
+  it('test reset removes maintenance listeners from prior suites', async () => {
+    startOpen()
+    const stale = vi.fn()
+    onMaintenanceMayBegin(stale)
+
+    resetMaintenanceGateForTests()
+    startOpen()
+    const release = beginMaintenance()
+    release()
+    await Promise.resolve()
+
+    expect(stale).not.toHaveBeenCalled()
+  })
+
   it('interactive re-check is scheduled only while waiters exist', async () => {
     uptime = 121_000
     interactive = true
