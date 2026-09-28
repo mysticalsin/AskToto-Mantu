@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { hasAtLeastEvent, observedReapedOrphan, parseSidecarRegistry, registryHasSpawnedPid } from './sidecar-boot-reaper.mjs'
+import {
+  combinedReport,
+  hasAtLeastEvent,
+  observedReapedOrphan,
+  parseSidecarRegistry,
+  registryHasSpawnedPid,
+  summarizeProof
+} from './sidecar-boot-reaper.mjs'
 
 describe('sidecar boot reaper proof helpers', () => {
   it('waits for the spawned identity record for the exact orphan pid before hard-killing main', () => {
@@ -27,5 +34,35 @@ describe('sidecar boot reaper proof helpers', () => {
     expect(observedReapedOrphan(records, 4242, () => false)).toBe('registry')
     expect(observedReapedOrphan(records, 5151, () => false)).toBeNull()
     expect(observedReapedOrphan(records, 4242, () => true)).toBeNull()
+  })
+
+  it('ships when the stand-in proof passes and the real llama-server variant is externally blocked', () => {
+    const standIn = summarizeProof({
+      kind: 'stand-in-registry',
+      result: 'pass',
+      failures: [],
+      unblock: null,
+      timingsMs: { firstReady: 1, sidecarStarted: 2, reaped: 3 },
+      pids: { firstMain: 10, sidecar: 11, secondMain: 12 },
+      reapedReason: 'registry',
+      events: { 'sidecar.reaped': 1 },
+      processes: { beforeKill: {}, afterReaper: {} }
+    })
+    const realLlama = summarizeProof({
+      kind: 'real-llama-server',
+      result: 'BLOCKED_EXTERNAL',
+      failures: ['Seed the packaged local model assets.'],
+      unblock: 'Seed the packaged local model assets.',
+      timingsMs: { firstReady: null, sidecarStarted: null, reaped: null },
+      pids: { firstMain: null, sidecar: null, secondMain: null },
+      reapedReason: null,
+      events: {},
+      processes: { beforeKill: null, afterReaper: null }
+    })
+
+    expect(combinedReport(standIn, realLlama)).toMatchObject({
+      result: 'pass',
+      externalBlockers: [{ kind: 'real-llama-server', unblock: 'Seed the packaged local model assets.' }]
+    })
   })
 })
