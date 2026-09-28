@@ -947,6 +947,7 @@ export function App(): JSX.Element {
       proceed()
     })()
   }, [confirmReviewNavigation])
+  const approveReviewNav = useCallback(async (): Promise<boolean> => confirmReviewNavigation(), [confirmReviewNavigation])
   // Set by endReview() while waiting for listen.stop()'s asynchronous terminal drain before the recap is
   // generated. Healthy queued windows commit first; a no-progress expiry instead leaves an incomplete
   // warning on listen.error — terminal does not itself guarantee a complete transcript. See maybeFireRecap.
@@ -3374,11 +3375,7 @@ export function App(): JSX.Element {
   // opened. Keeping the IPC and failure normalization in App lets the compact dock remain presentation-only.
   const openIntelligenceDashboard = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
     if (capturing || capturingRef.current) return { ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence.' }
-    let approved = false
-    guardReviewNav(() => {
-      approved = true
-    })
-    if (!approved) return { ok: false, error: 'Save or discard the recap before opening Mantu Intelligence.' }
+    if (!(await approveReviewNav())) return { ok: false, error: 'Save or discard the recap before opening Mantu Intelligence.' }
     try {
       const result = await window.toto.brainOpenDashboard()
       if (!result.ok) return { ok: false, error: result.error || 'Could not open Mantu Intelligence.' }
@@ -3387,7 +3384,7 @@ export function App(): JSX.Element {
     } catch {
       return { ok: false, error: 'Could not open Mantu Intelligence.' }
     }
-  }, [capturing, guardReviewNav, minimizeForIntelligence])
+  }, [approveReviewNav, capturing, minimizeForIntelligence])
 
   // Panel body — memoized so state changes unrelated to the active view/answer (typing in the ask input,
   // the elapsed-meeting clock, focus signals, etc.) don't rebuild this whole element tree on every App

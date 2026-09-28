@@ -419,7 +419,8 @@ describe('right-edge dock', () => {
   })
 
   it('guards a dirty recap before it launches and collapses for the standalone Intelligence dashboard', () => {
-    expect(app).toMatch(/const openIntelligenceDashboard = useCallback\(async[\s\S]*?guardReviewNav\(\(\) => \{[\s\S]*?approved = true/)
+    expect(app).toMatch(/const approveReviewNav = useCallback\(async \(\): Promise<boolean> => confirmReviewNavigation\(\), \[confirmReviewNavigation\]\)/)
+    expect(app).toMatch(/const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(!\(await approveReviewNav\(\)\)\) return/)
     expect(app).toContain("Save or discard the recap before opening Mantu Intelligence.")
     expect(app).toMatch(/window\.toto\.brainOpenDashboard\(\)[\s\S]*?minimizeForIntelligence\(\)/)
     expect(app).toMatch(/const closeRightEdgeDock = useCallback\(\(\): void => \{[\s\S]*?forceParkAfterHideRef\.current = true[\s\S]*?dispatchAutoHide\(\{ type: 'collapse-now' \}\)/)

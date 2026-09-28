@@ -433,11 +433,19 @@ describe('initialNavigationGuardRows', () => {
 
     expect(rows.map((row) => row.id)).toEqual([
       'HIST-clean-bar-open',
+      'HIST-clean-settings-open',
       'HIST-clean-row-doubleclick',
-      'HIST-clean-back',
       'HIST-clean-bottom-open',
+      'HIST-clean-back',
+      'HIST-clean-recent-meeting',
+      'HIST-dirty-cancel-bar',
+      'HIST-dirty-discard-bar',
+      'HIST-dirty-save-bar',
       'HIST-dirty-cancel-back',
       'HIST-dirty-discard-back',
+      'HIST-dirty-save-back',
+      'HIST-dirty-cancel-recent',
+      'HIST-dirty-discard-recent',
       'HIST-dirty-save-recent'
     ])
     expect(rows.some((row) => row.state === 'clean')).toBe(true)
