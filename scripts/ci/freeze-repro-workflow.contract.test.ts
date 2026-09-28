@@ -27,10 +27,22 @@ describe('M2-0008 freeze repro workflow', () => {
 
   it('covers hosted macOS and Windows artifact extraction paths', () => {
     expect(workflow).toContain('runs-on: macos-latest')
-    expect(workflow).toContain("gh release download \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\" --pattern 'Metis-*.dmg'")
+    expect(workflow).toContain("gh release download \"$RELEASE_TAG\" --repo \"$RELEASE_REPO\" --pattern 'Metis-*.dmg'")
     expect(workflow).toContain('hdiutil attach')
     expect(workflow).toContain('runs-on: windows-latest')
-    expect(workflow).toContain("gh release download \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\" --pattern 'Metis-Setup-*.exe'")
+    expect(workflow).toContain("gh release download \"$RELEASE_TAG\" --repo \"$RELEASE_REPO\" --pattern 'Metis-Setup-*.exe'")
     expect(workflow).toContain('Start-Process')
+  })
+
+  it('downloads from the real 1.9.6 release, verifies SHA256SUMS before install, and only runs on main', () => {
+    expect(workflow).toContain('default: mysticalsin/Metis-Releases')
+    expect(workflow).toContain('default: v1.9.6-unsigned')
+    expect(workflow).not.toContain('"$GITHUB_REPOSITORY" --pattern')
+    expect(workflow.match(/--pattern 'SHA256SUMS\*'/g)).toHaveLength(2)
+    expect(workflow.match(/node scripts\/qa\/verify-sha256sums\.mjs/g)).toHaveLength(2)
+    expect(workflow.indexOf('verify-sha256sums.mjs')).toBeLessThan(workflow.indexOf('hdiutil attach'))
+    expect(workflow.lastIndexOf('verify-sha256sums.mjs')).toBeLessThan(workflow.indexOf('Start-Process'))
+    expect(workflow.match(/if: github\.ref == 'refs\/heads\/main'/g)).toHaveLength(2)
+    expect(workflow).not.toContain('secrets.')
   })
 })
