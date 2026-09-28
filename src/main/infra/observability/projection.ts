@@ -25,7 +25,7 @@ export type FieldKind =
 export type EventFields = Readonly<Record<string, FieldKind>>
 
 export const MAX_MESSAGE_CHARS = 300
-export const REVEAL_REASONS = ['activate', 'second-instance', 'ensure-window'] as const
+export const REVEAL_REASONS = ['activate', 'second-instance', 'tray', 'hotkey', 'notification-click', 'ensure-window'] as const
 export const REVEAL_OUTCOMES = ['created', 'shown', 'already-visible', 'failed'] as const
 export const SIDECAR_NAMES = ['llama-server', 'fm-serve', 'stall-watch'] as const
 export const HISTORY_STAGES = ['received', 'served', 'settled'] as const

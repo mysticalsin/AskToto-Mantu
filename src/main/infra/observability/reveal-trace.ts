@@ -26,14 +26,13 @@ export interface RevealTrace {
   trace<T>(reason: RevealReason, reveal: () => T): T
 }
 
-type Snapshot = { live: boolean; visible: boolean }
+type Snapshot = { live: boolean; visible: boolean; parked: boolean }
 
 export function createRevealTrace(opts: RevealTraceOptions): RevealTrace {
   const now = opts.now ?? (() => performance.now())
   return {
     trace<T>(reason: RevealReason, reveal: () => T): T {
-      const before = snapshot(opts.window())
-      const parked = opts.parked()
+      const before = snapshot(opts.window(), opts.parked())
       let layout: OverlayLayout | undefined
       try {
         layout = opts.layout()
@@ -48,11 +47,11 @@ export function createRevealTrace(opts: RevealTraceOptions): RevealTrace {
         thrown = true
         throw error
       } finally {
-        const after = snapshot(opts.window())
+        const after = snapshot(opts.window(), opts.parked())
         opts.audit('reveal', {
           reason,
           isVisible: before.visible,
-          parked,
+          parked: before.parked,
           ...(layout !== undefined ? { layout } : {}),
           outcome: outcome(before, after, thrown),
           ms: Math.max(0, now() - startedAt)
@@ -62,14 +61,15 @@ export function createRevealTrace(opts: RevealTraceOptions): RevealTrace {
   }
 }
 
-function snapshot(window: RevealWindow | null): Snapshot {
+function snapshot(window: RevealWindow | null, parked: boolean): Snapshot {
   const live = window !== null && !window.isDestroyed()
-  return { live, visible: live && window.isVisible() }
+  return { live, visible: live && window.isVisible(), parked: live && parked }
 }
 
 function outcome(before: Snapshot, after: Snapshot, thrown: boolean): RevealOutcome {
   if (thrown || !after.live) return 'failed'
   if (!before.live) return 'created'
+  if (before.parked && !after.parked) return 'shown'
   if (before.visible) return 'already-visible'
   if (after.visible) return 'shown'
   return 'failed'

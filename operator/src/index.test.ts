@@ -470,7 +470,7 @@ describe('CRM send board', () => {
   it('stores only canonical CRM delivery metadata and clears legacy content-bearing columns', async () => {
     const store = memoryStore()
     await store.upsertCrm({
-      id: 'crm-ok', device_id: 'device-a', ts: NOW - 1, status: 'pending', title: 'Legacy Customer Alpha',
+      id: 'crm-ok', device_id: 'device-a', ts: NOW - 1, status: 'pending', title: 'Legacy Example Customer',
       connector: 'plane', meeting_file: '/legacy/private.md', meeting_hash: 'aabbccddeeff0011',
       last_error: 'Legacy customer error text', retry_requested: 0, attempt: 1, latency_ms: 10,
       remote_id: 'legacy-deal', remote_url: 'https://crm.example/legacy-deal', action: 'legacy-action'
@@ -499,7 +499,7 @@ describe('CRM send board', () => {
       retry_requested: 0, attempt: 2, latency_ms: 345, meeting_file: null, meeting_hash: null,
       remote_id: null, remote_url: null, action: null
     })
-    expect(JSON.stringify(row)).not.toContain('Customer Alpha')
+    expect(JSON.stringify(row)).not.toContain('Example Customer')
     expect(JSON.stringify(row)).not.toContain('deal-99')
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),

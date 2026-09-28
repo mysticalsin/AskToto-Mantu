@@ -43,8 +43,9 @@ describe('redactSecrets', () => {
   it('does not let the widened sk- class eat hyphenated prose (MQA-080)', () => {
     // 'sk' here is mid-word, so the word boundary — not the character class — is what holds the line.
     const chan = 'posted in #ask-me-anything-2026-planning yesterday'
+    const tooShortSkLikeKey = 'sk-nope'
     expect(redactSecrets(chan)).toBe(chan)
-    expect(redactSecrets('sk-test-1234')).toBe('sk-test-1234') // far too short to be a key
+    expect(redactSecrets(tooShortSkLikeKey)).toBe(tooShortSkLikeKey) // far too short to be a key
   })
 
   it('redacts PEM private-key blocks', () => {

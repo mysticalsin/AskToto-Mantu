@@ -1,0 +1,67 @@
+name: M2-0025 GitHub triage
+
+# Manual process lane for M2-0025. Dry-run is the default: it reads live GitHub state, checks the
+# configured public evidence file:line references, and uploads the mutation plan. Apply mode performs
+# the same checked plan through GitHub CLI; it never builds, signs, publishes, deploys, edits
+# release.yml, creates tags, or touches local release artifacts.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply the checked triage plan instead of only uploading it
+        required: true
+        default: false
+        type: boolean
+      operator_portal_ticket:
+        description: Ticket for any still-open Operator visual issue routed during apply
+        required: false
+        type: string
+      operator_branch:
+        description: Upstream branch whose Operator UX PR must exist
+        required: true
+        default: codex/operator-ux-rock-1
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: m2-0025-triage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    name: Triage open PRs and issues
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Contract-test the triage planner
+        run: node --test scripts/github-triage.test.mjs
+      - name: Build or apply the triage plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          METIS_OPERATOR_PORTAL_TICKET: ${{ inputs.operator_portal_ticket }}
+          METIS_OPERATOR_BRANCH: ${{ inputs.operator_branch }}
+        run: |
+          args=(--repo "$GITHUB_REPOSITORY" --out out/m2-0025-triage)
+          if [ "${{ inputs.apply }}" = "true" ]; then
+            args+=(--apply)
+          else
+            args+=(--dry-run)
+          fi
+          node scripts/github-triage.mjs "${args[@]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: m2-0025-triage-${{ github.run_attempt }}
+          path: out/m2-0025-triage/
+          if-no-files-found: error
+          retention-days: 30

@@ -27,7 +27,7 @@ only governs whether Métis runs.
 - Verified live end to end: mint → 2 activations → 3rd refused at cap → heartbeat → revoke →
   blocked → seat freed. Plus real-UI activation through Settings ("Active · Mantu · up to 50 seats").
 - Running now: Docker container `asktoto-license` on Tony's Mac (port 8420, persistent volume);
-  admin token + the Mantu 50-seat key in `~/AI-Brain-build/asktoto-license/`.
+  admin token + the Mantu 50-seat key in `local license workspace/`.
 
 ## Phase 1 — management dashboard (DONE, shipped 2026-07-06, commits cc2c64f/71ccce7)
 

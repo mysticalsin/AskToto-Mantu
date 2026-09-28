@@ -15,7 +15,7 @@ const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
 
 describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
-  it('uses Tony’s first-slide clip, muted loop autoplay, object-cover, z-0 under the UI', () => {
+  it('uses Example’s first-slide clip, muted loop autoplay, object-cover, z-0 under the UI', () => {
     expect(ONBOARDING_HERO_VIDEO_REMOTE_SRC).toMatch(/hf_20260429_115139_0fc6bd3d/)
     expect(ONBOARDING_HERO_VIDEO_SRC).toMatch(/onboarding-hero-lady-planet/)
     expect(ONBOARDING_HERO_POSTER_SRC).toMatch(/onboarding-hero-poster/)
@@ -48,12 +48,12 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(videoBlock).not.toMatch(/filter:/)
   })
 
-  it('Next and the Tony Walteur byline use liquid glass; logo stays Métis; no Skip', () => {
+  it('Next and the Metis Maintainers byline use liquid glass; logo stays Métis; no Skip', () => {
     expect(experience).toMatch(/onboard-cta no-drag focus-ring/)
     expect(experience).toMatch(/>\s*Next\s*</)
     expect(experience).not.toMatch(/Skip the tour/)
     expect(experience).toMatch(/onboard-glass onboard-glass-chip/)
-    expect(experience).toMatch(/Tony Walteur/)
+    expect(experience).toMatch(/Metis Maintainers/)
     expect(experience).toMatch(/<MetisMark size=\{96\}/)
     expect(experience).toMatch(/<span aria-hidden="true">\{WORDMARK\}<\/span>/)
     expect(experience).not.toMatch(/useScrambleReveal/)

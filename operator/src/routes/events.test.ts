@@ -159,13 +159,13 @@ describe('GET /v1/admin/events.json', () => {
 
   it('suppresses content-bearing detail from legacy Ask, CRM, and heartbeat rows', async () => {
     const store = memoryStore()
-    await store.insertEvent({ id: 'a', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Customer Alpha private ask' })
+    await store.insertEvent({ id: 'a', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Example Customer private ask' })
     await store.insertEvent({ id: 'c', ts: NOW - 1, kind: 'crm', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Patient diagnosis CRM payload' })
     await store.insertEvent({ id: 'h', ts: NOW - 2, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: '/private/synthetic-home/private.md' })
     const res = await handleRequest(new Request('https://operator.test/v1/admin/events.json'), env(), { access: ownerAccess }, { store, now: NOW })
     const body = (await res.json()) as { rows: { id: string; detail: string | null }[] }
     expect(body.rows.map((row) => row.detail)).toEqual([null, null, null])
-    expect(JSON.stringify(body)).not.toContain('Customer Alpha')
+    expect(JSON.stringify(body)).not.toContain('Example Customer')
     expect(JSON.stringify(body)).not.toContain('Patient diagnosis')
     expect(JSON.stringify(body)).not.toContain('/private/synthetic-home')
   })
