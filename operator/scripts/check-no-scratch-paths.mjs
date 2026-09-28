@@ -41,12 +41,6 @@ const FORBIDDEN = [
 /** Pre-existing hits this gate grandfathers, one entry per file with its expected violation
  *  COUNT — tracked by ticket M2-0225. Remove a file's entry the moment its count reaches zero. */
 export const BASELINE_VIOLATIONS = new Map([
-  ['operator/scripts/build-css.mjs', 1],
-  ['intelligence/scripts/build-data.mjs', 1],
-  ['.scratch/render-preview.mjs', 1],
-  ['scripts/prove-local-ttft.mjs', 2],
-  ['src/main/cli.ts', 1],
-  ['package.json', 1]
 ])
 
 /** One "path:line" string per line in `files` (an array of {path, content}) matching a forbidden

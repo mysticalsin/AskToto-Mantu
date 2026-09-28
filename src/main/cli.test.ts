@@ -859,10 +859,10 @@ describe('connectCliSession — Settings Connect never auto-sends a billed turn'
 describe('posixUserBinCandidates', () => {
   it('points at ~/.local/bin, ~/.hermes/node/bin, and Homebrew for GUI PATH gaps', () => {
     const prev = process.env.HOME
-    process.env.HOME = '/Users/tony'
+    process.env.HOME = '/Users/example-owner'
     expect(posixUserBinCandidates('claude')).toEqual([
-      '/Users/tony/.local/bin/claude',
-      '/Users/tony/.hermes/node/bin/claude',
+      '/Users/example-owner/.local/bin/claude',
+      '/Users/example-owner/.hermes/node/bin/claude',
       '/opt/homebrew/bin/claude',
       '/usr/local/bin/claude'
     ])

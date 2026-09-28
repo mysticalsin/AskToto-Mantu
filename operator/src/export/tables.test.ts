@@ -23,8 +23,8 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lat: null,
     lon: null,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'twalteur@amaris.com',
+    hostname: 'Example-MacBook-Pro',
+    sso_email: 'admin@example.test',
     license: 'approved',
     approval: 'approved',
     license_jti: null,
@@ -41,7 +41,7 @@ function issued(overrides: Partial<IssuedLicenseRow> & Pick<IssuedLicenseRow, 'j
     exp: Math.floor(NOW / 1000) + 30 * 24 * 60 * 60,
     revoked: 0,
     created_at: NOW,
-    created_by: 'tony.walteur@gmail.com',
+    created_by: 'owner@example.test',
     ...overrides
   }
 }
@@ -57,7 +57,7 @@ function integration(overrides: Partial<IntegrationRow> & Pick<IntegrationRow, '
     scope_json: '{}',
     status: 'active',
     created_at: NOW,
-    created_by: 'tony.walteur@gmail.com',
+    created_by: 'owner@example.test',
     rotated_at: null,
     revoked_at: null,
     last_used_at: null,
@@ -79,11 +79,11 @@ describe('isExportTable', () => {
 describe('audit table', () => {
   it('projects the audited columns and applies since/actor/action/q', async () => {
     const store = memoryStore()
-    await store.audit('a-1', NOW, 'tony.walteur@gmail.com', 'revoke-license', null, 'jti-1')
+    await store.audit('a-1', NOW, 'owner@example.test', 'revoke-license', null, 'jti-1')
     await store.audit('a-2', NOW - 1000, 'system', 'platform.heartbeat', null, 'events 0')
-    const rows = await collectAll(exportTableDef('audit').rows(store, { actor: 'tony.walteur@gmail.com' }))
+    const rows = await collectAll(exportTableDef('audit').rows(store, { actor: 'owner@example.test' }))
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ actor: 'tony.walteur@gmail.com', action: 'revoke-license', detail: 'jti-1' })
+    expect(rows[0]).toMatchObject({ actor: 'owner@example.test', action: 'revoke-license', detail: 'jti-1' })
   })
 })
 
@@ -187,13 +187,13 @@ describe('events and sessions tables (cursor-paginated store methods)', () => {
     const store = memoryStore()
     await store.insertEvent({ id: 'ask', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Customer Alpha private ask' })
     await store.insertEvent({ id: 'crm', ts: NOW - 1, kind: 'crm', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Patient diagnosis CRM payload' })
-    await store.insertEvent({ id: 'beat', ts: NOW - 2, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: '/Users/tony/private.md' })
+    await store.insertEvent({ id: 'beat', ts: NOW - 2, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: '/private/synthetic-home/private.md' })
     const rows = await collectAll(exportTableDef('events').rows(store, {}))
     expect(rows).toHaveLength(3)
     expect(rows.map((row) => row.detail)).toEqual([null, null, null])
     expect(JSON.stringify(rows)).not.toContain('Customer Alpha')
     expect(JSON.stringify(rows)).not.toContain('Patient diagnosis')
-    expect(JSON.stringify(rows)).not.toContain('/Users/tony')
+    expect(JSON.stringify(rows)).not.toContain('/private/synthetic-home')
   })
 
   it('event export search cannot reveal hidden legacy details through row selection', async () => {

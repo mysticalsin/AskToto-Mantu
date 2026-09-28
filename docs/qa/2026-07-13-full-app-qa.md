@@ -81,7 +81,7 @@ Physical testing uses the final packaged Apple Silicon macOS app with synthetic 
 
 - Sidecar checks passed for macOS and Windows llama-server, FFmpeg, and platform-specific Sherpa.
 - Bundled model check passed: exactly one Qwen3.5-0.8B model with verified model, mmproj, and license hashes.
-- Branding check passed: `/Users/tony/Downloads/Métis.png` and `build/icon-metis-source.png` have the same SHA-256; both final platform payloads contain the derived `build/icon.png` resource, the macOS app has `icon.icns`, and both builder targets point at that same icon. The macOS bundle metadata reports display name `Métis` and executable `Metis`, not Electron.
+- Branding check passed: the reviewed source icon and `build/icon-metis-source.png` have the same SHA-256; both final platform payloads contain the derived `build/icon.png` resource, the macOS app has `icon.icns`, and both builder targets point at that same icon. The macOS bundle metadata reports display name `Métis` and executable `Metis`, not Electron.
 - macOS `check-packaged-runtime.mjs ... --post-sign`: **passed**; deep strict codesign verification passed.
 - Windows `check-packaged-runtime.mjs ... --post-sign`: **passed** for the final unpacked payload.
 - ASAR extraction passed for both final platform payloads. The Windows Setup and Portable SHA-256 values are recorded in the release handoff:

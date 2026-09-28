@@ -12,7 +12,7 @@ import {
   SPA_WORLD_SVG,
   SPA_WORLD_SVG_PATH
 } from './spa/manifest'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_TEAM_DOMAIN } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
 
@@ -20,6 +20,7 @@ function env(): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     TEAM_DOMAIN: TEST_TEAM_DOMAIN
   }
@@ -96,7 +97,7 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     const cssBody = await css.text()
     expect(cssBody.length).toBeGreaterThan(97)
     expect(cssBody).toContain('288px')
-    // The map is a light choropleth matching the page canvas (plan 3.2, Tony 2026-09-06), not
+    // The map is a light choropleth matching the page canvas (plan 3.2, the owner 2026-09-06), not
     // the measured-Shoey exact grey land value.
     expect(cssBody).toContain('--map-land: #f0f0f0')
     expect(cssBody).not.toMatch(/cloudflareaccess/)

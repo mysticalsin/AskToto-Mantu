@@ -206,9 +206,10 @@ describe('MQA-249 — a portable "this build came up" signal, and the macOS gate
     for (const name of ['dist', 'release:build:mac']) {
       expect(pkg.scripts[name]).toContain('check-packaged-launch.mjs release/mac-universal/Metis.app')
     }
+    expect(pkg.scripts['dist:local']).toContain('ASKTOTO_LOCAL_RELEASE_DIR="${ASKTOTO_LOCAL_RELEASE_DIR:-release-local}"')
     expect(pkg.scripts['dist:local']).toContain(
-      'check-packaged-launch.mjs /Users/tony/AI-Brain-build/asktoto-release/mac-universal/Metis.app'
+      'check-packaged-launch.mjs "$ASKTOTO_LOCAL_RELEASE_DIR/mac-universal/Metis.app"'
     )
-    expect(pkg.scripts['dist:local']).toContain('verify-signing.mjs /Users/tony/AI-Brain-build/asktoto-release')
+    expect(pkg.scripts['dist:local']).toContain('verify-signing.mjs "$ASKTOTO_LOCAL_RELEASE_DIR"')
   })
 })

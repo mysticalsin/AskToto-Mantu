@@ -76,7 +76,7 @@ function renderLicensesTable(data: DashboardPayload): string {
     })
     .join('')
   return `<table><thead><tr><th>Computer</th><th>SSO email</th><th>License</th><th>Approval</th><th>OS</th><th>Version</th><th></th></tr></thead><tbody>${body}</tbody></table>
-    <div class="sub muted pad-b8">Tony approves a seat or the seat activates an Operator license. Revoke still stops platform keys. last4 only. Never a raw key.</div>`
+    <div class="sub muted pad-b8">The owner approves a seat or the seat activates an Operator license. Revoke still stops platform keys. last4 only. Never a raw key.</div>`
 }
 
 export function renderLicenses(data: DashboardPayload, _ctx: RenderCtx): string {

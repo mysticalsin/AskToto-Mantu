@@ -222,7 +222,7 @@ export interface DashboardPayload {
     timeSavedSub: string
     value: string
     valueSub: string
-    /** Law 3 (plan 3.7b): time saved x the hourly rate Tony sets in Settings -> Value, in integer
+    /** Law 3 (plan 3.7b): time saved x the hourly rate the owner sets in Settings -> Value, in integer
      *  minor units (cents). Null whenever no rate is stored - never a default rate. */
     valueMinor: number | null
     currency: string
