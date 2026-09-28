@@ -4,7 +4,7 @@
  * QA-identity package must always carry it — otherwise scripts/qa/fault-fatal-relaunch.mjs cannot drive it.
  */
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
-import { getRawHeader, uncache } from '@electron/asar'
+import { getRawHeader, listPackage, uncache } from '@electron/asar'
 
 /** The string only the QA fault hook (src/main/qa-identity.ts) puts into a main-process bundle. */
 export const QA_FAULT_MARKER = 'METIS_QA_FAULT_HOOK'
@@ -21,11 +21,15 @@ export function assertQaFaultHookMatchesIdentity(archive) {
   try {
     const { header, headerSize } = getRawHeader(archive)
     assertArchiveBytesComplete(archive, header, headerSize)
+    // Keep the raw-to-POSIX normalization shared with verifyPackagedDependencyPruning: Windows-packed
+    // archives list backslash entries, while the QA checks reason about leading-slash POSIX paths.
+    const rawEntries = listPackage(archive)
+    const rawByPosix = new Map(rawEntries.map((entry) => [toPosix(entry), entry]))
     const filesByPosix = new Map(listPackedFiles(header).map((entry) => [entry.path, entry.file]))
     const packageJson = filesByPosix.get('/package.json')
     if (!packageJson) throw new Error('app.asar has no package.json — the packaged app identity is missing')
     const qaIdentity = JSON.parse(readPackedFile(archive, headerSize, packageJson, 'package.json').toString('utf8')).name === QA_IDENTITY_PACKAGE_NAME
-    const mainFiles = [...filesByPosix.keys()].filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
+    const mainFiles = [...rawByPosix.keys()].filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
     const carriesHook = mainFiles.some((entry) =>
       readPackedFile(archive, headerSize, filesByPosix.get(entry), entry).includes(QA_FAULT_MARKER)
     )
@@ -40,6 +44,10 @@ export function assertQaFaultHookMatchesIdentity(archive) {
   } finally {
     uncache(archive)
   }
+}
+
+function toPosix(entry) {
+  return `/${entry.split('\\').join('/').replace(/^\/+/, '')}`
 }
 
 function assertArchiveBytesComplete(archive, header, headerSize) {
