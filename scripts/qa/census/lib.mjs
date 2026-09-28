@@ -15,6 +15,18 @@ export const STATES = [
   'post-recovery'
 ]
 
+export const ATTRIBUTABLE_PROCESS_KINDS = [
+  'main',
+  'renderer',
+  'gpu',
+  'parakeet-utility',
+  'whisper-utility',
+  'speaker-utility',
+  'llama-server',
+  'fm-serve',
+  'crashpad'
+]
+
 export const REQUIRED_TRACE_SCENARIOS = ['parked-bar-orb', 'backdrop-filter', 'threejs-obsidian-orb']
 export const STATES_REQUIRING_ATTACH_PRECONDITION = [
   'first-inference',
@@ -28,6 +40,10 @@ export const DEFAULT_INTERVAL_MS = 5_000
 
 const ONE_CORE_CPU_FORMULA = '100 * sum(delta cpuSeconds) / delta wallSeconds'
 const PROVE_LOCAL_TTFT_COMMAND = 'node scripts/prove-local-ttft.mjs'
+const ACCOUNTING_BOUNDARY =
+  'main pid descendants whose start time is not older than their parent, plus processes whose executable resolves below the installed app root'
+const ACCOUNTING_CONTRACT =
+  'Electron helper attribution on macOS is the structural ownership rule above; OS-level app-accounting parity is not assumed by this tool.'
 
 function entryKey(entry) {
   return `${entry.pid}:${entry.startedMs}`
@@ -233,16 +249,20 @@ export function sanitizeReport(report) {
     schemaVersion: 1,
     generatedAt: report.generatedAt,
     ticket: 'M2-0009',
+    evidenceLevel: 'MEASURED',
     productVersion: report.productVersion,
     platform: report.platform,
     state: report.state,
     seconds: report.seconds,
     intervalMs: report.intervalMs,
     accountingBoundary: report.accountingBoundary,
+    accountingContract: report.accountingContract,
     cpuFormula: ONE_CORE_CPU_FORMULA,
+    attributableProcessKinds: ATTRIBUTABLE_PROCESS_KINDS,
     mainPid: report.mainPid,
     installRootKind: report.installRootKind,
     profileKind: report.profileKind,
+    stateCoverage: report.stateCoverage,
     processIdentities: report.processIdentities.map(sanitizeProcessSample),
     samples: report.samples.map((sample) => ({
       tMs: sample.tMs,
@@ -313,6 +333,39 @@ export function summarize(samples, wallSeconds) {
     gpuSampled: gpuProcesses.length > 0,
     gpuPids: gpuProcesses.map((sample) => sample.pid).sort((a, b) => a - b)
   }
+}
+
+function windowsWorkingSetEvidenceFromSamples(platform, samples) {
+  if (platform !== 'win32') {
+    return {
+      measured: false,
+      metric: 'Win32_Process.WorkingSetSize',
+      lane: 'windows-qa'
+    }
+  }
+  const measured = samples.some((sample) =>
+    (sample.processes ?? []).some((process) => Number.isFinite(process.workingSetBytes) && process.workingSetBytes > 0)
+  )
+  return {
+    measured,
+    metric: 'Win32_Process.WorkingSetSize',
+    lane: 'windows-qa'
+  }
+}
+
+export function stateCoverageForRun(measuredState) {
+  validateState(measuredState)
+  return STATES.map((state) => {
+    if (state === measuredState) return { state, status: 'MEASURED' }
+    if (stateRequiresAttachPrecondition(state)) {
+      return {
+        state,
+        status: 'BLOCKED_EXTERNAL',
+        unblockStep: `Start the packaged app on the representative QA profile, establish ${state}, then rerun with --main-pid, --install-root, and --precondition-evidence.`
+      }
+    }
+    return { state, status: 'SUPPORTED_NOT_RUN', unblockStep: `Run node scripts/qa/census/run.mjs --state ${state} --seconds 300.` }
+  })
 }
 
 export function validateCensusIdentity(samples, mainPid) {
@@ -584,19 +637,16 @@ export async function collectCensus(options) {
     mainPid: options.mainPid,
     installRootKind: platform === 'darwin' ? 'app-bundle' : 'unpacked-directory',
     profileKind: options.profileKind ?? 'representative-synthetic',
-    accountingBoundary:
-      'main pid descendants whose start time is not older than their parent, plus processes whose executable resolves below the installed app root',
+    accountingBoundary: ACCOUNTING_BOUNDARY,
+    accountingContract: ACCOUNTING_CONTRACT,
+    stateCoverage: options.stateCoverage ?? stateCoverageForRun(state),
     processIdentities,
     samples,
     summary: summarize(samples, Math.max(seconds, (samples.at(-1)?.tMs ?? 0) / 1000)),
     statePrecondition,
     rendererTrace: options.rendererTrace ?? { captured: false, scenarios: [] },
     proveLocalTtft: options.proveLocalTtft ?? { recorded: false, command: PROVE_LOCAL_TTFT_COMMAND },
-    windowsWorkingSet: options.windowsWorkingSet ?? {
-      measured: false,
-      metric: 'Win32_Process.WorkingSetSize',
-      lane: 'windows-qa'
-    }
+    windowsWorkingSet: options.windowsWorkingSet ?? windowsWorkingSetEvidenceFromSamples(platform, samples)
   }
   return sanitizeReport(report)
 }

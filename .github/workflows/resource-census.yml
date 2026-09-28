@@ -1,0 +1,133 @@
+name: Resource census
+
+# Manual evidence lane for M2-0009. It downloads an existing packaged release artifact, installs it on
+# hosted macOS and Windows runners, measures the reusable process census, and uploads only content-free
+# JSON/log artifacts. It never builds, signs, publishes, tags, or changes release.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to measure
+        required: true
+        default: v1.9.6
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: resource-census-${{ github.ref }}-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  macos:
+    name: Resource census (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Download the packaged release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          mkdir -p release-artifact census-output
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-*.dmg' --dir release-artifact --clobber
+          shasum -a 256 release-artifact/* > census-output/SHA256SUMS.txt
+      - name: Install into runner temp
+        run: |
+          volume="$RUNNER_TEMP/resource-census-volume"
+          target="$RUNNER_TEMP/resource-census-install"
+          rm -rf "$volume" "$target"
+          mkdir -p "$target"
+          hdiutil attach -nobrowse -readonly -mountpoint "$volume" release-artifact/Metis-*.dmg > /dev/null
+          app=$(find "$volume" -maxdepth 1 -name '*.app' -print -quit)
+          ditto "$app" "$target/Metis.app"
+          hdiutil detach "$volume" > /dev/null
+      - name: Build representative synthetic profile
+        run: node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
+      - name: Record local TTFT proof
+        env:
+          ASKTOTO_USERDATA: ${{ runner.temp }}/metis-census-profile
+        run: node scripts/prove-local-ttft.mjs > census-output/prove-local-ttft.log 2>&1
+      - name: Measure settled idle census
+        env:
+          METIS_QA_PROFILE: ${{ runner.temp }}/metis-census-profile
+        run: |
+          node scripts/qa/census/run.mjs \
+            --state settled-idle \
+            --seconds 300 \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.app" \
+            --output census-output/darwin-settled-idle.json \
+            --ttft-output census-output/prove-local-ttft.log \
+            --trace-scenario parked-bar-orb \
+            --trace-scenario backdrop-filter \
+            --trace-scenario threejs-obsidian-orb
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: resource-census-macos-${{ inputs.release_tag }}
+          path: census-output/
+          if-no-files-found: error
+          retention-days: 30
+
+  windows:
+    name: Resource census (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Download the packaged release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          mkdir -p release-artifact census-output
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-Setup-*.exe' --dir release-artifact --clobber
+          sha256sum release-artifact/* > census-output/SHA256SUMS.txt
+      - name: Install into runner temp
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = Join-Path $env:RUNNER_TEMP 'resource-census-install'
+          if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+          New-Item -ItemType Directory -Path $target | Out-Null
+          $setup = Get-Item release-artifact/Metis-Setup-*.exe
+          $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+      - name: Build representative synthetic profile
+        run: node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
+      - name: Measure settled idle census
+        env:
+          METIS_QA_PROFILE: ${{ runner.temp }}/metis-census-profile
+        run: |
+          node scripts/qa/census/run.mjs \
+            --state settled-idle \
+            --seconds 300 \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
+            --output census-output/win32-settled-idle.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: resource-census-windows-${{ inputs.release_tag }}
+          path: census-output/
+          if-no-files-found: error
+          retention-days: 30
