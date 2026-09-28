@@ -2352,7 +2352,7 @@ export async function requestSourceRefresh(s: Settings = getSettings()): Promise
     idx.sourceRefreshRequested = true
     idx.backfillRequested = true
   })
-  maybeStartSourceRefresh()
+  await maybeStartSourceRefreshAsync()
 }
 
 async function maybeStartSourceRefreshAsync(): Promise<void> {
