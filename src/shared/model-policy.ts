@@ -15,9 +15,9 @@
  * text-to-speech path, no embedding model is called): they stay in the signed document so the portal
  * and audit trail are complete, but nothing enforces them and Settings does not claim otherwise.
  *
- * Native Mac app: LEAD_ACTION / BLOCKED_EXTERNAL. It has no Operator credential flow (its Operator
- * secret is not yet in the Keychain) and no cloud-model call site to route, so it cannot fetch or enforce
- * this policy until a native pairing flow lands (M2-0145). Nothing here claims native enforcement.
+ * Native Mac app: MetisKit's policy poller exists (ModelPolicy.swift) but stays inactive until an
+ * Operator credential is provisioned (BLOCKED_EXTERNAL; native pairing lands with M2-0145). The native
+ * app has no cloud-model call site to route yet. Nothing here claims native enforcement.
  */
 import { z } from 'zod'
 

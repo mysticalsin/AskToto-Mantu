@@ -375,7 +375,10 @@ export function startOperatorRuntime(
     hooks?.onReadinessChanged?.()
     // M2-0412: piggyback the fleet model policy poll on the same <=60s heartbeat cadence rather than a
     // second timer. Best-effort — a failed fetch never blocks or fails the heartbeat itself.
-    void refreshModelPolicy(getSettings())
+    // Broadcast once it settles so Settings' managed/locked display reflects a newly applied policy.
+    void refreshModelPolicy(getSettings()).then(() => {
+      if (generation === runtimeGeneration) hooks?.onReadinessChanged?.()
+    })
     if (beat.retry.length && hooks?.onCrmRetry) {
       await hooks.onCrmRetry(beat.retry)
     }

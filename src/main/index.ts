@@ -1608,7 +1608,7 @@ function detectImportLanguage(text: string): string | null {
  */
 async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[]> {
   const settings = getSettings()
-  const allowed = getAllowedProviders()
+  const allowed = narrowAllowedForCapability(settings, getAllowedProviders(), 'recap', [...CLI_PROVIDER_IDS, 'local'])
   const localReady =
     localEligibleFor({ mode: 'summary' }, settings, 'base', allowed) ||
     localFallbackEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
@@ -1658,13 +1658,14 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
     for (const provider of candidates) {
       const def = PROVIDERS[provider]
       const local = provider === 'local'
-      const model = local
+      const preManagedModel = local
         ? settings.localLlm.modelId
         : applyInteractiveGuardrail(
             provider,
             'base',
             resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base', settings.providerModelsDeep) || def.defaultModel
           )
+      const model = !local && def.kind !== 'cli' ? resolveManagedModel(settings, 'recap', provider, preManagedModel) : preManagedModel
       try {
         const raw = await new Promise<string>((resolvePolish, rejectPolish) => {
           let text = ''
@@ -4063,7 +4064,7 @@ function visionCheckContextFromSettings(): import('@shared/screen-capture-check'
         : getApiKey(provider).length > 0 &&
           (provider !== 'dust' || !!s.dustWorkspaceId) &&
           (!requiresUserBaseUrl(provider) || !!providerBaseUrl(provider, s))
-  const allowed = getAllowedProviders()
+  const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
   const orgOk = !allowed || allowed.includes(provider)
   return {
     localWeightsReady,
@@ -4112,7 +4113,11 @@ function askVisionForScreenCheck(
   }
   const def = PROVIDERS[provider]
   const key = def.kind === 'cli' ? '' : getApiKey(provider)
-  const model =
+  const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
+  if (allowed && !allowed.includes(provider)) {
+    return Promise.reject(new Error('The selected provider is not allowed by the fleet model policy.'))
+  }
+  const preManagedModel =
     provider === 'dust'
       ? (s.providerModels['dust'] || '').trim() || def.defaultModel
       : applyInteractiveGuardrail(
@@ -4126,6 +4131,7 @@ function askVisionForScreenCheck(
             s.providerModelsDeep
           ) || def.fastModel
         )
+  const model = def.kind === 'cli' ? preManagedModel : resolveManagedModel(s, 'askChat', provider, preManagedModel)
   return collectVisionStream((handlers) =>
     createStream({
       providerId: provider,

@@ -72,6 +72,69 @@ describe('M2-0412 — every real model call site resolves through the fleet poli
   })
 })
 
+/** Every non-test source file under src/main (repo-relative, forward slashes). */
+function mainSources(): string[] {
+  return readdirSync(join(root, 'src/main'), { recursive: true, encoding: 'utf8' })
+    .map((f) => join('src/main', f).replace(/\\/g, '/'))
+    .filter((f) => /\.(ts|tsx|mjs|js)$/.test(f) && !/\.test\.(ts|tsx)$/.test(f))
+}
+
+// Speech-engine `createStream()` calls (sherpa recognizer / extractor streams) are audio decoders, not model calls.
+const SPEECH_ENGINE_FILES = ['src/main/parakeet-asr-host.ts', 'src/main/speaker-embedding-host.ts']
+
+const DECLARATION = /^(?:export )?(?:async )?function (\w+)/gm
+
+/** Source of the column-0 function that contains `index`, plus its name. */
+function enclosingFunction(text: string, index: number): { name: string; body: string } {
+  const decls = [...text.matchAll(DECLARATION)]
+  const start = [...decls].reverse().find((d) => (d.index ?? 0) <= index)
+  if (!start) return { name: '<module>', body: text }
+  const next = decls.find((d) => (d.index ?? 0) > (start.index ?? 0))
+  return { name: start[1], body: text.slice(start.index, next?.index ?? text.length) }
+}
+
+function namedFunction(text: string, name: string): string {
+  const decl = [...text.matchAll(DECLARATION)].find((d) => d[1] === name)
+  if (!decl) throw new Error(`function ${name} not found`)
+  return enclosingFunction(text, decl.index ?? 0).body
+}
+
+const resolvesThroughPolicy = (body: string): boolean => /\b(?:narrowAllowedForCapability|resolveManagedModel)\(/.test(body)
+
+// A call site that only streams a candidate handed to it names the function that built the candidate;
+// that function must itself resolve through the policy.
+const CANDIDATE_BUILDERS: Record<string, string> = {
+  'src/main/brain/ingest.ts#runCompletionOnce': 'pickProviderCandidates'
+}
+
+describe('M2-0412 — every createStream( call site in src/main resolves through the fleet policy', () => {
+  const sites = mainSources()
+    .filter((f) => f !== 'src/main/llm.ts' && !SPEECH_ENGINE_FILES.includes(f))
+    .flatMap((file) => {
+      const text = src(file)
+      return [...text.matchAll(/(?<!function )\bcreateStream\(/g)].map((m) => ({ file, text, fn: enclosingFunction(text, m.index ?? 0) }))
+    })
+
+  it('finds the known call sites (a scan that finds nothing must not pass vacuously)', () => {
+    const found = new Set(sites.map((s) => `${s.file}#${s.fn.name}`))
+    for (const expected of [
+      'src/main/index.ts#runImportPolish',
+      'src/main/index.ts#askVisionForScreenCheck',
+      'src/main/index.ts#registerIpc',
+      'src/main/import-recap.ts#runImportedRecap',
+      'src/main/brain/ingest.ts#runCompletionOnce'
+    ]) {
+      expect(found.has(expected), expected).toBe(true)
+    }
+  })
+
+  it.each(sites.map((s) => [`${s.file}#${s.fn.name}`, s] as const))('%s resolves through the policy', (key, site) => {
+    const builder = CANDIDATE_BUILDERS[key]
+    const body = builder ? namedFunction(site.text, builder) : site.fn.body
+    expect(resolvesThroughPolicy(body), key).toBe(true)
+  })
+})
+
 describe('M2-0412 — capabilities with no model-routed call site are a documented absence, not a silent gap', () => {
   it('there is no text-to-speech call site anywhere in src/main (tts has nothing to enforce)', () => {
     const grep = (pattern: RegExp): boolean => {
