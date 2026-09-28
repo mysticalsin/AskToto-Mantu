@@ -1336,6 +1336,7 @@ type BackfillObserver = {
 let backfillObserver: BackfillObserver | null = null
 let backfillFinalization: Promise<void> | null = null
 let drainTask: Promise<void> | null = null
+let backfillScans = 0
 let rebuildReplayTask: Promise<void> | null = null
 let rebuildReplayQueued = false
 let rebuildStarting = false
@@ -1877,12 +1878,18 @@ const pendingDrainCallbacks: Array<() => void | Promise<void>> = []
 /** Registers `cb` to run the next time the queue is fully idle, firing immediately (still async, via
  *  the idle check below) if it already is. `startBackfill`'s only caller today (brain:rebuildAll) always
  *  pushes its own candidates onto `queue` before calling this, so "queue idle" can never mean "before my
- *  jobs were even queued" — by construction the check only ever fires once THIS batch (and anything
- *  else in flight) has actually finished. */
+ *  jobs were even queued" — backfillScans keeps that construction true now that scans can await the
+ *  storage gateway before queueing. */
 function registerDrainCallback(cb?: () => void | Promise<void>): void {
   if (!cb) return
   pendingDrainCallbacks.push(cb)
   maybeFinishDrain()
+}
+
+function unregisterDrainCallback(cb?: () => void | Promise<void>): void {
+  if (!cb) return
+  const index = pendingDrainCallbacks.indexOf(cb)
+  if (index >= 0) pendingDrainCallbacks.splice(index, 1)
 }
 
 /** Finishes historical indexing once its own work has drained, independent of live meeting ingestion. */
@@ -1966,7 +1973,7 @@ async function hasSavedReconciliationCandidateForSettings(s: Settings, scan?: So
  *  trip this — inFlightJobs and queue both being empty is what makes it "true". */
 function maybeFinishDrain(): void {
   maybeFinishBackfill()
-  if (queue.length === 0 && inFlightJobs.size === 0 && !backfillPreparing && !rebuildStarting && !backfillLintPending && !backfillFinalization && !drainTask) {
+  if (queue.length === 0 && inFlightJobs.size === 0 && backfillScans === 0 && !backfillPreparing && !rebuildStarting && !backfillLintPending && !backfillFinalization && !drainTask) {
     // A just-saved meeting persists `backfillRequested` before its background job starts so a quit or
     // crash cannot strand it. Once every job truly drains, clear that durable marker only when none of
     // the persisted records remain failed/pending. A failed job therefore survives restart and the next
@@ -2188,8 +2195,9 @@ function replayAfterDrain(s: Settings, onFinished?: () => void | Promise<void>):
 async function startReplayBackfill(s: Settings, options: BackfillStartOptions, onFinished?: () => void | Promise<void>): Promise<BackfillStartResult> {
   const callback = replayAfterDrain(s, onFinished)
   try { return await startBackfill(callback, options) } catch (error) {
-    // startBackfill registers its callback only AFTER scanning. A failed scan must not leave a phantom
-    // queued replay that prevents a later repaired-folder retry from registering the real callback.
+    // A failed scan must not leave a phantom queued replay that prevents a later repaired-folder retry
+    // from registering the real callback.
+    unregisterDrainCallback(callback)
     if (callback) rebuildReplayQueued = false
     if (options.allowSourceRefresh) sourceRefreshScanRetryKeys = new Set(sourceRefreshWorkKeys)
     completionError('scan-failed')
@@ -2297,6 +2305,7 @@ function rebuildWorkBusy(): boolean {
 }
 
 export async function startRebuild(s: Settings, options: StartRebuildOptions = {}): Promise<{ queued: number; error?: string }> {
+  await whenDrainSettles()
   // Own asynchronous preflight as well as the queue. A second rebuild must not purge active work or
   // have its onFinished lifecycle owner dropped by the already-queued replay callback.
   if (rebuildStarting || rebuildWorkBusy()) return { queued: 0, error: REBUILD_BUSY_ERROR }
@@ -2672,20 +2681,23 @@ function finishCompletionObserver(observer: BackfillObserver): void {
 
 
 async function startBackfillAsync(onDrained?: () => void | Promise<void>, options: BackfillStartOptions = {}): Promise<BackfillStartResult> {
+  backfillScans += 1
   const s = getSettings()
-  // M2-0003: an unreadable index.json must never be treated as "nothing left to index" — that empty
-  // stand-in would otherwise trigger a full re-extraction of every meeting. Covers resume, reconcile,
-  // consolidation, the intelligence pass, dashboard-open and the Index-meetings click: this and
-  // enqueueIngest are the only two `queue.push` sites.
-  const unavailable = await indexUnavailableAsync(s)
-  if (unavailable) {
-    reportDeferred('backfill', 'ledger_unavailable')
-    return { queued: 0 }
-  }
-  const scan = await scanMeetingSources(s)
-  if (!(await brainInputsLocal(s, scan))) return { queued: 0 }
-  const idx = await readIndexAsync(s)
-  const route = options.route ?? 'default'
+  registerDrainCallback(onDrained)
+  try {
+    // M2-0003: an unreadable index.json must never be treated as "nothing left to index" — that empty
+    // stand-in would otherwise trigger a full re-extraction of every meeting. Covers resume, reconcile,
+    // consolidation, the intelligence pass, dashboard-open and the Index-meetings click: this and
+    // enqueueIngest are the only two `queue.push` sites.
+    const unavailable = await indexUnavailableAsync(s)
+    if (unavailable) {
+      reportDeferred('backfill', 'ledger_unavailable')
+      return { queued: 0 }
+    }
+    const scan = await scanMeetingSources(s)
+    if (!(await brainInputsLocal(s, scan))) return { queued: 0 }
+    const idx = await readIndexAsync(s)
+    const route = options.route ?? 'default'
   const providerAvailable =
     route === 'intelligence-pass' ? pickIntelligencePassCandidates(s).length > 0 : hasUsableProvider(s)
   if (!options.force && !options.allowSourceRefresh && (idx.sourceRefreshRequested || hasSourceDrift(scan, idx))) {
@@ -2795,8 +2807,11 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
       if (!backfillObserver && !hasIncompleteSource(scan, i)) i.backfillRequested = false
     })
   }
-  registerDrainCallback(onDrained)
-  return deferredByProvider ? { queued: candidates.length, deferred: 'no-provider' } : { queued: candidates.length }
+    return deferredByProvider ? { queued: candidates.length, deferred: 'no-provider' } : { queued: candidates.length }
+  } finally {
+    backfillScans -= 1
+    maybeFinishDrain()
+  }
 }
 
 export function startBackfill(onDrained?: () => void | Promise<void>, options: BackfillStartOptions = {}): BackfillStartHandle {
