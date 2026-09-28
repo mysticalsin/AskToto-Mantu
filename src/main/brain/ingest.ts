@@ -1340,6 +1340,7 @@ let rebuildReplayTask: Promise<void> | null = null
 let rebuildReplayQueued = false
 let rebuildStarting = false
 let sourceRefreshWorkKeys = new Set<string>()
+let sourceRefreshScanRetryKeys = new Set<string>()
 
 function completionError(error: CompletionError): void {
   const observer = backfillObserver
@@ -1366,7 +1367,8 @@ function observeClaimedSourceRefreshWork(): void {
 
 function observeSourceRefreshWorkFromIndex(idx: BrainIndex): void {
   observeClaimedSourceRefreshWork()
-  if (sourceRefreshWorkKeys.size > 0 || (!idx.sourceRefreshRequested && !idx.replayPending)) return
+  for (const key of sourceRefreshScanRetryKeys) observeSource(key)
+  if (sourceRefreshWorkKeys.size > 0 || sourceRefreshScanRetryKeys.size > 0 || !idx.sourceRefreshRequested || idx.replayPending) return
   for (const key of claimSourceRefreshWork(idx)) observeSource(key)
 }
 
@@ -2183,6 +2185,7 @@ async function startReplayBackfill(s: Settings, options: BackfillStartOptions, o
     // startBackfill registers its callback only AFTER scanning. A failed scan must not leave a phantom
     // queued replay that prevents a later repaired-folder retry from registering the real callback.
     if (callback) rebuildReplayQueued = false
+    if (options.allowSourceRefresh) sourceRefreshScanRetryKeys = new Set(sourceRefreshWorkKeys)
     completionError('scan-failed')
     throw new BackfillScanFailure(error)
   }
@@ -2409,6 +2412,7 @@ async function maybeStartSourceRefreshAsync(): Promise<void> {
     onFinished: () => {
       sourceRefreshRunning = false
       sourceRefreshWorkKeys = new Set()
+      sourceRefreshScanRetryKeys = new Set()
       maybeStartSourceRefresh()
       maybeCompleteBackfillRun()
     }
