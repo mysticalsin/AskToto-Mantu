@@ -17,6 +17,8 @@ import type { ProbeDeps } from './probe'
 
 const SECRET = 'operator-ingest-secret-for-tests'
 const NOW = 1_725_000_000_000
+const OPERATOR_BASE_URL = 'https://metis-operator.example.workers.dev'
+const ACTOR_EMAIL = 'owner@example.test'
 
 function jsonResponse(body: unknown, init: { status?: number } = {}): Response {
   return new Response(JSON.stringify(body), { status: init.status ?? 200, headers: { 'content-type': 'application/json' } })
@@ -32,12 +34,12 @@ describe('mintOAuthState / verifyOAuthState', () => {
       seen.add(nonce)
       return false
     }
-    const state = await mintOAuthState(SECRET, 'zoho', 'tony@example.com', 'nonce-0001', NOW, { verifier: 'v'.repeat(43), config: { dataCenter: 'accounts.zoho.eu' } })
+    const state = await mintOAuthState(SECRET, 'zoho', ACTOR_EMAIL, 'nonce-0001', NOW, { verifier: 'v'.repeat(43), config: { dataCenter: 'accounts.zoho.eu' } })
     const first = await verifyOAuthState(SECRET, state, NOW + 1000, seenNonce)
     expect(first.ok).toBe(true)
     if (first.ok) {
       expect(first.claims.kind).toBe('zoho')
-      expect(first.claims.actor).toBe('tony@example.com')
+      expect(first.claims.actor).toBe(ACTOR_EMAIL)
       expect(first.claims.verifier).toBe('v'.repeat(43))
       expect(first.claims.config).toEqual({ dataCenter: 'accounts.zoho.eu' })
     }
@@ -50,7 +52,7 @@ describe('mintOAuthState / verifyOAuthState', () => {
       seen.add(nonce)
       return false
     }
-    const state = await mintOAuthState(SECRET, 'googledrive', 'tony@example.com', 'nonce-0002', NOW)
+    const state = await mintOAuthState(SECRET, 'googledrive', ACTOR_EMAIL, 'nonce-0002', NOW)
     const first = await verifyOAuthState(SECRET, state, NOW, seenNonce)
     expect(first.ok).toBe(true)
     const second = await verifyOAuthState(SECRET, state, NOW, seenNonce)
@@ -59,14 +61,14 @@ describe('mintOAuthState / verifyOAuthState', () => {
   })
 
   it('rejects an expired state', async () => {
-    const state = await mintOAuthState(SECRET, 'googledrive', 'tony@example.com', 'nonce-0003', NOW)
+    const state = await mintOAuthState(SECRET, 'googledrive', ACTOR_EMAIL, 'nonce-0003', NOW)
     const result = await verifyOAuthState(SECRET, state, NOW + OAUTH_STATE_TTL_MS + 1)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('expired')
   })
 
   it('rejects a forged state (tampered payload, or signed with a different secret)', async () => {
-    const state = await mintOAuthState(SECRET, 'googledrive', 'tony@example.com', 'nonce-0004', NOW)
+    const state = await mintOAuthState(SECRET, 'googledrive', ACTOR_EMAIL, 'nonce-0004', NOW)
     const [payloadB64, sigB64] = state.split('.')
     // Flip one character in the payload without re-signing - a bit-for-bit forgery attempt.
     const flipped = payloadB64.slice(0, -1) + (payloadB64.endsWith('A') ? 'B' : 'A')
@@ -75,17 +77,17 @@ describe('mintOAuthState / verifyOAuthState', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(['bad-signature', 'malformed', 'bad-claims']).toContain(result.code)
 
-    const wrongSecretState = await mintOAuthState('a-completely-different-secret', 'googledrive', 'tony@example.com', 'nonce-0005', NOW)
+    const wrongSecretState = await mintOAuthState('a-completely-different-secret', 'googledrive', ACTOR_EMAIL, 'nonce-0005', NOW)
     const wrongSecretResult = await verifyOAuthState(SECRET, wrongSecretState, NOW)
     expect(wrongSecretResult.ok).toBe(false)
     if (!wrongSecretResult.ok) expect(wrongSecretResult.code).toBe('bad-signature')
   })
 
   it('lets the caller reject on actor mismatch (the route checks claims.actor against the signed-in email)', async () => {
-    const state = await mintOAuthState(SECRET, 'googledrive', 'tony@example.com', 'nonce-0006', NOW)
+    const state = await mintOAuthState(SECRET, 'googledrive', ACTOR_EMAIL, 'nonce-0006', NOW)
     const result = await verifyOAuthState(SECRET, state, NOW)
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.claims.actor).not.toBe('someone-else@example.com')
+    if (result.ok) expect(result.claims.actor).not.toBe('someone-else.test')
   })
 
   it('rejects a state signed for a genuinely different payload shape (bad-claims) rather than crashing', async () => {
@@ -156,7 +158,7 @@ describe('exchangeAuthorizationCode', () => {
       expect(body.get('code')).toBe('auth-code-123')
       expect(body.get('client_id')).toBe('client-id')
       expect(body.get('client_secret')).toBe('client-secret')
-      expect(body.get('redirect_uri')).toBe('https://metis-operator.tony-walteur.workers.dev/v1/admin/connectors/oauth/callback')
+      expect(body.get('redirect_uri')).toBe(`${OPERATOR_BASE_URL}/v1/admin/connectors/oauth/callback`)
       expect(body.get('code_verifier')).toBe('verifier-value')
       return jsonResponse({ access_token: 'ya29.token', refresh_token: 'refresh-token', expires_in: 3600, token_type: 'Bearer' })
     })
@@ -166,7 +168,7 @@ describe('exchangeAuthorizationCode', () => {
       {},
       {
         code: 'auth-code-123',
-        redirectUri: 'https://metis-operator.tony-walteur.workers.dev/v1/admin/connectors/oauth/callback',
+        redirectUri: `${OPERATOR_BASE_URL}/v1/admin/connectors/oauth/callback`,
         codeVerifier: 'verifier-value'
       },
       { clientId: 'client-id', clientSecret: 'client-secret' },

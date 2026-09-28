@@ -23,11 +23,18 @@ describe('update-persistence: meeting transcripts survive an app update', () => 
 
   it('the default meeting store is user-owned, version-independent, and never inside the install dir', () => {
     const dir = resolveMeetingsFolder({ meetingsFolder: '' } as Settings)
-    // Under the user's Documents/OneDrive (the mocked getPath('documents') = /tmp/asktoto-test-documents),
-    // named stably — NOT under the app bundle the updater overwrites.
+    // Under the user's Documents/OneDrive (the mocked getPath('documents'), sandboxed per-run under
+    // ASKTOTO_TEST_SANDBOX_ROOT — see __mocks__/electron.ts), named stably — NOT under the app bundle
+    // the updater overwrites.
     expect(dir.endsWith('Métis Meetings')).toBe(true)
     expect(SEMVER.test(dir)).toBe(false) // no version in the path → the same folder across 1.1.0, 1.2.0, …
     for (const marker of INSTALL_MARKERS) expect(dir.includes(marker)).toBe(false)
+    // W0-HERMETIC — this is the assertion this file was missing: on a machine with a real OneDrive
+    // (unsandboxed), the two checks above still passed while `dir` silently resolved into the
+    // developer's real ~/Library/CloudStorage/OneDrive-*/Métis Meetings. The hermetic vitest.config.ts
+    // home override closes the path by construction; this assertion keeps that guarantee from silently
+    // regressing without this test noticing.
+    expect(dir).not.toMatch(/CloudStorage|OneDrive/)
   })
 
   it('the store path does not depend on the app version (same folder before and after an update)', () => {

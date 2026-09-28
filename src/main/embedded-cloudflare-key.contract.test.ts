@@ -27,24 +27,20 @@ const SEED = readFileSync(join(__dirname, 'embedded-cloudflare-key.ts'), 'utf8')
  * during a filesystem sweep, with no injectable seam.
  */
 describe('MQA-260 — a rebuilt profile must be able to seed the embedded key again', () => {
-  it('clears both one-shot seed markers when the encrypted profile is archived', () => {
-    // Cahê's Kimi key uses the identical one-shot pattern (cahe-embedded-key.ts) and has the identical
-    // failure, so both markers move together or the next one to matter is missed.
-    for (const marker of ["'.cloudflare-key-seeded'", "'.cahe-key-seeded'"]) {
-      expect(
-        STORE.includes(marker),
-        `${marker} must be in PROFILE_RECOVERY_FIXED_FILES, or a repaired profile inherits "already seeded" and can never hold the shipped key`
-      ).toBe(true)
-    }
+  it('clears the one-shot seed marker when the encrypted profile is archived', () => {
+    const marker = "'.cloudflare-key-seeded'"
+    expect(
+      STORE.includes(marker),
+      `${marker} must be in PROFILE_RECOVERY_FIXED_FILES, or a repaired profile inherits "already seeded" and can never hold the shipped key`
+    ).toBe(true)
   })
 
-  it('keeps the markers inside PROFILE_RECOVERY_FIXED_FILES specifically', () => {
-    // Guards against the strings surviving only in a comment after a refactor.
+  it('keeps the marker inside PROFILE_RECOVERY_FIXED_FILES specifically', () => {
+    // Guards against the string surviving only in a comment after a refactor.
     const start = STORE.indexOf('const PROFILE_RECOVERY_FIXED_FILES')
     expect(start).toBeGreaterThan(-1)
     const block = STORE.slice(start, STORE.indexOf('])', start))
     expect(block).toContain("'.cloudflare-key-seeded'")
-    expect(block).toContain("'.cahe-key-seeded'")
   })
 
   it('does NOT weaken the marker itself — a user key must still win on an ordinary launch', () => {

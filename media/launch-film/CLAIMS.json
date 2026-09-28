@@ -1,0 +1,252 @@
+{
+  "schema_version": 1,
+  "ticket_id": "M2-0178",
+  "release_claims_approved": false,
+  "decisions": {
+    "D-12": "Privacy lines must use the verified privacy sentence exactly or be cut.",
+    "D-27": "Competitive, superiority, affiliation and infallibility claims are cut unless the competitive qualification evidence is present for that slice."
+  },
+  "privacy_line": {
+    "status": "cut",
+    "text": "",
+    "evidence_record_id": null
+  },
+  "forbidden_claims": [
+    {
+      "id": "forbidden-remembers-everything",
+      "phrase": "remembers everything",
+      "reason": "Broad memory claim without exact live proof."
+    },
+    {
+      "id": "forbidden-zero-retention",
+      "phrase": "zero retention",
+      "reason": "Absolute privacy claim without exact verified wording."
+    },
+    {
+      "id": "forbidden-all-data-stays-on-your-mac",
+      "phrase": "all data stays on your Mac",
+      "reason": "Absolute local-data claim without exact verified wording."
+    },
+    {
+      "id": "forbidden-never-misses",
+      "phrase": "never misses",
+      "reason": "Infallibility claim."
+    },
+    {
+      "id": "forbidden-best",
+      "phrase": "best meeting assistant",
+      "reason": "Superiority claim."
+    }
+  ],
+  "evidence_records": [
+    {
+      "id": "EV-M2-0178-REGISTER",
+      "level": "DESIGNED",
+      "verified": true,
+      "source": {
+        "type": "ticket",
+        "id": "M2-0178"
+      },
+      "summary": "Claim register and truth gate define how launch-film scenes may appear before live product proof exists."
+    },
+    {
+      "id": "EV-M2-0212-TOOLCHAIN",
+      "level": "DESIGNED",
+      "verified": true,
+      "source": {
+        "type": "ticket",
+        "id": "M2-0212"
+      },
+      "summary": "Launch-film render toolchain spike exists as presentation and render-path evidence only, not product-capability evidence."
+    }
+  ],
+  "competitive_qualification": {
+    "status": "absent",
+    "ticket_id": "M2-0185",
+    "final_signed_windows_qa_receipt": null,
+    "final_signed_native_mac_qa_receipt": null,
+    "allowed_claim_slices": []
+  },
+  "re_evaluations": [
+    {
+      "stage": "T2",
+      "status": "required",
+      "output": "Re-run the claim gate and attach the generated readiness report artifact."
+    },
+    {
+      "stage": "T3",
+      "status": "required",
+      "output": "Re-run the claim gate and attach the generated readiness report artifact."
+    },
+    {
+      "stage": "rc1",
+      "status": "required",
+      "evidence_ticket_id": "M2-0210",
+      "output": "Record the rc1 re-evaluation report as M2-0210 evidence."
+    }
+  ],
+  "storyboard_scenes": [
+    {
+      "id": "LF-01",
+      "title": "Cold open desktop overlay",
+      "state": "concept",
+      "claim_id": "CL-01",
+      "evidence_record_id": "EV-M2-0178-REGISTER",
+      "visible_label": "Concept UI sequence",
+      "script": "A slim desktop overlay appears beside a meeting workspace.",
+      "captions": [
+        "Concept UI sequence"
+      ],
+      "variants": {
+        "live": "Use only after a packaged app QA receipt proves the exact captured overlay state.",
+        "concept": "Show the scene with the visible concept label.",
+        "cut": "Remove the scene and bridge with abstract title footage."
+      }
+    },
+    {
+      "id": "LF-02",
+      "title": "Live meeting capture",
+      "state": "concept",
+      "claim_id": "CL-02",
+      "evidence_record_id": "EV-M2-0178-REGISTER",
+      "visible_label": "Reconstruction",
+      "script": "A reconstructed meeting beat shows notes forming from approved sample dialogue.",
+      "captions": [
+        "Reconstruction"
+      ],
+      "variants": {
+        "live": "Use only with a live verified receipt for the exact capture, transcript and note output.",
+        "concept": "Use synthetic dialogue and the visible reconstruction label.",
+        "cut": "Replace with a neutral title card."
+      }
+    },
+    {
+      "id": "LF-03",
+      "title": "Hindsight memory recall",
+      "state": "concept",
+      "claim_id": "CL-03",
+      "evidence_record_id": "EV-M2-0178-REGISTER",
+      "visible_label": "Concept memory sequence",
+      "script": "A concept sequence shows a user asking for prior context and receiving a bounded answer.",
+      "captions": [
+        "Concept memory sequence"
+      ],
+      "requires_live_verified_memory_proof": true,
+      "variants": {
+        "live": "Use only if the memory proof evidence record is LIVE_VERIFIED.",
+        "concept": "Show the sequence only with the visible concept memory label.",
+        "cut": "Remove the memory beat entirely."
+      }
+    },
+    {
+      "id": "LF-04",
+      "title": "Privacy assurance",
+      "state": "cut",
+      "claim_id": null,
+      "evidence_record_id": null,
+      "visible_label": "Cut pending exact verified privacy sentence",
+      "script": "",
+      "captions": [],
+      "variants": {
+        "live": "Use the exact verified privacy sentence only after the privacy evidence exists.",
+        "concept": "No concept privacy line is allowed.",
+        "cut": "Cut the privacy line."
+      }
+    },
+    {
+      "id": "LF-05",
+      "title": "Comparison montage",
+      "state": "cut",
+      "claim_id": null,
+      "evidence_record_id": null,
+      "visible_label": "Cut pending competitive qualification",
+      "script": "",
+      "captions": [],
+      "variants": {
+        "live": "Use only slices recorded by M2-0185 with final signed Windows and native Mac QA receipts.",
+        "concept": "No comparative concept line is allowed.",
+        "cut": "Cut the comparative beat."
+      }
+    },
+    {
+      "id": "LF-06",
+      "title": "Toolchain proof card",
+      "state": "live",
+      "claim_id": "CL-06",
+      "evidence_record_id": "EV-M2-0212-TOOLCHAIN",
+      "visible_label": "",
+      "script": "The film render path is controlled by a pinned toolchain.",
+      "captions": [
+        "Pinned film toolchain"
+      ],
+      "variants": {
+        "live": "Show only as render-path proof, never as product verification.",
+        "concept": "Show as a process diagram with concept label.",
+        "cut": "Remove the card."
+      }
+    }
+  ],
+  "claims": [
+    {
+      "id": "CL-01",
+      "text": "The launch film may depict the desktop overlay only as a concept until exact packaged-app QA evidence exists.",
+      "type": "concept-treatment",
+      "evidence_record_id": "EV-M2-0178-REGISTER",
+      "allowed_states": [
+        "concept",
+        "cut"
+      ],
+      "variants": {
+        "live": "Promote only when exact packaged-app QA evidence backs the captured overlay slice.",
+        "concept": "Use the concept-treatment claim with a visible concept label.",
+        "cut": "Cut the overlay claim if the concept label cannot be shown."
+      }
+    },
+    {
+      "id": "CL-02",
+      "text": "Meeting capture scenes are reconstructions unless backed by live verified capture and transcript evidence.",
+      "type": "reconstruction-treatment",
+      "evidence_record_id": "EV-M2-0178-REGISTER",
+      "allowed_states": [
+        "concept",
+        "cut"
+      ],
+      "variants": {
+        "live": "Promote only when live verified capture and transcript evidence backs the exact scene.",
+        "concept": "Use the reconstruction-treatment claim with a visible reconstruction label.",
+        "cut": "Cut the capture claim if reconstruction labelling is unavailable."
+      }
+    },
+    {
+      "id": "CL-03",
+      "text": "Hindsight memory is a concept sequence unless the memory proof evidence is LIVE_VERIFIED.",
+      "type": "memory-treatment",
+      "evidence_record_id": "EV-M2-0178-REGISTER",
+      "allowed_states": [
+        "concept",
+        "cut"
+      ],
+      "variants": {
+        "live": "Promote only when the exact memory proof evidence is LIVE_VERIFIED.",
+        "concept": "Use the memory-treatment claim with a visible concept memory label.",
+        "cut": "Cut the memory claim if the concept label cannot be shown."
+      }
+    },
+    {
+      "id": "CL-06",
+      "text": "The launch film uses a pinned render toolchain.",
+      "type": "render-path",
+      "evidence_record_id": "EV-M2-0212-TOOLCHAIN",
+      "allowed_states": [
+        "live",
+        "concept",
+        "cut"
+      ],
+      "variants": {
+        "live": "Use as render-path proof only.",
+        "concept": "Show as a process diagram with a visible concept label.",
+        "cut": "Cut the render-path claim if the toolchain evidence is unavailable."
+      }
+    }
+  ]
+}

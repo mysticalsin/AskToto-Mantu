@@ -15,7 +15,7 @@ const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
 
 describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
-  it('uses Tony’s first-slide clip, muted loop autoplay, object-cover, z-0 under the UI', () => {
+  it('uses Example’s first-slide clip, muted loop autoplay, object-cover, z-0 under the UI', () => {
     expect(ONBOARDING_HERO_VIDEO_REMOTE_SRC).toMatch(/hf_20260429_115139_0fc6bd3d/)
     expect(ONBOARDING_HERO_VIDEO_SRC).toMatch(/onboarding-hero-lady-planet/)
     expect(ONBOARDING_HERO_POSTER_SRC).toMatch(/onboarding-hero-poster/)
@@ -48,12 +48,12 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(videoBlock).not.toMatch(/filter:/)
   })
 
-  it('Next and the Tony Walteur byline use liquid glass; logo stays Métis; no Skip', () => {
+  it('Next and the Metis Maintainers byline use liquid glass; logo stays Métis; no Skip', () => {
     expect(experience).toMatch(/onboard-cta no-drag focus-ring/)
     expect(experience).toMatch(/>\s*Next\s*</)
     expect(experience).not.toMatch(/Skip the tour/)
     expect(experience).toMatch(/onboard-glass onboard-glass-chip/)
-    expect(experience).toMatch(/Tony Walteur/)
+    expect(experience).toMatch(/Metis Maintainers/)
     expect(experience).toMatch(/<MetisMark size=\{96\}/)
     expect(experience).toMatch(/<span aria-hidden="true">\{WORDMARK\}<\/span>/)
     expect(experience).not.toMatch(/useScrambleReveal/)
@@ -103,9 +103,22 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     playOnboardingVideo(v, { restart: true })
     expect(v.currentTime).toBe(0)
 
+    // Observe the actual setters: variable-name regexes missed the regression where
+    // restarting audio happened before attempting video. Keep both starts in the click.
+    const observed: string[] = []
+    function tracked(name: string): HTMLMediaElement {
+      return {
+        play() { observed.push(`${name}:play`); return Promise.resolve() },
+        set currentTime(value: number) { observed.push(`${name}:seek:${value}`) }
+      } as unknown as HTMLMediaElement
+    }
+    playOnboardingMedia(tracked('video') as HTMLVideoElement, tracked('audio') as HTMLAudioElement, { restart: true })
+    expect(observed).toEqual(['audio:play', 'video:play', 'audio:seek:0', 'video:seek:0'])
+    observed.length = 0
+    playOnboardingVideo(tracked('video') as HTMLVideoElement, { restart: true })
+    expect(observed).toEqual(['video:play', 'video:seek:0'])
+
     const src = readFileSync(join(__dirname, './onboarding-hero-video.ts'), 'utf8')
-    expect(src).toMatch(/const playing = el\.play\(\)[\s\S]*?if \(opts\.restart\) el\.currentTime = 0/)
-    expect(src).toMatch(/const audioPlay = audio\?\.play\(\)[\s\S]*?const videoPlay = video\?\.play\(\)/)
     expect(src).not.toMatch(/currentTime = 0\s*\n\s*void el\.play/)
     expect(src).toMatch(/document\.head\.appendChild/)
     expect(src).not.toMatch(/await el\.play|queueMicrotask|requestAnimationFrame/)
@@ -199,5 +212,58 @@ describe('FITO-185-W packaged hero mp4 plays outside asar', () => {
     expect(experience).toMatch(
       /onBegin=\{\(\) => \{[\s\S]*?setScene\('problem'\)[\s\S]*?playOnboardingVideo\(heroVideoRef\.current\)/
     )
+  })
+})
+
+// R11: optional media may fail, but it cannot swallow a navigation click.
+describe('R11 optional onboarding media failures', () => {
+  it('does not throw on a synchronous play failure', () => {
+    const media = { play() { throw new Error('fixture missing media') } } as unknown as HTMLVideoElement
+    expect(() => playOnboardingVideo(media, { restart: true })).not.toThrow()
+  })
+  it('handles rejection before a synchronous seek failure', async () => {
+    const media = {
+      play: () => Promise.reject(new Error('fixture blocked playback')),
+      set currentTime(_value: number) { throw new Error('fixture not seekable') }
+    } as unknown as HTMLVideoElement
+    expect(() => playOnboardingVideo(media, { restart: true })).not.toThrow()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  })
+  it('audio failure cannot prevent an independent video play attempt', () => {
+    const audio = { play() { throw new Error('fixture audio failure') } } as unknown as HTMLAudioElement
+    const video = { play: vi.fn(() => Promise.resolve()) } as unknown as HTMLVideoElement
+    expect(() => playOnboardingMedia(video, audio)).not.toThrow()
+    expect(video.play).toHaveBeenCalledOnce()
+  })
+})
+
+// These assertions exercise the shared production functions, not their source spelling.
+describe('R11 repair: two-phase optional media startup', () => {
+  for (const fail of ['audio-play', 'video-play', 'audio-seek', 'video-seek'] as const) {
+    it(`attempts both starts before seeking even when ${fail} fails`, () => {
+      const events: string[] = []
+      function media(name: string): HTMLMediaElement {
+        return {
+          play() {
+            events.push(`${name}-play`)
+            if (fail === `${name}-play`) throw new Error('fixture media failure')
+            return Promise.resolve()
+          },
+          set currentTime(_value: number) {
+            events.push(`${name}-seek`)
+            if (fail === `${name}-seek`) throw new Error('fixture seek failure')
+          }
+        } as unknown as HTMLMediaElement
+      }
+      expect(() => playOnboardingMedia(media('video') as HTMLVideoElement, media('audio') as HTMLAudioElement, { restart: true })).not.toThrow()
+      expect(events).toEqual(['audio-play', 'video-play', 'audio-seek', 'video-seek'])
+    })
+  }
+  it('does not seek when restart is false', () => {
+    const seek = vi.fn()
+    const video = { play: vi.fn(() => Promise.resolve()), set currentTime(v: number) { seek(v) } } as unknown as HTMLVideoElement
+    playOnboardingMedia(video, null)
+    expect(video.play).toHaveBeenCalledOnce()
+    expect(seek).not.toHaveBeenCalled()
   })
 })

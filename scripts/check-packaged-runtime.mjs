@@ -25,6 +25,7 @@ import { REPO_ROOT } from './local-model-assets.mjs'
 import { verifyLocalModelPayload } from './lib/local-model-inventory.mjs'
 import { verifyPackagedSharp } from './verify-packaged-sharp.mjs'
 import { assertMacHelperSpeechUsage } from './lib/mac-helper-privacy.mjs'
+import { assertQaFaultHookMatchesIdentity } from './lib/qa-fault-hook.mjs'
 
 const argv = process.argv.slice(2)
 const target = argv.shift()
@@ -636,11 +637,14 @@ if (target === 'mac') {
   const contentsDir = dirname(resourcesRoot)
   const appRoot = dirname(contentsDir)
   const macOsDir = join(contentsDir, 'MacOS')
-  requireExactInventory(macOsDir, ['Metis'], 'macOS executable directory')
+  // electron-builder names the executable after the bundle (productFilename), so the QA-identity
+  // variant's Metis QA.app carries "Metis QA", not "Metis" (M2-0187) — derive it rather than assume it.
+  const executable = basename(appRoot, '.app')
+  requireExactInventory(macOsDir, [executable], 'macOS executable directory')
   // Thin during an arch sub-build, fat once lipo has merged them — assert exactly the slices this
   // stage is supposed to have, so a universal package missing a slice fails here rather than on a
   // user's machine.
-  verifyMachOArches(join(macOsDir, 'Metis'), expectedMachoArches)
+  verifyMachOArches(join(macOsDir, executable), expectedMachoArches)
   const speechHelper = join(resourcesRoot, 'mac-helper', 'metis-mac-helper')
   requireRegularFile(speechHelper)
   verifyMachOArches(speechHelper, ['arm64', 'x64'])
@@ -652,6 +656,11 @@ if (target === 'mac') {
 } else {
   verifyPeX64(join(resourcesRoot, '..', executableName || 'Metis.exe'))
 }
+
+const { qaIdentity } = assertQaFaultHookMatchesIdentity(join(resourcesRoot, 'app.asar'))
+console.log(
+  `[check:packaged-runtime] OK ${qaIdentity ? 'the QA-identity package carries' : 'the shipping package lacks'} the QA fault hook`
+)
 
 console.log(
   `[check:packaged-runtime] OK ${target} (${postSign ? 'post-sign' : 'pre-sign'}) — exact reviewed ` +

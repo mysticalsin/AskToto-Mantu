@@ -9,7 +9,7 @@
  * `.shell` keeps the exact `grid-template-columns: 288px 1fr` string operator/src/assets.test.ts
  * greps for (rail is 288px, not the pre-wow 185px).
  *
- * Tony 2026-09-06: no command palette, no shortcut sheet (removed).
+ * the owner 2026-09-06: no command palette, no shortcut sheet (removed).
  */
 export const SHELL_CSS = `
 .shell { display: grid; grid-template-columns: 288px 1fr; min-height: 100%; }

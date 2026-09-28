@@ -9,7 +9,11 @@ mac-show: Totos-Mac / PR 66
 
 # Onboarding Starfield Close bed
 
-Tony Mac-showed the combined onboarding on Totos-Mac and rejected it. This file is the contract after that show. Six-act copy stays locked. Overlay hide-park, island geometry, cursor-watch, and `BAR_MIN_HEIGHT` stay off limits (PR 58). Do not pack. Do not merge. READY TO MERGE stays no until Devon Mac-shows again.
+**Status:** Draft — implement-exactly, ready-to-merge: no until Devon Mac-shows again (see
+frontmatter). Superseded after the lady beat by `ONBOARDING-KINETIC-GRID.md` (see `DESIGN.md` §
+Starfield Close).
+
+The owner Mac-showed the combined onboarding on Totos-Mac and rejected it. This file is the contract after that show. Six-act copy stays locked. Overlay hide-park, island geometry, cursor-watch, and `BAR_MIN_HEIGHT` stay off limits (PR 58). Do not pack. Do not merge. READY TO MERGE stays no until Devon Mac-shows again.
 
 ## Outcome (verbatim intent, 2026-08-31)
 

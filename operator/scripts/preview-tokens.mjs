@@ -4,7 +4,8 @@
  * its name and value, the type scale with real text, a card, a button in every state, an input,
  * a 4-row table, a status dot set, and the four data colours as bars (P0.1 deliverable 7).
  *
- * Writes /private/tmp/claude-501/operator-preview/tokens-light.html and tokens-dark.html. CSS is
+ * Writes tokens-light.html and tokens-dark.html into resolvePreviewDir() (an os.tmpdir()-based
+ * default, overridable via METIS_QA_PREVIEW_DIR). CSS is
  * inlined and the @font-face `src` is rewritten from `/assets/fonts/...` to an absolute
  * `file://` path into operator/public/fonts/, so each file opens standalone (no server, no
  * Worker) with the real Space Grotesk / Inter faces.
@@ -16,6 +17,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { resolvePreviewDir } from './qa-dirs.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OPERATOR_ROOT = join(__dirname, '..')
@@ -23,7 +25,8 @@ const CSS_ENTRY = join(OPERATOR_ROOT, 'src', 'spa', 'css.ts')
 const FONTS_DIR = join(OPERATOR_ROOT, 'public', 'fonts')
 const LOGOS_DIR = join(OPERATOR_ROOT, 'public', 'logos')
 const FLAGS_DIR = join(OPERATOR_ROOT, 'public', 'flags')
-const OUT_DIR = '/private/tmp/claude-501/operator-preview'
+
+const OUT_DIR = resolvePreviewDir()
 
 /** Bundles operator/src/spa/css.ts's own CONSOLE_CSS export directly (not manifest.ts's
  *  composed SPA_CSS, which also concatenates other pages' shell/chrome stylesheets owned by
@@ -120,7 +123,7 @@ function extractLightTokens(css) {
  * token, otherwise the light value (plan 3.2: "dark redefines only tokens"). Without this, the
  * dark preview's swatches would render correctly (the browser resolves var() against the page's
  * own data-theme) while the printed hex text next to them stayed the light value -- a real,
- * user-visible mismatch on the exact page meant to let Tony verify tokens.
+ * user-visible mismatch on the exact page meant to let the owner verify tokens.
  */
 function extractDarkTokens(css) {
   const rootMatch = css.match(/:root\s*\{([\s\S]*?)\n\}/)
@@ -221,7 +224,7 @@ const PREVIEW_CSS = `
 `
 
 /**
- * Real markup from the four plan 3.5c / 3.6 / 6.10b primitives, so Tony sees exactly what
+ * Real markup from the four plan 3.5c / 3.6 / 6.10b primitives, so the owner sees exactly what
  * countryCell()/flagStrip(), connectorRow()/connectorGroup(), dataTable({variant:'card'}) and
  * alertBadge() render rather than a hand-typed stand-in that could drift from the real functions.
  */

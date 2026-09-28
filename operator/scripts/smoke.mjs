@@ -7,7 +7,7 @@
  * Worker at any time, not only right after a deploy. `deploy.mjs` runs this automatically after
  * `wrangler deploy`; it can also be run by hand:
  *
- *   node operator/scripts/smoke.mjs --url https://metis-operator.tony-walteur.workers.dev
+ *   node operator/scripts/smoke.mjs --url https://metis-operator.example.workers.dev
  *
  * The checks are exported as small, independently testable functions (each takes an injected
  * `fetchImpl` instead of calling the global `fetch`) so operator/scripts/smoke.contract.test.ts
@@ -22,7 +22,7 @@
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
-export const DEFAULT_TEAM_DOMAIN = 'https://tony-walteur.cloudflareaccess.com'
+export const DEFAULT_TEAM_DOMAIN = 'https://metis-team.cloudflareaccess.com'
 const FETCH_TIMEOUT_MS = 10_000
 const VERSION_PROBE_ATTEMPTS = 5
 const VERSION_PROBE_DELAY_MS = 2000

@@ -6,7 +6,7 @@ import { sha256Hex } from './crypto'
 import { verifyAccessJwt } from './access'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
 
 /**
  * P0.3 security pass (2026-09-06): the request-plumbing hardening from
@@ -21,6 +21,7 @@ function env(overrides: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY,
     ...overrides
@@ -51,7 +52,7 @@ async function signed(
   })
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 describe('nonce is consumed only after the signature verifies', () => {
   it('a forged request cannot burn a nonce that a real request then presents', async () => {
@@ -103,7 +104,7 @@ describe('a device may only touch its own rows', () => {
 describe('console and JSON response headers', () => {
   it('serves the admin console with a self-only CSP, no framing, nosniff and no-store', async () => {
     const store = memoryStore()
-    const res = await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })
+    const res = await handleRequest(new Request('https://operator.test/'), env(), { access: ownerAccess }, { store, now: NOW })
     expect(res.status).toBe(200)
     const csp = res.headers.get('content-security-policy') ?? ''
     expect(csp).toMatch(/default-src 'self'/)
@@ -121,7 +122,7 @@ describe('console and JSON response headers', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/health.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -145,7 +146,7 @@ describe('Cloudflare Access JWT fallback checks the time claims', () => {
     return `${head}.${body}.${sig}`
   }
   const nowSec = Math.floor(NOW / 1000)
-  const good = { aud: AUD, email: 'Tony.Walteur@gmail.com', iss: TEAM, iat: nowSec - 60, exp: nowSec + 600 }
+  const good = { aud: AUD, email: 'Owner@Example.test', iss: TEAM, iat: nowSec - 60, exp: nowSec + 600 }
 
   afterEach(() => vi.unstubAllGlobals())
 
@@ -155,7 +156,7 @@ describe('Cloudflare Access JWT fallback checks the time claims', () => {
 
   it('accepts a live token and lowercases the email', async () => {
     stubJwks()
-    expect(await verifyAccessJwt(mint(good), TEAM, AUD, NOW)).toBe('tony.walteur@gmail.com')
+    expect(await verifyAccessJwt(mint(good), TEAM, AUD, NOW)).toBe('owner@example.test')
   })
 
   it('rejects expired, not-yet-valid, missing-exp, wrong-issuer and wrong-audience tokens', async () => {
@@ -174,7 +175,7 @@ describe('Cloudflare Access JWT fallback checks the time claims', () => {
     const [h, p, s] = mint(good).split('.')
     const noneHead = Buffer.from(JSON.stringify({ alg: 'none', kid: 'k1' })).toString('base64url')
     expect(await verifyAccessJwt(`${noneHead}.${p}.${s}`, TEAM, AUD, NOW)).toBeNull()
-    const tampered = Buffer.from(JSON.stringify({ ...good, email: 'attacker@example.com' })).toString('base64url')
+    const tampered = Buffer.from(JSON.stringify({ ...good, email: 'attacker.test' })).toString('base64url')
     expect(await verifyAccessJwt(`${h}.${tampered}.${s}`, TEAM, AUD, NOW)).toBeNull()
   })
 
@@ -190,7 +191,7 @@ describe('Cloudflare Access JWT fallback checks the time claims', () => {
 })
 
 describe('CSRF on every admin POST', () => {
-  const body = () => JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-cs99' })
+  const body = () => JSON.stringify({ provider: 'anthropic', secret: syntheticProviderKey('anthropic', 'cs99') })
 
   it('same-origin (Sec-Fetch-Site) passes', async () => {
     const store = memoryStore()
@@ -201,7 +202,7 @@ describe('CSRF on every admin POST', () => {
         body: body()
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -216,7 +217,7 @@ describe('CSRF on every admin POST', () => {
         body: body()
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(viaSecFetch.status).toBe(403)
@@ -229,7 +230,7 @@ describe('CSRF on every admin POST', () => {
         body: body()
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(viaOrigin.status).toBe(403)
@@ -238,7 +239,7 @@ describe('CSRF on every admin POST', () => {
 
   it('Bearer session + same-origin passes', async () => {
     const store = memoryStore()
-    const home = await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })
+    const home = await handleRequest(new Request('https://operator.test/'), env(), { access: ownerAccess }, { store, now: NOW })
     const token = home.headers.get('X-Metis-Session') || ''
     expect(token).toMatch(/^v1\|/)
     const res = await handleRequest(
@@ -285,7 +286,7 @@ describe('per-route HMAC buckets', () => {
 })
 
 describe('admin mutation rate limit', () => {
-  const mutationBody = () => JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-cs99' })
+  const mutationBody = () => JSON.stringify({ provider: 'anthropic', secret: syntheticProviderKey('anthropic', 'cs99') })
   const mutation = () =>
     new Request('https://operator.test/v1/admin/keys', {
       method: 'POST',
@@ -297,7 +298,7 @@ describe('admin mutation rate limit', () => {
     const store = memoryStore()
     let last: Response | null = null
     for (let i = 0; i < 61; i++) {
-      last = await handleRequest(mutation(), env(), { access: tonyAccess }, { store, now: NOW })
+      last = await handleRequest(mutation(), env(), { access: ownerAccess }, { store, now: NOW })
     }
     expect(last?.status).toBe(429)
     const body = (await last!.json()) as { ok: boolean; error: string; code: string; retryAfterMs: number }
@@ -310,12 +311,12 @@ describe('admin mutation rate limit', () => {
   it('never limits GET, even once the mutation bucket for that email is exhausted', async () => {
     const store = memoryStore()
     for (let i = 0; i < 61; i++) {
-      await handleRequest(mutation(), env(), { access: tonyAccess }, { store, now: NOW })
+      await handleRequest(mutation(), env(), { access: ownerAccess }, { store, now: NOW })
     }
     const getRes = await handleRequest(
       new Request('https://operator.test/v1/admin/health.json', { headers: { 'sec-fetch-site': 'same-origin' } }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(getRes.status).toBe(200)

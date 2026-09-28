@@ -42,9 +42,10 @@ describe('MQA-232 — every audit record chains to the one before it', () => {
   })
 
   it('writes seq/prev on every record and the verifier proves the chain', () => {
-    auditLog('app.crash', { probe: 'chain-1' })
-    auditLog('app.crash', { probe: 'chain-2' })
-    auditLog('app.crash', { probe: 'chain-3' })
+    // An attributed event: app.* is projected and would drop `probe`, leaving the tamper case nothing to edit.
+    auditLog('settings.changed', { probe: 'chain-1' })
+    auditLog('settings.changed', { probe: 'chain-2' })
+    auditLog('settings.changed', { probe: 'chain-3' })
     const lines = readLines()
     expect(lines.length).toBeGreaterThanOrEqual(3)
     const last = JSON.parse(lines[lines.length - 1]) as { seq: number; prev: string }
@@ -68,7 +69,7 @@ describe('MQA-232 — every audit record chains to the one before it', () => {
     tampered[0] = tampered[0].replace('"probe":"chain-1"', '"probe":"edited"')
     const r = verifyAuditLines(tampered)
     expect(r.ok).toBe(false)
-    expect(r.breaks.some((b: Record<string, unknown>) => /altered/.test(b.reason))).toBe(true)
+    expect(r.breaks.some((b: Record<string, unknown>) => /altered/.test(String(b.reason)))).toBe(true)
   })
 
   it('DETECTS a deleted record', () => {
@@ -76,14 +77,14 @@ describe('MQA-232 — every audit record chains to the one before it', () => {
     const tampered = lines.filter((_, i) => i !== 1)
     const r = verifyAuditLines(tampered)
     expect(r.ok).toBe(false)
-    expect(r.breaks.some((b: Record<string, unknown>) => /seq jumped|altered/.test(b.reason))).toBe(true)
+    expect(r.breaks.some((b: Record<string, unknown>) => /seq jumped|altered/.test(String(b.reason)))).toBe(true)
   })
 
   it('DETECTS truncate-and-append (unchained line after the chain started)', () => {
     const lines = readLines()
     const r = verifyAuditLines([...lines, JSON.stringify({ ts: 'x', event: 'app.crash' })])
     expect(r.ok).toBe(false)
-    expect(r.breaks.some((b: Record<string, unknown>) => /truncate-and-append/.test(b.reason))).toBe(true)
+    expect(r.breaks.some((b: Record<string, unknown>) => /truncate-and-append/.test(String(b.reason)))).toBe(true)
   })
 
   it('legacy pre-chain records are a reported prefix, never a false failure', () => {

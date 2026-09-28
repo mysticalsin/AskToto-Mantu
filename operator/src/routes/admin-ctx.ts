@@ -17,6 +17,7 @@ export interface Env {
   DB?: D1DatabaseLike
   /** Workers Static Assets binding (plan D5, B8): fonts, flags and connector logos. */
   ASSETS?: { fetch(request: Request): Promise<Response> }
+  ADMIN_EMAILS?: string
   OPERATOR_INGEST_SECRET: string
   OPERATOR_PROMPT_KEY: string
   OPERATOR_SKILL_PRIVATE_KEY: string
@@ -32,7 +33,6 @@ export interface Env {
   CF_OAUTH_CLIENT_SECRET?: string
   CF_OAUTH_AUTHORIZE_URL?: string
   CF_OAUTH_TOKEN_URL?: string
-  CF_OAUTH_SCOPES?: string
   CF_ACCOUNT_ID?: string
 }
 

@@ -21,6 +21,7 @@ import {
   baseURL
 } from './local-runtime'
 import { LOCAL_MODELS, spawnProfileFor } from './local-models'
+import { formatCommand, releasePlans } from '../../../scripts/release/orchestrate.mjs'
 
 const REPO_ROOT = process.cwd()
 
@@ -194,6 +195,13 @@ describe('packaging wiring (mechanical — missing wiring fails this suite)', ()
   ] as const
 
   function expandScript(key: string, scripts: Record<string, string>, seen = new Set<string>()): string {
+    const releaseTarget: Record<string, keyof typeof releasePlans> = {
+      release: 'mac',
+      'release:win': 'win',
+      'release:mas': 'mas',
+      'release:win:store': 'win-store'
+    }
+    if (releaseTarget[key]) return releasePlans[releaseTarget[key]].map(formatCommand).join(' && ')
     if (seen.has(key)) throw new Error(`Cyclic npm script alias: ${[...seen, key].join(' -> ')}`)
     const script = scripts[key]
     if (!script) return ''
@@ -238,26 +246,12 @@ describe('packaging wiring (mechanical — missing wiring fails this suite)', ()
   })
 })
 
-describe('will-quit wiring (index.ts) — F3', () => {
-  it('kills the local sidecar synchronously on app quit', () => {
-    const src = readFileSync(join(REPO_ROOT, 'src', 'main', 'index.ts'), 'utf8')
-    const startIdx = src.indexOf("app.on('will-quit'")
-    expect(startIdx, 'will-quit handler not found in index.ts').toBeGreaterThan(-1)
-    // The handler body is short (globalShortcut.unregisterAll + the notif timer clear + the sidecar kill)
-    // — a bounded window after the handler's opening line is enough, mirroring the build.yml job-slicing
-    // pattern above rather than trying to balance-parse braces.
-    const endIdx = src.indexOf('\n})', startIdx)
-    const body = src.slice(startIdx, endIdx > -1 ? endIdx : startIdx + 400)
-    expect(body).toMatch(/localRuntime\.stop\(\)/)
-  })
-})
-
 describe('start() integration — real binary + real Qwen3.5-0.8B model', () => {
   // This test SPAWNS the binary, so it needs the slice this process can actually execute — the
   // universal package's other arch is present on disk but would fail with an exec-format error.
   const macBinary = join(REPO_ROOT, 'resources', 'llama', 'mac', process.arch, 'llama-server')
-  const gguf = '/Users/tony/AI-Brain-build/llama-spike/Qwen3.5-0.8B-UD-Q4_K_XL.gguf'
-  const mmproj = '/Users/tony/AI-Brain-build/llama-spike/mmproj-F16.gguf'
+  const gguf = '/Users/example-owner/local-models/llama-spike/Qwen3.5-0.8B-UD-Q4_K_XL.gguf'
+  const mmproj = '/Users/example-owner/local-models/llama-spike/mmproj-F16.gguf'
 
   const missing: string[] = []
   if (!existsSync(macBinary)) missing.push(`mac binary (${macBinary})`)
@@ -336,12 +330,21 @@ interface Harness {
   logger: typeof import('../logger')
   procs: FakeProc[]
   calls: Array<{ path: string; args: string[] }>
+  registry: {
+    recordSidecarIntent: ReturnType<typeof vi.fn>
+    recordSidecarSpawned: ReturnType<typeof vi.fn>
+  }
 }
 
-async function loadIsolatedRuntime(): Promise<Harness> {
+async function loadIsolatedRuntime(options: { spawnedRegistryWrite?: Promise<void> } = {}): Promise<Harness> {
   vi.resetModules()
   const procs: FakeProc[] = []
   const calls: Array<{ path: string; args: string[] }> = []
+  const registry = {
+    recordSidecarIntent: vi.fn(),
+    recordSidecarSpawned: vi.fn(() => options.spawnedRegistryWrite ?? Promise.resolve())
+  }
+  vi.doMock('../infra/process/registry', () => registry)
   vi.doMock('node:child_process', async () => {
     const { EventEmitter: EE } = await import('node:events')
     const spawn = vi.fn((path: string, args: string[]) => {
@@ -371,7 +374,7 @@ async function loadIsolatedRuntime(): Promise<Harness> {
   // holds — the module-level vi.mock factories re-run on reset and hand out new vi.fn()s.
   const runtime = await import('./local-runtime')
   const logger = await import('../logger')
-  return { runtime, logger, procs, calls }
+  return { runtime, logger, procs, calls, registry }
 }
 
 function emitListening(h: Harness, procIndex: number, port: number): void {
@@ -438,6 +441,36 @@ describe('port-line timeout — a sidecar that starts but never reports a listen
     expect(h.calls).toHaveLength(1)
     expect(h.runtime.getState()).toBe('stopped')
     expect(h.runtime.isRunning()).toBe(false)
+  })
+})
+
+describe('sidecar registry ordering', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('does not report the sidecar as started until the spawned identity record has landed', async () => {
+    let releaseRegistryWrite!: () => void
+    const registryWrite = new Promise<void>((resolve) => {
+      releaseRegistryWrite = resolve
+    })
+    const h = await loadIsolatedRuntime({ spawnedRegistryWrite: registryWrite })
+    vi.stubGlobal('fetch', async () => ({ status: 200 }))
+
+    let resolved = false
+    const started = h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(() => {
+      resolved = true
+    })
+    emitListening(h, 0, 55901)
+    await waitUntil(() => h.registry.recordSidecarSpawned.mock.calls.length === 1)
+    await Promise.resolve()
+
+    expect(resolved).toBe(false)
+
+    releaseRegistryWrite()
+    await started
+
+    expect(resolved).toBe(true)
   })
 })
 

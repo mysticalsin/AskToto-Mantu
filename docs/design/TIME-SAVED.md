@@ -33,6 +33,8 @@ motion:
 
 # Time saved
 
+**Status:** Active — shipped design reference for the Time Saved surface.
+
 A calm, factual record of work Métis actually finished. Never a vanity dashboard. Never a percentage
 that was not measured. Every minute on screen is an **estimate**, labeled as one.
 
@@ -84,7 +86,7 @@ invent a number to keep the UI pretty.
 
 ## MCP / Outlook write (same law)
 
-- Push is a button the user presses. Never auto-send. Tony: never auto-send.
+- Push is a button the user presses. Never auto-send. the owner: never auto-send.
 - Connected + a real write tool: show the payload, then Confirm.
 - Not connected: the same button slot reads **Connect Outlook** or **Connect Polo Pre-Sales**.
   It does not claim a send. It does not invent a Polo or Outlook delivery.

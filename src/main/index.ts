@@ -33,8 +33,16 @@ import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, creat
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
-import { bindRendererReadiness } from './renderer-readiness'
+import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
+import {
+  createRevealController,
+  legacyRevealWindow,
+  revealLegacyEnabled as revealLegacyFlagEnabled,
+  type PresenterState,
+  type RevealReason
+} from './lifecycle/reveal'
+import { captureActiveForWindowRestart as captureActiveForWindowRestartState } from './lifecycle/window-restart'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
   IPC,
@@ -93,7 +101,9 @@ import {
   type DiagnosticsExportResult,
   type RecallExportPlainResult,
   ScreenCaptureCheckPayloadSchema,
-  MetisCommandConfirmationSchema
+  MetisCommandConfirmationSchema,
+  RendererCrashContextSchema,
+  type RendererCrashContext
 } from '@shared/ipc'
 import {
   getSettings,
@@ -166,14 +176,16 @@ import {
 } from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
-import { extractScreenText } from './mac-helper'
+import { extractScreenText, macStallWatchCommand } from './mac-helper'
+import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
+import { runBootSidecarReaper } from './infra/process/reaper'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,
   type SpeakerId,
   type SpeakerLabel
 } from './speaker-id'
-import { releaseSpeakerEmbedding } from './speaker-embedding-client'
+import { releaseSpeakerEmbedding, killSpeakerEmbeddingHostForQuit } from './speaker-embedding-client'
 import {
   clampAxis,
   clampAxisMargin,
@@ -252,7 +264,9 @@ import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 // until an identified and admitted live/import session needs it (never on the startup path).
 let speakerIdInstance: SpeakerId | null = null
 function getSpeakerId(): SpeakerId {
-  if (!speakerIdInstance) speakerIdInstance = createSpeakerId()
+  if (!speakerIdInstance) {
+    speakerIdInstance = createSpeakerId({ canSaveVoiceprints: () => getSettings().speakerId.saveVoiceprints })
+  }
   return speakerIdInstance
 }
 
@@ -270,6 +284,11 @@ type ImportSpeakerOwner = {
 const LIVE_SPEAKER_RECEIPT_TTL_MS = 30 * 60_000
 let activeLiveSpeakerStartedAt: number | null = null
 let legacyListeningActive = false
+function setLegacyListeningActive(on: boolean): void {
+  if (legacyListeningActive === on) return
+  legacyListeningActive = on
+  rebuildTrayMenu()
+}
 let liveSpeakerStartedAtHighWater = 0
 const liveSpeakerReceipts = new Map<number, LiveSpeakerReceipt>()
 const importSpeakerOwners = new Map<string, ImportSpeakerOwner>()
@@ -300,8 +319,8 @@ function completeLiveSpeakerReceipt(startedAt: number): void {
   if (!receipt || receipt.closedAt === undefined || !receipt.savedFile) return
 
   // Delete before any fallible work: duplicate saves/stops cannot replay the capability or snapshot a
-  // replacement. snapshotSession intentionally keeps its existing qualified-operator flush behavior;
-  // consent/encrypted operator-profile persistence remains Task 7-P3.
+  // replacement. snapshotSession flushes the qualified operator buffer only under the save-voiceprints opt-in,
+  // which speaker-id.ts enforces; encrypting that store remains Task 7-P3.
   liveSpeakerReceipts.delete(startedAt)
   let snapshot: SpeakerEnrollmentSnapshot | null = null
   try {
@@ -344,7 +363,7 @@ function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
   if (startedAt === undefined) {
     if (activeLiveSpeakerStartedAt !== null) return false
     if (change.on === legacyListeningActive) return false
-    legacyListeningActive = change.on
+    setLegacyListeningActive(change.on)
     return true
   }
 
@@ -353,7 +372,7 @@ function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
     const previous = activeLiveSpeakerStartedAt
     if (previous !== null) closeLiveSpeakerReceipt(previous)
     activeLiveSpeakerStartedAt = startedAt
-    legacyListeningActive = false
+    setLegacyListeningActive(false)
     liveSpeakerStartedAtHighWater = startedAt
 
     if (!speakerIdProcessingEnabled()) return true
@@ -371,7 +390,7 @@ function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
   // release that follows in listening-state-ipc therefore cannot resolve against a replacement.
   closeLiveSpeakerReceipt(startedAt)
   activeLiveSpeakerStartedAt = null
-  legacyListeningActive = false
+  setLegacyListeningActive(false)
   return true
 }
 
@@ -388,7 +407,7 @@ function captureLiveSpeakerKey(rawStartedAt: unknown): string | null {
 function discardActiveLiveSpeakerSession(): void {
   const startedAt = activeLiveSpeakerStartedAt
   activeLiveSpeakerStartedAt = null
-  legacyListeningActive = false
+  setLegacyListeningActive(false)
   if (startedAt === null) return
   const receipt = liveSpeakerReceipts.get(startedAt)
   if (!receipt) return
@@ -505,6 +524,9 @@ import { ensureLocalModel, localModelDownloadState } from './llm/local-model-dow
 import { provisionLocalModel } from './local-model-provisioning'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
+import { createStopAll } from './infra/process/stop-all'
+import { installExitPaths } from './lifecycle/exit-paths'
+import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
@@ -555,6 +577,8 @@ import {
 import {
   readIndex as readBrainIndex,
   writeIndex as writeBrainIndex,
+  indexUnavailable,
+  indexUnavailableMessage,
   readGraph as readBrainGraph,
   writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
@@ -567,6 +591,10 @@ import {
   listMeetingExtractions as listBrainMeetingExtractions,
   readMeetingExtraction as readBrainMeetingExtraction,
   purgeBrain,
+  listPreservedBrainIndexes,
+  currentBrainIndexIsReadable,
+  restorePreservedBrainIndex,
+  deletePreservedBrainIndex,
   setDealOutcome,
   slugify as brainSlugify,
   brainDir as brainStoreDir
@@ -596,7 +624,7 @@ import { startOperatorOverlayPoll } from './operator-overlay'
 import { activateOperatorLicenseToken } from './operator-license-activate'
 import { operatorGate } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
-import { initLogging, mainLog, auditLog } from './logger'
+import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
 import { CommandControl } from './command-control'
 import { executeDesktopAction } from './desktop-adapters'
 import { ensureMetisCommandRuntime } from './metis-command-register'
@@ -611,6 +639,15 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
+import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
+import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
+import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
+import { crashDetail, type CrashKind } from './infra/observability/crash-taxonomy'
+import { createRevealTrace } from './infra/observability/reveal-trace'
+import { createHistoryTracer } from './infra/observability/history-trace'
+import { copyDiagnosticsSummary } from './infra/observability/diagnostics-summary'
+import { createReloadBudget } from './lifecycle/reload-budget'
+import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './lifecycle/render-loop-halted-dialog'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
@@ -627,7 +664,8 @@ import {
   ensureParakeetModel,
   parakeetTranscribe,
   parakeetRelease,
-  parakeetAddonError
+  parakeetAddonError,
+  killParakeetHostForQuit
 } from './parakeet'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
@@ -725,7 +763,7 @@ import {
   sweepExpiredMeetings
 } from './recall'
 import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './updater'
-import { runSelfTest } from './selftest'
+import { runSelfTest, redirectSelfTestUserData } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
@@ -794,6 +832,7 @@ import {
 import {
   runPlaneOAuth,
   refreshPlaneToken,
+  savePlaneClientAndTokens,
   PLANE_MCP_OAUTH_ENDPOINT,
   PLANE_MCP_PAT_ENDPOINT,
   tryAcquirePlaneTokenLock,
@@ -826,9 +865,7 @@ import { redactSecrets } from '@shared/redact'
 import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
 import { applySpeakerNames, clusterNamePairsFromAlignment } from '@shared/transcript-align'
-import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { freezeAsciiUserAgent } from './app-user-agent'
-import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 import { importEmbeddedCloudflareKey, embeddedCloudflareKeyAvailable, restoreEmbeddedCloudflareKey } from './embedded-cloudflare-key'
 
 /**
@@ -881,10 +918,15 @@ function makeRefreshDustAuth(current: {
 // `??=` on BOTH platforms leaves an explicit QA/operator override (ASKTOTO_LOCAL_KEYSTORE already set
 // in the environment) untouched — including forcing the file keystore on Windows for isolated QA.
 // ENT-029: preserve Métis display branding without putting non-ASCII bytes into Chromium headers.
-// Run before edition/display-name changes and before the first session is initialized.
+// Run before any display-name change and before the first session is initialized.
 freezeAsciiUserAgent(app)
-initializeCaheEditionIdentity()
 if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
+
+// Self-test must own a throwaway userData before anything resolves userData; no-op unless
+// devEnv(ASKTOTO_SELFTEST). Setting ASKTOTO_USERDATA lets the ASKTOTO_USERDATA handling immediately
+// below, and resolveMeetingsFolder()'s own ASKTOTO_USERDATA check (transcripts.ts), apply the throwaway
+// directory through the one QA-isolation mechanism instead of a second, self-test-only one (M2-0004).
+redirectSelfTestUserData()
 
 // Select the final user-data profile before crashReporter (or any other Electron service) can resolve
 // a default path. In particular, ASKTOTO_USERDATA must isolate physical QA from a real encrypted profile.
@@ -903,7 +945,7 @@ if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
 // stays Electron unless a wrapper .app overrides Info.plist — do not invent
 // a second product name for unpackaged builds. Packaged Metis.app already
 // uses CFBundleDisplayName Métis.
-if (!app.isPackaged && !isCaheEdition()) {
+if (!app.isPackaged) {
   try {
     app.setName('Métis')
   } catch {
@@ -916,7 +958,7 @@ if (!app.isPackaged && !isCaheEdition()) {
 // "Métis Helper" child-process bundles crashed Chromium at launch on macOS 26+/Tahoe; see the
 // productName note in electron-builder.yml). Adopt the newest existing prior profile once so settings,
 // transcripts, and secret-key.bin survive the rename. Must run before anything opens userData.
-if (app.isPackaged && !process.env.ASKTOTO_USERDATA && !isCaheEdition()) {
+if (app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   try {
     const ud = app.getPath('userData')
     if (!existsSync(join(ud, 'settings.json'))) {
@@ -1047,6 +1089,12 @@ type CloudSttIpcOwner = { webContentsId: number; generation: number; captureId?:
 let cloudSttIpcGeneration = 0
 let cloudSttIpcOwner: CloudSttIpcOwner | null = null
 
+function setCloudSttIpcOwner(owner: CloudSttIpcOwner | null): void {
+  if (cloudSttIpcOwner === owner) return
+  cloudSttIpcOwner = owner
+  rebuildTrayMenu()
+}
+
 /** Only the renderer that opened the current live-STT session may receive its tail callbacks. */
 function isCurrentCloudSttOwner(
   owner: CloudSttIpcOwner,
@@ -1064,7 +1112,7 @@ function isCurrentCloudSttOwner(
 function invalidateCloudSttOwner(webContentsId?: number): void {
   if (webContentsId !== undefined && cloudSttIpcOwner?.webContentsId !== webContentsId) return
   cloudSttIpcGeneration += 1
-  cloudSttIpcOwner = null
+  setCloudSttIpcOwner(null)
   void stopCloudSttLive()
 }
 // Fresh-question boundary state (written by IPC.listeningState / IPC.askResetContext / IPC.askStart, all
@@ -1072,6 +1120,33 @@ function invalidateCloudSttOwner(webContentsId?: number): void {
 // recovery can re-sync it: main can never observe the listeningState(false) a dead renderer owed it, and a
 // stuck `listeningActive` disables the boundary for the rest of the app session (MQA-038).
 let listeningActive = false
+
+function setListeningActive(on: boolean): void {
+  if (listeningActive === on) return
+  listeningActive = on
+  rebuildTrayMenu()
+}
+
+function setAudioArmed(on: boolean): void {
+  if (audioArmed === on) return
+  audioArmed = on
+  rebuildTrayMenu()
+}
+
+function presenterState(): PresenterState {
+  if (!win || win.isDestroyed() || !win.isVisible()) return { kind: 'HIDDEN' }
+  if (islandResting) return { kind: 'PARKED', layout: liveOverlayLayout() }
+  return { kind: 'REVEALED' }
+}
+
+function captureActiveForWindowRestart(): boolean {
+  return captureActiveForWindowRestartState({
+    listeningActive,
+    audioArmed,
+    legacyListeningActive,
+    cloudSttActive: cloudSttIpcOwner !== null
+  })
+}
 let lastPlainAskAt = 0 // 0 = no live follow-up window; the next plain ask always starts clean
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
 // The top edge the USER last put the window at (drag, hotkey move, display reanchor). resizeTo slides the
@@ -1259,11 +1334,7 @@ function publishImportJob(job: ImportJob): void {
       body: job.recapError ? `${job.title} transcript is ready. Summary needs a retry.` : `${job.title} transcript and summary are ready.`
     })
     notification.on('click', () => {
-      if (!win || win.isDestroyed()) createWindow()
-      // Non-activating: clicking the notification surfaces the overlay but must not steal focus from
-      // whatever app the user was in (the island's "never steals focus" contract) — see showForAsk's
-      // doc comment for the one deliberate exception.
-      win?.showInactive()
+      reveal('notification-click', { focus: false })
     })
     notification.show()
   }
@@ -1421,7 +1492,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
       onError: async (error) => {
         // A transcription failure inside onChunk (acceptDecodedChunk throwing) reaches here via the
         // decoder's own uncaught-rejection path with the ffmpeg child still alive and blocked on
-        // write() (nothing is reading its stdout anymore) — cancel() sends SIGTERM so it can't leak as
+        // write() (nothing is reading its stdout anymore) — cancel() kills it so it cannot leak as
         // an orphaned OS process. Read from the map rather than closing over `decoder` directly: in the
         // rare case spawn() itself throws synchronously, onError can fire before `decoder` is assigned.
         ffmpegDecoders.get(job.jobId)?.cancel()
@@ -1673,7 +1744,7 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
 }
 
 function wireIntelligenceIndexWork(): void {
-  setIntelligenceIndexWork(() => startIntelligenceWork({
+  setIntelligenceIndexWork((reason) => startIntelligenceWork({
     list: listMeetingsNeedingRecap,
     generate: (meeting) => runImportedRecap({
       jobId: `index-${meeting.file}`,
@@ -1683,7 +1754,7 @@ function wireIntelligenceIndexWork(): void {
     save: (file, recap, status) => updateMeetingRecap(getSettings(), file, recap, status),
     backfill: requestBackfillRun,
     logFailure: (error) => mainLog.error('[intelligence-index] recap failed:', error)
-  }))
+  }, reason))
 }
 
 function initializeImportJobs(): void {
@@ -2085,6 +2156,9 @@ function overlayRendererUrl(): string {
  */
 let overlayWindowTransparent = true
 let emittedAppStarted = false
+// M2-0006: set once, at the same point app.started fires — will-quit calls observability.shutdownClean()
+// on it, and it is meaningless before that first createWindow() has run.
+let observability: RunObservability | null = null
 /** Consumed by the next transparent window created when Act 6 finishes. Never persisted. */
 let postOnboardingDestination: 'answer' | 'settings' = 'answer'
 const ONBOARDING_EXIT_FALLBACK_MS = 5_000
@@ -2537,7 +2611,20 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // Emitted here rather than at app-ready because reaching createWindow means the main process survived
   // module load, bytecode load, and boot — which is exactly the class of failure that shipped DOA twice.
   if (!emittedAppStarted) {
-    auditLog('app.started', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+    // M2-0006: app.started/app.stall/app.shutdown.clean and the run/liveness/stall-monitor lifecycle
+    // behind them, and the out-of-process stall sampler (M2-0192) — see
+    // infra/observability/run-observability.ts for the invariant this enforces.
+    observability = startRunObservability({
+      userData: app.getPath('userData'),
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      uvThreadpoolSize: process.env.UV_THREADPOOL_SIZE,
+      audit: auditLog,
+      powerMonitor,
+      stallWatchCommand: macStallWatchCommand()
+    })
+    settlePriorExit(observability.priorShutdown)
     emittedAppStarted = true
   }
   // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
@@ -2719,14 +2806,28 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // A renderer that is wedged (event loop stuck) never fires render-process-gone below, so the island can
   // sit blank with no trace in any log. Record it, and record the recovery. No automatic reload: Chromium
   // recovers most stalls on its own, and a forced reload mid-meeting would drop the live transcript.
+  // M2-0006: when the overlay recovers on its own, pair it with how long it was wedged — 'app.unresponsive'
+  // alone cannot tell a stall Chromium recovered from a wedge that never did.
+  const responsiveness = createResponsivenessTracker()
   win.on('unresponsive', () => {
     if (win !== self) return
+    responsiveness.markUnresponsive()
     mainLog.warn('[renderer-unresponsive] overlay renderer stopped responding')
     auditLog('app.unresponsive', { kind: 'overlay' })
   })
   win.on('responsive', () => {
     if (win !== self) return
     mainLog.info('[renderer-responsive] overlay renderer recovered')
+    const stallMs = responsiveness.markResponsive()
+    if (stallMs !== null) auditLog('app.responsive', { kind: 'overlay', stallMs })
+  })
+  // M2-0037 (B3-RC2): bounds the render-process-gone reload below to 3 reloads/60s instead of reloading
+  // forever. did-finish-load is the "this reload actually worked" signal the budget resets on once the
+  // content stays up for its own alive window — see lifecycle/reload-budget.ts.
+  const reloadBudget = createReloadBudget()
+  self.webContents.on('did-finish-load', () => {
+    if (win !== self) return
+    reloadBudget.onDidFinishLoad()
   })
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
   // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
@@ -2738,7 +2839,11 @@ function createWindow(targetDisplay?: Electron.Display): void {
     if (win !== self) return
     commandControl.revokeForLifecycleEvent('renderer_replaced')
     mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
-    auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
+    auditLog('app.crash', crashDetail('render-process-gone', { reason: details.reason, exitCode: details.exitCode }))
+    // The content died instead of recovering on its own — any pending unresponsiveSince belongs to a wedge
+    // that will never get its matching 'responsive'. Without this, a later 'unresponsive' in the reloaded
+    // renderer would be paired with the stale one and report a stallMs of however long it's been since.
+    responsiveness.markGone()
     // A dead/reloading renderer cannot receive final STT messages or issue Stop. Force-close the live
     // socket before reload so provider callbacks cannot bleed into the new renderer session.
     invalidateCloudSttOwner(selfWebContentsId)
@@ -2751,9 +2856,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // them as exactly that). Reset the whole set here, mirroring the meeting-start boundary.
     resetDustConversation()
     discardActiveLiveSpeakerSession()
-    listeningActive = false
+    setListeningActive(false)
     lastPlainAskAt = 0
-    audioArmed = false
+    setAudioArmed(false)
     setTrayRecording(false)
     setRecordingPowerSaveBlock(false)
     // MQA-196: the geometry half of the same root cause. If the overlay was collapsed to the mini-pill
@@ -2762,6 +2867,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // width — squeezing the recovered bar into a ~130px sliver that resizable:false makes unfixable. Same
     // two lines createWindow's crash guard uses, for the reload path that never reaches it.
     isMinimized = false
+    currentWidth = BAR_WIDTH
     if (onboardingExclusiveLive() && !self.isDestroyed()) {
       const retainedOwnership = applyExclusiveOnboardingStage(self)
       // A transparent renderer can crash after Settings durably re-arms onboarding but before its
@@ -2779,7 +2885,45 @@ function createWindow(targetDisplay?: Electron.Display): void {
       currentWidth = BAR_WIDTH
     }
     if (win !== self || self.isDestroyed()) return
-    self.loadURL(overlayRendererUrl())
+    // M2-0037 (B3-RC2): consumed only once we know this crash will actually be handled — computing it
+    // any earlier would count a reload against the budget for an event one of the guards above discards.
+    const reloadDecision = reloadBudget.onRenderProcessGone(details.reason)
+    // 'ignore' (clean-exit): the content exited on purpose, not a crash — never reload for it.
+    if (reloadDecision === 'ignore') return
+    if (reloadDecision === 'halt') {
+      auditLog('app.render_loop_halted', { reason: details.reason, exitCode: details.exitCode })
+      void showRenderLoopHaltedDialog(
+        details.reason,
+        details.exitCode,
+        () => win !== self || self.isDestroyed(),
+        (opts) => dialog.showMessageBox(self, opts),
+        {
+          reload: () => reloadOverlay(self),
+          quit: () => app.quit(),
+          // Mirrors the openPath IPC handler's requireAuth() gate for the same
+          // shell.openPath(resolveMeetingsFolder(...)) call, so a locked session gets no button rather
+          // than one whose click silently does nothing.
+          openMeetingsFolder: requireAuth()
+            ? async () => {
+                const openError = await shell.openPath(resolveMeetingsFolder(getSettings()))
+                if (openError) mainLog.warn('[render-loop-halted] open meetings folder failed:', openError)
+              }
+            : undefined,
+          copyDiagnostics: () =>
+            clipboard.writeText(formatRenderLoopDiagnostics({
+              version: app.getVersion(),
+              platform: process.platform,
+              arch: process.arch,
+              packaged: app.isPackaged,
+              reason: details.reason,
+              exitCode: details.exitCode,
+              at: new Date().toISOString()
+            }))
+        }
+      ).catch((err) => mainLog.warn('[render-loop-halted] dialog failed:', err))
+      return
+    }
+    reloadOverlay(self)
   })
   // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
   // The same helper is used by crash recovery, so the parser-time Act 1 shell cannot disappear there.
@@ -2787,13 +2931,6 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // The one-time onboarding destination belongs to this replacement only. Later renderer recovery
   // should preserve the user's current surface rather than repeatedly forcing Settings.
   postOnboardingDestination = 'answer'
-  // MQA-318: opt-in release diagnostics only. Preserve app.started's boot semantics and never
-  // equate entering createWindow with a loaded, responsive renderer. Register before navigation.
-  if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
-    bindRendererReadiness(win.webContents, rendererUrl, () => {
-      auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
-    })
-  }
   // Bounded launch evidence only. Normal onboarding never serializes renderer state to disk.
   if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
     bindAct1DomProbe(win.webContents, {
@@ -2802,9 +2939,11 @@ function createWindow(targetDisplay?: Electron.Display): void {
       audit: (summary) => auditLog('app.act1.dom', summary)
     })
   }
-  // FITO-185-B: always loadURL(rendererUrl) — same string bindRendererReadiness expects — so packaged
-  // asar file:// getURL() cannot miss the strict equality check that loadFile alone can mismatch.
-  win.loadURL(rendererUrl)
+  // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
+  // above. A session with app.started but no renderer.ready must always be visible in the audit log.
+  bindReadinessThenNavigate(win, rendererUrl, () => {
+    auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+  })
   const overlay = win
   let exclusiveRevealed = false
   const revealExclusiveWhenPainted = (): void => {
@@ -3381,6 +3520,25 @@ function restoreBarWidth(): void {
   win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
 }
 
+function repairOverlayBoundsForReveal(): void {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
+  const b = win.getBounds()
+  const display = screen.getDisplayMatching(b)
+  const { workArea } = display
+  const height = clampHeight(b.height, workArea.height)
+  const visible =
+    b.x + b.width > workArea.x &&
+    b.x < workArea.x + workArea.width &&
+    b.y + b.height > workArea.y &&
+    b.y < workArea.y + workArea.height
+  if (visible && height === b.height) return
+  const x = visible ? b.x : clampAxis(b.x, b.width, workArea.x, workArea.width)
+  const y = visible
+    ? Math.min(b.y, workArea.y + workArea.height - height - 8)
+    : clampAxis(b.y, height, workArea.y, workArea.height)
+  win.setBounds({ ...b, x, y, height }, false)
+}
+
 /**
  * MQA-286 — tray / dock / IPC Settings must use a full Settings window, never Hide 8×2 or Island peek.
  * Closing Settings calls leaveSettingsSurface then setWindowMode, which re-parks Hide/Island.
@@ -3465,20 +3623,24 @@ function setWindowMode(): void {
   win.setBounds({ ...position, width: currentWidth, height: nextHeight }, false)
 }
 
+const reveals = createRevealTrace({ audit: auditLog, window: () => win, layout: liveOverlayLayout, parked: () => islandResting })
+
 /** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
  *  creation once at call time, instead of leaving window-dependent hotkeys dead for the process
- *  lifetime. Callers that previously did `if (!win) return` should call this instead. A repeated
- *  failure is logged and swallowed — it just leaves win null again, same as the original no-op. */
+ *  lifetime. Callers that previously did `if (!win) return` should call this instead. A heal is audited
+ *  as `reveal`, and a failed heal as `app.error.window_create`. */
 function ensureWindow(): BrowserWindow | null {
   if (win && !win.isDestroyed()) return win
-  win = null // a destroyed-but-non-null win is just as dead as null — treat it the same before recreating
-  try {
-    createWindow()
-  } catch (e) {
-    mainLog.error('[recover] createWindow retry failed:', e)
-    auditLog('app.crash', { kind: 'boot_step', step: 'createWindow_retry' })
-  }
-  return win
+  return reveals.trace('ensure-window', () => {
+    win = null // a destroyed-but-non-null win is just as dead as null — treat it the same before recreating
+    try {
+      createWindow()
+    } catch (e) {
+      mainLog.error('[recover] createWindow retry failed:', e)
+      auditLog('app.error.window_create', { message: e, recoveryStatus: 'retry_pending' })
+    }
+    return win
+  })
 }
 
 /**
@@ -3517,9 +3679,13 @@ function sendHotkey(action: HotkeyAction): void {
   const w = ensureWindow()
   if (!w) return
   if (action === 'settings') applySettingsSurface()
-  if (!w.isVisible()) {
-    if (action === 'ask') showForAsk(w)
-    else w.showInactive()
+  if (action === 'settings') {
+    if (!w.isVisible()) w.showInactive()
+    w.webContents.send(IPC.hotkey, action)
+    return
+  }
+  if (!w.isVisible() || islandResting) {
+    reveal('hotkey', { focus: action === 'ask' })
   }
   w.webContents.send(IPC.hotkey, action)
 }
@@ -3536,11 +3702,11 @@ let crashSeq = 0
  * failing operation, so mainLog and auditLog (both persistent) must never see the raw value, same as the
  * crash-*.log dump below. Best-effort: logging must never throw out of a crash handler.
  */
-function persistCrash(kind: string, detail: string, shortMessage: string): void {
+function persistCrash(kind: CrashKind, detail: string, shortMessage: string, context?: RendererCrashContext): void {
   try {
     const redactedDetail = redactSecrets(detail)
     mainLog.error(`[${kind}]`, redactedDetail)
-    auditLog('app.crash', { kind, message: redactSecrets(shortMessage) })
+    auditLog('app.crash', crashDetail(kind, { message: redactSecrets(shortMessage), ...context }))
     writeFileSync(
       join(app.getPath('userData'), `crash-${Date.now()}-${crashSeq++}.log`),
       `${new Date().toISOString()} ${kind}\n${redactedDetail}\n`,
@@ -3549,6 +3715,113 @@ function persistCrash(kind: string, detail: string, shortMessage: string): void 
   } catch {
     /* logging is best-effort — never throw out of the crash handler */
   }
+}
+
+/**
+ * Reload the overlay's content, catching and auditing a failed loadURL instead of letting it become an
+ * unhandled rejection. Shared by the automatic render-process-gone reload and the halted dialog's manual
+ * Reload button (lifecycle/render-loop-halted-dialog.ts).
+ */
+function reloadOverlay(target: BrowserWindow): void {
+  target.loadURL(overlayRendererUrl()).catch((err) => {
+    const message = redactSecrets(err instanceof Error ? err.message : String(err))
+    mainLog.error('[renderer-gone] reload failed:', message)
+    auditLog('app.error.reload_failed', { message, recoveryStatus: 'unrecovered' })
+  })
+}
+
+function restartMetisWindow(): void {
+  if (captureActiveForWindowRestart()) return
+  const w = ensureWindow()
+  if (!w) return
+  try {
+    w.webContents.forcefullyCrashRenderer()
+  } catch (err) {
+    mainLog.warn('[tray] restart window crash request failed:', err instanceof Error ? err.message : String(err))
+  }
+  reloadOverlay(w)
+}
+
+function revealLegacyEnabled(): boolean {
+  return revealLegacyFlagEnabled(process.env, process.argv)
+}
+
+function legacyReveal(reason: RevealReason, options: { focus: boolean }): void {
+  const w = ensureWindow()
+  if (!w) return
+  legacyRevealWindow(reason, options, w, (target) => showForAsk(target as BrowserWindow))
+}
+
+const revealController = createRevealController({
+  ensureWindow,
+  legacyRevealEnabled: revealLegacyEnabled,
+  legacyReveal,
+  presenterState,
+  cancelPendingRepark: cancelOverlayLeavePark,
+  restoreInteractiveLayout: () => {
+    if (settingsSurfaceOpen) leaveSettingsSurface()
+    isMinimized = false
+    restoreBarWidth()
+  },
+  repairOffscreenBounds: repairOverlayBoundsForReveal,
+  disableClickThrough: () => {
+    try {
+      win?.setIgnoreMouseEvents(false)
+    } catch {
+      /* headless */
+    }
+  }
+})
+
+function reveal(reason: RevealReason, options: { focus?: boolean } = {}): void {
+  reveals.trace(reason, () => {
+    revealController.reveal(reason, options)
+  })
+}
+
+function writeSmokeParkState(w: Electron.BrowserWindow): void {
+  try {
+    writeFileSync(
+      join(app.getPath('userData'), 'smoke-park-state.json'),
+      JSON.stringify({
+        at: Date.now(),
+        parked: islandResting === true,
+        visible: !w.isDestroyed() && w.isVisible(),
+        layout: liveOverlayLayout()
+      })
+    )
+  } catch {
+    /* smoke sensor is best-effort */
+  }
+}
+
+/** Park (or hide) for packaged-smoke RV prepare, and latch the park against cursor-watch restore. */
+function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
+  if (process.env.ASKTOTO_SMOKE_REOPEN_PROBE !== '1') return false
+  const action = commandLine
+    .map((arg) => arg.match(/^--metis-smoke-reopen=(park-window|hide-window|tray-show)$/)?.[1])
+    .find((value): value is 'park-window' | 'hide-window' | 'tray-show' =>
+      value === 'park-window' || value === 'hide-window' || value === 'tray-show')
+  if (!action) return false
+
+  const w = ensureWindow()
+  if (!w) return true
+  // HIST leaves Settings/History surfaces that refuse park; clear before force-park.
+  if (settingsSurfaceOpen) leaveSettingsSurface()
+  if (action === 'park-window' || action === 'hide-window') {
+    if (!parkOverlayAfterHideSpring(true)) w.hide()
+    // Hosted macOS keeps the pointer in the top-edge strip; cursor watch would otherwise
+    // restore the bar before the reopen probe snapshots parked===true.
+    stopOverlayCursorWatch()
+    writeSmokeParkState(w)
+    return true
+  }
+
+  if (!parkOverlayAfterHideSpring(true)) w.hide()
+  stopOverlayCursorWatch()
+  writeSmokeParkState(w)
+  toggleVisible('tray')
+  return true
 }
 
 let fatalHandled = false
@@ -3561,20 +3834,25 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
   persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
   if (kind !== 'uncaughtException' || fatalHandled) return
   fatalHandled = true
+  void showFatalDialog()
+}
+
+// M2-0037: split out of onFatal so the main thread is never blocked showing this — a synchronous native
+// dialog (showMessageBoxSync) froze every window, including whatever else the user was mid-click in,
+// until they dismissed it.
+async function showFatalDialog(): Promise<void> {
   try {
-    const choice = dialog.showMessageBoxSync({
-      type: 'error',
+    const dialogOpts = {
+      type: 'error' as const,
       title: 'Métis hit a problem',
       message: 'Métis ran into an unexpected error.',
       detail: 'A crash report was saved to your Métis data folder. Relaunch now, or keep going.',
       buttons: ['Relaunch Métis', 'Continue'],
       defaultId: 1,
       cancelId: 1
-    })
-    if (choice === 0) {
-      app.relaunch()
-      app.exit(0)
     }
+    const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+    if (response === 0) exitAndRelaunch()
   } catch {
     /* if the dialog itself fails, leave the app running */
   }
@@ -4102,7 +4380,7 @@ function registerScreenListeners(): void {
   screen.on('display-metrics-changed', reanchor)
 }
 
-function toggleVisible(): void {
+function toggleVisible(reason: Extract<RevealReason, 'hotkey' | 'tray'> = 'hotkey'): void {
   // ensureWindow() silently CREATES a new window when `win` is null/destroyed (e.g. after a boot-time
   // createWindow() failure) — and a freshly created window starts visible. Without this check, the
   // isVisible() branch below would immediately re-hide the just-recovered window, so the first Ctrl+\
@@ -4110,7 +4388,7 @@ function toggleVisible(): void {
   const hadNoWindow = !win || win.isDestroyed()
   const w = ensureWindow()
   if (!w) return
-  if (!hadNoWindow && w.isVisible()) {
+  if (!hadNoWindow && w.isVisible() && !islandResting) {
     w.hide()
     // Tray Hide is not the rest sensor. Keep the top-edge watch armed so
     // mouse-at-top can showInactive without hunting Show Métis.
@@ -4118,14 +4396,14 @@ function toggleVisible(): void {
   } else {
     // Revealing via the show/hide hotkey always opens the ask input right after — the same deliberate,
     // user-initiated focus grab as sendHotkey('ask'). See showForAsk's doc comment.
-    showForAsk(w)
+    reveal(reason, { focus: true })
     w.webContents.send(IPC.hotkey, 'ask')
   }
 }
 
 const shortcutActions: Record<string, () => void> = {
   ask: () => sendHotkey('ask'),
-  hide: () => toggleVisible(),
+  hide: () => toggleVisible('hotkey'),
   reset: () => sendHotkey('reset'),
   'toggle-listen': () => sendHotkey('toggle-listen'),
   'metis-command': () => sendHotkey('metis-command'),
@@ -4153,63 +4431,32 @@ const shortcutActions: Record<string, () => void> = {
 // itself is unresponsive, macOS's native Option+Command+Escape remains the recovery path.
 const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command+Control+Escape'
 
-// `before-quit` gives a live meeting 2s to flush before it re-quits, so the polite path needs longer
-// than that to finish. Past it, being polite is the bug: a renderer wedged mid-onboarding never answers
-// the flush hotkey and its unresponsive window can keep the quit from completing at all — which is the
-// exact freeze this accelerator exists to escape. The user pressed the escape hatch; it must escape.
-const EMERGENCY_FORCE_QUIT_GRACE_MS = 4000
+// Every child process this app spawns that the OS does not end with it, in teardown order: the producers of
+// local-model work (screen pre-analysis, which owns the foreground watcher, import decodes, and the ASR/
+// speaker-embedding utilityProcess hosts they use) before the runtimes they feed. The packaged smoke
+// (M2-0231) caught these utilityProcess hosts surviving quit on Windows, so each gets its own explicit,
+// signal-only kill here rather than trusting Electron to end them on its own.
+const stopAllSidecars = createStopAll(
+  [
+    { name: 'screen-preprocess', stop: () => screenPreprocess.stop() },
+    { name: 'import-decoders', stop: () => ffmpegDecoders.forEach((decoder) => decoder.cancel()) },
+    { name: 'whisper-import-host', stop: () => void stopWhisperHost().catch(() => undefined) },
+    { name: 'parakeet-host', stop: () => killParakeetHostForQuit() },
+    { name: 'speaker-embedding-host', stop: () => killSpeakerEmbeddingHostForQuit() },
+    { name: 'local-runtime', stop: () => localRuntime.stop() },
+    { name: 'fm-runtime', stop: () => fmRuntime.stop() }
+  ],
+  (name, error) => mainLog.warn(`[stop-all] ${name} failed to stop`, error)
+)
 
-let emergencyQuitWatchdog: NodeJS.Timeout | null = null
-
-/** Kill what outlives the process when it dies without `will-quit`. `app.exit()` never emits that event,
- *  so the hard path has to repeat its sidecar teardown here: an orphaned llama-server, fm-serve loopback
- *  or screen-watcher child outliving the app is strictly worse than the freeze the user just escaped.
- *  Deliberately a copy rather than a shared helper — several source-contract tests pin these exact calls
- *  inside the `will-quit` handler body, and each step keeps its own try so one throw cannot skip a kill. */
-function stopSidecarsForHardExit(): void {
-  try {
-    screenPreprocess.stop()
-  } catch (e) {
-    mainLog.warn('[force-quit] screenPreprocess.stop failed', e)
-  }
-  try {
-    localRuntime.stop()
-  } catch (e) {
-    mainLog.warn('[force-quit] localRuntime.stop failed', e)
-  }
-  try {
-    fmRuntime.stop()
-  } catch (e) {
-    mainLog.warn('[force-quit] fmRuntime.stop failed', e)
-  }
-  // A deliberate quit is a normal exit, not an early death — close the boot watch so the NEXT launch is
-  // not pushed into safe start by a user who simply escaped a hung window (mirrors `will-quit`).
-  try {
+const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
+  stopAll: stopAllSidecars,
+  closeBootWatch: () => {
     setBootPowerSaveBlock(false)
     endBootWatch(app.getPath('userData'))
-  } catch (e) {
-    mainLog.warn('[force-quit] endBootWatch failed', e)
-  }
-}
-
-function forceQuitMétis(): void {
-  // Second press means the first one did not get the process down. Stop asking.
-  if (emergencyQuitWatchdog) {
-    mainLog.warn('[lifecycle] emergency quit pressed again — exiting now')
-    stopSidecarsForHardExit()
-    app.exit(0)
-    return
-  }
-  mainLog.warn('[lifecycle] emergency graceful quit requested')
-  app.quit()
-  emergencyQuitWatchdog = setTimeout(() => {
-    mainLog.warn('[lifecycle] graceful quit did not complete — forcing exit')
-    stopSidecarsForHardExit()
-    app.exit(0)
-  }, EMERGENCY_FORCE_QUIT_GRACE_MS)
-  // Never let the watchdog itself be the handle that keeps a quitting process alive.
-  emergencyQuitWatchdog.unref?.()
-}
+  },
+  warn: (...args) => mainLog.warn(...args)
+})
 
 function registerEmergencyForceQuitShortcut(): boolean {
   if (process.platform !== 'darwin') return false
@@ -4403,7 +4650,7 @@ function buildTrayMenu(): Menu {
     return k ? `${base}  (${k})` : base
   }
   return Menu.buildFromTemplate([
-    { label: label('Show / Hide', 'hide'), click: toggleVisible },
+    { label: label('Show / Hide', 'hide'), click: () => toggleVisible('tray') },
     // sendHotkey() already reveals the window itself (non-activating — see showForAsk's doc comment)
     // when it isn't visible, so no separate show call is needed (or wanted) here.
     { label: 'Settings…', click: () => {
@@ -4414,6 +4661,16 @@ function buildTrayMenu(): Menu {
       sendHotkey('agenda')
     } },
     { label: label('New', 'reset'), click: () => sendHotkey('reset') },
+    { type: 'separator' },
+    { label: 'Copy diagnostics summary', click: () => void copyDiagnosticsSummary({
+      auditTrailPath: auditLogPath(),
+      identity: { version: app.getVersion(), platform: process.platform, arch: process.arch },
+      writeText: (text) => clipboard.writeText(text) }) },
+    {
+      label: 'Restart Métis window',
+      enabled: !captureActiveForWindowRestart(),
+      click: restartMetisWindow
+    },
     { type: 'separator' },
     {
       label: 'Force Quit Métis',
@@ -4510,6 +4767,7 @@ function setTrayRecording(on: boolean): void {
     tray.setToolTip('Métis')
     if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
   }
+  rebuildTrayMenu()
 }
 
 /**
@@ -6044,12 +6302,17 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const tokens = await runPlaneOAuth()
-    if (!tokens.ok || !tokens.accessToken) return { ok: false, error: tokens.error || 'Could not connect Plane.' }
+    if (!tokens.ok || !tokens.accessToken || !tokens.clientId || !tokens.clientSecret) {
+      return { ok: false, error: tokens.error || 'Could not connect Plane.' }
+    }
     const r = await connectMcp(PLANE_MCP_OAUTH_ENDPOINT, tokens.accessToken, {}, 'Plane')
     if (!r.ok) return r
     try {
-      setMcpApiKey('plane', tokens.accessToken)
-      setMcpRefreshToken('plane', tokens.refreshToken ?? '')
+      // Save client + tokens together only now that connectMcp has proven the access token works (P4-F2; see planeOAuth.ts's file header).
+      savePlaneClientAndTokens(
+        { clientId: tokens.clientId, clientSecret: tokens.clientSecret },
+        { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken ?? '' }
+      )
       const s = getSettings()
       const entry: McpConnection = {
         id: 'plane',
@@ -6472,7 +6735,8 @@ function registerIpc(): void {
     if (response !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteAllMeetings()
     purgeGraphArtifacts() // legacy userData/graph artifacts + the runner's graphify-out/ manifest
-    const brainPurge = purgeBrain(getSettings()) // the `.brain/` knowledge store — entities, quotes, graph
+    const settings = getSettings()
+    const brainPurge = purgeBrain(settings, { mode: 'erase' }) // the `.brain/` knowledge store — entities, quotes, graph
     // The wiki mirror is that same derived knowledge in CLEARTEXT (publish.ts writes it with
     // `encrypt: false` by design), so an erasure that skipped it would leave a readable copy of every
     // meeting, person and open commitment behind — and, with the brain gone, one nothing can ever prune.
@@ -6486,6 +6750,13 @@ function registerIpc(): void {
       brainPurged: brainPurge.ok,
       wikiRemoved: wiki.ok
     })
+    if (!brainPurge.ok) {
+      return {
+        ...result,
+        ok: false,
+        error: 'Deleted the transcripts, but the Mantu Intelligence data could not be fully removed. Close anything using the meetings folder, then try again.'
+      }
+    }
     if (!wiki.ok) {
       return {
         ...result,
@@ -6599,7 +6870,7 @@ function registerIpc(): void {
       generation: ++cloudSttIpcGeneration,
       captureId
     }
-    cloudSttIpcOwner = owner
+    setCloudSttIpcOwner(owner)
     // A fresh start is an explicit replacement, not a graceful end of the prior capture.
     const result = await replaceCloudSttSessionIfCurrent({
       stop: () => stopCloudSttLive(),
@@ -6637,7 +6908,7 @@ function registerIpc(): void {
         )
     })
     if (!result.ok && cloudSttIpcOwner === owner) {
-      cloudSttIpcOwner = null
+      setCloudSttIpcOwner(null)
     }
     return result
   })
@@ -6652,7 +6923,7 @@ function registerIpc(): void {
     const force = p.force === true
     const result = await stopCloudSttLive({ graceful: !force, timeoutMs: 5_000 })
     if (cloudSttIpcOwner === owner) {
-      cloudSttIpcOwner = null
+      setCloudSttIpcOwner(null)
     }
     return result
   })
@@ -7848,7 +8119,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return
     if (!takeHotPath('arm-audio')) return
-    audioArmed = !!on
+    setAudioArmed(!!on)
   })
 
   // --- Transcript, notes & feedback persistence ---
@@ -7950,6 +8221,9 @@ function registerIpc(): void {
     }
     const s = getSettings()
     const idx = readBrainIndex(s)
+    // M2-0003: non-null while an existing index.json exists but cannot be used on this device — idx
+    // above is then only the empty stand-in, so this must be read before deciding what "no data" means.
+    const unavailable = indexUnavailable(s)
     const counts = brainStatusCounts(s, idx.revision)
     // T6 6c: durable failure counts read straight from the index — unlike backfill.failed below (an
     // ephemeral per-run counter), these stay visible for as long as a source has ok:false, independent
@@ -7986,7 +8260,9 @@ function registerIpc(): void {
       // cleanup is pending instead of silently claiming the delete was complete.
       cleanupPending: idx.sourceRefreshRequested === true,
       lastIndexedAt: lastIndexedAt(s),
-      intelligenceIndex: intelligenceIndexStatus(s)
+      intelligenceIndex: intelligenceIndexStatus(s),
+      // M2-0003: surfaces the degraded read-only state instead of silently reporting an empty brain.
+      ...(unavailable ? { indexUnavailable: unavailable, error: indexUnavailableMessage(unavailable) } : {})
     }
   })
   ipcMain.handle(IPC.brainBackfill, async (e) => {
@@ -8016,13 +8292,63 @@ function registerIpc(): void {
     //  - a corrupt/blocked-journal guard (MI-2.5 review Fix 2 — refuse rather than rebuild atop a store
     //    onto which zero corrections could be replayed, which would silently revert every human fix);
     //  - the replayPending flag (Fix E) + the onDrained replay that clears it only on a clean replay.
-    const r = await startRebuild(getSettings())
+    const r = await startRebuild(getSettings(), { trigger: 'user' })
     if (r.error) {
       auditLog('brain.rebuild.aborted', {})
       return r
     }
     auditLog('brain.backfill.start', { queued: r.queued, rebuild: true })
     return r
+  })
+  ipcMain.handle(IPC.brainPreservedIndexesList, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { copies: [] }
+    return { copies: listPreservedBrainIndexes(getSettings()) }
+  })
+  ipcMain.handle(IPC.brainPreservedIndexRestore, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const id = String((raw as { id?: unknown } | null)?.id ?? '')
+    if (!id) return { ok: false, error: 'Missing preserved copy.' }
+    let allowReplaceReadable = false
+    if (currentBrainIndexIsReadable(getSettings())) {
+      const dialogOpts = {
+        type: 'warning' as const,
+        title: 'Restore preserved brain index',
+        message: 'Replace the current Mantu Intelligence index?',
+        detail:
+          'Métis will verify the preserved copy can be decrypted, keep the current index as a preserved copy, then restore the selected index.',
+        buttons: ['Restore', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1
+      }
+      const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+      if (response !== 0) return { ok: false, error: 'cancelled' }
+      allowReplaceReadable = true
+    }
+    const r = restorePreservedBrainIndex(getSettings(), id, { allowReplaceReadable })
+    auditLog('brain.index.preserved_restore', { ok: r.ok, error: r.error })
+    return r.ok ? { ok: true } : { ok: false, error: r.error || 'Restore failed.' }
+  })
+  ipcMain.handle(IPC.brainPreservedIndexDelete, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const id = String((raw as { id?: unknown } | null)?.id ?? '')
+    if (!id) return { ok: false, error: 'Missing preserved copy.' }
+    const dialogOpts = {
+      type: 'warning' as const,
+      title: 'Delete preserved brain index',
+      message: 'Delete this preserved Mantu Intelligence index copy?',
+      detail: 'This removes only the selected preserved copy. Saved meetings and the current index are not changed.',
+      buttons: ['Delete copy', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1
+    }
+    const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+    if (response !== 0) return { ok: false, error: 'cancelled' }
+    const r = deletePreservedBrainIndex(getSettings(), id)
+    auditLog('brain.index.preserved_delete', { ok: r.ok, error: r.error })
+    return r.ok ? { ok: true } : { ok: false, error: r.error || 'Delete failed.' }
   })
   // MI-2.5 review round 3: user-invoked recovery from a durable correction-journal corruption lock —
   // clears the sentinel so corrections resume (the quarantined corrections.corrupt-*.json copy is left
@@ -8535,9 +8861,10 @@ function registerIpc(): void {
     return requireAuth() ? shell.openPath(resolveMeetingsFolder(getSettings())) : ''
   })
   // --- Recall (meeting history): list/search/open ---
-  ipcMain.handle(IPC.recallList, (e) => {
+  const history = createHistoryTracer({ audit: auditLog })
+  ipcMain.handle(IPC.recallList, (e, trace: unknown) => {
     assertMainWindow(e)
-    return requireAuth() ? listMeetings() : []
+    return history.traceList(trace, () => (requireAuth() ? listMeetings() : Promise.resolve([])))
   })
   ipcMain.handle(IPC.recallSearch, (e, q: string) => {
     assertMainWindow(e)
@@ -8559,6 +8886,11 @@ function registerIpc(): void {
     if (encrypted) return shell.openPath(decryptToTemp(path))
     return shell.openPath(path)
   })
+  ipcMain.handle(IPC.historySettled, (e, report: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return
+    history.settle(report)
+  })
 
   // "Open brain folder for Claude" (the handshake): reveal the published wiki — a plaintext, self-describing
   // mirror with a CLAUDE.md entry doc — so the user can point Claude at it (a Claude Project, Claude Desktop,
@@ -8579,7 +8911,7 @@ function registerIpc(): void {
     assertMainWindow,
     requireAuth,
     acceptTransition: acceptLiveSpeakerTransition,
-    setListeningActive: (on) => { listeningActive = on },
+    setListeningActive,
     setTrayRecording,
     setRecordingPowerSaveBlock,
     releaseParakeet: parakeetRelease,
@@ -8688,7 +9020,13 @@ function registerIpc(): void {
     const message = typeof r?.message === 'string' ? r.message : 'unknown renderer error'
     const stack = typeof r?.stack === 'string' ? r.stack : ''
     const componentStack = typeof r?.componentStack === 'string' ? r.componentStack : ''
-    persistCrash('renderer-error-boundary', `${message}\nstack: ${stack}\ncomponentStack: ${componentStack}`, message)
+    const context = RendererCrashContextSchema.safeParse(raw)
+    persistCrash(
+      'renderer-error-boundary',
+      `${message}\nstack: ${stack}\ncomponentStack: ${componentStack}`,
+      message,
+      context.success ? context.data : undefined
+    )
   })
   // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
   ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {
@@ -8785,18 +9123,19 @@ protocol.registerSchemesAsPrivileged([
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    // Relaunching the shortcut is the user's "bring it back" gesture, so it must self-heal a null `win`
-    // (a boot-time createWindow() throw leaves the app alive in the tray with no window) instead of
-    // no-opping forever. ensureWindow() also filters a destroyed-but-non-null window.
-    const w = ensureWindow()
-    if (!w) return
-    // Non-activating, same island contract as every other reveal (see showForAsk's doc comment) — a
-    // second launch attempt surfaces the overlay without stealing focus from the foreground app.
-    if (!w.isVisible()) w.showInactive()
+  app.on('second-instance', (_event, commandLine) => {
+    reveal('second-instance', { focus: true })
+    if (typeof handleSmokeReopenProbe === 'function') handleSmokeReopenProbe(commandLine)
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
+  await runBootSidecarReaper(app.getPath('userData'))
+  // M2-0033: unattended model work waits for the maintenance gate.
+  startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
+  app.on('web-contents-created', (_event, contents) => {
+    contents.on('input-event', (_inputEvent, input) => noteUserInput(input.type))
+  })
   // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
   // proxy/CLI/key seeding before first paint — hoist tray+IPC+window for wiped-profile exclusive.
   // Call createTray/registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared
@@ -8833,17 +9172,9 @@ if (!app.requestSingleInstanceLock()) {
   } catch {
     /* best-effort warm-up */
   }
-  // Cahê pilot only (a no-op everywhere else): seed the installer-embedded Kimi key into the normal
-  // encrypted keystore, exactly once per profile. Settings/the keystore are safe to touch here — same
-  // phase as the first getSettings() read just above. See cahe-embedded-key.ts for the one-time-seed
-  // design that lets a user's later key change/removal stick.
-  importEmbeddedCaheKey()
-  // Cahê M13: one-time enable of the on-device model so the background screen reader works out of the box
-  // (own marker → also migrates existing pilot profiles upgraded from 1.0.7). See cahe-embedded-key.ts.
-  seedCaheLocalAiForBackgroundScreen()
-  // Every build (not just Cahê): seed an optional installer-embedded Cloudflare proxy key, once per
-  // profile, so a fresh install of the default provider can answer with zero paste-a-key setup when the
-  // operator chose to embed one. See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
+  // Seed an optional installer-embedded Cloudflare proxy key, once per profile, so a fresh install of
+  // the default provider can answer with zero paste-a-key setup when the operator chose to embed one.
+  // See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
   importEmbeddedCloudflareKey()
   {
     setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
@@ -8874,14 +9205,15 @@ if (!app.requestSingleInstanceLock()) {
         mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
       }
     }
+    // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
     void provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
       .then((ready) => {
         if (!ready) return
         refreshScreenPreprocess()
-        warmLocalIfReady()
+        void runAsMaintenance(warmLocalIfReady)
       })
       .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
-    setTimeout(warmLocalIfReady, 4000).unref?.()
+    void runAsMaintenance(warmLocalIfReady)
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
   // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
@@ -8948,9 +9280,11 @@ if (!app.requestSingleInstanceLock()) {
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
   process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
   process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
-  // The self-test suite runs destructively against the LIVE profile (it overwrites, then deletes,
-  // settings.json and managed-config.json), so devEnv() keeps it out of packaged builds — otherwise a
-  // persistent `setx ASKTOTO_SELFTEST out.json` re-wipes the profile and quits on every launch.
+  // QA-identity builds only (compiled out of every other bundle): the packaged exit-path proof sends SIGUSR2
+  // to raise a real uncaughtException through onFatal.
+  if (QA_IDENTITY_BUILD) installQaFaultHook()
+  // devEnv(ASKTOTO_SELFTEST) keeps self-test out of packaged builds; runSelfTest() itself refuses to run
+  // unless userData is exactly the throwaway directory redirectSelfTestUserData() created (M2-0004).
   const selfTestOut = devEnv('ASKTOTO_SELFTEST')
   if (selfTestOut) {
     try {
@@ -9000,14 +9334,23 @@ if (!app.requestSingleInstanceLock()) {
   // below — previously registered unguarded — run inside it too: a throw during any of those must not
   // take out createTray/registerShortcuts/createWindow further down the boot sequence.
   const runStep = (name: string, fn: () => void): void => {
-    try {
-      fn()
-    } catch (e) {
-      // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
-      // boot-step failure is actually diagnosable and shows up in the audit trail.
-      mainLog.error(`[boot] ${name} failed:`, e)
-      auditLog('app.crash', { kind: 'boot_step', step: name })
+    const run = (): void => {
+      try {
+        fn()
+      } catch (e) {
+        // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
+        // boot-step failure is actually diagnosable and shows up in the audit trail.
+        mainLog.error(`[boot] ${name} failed:`, e)
+        auditLog('app.error.boot_step', { step: name, message: e, recoveryStatus: 'continued' })
+      }
     }
+    // M2-0006: timePhase measures how long this step actually took, so a late app.stall tick can name
+    // whichever one really blocked it. Boot steps run synchronously back to back with no await between
+    // them, so no tick can ever fire in the middle of that sequence — only measured duration, never call
+    // order, tells them apart. observability is still null for every boot step ahead of createWindow
+    // (it starts inside createWindow itself); those run un-timed since no heartbeat exists yet to blame.
+    if (observability) observability.timePhase(name, run)
+    else run()
   }
 
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
@@ -9287,6 +9630,7 @@ if (!app.requestSingleInstanceLock()) {
   runStep('registerIpc', registerIpc)
   clearBootWatchOnce('registerIpc')
   runStep('createWindow', createWindow)
+  revealController.markBootComplete()
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
   // FITO-185-G-TIMER: also setImmediate + unlock-screen so App Nap / locked-screen cannot leave
@@ -9355,7 +9699,7 @@ if (!app.requestSingleInstanceLock()) {
     try {
       if (earlyDeath) {
         mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${describeEarlyDeath(earlyDeath)}`)
-        auditLog('app.crash', { kind: 'safe_start', consecutive: earlyDeath.consecutive })
+        auditLog('app.error.early_death', { consecutive: earlyDeath.consecutive, recoveryStatus: 'safe_start' })
       } else {
         // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
         try {
@@ -9390,9 +9734,7 @@ if (!app.requestSingleInstanceLock()) {
         } catch (e) {
           mainLog.warn('[boot] scheduleIntelligenceIndex failed:', e)
         }
-        // Hourly consolidation is demoted: the named slots own the extract pass. The helper stays
-        // imported so existing settings/tests keep compiling, and a manual budget check still no-ops
-        // when the feature is off.
+        // Consolidation runs once per launch; the named slots own the recurring pass. Both are automatic triggers (infra/scheduler/policy.ts).
         try {
           void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
         } catch (e) {
@@ -9408,8 +9750,7 @@ if (!app.requestSingleInstanceLock()) {
   }, 15_000)
 
   app.on('activate', () => {
-    if (!win) createWindow()
-    else win.showInactive()
+    reveal('activate', { focus: true })
     // Bar dock click still opens Settings. Hide/Island launch must stay parked
     // 8×2 — Ultron fresh userdata was 880×1017 Settings / Expand Métis.
     try {
@@ -9428,7 +9769,7 @@ if (!app.requestSingleInstanceLock()) {
     // redact-before-log discipline as onFatal) so a boot failure is actually diagnosable and audited.
     const detail = e instanceof Error ? e.stack || e.message : String(e)
     mainLog.error('[boot] Métis startup failed:', redactSecrets(detail))
-    auditLog('app.crash', { kind: 'boot', message: redactSecrets(e instanceof Error ? e.message : String(e)) })
+    auditLog('app.crash', crashDetail('boot', { message: redactSecrets(e instanceof Error ? e.message : String(e)) }))
   })
 }
 
@@ -9474,8 +9815,8 @@ app.on('will-quit', () => {
   // startup sequence, an automation/Playwright app.close(), or an early abort. Calling globalShortcut in
   // that window throws "globalShortcut cannot be used before the app is ready" as an UNCAUGHT exception
   // (the observed crash), and there is nothing registered to unregister anyway — so gate it on isReady().
-  // Each cleanup step is independent (its own try): a throw in one must never skip the sidecar kill
-  // below, because an orphaned llama-server outliving the app the user just quit is the worse failure.
+  // Each cleanup step is independent (its own try), so one throw never skips the rest. Owned sidecars are
+  // already stopped: installExitPaths registered the first will-quit listener (lifecycle/exit-paths.ts).
   if (app.isReady()) {
     try {
       globalShortcut.unregisterAll()
@@ -9494,25 +9835,11 @@ app.on('will-quit', () => {
     }
   }
   backgroundTimers.length = 0
-  // Stop the background screen-preprocess watcher (kills its long-lived powershell child) before the
-  // sidecar kill — an orphaned watcher process outliving the app would keep polling the foreground window.
+  // M2-0006: last, so it only fires once every other teardown step above has run. This is the one signal
+  // that distinguishes THIS quit from a hard kill on the next boot's app.started.prevShutdown.
   try {
-    screenPreprocess.stop()
+    observability?.shutdownClean(process.uptime())
   } catch (e) {
-    mainLog.warn('[will-quit] screenPreprocess.stop failed', e)
-  }
-  // Kill the llama-server sidecar synchronously (SIGKILL, F3 hardening) — without this an on-device
-  // suggest/summary/vision sidecar could outlive the app the user just quit.
-  try {
-    localRuntime.stop()
-  } catch (e) {
-    mainLog.warn('[will-quit] localRuntime.stop failed', e)
-  }
-  // Same F3 contract for the Apple fm-serve sidecar (macOS 27+ text engine) — an orphaned unauthenticated
-  // loopback server outliving the app is strictly worse than an orphaned llama-server.
-  try {
-    fmRuntime.stop()
-  } catch (e) {
-    mainLog.warn('[will-quit] fmRuntime.stop failed', e)
+    mainLog.warn('[will-quit] observability.shutdownClean failed', e)
   }
 })

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
+import { formatCommand, releasePlans } from './release/orchestrate.mjs'
 
 /**
  * mac-chain-gates.contract.test.ts — the mac packaging chains, pinned where they are load-bearing.
@@ -30,12 +31,26 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
 const launchGate = readFileSync(join(root, 'scripts', 'check-packaged-launch.mjs'), 'utf8')
 
 /** Every npm script that actually invokes electron-builder against a mac target. */
-const MAC_BUILD_CHAINS = ['dist', 'dist:local', 'release:build:mac', 'release:mas']
+const MAC_BUILD_CHAINS = ['dist', 'dist:local', 'release:build:mac', 'release:mas', 'dist:qa-identity']
+const RELEASE_CHAIN_TARGETS: Record<string, keyof typeof releasePlans> = {
+  'release:build:mac': 'mac',
+  'release:mas': 'mas'
+}
 
-/** A chain plus whatever npm runs ahead of it — `dist` does its provisioning in `predist`. */
+/**
+ * A chain plus whatever npm runs ahead of it. `dist` does its provisioning inline in `predist`;
+ * `dist:qa-identity` (M2-0187) reuses that same provisioning through `predist:qa-identity: "npm run
+ * predist"` instead of duplicating it, so a pre-hook of exactly that `npm run <script>` form is expanded
+ * to the referenced script's own text before counting as provisioning.
+ */
 function chainWithHook(name: string): string {
+  const target = RELEASE_CHAIN_TARGETS[name]
+  if (target) return releasePlans[target].map(formatCommand).join(' && ')
   const pre = pkg.scripts[`pre${name}`]
-  return pre ? `${pre} && ${pkg.scripts[name]}` : pkg.scripts[name]
+  if (!pre) return pkg.scripts[name]
+  const referencedScript = /^npm run (\S+)$/.exec(pre)?.[1]
+  const expandedPre = referencedScript ? pkg.scripts[referencedScript] : pre
+  return `${expandedPre} && ${pkg.scripts[name]}`
 }
 
 describe('MQA-208 — release:mas stages Electron like every other mac chain', () => {
@@ -43,11 +58,12 @@ describe('MQA-208 — release:mas stages Electron like every other mac chain', (
     for (const name of MAC_BUILD_CHAINS) {
       const script = pkg.scripts[name]
       expect(script, `missing script: ${name}`).toBeTruthy()
+      const expanded = chainWithHook(name)
       expect(
-        chainWithHook(name),
+        expanded,
         `${name} invokes electron-builder without staging Electron`
       ).toContain('scripts/provision-electron-dist.mjs')
-      expect(script, `${name} stages Electron but does not point electron-builder at it`).toContain(
+      expect(expanded, `${name} stages Electron but does not point electron-builder at it`).toContain(
         '-c.electronDist=resources/electron-dist'
       )
     }
@@ -59,10 +75,9 @@ describe('MQA-208 — release:mas stages Electron like every other mac chain', (
     // darwin-arm64 here would leave the directory without the file electron-builder looks for — and
     // ElectronFramework then falls through to its "already-unpacked distribution" branch, which copies
     // the directory verbatim and produces a broken .app instead of failing.
-    expect(pkg.scripts['release:mas']).toContain(
-      'node scripts/provision-electron-dist.mjs --platform=mas arm64'
-    )
-    expect(pkg.scripts['release:mas']).toMatch(/electron-builder --mac mas --arm64[^&]*-c\.electronDist=resources\/electron-dist/)
+    const mas = chainWithHook('release:mas')
+    expect(mas).toContain('scripts/provision-electron-dist.mjs --platform=mas arm64')
+    expect(mas).toMatch(/electron-builder --mac mas --arm64[^&]*-c\.electronDist=resources\/electron-dist/)
   })
 
   it('MQA-208: the archive release:mas asks for is a real published Electron artifact', () => {
@@ -93,15 +108,15 @@ describe('MQA-208 — release:mas stages Electron like every other mac chain', (
 describe('MQA-207 — the launch gate never silently covers a host it cannot inspect', () => {
   it('MQA-207: the Windows chains keep their real-launch gate', () => {
     for (const name of ['dist:win', 'release:build:win']) {
-      expect(pkg.scripts[name]).toContain(
-        'node scripts/check-packaged-launch.mjs release/win-unpacked/Metis.exe'
-      )
+      const body = name === 'release:build:win' ? releasePlans.win.map(formatCommand).join(' && ') : pkg.scripts[name]
+      expect(body).toContain('scripts/check-packaged-launch.mjs release/win-unpacked/Metis.exe')
     }
   })
 
   it('MQA-207: each direct mac chain opts into its supported launch gate', () => {
     for (const name of MAC_BUILD_CHAINS.filter((name) => name !== 'release:mas')) {
-      expect(pkg.scripts[name]).toContain('ASKTOTO_MAC_LAUNCH_GATE=1 node scripts/check-packaged-launch.mjs')
+      expect(chainWithHook(name)).toContain('ASKTOTO_MAC_LAUNCH_GATE=1')
+      expect(chainWithHook(name)).toContain('scripts/check-packaged-launch.mjs')
     }
   })
 
@@ -164,17 +179,22 @@ describe('MQA-249 — a portable "this build came up" signal, and the macOS gate
   const indexSrc = readFileSync(join(root, 'src', 'main', 'index.ts'), 'utf8')
   const loggerSrc = readFileSync(join(root, 'src', 'main', 'logger.ts'), 'utf8')
 
-  it('MQA-249: createWindow emits app.started unconditionally', () => {
+  it('MQA-249: createWindow starts run observability and audits both app.started and app.renderer.ready', () => {
     const start = indexSrc.indexOf('function createWindow(')
     expect(start).toBeGreaterThan(-1)
     const createWindow = indexSrc.slice(start)
     const body = createWindow.slice(0, createWindow.indexOf('\n}\n'))
-    expect(body).toMatch(/auditLog\('app\.started'/)
+    // createWindow's app.started audit lives in infra/observability/run-observability.ts
+    // (startRunObservability); this pins createWindow's call-site into it, not the audit call itself.
+    expect(body).toMatch(/startRunObservability\(/)
     // Before any early return that could skip it — other than the idempotency guard, which only fires
     // when a window already exists and the app has therefore demonstrably already started.
     const guard = body.indexOf('if (win && !win.isDestroyed()) return')
     expect(guard).toBeGreaterThan(-1)
-    expect(body.indexOf("auditLog('app.started'")).toBeGreaterThan(guard)
+    expect(body.indexOf('startRunObservability(')).toBeGreaterThan(guard)
+    // The only positive signal the macOS launch gate (check-packaged-launch.mjs) waits for. The macOS
+    // package job is skipped on branch CI, so this is the sole pin keeping it from silently regressing.
+    expect(body).toContain("auditLog('app.renderer.ready'")
   })
 
   it('MQA-249: the event is a registered audit event, so it survives the type checker', () => {
@@ -191,11 +211,13 @@ describe('MQA-249 — a portable "this build came up" signal, and the macOS gate
 
   it('MQA-249: each direct mac chain launches its own output, including the local custom directory', () => {
     for (const name of ['dist', 'release:build:mac']) {
-      expect(pkg.scripts[name]).toContain('check-packaged-launch.mjs release/mac-universal/Metis.app')
+      const body = name === 'release:build:mac' ? chainWithHook(name) : pkg.scripts[name]
+      expect(body).toContain('check-packaged-launch.mjs release/mac-universal/Metis.app')
     }
+    expect(pkg.scripts['dist:local']).toContain('ASKTOTO_LOCAL_RELEASE_DIR="${ASKTOTO_LOCAL_RELEASE_DIR:-release-local}"')
     expect(pkg.scripts['dist:local']).toContain(
-      'check-packaged-launch.mjs /Users/tony/AI-Brain-build/asktoto-release/mac-universal/Metis.app'
+      'check-packaged-launch.mjs "$ASKTOTO_LOCAL_RELEASE_DIR/mac-universal/Metis.app"'
     )
-    expect(pkg.scripts['dist:local']).toContain('verify-signing.mjs /Users/tony/AI-Brain-build/asktoto-release')
+    expect(pkg.scripts['dist:local']).toContain('verify-signing.mjs "$ASKTOTO_LOCAL_RELEASE_DIR"')
   })
 })

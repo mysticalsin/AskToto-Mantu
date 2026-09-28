@@ -461,20 +461,51 @@ function hashFile(path: string): Promise<string> {
   })
 }
 
+/**
+ * Path to `${size}:${mtimeNs}:${ctimeNs}:${ino}`, for files verified this process's life — the cache lives
+ * only for the process, so every fresh launch re-hashes regardless.
+ *
+ * The invariant a hit relies on: any write, rename, or `utimes`/`touch -r` mtime restore made through
+ * ordinary file APIs changes this identity and forces a re-hash. A write or rename always moves size,
+ * mtime, or inode; a restore rolls mtime back but not ctime — the inode change time, which is why git's
+ * index compares it too — so it still changes the identity. A failed checksum never reaches this map, so
+ * a repaired file re-verifies on its next check. A metadata-only change (chmod, xattr) still advances
+ * ctime and costs one extra hash, which is the safe direction to be wrong in.
+ *
+ * That invariant is not a cryptographic guarantee. It holds for ordinary file operations, not against: a
+ * process able to set ctime directly (Windows `SetFileInformationByHandle(FileBasicInfo)` under
+ * `FILE_WRITE_ATTRIBUTES`, or POSIX root) — but such a process already runs as this user and could tamper
+ * some other way too; or a kernel without fine-grained (multigrain) timestamps, where a write landing in
+ * the same coarse clock tick as the read does not move ctime. bigint stats avoid the Number rounding of
+ * 64-bit NTFS file IDs on Windows.
+ */
+const verifiedFileIdentity = new Map<string, string>()
+
+function fileIdentity(path: string): string {
+  const stat = statSync(path, { bigint: true })
+  return `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}`
+}
+
 async function verifyFileChecksum(
   modelId: string,
   file: 'gguf' | 'mmproj',
   path: string,
   spec: LocalModelFile
 ): Promise<void> {
+  const identity = fileIdentity(path)
+  if (verifiedFileIdentity.get(path) === identity) return
   const digest = await hashFile(path)
   if (digest !== spec.sha256) {
     localAudit('local.model.checksum_fail', { modelId, file })
     throw new ChecksumMismatchError(modelId, file, spec.sha256, digest)
   }
+  verifiedFileIdentity.set(path, identity)
 }
 
-/** Re-hash both model files before a cold llama-server start. */
+/**
+ * Verify both model files before a cold llama-server start, re-hashing only when a file's on-disk
+ * identity is not already cached as verified (see `verifiedFileIdentity`).
+ */
 export async function verifyIntegrity(id: string): Promise<void> {
   assertRamOk(id)
   const entry = getModel(id)

@@ -1,0 +1,33 @@
+name: Evidence
+
+# Verifies evidence records pasted into a pull request body: a LOCALLY_TESTED record must name a green
+# Build & Test run on this PR's head commit, and a fix's red-before run must be a failed run on an
+# ancestor commit. A PR body without a record makes no claim and passes (M2-0002, ADR-017).
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: evidence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  record:
+    name: Evidence record
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Verify the evidence records in the PR body
+        run: node scripts/evidence/check.mjs --pr-event "$GITHUB_EVENT_PATH"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

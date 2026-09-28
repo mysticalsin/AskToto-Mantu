@@ -1,10 +1,18 @@
 import { vi } from 'vitest'
+import { join } from 'node:path'
+
+// W0-HERMETIC — derived from the per-run sandbox vitest.config.ts hands each worker (ASKTOTO_TEST_SANDBOX_ROOT
+// === METIS_TEST_HOME), not a fixed /tmp path: two concurrent runs (another worktree, a parallel agent, or
+// just two vitest processes) never share a userData/documents directory and can't corrupt each other's state.
+// The fallback only matters if this mock is ever loaded outside the hermetic config (it always has the env
+// var set when vitest.config.ts's `env` block runs) — still namespaced under /tmp, never a real path.
+const SANDBOX = process.env.ASKTOTO_TEST_SANDBOX_ROOT ?? '/tmp/asktoto-test-fallback'
 
 export const app = {
   getPath: vi.fn((name: string) => {
-    if (name === 'userData') return '/tmp/asktoto-test-userdata'
-    if (name === 'documents') return '/tmp/asktoto-test-documents'
-    return `/tmp/asktoto-${name}`
+    if (name === 'userData') return join(SANDBOX, 'userdata')
+    if (name === 'documents') return join(SANDBOX, 'documents')
+    return join(SANDBOX, name)
   }),
   getVersion: vi.fn(() => '0.1.0-test'),
   isReady: vi.fn(() => true),

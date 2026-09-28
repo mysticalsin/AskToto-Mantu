@@ -5,7 +5,7 @@ import { hmacHex } from './hmac'
 import { sha256Hex, verifySkillPack } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_TEAM_DOMAIN } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
 
@@ -25,13 +25,14 @@ function env(overrides: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: SKILL_KEYS.privateKeyPem,
     ...overrides
   }
 }
 
-const tonyAccess = {
-  getIdentity: async () => ({ email: 'tony.walteur@gmail.com' })
+const ownerAccess = {
+  getIdentity: async () => ({ email: 'owner@example.test' })
 }
 
 async function signedRequest(
@@ -155,7 +156,7 @@ describe('Access on admin routes', () => {
     const homeJson = new Request('https://operator.test/', { headers: { accept: 'application/json' } })
     const home = await handleRequest(
       homeJson,
-      { ...env(), TEAM_DOMAIN: 'https://tony-walteur.cloudflareaccess.com' },
+      { ...env(), TEAM_DOMAIN: TEST_TEAM_DOMAIN },
       {},
       { store, now: NOW }
     )
@@ -175,13 +176,13 @@ describe('Access on admin routes', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/summary'),
       env(),
-      { access: { getIdentity: async () => ({ email: 'other@example.com' }) } },
+      { access: { getIdentity: async () => ({ email: 'other@example.test' }) } },
       { store, now: NOW }
     )
     expect(res.status).toBe(401)
   })
 
-  it('allows Tony and never returns prompt ciphertext on the asks list', async () => {
+  it('allows a configured admin and never returns prompt ciphertext on the asks list', async () => {
     const store = memoryStore()
     await handleRequest(
       await signedRequest('/v1/ingest', JSON.stringify({ id: 'ask-2', question: 'secret close plan', mode: 'sales' })),
@@ -192,7 +193,7 @@ describe('Access on admin routes', () => {
     const list = await handleRequest(
       new Request('https://operator.test/v1/admin/asks'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(list.status).toBe(200)
@@ -214,7 +215,7 @@ describe('Access on admin routes', () => {
     const reveal = await handleRequest(
       new Request('https://operator.test/v1/admin/asks/ask-3'),
       env({ OPERATOR_PROMPT_KEY: '' }),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(reveal.status).toBe(410)
@@ -234,7 +235,7 @@ describe('Approve vs Push', () => {
         body: JSON.stringify({ skillId: 'interview' })
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const { id } = (await draft.json()) as { id: string }
@@ -246,7 +247,7 @@ describe('Approve vs Push', () => {
         body: JSON.stringify({ diff: skillMd })
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(approve.status).toBe(200)
@@ -260,7 +261,7 @@ describe('Approve vs Push', () => {
         body: JSON.stringify({})
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(push.status).toBe(200)
@@ -298,7 +299,7 @@ describe('health', () => {
       lon: null,
       last_index_at: null,
       hostname: 'box',
-      sso_email: 'tony.walteur@gmail.com',
+      sso_email: 'owner@example.test',
       license: 'approved',
       approval: 'approved',
       license_jti: null
@@ -316,7 +317,7 @@ describe('health', () => {
     const res = await handleRequest(new Request('https://operator.test/health'), env(), {}, { store: memoryStore() })
     const text = await res.text()
     expect(text).not.toContain(TEST_INGEST_SECRET)
-    expect(text).not.toContain(TEST_PROMPT_KEY)
+    expect(text).not.toContain(TEST_PROMPT_KEY, TEST_ADMIN_EMAILS)
   })
 })
 
@@ -326,7 +327,7 @@ describe('packed console map and geo', () => {
     const home = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(home.status).toBe(200)
@@ -340,7 +341,7 @@ describe('packed console map and geo', () => {
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await dash.json()) as { map: { empty: boolean; countries: unknown[]; dots: unknown[] } }
@@ -377,7 +378,7 @@ describe('packed console map and geo', () => {
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const text = await dash.text()
@@ -399,7 +400,7 @@ describe('packed console map and geo', () => {
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await dash.json()) as { map: { empty: boolean; countries: unknown[] }; kpis: { live: number } }
@@ -426,7 +427,7 @@ describe('CRM send board', () => {
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const before = (await dash.json()) as {
@@ -437,7 +438,7 @@ describe('CRM send board', () => {
     const retry = await handleRequest(
       new Request('https://operator.test/v1/admin/crm/crm-1/retry', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(retry.status).toBe(200)
@@ -469,7 +470,7 @@ describe('CRM send board', () => {
   it('stores only canonical CRM delivery metadata and clears legacy content-bearing columns', async () => {
     const store = memoryStore()
     await store.upsertCrm({
-      id: 'crm-ok', device_id: 'device-a', ts: NOW - 1, status: 'pending', title: 'Legacy Customer Alpha',
+      id: 'crm-ok', device_id: 'device-a', ts: NOW - 1, status: 'pending', title: 'Legacy Example Customer',
       connector: 'plane', meeting_file: '/legacy/private.md', meeting_hash: 'aabbccddeeff0011',
       last_error: 'Legacy customer error text', retry_requested: 0, attempt: 1, latency_ms: 10,
       remote_id: 'legacy-deal', remote_url: 'https://crm.example/legacy-deal', action: 'legacy-action'
@@ -485,7 +486,7 @@ describe('CRM send board', () => {
         meetingHash: 'aabbccddeeff0011',
         remoteId: 'deal-99',
         remoteUrl: 'https://crm.example/deal-99',
-        meetingFile: '/Users/tony/secret/Acme.md',
+        meetingFile: '/private/synthetic-home/secret/Acme.md',
         error: 'timeout posting Customer Alpha to https://crm.example/deal-99',
         attempt: 2,
         latencyMs: 345
@@ -498,22 +499,22 @@ describe('CRM send board', () => {
       retry_requested: 0, attempt: 2, latency_ms: 345, meeting_file: null, meeting_hash: null,
       remote_id: null, remote_url: null, action: null
     })
-    expect(JSON.stringify(row)).not.toContain('Customer Alpha')
+    expect(JSON.stringify(row)).not.toContain('Example Customer')
     expect(JSON.stringify(row)).not.toContain('deal-99')
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await dash.json()) as { crm: { rows: { title: string; error: string; remoteId: string | null; meetingHash: string | null }[] } }
     expect(body.crm.rows[0]).toMatchObject({ title: 'CRM delivery', error: 'transient', remoteId: null, meetingHash: null })
-    expect(JSON.stringify(body)).not.toContain('/Users/tony')
+    expect(JSON.stringify(body)).not.toContain('/private/synthetic-home')
   })
 
   it('projects heartbeat CRM and event detail without path, text, or CRM content', async () => {
     const store = memoryStore()
-    const privatePath = '/Users/tony/Customer Alpha/private-meeting.md'
+    const privatePath = '/private/synthetic-home/Customer Alpha/private-meeting.md'
     const privateText = 'Customer Alpha acquisition plan'
     const req = await signedRequest('/v1/heartbeat', JSON.stringify({
       os: 'darwin', appVersion: '2.0.0', path: privatePath, text: privateText,
@@ -572,7 +573,7 @@ describe('CRM send board', () => {
         body: '{}'
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const beat = await signedRequest('/v1/heartbeat', JSON.stringify({ os: 'darwin', appVersion: '1.8.0' }))
@@ -611,7 +612,7 @@ describe('CRM send board', () => {
         body: '{}'
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(retry.status).toBe(200)
@@ -639,7 +640,7 @@ describe('CRM send board', () => {
       )
       expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
     }
-    const page = await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })
+    const page = await handleRequest(new Request('https://operator.test/'), env(), { access: ownerAccess }, { store, now: NOW })
     const html = await page.text()
     expect(html).toContain('data-retry="row-failed"')
     expect(html).toContain('data-retry="row-expired"')

@@ -11,10 +11,13 @@ import {
   macHelperPath,
   macHelperPresent,
   macScreenMetricsSpawnSpec,
+  macStatFlagsSpawnSpec,
+  macStallWatchCommand,
   getMacScreenMetrics,
   extractScreenText,
   type OcrResult
 } from './mac-helper'
+import { formatCommand, releasePlans } from '../../scripts/release/orchestrate.mjs'
 
 const REPO_ROOT = process.cwd()
 
@@ -102,6 +105,27 @@ describe('macScreenMetricsSpawnSpec / getMacScreenMetrics (MQA-275 — island no
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
     }
   })
+
+  it('stat-flags spawn spec degrades to null where the helper cannot exist', () => {
+    const originalPlatform = process.platform
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(macStatFlagsSpawnSpec()).toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+    }
+  })
+
+  // M2-0192: Windows has no stall sampler at all — this is that proof.
+  it('macStallWatchCommand() is null on a platform that cannot have the helper', () => {
+    const originalPlatform = process.platform
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(macStallWatchCommand()).toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+    }
+  })
 })
 
 describe('packaging wiring (mechanical — missing wiring fails this suite)', () => {
@@ -113,8 +137,13 @@ describe('packaging wiring (mechanical — missing wiring fails this suite)', ()
     }
     for (const key of MAC_CHAIN_KEYS) {
       expect(pkg.scripts[key], `scripts.${key} missing`).toBeTruthy()
-      expect(pkg.scripts[key], `scripts.${key} does not build the mac helper`).toContain('build-mac-helper.mjs')
-      expect(pkg.scripts[key], `scripts.${key} does not guard the mac helper`).toContain('check-mac-helper.mjs mac')
+      const body = key === 'release:build:mac'
+        ? releasePlans.mac.map(formatCommand).join(' && ')
+        : key === 'release:mas'
+          ? releasePlans.mas.map(formatCommand).join(' && ')
+          : pkg.scripts[key]
+      expect(body, `scripts.${key} does not build the mac helper`).toContain('build-mac-helper.mjs')
+      expect(body, `scripts.${key} does not guard the mac helper`).toContain('check-mac-helper.mjs mac')
     }
   })
 

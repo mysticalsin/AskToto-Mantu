@@ -1,7 +1,6 @@
 import { projectOperatorIngestMetadata, sanitizeOperatorHostname, sanitizeOperatorSsoEmail } from '../../src/shared/operator'
 import { normalizeQuestionType, QUESTION_TYPE_LABELS, type QuestionType } from '../../src/shared/question-type'
 import {
-  ADMIN_EMAILS,
   clearSessionCookie,
   accessMisconfigured,
   accessTeamDomain,
@@ -628,5 +627,3 @@ export default {
     console.log(JSON.stringify({ t: 'retention', ...result }))
   }
 }
-
-export { ADMIN_EMAILS }

@@ -1,6 +1,41 @@
 import { defineConfig, mergeConfig } from 'vitest/config'
-import { resolve } from 'path'
+import { homedir } from 'node:os'
+import { join, resolve } from 'path'
 import electronViteConfig from './electron.vite.config'
+import { createHermeticSandbox, hermeticEnv } from './scripts/hermetic/sandbox-env.mjs'
+
+// W0-HERMETIC / MQA-348 — every test worker gets a fresh, empty home directory. Production code derives
+// real user locations from the home directory (detectOneDrive → ~/Library/CloudStorage/OneDrive-*, then
+// the one-time "AskToto Meetings" copy-forward into "Métis Meetings"), so a test that never pins a
+// meetings folder was reading and WRITING the developer's real OneDrive meeting store. Under the sandbox
+// the write failed silently; unsandboxed, copyFileSync blocked on a cloud-only placeholder and hung the
+// worker forever (a synchronous block starves testTimeout, so the run never ended). CI has no OneDrive,
+// which is why it never showed there. A throwaway home per run makes every test resolve the same
+// no-OneDrive path CI sees, and nothing a test does can reach a real profile — even a HOME the calling
+// shell or CI environment already set is overridden here, since Vitest's `test.env` wins over inherited
+// process env for the worker.
+//
+// Playwright resolves its browser cache from the home directory too, so pin it to the REAL cache (unless
+// the caller already chose one) or the browser-backed tests would lose their Chromium. `homedir()` here
+// runs in the config-loading process, before any override below applies, so it still resolves the actual
+// developer home.
+function playwrightBrowsersPath(realHome: string): string {
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) return process.env.PLAYWRIGHT_BROWSERS_PATH
+  if (process.platform === 'darwin') return join(realHome, 'Library', 'Caches', 'ms-playwright')
+  if (process.platform === 'win32') {
+    return join(process.env.LOCALAPPDATA || join(realHome, 'AppData', 'Local'), 'ms-playwright')
+  }
+  return join(process.env.XDG_CACHE_HOME || join(realHome, '.cache'), 'ms-playwright')
+}
+// scripts/hermetic/sandbox-env.mjs is the single implementation every non-vitest runner that shares this
+// mechanism (license-server, operator's wrangler test — scripts/qa and swift test build their sandboxes a
+// different way, see that file's own header) builds its own sandbox from (M2-0190); building this vitest
+// worker's own env from the same two functions, rather than an independent literal copy, makes that
+// true rather than merely documented.
+const sandbox = createHermeticSandbox()
+const hermeticHomeEnv = hermeticEnv(sandbox, {
+  PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath(homedir())
+})
 
 // A `#!/usr/bin/env node` shebang is valid in a file Node's own loader reads directly, but esbuild's
 // transform (which Vitest runs on served modules) PRESERVES it, and Vitest then evaluates the
@@ -23,6 +58,11 @@ const vitestConfig = defineConfig({
   // Match the renderer's react-jsx compiler setting explicitly. The root config only references
   // tsconfig.web.json, so Vite's standalone test transform does not inherit that JSX option.
   esbuild: { jsx: 'automatic' },
+  // Tests see the shipping value; the QA branch is exercised directly (scripts/lib/qa-fault-hook.test.ts).
+  // electron.vite.config.ts's own `main.define` does not reach here: mergeConfig below merges the
+  // electron-vite config's top-level main/preload/renderer keys verbatim, it does not hoist their nested
+  // Vite sub-config into this flat one.
+  define: { __METIS_QA_IDENTITY__: 'false' },
   test: {
     globals: true,
     environment: 'node',
@@ -55,6 +95,7 @@ const vitestConfig = defineConfig({
     // scatter of per-test magic numbers.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    env: hermeticHomeEnv,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

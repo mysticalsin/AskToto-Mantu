@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const fixtures = vi.hoisted(() => ({
@@ -133,5 +134,17 @@ describe('MQA-318 packaged Mac launch readiness', () => {
     fixtures.audit = event('app.started') + event('app.renderer.ready')
     fixtures.onSpawn = () => setTimeout(() => { fixtures.audit += event(name) }, 1000)
     expect(await runGate()).toBe(1)
+  })
+
+  // Invariant: the gate must launch the executable named after the bundle it was given, never a hardcoded name.
+  it('launches the executable named after the bundle it was given, not a hardcoded name', async () => {
+    process.argv = [process.execPath, 'check-packaged-launch.mjs', '/fixture/Metis QA.app', '--timeout-seconds', '6']
+    fixtures.onSpawn = () => setTimeout(() => { fixtures.audit = event('app.renderer.ready') }, 500)
+    expect(await runGate()).toBe(0)
+    expect(fixtures.spawn).toHaveBeenCalledWith(
+      join('/fixture/Metis QA.app', 'Contents', 'MacOS', 'Metis QA'),
+      [],
+      expect.objectContaining({ stdio: 'ignore', detached: true })
+    )
   })
 })

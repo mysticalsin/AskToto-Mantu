@@ -7,7 +7,9 @@ status: implement-exactly
 mac-show: Totos-Mac 11:52–11:53pm ET
 ---
 
-# Onboarding flow (Tony 11:52–11:53pm)
+# Onboarding flow (the owner 11:52–11:53pm)
+
+**Status:** Draft — implement-exactly, ready-to-merge: no (see frontmatter).
 
 Do not merge. Do not pack. Version stays 1.8.3. READY TO MERGE stays no.
 
@@ -15,7 +17,7 @@ Keep: KineticGrid after the lady beat. No Skip. No starfield. Opaque exclusive `
 
 ## 1. Your setup loading orb (HARD)
 
-Tony: the Jakub thinking-orb is the animation for everything that is loading on Your setup.
+the owner: the Jakub thinking-orb is the animation for everything that is loading on Your setup.
 
 Root: `asrAssetsRowStatus` maps `downloading` / `idle` to `SetupRowState 'action'`. `localModelRowStatus` maps `downloading` / `not-downloaded` to `'action'`. The row only mounts `<InlineOrb kind="loading" />` when `state === 'checking'`. `'action'` paints the word **needed**. The long Parakeet+Whisper fetch looks idle.
 
@@ -45,7 +47,7 @@ Act 4 personalize sits on KineticGrid `#05010a`. Tell the room (`.onboard-tell-c
 
 ## 3. Where should Métis live moves earlier (HARD)
 
-Tony: right after the demo of how it works, ask where it lives, then jump into setting it up, then choosing the setup you want.
+the owner: right after the demo of how it works, ask where it lives, then jump into setting it up, then choosing the setup you want.
 
 ```
 hero → problem → reveal → appearance → setup → personalize → [license if enabled] → ready

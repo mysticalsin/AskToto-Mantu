@@ -3,21 +3,22 @@ project: Métis
 type: design-system-contract
 surface: Review post-meeting ClickUp push
 date: 2026-09-02
-owner: Tony
+owner: the owner
 status: active contract — implement only what this file states
-workspace: "90141511178"
 ready-to-merge: no
 ---
 
 # ClickUp post-meeting push
 
-Tony cannot push a meeting into ClickUp. The current path calls the wrong MCP tool (`attach_task_file`) with `{title, description, project_id}` and ClickUp answers **invalid parameters**. Destination is a blank "project ID" paste. That is the bug.
+**Status:** Active contract — implement only what this file states (see frontmatter `status`).
+
+the owner cannot push a meeting into ClickUp. The current path calls the wrong MCP tool (`attach_task_file`) with `{title, description, project_id}` and ClickUp answers **invalid parameters**. Destination is a blank "project ID" paste. That is the bug.
 
 This file is the gate. Write it before UI. Overlay, Operator, Listen, appearance, pack, and Aria stay out.
 
 ## Outcome
 
-After a meeting, Review shows **Push to ClickUp** when ClickUp is connected. Confirm creates a **task** in the last (or connected) list in workspace `90141511178`. The list name is on screen before Confirm. Nothing sends itself. A ClickUp failure is ClickUp's own sentence, not "unknown reason" and not a JSON blob.
+After a meeting, Review shows **Push to ClickUp** when ClickUp is connected. Confirm creates a **task** in the last (or connected) list, in the workspace ClickUp resolves for the connected account (D-18). The list name is on screen before Confirm. Nothing sends itself. A ClickUp failure is ClickUp's own sentence, not "unknown reason" and not a JSON blob.
 
 Book next steps, when ClickUp is checked, creates one task per action item in that same list. Same tool. Same destination. Same confirm.
 
@@ -25,9 +26,9 @@ Book next steps, when ClickUp is checked, creates one task per action item in th
 
 | Hat | Ships only if | Rejects |
 |---|---|---|
-| Product | Confirm creates a task in a named list. Destination is automatic. | Attaching a file. Asking Tony to paste a list/project ID as the common path. A tool dropdown that includes `attach_task_file`. |
+| Product | Confirm creates a task in a named list. Destination is automatic. | Attaching a file. Asking the owner to paste a list/project ID as the common path. A tool dropdown that includes `attach_task_file`. |
 | Destination | Screen says `Task in {list name}` (space › folder › list when known) before Confirm. | Empty destination. Silent first-list. "Project ID (optional)". |
-| Tool | Wire tool is create-task (`clickup_create_task` / `create_task`). Args: `name`, `list_id`, optional `markdown_description`, `workspace_id`. | `attach_task_file`, comment, update, delete. Args `title` / `project_id` / `description` as the ClickUp wire names. |
+| Tool | Wire tool is create-task (`clickup_create_task` / `create_task`). Args: `name`, `list_id`, optional `markdown_description`. Never `workspace_id`. | `attach_task_file`, comment, update, delete. Args `title` / `project_id` / `description` as the ClickUp wire names. |
 | Trust | Confirm click only. Confidential still blocked. | `useEffect` / mount / timer / Intelligence index / import calling `mcpPush`. |
 | Failure | Review shows ClickUp's error text (capped). OAuth mismatch uses PR 73's human sentence. | Swallowed MCP `isError`. Generic "unknown reason". Raw `{"error":"invalid_client",…}` blob. |
 | Scope | Review ClickUp push + ClickUp OAuth redirect (PR 73) + write-tool pick. Polo, Plane paste field, overlay, Operator, Listen, appearance, pack, Aria untouched. | Overlay chrome. Operator Worker. Pack. Merge. READY TO MERGE: yes. |
@@ -36,7 +37,8 @@ Would Apple ship this? Only if every hat passes.
 
 ## Destination (automatic)
 
-Workspace is pinned: `90141511178`. Never a renderer-supplied workspace.
+No call ever sends `workspace_id`: ClickUp's hosted MCP tool schemas resolve the connected account's own
+workspace when the parameter is omitted (D-18). Never a renderer-supplied workspace either way.
 
 Main (not Review) resolves the list, in this order:
 
@@ -59,7 +61,7 @@ On Confirm, main:
 1. Ignores a renderer tool named attach / file / comment.
 2. Picks create-task from the saved `tools` list. Missing → `ClickUp did not offer a create-task tool. Reconnect ClickUp in Settings.`
 3. Resolves `list_id` as above. Missing → the destination failure above.
-4. Calls the tool with `{ name, list_id, markdown_description?, workspace_id: "90141511178" }`.
+4. Calls the tool with `{ name, list_id, markdown_description? }`. No `workspace_id`.
 5. On MCP `isError` or thrown error, return ClickUp's text (slice 500). Do not map a tool error into `classifyError`'s "unknown reason".
 6. On success, persist that list as last, return `{ ok: true, destinationName, taskUrl? }`.
 
@@ -93,7 +95,7 @@ No `useEffect`, timer, mount, Intelligence pass, or import job may call `mcpPush
 ## Tests (required)
 
 1. `pickWriteTool` / `pickClickupCreateTask`: `clickup_attach_task_file` is never chosen; `clickup_create_task` is.
-2. ClickUp push args are `name` + `list_id` (+ markdown_description, workspace_id). Never `title`/`project_id` as the wire keys.
+2. ClickUp push args are `name` + `list_id` (+ optional markdown_description). Never `title`/`project_id`/`workspace_id` as the wire keys.
 3. Destination order: saved last list, else last-updated task list, else loud error.
 4. MCP `isError` text reaches the result. Unknown-reason classify does not eat a ClickUp tool error.
 5. Review source: ClickUp panel has no `attach_task_file` select and no `project ID` placeholder; shows `Task in`.

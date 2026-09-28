@@ -9,7 +9,9 @@ mac-show: Totos-Mac
 
 # Onboarding appearance picker
 
-Tony asks Hidden vs Island vs Bar during onboarding, with a live preview and no lag. Root gate: [`DESIGN.md`](../../DESIGN.md) **Onboarding appearance (Tony ask)**. Overlay hide-park 8×2, Island hover (camera / notch square), cursor-watch, and PR 94 park leftover stay off limits. Do not pack. Do not merge. READY TO MERGE stays no until Tony Mac-shows.
+**Status:** Draft — implement-exactly, ready-to-merge: no until the owner Mac-shows (see frontmatter).
+
+The owner asks Hidden vs Island vs Bar during onboarding, with a live preview and no lag. Root gate: [`DESIGN.md`](../../DESIGN.md) **Onboarding appearance (the owner ask)**. Overlay hide-park 8×2, Island hover (camera / notch square), cursor-watch, and PR 94 park leftover stay off limits. Do not pack. Do not merge. READY TO MERGE stays no until the owner Mac-shows.
 
 ## Outcome
 

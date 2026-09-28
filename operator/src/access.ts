@@ -1,7 +1,4 @@
 import { hmacHex, timingSafeEqualHex } from './hmac'
-
-export const ADMIN_EMAILS = ['tony.walteur@gmail.com', 'twalteur@amaris.com'] as const
-
 export const SESSION_COOKIE = 'metis_operator_session'
 
 export const CONSOLE_PATHS = [
@@ -58,6 +55,7 @@ export type AccessCtx = {
 }
 
 export type AdminEnv = {
+  ADMIN_EMAILS?: string
   TEAM_DOMAIN?: string
   POLICY_AUD?: string
   OPERATOR_PROMPT_KEY?: string
@@ -74,8 +72,29 @@ export function normalizeAdminEmail(raw: string): string {
   return raw.trim().toLowerCase()
 }
 
-export function isAdminEmail(raw: string): boolean {
-  return (ADMIN_EMAILS as readonly string[]).includes(normalizeAdminEmail(raw))
+export function adminEmailsFromEnv(env: AdminEnv): readonly string[] | null {
+  const raw = env.ADMIN_EMAILS
+  if (!raw?.trim()) {
+    console.warn('Metis Operator admin access denied: ADMIN_EMAILS binding is missing or empty')
+    return null
+  }
+  const emails = Array.from(
+    new Set(
+      raw
+        .split(',')
+        .map(normalizeAdminEmail)
+        .filter(Boolean)
+    )
+  )
+  if (emails.length === 0) {
+    console.warn('Metis Operator admin access denied: ADMIN_EMAILS binding is missing or empty')
+    return null
+  }
+  return emails
+}
+
+export function isAdminEmail(raw: string, env: AdminEnv): boolean {
+  return adminEmailsFromEnv(env)?.includes(normalizeAdminEmail(raw)) ?? false
 }
 
 export function isConsolePath(pathname: string): boolean {
@@ -243,7 +262,8 @@ export type VerifiedSession = { email: string; iat: number }
 export async function verifySessionToken(
   raw: string | null | undefined,
   secret: string | undefined,
-  now: number
+  now: number,
+  env: AdminEnv
 ): Promise<VerifiedSession | null> {
   if (!secret?.trim() || !raw) return null
   const parts = raw.split('|')
@@ -251,7 +271,7 @@ export async function verifySessionToken(
   const iat = Number(parts[1])
   const email = normalizeAdminEmail(parts[2] || '')
   const sig = (parts[3] || '').toLowerCase()
-  if (!Number.isFinite(iat) || now < iat || now - iat > SESSION_ABSOLUTE_TTL_MS || !isAdminEmail(email) || !sig) {
+  if (!Number.isFinite(iat) || now < iat || now - iat > SESSION_ABSOLUTE_TTL_MS || !isAdminEmail(email, env) || !sig) {
     return null
   }
   const expected = await hmacHex(secret, `metis-operator-session:v1|${iat}|${email}`)
@@ -262,9 +282,10 @@ export async function verifySessionToken(
 export async function verifySessionCookie(
   request: Request,
   secret: string | undefined,
-  now: number
+  now: number,
+  env: AdminEnv
 ): Promise<VerifiedSession | null> {
-  return verifySessionToken(sessionTokenFromRequest(request), secret, now)
+  return verifySessionToken(sessionTokenFromRequest(request), secret, now, env)
 }
 
 export async function resolveAdminIdentity(
@@ -278,7 +299,7 @@ export async function resolveAdminIdentity(
       const identity = await ctx.access.getIdentity()
       const email = identity?.email?.trim().toLowerCase()
       if (email) {
-        if (isAdminEmail(email)) return { status: 'ok', email }
+        if (isAdminEmail(email, env)) return { status: 'ok', email }
         return { status: 'denied' }
       }
     } catch {
@@ -294,9 +315,9 @@ export async function resolveAdminIdentity(
       return { status: 'misconfigured', error: 'Cloudflare Access is misconfigured: POLICY_AUD is unset' }
     }
     const email = await verifyAccessJwt(jwt, accessTeamDomain(env.TEAM_DOMAIN)!, env.POLICY_AUD.trim(), now)
-    if (email && isAdminEmail(email)) return { status: 'ok', email }
+    if (email && isAdminEmail(email, env)) return { status: 'ok', email }
   }
-  const session = await verifySessionCookie(request, await deriveSessionSecret(env), now)
+  const session = await verifySessionCookie(request, await deriveSessionSecret(env), now, env)
   if (session) return { status: 'ok', email: session.email, sessionIat: session.iat }
   if (jwt) return { status: 'denied' }
   return { status: 'none' }

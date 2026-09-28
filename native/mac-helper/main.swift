@@ -1,7 +1,7 @@
 // metis-mac-helper — dependency-free macOS sidecar for Métis (compiled by scripts/build-mac-helper.mjs,
 // shipped via electron-builder's mac extraResources; mirrors the llama-server sidecar pattern).
 //
-// Two subcommands, both designed to plug into EXISTING main-process seams without new protocols:
+// Subcommands, each spawned by the main process:
 //
 //   watch-frontmost   Long-running. Prints one TSV line per app activation — the SAME
 //                     `windowId \t pid \t title` shape foreground-watcher.ts already parses from the
@@ -33,7 +33,27 @@
 //                     `frame`/`visibleFrame` are AppKit rects (bottom-left origin) — the TS side must
 //                     NEVER treat them as Electron bounds/workArea (top-left origin); only the magnitude
 //                     fields (notchWidth, safeAreaInsetTop, backingScaleFactor) cross that boundary.
+//
+//   stat-flags        One-shot. Reads NUL-separated UTF-8 paths from stdin and prints ONE JSON array
+//                     holding each path's st_flags, or null where stat(2) failed, in input order.
+//                     stat(2) reads the inode and never opens the file, so probing a dataless
+//                     (cloud-only) file cannot materialize it. src/main/infra/storage/dataless.ts owns
+//                     the protocol and decodes SF_DATALESS; this command reports the raw word.
+//
+//   proc-info <pid>   One-shot. Prints process identity JSON for PID if alive:
+//                     {pid, ppid, pgid, osStartTime, exeRealpath, args}. osStartTime is the kernel start
+//                     time in ISO-8601 UTC. Used by the sidecar registry/reaper; name is deliberately not
+//                     part of the identity, because names are not safe across PID reuse.
+//
+//   stall-watch       Long-running, one per boot. --pid <main> --alive <file> --capture-prefix <path>
+//                     --stale-after-ms <ms>. Every 5 s it stats <file>; when its mtime has not changed
+//                     for more than <ms> of awake time it runs /usr/bin/sample on <main> into
+//                     <path>.<epochMs>.<stalledMs>.sample, once per stall and at most once per 10 minutes,
+//                     then prints `sampled` or `failed`. It samples only its own parent and exits once
+//                     <main> is no longer its parent. src/main/infra/observability/stall-sampler.ts owns
+//                     the protocol; all redaction, retention and auditing happen there, not here.
 import AppKit
+import Darwin
 import Speech
 import Vision
 
@@ -285,11 +305,203 @@ func runScreenMetrics() -> Never {
     exit(0)
 }
 
+// MARK: - stat-flags
+
+func runStatFlags() -> Never {
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    let flags: [UInt32?] = input.split(separator: 0).map { pathBytes in
+        var info = stat()
+        let path = String(decoding: pathBytes, as: UTF8.self)
+        return stat(path, &info) == 0 ? info.st_flags : nil
+    }
+    do {
+        let encoded = try JSONEncoder().encode(flags)
+        FileHandle.standardOutput.write(encoded)
+        FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+    } catch {
+        fail("stat-flags: could not encode result: \(error.localizedDescription)")
+    }
+    exit(0)
+}
+
+// MARK: - proc-info
+
+struct ProcInfo: Codable {
+    let pid: Int32
+    let ppid: Int32
+    let pgid: Int32
+    let osStartTime: String
+    let exeRealpath: String
+    let args: [String]
+}
+
+func processStartIso(_ info: kinfo_proc) -> String {
+    let seconds = TimeInterval(info.kp_proc.p_starttime.tv_sec)
+    let micros = TimeInterval(info.kp_proc.p_starttime.tv_usec) / 1_000_000
+    let date = Date(timeIntervalSince1970: seconds + micros)
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    return formatter.string(from: date)
+}
+
+func kinfoForPid(_ pid: Int32) -> kinfo_proc? {
+    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.stride
+    let rc = mib.withUnsafeMutableBufferPointer { ptr in
+        sysctl(ptr.baseAddress, u_int(ptr.count), &info, &size, nil, 0)
+    }
+    return rc == 0 && size > 0 ? info : nil
+}
+
+func argsForPid(_ pid: Int32) -> [String] {
+    var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+    var size = 0
+    guard sysctl(&mib, u_int(mib.count), nil, &size, nil, 0) == 0, size > 0 else { return [] }
+    var buffer = [UInt8](repeating: 0, count: size)
+    guard sysctl(&mib, u_int(mib.count), &buffer, &size, nil, 0) == 0, size >= MemoryLayout<Int32>.size else { return [] }
+    let argc = buffer.withUnsafeBytes { $0.load(as: Int32.self) }
+    var offset = MemoryLayout<Int32>.size
+    while offset < size && buffer[offset] != 0 { offset += 1 }
+    while offset < size && buffer[offset] == 0 { offset += 1 }
+    var args: [String] = []
+    for _ in 0..<argc {
+        if offset >= size { break }
+        let start = offset
+        while offset < size && buffer[offset] != 0 { offset += 1 }
+        if offset > start {
+            args.append(String(decoding: buffer[start..<offset], as: UTF8.self))
+        }
+        while offset < size && buffer[offset] == 0 { offset += 1 }
+    }
+    return args
+}
+
+func runProcInfo(pidText: String) -> Never {
+    guard let pid = Int32(pidText), let info = kinfoForPid(pid) else { exit(0) }
+    var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+    let pathLength = pathBuffer.withUnsafeMutableBufferPointer { buffer in
+        proc_pidpath(pid, buffer.baseAddress, UInt32(buffer.count))
+    }
+    guard pathLength > 0 else { exit(0) }
+    let exePath = String(cString: pathBuffer)
+    let real = URL(fileURLWithPath: exePath).resolvingSymlinksInPath().path
+    let result = ProcInfo(
+        pid: pid,
+        ppid: info.kp_eproc.e_ppid,
+        pgid: getpgid(pid),
+        osStartTime: processStartIso(info),
+        exeRealpath: real,
+        args: argsForPid(pid)
+    )
+    do {
+        let encoded = try JSONEncoder().encode(result)
+        FileHandle.standardOutput.write(encoded)
+        FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+    } catch {
+        fail("proc-info: could not encode result: \(error.localizedDescription)")
+    }
+    exit(0)
+}
+
+// MARK: - stall-watch
+
+let stallPollSeconds: UInt32 = 5
+let stallCooldownMs: UInt64 = 600_000
+let sampleDeadlineMs: UInt64 = 60_000
+
+/// Awake milliseconds. CLOCK_UPTIME_RAW stops while the Mac sleeps, so a lid-close never counts toward a
+/// stall.
+func awakeMs() -> UInt64 {
+    clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1_000_000
+}
+
+/// The file's mtime in nanoseconds, or nil when stat(2) fails. Only ever compared for equality, so a
+/// wall-clock step cannot fake a stall either.
+func mtimeNs(_ path: String) -> Int? {
+    var info = stat()
+    guard stat(path, &info) == 0 else { return nil }
+    return info.st_mtimespec.tv_sec * 1_000_000_000 + info.st_mtimespec.tv_nsec
+}
+
+/// Samples `pid` into `path` for 5 s at 10 ms; -mayDie keeps the symbols if `pid` dies mid-sample. True
+/// only when sample exited 0 within the deadline; otherwise it is killed and its partial output removed,
+/// so a failed sample never becomes a bundle.
+func sampleInto(_ path: String, pid: Int32) -> Bool {
+    let sampler = Process()
+    sampler.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+    sampler.arguments = [String(pid), "5", "10", "-mayDie", "-file", path]
+    // This helper's stdout is the protocol pipe to the main process: sample must never write to it.
+    sampler.standardOutput = FileHandle.nullDevice
+    sampler.standardError = FileHandle.nullDevice
+    do {
+        try sampler.run()
+    } catch {
+        return false
+    }
+    let deadline = awakeMs() + sampleDeadlineMs
+    while sampler.isRunning && awakeMs() < deadline {
+        usleep(100_000)
+    }
+    if sampler.isRunning {
+        kill(sampler.processIdentifier, SIGKILL)
+        sampler.waitUntilExit()
+    }
+    let captured = sampler.terminationReason == .exit && sampler.terminationStatus == 0
+    if !captured { unlink(path) }
+    return captured
+}
+
+func runStallWatch(_ options: [String]) -> Never {
+    func value(of flag: String) -> String? {
+        guard let i = options.firstIndex(of: flag), i + 1 < options.count else { return nil }
+        return options[i + 1]
+    }
+    guard let pid = value(of: "--pid").flatMap({ Int32($0) }),
+          let alivePath = value(of: "--alive"),
+          let capturePrefix = value(of: "--capture-prefix"),
+          let staleAfterMs = value(of: "--stale-after-ms").flatMap({ UInt64($0) })
+    else {
+        fail("usage: metis-mac-helper stall-watch --pid <pid> --alive <file> --capture-prefix <path> --stale-after-ms <ms>")
+    }
+    guard getppid() == pid else { fail("stall-watch: --pid \(pid) is not this helper's parent") }
+
+    var lastMtime = mtimeNs(alivePath)
+    var lastChangeAt = awakeMs()
+    var sampledThisStall = false
+    var lastSampleAt: UInt64?
+    while true {
+        sleep(stallPollSeconds)
+        // A dead parent reparents this helper, so getppid() changes: exit rather than ever sample a
+        // process this helper did not come from.
+        guard getppid() == pid else { exit(0) }
+        let now = awakeMs()
+        let mtime = mtimeNs(alivePath)
+        // An unreadable marker is no evidence of a stall: treat it like a fresh write.
+        if mtime == nil || mtime != lastMtime {
+            lastMtime = mtime
+            lastChangeAt = now
+            sampledThisStall = false
+            continue
+        }
+        let stalledMs = now - lastChangeAt
+        let cooledDown = lastSampleAt.map { now - $0 >= stallCooldownMs } ?? true
+        guard stalledMs > staleAfterMs, !sampledThisStall, cooledDown else { continue }
+        sampledThisStall = true
+        lastSampleAt = now
+        let epochMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let captured = sampleInto("\(capturePrefix).\(epochMs).\(stalledMs).sample", pid: pid)
+        print(captured ? "sampled" : "failed")
+        fflush(stdout)
+    }
+}
+
 // MARK: - entry point
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|stall-watch> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -303,6 +515,15 @@ case "transcribe":
     runTranscribe(path: arguments[2], localeIdentifier: arguments.count >= 4 ? arguments[3] : nil)
 case "screen-metrics":
     runScreenMetrics()
+case "stat-flags":
+    runStatFlags()
+case "proc-info":
+    guard arguments.count >= 3 else {
+        fail("usage: metis-mac-helper proc-info <pid>")
+    }
+    runProcInfo(pidText: arguments[2])
+case "stall-watch":
+    runStallWatch(Array(arguments.dropFirst(2)))
 default:
     fail("unknown command: \(arguments[1])")
 }

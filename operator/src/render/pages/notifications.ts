@@ -90,7 +90,7 @@ export function renderNotifications(data: DashboardPayload, _ctx: RenderCtx): st
       ${
         noticeRows
           ? `<table data-notice-table><thead><tr><th>Kind</th><th>Title</th><th>Profile</th><th>City</th><th>OS</th><th>When</th></tr></thead><tbody>${noticeRows}</tbody></table>`
-          : '<div class="empty">Nothing needs Tony right now.</div>'
+          : '<div class="empty">Nothing needs attention right now.</div>'
       }
     </article>
     <article class="card pad-b10" data-crm-notices>
@@ -99,7 +99,7 @@ export function renderNotifications(data: DashboardPayload, _ctx: RenderCtx): st
       <div class="crm-kpis">
         ${kpiCard({ title: 'Landed today', value: String(landing.landedToday), sub: 'success with a remote id', spark: '' })}
         ${kpiCard({ title: 'Fail rate', value: failRate, sub: 'failed + expired over attempted', spark: '' })}
-        ${kpiCard({ title: 'Retries', value: String(landing.retries), sub: 'Tony Retry or attempt over 1', spark: '' })}
+        ${kpiCard({ title: 'Retries', value: String(landing.retries), sub: 'manual retry or attempt over 1', spark: '' })}
         ${kpiCard({ title: 'Dead letters', value: String(landing.deadLetters), sub: 'max attempts, Expired', spark: '' })}
       </div>
       ${funnelRows ? `<p class="eyebrow">Funnel by connector</p><div class="crm-funnel">${funnelRows}</div>` : ''}

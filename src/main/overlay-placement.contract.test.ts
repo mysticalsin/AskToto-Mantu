@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { transformWithEsbuild } from 'vite'
 import { describe, expect, it, vi } from 'vitest'
 import { clampAxis, clampAxisMargin, clampHeight as islandClampHeight, isReachable as islandIsReachable, recenterXForWidth, refitToDisplay as islandRefitToDisplay } from './island/geometry'
+import { crashDetail } from './infra/observability/crash-taxonomy'
 
 /**
  * Source-contract tests for the overlay-placement findings (MQA-196, MQA-197). src/main/index.ts boots
@@ -63,9 +64,11 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       )
     )
     const preamble = [
-      'const { mainLog, auditLog, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, commandControl, before } = stubs',
+      'const { mainLog, auditLog, crashDetail, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, commandControl, responsiveness, before } = stubs',
       `const BAR_WIDTH = ${constant('BAR_WIDTH')}`,
       'let { listeningActive, lastPlainAskAt, audioArmed, isMinimized, currentWidth } = before',
+      'const setListeningActive = (on) => { listeningActive = on }',
+      'const setAudioArmed = (on) => { audioArmed = on }',
       'let handler = null',
       // isDestroyed() -> true stops the handler before the reload, which needs a real BrowserWindow. The
       // reload itself is already pinned by c-main-fixes.contract.test.ts; this is about the reset above it.
@@ -89,12 +92,14 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
     const after = run({
       mainLog: { error: () => {} },
       auditLog: () => {},
+      crashDetail,
       resetDustConversation: () => {},
       setTrayRecording: () => {},
       setRecordingPowerSaveBlock: () => {},
       discardActiveLiveSpeakerSession: () => {},
       invalidateCloudSttOwner: () => {},
       commandControl: { revokeForLifecycleEvent },
+      responsiveness: { markGone: () => {} },
       before
     })
     expect(revokeForLifecycleEvent).toHaveBeenCalledExactlyOnceWith('renderer_replaced')
@@ -278,6 +283,9 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       'const OVERLAY_REST_BACKGROUND = "#00000000"',
       'const onboardingExclusiveLive = () => false',
       'const islandResting = false',
+      'const createRevealTrace = () => ({ trace: (_reason, reveal) => reveal() })',
+      'const auditLog = () => {}',
+      'const liveOverlayLayout = () => "bar"',
       'const resolvedOverlayPlacementForDisplay = () => "top-center"',
       ''
     ].join('\n')

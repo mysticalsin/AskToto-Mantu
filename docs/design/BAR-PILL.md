@@ -10,18 +10,23 @@ notes: Island/Hide hover hit is the always-on top-edge strip (DESIGN.md + island
 
 # Bar sphere: Jakub thinking-orb
 
+**Status:** Active — shipped Bar/orb visual system. Part of design A (`DESIGN.md` + this file +
+`ORB-SELECTION.md`), one of three overlapping voice/orb/bar designs (with
+`METIS-2.0-JARVIS-COMMAND.md` and `METIS-2.0-CAP2-WAKE-ADAPTERS.md`) reconciled by M2-0093
+(TASK-030) — see `DESIGN.md` § Bar sphere.
+
 This file is the contract for one slice. Implement only what it names. Hide and Island overlay chrome stay exactly as they are.
 
 ## Consultant (feel)
 
-The Bar control is a **being** Tony can drag while using apps, not a badge and not a WebGL marble. At rest it is Jakub Antalik's `solving` orb: the playground Solving animation, always on, with no caption. It lives on the Métis glass Bar (Settings overlay Bar) and as the minimized circle. Same circle both places.
+The Bar control is a **being** the owner can drag while using apps, not a badge and not a WebGL marble. At rest it is Jakub Antalik's `solving` orb: the playground Solving animation, always on, with no caption. It lives on the Métis glass Bar (Settings overlay Bar) and as the minimized circle. Same circle both places.
 
 Reference (the real package, not a clone):
 - **thinking-orbs** ([orbs.jakubantalik.com](https://orbs.jakubantalik.com/), `thinking-orbs@0.3.1` MIT). Dotted 2D canvas. Monochrome. Nine states. Two tuned sizes (`20` inline, `64` avatar). No WebGL. No `ctx.filter`.
 - Idle on this control is `solving` (playground Solving at 64, no "Solving…" word). Listen is `listening` (waveform in the rings). Think is `working` (tilted orbits). Connecting is `connecting`. Fact-check is `searching` (scan meridian; it reads at 64).
 - Theme is pinned `dark`: light dots on dark glass. The glass around the orb stays Métis chrome. The orb itself stays a circle.
 
-Tony rejected the Fit Studio glow-core WebGL marble (magenta volume, bloom, specular kiss) and the particle constellation (glitter ball / fibonacci cloud / electron chords). Idle is **not** `#4CA8E8` and **not** Fit Studio `#b266e9`. A science viz is a fail. A magenta core on this control is a fail.
+The owner rejected the Fit Studio glow-core WebGL marble (magenta volume, bloom, specular kiss) and the particle constellation (glitter ball / fibonacci cloud / electron chords). Idle is **not** `#4CA8E8` and **not** Fit Studio `#b266e9`. A science viz is a fail. A magenta core on this control is a fail.
 
 A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a status blob. This slice replaces that blob on the **existing** Bar orb (`bar-pill-orb` / `JarvisOrbButton`). Do not invent a second orb. Do not rewrite Jakub's renderer. Do not copy their canvas strings.
 
@@ -43,7 +48,7 @@ The left Settings mark (logo / M) is a locked 30×30 circle (`BAR_MARK_SIZE_PX`,
 
 ### Toolbar reserved boxes (HARD — overlap is a ship blocker)
 
-Tony live fail: overlay Bar while listening, the elapsed timer + pause sat on top of "+ New meeting". Production overlay width is `BAR_OVERLAY_WIDTH_PX` === `BAR_WIDTH` **880**.
+Owner live fail: overlay Bar while listening, the elapsed timer + pause sat on top of "+ New meeting". Production overlay width is `BAR_OVERLAY_WIDTH_PX` === `BAR_WIDTH` **880**.
 
 The toolbar is one flex row. Each control owns an in-flow reserved box. Do not absolutely stack siblings. Do not use negative margins. Do not let overflow paint on a neighbor. Do not steal 100px with a dummy spacer to keep icons centered.
 
@@ -167,7 +172,7 @@ Monochrome thinking-orb. Theme `dark`. Color does not retint the dots. State cha
 
 | Mood | Package state | When |
 | --- | --- | --- |
-| `idle` | `solving` | Standard. Rest. Default. Tony locked Solving with no caption. |
+| `idle` | `solving` | Standard. Rest. Default. Owner locked Solving with no caption. |
 | `factcheck` | `searching` | Fact-check / cited answer. |
 | `connecting` | `connecting` | Connecting handshake. |
 | `thinking` | `working` | Thinking / ask in progress. |

@@ -4,6 +4,12 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'node:fs'
+import {
+  isObservabilityEvent,
+  projectEvent,
+  type ObservabilityDetail,
+  type ObservabilityEvent
+} from './infra/observability/projection'
 
 // Only the installed app owns a user profile. electron-log resolves its own file path, and outside an
 // Electron main process it silently falls back to NodeExternalApi, whose log directory is
@@ -137,6 +143,8 @@ function loadChainTip(): void {
   }
 }
 
+// app.*, sidecar.*, history.* and reveal events are observability events: each needs an allowlist in
+// infra/observability/projection.ts (tsc enforces it) and is written without an actor.
 export type AuditEvent =
   | 'auth.signin'
   | 'auth.signout'
@@ -178,6 +186,13 @@ export type AuditEvent =
   | 'brain.commitment.rejected'
   | 'brain.rebuild.aborted'
   | 'brain.corrections.lock_cleared'
+  // M2-0003: index.json exists but cannot be used on this device this session (io / undecryptable /
+  // unsupported / corrupt-kept), and a decoded-but-invalid index was set aside. Content-free: cause/
+  // counts only, never a path, decode reason, or filename.
+  | 'brain.index.unavailable'
+  | 'brain.index.quarantined'
+  | 'brain.index.preserved_restore'
+  | 'brain.index.preserved_delete'
   // Task MI-5: the markdown mirror (main/brain/publish.ts).
   | 'transcript.confidential_set'
   | 'brain.publish.consent'
@@ -205,6 +220,32 @@ export type AuditEvent =
   // FITO-185-U: live Act1 DOM probe summary (userData/logs/act1-dom.json).
   | 'app.act1.dom'
   | 'app.crash'
+  // M2-0215: a handled boot-step failure; boot continues without that step's work.
+  | 'app.error.boot_step'
+  // M2-0215: a handled window-create failure; the next reveal retries creation.
+  | 'app.error.window_create'
+  // M2-0215: safe-start skipped brain resume after repeated early deaths.
+  | 'app.error.early_death'
+  // M2-0037/M2-0215: the automatic reload after render-process-gone itself failed to load; the overlay
+  // is left as-is with no further automatic retry.
+  | 'app.error.reload_failed'
+  // M2-0006: the clean-shutdown marker — written at the end of will-quit, so the NEXT app.started can
+  // report a real prevShutdown classification instead of no evidence at all (see boot-sentinel.ts).
+  | 'app.shutdown.clean'
+  // M2-0006: a 1s heartbeat timer fired at least 1s late (main-thread stall — see
+  // infra/observability/stall-monitor.ts and its orchestrator run-observability.ts), plus its periodic
+  // p99 summary.
+  | 'app.stall'
+  | 'app.stall.summary'
+  // M2-0192: the out-of-process stall sampler (infra/observability/stall-sampler.ts). `sampled` names a
+  // content-free bundle in userData/diagnostics/stalls/ by file name; `sample_failed` carries only a
+  // reason ("sample" | "bundle" | "watcher") — double-quoted so audit-event-coverage.contract.test.ts's
+  // single-quote scan for declared event names does not mistake them for members of this union.
+  // bootId is the boot that stalled.
+  | 'app.stall.sampled'
+  | 'app.stall.sample_failed'
+  // M2-0006: pairs app.unresponsive with how long the renderer stayed wedged before it recovered.
+  | 'app.responsive'
   // A main-process, state-checked repair completed a renderer handoff after durable setup save.
   | 'app.recovery'
   // FITO-185-E: 15s MQA-175 callback closed the boot watch (finally), whether brain resume ran or threw.
@@ -215,9 +256,23 @@ export type AuditEvent =
   // The overlay renderer stopped answering Chromium (event loop wedged, not crashed). Logged so a stuck
   // island is diagnosable from the support bundle; the app does not reload or kill it on this signal.
   | 'app.unresponsive'
+  // M2-0215: user-visible reveal attempt and outcome.
+  | 'reveal'
+  // M2-0215: long-lived local sidecar process started.
+  | 'sidecar.spawn'
+  // M2-0215: long-lived local sidecar process exited.
+  | 'sidecar.exit'
+  // M2-0215: History list request timing across renderer and main.
+  | 'history.request'
+  // M2-0037 (B3-RC2): render-process-gone's reload budget was exhausted (>=3 reloads within 60s with no
+  // recovered 30s-alive window) — auto-reload stops and a recovery dialog is shown instead.
+  | 'app.render_loop_halted'
   | 'meeting.detect.degraded'
   | 'recall.open'
   | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
+  // A cloud-placeholder probe could not classify a batch of meeting files, so they were treated as
+  // cloud-only and not read. Once per failure streak; reason and file count only.
+  | 'storage.dataless_probe_failed'
   // Generalized MCP push connections (BidStack CRM, Plane, ClickUp, …) — see main/mcp/mcpClient.ts.
   | 'mcp.connected'
   | 'mcp.disconnected'
@@ -233,6 +288,8 @@ export type AuditEvent =
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'
+  // M2-0033: scheduler decisions (backfill scan counts, deferrals, maintenance window) — counts and enums only, never paths or names.
+  | 'scheduler.job'
   // Wave 3 (main/brain/consolidate.ts): one batched extraction pass actually ran. Distinct from
   // 'brain.ingest' (per-meeting) — this is the per-PASS marker metrics.ts counts against the
   // maxPassesPerDay budget.
@@ -252,6 +309,8 @@ export type AuditEvent =
   | 'local.runtime.crash'
   | 'local.runtime.restart'
   | 'local.runtime.missing'
+  | 'sidecar.reaped'
+  | 'sidecar.reap.skipped'
   | 'local.model.checksum_fail'
   // First-run weight download (local-model-download.ts). The weights are no longer bundled, so these
   // are the audit trail for the only network fetch installed code makes for model files.
@@ -259,7 +318,6 @@ export type AuditEvent =
   | 'local.model.download_ok'
   | 'local.model.download_fail'
   | 'screen.preprocess.describe'
-  | 'cahe.localai.seeded'
   // Support diagnosability: the user exported the log trail to a folder (metadata only — file count).
   | 'diagnostics.export'
   | 'llm.call'
@@ -273,6 +331,10 @@ export type AuditEvent =
   | 'operator.license.activated'
   | 'operator.license.cleared'
   | 'operator.gate.blocked'
+
+/** What an event may carry: an observability event only its allowlisted fields. */
+export type AuditDetail<E extends AuditEvent> = E extends ObservabilityEvent ? ObservabilityDetail<E> : Record<string, unknown>
+export type AuditSink = typeof auditLog
 
 // Lazy actor resolver — set once by the main process (wired to authStatus().email) so every audit
 // record can carry the signed-in identity without logger.ts importing auth.ts (which would be
@@ -288,13 +350,18 @@ export function setAuditActor(fn: () => string | undefined): void {
  * Append a structured audit record. NEVER pass secrets or message/transcript CONTENT — metadata only
  * (provider id, mode, outcome, byte counts, domain, event type). Best-effort; never throws.
  */
-export function auditLog(event: AuditEvent, detail: Record<string, unknown> = {}): void {
+export function auditLog<E extends AuditEvent>(event: E, detail?: AuditDetail<E>): void {
   try {
+    const observability = isObservabilityEvent(event)
+    const rawDetail: Readonly<Record<string, unknown>> = detail ?? {}
+    const fields = observability ? projectEvent(event, rawDetail) : rawDetail
     let actor: string | undefined
-    try {
-      actor = actorResolver?.()
-    } catch {
-      /* a broken resolver must never block the audit write */
+    if (!observability) {
+      try {
+        actor = actorResolver?.()
+      } catch {
+        /* a broken resolver must never block the audit write */
+      }
     }
     if (!chainLoaded) loadChainTip()
     chainSeq += 1
@@ -304,7 +371,7 @@ export function auditLog(event: AuditEvent, detail: Record<string, unknown> = {}
       prev: chainPrev,
       event,
       ...(actor ? { actor } : {}),
-      ...detail
+      ...fields
     })
     // Advance the tip BEFORE handing the line to the transport: audit.info is synchronous here
     // (file transport sync:true), but the chain must stay correct even if a future transport buffers.
@@ -321,7 +388,7 @@ export function auditChainTip(): { seq: number; prev: string } {
   return { seq: chainSeq, prev: chainPrev }
 }
 
-/** Test seam: where the audit trail lives for this process (the real userData in the app, tmp in tests). */
+/** Where the audit trail lives for this process (userData/logs in the app, a scratch directory otherwise). */
 export function auditLogPath(): string {
   return auditFilePath()
 }

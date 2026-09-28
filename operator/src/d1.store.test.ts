@@ -40,6 +40,18 @@ function sqliteD1(db: DatabaseSync): D1DatabaseLike {
         }
       }
       return wrapper
+    },
+    async batch(statements) {
+      db.exec('BEGIN')
+      try {
+        const results = []
+        for (const statement of statements) results.push(await statement.run() as { success: boolean })
+        db.exec('COMMIT')
+        return results
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
     }
   }
 }
@@ -64,8 +76,8 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lat: 45.5,
     lon: -73.5,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'twalteur@amaris.com',
+    hostname: 'Example-MacBook-Pro',
+    sso_email: 'admin@example.test',
     license: 'licensed',
     approval: 'approved',
     license_jti: null,
@@ -112,7 +124,7 @@ beforeEach(() => {
 describe('getSeat', () => {
   it('returns the seat by device id, or null', async () => {
     await store.upsertSeat(seat({ device_id: 'dev-a' }))
-    expect((await store.getSeat('dev-a'))?.hostname).toBe('Tonys-MacBook-Pro')
+    expect((await store.getSeat('dev-a'))?.hostname).toBe('Example-MacBook-Pro')
     expect(await store.getSeat('missing')).toBeNull()
   })
 
@@ -270,13 +282,13 @@ describe('sessions', () => {
 
 describe('groups, tiers, integrations', () => {
   it('CRUDs groups and members', async () => {
-    const g: GroupRow = { id: 'g1', name: 'Amaris', tier: 'metis', notes: null, created_at: 1, created_by: 'tony' }
+    const g: GroupRow = { id: 'g1', name: 'Amaris', tier: 'metis', notes: null, created_at: 1, created_by: 'owner.test' }
     await store.putGroup(g)
     expect(await store.getGroup('g1')).toMatchObject({ name: 'Amaris' })
-    const member: GroupMemberRow = { group_id: 'g1', member: 'a@amaris.com', kind: 'email', added_at: 1, added_by: 'tony' }
+    const member: GroupMemberRow = { group_id: 'g1', member: 'member@example.test', kind: 'email', added_at: 1, added_by: 'owner.test' }
     await store.putGroupMember(member)
     expect(await store.listGroupMembers('g1')).toHaveLength(1)
-    await store.deleteGroupMember('g1', 'a@amaris.com')
+    await store.deleteGroupMember('g1', 'member@example.test')
     expect(await store.listGroupMembers('g1')).toHaveLength(0)
     await store.deleteGroup('g1')
     expect(await store.getGroup('g1')).toBeNull()
@@ -301,7 +313,7 @@ describe('groups, tiers, integrations', () => {
       scope_json: '{"groups":["g1"]}',
       status: 'active',
       created_at: 1,
-      created_by: 'tony',
+      created_by: 'owner.test',
       rotated_at: null,
       revoked_at: null,
       last_used_at: null,
@@ -324,12 +336,12 @@ describe('groups, tiers, integrations', () => {
 
 describe('audit with request/route meta, listAudit filters', () => {
   it('stores and filters by actor/action/since', async () => {
-    await store.audit('id-1', 1000, 'tony@x.com', 'reveal', 'ask-1', 'ask text', { requestId: 'ray-1', route: '/v1/admin/asks/ask-1' })
-    await store.audit('id-2', 2000, 'other@x.com', 'reveal', null, 'x')
+    await store.audit('id-1', 1000, 'admin@example.test', 'reveal', 'ask-1', 'ask text', { requestId: 'ray-1', route: '/v1/admin/asks/ask-1' })
+    await store.audit('id-2', 2000, 'other@example.test', 'reveal', null, 'x')
     const rows = await store.listAudit(10)
     expect(rows).toHaveLength(2)
     expect(rows[0].request_id).toBe(null) // most recent first: id-2 has no meta
-    const filtered = await store.listAudit(10, { actor: 'tony@x.com' })
+    const filtered = await store.listAudit(10, { actor: 'admin@example.test' })
     expect(filtered).toHaveLength(1)
     expect(filtered[0].request_id).toBe('ray-1')
     expect(filtered[0].route).toBe('/v1/admin/asks/ask-1')
@@ -337,8 +349,8 @@ describe('audit with request/route meta, listAudit filters', () => {
   })
 })
 
-describe('vault supersede and clear', () => {
-  it('supersedeActiveVaultKeys marks other active rows superseded and clears their secret', async () => {
+describe('vault put, supersede-on-write, and clear', () => {
+  it('putVaultKeys inserts the new row, supersedes the other active rows for its provider, and records one audit row and one event', async () => {
     await store.putVaultKey({
       id: 'v1',
       provider: 'anthropic',
@@ -348,24 +360,27 @@ describe('vault supersede and clear', () => {
       iv: 'i1',
       status: 'active',
       created_at: 1,
-      created_by: 'tony',
+      created_by: 'owner.test',
       rotated_at: null,
       revoked_at: null
     })
-    await store.putVaultKey({
-      id: 'v2',
-      provider: 'anthropic',
-      label: 'new',
-      last4: 'bbbb',
-      cipher: 'c2',
-      iv: 'i2',
-      status: 'active',
-      created_at: 2,
-      created_by: 'tony',
-      rotated_at: null,
-      revoked_at: null
-    })
-    await store.supersedeActiveVaultKeys('anthropic', 'v2', 500)
+    await store.putVaultKeys(
+      [{
+        id: 'v2',
+        provider: 'anthropic',
+        label: 'new',
+        last4: 'bbbb',
+        cipher: 'c2',
+        iv: 'i2',
+        status: 'active',
+        created_at: 2,
+        created_by: 'owner.test',
+        rotated_at: null,
+        revoked_at: null
+      }],
+      { id: 'audit-1', ts: 2, actor: 'owner.test', detail: 'anthropic ·bbbb' },
+      { id: 'event-1', ts: 2, kind: 'vault', actor: 'owner.test', device_id: null, country: null, detail: 'write anthropic' }
+    )
     const v1 = await store.getVaultKey('v1')
     expect(v1?.status).toBe('superseded')
     expect(v1?.cipher).toBe('')
@@ -375,6 +390,13 @@ describe('vault supersede and clear', () => {
     expect(v2?.cipher).toBe('c2')
     await store.clearVaultSecret('v2')
     expect((await store.getVaultKey('v2'))?.cipher).toBe('')
+
+    const audits = await store.listAudit(10, { action: 'vault-write' })
+    expect(audits).toHaveLength(1)
+    expect(audits[0]).toMatchObject({ actor: 'owner.test', detail: 'anthropic ·bbbb' })
+    const events = await store.listEvents(10)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ id: 'event-1', kind: 'vault', detail: 'write anthropic' })
   })
 })
 
@@ -389,15 +411,15 @@ describe('issued license update/revoke and group fields', () => {
       exp: 999999,
       revoked: 0,
       created_at: 1,
-      created_by: 'tony',
+      created_by: 'owner.test',
       group_id: 'g1',
       tier: 'metis',
-      member: 'a@amaris.com',
+      member: 'member@example.test',
       activated_device: null,
       activated_at: null
     }
     await store.putIssuedLicense(lic)
-    expect(await store.getIssuedLicense('j1')).toMatchObject({ group_id: 'g1', tier: 'metis', member: 'a@amaris.com' })
+    expect(await store.getIssuedLicense('j1')).toMatchObject({ group_id: 'g1', tier: 'metis', member: 'member@example.test' })
     expect(await store.updateIssuedLicense('j1', { activated_device: 'dev-a', activated_at: 5 })).toBe(true)
     expect(await store.getIssuedLicense('j1')).toMatchObject({ activated_device: 'dev-a', activated_at: 5 })
     expect(await store.updateIssuedLicense('missing', { revoked: 1 })).toBe(false)
@@ -417,7 +439,7 @@ describe('issued license update/revoke and group fields', () => {
       exp: 999999,
       revoked: 0,
       created_at: 1,
-      created_by: 'tony'
+      created_by: 'owner.test'
     })
     expect(await store.getIssuedLicense('j2')).toMatchObject({ group_id: null, tier: null, member: null })
   })
@@ -433,7 +455,7 @@ describe('issued license update/revoke and group fields', () => {
         exp: 999999,
         revoked: 0,
         created_at: i,
-        created_by: 'tony'
+        created_by: 'owner.test'
       })
     }
     expect(await store.listIssuedLicenses()).toHaveLength(3)
@@ -501,7 +523,7 @@ describe('listPacks / latestPacks omit the body', () => {
       body: 'a very large signed skill body that should not round-trip through the dashboard',
       signed: 'sig',
       pushed_at: 1,
-      pushed_by: 'tony'
+      pushed_by: 'owner.test'
     })
     const rows = await store.listPacks()
     expect(rows).toHaveLength(1)

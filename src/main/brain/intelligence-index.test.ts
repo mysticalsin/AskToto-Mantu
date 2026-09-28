@@ -1,9 +1,11 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { app } from 'electron'
 import { DEFAULT_SETTINGS } from '@shared/ipc'
 import * as brainStore from './store'
+import { resetMaintenanceGateForTests, settlePriorExit, startMaintenanceGate } from '../infra/scheduler/maintenance'
 import {
   INTELLIGENCE_INDEX_HOURS,
   INTELLIGENCE_INDEX_TZ,
@@ -18,14 +20,20 @@ import {
   readIntelligenceIndexState,
   intelligenceIndexStatus,
   runIntelligenceIndex,
+  settleIntelligenceIndexForTests,
   setIntelligenceIndexWork,
   shouldCatchUp,
+  triggerForReason,
   writeIntelligenceIndexState,
   zonedDateTimeToUtc,
   zonedParts,
   type IntelligenceIndexResult,
   type IntelligenceIndexCompletion
 } from './intelligence-index'
+
+const auditLogMock = vi.hoisted(() => vi.fn())
+vi.mock('electron')
+vi.mock('../logger', async (orig) => ({ ...(await orig()), auditLog: auditLogMock }))
 
 function completedRun(result: IntelligenceIndexResult) {
   return { result, completion: Promise.resolve({ ok: !result.error && !result.deferred }) }
@@ -38,10 +46,24 @@ function completionGate() {
   return { promise, resolve, reject }
 }
 
-afterEach(() => {
+let userData: string
+
+beforeEach(() => {
+  userData = mkdtempSync(join(tmpdir(), 'intel-idx-userdata-'))
+  ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
+    if (name === 'userData') return userData
+    return join(userData, name)
+  })
+})
+
+afterEach(async () => {
+  await settleIntelligenceIndexForTests()
   vi.restoreAllMocks()
   resetIntelligenceIndexLockForTests()
   setIntelligenceIndexWork(null)
+  resetMaintenanceGateForTests()
+  auditLogMock.mockReset()
+  rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
 
 function torontoMs(year: number, month: number, day: number, hour: number, minute = 0): number {
@@ -261,6 +283,75 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
     expect(r).toEqual({ ran: false, queued: 0, reason: 'current' })
     expect(calls).toBe(0)
   })
+
+  it('catch-up no-ops after a failed pass finished after the elapsed slot', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'intel-idx-'))
+    const s = { ...DEFAULT_SETTINGS, meetingsFolder: folder, encryptTranscripts: false }
+    await writeIntelligenceIndexState({
+      lastSuccessAt: 0,
+      lastFinishedAt: torontoMs(2026, 8, 31, 12, 5)
+    }, s)
+    let calls = 0
+    setIntelligenceIndexWork(async () => {
+      calls += 1
+      return completedRun({ ran: true, queued: 1 })
+    })
+    const r = await catchUpIntelligenceIndexIfNeeded(torontoMs(2026, 8, 31, 13, 0), s)
+    expect(r).toEqual({ ran: false, queued: 0, reason: 'current' })
+    expect(calls).toBe(0)
+  })
+
+  it('catch-up waits for the maintenance window, then re-checks', async () => {
+    let uptime = 0
+    const scheduled: Array<{ run: () => void; ms: number }> = []
+    resetMaintenanceGateForTests()
+    startMaintenanceGate({
+      uptimeMs: () => uptime,
+      interactiveActive: () => false,
+      schedule: (run: () => void, ms: number) => { scheduled.push({ run, ms }) }
+    })
+    settlePriorExit('clean')
+    const folder = mkdtempSync(join(tmpdir(), 'intel-idx-'))
+    const s = { ...DEFAULT_SETTINGS, meetingsFolder: folder, encryptTranscripts: false }
+    await writeIntelligenceIndexState({ lastSuccessAt: torontoMs(2026, 8, 31, 6, 0) }, s)
+    const work = vi.fn(async () => completedRun({ ran: true, queued: 1 }))
+    setIntelligenceIndexWork(work)
+    const pending = catchUpIntelligenceIndexIfNeeded(torontoMs(2026, 8, 31, 13, 0), s)
+    await Promise.resolve()
+    expect(work).not.toHaveBeenCalled()
+    uptime = 121_000
+    scheduled[0].run()
+    await expect(pending).resolves.toMatchObject({ ran: true, queued: 1 })
+    await settleIntelligenceIndexForTests()
+    expect(work).toHaveBeenCalledOnce()
+  })
+
+  it('an automatic pass with an unavailable ledger runs no work and audits ledger_unavailable, while a click still runs', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'intel-idx-'))
+    const s = { ...DEFAULT_SETTINGS, meetingsFolder: folder, encryptTranscripts: false }
+    const indexUnavailableSpy = vi.spyOn(brainStore, 'indexUnavailable').mockReturnValue('undecryptable')
+    const work = vi.fn(async () => completedRun({ ran: true, queued: 1 }))
+    setIntelligenceIndexWork(work)
+    const scheduled = await runIntelligenceIndex('schedule', s)
+    expect(scheduled).toMatchObject({ ran: false, queued: 0 })
+    expect(work).not.toHaveBeenCalled()
+    expect(auditLogMock).toHaveBeenCalledWith('scheduler.job', {
+      kind: 'intelligence-index',
+      outcome: 'deferred',
+      deferredReason: 'ledger_unavailable'
+    })
+
+    indexUnavailableSpy.mockReturnValue(null)
+    const click = await runIntelligenceIndex('click', s)
+    expect(click).toMatchObject({ ran: true, queued: 1 })
+  })
+
+  it('triggerForReason maps click to user and every other reason to automatic', () => {
+    expect(triggerForReason('click')).toBe('user')
+    expect(triggerForReason('schedule')).toBe('automatic')
+    expect(triggerForReason('catch-up')).toBe('automatic')
+    expect(triggerForReason('import-idle')).toBe('automatic')
+  })
 })
 
 describe('Intelligence completion, not dispatch, owns success', () => {
@@ -284,6 +375,10 @@ describe('Intelligence completion, not dispatch, owns success', () => {
     expect(work).toHaveBeenCalledTimes(1)
     gate.resolve({ ok: true, recapped: 2 })
     await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
+    expect(readIntelligenceIndexState(s)).toEqual({
+      lastSuccessAt: expect.any(Number),
+      lastFinishedAt: expect.any(Number)
+    })
     expect(readIntelligenceIndexState(s).lastSuccessAt).toBeGreaterThan(123)
     expect(readIntelligenceIndexState(s).lastError).toBeUndefined()
   })
@@ -295,7 +390,7 @@ describe('Intelligence completion, not dispatch, owns success', () => {
     await runIntelligenceIndex('click', s)
     gate.resolve({ ok: false, error: `${stage} could not finish. Retry Update Intelligence.` })
     await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
-    expect(readIntelligenceIndexState(s)).toEqual({ lastSuccessAt: 123, lastError: `${stage} could not finish. Retry Update Intelligence.` })
+    expect(readIntelligenceIndexState(s)).toEqual({ lastSuccessAt: 123, lastFinishedAt: expect.any(Number), lastError: `${stage} could not finish. Retry Update Intelligence.` })
   })
 
   it('does not promote a deferred dispatch even if its local subset completes', async () => {

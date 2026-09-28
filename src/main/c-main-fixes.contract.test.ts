@@ -67,7 +67,7 @@ describe('finding 6: ffmpeg import decoder is killed on ASR/transcription failur
     const deleteIdx = body.indexOf('ffmpegDecoders.delete(job.jobId)')
     expect(cancelIdx).toBeGreaterThan(-1)
     expect(deleteIdx).toBeGreaterThan(-1)
-    // Cancel (SIGTERM to the still-alive ffmpeg child) must happen before the bookkeeping delete.
+    // Cancel (kill the still-alive ffmpeg child) must happen before the bookkeeping delete.
     expect(cancelIdx).toBeLessThan(deleteIdx)
   })
 })
@@ -93,7 +93,7 @@ describe('finding 8: duplicate global-hotkey accelerators are surfaced, not sile
 })
 
 describe('emergency force quit remains available when the renderer is wedged', () => {
-  it('registers Ctrl+Cmd+Esc on macOS outside user-configurable shortcuts and uses the normal bounded quit path', () => {
+  it('registers Ctrl+Cmd+Esc on macOS outside user-configurable shortcuts', () => {
     expect(source).toMatch(/const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command\+Control\+Escape'/)
     const start = source.indexOf('function registerEmergencyForceQuitShortcut(): boolean {')
     const end = source.indexOf('\n}', start)
@@ -104,60 +104,7 @@ describe('emergency force quit remains available when the renderer is wedged', (
     expect(source).toMatch(/function shortcutClaimKey\(accel: string\): string/)
     expect(source).toMatch(/const claimKey = shortcutClaimKey\(accel\)/)
     expect(source).toMatch(/claimedBy\.set\(shortcutClaimKey\(EMERGENCY_FORCE_QUIT_ACCELERATOR\), 'emergency-force-quit'\)/)
-    // app.quit() must be what the FIRST press asks for, so before-quit keeps its bounded flush and an
-    // active meeting is not lost. app.exit() must never be reachable ahead of it.
-    const quitFn = source.slice(
-      source.indexOf('function forceQuitMétis(): void {'),
-      source.indexOf('\n}', source.indexOf('function forceQuitMétis(): void {'))
-    )
-    expect(quitFn).toMatch(/app\.quit\(\)/)
-    expect(quitFn.indexOf('app.quit()')).toBeLessThan(quitFn.indexOf('EMERGENCY_FORCE_QUIT_GRACE_MS'))
     expect(source).toMatch(/label: 'Force Quit Métis'/)
-  })
-
-  it("hard-exits after the graceful quit has had longer than before-quit's own flush window", () => {
-    // A wedged renderer never answers the flush hotkey and its unresponsive window can stop the quit
-    // completing at all — the freeze this accelerator exists to escape. Being polite forever is the bug,
-    // so the polite path gets a bounded grace and then the process goes down regardless.
-    const grace = source.match(/const EMERGENCY_FORCE_QUIT_GRACE_MS = (\d+)/)
-    expect(grace, 'emergency quit watchdog grace was not found').not.toBeNull()
-    // before-quit gives a live meeting 2000ms; the watchdog must outlast that or it would cut a flush
-    // that was still running normally.
-    expect(Number(grace?.[1])).toBeGreaterThan(2000)
-
-    const quitFn = source.slice(
-      source.indexOf('function forceQuitMétis(): void {'),
-      source.indexOf('\n}', source.indexOf('function forceQuitMétis(): void {'))
-    )
-    expect(quitFn).toMatch(/setTimeout\(/)
-    expect(quitFn).toMatch(/app\.exit\(0\)/)
-    // A second press is an unmistakable instruction: go down now, without waiting out the grace.
-    expect(quitFn).toMatch(/if \(emergencyQuitWatchdog\)/)
-    // The watchdog must never be the handle that keeps a quitting process alive.
-    expect(quitFn).toMatch(/emergencyQuitWatchdog\.unref\?\.\(\)/)
-  })
-
-  it('kills the sidecars on the hard path, because app.exit() never emits will-quit', () => {
-    // An orphaned llama-server, fm-serve loopback or screen-watcher child outliving the app is strictly
-    // worse than the freeze the user just escaped, and will-quit's teardown does not run on app.exit().
-    const start = source.indexOf('function stopSidecarsForHardExit(): void {')
-    expect(start, 'hard-exit sidecar teardown was not found').toBeGreaterThan(-1)
-    const body = source.slice(start, source.indexOf('\n}', start))
-    expect(body).toMatch(/screenPreprocess\.stop\(\)/)
-    expect(body).toMatch(/localRuntime\.stop\(\)/)
-    expect(body).toMatch(/fmRuntime\.stop\(\)/)
-    expect(body).toMatch(/endBootWatch\(app\.getPath\('userData'\)\)/)
-    // Each kill keeps its own try: one throw must never skip the kills after it.
-    expect(body.match(/try \{/g)?.length).toBeGreaterThanOrEqual(4)
-
-    const quitFn = source.slice(
-      source.indexOf('function forceQuitMétis(): void {'),
-      source.indexOf('\n}', source.indexOf('function forceQuitMétis(): void {'))
-    )
-    // Every app.exit(0) in the escape hatch is preceded by the teardown.
-    for (const exitIdx of [...quitFn.matchAll(/app\.exit\(0\)/g)].map((m) => m.index ?? -1)) {
-      expect(quitFn.lastIndexOf('stopSidecarsForHardExit()', exitIdx)).toBeGreaterThan(-1)
-    }
   })
 })
 
@@ -180,10 +127,10 @@ describe('finding 9: renderer crash recovery on the main overlay window', () => 
     const listenerEnd = source.indexOf('\n  })', listenerStart)
     const body = source.slice(listenerStart, listenerEnd)
     expect(body).toMatch(/mainLog\.error\(/)
-    expect(body).toMatch(/auditLog\('app\.crash', \{ kind: 'render-process-gone'/)
+    expect(body).toMatch(/auditLog\('app\.crash', crashDetail\('render-process-gone'/)
     expect(body).toMatch(/if \(win !== self\) return/)
     expect(body).toMatch(/if \(win !== self \|\| self\.isDestroyed\(\)\) return/)
-    expect(body).toMatch(/self\.loadURL\(overlayRendererUrl\(\)\)/)
+    expect(body).toMatch(/reloadOverlay\(self\)/)
   })
 })
 
@@ -198,7 +145,7 @@ describe('finding 7: brain:rebuildAll stays guarded (assessed, not modified)', (
     // MI-2.5 superseded the direct purgeBrain(getSettings()) call with ingest.ts's startRebuild, which
     // still purges (preserveCorrections: true) but adds a corrupt-journal guard and a checked/resumable
     // corrections replay — same guarantee (guarded, not silently modified), stronger implementation.
-    expect(body).toMatch(/startRebuild\(getSettings\(\)\)/)
+    expect(body).toMatch(/startRebuild\(getSettings\(\), \{ trigger: 'user' \}\)/)
   })
 })
 

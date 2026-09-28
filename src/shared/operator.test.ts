@@ -188,8 +188,8 @@ describe('projectOperatorIngestMetadata', () => {
       seatHash: 'seat-abc',
       os: 'darwin',
       appVersion: '1.8.9',
-      hostname: 'tonys-mac',
-      ssoEmail: 'tony@example.com',
+      hostname: 'example-mac',
+      ssoEmail: 'owner@example.test',
       license: 'licensed',
       licenseId: 'abcdef0123456789',
       licenseLast4: 'Z9Z9',
@@ -224,8 +224,8 @@ describe('projectOperatorIngestMetadata', () => {
       seatHash: 'seat-abc',
       os: 'darwin',
       appVersion: '1.8.9',
-      hostname: 'tonys-mac',
-      ssoEmail: 'tony@example.com',
+      hostname: 'example-mac',
+      ssoEmail: 'owner@example.test',
       license: 'licensed',
       licenseId: 'abcdef0123456789',
       licenseLast4: 'Z9Z9',
@@ -245,10 +245,10 @@ describe('projectOperatorIngestMetadata', () => {
         attempt: 2,
         latencyMs: 78,
         credentialSource: 'operator',
-        error: 'timeout posting Customer Alpha to https://crm.example/record/42',
-        title: 'Customer Alpha renewal',
+        error: 'timeout posting Example Customer to https://crm.example/record/42',
+        title: 'Example Customer renewal',
         meetingHash: 'abcdef0123456789',
-        action: 'create Customer Alpha opportunity',
+        action: 'create Example Customer opportunity',
         remoteId: 'record-42',
         remoteUrl: 'https://crm.example/record/42',
         payload: { description: 'customer notes' }
@@ -270,7 +270,7 @@ describe('projectOperatorIngestMetadata', () => {
     expect(projectOperatorIngestMetadata({ event: 'future-event', id: 'future-1', body: 'private' })).toBeNull()
     expect(projectOperatorIngestMetadata({ event: 'rating', id: 'contains private words', rating: 'up' })).toBeNull()
     expect(projectOperatorIngestMetadata({ event: 'crm', id: 'crm-1', status: 'made-up' })).toBeNull()
-    expect(projectOperatorIngestMetadata({ id: 'ask-unknown-error', outcome: 'error', error: 'Customer Alpha failed' })).toMatchObject({
+    expect(projectOperatorIngestMetadata({ id: 'ask-unknown-error', outcome: 'error', error: 'Example Customer failed' })).toMatchObject({
       id: 'ask-unknown-error',
       error: 'unknown'
     })

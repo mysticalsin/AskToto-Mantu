@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { formatCommand, releasePlans } from './release/orchestrate.mjs'
 
 const REPO = join(__dirname, '..')
 const GATE = join(REPO, 'scripts', 'check-cloudflare-key-valid.mjs')
@@ -63,8 +64,15 @@ describe('MQA-254 — the embedded Cloudflare key must be provably accepted befo
 
   it('runs before packaging, but never before the host guard', () => {
     const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
-    for (const chain of ['dist:win', 'release:build:win', 'dist', 'dist:local', 'release:build:mac']) {
-      const script = pkg.scripts[chain]
+    const chains = [
+      ['dist:win', pkg.scripts['dist:win']],
+      ['release:build:win', releasePlans.win.map(formatCommand).join(' && ')],
+      ['dist', pkg.scripts.dist],
+      ['dist:local', pkg.scripts['dist:local']],
+      ['release:build:mac', releasePlans.mac.map(formatCommand).join(' && ')]
+    ] as const
+
+    for (const [chain, script] of chains) {
       expect(script, `${chain} missing`).toBeTruthy()
 
       const keyAt = script.indexOf('check-cloudflare-key-valid.mjs')

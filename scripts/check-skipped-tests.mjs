@@ -67,16 +67,25 @@ const REASONS = [
   },
   {
     match: 'ffmpeg-decoder.test.ts',
-    why: 'Needs the packaged ffmpeg sidecar binary for this OS. CI linux images without the sidecar skip the live decode; contract tests cover window sizing without spawning ffmpeg.'
+    why: "Needs the packaged ffmpeg sidecar binary for this OS. CI linux images without the sidecar skip the live decode; contract tests cover window sizing without spawning ffmpeg. The cancel test's SIGTERM-immune stand-in is a POSIX shell script; Windows has no signals to ignore (kill is TerminateProcess), so it runs on linux and darwin only."
   },
   {
     match: 'win-security.test.ts',
     why: 'Probes Windows ACL owner SIDs and admin-managed policy files. No-op / skipped on non-Windows hosts by design.'
+  },
+  {
+    match: 'dataless.test.ts',
+    why: 'Runs the real Windows PowerShell attribute probe against an NTFS file carrying FILE_ATTRIBUTE_OFFLINE. The binary and the attribute exist only on Windows; the shared wire protocol, decoding and failure policy run on every platform through a stand-in probe.'
+  },
+  {
+    match: 'gateway.test.ts',
+    why: 'Pins libuv pool threads with real FIFOs, the kernel-blocking stand-in for a cloud-only read. Windows has no FIFOs; the admission, deadline, sharing and dataless rules run on every platform through an in-memory fs whose calls can be held open.'
   }
 ]
 
-/** Skips accepted on this platform. Lower it when a skip is retired; never raise it to accommodate one. */
-const BASELINE = { win32: 12, darwin: 1, linux: 18 }
+/** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
+ *  Lower it when a skip is retired; never raise it for an undeclared skip. */
+const BASELINE = { win32: 16, darwin: 2, linux: 19 }
 
 const platform = process.platform
 const allowed = BASELINE[platform]

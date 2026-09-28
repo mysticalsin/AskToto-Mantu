@@ -158,7 +158,7 @@ describe('corrections engine', () => {
 
     // Simulate brain:rebuildAll: purge derived entities (preserving the correction journal, exactly
     // like the real IPC handler does), re-run ingest of the SAME extractions, then replay corrections.
-    const purge = purgeBrain(s, { preserveCorrections: true })
+    const purge = purgeBrain(s, { mode: 'rebuild', preserveCorrections: true })
     expect(purge.ok).toBe(true)
     expect(readCorrectionsJournal(s)).toHaveLength(4) // journal survived the purge
 
@@ -186,7 +186,7 @@ describe('corrections engine', () => {
 
     const liveSnapshot = snapshotEntities(s)
 
-    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
     await ingestExtraction(s, accountOnly('Acme Corp'), transcriptMd('2026-06-01'), join(folder, 'r1.md'))
     await ingestExtraction(s, accountOnly('Acme'), transcriptMd('2026-06-02'), join(folder, 'r2.md'))
     const replay = await replayCorrections(s)
@@ -209,7 +209,7 @@ describe('corrections engine', () => {
     const liveSnapshot = snapshotEntities(s)
     expect((liveSnapshot[`account/${ID}`] as { name: string; aliases: string[] }).name).toBe('Gamma Analytics')
 
-    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
     await ingestExtraction(s, accountOnly('Alpha Analytics'), transcriptMd('2026-06-01'), join(folder, 'c1.md'))
     await ingestExtraction(s, accountOnly('Beta Analytics'), transcriptMd('2026-06-02'), join(folder, 'c2.md'))
     await ingestExtraction(s, accountOnly('Gamma Analytics'), transcriptMd('2026-06-03'), join(folder, 'c3.md'))
@@ -260,7 +260,7 @@ describe('corrections engine', () => {
 
     const liveSnapshot = snapshotEntities(s)
 
-    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
     await ingestExtraction(s, preRename, transcriptMd('2026-06-01'), join(folder, 'g1.md'))
     await ingestExtraction(s, postRenameReuse, transcriptMd('2026-07-01'), join(folder, 'g2.md'))
     const replay = await replayCorrections(s)
@@ -319,7 +319,7 @@ describe('corrections engine', () => {
 
     const liveSnapshot = snapshotEntities(s)
 
-    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
     await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'ch1.md'))
     await ingestExtraction(s, m2, transcriptMd('2026-06-02'), join(folder, 'ch2.md'))
     await ingestExtraction(s, m3, transcriptMd('2026-06-03'), join(folder, 'ch3.md'))
@@ -360,7 +360,7 @@ describe('corrections engine', () => {
 
     const liveSnapshot = snapshotEntities(s)
 
-    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
     await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'am1.md'))
     await ingestExtraction(s, m2, transcriptMd('2026-06-02'), join(folder, 'am2.md'))
     const replay = await replayCorrections(s)
@@ -389,7 +389,7 @@ describe('corrections engine', () => {
 
     const liveSnapshot = snapshotEntities(s)
 
-    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
     await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'dr1.md'))
     const replay = await replayCorrections(s)
     expect(replay.warnings).toEqual([])
@@ -420,7 +420,7 @@ describe('corrections engine', () => {
 
     const liveSnapshot = snapshotEntities(s)
 
-    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
     await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'dm1.md'))
     await ingestExtraction(s, m2, transcriptMd('2026-06-02'), join(folder, 'dm2.md'))
     const replay = await replayCorrections(s)
@@ -452,7 +452,7 @@ describe('corrections engine', () => {
     const liveExtraction = readMeetingExtraction(s, extractionSlug)
     expect(liveExtraction!.account!.name).toBe('Acme Corp') // written before the rename ever happened
 
-    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
     await ingestExtraction(s, preRename, transcriptMd('2026-06-01'), file)
     await replayCorrections(s)
     const rebuiltExtraction = readMeetingExtraction(s, extractionSlug)
@@ -492,7 +492,7 @@ describe('corrections engine', () => {
     expect(readCorrectionsJournal(s)).toHaveLength(2)
     const liveSnapshot = snapshotEntities(s)
 
-    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
     await ingestExtraction(s, alice, transcriptMd('2026-06-01'), join(folder, 'pin1.md'))
     await ingestExtraction(s, bob, transcriptMd('2026-06-02'), join(folder, 'pin2.md'))
     const replay = await replayCorrections(s)
@@ -526,7 +526,7 @@ describe('corrections engine', () => {
     // The load-bearing assertion: a full rebuild re-ingests the ORIGINAL extraction (c.by === 'Alice
     // Adams') under the rename. Without the commitment.by rewrite the name-match misses and the commitment
     // vanishes; with it, the ledger survives byte-for-byte.
-    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
     await ingestExtraction(s, m, transcriptMd('2026-06-01'), file)
     await replayCorrections(s)
     expect(readPerson(s, ALICE)!.name).toBe('Alicia')
@@ -1403,7 +1403,7 @@ describe('corrections engine', () => {
       expect((await mergeEntities(s, { kind: 'person', fromId: ALICE, intoId: SURVIVOR })).ok).toBe(true)
       expect(statusOf(SURVIVOR)).toBe('rejected')
 
-      expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+      expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
       await ingestBoth()
       const replay = await replayCorrections(s)
 
@@ -1447,7 +1447,7 @@ describe('corrections engine', () => {
       expect(readPerson(s, BOB)!.role).toBe('Survivor Pin')
       const liveSnapshot = snapshotEntities(s)
 
-      expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+      expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
       await ingestBoth()
       const replay = await replayCorrections(s)
       expect(replay.warnings).toEqual([])

@@ -38,7 +38,7 @@ const graph = {
   nodes: [
     { id: 'bnp_note', label: 'BNP Paribas RFP', file_type: 'document', source_file: '/notes/2026-06-01_bnp.md' },
     { id: 'owens_note', label: 'Owens-Corning extension', file_type: 'document', source_file: '/notes/2026-06-02_owens.md' },
-    { id: 'tony', label: 'Tony Walteur', file_type: 'concept', source_file: '/notes/2026-06-01_bnp.md' },
+    { id: 'tony', label: 'Metis Maintainers', file_type: 'concept', source_file: '/notes/2026-06-01_bnp.md' },
     { id: 'cyber', label: 'Mantu cybersecurity team', file_type: 'concept', source_file: '/notes/2026-06-02_owens.md' },
     { id: 'lonely', label: 'Unrelated topic', file_type: 'concept', source_file: '/notes/2026-06-09_other.md' }
   ],
@@ -54,8 +54,8 @@ describe('computeRelated', () => {
   it('connects two notes through a shared person (1-hop, my concept) and team (2-hop, neighbour concept)', () => {
     const r = computeRelated(graph, '/notes/2026-06-01_bnp.md')
     expect(r.ok).toBe(true)
-    // BNP owns "Tony"; it links to "cyber" (owned by Owens) → both are topics of this note.
-    expect(r.topics).toEqual(expect.arrayContaining(['Tony Walteur', 'Mantu cybersecurity team']))
+    // BNP owns "Example"; it links to "cyber" (owned by Owens) → both are topics of this note.
+    expect(r.topics).toEqual(expect.arrayContaining(['Metis Maintainers', 'Mantu cybersecurity team']))
     // Owens connects to BNP via both shared concepts.
     const owens = r.notes.find((n) => n.title === 'Owens-Corning extension')
     expect(owens).toBeTruthy()
@@ -199,8 +199,11 @@ describe('purgeGraphArtifacts — the whole graph directory Metis owns (MQA-170)
     )
   })
   afterEach(() => {
+    // Restore the module mock's own default (see __mocks__/electron.ts) rather than a hardcoded literal —
+    // that default is itself sandboxed per-run under ASKTOTO_TEST_SANDBOX_ROOT.
+    const sandbox = process.env.ASKTOTO_TEST_SANDBOX_ROOT ?? '/tmp/asktoto-test-fallback'
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
-      name === 'userData' ? '/tmp/asktoto-test-userdata' : `/tmp/asktoto-${name}`
+      join(sandbox, name === 'userData' ? 'userdata' : name)
     )
     rmSync(userData, { recursive: true, force: true })
   })

@@ -4,6 +4,7 @@ import { LocalVisionEvidenceSchema } from './local-ai'
 import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
+import { RENDERER_VIEWS } from './renderer-view'
 
 /** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
 export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
@@ -12,6 +13,34 @@ export const ListeningStatePayloadSchema = z.object({
   startedAt: LiveMeetingStartedAtSchema.optional()
 })
 export type ListeningStatePayload = z.infer<typeof ListeningStatePayloadSchema>
+
+export type PreservedBrainIndexCopy = {
+  id: string
+  createdAt: number
+  size: number
+  restorable: boolean
+}
+
+export type PreservedBrainIndexListResult = {
+  copies: PreservedBrainIndexCopy[]
+}
+
+export const HistoryTraceSchema = z.object({ requestId: z.string().uuid(), sentAt: z.number().finite().positive() })
+export type HistoryTrace = z.infer<typeof HistoryTraceSchema>
+export const HistorySettledSchema = z.object({
+  requestId: z.string().uuid(),
+  outcome: z.enum(['ok', 'failed', 'discarded']),
+  ipcMs: z.number().finite().nonnegative(),
+  renderMs: z.number().finite().nonnegative().optional()
+})
+export type HistorySettled = z.infer<typeof HistorySettledSchema>
+export const RendererCrashContextSchema = z.object({ view: z.enum(RENDERER_VIEWS), listening: z.boolean() })
+export type RendererCrashContext = z.infer<typeof RendererCrashContextSchema>
+export interface RendererCrashReport extends RendererCrashContext {
+  message: string
+  stack?: string
+  componentStack?: string
+}
 
 export const ProviderIdSchema = z.enum([
   'anthropic',
@@ -80,6 +109,9 @@ export const IPC = {
   restoreEmbeddedCloudflareKey: 'settings:restoreEmbeddedCloudflareKey',
   brainOpenDashboard: 'brain:openDashboard',
   brainRebuildAll: 'brain:rebuildAll',
+  brainPreservedIndexesList: 'brain:preservedIndexes:list',
+  brainPreservedIndexRestore: 'brain:preservedIndex:restore',
+  brainPreservedIndexDelete: 'brain:preservedIndex:delete',
   brainClearJournalCorruption: 'brain:clearJournalCorruption',
   authStatus: 'auth:status',
   authSignIn: 'auth:signIn',
@@ -147,6 +179,7 @@ export const IPC = {
   openBrainForClaude: 'brain:open-for-claude',
   recallList: 'recall:list',
   recallSearch: 'recall:search',
+  historySettled: 'history:settled',
   recallOpen: 'recall:open',
   recallRead: 'recall:read',
   recallExportPlain: 'recall:export-plain', // user-initiated decrypted md copy of ONE meeting
@@ -1113,9 +1146,7 @@ export const BaseSettingsSchema = z.object({
    *  the ON-DEVICE model and cache the description, so "What's on my screen" answers from pre-computed text
    *  instead of a cold capture + full-image round trip. On-device only — nothing extra is sent to the cloud;
    *  Private View hard-blocks it. Default OFF — explicit opt-in. Continuous screen reading is its own
-   *  consent decision, and it also requires Local AI to be enabled (itself off by default). (The Cahê
-   *  pilot still seeds both true explicitly — cahe-embedded-key.ts — which is an explicit per-edition
-   *  choice, not a default.) */
+   *  consent decision, and it also requires Local AI to be enabled (itself off by default). */
   backgroundScreenContext: z.boolean().default(false),
   // How see-through the overlay's glass background is. A multiplier on the default glass alpha values
   // (see --glass-fill etc. in styles.css) — 1 = today's default look, lower = more transparent (see more
@@ -1168,7 +1199,7 @@ export const BaseSettingsSchema = z.object({
    */
   cloudSttProvider: z.enum(['cloudflare-nova3', 'soniox', 'unconfigured']).default('unconfigured'),
   /**
-   * Cloudflare AI Gateway id for Nova-3 live WS (Operator ensureDefaultAiGateway uses `default`).
+   * Cloudflare AI Gateway id for Nova-3 live WS (Operator verifyDefaultGatewayPrivacy uses `default`).
    * Blank → resolveCloudSttGatewayId falls through env then `default`. Not a secret.
    */
   cfAiGatewayId: z.string().max(128).default(''),
@@ -1339,15 +1370,20 @@ export const BaseSettingsSchema = z.object({
       preferLocal: z.boolean().default(false)
     })
     .default({ enabled: true, maxPassesPerDay: 2, preferLocal: false }),
-  // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
-  // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). ON by
-  // default since 2026-08-21 (MQA-235 / Plaud-parity work): the embedding model ships in every build
-  // (runtime-assets-manifest.json pins resources/models/speaker/embedding.onnx; check-packaged-runtime
-  // verifies it), the whole pass is on-device, and speaker-id.ts degrades to unlabeled lines when the
-  // extractor is unavailable — so the default costs nothing where it cannot work.
+  // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): "who's speaking" labels on THEM transcript lines
+  // from on-device voice embeddings (sherpa-onnx, same addon as Parakeet).
+  // `enabled` (default on) gives session-local labels: "Speaker N" clusters held in memory for one meeting. The
+  // embedding model ships in every build and speaker-id.ts degrades to unlabeled lines when the extractor is
+  // unavailable, so this default costs nothing where it cannot work.
+  // `saveVoiceprints` (default off) is the explicit opt-in for anything that outlives a meeting: only while it is
+  // on does speaker-id.ts add to userData/voiceprints.json (named profiles and the operator's own echo-defense
+  // voiceprint). A stored speakerId written before this field existed parses with it off.
   speakerId: z
-    .object({ enabled: z.boolean().default(true) })
-    .default({ enabled: true }),
+    .object({
+      enabled: z.boolean().default(true),
+      saveVoiceprints: z.boolean().default(false)
+    })
+    .default({ enabled: true, saveVoiceprints: false }),
   // Durable "time saved" usage counters (shared/time-saved.ts). Incremented ONCE when a meeting file is
   // first written (main/store.ts recordMeetingSummarized) — a rebuild/re-index never re-counts, and this
   // survives transcriptRetentionDays deleting the meetings a live sum would need, so the lifetime figure
@@ -1722,7 +1758,7 @@ export const DEFAULT_SETTINGS: Settings = {
     useFor: { suggest: false, summary: false, vision: false },
     fallback: false
   },
-  speakerId: { enabled: true },
+  speakerId: { enabled: true, saveVoiceprints: false },
   brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: false },
   usageStats: { meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 },
   timeSaved: { writeupRatio: 0.2, floorMin: 5, capMin: 30 },

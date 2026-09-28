@@ -13,6 +13,7 @@
  * trade a boot stall for a provider outage on exactly the networks this module exists to serve.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { LookupFunction } from 'node:net'
 
 const resolveProxy = vi.fn<(url: string) => Promise<string>>()
 const setGlobalDispatcher = vi.fn()
@@ -28,15 +29,20 @@ vi.mock('../logger', () => ({
 
 const fakes = vi.hoisted(() => {
   class FakeProxyAgent {
-    constructor(public readonly uri: string) {}
+    readonly uri: string
+    constructor(opts: { uri: string; factory?: unknown }) {
+      this.uri = opts.uri
+    }
   }
   class FakeAgent {
     constructor(public readonly opts: unknown) {}
   }
-  class FakeEnvHttpProxyAgent {}
+  class FakeEnvHttpProxyAgent {
+    constructor(public readonly opts?: unknown) {}
+  }
   return { FakeProxyAgent, FakeAgent, FakeEnvHttpProxyAgent }
 })
-const { FakeProxyAgent, FakeAgent } = fakes
+const { FakeProxyAgent, FakeAgent, FakeEnvHttpProxyAgent } = fakes
 
 vi.mock('undici', () => ({
   Agent: fakes.FakeAgent,
@@ -45,9 +51,13 @@ vi.mock('undici', () => ({
   setGlobalDispatcher: (d: unknown) => setGlobalDispatcher(d)
 }))
 
-import { installProxyAwareFetch } from './install-proxy'
+import { installProxyAwareFetch, routeDispatcher } from './install-proxy'
 
 const PROXY_ENV_KEYS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
+const SOCKS_PROXY_URLS = ['socks5://127.0.0.1:1080', 'socks://127.0.0.1:1080'] as const
+const SOCKS_PROXY_CASES = PROXY_ENV_KEYS.flatMap((proxyEnvKey) =>
+  SOCKS_PROXY_URLS.map((proxyUrl) => [proxyEnvKey, proxyUrl] as const)
+)
 
 describe('MQA-190 — the OS proxy probe must never hold boot open', () => {
   let saved: Record<string, string | undefined>
@@ -104,7 +114,7 @@ describe('MQA-190 — the OS proxy probe must never hold boot open', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2)
-    const late = setGlobalDispatcher.mock.calls[1][0] as FakeProxyAgent
+    const late = setGlobalDispatcher.mock.calls[1][0] as InstanceType<typeof FakeProxyAgent>
     expect(late).toBeInstanceOf(FakeProxyAgent)
     expect(late.uri).toBe('http://corp-proxy.internal:8080')
   })
@@ -113,6 +123,112 @@ describe('MQA-190 — the OS proxy probe must never hold boot open', () => {
     resolveProxy.mockResolvedValue('PROXY fast-proxy.corp:3128')
     await Promise.all([installProxyAwareFetch(), vi.advanceTimersByTimeAsync(0)])
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
-    expect((setGlobalDispatcher.mock.calls[0][0] as FakeProxyAgent).uri).toBe('http://fast-proxy.corp:3128')
+    expect((setGlobalDispatcher.mock.calls[0][0] as InstanceType<typeof FakeProxyAgent>).uri).toBe('http://fast-proxy.corp:3128')
   })
+})
+
+/**
+ * M2-0147 needs a second dispatcher that routes exactly like the global one, but with its own
+ * connect-time `lookup` — so mcpClient.ts can pin one MCP session's resolved address without bypassing
+ * whatever proxy this machine is behind (env, system/PAC, or none). `routeDispatcher(lookup)` is that
+ * function: same route, a fresh dispatcher, parameterized by `lookup`.
+ */
+describe('routeDispatcher — a second dispatcher that routes like the global one', () => {
+  const lookup = vi.fn() as unknown as LookupFunction
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    for (const k of PROXY_ENV_KEYS) delete process.env[k]
+    resolveProxy.mockReset()
+    setGlobalDispatcher.mockReset()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    for (const k of PROXY_ENV_KEYS) delete process.env[k]
+  })
+
+  it('P1: DIRECT route — a FakeAgent whose opts.connect.lookup is the given lookup', async () => {
+    resolveProxy.mockResolvedValue('DIRECT')
+    await Promise.all([installProxyAwareFetch(), vi.advanceTimersByTimeAsync(0)])
+
+    const d = routeDispatcher(lookup) as unknown as InstanceType<typeof FakeAgent>
+    expect(d).toBeInstanceOf(FakeAgent)
+    expect(d.opts).toMatchObject({ connect: { lookup } })
+  })
+
+  it('P2: env proxy (HTTPS_PROXY set) — a FakeEnvHttpProxyAgent whose opts.connect.lookup is the given lookup', async () => {
+    process.env.HTTPS_PROXY = 'http://env-proxy.corp:8080'
+    await installProxyAwareFetch()
+
+    const d = routeDispatcher(lookup) as unknown as InstanceType<typeof FakeEnvHttpProxyAgent>
+    expect(d).toBeInstanceOf(FakeEnvHttpProxyAgent)
+    expect(d.opts).toMatchObject({ connect: { lookup } })
+  })
+
+  it('P3: system proxy answered promptly — a FakeProxyAgent carrying the proxy uri', async () => {
+    resolveProxy.mockResolvedValue('PROXY system-proxy.corp:3128')
+    await Promise.all([installProxyAwareFetch(), vi.advanceTimersByTimeAsync(0)])
+
+    const d = routeDispatcher(lookup) as unknown as InstanceType<typeof FakeProxyAgent>
+    expect(d).toBeInstanceOf(FakeProxyAgent)
+    expect(d.uri).toBe('http://system-proxy.corp:3128')
+  })
+
+  it('P4: a PAC that lands after the boot deadline — routeDispatcher follows the late upgrade to the proxy', async () => {
+    let land: (v: string) => void = () => {}
+    resolveProxy.mockReturnValue(
+      new Promise<string>((r) => {
+        land = r
+      })
+    )
+    await Promise.all([installProxyAwareFetch(), vi.advanceTimersByTimeAsync(5_000)])
+    expect(routeDispatcher(lookup)).toBeInstanceOf(FakeAgent) // still direct — the PAC hasn't landed yet
+
+    land('PROXY late-proxy.corp:8080')
+    await vi.advanceTimersByTimeAsync(0)
+
+    const d = routeDispatcher(lookup) as unknown as InstanceType<typeof FakeProxyAgent>
+    expect(d).toBeInstanceOf(FakeProxyAgent)
+    expect(d.uri).toBe('http://late-proxy.corp:8080')
+  })
+
+  // M2-0222 — a SOCKS proxy is sent the host name by undici, outside any hook a pinned session could use
+  // to hold it to the address `lookup` resolved, so a pinned dispatcher must refuse it outright rather than
+  // silently resolving through it unpinned. Boot itself is unaffected: the SHARED global dispatcher (no
+  // `lookup`) still installs normally.
+  it.each(SOCKS_PROXY_CASES)(
+    'P5: %s %s proxy — boot still installs the global dispatcher, but a pinned session is refused',
+    async (proxyEnvKey, proxyUrl) => {
+      process.env[proxyEnvKey] = proxyUrl
+      await installProxyAwareFetch()
+
+      expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
+      expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeEnvHttpProxyAgent)
+      expect(() => routeDispatcher(lookup)).toThrow(/SOCKS/)
+    }
+  )
+
+  it('P5: a later HTTP_PROXY SOCKS route is refused even when HTTPS_PROXY selected env boot mode', async () => {
+    process.env.HTTPS_PROXY = 'http://env-proxy.corp:8080'
+    process.env.HTTP_PROXY = 'socks5://127.0.0.1:1080'
+    await installProxyAwareFetch()
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
+    expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeEnvHttpProxyAgent)
+    expect(() => routeDispatcher(lookup)).toThrow(/SOCKS/)
+  })
+
+  // process.env keys are case-insensitive on Windows, so setting both names collapses to one variable.
+  it.skipIf(process.platform === 'win32')(
+    'P5: a lowercase https_proxy SOCKS route is refused even when HTTPS_PROXY selected env boot mode',
+    async () => {
+      process.env.HTTPS_PROXY = 'http://env-proxy.corp:8080'
+      process.env.https_proxy = 'socks5://127.0.0.1:1080'
+      await installProxyAwareFetch()
+
+      expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
+      expect(setGlobalDispatcher.mock.calls[0][0]).toBeInstanceOf(FakeEnvHttpProxyAgent)
+      expect(() => routeDispatcher(lookup)).toThrow(/SOCKS/)
+    }
+  )
 })

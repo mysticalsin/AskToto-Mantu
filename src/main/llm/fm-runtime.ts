@@ -25,6 +25,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { auditLog, mainLog } from '../logger'
+import { observeSidecar } from '../infra/observability/sidecar-events'
 import { errMsg } from './shared'
 
 export const FM_BINARY_PATH = '/usr/bin/fm'
@@ -286,6 +287,7 @@ async function spawnAndWaitHealthy(generation: number): Promise<void> {
     stdio: ['ignore', 'pipe', 'pipe']
   })
   child = proc
+  observeSidecar('fm-serve', proc, auditLog)
   let exited = false
   let exitDetail = ''
   let outputTail = ''
@@ -365,7 +367,8 @@ export async function start(): Promise<void> {
   }
 }
 
-/** Kill the server and clear bookkeeping. Idempotent. Wired into will-quit beside localRuntime.stop(). */
+/** Kill the server and clear bookkeeping. Idempotent. Every exit path stops it through the stopAll() list in
+ *  index.ts. */
 export function stop(): void {
   clearIdleTimer()
   const wasUp = state === 'running' || state === 'starting'

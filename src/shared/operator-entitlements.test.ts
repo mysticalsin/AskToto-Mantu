@@ -12,6 +12,7 @@ import {
   parseOperatorIntegrationsVersion,
   parseOperatorTier
 } from './operator-entitlements'
+import { CONNECTOR_KINDS } from './operator-connectors'
 
 describe('parseOperatorTier', () => {
   it('accepts exactly the two known tiers', () => {
@@ -196,5 +197,17 @@ describe('parseOperatorIntegrationsResponse', () => {
     expect(parseOperatorIntegrationsResponse({ ok: true, integrations: [] })).toBeNull()
     expect(parseOperatorIntegrationsResponse({ ok: true, version: -1, integrations: [] })).toBeNull()
     expect(parseOperatorIntegrationsResponse({ ok: true, version: 1, integrations: 'nope' })).toBeNull()
+  })
+  it('accepts every connector kind in the shared catalog', () => {
+    const integrations = CONNECTOR_KINDS.map((kind, i) => ({
+      id: `i${i}`,
+      kind,
+      label: kind,
+      baseUrl: null,
+      credential: null,
+      scopes: []
+    }))
+    const parsed = parseOperatorIntegrationsResponse({ ok: true, version: 1, integrations })
+    expect(parsed?.integrations.map((i) => i.kind)).toEqual([...CONNECTOR_KINDS])
   })
 })

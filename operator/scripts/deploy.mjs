@@ -40,8 +40,8 @@ const OPERATOR_ROOT = join(__dirname, '..')
 const REPO_ROOT = join(OPERATOR_ROOT, '..')
 
 export const DEPLOYED_URLS = {
-  production: 'https://metis-operator.tony-walteur.workers.dev',
-  staging: 'https://metis-operator-staging.tony-walteur.workers.dev'
+  production: 'https://metis-operator.example.workers.dev',
+  staging: 'https://metis-operator-staging.example.workers.dev'
 }
 
 export function parseArgs(argv) {
