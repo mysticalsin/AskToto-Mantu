@@ -13,7 +13,7 @@
 //   globs:      operator/src/render/**/*.ts  operator/client/**/*.ts
 //   --out:      $TMPDIR/tailwind-spike.css
 //   --reference operator/src/spa/reference.css if it exists in the repo,
-//               else fail with instructions to pass --reference.
+//               else the WebsiteCloner globals.css this was ported from.
 
 import { readFileSync, writeFileSync, existsSync, globSync } from 'node:fs';
 import path from 'node:path';
@@ -23,6 +23,8 @@ import { compile } from 'tailwindcss';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OPERATOR_ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(OPERATOR_ROOT, '..');
+
+const FALLBACK_REFERENCE = 'operator/src/spa/reference.css';
 
 const DEFAULT_GLOBS = ['operator/src/render/**/*.ts', 'operator/client/**/*.ts'];
 
@@ -55,8 +57,7 @@ function parseArgs(argv) {
 
 function defaultReferencePath() {
   const committed = path.join(OPERATOR_ROOT, 'src', 'spa', 'reference.css');
-  if (existsSync(committed)) return committed;
-  throw new Error('operator/src/spa/reference.css is missing; pass --reference <path> explicitly');
+  return existsSync(committed) ? committed : FALLBACK_REFERENCE;
 }
 
 // -- Candidate scanning --------------------------------------------------
