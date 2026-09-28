@@ -1,5 +1,4 @@
 import { hmacHex, timingSafeEqualHex } from './hmac'
-
 export const SESSION_COOKIE = 'metis_operator_session'
 
 export const CONSOLE_PATHS = [

@@ -35,6 +35,14 @@ import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
+import {
+  createRevealController,
+  legacyRevealWindow,
+  revealLegacyEnabled as revealLegacyFlagEnabled,
+  type PresenterState,
+  type RevealReason
+} from './lifecycle/reveal'
+import { captureActiveForWindowRestart as captureActiveForWindowRestartState } from './lifecycle/window-restart'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
   IPC,
@@ -169,6 +177,8 @@ import {
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
+import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
+import { runBootSidecarReaper } from './infra/process/reaper'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,
@@ -274,6 +284,11 @@ type ImportSpeakerOwner = {
 const LIVE_SPEAKER_RECEIPT_TTL_MS = 30 * 60_000
 let activeLiveSpeakerStartedAt: number | null = null
 let legacyListeningActive = false
+function setLegacyListeningActive(on: boolean): void {
+  if (legacyListeningActive === on) return
+  legacyListeningActive = on
+  rebuildTrayMenu()
+}
 let liveSpeakerStartedAtHighWater = 0
 const liveSpeakerReceipts = new Map<number, LiveSpeakerReceipt>()
 const importSpeakerOwners = new Map<string, ImportSpeakerOwner>()
@@ -348,7 +363,7 @@ function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
   if (startedAt === undefined) {
     if (activeLiveSpeakerStartedAt !== null) return false
     if (change.on === legacyListeningActive) return false
-    legacyListeningActive = change.on
+    setLegacyListeningActive(change.on)
     return true
   }
 
@@ -357,7 +372,7 @@ function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
     const previous = activeLiveSpeakerStartedAt
     if (previous !== null) closeLiveSpeakerReceipt(previous)
     activeLiveSpeakerStartedAt = startedAt
-    legacyListeningActive = false
+    setLegacyListeningActive(false)
     liveSpeakerStartedAtHighWater = startedAt
 
     if (!speakerIdProcessingEnabled()) return true
@@ -375,7 +390,7 @@ function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
   // release that follows in listening-state-ipc therefore cannot resolve against a replacement.
   closeLiveSpeakerReceipt(startedAt)
   activeLiveSpeakerStartedAt = null
-  legacyListeningActive = false
+  setLegacyListeningActive(false)
   return true
 }
 
@@ -392,7 +407,7 @@ function captureLiveSpeakerKey(rawStartedAt: unknown): string | null {
 function discardActiveLiveSpeakerSession(): void {
   const startedAt = activeLiveSpeakerStartedAt
   activeLiveSpeakerStartedAt = null
-  legacyListeningActive = false
+  setLegacyListeningActive(false)
   if (startedAt === null) return
   const receipt = liveSpeakerReceipts.get(startedAt)
   if (!receipt) return
@@ -1073,6 +1088,12 @@ type CloudSttIpcOwner = { webContentsId: number; generation: number; captureId?:
 let cloudSttIpcGeneration = 0
 let cloudSttIpcOwner: CloudSttIpcOwner | null = null
 
+function setCloudSttIpcOwner(owner: CloudSttIpcOwner | null): void {
+  if (cloudSttIpcOwner === owner) return
+  cloudSttIpcOwner = owner
+  rebuildTrayMenu()
+}
+
 /** Only the renderer that opened the current live-STT session may receive its tail callbacks. */
 function isCurrentCloudSttOwner(
   owner: CloudSttIpcOwner,
@@ -1090,7 +1111,7 @@ function isCurrentCloudSttOwner(
 function invalidateCloudSttOwner(webContentsId?: number): void {
   if (webContentsId !== undefined && cloudSttIpcOwner?.webContentsId !== webContentsId) return
   cloudSttIpcGeneration += 1
-  cloudSttIpcOwner = null
+  setCloudSttIpcOwner(null)
   void stopCloudSttLive()
 }
 // Fresh-question boundary state (written by IPC.listeningState / IPC.askResetContext / IPC.askStart, all
@@ -1098,6 +1119,33 @@ function invalidateCloudSttOwner(webContentsId?: number): void {
 // recovery can re-sync it: main can never observe the listeningState(false) a dead renderer owed it, and a
 // stuck `listeningActive` disables the boundary for the rest of the app session (MQA-038).
 let listeningActive = false
+
+function setListeningActive(on: boolean): void {
+  if (listeningActive === on) return
+  listeningActive = on
+  rebuildTrayMenu()
+}
+
+function setAudioArmed(on: boolean): void {
+  if (audioArmed === on) return
+  audioArmed = on
+  rebuildTrayMenu()
+}
+
+function presenterState(): PresenterState {
+  if (!win || win.isDestroyed() || !win.isVisible()) return { kind: 'HIDDEN' }
+  if (islandResting) return { kind: 'PARKED', layout: liveOverlayLayout() }
+  return { kind: 'REVEALED' }
+}
+
+function captureActiveForWindowRestart(): boolean {
+  return captureActiveForWindowRestartState({
+    listeningActive,
+    audioArmed,
+    legacyListeningActive,
+    cloudSttActive: cloudSttIpcOwner !== null
+  })
+}
 let lastPlainAskAt = 0 // 0 = no live follow-up window; the next plain ask always starts clean
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
 // The top edge the USER last put the window at (drag, hotkey move, display reanchor). resizeTo slides the
@@ -1285,11 +1333,7 @@ function publishImportJob(job: ImportJob): void {
       body: job.recapError ? `${job.title} transcript is ready. Summary needs a retry.` : `${job.title} transcript and summary are ready.`
     })
     notification.on('click', () => {
-      if (!win || win.isDestroyed()) createWindow()
-      // Non-activating: clicking the notification surfaces the overlay but must not steal focus from
-      // whatever app the user was in (the island's "never steals focus" contract) — see showForAsk's
-      // doc comment for the one deliberate exception.
-      win?.showInactive()
+      reveal('notification-click', { focus: false })
     })
     notification.show()
   }
@@ -2811,9 +2855,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // them as exactly that). Reset the whole set here, mirroring the meeting-start boundary.
     resetDustConversation()
     discardActiveLiveSpeakerSession()
-    listeningActive = false
+    setListeningActive(false)
     lastPlainAskAt = 0
-    audioArmed = false
+    setAudioArmed(false)
     setTrayRecording(false)
     setRecordingPowerSaveBlock(false)
     // MQA-196: the geometry half of the same root cause. If the overlay was collapsed to the mini-pill
@@ -2822,6 +2866,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // width — squeezing the recovered bar into a ~130px sliver that resizable:false makes unfixable. Same
     // two lines createWindow's crash guard uses, for the reload path that never reaches it.
     isMinimized = false
+    currentWidth = BAR_WIDTH
     if (onboardingExclusiveLive() && !self.isDestroyed()) {
       const retainedOwnership = applyExclusiveOnboardingStage(self)
       // A transparent renderer can crash after Settings durably re-arms onboarding but before its
@@ -3474,6 +3519,25 @@ function restoreBarWidth(): void {
   win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
 }
 
+function repairOverlayBoundsForReveal(): void {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
+  const b = win.getBounds()
+  const display = screen.getDisplayMatching(b)
+  const { workArea } = display
+  const height = clampHeight(b.height, workArea.height)
+  const visible =
+    b.x + b.width > workArea.x &&
+    b.x < workArea.x + workArea.width &&
+    b.y + b.height > workArea.y &&
+    b.y < workArea.y + workArea.height
+  if (visible && height === b.height) return
+  const x = visible ? b.x : clampAxis(b.x, b.width, workArea.x, workArea.width)
+  const y = visible
+    ? Math.min(b.y, workArea.y + workArea.height - height - 8)
+    : clampAxis(b.y, height, workArea.y, workArea.height)
+  win.setBounds({ ...b, x, y, height }, false)
+}
+
 /**
  * MQA-286 — tray / dock / IPC Settings must use a full Settings window, never Hide 8×2 or Island peek.
  * Closing Settings calls leaveSettingsSurface then setWindowMode, which re-parks Hide/Island.
@@ -3614,9 +3678,13 @@ function sendHotkey(action: HotkeyAction): void {
   const w = ensureWindow()
   if (!w) return
   if (action === 'settings') applySettingsSurface()
-  if (!w.isVisible()) {
-    if (action === 'ask') showForAsk(w)
-    else w.showInactive()
+  if (action === 'settings') {
+    if (!w.isVisible()) w.showInactive()
+    w.webContents.send(IPC.hotkey, action)
+    return
+  }
+  if (!w.isVisible() || islandResting) {
+    reveal('hotkey', { focus: action === 'ask' })
   }
   w.webContents.send(IPC.hotkey, action)
 }
@@ -3659,6 +3727,75 @@ function reloadOverlay(target: BrowserWindow): void {
     mainLog.error('[renderer-gone] reload failed:', message)
     auditLog('app.error.reload_failed', { message, recoveryStatus: 'unrecovered' })
   })
+}
+
+function restartMetisWindow(): void {
+  if (captureActiveForWindowRestart()) return
+  const w = ensureWindow()
+  if (!w) return
+  try {
+    w.webContents.forcefullyCrashRenderer()
+  } catch (err) {
+    mainLog.warn('[tray] restart window crash request failed:', err instanceof Error ? err.message : String(err))
+  }
+  reloadOverlay(w)
+}
+
+function revealLegacyEnabled(): boolean {
+  return revealLegacyFlagEnabled(process.env, process.argv)
+}
+
+function legacyReveal(reason: RevealReason, options: { focus: boolean }): void {
+  const w = ensureWindow()
+  if (!w) return
+  legacyRevealWindow(reason, options, w, (target) => showForAsk(target as BrowserWindow))
+}
+
+const revealController = createRevealController({
+  ensureWindow,
+  legacyRevealEnabled: revealLegacyEnabled,
+  legacyReveal,
+  presenterState,
+  cancelPendingRepark: cancelOverlayLeavePark,
+  restoreInteractiveLayout: () => {
+    if (settingsSurfaceOpen) leaveSettingsSurface()
+    isMinimized = false
+    restoreBarWidth()
+  },
+  repairOffscreenBounds: repairOverlayBoundsForReveal,
+  disableClickThrough: () => {
+    try {
+      win?.setIgnoreMouseEvents(false)
+    } catch {
+      /* headless */
+    }
+  }
+})
+
+function reveal(reason: RevealReason, options: { focus?: boolean } = {}): void {
+  reveals.trace(reason, () => {
+    revealController.reveal(reason, options)
+  })
+}
+
+function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
+  if (process.env.ASKTOTO_SMOKE_REOPEN_PROBE !== '1') return false
+  const action = commandLine
+    .map((arg) => arg.match(/^--metis-smoke-reopen=(park-window|hide-window|tray-show)$/)?.[1])
+    .find((value): value is 'park-window' | 'hide-window' | 'tray-show' =>
+      value === 'park-window' || value === 'hide-window' || value === 'tray-show')
+  if (!action) return false
+
+  const w = ensureWindow()
+  if (!w) return true
+  if (action === 'park-window' || action === 'hide-window') {
+    if (!parkOverlayAfterHideSpring(true)) w.hide()
+    return true
+  }
+
+  if (!parkOverlayAfterHideSpring(true)) w.hide()
+  toggleVisible('tray')
+  return true
 }
 
 let fatalHandled = false
@@ -4217,7 +4354,7 @@ function registerScreenListeners(): void {
   screen.on('display-metrics-changed', reanchor)
 }
 
-function toggleVisible(): void {
+function toggleVisible(reason: Extract<RevealReason, 'hotkey' | 'tray'> = 'hotkey'): void {
   // ensureWindow() silently CREATES a new window when `win` is null/destroyed (e.g. after a boot-time
   // createWindow() failure) — and a freshly created window starts visible. Without this check, the
   // isVisible() branch below would immediately re-hide the just-recovered window, so the first Ctrl+\
@@ -4225,7 +4362,7 @@ function toggleVisible(): void {
   const hadNoWindow = !win || win.isDestroyed()
   const w = ensureWindow()
   if (!w) return
-  if (!hadNoWindow && w.isVisible()) {
+  if (!hadNoWindow && w.isVisible() && !islandResting) {
     w.hide()
     // Tray Hide is not the rest sensor. Keep the top-edge watch armed so
     // mouse-at-top can showInactive without hunting Show Métis.
@@ -4233,14 +4370,14 @@ function toggleVisible(): void {
   } else {
     // Revealing via the show/hide hotkey always opens the ask input right after — the same deliberate,
     // user-initiated focus grab as sendHotkey('ask'). See showForAsk's doc comment.
-    showForAsk(w)
+    reveal(reason, { focus: true })
     w.webContents.send(IPC.hotkey, 'ask')
   }
 }
 
 const shortcutActions: Record<string, () => void> = {
   ask: () => sendHotkey('ask'),
-  hide: () => toggleVisible(),
+  hide: () => toggleVisible('hotkey'),
   reset: () => sendHotkey('reset'),
   'toggle-listen': () => sendHotkey('toggle-listen'),
   'metis-command': () => sendHotkey('metis-command'),
@@ -4483,7 +4620,7 @@ function buildTrayMenu(): Menu {
     return k ? `${base}  (${k})` : base
   }
   return Menu.buildFromTemplate([
-    { label: label('Show / Hide', 'hide'), click: toggleVisible },
+    { label: label('Show / Hide', 'hide'), click: () => toggleVisible('tray') },
     // sendHotkey() already reveals the window itself (non-activating — see showForAsk's doc comment)
     // when it isn't visible, so no separate show call is needed (or wanted) here.
     { label: 'Settings…', click: () => {
@@ -4499,6 +4636,12 @@ function buildTrayMenu(): Menu {
       auditTrailPath: auditLogPath(),
       identity: { version: app.getVersion(), platform: process.platform, arch: process.arch },
       writeText: (text) => clipboard.writeText(text) }) },
+    {
+      label: 'Restart Métis window',
+      enabled: !captureActiveForWindowRestart(),
+      click: restartMetisWindow
+    },
+    { type: 'separator' },
     {
       label: 'Force Quit Métis',
       accelerator: process.platform === 'darwin' ? EMERGENCY_FORCE_QUIT_ACCELERATOR : undefined,
@@ -4594,6 +4737,7 @@ function setTrayRecording(on: boolean): void {
     tray.setToolTip('Métis')
     if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
   }
+  rebuildTrayMenu()
 }
 
 /**
@@ -6696,7 +6840,7 @@ function registerIpc(): void {
       generation: ++cloudSttIpcGeneration,
       captureId
     }
-    cloudSttIpcOwner = owner
+    setCloudSttIpcOwner(owner)
     // A fresh start is an explicit replacement, not a graceful end of the prior capture.
     const result = await replaceCloudSttSessionIfCurrent({
       stop: () => stopCloudSttLive(),
@@ -6734,7 +6878,7 @@ function registerIpc(): void {
         )
     })
     if (!result.ok && cloudSttIpcOwner === owner) {
-      cloudSttIpcOwner = null
+      setCloudSttIpcOwner(null)
     }
     return result
   })
@@ -6749,7 +6893,7 @@ function registerIpc(): void {
     const force = p.force === true
     const result = await stopCloudSttLive({ graceful: !force, timeoutMs: 5_000 })
     if (cloudSttIpcOwner === owner) {
-      cloudSttIpcOwner = null
+      setCloudSttIpcOwner(null)
     }
     return result
   })
@@ -7945,7 +8089,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return
     if (!takeHotPath('arm-audio')) return
-    audioArmed = !!on
+    setAudioArmed(!!on)
   })
 
   // --- Transcript, notes & feedback persistence ---
@@ -8737,7 +8881,7 @@ function registerIpc(): void {
     assertMainWindow,
     requireAuth,
     acceptTransition: acceptLiveSpeakerTransition,
-    setListeningActive: (on) => { listeningActive = on },
+    setListeningActive,
     setTrayRecording,
     setRecordingPowerSaveBlock,
     releaseParakeet: parakeetRelease,
@@ -8949,18 +9093,14 @@ protocol.registerSchemesAsPrivileged([
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => reveals.trace('second-instance', () => {
-    // Relaunching the shortcut is the user's "bring it back" gesture, so it must self-heal a null `win`
-    // (a boot-time createWindow() throw leaves the app alive in the tray with no window) instead of
-    // no-opping forever. ensureWindow() also filters a destroyed-but-non-null window.
-    const w = ensureWindow()
-    if (!w) return
-    // Non-activating, same island contract as every other reveal (see showForAsk's doc comment) — a
-    // second launch attempt surfaces the overlay without stealing focus from the foreground app.
-    if (!w.isVisible()) w.showInactive()
-  }))
+  app.on('second-instance', (_event, commandLine) => {
+    reveal('second-instance', { focus: true })
+    if (typeof handleSmokeReopenProbe === 'function') handleSmokeReopenProbe(commandLine)
+  })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
+  await runBootSidecarReaper(app.getPath('userData'))
   // M2-0033: unattended model work waits for the maintenance gate.
   startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
   app.on('web-contents-created', (_event, contents) => {
@@ -9460,6 +9600,7 @@ if (!app.requestSingleInstanceLock()) {
   runStep('registerIpc', registerIpc)
   clearBootWatchOnce('registerIpc')
   runStep('createWindow', createWindow)
+  revealController.markBootComplete()
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
   // FITO-185-G-TIMER: also setImmediate + unlock-screen so App Nap / locked-screen cannot leave
@@ -9578,9 +9719,8 @@ if (!app.requestSingleInstanceLock()) {
     }
   }, 15_000)
 
-  app.on('activate', () => reveals.trace('activate', () => {
-    if (!win) createWindow()
-    else win.showInactive()
+  app.on('activate', () => {
+    reveal('activate', { focus: true })
     // Bar dock click still opens Settings. Hide/Island launch must stay parked
     // 8×2 — Ultron fresh userdata was 880×1017 Settings / Expand Métis.
     try {
@@ -9593,7 +9733,7 @@ if (!app.requestSingleInstanceLock()) {
     } catch {
       /* settings store not ready */
     }
-  }))
+  })
   }).catch((e) => {
     // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same
     // redact-before-log discipline as onFatal) so a boot failure is actually diagnosable and audited.

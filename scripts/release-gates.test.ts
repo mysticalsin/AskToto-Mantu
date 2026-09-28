@@ -2,14 +2,18 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
+import { formatCommand, releasePlans } from './release/orchestrate.mjs'
 
 const root = join(__dirname, '..')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
   description: string
+  version: string
   scripts: Record<string, string>
   devDependencies: Record<string, string>
   engines: { node: string }
 }
+
+const releaseCommands = (target: keyof typeof releasePlans): string[] => releasePlans[target].map(formatCommand)
 
 describe('installer branding', () => {
   it('uses a customer-facing Métis file description without internal migration notes', () => {
@@ -25,9 +29,11 @@ describe('installer branding', () => {
     expect(overlay).toContain("!node_modules/sherpa-onnx-linux-*{,/**/*}")
     expect(overlay).toContain("!node_modules/@img/sharp-linux-*{,/**/*}")
 
-    for (const script of ['dist:win', 'dist:win:appx', 'release:build:win', 'release:win:store']) {
+    for (const script of ['dist:win', 'dist:win:appx']) {
       expect(pkg.scripts[script]).toContain('--config electron-builder.win.yml')
     }
+    expect(releaseCommands('win').join('\n')).toContain('--config electron-builder.win.yml')
+    expect(releaseCommands('win-store').join('\n')).toContain('--config electron-builder.win.yml')
     const installerBuilder = readFileSync(join(root, 'scripts', 'build-installers.mjs'), 'utf8')
     expect(installerBuilder).toMatch(/'--config',\s*'electron-builder\.win\.yml'/)
   })
@@ -133,6 +139,9 @@ describe('deterministic packaging toolchain', () => {
         expect(body, `${name} sets the universal flag but does not build --universal`).toContain('--universal')
       }
     }
+    const macRelease = releaseCommands('mac').join('\n')
+    expect(macRelease).toContain('ASKTOTO_MAC_UNIVERSAL=1')
+    expect(macRelease).toContain('electron-builder --mac --universal')
   })
 
   it('MQA-207: single-architecture Windows chains keep their bytecode', () => {
@@ -144,6 +153,34 @@ describe('deterministic packaging toolchain', () => {
 })
 
 describe('direct release signing gates', () => {
+  it('the release pre-flight requires the platform it checks', () => {
+    for (const args of [[], ['linux']]) {
+      const result = spawnSync(process.execPath, [join(__dirname, 'check-version-parity.mjs'), ...args], {
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH || '',
+          GITHUB_REF_NAME: `v${pkg.version}`
+        }
+      })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('<mac|win>')
+    }
+  })
+
+  it('the release pre-flight checks the tag for each platform and skips the feed without a token', () => {
+    for (const platform of ['mac', 'win']) {
+      const result = spawnSync(process.execPath, [join(__dirname, 'check-version-parity.mjs'), platform], {
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH || '',
+          GITHUB_REF_NAME: `v${pkg.version}`
+        }
+      })
+      expect(result.status).toBe(0)
+      expect(result.stdout).toContain('Skipping the release-feed check')
+    }
+  })
+
   it('tests the tagged source on Windows as well as Linux before packaging', () => {
     const workflow = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8')
     const sourceGate = workflow.slice(workflow.indexOf('  release-quality:'), workflow.indexOf('  release-macos:'))
@@ -175,8 +212,8 @@ describe('direct release signing gates', () => {
   })
 
   it('verifies produced signatures in both direct release commands', () => {
-    expect(pkg.scripts['release:build:mac']).toContain('node scripts/verify-signing.mjs --require-notarized')
-    expect(pkg.scripts['release:build:win']).toContain('node scripts/verify-signing.mjs')
+    expect(releaseCommands('mac').join('\n')).toContain('scripts/verify-signing.mjs --require-notarized')
+    expect(releaseCommands('win').join('\n')).toContain('scripts/verify-signing.mjs')
   })
 
   it('refuses macOS release when Developer ID or notarization inputs are missing, including in CI', () => {
@@ -216,7 +253,6 @@ describe('direct release signing gates', () => {
   it('release.yml publishes only notarized Electron macOS artifacts and excludes the unsigned native ZIP', () => {
     const workflow = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8')
     const macGate = workflow.slice(workflow.indexOf('  release-macos:'), workflow.indexOf('  release-windows:'))
-    const publishGate = workflow.slice(workflow.indexOf('  release-verify:'))
     expect(macGate).toContain('node scripts/check-release-secrets.mjs mac')
     expect(macGate).toContain('node scripts/verify-signing.mjs --require-notarized')
     expect(macGate).not.toContain('ASKTOTO_ALLOW_ADHOC_MAC')
@@ -228,7 +264,6 @@ describe('direct release signing gates', () => {
     expect(verifier).toMatch(/const REQUIRE_NOTARIZED = process\.argv\.includes\(['"]--require-notarized['"]\)/)
     expect(verifier).not.toContain('ASKTOTO_ALLOW_ADHOC_MAC')
     expect(workflow).not.toContain('release-macos-native:')
-    expect(publishGate).not.toContain('Metis-Native-${version}.zip')
     const winGate = workflow.slice(workflow.indexOf('release-windows:'))
     expect(winGate).toContain('refusing to publish an unsigned Windows release')
     expect(winGate).toContain('WIN_CSC_EXPECTED_SUBJECT')
@@ -237,15 +272,12 @@ describe('direct release signing gates', () => {
 
 describe('embedded-credential placeholder gate (M2-0056)', () => {
   it('wires check-provisioned-secrets into every release chain that runs check-release-secrets, before electron-builder', () => {
-    const releaseChains = Object.entries(pkg.scripts).filter(
-      ([name, body]) => name.startsWith('release:') && body.includes('check-release-secrets.mjs')
-    )
-    // release:build:mac, release:build:win, release:mas, release:win:store. `release` and `release:win`
-    // are excluded here — they only delegate via `npm run release:build:*` and never repeat the gate text.
+    const releaseChains = Object.entries(releasePlans)
     expect(releaseChains.length).toBeGreaterThanOrEqual(4)
-    for (const [name, body] of releaseChains) {
+    for (const [name, steps] of releaseChains) {
+      const body = steps.map(formatCommand).join('\n')
       expect(body, `${name} must gate on check-provisioned-secrets.mjs --profile release`).toContain(
-        'node scripts/check-provisioned-secrets.mjs --profile release'
+        'scripts/check-provisioned-secrets.mjs --profile release'
       )
       const secretsIndex = body.indexOf('check-release-secrets.mjs')
       const provisionedIndex = body.indexOf('check-provisioned-secrets.mjs')

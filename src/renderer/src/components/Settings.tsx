@@ -12,6 +12,7 @@ import {
   type ReactNode
 } from 'react'
 import appPackage from '../../../../package.json'
+import type { NavigationGuardService } from '../lib/navigation-guard'
 import { TapControlCard } from './TapCalibration'
 import {
   Check,
@@ -6297,6 +6298,7 @@ export function Settings({
   notice,
   onQuit,
   onLogout,
+  navigationGuard,
   onOpenIntelligence,
   onOpenHistory,
   onOpenMeeting
@@ -6315,6 +6317,7 @@ export function Settings({
   onOpenIntelligence?: () => void
   onOpenHistory?: () => void
   onOpenMeeting?: (file: string) => void
+  navigationGuard: NavigationGuardService
   // Shown as a small banner under the header — e.g. why the user got redirected here (no provider
   // ready). Without this, a silent tab-open reads as broken rather than as a guided fix.
   notice?: string
@@ -6358,7 +6361,15 @@ export function Settings({
   // surface it instead of silently discarding it (was `void window.toto.openMeetingsFolder()`).
   const [meetingsFolderErr, setMeetingsFolderErr] = useState<string | null>(null)
   const replayOnboarding = async (): Promise<void> => {
-    if (replayState.busy || !window.confirm("Replay onboarding from the start? Your settings won't change.")) return
+    if (replayState.busy) return
+    const choice = await navigationGuard.request({
+      title: 'Replay onboarding?',
+      message: "Start setup again from the beginning. Your settings won't change.",
+      saveLabel: 'Replay',
+      discardLabel: 'Stay here',
+      cancelLabel: 'Cancel'
+    })
+    if (choice !== 'save') return
     setReplayState({ busy: true, error: null })
     try {
       const saved = await patch({ onboardingDone: false })
@@ -7522,9 +7533,17 @@ export function Settings({
         <button
           type="button"
           onClick={() => {
-            if (window.confirm("Log out of Métis? You'll need to sign in again to use Dust and your Mantu Microsoft account.")) {
-              onLogout ? onLogout() : void window.toto.signOut()
-            }
+            void (async () => {
+              const choice = await navigationGuard.request({
+                title: 'Log out of Métis?',
+                message: "You'll need to sign in again to use Dust and your Mantu Microsoft account.",
+                saveLabel: 'Log out',
+                discardLabel: 'Stay signed in',
+                cancelLabel: 'Cancel',
+                destructive: true
+              })
+              if (choice === 'save') onLogout ? onLogout() : void window.toto.signOut()
+            })()
           }}
           className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08]"
         >
