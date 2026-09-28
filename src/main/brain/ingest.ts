@@ -1331,6 +1331,7 @@ type BackfillObserver = {
   gates: number
   settling: boolean
   published: boolean
+  initialOkSourceVersions: Map<string, string | undefined>
   error?: CompletionError
 }
 let backfillObserver: BackfillObserver | null = null
@@ -2576,7 +2577,7 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
   }
   let resolve!: (value: BackfillCompletion) => void
   const run: BackfillRun = { result: { queued: 0, preparing: true }, completion: new Promise((done) => { resolve = done }) }
-  const observer: BackfillObserver = { run, resolve, s: getSettings(), sources: new Map(), preparing: true, gates: 0, settling: false, published: false }
+  const observer: BackfillObserver = { run, resolve, s: getSettings(), sources: new Map(), preparing: true, gates: 0, settling: false, published: false, initialOkSourceVersions: new Map() }
   backfillObserver = observer
   for (const job of [...queue, ...inFlightJobs]) observeSource(jobKey(job))
   observeClaimedSourceRefreshWork()
@@ -2584,6 +2585,9 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
   addCompletionGate(observer, beforeComplete)
   try {
     const before = await readIndexAsync(observer.s)
+    for (const [key, record] of Object.entries(before.ingested)) {
+      if (record.ok) observer.initialOkSourceVersions.set(key, record.sourceVersion)
+    }
     observeSourceRefreshWorkFromIndex(before)
     if (before.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     const startingSourceRefresh = before.sourceRefreshRequested && !before.replayPending && !sourceRefreshRunning
@@ -2671,7 +2675,11 @@ function maybeCompleteBackfillRun(): void {
       const idx = await readIndexAsync(observer.s)
       for (const [key, version] of current) {
         const record = idx.ingested[key]
-        if (record?.ok && record.sourceVersion === version) continue
+        if (record?.ok && record.sourceVersion === version) {
+          const priorVersion = observer.initialOkSourceVersions.get(key)
+          if (!observer.initialOkSourceVersions.has(key) || priorVersion !== version) observeSource(key)
+          continue
+        }
         observeSource(key)
         // Check AFTER publication as well as recap prerequisites: either can overlap source writes.
         completionError(!record?.ok && !hasUsableProvider(getSettings()) ? 'no-provider' : 'incomplete')
