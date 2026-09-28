@@ -1432,6 +1432,10 @@ export function whenIndexWritesSettle(): Promise<void> {
   )
 }
 
+export async function whenDrainSettles(): Promise<void> {
+  while (drainTask) await drainTask.catch(() => {})
+}
+
 /** Record any derived-brain mutation so both Intelligence surfaces can refresh same-count changes. */
 export function markBrainChanged(s: Settings = getSettings()): Promise<void> {
   return updateIndex(s, (idx) => {
@@ -2694,7 +2698,7 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
     heldUnreadable: held.unreadable
   })
   if (toRevive.length > 0) {
-    updateIndexDetached(s, (i) => {
+    await updateIndex(s, (i) => {
       for (const k of toRevive) {
         const r = i.ingested[k]
         if (r) reviveExhausted(r)

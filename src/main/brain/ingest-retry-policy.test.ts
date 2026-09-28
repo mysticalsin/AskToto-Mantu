@@ -230,7 +230,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
   it('EX-3: an explicit Retry (requestBackfillRun({ force: true, trigger: \'user\' })) revives an exhausted source; one more failure lands at attempts 1, not 7', async () => {
     createStreamMock.mockReset()
     createStreamMock.mockImplementation(respondError('synthetic model failure', modelMarkers))
-    const { completion } = requestBackfillRun({ force: true, ...userTrigger })
+    const { completion } = await requestBackfillRun({ force: true, ...userTrigger })
     await completion
     await waitForIdle()
     const record = readIndex(getSettings()).ingested['exhausted.md']
@@ -251,7 +251,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
     modelMarkers = []
     createStreamMock.mockReset()
     createStreamMock.mockImplementation(respondError('synthetic model failure', modelMarkers))
-    const { completion } = requestBackfillRun({ force: true, ...userTrigger })
+    const { completion } = await requestBackfillRun({ force: true, ...userTrigger })
     await completion
     await waitForIdle()
 

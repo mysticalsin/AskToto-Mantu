@@ -216,7 +216,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     startGate('clean')
     writeMeeting('promote.md')
     requestBackfill()
-    expect(brainBackfillProgress().preparing).toBe(true)
+    await vi.waitFor(() => expect(brainBackfillProgress().preparing).toBe(true), { timeout: 10_000 })
     expect(createStreamMock).not.toHaveBeenCalled()
     await requestBackfillRun({ force: true, ...userTrigger })
     await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(1), { timeout: 10_000 })
