@@ -18,6 +18,9 @@ import {
   countSourceFile,
   formatBaseline,
   lowerBaseline,
+  renderSizeScheduleBlock,
+  sizeScheduleDocIsCurrent,
+  validateSizeSchedule,
 } from './check-architecture.mjs'
 
 type Counts = Record<string, Record<string, number>>
@@ -179,6 +182,7 @@ function createLayeringFixture(): { root: string } {
 function createArchitectureFixture(): { root: string } {
   const fixture = createLayeringFixture()
   mkdirSync(join(fixture.root, 'intelligence', 'src'), { recursive: true })
+  mkdirSync(join(fixture.root, 'operator', 'src'), { recursive: true })
   mkdirSync(join(fixture.root, 'scripts'), { recursive: true })
   copyFileSync(
     join(__dirname, 'check-architecture.mjs'),
@@ -221,6 +225,64 @@ function removeLayeringErrors(root: string): void {
     'export const schema = z.object({ ok: z.boolean() })',
   ].join('\n'))
 }
+
+type SizeSchedule = { rows: Record<string, { owner: string; target: number; by: string; milestone?: string }> }
+
+const row = { owner: 'M2-0001', target: 800, by: '2027-03-31' }
+
+function readRepoJson<T>(name: string): T {
+  return JSON.parse(readFileSync(join(__dirname, name), 'utf8')) as T
+}
+
+describe('FF-04 size schedule', () => {
+  it('accepts a schedule that names exactly the baseline files', () => {
+    expect(validateSizeSchedule({ 'src/a.mjs': 900 }, { rows: { 'src/a.mjs': row } })).toEqual([])
+  })
+
+  it('fails a baseline entry without a schedule row', () => {
+    const problems = validateSizeSchedule({ 'src/a.mjs': 900, 'src/b.mjs': 950 }, { rows: { 'src/a.mjs': row } })
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('src/b.mjs')
+    expect(problems[0]).toContain('no size-schedule row')
+  })
+
+  it('fails a row for a file that is no longer over 800 lines', () => {
+    const problems = validateSizeSchedule({ 'src/a.mjs': 900 }, { rows: { 'src/a.mjs': row, 'src/gone.mjs': row } })
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('src/gone.mjs')
+    expect(problems[0]).toContain('no longer over 800 lines')
+  })
+
+  it('fails a row without a ticket owner, a target in 1..800 or an ISO date', () => {
+    const baseline = { 'src/a.mjs': 900 }
+    expect(validateSizeSchedule(baseline, { rows: { 'src/a.mjs': { ...row, owner: 'someone' } } })).toHaveLength(1)
+    expect(validateSizeSchedule(baseline, { rows: { 'src/a.mjs': { ...row, target: 801 } } })).toHaveLength(1)
+    expect(validateSizeSchedule(baseline, { rows: { 'src/a.mjs': { ...row, target: 0 } } })).toHaveLength(1)
+    expect(validateSizeSchedule(baseline, { rows: { 'src/a.mjs': { ...row, by: 'm10' } } })).toHaveLength(1)
+    expect(validateSizeSchedule(baseline, { rows: { 'src/a.mjs': { ...row, by: '2027-13-40' } } })).toHaveLength(1)
+  })
+
+  it('renders one sorted row per file and detects a drifted document', () => {
+    const schedule: SizeSchedule = {
+      rows: { 'src/b.mjs': { ...row, target: 300, milestone: 'm10' }, 'src/a.mjs': row },
+    }
+    const block = renderSizeScheduleBlock(schedule)
+    expect(block.indexOf('src/a.mjs')).toBeLessThan(block.indexOf('src/b.mjs'))
+    expect(block).toContain('| 300 | 2027-03-31 (m10) | M2-0001 |')
+    expect(sizeScheduleDocIsCurrent(`# Doc\n\n${block}\n`, schedule)).toBe(true)
+    expect(sizeScheduleDocIsCurrent(`# Doc\n\n${block.replace('300', '299')}\n`, schedule)).toBe(false)
+    expect(sizeScheduleDocIsCurrent('# Doc\n', schedule)).toBe(false)
+  })
+
+  it('holds for the committed baseline, schedule and architecture document, with src/main/index at 300 lines by m10', () => {
+    const baseline = readRepoJson<Counts>('architecture-baseline.json')
+    const schedule = readRepoJson<SizeSchedule>('architecture-size-schedule.json')
+    expect(validateSizeSchedule(baseline['FF-04'], schedule)).toEqual([])
+    expect(schedule.rows['src/main/index.' + 'ts']).toMatchObject({ target: 300, milestone: 'm10' })
+    const doc = readFileSync(join(__dirname, '..', 'docs', 'ARCHITECTURE.md'), 'utf8')
+    expect(sizeScheduleDocIsCurrent(doc, schedule)).toBe(true)
+  })
+})
 
 describe('architecture ratchet pure functions', () => {
   it('returns no differences when baseline and current counts are equal', () => {
@@ -357,6 +419,33 @@ describe('architecture source detectors', () => {
       expect(countSourceFile('src/main/long.test.ts', lines900)).toEqual({})
       expect(countSourceFile('src/main/types.d.ts', lines900)).toEqual({})
       expect(countSourceFile('src/main/__fixtures__/long.ts', lines900)).toEqual({})
+    })
+
+    it.each([
+      ['src/main', ['ts', 'tsx']],
+      ['operator/src', ['ts']],
+      ['intelligence/src', ['ts', 'tsx']],
+      ['scripts', ['ts', 'mjs']],
+    ])('counts a 801-line production file in %s and not a 799-line one', (root, extensions) => {
+      const lines = (count: number) => Array.from({ length: count }, (_, index) => `line${index + 1}`).join('\n')
+      for (const extension of extensions) {
+        const file = `${root}/big.${extension}`
+        expect(countSourceFile(file, lines(801))).toEqual({ 'FF-04': 801 })
+        expect(countSourceFile(file, lines(799))).toEqual({})
+      }
+    })
+
+    it('does not count tests, declarations or fixtures under the extended roots', () => {
+      const lines900 = Array.from({ length: 900 }, (_, index) => `line${index + 1}`).join('\n')
+      for (const root of ['operator/src', 'intelligence/src', 'scripts']) {
+        expect(countSourceFile(`${root}/big.test.${'tsx'}`, lines900)).toEqual({})
+        expect(countSourceFile(`${root}/big.test.${'mjs'}`, lines900)).toEqual({})
+        expect(countSourceFile(`${root}/big.d.${'ts'}`, lines900)).toEqual({})
+        expect(countSourceFile(`${root}/__fixtures__/big.${'ts'}`, lines900)).toEqual({})
+      }
+      expect(countSourceFile(`docs/big.${'ts'}`, lines900)).toEqual({})
+      expect(countSourceFile(`operator/scripts/big.${'mjs'}`, lines900)).toEqual({})
+      expect(countSourceFile(`src/main/big.${'mjs'}`, lines900)).toEqual({})
     })
   })
 
@@ -653,6 +742,30 @@ describe('architecture ratchet CLI', () => {
       const result = runArchitectureCli(fixture.root)
       expect(result.code, result.out).toBe(1)
       expect(result.out).toContain('FF-04 src/main/new-long.ts: 0 -> 801 (rose')
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    ['operator/src/new-long', 'ts'],
+    ['intelligence/src/new-long', 'tsx'],
+    ['scripts/new-long', 'mjs'],
+  ])('adding an 801-line production file %s: exits 1 naming FF-04 and 0 -> 801', (stem, extension) => {
+    const fixture = createArchitectureFixture()
+    try {
+      const seed = readTrailingJson(runArchitectureCli(fixture.root).out)
+      writeFixtureFile(fixture.root, 'scripts/architecture-baseline.json', formatBaseline(seed))
+
+      writeFixtureFile(
+        fixture.root,
+        `${stem}.${extension}`,
+        `${Array.from({ length: 801 }, (_, index) => `export const line${index + 1} = ${index + 1}`).join('\n')}\n`,
+      )
+
+      const result = runArchitectureCli(fixture.root)
+      expect(result.code, result.out).toBe(1)
+      expect(result.out).toContain(`FF-04 ${stem}.${extension}: 0 -> 801 (rose`)
     } finally {
       rmSync(fixture.root, { recursive: true, force: true })
     }

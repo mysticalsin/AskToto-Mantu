@@ -26,7 +26,14 @@ import ts from 'typescript'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const BASELINE_PATH = join(repoRoot, 'scripts', 'architecture-baseline.json')
+const SCHEDULE_PATH = join(repoRoot, 'scripts', 'architecture-size-schedule.json')
+const ARCHITECTURE_DOC_PATH = join(repoRoot, 'docs', 'ARCHITECTURE.md')
+const SIZE_TABLE_START = '<!-- FF-04 size schedule: generated from scripts/architecture-size-schedule.json, do not edit -->'
+const SIZE_TABLE_END = '<!-- /FF-04 size schedule -->'
 const TEST_FILE = /\.(test|spec)\.tsx?$/
+const SIZE_ROOTS = ['src/', 'operator/src/', 'intelligence/src/', 'scripts/']
+const SCRIPT_FILE = /^scripts\/.*\.(mjs|cjs|js)$/
+const SCRIPT_TEST_FILE = /\.(test|spec)\.(mjs|cjs|js)$/
 const TS_FILE = /\.tsx?$/
 const D_TS_FILE = /\.d\.ts$/
 const PATH_LIKE_TS = /^[^\s]*\.tsx?$/
@@ -80,7 +87,7 @@ export function countSourceFile(file, text) {
     if (count > 0) counts[rule] = (counts[rule] ?? 0) + count
   }
 
-  if (isProductionFile(file) && file.startsWith('src/')) {
+  if (isSizedFile(file)) {
     const lines = countLines(normalized)
     if (lines > 800) add('FF-04', lines)
   }
@@ -204,6 +211,81 @@ export function formatBaseline(counts) {
   return `${JSON.stringify(canonicalCounts(counts), null, 2)}\n`
 }
 
+/** @typedef {{ owner: string, target: number, by: string, milestone?: string }} SizeRow */
+/** @typedef {{ rows: Record<string, SizeRow> }} SizeSchedule */
+
+/**
+ * Checks that the size schedule and the FF-04 baseline name exactly the same files, and that each row is well formed.
+ * @param {Record<string, number>} sizeBaseline FF-04 baseline counts keyed by file.
+ * @param {SizeSchedule} schedule Parsed size schedule.
+ * @returns {string[]} Problems; empty when consistent.
+ */
+export function validateSizeSchedule(sizeBaseline, schedule) {
+  const problems = []
+  const rows = schedule.rows ?? {}
+  for (const file of Object.keys(sizeBaseline)) {
+    if (!(file in rows)) problems.push(`${file} is over 800 lines in the baseline but has no size-schedule row`)
+  }
+  for (const [file, row] of Object.entries(rows)) {
+    if (!(file in sizeBaseline)) {
+      problems.push(`${file} has a size-schedule row but is no longer over 800 lines; delete the row`)
+      continue
+    }
+    if (!/^M2-\d{4}$/.test(row.owner ?? '')) problems.push(`${file}: owner must be a ticket id like M2-0001`)
+    if (!Number.isInteger(row.target) || row.target < 1 || row.target > 800) problems.push(`${file}: target must be an integer from 1 to 800`)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.by ?? '') || Number.isNaN(Date.parse(row.by))) problems.push(`${file}: by must be a YYYY-MM-DD date`)
+  }
+  return problems
+}
+
+/**
+ * @param {SizeSchedule} schedule Parsed size schedule.
+ * @returns {string} Markdown block (markers included) listing every scheduled file.
+ */
+export function renderSizeScheduleBlock(schedule) {
+  const rows = Object.entries(schedule.rows ?? {})
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([file, row]) => `| \`${file}\` | ${row.target} | ${row.by}${row.milestone ? ` (${row.milestone})` : ''} | ${row.owner} |`)
+  return [
+    SIZE_TABLE_START,
+    '| File | Target lines | By | Owner ticket |',
+    '| --- | ---: | --- | --- |',
+    ...rows,
+    SIZE_TABLE_END,
+  ].join('\n')
+}
+
+/**
+ * @param {string} doc Architecture document text.
+ * @param {SizeSchedule} schedule Parsed size schedule.
+ * @returns {boolean} Whether the document contains the exact rendering of the schedule.
+ */
+export function sizeScheduleDocIsCurrent(doc, schedule) {
+  return doc.replace(/\r\n/g, '\n').includes(renderSizeScheduleBlock(schedule))
+}
+
+/**
+ * Verifies the size schedule against the baseline and the architecture document.
+ * @returns {void}
+ */
+function runSizeScheduleCheck() {
+  const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'))
+  const schedule = JSON.parse(readFileSync(SCHEDULE_PATH, 'utf8'))
+  const problems = validateSizeSchedule(baseline['FF-04'] ?? {}, schedule)
+  const doc = existsSync(ARCHITECTURE_DOC_PATH) ? readFileSync(ARCHITECTURE_DOC_PATH, 'utf8') : ''
+  if (!sizeScheduleDocIsCurrent(doc, schedule)) {
+    problems.push('docs/ARCHITECTURE.md does not contain the current generated FF-04 block; replace it with:')
+    problems.push(renderSizeScheduleBlock(schedule))
+  }
+  if (problems.length > 0) {
+    console.log('[check:architecture] FAIL: FF-04 size schedule')
+    for (const problem of problems) console.log(`  ${problem}`)
+    process.exitCode = 1
+    return
+  }
+  console.log('[check:architecture] OK: every FF-04 baseline file has a size-schedule row and docs/ARCHITECTURE.md is current.')
+}
+
 /**
  * @param {Counts} counts Counts to canonicalize.
  * @returns {Counts} Counts in fixed rule order with sorted positive integer entries.
@@ -227,6 +309,17 @@ function canonicalCounts(counts) {
  */
 function isProductionFile(file) {
   return TS_FILE.test(file) && !TEST_FILE.test(file) && !D_TS_FILE.test(file) && !file.includes('/__fixtures__/')
+}
+
+/**
+ * FF-04 covers production TypeScript under every source root and production scripts under scripts/.
+ * @param {string} file Repository-relative POSIX path.
+ * @returns {boolean} Whether the file counts toward the 800-line limit.
+ */
+function isSizedFile(file) {
+  if (!SIZE_ROOTS.some((root) => file.startsWith(root))) return false
+  if (isProductionFile(file)) return true
+  return SCRIPT_FILE.test(file) && !SCRIPT_TEST_FILE.test(file) && !file.includes('/__fixtures__/')
 }
 
 /**
@@ -662,7 +755,7 @@ function enclosingFunctionNames(node) {
  * @returns {string[]} Repository-relative POSIX TypeScript paths to scan.
  */
 function walkSourceFiles() {
-  const roots = ['src', 'scripts', 'intelligence/src']
+  const roots = ['src', 'scripts', 'intelligence/src', 'operator/src']
   /** @type {string[]} */
   const files = []
   for (const root of roots) {
@@ -683,8 +776,9 @@ function walkDirectory(directory, files) {
     const absolute = join(directory, entry.name)
     if (entry.isDirectory()) {
       if (entry.name !== 'node_modules') walkDirectory(absolute, files)
-    } else if (entry.isFile() && TS_FILE.test(entry.name)) {
-      files.push(relative(repoRoot, absolute).split(sep).join('/'))
+    } else if (entry.isFile()) {
+      const file = relative(repoRoot, absolute).split(sep).join('/')
+      if (TS_FILE.test(entry.name) || SCRIPT_FILE.test(file)) files.push(file)
     }
   }
 }
@@ -822,6 +916,7 @@ const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).hr
 if (import.meta.url === invokedPath) {
   try {
     main()
+    if (process.argv.includes('--schedule')) runSizeScheduleCheck()
   } catch (error) {
     console.error(`[check:architecture] FAIL: ${error.message}`)
     process.exitCode = 1

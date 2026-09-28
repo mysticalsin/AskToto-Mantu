@@ -41,6 +41,17 @@
     "src/shared/contracts/knowledge/record.ts": 1
   },
   "FF-04": {
+    "intelligence/src/views/GraphView.tsx": 944,
+    "operator/src/connectors/catalog.ts": 866,
+    "operator/src/d1.ts": 1065,
+    "operator/src/dashboard.ts": 1428,
+    "operator/src/render/fixture.ts": 1059,
+    "operator/src/spa/css.ts": 992,
+    "operator/src/store.ts": 910,
+    "scripts/check-architecture.mjs": 924,
+    "scripts/e2e-smoke.mjs": 1109,
+    "scripts/qa/e2e-workflows.mjs": 1713,
+    "scripts/qa/packaged-smoke.mjs": 1224,
     "src/main/auth.ts": 999,
     "src/main/brain/corrections.ts": 1629,
     "src/main/brain/ingest.ts": 2905,
