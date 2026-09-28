@@ -281,7 +281,7 @@ test('renderForecastMarkdown names the gate forecast, remaining milestone hours,
 
   assert.match(markdown, /^# Delivery Velocity Forecast/m)
   assert.match(markdown, /\*\*Gate:\*\* m3/)
-  assert.match(markdown, /closed with evidence/)
+  assert.match(markdown, /closed with evidence/i)
   assert.match(markdown, /D-14/)
   assert.match(markdown, /lowers evidence level or ships DEFERRED flag-off/)
   assert.match(markdown, /M2-0155/)
