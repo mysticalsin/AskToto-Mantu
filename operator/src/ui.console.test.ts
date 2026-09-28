@@ -21,7 +21,7 @@ function env(): Env {
   }
 }
 
-const tonyAccess = {
+const ownerAccess = {
   getIdentity: async () => ({ email: 'owner@example.test' })
 }
 
@@ -52,7 +52,7 @@ async function page(store = memoryStore()): Promise<string> {
   const home = await handleRequest(
     new Request('https://operator.test/'),
     env(),
-    { access: tonyAccess },
+    { access: ownerAccess },
     { store, now: NOW }
   )
   return home.text()
@@ -288,7 +288,7 @@ describe('map has no repeating horizontal band', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     expect(findBandSubpaths(html)).toEqual([])
@@ -319,7 +319,7 @@ describe('events keep seat OS after a later ask ingest', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     const events = eventsHtml(html)
@@ -375,7 +375,7 @@ describe('events never render token-like strings', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     const events = eventsHtml(html)
@@ -446,7 +446,7 @@ describe('profiles hostname and SSO email', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     expect(html).toContain('Example-MacBook-Pro')
@@ -465,7 +465,7 @@ describe('profiles hostname and SSO email', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     expect(html).toContain('—')
@@ -567,7 +567,7 @@ describe('realtime.geo.json is city-level Shoey rows', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/realtime.geo.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)

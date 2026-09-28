@@ -31,7 +31,7 @@ function env(overrides: Partial<Env> = {}): Env {
   }
 }
 
-const tonyAccess = {
+const ownerAccess = {
   getIdentity: async () => ({ email: 'owner@example.test' })
 }
 
@@ -193,7 +193,7 @@ describe('Access on admin routes', () => {
     const list = await handleRequest(
       new Request('https://operator.test/v1/admin/asks'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(list.status).toBe(200)
@@ -215,7 +215,7 @@ describe('Access on admin routes', () => {
     const reveal = await handleRequest(
       new Request('https://operator.test/v1/admin/asks/ask-3'),
       env({ OPERATOR_PROMPT_KEY: '' }),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(reveal.status).toBe(410)
@@ -235,7 +235,7 @@ describe('Approve vs Push', () => {
         body: JSON.stringify({ skillId: 'interview' })
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const { id } = (await draft.json()) as { id: string }
@@ -247,7 +247,7 @@ describe('Approve vs Push', () => {
         body: JSON.stringify({ diff: skillMd })
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(approve.status).toBe(200)
@@ -261,7 +261,7 @@ describe('Approve vs Push', () => {
         body: JSON.stringify({})
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(push.status).toBe(200)
@@ -327,7 +327,7 @@ describe('packed console map and geo', () => {
     const home = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(home.status).toBe(200)
@@ -341,7 +341,7 @@ describe('packed console map and geo', () => {
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await dash.json()) as { map: { empty: boolean; countries: unknown[]; dots: unknown[] } }
@@ -378,7 +378,7 @@ describe('packed console map and geo', () => {
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const text = await dash.text()
@@ -400,7 +400,7 @@ describe('packed console map and geo', () => {
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await dash.json()) as { map: { empty: boolean; countries: unknown[] }; kpis: { live: number } }
@@ -427,7 +427,7 @@ describe('CRM send board', () => {
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const before = (await dash.json()) as {
@@ -438,7 +438,7 @@ describe('CRM send board', () => {
     const retry = await handleRequest(
       new Request('https://operator.test/v1/admin/crm/crm-1/retry', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(retry.status).toBe(200)
@@ -504,7 +504,7 @@ describe('CRM send board', () => {
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await dash.json()) as { crm: { rows: { title: string; error: string; remoteId: string | null; meetingHash: string | null }[] } }
@@ -573,7 +573,7 @@ describe('CRM send board', () => {
         body: '{}'
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const beat = await signedRequest('/v1/heartbeat', JSON.stringify({ os: 'darwin', appVersion: '1.8.0' }))
@@ -612,7 +612,7 @@ describe('CRM send board', () => {
         body: '{}'
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(retry.status).toBe(200)
@@ -640,7 +640,7 @@ describe('CRM send board', () => {
       )
       expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
     }
-    const page = await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })
+    const page = await handleRequest(new Request('https://operator.test/'), env(), { access: ownerAccess }, { store, now: NOW })
     const html = await page.text()
     expect(html).toContain('data-retry="row-failed"')
     expect(html).toContain('data-retry="row-expired"')

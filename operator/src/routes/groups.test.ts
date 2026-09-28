@@ -11,7 +11,7 @@ function env(): Env {
     ADMIN_EMAILS: TEST_ADMIN_EMAILS, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow {
   return {
@@ -49,7 +49,7 @@ async function call(
       ...(body !== undefined ? { body: JSON.stringify(body) } : {})
     }),
     env(),
-    { access: tonyAccess },
+    { access: ownerAccess },
     { store, now: NOW }
   )
 }
@@ -86,7 +86,7 @@ describe('CSRF', () => {
           ...(body !== undefined ? { body: JSON.stringify(body) } : {})
         }),
         env(),
-        { access: tonyAccess },
+        { access: ownerAccess },
         { store, now: NOW }
       )
       expect(res.status).toBe(403)

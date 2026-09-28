@@ -52,7 +52,7 @@ async function signed(
   })
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 describe('nonce is consumed only after the signature verifies', () => {
   it('a forged request cannot burn a nonce that a real request then presents', async () => {
@@ -104,7 +104,7 @@ describe('a device may only touch its own rows', () => {
 describe('console and JSON response headers', () => {
   it('serves the admin console with a self-only CSP, no framing, nosniff and no-store', async () => {
     const store = memoryStore()
-    const res = await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })
+    const res = await handleRequest(new Request('https://operator.test/'), env(), { access: ownerAccess }, { store, now: NOW })
     expect(res.status).toBe(200)
     const csp = res.headers.get('content-security-policy') ?? ''
     expect(csp).toMatch(/default-src 'self'/)
@@ -122,7 +122,7 @@ describe('console and JSON response headers', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/health.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -202,7 +202,7 @@ describe('CSRF on every admin POST', () => {
         body: body()
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -217,7 +217,7 @@ describe('CSRF on every admin POST', () => {
         body: body()
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(viaSecFetch.status).toBe(403)
@@ -230,7 +230,7 @@ describe('CSRF on every admin POST', () => {
         body: body()
       }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(viaOrigin.status).toBe(403)
@@ -239,7 +239,7 @@ describe('CSRF on every admin POST', () => {
 
   it('Bearer session + same-origin passes', async () => {
     const store = memoryStore()
-    const home = await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })
+    const home = await handleRequest(new Request('https://operator.test/'), env(), { access: ownerAccess }, { store, now: NOW })
     const token = home.headers.get('X-Metis-Session') || ''
     expect(token).toMatch(/^v1\|/)
     const res = await handleRequest(
@@ -298,7 +298,7 @@ describe('admin mutation rate limit', () => {
     const store = memoryStore()
     let last: Response | null = null
     for (let i = 0; i < 61; i++) {
-      last = await handleRequest(mutation(), env(), { access: tonyAccess }, { store, now: NOW })
+      last = await handleRequest(mutation(), env(), { access: ownerAccess }, { store, now: NOW })
     }
     expect(last?.status).toBe(429)
     const body = (await last!.json()) as { ok: boolean; error: string; code: string; retryAfterMs: number }
@@ -311,12 +311,12 @@ describe('admin mutation rate limit', () => {
   it('never limits GET, even once the mutation bucket for that email is exhausted', async () => {
     const store = memoryStore()
     for (let i = 0; i < 61; i++) {
-      await handleRequest(mutation(), env(), { access: tonyAccess }, { store, now: NOW })
+      await handleRequest(mutation(), env(), { access: ownerAccess }, { store, now: NOW })
     }
     const getRes = await handleRequest(
       new Request('https://operator.test/v1/admin/health.json', { headers: { 'sec-fetch-site': 'same-origin' } }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(getRes.status).toBe(200)

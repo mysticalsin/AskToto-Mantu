@@ -10,7 +10,7 @@ function env(): Env {
     ADMIN_EMAILS: TEST_ADMIN_EMAILS, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 async function readAll(res: Response): Promise<Uint8Array> {
   const buf = await res.arrayBuffer()
@@ -32,7 +32,7 @@ describe('GET /v1/admin/export.csv', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/export.csv?table=vault_keys'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store: memoryStore(), now: NOW }
     )
     expect(res.status).toBe(400)
@@ -44,7 +44,7 @@ describe('GET /v1/admin/export.csv', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/export.csv?table=audit'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -70,7 +70,7 @@ describe('GET /v1/admin/export.csv', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/export.csv?table=audit&actor=system'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const text = new TextDecoder().decode(await readAll(res))
@@ -104,7 +104,7 @@ describe('GET /v1/admin/export.xlsx', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/export.xlsx?table=seats'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -126,7 +126,7 @@ describe('GET /v1/admin/export.xlsx', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/export.xlsx?table=nope'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store: memoryStore(), now: NOW }
     )
     expect(res.status).toBe(400)
@@ -140,7 +140,7 @@ describe('export read-cost rate limit (security review, medium)', () => {
       const res = await handleRequest(
         new Request('https://operator.test/v1/admin/export.csv?table=audit'),
         env(),
-        { access: tonyAccess },
+        { access: ownerAccess },
         { store, now: NOW }
       )
       expect(res.status).toBe(200)
@@ -149,7 +149,7 @@ describe('export read-cost rate limit (security review, medium)', () => {
     const eleventh = await handleRequest(
       new Request('https://operator.test/v1/admin/export.xlsx?table=audit'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(eleventh.status).toBe(429)
@@ -165,7 +165,7 @@ describe('export read-cost rate limit (security review, medium)', () => {
       const res = await handleRequest(
         new Request('https://operator.test/v1/admin/export.csv?table=audit'),
         env(),
-        { access: tonyAccess },
+        { access: ownerAccess },
         { store, now: NOW }
       )
       await res.arrayBuffer()

@@ -10,7 +10,7 @@ function env(): Env {
     ADMIN_EMAILS: TEST_ADMIN_EMAILS, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow {
   return {
@@ -39,7 +39,7 @@ describe('GET /v1/admin/live.json', () => {
     const first = await handleRequest(
       new Request('https://operator.test/v1/admin/live.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(first.status).toBe(200)
@@ -53,7 +53,7 @@ describe('GET /v1/admin/live.json', () => {
     const second = await handleRequest(
       new Request('https://operator.test/v1/admin/live.json', { headers: { 'if-none-match': etag! } }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(second.status).toBe(304)
@@ -65,7 +65,7 @@ describe('GET /v1/admin/live.json', () => {
     const third = await handleRequest(
       new Request('https://operator.test/v1/admin/live.json', { headers: { 'if-none-match': etag! } }),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(third.status).toBe(200)
@@ -81,7 +81,7 @@ describe('GET /v1/admin/realtime/live-seats.json', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/realtime/live-seats.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -98,7 +98,7 @@ describe('GET /v1/admin/realtime/live-seats.json', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/realtime/live-seats.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await res.json()) as { rows: unknown[] }
@@ -115,7 +115,7 @@ describe('GET /v1/admin/realtime/geo.json', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/realtime/geo.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -132,7 +132,7 @@ describe('GET /v1/admin/realtime.geo.json (legacy alias)', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/realtime.geo.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -199,7 +199,7 @@ describe('GET /v1/admin/live.json (task B7 rail counters)', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/live.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await res.json()) as {
@@ -221,7 +221,7 @@ describe('GET /v1/admin/live.json (task B7 rail counters)', () => {
     const all = await handleRequest(
       new Request('https://operator.test/v1/admin/live.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const allBody = (await all.json()) as { unseenNotices: number }
@@ -230,7 +230,7 @@ describe('GET /v1/admin/live.json (task B7 rail counters)', () => {
     const filtered = await handleRequest(
       new Request(`https://operator.test/v1/admin/live.json?since=${NOW}`),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const filteredBody = (await filtered.json()) as { unseenNotices: number }
@@ -247,9 +247,9 @@ describe('GET /v1/admin/search.json', () => {
     await store.putIntegration(integrationRow({ id: 'int-1', kind: 'hubspot', label: 'HubSpot production' }))
 
     const res = await handleRequest(
-      new Request('https://operator.test/v1/admin/search.json?q=tony'),
+      new Request('https://operator.test/v1/admin/search.json?q=example-mac'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await res.json()) as {
@@ -265,7 +265,7 @@ describe('GET /v1/admin/search.json', () => {
     const byLast4 = await handleRequest(
       new Request('https://operator.test/v1/admin/search.json?q=zz99'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const byLast4Body = (await byLast4.json()) as { licenses: { id: string }[] }
@@ -274,7 +274,7 @@ describe('GET /v1/admin/search.json', () => {
     const byGroup = await handleRequest(
       new Request('https://operator.test/v1/admin/search.json?q=amaris'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const byGroupBody = (await byGroup.json()) as { groups: { id: string }[] }
@@ -283,7 +283,7 @@ describe('GET /v1/admin/search.json', () => {
     const byConnector = await handleRequest(
       new Request('https://operator.test/v1/admin/search.json?q=hubspot'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const byConnectorBody = (await byConnector.json()) as { integrations: { id: string }[] }
@@ -295,7 +295,7 @@ describe('GET /v1/admin/search.json', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/search.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await res.json()) as { seats: unknown[]; licenses: unknown[]; groups: unknown[]; integrations: unknown[] }
@@ -309,7 +309,7 @@ describe('GET /v1/admin/search.json', () => {
     const res = await handleRequest(
       new Request(`https://operator.test/v1/admin/search.json?q=${encodeURIComponent(longQuery)}`),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -325,17 +325,17 @@ describe('GET /v1/admin/search.json read-cost rate limit (security review, mediu
     const store = memoryStore()
     for (let i = 0; i < 30; i++) {
       const res = await handleRequest(
-        new Request('https://operator.test/v1/admin/search.json?q=tony'),
+        new Request('https://operator.test/v1/admin/search.json?q=example-mac'),
         env(),
-        { access: tonyAccess },
+        { access: ownerAccess },
         { store, now: NOW }
       )
       expect(res.status).toBe(200)
     }
     const res31 = await handleRequest(
-      new Request('https://operator.test/v1/admin/search.json?q=tony'),
+      new Request('https://operator.test/v1/admin/search.json?q=example-mac'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res31.status).toBe(429)
@@ -348,7 +348,7 @@ describe('GET /v1/admin/search.json read-cost rate limit (security review, mediu
     const liveRes = await handleRequest(
       new Request('https://operator.test/v1/admin/live.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(liveRes.status).toBe(200)

@@ -53,7 +53,7 @@ function env(): Env {
     ADMIN_EMAILS: TEST_ADMIN_EMAILS, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 describe('validateSettingValue', () => {
   it('hourlyRate: 0 to 10000 or null, nothing else', () => {
@@ -131,7 +131,7 @@ describe('GET/PATCH /v1/admin/settings.json', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/settings.json'),
       { ...env(), DB: db },
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store: memoryStore(), now: NOW }
     )
     expect(res.status).toBe(200)
@@ -150,7 +150,7 @@ describe('GET/PATCH /v1/admin/settings.json', () => {
         body: JSON.stringify({ hourlyRate: 42, currency: 'GBP' })
       }),
       { ...env(), DB: db },
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(patch.status).toBe(200)
@@ -166,7 +166,7 @@ describe('GET/PATCH /v1/admin/settings.json', () => {
     const get = await handleRequest(
       new Request('https://operator.test/v1/admin/settings.json'),
       { ...env(), DB: db },
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW + 1000 }
     )
     const getBody = (await get.json()) as { settings: { hourlyRate: number | null } }
@@ -183,7 +183,7 @@ describe('GET/PATCH /v1/admin/settings.json', () => {
         body: JSON.stringify({ hourlyRate: 999999 })
       }),
       { ...env(), DB: db },
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(400)
@@ -200,7 +200,7 @@ describe('GET/PATCH /v1/admin/settings.json', () => {
         body: JSON.stringify({ notARealSetting: 1 })
       }),
       { ...env(), DB: sqliteD1(freshSettingsDb()) },
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store: memoryStore(), now: NOW }
     )
     expect(res.status).toBe(400)

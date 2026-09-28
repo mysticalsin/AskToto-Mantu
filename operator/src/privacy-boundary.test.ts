@@ -10,7 +10,7 @@ const PRIVATE_CRM = 'Patient diagnosis and private meeting notes'
 const PRIVATE_EVENT = '/private/synthetic-home/Customer Alpha/private-meeting.md'
 const PRIVATE_EVIDENCE = 'Ask said to acquire Customer Alpha tomorrow'
 
-const tonyAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function env(overrides: Partial<Env> = {}): Env {
   return {
@@ -39,7 +39,7 @@ describe('legacy server privacy projections', () => {
     await store.insertAsk(legacyAsk())
 
     const list = await handleRequest(
-      new Request('https://operator.test/v1/admin/asks'), env(), { access: tonyAccess }, { store, now: NOW }
+      new Request('https://operator.test/v1/admin/asks'), env(), { access: ownerAccess }, { store, now: NOW }
     )
     expect(list.status).toBe(200)
     const listBody = (await list.json()) as { asks: Record<string, unknown>[] }
@@ -55,7 +55,7 @@ describe('legacy server privacy projections', () => {
     const reveal = await handleRequest(
       new Request('https://operator.test/v1/admin/asks/legacy-ask'),
       env({ OPERATOR_PROMPT_KEY: '' }),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(reveal.status).toBe(410)
@@ -76,7 +76,7 @@ describe('legacy server privacy projections', () => {
       new Request('https://operator.test/v1/admin/skills/draft', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ skillId: 'interview' })
       }),
-      env(), { access: tonyAccess }, { store, now: NOW }
+      env(), { access: ownerAccess }, { store, now: NOW }
     )
     expect(draft.status).toBe(200)
     const proposals = await store.listProposals(10)
@@ -127,7 +127,7 @@ describe('legacy server privacy projections', () => {
     })
     const response = await handleRequest(
       new Request('https://operator.test/v1/admin/crm/retry-crm/retry', { method: 'POST', body: '{}' }),
-      env(), { access: tonyAccess }, { store, now: NOW }
+      env(), { access: ownerAccess }, { store, now: NOW }
     )
     expect(response.status).toBe(200)
     const row = await store.getCrm('retry-crm')
