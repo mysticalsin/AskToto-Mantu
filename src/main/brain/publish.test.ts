@@ -419,6 +419,14 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       expect(set.has('b.md')).toBe(true)
       expect(set.has('a.md')).toBe(false)
     })
+
+    it('readConfidentialMeetings excludes a CRLF meeting flagged confidential (a synced/edited file keeps its flag)', () => {
+      writeMeetingFile(folder, 'open.md', { date: '2026-01-01' })
+      writeFileSync(join(folder, 'crlf-secret.md'), meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n/g, '\r\n'), 'utf8')
+      const set = readConfidentialMeetings(s)
+      expect(set.has('crlf-secret.md')).toBe(true)
+      expect(set.has('open.md')).toBe(false)
+    })
   })
 
   // ── MQA-074 / MQA-077: the confidential gate must fail CLOSED on a meeting it cannot read ────────────

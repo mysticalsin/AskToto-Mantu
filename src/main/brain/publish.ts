@@ -15,6 +15,7 @@ import {
   type EntityKind,
   type LedgerCommitment
 } from '@shared/brain'
+import { parseMeetingDocument, readMeetingFields } from '../features/meetings/meeting-document'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, parseRecapMarkdown } from '../transcripts'
 import { listEntities, readPerson, readAccount, readDeal, readIndex, readMeetingExtraction, listMeetingExtractions, slugify } from './store'
 import { readAliasMap, resolveEntitySlug, type AliasMap } from './corrections'
@@ -138,17 +139,14 @@ function teamMeetingKey(teamFolder: string, file: string): string {
  *  "confidential: true"-looking line inside the transcript/recap/debrief body (e.g. a participant
  *  literally saying those words), matching recall.ts's own frontmatter-block-scoped parsing. */
 function readFrontmatterFlag(md: string, key: string): boolean {
-  const block = md.match(/^---\n([\s\S]*?)\n---/)
-  if (!block) return false
-  const m = block[1].match(new RegExp(`^${key}:\\s*(.*)\\s*$`, 'm'))
-  return !!m && /^"?true"?$/i.test(m[1].trim())
+  return /^true$/i.test(readMeetingFields(md)[key] ?? '')
 }
 
 /** True only when `md` carries a COMPLETE leading frontmatter block. The team scan below reads a bounded
  *  head rather than the whole file, so "no closing `---` in what I read" must be distinguished from "read
  *  the whole thing, no flag there" — the first is unknown and has to fail closed. */
 function hasFrontmatterBlock(md: string): boolean {
-  return /^---\n[\s\S]*?\n---/.test(md)
+  return parseMeetingDocument(md) !== null
 }
 
 /** How much of a team transcript is read to decide its confidential flag. Frontmatter sits at byte 0 and
@@ -573,22 +571,8 @@ async function removeMeetingCard(s: Settings, file: string): Promise<void> {
 
 // ── Meeting note card ──────────────────────────────────────────────────────────────────────────────────
 
-/** Minimal key:value frontmatter parse — duplicated from recall.ts's own `frontmatter()` (not exported
- *  there) rather than imported, matching this codebase's established convention for small cross-file
- *  parsing helpers (see recall.ts's own doc comments on sanitizeRenameTitle/yamlSafeRenameTitle). */
-function parseFrontmatter(text: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  const m = text.match(/^---\n([\s\S]*?)\n---/)
-  if (!m) return out
-  for (const line of m[1].split('\n')) {
-    const kv = line.match(/^([a-z_]+):\s*(.*)$/i)
-    if (kv) out[kv[1]] = kv[2].replace(/^["[]|["\]]$/g, '').trim()
-  }
-  return out
-}
-
 /** Extracts the "## Notes & follow-ups" … "## Full transcript" span — the exact recap section
- *  recall.ts's recallRead parses, duplicated here for the same reason as parseFrontmatter above. NEVER
+ *  recall.ts's recallRead parses, duplicated here rather than imported. NEVER
  *  reads past "## Full transcript": the note card is recap-derived only, transcript lines must never
  *  reach it. */
 function extractRecapSection(text: string): string {
@@ -647,7 +631,7 @@ export async function publishMeetingCard(
   }
   if (!raw) return // undecryptable on this device — leave any existing card alone rather than guess
 
-  const fm = parseFrontmatter(raw)
+  const fm = readMeetingFields(raw)
   if (fm.type && fm.type !== 'meeting-transcript') return
 
   const recapMd = extractRecapSection(raw)

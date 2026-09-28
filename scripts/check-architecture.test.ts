@@ -36,6 +36,7 @@ const RULE_IDS = [
   'FF-10',
   'FF-11',
   'FF-14',
+  'FF-15',
 ]
 
 function sortedViolationLines(stdout: string): string[] {
@@ -319,6 +320,7 @@ describe('architecture ratchet pure functions', () => {
       'FF-10': {},
       'FF-11': {},
       'FF-14': {},
+      'FF-15': {},
     }, null, 2)}\n`)
     expect(Object.keys(JSON.parse(canonical) as Counts)).toEqual(RULE_IDS)
     expect(formatBaseline(JSON.parse(canonical) as Counts)).toBe(canonical)
@@ -531,6 +533,22 @@ describe('architecture source detectors', () => {
       ].join('\n')
       expect(countSourceFile('src/main/create-window.ts', text)).toEqual({ 'FF-11': 2 })
       expect(countSourceFile('src/main/windows/create-window.ts', text)).toEqual({})
+    })
+  })
+
+  describe('FF-15 frontmatter-delimiter regexes outside the meeting-document codec', () => {
+    it('counts delimiter regexes in src/main production files except the codec', () => {
+      const text = [
+        'const a = text.match(/^---\\n([\\s\\S]*?)\\n---/)',
+        'const b = text.replace(/^---\\r?\\n[\\s\\S]*?\\r?\\n---\\n?/, "")',
+        'const c = /^(?:---)/',
+        'const d = /^## Full transcript/m',
+        'const e = "^---\\n"',
+      ].join('\n')
+      expect(countSourceFile('src/main/reader.ts', text)).toEqual({ 'FF-15': 3 })
+      expect(countSourceFile('src/main/features/meetings/meeting-document.ts', text)).toEqual({})
+      expect(countSourceFile('src/main/reader.test.ts', text)).toEqual({})
+      expect(countSourceFile('src/renderer/src/reader.ts', text)).toEqual({})
     })
   })
 

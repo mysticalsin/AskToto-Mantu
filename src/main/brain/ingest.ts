@@ -35,6 +35,7 @@ import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@share
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
+import { parseMeetingDocument } from '../features/meetings/meeting-document'
 // Static (eager) import — NOT `await import()`: the main process is bytecode-compiled and dynamic import
 // throws there (see llm/dust.ts's own note). dustcli.ts imports nothing from brain/, so no cycle.
 import { refreshDustCliSession } from '../dustcli'
@@ -1582,10 +1583,10 @@ export function ingestFailureDetails(
 
 /** Reads the app-written meeting mode from the leading YAML frontmatter only. */
 export function readMeetingSourceMode(md: string): string {
-  const frontmatter = md.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1]
-  if (!frontmatter) return ''
+  const doc = parseMeetingDocument(md)
+  if (!doc) return ''
 
-  const raw = frontmatter.match(/^mode:\s*(.*?)\s*$/m)?.[1]?.trim() ?? ''
+  const raw = doc.lines.join('\n').match(/^mode:\s*(.*?)\s*$/m)?.[1]?.trim() ?? ''
   const quoted = raw.match(/^(['"])(.*)\1$/)
   const mode = (quoted ? quoted[2] : raw).trim()
   return mode.length <= 100 ? mode : ''

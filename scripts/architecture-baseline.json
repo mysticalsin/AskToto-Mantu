@@ -353,5 +353,6 @@
     "src/main/operator-overlay.ts": 1,
     "src/main/screen-preprocess.ts": 1,
     "src/main/updater.ts": 1
-  }
+  },
+  "FF-15": {}
 }
