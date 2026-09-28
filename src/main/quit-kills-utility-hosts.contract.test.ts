@@ -11,7 +11,7 @@ import { join } from 'node:path'
  * onto that unverified assumption.
  */
 describe('stopAllSidecars kills every utilityProcess host it owns', () => {
-  const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+  const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
   const family = (() => {
     const start = source.indexOf('const stopAllSidecars = createStopAll(')
     expect(start).toBeGreaterThan(-1)
