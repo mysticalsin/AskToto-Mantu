@@ -178,8 +178,7 @@ import {
   workingCliOrder
 } from '@shared/ask-routing'
 import { getActiveModelPolicy, narrowAllowedForCapability, resolveManagedModel } from './model-policy-client'
-import { localModelAllowedByPolicy } from '../shared/model-policy'
-import { MODEL_POLICY_CAPABILITIES } from '@shared/model-policy'
+import { localModelAllowedByPolicy, MODEL_POLICY_CAPABILITIES } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
@@ -2006,8 +2005,6 @@ function publicSettings(): PublicSettings {
   // at request time. Folding it in here keeps UI readiness from drifting out of sync with what's actually
   // allowed to answer (previously a blocked provider could show "ready" with no setup CTA, then reject
   // every ask).
-  // M2-0412: narrowed by the fleet model policy exactly as askStart narrows it, so the provider picker
-  // and readiness never offer a provider the policy would refuse at request time.
   const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
   const funded = operatorFundedProviders()
   const managedVisionReady = (p: ProviderId): boolean =>
@@ -6886,8 +6883,7 @@ function registerIpc(): void {
     const profile = resolveEnterpriseLiveProfile(settings.enterpriseLive ?? {})
     // Provider authority is settings/profile only. The renderer may report its UI selection but cannot
     // redirect a live audio stream to another backend by supplying `payload.provider`.
-    // M2-0412: the fleet policy's `stt` entry narrows that choice here, at session start only — a live
-    // session is never rewritten when the policy changes; the next start picks it up.
+    // M2-0412: the fleet policy's `stt` entry narrows this at session start only; live sessions are never rewritten.
     const provider = enforceSttPolicy(
       getActiveModelPolicy(settings),
       effectiveCloudSttProvider(profile, settings.cloudSttProvider)
@@ -7256,10 +7252,8 @@ function registerIpc(): void {
     // the renderer keeps what run() set (a vision ask carries its own image).
     const screenGrounded =
       req.mode === 'answer' && req.wantsScreenContext ? !!req.screenContext : undefined
-    // M2-0412: the fleet model policy (Operator "Models" page) narrows the org allowlist down to what
-    // the owner approved for interactive ask/chat, same shape every eligibility check below already
-    // consumes. CLI providers and 'local' are never narrowed by it — they are governed by their own
-    // connect state / routing-mode toggles, not this cloud-model fleet policy.
+    // M2-0412: the fleet model policy narrows the org allowlist for ask/chat; CLI providers and 'local'
+    // are governed by their own connect/routing toggles and never narrowed.
     const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
 
     // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends

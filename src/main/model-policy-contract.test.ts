@@ -25,8 +25,10 @@ function src(relativePath: string): string {
   return readFileSync(join(root, relativePath), 'utf8').replace(/\r\n/g, '\n')
 }
 
+const MAIN_INDEX = 'src/main/index.ts'
+
 const WIRED_CALL_SITES = [
-  'src/main/index.ts',
+  MAIN_INDEX,
   'src/main/import-recap.ts',
   'src/main/brain/ingest.ts',
   'src/main/brain/intelligence-pass-route.ts'
@@ -39,7 +41,7 @@ describe('M2-0412 — every real model call site resolves through the fleet poli
   })
 
   it('the interactive ask path (index.ts) narrows providers AND pins the model for the askChat capability', () => {
-    const text = src('src/main/index.ts')
+    const text = src(MAIN_INDEX)
     expect(text).toContain("narrowAllowedForCapability(s, getAllowedProviders(), 'askChat'")
     expect(text).toContain("resolveManagedModel(s, 'askChat', provider, model)")
   })
@@ -53,12 +55,12 @@ describe('M2-0412 — every real model call site resolves through the fleet poli
   })
 
   it('the cloud STT session start narrows the provider through the stt policy entry', () => {
-    const text = src('src/main/index.ts')
+    const text = src(MAIN_INDEX)
     expect(text).toMatch(/enforceSttPolicy\(\s*getActiveModelPolicy\(settings\),\s*effectiveCloudSttProvider\(/)
   })
 
   it('the on-device readiness gate is installed from the localModel policy entry', () => {
-    expect(src('src/main/index.ts')).toContain('setLocalModelGate((modelId) => localModelAllowedByPolicy(getActiveModelPolicy(getSettings()), modelId))')
+    expect(src(MAIN_INDEX)).toContain('setLocalModelGate((modelId) => localModelAllowedByPolicy(getActiveModelPolicy(getSettings()), modelId))')
     const routing = src('src/main/llm/local-routing.ts')
     expect(routing).toContain('if (!localModelGate(s.localLlm.modelId)) return false')
   })
