@@ -9,7 +9,7 @@
  *
  * Inert unless the app is packaged AND running on an isolated QA profile AND the env names a known row.
  */
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { access, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AuditEvent } from './logger'
 import type { bundledFfmpegPath, startFfmpegDecode } from './ffmpeg-decoder'
@@ -119,9 +119,9 @@ export function productionHkMDeps(
     holdFfmpegDecode: async () => {
       const executable = modules.bundledFfmpegPath(resourcesDir)
       if (!executable) throw new Error('bundled ffmpeg missing')
-      mkdirSync(profileDir, { recursive: true })
+      await mkdir(profileDir, { recursive: true })
       const source = join(profileDir, 'hk-m-silence.wav')
-      if (!existsSync(source)) writeFileSync(source, silentWav(HK_M_DECODE_SECONDS))
+      await access(source).catch(() => writeFile(source, silentWav(HK_M_DECODE_SECONDS)))
       await new Promise<void>((resolve, reject) => {
         let running = false
         const started = modules.startFfmpegDecode(executable, source, 0, {
@@ -143,7 +143,12 @@ export function productionHkMDeps(
       })
     },
     writeRegistryUntilKilled: () => {
-      setInterval(() => modules.recordSidecarIntent('llama-server', ['hk-m-registry-write']), REGISTRY_WRITE_INTERVAL_MS)
+      void (async () => {
+        for (;;) {
+          modules.recordSidecarIntent('llama-server', ['hk-m-registry-write'])
+          await new Promise((resolve) => setTimeout(resolve, REGISTRY_WRITE_INTERVAL_MS))
+        }
+      })()
     }
   }
 }
