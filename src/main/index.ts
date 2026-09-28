@@ -591,6 +591,7 @@ import {
   writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
   loadEntitySlugs as loadBrainEntitySlugs,
+  loadEntityDisplayNames as loadBrainEntityDisplayNames,
   loadMeetingExtraction as loadBrainMeetingExtraction,
   purgeBrain,
   listPreservedBrainIndexes,
@@ -8349,17 +8350,10 @@ function registerIpc(): void {
   // the renderer's ASR entity-casing bias (lib/entity-casing.ts) so a live transcript can spell a known
   // name correctly. Read-only, best-effort: an unsigned-in/empty brain just yields no names, never throws,
   // since this runs opportunistically (mount + after a meeting saves), not in response to a user action.
-  ipcMain.handle(IPC.brainEntityNames, (e) => {
+  ipcMain.handle(IPC.brainEntityNames, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { names: [] }
-    const s = getSettings()
-    const people = listBrainEntities(s, 'person')
-      .map((slug) => readBrainPerson(s, slug)?.name)
-      .filter((n): n is string => !!n)
-    const accounts = listBrainEntities(s, 'account')
-      .map((slug) => readBrainAccount(s, slug)?.name)
-      .filter((n): n is string => !!n)
-    return { names: Array.from(new Set([...people, ...accounts])).slice(0, 500) }
+    return loadBrainEntityDisplayNames(getSettings())
   })
   // Deal outcome — the human closes the loop the LLM never may (see DealEntitySchema.outcome). Main-window
   // only: it's a brain WRITE, like brainCommitmentSettle. Same slug convention too: the renderer sends the

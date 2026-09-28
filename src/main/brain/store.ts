@@ -824,6 +824,22 @@ export const writeDeal = async (s: Settings, slug: string, v: DealEntity): Promi
 }
 
 /**
+ * Canonical people/account NAMES ONLY, merged and deduped — feeds the renderer's ASR entity-casing bias
+ * (brain:entityNames), which refreshes opportunistically on mount, not in response to a user action. That
+ * makes this gateway-backed (M2-0031): a cloud-only or kernel-blocked entity file must be classified and
+ * skipped, never opened on the main thread, or a mount racing a stuck sync device freezes the whole app.
+ */
+export async function loadEntityDisplayNames(s: Settings): Promise<{ names: string[] }> {
+  const [personSlugs, accountSlugs] = await Promise.all([loadEntitySlugs(s, 'person'), loadEntitySlugs(s, 'account')])
+  const [people, accounts] = await Promise.all([
+    Promise.all(personSlugs.map((slug) => loadPerson(s, slug))),
+    Promise.all(accountSlugs.map((slug) => loadAccount(s, slug)))
+  ])
+  const names = [...people, ...accounts].map((entity) => entity?.name).filter((n): n is string => !!n)
+  return { names: Array.from(new Set(names)).slice(0, 500) }
+}
+
+/**
  * Set a deal's outcome (open/won/lost) — the human closes the loop the LLM never may (see the
  * DealEntitySchema.outcome doc comment in shared/brain.ts). Returns the updated entity, or null when
  * the slug doesn't match any deal on disk (deleted, mistyped, or never ingested).

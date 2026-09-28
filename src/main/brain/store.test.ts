@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, realpathSync } from 'node:fs'
+import { readFile, readdir, realpath, stat, lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
-import { BrainIndexSchema } from '@shared/brain'
+import { BrainIndexSchema, type PersonEntity, type AccountEntity } from '@shared/brain'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
+import type { StorageFs } from '../infra/storage/gateway'
 
 vi.mock('electron')
 
@@ -204,4 +207,83 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
   // mqa-175-brain-index-poison.test.ts's "at 5 auto snapshots a sixth invalid index is left in
   // place and read-only ('corrupt-kept')", which also asserts writeIndex rejects and that none of
   // the capped snapshots' names change — no need to duplicate it here.
+})
+
+describe('loadEntityDisplayNames — gateway-backed (M2-0031)', () => {
+  let folder: string
+  let s: Settings
+
+  const person = (name: string): PersonEntity => ({
+    schema_version: 2,
+    id: '',
+    aliases: [],
+    name,
+    role: null,
+    account: null,
+    meetings: [],
+    quotes: [],
+    stance_trail: [],
+    commitments: []
+  })
+  const account = (name: string): AccountEntity => ({
+    schema_version: 2,
+    id: '',
+    aliases: [],
+    name,
+    sector: 'other',
+    sector_confidence: 'INFERRED',
+    strategic: false,
+    people: [],
+    deals: [],
+    meetings: [],
+    win_reasons: [],
+    loss_reasons: []
+  })
+
+  beforeEach(async () => {
+    // realpathSync.native: the gateway resolves the root via fs.realpath before reading under it, and on
+    // some platforms (Windows CI's short 8.3-style RUNNER~1 temp path) a bare mkdtempSync path never
+    // matches that resolved root.
+    folder = realpathSync.native(mkdtempSync(join(tmpdir(), 'asktoto-store-names-')))
+    s = { meetingsFolder: folder } as Settings
+    useStorageForTests()
+    await store.writePerson(s, 'ada-lovelace', person('Ada Lovelace'))
+    await store.writeAccount(s, 'acme', account('Acme Corp'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    realFs.rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
+
+  it('merges person and account names into one deduped list', async () => {
+    const result = await store.loadEntityDisplayNames(s)
+    expect(result.names.slice().sort()).toEqual(['Acme Corp', 'Ada Lovelace'])
+  })
+
+  it('a kernel-blocked entity read (a cloud-only file, or a FIFO in the ST-1 QA harness) is classified ' +
+    'and skipped, never awaited on the main thread', async () => {
+    const stuckPath = join(folder, '.brain', 'entities', 'person', 'ada-lovelace.json')
+    const stuck = new Promise<Buffer>(() => {
+      /* models open()+read() blocking forever on a cloud-only/FIFO file — never settles */
+    })
+    const fs: StorageFs = {
+      readdir: (p) => readdir(p),
+      realpath: (p) => realpath(p),
+      stat: (p) => stat(p),
+      lstat: (p) => lstat(p).then((st) => ({ isSymbolicLink: st.isSymbolicLink() })),
+      readFile: (p) => (p === stuckPath ? stuck : readFile(p))
+    }
+    useStorageForTests({ fs })
+
+    vi.useFakeTimers()
+    const resultPromise = store.loadEntityDisplayNames(s)
+    await vi.advanceTimersByTimeAsync(5_000) // the gateway's own content-read deadline (CONTENT_DEADLINE_MS)
+    const result = await resultPromise
+
+    // The stuck person entity is dropped (classified 'timeout', never counted as a name); the healthy
+    // account still resolves. Before M2-0031 this same shape (readPerson/readJson, sync readFileSync)
+    // would have hung this test — and the real IPC handler, and the whole main process — forever.
+    expect(result.names).toEqual(['Acme Corp'])
+  })
 })
