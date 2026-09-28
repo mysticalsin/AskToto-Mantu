@@ -158,7 +158,7 @@ export function npmGlobalBinCandidates(bin: string): string[] {
 export function posixUserBinCandidates(bin: string): string[] {
   const home = process.env.HOME ?? ''
   // Always POSIX separators: this probe is for mac/Linux GUI PATH gaps, and Windows CI hosts
-  // still unit-test the helper. path.join() on win32 turned `/Users/tony` into `\\Users\\tony\\...`.
+  // still unit-test the helper. path.join() on win32 turned POSIX home paths into backslash paths.
   const out: string[] = []
   if (home) {
     out.push(posix.join(home, '.local', 'bin', bin), posix.join(home, '.hermes', 'node', 'bin', bin))

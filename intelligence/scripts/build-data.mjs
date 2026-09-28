@@ -11,8 +11,12 @@
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-const VAULT = '/Users/tony/Library/CloudStorage/OneDrive-MantuGroup/Documents/AI Second Brain'
+const VAULT = process.env.METIS_INTELLIGENCE_VAULT
 const OUT = join(import.meta.dirname, '..', 'public', 'data.json')
+
+if (!VAULT) {
+  throw new Error('METIS_INTELLIGENCE_VAULT must point to the local source vault')
+}
 
 function readJSON(relPath) {
   return JSON.parse(readFileSync(join(VAULT, relPath), 'utf8'))

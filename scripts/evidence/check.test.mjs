@@ -236,9 +236,9 @@ test('C15 a record kit_refs set must equal the ticket kit_refs exactly', () => {
 })
 
 test('C16 a finding_ref not on the ticket is a problem', () => {
-  const t = ticket({ id: 'M2-0001', status: 'IN_PROGRESS', finding_refs: ['CHATGPT-A10'] })
-  const recs = new Map([['M2-0001', [record({ ticket: 'M2-0001', finding_refs: ['CHATGPT-A10', 'CHATGPT-A99'] })]]])
-  assertProblem(ledgerProblems(ledger({ tickets: [t] }), recs), 'M2-0001', 'CHATGPT-A99')
+  const t = ticket({ id: 'M2-0001', status: 'IN_PROGRESS', finding_refs: ['PUBLIC-A10'] })
+  const recs = new Map([['M2-0001', [record({ ticket: 'M2-0001', finding_refs: ['PUBLIC-A10', 'PUBLIC-A99'] })]]])
+  assertProblem(ledgerProblems(ledger({ tickets: [t] }), recs), 'M2-0001', 'PUBLIC-A99')
 })
 
 test('C17 unlabelled OPEN assumptions and answered-changed decisions must be flagged', () => {
