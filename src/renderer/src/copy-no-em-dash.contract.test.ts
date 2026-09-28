@@ -14,7 +14,7 @@ const root = join(__dirname, '..', '..', '..')
 const FILES = [
   'src/renderer/src/App.tsx',
   'src/renderer/src/components/Bar.tsx',
-  'src/renderer/src/components/Settings.tsx',
+  'src/renderer/src/features/settings/Settings.tsx',
   'src/renderer/src/components/Review.tsx',
   'src/renderer/src/components/RecallView.tsx',
   'src/renderer/src/components/QuickActions.tsx',

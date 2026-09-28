@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 const SEED = readFileSync(join(__dirname, 'embedded-cloudflare-key.ts'), 'utf8')
 const INDEX = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const PRELOAD = readFileSync(join(__dirname, '..', 'preload', 'index.ts'), 'utf8')
-const SETTINGS = readFileSync(join(__dirname, '..', 'renderer', 'src', 'components', 'Settings.tsx'), 'utf8')
+const SETTINGS = readFileSync(join(__dirname, '..', 'renderer', 'src', 'features', 'settings', 'Settings.tsx'), 'utf8')
 
 /**
  * MQA-261 — the shipped key could be destroyed in one click and never come back.

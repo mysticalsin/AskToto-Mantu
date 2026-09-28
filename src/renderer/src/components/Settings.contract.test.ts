@@ -17,7 +17,7 @@ import { licenseErrorMessage as gateLicenseErrorMessage } from './LicenseGate'
 // Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
 // newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
 // Normalizing keeps every anchor line-ending-independent without weakening what each one pins.
-const source = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const source = readFileSync(join(__dirname, '../features/settings/Settings.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 describe('legacy licence activation errors', () => {
   it('explains a non-persistent device setup without blaming the network', () => {

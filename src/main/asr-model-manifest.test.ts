@@ -78,7 +78,7 @@ describe('MQA-247 — the fetch is reachable and explicit', () => {
     expect(read('src/shared/ipc.ts')).toMatch(/asrModelFetch: 'asrModel:fetch'/)
     expect(read('src/main/index.ts')).toMatch(/ipcMain\.handle\(IPC\.asrModelFetch/)
     expect(read('src/preload/index.ts')).toMatch(/asrModelFetch: \(\)/)
-    expect(read('src/renderer/src/components/Settings.tsx')).toMatch(
+    expect(read('src/renderer/src/features/settings/Settings.tsx')).toMatch(
       /<AsrModelRow engine=\{settings\.asrEngine\} \/>/
     )
   })
@@ -93,7 +93,7 @@ describe('MQA-247 — the fetch is reachable and explicit', () => {
   })
 
   it('shows the size BEFORE the button that spends it', () => {
-    const ui = read('src/renderer/src/components/Settings.tsx')
+    const ui = read('src/renderer/src/features/settings/Settings.tsx')
     expect(ui).toMatch(/Download \$\{gb\} GB/)
     expect(ui).toMatch(/\$\{gb\} GB download/)
   })

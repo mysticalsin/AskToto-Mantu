@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import { screenRecordingJustGranted } from './Settings'
 import { nextScreenCheckPass } from '@shared/screen-capture-check'
 
-const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
+const settingsSrc = readFileSync(join(__dirname, '../features/settings/Settings.tsx'), 'utf8')
 
 describe('screenRecordingJustGranted — the Restart Métis trigger', () => {
   it('is false on the first observation since mount, even if already granted', () => {
