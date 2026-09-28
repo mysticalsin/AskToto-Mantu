@@ -48,8 +48,9 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * providerId that does not exist ('claude-api'), and FIVE more `{ gguf, mmproj }` omissions — the same
  * `-c undefined` shape, in a third file.
  * 2026-09-27: 24 → 19 after the M2-0036 test surface stopped contributing additional diagnostics.
+ * 2026-09-28: 19 → 10 after CI proved the lower test-type count on the M2-0036 branch.
  */
-const BASELINE = 16
+const BASELINE = 10
 
 let output = ''
 try {
