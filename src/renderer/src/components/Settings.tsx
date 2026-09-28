@@ -126,6 +126,7 @@ import { DEFAULT_OPERATOR_URL, operatorUrlConfigured } from '@shared/operator'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { isCloudOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { effectiveCloudSttProvider, type CloudSttProviderId } from '@shared/cloud-stt-provider'
+import { MODEL_POLICY_CAPABILITY_LABELS } from '@shared/model-policy'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
 import { ClickUpMark } from './brand/ClickUpMark'
@@ -1419,6 +1420,12 @@ function AiSection({
   // once, at the top of this whole tab, since it governs which provider/model Ask/chat actually uses
   // regardless of what is picked below.
   const askChatPolicy = settings.modelPolicyCapabilities.askChat
+  // M2-0412: stt/localModel are owner-manageable and audited but not force-applied (see
+  // src/shared/model-policy.ts's doc comment for why) — still surfaced here as an informational/
+  // managed banner, same convention as askChatPolicy above, so Settings stays honest about every
+  // capability the fleet owner has set on the portal, not just the one this app enforces live.
+  const sttPolicy = settings.modelPolicyCapabilities.stt
+  const localModelPolicy = settings.modelPolicyCapabilities.localModel
 
   return (
     <div className="flex min-w-0 max-w-full flex-col gap-5">
@@ -1429,6 +1436,24 @@ function AiSection({
             Managed by your organization: Ask/chat uses{' '}
             <strong>{PROVIDERS[askChatPolicy.provider as ProviderId]?.label ?? askChatPolicy.provider}</strong> ({askChatPolicy.model}
             ), set on the Operator portal.
+          </span>
+        </div>
+      )}
+      {sttPolicy && (
+        <div className="flex items-center gap-2 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] p-3 text-[12px] text-[color:var(--cl-foreground)]">
+          <ShieldCheck size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
+          <span>
+            Managed by your organization: {MODEL_POLICY_CAPABILITY_LABELS.stt} uses <strong>{sttPolicy.provider}</strong> (
+            {sttPolicy.model}), set on the Operator portal.
+          </span>
+        </div>
+      )}
+      {localModelPolicy && (
+        <div className="flex items-center gap-2 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] p-3 text-[12px] text-[color:var(--cl-foreground)]">
+          <ShieldCheck size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
+          <span>
+            Managed by your organization: {MODEL_POLICY_CAPABILITY_LABELS.localModel} uses <strong>{localModelPolicy.provider}</strong>{' '}
+            ({localModelPolicy.model}), set on the Operator portal.
           </span>
         </div>
       )}

@@ -8,9 +8,12 @@ import CryptoKit
 ///
 /// The native app has no cloud-model call site today (`Intelligence.swift` only wraps Apple's
 /// on-device Foundation Models framework — see its own doc comment) — there is nothing yet to route
-/// through a resolved policy. This client still fetches, verifies and caches it, so the app is ready
-/// the day a cloud-routed capability is added, and so the fleet owner's policy audit trail includes
-/// every platform, not just the Electron app.
+/// through a resolved policy. `ModelPolicyRuntime` below still fetches, verifies, caches, and is wired
+/// into `MetisApp.swift`'s launch (start + <=60s poll), so the app is ready the day a cloud-routed
+/// capability is added, and so the fleet owner's policy audit trail includes every platform, not just
+/// the Electron app. What is genuinely missing is a device pairing/license flow for this app (this
+/// package has no Keychain or network credential storage anywhere yet) — until one exists,
+/// `ModelPolicyRuntime`'s `secretProvider` has no credential to return and every poll tick no-ops.
 public enum ModelPolicyCapability: String, CaseIterable, Codable, Sendable {
     case askChat
     case commandAgent
@@ -200,4 +203,58 @@ private struct ModelPolicyFetchBody: Codable {
     let ok: Bool
     let policy: ModelPolicyDocument?
     let signature: String?
+}
+
+/// Drives `ModelPolicyClient.refresh(url:secret:)` at app start and on a repeating poll, so this native
+/// app participates in the fleet policy the same way the Electron app does (`operator-ingest.ts`'s 60s
+/// heartbeat tick, `src/main/model-policy-client.ts`) instead of only ever holding a client nobody calls.
+///
+/// `secretProvider` returning `nil` is a silent skip, not an error: this app has no device pairing/
+/// license flow yet (see this file's top doc comment — no other Foundation networking exists in
+/// `native-app/App/` today either), so there is no device-authenticated credential to sign with. The app
+/// target wires this against `UserDefaults` keys nothing populates yet; the day a real pairing flow lands
+/// it only has to start returning a value, this loop already polls and applies correctly.
+public actor ModelPolicyRuntime {
+    public typealias SecretProvider = @Sendable () -> String?
+    public typealias SleepFn = @Sendable (Duration) async throws -> Void
+
+    private let client: ModelPolicyClient
+    private let sleepFn: SleepFn
+    private var pollTask: Task<Void, Never>?
+
+    public init(client: ModelPolicyClient, sleepFn: @escaping SleepFn = { try await Task.sleep(for: $0) }) {
+        self.client = client
+        self.sleepFn = sleepFn
+    }
+
+    public func activePolicy() async -> ModelPolicyDocument? {
+        await client.activePolicy()
+    }
+
+    /// Idempotent: replaces any already-running loop. Refreshes immediately, then every `pollInterval`
+    /// (default 60s — the acceptance bar is "poll <= 60s") until `stop()` or the loop's sleep is
+    /// cancelled. A refresh failure (network, tamper, missing policy) never stops the loop — the next
+    /// tick tries again, same as the Electron heartbeat.
+    public func start(url: URL, pollInterval: Duration = .seconds(60), secretProvider: @escaping SecretProvider) {
+        pollTask?.cancel()
+        let client = self.client
+        let sleepFn = self.sleepFn
+        pollTask = Task {
+            while !Task.isCancelled {
+                if let secret = secretProvider() {
+                    _ = await client.refresh(url: url, secret: secret)
+                }
+                do {
+                    try await sleepFn(pollInterval)
+                } catch {
+                    break
+                }
+            }
+        }
+    }
+
+    public func stop() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
 }

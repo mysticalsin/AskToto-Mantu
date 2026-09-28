@@ -183,3 +183,99 @@ final class ModelPolicyClientTests: XCTestCase {
         XCTAssertEqual(active?.version, 1000)
     }
 }
+
+/// `ModelPolicyRuntime`: the poll loop that drives `ModelPolicyClient` from app launch — proves the
+/// loop actually calls `refresh` when wired up (the gap this test file closes: before M2-0412's native
+/// wiring, nothing in `native-app/App/` ever called this client at all). `sleepFn` is injected so no
+/// test waits out a real 60s poll interval.
+final class ModelPolicyRuntimeTests: XCTestCase {
+    /// Same reasoning as `ModelPolicyClientTests.FailSwitch`: mutated from a `@Sendable` closure on one
+    /// Task at a time, never from two threads concurrently, but the compiler cannot see that alone.
+    private final class Counter: @unchecked Sendable {
+        var refreshCalls = 0
+        var secretCalls = 0
+    }
+
+    private static func tempCacheURL() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("model-policy-runtime-\(UUID().uuidString).json")
+    }
+
+    /// Gives the runtime's background `Task` a scheduling window to run its first loop iteration before
+    /// the test asserts and tears down. Not fully deterministic, but generous enough that a normal CI
+    /// runner's scheduler reaches the first `await` well within it.
+    private static func letLoopRunOnce() async {
+        try? await Task.sleep(for: .milliseconds(200))
+    }
+
+    func testStartSkipsRefreshWhenNoSecretIsConfiguredYet() async {
+        let counter = Counter()
+        let url = URL(string: "https://operator.test/v1/model-policy")!
+        let client = ModelPolicyClient(cacheURL: Self.tempCacheURL()) { _ in
+            counter.refreshCalls += 1
+            throw URLError(.notConnectedToInternet)
+        }
+        let runtime = ModelPolicyRuntime(client: client) { _ in throw CancellationError() }
+        await runtime.start(url: url) {
+            counter.secretCalls += 1
+            return nil // no device credential provisioned yet — see OperatorDeviceAuth's doc comment
+        }
+        await Self.letLoopRunOnce()
+        await runtime.stop()
+        XCTAssertEqual(counter.secretCalls, 1)
+        XCTAssertEqual(counter.refreshCalls, 0)
+    }
+
+    func testStartCallsRefreshOnceASecretIsConfigured() async {
+        let counter = Counter()
+        let url = URL(string: "https://operator.test/v1/model-policy")!
+        let client = ModelPolicyClient(cacheURL: Self.tempCacheURL()) { _ in
+            counter.refreshCalls += 1
+            throw URLError(.notConnectedToInternet)
+        }
+        let runtime = ModelPolicyRuntime(client: client) { _ in throw CancellationError() }
+        await runtime.start(url: url) { "shared-secret" }
+        await Self.letLoopRunOnce()
+        await runtime.stop()
+        XCTAssertEqual(counter.refreshCalls, 1)
+    }
+
+    func testStopCancelsTheLoopSoAPendingSleepNeverFiresAnotherRefresh() async {
+        let counter = Counter()
+        let url = URL(string: "https://operator.test/v1/model-policy")!
+        let client = ModelPolicyClient(cacheURL: Self.tempCacheURL()) { _ in
+            counter.refreshCalls += 1
+            throw URLError(.notConnectedToInternet)
+        }
+        // A real, long sleep: only cancellation (from stop()) ends it before the test's own timeout would.
+        let runtime = ModelPolicyRuntime(client: client) { duration in try await Task.sleep(for: duration) }
+        await runtime.start(url: url, pollInterval: .seconds(3600)) { "shared-secret" }
+        await Self.letLoopRunOnce()
+        await runtime.stop()
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(counter.refreshCalls, 1) // only the immediate refresh — the hour-long sleep never fired again
+    }
+
+    func testActivePolicyReflectsWhatTheClientApplied() async {
+        var capabilities: [String: ModelPolicyEntry] = [:]
+        for capability in modelPolicyCapabilityOrder {
+            capabilities[capability.rawValue] = ModelPolicyEntry(provider: "anthropic", model: "claude-sonnet-4-6")
+        }
+        let doc = ModelPolicyDocument(version: 7, updatedAt: 7, updatedBy: "owner@example.com", capabilities: capabilities)
+        let signature = ModelPolicy.sign(doc, secret: "shared-secret")
+        let url = URL(string: "https://operator.test/v1/model-policy")!
+        let client = ModelPolicyClient(cacheURL: Self.tempCacheURL()) { fetchedURL in
+            let data = try! JSONSerialization.data(withJSONObject: [
+                "ok": true,
+                "policy": try! JSONSerialization.jsonObject(with: JSONEncoder().encode(doc)),
+                "signature": signature
+            ])
+            return (data, HTTPURLResponse(url: fetchedURL, statusCode: 200, httpVersion: nil, headerFields: ["content-type": "application/json"])!)
+        }
+        let runtime = ModelPolicyRuntime(client: client) { _ in throw CancellationError() }
+        await runtime.start(url: url) { "shared-secret" }
+        await Self.letLoopRunOnce()
+        await runtime.stop()
+        let active = await runtime.activePolicy()
+        XCTAssertEqual(active?.version, 7)
+    }
+}

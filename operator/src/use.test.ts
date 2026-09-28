@@ -1,14 +1,18 @@
 import { reviewedGatewayReply, reviewedGatewayFetch } from './ai-gateway.privacy-fixture'
 import { describe, expect, it, vi } from 'vitest'
+import { DatabaseSync } from 'node:sqlite'
 import { handleRequest, type Env } from './index'
 import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
+import type { D1DatabaseLike } from './d1'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { parseUseBody, withProviderTimeout } from './use'
 import { PORTAL_CF_DEEPSEEK_FLASH, PORTAL_CF_DEEPSEEK_PRO } from '../../src/shared/ask-routing'
+import { MODEL_POLICY_MIGRATIONS, writeModelPolicy } from './model-policy'
+import { MODEL_POLICY_CAPABILITIES } from '../../src/shared/model-policy'
 
 const NOW = 1_725_000_000_000
 const SECRET = syntheticProviderKey('anthropic')
@@ -401,5 +405,114 @@ describe('withProviderTimeout', () => {
     await wrapped('https://example.test', {})
     expect(seenSignal).toBeInstanceOf(AbortSignal)
     expect(seenSignal?.aborted).toBe(false)
+  })
+})
+
+describe('M2-0412 fleet model policy enforcement on /v1/use (server-side, cannot be bypassed by an old/modified client)', () => {
+  function sqliteD1(db: DatabaseSync): D1DatabaseLike {
+    return {
+      prepare(sql: string) {
+        const stmt = db.prepare(sql)
+        let bound: unknown[] = []
+        const wrapper = {
+          bind(...values: unknown[]) {
+            bound = values
+            return wrapper
+          },
+          async first<T>() {
+            return (stmt.get(...(bound as never[])) as T) ?? null
+          },
+          async all<T>() {
+            return { results: stmt.all(...(bound as never[])) as T[] }
+          },
+          async run() {
+            return stmt.run(...(bound as never[]))
+          }
+        }
+        return wrapper
+      }
+    }
+  }
+
+  async function dbWithPolicy(overrides: Partial<Record<string, { provider: string; model: string }>> = {}): Promise<D1DatabaseLike> {
+    const raw = new DatabaseSync(':memory:')
+    for (const stmt of MODEL_POLICY_MIGRATIONS) raw.exec(stmt)
+    const db = sqliteD1(raw)
+    const capabilities = Object.fromEntries(
+      MODEL_POLICY_CAPABILITIES.map((k) => [k, { provider: 'anthropic', model: 'claude-haiku-4-5-20251001', fallbacks: [] }])
+    )
+    await writeModelPolicy(db, { ...capabilities, ...overrides }, 'owner@example.test', NOW)
+    return db
+  }
+
+  it('allows a /v1/use request naming exactly the policy-approved provider+model', async () => {
+    const store = memoryStore()
+    await addAnthropicKey(store)
+    await approveDevice(store)
+    const db = await dbWithPolicy()
+    const body = JSON.stringify({
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'Say ok.' }]
+    })
+    const providerFetch: typeof fetch = async () =>
+      new Response(JSON.stringify({ content: [{ type: 'text', text: 'ok' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-policy-ok'), { ...env(), DB: db }, {}, {
+      store,
+      now: NOW,
+      providerFetch
+    })
+    expect(res.status).toBe(200)
+  })
+
+  it('refuses a /v1/use request naming a provider/model the fleet policy does not allow for that capability, with a typed error and an audit event', async () => {
+    const store = memoryStore()
+    await addAnthropicKey(store)
+    await approveDevice(store)
+    const db = await dbWithPolicy() // askChat pinned to anthropic/haiku — cloudflare is not in it
+    const body = JSON.stringify({
+      provider: 'cloudflare',
+      model: '@cf/meta/llama-4-scout-17b-16e-instruct',
+      messages: [{ role: 'user', content: 'hi' }]
+    })
+    const providerFetch: typeof fetch = async () => new Response('should never be reached', { status: 500 })
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-policy-blocked'), { ...env(), DB: db }, {}, {
+      store,
+      now: NOW,
+      providerFetch
+    })
+    expect(res.status).toBe(403)
+    const responseBody = (await res.json()) as { ok: boolean; code: string }
+    expect(responseBody.ok).toBe(false)
+    expect(responseBody.code).toBe('model_not_allowed')
+    const audited = await store.listAudit(10, { action: 'model-policy.blocked' })
+    expect(audited.length).toBeGreaterThan(0)
+  })
+
+  it('does not enforce anything on /v1/use when no fleet policy has ever been set (not managed = today defaults)', async () => {
+    const store = memoryStore()
+    await addAnthropicKey(store)
+    await approveDevice(store)
+    const raw = new DatabaseSync(':memory:')
+    for (const stmt of MODEL_POLICY_MIGRATIONS) raw.exec(stmt)
+    const body = JSON.stringify({
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }]
+    })
+    const providerFetch: typeof fetch = async () =>
+      new Response(JSON.stringify({ content: [{ type: 'text', text: 'ok' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-policy-unmanaged'), { ...env(), DB: sqliteD1(raw) }, {}, {
+      store,
+      now: NOW,
+      providerFetch
+    })
+    expect(res.status).toBe(200)
   })
 })

@@ -689,4 +689,16 @@ describe('M2-0412 fleet model policy — "managed by your organization" banner',
     expect(source).toContain('askChatPolicy.provider')
     expect(source).toContain('askChatPolicy.model')
   })
+
+  it('also surfaces the stt and localModel capabilities as managed banners (owner-manageable but not force-applied — src/shared/model-policy.ts)', () => {
+    const sttBlock = blockAfter('const sttPolicy = settings.modelPolicyCapabilities.stt', '{sttPolicy &&')
+    expect(sttBlock).toMatch(/const localModelPolicy = settings\.modelPolicyCapabilities\.localModel/)
+    const banners = blockAfter('{sttPolicy &&', '{/* CLI Integration')
+    expect(banners).toMatch(/sttPolicy &&/)
+    expect(banners).toMatch(/localModelPolicy &&/)
+    expect(banners).toMatch(/Managed by your organization/)
+    expect(banners).toMatch(/set on the Operator portal/)
+    expect(source).toContain('sttPolicy.provider')
+    expect(source).toContain('localModelPolicy.provider')
+  })
 })
