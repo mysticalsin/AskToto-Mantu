@@ -12,6 +12,7 @@ import {
   isPassingRevealEvidence,
   parseAuditLog,
   readObservationTail,
+  runProcess,
   seedSmokeProfile,
   initialRvRows,
   initialNavigationGuardRows,
@@ -329,6 +330,20 @@ describe('runRevealRow', () => {
       evidence: null,
       unblock: 'missing second-instance reveal'
     })
+  })
+})
+
+describe('runProcess', () => {
+  it('reports a timeout as an error so a stuck duplicate app cannot leave orphan helpers unnoticed', async () => {
+    const result = await runProcess(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], 25)
+
+    expect(result).toEqual({ code: null, signal: 'timeout', error: true })
+  })
+
+  it('reports non-zero exits as errors for reopen driver commands', async () => {
+    const result = await runProcess(process.execPath, ['-e', 'process.exit(7)'], 1_000)
+
+    expect(result).toEqual({ code: 7, signal: null, error: true })
   })
 })
 

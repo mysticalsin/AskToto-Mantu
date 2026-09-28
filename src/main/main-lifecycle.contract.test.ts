@@ -113,6 +113,16 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
     expect(reveal).toHaveBeenCalledWith('second-instance', { focus: true })
   })
 
+  it('M2-0231 — the lock-losing duplicate exits immediately before creating app resources', () => {
+    const lockGate = indexSrc.slice(
+      indexSrc.indexOf('if (!app.requestSingleInstanceLock())'),
+      indexSrc.indexOf("app.on('second-instance'")
+    )
+
+    expect(lockGate).toContain('app.exit(0)')
+    expect(lockGate).not.toContain('app.quit()')
+  })
+
   it('M2-0036 — even an already-visible parked hairline is an explicit reopen, not a no-op', () => {
     const reveal = vi.fn()
     secondInstanceHandler(reveal)()
