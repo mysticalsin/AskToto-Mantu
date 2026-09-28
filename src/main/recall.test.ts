@@ -1062,13 +1062,13 @@ describe('isMeetingConfidentialOnDisk — MCP push defense-in-depth', () => {
 
   it('is false for a normal meeting and true after setMeetingConfidential', async () => {
     const file = await saveMeeting(testSettings, meeting)
-    expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).toBe(false)
+    await expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).resolves.toBe(false)
     expect(await setMeetingConfidential(testSettings, basename(file), true)).toEqual({ ok: true })
-    expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).toBe(true)
+    await expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).resolves.toBe(true)
   })
 
-  it('fails closed on a missing or path-traversal file name', () => {
-    expect(isMeetingConfidentialOnDisk(testSettings, 'no-such-meeting.md')).toBe(true)
-    expect(isMeetingConfidentialOnDisk(testSettings, '../escape.md')).toBe(true)
+  it('fails closed on a missing or path-traversal file name', async () => {
+    await expect(isMeetingConfidentialOnDisk(testSettings, 'no-such-meeting.md')).resolves.toBe(true)
+    await expect(isMeetingConfidentialOnDisk(testSettings, '../escape.md')).resolves.toBe(true)
   })
 })

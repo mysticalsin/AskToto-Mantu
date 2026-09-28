@@ -216,6 +216,6 @@ describe('startBackfill with no configured provider', () => {
       }
     } as never)
 
-    expect((await startBackfill(undefined, { respectRetryBackoff: true })).queued).toBe(0)
+    expect((await startBackfill(undefined, { trigger: 'automatic' })).queued).toBe(0)
   })
 })

@@ -162,10 +162,10 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     expect(record?.attempts).toBe(MAX_INGEST_ATTEMPTS)
     expect(record?.exhausted).toBe(true)
 
-    // The automatic reconcile tick (respectRetryBackoff) must never touch an exhausted record, even
+    // The automatic reconcile tick must never touch an exhausted record, even
     // once its own backoff window has already elapsed.
     createStreamMock.mockClear()
-    expect((await startBackfill(undefined, { respectRetryBackoff: true })).queued).toBe(0)
+    expect((await startBackfill(undefined, { trigger: 'automatic' })).queued).toBe(0)
     expect(createStreamMock).not.toHaveBeenCalled()
   })
 

@@ -25,7 +25,7 @@ function harness() {
 describe('complete Intelligence work', () => {
   it('starts extraction without waiting for recaps, but cannot finish before both settle', async () => {
     const h = harness()
-    const run = await startIntelligenceWork(h.deps)
+    const run = await startIntelligenceWork(h.deps, 'click')
     expect(h.deps.backfill).toHaveBeenCalledTimes(1)
     expect(run.result).toEqual({ ran: true, queued: 0, preparing: true, recapped: 0 })
     const completed = vi.fn()
@@ -43,7 +43,7 @@ describe('complete Intelligence work', () => {
     const h = harness()
     if (failure === 'rejected') h.deps.generate.mockRejectedValueOnce(new Error('synthetic provider failure'))
     if (failure === 'save-failed') h.deps.save.mockResolvedValueOnce({ ok: false })
-    const run = await startIntelligenceWork(h.deps)
+    const run = await startIntelligenceWork(h.deps, 'click')
     h.recap.resolve(failure === 'missing' ? undefined : 'A recap')
     h.extraction.resolve({ ok: true, total: 1, failed: 0 })
     const result = await run.completion
@@ -56,7 +56,7 @@ describe('complete Intelligence work', () => {
 
   it('retains successful summaries but reports a failed extraction pass', async () => {
     const h = harness()
-    const run = await startIntelligenceWork(h.deps)
+    const run = await startIntelligenceWork(h.deps, 'click')
     h.recap.resolve('A saved recap')
     h.extraction.resolve({ ok: false, error: 'write-failed', total: 1, failed: 1 })
     await expect(run.completion).resolves.toMatchObject({ ok: false, recapped: 1, error: expect.stringMatching(/Retry/) })
@@ -68,7 +68,7 @@ describe('complete Intelligence work', () => {
       result: { queued: 0, deferred: 'no-provider' },
       completion: Promise.resolve({ ok: false, error: 'no-provider', total: 1, failed: 0 })
     })
-    const run = await startIntelligenceWork(h.deps)
+    const run = await startIntelligenceWork(h.deps, 'click')
     h.recap.resolve(undefined)
     expect(run.result.ran).toBe(false)
     await expect(run.completion).resolves.toMatchObject({ ok: false, error: expect.stringMatching(/Connect an AI provider/) })
@@ -77,7 +77,7 @@ describe('complete Intelligence work', () => {
   it('settles a failed meeting-list read safely without an unhandled rejection', async () => {
     const h = harness()
     h.deps.list.mockRejectedValueOnce(new Error('synthetic private path'))
-    const run = await startIntelligenceWork(h.deps)
+    const run = await startIntelligenceWork(h.deps, 'click')
     h.extraction.resolve({ ok: true, total: 0, failed: 0 })
     await expect(run.completion).resolves.toMatchObject({ ok: false, recapped: 0 })
     expect(h.deps.generate).not.toHaveBeenCalled()
@@ -87,7 +87,7 @@ describe('complete Intelligence work', () => {
   it('finishes an empty verified pass without inventing summary work', async () => {
     const h = harness()
     h.deps.list.mockResolvedValueOnce([])
-    const run = await startIntelligenceWork(h.deps)
+    const run = await startIntelligenceWork(h.deps, 'click')
     h.extraction.resolve({ ok: true, total: 0, failed: 0 })
     await expect(run.completion).resolves.toEqual({ ok: true, recapped: 0 })
     expect(h.deps.generate).not.toHaveBeenCalled()
