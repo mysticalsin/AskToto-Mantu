@@ -9,7 +9,10 @@ const DEFAULT_CLAIMS = join(ROOT, 'CLAIMS.json')
 const DEFAULT_OUT = join(ROOT, 'out')
 const EVIDENCE_LEVELS = new Set(['DESIGNED', 'LOCALLY_TESTED', 'HOST_CONFIGURED', 'LIVE_VERIFIED', 'ACCEPTED', 'MEASURED'])
 const SCENE_STATES = new Set(['live', 'concept', 'reconstruction', 'cut'])
+const STORYBOARD_VARIANTS = ['live', 'concept', 'cut']
 const CLAIM_KINDS_REQUIRING_COMPETITIVE_PROOF = new Set(['comparative', 'superiority', 'affiliation', 'infallibility'])
+const VERIFIED_PRIVACY_SENTENCE = 'Authorized usage metadata is retained for administration'
+const VERIFIED_PRIVACY_SOURCE_TICKET = 'M2-0149'
 
 function parseArgs(argv) {
   const args = { claims: DEFAULT_CLAIMS, out: DEFAULT_OUT }
@@ -36,6 +39,28 @@ function includesInsensitive(haystack, needle) {
 
 function sceneText(scene) {
   return [scene.script, ...(scene.captions ?? [])].filter(Boolean).join('\n')
+}
+
+function claimSliceMatches(slice, scene, claim) {
+  return slice?.scene_id === scene.id && slice?.claim_id === claim.id
+}
+
+function hasCompetitiveReceiptsForSlice(competitive, scene, claim) {
+  return Boolean(
+    competitive.final_signed_windows_qa_receipt &&
+      competitive.final_signed_native_mac_qa_receipt &&
+      Array.isArray(competitive.allowed_claim_slices) &&
+      competitive.allowed_claim_slices.some((slice) => claimSliceMatches(slice, scene, claim))
+  )
+}
+
+function hasPrecisePrivacyEvidence(record) {
+  return Boolean(
+    record?.verified === true &&
+      record?.source?.type === 'ticket' &&
+      record?.source?.id === VERIFIED_PRIVACY_SOURCE_TICKET &&
+      record?.summary === VERIFIED_PRIVACY_SENTENCE
+  )
 }
 
 function requireObject(value, label, failures) {
@@ -73,6 +98,9 @@ export function validateClaims(register) {
       continue
     }
     if (!evidence.has(claim.evidence_record_id)) failures.push(`${claim.id} references missing evidence ${claim.evidence_record_id}`)
+    for (const variant of STORYBOARD_VARIANTS) {
+      if (!claim?.variants?.[variant]) failures.push(`${claim.id} is missing storyboard variant ${variant}`)
+    }
     claims.set(claim.id, claim)
   }
 
@@ -86,7 +114,7 @@ export function validateClaims(register) {
     const label = scene?.id ?? '<missing scene id>'
     if (!scene?.id) failures.push('every scene needs an id')
     if (!SCENE_STATES.has(scene?.state)) failures.push(`${label} has invalid state ${scene?.state}`)
-    for (const variant of ['live', 'concept', 'cut']) {
+    for (const variant of STORYBOARD_VARIANTS) {
       if (!scene?.variants?.[variant]) failures.push(`${label} is missing storyboard variant ${variant}`)
     }
 
@@ -122,17 +150,15 @@ export function validateClaims(register) {
   }
 
   const competitive = register.competitive_qualification ?? {}
-  const hasCompetitiveReceipts = Boolean(
-    competitive.final_signed_windows_qa_receipt &&
-      competitive.final_signed_native_mac_qa_receipt &&
-      Array.isArray(competitive.allowed_claim_slices) &&
-      competitive.allowed_claim_slices.length > 0
-  )
   for (const scene of scenes) {
     const claim = claims.get(scene.claim_id)
     if (!claim) continue
-    if (CLAIM_KINDS_REQUIRING_COMPETITIVE_PROOF.has(claim.type) && !hasCompetitiveReceipts && scene.state !== 'cut') {
-      failures.push(`${scene.id} must be cut until competitive qualification receipts exist`)
+    if (
+      CLAIM_KINDS_REQUIRING_COMPETITIVE_PROOF.has(claim.type) &&
+      scene.state !== 'cut' &&
+      !hasCompetitiveReceiptsForSlice(competitive, scene, claim)
+    ) {
+      failures.push(`${scene.id} must be cut until competitive qualification receipts exist for claim ${claim.id}`)
     }
   }
 
@@ -145,8 +171,17 @@ export function validateClaims(register) {
   }
 
   const privacy = register.privacy_line ?? {}
-  if (privacy.status !== 'cut' && !privacy.evidence_record_id) {
-    failures.push('privacy line must be cut unless it has exact verified privacy evidence')
+  const privacyText = privacy.text ?? ''
+  for (const rule of forbidden) {
+    if (rule?.phrase && includesInsensitive(privacyText, rule.phrase)) {
+      failures.push(`privacy_line contains forbidden claim phrase: ${rule.phrase}`)
+    }
+  }
+  if (privacy.status !== 'cut') {
+    const record = evidence.get(privacy.evidence_record_id)
+    if (privacyText !== VERIFIED_PRIVACY_SENTENCE || !hasPrecisePrivacyEvidence(record)) {
+      failures.push('privacy line must be cut unless it uses the exact verified M2-0149 privacy sentence and evidence')
+    }
   }
 
   return {

@@ -195,7 +195,12 @@
       "allowed_states": [
         "concept",
         "cut"
-      ]
+      ],
+      "variants": {
+        "live": "Promote only when exact packaged-app QA evidence backs the captured overlay slice.",
+        "concept": "Use the concept-treatment claim with a visible concept label.",
+        "cut": "Cut the overlay claim if the concept label cannot be shown."
+      }
     },
     {
       "id": "CL-02",
@@ -205,7 +210,12 @@
       "allowed_states": [
         "concept",
         "cut"
-      ]
+      ],
+      "variants": {
+        "live": "Promote only when live verified capture and transcript evidence backs the exact scene.",
+        "concept": "Use the reconstruction-treatment claim with a visible reconstruction label.",
+        "cut": "Cut the capture claim if reconstruction labelling is unavailable."
+      }
     },
     {
       "id": "CL-03",
@@ -215,7 +225,12 @@
       "allowed_states": [
         "concept",
         "cut"
-      ]
+      ],
+      "variants": {
+        "live": "Promote only when the exact memory proof evidence is LIVE_VERIFIED.",
+        "concept": "Use the memory-treatment claim with a visible concept memory label.",
+        "cut": "Cut the memory claim if the concept label cannot be shown."
+      }
     },
     {
       "id": "CL-06",
@@ -226,7 +241,12 @@
         "live",
         "concept",
         "cut"
-      ]
+      ],
+      "variants": {
+        "live": "Use as render-path proof only.",
+        "concept": "Show as a process diagram with a visible concept label.",
+        "cut": "Cut the render-path claim if the toolchain evidence is unavailable."
+      }
     }
   ]
 }

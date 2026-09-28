@@ -13,9 +13,10 @@ The checker writes `media/launch-film/out/claim-readiness.json` by default. Pass
 Rules enforced by the gate:
 
 - `release_claims_approved` must remain `false` until the owner approves.
-- Forbidden phrases are scanned across every scene script and caption.
+- Forbidden phrases are scanned across every scene script, every caption and the top-level privacy line.
+- A non-cut privacy line must use the exact M2-0149 verified sentence and evidence record; broad privacy wording is rejected.
 - The hindsight scene can be `live` only when its evidence record is `LIVE_VERIFIED`; otherwise it must carry a visible concept label or be cut.
-- Comparative, superiority, affiliation and infallibility claims stay cut unless M2-0185 lists the exact slice and both final signed Windows and native Mac QA receipts.
-- Every scene carries `live`, `concept` and `cut` storyboard variants, and T2, T3 and rc1 re-evaluations are registered. The rc1 report is filed as M2-0210 evidence.
+- Comparative, superiority, affiliation and infallibility claims stay cut unless M2-0185 lists the exact claim/scene slice and both final signed Windows and native Mac QA receipts.
+- Every scene and claim carries `live`, `concept` and `cut` storyboard variants, and T2, T3 and rc1 re-evaluations are registered. The rc1 report is filed as M2-0210 evidence.
 
 REF-09 and REF-10 are presentation references only. They do not prove product behavior and must not be used as claim evidence.
