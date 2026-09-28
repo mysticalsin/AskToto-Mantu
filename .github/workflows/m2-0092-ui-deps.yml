@@ -2,6 +2,13 @@ name: M2-0092 UI dependency qualification
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+      - scripts/qualify-ui-deps.mjs
+      - scripts/qualify-ui-deps.test.ts
+      - .github/workflows/m2-0092-ui-deps.yml
 
 permissions:
   contents: read

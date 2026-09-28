@@ -125,6 +125,16 @@ function npmJson(args, options = {}) {
   }))
 }
 
+function npm(args, options = {}) {
+  execFileSync('npm', args, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    ...options
+  })
+}
+
 function npmAuditOmitDev() {
   try {
     return npmJson(['audit', '--omit=dev', '--json'])
@@ -150,11 +160,11 @@ function npmPackageMetadata(candidate) {
   ])
 }
 
-function summarizeAudit(report) {
+function summarizeAudit(report, extra = {}) {
   const counts = report.metadata?.vulnerabilities ?? {}
   return {
+    ...extra,
     auditReportVersion: report.auditReportVersion ?? null,
-    omittedDevDependencies: true,
     vulnerabilities: {
       info: counts.info ?? 0,
       low: counts.low ?? 0,
@@ -166,7 +176,63 @@ function summarizeAudit(report) {
   }
 }
 
-function buildReport({ pins, metadata, audit }) {
+function packageAudit(candidate, outDir) {
+  const packageDir = join(outDir, 'package-audits', candidate.packageName)
+  mkdirSync(packageDir, { recursive: true })
+  writeJson(join(packageDir, 'package.json'), {
+    private: true,
+    name: `m2-0092-${candidate.packageName}-audit`,
+    version: '0.0.0',
+    dependencies: {
+      [candidate.packageName]: candidate.version
+    }
+  })
+  npm(['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: packageDir })
+  try {
+    return npmJson(['audit', '--package-lock-only', '--omit=dev', '--json'], { cwd: packageDir })
+  } catch (error) {
+    if (error.status === 1 && error.stdout) return JSON.parse(error.stdout.toString())
+    throw error
+  }
+}
+
+export function summarizePackageAudits(packageAudits, review = UI_DEPENDENCY_REVIEW) {
+  return review.map((candidate) => {
+    const report = packageAudits?.[candidate.packageName] ?? null
+    if (!report) {
+      return {
+        packageName: candidate.packageName,
+        version: candidate.version,
+        auditReportVersion: null,
+        reviewed: false,
+        status: 'missing',
+        vulnerabilities: null
+      }
+    }
+    const summary = summarizeAudit(report, {
+      packageName: candidate.packageName,
+      version: candidate.version,
+      reviewed: true
+    })
+    return {
+      ...summary,
+      status: summary.vulnerabilities.total === 0 ? 'pass' : 'fail'
+    }
+  })
+}
+
+function assertPackageAuditsClean(packageSecurity) {
+  const failures = packageSecurity
+    .filter((review) => !review.reviewed || review.vulnerabilities?.total !== 0)
+    .map((review) => {
+      if (!review.reviewed) return `${review.packageName}@${review.version} security review is missing`
+      return `${review.packageName}@${review.version} has ${review.vulnerabilities.total} npm audit finding(s)`
+    })
+  if (failures.length) throw new Error(failures.join('\n'))
+}
+
+export function buildReport({ pins, metadata, audit, packageAudits }) {
+  const packageSecurity = summarizePackageAudits(packageAudits)
   return {
     ticket: 'M2-0092',
     evidenceLevel: 'DESIGNED',
@@ -184,6 +250,7 @@ function buildReport({ pins, metadata, audit }) {
         observedLicense: npm?.license ?? pin?.lockfileLicense ?? null,
         runtimeDependencies: npm?.dependencies ?? null,
         peerDependencies: npm?.peerDependencies ?? null,
+        securityReview: packageSecurity.find((security) => security.packageName === candidate.packageName) ?? null,
         nativePort: candidate.nativePort,
         decision: candidate.decision
       }
@@ -197,7 +264,8 @@ function buildReport({ pins, metadata, audit }) {
       },
       outcome: 'Do not adopt native border-beam or voice-glow ports for this Electron desktop ticket; use renderer packages only.'
     },
-    audit: audit ? summarizeAudit(audit) : null
+    audit: audit ? summarizeAudit(audit, { omittedDevDependencies: true }) : null,
+    packageSecurity
   }
 }
 
@@ -226,12 +294,19 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   let audit = null
+  const packageAudits = {}
   if (args.audit) {
     audit = npmAuditOmitDev()
     writeJson(join(outDir, 'npm-audit-omit-dev.json'), audit)
+    for (const candidate of UI_DEPENDENCY_REVIEW) {
+      const observed = packageAudit(candidate, outDir)
+      packageAudits[candidate.packageName] = observed
+      writeJson(join(outDir, `npm-audit-${candidate.packageName}.json`), observed)
+    }
   }
 
-  const report = buildReport({ pins, metadata, audit })
+  const report = buildReport({ pins, metadata, audit, packageAudits })
+  if (args.audit) assertPackageAuditsClean(report.packageSecurity)
   writeJson(join(outDir, 'ui-dependency-review.json'), report)
   console.log(`[qualify-ui-deps] wrote ${outDir}`)
 }
