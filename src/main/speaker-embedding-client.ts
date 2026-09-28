@@ -286,3 +286,13 @@ export async function releaseSpeakerEmbedding(
   await terminateGeneration(current, new Error('Speaker embedding processing was cancelled.'))
   return hasNewOwner() ? 'superseded' : 'released'
 }
+
+/** Quit-time teardown only: kill the live helper outright, skipping releaseSpeakerEmbedding's owner/epoch
+ *  coordination (there is no other owner left to wait for). Signal-only, never waits; safe when idle. */
+export function killSpeakerEmbeddingHostForQuit(): void {
+  try {
+    current?.child.kill()
+  } catch (error) {
+    mainLog.warn('[speaker-embedding] quit-time kill failed:', asError(error).message)
+  }
+}

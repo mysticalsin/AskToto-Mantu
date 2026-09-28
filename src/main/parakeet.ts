@@ -284,4 +284,15 @@ export async function parakeetRelease(): Promise<void> {
   return terminateGeneration(current, new Error('Parakeet processing was cancelled.'))
 }
 
+/** Quit-time teardown only: kill the live helper outright, skipping parakeetRelease's exit-timer/
+ *  blockedRelease bookkeeping (nothing else needs that state once the app is exiting). Signal-only,
+ *  never waits; safe when idle. */
+export function killParakeetHostForQuit(): void {
+  try {
+    current?.child.kill()
+  } catch (error) {
+    mainLog.warn('[parakeet] quit-time kill failed:', asError(error).message)
+  }
+}
+
 export { PARAKEET_MODEL_NAME }

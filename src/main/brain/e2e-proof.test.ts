@@ -6,7 +6,8 @@ import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type MeetingExtraction } from '@shared/brain'
 import { computeSilence } from '@shared/silence'
 import { buildMarsWeek } from '@shared/mars'
-import { ingestExtraction, settleCommitment, whenIndexWritesSettle } from './ingest'
+import { ingestExtraction, settleCommitment } from './ingest'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import {
   slugify,
   readGraph,
@@ -144,7 +145,7 @@ describe.each([
   // rename then lands on a directory this line already deleted, failing an unrelated test in
   // whichever file happened to be running.
   afterAll(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
 

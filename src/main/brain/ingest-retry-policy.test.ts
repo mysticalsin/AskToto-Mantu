@@ -11,8 +11,11 @@ import type { BackfillStartOptions } from './ingest'
 import { MAX_INGEST_ATTEMPTS } from '../infra/scheduler/policy'
 import { resetSecretKeyCache } from '../secrets'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, reconcileMeetingsInBackground, requestBackfill, requestBackfillRun, resumeBackfillIfPending, startBackfill, whenIndexWritesSettle } from './ingest'
-import { catchUpIntelligenceIndexIfNeeded } from './intelligence-index'
+import { brainBackfillProgress, reconcileMeetingsInBackground, requestBackfill, requestBackfillRun, resumeBackfillIfPending, startBackfill } from './ingest'
+import * as ingestModule from './ingest'
+import * as storeModule from './store'
+import { whenIngestWorkSettles } from '../test-helpers/settle-brain-writes'
+import { catchUpIntelligenceIndexIfNeeded, settleIntelligenceIndexForTests } from './intelligence-index'
 import { runConsolidationIfDue } from './consolidate'
 import { brainDir, readIndex, writeIndex, writeMeetingExtraction } from './store'
 
@@ -85,12 +88,17 @@ describe('M2-0033 retry policy across backfill callers', () => {
   let meetingsFolder: string
   let modelMarkers: string[]
 
-  const waitForIdle = async (ingest?: Pick<typeof import('./ingest'), 'brainBackfillProgress' | 'whenIndexWritesSettle'>): Promise<void> => {
-    const idle = ingest ?? { brainBackfillProgress, whenIndexWritesSettle }
+  const waitForIdle = async (
+    ingest?: typeof import('./ingest'),
+    intelligenceIndex?: Pick<typeof import('./intelligence-index'), 'settleIntelligenceIndexForTests'>
+  ): Promise<void> => {
+    const idle = ingest ?? ingestModule
+    const intel = intelligenceIndex ?? { settleIntelligenceIndexForTests }
     await vi.waitFor(() => {
       expect(idle.brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
-    await idle.whenIndexWritesSettle()
+    await whenIngestWorkSettles(idle, ingest ? await import('./store') : storeModule)
+    await intel.settleIntelligenceIndexForTests()
   }
 
   const configureSettings = () => {
@@ -135,7 +143,8 @@ describe('M2-0033 retry policy across backfill callers', () => {
   }
 
   const relaunch = async () => {
-    await whenIndexWritesSettle()
+    await whenIngestWorkSettles()
+    await settleIntelligenceIndexForTests()
     vi.resetModules()
     const electron = await import('electron')
     ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -155,7 +164,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
     await consolidate.runConsolidationIfDue()
     ingest.requestBackfill()
     await intelligence.catchUpIntelligenceIndexIfNeeded()
-    await waitForIdle(ingest)
+    await waitForIdle(ingest, intelligence)
     return { ingest, store: await import('./store') }
   }
 
@@ -173,7 +182,8 @@ describe('M2-0033 retry policy across backfill callers', () => {
   })
 
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await whenIngestWorkSettles()
+    await settleIntelligenceIndexForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()

@@ -1314,10 +1314,10 @@ type BackfillObserver = {
   published: boolean
   error?: CompletionError
 }
-let backfillObserver: BackfillObserver | null = null
-let backfillFinalization: Promise<void> | null = null
-let drainTask: Promise<void> | null = null
-let rebuildReplayTask: Promise<void> | null = null
+export let backfillObserver: BackfillObserver | null = null
+export let backfillFinalization: Promise<void> | null = null
+export let drainTask: Promise<void> | null = null
+export let rebuildReplayTask: Promise<void> | null = null
 let rebuildReplayQueued = false
 let rebuildStarting = false
 
@@ -1371,7 +1371,7 @@ const inFlightJobs = new Set<Job>()
 // last with the staler snapshot. Production symptom: every extraction kept succeeding, but
 // idx.ingested ended up empty because a stale rewrite kept clobbering it. Every mutation of
 // index.json now goes through this single serialized lane.
-let indexLock: Promise<void> = Promise.resolve()
+export let indexLock: Promise<void> = Promise.resolve()
 export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Promise<void> {
   const run = indexLock.then(async () => {
     // M2-0003: an existing index.json this process cannot use is read-only for the session. Drop the
