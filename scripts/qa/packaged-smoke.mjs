@@ -19,16 +19,26 @@
  * `Stop-Process`) is never a quit, and neither is closing the window: the app stays in the tray by
  * design, so only the product's own Quit IPC counts.
  *
- * The History navigation-guard rows (HIST-*, M2-0232) need a post-onboarding bar, not a fresh profile's
- * exclusive onboarding tour: main stamps `?exclusiveOnboarding=1` on the very first window it creates
- * whenever `getSettings().onboardingDone` is still false (see `overlayRendererUrl` in main/index.ts), and
- * exiting that tour destroys and recreates the whole `BrowserWindow` (`replaceTransparentOverlayWithExclusiveOnboarding`
- * / `recreateOverlayWindow`) rather than merely reloading it. Driving that exit live over CDP — as the
- * reverted M2-0232 attempt (#271) did — races Playwright's in-flight `page.evaluate()` against the old
- * page's own destruction and can hang indefinitely with no report on Windows. Seeding `settings.json`
- * (plaintext-JSON is one of the three formats `readUserRaw` accepts, see main/store.ts) into the profile
- * BEFORE the app ever launches sidesteps the whole class of bug: the very first window main creates is
- * already the ordinary bar overlay, exactly the cold boot of a returning user who finished onboarding.
+ * The History navigation-guard rows (HIST-*, M2-0232) need a post-onboarding overlay, not a fresh
+ * profile's exclusive onboarding tour: main stamps `?exclusiveOnboarding=1` on the very first window it
+ * creates whenever `getSettings().onboardingDone` is still false (see `overlayRendererUrl` in
+ * main/index.ts), and exiting that tour destroys and recreates the whole `BrowserWindow`
+ * (`replaceTransparentOverlayWithExclusiveOnboarding` / `recreateOverlayWindow`) rather than merely
+ * reloading it. Driving that exit live over CDP — as the reverted M2-0232 attempt (#271) did — races
+ * Playwright's in-flight `page.evaluate()` against the old page's own destruction and can hang
+ * indefinitely with no report on Windows. Seeding `settings.json` (plaintext-JSON is one of the three
+ * formats `readUserRaw` accepts, see main/store.ts) into the profile BEFORE the app ever launches
+ * sidesteps the whole class of bug: the very first window main creates already has `onboardingDone: true`,
+ * exactly the cold boot of a returning user.
+ *
+ * That seed (`seedOnboardedProfile`) uses `overlayLayout: 'hide'`, the layout the RV-* reopen rows need for
+ * `parked === true` evidence (`parkOverlayAfterHideSpring` only parks a hover layout). The HIST-* rows need
+ * `bar` instead, where History/Settings stay on screen with no hover to drive. A plain settings write never
+ * recreates the `BrowserWindow` — only exiting the exclusive onboarding stage does — so
+ * `runPackagedNavigationGuardRows` switches the already-launched app to `NAVIGATION_GUARD_BOOTSTRAP_PATCH`
+ * over the live IPC settings channel (`ensureNavigationGuardHarnessState`), reveals the window
+ * (`revealNavigationSurface`), runs the HIST-* rows, then restores the hover layout
+ * (`restoreHoverParkableLayout`) before the RV-* rows run.
  *
  * Usage: node scripts/qa/packaged-smoke.mjs <installed app> <report.json>
  */
@@ -60,13 +70,6 @@ export const NAVIGATION_GUARD_BOOTSTRAP_PATCH = Object.freeze({
   overlayLayout: 'bar',
   autoHideOverlay: false
 })
-
-/** The settings.json body (plaintext JSON — one of the three formats main/store.ts's readUserRaw() reads)
- *  seeded into the smoke profile before launch, so main's first window is already the ordinary bar
- *  overlay instead of the exclusive onboarding stage. */
-export function navigationGuardProfileSettings(now = Date.now()) {
-  return { ...NAVIGATION_GUARD_BOOTSTRAP_PATCH, onboardingDoneAt: now }
-}
 
 export const LIFECYCLE_EVENTS = Object.freeze([
   'app.started',

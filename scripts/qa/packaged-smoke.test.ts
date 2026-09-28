@@ -12,7 +12,6 @@ import {
   computeCleanupTargets,
   isOverlayUrl,
   isPassingRevealEvidence,
-  navigationGuardProfileSettings,
   parseAuditLog,
   readObservationTail,
   initialRvRows,
@@ -526,33 +525,14 @@ describe('buildWindowsShortcutLauncher', () => {
   })
 })
 
-describe('navigationGuardProfileSettings', () => {
-  it('is a completed-onboarding, bar-layout, auto-hide-off settings patch — the same shape a real user leaves after picking the bar layout and finishing onboarding', () => {
+describe('NAVIGATION_GUARD_BOOTSTRAP_PATCH', () => {
+  it('is a completed-onboarding, bar-layout, auto-hide-off settings patch â€” the same shape a real user leaves after picking the bar layout and finishing onboarding', () => {
     expect(NAVIGATION_GUARD_BOOTSTRAP_PATCH).toEqual({
       onboardingDone: true,
       recordingConsent: true,
       overlayLayout: 'bar',
       autoHideOverlay: false
     })
-  })
-
-  it('stamps onboardingDoneAt with the given timestamp so setupIsComplete finds a genuinely-finished tour', () => {
-    expect(navigationGuardProfileSettings(12345)).toEqual({
-      onboardingDone: true,
-      recordingConsent: true,
-      overlayLayout: 'bar',
-      autoHideOverlay: false,
-      onboardingDoneAt: 12345
-    })
-  })
-
-  it('defaults the timestamp to the current time', () => {
-    const before = Date.now()
-    const result = navigationGuardProfileSettings()
-    const after = Date.now()
-
-    expect(result.onboardingDoneAt).toBeGreaterThanOrEqual(before)
-    expect(result.onboardingDoneAt).toBeLessThanOrEqual(after)
   })
 })
 
