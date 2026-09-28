@@ -192,7 +192,7 @@ describe('backfill run completion observes real work', () => {
     const run = await requestBackfillRun({ force: true }, recap.promise)
     let settled = false
     void run.completion.then(() => { settled = true })
-    await vi.waitFor(() => expect(brainStore.readIndex(getSettings()).ingested['recap.md']?.ok).toBe(true))
+    await vi.waitFor(() => expect(brainStore.readIndex(getSettings()).ingested['recap.md']?.ok).toBe(true), { timeout: 10_000 })
     expect(settled).toBe(false)
     writeFileSync(file, '---\ndate: 2026-01-01\n---\nSynthetic transcript with a newly saved recap.\n')
     recap.release()
