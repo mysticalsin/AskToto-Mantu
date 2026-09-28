@@ -33,6 +33,7 @@ import {
   meetingDurationMin,
   decryptToTemp
 } from './transcripts'
+import { useStorageForTests } from './infra/storage/meetings-storage'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
 const V2_MARKER = 'ATKENC2\n'
@@ -461,6 +462,7 @@ describe('appendDebrief (90-second off-record layer)', () => {
   let settings: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-debrief-test-'))
     settings = { ...baseSettings(), meetingsFolder: folder }
   })
@@ -657,6 +659,7 @@ describe('recoverOrphanDrafts (crash-recovery promotion)', () => {
   let settings: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recover-test-'))
     settings = { ...baseSettings(), meetingsFolder: folder }
   })

@@ -54,6 +54,7 @@ describe('recall — language tags round-trip through save → recallRead', () =
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-lang-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -112,6 +113,7 @@ describe('recall — managed summary-only meetings', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-summary-only-'))
     testSettings = {
       meetingsFolder: folder,
@@ -165,6 +167,7 @@ describe('recall — deleteMeeting', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -242,6 +245,7 @@ describe('recall — deleteAllMeetings', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -282,6 +286,7 @@ describe('recall — sweepExpiredMeetings (retention)', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -335,6 +340,7 @@ describe('recall — recallRead recap extraction', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -414,6 +420,7 @@ describe('recall — updateMeetingRecap', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -550,6 +557,7 @@ describe('recall — renameMeeting', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -613,6 +621,7 @@ describe('recall — undecryptable rows degrade gracefully', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -677,6 +686,7 @@ describe("recall — deleteAllMeetings erases only Métis's own files (MQA-032)"
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-own-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -841,6 +851,7 @@ describe('recall — quote/backslash titles round-trip through the reader (MQA-0
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-quote-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -903,6 +914,7 @@ describe('recall — sub-second start times do not shift the transcript a day (M
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-midnight-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -977,6 +989,7 @@ describe('setMeetingCrmPushed — the durable "already pushed to the CRM" marker
   }
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-crm-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -1057,6 +1070,7 @@ describe('isMeetingConfidentialOnDisk — MCP push defense-in-depth', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-conf-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
