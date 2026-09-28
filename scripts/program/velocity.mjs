@@ -64,6 +64,21 @@ function capsOf(id, byId) {
   return caps
 }
 
+const rootsOf = (caps) => caps.filter((dep) => dep.external_blocker != null)
+
+// Mirrors check.mjs's inheritedBlockProblems: a closure the ledger checker would reject for missing
+// inherited_block must not count as delivered velocity either.
+function listsInheritedBlock(latest, roots) {
+  if (roots.length === 0) return true
+  for (const record of latest.values()) {
+    const listed = new Set((record.inherited_block ?? []).map((entry) => entry.ticket))
+    for (const root of roots) {
+      if (!listed.has(root.id)) return false
+    }
+  }
+  return true
+}
+
 function closedEvidence(ticket, records, caps = []) {
   if (!CLOSED_STATUSES.has(ticket.status)) return null
   const latest = latestByLevel(records)
@@ -73,6 +88,7 @@ function closedEvidence(ticket, records, caps = []) {
   let passing
   if (ticket.status === 'ENGINEERING_COMPLETE') {
     if (!(ticket.external_blocker != null || caps.length > 0)) return null
+    if (!listsInheritedBlock(latest, rootsOf(caps))) return null
     const inHouseRequired = required.filter((level) => IN_HOUSE_EVIDENCE.has(level))
     passing = latestPassingRecords(latest, inHouseRequired)
     if (!passing) return null

@@ -172,7 +172,8 @@ test('analyzeProgram counts externally capped ENGINEERING_COMPLETE with unavaila
   ])
 })
 
-test('analyzeProgram counts ENGINEERING_COMPLETE capped by a blocked dependency ancestor', () => {
+test('analyzeProgram counts ENGINEERING_COMPLETE capped by a blocked dependency ancestor only when its evidence lists inherited_block for that ancestor', () => {
+  const blockerUnblockStep = 'Provide access to the external system.'
   const ledger = {
     decisions: { 'D-14': 'ANSWERED_AS_DEFAULT' },
     tickets: [
@@ -181,7 +182,7 @@ test('analyzeProgram counts ENGINEERING_COMPLETE capped by a blocked dependency 
         estimate_hours: 2,
         external_blocker: {
           owner: 'external-owner',
-          unblock_step: 'Provide access to the external system.',
+          unblock_step: blockerUnblockStep,
           needed_by: '2026-10-09',
           raised_on: '2026-09-27'
         }
@@ -194,17 +195,28 @@ test('analyzeProgram counts ENGINEERING_COMPLETE capped by a blocked dependency 
       })
     ]
   }
-  const recordsByTicket = new Map([
+
+  const noBlockRecords = new Map([
     ['M2-0002', [record('M2-0002', 'LOCALLY_TESTED', '2026-09-21T10:00:00Z')]]
   ])
+  const noBlockForecast = analyzeProgram({ ledger, recordsByTicket: noBlockRecords, asOf: '2026-09-24' })
+  assert.equal(noBlockForecast.closedEstimatedHours, 0)
+  assert.deepEqual(noBlockForecast.closedHoursPerDay, [])
+  assert.deepEqual(noBlockForecast.remainingHoursByMilestone, [
+    { milestone: 'm3', estimated_hours: 9, tickets: ['M2-0001', 'M2-0002'] }
+  ])
 
-  const forecast = analyzeProgram({ ledger, recordsByTicket, asOf: '2026-09-24' })
-
-  assert.equal(forecast.closedEstimatedHours, 7)
-  assert.deepEqual(forecast.closedHoursPerDay, [
+  const withBlockRecords = new Map([
+    ['M2-0002', [record('M2-0002', 'LOCALLY_TESTED', '2026-09-21T10:00:00Z', {
+      inherited_block: [{ ticket: 'M2-0001', unblock_step: blockerUnblockStep }]
+    })]]
+  ])
+  const withBlockForecast = analyzeProgram({ ledger, recordsByTicket: withBlockRecords, asOf: '2026-09-24' })
+  assert.equal(withBlockForecast.closedEstimatedHours, 7)
+  assert.deepEqual(withBlockForecast.closedHoursPerDay, [
     { date: '2026-09-21', estimated_hours: 7, tickets: ['M2-0002'] }
   ])
-  assert.deepEqual(forecast.remainingHoursByMilestone, [
+  assert.deepEqual(withBlockForecast.remainingHoursByMilestone, [
     { milestone: 'm3', estimated_hours: 2, tickets: ['M2-0001'] }
   ])
 })
