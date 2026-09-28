@@ -62,9 +62,6 @@ import Darwin
 import Speech
 import Vision
 
-@_silgen_name("environ")
-var processEnvironment: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>!
-
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
     exit(1)
@@ -593,7 +590,7 @@ func runSupervise(_ options: [String]) -> Never {
     var child: pid_t = 0
     let spawnResult = command.withCString { commandC in
         argv.withUnsafeBufferPointer { buffer in
-            posix_spawn(&child, commandC, nil, nil, UnsafeMutablePointer(mutating: buffer.baseAddress!), processEnvironment)
+            posix_spawn(&child, commandC, nil, nil, UnsafeMutablePointer(mutating: buffer.baseAddress!), _NSGetEnviron()!.pointee)
         }
     }
     guard spawnResult == 0 else {
