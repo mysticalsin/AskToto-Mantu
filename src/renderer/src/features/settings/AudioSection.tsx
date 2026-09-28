@@ -1,68 +1,8 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentType,
-  type ReactNode
-} from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import appPackage from '../../../../../package.json'
 import type { NavigationGuardService } from '../../lib/navigation-guard'
 import { TapControlCard } from '../../components/TapCalibration'
-import {
-  Check,
-  ExternalLink,
-  Mic,
-  Volume2,
-  Headphones,
-  ChevronDown,
-  ChevronUp,
-  Sparkles,
-  FolderOpen,
-  FolderCog,
-  AlertCircle,
-  Trash2,
-  Cpu,
-  Wand2,
-  ShieldCheck,
-  Info,
-  IdCard,
-  X,
-  Search,
-  RefreshCw,
-  Link2,
-  CircleCheck,
-  FileText,
-  Upload,
-  RotateCcw,
-  Trash,
-  Network,
-  Calendar,
-  Bell,
-  User,
-  MoreHorizontal,
-  Plus,
-  ArrowUp,
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
-  MessageSquare,
-  MessageSquareQuote,
-  Lightbulb,
-  AlignLeft,
-  FileSearch,
-  Camera,
-  Eye,
-  Settings2,
-  Lock,
-  Timer,
-  ListTree,
-  Route,
-  type LucideIcon
-} from 'lucide-react'
+import { Check, ExternalLink, Mic, Volume2, Headphones, ChevronDown, ChevronUp, Sparkles, FolderOpen, FolderCog, AlertCircle, Trash2, Cpu, Wand2, ShieldCheck, Info, IdCard, X, Search, RefreshCw, Link2, CircleCheck, FileText, Upload, RotateCcw, Trash, Network, Calendar, Bell, User, MoreHorizontal, Plus, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, MessageSquare, MessageSquareQuote, Lightbulb, AlignLeft, FileSearch, Camera, Eye, Settings2, Lock, Timer, ListTree, Route, type LucideIcon } from 'lucide-react'
 import { timeSavedFromTotals } from '@shared/time-saved'
 import { TimeSavedView } from '../../components/TimeSavedView'
 import { autoHideOverlayForLayout } from '@shared/overlay-chrome'
@@ -74,50 +14,10 @@ import { OverlayPlacementPicker } from '../../components/OverlayPlacementPicker'
 import { OverlayOrbPicker } from '../../components/OverlayOrbPicker'
 import { persistOverlayPlacement } from '../../lib/overlay-placement-save'
 import { formatResetPhrase } from '@shared/reset-time'
-import {
-  DEFAULT_SHORTCUTS,
-  HOTKEY_ACTIONS,
-  BUILTIN_MODE_LABELS,
-  MODE_GROUPS,
-  modeLabel,
-  type PublicSettings,
-  type AsrAssetsStatus,
-  type Profile,
-  type TestKeyResponse,
-  type ProfileRecoveryResult,
-  type DustAgent,
-  DUST_BASE_AGENT_ID,
-  type ConversationMode,
-  type BuiltinMode,
-  type CustomMode,
-  type AuthStatus,
-  type GraphStatus,
-  type HotkeyAction,
-  type EvalMetrics,
-  type MeetingSummary,
-  type ShortcutFailure,
-  type LocalModelSummary,
-  type PlatformPermissions,
-  type UpdateCheckResult,
-  type McpConnectionKind,
-  type LicenseStatusResult,
-  type ScreenCaptureCheckResult,
-  type PreservedBrainIndexCopy
-} from '@shared/ipc'
+import { DEFAULT_SHORTCUTS, HOTKEY_ACTIONS, BUILTIN_MODE_LABELS, MODE_GROUPS, modeLabel, type PublicSettings, type AsrAssetsStatus, type Profile, type TestKeyResponse, type ProfileRecoveryResult, type DustAgent, DUST_BASE_AGENT_ID, type ConversationMode, type BuiltinMode, type CustomMode, type AuthStatus, type GraphStatus, type HotkeyAction, type EvalMetrics, type MeetingSummary, type ShortcutFailure, type LocalModelSummary, type PlatformPermissions, type UpdateCheckResult, type McpConnectionKind, type LicenseStatusResult, type ScreenCaptureCheckResult, type PreservedBrainIndexCopy } from '@shared/ipc'
 import { nextScreenCheckPass } from '@shared/screen-capture-check'
 import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
-import {
-  PROVIDERS,
-  PROVIDER_IDS,
-  requiresUserBaseUrl,
-  detectProvider,
-  parseDustUrl,
-  resolveModelTier,
-  applyInteractiveGuardrail,
-  isDustReady,
-  dustStoredAgentMissing,
-  type ProviderId
-} from '@shared/providers'
+import { PROVIDERS, PROVIDER_IDS, requiresUserBaseUrl, detectProvider, parseDustUrl, resolveModelTier, applyInteractiveGuardrail, isDustReady, dustStoredAgentMissing, type ProviderId } from '@shared/providers'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { modeSkillLock } from '@shared/mode-skills'
 import { DEFAULT_OPERATOR_URL, operatorUrlConfigured } from '@shared/operator'
@@ -139,23 +39,8 @@ import { displayAccelerator, isWindows } from '../../lib/keys'
 import { decideDustLiveCheck } from '../../lib/dust-live-check'
 import { haltAllOnboardingAudio, unlockOnboardingAudio } from '../../lib/onboarding-music'
 import { canShowConnected, cliSetupChip, nextCliSetupStep } from '@shared/cli-setup-status'
-import {
-  DUST_EMPTY_AGENTS_ERROR,
-  DUST_WORKSPACE_MISSING_SETUP_ERROR,
-  decideDustInstantValidate,
-  formatDustConnectedMessage,
-  proveDustConnection,
-  type DustInstantValidateResult
-} from '@shared/dust-validate'
-import {
-  SETTINGS_CONTENT_SCROLL_CLASS,
-  Section,
-  TabIconContext,
-  ToggleRow,
-  ctl,
-  managedChipCls,
-  settingsScrollClipsOverflowX
-} from '../../ui/settings'
+import { DUST_EMPTY_AGENTS_ERROR, DUST_WORKSPACE_MISSING_SETUP_ERROR, decideDustInstantValidate, formatDustConnectedMessage, proveDustConnection, type DustInstantValidateResult } from '@shared/dust-validate'
+import { SETTINGS_CONTENT_SCROLL_CLASS, Section, TabIconContext, ToggleRow, ctl, managedChipCls, settingsScrollClipsOverflowX } from '../../ui/settings'
 import { CLI_PROVIDERS, DUST_CREDENTIAL_STORE, PROFILE_CREDENTIAL_STORE, LICENSE_UI_ENABLED, LazyInput, LazyTextarea, VocabCorrectionsTextarea, ManagedChip, ProviderTile, ExpandableSection, VocabSuggestions, detectHint, isProfileUnlockError, SonioxKeySeat, pickReadyProvider, recommendedProvider, prettyModel, type SettingsWithAsrWebgpuFallback } from './SettingsSupport'
 import { getAudioChoices } from './DustSetup'
 export function AudioChoices({
