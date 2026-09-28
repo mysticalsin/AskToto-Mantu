@@ -741,8 +741,9 @@ test('G2 mergedPullRequests pages until a short page, keeps only merged PRs, and
   const calls = []
   const fetchImpl = async (url) => {
     calls.push(url)
-    if (url.includes('page=1')) return { ok: true, status: 200, json: async () => page1 }
-    if (url.includes('page=2')) return { ok: true, status: 200, json: async () => page2 }
+    const page = new URL(url).searchParams.get('page')
+    if (page === '1') return { ok: true, status: 200, json: async () => page1 }
+    if (page === '2') return { ok: true, status: 200, json: async () => page2 }
     return { ok: true, status: 200, json: async () => [] }
   }
   const api = githubApi('mysticalsin/AskToto-Mantu', undefined, fetchImpl)
