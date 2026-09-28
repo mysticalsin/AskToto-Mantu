@@ -1364,6 +1364,12 @@ function observeClaimedSourceRefreshWork(): void {
   for (const key of sourceRefreshWorkKeys) observeSource(key)
 }
 
+function observeSourceRefreshWorkFromIndex(idx: BrainIndex): void {
+  observeClaimedSourceRefreshWork()
+  if (sourceRefreshWorkKeys.size > 0 || (!idx.sourceRefreshRequested && !idx.replayPending)) return
+  for (const key of claimSourceRefreshWork(idx)) observeSource(key)
+}
+
 class PublicationFailure extends Error {
   constructor(error: unknown) { super(error instanceof Error ? error.message : String(error)) }
 }
@@ -2541,8 +2547,9 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
   addCompletionGate(observer, beforeComplete)
   try {
     run.result = await requestBackfill(options)
-    observeClaimedSourceRefreshWork()
-    if ((await readIndexAsync(observer.s)).replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
+    const idx = await readIndexAsync(observer.s)
+    observeSourceRefreshWorkFromIndex(idx)
+    if (idx.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     if (run.result.deferred) completionError('no-provider')
     // A capped request can return "preparing" without dispatching anything. That is not completed work.
     if (run.result.preparing && !backfillPreparing && !sourceRefreshRunning && !rebuildStarting && !rebuildReplayTask && !hasActiveBackfill() && !backfillLintPending) completionError('incomplete')
@@ -2841,18 +2848,27 @@ async function requestBackfillAsync(options: BackfillStartOptions = {}): Promise
     if (!hasJobsInFlight()) pump()
     return { queued: 0, preparing: true }
   }
+  backfillPreparing = true
+  pendingBackfillTrigger = options.trigger ?? 'automatic'
   // Named 06:00 / 12:00 / 18:00 America/Toronto slots and an explicit Update Intelligence click
   // bypass the old 3-per-day reconcile budget. queued:0 + upToDate is illegal when meetings
   // exist but have not been extracted.
   if (!options.force && !(await consumeDailyBackfillRun(s))) {
     const unextracted = await hasUnextractedMeetings(s)
+    backfillPreparing = false
+    pendingBackfillTrigger = 'automatic'
     if (unextracted) return { queued: 0, preparing: true }
     return { queued: 0, upToDate: true }
   }
 
-  backfillPreparing = true
-  pendingBackfillTrigger = options.trigger ?? 'automatic'
-  const idx = await readIndexAsync(s)
+  let idx: BrainIndex
+  try {
+    idx = await readIndexAsync(s)
+  } catch (error) {
+    backfillPreparing = false
+    pendingBackfillTrigger = 'automatic'
+    throw error
+  }
   if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
   setImmediate(() => {
     void startBackfill(undefined, { ...options, trigger: pendingBackfillTrigger })
