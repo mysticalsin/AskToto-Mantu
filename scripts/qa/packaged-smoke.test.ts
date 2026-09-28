@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   LIFECYCLE_EVENTS,
+  NAVIGATION_GUARD_BOOTSTRAP_PATCH,
   childPidReserved,
   computeCleanupTargets,
   isOverlayUrl,
@@ -14,6 +15,7 @@ import {
   readObservationTail,
   runProcess,
   seedSmokeProfile,
+  buildWindowsShortcutLauncher,
   initialRvRows,
   initialNavigationGuardRows,
   runRevealRow,
@@ -336,7 +338,6 @@ describe('smokeVerdict', () => {
 
     expect(smokeVerdict(observation)).toEqual({ result: 'pass', failures: [] })
   })
-
 })
 
 describe('isPassingRevealEvidence', () => {
@@ -580,6 +581,15 @@ describe('initialRvRows', () => {
 })
 
 describe('initialNavigationGuardRows', () => {
+  it('bootstraps the disposable smoke profile into the visible post-onboarding bar before HIST automation', () => {
+    expect(NAVIGATION_GUARD_BOOTSTRAP_PATCH).toEqual({
+      onboardingDone: true,
+      recordingConsent: true,
+      overlayLayout: 'bar',
+      autoHideOverlay: false
+    })
+  })
+
   it('tracks clean and dirty History navigation entry points as pending automation', () => {
     const rows = initialNavigationGuardRows()
 
@@ -607,6 +617,33 @@ describe('initialNavigationGuardRows', () => {
     expect(rows.some((row) => row.state === 'dirty')).toBe(true)
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
+  })
+})
+
+describe('buildWindowsShortcutLauncher', () => {
+  it('points the .lnk at a launcher that preserves ASKTOTO_USERDATA for the smoke profile', () => {
+    const built = buildWindowsShortcutLauncher({
+      auditLogDir: 'C:\\Users\\Tony\\AppData\\Local\\Temp\\metis-smoke-xyz\\logs',
+      executable: 'C:\\Program Files\\Metis\\Metis.exe',
+      userData: 'C:\\Users\\Tony\\AppData\\Local\\Temp\\metis-smoke-xyz'
+    })
+
+    expect(built.shortcutPath.replace(/\\/g, '/')).toMatch(/Metis-smoke\.lnk$/)
+    expect(built.launcherPath.replace(/\\/g, '/')).toMatch(/Metis-smoke-launch\.cmd$/)
+    expect(built.launcherBody).toContain('set "ASKTOTO_USERDATA=C:\\Users\\Tony\\AppData\\Local\\Temp\\metis-smoke-xyz"')
+    expect(built.launcherBody).toContain('set "ASKTOTO_SMOKE_REOPEN_PROBE=1"')
+    expect(built.launcherBody).toContain(`start "" ${JSON.stringify("C:\\Program Files\\Metis\\Metis.exe")}`)
+    expect(built.shortcutScript).toContain('CreateShortcut')
+    expect(built.shortcutScript).toContain('Metis-smoke-launch.cmd')
+    expect(built.shortcutScript).toContain('WorkingDirectory')
+  })
+
+  it('refuses to build a launcher without ASKTOTO_USERDATA', () => {
+    expect(() => buildWindowsShortcutLauncher({
+      auditLogDir: 'C:\\tmp\\logs',
+      executable: 'C:\\Metis\\Metis.exe',
+      userData: ''
+    })).toThrow(/ASKTOTO_USERDATA/)
   })
 })
 

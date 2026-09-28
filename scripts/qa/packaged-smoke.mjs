@@ -39,6 +39,13 @@ const AUDIT_POLL_MS = 250
 const CENSUS_POLL_MS = 500
 const RV_TIMEOUT_MS = 15_000
 
+export const NAVIGATION_GUARD_BOOTSTRAP_PATCH = Object.freeze({
+  onboardingDone: true,
+  recordingConsent: true,
+  overlayLayout: 'bar',
+  autoHideOverlay: false
+})
+
 export const LIFECYCLE_EVENTS = Object.freeze([
   'app.started',
   'app.renderer.ready',
@@ -251,13 +258,22 @@ function completeNavigationRow(rows, id, patch) {
   if (row) Object.assign(row, patch)
 }
 
+async function findOverlayPage(browser, timeout = 15_000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const pages = browser.contexts().flatMap((context) => context.pages())
+    const overlay = pages.find((page) => !page.isClosed() && isOverlayUrl(page.url()))
+    if (overlay) return overlay
+    await sleep(100)
+  }
+  throw new Error('overlay page not found')
+}
+
 async function withOverlayPage(port, fn) {
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 30_000 })
   try {
-    const pages = browser.contexts().flatMap((context) => context.pages())
-    const overlay = pages.find((page) => isOverlayUrl(page.url()))
-    if (!overlay) throw new Error('overlay page not found')
-    return await fn(overlay)
+    const overlay = await findOverlayPage(browser)
+    return await fn(overlay, browser)
   } finally {
     await browser.close().catch(() => undefined)
   }
@@ -265,6 +281,58 @@ async function withOverlayPage(port, fn) {
 
 async function waitForText(page, text, timeout = 15_000) {
   await page.getByText(text, { exact: true }).first().waitFor({ timeout })
+}
+
+async function locatorVisible(locator) {
+  return locator.first().isVisible({ timeout: 500 }).catch(() => false)
+}
+
+async function ensureNavigationGuardHarnessState(page, browser) {
+  const state = await page.evaluate(async (patch) => {
+    const before = await window.toto.getSettings()
+    const after = await window.toto.setSettings({ ...patch, onboardingDoneAt: Date.now() })
+    if (!before.onboardingDone) window.toto.onboardingExit('answer')
+    return {
+      beforeOnboardingDone: before.onboardingDone,
+      afterOnboardingDone: after.onboardingDone,
+      overlayLayout: after.overlayLayout,
+      autoHideOverlay: after.autoHideOverlay
+    }
+  }, NAVIGATION_GUARD_BOOTSTRAP_PATCH)
+  const activePage = state.beforeOnboardingDone ? page : await findOverlayPage(browser, 30_000)
+  await activePage.getByRole('button', { name: 'History' }).first().waitFor({ timeout: 15_000 })
+  return { page: activePage, state }
+}
+
+async function ensureHistory(page) {
+  const search = page.getByLabel('Search past meetings')
+  if (await locatorVisible(search)) return
+
+  const backToHistory = page.getByRole('button', { name: /Back to history/ })
+  if (await locatorVisible(backToHistory)) {
+    await backToHistory.first().click({ timeout: 15_000 })
+    await search.waitFor({ timeout: 15_000 })
+    return
+  }
+
+  await clickHistory(page)
+}
+
+async function ensureIdleBar(page) {
+  const search = page.getByLabel('Search past meetings')
+  if (await locatorVisible(search)) {
+    await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
+    await search.waitFor({ state: 'hidden', timeout: 15_000 })
+    await page.waitForTimeout(450)
+    return
+  }
+
+  const backToHistory = page.getByRole('button', { name: /Back to history/ })
+  if (await locatorVisible(backToHistory)) {
+    await backToHistory.first().click({ timeout: 15_000 })
+    await search.waitFor({ timeout: 15_000 })
+    await ensureIdleBar(page)
+  }
 }
 
 async function seedNavigationMeetings(page) {
@@ -320,11 +388,13 @@ async function openHistoryFromSettings(page) {
 }
 
 async function openMeetingFromHistoryRow(page, title) {
+  await ensureHistory(page)
   await page.getByRole('button', { name: new RegExp(title) }).first().dblclick({ timeout: 15_000 })
   await waitForText(page, 'Summary')
 }
 
 async function openMeetingFromHistoryButton(page, title) {
+  await ensureHistory(page)
   await page.getByRole('button', { name: new RegExp(title) }).first().click({ timeout: 15_000 })
   await page.getByRole('button', { name: /^Open/ }).first().click({ timeout: 15_000 })
   await waitForText(page, 'Summary')
@@ -369,10 +439,26 @@ async function expectSavedRecap(page, file, suffix) {
   }
 }
 
+async function dismissNavigationGuardIfOpen(page) {
+  const dialog = page.getByRole('dialog', { name: 'Save recap changes?' })
+  if (!(await locatorVisible(dialog))) return
+  await dialog.getByRole('button', { name: 'Cancel' }).first().click({ timeout: 15_000 })
+  await dialog.waitFor({ state: 'hidden', timeout: 15_000 })
+}
+
+async function waitForNavigationGuardClosed(page) {
+  await page.getByRole('dialog', { name: 'Save recap changes?' }).waitFor({ state: 'hidden', timeout: 15_000 })
+}
+
 async function chooseDirtyHistoryNavigation(page, choice, trigger) {
+  await dismissNavigationGuardIfOpen(page)
+  // Bar History ignores clicks inside a 400ms toggle debounce; settle after prior History traffic.
+  await page.waitForTimeout(450)
   await trigger()
   await expectGuard(page)
-  await page.getByRole('button', { name: choice }).first().click({ timeout: 15_000 })
+  const dialog = page.getByRole('dialog', { name: 'Save recap changes?' })
+  await dialog.getByRole('button', { name: choice, exact: true }).click({ timeout: 15_000 })
+  await waitForNavigationGuardClosed(page)
 }
 
 async function runNavigationStep(rows, id, fn) {
@@ -395,16 +481,20 @@ async function revealNavigationSurface({ executable, env, page }) {
 }
 
 async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
-  await withOverlayPage(port, async (page) => {
+  await withOverlayPage(port, async (initialPage, browser) => {
+    const ready = await ensureNavigationGuardHarnessState(initialPage, browser)
+    const page = ready.page
     await revealNavigationSurface({ executable, env, page })
     const seeded = await seedNavigationMeetings(page)
 
     await runNavigationStep(rows, 'HIST-clean-bar-open', async () => {
+      await ensureIdleBar(page)
       await clickHistory(page)
-      return { seededMeetings: 2, guardVisible: false }
+      return { seededMeetings: 2, guardVisible: false, harnessState: ready.state }
     })
 
     await runNavigationStep(rows, 'HIST-clean-settings-open', async () => {
+      await ensureHistory(page)
       await openHistoryFromSettings(page)
       return { returnedToHistory: true, guardVisible: false }
     })
@@ -421,6 +511,7 @@ async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
     })
 
     await runNavigationStep(rows, 'HIST-clean-back', async () => {
+      await openMeetingFromHistoryRow(page, 'Smoke navigation alpha')
       await returnToHistoryFromReview(page)
       return { returnedToHistory: true, guardVisible: false }
     })
@@ -675,6 +766,35 @@ export async function runRevealRow(options) {
   })
 }
 
+/**
+ * Build the Windows shortcut reopen driver. A .lnk cannot set process env, so the shortcut targets a
+ * tiny .cmd that sets ASKTOTO_USERDATA (and the smoke reopen probe) before starting Metis.exe. Without
+ * that, the second process uses the default profile, misses the smoke single-instance lock, and leaves
+ * an install-root orphan after quit.
+ */
+export function buildWindowsShortcutLauncher({ auditLogDir, executable, userData }) {
+  if (typeof userData !== 'string' || userData.length === 0) {
+    throw new Error('windows shortcut smoke requires ASKTOTO_USERDATA in the reopen env')
+  }
+  const shortcutPath = join(auditLogDir, 'Metis-smoke.lnk')
+  const launcherPath = join(auditLogDir, 'Metis-smoke-launch.cmd')
+  const launcherBody = [
+    '@echo off',
+    `set "ASKTOTO_USERDATA=${userData}"`,
+    'set "ASKTOTO_SMOKE_REOPEN_PROBE=1"',
+    `start "" ${JSON.stringify(executable)}`
+  ].join('\r\n')
+  const shortcutScript = [
+    '$shell = New-Object -ComObject WScript.Shell',
+    `$shortcut = $shell.CreateShortcut(${JSON.stringify(shortcutPath)})`,
+    `$shortcut.TargetPath = ${JSON.stringify(launcherPath)}`,
+    `$shortcut.WorkingDirectory = ${JSON.stringify(dirname(executable))}`,
+    '$shortcut.Save()',
+    `Start-Process -FilePath ${JSON.stringify(shortcutPath)}`
+  ].join('; ')
+  return { shortcutPath, launcherPath, launcherBody, shortcutScript }
+}
+
 async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows, env }) {
   const hideBeforeReveal = () => runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
   if (platform === 'darwin') {
@@ -731,14 +851,12 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
     })
 
-    const shortcutPath = join(dirname(auditLogPath), 'Metis-smoke.lnk')
-    const shortcutScript = [
-      '$shell = New-Object -ComObject WScript.Shell',
-      `$shortcut = $shell.CreateShortcut(${JSON.stringify(shortcutPath)})`,
-      `$shortcut.TargetPath = ${JSON.stringify(executable)}`,
-      '$shortcut.Save()',
-      `Start-Process -FilePath ${JSON.stringify(shortcutPath)}`
-    ].join('; ')
+    const { launcherPath, launcherBody, shortcutScript } = buildWindowsShortcutLauncher({
+      auditLogDir: dirname(auditLogPath),
+      executable,
+      userData: env?.ASKTOTO_USERDATA
+    })
+    writeFileSync(launcherPath, launcherBody, 'utf8')
     await runRevealRow({
       auditLogPath,
       rows,
