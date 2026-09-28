@@ -1,5 +1,11 @@
 name: Settings screenshots
 
+# M2-0071 authorizes the `dist` / `dist:win` scripts here: no secrets are passed, so both builds are key-less and
+# unsigned, which is sufficient for a pure-move before/after comparison.
+# LEAD_ACTION: dispatch this workflow with base_ref=<integration sha> and head_ref=m2/M2-0071-split-settings-tsx-ui,
+# then have Opus review the settings-screenshots-{macos,windows}-latest artifacts (comparison.json status PASS).
+# Surfaces a hosted runner cannot reach are recorded as BLOCKED_EXTERNAL in comparison.json, never faked.
+
 on:
   workflow_dispatch:
     inputs:
@@ -15,10 +21,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: settings-screenshots-${{ github.event.inputs.head_ref }}-${{ matrix.os }}
-  cancel-in-progress: true
-
 defaults:
   run:
     shell: bash
@@ -28,6 +30,9 @@ jobs:
     name: Settings screenshots (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
+    concurrency:
+      group: settings-screenshots-${{ inputs.head_ref }}-${{ matrix.os }}
+      cancel-in-progress: true
     strategy:
       fail-fast: false
       matrix:

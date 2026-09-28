@@ -11,7 +11,6 @@ import {
 } from 'react'
 import appPackage from '../../../../../package.json'
 import type { NavigationGuardService } from '../../lib/navigation-guard'
-import { TapControlCard } from '../../components/TapCalibration'
 import {
   Check,
   ExternalLink,

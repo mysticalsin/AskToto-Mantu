@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, PublicSettingsSchema, type DustAgent, type PublicSettings } from '@shared/ipc'
 import { DUST_BASE_AGENT_ID } from '@shared/ipc'
-import { AgentPicker, DustSetup } from './Settings'
+import { AgentPicker, DustSetup } from '../../components/Settings'
 
 function publicSettingsWith(overrides: Partial<PublicSettings> = {}): PublicSettings {
   return PublicSettingsSchema.parse({
