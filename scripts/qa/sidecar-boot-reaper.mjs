@@ -148,37 +148,53 @@ function parsePsRows(output) {
   return rows
 }
 
-export function argsFingerprint(args) {
+function argsFingerprint(args) {
   return createHash('sha256').update(JSON.stringify(args), 'utf8').digest('hex')
 }
 
-export function splitCommand(command) {
-  const out = []
-  const re = /"([^"]*)"|'([^']*)'|(\S+)/g
-  let match
-  while ((match = re.exec(command))) out.push(match[1] ?? match[2] ?? match[3])
-  return out
-}
-
-function parsePosixIdentity(line) {
-  const match = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(.{24})\s+(.+)$/.exec(line.trim())
-  if (!match) return null
-  const command = match[5].trim()
-  const exe = command.split(/\s+/)[0]
-  let exeRealpath
+/**
+ * `ps`'s command column is argv joined with plain spaces, with no quoting to mark which spaces were
+ * inside a single argv element (e.g. a `node -e "<js with spaces>"` stand-in) versus between elements -
+ * re-splitting it on whitespace cannot recover the original argv and silently produces the wrong
+ * fingerprint. macOS production identity (registry.ts's darwin branch) never does this: it shells out to
+ * the packaged metis-mac-helper's `proc-info`, which reads the kernel's real argv via KERN_PROCARGS2
+ * (native/mac-helper/main.swift). This proof must use the exact same source, or its registration check
+ * exercises a path the product never takes.
+ */
+export function parseMacHelperProcInfo(stdout) {
+  let parsed
   try {
-    exeRealpath = realpathSync.native(exe)
+    parsed = JSON.parse(stdout.trim())
   } catch {
     return null
   }
-  return {
-    pid: Number(match[1]),
-    ppid: Number(match[2]),
-    pgid: Number(match[3]),
-    osStartTime: new Date(match[4]).toISOString(),
-    exeRealpath,
-    args: splitCommand(command)
+  if (
+    typeof parsed?.pid !== 'number' ||
+    typeof parsed?.osStartTime !== 'string' ||
+    typeof parsed?.exeRealpath !== 'string' ||
+    !Array.isArray(parsed?.args)
+  ) {
+    return null
   }
+  return {
+    pid: parsed.pid,
+    ppid: typeof parsed.ppid === 'number' ? parsed.ppid : undefined,
+    pgid: typeof parsed.pgid === 'number' ? parsed.pgid : undefined,
+    osStartTime: parsed.osStartTime,
+    exeRealpath: parsed.exeRealpath,
+    args: parsed.args
+  }
+}
+
+function macHelperProcInfo(installRoot, pid) {
+  const helperPath = join(installRoot, 'Contents', 'Resources', 'mac-helper', 'metis-mac-helper')
+  let stdout
+  try {
+    stdout = execFileSync(helperPath, ['proc-info', String(pid)], { encoding: 'utf8', timeout: 5_000 })
+  } catch {
+    return null
+  }
+  return parseMacHelperProcInfo(stdout)
 }
 
 function windowsProcessIdentity(pid) {
@@ -207,16 +223,12 @@ function windowsProcessIdentity(pid) {
   return stdout ? JSON.parse(stdout) : null
 }
 
-function processIdentity(pid) {
+function processIdentity(pid, installRoot) {
   if (process.platform === 'win32') return windowsProcessIdentity(pid)
-  const output = execFileSync('/bin/ps', ['-o', 'pid=,ppid=,pgid=,lstart=,command=', '-p', String(pid)], {
-    env: { ...process.env, LC_ALL: 'C' },
-    encoding: 'utf8'
-  })
-  return parsePosixIdentity(output)
+  return macHelperProcInfo(installRoot, pid)
 }
 
-export function identityArgsMatchFingerprint(args, expected) {
+function identityArgsMatchFingerprint(args, expected) {
   if (argsFingerprint(args) === expected) return true
   if (args.length > 0 && argsFingerprint(args.slice(1)) === expected) return true
   return false
@@ -228,7 +240,7 @@ function appendRegistryRecord(profile, sessionId, record) {
   appendFileSync(join(runDir, `sidecars-${sessionId}.json`), `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 })
 }
 
-function recordSpawnedStandIn(profile, sessionId, name, child, executable, args) {
+function recordSpawnedStandIn(profile, sessionId, name, child, executable, args, installRoot) {
   appendRegistryRecord(profile, sessionId, {
     kind: 'intent',
     sessionId,
@@ -238,7 +250,7 @@ function recordSpawnedStandIn(profile, sessionId, name, child, executable, args)
   })
   const pid = child.pid
   if (typeof pid !== 'number') throw new Failure('stand-in sidecar pid was unavailable')
-  const identity = processIdentity(pid)
+  const identity = processIdentity(pid, installRoot)
   const exeRealpath = realpathSync.native(executable)
   if (!identity) throw new Failure('stand-in sidecar identity was unavailable')
   if (identity.pid !== pid) throw new Failure('stand-in sidecar identity pid mismatch')
@@ -461,12 +473,13 @@ async function runStandInProof({ installRoot, executable }) {
     observation.timingsMs.firstReady = Date.now() - firstStartedAt
 
     const sidecarStartedAt = Date.now()
-    // macOS ps prints argv unquoted; spaces in -e scripts break splitCommand fingerprint matching (Win CommandLineToArgvW keeps one token).
-    const standInArgs = ['-e', 'setInterval(()=>{},1e3)']
+    const standInArgs = ['-e', 'setInterval(() => {}, 1000)']
     standIn = spawn(process.execPath, standInArgs, { stdio: 'ignore' })
     const identity = await waitFor(() => {
       try {
-        return standIn?.pid ? recordSpawnedStandIn(profile, 'stand-in', 'llama-server', standIn, process.execPath, standInArgs) : null
+        return standIn?.pid
+          ? recordSpawnedStandIn(profile, 'stand-in', 'llama-server', standIn, process.execPath, standInArgs, installRoot)
+          : null
       } catch {
         return null
       }
