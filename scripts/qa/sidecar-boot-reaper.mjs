@@ -14,7 +14,7 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -63,6 +63,35 @@ function parseAuditLog(text) {
 function readAudit(profile) {
   try {
     return parseAuditLog(readFileSync(join(profile, 'logs', 'audit.log'), 'utf8'))
+  } catch {
+    return []
+  }
+}
+
+export function parseSidecarRegistry(text) {
+  const records = []
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    try {
+      records.push(JSON.parse(trimmed))
+    } catch {
+      /* corrupt registry lines are product failures, but the proof must not guess from them */
+    }
+  }
+  return records
+}
+
+export function registryHasSpawnedPid(records, pid) {
+  return records.some((record) => record?.kind === 'spawned' && record.pid === pid)
+}
+
+function readSidecarRegistry(profile) {
+  const runDir = join(profile, 'run')
+  try {
+    return readdirSync(runDir)
+      .filter((file) => /^sidecars-[a-zA-Z0-9-]+\.json$/.test(file))
+      .flatMap((file) => parseSidecarRegistry(readFileSync(join(runDir, file), 'utf8')))
   } catch {
     return []
   }
@@ -288,6 +317,8 @@ async function main() {
     const llamaStartedAt = Date.now()
     const llama = await prewarmAndFindLlama(firstPort, first.pid, installRoot)
     if (!llama) throw new Precondition('real llama-server did not start; seed the packaged local model assets')
+    const registered = await waitFor(() => registryHasSpawnedPid(readSidecarRegistry(profile), llama.pid), 5_000, POLL_MS)
+    if (!registered) throw new Failure('llama-server spawned identity registry did not land before hard kill')
     observation.pids.orphan = llama.pid
     observation.timingsMs.llamaStarted = Date.now() - llamaStartedAt
     observation.processes.beforeKill = roleCounts(
