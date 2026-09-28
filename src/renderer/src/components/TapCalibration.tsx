@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Fingerprint, Radio } from 'lucide-react'
 import type { HotkeyAction, PublicSettings, SettingsPatch } from '@shared/ipc'
-import { Section, ToggleRow, ctl } from './Settings'
+import { Section, ToggleRow, ctl } from '../ui/settings'
 import { isWindows } from '../lib/keys'
 import { makeCalibration, CALIB_N, type CalibrationSession, type CalibFeedback } from '../lib/tap/calibrate'
 import { startTapCapture, startTapControl, type TapCaptureSession, type TapControlSession } from '../lib/tap/tap-control'

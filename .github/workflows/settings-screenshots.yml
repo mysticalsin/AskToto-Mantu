@@ -1,0 +1,111 @@
+name: Settings screenshots
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Ref to capture as the before baseline
+        required: true
+        default: main
+      head_ref:
+        description: Ref to capture and compare
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: settings-screenshots-${{ github.event.inputs.head_ref }}-${{ matrix.os }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  compare:
+    name: Settings screenshots (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.base_ref }}
+          path: base
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.head_ref }}
+          path: head
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: base/package-lock.json
+      - run: npm ci
+        working-directory: base
+      - name: Build baseline app
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            npm run dist:win
+          else
+            npm run dist
+          fi
+        working-directory: base
+      - name: Install and capture baseline
+        run: |
+          mkdir -p "$RUNNER_TEMP/settings-screenshots/before"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            setup="$(ls base/release/Metis-Setup-*.exe | head -1)"
+            "$setup" /S "/D=$RUNNER_TEMP/settings-before"
+            node head/scripts/qa/settings-screenshots.mjs capture "$RUNNER_TEMP/settings-before/Metis.exe" "$RUNNER_TEMP/settings-screenshots/before"
+          else
+            volume="$RUNNER_TEMP/settings-before-volume"
+            hdiutil attach -nobrowse -readonly -mountpoint "$volume" base/release/Metis-*.dmg > /dev/null
+            ditto "$volume/Metis.app" "$RUNNER_TEMP/settings-before/Metis.app"
+            hdiutil detach "$volume" > /dev/null
+            node head/scripts/qa/settings-screenshots.mjs capture "$RUNNER_TEMP/settings-before/Metis.app" "$RUNNER_TEMP/settings-screenshots/before"
+          fi
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: head/package-lock.json
+      - run: npm ci
+        working-directory: head
+      - name: Build candidate app
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            npm run dist:win
+          else
+            npm run dist
+          fi
+        working-directory: head
+      - name: Install, capture, and compare candidate
+        run: |
+          mkdir -p "$RUNNER_TEMP/settings-screenshots/after"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            setup="$(ls head/release/Metis-Setup-*.exe | head -1)"
+            "$setup" /S "/D=$RUNNER_TEMP/settings-after"
+            node head/scripts/qa/settings-screenshots.mjs capture "$RUNNER_TEMP/settings-after/Metis.exe" "$RUNNER_TEMP/settings-screenshots/after"
+          else
+            volume="$RUNNER_TEMP/settings-after-volume"
+            hdiutil attach -nobrowse -readonly -mountpoint "$volume" head/release/Metis-*.dmg > /dev/null
+            ditto "$volume/Metis.app" "$RUNNER_TEMP/settings-after/Metis.app"
+            hdiutil detach "$volume" > /dev/null
+            node head/scripts/qa/settings-screenshots.mjs capture "$RUNNER_TEMP/settings-after/Metis.app" "$RUNNER_TEMP/settings-screenshots/after"
+          fi
+          node head/scripts/qa/settings-screenshots.mjs compare "$RUNNER_TEMP/settings-screenshots/before" "$RUNNER_TEMP/settings-screenshots/after" "$RUNNER_TEMP/settings-screenshots/comparison.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ always() && !cancelled() }}
+        with:
+          name: settings-screenshots-${{ matrix.os }}
+          path: ${{ runner.temp }}/settings-screenshots/
+          if-no-files-found: error
+          retention-days: 14

@@ -4,8 +4,7 @@
     "src/shared/hash.test.ts": 1
   },
   "FF-02": {
-    "src/main/brain/ingest.ts": 2,
-    "src/renderer/src/components/Settings.tsx": 1
+    "src/main/brain/ingest.ts": 2
   },
   "FF-03": {
     "src/main/application-catalog-view.ts": 1,
@@ -57,7 +56,7 @@
     "src/renderer/src/components/OnboardingExperience.tsx": 1921,
     "src/renderer/src/components/RecallView.tsx": 1332,
     "src/renderer/src/components/Review.tsx": 1928,
-    "src/renderer/src/components/Settings.tsx": 9377,
+    "src/renderer/src/features/settings/Settings.tsx": 9330,
     "src/renderer/src/lib/listen.ts": 3153,
     "src/shared/ipc.ts": 2407
   },
