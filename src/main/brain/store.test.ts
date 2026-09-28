@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, realpathSync } from 'node:fs'
-import { readFile, readdir, realpath, stat, lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
@@ -267,12 +266,16 @@ describe('loadEntityDisplayNames — gateway-backed (M2-0031)', () => {
     const stuck = new Promise<Buffer>(() => {
       /* models open()+read() blocking forever on a cloud-only/FIFO file — never settles */
     })
+    // Sync (via the unmocked realFs), each wrapped in Promise.resolve: a real fs/promises call here would
+    // settle through the actual libuv poll phase, which a bulk vi.advanceTimersByTimeAsync (below) is not
+    // guaranteed to turn — the healthy account read must resolve on its own microtask tick, independent of
+    // how the fake clock schedules its yields, or this test would race the very stall it proves is fixed.
     const fs: StorageFs = {
-      readdir: (p) => readdir(p),
-      realpath: (p) => realpath(p),
-      stat: (p) => stat(p),
-      lstat: (p) => lstat(p).then((st) => ({ isSymbolicLink: st.isSymbolicLink() })),
-      readFile: (p) => (p === stuckPath ? stuck : readFile(p))
+      readdir: (p) => Promise.resolve(realFs.readdirSync(p)),
+      realpath: (p) => Promise.resolve(realFs.realpathSync(p)),
+      stat: (p) => Promise.resolve(realFs.statSync(p)),
+      lstat: (p) => Promise.resolve({ isSymbolicLink: realFs.lstatSync(p).isSymbolicLink() }),
+      readFile: (p) => (p === stuckPath ? stuck : Promise.resolve(realFs.readFileSync(p)))
     }
     useStorageForTests({ fs })
 
