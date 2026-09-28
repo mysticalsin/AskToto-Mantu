@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=3840, height=2160" />
+    <title>NP-04 Closing card</title>
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"
+      integrity="sha256-wXS/zlOnKUGNV6ithiXnJHx5OiL++OKFHjz6PenNgoA="
+      crossorigin="anonymous"
+    ></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #0a0a0a;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: sans-serif;
+      }
+      #scene {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 64px;
+      }
+      #glow {
+        position: absolute;
+        width: 1800px;
+        height: 1800px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(99, 102, 241, 0.4), rgba(99, 102, 241, 0) 70%);
+      }
+      #wordmark,
+      #platforms {
+        position: relative;
+      }
+      #wordmark {
+        margin: 0;
+        color: #f4f4f5;
+        font-size: 260px;
+        font-weight: 600;
+      }
+      #platforms {
+        margin: 0;
+        color: #a1a1aa;
+        font-size: 84px;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="np-04-closing-card"
+      data-start="0"
+      data-duration="4"
+      data-fps="30"
+      data-width="3840"
+      data-height="2160"
+    >
+      <div id="scene">
+        <div id="glow"></div>
+        <h1 id="wordmark">Métis</h1>
+        <p id="platforms">Desktop meeting copilot for macOS and Windows</p>
+      </div>
+    </div>
+    <script>
+      const tl = gsap.timeline({ paused: true })
+      tl.fromTo('#glow', { scale: 1.1, opacity: 1 }, { scale: 0.8, opacity: 0.4, duration: 3.9, ease: 'none' }, 0)
+      tl.fromTo('#wordmark', { y: 60, opacity: 0 }, { y: 0, opacity: 1, duration: 0.8, ease: 'power3.out' }, 0.2)
+      tl.fromTo('#platforms', { opacity: 0 }, { opacity: 1, duration: 0.6 }, 0.8)
+      window.__timelines = window.__timelines || {}
+      window.__timelines['np-04-closing-card'] = tl
+    </script>
+  </body>
+</html>

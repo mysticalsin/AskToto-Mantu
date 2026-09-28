@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=3840, height=2160" />
+    <title>NP-05 Render-path proof card</title>
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"
+      integrity="sha256-wXS/zlOnKUGNV6ithiXnJHx5OiL++OKFHjz6PenNgoA="
+      crossorigin="anonymous"
+    ></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #0a0a0a;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: sans-serif;
+      }
+      #scene {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 120px;
+      }
+      #title {
+        margin: 0;
+        color: #f4f4f5;
+        font-size: 160px;
+        font-weight: 600;
+      }
+      #steps {
+        display: flex;
+        align-items: center;
+        gap: 64px;
+      }
+      .step {
+        padding: 56px 88px;
+        border: 6px solid #6366f1;
+        border-radius: 32px;
+        color: #f4f4f5;
+        font-size: 84px;
+      }
+      .arrow {
+        color: #a1a1aa;
+        font-size: 96px;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="np-05-render-path-card"
+      data-start="0"
+      data-duration="4"
+      data-fps="30"
+      data-width="3840"
+      data-height="2160"
+    >
+      <div id="scene">
+        <h1 id="title">Pinned film toolchain</h1>
+        <div id="steps">
+          <div class="step" id="step-1">Compose</div>
+          <div class="arrow" id="arrow-1">→</div>
+          <div class="step" id="step-2">Render</div>
+          <div class="arrow" id="arrow-2">→</div>
+          <div class="step" id="step-3">Poster</div>
+          <div class="arrow" id="arrow-3">→</div>
+          <div class="step" id="step-4">Deliver</div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const tl = gsap.timeline({ paused: true })
+      tl.fromTo('#title', { y: 60, opacity: 0 }, { y: 0, opacity: 1, duration: 0.7, ease: 'power3.out' }, 0.1)
+      for (const index of [1, 2, 3, 4]) {
+        tl.fromTo('#step-' + index, { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.5, ease: 'power2.out' }, 0.5 + (index - 1) * 0.6)
+        if (index < 4) tl.fromTo('#arrow-' + index, { opacity: 0 }, { opacity: 1, duration: 0.3 }, 0.8 + (index - 1) * 0.6)
+      }
+      window.__timelines = window.__timelines || {}
+      window.__timelines['np-05-render-path-card'] = tl
+    </script>
+  </body>
+</html>
