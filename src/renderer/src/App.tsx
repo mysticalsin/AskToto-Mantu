@@ -31,9 +31,11 @@ import { RecordingConsentReminder } from './components/RecordingConsentReminder'
 import { MeetingOpenErrorToast } from './components/MeetingOpenErrorToast'
 import { OperatorGateToast } from './components/OperatorGateToast'
 import { QuickActions, type QuickKind } from './components/QuickActions'
+import { ConfirmSheet } from './ui/ConfirmSheet'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
+import { NavigationGuardService, type NavigationGuardRequest } from './lib/navigation-guard'
 import {
   AUTO_HIDE_GRACE_MS,
   REVEAL_DWELL_MS,
@@ -846,6 +848,15 @@ export function App(): JSX.Element {
     setRightEdgeDockDismissed(false)
     dispatchAutoHide({ type: 'pointer-enter' })
   }, [])
+  const navigationGuardRef = useRef<NavigationGuardService | null>(null)
+  if (!navigationGuardRef.current) navigationGuardRef.current = new NavigationGuardService()
+  const navigationGuard = navigationGuardRef.current
+  navigationGuard.setReveal(() => {
+    revealOverlay()
+    setCollapsed(false)
+  })
+  const [navigationGuardRequest, setNavigationGuardRequest] = useState<NavigationGuardRequest | null>(() => navigationGuard.current())
+  useEffect(() => navigationGuard.subscribe(() => setNavigationGuardRequest(navigationGuard.current())), [navigationGuard])
   const onOverlayPointerEnter = useCallback(() => {
     if (rightEdgePresentation) {
       const nextLock = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'renderer-pointer-enter' })
@@ -899,9 +910,9 @@ export function App(): JSX.Element {
   // Escape used to be the only exit that could silently discard an edit, since its sole guard was
   // activeElement being an INPUT/TEXTAREA, which misses focus sitting on the Save/Cancel buttons or
   // elsewhere. Kept in sync by Review via the onReviewDirtyChange callback below.
-  const reviewDirtyRef = useRef(false)
-  const onReviewDirtyChange = useCallback((dirty: boolean): void => {
-    reviewDirtyRef.current = dirty
+  const reviewDirtyRef = useRef<{ dirty: boolean; save?: () => Promise<boolean> }>({ dirty: false })
+  const onReviewDirtyChange = useCallback((dirty: boolean, save?: () => Promise<boolean>): void => {
+    reviewDirtyRef.current = { dirty, save }
   }, [])
   // Mirrors `view` for guardReviewNav below via a ref (rather than closing over the `view` state value
   // directly), so the helper keeps a STABLE identity across renders — required because several callers
@@ -916,13 +927,27 @@ export function App(): JSX.Element {
   // onTogglePanel). Only fires the confirm when Review is actually open AND dirty; every other view-switch
   // (History, Settings, and the hotkey dispatch below) used to skip this check entirely and navigate away
   // ungated, silently dropping the edit.
-  const guardReviewNav = useCallback((proceed: () => void): boolean => {
-    if (viewRef.current === 'review' && reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
-      return false
-    }
-    proceed()
+  const confirmReviewNavigation = useCallback(async (): Promise<boolean> => {
+    if (viewRef.current !== 'review' || !reviewDirtyRef.current.dirty) return true
+    const choice = await navigationGuard.request({
+      title: 'Save recap changes?',
+      message: 'You have unsaved edits in this recap. Save them before leaving, discard them, or cancel to keep editing.',
+      saveLabel: 'Save',
+      discardLabel: 'Discard',
+      cancelLabel: 'Cancel',
+      destructive: true
+    })
+    if (choice === 'cancel') return false
+    if (choice === 'save') return reviewDirtyRef.current.save ? reviewDirtyRef.current.save() : false
     return true
-  }, [])
+  }, [navigationGuard])
+  const guardReviewNav = useCallback((proceed: () => void): void => {
+    void (async () => {
+      if (!(await confirmReviewNavigation())) return
+      proceed()
+    })()
+  }, [confirmReviewNavigation])
+  const approveReviewNav = useCallback(async (): Promise<boolean> => confirmReviewNavigation(), [confirmReviewNavigation])
   // Set by endReview() while waiting for listen.stop()'s asynchronous terminal drain before the recap is
   // generated. Healthy queued windows commit first; a no-progress expiry instead leaves an incomplete
   // warning on listen.error — terminal does not itself guarantee a complete transcript. See maybeFireRecap.
@@ -2760,23 +2785,23 @@ export function App(): JSX.Element {
     guardReviewNav(openSettingsDefault)
   }, [guardReviewNav, openSettingsDefault])
   const onBarMinimize = useCallback(() => {
-    // Hide/Island: ignore. Do not collapse to a pill and do not jump layout to Bar.
-    if (!overlayAllowsMinimize(overlayLayout)) return
-    // Minimizing unmounts the entire Bar/Panel tree, including an open Review with an in-progress recap
-    // edit — same dirty-guard the global Escape handler already runs before leaving Review (see
-    // reviewDirtyRef's own comment above). Settings' own draft fields (API key / Dust / Bidstack inputs)
-    // have no equivalent dirty signal reachable here yet, so only the recap edit is covered.
-    if (reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
-      return
-    }
-    const next = circleRestSpringAfterCollapse(prefersOverlayReducedMotion())
-    if (next === 'idle') {
-      commitCircleRestMinimize()
-      return
-    }
-    setView((v) => (v === 'settings' ? 'answer' : v))
-    setCircleRestSpring('collapse')
-  }, [overlayLayout, commitCircleRestMinimize])
+    void (async () => {
+      // Hide/Island: ignore. Do not collapse to a pill and do not jump layout to Bar.
+      if (!overlayAllowsMinimize(overlayLayout)) return
+      // Minimizing unmounts the entire Bar/Panel tree, including an open Review with an in-progress recap
+      // edit — same dirty-guard the global Escape handler already runs before leaving Review (see
+      // reviewDirtyRef's own comment above). Settings' own draft fields (API key / Dust / Bidstack inputs)
+      // have no equivalent dirty signal reachable here yet, so only the recap edit is covered.
+      if (!(await confirmReviewNavigation())) return
+      const next = circleRestSpringAfterCollapse(prefersOverlayReducedMotion())
+      if (next === 'idle') {
+        commitCircleRestMinimize()
+        return
+      }
+      setView((v) => (v === 'settings' ? 'answer' : v))
+      setCircleRestSpring('collapse')
+    })()
+  }, [overlayLayout, commitCircleRestMinimize, confirmReviewNavigation])
   // The bar's eye button is the visible/invisible toggle: whether the Métis window shows up on a
   // screen you share or record (contentProtection). Hidden by default — the invisible-copilot identity.
   // This is the intuitive meaning of an eye icon and what users reach for to "make it visible / hide it".
@@ -2789,24 +2814,22 @@ export function App(): JSX.Element {
     setVisibilityToast(nextHidden ? 'hidden' : 'visible')
   }, [patch, settings?.contentProtection])
   const onTogglePanel = useCallback(() => {
-    // Only the COLLAPSE direction (open → closed) can hide an in-progress recap edit — expanding back is
-    // always safe, so only gate when we're currently expanded. Same guard as onBarMinimize/Escape above;
-    // read directly off `collapsed` rather than inside the setCollapsed updater so window.confirm (a
-    // blocking side effect) never risks running twice under React's dev-mode double-invoked updaters.
-    if (!collapsed && reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
-      return
-    }
-    // Chevron Collapse with Settings open must leave Settings the same way Done/X do.
-    // setView is startTransition; use setViewRaw so overlayShowsSettingsSheet clears this frame
-    // and windowMode(bar) hugs immediately — otherwise the gray settings slab stays under the Bar.
-    if (!collapsed && view === 'settings') {
-      setViewRaw('answer')
-      setCollapsed(true)
-      void window.toto.windowMode('bar')
-      return
-    }
-    setCollapsed((c) => !c)
-  }, [collapsed, view])
+    void (async () => {
+      // Only the COLLAPSE direction (open → closed) can hide an in-progress recap edit — expanding back is
+      // always safe, so only gate when we're currently expanded.
+      if (!collapsed && !(await confirmReviewNavigation())) return
+      // Chevron Collapse with Settings open must leave Settings the same way Done/X do.
+      // setView is startTransition; use setViewRaw so overlayShowsSettingsSheet clears this frame
+      // and windowMode(bar) hugs immediately — otherwise the gray settings slab stays under the Bar.
+      if (!collapsed && view === 'settings') {
+        setViewRaw('answer')
+        setCollapsed(true)
+        void window.toto.windowMode('bar')
+        return
+      }
+      setCollapsed((c) => !c)
+    })()
+  }, [collapsed, view, confirmReviewNavigation])
 
   // recapGen.run()'s own state update lands via React's startTransition (state.ts run()), so for one
   // render it's possible for recapGenTarget to already point at a NEW file while recapGen.answer still
@@ -3117,6 +3140,7 @@ export function App(): JSX.Element {
   // cancel a live stream → close an open surface → collapse → hide the bar.
   const escapeRef = useRef<() => void>(() => {})
   escapeRef.current = (): void => {
+    void (async () => {
     // A live stream takes top priority (see the precedence comment above) — checked BEFORE the typing-blur
     // branch below, because the ask input keeps focus after Enter-submit (submit clears its value but never
     // blurs). Without this ordering the first Esc during a stream only drops focus/the caret and the answer
@@ -3144,9 +3168,7 @@ export function App(): JSX.Element {
         // before navigating away from an unsaved recap edit — Escape was the one exit that could bypass
         // it, since its only prior guard was activeElement being an INPUT/TEXTAREA (missed focus sitting
         // on the Save/Cancel buttons, or anywhere else). Bail out and keep Review open if the user cancels.
-        if (reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
-          return
-        }
+        if (!(await confirmReviewNavigation())) return
         // Escaping a Review whose recap failed (or was cancelled) previously orphaned the transcript —
         // it existed only in listen state and the next session start wiped it. Rescue it on the way
         // out; idempotent via savedRef when the recap auto-save already landed. Past-meeting Reviews
@@ -3172,6 +3194,7 @@ export function App(): JSX.Element {
     } else {
       void window.toto.hide()
     }
+    })()
   }
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -3352,11 +3375,7 @@ export function App(): JSX.Element {
   // opened. Keeping the IPC and failure normalization in App lets the compact dock remain presentation-only.
   const openIntelligenceDashboard = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
     if (capturing || capturingRef.current) return { ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence.' }
-    let approved = false
-    guardReviewNav(() => {
-      approved = true
-    })
-    if (!approved) return { ok: false, error: 'Save or discard the recap before opening Mantu Intelligence.' }
+    if (!(await approveReviewNav())) return { ok: false, error: 'Save or discard the recap before opening Mantu Intelligence.' }
     try {
       const result = await window.toto.brainOpenDashboard()
       if (!result.ok) return { ok: false, error: result.error || 'Could not open Mantu Intelligence.' }
@@ -3365,7 +3384,7 @@ export function App(): JSX.Element {
     } catch {
       return { ok: false, error: 'Could not open Mantu Intelligence.' }
     }
-  }, [capturing, guardReviewNav, minimizeForIntelligence])
+  }, [approveReviewNav, capturing, minimizeForIntelligence])
 
   // Panel body — memoized so state changes unrelated to the active view/answer (typing in the ask input,
   // the elapsed-meeting clock, focus signals, etc.) don't rebuild this whole element tree on every App
@@ -3395,6 +3414,7 @@ export function App(): JSX.Element {
         onClose={() => setView('answer')}
         onQuit={quitApp}
         onLogout={logOut}
+        navigationGuard={navigationGuard}
         onOpenIntelligence={() => {
           brainReturnViewRef.current = 'settings'
           setView('brain')
@@ -3403,7 +3423,7 @@ export function App(): JSX.Element {
         onOpenMeeting={(file) => void openPastMeeting(file)}
       />
     )
-  }, [settings, refresh, patch, saveKey, recoverEncryptedProfile, clearKey, testKey, settingsInitialTab, settingsNotice, quitApp, logOut, openPastMeeting])
+  }, [settings, refresh, patch, saveKey, recoverEncryptedProfile, clearKey, testKey, settingsInitialTab, settingsNotice, quitApp, logOut, navigationGuard, openPastMeeting])
   const historyBody = useMemo(
     () => (
       <RecallView
@@ -3412,7 +3432,7 @@ export function App(): JSX.Element {
           // couldn't launch the OS file browser) instead of throwing — surface it instead of discarding
           // it, which the old fire-and-forget `void` call used to do silently.
           const err = await window.toto.openMeetingsFolder()
-          if (err) window.alert(err)
+          if (err) setOpenMeetingError(err)
         }}
         onBack={() => setView('answer')}
         onConnectCalendar={() => {
@@ -3533,13 +3553,14 @@ export function App(): JSX.Element {
           // couldn't launch the OS file browser) instead of throwing — surface it instead of discarding
           // it, which the old fire-and-forget `void` call used to do silently.
           const err = await window.toto.openMeetingsFolder()
-          if (err) window.alert(err)
+          if (err) setOpenMeetingError(err)
         }}
         onSave={pm ? undefined : manualSave}
         onDiscard={pm ? undefined : discardMeeting}
         onResume={pm ? resumePastMeeting : undefined}
         onOpenPastMeeting={openPastMeeting}
         isPastMeeting={!!pm}
+        navigationGuard={navigationGuard}
         onDirtyChange={onReviewDirtyChange}
         // Live-session-only: the recap was intentionally skipped (no AI provider configured) rather than
         // fired and left to fail with a red error — see maybeFireRecap. Past meetings already have their
@@ -3580,7 +3601,7 @@ export function App(): JSX.Element {
         }
       />
     )
-  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, saveGaveUp, settings?.showFullTranscriptInReview, settings?.mcpConnections, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryLiveRecap, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings, updateRecapManually])
+  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, saveGaveUp, settings?.showFullTranscriptInReview, settings?.mcpConnections, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryLiveRecap, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings, updateRecapManually, navigationGuard])
   const answerBody = useMemo(() => {
     if (!(capturing || captureError || ask.answer)) return null
     // While a new screen capture is in flight (capturing), force the streaming/empty display even when
@@ -3888,6 +3909,10 @@ export function App(): JSX.Element {
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
+      <ConfirmSheet
+        request={navigationGuardRequest}
+        onChoose={(choice, id) => navigationGuard.choose(choice, id)}
+      />
       {(() => {
         const toasts = (
           <>

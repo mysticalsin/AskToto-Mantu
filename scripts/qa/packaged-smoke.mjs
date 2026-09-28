@@ -58,6 +58,27 @@ export const RV_SCENARIOS = Object.freeze([
   { id: 'RV-3-windows-shortcut-relaunch', platform: 'win32', reason: 'second-instance', automation: 'windows-shortcut' }
 ])
 
+export const NAVIGATION_GUARD_SCENARIOS = Object.freeze([
+  { id: 'HIST-clean-bar-open', state: 'clean', entry: 'bar-history' },
+  { id: 'HIST-clean-settings-open', state: 'clean', entry: 'settings-open-full-history' },
+  { id: 'HIST-clean-row-doubleclick', state: 'clean', entry: 'history-row-doubleclick' },
+  { id: 'HIST-clean-bottom-open', state: 'clean', entry: 'history-open-button' },
+  { id: 'HIST-clean-back', state: 'clean', entry: 'review-back-to-history' },
+  { id: 'HIST-clean-recent-meeting', state: 'clean', entry: 'review-recent-meeting' },
+  { id: 'HIST-dirty-cancel-bar', state: 'dirty', entry: 'bar-history-cancel' },
+  { id: 'HIST-dirty-discard-bar', state: 'dirty', entry: 'bar-history-discard' },
+  { id: 'HIST-dirty-save-bar', state: 'dirty', entry: 'bar-history-save' },
+  { id: 'HIST-dirty-cancel-settings-open', state: 'dirty', entry: 'settings-open-full-history-cancel' },
+  { id: 'HIST-dirty-discard-settings-open', state: 'dirty', entry: 'settings-open-full-history-discard' },
+  { id: 'HIST-dirty-save-settings-open', state: 'dirty', entry: 'settings-open-full-history-save' },
+  { id: 'HIST-dirty-cancel-back', state: 'dirty', entry: 'review-back-to-history-cancel' },
+  { id: 'HIST-dirty-discard-back', state: 'dirty', entry: 'review-back-to-history-discard' },
+  { id: 'HIST-dirty-save-back', state: 'dirty', entry: 'review-back-to-history-save' },
+  { id: 'HIST-dirty-cancel-recent', state: 'dirty', entry: 'review-recent-meeting-cancel' },
+  { id: 'HIST-dirty-discard-recent', state: 'dirty', entry: 'review-recent-meeting-discard' },
+  { id: 'HIST-dirty-save-recent', state: 'dirty', entry: 'review-recent-meeting-save' }
+])
+
 /** JSON-lines audit transport ('{text}', logger.ts): blank and malformed lines are skipped, never guessed. */
 export function parseAuditLog(text) {
   const records = []
@@ -130,6 +151,17 @@ export function smokeVerdict(observation) {
       Array.isArray(observation.rv) &&
       observation.rv.some((row) => row.status !== 'PASS' && row.status !== 'FAIL')
   )
+  fail(
+    'navigation_guard_failed',
+    Array.isArray(observation.navigationGuard) && observation.navigationGuard.some((row) => row.status === 'FAIL')
+  )
+  fail(
+    'navigation_guard_incomplete',
+    observation.readyMs !== null &&
+      !observation.exitedEarly &&
+      Array.isArray(observation.navigationGuard) &&
+      observation.navigationGuard.some((row) => row.status !== 'PASS' && row.status !== 'FAIL')
+  )
   fail('smoke_incomplete', failures.length === 0 && observation.survivors === null)
 
   return { result: failures.length === 0 ? 'pass' : 'fail', failures }
@@ -160,6 +192,7 @@ export function smokeReport(observation) {
       marker: observation.marker
     },
     rv: observation.rv,
+    navigationGuard: observation.navigationGuard,
     processes: {
       atQuit: observation.ownedAtQuit === null ? null : roleCounts(observation.ownedAtQuit),
       survivors: observation.survivors === null ? null : roleCounts(observation.survivors)
@@ -180,9 +213,306 @@ export function initialRvRows(platform) {
     }))
 }
 
+export function initialNavigationGuardRows() {
+  return NAVIGATION_GUARD_SCENARIOS.map((scenario) => ({
+    id: scenario.id,
+    state: scenario.state,
+    entry: scenario.entry,
+    status: 'PENDING',
+    evidence: null,
+    unblock: null
+  }))
+}
+
 function completeRvRow(rows, id, patch) {
   const row = rows.find((entry) => entry.id === id)
   if (row) Object.assign(row, patch)
+}
+
+function completeNavigationRow(rows, id, patch) {
+  const row = rows.find((entry) => entry.id === id)
+  if (row) Object.assign(row, patch)
+}
+
+async function withOverlayPage(port, fn) {
+  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 30_000 })
+  const pages = browser.contexts().flatMap((context) => context.pages())
+  const overlay = pages.find((page) => isOverlayUrl(page.url()))
+  if (!overlay) throw new Error('overlay page not found')
+  return fn(overlay)
+}
+
+async function waitForText(page, text, timeout = 15_000) {
+  await page.getByText(text, { exact: true }).first().waitFor({ timeout })
+}
+
+async function seedNavigationMeetings(page) {
+  return page.evaluate(async () => {
+    const startedAt = Date.now()
+    const first = await window.toto.saveTranscript({
+      title: 'Smoke navigation alpha',
+      mode: 'meeting',
+      startedAt,
+      durationMs: 60_000,
+      lines: [{ speaker: 'them', text: 'Synthetic alpha navigation meeting.', t: 1 }],
+      recap: '## Overview\nSmoke navigation alpha recap.',
+      recapStatus: 'complete'
+    })
+    const second = await window.toto.saveTranscript({
+      title: 'Smoke navigation beta',
+      mode: 'meeting',
+      startedAt: startedAt + 1,
+      durationMs: 60_000,
+      lines: [{ speaker: 'them', text: 'Synthetic beta navigation meeting.', t: 1 }],
+      recap: '## Overview\nSmoke navigation beta recap.',
+      recapStatus: 'complete'
+    })
+    return {
+      first: first.path.split(/[\\/]/).pop(),
+      second: second.path.split(/[\\/]/).pop()
+    }
+  })
+}
+
+async function clickHistory(page) {
+  await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
+  await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+}
+
+async function clickHistoryButton(page) {
+  await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
+}
+
+async function clickSettingsButton(page) {
+  await page.getByRole('button', { name: 'Settings' }).first().click({ timeout: 15_000 })
+}
+
+async function clickOpenFullHistoryFromSettings(page) {
+  await page.getByRole('tab', { name: 'Brain' }).first().click({ timeout: 15_000 })
+  await page.getByRole('button', { name: 'Open full history' }).first().click({ timeout: 15_000 })
+}
+
+async function openHistoryFromSettings(page) {
+  await clickSettingsButton(page)
+  await clickOpenFullHistoryFromSettings(page)
+  await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+}
+
+async function openMeetingFromHistoryRow(page, title) {
+  await page.getByRole('button', { name: new RegExp(title) }).first().dblclick({ timeout: 15_000 })
+  await waitForText(page, 'Summary')
+}
+
+async function openMeetingFromHistoryButton(page, title) {
+  await page.getByRole('button', { name: new RegExp(title) }).first().click({ timeout: 15_000 })
+  await page.getByRole('button', { name: /^Open/ }).first().click({ timeout: 15_000 })
+  await waitForText(page, 'Summary')
+}
+
+async function makeRecapDirty(page, suffix) {
+  await page.getByRole('button', { name: /Edit/ }).first().click({ timeout: 15_000 })
+  const editor = page.getByLabel('Edit meeting notes')
+  await editor.waitFor({ timeout: 15_000 })
+  await editor.fill(`## Overview\n${suffix}`)
+}
+
+async function expectGuard(page) {
+  await page.getByRole('dialog', { name: 'Save recap changes?' }).waitFor({ timeout: 15_000 })
+}
+
+async function returnToHistoryFromReview(page) {
+  await page.getByRole('button', { name: /Back to history/ }).first().click({ timeout: 15_000 })
+  await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+}
+
+async function cancelRecapEdit(page) {
+  await page.getByRole('button', { name: 'Cancel' }).first().click({ timeout: 15_000 })
+  await page.getByRole('button', { name: /Edit/ }).first().waitFor({ timeout: 15_000 })
+}
+
+async function openDirtyReview(page, title, suffix) {
+  await openMeetingFromHistoryRow(page, title)
+  await makeRecapDirty(page, suffix)
+}
+
+async function assertDirtyDraft(page, suffix) {
+  await page.getByLabel('Edit meeting notes').waitFor({ timeout: 15_000 })
+  const value = await page.getByLabel('Edit meeting notes').inputValue()
+  if (!value.includes(suffix)) throw new Error('cancel did not preserve dirty recap draft')
+}
+
+async function expectSavedRecap(page, file, suffix) {
+  const readBack = await page.evaluate(async (savedFile) => window.toto.recallRead(savedFile), file)
+  if (!readBack.ok || !readBack.recap.includes(suffix)) {
+    throw new Error('save decision did not persist the dirty recap before navigation')
+  }
+}
+
+async function chooseDirtyHistoryNavigation(page, choice, trigger) {
+  await trigger()
+  await expectGuard(page)
+  await page.getByRole('button', { name: choice }).first().click({ timeout: 15_000 })
+}
+
+async function runNavigationStep(rows, id, fn) {
+  try {
+    const evidence = await fn()
+    completeNavigationRow(rows, id, { status: 'PASS', evidence: evidence ?? { observed: true }, unblock: null })
+  } catch (err) {
+    completeNavigationRow(rows, id, {
+      status: 'FAIL',
+      evidence: null,
+      unblock: `Inspect the packaged-smoke artifact; navigation guard scenario failed: ${err?.message ?? String(err)}`
+    })
+  }
+}
+
+async function runPackagedNavigationGuardRows({ port, rows }) {
+  await withOverlayPage(port, async (page) => {
+    const seeded = await seedNavigationMeetings(page)
+
+    await runNavigationStep(rows, 'HIST-clean-bar-open', async () => {
+      await clickHistory(page)
+      return { seededMeetings: 2, guardVisible: false }
+    })
+
+    await runNavigationStep(rows, 'HIST-clean-settings-open', async () => {
+      await openHistoryFromSettings(page)
+      return { returnedToHistory: true, guardVisible: false }
+    })
+
+    await runNavigationStep(rows, 'HIST-clean-row-doubleclick', async () => {
+      await openMeetingFromHistoryRow(page, 'Smoke navigation alpha')
+      return { openedReview: true, guardVisible: false }
+    })
+
+    await runNavigationStep(rows, 'HIST-clean-bottom-open', async () => {
+      await returnToHistoryFromReview(page)
+      await openMeetingFromHistoryButton(page, 'Smoke navigation alpha')
+      return { openedReview: true, guardVisible: false }
+    })
+
+    await runNavigationStep(rows, 'HIST-clean-back', async () => {
+      await returnToHistoryFromReview(page)
+      return { returnedToHistory: true, guardVisible: false }
+    })
+
+    await runNavigationStep(rows, 'HIST-clean-recent-meeting', async () => {
+      await openMeetingFromHistoryRow(page, 'Smoke navigation alpha')
+      await page.getByRole('button', { name: /Smoke navigation beta/ }).first().click({ timeout: 15_000 })
+      await waitForText(page, 'Smoke navigation beta')
+      await returnToHistoryFromReview(page)
+      return { openedRecentMeeting: true, guardVisible: false }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-cancel-bar', async () => {
+      const suffix = 'Cancel keeps this smoke edit from Bar History.'
+      await openDirtyReview(page, 'Smoke navigation alpha', suffix)
+      await chooseDirtyHistoryNavigation(page, 'Cancel', () => clickHistoryButton(page))
+      await assertDirtyDraft(page, suffix)
+      await cancelRecapEdit(page)
+      await returnToHistoryFromReview(page)
+      return { decision: 'cancel', entry: 'bar-history', draftPreserved: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-discard-bar', async () => {
+      await openDirtyReview(page, 'Smoke navigation alpha', 'Discard by Bar History.')
+      await chooseDirtyHistoryNavigation(page, 'Discard', () => clickHistoryButton(page))
+      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      return { decision: 'discard', entry: 'bar-history', returnedToHistory: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-save-bar', async () => {
+      const suffix = 'Saved by Bar History navigation guard.'
+      await openDirtyReview(page, 'Smoke navigation alpha', suffix)
+      await chooseDirtyHistoryNavigation(page, 'Save', () => clickHistoryButton(page))
+      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await expectSavedRecap(page, seeded.first, suffix)
+      return { decision: 'save', entry: 'bar-history', persistedBeforeNavigation: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-cancel-settings-open', async () => {
+      const suffix = 'Cancel keeps this smoke edit from Settings Open full history.'
+      await openDirtyReview(page, 'Smoke navigation alpha', suffix)
+      await chooseDirtyHistoryNavigation(page, 'Cancel', () => clickSettingsButton(page))
+      await assertDirtyDraft(page, suffix)
+      await cancelRecapEdit(page)
+      await returnToHistoryFromReview(page)
+      return { decision: 'cancel', entry: 'settings-open-full-history', draftPreserved: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-discard-settings-open', async () => {
+      await openDirtyReview(page, 'Smoke navigation alpha', 'Discard by Settings Open full history.')
+      await chooseDirtyHistoryNavigation(page, 'Discard', () => clickSettingsButton(page))
+      await clickOpenFullHistoryFromSettings(page)
+      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      return { decision: 'discard', entry: 'settings-open-full-history', returnedToHistory: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-save-settings-open', async () => {
+      const suffix = 'Saved by Settings Open full history navigation guard.'
+      await openDirtyReview(page, 'Smoke navigation alpha', suffix)
+      await chooseDirtyHistoryNavigation(page, 'Save', () => clickSettingsButton(page))
+      await clickOpenFullHistoryFromSettings(page)
+      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await expectSavedRecap(page, seeded.first, suffix)
+      return { decision: 'save', entry: 'settings-open-full-history', persistedBeforeNavigation: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-cancel-back', async () => {
+      const suffix = 'Cancel keeps this smoke edit from Back.'
+      await openDirtyReview(page, 'Smoke navigation alpha', suffix)
+      await chooseDirtyHistoryNavigation(page, 'Cancel', () => page.getByRole('button', { name: /Back to history/ }).first().click({ timeout: 15_000 }))
+      await assertDirtyDraft(page, suffix)
+      await cancelRecapEdit(page)
+      await returnToHistoryFromReview(page)
+      return { decision: 'cancel', draftPreserved: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-discard-back', async () => {
+      await openDirtyReview(page, 'Smoke navigation alpha', 'Discard by Back to history.')
+      await chooseDirtyHistoryNavigation(page, 'Discard', () => page.getByRole('button', { name: /Back to history/ }).first().click({ timeout: 15_000 }))
+      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      return { decision: 'discard', returnedToHistory: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-save-back', async () => {
+      const suffix = 'Saved by Back to history navigation guard.'
+      await openDirtyReview(page, 'Smoke navigation alpha', suffix)
+      await chooseDirtyHistoryNavigation(page, 'Save', () => page.getByRole('button', { name: /Back to history/ }).first().click({ timeout: 15_000 }))
+      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await expectSavedRecap(page, seeded.first, suffix)
+      return { decision: 'save', returnedToHistory: true, persistedBeforeNavigation: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-cancel-recent', async () => {
+      const suffix = 'Cancel keeps this smoke edit from Recent meetings.'
+      await openDirtyReview(page, 'Smoke navigation alpha', suffix)
+      await chooseDirtyHistoryNavigation(page, 'Cancel', () => page.getByRole('button', { name: /Smoke navigation beta/ }).first().click({ timeout: 15_000 }))
+      await assertDirtyDraft(page, suffix)
+      await cancelRecapEdit(page)
+      await returnToHistoryFromReview(page)
+      return { decision: 'cancel', entry: 'review-recent-meeting', draftPreserved: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-discard-recent', async () => {
+      await openDirtyReview(page, 'Smoke navigation alpha', 'Discard by Recent meetings.')
+      await chooseDirtyHistoryNavigation(page, 'Discard', () => page.getByRole('button', { name: /Smoke navigation beta/ }).first().click({ timeout: 15_000 }))
+      await waitForText(page, 'Smoke navigation beta')
+      await returnToHistoryFromReview(page)
+      return { decision: 'discard', entry: 'review-recent-meeting', openedTargetMeeting: true }
+    })
+
+    await runNavigationStep(rows, 'HIST-dirty-save-recent', async () => {
+      const suffix = 'Saved by Recent meetings navigation guard.'
+      await openDirtyReview(page, 'Smoke navigation alpha', suffix)
+      await chooseDirtyHistoryNavigation(page, 'Save', () => page.getByRole('button', { name: /Smoke navigation beta/ }).first().click({ timeout: 15_000 }))
+      await waitForText(page, 'Smoke navigation beta')
+      await expectSavedRecap(page, seeded.first, suffix)
+      await returnToHistoryFromReview(page)
+      return { decision: 'save', entry: 'review-recent-meeting', persistedBeforeNavigation: true }
+    })
+  })
 }
 
 function runProcess(file, args, timeoutMs, options = {}) {
@@ -484,6 +814,7 @@ async function main() {
     audit: [],
     marker: null,
     rv: initialRvRows(platform),
+    navigationGuard: initialNavigationGuardRows(),
     survivors: null,
     survivorsGoneMs: null
   }
@@ -541,6 +872,7 @@ async function main() {
     if (observation.launchFailed) return
 
     if (observation.readyMs !== null && !observation.exitedEarly) {
+      await runPackagedNavigationGuardRows({ port, rows: observation.navigationGuard })
       await runPackagedRvRows({ platform, target, executable, auditLogPath, rows: observation.rv, env })
 
       const survivalDeadline = Date.now() + SURVIVAL_MS
