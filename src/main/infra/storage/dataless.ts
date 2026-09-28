@@ -49,7 +49,11 @@ const SF_DATALESS = 0x4000_0000
 const WIN_PLACEHOLDER_ATTRIBUTES = 0x0000_1000 | 0x0004_0000 | 0x0040_0000
 /** The helper starts in about 0.1 s (see mac-helper.ts) and stat(2) on a listed file does not wait on the network. */
 const MAC_PROBE_TIMEOUT_MS = 5_000
-/** powershell.exe cold starts take 0.5-1.9 s on a managed install (see win-security.ts). */
+/** powershell.exe cold starts take 0.5-1.9 s on a managed install (see win-security.ts). A hosted CI
+ *  runner's FIRST powershell.exe spawn in a job is slower than that (antivirus/image warm-up, not disk
+ *  or app state a real user's machine carries) — CI-FLAKE-2026-09-28 measured one such spawn at ~10.5 s,
+ *  just over this budget. That is a property of hosted runners, not of real installs, so it widens the
+ *  ONE test that spawns the real binary (dataless.test.ts) rather than this production constant. */
 const WIN_PROBE_TIMEOUT_MS = 10_000
 /** After a failed probe, misses stay 'unknown' this long without a new attempt, so a broken probe cannot
  *  spawn a process per History open or search keystroke. */
@@ -117,13 +121,23 @@ async function runAttributeProbe(
 }
 
 /** The probe for `platform`. Platforms other than macOS and Windows have no cloud-placeholder mechanism
- *  the app supports, so every file there is local. */
-export function presenceProbeFor(platform: NodeJS.Platform): PresenceProbe {
+ *  the app supports, so every file there is local.
+ *
+ *  `win32Override` exists only for tests: it swaps the real `powershell.exe` spawn spec for a deterministic
+ *  stand-in process, and/or widens the query budget past WIN_PROBE_TIMEOUT_MS for the one test that spawns
+ *  the real binary. Production never passes it, so `presenceProbeFor(process.platform)` is unaffected. */
+export function presenceProbeFor(
+  platform: NodeJS.Platform,
+  win32Override: { spawnSpec?: { command: string; args: string[] }; timeoutMs?: number } = {}
+): PresenceProbe {
   switch (platform) {
     case 'darwin':
       return (paths) => runAttributeProbe(macStatFlagsSpawnSpec(), paths, MAC_PROBE_TIMEOUT_MS, presenceFromStFlags)
-    case 'win32':
-      return (paths) => runAttributeProbe(WIN_ATTRIBUTES_SPAWN_SPEC, paths, WIN_PROBE_TIMEOUT_MS, presenceFromWinAttributes)
+    case 'win32': {
+      const spec = win32Override.spawnSpec ?? WIN_ATTRIBUTES_SPAWN_SPEC
+      const timeoutMs = win32Override.timeoutMs ?? WIN_PROBE_TIMEOUT_MS
+      return (paths) => runAttributeProbe(spec, paths, timeoutMs, presenceFromWinAttributes)
+    }
     default:
       return async (paths) => paths.map((): ContentPresence => 'local')
   }
