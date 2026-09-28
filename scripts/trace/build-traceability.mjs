@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+import { writeM2_0016Artifacts } from './m2-0016-lock.mjs'
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
 const DEFAULT_OUT = 'out/m2-0018-targeted-review'
@@ -554,9 +555,11 @@ const jsonPath = join(ROOT, outDir, 'traceability.json')
 const mdPath = join(ROOT, outDir, 'README.md')
 writeFileSync(jsonPath, JSON.stringify(report, null, 2) + '\n')
 writeFileSync(mdPath, markdown(report) + '\n')
+const m2_0016Artifacts = writeM2_0016Artifacts(ROOT, outDir, report)
 
-if (report.check.problems.length > 0) {
-  for (const problem of report.check.problems) console.error(`[traceability] ${problem}`)
+const problems = [...report.check.problems, ...m2_0016Artifacts.problems]
+if (problems.length > 0) {
+  for (const problem of problems) console.error(`[traceability] ${problem}`)
   process.exit(1)
 }
 
