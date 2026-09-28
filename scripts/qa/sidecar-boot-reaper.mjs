@@ -413,6 +413,13 @@ function initialObservation(kind) {
   }
 }
 
+function initialRealLlamaObservation() {
+  const observation = initialObservation('real-llama-server')
+  observation.timingsMs.llamaStarted = null
+  observation.pids.orphan = null
+  return observation
+}
+
 export function summarizeProof(report) {
   return {
     schema: 1,
@@ -528,7 +535,7 @@ async function runRealLlamaProof({ installRoot, executable }) {
   if (process.platform !== 'darwin') {
     return {
       ...summarizeProof({
-        ...initialObservation('real-llama-server'),
+        ...initialRealLlamaObservation(),
         result: 'BLOCKED_EXTERNAL',
         failures: ['real llama-server proof runs on macOS packaged smoke only'],
         unblock: REAL_LLAMA_UNBLOCK
@@ -540,7 +547,7 @@ async function runRealLlamaProof({ installRoot, executable }) {
   seedLocalLlmSettings(profile)
   let first = null
   let second = null
-  const observation = initialObservation('real-llama-server')
+  const observation = initialRealLlamaObservation()
 
   try {
     const busy = ownedProcesses(listProcesses(process.platform), { mainPid: null, installRoot, platform: process.platform })
@@ -554,13 +561,15 @@ async function runRealLlamaProof({ installRoot, executable }) {
     if (!(await waitForRendererReady(profile))) throw new Failure('first launch did not reach renderer ready')
     observation.timingsMs.firstReady = Date.now() - firstStartedAt
 
-    const sidecarStartedAt = Date.now()
+    const llamaStartedAt = Date.now()
     const llama = await prewarmAndFindLlama(firstPort, first.pid, installRoot)
     if (!llama) throw new Precondition(REAL_LLAMA_UNBLOCK)
     const registered = await waitFor(() => registryHasSpawnedPid(readSidecarRegistry(profile), llama.pid), 5_000, POLL_MS)
     if (!registered) throw new Failure('llama-server spawned identity registry did not land before hard kill')
     observation.pids.sidecar = llama.pid
-    observation.timingsMs.sidecarStarted = Date.now() - sidecarStartedAt
+    observation.pids.orphan = llama.pid
+    observation.timingsMs.sidecarStarted = Date.now() - llamaStartedAt
+    observation.timingsMs.llamaStarted = observation.timingsMs.sidecarStarted
     observation.processes.beforeKill = roleCounts(
       ownedProcesses(listProcesses(process.platform), { mainPid: first.pid, installRoot, platform: process.platform })
     )

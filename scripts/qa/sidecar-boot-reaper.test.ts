@@ -65,4 +65,21 @@ describe('sidecar boot reaper proof helpers', () => {
       externalBlockers: [{ kind: 'real-llama-server', unblock: 'Seed the packaged local model assets.' }]
     })
   })
+
+  it('preserves the real llama-server boot-reaper evidence fields from the original proof', () => {
+    const realLlama = summarizeProof({
+      kind: 'real-llama-server',
+      result: 'pass',
+      failures: [],
+      unblock: null,
+      timingsMs: { firstReady: 1, sidecarStarted: 2, llamaStarted: 2, reaped: 3 },
+      pids: { firstMain: 10, sidecar: 11, orphan: 11, secondMain: 12 },
+      reapedReason: 'registry',
+      events: { 'sidecar.reaped': 1 },
+      processes: { beforeKill: {}, afterReaper: {} }
+    })
+
+    expect(realLlama.timingsMs).toMatchObject({ sidecarStarted: 2, llamaStarted: 2 })
+    expect(realLlama.pids).toMatchObject({ sidecar: 11, orphan: 11 })
+  })
 })
