@@ -11,7 +11,7 @@ vi.mock('../../mac-helper', () => ({ macStatFlagsSpawnSpec: vi.fn(() => null) })
 
 import { createFifo, releaseFifo } from '../../../../scripts/qa/fixtures/fifo.mjs'
 import { createDatalessDetector, type ContentPresence, type DatalessDetector, type FileVersion, type PresenceProbe } from './dataless'
-import { createStorage, threadpoolSize, type StorageFs, type StorageGateway } from './gateway'
+import { createStorage, createStorageGateway, threadpoolSize, type StorageFs, type StorageGateway } from './gateway'
 
 const ROOT = join(sep, 'meetings')
 const ROOT2 = join(sep, 'meetings2')
@@ -532,6 +532,24 @@ describe('failure classification (F1)', () => {
 
     await expect(gateway.read('a.md')).resolves.toEqual({ status: 'unavailable', code: 'UNKNOWN' })
   })
+
+  it('createStorageGateway public methods resolve unavailable when root resolution throws', async () => {
+    const gateway = createStorageGateway({
+      root: () => {
+        throw new Error('settings unavailable')
+      },
+      fs: memoryFs({ 'a.md': 'A' }),
+      detector: fakeDetector(),
+      poolSize: 4
+    })
+
+    await expect(gateway.list('')).resolves.toEqual({ status: 'unavailable', code: 'settings unavailable' })
+    await expect(gateway.read('a.md')).resolves.toEqual({ status: 'unavailable', code: 'settings unavailable' })
+    await expect(gateway.noteWritten('a.md')).resolves.toEqual({ status: 'unavailable', code: 'settings unavailable' })
+    await expect(gateway.classify(['a.md'])).resolves.toEqual(
+      new Map([['a.md', { status: 'unavailable', code: 'settings unavailable' }]])
+    )
+  })
 })
 
 describe('failure memory (F2-F3)', () => {
@@ -600,6 +618,28 @@ describe('failure memory (F2-F3)', () => {
     const third = await gateway.read('a.md') // the gate only failed the first stat: this one succeeds
     expect(third).toMatchObject({ status: 'ok' })
     expect(fs.calls.filter((call) => call === 'stat a.md')).toHaveLength(2)
+  })
+
+  it('a readFile unavailable is not remembered, so transient locks retry on the next read', async () => {
+    const fs = memoryFs({ 'a.md': 'A' })
+    fs.fail('readFile', 'a.md', 'EBUSY')
+    const gateway = gatewayOver(ROOT, { detector: fakeDetector(), fs, poolSize: 4 })
+
+    await expect(gateway.read('a.md')).resolves.toEqual({ status: 'unavailable', code: 'EBUSY' })
+    await expect(gateway.read('a.md')).resolves.toMatchObject({ status: 'ok' })
+
+    expect(fs.calls.filter((call) => call === 'readFile a.md')).toHaveLength(2)
+  })
+
+  it('a realpath unavailable is not remembered, so hydration races retry on the next read', async () => {
+    const fs = memoryFs({ 'a.md': 'A' })
+    fs.fail('realpath', 'a.md', 'EACCES')
+    const gateway = gatewayOver(ROOT, { detector: fakeDetector(), fs, poolSize: 4 })
+
+    await expect(gateway.read('a.md')).resolves.toEqual({ status: 'unavailable', code: 'EACCES' })
+    await expect(gateway.read('a.md')).resolves.toMatchObject({ status: 'ok' })
+
+    expect(fs.calls.filter((call) => call === 'realpath a.md')).toHaveLength(2)
   })
 
   it('a read that times out is answered from memory for 60 s, then tried again', async () => {

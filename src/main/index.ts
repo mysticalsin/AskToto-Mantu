@@ -8092,7 +8092,7 @@ function registerIpc(): void {
     }
     const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
     if (response !== 0) return { ok: false, error: 'cancelled' }
-    const r = deletePreservedBrainIndex(getSettings(), id)
+    const r = await deletePreservedBrainIndex(getSettings(), id)
     auditLog('brain.index.preserved_delete', { ok: r.ok, error: r.error })
     return r.ok ? { ok: true } : { ok: false, error: r.error || 'Delete failed.' }
   })

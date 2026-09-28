@@ -14,7 +14,7 @@ import {
   statSync,
   writeFileSync
 } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rename as renameAsync, rm as rmAsync, writeFile as writeFileAsync } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import type { PreservedBrainIndexCopy, Settings } from '@shared/ipc'
@@ -729,13 +729,13 @@ export async function currentBrainIndexIsReadable(settings: Settings): Promise<b
   return file.status === 'ok' && classifyIndexBytes(file.bytes).kind === 'ready'
 }
 
-function preserveCurrentIndexBeforeRestore(settings: Settings): void {
-  const current = join(brainDir(settings), INDEX_REL)
-  if (!existsSync(current)) return
+async function preserveCurrentIndexBeforeRestore(settings: Settings): Promise<void> {
+  const current = await readBrainFile(settings, INDEX_REL)
+  if (current.status !== 'ok') return
   const preserveDir = preservedIndexDir(settings)
   const preservePath = join(preserveDir, `index.before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
   mkdirSync(preserveDir, { recursive: true })
-  copyFileSync(current, preservePath, constants.COPYFILE_EXCL)
+  writeFileSync(preservePath, current.bytes, { flag: 'wx' })
   fsyncFilePath(preservePath)
   fsyncDirectoryIfSupported(preserveDir)
 }
@@ -745,9 +745,8 @@ export async function restorePreservedBrainIndex(
   id: string,
   opts: { allowReplaceReadable: boolean }
 ): Promise<{ ok: boolean; error?: 'not-found' | 'not-restorable' | 'current-readable' | 'failed' }> {
-  let source: string
   try {
-    source = preservedIndexPath(settings, id)
+    preservedIndexPath(settings, id)
   } catch {
     return { ok: false, error: 'not-found' }
   }
@@ -761,18 +760,18 @@ export async function restorePreservedBrainIndex(
   const target = join(root, INDEX_REL)
   const tmp = join(root, `index.restore-${randomBytes(6).toString('hex')}.tmp`)
   try {
-    mkdirSync(root, { recursive: true })
-    preserveCurrentIndexBeforeRestore(settings)
-    writeFileSync(tmp, sourceBytes, { flag: 'wx' })
+    await mkdir(root, { recursive: true })
+    await preserveCurrentIndexBeforeRestore(settings)
+    await writeFileAsync(tmp, sourceBytes, { flag: 'wx' })
     fsyncFilePath(tmp)
-    renameSync(tmp, target)
+    await renameAsync(tmp, target)
     fsyncDirectoryIfSupported(root)
     _writeGen += 1
     forgetIndex(settings)
     return { ok: true }
   } catch {
     try {
-      rmSync(tmp, { force: true })
+      await rmAsync(tmp, { force: true })
     } catch {
       /* best-effort cleanup */
     }
@@ -780,17 +779,20 @@ export async function restorePreservedBrainIndex(
   }
 }
 
-export function deletePreservedBrainIndex(settings: Settings, id: string): { ok: boolean; error?: 'not-found' | 'failed' } {
+export async function deletePreservedBrainIndex(settings: Settings, id: string): Promise<{ ok: boolean; error?: 'not-found' | 'failed' }> {
   let path: string
   try {
     path = preservedIndexPath(settings, id)
   } catch {
     return { ok: false, error: 'not-found' }
   }
-  if (!existsSync(path)) return { ok: false, error: 'not-found' }
+  const fileClass = (await storageAt(resolveMeetingsFolder(settings)).classify([join('.brain-preserved', id)])).get(join('.brain-preserved', id))
+  if (!fileClass || fileClass.status === 'missing') return { ok: false, error: 'not-found' }
+  if (!('version' in fileClass)) return { ok: false, error: 'failed' }
   try {
-    rmSync(path, { force: true })
-    return existsSync(path) ? { ok: false, error: 'failed' } : { ok: true }
+    await rmAsync(path, { force: true })
+    const after = (await storageAt(resolveMeetingsFolder(settings)).classify([join('.brain-preserved', id)])).get(join('.brain-preserved', id))
+    return !after || after.status === 'missing' ? { ok: true } : { ok: false, error: 'failed' }
   } catch {
     return { ok: false, error: 'failed' }
   }

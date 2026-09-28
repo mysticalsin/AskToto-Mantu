@@ -468,13 +468,13 @@ describe('rebuild preserves unreadable indexes', () => {
     expectBytesUnchanged(primary, currentBefore)
   })
 
-  it('deletes one preserved index copy without touching the others', () => {
+  it('deletes one preserved index copy without touching the others', async () => {
     const preserved = join(meetingsFolder, '.brain-preserved')
     mkdirSync(preserved, { recursive: true })
     writeFileSync(join(preserved, 'index.unreadable-a.json'), foreignFileEnvelope())
     writeFileSync(join(preserved, 'index.unreadable-b.json'), foreignFileEnvelope())
 
-    expect(deletePreservedBrainIndex(settings, 'index.unreadable-a.json')).toEqual({ ok: true })
+    await expect(deletePreservedBrainIndex(settings, 'index.unreadable-a.json')).resolves.toEqual({ ok: true })
 
     expect(existsSync(join(preserved, 'index.unreadable-a.json'))).toBe(false)
     expect(existsSync(join(preserved, 'index.unreadable-b.json'))).toBe(true)
