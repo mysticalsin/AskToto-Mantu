@@ -42,11 +42,15 @@ jobs:
         run: node --test scripts/program/velocity.test.mjs
       - name: Generate forecast artifact
         if: github.event_name == 'workflow_dispatch'
+        env:
+          LEDGER_PATH: ${{ inputs.ledger_path }}
+          RECORDS_PATH: ${{ inputs.records_path }}
+          GATE: ${{ inputs.gate }}
         run: |
           set -euo pipefail
-          args=(--ledger "${{ inputs.ledger_path }}" --out-dir out/program-velocity --gate "${{ inputs.gate }}")
-          if [ -n "${{ inputs.records_path }}" ]; then
-            args+=(--records "${{ inputs.records_path }}")
+          args=(--ledger "$LEDGER_PATH" --out-dir out/program-velocity --gate "$GATE")
+          if [ -n "$RECORDS_PATH" ]; then
+            args+=(--records "$RECORDS_PATH")
           fi
           node scripts/program/velocity.mjs "${args[@]}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

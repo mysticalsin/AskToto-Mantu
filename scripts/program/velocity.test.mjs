@@ -1,12 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { analyzeProgram, DEFAULT_DEGRADE_ORDER, renderForecastMarkdown, runCli } from './velocity.mjs'
 
 const SHA1_A = '1'.repeat(40)
 const SHA1_B = '2'.repeat(40)
+const PROGRAM_VELOCITY_WORKFLOW = new URL('../../.github/workflows/program-velocity.yml', import.meta.url)
 
 function tempDir() {
   return mkdtempSync(join(tmpdir(), 'metis-velocity-'))
@@ -61,6 +62,15 @@ function ticket(id, overrides = {}) {
     slices: [],
     ...overrides
   }
+}
+
+function generateForecastStep(workflow) {
+  const start = workflow.indexOf('      - name: Generate forecast artifact\n')
+  assert.notEqual(start, -1, 'program velocity workflow must keep the forecast artifact step')
+  const rest = workflow.slice(start)
+  const nextStep = rest.indexOf('\n      - uses:')
+  assert.notEqual(nextStep, -1, 'forecast artifact step must be followed by another workflow step')
+  return rest.slice(0, nextStep)
 }
 
 test('analyzeProgram counts estimated hours on the date all required evidence is satisfied', () => {
@@ -218,4 +228,18 @@ test('runCli writes forecast artifacts to the requested output directory', () =>
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('workflow_dispatch inputs are passed through environment variables before shell use', () => {
+  const workflow = readFileSync(PROGRAM_VELOCITY_WORKFLOW, 'utf8').replace(/\r\n/g, '\n')
+  const step = generateForecastStep(workflow)
+
+  assert.match(step, /\n        env:\n/)
+  assert.match(step, /\n          LEDGER_PATH: \$\{\{ inputs\.ledger_path \}\}\n/)
+  assert.match(step, /\n          RECORDS_PATH: \$\{\{ inputs\.records_path \}\}\n/)
+  assert.match(step, /\n          GATE: \$\{\{ inputs\.gate \}\}\n/)
+  assert.doesNotMatch(step.slice(step.indexOf('\n        run: |')), /\$\{\{\s*inputs\./)
+  assert.match(step, /args=\(--ledger "\$LEDGER_PATH" --out-dir out\/program-velocity --gate "\$GATE"\)/)
+  assert.match(step, /if \[ -n "\$RECORDS_PATH" \]; then/)
+  assert.match(step, /args\+=\(--records "\$RECORDS_PATH"\)/)
 })
