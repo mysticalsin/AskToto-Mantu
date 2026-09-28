@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  argsFingerprint,
   combinedReport,
   hasAtLeastEvent,
+  identityArgsMatchFingerprint,
   observedReapedOrphan,
   parseSidecarRegistry,
   registryHasSpawnedPid,
+  splitCommand,
   summarizeProof
 } from './sidecar-boot-reaper.mjs'
 
@@ -64,6 +67,17 @@ describe('sidecar boot reaper proof helpers', () => {
       result: 'pass',
       externalBlockers: [{ kind: 'real-llama-server', unblock: 'Seed the packaged local model assets.' }]
     })
+  })
+
+  it('keeps the stand-in -e argv fingerprintable after unquoted posix ps splitting', () => {
+    const standInArgs = ['-e', 'setInterval(()=>{},1e3)']
+    const spacedArgs = ['-e', 'setInterval(() => {}, 1000)']
+    const expected = argsFingerprint(standInArgs)
+    const psCommand = ['/usr/bin/node', ...standInArgs].join(' ')
+    const spacedCommand = ['/usr/bin/node', ...spacedArgs].join(' ')
+
+    expect(identityArgsMatchFingerprint(splitCommand(psCommand), expected)).toBe(true)
+    expect(identityArgsMatchFingerprint(splitCommand(spacedCommand), argsFingerprint(spacedArgs))).toBe(false)
   })
 
   it('preserves the real llama-server boot-reaper evidence fields from the original proof', () => {

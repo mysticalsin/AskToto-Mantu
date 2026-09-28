@@ -148,11 +148,11 @@ function parsePsRows(output) {
   return rows
 }
 
-function argsFingerprint(args) {
+export function argsFingerprint(args) {
   return createHash('sha256').update(JSON.stringify(args), 'utf8').digest('hex')
 }
 
-function splitCommand(command) {
+export function splitCommand(command) {
   const out = []
   const re = /"([^"]*)"|'([^']*)'|(\S+)/g
   let match
@@ -216,7 +216,7 @@ function processIdentity(pid) {
   return parsePosixIdentity(output)
 }
 
-function identityArgsMatchFingerprint(args, expected) {
+export function identityArgsMatchFingerprint(args, expected) {
   if (argsFingerprint(args) === expected) return true
   if (args.length > 0 && argsFingerprint(args.slice(1)) === expected) return true
   return false
@@ -461,7 +461,8 @@ async function runStandInProof({ installRoot, executable }) {
     observation.timingsMs.firstReady = Date.now() - firstStartedAt
 
     const sidecarStartedAt = Date.now()
-    const standInArgs = ['-e', 'setInterval(() => {}, 1000)']
+    // macOS ps prints argv unquoted; spaces in -e scripts break splitCommand fingerprint matching (Win CommandLineToArgvW keeps one token).
+    const standInArgs = ['-e', 'setInterval(()=>{},1e3)']
     standIn = spawn(process.execPath, standInArgs, { stdio: 'ignore' })
     const identity = await waitFor(() => {
       try {
