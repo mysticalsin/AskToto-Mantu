@@ -1,0 +1,101 @@
+name: Windows QA
+
+# Manual evidence lane for M2-0029. Downloads an existing packaged release installer, installs it on a
+# hosted Windows runner, and runs HK-W: 20 cycles that hard-kill only Metis.exe (Stop-Process -Id) and
+# census every owned descendant 5 s later. It also verifies the GetProcessTimes start-time path used by
+# the sidecar registry. Uploads content-free JSON only. Optionally compiles native/win-supervise (unsigned,
+# artifact only). It never builds the app, signs, publishes, tags, or changes release.yml.
+#   gh workflow run windows-qa.yml --ref <branch> -f suite=hk-w
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Suite to run
+        required: true
+        default: hk-w
+        type: choice
+        options:
+          - hk-w
+      # The default predates src/main/infra/process/registry.ts; the lead must pass a tag built after the
+      # M2-0027 registry, otherwise the report marks the registry start-time path BLOCKED_EXTERNAL.
+      release_tag:
+        description: Release tag whose Windows installer is measured (must contain the process registry)
+        required: true
+        default: v1.9.6
+        type: string
+      cycles:
+        description: Hard-kill cycles
+        required: true
+        default: '20'
+        type: string
+      build_supervise:
+        description: Also compile native/win-supervise (only when HK-W reports descendants-survive)
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-qa-${{ github.ref }}-${{ inputs.suite }}
+  cancel-in-progress: false
+
+jobs:
+  hk-w:
+    name: HK-W (Windows)
+    if: inputs.suite == 'hk-w'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Download and install the packaged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path release-artifact, hk-w-output | Out-Null
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'Metis-Setup-*.exe' --dir release-artifact --clobber
+          $setup = Get-Item release-artifact/Metis-Setup-*.exe
+          (Get-FileHash $setup.FullName -Algorithm SHA256).Hash | Set-Content hk-w-output/SHA256SUMS.txt
+          $target = Join-Path $env:RUNNER_TEMP 'hk-w-install'
+          if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+          New-Item -ItemType Directory -Path $target | Out-Null
+          $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+      - name: HK-W hard-kill cycles
+        run: >
+          ./scripts/qa/hk-w.ps1
+          -App "$env:RUNNER_TEMP\hk-w-install\Metis.exe"
+          -OutDir hk-w-output
+          -Cycles ${{ inputs.cycles }}
+          -PrewarmScript scripts/qa/hk-w-prewarm.mjs
+      - name: Summarize the verdict
+        run: |
+          node scripts/qa/hk-w-report.mjs hk-w-output/hk-w.json hk-w-output/hk-w-summary.json
+          Get-Content hk-w-output/hk-w-summary.json | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Compile supervise.exe (unsigned, artifact only)
+        if: inputs.build_supervise
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" && cl /nologo /W4 /O2 /Fe:hk-w-output\supervise.exe native\win-supervise\supervise.c"
+          if ($LASTEXITCODE -ne 0) { throw 'cl failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: hk-w-windows-${{ inputs.release_tag }}
+          path: hk-w-output/
+          if-no-files-found: error
+          retention-days: 30
