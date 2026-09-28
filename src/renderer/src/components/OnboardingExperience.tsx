@@ -2,7 +2,7 @@
  * Métis onboarding as an EXPERIENCE — six-act narrative per docs/ONBOARDING-EXPERIENCE.md, now that
  * Act 6 (Ready, MQA-283) closes it out: hero → staged problem story → reveal → live environment-scan
  * magic moment → personalization/vibe → [license, optional] → appearance → Ready → finish (anatomy extracted from
- * the Vibe Island reference Tony supplied: welcome → demo → config → vibe → license → ready).
+ * the Vibe Island reference Example supplied: welcome → demo → config → vibe → license → ready).
  *
  * Deliberate constraints:
  * - No animation libraries — CSS transitions + staged `animation-delay` only, like the rest of the app.
@@ -174,7 +174,7 @@ const PROBLEM_STORY: string[] = [
 ]
 
 // 'license' is deliberately NOT in GUIDED_SCENES. It only appears after personalize when
-// settings.licenseGateEnabled is true. Dots track the guided acts Tony walks:
+// settings.licenseGateEnabled is true. Dots track the guided acts Example walks:
 // problem → reveal → appearance → setup → personalize. See onboarding-flow.ts.
 type Scene = OnboardingScene
 
@@ -353,7 +353,7 @@ function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
             rel="noopener noreferrer"
             className="hero-byline-link no-drag focus-ring"
           >
-            Tony Walteur
+            Metis Maintainers
           </a>
         </p>
       </div>
@@ -1223,7 +1223,7 @@ export function OnboardingExperience({
   // the former needs a restart, since this process's ScreenCaptureKit handle never saw the earlier one.
   const screenGrantedRef = useRef<boolean | null>(null)
   const [restarting, setRestarting] = useState(false)
-  // P0: any post-hero scene must keep portal mask open (Tony: after Next → black).
+  // P0: any post-hero scene must keep portal mask open (Example: after Next → black).
   useEffect(() => {
     if (scene === 'hero') return
     document.getElementById('act1-boot-chrome')?.remove()
@@ -1498,7 +1498,7 @@ export function OnboardingExperience({
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
-            // P0: paint problem FIRST — never wait on music/video/portal (Tony: after Next → black/Loading).
+            // P0: paint problem FIRST — never wait on music/video/portal (Example: after Next → black/Loading).
             setScene('problem')
             try {
               music.start()

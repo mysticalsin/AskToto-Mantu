@@ -108,7 +108,7 @@ describe('GET /v1/admin/sessions/:id.json', () => {
       { country: 'CA', city: 'Longueuil' },
       { os: 'darwin', app_version: '1.8.5' }
     )
-    await store.insertEvent({ id: 'ev-1', ts: NOW - 30_000, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Customer Alpha private ask' })
+    await store.insertEvent({ id: 'ev-1', ts: NOW - 30_000, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Example Customer private ask' })
     await store.insertAsk(ask({ id: 'a1', device_id: 'dev-a', preview: 'Patient diagnosis private prompt' }))
 
     const res = await handleRequest(
@@ -122,7 +122,7 @@ describe('GET /v1/admin/sessions/:id.json', () => {
     expect(text).not.toContain('super-secret-ciphertext')
     expect(text).not.toContain('iv-value')
     expect(text.toLowerCase()).not.toContain('prompt_cipher')
-    expect(text).not.toContain('Customer Alpha')
+    expect(text).not.toContain('Example Customer')
     expect(text).not.toContain('Patient diagnosis')
 
     const body = JSON.parse(text) as {

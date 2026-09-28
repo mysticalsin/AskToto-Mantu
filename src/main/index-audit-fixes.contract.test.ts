@@ -82,14 +82,14 @@ describe('MQA-038 — a renderer crash re-syncs the renderer-owned meeting state
 
   it('resets the fresh-question boundary so a later plain ask cannot inherit the dead meeting', () => {
     const body = handler()
-    expect(body).toMatch(/listeningActive = false/)
+    expect(body).toMatch(/setListeningActive\(false\)/)
     expect(body).toMatch(/lastPlainAskAt = 0/)
     expect(body).toMatch(/resetDustConversation\(\)/)
   })
 
   it('clears the meeting-in-progress side effects the dead renderer can no longer turn off', () => {
     const body = handler()
-    expect(body).toMatch(/audioArmed = false/)
+    expect(body).toMatch(/setAudioArmed\(false\)/)
     expect(body).toMatch(/setTrayRecording\(false\)/)
     expect(body).toMatch(/setRecordingPowerSaveBlock\(false\)/)
   })
