@@ -106,7 +106,7 @@ describe('brain ingest — local last-resort index fallback', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['cloud-healthy.md']?.ok).toBe(true)
@@ -125,7 +125,7 @@ describe('brain ingest — local last-resort index fallback', () => {
     writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: ['local'] }), 'utf8')
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['no-cloud.md']?.ok).toBe(true)
@@ -142,7 +142,7 @@ describe('brain ingest — local last-resort index fallback', () => {
       .mockImplementationOnce(respondError('503 Service Unavailable'))
       .mockImplementationOnce(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['cloud-down.md']?.ok).toBe(true)
@@ -163,7 +163,7 @@ describe('brain ingest — local last-resort index fallback', () => {
     // job when nothing is eligible — it does not queue-then-fail. The file is left pending (no
     // index.json record at all) for the next reconcile once a provider becomes available, exactly the
     // legacy "single Kimi key down" outcome this change must not alter when fallback is off.
-    expect(startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
+    expect(await startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['fallback-off.md']).toBeUndefined()
@@ -178,7 +178,7 @@ describe('brain ingest — local last-resort index fallback', () => {
     })
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     // ...yet local is the ONLY candidate, exactly as before this change — useFor.summary short-circuits
@@ -199,7 +199,7 @@ describe('brain ingest — local last-resort index fallback', () => {
 
     // Same graceful-defer contract as the fallback-off test above — nothing queued, nothing
     // attempted, the file waits for a real provider instead of failing loudly.
-    expect(startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
+    expect(await startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['local-disabled.md']).toBeUndefined()
@@ -216,7 +216,7 @@ describe('brain ingest — local last-resort index fallback', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(respondError('503 Service Unavailable'))
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     const record = readIndex(getSettings()).ingested['org-blocked.md']
@@ -242,7 +242,7 @@ describe('brain ingest — local last-resort index fallback', () => {
       .mockImplementationOnce(respondError('network error'))
       .mockImplementationOnce(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['many-clouds.md']?.ok).toBe(true)
@@ -291,7 +291,7 @@ describe('brain ingest — local last-resort index fallback', () => {
     // stop the walk after one hop, which is not what this test is proving).
     createStreamMock.mockImplementation(respondError('503 Service Unavailable'))
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     const record = readIndex(getSettings()).ingested['everything-down.md']

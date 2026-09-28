@@ -265,7 +265,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
       ingested: {}
     } as never)
     unreadablePaths.add(file)
-    expect(startBackfill(undefined, { force: true }).queued).toBe(5)
+    expect((await startBackfill(undefined, { force: true })).queued).toBe(5)
     await waitForIdle()
     const failed = readIndex(getSettings()).ingested['unreadable.md']
     expect(failed?.attempts).toBe(0)
@@ -274,12 +274,12 @@ describe('M2-0033 retry policy across backfill callers', () => {
     expect(failed?.unreadable?.changedAtMs).toBe(Math.round(statSync(file).ctimeMs))
 
     createStreamMock.mockClear()
-    expect(startBackfill().queued).toBe(0)
+    expect((await startBackfill()).queued).toBe(0)
     expect(createStreamMock).not.toHaveBeenCalled()
 
     unreadablePaths.delete(file)
     writeFileSync(file, '---\ndate: 2026-01-04\n---\nunreadable transcript body hydrated', 'utf8')
-    expect(startBackfill().queued).toBe(1)
+    expect((await startBackfill()).queued).toBe(1)
     await waitForIdle()
     expect(readIndex(getSettings()).ingested['unreadable.md']?.ok).toBe(true)
   })

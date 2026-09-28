@@ -87,31 +87,31 @@ describe('license-funded meeting extraction', () => {
     expect(getApiKey('cloudflare')).toBe('')
   })
 
-  it('does not use an advertised provider when license transport is unavailable', () => {
+  it('does not use an advertised provider when license transport is unavailable', async () => {
     hosted.transport.mockReturnValue(null)
     meeting()
-    expect(startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
+    expect(await startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
     expect(createStream).not.toHaveBeenCalled()
   })
 
-  it('does not let a funded provider bypass the organization allowlist', () => {
+  it('does not let a funded provider bypass the organization allowlist', async () => {
     writeFileSync(join(profile, 'managed-config.json'), JSON.stringify({ allowedProviders: ['local'] }))
     meeting()
-    expect(startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
+    expect(await startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
     expect(createStream).not.toHaveBeenCalled()
   })
 
-  it('keeps explicit on-device summaries private when the local runtime is unavailable', () => {
+  it('keeps explicit on-device summaries private when the local runtime is unavailable', async () => {
     setSettings({ localLlm: { ...getSettings().localLlm, enabled: true, useFor: { suggest: false, summary: true, vision: false } } })
     meeting()
-    expect(startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
+    expect(await startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
     expect(createStream).not.toHaveBeenCalled()
   })
 
-  it('explains the local-only policy when an Intelligence click cannot use the available license', () => {
+  it('explains the local-only policy when an Intelligence click cannot use the available license', async () => {
     setSettings({ routingMode: 'local' })
     meeting()
-    const result = startIntelligencePass()
+    const result = await startIntelligencePass()
     expect(result.queued).toBe(0)
     expect(result.error).toMatch(/local.only.*not ready/i)
     expect(createStream).not.toHaveBeenCalled()

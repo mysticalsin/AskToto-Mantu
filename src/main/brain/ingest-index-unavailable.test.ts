@@ -142,7 +142,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     const beforeIndex = sha256(readFileSync(primary))
     const beforeSentinel = readFileSync(sentinelPath)
 
-    expect(startBackfill()).toEqual({ queued: 0 })
+    expect(await startBackfill()).toEqual({ queued: 0 })
     await waitForIdle()
 
     expect(createStreamMock).not.toHaveBeenCalled()

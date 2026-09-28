@@ -86,7 +86,7 @@ describe('backfill progress bookkeeping across runs', () => {
     writeFileSync(join(meetingsFolder, 'run1-a.md'), '---\ndate: 2026-01-01\n---\nhello', 'utf8')
     writeFileSync(join(meetingsFolder, 'run1-b.md'), '---\ndate: 2026-01-02\n---\nworld', 'utf8')
 
-    const first = startBackfill()
+    const first = await startBackfill()
     expect(first.queued).toBe(2)
     await waitForIdle()
     expect(brainBackfillProgress()).toEqual({ total: 2, done: 2, running: false })
@@ -103,7 +103,7 @@ describe('backfill progress bookkeeping across runs', () => {
     // A second, later backfill run over new transcripts must start its OWN fresh total/done, not
     // continue accumulating onto run #1's already-finished 2/2.
     writeFileSync(join(meetingsFolder, 'run2-a.md'), '---\ndate: 2026-02-01\n---\nfoo', 'utf8')
-    const second = startBackfill()
+    const second = await startBackfill()
     expect(second.queued).toBe(1)
     expect(brainBackfillProgress().total).toBe(1) // not 3 — reset, not accumulated
     await waitForIdle()
@@ -128,7 +128,7 @@ describe('backfill progress bookkeeping across runs', () => {
       return { abort: () => {} }
     })
 
-    const first = startBackfill()
+    const first = await startBackfill()
     expect(first.queued).toBe(1)
     // Give pump() a tick to splice the job out of `queue` and start processing it.
     await vi.waitFor(() => {
@@ -136,7 +136,7 @@ describe('backfill progress bookkeeping across runs', () => {
     }, { timeout: 10_000 })
 
     // Re-click "Index meetings" while the only candidate file is still mid-extraction.
-    const second = startBackfill()
+    const second = await startBackfill()
     expect(second.queued).toBe(0) // the in-flight file must not be queued a second time
 
     releaseFirst()
@@ -172,7 +172,7 @@ describe('backfill progress bookkeeping across runs', () => {
 
     // A live-only job must not be painted as a user-requested batch.
     expect(brainBackfillProgress().running).toBe(false)
-    expect(startBackfill()).toEqual({ queued: 0 })
+    expect(await startBackfill()).toEqual({ queued: 0 })
     expect(brainBackfillProgress()).toEqual({ total: 0, done: 0, running: false })
     // The in-flight save is durably marked so quitting at this exact point resumes it on next launch.
     expect(readIndex(getSettings()).backfillRequested).toBe(true)
@@ -228,7 +228,7 @@ describe('backfill progress bookkeeping across runs', () => {
 
     // This models a crash or OneDrive error after extraction.json was saved but before entity merge +
     // index.json could record success. It must re-merge the saved extraction without calling the model.
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
@@ -253,7 +253,7 @@ describe('backfill progress bookkeeping across runs', () => {
     writeFileSync(join(meetingsFolder, 'queued-from-ui.md'), '---\ndate: 2026-01-04\n---\nprepare the folder before mapping', 'utf8')
 
     // The UI must get a state to animate before the synchronous folder scan starts on the next turn.
-    expect(requestBackfill()).toEqual({ queued: 0, preparing: true })
+    expect(await requestBackfill()).toEqual({ queued: 0, preparing: true })
     expect(brainBackfillProgress()).toMatchObject({ preparing: true, running: true })
 
     await vi.waitFor(() => {
@@ -278,7 +278,7 @@ describe('backfill progress bookkeeping across runs', () => {
         return { abort: () => {} }
       })
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(brainBackfillProgress()).toMatchObject({

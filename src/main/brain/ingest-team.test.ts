@@ -125,7 +125,7 @@ describe('team-transcript ingest', () => {
       ingested: { [key]: { at: Date.now(), ok: true, sourceVersion: 'stale-version' } }
     } as never)
 
-    expect(startBackfill().queued).toBe(0)
+    expect((await startBackfill()).queued).toBe(0)
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).sourceRefreshRequested).toBe(true)
     }, { timeout: 10_000 })

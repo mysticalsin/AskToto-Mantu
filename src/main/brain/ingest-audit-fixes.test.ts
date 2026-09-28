@@ -330,7 +330,7 @@ describe('brain ingest — audited fixes', () => {
     setSettings({ dustWorkspaceId: 'ws-old', dustBaseUrl: 'https://dust.tt' })
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     const opts = createStreamMock.mock.calls[0][0] as StreamOptions
@@ -361,7 +361,7 @@ describe('brain ingest — audited fixes', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect((createStreamMock.mock.calls[0][0] as StreamOptions).refreshDustAuth).toBeUndefined()
@@ -378,7 +378,7 @@ describe('brain ingest — audited fixes', () => {
     setSettings({ cliConnected: { 'codex-cli': true } })
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['codex-served.md']?.ok).toBe(true)
@@ -392,7 +392,7 @@ describe('brain ingest — audited fixes', () => {
     allowProviders(['anthropic'])
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(respondJson())
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     trace.length = 0
@@ -422,7 +422,7 @@ describe('brain ingest — audited fixes', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(holdStream)
 
-    expect(startBackfill()).toEqual({ queued: 4 })
+    expect(await startBackfill()).toEqual({ queued: 4 })
     // The clamp below must not become a global slowdown: cloud extraction still runs three at a time.
     await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 10_000 })
 
@@ -438,7 +438,7 @@ describe('brain ingest — audited fixes', () => {
     allowProviders(['local']) // no cloud candidate: the sidecar is what indexes this profile
     createStreamMock.mockImplementation(holdStream)
 
-    expect(startBackfill()).toEqual({ queued: 4 })
+    expect(await startBackfill()).toEqual({ queued: 4 })
     // Three concurrent summary-mode requests all pin id_slot 1 — they cannot run in parallel, they only
     // take the slot the live meeting needs.
     await settle()
@@ -459,7 +459,7 @@ describe('brain ingest — audited fixes', () => {
     createStreamMock.mockImplementation(holdStream)
     activeStreamsMock.mockReturnValue(1) // a live suggest/summary is attached right now
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await settle()
     expect(held).toHaveLength(0)
     expect(createStreamMock).not.toHaveBeenCalled()
@@ -487,7 +487,7 @@ describe('brain ingest — audited fixes', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(holdStream)
 
-    expect(startBackfill()).toEqual({ queued: 4 })
+    expect(await startBackfill()).toEqual({ queued: 4 })
     await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 10_000 })
 
     // The key is rotated (or an admin pushes an allowlist) while the batch is running.
