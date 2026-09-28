@@ -9,6 +9,7 @@ export interface SupervisedSpawnResult {
 }
 
 const supervisedProcesses = new WeakSet<ChildProcess>()
+const supervisedPlatforms = new WeakMap<ChildProcess, NodeJS.Platform>()
 
 export function sidecarSupervisionEnabled(
   env: NodeJS.ProcessEnv = process.env,
@@ -28,8 +29,13 @@ function findRepoRoot(startDir: string): string {
   return startDir
 }
 
+function joinResourcePath(root: string, ...parts: string[]): string {
+  const separator = root.includes('\\') ? '\\' : '/'
+  return [root.replace(/[\\/]+$/, ''), ...parts].join(separator)
+}
+
 export function macSupervisorHelperPath(resourcesPath = process.resourcesPath): string {
-  const packaged = resourcesPath ? join(resourcesPath, 'mac-helper', 'metis-mac-helper') : null
+  const packaged = resourcesPath ? joinResourcePath(resourcesPath, 'mac-helper', 'metis-mac-helper') : null
   if (packaged && existsSync(packaged)) return packaged
   return join(findRepoRoot(__dirname), 'resources', 'mac-helper', 'metis-mac-helper')
 }
@@ -56,6 +62,7 @@ export function spawnSidecarProcess(
   try {
     const child = spawn(helper, ['supervise', '--parent', String(process.pid), '--', command, ...args], options)
     supervisedProcesses.add(child)
+    supervisedPlatforms.set(child, platform)
     return { child, supervised: true }
   } catch (error) {
     audit('sidecar.unsupervised', {
@@ -69,7 +76,8 @@ export function spawnSidecarProcess(
 
 export function stopSidecarProcess(child: ChildProcess, signal: NodeJS.Signals = 'SIGKILL'): void {
   if (child.killed) return
-  if (supervisedProcesses.has(child) && process.platform !== 'win32' && typeof child.pid === 'number') {
+  const supervisedPlatform = supervisedPlatforms.get(child)
+  if (supervisedProcesses.has(child) && supervisedPlatform !== 'win32' && typeof child.pid === 'number') {
     try {
       process.kill(-child.pid, signal)
       return
