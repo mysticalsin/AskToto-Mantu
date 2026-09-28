@@ -153,4 +153,63 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       rmSync(pathRoot, { recursive: true, force: true })
     }
   })
+
+  it('refuses PASS evidence when required live rows and interrupt checks are not exercised', () => {
+    const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
+    const profile = mkdtempSync(join(tmpdir(), 'm2-0008-profile-'))
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'm2-0008-fixtures-'))
+    const pathRoot = mkdtempSync(join(tmpdir(), 'm2-0008-path-'))
+    const app = join(out, 'Metis')
+    const fakeStat = join(pathRoot, 'stat')
+    const brainIndex = join(fixtureRoot, 'index.json')
+    const meeting = join(fixtureRoot, 'meeting.md')
+    try {
+      writeFileSync(app, '#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nsleep 120\n', 'utf8')
+      chmodSync(app, 0o700)
+      writeFileSync(brainIndex, '{}\n', 'utf8')
+      writeFileSync(meeting, '# synthetic\n', 'utf8')
+      writeFileSync(fakeStat, '#!/usr/bin/env bash\nprintf "1073741824\\n"\n', 'utf8')
+      chmodSync(fakeStat, 0o700)
+
+      const result = spawnSync('bash', [
+        SCRIPT,
+        '--artifact', SHA,
+        '--build-run-id', '123',
+        '--out', out,
+        '--app', app,
+        '--profile-template', profile,
+        '--dataless-brain-index', brainIndex,
+        '--dataless-meeting', meeting,
+        '--implementer-session-id', 'impl-1',
+        '--validator-session-id', 'valid-1',
+        '--qa-account'
+      ], {
+        encoding: 'utf8',
+        input: '\n\n\n\n\n\n\n\n\n',
+        env: {
+          ...process.env,
+          PATH: `${pathRoot}:${process.env.PATH ?? ''}`,
+          M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1',
+          M2_0008_CONTRACT_IDLE_SECONDS: '1',
+          M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1'
+        },
+        timeout: 45_000
+      })
+
+      expect(result.status).toBe(2)
+      expect(result.stderr).toContain('required matrix rows exercised')
+      expect(result.stderr).toContain('required interrupt checks exercised')
+      const manifest = readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8')
+      expect(manifest).toContain('"result": "FAIL"')
+      expect(manifest).toContain('"matrix_result_failures": 6')
+      expect(manifest).toContain('"interrupt_result_failures": 3')
+      expect(manifest).toContain('"first": "M2-0008"')
+      expect(manifest).toContain('"second": "M2-0009"')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+      rmSync(profile, { recursive: true, force: true })
+      rmSync(fixtureRoot, { recursive: true, force: true })
+      rmSync(pathRoot, { recursive: true, force: true })
+    }
+  })
 })

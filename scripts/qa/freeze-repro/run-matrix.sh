@@ -142,6 +142,32 @@ prompt_result() {
   printf '%s' "$value"
 }
 
+is_exercised_result() {
+  case "$1" in
+    observed|pass|fail) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+record_row_result() {
+  local row=$1
+  local result=$2
+  shift 2
+  if [[ "$DRY_RUN" == 0 ]] && ! is_exercised_result "$result"; then
+    MATRIX_RESULT_FAILURES=$((MATRIX_RESULT_FAILURES + 1))
+  fi
+  append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"operator_result\":$(json_string "$result")$*}"
+}
+
+record_interrupt_result() {
+  local interrupt=$1
+  local result=$2
+  if [[ "$DRY_RUN" == 0 ]] && ! is_exercised_result "$result"; then
+    INTERRUPT_RESULT_FAILURES=$((INTERRUPT_RESULT_FAILURES + 1))
+  fi
+  append_jsonl "$OUT/interrupt-results.jsonl" "{\"interrupt\":$(json_string "$interrupt"),\"result\":$(json_string "$result")}"
+}
+
 sample_pid() {
   local pid=$1
   local label=$2
@@ -430,6 +456,14 @@ EOF_BUGS
   "commit": "$commit",
   "command": $(json_string "$command"),
   "exit_code": $exit_code,
+  "sample_failures": $SAMPLE_FAILURES,
+  "matrix_result_failures": $MATRIX_RESULT_FAILURES,
+  "interrupt_result_failures": $INTERRUPT_RESULT_FAILURES,
+  "baseline_chain_position": {
+    "first": "M2-0008",
+    "second": "M2-0009",
+    "requires_paired_m2_0009_baseline": true
+  },
   "required_evidence_level": "LIVE_VERIFIED",
   "outputs": [
     {"kind": "matrix", "path": "matrix.jsonl", "sha256": "$output_hash"},
@@ -454,11 +488,25 @@ live_result() {
     printf 'PASS'
     return
   }
-  if (( SAMPLE_FAILURES > 0 )); then
+  if (( SAMPLE_FAILURES > 0 || MATRIX_RESULT_FAILURES > 0 || INTERRUPT_RESULT_FAILURES > 0 )); then
     printf 'FAIL'
     return
   fi
   printf 'PASS'
+}
+
+live_failure_summary() {
+  local -a reasons=()
+  (( SAMPLE_FAILURES == 0 )) || reasons+=("required main and renderer samples")
+  (( MATRIX_RESULT_FAILURES == 0 )) || reasons+=("required matrix rows exercised")
+  (( INTERRUPT_RESULT_FAILURES == 0 )) || reasons+=("required interrupt checks exercised")
+  local joined=""
+  local reason
+  for reason in "${reasons[@]}"; do
+    [[ -z "$joined" ]] || joined+=", "
+    joined+="$reason"
+  done
+  printf '%s' "$joined"
 }
 
 ARTIFACT=""
@@ -477,6 +525,8 @@ IMPLEMENTER_MODEL="claude-sonnet-4-6"
 VALIDATOR_MODEL="claude-opus-4-6"
 QA_HOST_LABEL="qa-mac-1"
 SAMPLE_FAILURES=0
+MATRIX_RESULT_FAILURES=0
+INTERRUPT_RESULT_FAILURES=0
 LAUNCH_SETTLE_SECONDS="${M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS:-10}"
 
 while [[ $# -gt 0 ]]; do
@@ -570,19 +620,19 @@ record_dataless_fixture_state
 
 row_result=$(prompt_result "row-1-history-open" "Row 1: open History/Recall with FIFO meeting and .brain fixtures in place, wait for freeze/no-freeze evidence, then press return.")
 sample_app "row-1-history-open"
-append_jsonl "$OUT/matrix.jsonl" "{\"row\":\"row-1-history-open\",\"operator_result\":$(json_string "$row_result")}"
+record_row_result "row-1-history-open" "$row_result"
 
 row_result=$(prompt_result "row-2-brain-status-blocked-brain" "Row 2: leave the blocked .brain/index.json fixture in place until the brainStatus poll should fire, then press return.")
 sample_app "row-2-brain-status-blocked-brain"
-append_jsonl "$OUT/matrix.jsonl" "{\"row\":\"row-2-brain-status-blocked-brain\",\"operator_result\":$(json_string "$row_result")}"
+record_row_result "row-2-brain-status-blocked-brain" "$row_result"
 
 row_result=$(prompt_result "row-3-macos-activate" "Row 3: hide/island the app, activate the existing app from macOS, and record whether it reopens.")
 sample_app "row-3-macos-activate"
-append_jsonl "$OUT/matrix.jsonl" "{\"row\":\"row-3-macos-activate\",\"operator_result\":$(json_string "$row_result")}"
+record_row_result "row-3-macos-activate" "$row_result"
 
 row_result=$(prompt_result "row-4-second-instance-reopen" "Row 4: launch a second instance/open request for the installed app and record whether the existing hidden/island layout reopens.")
 sample_app "row-4-second-instance-reopen"
-append_jsonl "$OUT/matrix.jsonl" "{\"row\":\"row-4-second-instance-reopen\",\"operator_result\":$(json_string "$row_result")}"
+record_row_result "row-4-second-instance-reopen" "$row_result"
 
 if [[ "$DRY_RUN" == 0 ]]; then
   stop_app
@@ -595,18 +645,18 @@ if [[ "${M2_0008_CONTRACT_ALLOW_NON_DARWIN:-0}" == 1 && "${M2_0008_CONTRACT_IDLE
 fi
 [[ "$DRY_RUN" == 1 ]] || sleep "$idle_wait_seconds"
 sample_app "row-5-dataless-brain-idle"
-append_jsonl "$OUT/matrix.jsonl" "{\"row\":\"row-5-dataless-brain-idle\",\"operator_result\":$(json_string "$row_result"),\"fixture\":$(json_string "$DATALess_BRAIN_INDEX")}"
+record_row_result "row-5-dataless-brain-idle" "$row_result" ",\"fixture\":$(json_string "$DATALess_BRAIN_INDEX")"
 
 row_result=$(prompt_result "row-9-network-off-flapping" "Row 9: with a real hydrating/dataless fixture, turn network off, then flap it on/off once; record whether the blocked read interrupts or remains pinned.")
 sample_app "row-9-network-off-flapping"
-append_jsonl "$OUT/matrix.jsonl" "{\"row\":\"row-9-network-off-flapping\",\"operator_result\":$(json_string "$row_result"),\"fixture\":$(json_string "$DATALess_MEETING")}"
+record_row_result "row-9-network-off-flapping" "$row_result" ",\"fixture\":$(json_string "$DATALess_MEETING")"
 
 interrupt=$(prompt_result "interrupt-network-off" "Interrupt test: while a kernel-blocked hydrating read is active, turn network off and record whether the read unwinds.")
-append_jsonl "$OUT/interrupt-results.jsonl" "{\"interrupt\":\"network-off\",\"result\":$(json_string "$interrupt")}"
+record_interrupt_result "network-off" "$interrupt"
 interrupt=$(prompt_result "interrupt-file-provider-cancel" "Interrupt test: cancel hydration in the File Provider UI and record whether the read unwinds.")
-append_jsonl "$OUT/interrupt-results.jsonl" "{\"interrupt\":\"file-provider-cancel\",\"result\":$(json_string "$interrupt")}"
+record_interrupt_result "file-provider-cancel" "$interrupt"
 interrupt=$(prompt_result "interrupt-process-signal" "Interrupt test: signal the process only after samples are captured; record whether the blocked read unwinds before process exit.")
-append_jsonl "$OUT/interrupt-results.jsonl" "{\"interrupt\":\"process-signal\",\"result\":$(json_string "$interrupt")}"
+record_interrupt_result "process-signal" "$interrupt"
 
 write_fixture_manifest
 copy_diagnostic_reports "$STAMP"
@@ -629,4 +679,4 @@ cat > "$OUT/README.md" <<EOF_README
 EOF_README
 
 printf '[M2-0008] wrote content-free bundle: %s\n' "$OUT"
-[[ "$RESULT" == PASS ]] || fail "live run did not produce required main and renderer samples"
+[[ "$RESULT" == PASS ]] || fail "live run did not produce PASS evidence: $(live_failure_summary)"
