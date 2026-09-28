@@ -51,8 +51,9 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * `-c undefined` shape, in a third file.
  * 2026-09-27: 24 → 19 after the M2-0036 test surface stopped contributing additional diagnostics.
  * 2026-09-28: 19 → 10 after CI proved the lower test-type count on the M2-0036 branch.
+ * 2026-09-28: 10 → 9 after CI proved one more stale test-type error was gone on M2-0092.
  */
-const BASELINE = 10
+const BASELINE = 9
 
 let output = ''
 try {
