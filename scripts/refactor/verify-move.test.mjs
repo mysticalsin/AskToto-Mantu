@@ -47,7 +47,7 @@ test('accepts moved code when only import paths change', () => {
   assert.deepEqual(verifyPureMove({
     entries,
     readAtRevision: (side, path) => contents.get(`${side}:${path}`)
-  }), { ok: true, modifiedProblems: [], unsupported: [], tokenProblems: [] })
+  }), { ok: true, modifiedProblems: [], orderProblems: [], unsupported: [], tokenProblems: [] })
 })
 
 test('rejects a behavior edit hidden inside a moved file', () => {
@@ -69,6 +69,31 @@ test('rejects a behavior edit hidden inside a moved file', () => {
   assert.deepEqual(result.tokenProblems, [
     { token: '42', removed: 1, added: 0 },
     { token: '43', removed: 0, added: 1 }
+  ])
+})
+
+test('rejects a same-token behavior edit hidden inside a moved file', () => {
+  const entries = [
+    { status: 'D', code: 'D', path: 'src/old/math.ts' },
+    { status: 'A', code: 'A', path: 'src/new/math.ts' }
+  ]
+  const contents = new Map([
+    ['base:src/old/math.ts', 'export function diff(a, b) {\n  return a - b\n}\n'],
+    ['head:src/new/math.ts', 'export function diff(a, b) {\n  return b - a\n}\n']
+  ])
+
+  const result = verifyPureMove({
+    entries,
+    readAtRevision: (side, path) => contents.get(`${side}:${path}`)
+  })
+
+  assert.equal(result.ok, false)
+  assert.deepEqual(result.tokenProblems, [])
+  assert.deepEqual(result.orderProblems, [
+    {
+      removedPath: 'src/old/math.ts',
+      addedPath: 'src/new/math.ts'
+    }
   ])
 })
 

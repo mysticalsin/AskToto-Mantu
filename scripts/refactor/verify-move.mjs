@@ -17,9 +17,17 @@ export function normalizeImportPaths(source) {
 }
 
 export function tokenMultiset(source) {
+  return tokenMultisetFromTokens(normalizedTokenSequence(source))
+}
+
+export function normalizedTokenSequence(source) {
   const normalized = stripComments(normalizeImportPaths(source))
+  return [...normalized.matchAll(tokenPattern())].map(([token]) => token)
+}
+
+function tokenMultisetFromTokens(tokens) {
   const counts = new Map()
-  for (const [token] of normalized.matchAll(tokenPattern())) {
+  for (const token of tokens) {
     counts.set(token, (counts.get(token) ?? 0) + 1)
   }
   return counts
@@ -56,23 +64,40 @@ export function parseNameStatus(output) {
 export function verifyPureMove({ entries, readAtRevision }) {
   const removed = new Map()
   const added = new Map()
+  const removedFiles = []
+  const addedFiles = []
   const modifiedProblems = []
+  const orderProblems = []
   const unsupported = []
 
-  const addTokens = (target, source) => {
-    for (const [token, count] of tokenMultiset(source)) {
+  const addTokens = (target, tokens) => {
+    for (const [token, count] of tokenMultisetFromTokens(tokens)) {
       target.set(token, (target.get(token) ?? 0) + count)
     }
   }
 
+  const recordRemoved = (path, source) => {
+    const tokens = normalizedTokenSequence(source)
+    removedFiles.push({ path, tokens })
+    addTokens(removed, tokens)
+    return tokens
+  }
+
+  const recordAdded = (path, source) => {
+    const tokens = normalizedTokenSequence(source)
+    addedFiles.push({ path, tokens })
+    addTokens(added, tokens)
+    return tokens
+  }
+
   for (const entry of entries) {
     if (entry.code === 'A') {
-      addTokens(added, readAtRevision('head', entry.path))
+      recordAdded(entry.path, readAtRevision('head', entry.path))
     } else if (entry.code === 'D') {
-      addTokens(removed, readAtRevision('base', entry.path))
+      recordRemoved(entry.path, readAtRevision('base', entry.path))
     } else if (entry.code === 'R') {
-      addTokens(removed, readAtRevision('base', entry.oldPath))
-      addTokens(added, readAtRevision('head', entry.newPath))
+      recordRemoved(entry.oldPath, readAtRevision('base', entry.oldPath))
+      recordAdded(entry.newPath, readAtRevision('head', entry.newPath))
     } else if (entry.code === 'M') {
       const before = normalizeImportPaths(readAtRevision('base', entry.path))
       const after = normalizeImportPaths(readAtRevision('head', entry.path))
@@ -82,12 +107,44 @@ export function verifyPureMove({ entries, readAtRevision }) {
     }
   }
 
-  return {
-    ok: modifiedProblems.length === 0 && unsupported.length === 0 && compareMultisets(removed, added).length === 0,
-    modifiedProblems,
-    unsupported,
-    tokenProblems: compareMultisets(removed, added)
+  const usedAddedIndexes = new Set()
+  for (const removedFile of removedFiles) {
+    const exactIndex = addedFiles.findIndex((addedFile, index) => {
+      return !usedAddedIndexes.has(index) && sameTokenSequence(removedFile.tokens, addedFile.tokens)
+    })
+    if (exactIndex >= 0) {
+      usedAddedIndexes.add(exactIndex)
+      continue
+    }
+
+    const reorderedIndex = addedFiles.findIndex((addedFile, index) => {
+      return !usedAddedIndexes.has(index) && sameTokenMultiset(removedFile.tokens, addedFile.tokens)
+    })
+    if (reorderedIndex >= 0) {
+      usedAddedIndexes.add(reorderedIndex)
+      orderProblems.push({
+        removedPath: removedFile.path,
+        addedPath: addedFiles[reorderedIndex].path
+      })
+    }
   }
+
+  const tokenProblems = compareMultisets(removed, added)
+  return {
+    ok: modifiedProblems.length === 0 && orderProblems.length === 0 && unsupported.length === 0 && tokenProblems.length === 0,
+    modifiedProblems,
+    orderProblems,
+    unsupported,
+    tokenProblems
+  }
+}
+
+function sameTokenSequence(left, right) {
+  return left.length === right.length && left.every((token, index) => token === right[index])
+}
+
+function sameTokenMultiset(left, right) {
+  return compareMultisets(tokenMultisetFromTokens(left), tokenMultisetFromTokens(right)).length === 0
 }
 
 function tokenPattern() {
@@ -165,6 +222,7 @@ function runCli() {
     ok: result.ok,
     changed_paths: entries.length,
     modified_non_import_paths: result.modifiedProblems,
+    token_order_differences: result.orderProblems,
     unsupported_statuses: result.unsupported,
     token_differences: result.tokenProblems.slice(0, 100)
   }
@@ -175,6 +233,9 @@ function runCli() {
     console.error(`Pure-move verification failed; report written to ${displayPath}`)
     if (result.modifiedProblems.length > 0) {
       console.error(`Modified files with non-import changes: ${result.modifiedProblems.join(', ')}`)
+    }
+    if (result.orderProblems.length > 0) {
+      console.error(`Moved files with token-order changes: ${result.orderProblems.length}`)
     }
     if (result.unsupported.length > 0) {
       console.error(`Unsupported diff statuses: ${result.unsupported.join(', ')}`)
