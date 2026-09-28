@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { getSettings, setSettings, setApiKey } from '../store'
+import * as brainStore from './store'
 import { canConsolidateToday, recordConsolidationPass, runConsolidationIfDue, resetConsolidationLockForTests } from './consolidate'
 import { brainBackfillProgress, whenIndexWritesSettle } from './ingest'
 
@@ -122,9 +123,13 @@ describe('runConsolidationIfDue', () => {
     setSettings({ brainConsolidation: { enabled: true, maxPassesPerDay: 1, preferLocal: true } })
     const s = getSettings()
     await recordConsolidationPass(s)
+    const readJson = vi.spyOn(brainStore, 'readJson')
+    const loadJson = vi.spyOn(brainStore, 'loadJson')
     writeFileSync(join(meetingsFolder, 'meeting-1.md'), '---\ndate: 2026-01-01\n---\nhello', 'utf8')
     const r = await runConsolidationIfDue(getSettings())
     expect(r).toEqual({ ran: false, queued: 0, reason: 'budget-spent' })
+    expect(loadJson).toHaveBeenCalled()
+    expect(readJson).not.toHaveBeenCalled()
   })
 
   it('queues every not-yet-ingested meeting and records exactly one pass when something was found', async () => {

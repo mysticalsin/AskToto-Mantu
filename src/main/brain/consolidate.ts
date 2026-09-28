@@ -12,7 +12,7 @@
 import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
 import { getSettings } from '../store'
-import { readJson, writeJson } from './store'
+import { loadJson, readJson, writeJson } from './store'
 import { startBackfill, type BackfillStartResult } from './ingest'
 import { auditLog, mainLog } from '../logger'
 
@@ -50,13 +50,24 @@ function readState(s: Settings, now = Date.now()): ConsolidateState {
   return v
 }
 
+async function loadState(s: Settings, now = Date.now()): Promise<ConsolidateState> {
+  const loaded = await loadJson<ConsolidateState>(s, STATE_FILE, (raw) => ConsolidateStateSchema.parse(raw))
+  const v = loaded.status === 'ok' ? loaded.value : null
+  if (!v || v.date !== todayKey(now)) return emptyState(now)
+  return v
+}
+
 /** Whether `settings.brainConsolidation` currently permits another pass: the feature is on, and today's
- *  count (readState, which itself resets on a day change) hasn't reached the daily cap. Pure and
- *  synchronous on purpose — this is the gate `runConsolidationIfDue` checks, and each check must cost
- *  nothing beyond one small JSON read. */
+ *  count (readState, which itself resets on a day change) hasn't reached the daily cap. Kept synchronous
+ *  for existing direct callers; boot's runConsolidationIfDue uses the async gateway-backed loader. */
 export function canConsolidateToday(s: Settings, now = Date.now()): boolean {
   if (!s.brainConsolidation.enabled) return false
   return readState(s, now).passes < s.brainConsolidation.maxPassesPerDay
+}
+
+async function canConsolidateTodayAsync(s: Settings, now = Date.now()): Promise<boolean> {
+  if (!s.brainConsolidation.enabled) return false
+  return (await loadState(s, now)).passes < s.brainConsolidation.maxPassesPerDay
 }
 
 /** Durably record that one consolidation pass just ran, and audit-log it (metrics.ts's
@@ -64,7 +75,7 @@ export function canConsolidateToday(s: Settings, now = Date.now()): boolean {
  *  WHEN to call this — `runConsolidationIfDue` only calls it after `startBackfill` actually found and
  *  queued something, so a launch with nothing pending never spends the daily budget on a no-op. */
 export async function recordConsolidationPass(s: Settings, now = Date.now()): Promise<ConsolidateState> {
-  const prev = readState(s, now)
+  const prev = await loadState(s, now)
   const next: ConsolidateState = { date: todayKey(now), passes: prev.passes + 1, lastRunAt: now }
   await writeJson(s, STATE_FILE, next)
   auditLog('brain.consolidation', { passes: next.passes, maxPerDay: s.brainConsolidation.maxPassesPerDay })
@@ -92,7 +103,7 @@ let consolidating = false
  */
 export async function runConsolidationIfDue(s: Settings = getSettings()): Promise<ConsolidationRunResult> {
   if (!s.brainConsolidation.enabled) return { ran: false, queued: 0, reason: 'disabled' }
-  if (!canConsolidateToday(s)) return { ran: false, queued: 0, reason: 'budget-spent' }
+  if (!(await canConsolidateTodayAsync(s))) return { ran: false, queued: 0, reason: 'budget-spent' }
   if (consolidating) return { ran: false, queued: 0, reason: 'in-flight' }
   consolidating = true
   try {
