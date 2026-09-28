@@ -1262,7 +1262,7 @@ function isUnattendedModelWork(job: Job): boolean {
 /** An explicit request makes already-queued historical work the user's: it stops waiting for the gate. */
 function promoteQueuedBackfill(): void {
   for (const job of queue) if (job.origin === 'backfill') job.trigger = 'user'
-  if (backfillPreparing) pendingBackfillTrigger = 'user'
+  if (pendingBackfillRequest) pendingBackfillRequest.trigger = 'user'
   pump()
 }
 
@@ -1294,8 +1294,8 @@ let backfillDone = 0
 // process turn. This lets the renderer immediately show an honest preparation state instead of appearing
 // frozen until readdirSync returns.
 let backfillPreparing = false
-/** Trigger captured for the deferred scan; explicit retries upgrade it until the scan finishes and resets it. */
-let pendingBackfillTrigger: WorkTrigger = 'automatic'
+/** Trigger captured for one deferred scan; explicit retries upgrade that same scan until it starts. */
+let pendingBackfillRequest: { trigger: WorkTrigger } | null = null
 // A source refresh is a clean rebuild scheduled by the durable index marker. Keep it distinct from a
 // normal backfill so a later periodic scan cannot start a second rebuild while corrections replay.
 let sourceRefreshRunning = false
@@ -2849,20 +2849,21 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
   }
 
   backfillPreparing = true
-  pendingBackfillTrigger = options.trigger ?? 'automatic'
+  const pending = { trigger: options.trigger ?? 'automatic' }
+  pendingBackfillRequest = pending
   const idx = readIndex(s)
   if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
   setImmediate(() => {
     try {
-      startBackfill(undefined, { ...options, trigger: pendingBackfillTrigger })
+      startBackfill(undefined, { ...options, trigger: pending.trigger })
     } catch (error) {
       // Keep the durable request flag intact so a temporary OneDrive/filesystem failure can resume on
       // the next app launch. The source error is still logged rather than silently discarded.
       mainLog.error('[brain] deferred backfill scan failed:', error)
       completionError('scan-failed')
     } finally {
-      backfillPreparing = false
-      pendingBackfillTrigger = 'automatic'
+      if (pendingBackfillRequest === pending) pendingBackfillRequest = null
+      backfillPreparing = pendingBackfillRequest !== null
       if (backfillObserver) backfillObserver.preparing = false
       maybeFinishDrain()
     }

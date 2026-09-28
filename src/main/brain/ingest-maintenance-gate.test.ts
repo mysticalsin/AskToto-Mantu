@@ -167,11 +167,12 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     await waitForIdle()
   })
 
-  it('EX-2: with no settlePriorExit the gate stays closed after 120 s (fail-closed)', () => {
+  it('EX-2: with no settlePriorExit the gate stays closed after 120 s (fail-closed)', async () => {
     uptime = 121_000
     startGate(undefined)
     writeMeeting('unknown.md', 'unknown prior work')
     requestBackfill()
+    await new Promise<void>((resolve) => setImmediate(resolve))
     expect(createStreamMock).not.toHaveBeenCalled()
   })
 
