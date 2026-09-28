@@ -190,8 +190,8 @@ describe('loginCliInvokeLines — managed Node, never PATH-only claude', () => {
   })
 
   it('Mac login quotes a resolved ~/.local/bin/claude', () => {
-    const lines = loginCliInvokeLines('claude-cli', false, null, '/Users/tony/.local/bin/claude')
-    expect(lines).toEqual(['"/Users/tony/.local/bin/claude"'])
+    const lines = loginCliInvokeLines('claude-cli', false, null, '/Users/example-owner/.local/bin/claude')
+    expect(lines).toEqual(['"/Users/example-owner/.local/bin/claude"'])
   })
 
   // M2-0147 — `loginScriptPathSafe` used cmd.exe's rule (quote/CR/LF/%) unconditionally, even on the

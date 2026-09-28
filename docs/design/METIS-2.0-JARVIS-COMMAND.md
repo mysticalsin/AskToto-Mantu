@@ -1,11 +1,11 @@
 # Métis 2.0 Jarvis Command Experience
 
-**Status:** Approved for implementation by Tony, 2026-09-20. One of three overlapping voice/orb/bar
+**Status:** Approved for implementation by the owner, 2026-09-20. One of three overlapping voice/orb/bar
 designs (with `DESIGN.md`+`BAR-PILL.md`+`ORB-SELECTION.md` and `METIS-2.0-CAP2-WAKE-ADAPTERS.md`)
 reconciled by M2-0093 (TASK-030) — see `DESIGN.md` § Bar sphere.
 **Product:** Métis desktop app
 **Platforms:** macOS universal and Windows x64
-**Reference:** `/Users/tony/Downloads/igexport-Ddevf2hNeHc.mp4`
+**Reference:** local exported reference video
 
 ## Product brief
 

@@ -199,7 +199,7 @@ describe('hashed SPA router (#104)', () => {
         setAttribute() {},
         removeAttribute() {},
         getAttribute(name: string) {
-          return name === 'data-q' ? 'heartbeat / tonys-macbook-pro longueuil ca darwin path /' : null
+          return name === 'data-q' ? 'heartbeat / example-macbook-pro longueuil ca darwin path /' : null
         }
       },
       {

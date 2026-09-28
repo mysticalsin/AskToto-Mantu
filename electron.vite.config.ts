@@ -31,6 +31,7 @@ const MAC_UNIVERSAL = process.env.ASKTOTO_MAC_UNIVERSAL === '1'
 // a literal, so every branch guarded by QA_IDENTITY_BUILD (src/main/qa-identity.ts) is dropped from shipping
 // bytes; scripts/check-packaged-runtime.mjs verifies that on every package.
 const QA_IDENTITY = process.env.METIS_QA_IDENTITY === '1'
+const FEEDBACK_EMAIL = process.env.METIS_FEEDBACK_EMAIL?.trim() || ''
 
 export default defineConfig({
   main: {
@@ -86,6 +87,7 @@ export default defineConfig({
   },
   renderer: {
     root: 'src/renderer',
+    define: { __METIS_FEEDBACK_EMAIL__: JSON.stringify(FEEDBACK_EMAIL) },
     assetsInclude: ['**/*.mp4'],
     resolve: {
       alias: {

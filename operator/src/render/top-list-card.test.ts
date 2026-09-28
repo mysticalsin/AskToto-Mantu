@@ -30,14 +30,14 @@ describe('topListCard', () => {
       labelHeader: 'Device',
       valueHeaders: [{ key: 'n', label: 'Seats' }],
       rows: [
-        { label: 'Tonys-MacBook-Pro', barValue: 10, cells: { n: '10' } },
+        { label: 'Example-MacBook-Pro', barValue: 10, cells: { n: '10' } },
         { label: 'Other-PC', barValue: 5, cells: { n: '5' } }
       ],
       footerRight: '<span>extra</span>'
     })
     expect(html).toContain('data-tlc-tab="devices"')
     expect(html).toContain('id="devices-search"')
-    expect(html).toContain('Tonys-MacBook-Pro')
+    expect(html).toContain('Example-MacBook-Pro')
     expect(html).toContain('<rect width="100%" height="100%" data-grow/>')
     expect(html).toContain('<rect width="50%" height="100%" data-grow/>')
     expect(html).toContain('extra')

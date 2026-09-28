@@ -13,12 +13,12 @@
  *
  * Restore (explanation-first, never silent):
  *   node operator/scripts/backup.mjs --restore path/to/backup.sql [--env staging]
- * Without --yes this only PRINTS the exact commands Tony would run and why, and exits 0. Pass
+ * Without --yes this only PRINTS the exact commands an operator would run and why, and exits 0. Pass
  * --yes to actually execute them. This mirrors D1's own posture (there is no single "restore"
  * verb — see the printed Time Travel note) and keeps a destructive action opt-in every time.
  *
  * No Cloudflare auth exists on this Mac (see docs/operator/RUNBOOKS.md); every wrangler
- * invocation here is meant to be run later by Tony after `npx wrangler@4 login`. The pure
+ * invocation here is meant to be run later by the owner after `npx wrangler@4 login`. The pure
  * command-building functions below are unit-tested in backup.contract.test.ts without touching
  * the network or wrangler at all.
  */

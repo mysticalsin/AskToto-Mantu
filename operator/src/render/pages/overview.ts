@@ -57,7 +57,7 @@ function renderInstallWorks(data: DashboardPayload): string {
           </tr>`
         })
         .join('')}</tbody></table>`
-    : '<div class="empty">No seats waiting. A new heartbeat lands pending until Tony approves it.</div>'
+    : '<div class="empty">No seats waiting. A new heartbeat lands pending until the owner approves it.</div>'
   return `<article class="card works" data-install-works>
     <p class="eyebrow">Install → works</p>
     <ol class="works-path">

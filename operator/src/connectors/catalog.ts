@@ -660,7 +660,7 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
       // that does not require it simply ignores the parameter) though not called out specifically on this
       // page for a confidential server-side client; sent as defence in depth. drive.file scopes only the
       // files Métis itself creates/opens, matching least-privilege - broaden to drive.readonly or drive
-      // only if Tony needs the fleet to read files it did not create.
+      // only if the owner needs the fleet to read files it did not create.
       oauth: {
         flow: 'auth-code',
         authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -824,7 +824,7 @@ export function isOAuthConfigured(entry: ConnectorCatalogEntry, env: unknown): b
  *  tenant/client-id/secret drawer per plan 6.10b) and its draft-test route both use this instead of the
  *  static `availability` field alone, so a bound secret genuinely unlocks the same drawer the catalog
  *  response already advertises as `ready` - a static-only check would leave the UI and the route
- *  permanently disagreeing once Tony binds the secrets. */
+ *  permanently disagreeing once the owner binds the secrets. */
 export function isConnectorReady(entry: ConnectorCatalogEntry, env: unknown): boolean {
   return entry.availability !== 'needs-oauth' || isOAuthConfigured(entry, env)
 }

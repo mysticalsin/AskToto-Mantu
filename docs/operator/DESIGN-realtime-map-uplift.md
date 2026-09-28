@@ -1,14 +1,14 @@
-# DESIGN: Operator Realtime map uplift (Tony 2026-09-13)
+# DESIGN: Operator Realtime map uplift (the owner 2026-09-13)
 
 ## Goal
-Keep Tony baseline visual language (dark grid world, Canada flag pill, city labels, LIVE badge, zoom +/-, Seats 30m / Live / LIVE EVENTS). Make it feel enterprise Mission Control, not a regression or a redesign.
+Keep the owner baseline visual language (dark grid world, Canada flag pill, city labels, LIVE badge, zoom +/-, Seats 30m / Live / LIVE EVENTS). Make it feel enterprise Mission Control, not a regression or a redesign.
 
 ## Non-goals
 - No Fable/OpenPanel redesign
 - No fixture/demo seats
 - No merge, no pack, OAuth LAST
 
-## Bugs vs Tony shots
+## Bugs vs the owner shots
 1. Live deploy sometimes paints light jagged/shoey-wrong path (theme default light in shoeyWorld / client reinit).
 2. Country pill can say "12 seats · 2 places" while only one city label renders.
 3. LIVE EVENTS ages show absurd values like "36h" for heartbeats that should be seconds/minutes when live.
@@ -23,11 +23,11 @@ Keep Tony baseline visual language (dark grid world, Canada flag pill, city labe
 6. Zoom/pan: keep attachMapInteraction; ensure controls visible on dark; tooltip follows pin.
 
 ## Acceptance
-- Soft-refresh Access Realtime dark matches Tony baseline PLUS every real place labeled.
+- Soft-refresh Access Realtime dark matches the owner baseline PLUS every real place labeled.
 - LIVE EVENTS ages are s/m not 36h for current heartbeats.
 - Overview live seats and licenses match Realtime.
 - Mac Metis 1.8.9 + Win EXE still heartbeat into map.
 
 ## EXE/DMG (parallel focus)
-Signed Latest still blocked on Apple Developer ID + GH secrets. Win CSC may be ready. Do not fire release.yml until secrets present. Prefer unsigned QA artifacts only if Tony asks.
+Signed Latest still blocked on Apple Developer ID + GH secrets. Win CSC may be ready. Do not fire release.yml until secrets present. Prefer unsigned QA artifacts only if The owner asks.
 

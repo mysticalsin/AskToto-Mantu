@@ -39,8 +39,8 @@ describe('pruneRetention', () => {
     const store = memoryStore()
     await store.insertEvent({ id: 'e-old', ts: NOW - RETENTION_MS.events - 1, kind: 'heartbeat', actor: null, device_id: 'd', country: null, detail: null })
     await store.insertEvent({ id: 'e-new', ts: NOW, kind: 'heartbeat', actor: null, device_id: 'd', country: null, detail: null })
-    await store.audit('a-old', NOW - RETENTION_MS.audit - 1, 'tony', 'reveal', null, 'x')
-    await store.audit('a-new', NOW, 'tony', 'reveal', null, 'x')
+    await store.audit('a-old', NOW - RETENTION_MS.audit - 1, 'owner.test', 'reveal', null, 'x')
+    await store.audit('a-new', NOW, 'owner.test', 'reveal', null, 'x')
     await store.insertAsk(askRow({ id: 'ask-old', ts: NOW - RETENTION_MS.asks - 1 }))
     await store.insertAsk(askRow({ id: 'ask-new', ts: NOW }))
 

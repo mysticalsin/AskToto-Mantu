@@ -5,7 +5,7 @@ that section. A flow passes when it takes at most two clicks (plus one confirm d
 destructive action) from any page, with no page hunt.
 
 Columns:
-- **Starting page**: where Tony is when the flow starts (should not matter; note if it does).
+- **Starting page**: where the owner is when the flow starts (should not matter; note if it does).
 - **Clicks**: literal click count from the starting page to the completed action, before the
   once-string or confirmation appears. A keyboard shortcut that opens the same target counts as
   zero clicks for that step.
@@ -33,5 +33,5 @@ Columns:
 - `⌘K` / `Ctrl K` should reach every seat, license last4, group and connector by name (plan 3.7b
   law 1). If a flow only works by scrolling a nav list, that is a FAIL even if the click count is
   low.
-- A FAIL here blocks the section from going to Tony (lock 13): send it back to the owning dev with
+- A FAIL here blocks the section from going to the owner (lock 13): send it back to the owning dev with
   the row filled in as the finding.

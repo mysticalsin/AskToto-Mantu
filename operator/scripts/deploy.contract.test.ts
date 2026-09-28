@@ -94,13 +94,13 @@ describe('buildSmokeArgs', () => {
 
 describe('extractDeployedUrl', () => {
   it('pulls the workers.dev URL out of wrangler deploy stdout', () => {
-    const stdout = 'Uploaded metis-operator (1.23 sec)\nDeployed metis-operator triggers\n  https://metis-operator.tony-walteur.workers.dev\nCurrent Version ID: abc'
-    expect(extractDeployedUrl(stdout, 'production')).toBe('https://metis-operator.tony-walteur.workers.dev')
+    const stdout = 'Uploaded metis-operator (1.23 sec)\nDeployed metis-operator triggers\n  https://metis-operator.example.workers.dev\nCurrent Version ID: abc'
+    expect(extractDeployedUrl(stdout, 'production')).toBe('https://metis-operator.example.workers.dev')
   })
 
   it('strips trailing punctuation picked up from surrounding prose', () => {
-    const stdout = 'see https://metis-operator-staging.tony-walteur.workers.dev.'
-    expect(extractDeployedUrl(stdout, 'staging')).toBe('https://metis-operator-staging.tony-walteur.workers.dev')
+    const stdout = 'see https://metis-operator-staging.example.workers.dev.'
+    expect(extractDeployedUrl(stdout, 'staging')).toBe('https://metis-operator-staging.example.workers.dev')
   })
 
   it('falls back to the known per-environment URL when stdout has none', () => {
@@ -118,8 +118,8 @@ describe('formatBuiltAt', () => {
 
 describe('DEPLOYED_URLS', () => {
   it('matches the known production and staging workers.dev hosts', () => {
-    expect(DEPLOYED_URLS.production).toBe('https://metis-operator.tony-walteur.workers.dev')
-    expect(DEPLOYED_URLS.staging).toBe('https://metis-operator-staging.tony-walteur.workers.dev')
+    expect(DEPLOYED_URLS.production).toBe('https://metis-operator.example.workers.dev')
+    expect(DEPLOYED_URLS.staging).toBe('https://metis-operator-staging.example.workers.dev')
   })
 })
 

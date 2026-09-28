@@ -5,7 +5,7 @@ import { encryptVault, sha256Hex } from './crypto'
 import { hmacHex } from './hmac'
 import { handleRequest, type Env } from './index'
 import { memoryStore, type IssuedLicenseRow, type OperatorStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
 const DEVICE = 'license-device-0001'
@@ -13,6 +13,7 @@ const OTHER_DEVICE = 'license-device-0002'
 const env: Env = {
   OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
   OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
   OPERATOR_SKILL_PRIVATE_KEY: '',
   OPERATOR_VAULT_KEY: TEST_VAULT_KEY
 }
