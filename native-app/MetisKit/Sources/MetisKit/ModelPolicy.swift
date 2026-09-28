@@ -165,7 +165,7 @@ public actor ModelPolicyClient {
     /// never crashes the caller) for a tampered, unsigned, or incomplete document; `.notManaged` when
     /// the Operator has no fleet policy configured; `.networkError` on a transport failure, leaving
     /// the last verified policy (if any) untouched for offline use.
-    public enum RefreshOutcome: Equatable { case applied, notManaged, rejected(String), networkError }
+    public enum RefreshOutcome: Equatable, Sendable { case applied, notManaged, rejected(String), networkError }
 
     public func refresh(url: URL, secret: String) async -> RefreshOutcome {
         let (data, response): (Data, URLResponse)
