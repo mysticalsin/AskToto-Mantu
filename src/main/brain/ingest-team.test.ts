@@ -6,7 +6,7 @@ import { app } from 'electron'
 import { PROVIDER_IDS } from '@shared/providers'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
-import { brainBackfillProgress, extractionSlug, startBackfill, whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress, extractionSlug, startBackfill, whenDrainSettles, whenIndexWritesSettle } from './ingest'
 import { readIndex, readMeetingExtraction, writeIndex, writeMeetingExtraction } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 
@@ -52,6 +52,7 @@ describe('team-transcript ingest', () => {
     // finalization still schedules its lint/publication/index writes after that point. Wait for the real
     // worker lifecycle first, then its serialized index tail, before deleting this profile.
     await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
+    await whenDrainSettles()
     await whenIndexWritesSettle()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
