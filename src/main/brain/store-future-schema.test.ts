@@ -9,6 +9,7 @@ import type { Settings } from '@shared/ipc'
 vi.mock('electron')
 
 import { BrainIndexUnavailableError, brainDir, classifyIndexBytes, indexUnavailable, readIndex, writeIndex } from './store'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 function futureSchemaIndexBytes(): Buffer {
   const index = {
@@ -39,7 +40,8 @@ describe('future schema index safety', () => {
     primary = join(brainDir(settings), 'index.json')
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
 

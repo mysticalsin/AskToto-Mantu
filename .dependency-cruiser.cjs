@@ -70,10 +70,16 @@ module.exports = {
     },
     {
       name: 'ff03-unreachable-from-entry-points',
-      comment: 'No entry point reaches this module, so it is dead code (being imported by a test does not count).',
+      comment:
+        'No entry point reaches this module, so it is dead code (being imported by a test does not count; ' +
+        'test-helpers/ modules exist only for tests, so they are out of scope).',
       severity: 'warn',
       from: { path: ENTRY_POINTS },
-      to: { path: '^src/.+\\.tsx?$', pathNot: [TEST_FILE, '\\.d\\.ts$', '/__fixtures__/', ...ENTRY_POINTS], reachable: false },
+      to: {
+        path: '^src/.+\\.tsx?$',
+        pathNot: [TEST_FILE, '\\.d\\.ts$', '/__fixtures__/', '/test-helpers/', ...ENTRY_POINTS],
+        reachable: false,
+      },
     },
   ],
   options: {
