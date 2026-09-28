@@ -8,7 +8,9 @@ vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
 const managedDustChat = vi.hoisted(() =>
-  vi.fn(async () => ({ ok: true as const, text: 'Data and AI, AI wiki' }))
+  vi.fn(async (..._args: unknown[]) => ({ ok: true as const, text: 'Data and AI, AI wiki' } as
+    | { ok: true; text: string }
+    | { ok: false; kind: 'missing-agent'; error: string }))
 )
 vi.mock('../dust-cli-chat', () => ({
   runManagedDustChat: (...args: unknown[]) => managedDustChat(...args),

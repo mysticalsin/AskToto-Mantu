@@ -441,7 +441,7 @@ interface CliConfig {
   bin: string
   // Builds the argv list. Prompt and system content are delivered via stdin, never as argv
   // args — prevents transcript/system text from appearing in `ps -ww` / /proc/<pid>/cmdline.
-  buildArgs(opts: { model: string }): string[]
+  buildArgs(opts: { model: string; system?: string; prompt?: string }): string[]
   parseLine(line: string): string | null
   /** True when `line` is the stream's own verified terminal marker. Optional — only implemented where
    *  the terminal-line schema is confirmed (claude-cli's `type:'result'`); left unset for providers

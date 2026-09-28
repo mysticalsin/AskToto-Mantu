@@ -111,6 +111,7 @@ const TEST_ENTRY: LocalModelEntry = {
   id: 'qwen3.5-0.8b',
   label: 'Qwen3.5 0.8B',
   minTotalRamGB: 8,
+  ctxSize: 8192,
   gguf: { bytes: GGUF.length, sha256: sha(GGUF), url: 'https://huggingface.co/test/model.gguf' },
   mmproj: { bytes: MMPROJ.length, sha256: sha(MMPROJ), url: 'https://huggingface.co/test/mmproj.gguf' }
 }
