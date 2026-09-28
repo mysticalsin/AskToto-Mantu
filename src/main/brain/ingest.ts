@@ -1536,7 +1536,8 @@ export function brainBackfillProgress(): { total: number; done: number; failed?:
     done: backfillDone,
     ...(backfillFailed > 0 ? { failed: backfillFailed } : {}),
     ...(backfillPreparing ? { preparing: true } : {}),
-    running: backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayQueued || !!rebuildReplayTask || hasActiveBackfill() || backfillLintPending
+    running: backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayQueued || !!rebuildReplayTask ||
+      hasActiveBackfill() || backfillLintPending || !!backfillFinalization || !!drainTask || !!backfillObserver?.settling
   }
 }
 
@@ -2305,6 +2306,7 @@ function rebuildWorkBusy(): boolean {
 }
 
 export async function startRebuild(s: Settings, options: StartRebuildOptions = {}): Promise<{ queued: number; error?: string }> {
+  if (rebuildReplayQueued || rebuildReplayTask) return { queued: 0, error: REBUILD_BUSY_ERROR }
   await whenDrainSettles()
   // Own asynchronous preflight as well as the queue. A second rebuild must not purge active work or
   // have its onFinished lifecycle owner dropped by the already-queued replay callback.
@@ -2569,6 +2571,9 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
   for (const key of sourceRefreshScanRetryKeys) observeSource(key)
   addCompletionGate(observer, beforeComplete)
   try {
+    const before = await readIndexAsync(observer.s)
+    observeSourceRefreshWorkFromIndex(before)
+    if (before.sourceRefreshRequested && !before.replayPending && !sourceRefreshRunning) await maybeStartSourceRefreshAsync()
     run.result = await requestBackfill(options)
     const idx = await readIndexAsync(observer.s)
     observeSourceRefreshWorkFromIndex(idx)
@@ -2810,6 +2815,7 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
     return deferredByProvider ? { queued: candidates.length, deferred: 'no-provider' } : { queued: candidates.length }
   } finally {
     backfillScans -= 1
+    if (backfillScans === 0 && backfillObserver) backfillObserver.preparing = false
     maybeFinishDrain()
   }
 }
