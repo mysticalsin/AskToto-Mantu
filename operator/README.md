@@ -38,7 +38,7 @@ Listen / Recap         --HMAC-->  upsert seat, insert event,  --write-->  sessio
 CRM push               --HMAC-->  materialize session,        --write-->  vault_keys, audit,
 skill manifest poll    --HMAC-->  serve signed skill packs    <--read---  issued_licenses,
                                                                            groups, tiers,
-Tony's browser         --Access-> resolve identity (JWT or    --read/--   integrations, ...
+the owner's browser         --Access-> resolve identity (JWT or    --read/--   integrations, ...
                                   minted session cookie),      write-->
                                   render/serve the admin
                                   console and JSON API
@@ -98,7 +98,7 @@ that has been configured with the Operator URL and that secret can sign a reques
 id it chooses; the HMAC proves the caller knows the shared secret, not which physical machine it is
 running on. This is mitigated three ways, not eliminated: the device id format check
 (`DEVICE_ID_RE` in `src/hmac.ts`) rejects anything shaped like an attack rather than a real seat id
-before the signature is even checked, a device still needs Tony's Approve or an active issued
+before the signature is even checked, a device still needs the owner's Approve or an active issued
 license before vault keys or connectors work for it, and every mutation and every seat action lands
 in the audit trail so an impersonated device id is visible after the fact. Per-device secrets, so
 one compromised install could never sign as another, are future work, not shipped today.
@@ -243,7 +243,7 @@ Never put these in git, logs, PR bodies, or `wrangler.jsonc`.
 | `OPERATOR_SKILL_PRIVATE_KEY` | Ed25519 PKCS8 PEM (or base64 of that PEM). Signs skill packs. The public half is committed in `src/main/operator-skill-key.ts`. |
 | `OPERATOR_VAULT_KEY` | 32-byte AES-GCM key, base64. Encrypts LLM API keys and the Cloudflare account token in D1. Separate from `OPERATOR_PROMPT_KEY`. |
 | `ADMIN_EMAILS` | Comma-separated allowlist for the owner's two Access emails. Missing or empty fails every admin check closed. |
-| `POLICY_AUD` | The Access application's audience tag, once Tony creates the Zero Trust app. |
+| `POLICY_AUD` | The Access application's audience tag, once the owner creates the Zero Trust app. |
 | `CF_OAUTH_CLIENT_ID` / `CF_OAUTH_CLIENT_SECRET` | Optional. Only needed for the Keys page's Cloudflare account connect flow. |
 
 Generate locally, then `secret put` (hidden prompt, not a shell argument):
@@ -382,7 +382,7 @@ still-valid minted session cookie) against the two-email allowlist. A missing `T
 - **Ingest secret.** Same value as `OPERATOR_INGEST_SECRET`. `METIS_OPERATOR_INGEST_SECRET` may
   prefill.
 - **Send Ask text for skill improvement.** Default on once a URL is set. Off sends metrics only.
-- **Open Operator.** System browser. Tony signs in with Access.
+- **Open Operator.** System browser. The owner signs in with Access.
 
 While the app is up and both URL and secret are set: a heartbeat about every 60 seconds; after
 each typed or screen Ask, metrics always and question text only if the toggle is on, never Listen
@@ -419,4 +419,4 @@ secrets.
 the client bundle (and the world bundle, once `build-world.mjs` lands) and fails the build if the
 committed generated file drifts from a fresh one, typechecks both operator tsconfigs, and runs the
 operator test suite plus the scripts contract tests. It never deploys; deploys are run by hand by
-Tony (see above), because CI holds no Cloudflare auth or secrets for this Worker.
+the owner (see above), because CI holds no Cloudflare auth or secrets for this Worker.

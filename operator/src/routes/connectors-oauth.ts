@@ -1,5 +1,5 @@
 /**
- * Admin OAuth 2.0 authorization-code routes (Tony: "clicking a connector must actually connect by
+ * Admin OAuth 2.0 authorization-code routes (the owner: "clicking a connector must actually connect by
  * opening the vendor's own authorisation page"; plan 6.10b). Two routes, both `auth: 'admin'` so CSRF and
  * Access identity are already enforced by `index.ts` before either handler runs, exactly like every other
  * admin route:
@@ -90,7 +90,7 @@ function oauthUnconfigured(entry: ConnectorCatalogEntry, env: unknown): Response
  * The central gate's CSRF check (`index.ts#isCrossSitePost`) only ever runs on a POST, so a GET route
  * gets none of it for free - a plain `<a href>` or `<img src>` on any page an already-authenticated admin
  * merely *views* (an email, a chat message, a compromised ad) is enough to fire it, no session of the
- * attacker's own required. `Sec-Fetch-Site` is sent by every modern browser Tony's console runs in; the
+ * attacker's own required. `Sec-Fetch-Site` is sent by every modern browser the owner's console runs in; the
  * legitimate path (the console opening this in a new tab via a click inside its own origin) sends
  * `same-origin`, so requiring exactly that value - refusing an absent header too, not just an explicit
  * `cross-site`/`same-site`/`none` - costs the legitimate flow nothing and closes every other one. This is

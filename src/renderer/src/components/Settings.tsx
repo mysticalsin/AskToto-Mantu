@@ -6475,7 +6475,7 @@ export function Settings({
         </div>
       )}
 
-      {/* TOP tab bar (Tony: "setting bar at the top") — horizontal, scrolls if narrow */}
+      {/* TOP tab bar (the owner: "setting bar at the top") — horizontal, scrolls if narrow */}
       <nav
         role="tablist"
         aria-label="Settings sections"
@@ -7445,7 +7445,7 @@ export function Settings({
                 </Section>
                 {/* Model/library license attributions live in THIRD_PARTY_NOTICES.md, shipped in the
                     app's install directory (electron-builder extraFiles) — kept out of the UI on
-                    purpose (Tony, 2026-07-05). */}
+                    purpose (the owner, 2026-07-05). */}
                 <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
                   <MantuLogo size={190} />
                   <div className="text-[13px] font-semibold text-[color:var(--cl-foreground)]">

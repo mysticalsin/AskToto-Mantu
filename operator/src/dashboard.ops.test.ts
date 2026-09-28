@@ -84,7 +84,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
       lat: 45.5,
       lon: -73.5,
       last_index_at: null,
-      hostname: 'Tonys-MacBook-Pro',
+      hostname: 'Example-MacBook-Pro',
       sso_email: 'admin@example.test',
       license: 'licensed',
       approval: 'approved'
@@ -97,7 +97,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.licenses.empty).toBe(false)
     expect(dash.licenses.rows[0]?.approval).toBe('approved')
     expect(dash.licenses.rows[0]?.license).toBe('licensed')
-    expect(dash.profiles[0]?.hostname).toBe('Tonys-MacBook-Pro')
+    expect(dash.profiles[0]?.hostname).toBe('Example-MacBook-Pro')
     expect(dash.profiles[0]?.email).toBe('admin@example.test')
     expect(dash.profiles[0]?.city).toBe('Longueuil')
     expect(dash.geo[0]).toMatchObject({
@@ -120,7 +120,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
       dash.events.some(
         (e) =>
           e.name === 'ask' &&
-          e.hostname === 'Tonys-MacBook-Pro' &&
+          e.hostname === 'Example-MacBook-Pro' &&
           e.chips.some((c) => c.key === 'city' && c.value === 'Longueuil') &&
           e.chips.some((c) => c.key === 'device')
       )

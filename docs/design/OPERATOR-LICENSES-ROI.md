@@ -42,4 +42,4 @@ Same Operator chrome (`docs/design/OPERATOR.md`): near-black, Geist, uppercase e
 
 ## What landing looks like
 
-Tony opens Access, lands on the packed console, sees Keys / Licenses / Devices map already in the pre-Shoey chrome. Licenses lists every heartbeat seat or the honest empty line. ROI uses the same ask log the Cost cards use.
+the owner opens Access, lands on the packed console, sees Keys / Licenses / Devices map already in the pre-Shoey chrome. Licenses lists every heartbeat seat or the honest empty line. ROI uses the same ask log the Cost cards use.

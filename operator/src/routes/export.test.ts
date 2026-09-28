@@ -95,7 +95,7 @@ describe('GET /v1/admin/export.xlsx', () => {
       lat: null,
       lon: null,
       last_index_at: null,
-      hostname: 'Tonys-MacBook-Pro',
+      hostname: 'Example-MacBook-Pro',
       sso_email: 'admin@example.test',
       license: 'approved',
       approval: 'approved',

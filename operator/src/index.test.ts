@@ -182,7 +182,7 @@ describe('Access on admin routes', () => {
     expect(res.status).toBe(401)
   })
 
-  it('allows Tony and never returns prompt ciphertext on the asks list', async () => {
+  it('allows a configured admin and never returns prompt ciphertext on the asks list', async () => {
     const store = memoryStore()
     await handleRequest(
       await signedRequest('/v1/ingest', JSON.stringify({ id: 'ask-2', question: 'secret close plan', mode: 'sales' })),

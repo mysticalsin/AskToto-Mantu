@@ -1,6 +1,6 @@
 # Métis 2.0 Cap 2 — Wake + desktop adapters (Devon)
 **When:** 20 Sep 2026 ~1:12pm ET (America/Toronto)  
-**Branch:** `metis-2.0-inventory`  
+**Branch:** `implementation branch`  
 **Base tip:** `9568d21ce7ab277d05a6ab34e79b76fc57713a2e` (Ultron Cap1 STAMP)  
 **Pack:** HOLD · **OAuth:** LAST · **Cap3 notch:** NOT started
 
@@ -61,7 +61,7 @@ npx vitest run src/shared/desktop-actions.test.ts src/shared/metis-wake.test.ts 
 # 8 files / 34 tests passed
 ```
 
-## Cap1 Keys deploy wire (Tony fuse — same Worker, no second portal)
+## Cap1 Keys deploy wire (the owner fuse — same Worker, no second portal)
 - Worker name: `metis-operator` (`operator/wrangler.jsonc`)
 - Production URL: `https://metis-operator.example.workers.dev` (`operator/scripts/deploy.mjs`)
 - Keys UI TypeSafe/Jev section: `operator/src/render/pages/keys.ts` (on tip `9568d21`)

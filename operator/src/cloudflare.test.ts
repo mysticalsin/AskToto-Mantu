@@ -46,7 +46,7 @@ describe('Cloudflare Overview fail-loud', () => {
     expect(JSON.stringify(dash)).not.toMatch(/\"token\"|cf-token|Bearer /)
   })
 
-  it('pulls token-free Worker/D1/analytics after Tony connects Cloudflare', async () => {
+  it('pulls token-free Worker/D1/analytics after an admin connects Cloudflare', async () => {
     const store = memoryStore()
     const token = 'cf-acct-token-not-real-zzzz'
     const added = await handleRequest(

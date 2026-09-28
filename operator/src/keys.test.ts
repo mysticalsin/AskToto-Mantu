@@ -28,7 +28,7 @@ describe('admin keys write / rotate / revoke', () => {
       new Request('https://operator.test/v1/admin/keys', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'anthropic', label: 'Tony cloud', secret })
+        body: JSON.stringify({ provider: 'anthropic', label: 'Primary cloud', secret })
       }),
       env(),
       { access: tony },
@@ -264,7 +264,7 @@ describe('admin keys write / rotate / revoke', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           provider: 'anthropic',
-          label: 'Tony cloud',
+          label: 'Primary cloud',
           secret: syntheticProviderKey('anthropic', 'xx99')
         })
       }),

@@ -51,7 +51,7 @@ pageviews.
 | 2 | `POST /v1/admin/licenses/generate` `{ days }` | Access JWT. Unauth **401** `{ ok:false, error:"Access required" }` |
 | 3 | Once-string | `METIS-OP-1.<jti>.<iat>.<exp>.<hmac-sha256-b64url>` HMAC over canonical with `OPERATOR_INGEST_SECRET`. Shown once. last4 after reload. Never in Events. |
 | 4 | Métis Identity | Activate the string. Seat heartbeat `{ license: "licensed", licenseId }` (jti). |
-| 5 | Worker | `seatAuthorizedForKeys` = Tony Approve **or** active issued jti. Revoke wins. Vault keys via HMAC `/v1/use`. |
+| 5 | Worker | `seatAuthorizedForKeys` = the owner Approve **or** active issued jti. Revoke wins. Vault keys via HMAC `/v1/use`. |
 
 Selling ATK- / Fly JWS stays closed. `LICENSE_ACTIVATION_OPEN` stays false.
 
@@ -60,7 +60,7 @@ Selling ATK- / Fly JWS stays closed. `LICENSE_ACTIVATION_OPEN` stays false.
 `#keys` Add an API → provider `cloudflare` → paste API token + accountId
 (+ label). Vault row last4 only. OAuth **Log in to Cloudflare** is optional
 and last. License generate must work if CF OAuth secrets are missing.
-Tony sets `CF_OAUTH_CLIENT_ID` + `CF_OAUTH_CLIENT_SECRET` on the Worker.
+the owner sets `CF_OAUTH_CLIENT_ID` + `CF_OAUTH_CLIENT_SECRET` on the Worker.
 Missing secrets → 503 after Access. Métis Settings tile (if any) is
 KineticGrid `b8a677b`, not this Worker tip.
 

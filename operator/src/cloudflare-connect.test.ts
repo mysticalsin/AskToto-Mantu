@@ -68,7 +68,7 @@ function cfFetch(input: RequestInfo | URL): Promise<Response> {
   }
   if (url.pathname === '/client/v4/accounts' || url.pathname.endsWith('/accounts')) {
     return Promise.resolve(
-      new Response(JSON.stringify({ result: [{ id: ACCOUNT, name: 'Tony' }] }), {
+      new Response(JSON.stringify({ result: [{ id: ACCOUNT, name: 'the owner' }] }), {
         status: 200,
         headers: { 'content-type': 'application/json' }
       })
@@ -232,7 +232,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
       lat: 45.5,
       lon: -73.5,
       last_index_at: null,
-      hostname: 'Tonys-MacBook-Pro',
+      hostname: 'Example-MacBook-Pro',
       sso_email: 'owner@example.test',
       license: 'licensed',
       approval: 'approved'

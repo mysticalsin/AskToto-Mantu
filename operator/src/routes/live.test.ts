@@ -25,7 +25,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lat: null,
     lon: null,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
+    hostname: 'Example-MacBook-Pro',
     sso_email: 'admin@example.test',
     license: 'approved',
     approval: 'approved',
@@ -89,7 +89,7 @@ describe('GET /v1/admin/realtime/live-seats.json', () => {
       rows: { deviceId: string; tier: string | null; licenseState: string; live: boolean; hostname: string | null }[]
     }
     expect(body.rows).toHaveLength(1)
-    expect(body.rows[0]).toMatchObject({ deviceId: 'dev-a', tier: 'metis', licenseState: 'licensed', live: true, hostname: 'Tonys-MacBook-Pro' })
+    expect(body.rows[0]).toMatchObject({ deviceId: 'dev-a', tier: 'metis', licenseState: 'licensed', live: true, hostname: 'Example-MacBook-Pro' })
   })
 
   it('excludes a seat whose last heartbeat is outside the 30 min window', async () => {
@@ -241,7 +241,7 @@ describe('GET /v1/admin/live.json (task B7 rail counters)', () => {
 describe('GET /v1/admin/search.json', () => {
   it('finds a seat by hostname, a license by last4, a group by name and a connector by label, capped at 8 per group', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Tonys-MacBook-Pro' }))
+    await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Example-MacBook-Pro' }))
     await store.putIssuedLicense(issuedLicense({ jti: 'lic-1', last4: 'zz99', tier: 'metis' }))
     await store.putGroup({ id: 'grp-1', name: 'Amaris team', tier: 'metis', notes: null, created_at: NOW, created_by: 'owner@example.test' })
     await store.putIntegration(integrationRow({ id: 'int-1', kind: 'hubspot', label: 'HubSpot production' }))
@@ -259,7 +259,7 @@ describe('GET /v1/admin/search.json', () => {
       integrations: unknown[]
     }
     expect(body.seats).toEqual([
-      { id: 'dev-a', label: 'Tonys-MacBook-Pro', sublabel: 'admin@example.test', page: 'sessions', rowKey: 'dev-a' }
+      { id: 'dev-a', label: 'Example-MacBook-Pro', sublabel: 'admin@example.test', page: 'sessions', rowKey: 'dev-a' }
     ])
 
     const byLast4 = await handleRequest(
@@ -304,7 +304,7 @@ describe('GET /v1/admin/search.json', () => {
 
   it('slices an overlong q to 100 characters after trim (security review, low)', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Tonys-MacBook-Pro' }))
+    await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Example-MacBook-Pro' }))
     const longQuery = `  ${'a'.repeat(150)}tony${'b'.repeat(150)}  `
     const res = await handleRequest(
       new Request(`https://operator.test/v1/admin/search.json?q=${encodeURIComponent(longQuery)}`),

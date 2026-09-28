@@ -76,7 +76,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lat: 45.5,
     lon: -73.5,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
+    hostname: 'Example-MacBook-Pro',
     sso_email: 'admin@example.test',
     license: 'licensed',
     approval: 'approved',
@@ -124,7 +124,7 @@ beforeEach(() => {
 describe('getSeat', () => {
   it('returns the seat by device id, or null', async () => {
     await store.upsertSeat(seat({ device_id: 'dev-a' }))
-    expect((await store.getSeat('dev-a'))?.hostname).toBe('Tonys-MacBook-Pro')
+    expect((await store.getSeat('dev-a'))?.hostname).toBe('Example-MacBook-Pro')
     expect(await store.getSeat('missing')).toBeNull()
   })
 

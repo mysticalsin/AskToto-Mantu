@@ -25,7 +25,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lat: null,
     lon: null,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
+    hostname: 'Example-MacBook-Pro',
     sso_email: 'admin@example.test',
     license: 'approved',
     approval: 'approved',
@@ -70,7 +70,7 @@ describe('GET /v1/admin/sessions.json', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { rows: { deviceId: string; tier: string | null; live: boolean; hostname: string | null }[] }
     expect(body.rows).toHaveLength(1)
-    expect(body.rows[0]).toMatchObject({ deviceId: 'dev-a', tier: 'metis', live: true, hostname: 'Tonys-MacBook-Pro' })
+    expect(body.rows[0]).toMatchObject({ deviceId: 'dev-a', tier: 'metis', live: true, hostname: 'Example-MacBook-Pro' })
   })
 
   it('applies country/os/q filters on top of the store page', async () => {

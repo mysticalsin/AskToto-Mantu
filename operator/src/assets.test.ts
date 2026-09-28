@@ -97,7 +97,7 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     const cssBody = await css.text()
     expect(cssBody.length).toBeGreaterThan(97)
     expect(cssBody).toContain('288px')
-    // The map is a light choropleth matching the page canvas (plan 3.2, Tony 2026-09-06), not
+    // The map is a light choropleth matching the page canvas (plan 3.2, the owner 2026-09-06), not
     // the measured-Shoey exact grey land value.
     expect(cssBody).toContain('--map-land: #f0f0f0')
     expect(cssBody).not.toMatch(/cloudflareaccess/)

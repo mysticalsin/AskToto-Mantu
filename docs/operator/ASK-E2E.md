@@ -45,7 +45,7 @@ Licensed seat Ask (HMAC, no seat-local CF/DeepSeek key):
 # never a vault secret in the stream
 ```
 
-## Stamp gate (Tony)
+## Stamp gate (the owner)
 
 1. Flash stream works with **no seat-local key**. Default model `@cf/deepseek-ai/deepseek-v4-flash-0731` (`portal-cf`).
 2. Portal Overview + Keys show **two lines**: `portal-cf` vs `portal-direct` with tokens + list-price estimate, or `not reported`. Never `$0`.

@@ -16,7 +16,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lat: 45.5,
     lon: -73.5,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
+    hostname: 'Example-MacBook-Pro',
     sso_email: 'admin@example.test',
     license: 'licensed',
     approval: 'approved',
@@ -67,7 +67,7 @@ describe('buildLiveSnapshot', () => {
     expect(snap.kpis.asksToday).toBe(1)
     expect(snap.events.length).toBeGreaterThan(0)
     expect(snap.liveSeatsTable).toHaveLength(1)
-    expect(snap.liveSeatsTable[0]).toMatchObject({ deviceId: 'dev-a', hostname: 'Tonys-MacBook-Pro', city: 'Longueuil' })
+    expect(snap.liveSeatsTable[0]).toMatchObject({ deviceId: 'dev-a', hostname: 'Example-MacBook-Pro', city: 'Longueuil' })
     expect(snap.liveSeatsTable[0].sessionStarted).toBe(NOW - 60_000)
     expect(typeof snap.generation).toBe('number')
   })

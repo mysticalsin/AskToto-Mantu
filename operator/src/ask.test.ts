@@ -66,7 +66,7 @@ async function approveDevice(store: ReturnType<typeof memoryStore>, deviceId = '
     lat: 45.5,
     lon: -73.5,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
+    hostname: 'Example-MacBook-Pro',
     sso_email: 'owner@example.test',
     license: 'licensed',
     approval: 'approved'

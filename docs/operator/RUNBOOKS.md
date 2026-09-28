@@ -5,7 +5,7 @@ assumes the tooling added for plan task P4.0: `operator/scripts/deploy.mjs`, `sm
 `backup.mjs`, `dev-session.mjs`, and (from a separate concurrent task) `migrate.mjs`.
 
 No Cloudflare auth exists on the machine these scripts were written on. Every real command below
-needs Tony to run, once per machine:
+needs the owner to run, once per machine:
 
 ```sh
 cd operator
@@ -216,5 +216,5 @@ when the intent is to fully cut a seat off.
 `build:operator-world` once that script lands) and fails if the committed file drifts from a fresh
 build, typechecks `operator/tsconfig.json` and `operator/client/tsconfig.json`, and runs the
 operator test suite plus the contract tests for the scripts in this runbook
-(`operator/scripts/*.contract.test.ts`). It does not deploy; `deploy.mjs` is run by hand by Tony,
+(`operator/scripts/*.contract.test.ts`). It does not deploy; `deploy.mjs` is run by hand by the owner,
 never from CI, because there is no Cloudflare auth (and no secrets) in CI for this Worker.

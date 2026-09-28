@@ -54,7 +54,7 @@ async function signed(
 let store = memoryStore()
 
 describe('Operator generate license', () => {
-  it('mints a token Tony can paste, stores last4 only, and 401s without Access', async () => {
+  it('mints a token the owner can paste, stores last4 only, and 401s without Access', async () => {
     store = memoryStore()
     const unauth = await handleRequest(
       new Request('https://operator.test/v1/admin/licenses/generate', {

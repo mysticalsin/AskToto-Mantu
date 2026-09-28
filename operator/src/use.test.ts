@@ -56,7 +56,7 @@ async function approveDevice(store: ReturnType<typeof memoryStore>, deviceId = '
     lat: 45.5,
     lon: -73.5,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
+    hostname: 'Example-MacBook-Pro',
     sso_email: 'owner@example.test',
     license: 'licensed',
     approval: 'approved'
@@ -213,7 +213,7 @@ describe('HMAC POST /v1/use', () => {
     expect(res.status).toBe(403)
     expect(await res.json()).toEqual({
       ok: false,
-      error: 'This seat is not approved. Tony must approve this device in Operator before platform keys work.'
+      error: 'This seat is not approved. The owner must approve this device in Operator before platform keys work.'
     })
   })
 

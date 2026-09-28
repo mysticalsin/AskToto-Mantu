@@ -74,7 +74,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lat: null,
     lon: null,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
+    hostname: 'Example-MacBook-Pro',
     sso_email: 'admin@example.test',
     license: 'approved',
     approval: 'approved',
@@ -117,7 +117,7 @@ describe('GET /v1/admin/events.json', () => {
       counts: Record<string, number>
     }
     expect(body1.rows).toHaveLength(2)
-    expect(body1.rows[0]).toMatchObject({ hostname: 'Tonys-MacBook-Pro', email: 'admin@example.test', os: 'darwin', appVersion: '1.8.5' })
+    expect(body1.rows[0]).toMatchObject({ hostname: 'Example-MacBook-Pro', email: 'admin@example.test', os: 'darwin', appVersion: '1.8.5' })
     expect(body1.nextCursor).toBeTruthy()
     expect(body1.counts.heartbeat).toBe(3)
 

@@ -27,7 +27,7 @@ describe('real seats vs usage-import', () => {
         device_id: '6be389767fb160f7503de8e0227f4965',
         os: 'darwin',
         app_version: '1.8.3',
-        hostname: 'Tonys-MacBook-Pro'
+        hostname: 'Example-MacBook-Pro'
       })
     ).toBe(true)
   })

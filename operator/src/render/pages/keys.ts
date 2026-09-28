@@ -43,7 +43,7 @@ export function renderKeys(data: DashboardPayload, _ctx: RenderCtx): string {
   return `${pageHeader({ title: 'Keys', subtitle: 'Seats never receive these keys. A licensed seat calls the Operator, and the Operator calls the provider.' })}
     <article class="card pad-b10">
       <p class="eyebrow">Keys</p>
-      <div class="sub muted pad-b8">Tony adds LLM APIs and Cloudflare here. last4 only. Never a secret, cipher, token, or grant. After a seat is approved, these keys are the default Ask path. CLI tokens stay on the seat.</div>
+      <div class="sub muted pad-b8">The owner adds LLM APIs and Cloudflare here. last4 only. Never a secret, cipher, token, or grant. After a seat is approved, these keys are the default Ask path. CLI tokens stay on the seat.</div>
       <table>
         <thead><tr><th>Binding</th><th>Status</th></tr></thead>
         <tbody>
