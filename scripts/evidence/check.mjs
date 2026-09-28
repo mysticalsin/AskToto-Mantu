@@ -595,7 +595,7 @@ export function m2_0008BundleProblems(bundlePath) {
     }
     for (const fixture of fifo.fixtures) {
       if (!fixture || typeof fixture !== 'object' || !Object.hasOwn(fixture, 'opened_by_1_9_6')) {
-        problems.push('fifo-fixtures.json: every fixture must record whether 1.9.6 opened it')
+        problems.push('fifo-fixtures.json: every fixture must record opened_by_1_9_6')
         break
       }
     }
