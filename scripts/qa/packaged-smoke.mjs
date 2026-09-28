@@ -321,17 +321,57 @@ async function restoreHoverParkableLayout(page) {
   await page.evaluate(async () => {
     await window.toto.setSettings({ overlayLayout: 'hide', autoHideOverlay: true })
   })
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const ok = await page.evaluate(async () => {
+      const settings = await window.toto.getSettings()
+      return settings.overlayLayout === 'hide' && settings.autoHideOverlay === true
+    })
+    if (ok) return
+    await sleep(100)
+  }
+  throw new Error('hover parkable layout was not applied before RV rows')
 }
 
-async function settleOverlayForRvRows({ page, executable, env }) {
+function readSmokeParkState(userData) {
+  try {
+    return JSON.parse(readFileSync(join(userData, 'smoke-park-state.json'), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/** Poll the park-window marker until islandResting is proved (not a blind sleep). */
+export async function waitUntilParked(userData, sinceMs, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const state = readSmokeParkState(userData)
+    if (state && typeof state.at === 'number' && state.at >= sinceMs && state.parked === true) {
+      return state
+    }
+    await sleep(AUDIT_POLL_MS)
+  }
+  return null
+}
+
+async function parkAndProve({ executable, env, userData }) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const since = Date.now()
+    const result = await runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
+    if (result.error) return result
+    const proved = await waitUntilParked(userData, since)
+    if (proved) return result
+    await sleep(200)
+  }
+  return { code: null, signal: null, error: true }
+}
+
+async function settleOverlayForRvRows({ page, executable, env, userData }) {
   await dismissNavigationGuardIfOpen(page)
   await ensureIdleBar(page)
   await restoreHoverParkableLayout(page)
-  // Let main apply the hover layout before park-window probes overlayUsesHover.
-  await page.waitForTimeout(500)
-  const parked = await runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
-  if (parked.error) throw new Error('park-window after navigation guard failed')
-  await sleep(750)
+  const parked = await parkAndProve({ executable, env, userData })
+  if (parked.error) throw new Error('park-window after navigation guard failed to prove parked===true')
 }
 
 async function ensureHistory(page) {
@@ -660,7 +700,7 @@ async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
       return { decision: 'save', entry: 'review-recent-meeting', persistedBeforeNavigation: true }
     })
 
-    await settleOverlayForRvRows({ page, executable, env })
+    await settleOverlayForRvRows({ page, executable, env, userData: env.ASKTOTO_USERDATA })
   })
 }
 
@@ -781,12 +821,8 @@ export function buildWindowsShortcutLauncher({ auditLogDir, executable, userData
 }
 
 async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows, env }) {
-  const hideBeforeReveal = async () => {
-    const result = await runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
-    // Hosted macOS can still report the pre-park bounds if the reopen probe races the park spring.
-    await sleep(750)
-    return result
-  }
+  const userData = env.ASKTOTO_USERDATA
+  const hideBeforeReveal = async () => parkAndProve({ executable, env, userData })
   if (platform === 'darwin') {
     await runRevealRow({
       auditLogPath,

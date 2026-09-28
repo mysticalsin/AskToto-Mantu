@@ -12,6 +12,7 @@ import {
   computeCleanupTargets,
   isOverlayUrl,
   isPassingRevealEvidence,
+  waitUntilParked,
   parseAuditLog,
   readObservationTail,
   initialRvRows,
@@ -297,6 +298,38 @@ describe('isPassingRevealEvidence', () => {
     expect(isPassingRevealEvidence({ outcome: 'shown', parked: false })).toBe(false)
     expect(isPassingRevealEvidence({ outcome: 'already-visible', parked: true })).toBe(false)
     expect(isPassingRevealEvidence(null)).toBe(false)
+  })
+})
+
+describe('waitUntilParked', () => {
+  it('resolves when smoke-park-state.json reports parked after sinceMs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-park-prove-'))
+    try {
+      const since = Date.now() - 1_000
+      writeFileSync(
+        join(dir, 'smoke-park-state.json'),
+        JSON.stringify({ at: Date.now(), parked: true, visible: true, layout: 'hide' })
+      )
+      const state = await waitUntilParked(dir, since, 2_000)
+      expect(state?.parked).toBe(true)
+      expect(state?.layout).toBe('hide')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('times out when the marker stays unparked', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-park-prove-'))
+    try {
+      writeFileSync(
+        join(dir, 'smoke-park-state.json'),
+        JSON.stringify({ at: Date.now(), parked: false, visible: true, layout: 'hide' })
+      )
+      const state = await waitUntilParked(dir, 0, 400)
+      expect(state).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
