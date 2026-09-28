@@ -8,7 +8,7 @@ import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
 import { intelligenceNoProviderMessage, LOCAL_ONLY_INTELLIGENCE_UNAVAILABLE } from '@shared/intelligence-pass'
 import { getSettings } from '../store'
-import { indexUnavailable, readJson, writeJson } from './store'
+import { indexUnavailableAsync, loadJson, readJson, writeJson } from './store'
 import { requestBackfillRun, type BackfillStartResult, type BackfillCompletion } from './ingest'
 import { auditLog, mainLog } from '../logger'
 import { reportDeferred, whenMaintenanceWindowOpens } from '../infra/scheduler/maintenance'
@@ -201,6 +201,11 @@ export function readIntelligenceIndexState(s: Settings = getSettings()): Intelli
   return v ?? { lastSuccessAt: 0 }
 }
 
+export async function loadIntelligenceIndexState(s: Settings = getSettings()): Promise<IntelligenceIndexState> {
+  const loaded = await loadJson<IntelligenceIndexState>(s, INTELLIGENCE_INDEX_STATE_FILE, (raw) => StateSchema.parse(raw))
+  return loaded.status === 'ok' && loaded.value ? loaded.value : { lastSuccessAt: 0 }
+}
+
 export async function writeIntelligenceIndexState(
   next: IntelligenceIndexState,
   s: Settings = getSettings()
@@ -210,6 +215,11 @@ export async function writeIntelligenceIndexState(
 
 export function lastIndexedAt(s: Settings = getSettings()): number | undefined {
   const at = readIntelligenceIndexState(s).lastSuccessAt
+  return at > 0 ? at : undefined
+}
+
+export async function lastIndexedAtAsync(s: Settings = getSettings()): Promise<number | undefined> {
+  const at = (await loadIntelligenceIndexState(s)).lastSuccessAt
   return at > 0 ? at : undefined
 }
 
@@ -225,6 +235,17 @@ export function resetIntelligenceIndexLockForTests(): void {
 
 export function intelligenceIndexStatus(s: Settings = getSettings()): { running: boolean; lastError?: string } {
   const savedError = readIntelligenceIndexState(s).lastError
+  const safeSavedError = !savedError || [NO_PROVIDER_INDEX_COPY, LOCAL_ONLY_INTELLIGENCE_UNAVAILABLE, INCOMPLETE_INDEX_COPY, SUMMARY_INDEX_RETRY_COPY].includes(savedError)
+    ? savedError
+    : INCOMPLETE_INDEX_COPY
+  const error = volatileError?.folder === s.meetingsFolder
+    ? volatileError.message
+    : safeSavedError
+  return { running: activeRun !== null, ...(!activeRun && error ? { lastError: error } : {}) }
+}
+
+export async function intelligenceIndexStatusAsync(s: Settings = getSettings()): Promise<{ running: boolean; lastError?: string }> {
+  const savedError = (await loadIntelligenceIndexState(s)).lastError
   const safeSavedError = !savedError || [NO_PROVIDER_INDEX_COPY, LOCAL_ONLY_INTELLIGENCE_UNAVAILABLE, INCOMPLETE_INDEX_COPY, SUMMARY_INDEX_RETRY_COPY].includes(savedError)
     ? savedError
     : INCOMPLETE_INDEX_COPY
@@ -253,11 +274,11 @@ export async function runIntelligenceIndex(
   const settings = s ?? getSettings()
   if (activeRun) {
     mainLog.info(`[intelligence-index] coalesced (${reason}); a pass is already running`)
-    return { ran: false, queued: 0, coalesced: true, lastIndexedAt: lastIndexedAt(settings) }
+    return { ran: false, queued: 0, coalesced: true, lastIndexedAt: await lastIndexedAtAsync(settings) }
   }
-  if (trigger === 'automatic' && indexUnavailable(settings)) {
+  if (trigger === 'automatic' && await indexUnavailableAsync(settings)) {
     reportDeferred('intelligence-index', 'ledger_unavailable')
-    return { ran: false, queued: 0, lastIndexedAt: lastIndexedAt(settings) }
+    return { ran: false, queued: 0, lastIndexedAt: await lastIndexedAtAsync(settings) }
   }
   const token = {}
   activeRun = token
@@ -265,7 +286,7 @@ export async function runIntelligenceIndex(
   const recordFailure = async (message: string): Promise<void> => {
     volatileError = { folder: settings.meetingsFolder, message }
     try {
-      const state = readIntelligenceIndexState(settings)
+      const state = await loadIntelligenceIndexState(settings)
       await writeIntelligenceIndexState({
         lastSuccessAt: state.lastSuccessAt,
         lastFinishedAt: Date.now(),
@@ -286,7 +307,7 @@ export async function runIntelligenceIndex(
     const result = {
       ...run.result,
       ...(run.result.deferred === 'no-provider' ? { error: intelligenceNoProviderMessage(settings, NO_PROVIDER_INDEX_COPY) } : {}),
-      lastIndexedAt: lastIndexedAt(settings)
+      lastIndexedAt: await lastIndexedAtAsync(settings)
     }
     // Attach the terminal handler before returning to IPC. The lock stays owned until every stage
     // has finished AND its success/failure state has been saved, even if the caller closes its window.
@@ -315,7 +336,7 @@ export async function runIntelligenceIndex(
     mainLog.error(`[intelligence-index] ${reason} dispatch failed:`, error)
     await recordFailure(INCOMPLETE_INDEX_COPY)
     if (activeRun === token) activeRun = null
-    return { ran: false, queued: 0, error: INCOMPLETE_INDEX_COPY, lastIndexedAt: lastIndexedAt(settings) }
+    return { ran: false, queued: 0, error: INCOMPLETE_INDEX_COPY, lastIndexedAt: await lastIndexedAtAsync(settings) }
   }
 }
 
@@ -354,7 +375,7 @@ export async function catchUpIntelligenceIndexIfNeeded(
   await whenMaintenanceWindowOpens()
   const at = now ?? Date.now()
   const settings = s ?? getSettings()
-  const state = readIntelligenceIndexState(settings)
+  const state = await loadIntelligenceIndexState(settings)
   const last = state.lastFinishedAt ?? state.lastSuccessAt
   if (!shouldCatchUp(last, at)) return { ran: false, queued: 0, reason: 'current' }
   mainLog.info(

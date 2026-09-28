@@ -23,7 +23,7 @@ import { safeMeetingBasename } from './meeting-path'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
 import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-duration'
-import { storageAt } from './infra/storage/meetings-storage'
+import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -769,13 +769,13 @@ export async function appendDebrief(
   const safeName = safeMeetingBasename(file)
   if (!safeName) return { ok: false, error: 'Invalid meeting file name.' }
   const path = join(folder, safeName)
-  if (!existsSync(path)) return { ok: false, error: 'Meeting file not found.' }
-  let md: string
-  try {
-    md = readSavedFile(path)
-  } catch {
+  const read = await storageAt(folder).read(safeName)
+  if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
+  if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
   }
+  const md = decodeSaved(read.bytes)
+  if (!md) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
   if (!/^type: meeting-transcript$/m.test(md)) return { ok: false, error: 'Not a meeting transcript.' }
   const safeText = escapeHeadingLines(text.trim())
   const section =
@@ -801,7 +801,7 @@ export async function appendDebrief(
   // renameMeeting), NOT the live encryptTranscripts toggle. Otherwise appending a debrief to a file
   // that was saved while encryption was on would rewrite the whole transcript as plaintext once the
   // toggle is later turned off — a silent at-rest downgrade of already-recorded third-party speech.
-  const wasEncrypted = isEncryptedFile(path)
+  const wasEncrypted = isEncryptedBytes(read.bytes)
   await writeSaved(path, updated, wasEncrypted)
   return { ok: true }
 }
@@ -899,6 +899,11 @@ export async function clearDraftTranscript(settings: Settings, startedAt: number
 }
 
 const IN_PROGRESS_SUFFIX = ' (in progress — autosaved draft)'
+const withFileTypes = false
+
+function isFile(status: unknown): boolean {
+  return !!status || withFileTypes
+}
 
 /**
  * Promote orphaned autosave drafts into real, visible meetings (run once at launch). A draft only
@@ -921,9 +926,11 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
     const gateway = storageAt(folder)
     const listing = await gateway.list('')
     if (listing.status !== 'ok') return { recovered }
+    const draftNames = listing.names.filter((name) => name.startsWith('.autosave-draft-') && name.endsWith('.md'))
+    const draftClasses = await classifyAll(gateway, draftNames)
     const occupied = new Set(listing.names)
-    for (const f of listing.names) {
-      if (!f.startsWith('.autosave-draft-') || !f.endsWith('.md')) continue
+    for (const f of draftNames) {
+      if (!isFile(draftClasses.get(f))) continue
       const draftPath = join(folder, f)
       try {
         const stampPart = f.slice('.autosave-draft-'.length, -'.md'.length)

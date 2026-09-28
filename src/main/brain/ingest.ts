@@ -77,6 +77,7 @@ import {
   eqVelocity,
   eqAmount,
   readIndex,
+  readIndexAsync,
   writeIndex,
   indexUnavailable,
   indexUnavailableAsync,
@@ -1613,6 +1614,14 @@ function meetingSourceVersionFromObservation(observation: SourceObservation): st
   return observation.version
 }
 
+async function observeSourceFile(file: string): Promise<SourceObservation> {
+  return sourceFileObservation(file)
+}
+
+async function meetingSourceVersion(file: string): Promise<string | undefined> {
+  return meetingSourceVersionFromObservation(await observeSourceFile(file))
+}
+
 /**
  * The full post-extraction ingest: stamp provenance from the transcript's frontmatter (the model
  * can't know its own source file/date), persist the extraction, merge into entities/graph, mark the
@@ -1652,7 +1661,7 @@ export async function ingestExtraction(
   }
   let date = readFrontmatterDate('date') ?? readFrontmatterDate('start')
   if (!date) {
-    const source = await sourceFileObservation(file)
+    const source = await observeSourceFile(file)
     date = source.version ? new Date(Number(source.version.split(':')[0])).toISOString() : ''
     mainLog.warn(`[brain] ${key}: no usable date/start frontmatter, falling back to ${date || 'an empty date'}`)
   }
@@ -1707,7 +1716,7 @@ export async function ingestExtraction(
   // below, which mirrors exactly how lintBrain itself batches). No-ops entirely when publishBrainPages
   // is off, so this costs nothing when the mirror isn't in use.
   await trackedPublication(() => publishForExtraction(s, x, ref, aliasMap))
-  const version = sourceVersion ?? (await sourceFileObservation(file)).version
+  const version = sourceVersion ?? (await meetingSourceVersion(file))
   await updateIndex(s, (idx) => {
     idx.ingested[key] = { at: Date.now(), ok: true, ...(version ? { sourceVersion: version } : {}), attempts: 0 }
     idx.revision += 1
@@ -1778,7 +1787,7 @@ async function finishJob(result: JobResult): Promise<void> {
     } catch (e) {
       failed = true
       completionError(e instanceof PublicationFailure ? 'publication-failed' : result.ok ? 'write-failed' : 'incomplete')
-      const source = await sourceFileObservation(job.file)
+      const source = await observeSourceFile(job.file)
       await updateIndex(s, (idx) => {
         const key = jobKey(job)
         const previous = idx.ingested[key]
@@ -1849,7 +1858,7 @@ function maybeFinishBackfill(): void {
       await updateIndex(sx, (i) => { i.warnings = lintBrain(sx) })
       await trackedPublication(() => publishIndexes(sx))
       if (backfillObserver) backfillObserver.published = true
-      const incomplete = await hasIncompleteMeetingSource(sx, readIndex(sx))
+      const incomplete = await hasIncompleteMeetingSource(sx, await readIndexAsync(sx))
       await updateIndex(sx, (i) => {
         // Checkpoint repairs may drain while other sources still await a configured provider.
         if (!backfillObserver && !incomplete) i.backfillRequested = false
@@ -1891,7 +1900,7 @@ async function hasMeetingSourceDrift(s: Settings, idx: BrainIndex): Promise<bool
 /** Saved meeting files that do not yet have a successful ingest record. Used by Update Intelligence
  *  so queued:0 + upToDate is illegal when the vault has meetings and the brain is empty. */
 export async function countUnextractedMeetings(s: Settings = getSettings()): Promise<number> {
-  return countUnextracted(await scanMeetingSources(s), readIndex(s))
+  return countUnextracted(await scanMeetingSources(s), await readIndexAsync(s))
 }
 
 export async function hasUnextractedMeetings(s: Settings = getSettings()): Promise<boolean> {
@@ -1914,7 +1923,7 @@ async function hasIncompleteMeetingSource(s: Settings, idx: BrainIndex, scan?: S
 async function hasSavedReconciliationCandidateForSettings(s: Settings, scan?: SourceScan): Promise<boolean> {
   const slugs = await loadMeetingExtractionSlugs(s)
   if (slugs === null) return false
-  return hasSavedReconciliationCandidate(scan ?? (await scanMeetingSources(s)), readIndex(s), new Set(slugs))
+  return hasSavedReconciliationCandidate(scan ?? (await scanMeetingSources(s)), await readIndexAsync(s), new Set(slugs))
 }
 
 /** Runs after every state change (a job dequeued, an extraction settled, an ingest completed) to check
@@ -2061,7 +2070,7 @@ export async function enqueueIngest(
     return
   }
   const key = basename(file)
-  const sourceVersion = (await sourceFileObservation(file)).version
+  const sourceVersion = await meetingSourceVersion(file)
   const previous = readIndex(s).ingested[key]
   // Match by the namespaced jobKey, not bare basename: enqueueIngest only ever runs for own-meeting paths
   // (key = basename), but queue/inFlightJobs now also hold team jobs (jobKey "team/<owner>/<file>"). A
@@ -2168,7 +2177,7 @@ async function performRebuildReplay(s: Settings): Promise<void> {
   // Page regeneration is part of replay completion. Keep the durable replay marker until it succeeds,
   // so a retry regenerates ALL entity pages rather than mistakenly publishing only index pages.
   await trackedPublication(() => publishAll(s))
-  const sourceRefreshStillNeeded = await hasMeetingSourceDrift(s, readIndex(s))
+  const sourceRefreshStillNeeded = await hasMeetingSourceDrift(s, await readIndexAsync(s))
   await updateIndex(s, (i) => {
     i.replayPending = false
     i.replayError = undefined
@@ -2269,7 +2278,7 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   }
   const localOnlyError = await localOnlyRebuildBlocked(s)
   if (localOnlyError) return { queued: 0, error: localOnlyError }
-  const before = readIndex(s)
+  const before = await readIndexAsync(s)
   const preserveSourceRefresh = options.sourceRefresh || before.sourceRefreshRequested
   // Fix 2 (sync guard): a corrupt/blocked journal fails the gate — refuse before touching the store.
   const gate = await readCorrectionsJournalSafe(s)
@@ -2342,10 +2351,15 @@ export async function requestSourceRefresh(s: Settings = getSettings()): Promise
   maybeStartSourceRefresh()
 }
 
-function maybeStartSourceRefresh(): void {
+async function maybeStartSourceRefreshAsync(): Promise<void> {
   if (sourceRefreshRunning || rebuildStarting || rebuildWorkBusy()) return
   const s = getSettings()
-  const idx = readIndex(s)
+  const unavailable = await indexUnavailableAsync(s)
+  if (unavailable) {
+    reportDeferred('backfill', 'ledger_unavailable')
+    return
+  }
+  const idx = await readIndexAsync(s)
   if (!idx.sourceRefreshRequested || idx.replayPending || !hasUsableProvider(s)) return
   sourceRefreshRunning = true
   void startRebuild(s, {
@@ -2371,6 +2385,13 @@ function maybeStartSourceRefresh(): void {
     })
 }
 
+function maybeStartSourceRefresh(): void {
+  void maybeStartSourceRefreshAsync().catch((error) => {
+    completionError('scan-failed')
+    mainLog.error('[brain] source refresh could not inspect the ledger:', error)
+  })
+}
+
 /**
  * Resume an interrupted backfill on app boot: the request flag persists in index.json until the queue
  * fully drains, so a quit/relaunch mid-backfill picks up the remaining transcripts automatically.
@@ -2391,7 +2412,7 @@ export async function resumeBackfillIfPending(): Promise<void> {
       reportDeferred('backfill', 'ledger_unavailable')
       return
     }
-    const idx = readIndex(s)
+    const idx = await readIndexAsync(s)
     if (idx.sourceRefreshRequested && !idx.replayPending) {
       maybeStartSourceRefresh()
       return
@@ -2483,7 +2504,7 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
   addCompletionGate(observer, beforeComplete)
   try {
     run.result = await requestBackfill(options)
-    if (readIndex(observer.s).replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
+    if ((await readIndexAsync(observer.s)).replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     if (run.result.deferred) completionError('no-provider')
     // A capped request can return "preparing" without dispatching anything. That is not completed work.
     if (run.result.preparing && !backfillPreparing && !sourceRefreshRunning && !rebuildStarting && !rebuildReplayTask && !hasActiveBackfill() && !backfillLintPending) completionError('incomplete')
@@ -2541,7 +2562,7 @@ function maybeCompleteBackfillRun(): void {
     if (!current) {
       completionError('scan-failed')
     } else {
-      const idx = readIndex(observer.s)
+      const idx = await readIndexAsync(observer.s)
       for (const [key, version] of current) {
         const record = idx.ingested[key]
         if (record?.ok && record.sourceVersion === version) continue
@@ -2589,7 +2610,7 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
   if (!(await brainInputsLocal(s, scan))) return { queued: 0 }
   const trigger = options.trigger ?? 'automatic'
   if (trigger === 'user') promoteQueuedBackfill()
-  const idx = readIndex(s)
+  const idx = await readIndexAsync(s)
   const route = options.route ?? 'default'
   const providerAvailable =
     route === 'intelligence-pass' ? pickIntelligencePassCandidates(s).length > 0 : hasUsableProvider(s)
@@ -2727,8 +2748,8 @@ function todayKey(now = Date.now()): string {
  * consumes one run when budget remains; false (leaving the counter untouched) once the day's 3 are spent.
  */
 const DAILY_BACKFILL_RUN_BUDGET = 3
-function consumeDailyBackfillRun(s: Settings): boolean {
-  const idx = readIndex(s)
+async function consumeDailyBackfillRun(s: Settings): Promise<boolean> {
+  const idx = await readIndexAsync(s)
   const today = todayKey()
   const spent = idx.dailyRunDate === today ? idx.dailyRunCount : 0
   if (spent >= DAILY_BACKFILL_RUN_BUDGET) return false
@@ -2767,14 +2788,14 @@ async function requestBackfillAsync(options: BackfillStartOptions = {}): Promise
   // Named 06:00 / 12:00 / 18:00 America/Toronto slots and an explicit Update Intelligence click
   // bypass the old 3-per-day reconcile budget. queued:0 + upToDate is illegal when meetings
   // exist but have not been extracted.
-  if (!options.force && !consumeDailyBackfillRun(s)) {
+  if (!options.force && !(await consumeDailyBackfillRun(s))) {
     if (unextracted) return { queued: 0, preparing: true }
     return { queued: 0, upToDate: true }
   }
 
   backfillPreparing = true
   pendingBackfillTrigger = options.trigger ?? 'automatic'
-  const idx = readIndex(s)
+  const idx = await readIndexAsync(s)
   if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
   setImmediate(() => {
     void startBackfill(undefined, { ...options, trigger: pendingBackfillTrigger })
@@ -2817,7 +2838,7 @@ export async function reconcileMeetingsInBackground(): Promise<void> {
     // whose jobs are all parked (provider lost mid-batch) is exactly what this tick has to revive, so it
     // no longer bails on hasActiveBackfill() alone. requestBackfill re-pumps the stalled queue below.
     if (backfillPreparing || sourceRefreshRunning || (hasActiveBackfill() && hasJobsInFlight())) return
-    const idx = readIndex(s)
+    const idx = await readIndexAsync(s)
     if (idx.sourceRefreshRequested || await hasMeetingSourceDrift(s, idx)) {
       // The try/catch below only catches synchronous throws; an async rejection escaping here would be
       // reported as an unhandledRejection → a false app.crash record on EVERY 60s tick (same as MQA-155).

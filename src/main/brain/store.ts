@@ -268,7 +268,7 @@ export function readJson<T>(settings: Settings, rel: string, parse: (v: unknown)
 
 type BrainFileLoad<T> = { status: 'ok'; value: T | null } | { status: 'unavailable' }
 
-async function loadJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T): Promise<BrainFileLoad<T>> {
+export async function loadJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T): Promise<BrainFileLoad<T>> {
   const p = join(brainDir(settings), rel)
   const gateway = storageAt(resolveMeetingsFolder(settings))
   const path = join('.brain', rel)
@@ -720,6 +720,11 @@ export const readIndex = (s: Settings): BrainIndex => {
   return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
 }
 
+export const readIndexAsync = async (s: Settings): Promise<BrainIndex> => {
+  const load = await loadIndexAsync(s)
+  return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
+}
+
 export const loadIndexForStatus = async (s: Settings): Promise<BrainIndex> => {
   const load = await loadIndexAsync(s)
   return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
@@ -774,11 +779,19 @@ export const writeGraph = (s: Settings, v: BrainGraph): Promise<void> => writeJs
 
 export const readMeetingExtraction = (s: Settings, fileSlug: string): MeetingExtraction | null =>
   readJson(s, join('meetings', `${fileSlug}.json`), (v) => MeetingExtractionSchema.parse(v))
+export const loadMeetingExtraction = async (s: Settings, fileSlug: string): Promise<MeetingExtraction | null> => {
+  const loaded = await loadJson(s, join('meetings', `${fileSlug}.json`), (v) => MeetingExtractionSchema.parse(v))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writeMeetingExtraction = (s: Settings, fileSlug: string, v: MeetingExtraction): Promise<void> =>
   writeJson(s, join('meetings', `${fileSlug}.json`), v)
 
 export const readPerson = (s: Settings, slug: string): PersonEntity | null =>
   readJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
+export const loadPerson = async (s: Settings, slug: string): Promise<PersonEntity | null> => {
+  const loaded = await loadJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writePerson = async (s: Settings, slug: string, v: PersonEntity): Promise<void> => {
   ensureV1Backup(s)
   await writeJson(s, join('entities', 'person', `${slug}.json`), v)
@@ -788,6 +801,10 @@ export const writePerson = async (s: Settings, slug: string, v: PersonEntity): P
 
 export const readAccount = (s: Settings, slug: string): AccountEntity | null =>
   readJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
+export const loadAccount = async (s: Settings, slug: string): Promise<AccountEntity | null> => {
+  const loaded = await loadJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writeAccount = async (s: Settings, slug: string, v: AccountEntity): Promise<void> => {
   ensureV1Backup(s)
   await writeJson(s, join('entities', 'account', `${slug}.json`), v)
@@ -796,6 +813,10 @@ export const writeAccount = async (s: Settings, slug: string, v: AccountEntity):
 
 export const readDeal = (s: Settings, slug: string): DealEntity | null =>
   readJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
+export const loadDeal = async (s: Settings, slug: string): Promise<DealEntity | null> => {
+  const loaded = await loadJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writeDeal = async (s: Settings, slug: string, v: DealEntity): Promise<void> => {
   ensureV1Backup(s)
   await writeJson(s, join('entities', 'deal', `${slug}.json`), v)

@@ -104,8 +104,10 @@ type Unread = Exclude<ReadResult, { status: 'ok' }>
 type PresenceOf = (files: readonly FileVersion[]) => Promise<Map<string, ContentPresence>>
 
 /** Read outcomes that describe the file itself: repeating the read inside the TTL would only pin another
- *  pool thread or spawn another probe. */
-const REMEMBERED: ReadonlySet<ReadResult['status']> = new Set<ReadResult['status']>(['dataless', 'unknown', 'unavailable', 'timeout'])
+ *  pool thread or spawn another probe. Do not remember 'unavailable' here: once stat has succeeded,
+ *  later realpath/readFile unavailability can be a transient lock or hydration failure that must recover
+ *  on the next read attempt. */
+const REMEMBERED: ReadonlySet<ReadResult['status']> = new Set<ReadResult['status']>(['dataless', 'unknown', 'timeout'])
 
 /** The libuv pool size for a UV_THREADPOOL_SIZE value, never above libuv's own reading of it (libuv reads
  *  a negative value as a huge unsigned one; here it counts as 1). */

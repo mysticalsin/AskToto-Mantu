@@ -560,13 +560,11 @@ import {
   syncIntelContentProtection
 } from './intelligence'
 import {
-  readIndex as readBrainIndex,
   loadIndexForStatus as loadBrainIndexForStatus,
   writeIndex as writeBrainIndex,
   indexUnavailable,
   indexUnavailableAsync,
   indexUnavailableMessage,
-  readGraph as readBrainGraph,
   loadGraph as loadBrainGraph,
   writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
@@ -577,8 +575,7 @@ import {
   writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
   loadEntitySlugs as loadBrainEntitySlugs,
-  listMeetingExtractions as listBrainMeetingExtractions,
-  readMeetingExtraction as readBrainMeetingExtraction,
+  loadMeetingExtraction as loadBrainMeetingExtraction,
   purgeBrain,
   listPreservedBrainIndexes,
   currentBrainIndexIsReadable,
@@ -588,6 +585,7 @@ import {
   slugify as brainSlugify,
   brainDir as brainStoreDir
 } from './brain/store'
+import { readBrainDashboard } from './brain/dashboard-read'
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { applyCaveman } from '@shared/caveman-ask'
@@ -696,8 +694,8 @@ import {
   catchUpIntelligenceIndexIfNeeded,
   runIntelligenceIndex,
   setIntelligenceIndexWork,
-  lastIndexedAt,
-  intelligenceIndexStatus,
+  lastIndexedAtAsync,
+  intelligenceIndexStatusAsync,
   SIGN_IN_INDEX_COPY
 } from './brain/intelligence-index'
 import { startIntelligenceWork } from './brain/intelligence-work'
@@ -5768,7 +5766,7 @@ function registerIpc(): void {
   // failure, which is an acceptable (and honest — "reconnect ClickUp") outcome for a background retry.
   async function retryOutboundAction(action: OutboundAction): Promise<{ ok: boolean; error?: string }> {
     // Re-check disk on every retry tick — a meeting flagged confidential AFTER enqueue must never leave.
-    if (action.meetingFile && isMeetingConfidentialOnDisk(getSettings(), action.meetingFile)) {
+    if (action.meetingFile && (await isMeetingConfidentialOnDisk(getSettings(), action.meetingFile))) {
       // Dequeue without sending — returning ok:true removes the entry; a hard error would retry forever.
       auditLog('mcp.push.skipped_confidential', { kind: action.kind, action: action.action, source: 'disk' })
       return { ok: true }
@@ -5950,7 +5948,7 @@ function registerIpc(): void {
     const s = getSettings()
     // Wave 4 / QA defense-in-depth: never push confidential meetings. Prefer disk frontmatter over the
     // renderer flag — a buggy UI could omit args.confidential. Unreadable files fail closed.
-    const diskConfidential = meetingFile ? isMeetingConfidentialOnDisk(s, meetingFile) : false
+    const diskConfidential = meetingFile ? await isMeetingConfidentialOnDisk(s, meetingFile) : false
     const argConfidential = args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true
     if (diskConfidential || argConfidential) {
       auditLog('mcp.push.skipped_confidential', {
@@ -8089,8 +8087,8 @@ function registerIpc(): void {
       // deferred source refresh runs (it needs a usable provider). Surfaced so the UI can say the
       // cleanup is pending instead of silently claiming the delete was complete.
       cleanupPending: idx.sourceRefreshRequested === true,
-      lastIndexedAt: lastIndexedAt(s),
-      intelligenceIndex: intelligenceIndexStatus(s),
+      lastIndexedAt: await lastIndexedAtAsync(s),
+      intelligenceIndex: await intelligenceIndexStatusAsync(s),
       // M2-0003: surfaces the degraded read-only state instead of silently reporting an empty brain.
       ...(unavailable ? { indexUnavailable: unavailable, error: indexUnavailableMessage(unavailable) } : {})
     }
@@ -8192,21 +8190,10 @@ function registerIpc(): void {
     return { ok: true, cleared }
   })
   // Full assembled dataset for the Mantu Intelligence dashboard (decrypted in main when needed).
-  ipcMain.handle(IPC.brainRead, (e) => {
+  ipcMain.handle(IPC.brainRead, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    const s = getSettings()
-    const index = readBrainIndex(s)
-    return {
-      index,
-      graph: readBrainGraph(s),
-      people: listBrainEntities(s, 'person').map((slug) => readBrainPerson(s, slug)).filter(Boolean),
-      accounts: listBrainEntities(s, 'account').map((slug) => readBrainAccount(s, slug)).filter(Boolean),
-      deals: listBrainEntities(s, 'deal').map((slug) => readBrainDeal(s, slug)).filter(Boolean),
-      meetings: listBrainMeetingExtractions(s)
-        .map((slug) => readBrainMeetingExtraction(s, slug))
-        .filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
-    }
+    return readBrainDashboard(getSettings())
   })
   // Canonical people/account NAMES ONLY (never quotes, roles, deals, or any other entity field) — feeds
   // the renderer's ASR entity-casing bias (lib/entity-casing.ts) so a live transcript can spell a known
@@ -8388,12 +8375,12 @@ function registerIpc(): void {
 
   // Task MI-3: two read-only channels feeding the CRM record pages, the Review.tsx entity strip, and the
   // needs-attention queue. Same guard pattern as the other brain reads — no audit event (nothing mutates).
-  ipcMain.handle(IPC.brainMeetingExtraction, (e, raw) => {
+  ipcMain.handle(IPC.brainMeetingExtraction, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) return null
     const parsed = MeetingExtractionQuerySchema.safeParse(raw)
     if (!parsed.success) return null
-    return readBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
+    return loadBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
   })
   ipcMain.handle(IPC.brainAttention, (e) => {
     assertMainWindow(e)
