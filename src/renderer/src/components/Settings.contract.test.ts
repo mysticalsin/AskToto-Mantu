@@ -575,7 +575,7 @@ describe('Settings from M scrolls the full surface', () => {
   it('fills the 880×800 window and scrolls cl-content end to end', () => {
     expect(source).toMatch(/cl-root flex h-full min-h-0/)
     expect(source).toMatch(/className=\{SETTINGS_CONTENT_SCROLL_CLASS\}/)
-    expect(source).toMatch(/cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden/)
+    expect(SETTINGS_CONTENT_SCROLL_CLASS).toBe('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden')
     expect(source).not.toMatch(/max-h-\[480px\]/)
     expect(source).not.toMatch(/panel-enter/)
     expect(source).toMatch(/Custom instructions/)
