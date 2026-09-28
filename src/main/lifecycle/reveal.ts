@@ -65,8 +65,12 @@ export function legacyRevealWindow(
   w: RevealWindow,
   showForAsk: (w: RevealWindow) => void
 ): void {
-  if (reason === 'activate' || reason === 'second-instance') {
+  if (reason === 'activate') {
     w.showInactive()
+    return
+  }
+  if (reason === 'second-instance') {
+    if (!w.isVisible()) w.showInactive()
     return
   }
   if (options.focus) {

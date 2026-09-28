@@ -4,6 +4,7 @@ import 'streamdown/styles.css'
 import './styles.css'
 import { App } from './App'
 import { useAutoResize } from './state'
+import { crashReport } from './lib/crash-context'
 
 /**
  * The boundary's fallback replaces the ENTIRE App tree — including App's useAutoResize instance, the
@@ -63,7 +64,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
     try {
       // .catch, not just the surrounding try: window.toto.reportCrash returns a promise (ipcRenderer.invoke) —
       // a rejection (e.g. the main handler itself throwing) surfaces as an unhandled rejection, not a sync throw.
-      void window.toto.reportCrash(error?.message ?? '', error?.stack ?? '', info?.componentStack ?? '').catch(() => {})
+      void window.toto.reportCrash(crashReport(error, info?.componentStack)).catch(() => {})
     } catch {
       /* preload bridge itself may be what broke — still show the card */
     }

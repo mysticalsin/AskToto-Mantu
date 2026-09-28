@@ -29,7 +29,15 @@ import { resetSecretKeyCache } from '../secrets'
 import { setSettings } from '../store'
 import { envelopeKeyKind, writeSaved } from '../transcripts'
 import { startBackfill } from './ingest'
-import { brainDir, BrainIndexRebuildError, purgeBrain } from './store'
+import {
+  brainDir,
+  BrainIndexRebuildError,
+  currentBrainIndexIsReadable,
+  deletePreservedBrainIndex,
+  listPreservedBrainIndexes,
+  purgeBrain,
+  restorePreservedBrainIndex
+} from './store'
 
 function sha256(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex')
@@ -361,6 +369,115 @@ describe('rebuild preserves unreadable indexes', () => {
     expect(purgeBrain(settings, { mode: 'erase' }).ok).toBe(true)
 
     expect(existsSync(preserved)).toBe(false)
+  })
+
+  it('delete-all reports failure when preserved indexes remain after the erase attempt', () => {
+    const preserved = join(meetingsFolder, '.brain-preserved')
+    mkdirSync(preserved, { recursive: true })
+    writeFileSync(join(preserved, 'index.unreadable-sample.json'), foreignFileEnvelope())
+    vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => {
+      if (path === preserved) return
+      return actualFs.rmSync!(path, options)
+    })
+
+    expect(purgeBrain(settings, { mode: 'erase' }).ok).toBe(false)
+
+    expect(existsSync(brainDir(settings))).toBe(false)
+    expect(existsSync(preserved)).toBe(true)
+  })
+
+  it('lists preserved indexes with size, date, and restore availability only after they decrypt', async () => {
+    const preserved = join(meetingsFolder, '.brain-preserved')
+    mkdirSync(preserved, { recursive: true })
+    const locked = join(preserved, 'index.unreadable-locked.json')
+    const readable = join(preserved, 'index.unreadable-readable.json')
+    writeFileSync(locked, foreignFileEnvelope())
+    await writeSaved(readable, indexJson(), true)
+
+    const copies = listPreservedBrainIndexes(settings)
+
+    expect(copies.map((c) => c.id).sort()).toEqual(['index.unreadable-locked.json', 'index.unreadable-readable.json'])
+    expect(copies.find((c) => c.id === 'index.unreadable-locked.json')).toMatchObject({
+      size: readFileSync(locked).byteLength,
+      restorable: false
+    })
+    expect(copies.find((c) => c.id === 'index.unreadable-readable.json')).toMatchObject({
+      size: readFileSync(readable).byteLength,
+      restorable: true
+    })
+    expect(copies.every((c) => c.createdAt > 0)).toBe(true)
+  })
+
+  it('restores a decrypting preserved index only after readable-current confirmation and preserves the current index', async () => {
+    const preserved = join(meetingsFolder, '.brain-preserved')
+    mkdirSync(preserved, { recursive: true })
+    await writeSaved(primary, indexJson(), false)
+    const currentBefore = sha256(readFileSync(primary))
+    const copy = join(preserved, 'index.unreadable-readable.json')
+    await writeSaved(copy, JSON.stringify(BrainIndexSchema.parse({ ingested: { 'restored.md': { at: 1, ok: true } } })), true)
+    const restoredBytes = sha256(readFileSync(copy))
+
+    expect(currentBrainIndexIsReadable(settings)).toBe(true)
+    expect(restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: false })).toEqual({
+      ok: false,
+      error: 'current-readable'
+    })
+    expectBytesUnchanged(primary, currentBefore)
+
+    expect(restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: true })).toEqual({ ok: true })
+
+    expectBytesUnchanged(primary, restoredBytes)
+    const beforeRestore = fs.readdirSync(preserved).filter((f) => f.startsWith('index.before-restore-'))
+    expect(beforeRestore).toHaveLength(1)
+    expectBytesUnchanged(join(preserved, beforeRestore[0]), currentBefore)
+  })
+
+  it('restores the bytes it verified even if the preserved source changes before replacement', async () => {
+    const preserved = join(meetingsFolder, '.brain-preserved')
+    mkdirSync(preserved, { recursive: true })
+    await writeSaved(primary, indexJson(), false)
+    const copy = join(preserved, 'index.unreadable-readable.json')
+    await writeSaved(copy, JSON.stringify(BrainIndexSchema.parse({ ingested: { 'verified.md': { at: 1, ok: true } } })), true)
+    const verifiedBytes = sha256(readFileSync(copy))
+    const changedBytes = Buffer.from(JSON.stringify(BrainIndexSchema.parse({ ingested: { 'changed.md': { at: 2, ok: true } } })), 'utf8')
+    const changedSha = sha256(changedBytes)
+    vi.spyOn(fs, 'copyFileSync').mockImplementation((from, to, mode) => {
+      actualFs.copyFileSync!(from, to, mode)
+      if (from === primary) writeFileSync(copy, changedBytes)
+    })
+
+    expect(restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: true })).toEqual({ ok: true })
+
+    expectBytesUnchanged(primary, verifiedBytes)
+    expect(sha256(readFileSync(primary))).not.toBe(changedSha)
+  })
+
+  it('refuses to restore a preserved index that still cannot decrypt', () => {
+    const preserved = join(meetingsFolder, '.brain-preserved')
+    mkdirSync(preserved, { recursive: true })
+    const locked = join(preserved, 'index.unreadable-locked.json')
+    writeFileSync(locked, foreignFileEnvelope())
+    writeFileSync(primary, indexJson())
+    const currentBefore = sha256(readFileSync(primary))
+
+    expect(restorePreservedBrainIndex(settings, 'index.unreadable-locked.json', { allowReplaceReadable: true })).toEqual({
+      ok: false,
+      error: 'not-restorable'
+    })
+
+    expectBytesUnchanged(primary, currentBefore)
+  })
+
+  it('deletes one preserved index copy without touching the others', () => {
+    const preserved = join(meetingsFolder, '.brain-preserved')
+    mkdirSync(preserved, { recursive: true })
+    writeFileSync(join(preserved, 'index.unreadable-a.json'), foreignFileEnvelope())
+    writeFileSync(join(preserved, 'index.unreadable-b.json'), foreignFileEnvelope())
+
+    expect(deletePreservedBrainIndex(settings, 'index.unreadable-a.json')).toEqual({ ok: true })
+
+    expect(existsSync(join(preserved, 'index.unreadable-a.json'))).toBe(false)
+    expect(existsSync(join(preserved, 'index.unreadable-b.json'))).toBe(true)
   })
 
   it('automatic paths never rebuild an unavailable index', () => {

@@ -130,18 +130,40 @@ describe('M2-0036 reveal controller', () => {
     expect(d.disableClickThrough).not.toHaveBeenCalled()
   })
 
-  it('legacy activate and second-instance stay on the old non-activating showInactive path', () => {
-    for (const reason of ['activate', 'second-instance'] as const) {
-      const w = windowStub()
-      const showForAsk = vi.fn()
+  it('legacy activate stays on the old non-activating showInactive path', () => {
+    const w = windowStub()
+    const showForAsk = vi.fn()
 
-      legacyRevealWindow(reason, { focus: true }, w, showForAsk)
+    legacyRevealWindow('activate', { focus: true }, w, showForAsk)
 
-      expect(w.showInactive).toHaveBeenCalledTimes(1)
-      expect(showForAsk).not.toHaveBeenCalled()
-      expect(w.show).not.toHaveBeenCalled()
-      expect(w.focus).not.toHaveBeenCalled()
-    }
+    expect(w.showInactive).toHaveBeenCalledTimes(1)
+    expect(showForAsk).not.toHaveBeenCalled()
+    expect(w.show).not.toHaveBeenCalled()
+    expect(w.focus).not.toHaveBeenCalled()
+  })
+
+  it('legacy second-instance shows a hidden window without activating it', () => {
+    const w = windowStub(false)
+    const showForAsk = vi.fn()
+
+    legacyRevealWindow('second-instance', { focus: true }, w, showForAsk)
+
+    expect(w.showInactive).toHaveBeenCalledTimes(1)
+    expect(showForAsk).not.toHaveBeenCalled()
+    expect(w.show).not.toHaveBeenCalled()
+    expect(w.focus).not.toHaveBeenCalled()
+  })
+
+  it('legacy second-instance leaves an already-visible window alone', () => {
+    const w = windowStub(true)
+    const showForAsk = vi.fn()
+
+    legacyRevealWindow('second-instance', { focus: true }, w, showForAsk)
+
+    expect(w.showInactive).not.toHaveBeenCalled()
+    expect(showForAsk).not.toHaveBeenCalled()
+    expect(w.show).not.toHaveBeenCalled()
+    expect(w.focus).not.toHaveBeenCalled()
   })
 
   it('legacy explicit ask-style hotkey keeps the pre-change focus path', () => {
