@@ -136,10 +136,47 @@ test('an unsigned BLOCKED Windows candidate does not make the platform available
   platformScene.captions = [platformScene.visible_label]
   register.release_evidence.find((entry) => entry.platform === 'macos').status = 'AVAILABLE'
   register.release_evidence.find((entry) => entry.platform === 'macos').signed = true
-  register.release_evidence.find((entry) => entry.platform === 'macos').evidence_record_id = 'EV-M2-0178-REGISTER'
+  register.release_evidence.find((entry) => entry.platform === 'macos').evidence_record_id = 'EV-MAC-RELEASE'
+  register.evidence_records.push({ id: 'EV-MAC-RELEASE', level: 'LIVE_VERIFIED', verified: true, source: { type: 'ticket', id: 'M2-0178' }, summary: 'Release evidence.' })
   const failures = failuresOf(register)
   assert.doesNotMatch(failures, /availability on macos/)
   assert.match(failures, /LF-07 claims availability on windows without release evidence/)
+})
+
+test('release evidence below a proof level does not make a platform available', () => {
+  const register = clone(validRegister)
+  const platformScene = register.storyboard_scenes.find((scene) => scene.id === 'LF-07')
+  platformScene.state = 'concept'
+  platformScene.script = 'Available on both platforms.'
+  platformScene.captions = [platformScene.visible_label]
+  const macos = register.release_evidence.find((entry) => entry.platform === 'macos')
+  macos.status = 'AVAILABLE'
+  macos.signed = true
+  macos.evidence_record_id = 'EV-M2-0178-REGISTER'
+  assert.match(failuresOf(register), /LF-07 claims availability on macos without release evidence/)
+})
+
+test('the platform beat must carry a platform-availability claim', () => {
+  const register = clone(validRegister)
+  const platformScene = register.storyboard_scenes.find((scene) => scene.id === 'LF-07')
+  platformScene.claim_id = null
+  assert.match(failuresOf(register), /LF-07 must carry a platform-availability claim/)
+})
+
+test('a duplicated beat id fails the gate', () => {
+  const register = clone(validRegister)
+  register.storyboard_scenes.push(clone(register.storyboard_scenes[0]))
+  assert.match(failuresOf(register), /storyboard_scenes must not repeat a beat id/)
+})
+
+test('the kit beat list is eight contiguous beats with unique ids and titles', () => {
+  assert.equal(KIT_BEATS.length, 8)
+  KIT_BEATS.forEach((beat, index) => {
+    assert.equal(beat.id, `LF-0${index + 1}`)
+    assert.equal(beat.start_s, index === 0 ? 0 : KIT_BEATS[index - 1].end_s)
+    assert.ok(beat.end_s > beat.start_s)
+  })
+  assert.equal(new Set(KIT_BEATS.map((beat) => beat.title)).size, KIT_BEATS.length)
 })
 
 test('claims must carry live, concept and cut storyboard variants', () => {

@@ -24,6 +24,7 @@ export const KIT_BEATS = [
   { id: 'LF-07', title: 'Runs on Mac and Windows', start_s: 54, end_s: 62 },
   { id: 'LF-08', title: 'Close', start_s: 62, end_s: 70 }
 ]
+const PLATFORM_BEAT_ID = 'LF-07'
 const VERIFIED_PRIVACY_SENTENCE = 'Authorized usage metadata is retained for administration'
 const VERIFIED_PRIVACY_SOURCE_TICKET = 'M2-0149'
 
@@ -93,7 +94,8 @@ export function computeFilmStatus(scenes, claims) {
 
 function platformAvailable(register, evidence, platform) {
   const entry = (register.release_evidence ?? []).find((item) => item?.platform === platform)
-  return Boolean(entry && entry.status === 'AVAILABLE' && entry.signed === true && evidence.get(entry.evidence_record_id)?.verified === true)
+  const record = evidence.get(entry?.evidence_record_id)
+  return Boolean(entry && entry.status === 'AVAILABLE' && entry.signed === true && record?.verified === true && PROOF_LEVELS.has(record.level))
 }
 
 export function validateClaims(register) {
@@ -199,6 +201,10 @@ export function validateClaims(register) {
     }
     if ((scene.state === 'concept' || scene.state === 'reconstruction') && scene.visible_label && !(scene.captions ?? []).includes(scene.visible_label)) {
       failures.push(`${label} must show its visible label ${scene.visible_label} on screen as a caption`)
+    }
+    // The platform beat always carries its availability claim, so its script and captions cannot skip the platform check.
+    if (scene.id === PLATFORM_BEAT_ID && claims.get(scene.claim_id)?.type !== 'platform-availability') {
+      failures.push(`${label} must carry a platform-availability claim`)
     }
     const shownClaim = scene.state === 'cut' ? undefined : claims.get(scene.claim_id)
     if (shownClaim?.type === 'platform-availability') {

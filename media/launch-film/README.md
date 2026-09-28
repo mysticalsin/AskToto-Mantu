@@ -21,9 +21,9 @@ Rules enforced by the gate:
 
 M2-0349 re-keys the register to the eight storyboard beats and adds:
 
-- `storyboard_scenes` must be exactly `LF-01`..`LF-08` with the titles and `start_s`/`end_s` timings in `KIT_BEATS` (ASSUMED to mirror the kit storyboard; update both together if the kit changes). A missing, extra, retitled or retimed beat fails.
+- `storyboard_scenes` must be exactly `LF-01`..`LF-08` with the titles and `start_s`/`end_s` timings in `KIT_BEATS` (LEAD_ACTION: diff KIT_BEATS (ids, titles, start_s/end_s) against the kit STORYBOARD.json and correct any mismatch before M2-0213 consumes CLAIMS.json; the kit file is not in this repository, so these values are unverified against it. Update KIT_BEATS and CLAIMS.json together). A missing, extra, retitled or retimed beat fails.
 - Each claim carries a `capability_class` (`verified`, `implemented-unverified`, `planned`, `unavailable`), a `build_hash` (null until a build exists) and an `evidence_record_id`. `verified` needs a build hash and LIVE_VERIFIED, ACCEPTED or MEASURED evidence; a `live` scene needs a verified claim.
 - `film_status` is computed: `verified product preview` only when every shown scene is live on a verified claim, otherwise `concept preview`, where each concept scene must show its label as a caption. The declared value must match.
-- A shown `platform-availability` claim fails unless `release_evidence` has an `AVAILABLE`, signed entry with a verified evidence record for each listed platform. An unsigned BLOCKED Windows candidate (D-29) is not available.
+- A shown `platform-availability` claim fails unless `release_evidence` has an `AVAILABLE`, signed entry whose evidence record is LIVE_VERIFIED, ACCEPTED or MEASURED for each listed platform. `LF-07` must always carry a `platform-availability` claim. An unsigned BLOCKED Windows candidate (D-29) is not available.
 
 REF-09 and REF-10 are presentation references only. They do not prove product behavior and must not be used as claim evidence.
