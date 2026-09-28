@@ -21,6 +21,7 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       expect(readFileSync(join(out, 'environment.json'), 'utf8')).toContain('"dry_run": 1')
       expect(readFileSync(join(out, 'node-options-fuse.json'), 'utf8')).toContain('NOT_EXERCISED')
       expect(readFileSync(join(out, 'dataless-fixtures.json'), 'utf8')).toContain('"fixtures"')
+      expect(readFileSync(join(out, 'external-blockers.json'), 'utf8')).toContain('"BLOCKED_EXTERNAL"')
       expect(readFileSync(join(out, 'launch-plan.json'), 'utf8')).toContain('"electron_user_data_dir_switch":true')
 
       const fixtures = JSON.parse(readFileSync(join(out, 'fifo-fixtures.json'), 'utf8')) as {

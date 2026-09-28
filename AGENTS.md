@@ -5,10 +5,10 @@ ChatGPT (GitHub plugin), Antigravity and humans. Keep it short enough to read ev
 
 ## 1. Start every session here
 
-1. Read `_relay/HANDOFF.md` in the private program repository `mysticalsin/Metis-2.0-Program` — the live baton.
+1. Read the internal program relay baton — the live baton.
    It is fresher than git log. Honour its "Decisions made". (`_relay/` is git-ignored here because this repository is public.)
-2. If you are working on Métis 2.0, the plan, ticket ledger and evidence live in the private program repository `mysticalsin/Metis-2.0-Program`
-   (`docs/metis-2.0/`). Read its `README.md`, then only the ticket you are assigned (`docs/metis-2.0/ledger/tickets/M2-####.md`).
+2. If you are working on Métis 2.0, the plan, ticket ledger and evidence live in the internal program tracker.
+   Read its start-here document, then only the ticket you are assigned.
    Do not reload the whole plan or kit for every subtask. Program documents never go into this public repository.
 3. Say in one line what you are resuming, then work.
 
@@ -29,7 +29,7 @@ meeting copilot / note-taker: a frameless, transparent, always-on-top overlay fo
 | `intelligence/` | Mantu Intelligence sub-app bundle |
 | `native-app/`, `native/` | Swift MetisKit / native macOS helper |
 | `scripts/` | Build, packaging, release and gate scripts |
-| `docs/` | Product and engineering docs (the 2.0 program docs live in the private program repository `mysticalsin/Metis-2.0-Program`) |
+| `docs/` | Product and engineering docs. Internal 2.0 program docs stay outside this public repository. |
 
 ## 3. Commands
 
@@ -57,7 +57,7 @@ Pushing a `v*` tag triggers the public release pipeline — never push tags.
 
 ## 4. Métis 2.0 program conventions
 
-- **Ticket IDs.** Program tickets are `M2-0001`…, defined in `docs/metis-2.0/ledger/` of the private program repository `mysticalsin/Metis-2.0-Program`. Each ticket lists the kit
+- **Ticket IDs.** Program tickets are `M2-0001`…, defined in the internal program tracker. Each ticket lists the kit
   references it satisfies (`TASK-027`, `UC-014`, `OBU-02`, `HMSTEP-05`, …) and review findings it closes
   (`L01-F3`, `B2-F1`, …). Never renumber or delete a ticket; mark it `CANCELLED` with a reason instead.
 - **Branches.** `m2/M2-0001-short-slug` for program work, `fix/<slug>` for hotfixes. Branch from `main`.
@@ -95,7 +95,7 @@ A reviewer never approves work it wrote. A different model's agreement is not en
 
 ## Relay Baton — shift handoff (MANDATORY)
 
-This project uses `_relay/HANDOFF.md` in the private program repository `mysticalsin/Metis-2.0-Program` as shared memory between AI tools (Claude Code, Codex, Cursor, Antigravity, Xcode). Treat every session as a shift:
+This project uses the internal relay baton as shared memory between AI tools (Claude Code, Codex, Cursor, Antigravity, Xcode). Treat every session as a shift:
 
 1. **Shift start:** Read `_relay/HANDOFF.md` BEFORE anything else. It is the freshest ground truth. Honor the "Decisions made" section — do not relitigate settled decisions. Tell the user in one line what you're resuming.
 2. **During:** Update `HANDOFF.md` at milestones and the moment you hit a blocker.

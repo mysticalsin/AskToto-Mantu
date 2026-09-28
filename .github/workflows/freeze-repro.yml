@@ -1,0 +1,127 @@
+name: M2-0008 freeze repro
+
+# Manual hosted run for the M2-0008 public-repo tool. Hosted runners can verify the unmodified 1.9.6
+# artifact hash, run the fixture/report harness, and upload the content-free bundle. Rows that require a
+# real QA account, cloud-file provider hydration, or a physical desktop session remain BLOCKED_EXTERNAL
+# inside the uploaded bundle; the workflow does not fake those observations.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag that contains the unmodified 1.9.6 artifacts.
+        required: true
+        default: v1.9.6
+      macos_artifact_sha256:
+        description: SHA-256 of the macOS 1.9.6 DMG under test.
+        required: true
+      windows_artifact_sha256:
+        description: SHA-256 of the Windows 1.9.6 installer under test.
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m2-0008-freeze-repro-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  macos:
+    name: M2-0008 hosted bundle (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    if: startsWith(github.ref, 'refs/heads/')
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Download and verify the 1.9.6 macOS artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_SHA256: ${{ inputs.macos_artifact_sha256 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/m2-0008-artifact" "$RUNNER_TEMP/m2-0008-app"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-*.dmg' --dir "$RUNNER_TEMP/m2-0008-artifact"
+          artifact="$(find "$RUNNER_TEMP/m2-0008-artifact" -type f -name '*.dmg' -print -quit)"
+          test -n "$artifact"
+          printf '%s  %s\n' "$EXPECTED_SHA256" "$artifact" | shasum -a 256 -c -
+          volume="$RUNNER_TEMP/m2-0008-volume"
+          hdiutil attach -nobrowse -readonly -mountpoint "$volume" "$artifact" > /dev/null
+          ditto "$volume/Metis.app" "$RUNNER_TEMP/m2-0008-app/Metis.app"
+          hdiutil detach "$volume" > /dev/null
+      - name: Run the M2-0008 hosted bundle check
+        env:
+          ARTIFACT_SHA256: ${{ inputs.macos_artifact_sha256 }}
+        run: |
+          bash scripts/qa/freeze-repro/run-matrix.sh \
+            --artifact "$ARTIFACT_SHA256" \
+            --build-run-id "$GITHUB_RUN_ID" \
+            --app "$RUNNER_TEMP/m2-0008-app/Metis.app" \
+            --out out/m2-0008-freeze-repro \
+            --dry-run
+          node scripts/evidence/check.mjs --ticket M2-0008 --bundle out/m2-0008-freeze-repro
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: m2-0008-freeze-repro-macos
+          path: out/m2-0008-freeze-repro/
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: M2-0008 hosted bundle (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    if: startsWith(github.ref, 'refs/heads/')
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Download, verify, and install the 1.9.6 Windows artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_SHA256: ${{ inputs.windows_artifact_sha256 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/m2-0008-artifact" "$RUNNER_TEMP/m2-0008-install"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-Setup-*.exe' --dir "$RUNNER_TEMP/m2-0008-artifact"
+          artifact="$(find "$RUNNER_TEMP/m2-0008-artifact" -type f -name '*.exe' -print -quit)"
+          test -n "$artifact"
+          printf '%s  %s\n' "$EXPECTED_SHA256" "$artifact" | sha256sum -c -
+          install_dir="$(cygpath -w "$RUNNER_TEMP/m2-0008-install")"
+          artifact_win="$(cygpath -w "$artifact")"
+          cat > "$RUNNER_TEMP/m2-0008-install.ps1" <<'PS1'
+          param([string]$Artifact, [string]$InstallDir)
+          $p = Start-Process -FilePath $Artifact -ArgumentList '/S', "/D=$InstallDir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited $($p.ExitCode)" }
+          PS1
+          powershell -NoProfile -File "$RUNNER_TEMP/m2-0008-install.ps1" -Artifact "$artifact_win" -InstallDir "$install_dir"
+      - name: Run the M2-0008 hosted bundle check
+        env:
+          ARTIFACT_SHA256: ${{ inputs.windows_artifact_sha256 }}
+        run: |
+          bash scripts/qa/freeze-repro/run-matrix.sh \
+            --artifact "$ARTIFACT_SHA256" \
+            --build-run-id "$GITHUB_RUN_ID" \
+            --app "$RUNNER_TEMP/m2-0008-install/Metis.exe" \
+            --out out/m2-0008-freeze-repro \
+            --dry-run
+          node scripts/evidence/check.mjs --ticket M2-0008 --bundle out/m2-0008-freeze-repro
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: m2-0008-freeze-repro-windows
+          path: out/m2-0008-freeze-repro/
+          if-no-files-found: error
+          retention-days: 14

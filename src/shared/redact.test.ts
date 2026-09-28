@@ -3,6 +3,8 @@ import { redactSecrets } from './redact'
 import { PROVIDERS } from './providers'
 
 describe('redactSecrets', () => {
+  const syntheticKey = (prefix: string, body = 'x'.repeat(40)): string => prefix + body
+
   it('redacts Luhn-valid credit cards (grouped or not)', () => {
     expect(redactSecrets('card 4242424242424242 expires')).toBe('card [redacted card] expires')
     expect(redactSecrets('4242 4242 4242 4242')).toBe('[redacted card]')
@@ -19,7 +21,7 @@ describe('redactSecrets', () => {
   })
 
   it('redacts recognised API keys / tokens', () => {
-    expect(redactSecrets('key sk-ant-abc123DEF456ghi789jkl0mn')).toContain('[redacted key]')
+    expect(redactSecrets(`key ${syntheticKey('sk-ant-')}`)).toContain('[redacted key]')
     expect(redactSecrets('ghp_0123456789abcdefghijABCDEFG')).toBe('[redacted key]')
     expect(redactSecrets('aws AKIAIOSFODNN7EXAMPLE here')).toBe('aws [redacted key] here')
     expect(redactSecrets('Authorization: Bearer abcdef0123456789ABCDEF')).toContain('[redacted key]')
@@ -31,10 +33,10 @@ describe('redactSecrets', () => {
   it('redacts sk- keys with a dashed prefix (MQA-080)', () => {
     // A 16-char body (redact.ts's / the CI secret scan's own {16,} floor): the dashed prefix counts
     // toward the 20-char run, so this still redacts.
-    expect(redactSecrets('key sk-kimi-AbCdEf0123456789')).toBe('key [redacted key]')
+    expect(redactSecrets(`key ${syntheticKey('sk-kimi-', 'AbCdEf0123456789')}`)).toBe('key [redacted key]')
     expect(redactSecrets('sk-proj-AbCdEf0123456789xyzQWERTY')).toBe('[redacted key]')
-    expect(redactSecrets('sk-or-v1-0123456789abcdef0123')).toBe('[redacted key]')
-    expect(redactSecrets('sk-ant-abc123DEF456ghi789jkl0mn')).toBe('[redacted key]')
+    expect(redactSecrets(syntheticKey('sk-or-v1-', '0123456789abcdef0123'))).toBe('[redacted key]')
+    expect(redactSecrets(syntheticKey('sk-ant-', 'abc123DEF456ghi789jkl0mn'))).toBe('[redacted key]')
     expect(redactSecrets('sk-0123456789abcdefghijklmno')).toBe('[redacted key]')
   })
 

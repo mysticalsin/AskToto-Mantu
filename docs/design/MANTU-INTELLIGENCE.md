@@ -14,9 +14,9 @@ Mantu Intelligence into an evidence-first workspace") owns the fuller workspace 
 (TASK-038, "Deploy and connect the Dust knowledge read tools over remote MCP") owns the
 `knowledge.*` Dust MCP tools within that contract.
 
-## Outcome (Tony locks)
+## Outcome (Owner locks)
 
-1. **Setup connects an existing brain.** Onboarding / first-run **scans OneDrive** for an existing second brain / LLM wiki (Tony vault patterns under OneDrive-MantuGroup Documents, plus any already-configured Métis meetings root). User picks the match (or confirms the best hit). Métis **connects** that folder as the Mantu Intelligence brain — not a blank local-only store by default when a brain already exists.
+1. **Setup connects an existing brain.** Onboarding / first-run **scans OneDrive** for an existing second brain / LLM wiki (the owner vault patterns under configured cloud Documents folder, plus any already-configured Métis meetings root). User picks the match (or confirms the best hit). Métis **connects** that folder as the Mantu Intelligence brain — not a blank local-only store by default when a brain already exists.
 2. **Meetings enrich that brain.** Every saved meeting (Listen / import) writes into the connected brain. Enrichment is durable markdown/wiki pages + structured `.brain/` extracts (people, accounts, deals, coaching, Today) — same pass family as Update Intelligence (`docs/design/INTELLIGENCE-UPDATE.md`).
 3. **Concrete cross-meeting wiki connections.** The dashboard shows **named, clickable links between meetings** (shared people, accounts, deals, topics, follow-ups) drawn from the wiki/graph — not a vague "embeddings" or similarity-cloud UI. Example row: "Acme renewal" links Meeting A ↔ Meeting B via account Acme + open deal.
 4. **Concrete dashboards.** Today, People, Accounts, Deals, Coaching, Relationships, Connections — each shows real rows from the connected brain or a loud empty state with a clear next action (Update Intelligence / save a meeting / reconnect OneDrive). No empty shell cards that look populated.
@@ -59,7 +59,7 @@ Mantu Intelligence into an evidence-first workspace") owns the fuller workspace 
 ## Acceptance (Ultron stamp)
 
 1. DESIGN this file ACK by Ultron (this FRAME).
-2. Mac: setup/scan lists at least Tony AI Second Brain (or configured OneDrive brain) and Connect sticks across relaunch.
+2. Mac: setup/scan lists at least the owner AI Second Brain (or configured OneDrive brain) and Connect sticks across relaunch.
 3. After two meetings sharing a person or account, Connections shows a concrete link both directions.
 4. Update Intelligence / 3x daily cadence still honors INTELLIGENCE-UPDATE.md.
 5. No Worker URL paste regression on CF Settings (F stays PASS).

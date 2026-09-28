@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RECORD_SCHEMA } from './record.mjs'
-import { TEST_WORKFLOW, ledgerProblems, outputProblems, prProblems, githubApi } from './check.mjs'
+import { TEST_WORKFLOW, ledgerProblems, outputProblems, prProblems, githubApi, m2_0008BundleProblems } from './check.mjs'
 
 const SHA1_A = '1'.repeat(40)
 const SHA1_B = '2'.repeat(40)
@@ -236,9 +236,9 @@ test('C15 a record kit_refs set must equal the ticket kit_refs exactly', () => {
 })
 
 test('C16 a finding_ref not on the ticket is a problem', () => {
-  const t = ticket({ id: 'M2-0001', status: 'IN_PROGRESS', finding_refs: ['CHATGPT-A10'] })
-  const recs = new Map([['M2-0001', [record({ ticket: 'M2-0001', finding_refs: ['CHATGPT-A10', 'CHATGPT-A99'] })]]])
-  assertProblem(ledgerProblems(ledger({ tickets: [t] }), recs), 'M2-0001', 'CHATGPT-A99')
+  const t = ticket({ id: 'M2-0001', status: 'IN_PROGRESS', finding_refs: ['PUBLIC-A10'] })
+  const recs = new Map([['M2-0001', [record({ ticket: 'M2-0001', finding_refs: ['PUBLIC-A10', 'PUBLIC-A99'] })]]])
+  assertProblem(ledgerProblems(ledger({ tickets: [t] }), recs), 'M2-0001', 'PUBLIC-A99')
 })
 
 test('C17 unlabelled OPEN assumptions and answered-changed decisions must be flagged', () => {
@@ -396,6 +396,92 @@ test('C26 a non-boolean truthy closes_program does not exempt a capped DONE tick
     ['M2-0002', [record({ ticket: 'M2-0002' })]]
   ])
   assertProblem(ledgerProblems(ledger({ tickets: [blocker, t] }), recs), 'M2-0002', 'only as ENGINEERING_COMPLETE')
+})
+
+test('C27 M2-0008 bundle check requires the content-free freeze repro matrix artifacts', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0008-bundle-'))
+  const writeJson = (name, value) => writeFileSync(join(root, name), `${JSON.stringify(value, null, 2)}\n`)
+  writeFileSync(join(root, 'README.md'), '# M2-0008\n')
+  writeFileSync(join(root, 'M2-0008.records.README.md'), '# Evidence Import Not Emitted\n')
+  writeJson('environment.json', { ticket: 'M2-0008', artifact_sha256: 'a'.repeat(64), dry_run: 1 })
+  writeJson('node-options-fuse.json', { node_options_fuse: 'DISABLED_OR_UNAVAILABLE', detail: 'probe recorded' })
+  writeJson('dataless-fixtures.json', { fixtures: [] })
+  writeJson('external-blockers.json', { ticket: 'M2-0008', blockers: [{ status: 'BLOCKED_EXTERNAL', unblock_step: 'Run on QA account.' }] })
+  writeJson('launch-plan.json', { electron_user_data_dir_switch: true })
+  writeJson('fifo-fixtures.json', {
+    kind: 'fifo',
+    count: 6,
+    fixtures: [
+      { path: 'one.md', opened_by_1_9_6: false },
+      { path: 'two.md', opened_by_1_9_6: false },
+      { path: 'three.md', opened_by_1_9_6: false },
+      { path: 'four.md', opened_by_1_9_6: false },
+      { path: '.brain/index.json', opened_by_1_9_6: false },
+      { path: '.brain/entities/person/person.json', opened_by_1_9_6: false }
+    ]
+  })
+  writeFileSync(join(root, 'matrix.jsonl'), [
+    'row-1-history-open',
+    'row-2-brain-status-blocked-brain',
+    'row-3-macos-activate',
+    'row-4-second-instance-reopen',
+    'row-5-dataless-brain-idle',
+    'row-9-network-off-flapping'
+  ].map((row) => JSON.stringify({ row })).join('\n') + '\n')
+  writeFileSync(join(root, 'interrupt-results.jsonl'), [
+    'network-off',
+    'file-provider-cancel',
+    'process-signal'
+  ].map((interrupt) => JSON.stringify({ interrupt })).join('\n') + '\n')
+
+  assert.deepEqual(m2_0008BundleProblems(root), [])
+
+  writeJson('fifo-fixtures.json', { kind: 'fifo', count: 1, fixtures: [{ path: 'one.md' }] })
+  const problems = m2_0008BundleProblems(root)
+  assertProblem(problems, 'at least six FIFO fixtures')
+  assertProblem(problems, 'blocked .brain/index.json')
+  assertProblem(problems, 'opened_by_1_9_6')
+})
+
+test('C28 CLI --ticket M2-0008 validates a freeze repro bundle path', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0008-bundle-cli-'))
+  const writeJson = (name, value) => writeFileSync(join(root, name), `${JSON.stringify(value)}\n`)
+  writeFileSync(join(root, 'README.md'), '# M2-0008\n')
+  writeFileSync(join(root, 'M2-0008.records.README.md'), '# Evidence Import Not Emitted\n')
+  writeJson('environment.json', { ticket: 'M2-0008', artifact_sha256: 'a'.repeat(64) })
+  writeJson('node-options-fuse.json', { node_options_fuse: 'NOT_EXERCISED', detail: 'dry-run' })
+  writeJson('dataless-fixtures.json', { fixtures: [] })
+  writeJson('external-blockers.json', { ticket: 'M2-0008', blockers: [{ status: 'BLOCKED_EXTERNAL', unblock_step: 'Run on QA account.' }] })
+  writeJson('launch-plan.json', { electron_user_data_dir_switch: true })
+  writeJson('fifo-fixtures.json', {
+    kind: 'fifo',
+    count: 6,
+    fixtures: [
+      { path: 'one.md', opened_by_1_9_6: null },
+      { path: 'two.md', opened_by_1_9_6: null },
+      { path: 'three.md', opened_by_1_9_6: null },
+      { path: 'four.md', opened_by_1_9_6: null },
+      { path: '.brain/index.json', opened_by_1_9_6: null },
+      { path: '.brain/entities/account/account.json', opened_by_1_9_6: null }
+    ]
+  })
+  writeFileSync(join(root, 'matrix.jsonl'), [
+    'row-1-history-open',
+    'row-2-brain-status-blocked-brain',
+    'row-3-macos-activate',
+    'row-4-second-instance-reopen',
+    'row-5-dataless-brain-idle',
+    'row-9-network-off-flapping'
+  ].map((row) => JSON.stringify({ row })).join('\n') + '\n')
+  writeFileSync(join(root, 'interrupt-results.jsonl'), [
+    'network-off',
+    'file-provider-cancel',
+    'process-signal'
+  ].map((interrupt) => JSON.stringify({ interrupt })).join('\n') + '\n')
+
+  const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
+  const output = execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0008', '--bundle', root], { encoding: 'utf8' })
+  assert.match(output, /M2-0008 bundle: OK/)
 })
 
 // --- PR rules (P1-P7) and githubApi (G1) ---

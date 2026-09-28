@@ -65,17 +65,17 @@ describe('deriveSessionSecretNode', () => {
 
 describe('mintSessionTokenNode', () => {
   it('produces v1|{iat}|{email}|{sig} with a lowercase email', async () => {
-    const token = await mintSessionTokenNode('Tony.Walteur@Gmail.com', 1700000000000, 'deadbeef')
+    const token = await mintSessionTokenNode('Owner@Example.test', 1700000000000, 'deadbeef')
     const parts = token.split('|')
     expect(parts).toHaveLength(4)
     expect(parts[0]).toBe('v1')
     expect(parts[1]).toBe('1700000000000')
-    expect(parts[2]).toBe('tony.walteur@gmail.com')
+    expect(parts[2]).toBe('owner@example.test')
     expect(parts[3]).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it('signature matches an independent HMAC-SHA256 re-derivation via node:crypto', async () => {
-    const email = 'tony.walteur@gmail.com'
+    const email = 'owner@example.test'
     const iat = 1700000000000
     const secret = 'some-derived-hex-secret'
     const token = await mintSessionTokenNode(email, iat, secret)
@@ -95,7 +95,7 @@ describe('mintSessionTokenNode', () => {
 describe('end-to-end: derive + mint matches a from-scratch reference implementation', () => {
   it('full pipeline agrees with independently computed HKDF + HMAC', async () => {
     const promptKeyB64 = Buffer.alloc(32, 42).toString('base64')
-    const email = 'tony.walteur@gmail.com'
+    const email = 'owner@example.test'
     const iat = 1735689600000
 
     const secret = await deriveSessionSecretNode({ promptKey: promptKeyB64 })
@@ -143,7 +143,7 @@ describe('parseDevVars', () => {
 describe('parseArgs', () => {
   it('defaults email and iat', () => {
     const args = parseArgs([])
-    expect(args.email).toBe('tony.walteur@gmail.com')
+    expect(args.email).toBe('owner@example.test')
     expect(typeof args.iat).toBe('number')
     expect(args.promptKey).toBeNull()
     expect(args.sessionSecret).toBeNull()

@@ -25,7 +25,8 @@ Options:
   --qa-host-label <label>      public QA host label for the evidence record (default: qa-mac-1)
   --implementer-model <id>     implementer model label for the evidence record
   --validator-model <id>       validator model label for the evidence record
-  --dry-run                    create fixtures and reports without launching or sampling
+  --dry-run                    create fixtures and reports without launching or sampling; if --app is provided,
+                               record the app executable hash and NODE_OPTIONS fuse state
 USAGE
 }
 
@@ -372,6 +373,30 @@ write_environment() {
   } > "$OUT/environment.json"
 }
 
+write_external_blockers() {
+  if [[ "$DRY_RUN" == 0 ]]; then
+    printf '{"ticket":"M2-0008","blockers":[]}\n' > "$OUT/external-blockers.json"
+    return
+  fi
+  cat > "$OUT/external-blockers.json" <<'EOF_BLOCKERS'
+{
+  "ticket": "M2-0008",
+  "blockers": [
+    {
+      "status": "BLOCKED_EXTERNAL",
+      "rows": ["row-1-history-open", "row-2-brain-status-blocked-brain", "row-5-dataless-brain-idle", "row-9-network-off-flapping"],
+      "unblock_step": "Run the same harness on the QA account with a representative synthetic profile, real dataless cloud-file fixtures, network-off and network-flapping observations, and consented DiagnosticReports collection."
+    },
+    {
+      "status": "BLOCKED_EXTERNAL",
+      "rows": ["row-3-macos-activate", "row-4-second-instance-reopen"],
+      "unblock_step": "Run the same harness on the QA macOS desktop session against the installed 1.9.6 app and record activate versus second-instance reopen behavior."
+    }
+  ]
+}
+EOF_BLOCKERS
+}
+
 record_dataless_fixture_state() {
   local out="$OUT/dataless-fixtures.json"
   printf '{\n  "fixtures": [\n' > "$out"
@@ -610,12 +635,20 @@ if [[ "$DRY_RUN" == 0 ]]; then
   record_fuse_state "$EXE"
   launch_app "$PROFILE"
 else
-  APP_EXE_SHA="dry-run"
-  printf '{"node_options_fuse":"NOT_EXERCISED","detail":"dry-run"}\n' > "$OUT/node-options-fuse.json"
+  if [[ -n "$APP" ]]; then
+    EXE=$(resolve_exe "$APP")
+    [[ -x "$EXE" ]] || fail "app executable is not executable"
+    APP_EXE_SHA=$(sha256_file "$EXE")
+    record_fuse_state "$EXE"
+  else
+    APP_EXE_SHA="dry-run-no-app"
+    printf '{"node_options_fuse":"NOT_EXERCISED","detail":"dry-run without --app"}\n' > "$OUT/node-options-fuse.json"
+  fi
   write_launch_plan "$PROFILE"
 fi
 
 write_environment
+write_external_blockers
 record_dataless_fixture_state
 
 row_result=$(prompt_result "row-1-history-open" "Row 1: open History/Recall with FIFO meeting and .brain fixtures in place, wait for freeze/no-freeze evidence, then press return.")
@@ -672,6 +705,7 @@ cat > "$OUT/README.md" <<EOF_README
 - FIFO fixture evidence: \`fifo-fixtures.json\`
 - NODE_OPTIONS fuse state: \`node-options-fuse.json\`
 - Interrupt checks for ADR-021/C10: \`interrupt-results.jsonl\`
+- Hosted/QA account blockers: \`external-blockers.json\`
 - Main/renderer samples: \`samples/\`
 - DiagnosticReports .spin/.hang copies, if any: \`diagnostic-reports/\`
 - Evidence import manifest: \`M2-0008.evidence-import.json\`

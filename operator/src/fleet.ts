@@ -1,4 +1,4 @@
-/** Real Métis seats vs synthetic import rows. Tony-only approval for platform keys. */
+/** Real Métis seats vs synthetic import rows. owner-only approval for platform keys. */
 
 import { parseLicenseId } from '../../src/shared/operator-license'
 import type { IssuedLicenseRow, OperatorStore } from './store'
@@ -21,7 +21,7 @@ export const LICENSE_STATUSES = [
 export type LicenseStatus = (typeof LICENSE_STATUSES)[number]
 
 export const SEAT_NOT_APPROVED =
-  'This seat is not approved. Tony must approve this device in Operator before platform keys work.'
+  'This seat is not approved. The owner must approve this device in Operator before platform keys work.'
 
 export const LICENSES_EMPTY = 'No licenses in D1'
 

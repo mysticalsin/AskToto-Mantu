@@ -1,5 +1,5 @@
 /**
- * Generic OAuth 2.0 authorization-code flow (Tony: "clicking a connector must actually connect by
+ * Generic OAuth 2.0 authorization-code flow (the owner: "clicking a connector must actually connect by
  * opening the vendor's own authorisation page"; plan 6.10b). Owns three things `routes/connectors-oauth.ts`
  * composes into the two routes:
  *

@@ -1,14 +1,14 @@
 # Brain connectors
 
 Date: 2026-08-31
-Owner: Tony · Settings → Brain
+Owner: the owner · Settings → Brain
 Status: **active contract** — implement only what this file states.
 
 ## Outcome
 
 Settings → Brain shows three connectors.
 
-- **Polo Pre-Sales** stays Tony's CRM form: MCP URL, API key, Test, Save. No visual or flow rewrite.
+- **Polo Pre-Sales** stays the owner's CRM form: MCP URL, API key, Test, Save. No visual or flow rewrite.
 - **ClickUp** and **Plane** are product connects: official logo, name, one friendly line, one **Connect** button. Connect opens the vendor login in the system browser and Métis finishes MCP setup. No URL, key, slug, Test, or Save on the default card.
 - **Advanced** (closed on every mount) is the power path: paste an API key. Extra headers (Plane workspace slug) live here too. The official hosted MCP URL is pinned in main — never a field.
 - Nothing auto-sends. Connect is a click. Push stays Review → Confirm.

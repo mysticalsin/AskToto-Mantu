@@ -461,7 +461,16 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
             superseded: []
           },
           commitments: [
-            { text: 'send the revised pricing', by: 'you', meeting: 'acme-pricing.md', date: '2026-02-01', status: 'open', confidence: 'EXTRACTED', quote: '', due_hint: '' }
+            {
+              text: 'send the revised pricing',
+              by: 'you',
+              meeting: 'acme-pricing.md',
+              date: '2026-02-01',
+              status: 'open',
+              confidence: 'EXTRACTED',
+              quote: 'stated aloud',
+              due_hint: ''
+            }
           ]
         })
       )
@@ -679,7 +688,16 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
             { file: teamKey, date: '2026-02-01', title: 'Alice Pricing Negotiation' }
           ],
           commitments: [
-            { text: 'drop the floor price to 40k', by: 'Alice', meeting: teamKey, date: '2026-02-01', status: 'open', confidence: 'EXTRACTED', quote: '', due_hint: '' }
+            {
+              text: 'drop the floor price to 40k',
+              by: 'Alice',
+              meeting: teamKey,
+              date: '2026-02-01',
+              status: 'open',
+              confidence: 'EXTRACTED',
+              quote: 'stated aloud',
+              due_hint: ''
+            }
           ]
         })
       )

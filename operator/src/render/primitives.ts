@@ -45,7 +45,7 @@ export function timeCell(ts: number, now: number): string {
 }
 
 /**
- * @deprecated Plan 3.6 (rewritten 2026-09-06, Tony: "I want the country flags with their names
+ * @deprecated Plan 3.6 (rewritten 2026-09-06, the owner: "I want the country flags with their names
  * and more"): an emoji flag with no visible name next to it is retired in favour of
  * `countryCell(iso, opts)` below, everywhere except a header summary strip (`flagStrip()`).
  * Kept working, unchanged, for pages that still call it directly -- do not add new call sites.
@@ -177,7 +177,7 @@ const KIND_LABEL: Record<IngestKind, string> = {
   crm: 'CRM', vault: 'Vault', license: 'License', seat: 'Seat', use: 'Use', platform: 'Platform'
 }
 
-/** Tint + icon + label for one ingest kind (Tony 9c2 tint map). Unknown kinds fall back to the
+/** Tint + icon + label for one ingest kind (the owner 9c2 tint map). Unknown kinds fall back to the
  * grey "seat" tint with their raw name, never a blank badge. */
 export function kindBadge(kind: string): string {
   const known = Object.prototype.hasOwnProperty.call(KIND_ICON_PATHS, kind)

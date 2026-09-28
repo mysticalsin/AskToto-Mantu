@@ -12,7 +12,7 @@ import {
 
 describe('sanitizeSeatHostname', () => {
   it('trims and caps a real hostname', () => {
-    expect(sanitizeSeatHostname('  Tonys-MacBook-Pro.local  ')).toBe('Tonys-MacBook-Pro.local')
+    expect(sanitizeSeatHostname('  Example-MacBook-Pro.local  ')).toBe('Example-MacBook-Pro.local')
     expect(sanitizeSeatHostname('a'.repeat(100))).toHaveLength(64)
   })
   it('rejects non-strings and blanks', () => {
@@ -33,7 +33,7 @@ describe('sanitizeSeatHostname', () => {
 
 describe('sanitizeSeatSsoEmail', () => {
   it('lowercases a real address', () => {
-    expect(sanitizeSeatSsoEmail('Tony.Walteur@Mantu.com')).toBe('tony.walteur@mantu.com')
+    expect(sanitizeSeatSsoEmail('Owner@Example.test')).toBe('owner@example.test')
   })
   it('rejects malformed or oversized input', () => {
     expect(sanitizeSeatSsoEmail('not-an-email')).toBeUndefined()
@@ -101,8 +101,8 @@ describe('buildSeatMeta', () => {
       seatHash: 'hash123',
       os: 'darwin',
       appVersion: '1.8.5',
-      hostname: 'Tonys-Mac.local',
-      ssoEmail: 'Tony@Mantu.com',
+      hostname: 'Example-Mac.local',
+      ssoEmail: 'owner@example.test',
       license: 'LICENSED',
       licenseLast4: 'wxyz',
       licenseId: 'AB12CD34EF56AB78',
@@ -112,8 +112,8 @@ describe('buildSeatMeta', () => {
       seatHash: 'hash123',
       os: 'darwin',
       appVersion: '1.8.5',
-      hostname: 'Tonys-Mac.local',
-      ssoEmail: 'tony@mantu.com',
+      hostname: 'Example-Mac.local',
+      ssoEmail: 'owner@example.test',
       license: 'licensed',
       licenseLast4: 'wxyz',
       licenseId: 'ab12cd34ef56ab78',
@@ -138,11 +138,11 @@ describe('buildSeatMeta', () => {
       os: 'darwin',
       appVersion: '1.8.5',
       hostname: 'sk-ant-secret-host',
-      ssoEmail: 'tony@mantu.com',
+      ssoEmail: 'owner@example.test',
       license: 'not-a-real-state'
     })
     expect(meta.hostname).toBeUndefined()
-    expect(meta.ssoEmail).toBe('tony@mantu.com')
+    expect(meta.ssoEmail).toBe('owner@example.test')
     expect(meta.license).toBeUndefined()
   })
 

@@ -65,5 +65,5 @@ const html = `<!doctype html>
 </html>
 `
 
-writeFileSync('/private/tmp/claude-501/operator-preview/world-map-fix.html', html)
+writeFileSync(join(tmpdir(), 'operator-preview-world-map-fix.html'), html)
 console.log('wrote preview html, bytes', Buffer.byteLength(html))
