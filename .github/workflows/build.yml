@@ -71,6 +71,11 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - run: npm test
+      # MQA-252 (M2-0048): every skipped test must be declared and stay within its per-OS baseline, so a
+      # newly-skipped test fails the build instead of quietly joining the pile. Runs its own vitest pass
+      # (scripts/check-skipped-tests.mjs collects a fresh JSON report) against the same checkout npm test
+      # just verified.
+      - run: npm run check:skips
 
   operator:
     # Métis Operator (the fleet control-plane Worker under operator/) is a separate deployable with
