@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
+  ATTRIBUTABLE_PROCESS_KINDS,
   REQUIRED_TRACE_SCENARIOS,
   STATES_REQUIRING_ATTACH_PRECONDITION,
   STATES,
@@ -16,14 +18,17 @@ import {
   resolveProductVersion,
   sanitizeReport,
   defaultOutputPath,
+  stateCoverageForRun,
   stateRequiresAttachPrecondition,
   summarize,
   validateStatePrecondition,
   validateState,
   windowsWorkingSetEvidenceFromArtifact
 } from './lib.mjs'
+import { representativeSettings, writeRepresentativeProfile } from './profile.mjs'
 
 const startedMs = Date.UTC(2026, 8, 27, 12)
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 
 describe('resource census state contract', () => {
   it('pins the six acceptance states in release-gate order', () => {
@@ -118,6 +123,20 @@ describe('resource census product version contract', () => {
 })
 
 describe('resource census process classification', () => {
+  it('declares every attributable process kind the release gate compares by pid and start time', () => {
+    expect(ATTRIBUTABLE_PROCESS_KINDS).toEqual([
+      'main',
+      'renderer',
+      'gpu',
+      'parakeet-utility',
+      'whisper-utility',
+      'speaker-utility',
+      'llama-server',
+      'fm-serve',
+      'crashpad'
+    ])
+  })
+
   it.each([
     [
       'renderer',
@@ -286,6 +305,50 @@ describe('resource census CPU formula', () => {
       }
     })
   })
+
+  it('marks Windows working-set evidence from the census samples themselves', async () => {
+    let clockMs = 0
+    const report = await collectCensus({
+      state: 'settled-idle',
+      seconds: 1,
+      intervalMs: 1,
+      platform: 'win32',
+      installRoot: 'C:\\Metis',
+      mainPid: 100,
+      productVersion: '1.9.6',
+      listProcesses: () => [
+        {
+          pid: 100,
+          ppid: 1,
+          startedMs,
+          exe: 'C:\\Metis\\Metis.exe',
+          role: 'Metis.exe'
+        }
+      ],
+      sampleOwnedProcesses: () => [
+        {
+          pid: 100,
+          startedMs,
+          role: 'Metis.exe',
+          kind: 'main',
+          rssBytes: 123,
+          physFootprintBytes: null,
+          workingSetBytes: 123,
+          cpuSeconds: clockMs / 1000
+        }
+      ],
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    expect(report.windowsWorkingSet).toEqual({
+      measured: true,
+      metric: 'Win32_Process.WorkingSetSize',
+      lane: 'windows-qa'
+    })
+  })
 })
 
 describe('resource census report boundary', () => {
@@ -320,6 +383,41 @@ describe('resource census report boundary', () => {
 
     expect(JSON.stringify(report)).not.toContain('private-value')
     expect(report.processIdentities[0]).toMatchObject({ pid: 100, startedMs, role: 'Metis', kind: 'main' })
+    expect(report).toMatchObject({
+      evidenceLevel: 'MEASURED',
+      attributableProcessKinds: ATTRIBUTABLE_PROCESS_KINDS
+    })
+  })
+
+  it('records an explicit state-coverage boundary instead of faking states that need a live precondition', () => {
+    expect(stateCoverageForRun('settled-idle')).toEqual([
+      { state: 'cold-start', status: 'SUPPORTED_NOT_RUN', unblockStep: 'Run node scripts/qa/census/run.mjs --state cold-start --seconds 300.' },
+      { state: 'settled-idle', status: 'MEASURED' },
+      {
+        state: 'first-inference',
+        status: 'BLOCKED_EXTERNAL',
+        unblockStep:
+          'Start the packaged app on the representative QA profile, establish first-inference, then rerun with --main-pid, --install-root, and --precondition-evidence.'
+      },
+      {
+        state: 'active-transcription',
+        status: 'BLOCKED_EXTERNAL',
+        unblockStep:
+          'Start the packaged app on the representative QA profile, establish active-transcription, then rerun with --main-pid, --install-root, and --precondition-evidence.'
+      },
+      {
+        state: 'post-meeting',
+        status: 'BLOCKED_EXTERNAL',
+        unblockStep:
+          'Start the packaged app on the representative QA profile, establish post-meeting, then rerun with --main-pid, --install-root, and --precondition-evidence.'
+      },
+      {
+        state: 'post-recovery',
+        status: 'BLOCKED_EXTERNAL',
+        unblockStep:
+          'Start the packaged app on the representative QA profile, establish post-recovery, then rerun with --main-pid, --install-root, and --precondition-evidence.'
+      }
+    ])
   })
 
   it('pins the renderer trace scenarios required by the ticket', () => {
@@ -414,5 +512,61 @@ warm TTFT: 731 ms
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('resource census representative profile', () => {
+  it('arms the local synthetic profile so the baseline is not a fresh-profile census', () => {
+    const settings = representativeSettings('/tmp/metis-census-profile', 1)
+
+    expect(settings).toMatchObject({
+      onboardingDone: true,
+      recordingConsent: true,
+      autoSaveTranscripts: true,
+      overlayLayout: 'bar',
+      overlayOrbStyle: 'obsidian',
+      routingMode: 'local',
+      localLlm: {
+        enabled: true,
+        modelId: 'qwen3.5-0.8b',
+        useFor: { suggest: true, summary: true, vision: true },
+        fallback: true
+      }
+    })
+    expect(settings.meetingsFolder).toBe('/tmp/metis-census-profile/meetings')
+  })
+
+  it('writes only a disposable profile and meetings folder', () => {
+    const root = mkdtempSync(join(tmpdir(), 'metis-census-profile-'))
+    try {
+      const profile = writeRepresentativeProfile(root, 1)
+      const persisted = JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8'))
+
+      expect(profile.profileDir).toBe(root)
+      expect(persisted.meetingsFolder).toBe(join(root, 'meetings'))
+      expect(persisted.localLlm.enabled).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('resource census GitHub Actions lane', () => {
+  const workflow = readFileSync(join(repoRoot, '.github/workflows/resource-census.yml'), 'utf8')
+
+  it('runs only on workflow_dispatch and never edits release publication triggers', () => {
+    expect(workflow).toContain('workflow_dispatch:')
+    expect(workflow).not.toContain('push:')
+    expect(workflow).not.toContain('release:')
+  })
+
+  it('runs the reusable census tool on hosted macOS and Windows with artifact upload', () => {
+    expect(workflow).toContain('runs-on: macos-latest')
+    expect(workflow).toContain('runs-on: windows-latest')
+    expect(workflow).toContain('node scripts/qa/census/run.mjs')
+    expect(workflow).toContain('--state settled-idle')
+    expect(workflow).toContain('--seconds 300')
+    expect(workflow).toContain('node scripts/prove-local-ttft.mjs')
+    expect(workflow).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2')
   })
 })
