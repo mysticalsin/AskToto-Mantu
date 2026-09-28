@@ -517,7 +517,8 @@ warm TTFT: 731 ms
 
 describe('resource census representative profile', () => {
   it('arms the local synthetic profile so the baseline is not a fresh-profile census', () => {
-    const settings = representativeSettings('/tmp/metis-census-profile', 1)
+    const profileRoot = '/tmp/metis-census-profile'
+    const settings = representativeSettings(profileRoot, 1)
 
     expect(settings).toMatchObject({
       onboardingDone: true,
@@ -533,7 +534,7 @@ describe('resource census representative profile', () => {
         fallback: true
       }
     })
-    expect(settings.meetingsFolder).toBe('/tmp/metis-census-profile/meetings')
+    expect(settings.meetingsFolder).toBe(join(resolve(profileRoot), 'meetings'))
   })
 
   it('writes only a disposable profile and meetings folder', () => {
