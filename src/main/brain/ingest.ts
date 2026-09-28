@@ -1281,6 +1281,10 @@ function promoteQueuedBackfill(): void {
   pump()
 }
 
+function effectiveBackfillTrigger(options: BackfillStartOptions): WorkTrigger {
+  return options.trigger === 'user' || pendingBackfillTrigger === 'user' ? 'user' : 'automatic'
+}
+
 /** Ingest-index identity for a job: the user's own meetings key by basename (unchanged); team jobs carry
  *  an explicit folder-namespaced key so they never collide with a same-named own meeting or member file. */
 const jobKey = (j: Job): string => j.key ?? basename(j.file)
@@ -1335,6 +1339,7 @@ let drainTask: Promise<void> | null = null
 let rebuildReplayTask: Promise<void> | null = null
 let rebuildReplayQueued = false
 let rebuildStarting = false
+let sourceRefreshWorkKeys = new Set<string>()
 
 function completionError(error: CompletionError): void {
   const observer = backfillObserver
@@ -1345,6 +1350,10 @@ function completionError(error: CompletionError): void {
 
 function observeSource(key: string): void {
   if (backfillObserver && !backfillObserver.sources.has(key)) backfillObserver.sources.set(key, false)
+}
+
+function observeClaimedSourceRefreshWork(): void {
+  for (const key of sourceRefreshWorkKeys) observeSource(key)
 }
 
 class PublicationFailure extends Error {
@@ -2348,6 +2357,18 @@ export async function exciseDeletedMeeting(s: Settings, file: string): Promise<{
 
 /** Persisted source edits/deletions are replayed as a clean rebuild when a provider is ready. */
 export async function requestSourceRefresh(s: Settings = getSettings()): Promise<void> {
+  try {
+    const [scan, idx] = await Promise.all([scanMeetingSources(s), readIndexAsync(s)])
+    sourceRefreshWorkKeys = new Set(
+      scan.flatMap((folder) =>
+        folder.status === 'ok'
+          ? folder.sources.filter((source) => source.local && idx.ingested[source.key]?.ok).map((source) => source.key)
+          : []
+      )
+    )
+  } catch {
+    sourceRefreshWorkKeys = new Set()
+  }
   await updateIndex(s, (idx) => {
     idx.sourceRefreshRequested = true
     idx.backfillRequested = true
@@ -2370,6 +2391,7 @@ async function maybeStartSourceRefreshAsync(): Promise<void> {
     sourceRefresh: true,
     onFinished: () => {
       sourceRefreshRunning = false
+      sourceRefreshWorkKeys = new Set()
       maybeStartSourceRefresh()
       maybeCompleteBackfillRun()
     }
@@ -2508,6 +2530,7 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
   addCompletionGate(observer, beforeComplete)
   try {
     run.result = await requestBackfill(options)
+    observeClaimedSourceRefreshWork()
     if ((await readIndexAsync(observer.s)).replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     if (run.result.deferred) completionError('no-provider')
     // A capped request can return "preparing" without dispatching anything. That is not completed work.
@@ -2629,8 +2652,6 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
   }
   const scan = await scanMeetingSources(s)
   if (!(await brainInputsLocal(s, scan))) return { queued: 0 }
-  const trigger = options.trigger ?? 'automatic'
-  if (trigger === 'user') promoteQueuedBackfill()
   const idx = await readIndexAsync(s)
   const route = options.route ?? 'default'
   const providerAvailable =
@@ -2645,6 +2666,8 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
   // between writeMeetingExtraction and the entity merge/index update. Those entries are re-merged from
   // disk below without another LLM call.
   const extractedSlugs = new Set((await loadMeetingExtractionSlugs(s)) ?? [])
+  const trigger = effectiveBackfillTrigger(options)
+  if (trigger === 'user') promoteQueuedBackfill()
   // pump() has already spliced any currently-extracting-or-ingesting job out of `queue` by the time it's
   // mid-flight — omitting those here would let a re-click of "Index meetings" queue the exact same file
   // a second time while it's still being extracted (or is sitting in the withEntityLock lane). inFlightJobs covers
