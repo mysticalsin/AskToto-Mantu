@@ -267,6 +267,24 @@ describe('smokeVerdict', () => {
 
     expect(smokeVerdict(observation)).toEqual({ result: 'fail', failures: ['smoke_incomplete'] })
   })
+
+  it('does not fail a completed smoke observation for BLOCKED_EXTERNAL rows', () => {
+    const observation = goodObservation()
+    observation.rv[0] = {
+      ...observation.rv[0],
+      status: 'BLOCKED_EXTERNAL',
+      evidence: null,
+      unblock: 'Run this row where the outside dependency is available.'
+    }
+    observation.navigationGuard[0] = {
+      ...observation.navigationGuard[0],
+      status: 'BLOCKED_EXTERNAL',
+      evidence: null,
+      unblock: 'Run this row where the outside dependency is available.'
+    }
+
+    expect(smokeVerdict(observation)).toEqual({ result: 'pass', failures: [] })
+  })
 })
 
 describe('isPassingRevealEvidence', () => {

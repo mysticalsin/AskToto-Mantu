@@ -109,6 +109,10 @@ function hasEvent(records, event) {
   return records.some((record) => record.event === event)
 }
 
+function rowIsTerminal(row) {
+  return row.status === 'PASS' || row.status === 'FAIL' || row.status === 'BLOCKED_EXTERNAL'
+}
+
 /** One failure code per defect, evaluated in a fixed order; `result` is `'pass'` only when none fire. */
 export function smokeVerdict(observation) {
   const failures = []
@@ -149,7 +153,7 @@ export function smokeVerdict(observation) {
     observation.readyMs !== null &&
       !observation.exitedEarly &&
       Array.isArray(observation.rv) &&
-      observation.rv.some((row) => row.status !== 'PASS' && row.status !== 'FAIL')
+      observation.rv.some((row) => !rowIsTerminal(row))
   )
   fail(
     'navigation_guard_failed',
@@ -160,7 +164,7 @@ export function smokeVerdict(observation) {
     observation.readyMs !== null &&
       !observation.exitedEarly &&
       Array.isArray(observation.navigationGuard) &&
-      observation.navigationGuard.some((row) => row.status !== 'PASS' && row.status !== 'FAIL')
+      observation.navigationGuard.some((row) => !rowIsTerminal(row))
   )
   fail('smoke_incomplete', failures.length === 0 && observation.survivors === null)
 
