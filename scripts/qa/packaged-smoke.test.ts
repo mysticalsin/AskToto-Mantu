@@ -9,6 +9,7 @@ import {
   childPidReserved,
   computeCleanupTargets,
   isOverlayUrl,
+  isPassingRevealEvidence,
   parseAuditLog,
   readObservationTail,
   initialRvRows,
@@ -121,7 +122,7 @@ function goodObservation(): Observation {
         reason: 'activate',
         automation: 'open-app-path',
         status: 'PASS',
-        evidence: { event: 'reveal', reason: 'activate', outcome: 'already-visible' },
+        evidence: { event: 'reveal', reason: 'activate', outcome: 'shown' },
         unblock: null
       },
       {
@@ -129,7 +130,7 @@ function goodObservation(): Observation {
         reason: 'second-instance',
         automation: 'open-new-instance',
         status: 'PASS',
-        evidence: { event: 'reveal', reason: 'second-instance', outcome: 'already-visible' },
+        evidence: { event: 'reveal', reason: 'second-instance', outcome: 'shown' },
         unblock: null
       },
       {
@@ -137,7 +138,7 @@ function goodObservation(): Observation {
         reason: 'tray',
         automation: 'tray-menu',
         status: 'PASS',
-        evidence: { event: 'reveal', reason: 'tray', outcome: 'already-visible' },
+        evidence: { event: 'reveal', reason: 'tray', outcome: 'shown' },
         unblock: null
       },
       {
@@ -145,7 +146,7 @@ function goodObservation(): Observation {
         reason: 'hotkey',
         automation: 'global-hotkey',
         status: 'PASS',
-        evidence: { event: 'reveal', reason: 'hotkey', outcome: 'already-visible' },
+        evidence: { event: 'reveal', reason: 'hotkey', outcome: 'shown' },
         unblock: null
       },
       {
@@ -153,7 +154,7 @@ function goodObservation(): Observation {
         reason: 'activate',
         automation: 'finder-open-app-file',
         status: 'PASS',
-        evidence: { event: 'reveal', reason: 'activate', outcome: 'already-visible' },
+        evidence: { event: 'reveal', reason: 'activate', outcome: 'shown' },
         unblock: null
       }
     ],
@@ -239,6 +240,15 @@ describe('smokeVerdict', () => {
     }
 
     expect(smokeVerdict(observation)).toEqual({ result: 'fail', failures: ['smoke_incomplete'] })
+  })
+})
+
+describe('isPassingRevealEvidence', () => {
+  it('accepts created and shown reveals, but rejects already-visible no-ops', () => {
+    expect(isPassingRevealEvidence({ outcome: 'created' })).toBe(true)
+    expect(isPassingRevealEvidence({ outcome: 'shown' })).toBe(true)
+    expect(isPassingRevealEvidence({ outcome: 'already-visible' })).toBe(false)
+    expect(isPassingRevealEvidence(null)).toBe(false)
   })
 })
 

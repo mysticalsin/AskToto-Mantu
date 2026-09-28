@@ -237,25 +237,34 @@ function revealCount(auditLogPath, reason) {
   return parseAuditLog(readAuditLog(auditLogPath)).filter((r) => r.event === 'reveal' && r.reason === reason).length
 }
 
+export function isPassingRevealEvidence(reveal) {
+  return reveal !== null && (reveal.outcome === 'created' || reveal.outcome === 'shown')
+}
+
 async function runRevealRow({ auditLogPath, rows, id, reason, run, failure }) {
   const seen = revealCount(auditLogPath, reason)
   const launched = await run()
   const reveal = launched.error ? null : await waitForReveal(auditLogPath, reason, seen)
+  const pass = isPassingRevealEvidence(reveal)
   completeRvRow(rows, id, {
-    status: reveal ? 'PASS' : 'FAIL',
+    status: pass ? 'PASS' : 'FAIL',
     evidence: reveal ? { event: 'reveal', reason, outcome: reveal.outcome ?? null } : null,
-    unblock: reveal ? null : failure
+    unblock: pass ? null : failure
   })
 }
 
 async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows, env }) {
+  const hideBeforeReveal = () => runProcess(executable, ['--metis-smoke-reopen=hide-window'], 10_000, { env })
   if (platform === 'darwin') {
     await runRevealRow({
       auditLogPath,
       rows,
       id: 'RV-1-macos-open-activate',
       reason: 'activate',
-      run: () => runProcess('open', [target], 10_000),
+      run: async () => {
+        await hideBeforeReveal()
+        return runProcess('open', [target], 10_000)
+      },
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing activate reveal event.'
     })
 
@@ -264,7 +273,10 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       rows,
       id: 'RV-2-macos-open-new-instance',
       reason: 'second-instance',
-      run: () => runProcess('open', ['-n', target], 10_000),
+      run: async () => {
+        await hideBeforeReveal()
+        return runProcess('open', ['-n', target], 10_000)
+      },
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
     })
 
@@ -273,7 +285,10 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       rows,
       id: 'RV-1-macos-finder-spotlight-launchpad',
       reason: 'activate',
-      run: () => runAppleScript(`tell application "Finder" to open POSIX file ${JSON.stringify(target)}`, 10_000),
+      run: async () => {
+        await hideBeforeReveal()
+        return runAppleScript(`tell application "Finder" to open POSIX file ${JSON.stringify(target)}`, 10_000)
+      },
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing Finder activate reveal event.'
     })
 
@@ -296,7 +311,10 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       rows,
       id: 'RV-3-windows-exe-relaunch',
       reason: 'second-instance',
-      run: () => runProcess(executable, [], 10_000, { env }),
+      run: async () => {
+        await hideBeforeReveal()
+        return runProcess(executable, [], 10_000, { env })
+      },
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
     })
 
@@ -313,7 +331,10 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       rows,
       id: 'RV-3-windows-shortcut-relaunch',
       reason: 'second-instance',
-      run: () => runPowerShell(shortcutScript, 10_000),
+      run: async () => {
+        await hideBeforeReveal()
+        return runPowerShell(shortcutScript, 10_000)
+      },
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing Windows shortcut reveal event.'
     })
 
