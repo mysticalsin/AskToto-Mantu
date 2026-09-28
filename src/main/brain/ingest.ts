@@ -2585,6 +2585,7 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
   try {
     const before = await readIndexAsync(observer.s)
     observeSourceRefreshWorkFromIndex(before)
+    if (before.replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
     if (before.sourceRefreshRequested && !before.replayPending && !sourceRefreshRunning) await maybeStartSourceRefreshAsync()
     run.result = await requestBackfill(options)
     const idx = await readIndexAsync(observer.s)
