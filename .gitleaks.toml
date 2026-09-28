@@ -40,7 +40,7 @@ paths = [
 # fails. Documentation is deliberately NOT path-exempt: docs/**.md is scanned like any other file (M2-0049).
 regexes = [
   # The fixture the redaction unit tests use, when a doc quotes it.
-  '''ABCDEF123456''',
+  '''^['"]?ABCDEF123456['"]?$''',
   # The license-server test fixture key, when a doc quotes it.
-  '''ATK-HY2JVMZ3P3JF8CGAQWPR'''
+  '''^ATK-HY2JVMZ3P3JF8CGAQWPR$'''
 ]
