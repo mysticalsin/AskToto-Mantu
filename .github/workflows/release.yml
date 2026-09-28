@@ -11,6 +11,13 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run the release-lane contract without building or publishing"
+        required: true
+        default: true
+        type: boolean
 
 # A retry for the same tag must never race another run while both mutate the same feed release.
 concurrency:
@@ -18,8 +25,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-dry-run:
+    name: Release lane dry run
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Prove release lane independence
+        run: npx vitest run scripts/release-lanes.contract.test.ts
+
   release-quality:
     name: Release source gate (${{ matrix.os }})
+    if: github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -55,6 +80,7 @@ jobs:
 
   release-macos:
     name: macOS release
+    if: github.event_name == 'push'
     needs: release-quality
     runs-on: macos-latest
     # Notarization blocks on Apple's queue, which is usually minutes but has had documented multi-hour
@@ -207,6 +233,7 @@ jobs:
 
   release-windows:
     name: Windows release
+    if: github.event_name == 'push'
     needs: release-quality
     runs-on: windows-latest
     timeout-minutes: 120
@@ -320,6 +347,7 @@ jobs:
   # its update metadata uploaded last, after GitHub's digests of its installers match.
   publish-macos:
     name: Publish macOS release
+    if: github.event_name == 'push'
     needs: release-macos
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -344,6 +372,7 @@ jobs:
 
   publish-windows:
     name: Publish Windows release
+    if: github.event_name == 'push'
     needs: release-windows
     runs-on: ubuntu-latest
     timeout-minutes: 90

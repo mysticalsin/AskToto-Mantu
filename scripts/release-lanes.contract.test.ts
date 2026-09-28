@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 const root = join(__dirname, '..')
 
 interface Job {
+  condition: string | null
   needs: string[]
   concurrency: { group: string; cancelInProgress: boolean } | null
   uploads: string[]
@@ -12,6 +13,7 @@ interface Job {
 }
 
 interface WorkflowModel {
+  manualDryRunInput: boolean
   workflowConcurrencyGroup: string | null
   jobs: Record<string, Job>
 }
@@ -19,6 +21,7 @@ interface WorkflowModel {
 const SHARED = ['release-quality']
 const MAC = ['release-macos', 'publish-macos']
 const WIN = ['release-windows', 'publish-windows']
+const DRY_RUN = ['release-dry-run']
 
 function parseNeeds(value: string, job: string): string[] {
   const trimmed = value.trim()
@@ -39,8 +42,12 @@ function parseNeeds(value: string, job: string): string[] {
 function parseWorkflow(source: string): WorkflowModel {
   const lines = source.replace(/\r\n/g, '\n').split('\n')
   const jobs: Record<string, Job> = {}
-  const allowedJobKeys = new Set(['name', 'needs', 'runs-on', 'timeout-minutes', 'strategy', 'concurrency', 'steps'])
+  const allowedJobKeys = new Set(['name', 'if', 'needs', 'runs-on', 'timeout-minutes', 'strategy', 'concurrency', 'steps'])
+  let manualDryRunInput = false
   let inJobs = false
+  let inWorkflowDispatch = false
+  let inWorkflowDispatchInputs = false
+  let inWorkflowDispatchDryRun = false
   let currentJob: string | null = null
   let currentAction: 'upload' | 'download' | null = null
   let waitingForArtifactName = false
@@ -50,6 +57,31 @@ function parseWorkflow(source: string): WorkflowModel {
   for (const raw of lines) {
     const line = raw.replace(/\s+$/, '')
     if (!line.trim() || line.trimStart().startsWith('#')) continue
+
+    if (!inJobs) {
+      if (line === '  workflow_dispatch:') {
+        inWorkflowDispatch = true
+        inWorkflowDispatchInputs = false
+        inWorkflowDispatchDryRun = false
+        continue
+      }
+      if (inWorkflowDispatch) {
+        if (/^  [a-z]/.test(line) && line !== '  workflow_dispatch:') {
+          inWorkflowDispatch = false
+          inWorkflowDispatchInputs = false
+          inWorkflowDispatchDryRun = false
+        } else if (line === '    inputs:') {
+          inWorkflowDispatchInputs = true
+          continue
+        } else if (inWorkflowDispatchInputs && line === '      dry_run:') {
+          inWorkflowDispatchDryRun = true
+          continue
+        } else if (inWorkflowDispatchDryRun && line === '        type: boolean') {
+          manualDryRunInput = true
+          continue
+        }
+      }
+    }
 
     if (line === 'concurrency:') {
       inWorkflowConcurrency = true
@@ -73,7 +105,7 @@ function parseWorkflow(source: string): WorkflowModel {
     const jobHeader = line.match(/^  ([a-z][a-z0-9-]*):$/)
     if (jobHeader) {
       currentJob = jobHeader[1]
-      jobs[currentJob] = { needs: [], concurrency: null, uploads: [], downloads: [] }
+      jobs[currentJob] = { condition: null, needs: [], concurrency: null, uploads: [], downloads: [] }
       currentAction = null
       waitingForArtifactName = false
       continue
@@ -88,6 +120,7 @@ function parseWorkflow(source: string): WorkflowModel {
     if (jobKey) {
       const [, key, value] = jobKey
       if (!allowedJobKeys.has(key)) throw new Error(`${currentJob} has job-level ${key}; model it before adding it`)
+      if (key === 'if') jobs[currentJob].condition = value
       if (key === 'needs') jobs[currentJob].needs = parseNeeds(value, currentJob)
       if (key === 'concurrency') {
         jobs[currentJob].concurrency = { group: '', cancelInProgress: true }
@@ -133,7 +166,7 @@ function parseWorkflow(source: string): WorkflowModel {
       throw new Error(`${name} has incomplete concurrency; model it before adding it`)
     }
   }
-  return { workflowConcurrencyGroup, jobs }
+  return { manualDryRunInput, workflowConcurrencyGroup, jobs }
 }
 
 function dependencyOrder(jobs: Record<string, Job>): string[] {
@@ -205,7 +238,20 @@ describe('release.yml independent platform publication lanes (M2-0053)', () => {
 
   it('models every job in release.yml', () => {
     const { jobs } = modelReleaseWorkflow()
-    expect(Object.keys(jobs).sort()).toEqual([...SHARED, ...MAC, ...WIN].sort())
+    expect(Object.keys(jobs).sort()).toEqual([...DRY_RUN, ...SHARED, ...MAC, ...WIN].sort())
+  })
+
+  it('keeps a manual dry-run lane for proving the contract without publishing', () => {
+    const { manualDryRunInput, jobs } = modelReleaseWorkflow()
+
+    expect(manualDryRunInput).toBe(true)
+    expect(jobs['release-dry-run'].condition).toBe("github.event_name == 'workflow_dispatch' && inputs.dry_run")
+    expect(jobs['release-dry-run'].needs).toEqual([])
+    expect(jobs['release-quality'].condition).toBe("github.event_name == 'push'")
+    expect(jobs['release-macos'].condition).toBe("github.event_name == 'push'")
+    expect(jobs['release-windows'].condition).toBe("github.event_name == 'push'")
+    expect(jobs['publish-macos'].condition).toBe("github.event_name == 'push'")
+    expect(jobs['publish-windows'].condition).toBe("github.event_name == 'push'")
   })
 
   for (const job of MAC) {
