@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { app } from 'electron'
 import { auditLog, mainLog } from '../../logger'
 import { resolveBinaryPath } from '../../llm/local-runtime'
+import { WINDOWS_POWERSHELL } from '../../win-security'
 import { argsFingerprint, getProcessIdentity, type SidecarRecord } from './registry'
 
 const execFileAsync = promisify(execFile)
@@ -320,7 +321,6 @@ function parsePosixPsLine(line: string): ProcessIdentity | null {
 }
 
 async function listWindowsProcesses(): Promise<ProcessIdentity[]> {
-  const { WINDOWS_POWERSHELL } = await import('../../win-security')
   const script = [
     'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class MetisProcNative { [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetProcessTimes(IntPtr hProcess, out long creation, out long exit, out long kernel, out long user); [DllImport("shell32.dll", SetLastError=true)] public static extern IntPtr CommandLineToArgvW([MarshalAs(UnmanagedType.LPWStr)] string commandLine, out int argc); [DllImport("kernel32.dll")] public static extern IntPtr LocalFree(IntPtr handle); public static string[] SplitCommandLine(string commandLine) { if (String.IsNullOrWhiteSpace(commandLine)) return new string[0]; int argc = 0; IntPtr argv = CommandLineToArgvW(commandLine, out argc); if (argv == IntPtr.Zero) return new string[] { commandLine }; try { string[] args = new string[argc]; for (int i = 0; i < argc; i++) args[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * IntPtr.Size)) ?? ""; return args; } finally { LocalFree(argv); } } }\'',
     '$items = @()',

@@ -57,6 +57,12 @@ jobs:
         continue-on-error: true
         run: npm run check:architecture
       - run: npm run build
+      - name: QA fault-hook deterministic repeat
+        shell: bash
+        run: |
+          for run in 1 2 3; do
+            npx vitest run scripts/lib/qa-fault-hook.test.ts
+          done
       # bar-toolbar.layout.test.ts launches Playwright Chromium. `npm ci` installs the npm package
       # only — not the browser binary. Without this step, ubuntu and windows Quality both die at
       # chromium.launch with `Executable doesn't exist ... chromium_headless_shell`. Chromium only
