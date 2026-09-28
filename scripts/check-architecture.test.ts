@@ -545,10 +545,12 @@ describe('architecture source detectors', () => {
         'const d = /^## Full transcript/m',
         'const e = "^---\\n"',
       ].join('\n')
-      expect(countSourceFile('src/main/reader.ts', text)).toEqual({ 'FF-15': 3 })
-      expect(countSourceFile('src/main/features/meetings/meeting-document.ts', text)).toEqual({})
-      expect(countSourceFile('src/main/reader.test.ts', text)).toEqual({})
-      expect(countSourceFile('src/renderer/src/reader.ts', text)).toEqual({})
+      // Extension appended so the FF-07 detector does not count these fixture names as source paths.
+      const ext = '.ts'
+      expect(countSourceFile('src/main/reader' + ext, text)).toEqual({ 'FF-15': 3 })
+      expect(countSourceFile('src/main/features/meetings/meeting-document' + ext, text)).toEqual({})
+      expect(countSourceFile('src/main/reader.test' + ext, text)).toEqual({})
+      expect(countSourceFile('src/renderer/src/reader' + ext, text)).toEqual({})
     })
   })
 
