@@ -9092,8 +9092,8 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', (_event, commandLine) => {
-    if (handleSmokeReopenProbe(commandLine)) return
     reveal('second-instance', { focus: true })
+    if (typeof handleSmokeReopenProbe === 'function') handleSmokeReopenProbe(commandLine)
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
