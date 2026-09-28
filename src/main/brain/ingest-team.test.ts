@@ -38,7 +38,7 @@ describe('team-transcript ingest', () => {
         deepseek: 'DEEPSEEK_API_KEY', qwen: 'DASHSCOPE_API_KEY', minimax: 'MINIMAX_API_KEY',
         kimi: 'KIMI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', grok: 'XAI_API_KEY',
         together: 'TOGETHER_API_KEY', fireworks: 'FIREWORKS_API_KEY', mistral: 'MISTRAL_API_KEY',
-        dust: 'DUST_API_KEY', 'claude-cli': '', 'codex-cli': '', gemini: 'GEMINI_API_KEY',
+        dust: 'DUST_API_KEY', cloudflare: 'CLOUDFLARE_API_KEY', local: '', 'claude-cli': '', 'codex-cli': '', gemini: 'GEMINI_API_KEY',
         custom: 'ASKTOTO_CUSTOM_API_KEY'
       }[p]
       if (envVar) vi.stubEnv(envVar, '')

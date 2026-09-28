@@ -135,26 +135,26 @@ function goodObservation(): Observation {
       {
         id: 'RV-4-tray-show',
         reason: 'tray',
-        automation: 'external-ui',
-        status: 'BLOCKED_EXTERNAL',
-        evidence: null,
-        unblock: 'Run this row on a QA desktop with the packaged app installed and file the content-free smoke artifact.'
+        automation: 'tray-menu',
+        status: 'PASS',
+        evidence: { event: 'reveal', reason: 'tray', outcome: 'already-visible' },
+        unblock: null
       },
       {
         id: 'RV-4-global-hotkey',
         reason: 'hotkey',
-        automation: 'external-ui',
-        status: 'BLOCKED_EXTERNAL',
-        evidence: null,
-        unblock: 'Run this row on a QA desktop with the packaged app installed and file the content-free smoke artifact.'
+        automation: 'global-hotkey',
+        status: 'PASS',
+        evidence: { event: 'reveal', reason: 'hotkey', outcome: 'already-visible' },
+        unblock: null
       },
       {
         id: 'RV-1-macos-finder-spotlight-launchpad',
         reason: 'activate',
-        automation: 'external-ui',
-        status: 'BLOCKED_EXTERNAL',
-        evidence: null,
-        unblock: 'Run this row on a QA desktop with the packaged app installed and file the content-free smoke artifact.'
+        automation: 'finder-open-app-file',
+        status: 'PASS',
+        evidence: { event: 'reveal', reason: 'activate', outcome: 'already-visible' },
+        unblock: null
       }
     ],
     survivors: [],
@@ -204,6 +204,11 @@ describe('smokeVerdict', () => {
       'an automated RV row failed',
       (o) => { o.rv[0] = { ...o.rv[0], status: 'FAIL', evidence: null } },
       'rv_reopen_failed'
+    ],
+    [
+      'an automated RV row never completed after renderer readiness',
+      (o) => { o.rv[0] = { ...o.rv[0], status: 'PENDING', evidence: null } },
+      'rv_reopen_incomplete'
     ]
   ]
 
@@ -228,7 +233,7 @@ describe('smokeVerdict', () => {
       exitMs: null,
       audit: [{ event: 'app.started', version: '1.9.7', platform: 'darwin', arch: 'arm64' }],
       marker: null,
-      rv: initialRvRows('darwin'),
+      rv: goodObservation().rv,
       survivors: null,
       survivorsGoneMs: null
     }
@@ -321,7 +326,7 @@ describe('smokeReport', () => {
 })
 
 describe('initialRvRows', () => {
-  it('tracks the macOS hosted reopen rows and marks shell UI paths as explicit external blockers', () => {
+  it('tracks every macOS hosted reopen row as pending automation', () => {
     const rows = initialRvRows('darwin')
 
     expect(rows.map((row) => row.id)).toEqual([
@@ -331,12 +336,11 @@ describe('initialRvRows', () => {
       'RV-4-global-hotkey',
       'RV-1-macos-finder-spotlight-launchpad'
     ])
-    expect(rows.find((row) => row.id === 'RV-1-macos-open-activate')?.status).toBe('PENDING')
-    expect(rows.find((row) => row.id === 'RV-4-tray-show')?.status).toBe('BLOCKED_EXTERNAL')
-    expect(rows.find((row) => row.id === 'RV-4-tray-show')?.unblock).toContain('QA desktop')
+    expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
+    expect(rows.every((row) => row.unblock === null)).toBe(true)
   })
 
-  it('tracks the Windows hosted relaunch row plus the desktop-only shortcut rows', () => {
+  it('tracks every Windows hosted reopen row as pending automation', () => {
     const rows = initialRvRows('win32')
 
     expect(rows.map((row) => row.id)).toEqual([
@@ -345,8 +349,8 @@ describe('initialRvRows', () => {
       'RV-4-global-hotkey',
       'RV-3-windows-shortcut-relaunch'
     ])
-    expect(rows.find((row) => row.id === 'RV-3-windows-exe-relaunch')?.status).toBe('PENDING')
-    expect(rows.find((row) => row.id === 'RV-3-windows-shortcut-relaunch')?.status).toBe('BLOCKED_EXTERNAL')
+    expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
+    expect(rows.every((row) => row.unblock === null)).toBe(true)
   })
 })
 

@@ -51,7 +51,7 @@ async function signed(
   })
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tonyAccess = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 describe('nonce is consumed only after the signature verifies', () => {
   it('a forged request cannot burn a nonce that a real request then presents', async () => {
@@ -145,7 +145,7 @@ describe('Cloudflare Access JWT fallback checks the time claims', () => {
     return `${head}.${body}.${sig}`
   }
   const nowSec = Math.floor(NOW / 1000)
-  const good = { aud: AUD, email: 'Tony.Walteur@gmail.com', iss: TEAM, iat: nowSec - 60, exp: nowSec + 600 }
+  const good = { aud: AUD, email: 'Example.Walteur@gmail.com', iss: TEAM, iat: nowSec - 60, exp: nowSec + 600 }
 
   afterEach(() => vi.unstubAllGlobals())
 
@@ -155,7 +155,7 @@ describe('Cloudflare Access JWT fallback checks the time claims', () => {
 
   it('accepts a live token and lowercases the email', async () => {
     stubJwks()
-    expect(await verifyAccessJwt(mint(good), TEAM, AUD, NOW)).toBe('tony.walteur@gmail.com')
+    expect(await verifyAccessJwt(mint(good), TEAM, AUD, NOW)).toBe('admin@example.com')
   })
 
   it('rejects expired, not-yet-valid, missing-exp, wrong-issuer and wrong-audience tokens', async () => {

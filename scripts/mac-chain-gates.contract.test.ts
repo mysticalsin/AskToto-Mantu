@@ -207,8 +207,8 @@ describe('MQA-249 — a portable "this build came up" signal, and the macOS gate
       expect(pkg.scripts[name]).toContain('check-packaged-launch.mjs release/mac-universal/Metis.app')
     }
     expect(pkg.scripts['dist:local']).toContain(
-      'check-packaged-launch.mjs /Users/tony/AI-Brain-build/asktoto-release/mac-universal/Metis.app'
+      'check-packaged-launch.mjs local-release/mac-universal/Metis.app'
     )
-    expect(pkg.scripts['dist:local']).toContain('verify-signing.mjs /Users/tony/AI-Brain-build/asktoto-release')
+    expect(pkg.scripts['dist:local']).toContain('verify-signing.mjs local-release')
   })
 })

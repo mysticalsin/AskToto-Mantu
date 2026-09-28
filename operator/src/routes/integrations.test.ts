@@ -17,7 +17,7 @@ function env(overrides: Partial<Env> = {}): Env {
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 function post(path: string, body: unknown, headers: Record<string, string> = {}): Request {
   return new Request(`https://operator.test${path}`, {
@@ -305,7 +305,7 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
       scope_json: '{}',
       status: 'active',
       created_at: NOW,
-      created_by: 'tony.walteur@gmail.com',
+      created_by: 'admin@example.com',
       rotated_at: null,
       revoked_at: null,
       last_used_at: null,

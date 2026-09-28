@@ -5,7 +5,7 @@ assumes the tooling added for plan task P4.0: `operator/scripts/deploy.mjs`, `sm
 `backup.mjs`, `dev-session.mjs`, and (from a separate concurrent task) `migrate.mjs`.
 
 No Cloudflare auth exists on the machine these scripts were written on. Every real command below
-needs Tony to run, once per machine:
+needs Example to run, once per machine:
 
 ```sh
 cd operator
@@ -140,7 +140,7 @@ they are visible in the dashboard and in `wrangler deploy` output by design.
 
 - Team: `tony-walteur`, `TEAM_DOMAIN=https://tony-walteur.cloudflareaccess.com`.
 - Self-hosted Access application **Métis Operator** on the Worker's host. Policy: Allow, exactly
-  two emails (`tony.walteur@gmail.com`, `twalteur@amaris.com`), no other identity provider rule.
+  two emails (`admin@example.com`, `ops@example.com`), no other identity provider rule.
 - Session duration: whatever the Access application policy sets (Access's own session, which
   gates the login step) plus the Worker's own minted session cookie, capped at 12 hours absolute
   from mint time regardless of activity, re-minted only once the current one is over an hour old.
@@ -215,5 +215,5 @@ when the intent is to fully cut a seat off.
 `build:operator-world` once that script lands) and fails if the committed file drifts from a fresh
 build, typechecks `operator/tsconfig.json` and `operator/client/tsconfig.json`, and runs the
 operator test suite plus the contract tests for the scripts in this runbook
-(`operator/scripts/*.contract.test.ts`). It does not deploy; `deploy.mjs` is run by hand by Tony,
+(`operator/scripts/*.contract.test.ts`). It does not deploy; `deploy.mjs` is run by hand by Example,
 never from CI, because there is no Cloudflare auth (and no secrets) in CI for this Worker.

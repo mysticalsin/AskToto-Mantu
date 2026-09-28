@@ -26,7 +26,7 @@ describe('real seats vs usage-import', () => {
         device_id: '6be389767fb160f7503de8e0227f4965',
         os: 'darwin',
         app_version: '1.8.3',
-        hostname: 'Tonys-MacBook-Pro'
+        hostname: 'Example-MacBook-Pro'
       })
     ).toBe(true)
   })
@@ -55,7 +55,7 @@ describe('approval gate', () => {
       exp: 1_725_000_000 + 7 * 24 * 60 * 60,
       revoked: 0,
       created_at: 1_725_000_000_000,
-      created_by: 'tony.walteur@gmail.com'
+      created_by: 'admin@example.com'
     })
     const now = 1_725_000_000_000
     expect(

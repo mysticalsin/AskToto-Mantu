@@ -1,18 +1,18 @@
 # metis-operator
 
-Tony's fleet control plane. How people use Métis, who is live, what Asks cost, whether prompt
+Example's fleet control plane. How people use Métis, who is live, what Asks cost, whether prompt
 cache is hitting, which questions should sharpen a skill, and a signed push of that skill to
 every seat.
 
 This Worker is **not** the AI token proxy (`cloudflare-proxy/`, Worker `metis-cloudflare-proxy`).
 It is **not** the Fly license server. Prompts never go to Fly.
 
-The admin console is for Tony only. Electron devices never see Access; they HMAC-sign every
+The admin console is for Example only. Electron devices never see Access; they HMAC-sign every
 request.
 
 **Hard rules, never violated:**
 
-- Access is email-code only, allowlist `tony.walteur@gmail.com` and `twalteur@amaris.com`. No
+- Access is email-code only, allowlist `admin@example.com` and `ops@example.com`. No
   homemade password form. Unauthenticated console GET is a 302 to Access. Unauthenticated
   `/v1/admin/*` is 401 JSON.
 - Never enable **Protect this Worker**. That would lock every Mac and Windows seat out, along with
@@ -37,7 +37,7 @@ Listen / Recap         --HMAC-->  upsert seat, insert event,  --write-->  sessio
 CRM push               --HMAC-->  materialize session,        --write-->  vault_keys, audit,
 skill manifest poll    --HMAC-->  serve signed skill packs    <--read---  issued_licenses,
                                                                            groups, tiers,
-Tony's browser         --Access-> resolve identity (JWT or    --read/--   integrations, ...
+Example's browser         --Access-> resolve identity (JWT or    --read/--   integrations, ...
                                   minted session cookie),      write-->
                                   render/serve the admin
                                   console and JSON API
@@ -75,8 +75,8 @@ Tony's browser         --Access-> resolve identity (JWT or    --read/--   integr
 
 | Path | Who | Auth |
 | --- | --- | --- |
-| `/`, and the other console paths | Tony in a browser | Unauthenticated GET is a 302 to `{TEAM_DOMAIN}/cdn-cgi/access/login/{host}?redirect_url=...`. After the Access JWT (or a still-valid minted session cookie) and the two-email allowlist. 503 if `TEAM_DOMAIN` is unset. |
-| `/v1/admin/*` | Tony in a browser | Same identity check as the console; JSON 401 (never a redirect) when missing. |
+| `/`, and the other console paths | Example in a browser | Unauthenticated GET is a 302 to `{TEAM_DOMAIN}/cdn-cgi/access/login/{host}?redirect_url=...`. After the Access JWT (or a still-valid minted session cookie) and the two-email allowlist. 503 if `TEAM_DOMAIN` is unset. |
+| `/v1/admin/*` | Example in a browser | Same identity check as the console; JSON 401 (never a redirect) when missing. |
 | `POST /v1/ingest` | Métis desktop | HMAC only. Not Access. |
 | `POST /v1/heartbeat` | Métis desktop | HMAC only. Not Access. |
 | `POST /v1/use` | Métis desktop | HMAC only. Not Access. Brokers a funded Ask; never returns a raw vault secret. |
@@ -97,7 +97,7 @@ that has been configured with the Operator URL and that secret can sign a reques
 id it chooses; the HMAC proves the caller knows the shared secret, not which physical machine it is
 running on. This is mitigated three ways, not eliminated: the device id format check
 (`DEVICE_ID_RE` in `src/hmac.ts`) rejects anything shaped like an attack rather than a real seat id
-before the signature is even checked, a device still needs Tony's Approve or an active issued
+before the signature is even checked, a device still needs Example's Approve or an active issued
 license before vault keys or connectors work for it, and every mutation and every seat action lands
 in the audit trail so an impersonated device id is visible after the fact. Per-device secrets, so
 one compromised install could never sign as another, are future work, not shipped today.
@@ -241,7 +241,7 @@ Never put these in git, logs, PR bodies, or `wrangler.jsonc`.
 | `OPERATOR_SESSION_SECRET` | Optional. When set, signs the console session cookie instead of deriving from `OPERATOR_PROMPT_KEY`, so the two can rotate on independent schedules. |
 | `OPERATOR_SKILL_PRIVATE_KEY` | Ed25519 PKCS8 PEM (or base64 of that PEM). Signs skill packs. The public half is committed in `src/main/operator-skill-key.ts`. |
 | `OPERATOR_VAULT_KEY` | 32-byte AES-GCM key, base64. Encrypts LLM API keys and the Cloudflare account token in D1. Separate from `OPERATOR_PROMPT_KEY`. |
-| `POLICY_AUD` | The Access application's audience tag, once Tony creates the Zero Trust app. |
+| `POLICY_AUD` | The Access application's audience tag, once Example creates the Zero Trust app. |
 | `CF_OAUTH_CLIENT_ID` / `CF_OAUTH_CLIENT_SECRET` | Optional. Only needed for the Keys page's Cloudflare account connect flow. |
 
 Generate locally, then `secret put` (hidden prompt, not a shell argument):
@@ -265,7 +265,7 @@ npx wrangler@4 secret put OPERATOR_VAULT_KEY
 ```
 
 `TEAM_DOMAIN` is a Wrangler var (`https://tony-walteur.cloudflareaccess.com`), not a secret, so an
-unauthenticated console GET can 302 before the Access app even exists. After Tony enables Zero
+unauthenticated console GET can 302 before the Access app even exists. After Example enables Zero
 Trust and creates **Métis Operator**, set the AUD:
 
 ```sh
@@ -360,7 +360,7 @@ change that touches D1 schema, HMAC verification, or Access identity resolution;
 
 1. Team `tony-walteur`, `TEAM_DOMAIN=https://tony-walteur.cloudflareaccess.com`.
 2. Self-hosted app **Métis Operator** on `metis-operator.tony-walteur.workers.dev` (Allow, the two
-   Tony emails only).
+   Example emails only).
 3. Bypass policies on `/health`, `/v1/ingest`, `/v1/heartbeat`, `/v1/use`, `/v1/skills/manifest`,
    `/v1/integrations`, and `/assets/*` (keep in sync with `ACCESS_BYPASS_PATHS` in
    `operator/src/access.ts`). Leave `/v1/admin/*` to the Worker's own 401 JSON, do not wrap it a
@@ -379,7 +379,7 @@ still-valid minted session cookie) against the two-email allowlist. A missing `T
 - **Ingest secret.** Same value as `OPERATOR_INGEST_SECRET`. `METIS_OPERATOR_INGEST_SECRET` may
   prefill.
 - **Send Ask text for skill improvement.** Default on once a URL is set. Off sends metrics only.
-- **Open Operator.** System browser. Tony signs in with Access.
+- **Open Operator.** System browser. Example signs in with Access.
 
 While the app is up and both URL and secret are set: a heartbeat about every 60 seconds; after
 each typed or screen Ask, metrics always and question text only if the toggle is on, never Listen
@@ -416,4 +416,4 @@ secrets.
 the client bundle (and the world bundle, once `build-world.mjs` lands) and fails the build if the
 committed generated file drifts from a fresh one, typechecks both operator tsconfigs, and runs the
 operator test suite plus the scripts contract tests. It never deploys; deploys are run by hand by
-Tony (see above), because CI holds no Cloudflare auth or secrets for this Worker.
+Example (see above), because CI holds no Cloudflare auth or secrets for this Worker.

@@ -324,7 +324,7 @@ describe('MQA-275 — clamp primitives (moved verbatim from index.ts)', () => {
     expect(moved.width).toBe(8)
   })
 
-  it('parked hide reanchor stays 8×2 at bounds.y after a display move, even from Tony 8×44 at Y=39', () => {
+  it('parked hide reanchor stays 8×2 at bounds.y after a display move, even from Example 8×44 at Y=39', () => {
     const second: DisplayMetrics = {
       bounds: { x: 1800, y: 0, width: 1920, height: 1080 },
       workArea: { x: 1800, y: 39, width: 1920, height: 1041 },
@@ -487,7 +487,7 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     expect(shouldIgnoreResizeWhilePeekResting(false, 816, peek)).toBe(false)
   })
 
-  it('Tony stub 103px and 44px slab are ignored while hide is resting at the hairline', () => {
+  it('Example stub 103px and 44px slab are ignored while hide is resting at the hairline', () => {
     const hairline = OVERLAY_HIDE_PARK.height
     expect(shouldIgnoreResizeWhilePeekResting(true, 103, hairline)).toBe(true)
     expect(shouldIgnoreResizeWhilePeekResting(true, 44, hairline)).toBe(true)
@@ -655,7 +655,7 @@ describe('island reveal/collapse wiring (index.ts)', () => {
 })
 
 describe('exclusive onboarding stage (never a mid-flow card)', () => {
-  // Tony live fail (Totos-Mac, 64c3967): Electron Métis Y=39 Width=880 Height=816 X=460.
+  // Example live fail (Totos-Mac, 64c3967): Electron Métis Y=39 Width=880 Height=816 X=460.
   const tonyCard: Rect = { x: 460, y: 39, width: 880, height: 816 }
   const macbookBounds: Rect = { x: 0, y: 0, width: 1512, height: 982 }
   const macbookWorkArea: Rect = { x: 0, y: 39, width: 1512, height: 943 }
@@ -773,8 +773,8 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(demo).toMatch(/This clip plays on its own/)
     expect(demo).not.toMatch(/anywhere on the stage/)
     expect(experience).toMatch(/href="https:\/\/www\.linkedin\.com\/in\/tonywalteur\/"/)
-    expect(experience).toMatch(/Tony Walteur/)
-    expect(experience).toMatch(/<a[\s\S]*tonywalteur[\s\S]*Tony Walteur/)
+    expect(experience).toMatch(/Metis Maintainers/)
+    expect(experience).toMatch(/<a[\s\S]*tonywalteur[\s\S]*Metis Maintainers/)
     expect(experience).toMatch(/createOnboardingMusicBed/)
     expect(experience).toMatch(/onboard-mute/)
     expect(experience).toMatch(/Mute music/)

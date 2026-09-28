@@ -16,7 +16,7 @@ does-not-own:
   - MCP gateway-token
   - Goldberg Aria
 ready-to-merge: no
-audience: Tony Walteur only
+audience: Metis Maintainers only
 prove-host: https://metis-operator.tony-walteur.workers.dev/
 tip-baseline: feat/operator-wow 17ccbd9 (PR169 licensed · last4)
 ---
@@ -31,11 +31,11 @@ Worker name `metis-operator`. Not `cloudflare-proxy`. Not Fly.
 
 ---
 
-## Tony hard locks (non-negotiable)
+## Example hard locks (non-negotiable)
 
 ### 1. Portal-hosted keys for licensed seats
 
-When Tony adds an API key on Portal `#keys` (Anthropic / DeepSeek / Cloudflare / any vault LLM),
+When Example adds an API key on Portal `#keys` (Anthropic / DeepSeek / Cloudflare / any vault LLM),
 an **approved or licensed mid-tier** seat (`operator_keys` entitlement — default Métis tier, not
 Métis Light) must spend **that** key through the Operator proxy.
 
@@ -54,7 +54,7 @@ The implement slice makes that copy true end to end. It does not invent a second
 ### 2. Prove host
 
 Full E2E prove **only** on `https://metis-operator.tony-walteur.workers.dev/`.
-Tony states A–D already proven there. No alternate host. No staging Worker. No localhost
+Example states A–D already proven there. No alternate host. No staging Worker. No localhost
 stand-in as the Ultron stamp. No `cloudflare-proxy` URL as the Portal path.
 
 ---
@@ -62,7 +62,7 @@ stand-in as the Ultron stamp. No `cloudflare-proxy` URL as the Portal path.
 ## Ultron process
 
 Write this file first. Then UI / Worker / desktop contract work in a later slice.
-Do not invent Keys chrome. Do not pack. Do not contact Tony from this agent.
+Do not invent Keys chrome. Do not pack. Do not contact Example from this agent.
 
 ---
 
@@ -106,7 +106,7 @@ Live copy already matches lock 1. The bind/Ask path does not yet.
 
 ### 1.3 Seat authorization + licensed label (done, including PR169)
 
-`seatAuthorizedForKeys` = Tony Approve **or** active issued license jti. Revoke wins.
+`seatAuthorizedForKeys` = Example Approve **or** active issued license jti. Revoke wins.
 Heartbeat returns `fundedProviders` (IDs only) + `tier` + `entitlements` to an authorized seat.
 Default Métis tier includes `operator_keys`. Métis Light does not (`ask` + `intelligence` only).
 Desktop `operatorFundedProviders()` empties the list when `operator_keys` is false.
@@ -126,16 +126,16 @@ even when an Operator jti / last4 was bound. Now:
 
 So a Generate → activate seat shows `licensed · last4` and `keysAuthorized: true` on the live
 Portal when the jti is active. That is **label + key gate**, not Ask E2E. `/v1/ask` is still
-missing. Do not treat a green Licenses chip as proof Tony’s vault answered an Ask.
+missing. Do not treat a green Licenses chip as proof Example’s vault answered an Ask.
 
 ### 1.4 Operator LLM proxy today (partial)
 
 `POST /v1/use` (HMAC, not Access):
 
 - Decrypts the active vault row for `provider`. Never returns the secret.
-- **DeepSeek** → `https://api.deepseek.com/v1` **direct** (Tony’s vault DeepSeek key).
+- **DeepSeek** → `https://api.deepseek.com/v1` **direct** (Example’s vault DeepSeek key).
 - **Cloudflare** → `https://api.cloudflare.com/client/v4/accounts/{id}/ai/v1/chat/completions`
-  with `cf-aig-gateway-id: default` (Tony’s vault CF token + account id).
+  with `cf-aig-gateway-id: default` (Example’s vault CF token + account id).
 - **Anthropic / OpenAI-compat** → vendor base URL with the vault secret.
 - **Buffered JSON.** 60s timeout. No SSE. Rejects vision / screenshots.
 - Tests cover authorized `/v1/use` with `provider: cloudflare` after OAuth provision.
@@ -156,7 +156,7 @@ Desktop `viaOperator` when: no seat-local key, provider ∈ `operatorFundedProvi
 
 `OPERATOR_HOSTED_PROVIDER_IDS` includes `deepseek` and Anthropic/OpenAI/… **It does not
 include `cloudflare`.** Heartbeat may list `cloudflare` (vault allowlist has it);
-`filterFundedProviders` drops it. A licensed seat cannot spend Tony’s CF vault row via
+`filterFundedProviders` drops it. A licensed seat cannot spend Example’s CF vault row via
 the funded-providers path.
 
 Seat-local Cloudflare still works the old way: `cloudflareBaseUrl` + proxy/account key
@@ -203,7 +203,7 @@ AI Gateway also accepts third-party `deepseek/…` (Unified Billing or BYOK). Wo
 
 ### 2.1 One law
 
-**Tony’s Portal vault is the key. The Operator Worker is the only process that decrypts it.
+**Example’s Portal vault is the key. The Operator Worker is the only process that decrypts it.
 The seat sends HMAC + prompt. The provider never sees a Métis seat credential.**
 
 No mid-flight key invent: no generated DeepSeek key, no generated CF token, no embed, no
@@ -214,10 +214,10 @@ copy of the vault secret onto the seat, no “temporary” key in heartbeat JSON
 Bind is authorization + funded IDs, not a new secret.
 
 ```
-Tony: Portal #keys Add API or Log in to Cloudflare
+Example: Portal #keys Add API or Log in to Cloudflare
         │  vault write (AES-GCM). last4 only in UI
         ▼
-Tony: Generate license  OR  Approve seat
+Example: Generate license  OR  Approve seat
         │  jti activate on Métis → Identity, or approval=approved
         ▼
 Seat heartbeat (HMAC) { license, licenseId }
@@ -239,13 +239,13 @@ Mid-tier = default `metis` tier with `operator_keys`. Light stays unfunded.
 
 ### 2.3 Two DeepSeek paths (keep both; tag them)
 
-| Path id | Vault row Tony added | Upstream | Needs DeepSeek platform key? |
+| Path id | Vault row Example added | Upstream | Needs DeepSeek platform key? |
 | --- | --- | --- | --- |
 | `portal-cf` | `cloudflare` (+ account id on the row) | CF AI REST + `cf-aig-gateway-id: default` + `@cf/deepseek-ai/…` | No |
 | `portal-direct` | `deepseek` | `api.deepseek.com` | Yes — the vault secret |
 
 Both are Portal-hosted. Both are lock 1. The FRAME’s **CF DeepSeek bind** is `portal-cf`.
-`portal-direct` stays the non-CF compare and the path when Tony pasted DeepSeek and has
+`portal-direct` stays the non-CF compare and the path when Example pasted DeepSeek and has
 not connected Cloudflare.
 
 Do **not** merge the two into one provider ID. Cost compare dies if you do.
@@ -255,7 +255,7 @@ CF credential precedence: a provider key on the request skips BYOK / Unified Bil
 is the wrong hop.
 
 Optional later (not this FRAME’s happy path): Unified Billing `deepseek/deepseek-v4-flash`
-through the same REST API when the gateway has credit. Still Tony’s CF token. Still no
+through the same REST API when the gateway has credit. Still Example’s CF token. Still no
 seat key. Still `portal-cf`. Do not default to it until a live account proves the id.
 
 ### 2.4 Upstream (reuse REST; do not require a new binding)
@@ -329,7 +329,7 @@ scanned so the secret, cipher, and iv never leak (already in `/v1/use`).
 Rotate / revoke stay the existing vault buttons. Revoke stops the next Ask. No seat update.
 
 Build-time embedded Cloudflare (`docs/CLOUDFLARE.md` shape 2) is **not** the Portal bind.
-Do not seed a new embed in this slice. Do not rotate Tony’s account token from Ask code.
+Do not seed a new embed in this slice. Do not rotate Example’s account token from Ask code.
 
 ---
 
@@ -386,7 +386,7 @@ C. Desktop: no `getApiKey('cloudflare')`, no `getApiKey('deepseek')`. Typed Ask.
 D. Repeat with vault `deepseek` and no CF spend (or a second Ask) for `portal-direct`.  
 E. Revoke the vault row or the seat → next Ask `403` / `503`, not a silent seat key.
 
-A–D in Tony’s lock are **already proven** on this host for prior Operator slices.
+A–D in Example’s lock are **already proven** on this host for prior Operator slices.
 Letters above are this FRAME’s Ask prove, not a rename of those.
 
 ---
@@ -400,9 +400,9 @@ Same prompt family, two Portal paths:
 | Series | Path | Bill |
 | --- | --- | --- |
 | CF | `portal-cf` `@cf/deepseek-ai/…` | Workers AI / AI Gateway credits (Cloudflare) |
-| Non-CF | `portal-direct` `deepseek-v4-*` | DeepSeek platform (Tony’s vault key) |
+| Non-CF | `portal-direct` `deepseek-v4-*` | DeepSeek platform (Example’s vault key) |
 
-Optional third series later: CLI Asks (subscription, not Tony’s meter). Already split
+Optional third series later: CLI Asks (subscription, not Example’s meter). Already split
 in `dashboard.ts` as `cliAsks` vs `operatorAsks`. Keep that split. Add **CF vs
 direct** inside `operatorAsks`.
 
@@ -420,7 +420,7 @@ direct** inside `operatorAsks`.
    cost, cache). Worker invocation GraphQL stays a **different** KPI (Operator
    Worker CPU). Do not label invocations as LLM spend.
 5. Seat-local DeepSeek / embedded CF proxy spend is **out of the Portal compare**.
-   Do not mix it into Tony’s vault meter.
+   Do not mix it into Example’s vault meter.
 
 Spend limits / User Insights on the gateway are Cloudflare dashboard features. Portal
 may link; it must not invent per-seat $ from empty D1.
@@ -467,7 +467,7 @@ This FRAME PR ships the doc only.
 - Native Swift app.
 - Merging `cloudflare-proxy` into Operator.
 - Inventing keys, seats, dollars, or an alternate prove host.
-- Contacting Tony from this agent.
+- Contacting Example from this agent.
 - Fat PR151. Aria / Polo densify. WebsiteCloner chrome work.
 
 ---
@@ -484,7 +484,7 @@ This FRAME PR ships the doc only.
 
 Stamp only if **all** hold on `https://metis-operator.tony-walteur.workers.dev/`:
 
-1. Tony’s Portal key (CF and/or DeepSeek) answers a licensed Métis Ask. The seat
+1. Example’s Portal key (CF and/or DeepSeek) answers a licensed Métis Ask. The seat
    has **no** local key for that provider. HMAC only.
 2. Network: desktop → that Operator host `/v1/ask` → CF REST or `api.deepseek.com`.
    No account token and no DeepSeek secret in seat storage, logs, or renderer.

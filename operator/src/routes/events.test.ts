@@ -58,7 +58,7 @@ function env(): Env {
   return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tonyAccess = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow {
   return {
@@ -73,8 +73,8 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lat: null,
     lon: null,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'twalteur@amaris.com',
+    hostname: 'Example-MacBook-Pro',
+    sso_email: 'ops@example.com',
     license: 'approved',
     approval: 'approved',
     ...overrides
@@ -116,7 +116,7 @@ describe('GET /v1/admin/events.json', () => {
       counts: Record<string, number>
     }
     expect(body1.rows).toHaveLength(2)
-    expect(body1.rows[0]).toMatchObject({ hostname: 'Tonys-MacBook-Pro', email: 'twalteur@amaris.com', os: 'darwin', appVersion: '1.8.5' })
+    expect(body1.rows[0]).toMatchObject({ hostname: 'Example-MacBook-Pro', email: 'ops@example.com', os: 'darwin', appVersion: '1.8.5' })
     expect(body1.nextCursor).toBeTruthy()
     expect(body1.counts.heartbeat).toBe(3)
 
@@ -158,14 +158,14 @@ describe('GET /v1/admin/events.json', () => {
 
   it('suppresses content-bearing detail from legacy Ask, CRM, and heartbeat rows', async () => {
     const store = memoryStore()
-    await store.insertEvent({ id: 'a', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Customer Alpha private ask' })
+    await store.insertEvent({ id: 'a', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Example Customer private ask' })
     await store.insertEvent({ id: 'c', ts: NOW - 1, kind: 'crm', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Patient diagnosis CRM payload' })
-    await store.insertEvent({ id: 'h', ts: NOW - 2, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: '/Users/tony/private.md' })
+    await store.insertEvent({ id: 'h', ts: NOW - 2, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: '/home/example/private.md' })
     const res = await handleRequest(new Request('https://operator.test/v1/admin/events.json'), env(), { access: tonyAccess }, { store, now: NOW })
     const body = (await res.json()) as { rows: { id: string; detail: string | null }[] }
     expect(body.rows.map((row) => row.detail)).toEqual([null, null, null])
-    expect(JSON.stringify(body)).not.toContain('Customer Alpha')
+    expect(JSON.stringify(body)).not.toContain('Example Customer')
     expect(JSON.stringify(body)).not.toContain('Patient diagnosis')
-    expect(JSON.stringify(body)).not.toContain('/Users/tony')
+    expect(JSON.stringify(body)).not.toContain('/home/example')
   })
 })

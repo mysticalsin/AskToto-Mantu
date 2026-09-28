@@ -52,7 +52,7 @@ function env(): Env {
   return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tonyAccess = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 describe('validateSettingValue', () => {
   it('hourlyRate: 0 to 10000 or null, nothing else', () => {
@@ -96,13 +96,13 @@ describe('readOperatorSettings / writeOperatorSettingsPatch (node:sqlite D1 shim
 
   it('writes exactly the given keys, leaves the rest at default, and reports settingsVersion as the max updated_at', async () => {
     const db = sqliteD1(freshSettingsDb())
-    const result = await writeOperatorSettingsPatch(db, { hourlyRate: 65, currency: 'CAD' }, 'tony.walteur@gmail.com', NOW)
+    const result = await writeOperatorSettingsPatch(db, { hourlyRate: 65, currency: 'CAD' }, 'admin@example.com', NOW)
     expect(result.ok).toBe(true)
     if (!result.ok) throw new Error('unreachable')
     expect(result.values).toEqual({ ...DEFAULT_OPERATOR_SETTINGS, hourlyRate: 65, currency: 'CAD' })
     expect(result.settingsVersion).toBe(NOW)
 
-    const later = await writeOperatorSettingsPatch(db, { density: 'compact' }, 'tony.walteur@gmail.com', NOW + 1000)
+    const later = await writeOperatorSettingsPatch(db, { density: 'compact' }, 'admin@example.com', NOW + 1000)
     if (!later.ok) throw new Error('unreachable')
     expect(later.values.hourlyRate).toBe(65) // untouched key survives a later partial patch
     expect(later.settingsVersion).toBe(NOW + 1000)
@@ -110,7 +110,7 @@ describe('readOperatorSettings / writeOperatorSettingsPatch (node:sqlite D1 shim
 
   it('rejects the whole patch, writing nothing, when any key in it is invalid', async () => {
     const db = sqliteD1(freshSettingsDb())
-    const result = await writeOperatorSettingsPatch(db, { hourlyRate: 50, currency: 'JPY' }, 'tony.walteur@gmail.com', NOW)
+    const result = await writeOperatorSettingsPatch(db, { hourlyRate: 50, currency: 'JPY' }, 'admin@example.com', NOW)
     expect(result.ok).toBe(false)
     const after = await readOperatorSettings(db)
     expect(after.values.hourlyRate).toBeNull() // the valid hourlyRate in the same patch never landed either
@@ -118,7 +118,7 @@ describe('readOperatorSettings / writeOperatorSettingsPatch (node:sqlite D1 shim
 
   it('never invents a default hourly rate: hourlyRate stays null until explicitly set', async () => {
     const db = sqliteD1(freshSettingsDb())
-    await writeOperatorSettingsPatch(db, { currency: 'EUR' }, 'tony.walteur@gmail.com', NOW)
+    await writeOperatorSettingsPatch(db, { currency: 'EUR' }, 'admin@example.com', NOW)
     const result = await readOperatorSettings(db)
     expect(result.values.hourlyRate).toBeNull()
   })

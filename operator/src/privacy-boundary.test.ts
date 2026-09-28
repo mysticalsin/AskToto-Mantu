@@ -5,12 +5,12 @@ import { memoryStore, type AskRow } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
-const PRIVATE_ASK = 'Customer Alpha acquisition plan'
+const PRIVATE_ASK = 'Example Customer acquisition plan'
 const PRIVATE_CRM = 'Patient diagnosis and private meeting notes'
-const PRIVATE_EVENT = '/Users/tony/Customer Alpha/private-meeting.md'
-const PRIVATE_EVIDENCE = 'Ask said to acquire Customer Alpha tomorrow'
+const PRIVATE_EVENT = '/home/example/Example Customer/private-meeting.md'
+const PRIVATE_EVIDENCE = 'Ask said to acquire Example Customer tomorrow'
 
-const tonyAccess = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tonyAccess = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 function env(overrides: Partial<Env> = {}): Env {
   return {
@@ -67,7 +67,7 @@ describe('legacy server privacy projections', () => {
     await store.putProposal({
       id: 'legacy-proposal', skill_id: 'interview', from_version: '1.0.0',
       evidence_json: JSON.stringify([PRIVATE_EVIDENCE]), diff: '# safe admin-authored diff',
-      rationale: PRIVATE_EVIDENCE, status: 'pending', created_by: 'tony.walteur@gmail.com',
+      rationale: PRIVATE_EVIDENCE, status: 'pending', created_by: 'admin@example.com',
       created_at: NOW - 1, decided_at: null, reject_reason: null
     })
 
@@ -83,7 +83,7 @@ describe('legacy server privacy projections', () => {
     expect(created?.evidence_json).toBe('[]')
     expect(`${created?.evidence_json} ${created?.rationale}`).not.toContain(PRIVATE_ASK)
 
-    const dashboard = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    const dashboard = await buildDashboard(store, 'admin@example.com', NOW)
     const dashboardText = JSON.stringify(dashboard)
     expect(dashboardText).not.toContain(PRIVATE_EVIDENCE)
     expect(dashboardText).not.toContain(PRIVATE_ASK)
@@ -102,7 +102,7 @@ describe('legacy server privacy projections', () => {
       id: 'legacy-event', ts: NOW, kind: 'heartbeat', actor: null, device_id: 'device-a', country: 'CA', detail: PRIVATE_EVENT
     })
 
-    const dashboard = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    const dashboard = await buildDashboard(store, 'admin@example.com', NOW)
     const live = await buildLiveSnapshot(store, NOW)
     const output = JSON.stringify({ dashboard, live })
     for (const forbidden of [PRIVATE_ASK, PRIVATE_CRM, PRIVATE_EVENT, 'patient-42', 'send-diagnosis']) {

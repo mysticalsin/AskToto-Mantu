@@ -52,10 +52,10 @@ export const RV_SCENARIOS = Object.freeze([
   { id: 'RV-1-macos-open-activate', platform: 'darwin', reason: 'activate', automation: 'open-app-path' },
   { id: 'RV-2-macos-open-new-instance', platform: 'darwin', reason: 'second-instance', automation: 'open-new-instance' },
   { id: 'RV-3-windows-exe-relaunch', platform: 'win32', reason: 'second-instance', automation: 'exe-relaunch' },
-  { id: 'RV-4-tray-show', platform: 'all', reason: 'tray', automation: 'external-ui' },
-  { id: 'RV-4-global-hotkey', platform: 'all', reason: 'hotkey', automation: 'external-ui' },
-  { id: 'RV-1-macos-finder-spotlight-launchpad', platform: 'darwin', reason: 'activate', automation: 'external-ui' },
-  { id: 'RV-3-windows-shortcut-relaunch', platform: 'win32', reason: 'second-instance', automation: 'external-ui' }
+  { id: 'RV-4-tray-show', platform: 'all', reason: 'tray', automation: 'tray-menu' },
+  { id: 'RV-4-global-hotkey', platform: 'all', reason: 'hotkey', automation: 'global-hotkey' },
+  { id: 'RV-1-macos-finder-spotlight-launchpad', platform: 'darwin', reason: 'activate', automation: 'finder-open-app-file' },
+  { id: 'RV-3-windows-shortcut-relaunch', platform: 'win32', reason: 'second-instance', automation: 'windows-shortcut' }
 ])
 
 /** JSON-lines audit transport ('{text}', logger.ts): blank and malformed lines are skipped, never guessed. */
@@ -121,7 +121,14 @@ export function smokeVerdict(observation) {
   fail('processes_survived', observation.survivors !== null && observation.survivors.length > 0)
   fail(
     'rv_reopen_failed',
-    Array.isArray(observation.rv) && observation.rv.some((row) => row.status === 'FAIL' && row.automation !== 'external-ui')
+    Array.isArray(observation.rv) && observation.rv.some((row) => row.status === 'FAIL')
+  )
+  fail(
+    'rv_reopen_incomplete',
+    observation.readyMs !== null &&
+      !observation.exitedEarly &&
+      Array.isArray(observation.rv) &&
+      observation.rv.some((row) => row.status !== 'PASS' && row.status !== 'FAIL')
   )
   fail('smoke_incomplete', failures.length === 0 && observation.survivors === null)
 
@@ -167,12 +174,9 @@ export function initialRvRows(platform) {
       id: scenario.id,
       reason: scenario.reason,
       automation: scenario.automation,
-      status: scenario.automation === 'external-ui' ? 'BLOCKED_EXTERNAL' : 'PENDING',
+      status: 'PENDING',
       evidence: null,
-      unblock:
-        scenario.automation === 'external-ui'
-          ? 'Run this row on a QA desktop with the packaged app installed and file the content-free smoke artifact.'
-          : null
+      unblock: null
     }))
 }
 
@@ -181,10 +185,10 @@ function completeRvRow(rows, id, patch) {
   if (row) Object.assign(row, patch)
 }
 
-function runProcess(file, args, timeoutMs) {
+function runProcess(file, args, timeoutMs, options = {}) {
   return new Promise((resolve) => {
     let settled = false
-    const child = spawn(file, args, { stdio: 'ignore', detached: false })
+    const child = spawn(file, args, { stdio: 'ignore', detached: false, ...options })
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
@@ -210,6 +214,14 @@ function runProcess(file, args, timeoutMs) {
   })
 }
 
+async function runAppleScript(script, timeoutMs) {
+  return runProcess('osascript', ['-e', script], timeoutMs)
+}
+
+async function runPowerShell(script, timeoutMs) {
+  return runProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], timeoutMs)
+}
+
 async function waitForReveal(auditLogPath, reason, seenCount) {
   const deadline = Date.now() + RV_TIMEOUT_MS
   while (Date.now() < deadline) {
@@ -221,37 +233,111 @@ async function waitForReveal(auditLogPath, reason, seenCount) {
   return null
 }
 
-async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows }) {
+function revealCount(auditLogPath, reason) {
+  return parseAuditLog(readAuditLog(auditLogPath)).filter((r) => r.event === 'reveal' && r.reason === reason).length
+}
+
+async function runRevealRow({ auditLogPath, rows, id, reason, run, failure }) {
+  const seen = revealCount(auditLogPath, reason)
+  const launched = await run()
+  const reveal = launched.error ? null : await waitForReveal(auditLogPath, reason, seen)
+  completeRvRow(rows, id, {
+    status: reveal ? 'PASS' : 'FAIL',
+    evidence: reveal ? { event: 'reveal', reason, outcome: reveal.outcome ?? null } : null,
+    unblock: reveal ? null : failure
+  })
+}
+
+async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows, env }) {
   if (platform === 'darwin') {
-    const activateSeen = parseAuditLog(readAuditLog(auditLogPath)).filter((r) => r.event === 'reveal' && r.reason === 'activate').length
-    const activate = await runProcess('open', [target], 10_000)
-    const activateReveal = activate.error ? null : await waitForReveal(auditLogPath, 'activate', activateSeen)
-    completeRvRow(rows, 'RV-1-macos-open-activate', {
-      status: activateReveal ? 'PASS' : 'FAIL',
-      evidence: activateReveal ? { event: 'reveal', reason: 'activate', outcome: activateReveal.outcome ?? null } : null,
-      unblock: activateReveal ? null : 'Inspect the packaged-smoke artifact and the app audit log for the missing activate reveal event.'
+    await runRevealRow({
+      auditLogPath,
+      rows,
+      id: 'RV-1-macos-open-activate',
+      reason: 'activate',
+      run: () => runProcess('open', [target], 10_000),
+      failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing activate reveal event.'
     })
 
-    const secondSeen = parseAuditLog(readAuditLog(auditLogPath)).filter((r) => r.event === 'reveal' && r.reason === 'second-instance').length
-    const second = await runProcess('open', ['-n', target], 10_000)
-    const secondReveal = second.error ? null : await waitForReveal(auditLogPath, 'second-instance', secondSeen)
-    completeRvRow(rows, 'RV-2-macos-open-new-instance', {
-      status: secondReveal ? 'PASS' : 'FAIL',
-      evidence: secondReveal ? { event: 'reveal', reason: 'second-instance', outcome: secondReveal.outcome ?? null } : null,
-      unblock: secondReveal ? null : 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
+    await runRevealRow({
+      auditLogPath,
+      rows,
+      id: 'RV-2-macos-open-new-instance',
+      reason: 'second-instance',
+      run: () => runProcess('open', ['-n', target], 10_000),
+      failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
+    })
+
+    await runRevealRow({
+      auditLogPath,
+      rows,
+      id: 'RV-1-macos-finder-spotlight-launchpad',
+      reason: 'activate',
+      run: () => runAppleScript(`tell application "Finder" to open POSIX file ${JSON.stringify(target)}`, 10_000),
+      failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing Finder activate reveal event.'
+    })
+
+    await runRevealRow({
+      auditLogPath,
+      rows,
+      id: 'RV-4-global-hotkey',
+      reason: 'hotkey',
+      run: async () => {
+        await runProcess(executable, ['--metis-smoke-reopen=hide-window'], 10_000, { env })
+        return runAppleScript('tell application "System Events" to keystroke return using {command down, shift down}', 10_000)
+      },
+      failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing global-hotkey reveal event.'
     })
   }
 
   if (platform === 'win32') {
-    const secondSeen = parseAuditLog(readAuditLog(auditLogPath)).filter((r) => r.event === 'reveal' && r.reason === 'second-instance').length
-    const second = await runProcess(executable, [], 10_000)
-    const secondReveal = second.error ? null : await waitForReveal(auditLogPath, 'second-instance', secondSeen)
-    completeRvRow(rows, 'RV-3-windows-exe-relaunch', {
-      status: secondReveal ? 'PASS' : 'FAIL',
-      evidence: secondReveal ? { event: 'reveal', reason: 'second-instance', outcome: secondReveal.outcome ?? null } : null,
-      unblock: secondReveal ? null : 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
+    await runRevealRow({
+      auditLogPath,
+      rows,
+      id: 'RV-3-windows-exe-relaunch',
+      reason: 'second-instance',
+      run: () => runProcess(executable, [], 10_000, { env }),
+      failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
+    })
+
+    const shortcutPath = join(dirname(auditLogPath), 'Metis-smoke.lnk')
+    const shortcutScript = [
+      '$shell = New-Object -ComObject WScript.Shell',
+      `$shortcut = $shell.CreateShortcut(${JSON.stringify(shortcutPath)})`,
+      `$shortcut.TargetPath = ${JSON.stringify(executable)}`,
+      '$shortcut.Save()',
+      `Start-Process -FilePath ${JSON.stringify(shortcutPath)}`
+    ].join('; ')
+    await runRevealRow({
+      auditLogPath,
+      rows,
+      id: 'RV-3-windows-shortcut-relaunch',
+      reason: 'second-instance',
+      run: () => runPowerShell(shortcutScript, 10_000),
+      failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing Windows shortcut reveal event.'
+    })
+
+    await runRevealRow({
+      auditLogPath,
+      rows,
+      id: 'RV-4-global-hotkey',
+      reason: 'hotkey',
+      run: async () => {
+        await runProcess(executable, ['--metis-smoke-reopen=hide-window'], 10_000, { env })
+        return runPowerShell("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^+{ENTER}')", 10_000)
+      },
+      failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing global-hotkey reveal event.'
     })
   }
+
+  await runRevealRow({
+    auditLogPath,
+    rows,
+    id: 'RV-4-tray-show',
+    reason: 'tray',
+    run: () => runProcess(executable, ['--metis-smoke-reopen=tray-show'], 10_000, { env }),
+    failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing tray reveal event.'
+  })
 }
 
 function sleep(ms) {
@@ -393,7 +479,7 @@ async function main() {
     const port = await freeLoopbackPort()
     const auditLogPath = join(profile, 'logs', 'audit.log')
 
-    const env = { ...process.env, ASKTOTO_USERDATA: profile }
+    const env = { ...process.env, ASKTOTO_USERDATA: profile, ASKTOTO_SMOKE_REOPEN_PROBE: '1' }
     for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
 
     const exitInfo = { settled: false, code: null, signal: null }
@@ -431,7 +517,7 @@ async function main() {
     if (observation.launchFailed) return
 
     if (observation.readyMs !== null && !observation.exitedEarly) {
-      await runPackagedRvRows({ platform, target, executable, auditLogPath, rows: observation.rv })
+      await runPackagedRvRows({ platform, target, executable, auditLogPath, rows: observation.rv, env })
 
       const survivalDeadline = Date.now() + SURVIVAL_MS
       while (Date.now() < survivalDeadline) {

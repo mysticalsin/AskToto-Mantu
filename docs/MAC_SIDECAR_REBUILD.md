@@ -158,7 +158,7 @@ actually got **bundled**, not just the one in `resources/`:
 
 ```bash
 # npm run dist:local (output dir is overridden in that script)
-otool -L /Users/tony/AI-Brain-build/asktoto-release/mac-arm64/Metis.app/Contents/Resources/ffmpeg/darwin-arm64/ffmpeg
+otool -L local-release/mac-arm64/Metis.app/Contents/Resources/ffmpeg/darwin-arm64/ffmpeg
 
 # npm run dist (default output dir)
 otool -L release/mac-arm64/Metis.app/Contents/Resources/ffmpeg/darwin-arm64/ffmpeg

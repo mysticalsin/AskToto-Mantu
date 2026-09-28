@@ -14,7 +14,7 @@ import { tokenPatternForTests } from './redact'
 import { SPA_CSS_PATH } from './spa/manifest'
 
 /**
- * Tony 6:17 PM ET quality bar. After every Operator change these four
+ * Example 6:17 PM ET quality bar. After every Operator change these four
  * contracts must still hold. Overlay Island/Hide files stay frozen — this
  * file proves the Operator slice does not import them.
  */
@@ -81,7 +81,7 @@ describe('quality bar: overlay chrome stays a separate slice', () => {
 
 describe('quality bar: login', () => {
   it('302s unauth console GET to Access and keeps admin APIs at 401 JSON', async () => {
-    expect([...ADMIN_EMAILS].sort()).toEqual(['tony.walteur@gmail.com', 'twalteur@amaris.com'].sort())
+    expect([...ADMIN_EMAILS].sort()).toEqual(['admin@example.com', 'ops@example.com'].sort())
     const store = memoryStore()
     const configured = {
       ...env(),
@@ -169,7 +169,7 @@ describe('quality bar: map data contract', () => {
     const emptyHome = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: access('tony.walteur@gmail.com') },
+      { access: access('admin@example.com') },
       { store, now: NOW }
     )
     const emptyHtml = await emptyHome.text()
@@ -181,7 +181,7 @@ describe('quality bar: map data contract', () => {
       await handleRequest(
         new Request('https://operator.test/v1/admin/dashboard'),
         env(),
-        { access: access('tony.walteur@gmail.com') },
+        { access: access('admin@example.com') },
         { store, now: NOW }
       )
     ).json()) as { map: { empty: boolean; countries: unknown[]; dots: unknown[] } }
@@ -216,7 +216,7 @@ describe('quality bar: map data contract', () => {
     const live = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: access('twalteur@amaris.com') },
+      { access: access('ops@example.com') },
       { store, now: NOW }
     )
     const html = await live.text()
@@ -246,7 +246,7 @@ describe('quality bar: map data contract', () => {
       await handleRequest(
         new Request('https://operator.test/v1/admin/dashboard'),
         env(),
-        { access: access('twalteur@amaris.com') },
+        { access: access('ops@example.com') },
         { store, now: NOW }
       )
     ).json()) as { map: { empty: boolean; countries: { iso: string; devices: number }[]; dots: { country: string }[] } }
@@ -263,7 +263,7 @@ describe('quality bar: token-free events', () => {
       id: 'qb-tok',
       ts: NOW,
       kind: 'ask',
-      actor: 'tony.walteur@gmail.com',
+      actor: 'admin@example.com',
       device_id: 'device-qb',
       country: 'CA',
       detail: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaa.bbb sk-ant-api03-abcdefghijklmnop'
@@ -271,7 +271,7 @@ describe('quality bar: token-free events', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: access('tony.walteur@gmail.com') },
+      { access: access('admin@example.com') },
       { store, now: NOW }
     ).then((r) => r.text())
     const events = eventsHtml(html)
@@ -288,7 +288,7 @@ describe('quality bar: keys last4 and Cloudflare fail-loud', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: access('tony.walteur@gmail.com') },
+      { access: access('admin@example.com') },
       { store, now: NOW }
     ).then((r) => r.text())
     expect(html).not.toContain('Seats keep their own keys')

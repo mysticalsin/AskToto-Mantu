@@ -121,6 +121,21 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
     expect(reveal).toHaveBeenNthCalledWith(2, 'second-instance', { focus: true })
   })
 
+  it('M2-0036 — activate, second-instance, tray, hotkey and notification click all route through reveal()', () => {
+    expect(indexSrc).toContain("reveal('activate', { focus: true })")
+    expect(indexSrc).toContain("reveal('second-instance', { focus: true })")
+    expect(indexSrc).toContain("reveal(reason, { focus: true })")
+    expect(indexSrc).toContain("reveal('hotkey', { focus: action === 'ask' })")
+    expect(indexSrc).toContain("reveal('notification-click', { focus: false })")
+  })
+
+  it('M2-0036 — the reveal wrapper delegates to the one controller instead of reimplementing window show logic', () => {
+    const body = sliceBetween('function reveal(reason: RevealReason', 'function handleSmokeReopenProbe')
+    expect(body).toContain('revealController.reveal(reason, options)')
+    expect(body).not.toMatch(/\.(show|showInactive|focus)\(/)
+    expect(body).not.toMatch(/setIgnoreMouseEvents/)
+  })
+
   it('MQA-172 — createWindow() is idempotent, so the boot step cannot orphan a recovered window', () => {
     // ensureWindow() may now run during the async gap between the handler registration and boot's own
     // runStep('createWindow'). Without this guard the boot step would overwrite `win` with a second

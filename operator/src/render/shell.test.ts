@@ -84,8 +84,8 @@ describe('shell', () => {
   })
 
   it('renders the signed-in email, a Private/Access chip, and a sign-out form posting to /logout', () => {
-    const html = shell(ctx, { page: 'overview', title: 'Overview', live: 0, email: 'tony.walteur@gmail.com', bodyHtml: '' })
-    expect(html).toContain('tony.walteur@gmail.com')
+    const html = shell(ctx, { page: 'overview', title: 'Overview', live: 0, email: 'admin@example.com', bodyHtml: '' })
+    expect(html).toContain('admin@example.com')
     expect(html).toContain('data-access-solid')
     expect(html).toContain('Private, Access')
     expect(html).toContain('method="post" action="/logout"')

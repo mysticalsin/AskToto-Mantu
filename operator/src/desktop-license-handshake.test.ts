@@ -15,7 +15,7 @@ describe('MQA-293 desktop licence handshake with the Operator Worker', () => {
       OPERATOR_SKILL_PRIVATE_KEY: '',
       OPERATOR_VAULT_KEY: TEST_VAULT_KEY
     }
-    const access = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+    const access = { getIdentity: async () => ({ email: 'admin@example.com' }) }
     const adminPost = (path: string, body: Record<string, unknown>) => handleRequest(
       new Request(`https://operator.test${path}`, { method: 'POST', body: JSON.stringify(body) }),
       env, { access }, { store, now }

@@ -1,7 +1,7 @@
 ---
 project: Métis
 goal: A faithful look-and-feel clone of Cluely (AI desktop overlay assistant), rebranded Métis.
-reference: /Users/tony/Downloads/Cluely (New) 2.1.19.dmg  (Cluely v2.1.19, bundle id com.cluely.app.april22)
+reference: local reference DMG  (Cluely v2.1.19, bundle id com.cluely.app.april22)
 extracted_to: $TMPDIR/cluely_asar  (app.asar, read-only analysis)
 status: historical reference — superseded by DESIGN.md
 confidence_legend: [V]=verified from binary  [A]=assumed/inferred  [?]=unknown

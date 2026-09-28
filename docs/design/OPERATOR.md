@@ -5,7 +5,7 @@ owns: Cloudflare-hosted Operator console, license generate, seat approval, keys 
 does-not-own: overlay chrome, installer pack, Fly license-server, Metis-Releases Latest, Goldberg Aria
 ready-to-merge: no
 this-slice: thin-operator-license-generate
-audience: Tony Walteur only. Two emails. Nobody else.
+audience: Metis Maintainers only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
   live: "#10B981"
@@ -21,8 +21,8 @@ tokens:
 requirement (MASTER §12.2, §12.9) joins this console is an open scope question owned by M2-0158.
 
 Live URL: `https://metis-operator.tony-walteur.workers.dev/` (`#overview`).
-Access: Cloudflare Access email-code only. Allowlist `tony.walteur@gmail.com` +
-`twalteur@amaris.com`. Never a homemade password form.
+Access: Cloudflare Access email-code only. Allowlist `admin@example.com` +
+`ops@example.com`. Never a homemade password form.
 
 **Hold merge.** Draft only. No pack. No Latest. Ultron green-lit Operator-only
 deploy to `metis-operator` (`tony-walteur.workers.dev`). Do not merge fat PR151.
@@ -51,7 +51,7 @@ pageviews.
 | 2 | `POST /v1/admin/licenses/generate` `{ days }` | Access JWT. Unauth **401** `{ ok:false, error:"Access required" }` |
 | 3 | Once-string | `METIS-OP-1.<jti>.<iat>.<exp>.<hmac-sha256-b64url>` HMAC over canonical with `OPERATOR_INGEST_SECRET`. Shown once. last4 after reload. Never in Events. |
 | 4 | Métis Identity | Activate the string. Seat heartbeat `{ license: "licensed", licenseId }` (jti). |
-| 5 | Worker | `seatAuthorizedForKeys` = Tony Approve **or** active issued jti. Revoke wins. Vault keys via HMAC `/v1/use`. |
+| 5 | Worker | `seatAuthorizedForKeys` = Example Approve **or** active issued jti. Revoke wins. Vault keys via HMAC `/v1/use`. |
 
 Selling ATK- / Fly JWS stays closed. `LICENSE_ACTIVATION_OPEN` stays false.
 
@@ -60,7 +60,7 @@ Selling ATK- / Fly JWS stays closed. `LICENSE_ACTIVATION_OPEN` stays false.
 `#keys` Add an API → provider `cloudflare` → paste API token + accountId
 (+ label). Vault row last4 only. OAuth **Log in to Cloudflare** is optional
 and last. License generate must work if CF OAuth secrets are missing.
-Tony sets `CF_OAUTH_CLIENT_ID` + `CF_OAUTH_CLIENT_SECRET` on the Worker.
+Example sets `CF_OAUTH_CLIENT_ID` + `CF_OAUTH_CLIENT_SECRET` on the Worker.
 Missing secrets → 503 after Access. Métis Settings tile (if any) is
 KineticGrid `b8a677b`, not this Worker tip.
 

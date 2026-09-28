@@ -60,7 +60,7 @@ Three feelings, in this order:
 | `providerPriority` | `api` | CLI-first is a live promotion when a CLI session is actually connected. |
 | Local AI | off | Weights may warm. They do not preempt. |
 | `encryptTranscripts` | true | Fail closed on disk. |
-| Operator URL | empty | No phone-home until Tony points the seat. |
+| Operator URL | empty | No phone-home until Example points the seat. |
 
 Fail loud: a WindowsApps Desktop alias is not Claude Code. A leftover managed pointer is not
 installed. `installCli` is not ok until `resolveBin` finds a runnable entry. `cliConnected` is
@@ -92,7 +92,7 @@ CLI install, CLI session). R17 (vault last4) is Operator. Do not implement `#key
    reachable by trackpad/mouse. No nested transcript scroll trap. No "scroll here" hint.
 
 ## Review / recap (never clip)
-The post-meeting **Summary** Tony opens after a session lives in Review inside `Panel`. Sibling
+The post-meeting **Summary** Example opens after a session lives in Review inside `Panel`. Sibling
 recap/note bodies that share that shell follow the same rule: fit cleanly, or scroll to the last
 line. Safe-area / overlay Bar height is respected. Content never sits under the glass bar or the
 window frame. Defaults stay the friendly path.
@@ -167,10 +167,10 @@ value. Never generic pageviews.
 Chrome / density / placement — WebsiteCloner Shoey OpenPanel. Compare
 every section, not only realtime:
 
-- App: `/Users/tony/Library/CloudStorage/OneDrive-MantuGroup/Documents/Chief of Staff/Apps Source/WebsiteCloner`
+- App: `../WebsiteCloner`
 - Live compare: `http://localhost:3112/demo/shoey/realtime` plus
   `/overview` `/events` `/sessions` and the other rail pages
-- Visual refs (Totos-Mac): `/Users/tony/dev/metis-repro/shoey-ref/overview.png`
+- Visual refs (Totos-Mac): `../metis-repro/shoey-ref/overview.png`
   (paired TopLists, device/events tables with inline bars, Countries /
   Regions / Cities + **corner** world map) and
   `…/shoey-ref/realtime.png` (full WorldMap, city/country pills, LIVE
@@ -181,8 +181,8 @@ CRM. **Never** Unique Visitors, pageviews, sneakers, referrers, or
 invented people.
 
 Live host: `https://metis-operator.tony-walteur.workers.dev/`.
-**Cloudflare Access stays** (302 + email-code; `tony.walteur@gmail.com`
-+ `twalteur@amaris.com`). Thin Worker tip only. Do not merge fat
+**Cloudflare Access stays** (302 + email-code; `admin@example.com`
++ `ops@example.com`). Thin Worker tip only. Do not merge fat
 PR151. Generate license stays P0.
 EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
 
@@ -231,7 +231,7 @@ reload. Never a secret in HTML.
 
 ### Overview `#overview` — Mission Control glance
 
-Job: Tony reads the fleet in one glance and can mint a license.
+Job: Example reads the fleet in one glance and can mint a license.
 **PORT** `shoey-ref/overview.png` (WebsiteCloner `/demo/shoey`): two
 equal columns, then Métis People + Generate. Not a vague card stack.
 
@@ -335,7 +335,7 @@ pre-Kinetic, not fat PR151.
 
 ### Seat path (Identity)
 
-Tony copies the once-string. Seat: Métis → Identity → License →
+Example copies the once-string. Seat: Métis → Identity → License →
 Activate. Heartbeat `{ license, licenseId }` + city. Worker funds keys
 when Approve **or** active jti. Revoke wins. `LICENSE_ACTIVATION_OPEN`
 stays false.
@@ -360,7 +360,7 @@ See `docs/design/BRAIN-CONNECTORS.md`.
 See [ONBOARDING-FLOW.md](./ONBOARDING-FLOW.md). Order: hero → problem → reveal → appearance → setup → personalize → [license] → ready. Loading orb on Your setup. Act 4 heading contrast on KineticGrid.
 
 ## Onboarding appearance
-See [ONBOARDING-APPEARANCE.md](./ONBOARDING-APPEARANCE.md). Tony ask: Hidden (default, mouse to top, click to trigger) vs Island vs Bar. Sits after the demo, before Your setup. Live preview. Persist existing overlay. Hide 8×2 and Island hover stay out.
+See [ONBOARDING-APPEARANCE.md](./ONBOARDING-APPEARANCE.md). Example ask: Hidden (default, mouse to top, click to trigger) vs Island vs Bar. Sits after the demo, before Your setup. Live preview. Persist existing overlay. Hide 8×2 and Island hover stay out.
 
 ## Starfield Close (onboarding bed)
 See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). **Superseded after the lady beat** by [ONBOARDING-KINETIC-GRID.md](./ONBOARDING-KINETIC-GRID.md). Starfield / space-with-moving-lights does not mount after Next. Overlay hide/island stay out.
@@ -382,7 +382,7 @@ Bar rest look (power choice): [ORB-SELECTION.md](./ORB-SELECTION.md). Full bar (
 **2.0 reconciliation.** This file's Bar/orb pixel contract (together with [BAR-PILL.md](BAR-PILL.md) and [ORB-SELECTION.md](ORB-SELECTION.md)), [METIS-2.0-JARVIS-COMMAND.md](METIS-2.0-JARVIS-COMMAND.md)'s pill/sidecar placement, and [METIS-2.0-CAP2-WAKE-ADAPTERS.md](METIS-2.0-CAP2-WAKE-ADAPTERS.md)'s shipped wake path are three overlapping designs that do not fully agree. M2-0093 (TASK-030) owns reconciling all three into one committed design; until it lands, this file remains the operative shipped visual contract for Bar/orb pixels.
 
 ## Auto-answer
-Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send) or a new question replaces it. Not an ephemeral 4s/7s card.
+Ambient copilot / auto-answer stays until Example clicks (dismiss/read, never send) or a new question replaces it. Not an ephemeral 4s/7s card.
 
 ## CLI session and Spotlight Ref
 Settings → CLI Integration Connect is a zero-token session probe (`missing` / `signed-out` / `weekly-limit` / `live`). A Claude weekly cap is signed-in, not disconnected. Codex `login status` = Logged in is connected. Never auto-send a billed turn to connect.

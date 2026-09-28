@@ -23,7 +23,7 @@ function env(): Env {
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 async function signedRequest(path: string, bodyText: string, nonce = `use-${Math.random().toString(16).slice(2)}`) {
   const ts = String(NOW)
@@ -55,8 +55,8 @@ async function approveDevice(store: ReturnType<typeof memoryStore>, deviceId = '
     lat: 45.5,
     lon: -73.5,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'tony.walteur@gmail.com',
+    hostname: 'Example-MacBook-Pro',
+    sso_email: 'admin@example.com',
     license: 'licensed',
     approval: 'approved'
   })
@@ -212,7 +212,7 @@ describe('HMAC POST /v1/use', () => {
     expect(res.status).toBe(403)
     expect(await res.json()).toEqual({
       ok: false,
-      error: 'This seat is not approved. Tony must approve this device in Operator before platform keys work.'
+      error: 'This seat is not approved. Example must approve this device in Operator before platform keys work.'
     })
   })
 

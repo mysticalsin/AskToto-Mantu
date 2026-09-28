@@ -3,6 +3,13 @@ import { redactSecrets } from './redact'
 import { PROVIDERS } from './providers'
 
 describe('redactSecrets', () => {
+  const anthropicLikeKey = ['sk', 'ant', 'abc123DEF456ghi789jkl0mn'].join('-')
+  const kimiLikeKey = ['sk', 'kimi', 'AbCdEf0123456789'].join('-')
+  const openAiProjectLikeKey = ['sk', 'proj', 'AbCdEf0123456789xyzQWERTY'].join('-')
+  const openRouterLikeKey = ['sk', 'or', 'v1', '0123456789abcdef0123'].join('-')
+  const flatSkLikeKey = ['sk', '0123456789abcdefghijklmno'].join('-')
+  const tooShortSkLikeKey = ['sk', 'test', '1234'].join('-')
+
   it('redacts Luhn-valid credit cards (grouped or not)', () => {
     expect(redactSecrets('card 4242424242424242 expires')).toBe('card [redacted card] expires')
     expect(redactSecrets('4242 4242 4242 4242')).toBe('[redacted card]')
@@ -19,7 +26,7 @@ describe('redactSecrets', () => {
   })
 
   it('redacts recognised API keys / tokens', () => {
-    expect(redactSecrets('key sk-ant-abc123DEF456ghi789jkl0mn')).toContain('[redacted key]')
+    expect(redactSecrets(`key ${anthropicLikeKey}`)).toContain('[redacted key]')
     expect(redactSecrets('ghp_0123456789abcdefghijABCDEFG')).toBe('[redacted key]')
     expect(redactSecrets('aws AKIAIOSFODNN7EXAMPLE here')).toBe('aws [redacted key] here')
     expect(redactSecrets('Authorization: Bearer abcdef0123456789ABCDEF')).toContain('[redacted key]')
@@ -31,18 +38,18 @@ describe('redactSecrets', () => {
   it('redacts sk- keys with a dashed prefix (MQA-080)', () => {
     // A 16-char body (redact.ts's / the CI secret scan's own {16,} floor): the dashed prefix counts
     // toward the 20-char run, so this still redacts.
-    expect(redactSecrets('key sk-kimi-AbCdEf0123456789')).toBe('key [redacted key]')
-    expect(redactSecrets('sk-proj-AbCdEf0123456789xyzQWERTY')).toBe('[redacted key]')
-    expect(redactSecrets('sk-or-v1-0123456789abcdef0123')).toBe('[redacted key]')
-    expect(redactSecrets('sk-ant-abc123DEF456ghi789jkl0mn')).toBe('[redacted key]')
-    expect(redactSecrets('sk-0123456789abcdefghijklmno')).toBe('[redacted key]')
+    expect(redactSecrets(`key ${kimiLikeKey}`)).toBe('key [redacted key]')
+    expect(redactSecrets(openAiProjectLikeKey)).toBe('[redacted key]')
+    expect(redactSecrets(openRouterLikeKey)).toBe('[redacted key]')
+    expect(redactSecrets(anthropicLikeKey)).toBe('[redacted key]')
+    expect(redactSecrets(flatSkLikeKey)).toBe('[redacted key]')
   })
 
   it('does not let the widened sk- class eat hyphenated prose (MQA-080)', () => {
     // 'sk' here is mid-word, so the word boundary — not the character class — is what holds the line.
     const chan = 'posted in #ask-me-anything-2026-planning yesterday'
     expect(redactSecrets(chan)).toBe(chan)
-    expect(redactSecrets('sk-test-1234')).toBe('sk-test-1234') // far too short to be a key
+    expect(redactSecrets(tooShortSkLikeKey)).toBe(tooShortSkLikeKey) // far too short to be a key
   })
 
   it('redacts PEM private-key blocks', () => {

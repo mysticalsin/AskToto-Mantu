@@ -20,7 +20,7 @@ import { sha256Hex } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 
 const NOW = 1_725_000_000_000
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 const TOKEN = 'cf-oauth-access-token-xx42'
 const ACCOUNT = '294885a27b3cc0a1cbe5d0ccbe38de4f'
 
@@ -67,7 +67,7 @@ function cfFetch(input: RequestInfo | URL): Promise<Response> {
   }
   if (url.pathname === '/client/v4/accounts' || url.pathname.endsWith('/accounts')) {
     return Promise.resolve(
-      new Response(JSON.stringify({ result: [{ id: ACCOUNT, name: 'Tony' }] }), {
+      new Response(JSON.stringify({ result: [{ id: ACCOUNT, name: 'Example' }] }), {
         status: 200,
         headers: { 'content-type': 'application/json' }
       })
@@ -231,8 +231,8 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
       lat: 45.5,
       lon: -73.5,
       last_index_at: null,
-      hostname: 'Tonys-MacBook-Pro',
-      sso_email: 'tony.walteur@gmail.com',
+      hostname: 'Example-MacBook-Pro',
+      sso_email: 'admin@example.com',
       license: 'licensed',
       approval: 'approved'
     })
@@ -376,7 +376,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
       // of each per row.
       const { audits, events } = await vaultWriteAuditAndEvents(store)
       expect(audits).toHaveLength(1)
-      expect(audits[0]).toMatchObject({ actor: 'tony.walteur@gmail.com' })
+      expect(audits[0]).toMatchObject({ actor: 'admin@example.com' })
       expect((audits[0] as { detail: string }).detail).toContain('cloudflare ·')
       expect((audits[0] as { detail: string }).detail).toContain('cloudflare-account ·')
       expect(events).toHaveLength(1)

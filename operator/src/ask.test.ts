@@ -27,7 +27,7 @@ function env(): Env {
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 async function signedRequest(
   path: string,
@@ -65,8 +65,8 @@ async function approveDevice(store: ReturnType<typeof memoryStore>, deviceId = '
     lat: 45.5,
     lon: -73.5,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'tony.walteur@gmail.com',
+    hostname: 'Example-MacBook-Pro',
+    sso_email: 'admin@example.com',
     license: 'licensed',
     approval: 'approved'
   })

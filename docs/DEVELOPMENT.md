@@ -46,7 +46,7 @@ to work, each with a graceful fallback — know about them so you're not surpris
    `npm run build` and `npm run dev` now run `scripts/ensure-intelligence-bundle.mjs` first, so a
    normal tree cannot skip the dashboard. Totos-Mac show tree failed `tsc -b` with
    `IntelligenceUpdateButton.tsx(12,5): error TS2503: Cannot find namespace 'JSX'` (MQA-290); the
-   button returns `ReactElement` and `tsconfig.app.json` loads React types. Tony's live 1.8.3 banner
+   button returns `ReactElement` and `tsconfig.app.json` loads React types. Example's live 1.8.3 banner
    (`Intelligence dashboard bundle not found`) is the same miss on an app that never ran that build.
    `openIntelligenceWindow()` (`src/main/intelligence.ts`) looks for a built `intelligence/dist/index.html`
    in three candidate locations and returns `{ ok: false, error: 'Intelligence dashboard bundle not
@@ -261,7 +261,7 @@ native addons cannot load from inside an asar.
   contention or slower I/O in `out/`, `release/`, and `node_modules/` during `npm run dev`/`npm run
   build`, especially right after a sync event. `npm run dist:local` intentionally overrides
   `directories.output` to an OneDrive-free path
-  (`/Users/tony/AI-Brain-build/asktoto-release`, per the script and the electron-builder.yml comment
+  (`local-release`, per the script and the electron-builder.yml comment
   "Local rebuilds that need keychain-safe signing + an OneDrive-free output dir") — use the same pattern
   if OneDrive sync is causing you build flakiness.
 - **Bytecode-compiled main process — dynamic `import()` fails only in built/packaged builds.** See §3.

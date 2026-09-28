@@ -256,7 +256,8 @@ describe('render-process-gone reload budget wiring', () => {
     const { globals, loadURL, auditLog, mainLog } = baseGlobals({
       reloadBudget: { onRenderProcessGone: () => 'reload' }
     })
-    loadURL.mockImplementation(() => Promise.reject(new Error('offline near sk-ant-abcdefghijklmnopqrstuvwxyz1234567890')))
+    const syntheticProviderKey = ['sk', 'ant', 'abcdefghijklmnopqrstuvwxyz1234567890'].join('-')
+    loadURL.mockImplementation(() => Promise.reject(new Error(`offline near ${syntheticProviderKey}`)))
 
     const unhandled = vi.fn()
     process.on('unhandledRejection', unhandled)

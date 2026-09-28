@@ -17,7 +17,7 @@ function env(): Env {
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 describe('admin keys write / rotate / revoke', () => {
   it('adds a key, returns last4 only, and never echoes the secret', async () => {
@@ -27,7 +27,7 @@ describe('admin keys write / rotate / revoke', () => {
       new Request('https://operator.test/v1/admin/keys', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'anthropic', label: 'Tony cloud', secret })
+        body: JSON.stringify({ provider: 'anthropic', label: 'Example cloud', secret })
       }),
       env(),
       { access: tony },
@@ -263,7 +263,7 @@ describe('admin keys write / rotate / revoke', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           provider: 'anthropic',
-          label: 'Tony cloud',
+          label: 'Example cloud',
           secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-xx99'
         })
       }),
@@ -410,13 +410,13 @@ describe('admin keys write / rotate / revoke', () => {
     expect(home.status).toBe(200)
     const setCookie = home.headers.get('set-cookie') || ''
     expect(setCookie).toContain('metis_operator_session=')
-    expect(setCookie).toContain('tony.walteur%40gmail.com')
+    expect(setCookie).toContain('admin%40example.com')
     expect(setCookie).toMatch(/HttpOnly/)
     expect(setCookie).toMatch(/SameSite=Lax/)
     const sessionPair = setCookie.split(';')[0]
     const token = home.headers.get('X-Metis-Session') || ''
     expect(token).toMatch(/^v1\|/)
-    expect(token).toContain('tony.walteur@gmail.com')
+    expect(token).toContain('admin@example.com')
     const html = await home.text()
     expect(html).not.toContain('name="metis-session"')
     expect(html).not.toContain(token)
@@ -475,7 +475,7 @@ describe('admin keys write / rotate / revoke', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          cookie: 'metis_operator_session=v1|9999999999999|tony.walteur@gmail.com|deadbeef'
+          cookie: 'metis_operator_session=v1|9999999999999|admin@example.com|deadbeef'
         },
         body: JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-api03-TESTKEYONLY-nope' })
       }),
@@ -487,7 +487,7 @@ describe('admin keys write / rotate / revoke', () => {
     expect(await forged.json()).toEqual({ ok: false, error: 'Access required' })
   })
 
-  it('requires Tony identity and never serves keys to a stranger', async () => {
+  it('requires Example identity and never serves keys to a stranger', async () => {
     const denied = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', {
         method: 'POST',

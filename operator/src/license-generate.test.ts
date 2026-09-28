@@ -20,7 +20,7 @@ function env(): Env {
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 async function signed(
   path: string,
@@ -53,7 +53,7 @@ async function signed(
 let store = memoryStore()
 
 describe('Operator generate license', () => {
-  it('mints a token Tony can paste, stores last4 only, and 401s without Access', async () => {
+  it('mints a token Example can paste, stores last4 only, and 401s without Access', async () => {
     store = memoryStore()
     const unauth = await handleRequest(
       new Request('https://operator.test/v1/admin/licenses/generate', {
@@ -255,7 +255,7 @@ describe('Operator generate license', () => {
     expect(wipe.status).toBe(200)
     expect((await store.getSeat('baa2dc6edd670a9894ed402b5a9b9246'))?.license).toBe(`licensed · ${lic.last4}`)
 
-    const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    const dash = await buildDashboard(store, 'admin@example.com', NOW)
     const row = dash.licenses.rows.find((r) => r.device === 'baa2dc6edd670a9894ed402b5a9b9246')
     expect(row?.hostname).toBe('Totos-Mac.local')
     expect(row?.license).toBe(`licensed · ${lic.last4}`)

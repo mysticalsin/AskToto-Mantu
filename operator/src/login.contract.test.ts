@@ -252,7 +252,7 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
       new Request('https://operator.test/login', {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: 'email=tony.walteur@gmail.com&password=anything'
+        body: 'email=admin@example.com&password=anything'
       }),
       env(),
       {},

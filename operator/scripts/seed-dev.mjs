@@ -86,7 +86,7 @@ function seatProfiles() {
       os: i % 2 === 0 ? 'darwin' : 'win32',
       appVersion: '1.8.5',
       hostname: `${name[0].toUpperCase()}${name.slice(1)}-${HOSTS[i % HOSTS.length]}`,
-      ssoEmail: `${name}@amaris.com`,
+      ssoEmail: `${name}@example.com`,
       license: LICENSES[i % LICENSES.length],
       geo
     })

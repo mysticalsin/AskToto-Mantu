@@ -1,6 +1,6 @@
 import { hmacHex, timingSafeEqualHex } from './hmac'
 
-export const ADMIN_EMAILS = ['tony.walteur@gmail.com', 'twalteur@amaris.com'] as const
+export const ADMIN_EMAILS = ['admin@example.com', 'ops@example.com'] as const
 
 export const SESSION_COOKIE = 'metis_operator_session'
 

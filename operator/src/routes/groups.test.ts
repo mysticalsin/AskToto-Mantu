@@ -10,7 +10,7 @@ function env(): Env {
   return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tonyAccess = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow {
   return {
@@ -26,7 +26,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lon: null,
     last_index_at: null,
     hostname: 'Amaris-Laptop',
-    sso_email: 'a@amaris.com',
+    sso_email: 'member@example.com',
     license: null,
     approval: 'pending',
     license_jti: null,
@@ -70,8 +70,8 @@ describe('CSRF', () => {
     ['POST', '/v1/admin/groups', { name: 'Amaris', tier: 'metis' }],
     ['PATCH', '/v1/admin/groups/g1', { name: 'New' }],
     ['DELETE', '/v1/admin/groups/g1', undefined],
-    ['POST', '/v1/admin/groups/g1/members', { member: 'a@amaris.com', kind: 'email' }],
-    ['DELETE', '/v1/admin/groups/g1/members/a@amaris.com', undefined],
+    ['POST', '/v1/admin/groups/g1/members', { member: 'member@example.com', kind: 'email' }],
+    ['DELETE', '/v1/admin/groups/g1/members/member@example.com', undefined],
     ['POST', '/v1/admin/groups/g1/licenses/generate', { days: 30 }],
     ['PATCH', '/v1/admin/tiers/metis', { entitlements: ['ask'] }]
   ]
@@ -158,8 +158,8 @@ describe('GET /v1/admin/groups', () => {
     )
     expect(empty.groups[0]).toMatchObject({ members: 0, licensesIssued: 0, licensesActive: 0, seatsLive: 0, lastActiveAt: null })
 
-    await store.putGroupMember({ group_id: groupId, member: 'a@amaris.com', kind: 'email', added_at: NOW, added_by: 'tony.walteur@gmail.com' })
-    await store.upsertSeat(seat({ device_id: 'dev-amaris-1', sso_email: 'a@amaris.com', last_seen: NOW }))
+    await store.putGroupMember({ group_id: groupId, member: 'member@example.com', kind: 'email', added_at: NOW, added_by: 'admin@example.com' })
+    await store.upsertSeat(seat({ device_id: 'dev-amaris-1', sso_email: 'member@example.com', last_seen: NOW }))
 
     const generated = await json<{ jti: string }>(
       await call('POST', `/v1/admin/groups/${groupId}/licenses/generate`, store, { days: 30 })
@@ -178,9 +178,9 @@ describe('GET /v1/admin/groups/:id', () => {
     const store = memoryStore()
     const created = await json<{ group: { id: string } }>(await call('POST', '/v1/admin/groups', store, { name: 'Amaris', tier: 'metis' }))
     const groupId = created.group.id
-    await call('POST', `/v1/admin/groups/${groupId}/members`, store, { member: 'a@amaris.com', kind: 'email' })
-    await store.upsertSeat(seat({ device_id: 'dev-amaris-1', sso_email: 'a@amaris.com' }))
-    await call('POST', `/v1/admin/groups/${groupId}/licenses/generate`, store, { days: 30, member: 'a@amaris.com' })
+    await call('POST', `/v1/admin/groups/${groupId}/members`, store, { member: 'member@example.com', kind: 'email' })
+    await store.upsertSeat(seat({ device_id: 'dev-amaris-1', sso_email: 'member@example.com' }))
+    await call('POST', `/v1/admin/groups/${groupId}/licenses/generate`, store, { days: 30, member: 'member@example.com' })
 
     const res = await call('GET', `/v1/admin/groups/${groupId}`, store)
     expect(res.status).toBe(200)
@@ -192,10 +192,10 @@ describe('GET /v1/admin/groups/:id', () => {
       activity: { action: string }[]
     }>(res)
     expect(body.group.id).toBe(groupId)
-    expect(body.members).toEqual([{ member: 'a@amaris.com', kind: 'email', addedAt: NOW, addedBy: 'tony.walteur@gmail.com' }])
+    expect(body.members).toEqual([{ member: 'member@example.com', kind: 'email', addedAt: NOW, addedBy: 'admin@example.com' }])
     expect(body.licenses).toHaveLength(1)
     expect(body.licenses[0].tier).toBe('metis')
-    expect(body.licenses[0].member).toBe('a@amaris.com')
+    expect(body.licenses[0].member).toBe('member@example.com')
     expect(body.seats).toHaveLength(1)
     expect(body.seats[0].deviceId).toBe('dev-amaris-1')
     expect(body.seats[0].deviceShortId).toBe('dev-amar')
@@ -276,7 +276,7 @@ describe('members', () => {
     const store = memoryStore()
     const created = await json<{ group: { id: string } }>(await call('POST', '/v1/admin/groups', store, { name: 'Amaris', tier: 'metis' }))
     const groupId = created.group.id
-    await call('POST', `/v1/admin/groups/${groupId}/members`, store, { member: 'a@amaris.com', kind: 'email' })
+    await call('POST', `/v1/admin/groups/${groupId}/members`, store, { member: 'member@example.com', kind: 'email' })
 
     const res = await call('DELETE', `/v1/admin/groups/${groupId}/members/A@AMARIS.COM`, store)
     expect(res.status).toBe(200)
@@ -308,7 +308,7 @@ describe('POST /v1/admin/groups/:id/licenses/generate', () => {
     const created = await json<{ group: { id: string } }>(await call('POST', '/v1/admin/groups', store, { name: 'Amaris', tier: 'metis-light' }))
     const groupId = created.group.id
 
-    const res = await call('POST', `/v1/admin/groups/${groupId}/licenses/generate`, store, { days: 90, member: 'a@amaris.com' })
+    const res = await call('POST', `/v1/admin/groups/${groupId}/licenses/generate`, store, { days: 90, member: 'member@example.com' })
     expect(res.status).toBe(200)
     const body = await json<{ license: string; jti: string; tier: string; groupId: string; member: string }>(res)
     expect(body.license.startsWith('METIS-OP-1.')).toBe(true)
@@ -321,7 +321,7 @@ describe('POST /v1/admin/groups/:id/licenses/generate', () => {
     const stored = await store.getIssuedLicense(body.jti)
     expect(stored?.group_id).toBe(groupId)
     expect(stored?.tier).toBe('metis-light')
-    expect(stored?.member).toBe('a@amaris.com')
+    expect(stored?.member).toBe('member@example.com')
     expect(JSON.stringify(stored)).not.toContain(body.license)
   })
 

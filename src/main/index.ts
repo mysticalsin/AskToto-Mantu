@@ -3776,6 +3776,25 @@ function reveal(reason: RevealReason, options: { focus?: boolean } = {}): void {
   })
 }
 
+function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
+  if (process.env.ASKTOTO_SMOKE_REOPEN_PROBE !== '1') return false
+  const action = commandLine
+    .map((arg) => arg.match(/^--metis-smoke-reopen=(hide-window|tray-show)$/)?.[1])
+    .find((value): value is 'hide-window' | 'tray-show' => value === 'hide-window' || value === 'tray-show')
+  if (!action) return false
+
+  const w = ensureWindow()
+  if (!w) return true
+  if (action === 'hide-window') {
+    w.hide()
+    return true
+  }
+
+  w.hide()
+  toggleVisible('tray')
+  return true
+}
+
 let fatalHandled = false
 /**
  * For a fatal exception, offer a ONE-TIME relaunch — but default to "Continue" so a benign async error
@@ -9071,7 +9090,8 @@ protocol.registerSchemesAsPrivileged([
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, commandLine) => {
+    if (handleSmokeReopenProbe(commandLine)) return
     reveal('second-instance', { focus: true })
   })
   app.whenReady().then(async () => {

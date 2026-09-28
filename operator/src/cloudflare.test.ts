@@ -5,7 +5,7 @@ import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 function env(): Env {
   return {
@@ -45,7 +45,7 @@ describe('Cloudflare Overview fail-loud', () => {
     expect(JSON.stringify(dash)).not.toMatch(/\"token\"|cf-token|Bearer /)
   })
 
-  it('pulls token-free Worker/D1/analytics after Tony connects Cloudflare', async () => {
+  it('pulls token-free Worker/D1/analytics after Example connects Cloudflare', async () => {
     const store = memoryStore()
     const token = 'cf-acct-token-not-real-zzzz'
     const added = await handleRequest(

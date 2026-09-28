@@ -25,7 +25,7 @@ const OPERATOR_ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(OPERATOR_ROOT, '..');
 
 const FALLBACK_REFERENCE =
-  '/Users/tony/Library/CloudStorage/OneDrive-MantuGroup/Documents/Chief of Staff/Apps Source/WebsiteCloner/src/app/globals.css';
+  'operator/src/spa/reference.css';
 
 const DEFAULT_GLOBS = ['operator/src/render/**/*.ts', 'operator/client/**/*.ts'];
 

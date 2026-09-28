@@ -9,7 +9,7 @@ function env(): Env {
   return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tonyAccess = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow {
   return {
@@ -24,8 +24,8 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lat: null,
     lon: null,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'twalteur@amaris.com',
+    hostname: 'Example-MacBook-Pro',
+    sso_email: 'ops@example.com',
     license: 'approved',
     approval: 'approved',
     ...overrides
@@ -88,7 +88,7 @@ describe('GET /v1/admin/realtime/live-seats.json', () => {
       rows: { deviceId: string; tier: string | null; licenseState: string; live: boolean; hostname: string | null }[]
     }
     expect(body.rows).toHaveLength(1)
-    expect(body.rows[0]).toMatchObject({ deviceId: 'dev-a', tier: 'metis', licenseState: 'licensed', live: true, hostname: 'Tonys-MacBook-Pro' })
+    expect(body.rows[0]).toMatchObject({ deviceId: 'dev-a', tier: 'metis', licenseState: 'licensed', live: true, hostname: 'Example-MacBook-Pro' })
   })
 
   it('excludes a seat whose last heartbeat is outside the 30 min window', async () => {
@@ -153,7 +153,7 @@ function integrationRow(overrides: Partial<import('../store').IntegrationRow> & 
     scope_json: '{}',
     status: 'active',
     created_at: NOW,
-    created_by: 'tony.walteur@gmail.com',
+    created_by: 'admin@example.com',
     rotated_at: null,
     revoked_at: null,
     last_used_at: null,
@@ -171,7 +171,7 @@ function issuedLicense(overrides: Partial<import('../store').IssuedLicenseRow> &
     exp: Math.floor(NOW / 1000) + 30 * 24 * 60 * 60,
     revoked: 0,
     created_at: NOW,
-    created_by: 'tony.walteur@gmail.com',
+    created_by: 'admin@example.com',
     ...overrides
   }
 }
@@ -240,9 +240,9 @@ describe('GET /v1/admin/live.json (task B7 rail counters)', () => {
 describe('GET /v1/admin/search.json', () => {
   it('finds a seat by hostname, a license by last4, a group by name and a connector by label, capped at 8 per group', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Tonys-MacBook-Pro' }))
+    await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Example-MacBook-Pro' }))
     await store.putIssuedLicense(issuedLicense({ jti: 'lic-1', last4: 'zz99', tier: 'metis' }))
-    await store.putGroup({ id: 'grp-1', name: 'Amaris team', tier: 'metis', notes: null, created_at: NOW, created_by: 'tony.walteur@gmail.com' })
+    await store.putGroup({ id: 'grp-1', name: 'Amaris team', tier: 'metis', notes: null, created_at: NOW, created_by: 'admin@example.com' })
     await store.putIntegration(integrationRow({ id: 'int-1', kind: 'hubspot', label: 'HubSpot production' }))
 
     const res = await handleRequest(
@@ -258,7 +258,7 @@ describe('GET /v1/admin/search.json', () => {
       integrations: unknown[]
     }
     expect(body.seats).toEqual([
-      { id: 'dev-a', label: 'Tonys-MacBook-Pro', sublabel: 'twalteur@amaris.com', page: 'sessions', rowKey: 'dev-a' }
+      { id: 'dev-a', label: 'Example-MacBook-Pro', sublabel: 'ops@example.com', page: 'sessions', rowKey: 'dev-a' }
     ])
 
     const byLast4 = await handleRequest(
@@ -303,7 +303,7 @@ describe('GET /v1/admin/search.json', () => {
 
   it('slices an overlong q to 100 characters after trim (security review, low)', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Tonys-MacBook-Pro' }))
+    await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Example-MacBook-Pro' }))
     const longQuery = `  ${'a'.repeat(150)}tony${'b'.repeat(150)}  `
     const res = await handleRequest(
       new Request(`https://operator.test/v1/admin/search.json?q=${encodeURIComponent(longQuery)}`),

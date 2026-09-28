@@ -6470,7 +6470,7 @@ export function Settings({
         </div>
       )}
 
-      {/* TOP tab bar (Tony: "setting bar at the top") — horizontal, scrolls if narrow */}
+      {/* TOP tab bar (Example: "setting bar at the top") — horizontal, scrolls if narrow */}
       <nav
         role="tablist"
         aria-label="Settings sections"
@@ -7440,7 +7440,7 @@ export function Settings({
                 </Section>
                 {/* Model/library license attributions live in THIRD_PARTY_NOTICES.md, shipped in the
                     app's install directory (electron-builder extraFiles) — kept out of the UI on
-                    purpose (Tony, 2026-07-05). */}
+                    purpose (Example, 2026-07-05). */}
                 <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
                   <MantuLogo size={190} />
                   <div className="text-[13px] font-semibold text-[color:var(--cl-foreground)]">
@@ -7466,14 +7466,14 @@ export function Settings({
                     </a>
                     <span aria-hidden>·</span>
                     <a
-                      href="mailto:twalteur@amaris.com"
+                      href="mailto:ops@example.com"
                       className="transition-colors hover:text-[color:var(--cl-foreground)]"
                     >
                       Support
                     </a>
                     <span aria-hidden>·</span>
                     <a
-                      href="mailto:twalteur@amaris.com?subject=M%C3%A9tis%20feedback"
+                      href="mailto:ops@example.com?subject=M%C3%A9tis%20feedback"
                       className="transition-colors hover:text-[color:var(--cl-foreground)]"
                     >
                       Send feedback
@@ -7496,7 +7496,7 @@ export function Settings({
                       rel="noopener noreferrer"
                       className="font-medium text-[color:var(--cl-primary)] transition-colors hover:underline"
                     >
-                      Tony Walteur
+                      Metis Maintainers
                     </a>
                   </div>
                 </div>

@@ -9,7 +9,7 @@ function env(): Env {
   return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const tonyAccess = { getIdentity: async () => ({ email: 'admin@example.com' }) }
 
 function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow {
   return {
@@ -24,8 +24,8 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lat: null,
     lon: null,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'twalteur@amaris.com',
+    hostname: 'Example-MacBook-Pro',
+    sso_email: 'ops@example.com',
     license: 'approved',
     approval: 'approved',
     ...overrides
@@ -69,7 +69,7 @@ describe('GET /v1/admin/sessions.json', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { rows: { deviceId: string; tier: string | null; live: boolean; hostname: string | null }[] }
     expect(body.rows).toHaveLength(1)
-    expect(body.rows[0]).toMatchObject({ deviceId: 'dev-a', tier: 'metis', live: true, hostname: 'Tonys-MacBook-Pro' })
+    expect(body.rows[0]).toMatchObject({ deviceId: 'dev-a', tier: 'metis', live: true, hostname: 'Example-MacBook-Pro' })
   })
 
   it('applies country/os/q filters on top of the store page', async () => {
@@ -107,7 +107,7 @@ describe('GET /v1/admin/sessions/:id.json', () => {
       { country: 'CA', city: 'Longueuil' },
       { os: 'darwin', app_version: '1.8.5' }
     )
-    await store.insertEvent({ id: 'ev-1', ts: NOW - 30_000, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Customer Alpha private ask' })
+    await store.insertEvent({ id: 'ev-1', ts: NOW - 30_000, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Example Customer private ask' })
     await store.insertAsk(ask({ id: 'a1', device_id: 'dev-a', preview: 'Patient diagnosis private prompt' }))
 
     const res = await handleRequest(
@@ -121,7 +121,7 @@ describe('GET /v1/admin/sessions/:id.json', () => {
     expect(text).not.toContain('super-secret-ciphertext')
     expect(text).not.toContain('iv-value')
     expect(text.toLowerCase()).not.toContain('prompt_cipher')
-    expect(text).not.toContain('Customer Alpha')
+    expect(text).not.toContain('Example Customer')
     expect(text).not.toContain('Patient diagnosis')
 
     const body = JSON.parse(text) as {

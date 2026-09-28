@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-const VAULT = '/Users/tony/Library/CloudStorage/OneDrive-MantuGroup/Documents/AI Second Brain'
+const VAULT = '../AI Second Brain'
 const OUT = join(import.meta.dirname, '..', 'public', 'data.json')
 
 function readJSON(relPath) {

@@ -20,7 +20,7 @@
  *
  * Usage:
  *   OPERATOR_PROMPT_KEY=<base64> node operator/scripts/dev-session.mjs
- *   node operator/scripts/dev-session.mjs --prompt-key <base64> --email tony.walteur@gmail.com
+ *   node operator/scripts/dev-session.mjs --prompt-key <base64> --email admin@example.com
  *   node operator/scripts/dev-session.mjs --session-secret <hex-or-anything>
  *
  * Secret resolution order (highest wins): --session-secret flag, --prompt-key flag,
@@ -40,7 +40,7 @@ const DEV_VARS_PATH = join(OPERATOR_ROOT, '.dev.vars')
 
 export const SESSION_COOKIE = 'metis_operator_session'
 const SESSION_HKDF_INFO = 'metis-operator-session'
-const DEFAULT_EMAIL = 'tony.walteur@gmail.com'
+const DEFAULT_EMAIL = 'admin@example.com'
 
 /** Same fallback as access.ts's base64ToBytes: try base64, else treat as raw UTF-8 text. */
 export function base64OrUtf8Bytes(raw) {

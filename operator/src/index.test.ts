@@ -31,7 +31,7 @@ function env(overrides: Partial<Env> = {}): Env {
 }
 
 const tonyAccess = {
-  getIdentity: async () => ({ email: 'tony.walteur@gmail.com' })
+  getIdentity: async () => ({ email: 'admin@example.com' })
 }
 
 async function signedRequest(
@@ -181,7 +181,7 @@ describe('Access on admin routes', () => {
     expect(res.status).toBe(401)
   })
 
-  it('allows Tony and never returns prompt ciphertext on the asks list', async () => {
+  it('allows Example and never returns prompt ciphertext on the asks list', async () => {
     const store = memoryStore()
     await handleRequest(
       await signedRequest('/v1/ingest', JSON.stringify({ id: 'ask-2', question: 'secret close plan', mode: 'sales' })),
@@ -298,7 +298,7 @@ describe('health', () => {
       lon: null,
       last_index_at: null,
       hostname: 'box',
-      sso_email: 'tony.walteur@gmail.com',
+      sso_email: 'admin@example.com',
       license: 'approved',
       approval: 'approved',
       license_jti: null
@@ -469,7 +469,7 @@ describe('CRM send board', () => {
   it('stores only canonical CRM delivery metadata and clears legacy content-bearing columns', async () => {
     const store = memoryStore()
     await store.upsertCrm({
-      id: 'crm-ok', device_id: 'device-a', ts: NOW - 1, status: 'pending', title: 'Legacy Customer Alpha',
+      id: 'crm-ok', device_id: 'device-a', ts: NOW - 1, status: 'pending', title: 'Legacy Example Customer',
       connector: 'plane', meeting_file: '/legacy/private.md', meeting_hash: 'aabbccddeeff0011',
       last_error: 'Legacy customer error text', retry_requested: 0, attempt: 1, latency_ms: 10,
       remote_id: 'legacy-deal', remote_url: 'https://crm.example/legacy-deal', action: 'legacy-action'
@@ -485,8 +485,8 @@ describe('CRM send board', () => {
         meetingHash: 'aabbccddeeff0011',
         remoteId: 'deal-99',
         remoteUrl: 'https://crm.example/deal-99',
-        meetingFile: '/Users/tony/secret/Acme.md',
-        error: 'timeout posting Customer Alpha to https://crm.example/deal-99',
+        meetingFile: '/home/example/secret/Acme.md',
+        error: 'timeout posting Example Customer to https://crm.example/deal-99',
         attempt: 2,
         latencyMs: 345
       })
@@ -498,7 +498,7 @@ describe('CRM send board', () => {
       retry_requested: 0, attempt: 2, latency_ms: 345, meeting_file: null, meeting_hash: null,
       remote_id: null, remote_url: null, action: null
     })
-    expect(JSON.stringify(row)).not.toContain('Customer Alpha')
+    expect(JSON.stringify(row)).not.toContain('Example Customer')
     expect(JSON.stringify(row)).not.toContain('deal-99')
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
@@ -508,13 +508,13 @@ describe('CRM send board', () => {
     )
     const body = (await dash.json()) as { crm: { rows: { title: string; error: string; remoteId: string | null; meetingHash: string | null }[] } }
     expect(body.crm.rows[0]).toMatchObject({ title: 'CRM delivery', error: 'transient', remoteId: null, meetingHash: null })
-    expect(JSON.stringify(body)).not.toContain('/Users/tony')
+    expect(JSON.stringify(body)).not.toContain('/home/example')
   })
 
   it('projects heartbeat CRM and event detail without path, text, or CRM content', async () => {
     const store = memoryStore()
-    const privatePath = '/Users/tony/Customer Alpha/private-meeting.md'
-    const privateText = 'Customer Alpha acquisition plan'
+    const privatePath = '/home/example/Example Customer/private-meeting.md'
+    const privateText = 'Example Customer acquisition plan'
     const req = await signedRequest('/v1/heartbeat', JSON.stringify({
       os: 'darwin', appVersion: '2.0.0', path: privatePath, text: privateText,
       crm: [{

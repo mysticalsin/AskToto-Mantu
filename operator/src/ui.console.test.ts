@@ -21,7 +21,7 @@ function env(): Env {
 }
 
 const tonyAccess = {
-  getIdentity: async () => ({ email: 'tony.walteur@gmail.com' })
+  getIdentity: async () => ({ email: 'admin@example.com' })
 }
 
 async function signedRequest(
@@ -196,8 +196,8 @@ describe('product sidebar (#105)', () => {
       lat: 45.5,
       lon: -73.5,
       last_index_at: null,
-      hostname: 'Tonys-MacBook-Pro',
-      sso_email: 'twalteur@amaris.com',
+      hostname: 'Example-MacBook-Pro',
+      sso_email: 'ops@example.com',
       license: 'licensed',
       approval: 'pending'
     })
@@ -218,7 +218,7 @@ describe('product sidebar (#105)', () => {
     expect(overview).toContain('data-device-tab="os"')
     expect(overview).toContain('class="vol-bar"')
     expect(overview).toContain('Longueuil')
-    expect(overview).toContain('Tonys-MacBook-Pro')
+    expect(overview).toContain('Example-MacBook-Pro')
     expect(overview).toContain('data-people-row')
     expect(overview).toContain('data-live="1"')
     expect(overview).toContain('data-license-approve="device-a"')
@@ -234,8 +234,8 @@ describe('product sidebar (#105)', () => {
       JSON.stringify({
         os: 'darwin',
         appVersion: '1.8.3',
-        hostname: 'Tonys-MacBook-Pro',
-        ssoEmail: 'twalteur@amaris.com',
+        hostname: 'Example-MacBook-Pro',
+        ssoEmail: 'ops@example.com',
         license: 'licensed'
       })
     )
@@ -254,7 +254,7 @@ describe('product sidebar (#105)', () => {
     expect(overview).toContain('data-people-row')
     expect(overview).toContain('data-live="1"')
     expect(overview).toContain('data-city="Longueuil"')
-    expect(overview).toContain('Tonys-MacBook-Pro')
+    expect(overview).toContain('Example-MacBook-Pro')
     expect(overview).toContain('>live<')
     expect(overview).toContain('data-overview-activity')
     expect(overview).toMatch(/live|heartbeat/)
@@ -264,7 +264,7 @@ describe('product sidebar (#105)', () => {
     expect(overview).toContain('class="ago"')
     expect(overview).toMatch(/>now</)
     expect(overview).toContain('city Longueuil')
-    expect(overview).toContain('twalteur@amaris.com')
+    expect(overview).toContain('ops@example.com')
   })
 })
 
@@ -273,7 +273,7 @@ describe('map has no repeating horizontal band', () => {
     const store = memoryStore()
     const req = await signedRequest(
       '/v1/heartbeat',
-      JSON.stringify({ os: 'darwin', appVersion: '1.8.2', hostname: 'Tonys-MacBook-Pro' })
+      JSON.stringify({ os: 'darwin', appVersion: '1.8.2', hostname: 'Example-MacBook-Pro' })
     )
     expect(
       (
@@ -305,7 +305,7 @@ describe('events keep seat OS after a later ask ingest', () => {
     const store = memoryStore()
     const hb = await signedRequest(
       '/v1/heartbeat',
-      JSON.stringify({ os: 'darwin', appVersion: '1.8.2', hostname: 'Tonys-MacBook-Pro' }),
+      JSON.stringify({ os: 'darwin', appVersion: '1.8.2', hostname: 'Example-MacBook-Pro' }),
       { deviceId: 'mac-keep-os' }
     )
     expect((await handleRequest(hb, env(), {}, { store, now: NOW, geo: { country: 'CA', city: 'Longueuil', lat: 45.5, lon: -73.5 } })).status).toBe(200)
@@ -323,7 +323,7 @@ describe('events keep seat OS after a later ask ingest', () => {
     ).then((r) => r.text())
     const events = eventsHtml(html)
     expect(events).toContain('darwin')
-    expect(events).toContain('Tonys-MacBook-Pro')
+    expect(events).toContain('Example-MacBook-Pro')
     expect(events).toContain('Longueuil')
     const realtime = html.slice(html.indexOf('data-page="realtime"'), html.indexOf('data-page="sessions"'))
     expect(realtime).toContain('data-world-live')
@@ -340,7 +340,7 @@ describe('events never render token-like strings', () => {
       id: 'tok-1',
       ts: NOW,
       kind: 'ask',
-      actor: 'twalteur@amaris.com',
+      actor: 'ops@example.com',
       device_id: 'device-a',
       country: 'CA',
       detail: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signaturexx'
@@ -357,8 +357,8 @@ describe('events never render token-like strings', () => {
       lat: 45.5,
       lon: -73.5,
       last_index_at: null,
-      hostname: 'Tonys-MacBook-Pro',
-      sso_email: 'twalteur@amaris.com',
+      hostname: 'Example-MacBook-Pro',
+      sso_email: 'ops@example.com',
       license: 'approved'
     })
     const ingest = await signedRequest(
@@ -385,7 +385,7 @@ describe('events never render token-like strings', () => {
   })
 })
 
-describe('licenses pane is real seats with Tony approval, not Shoey demo rows', () => {
+describe('licenses pane is real seats with Example approval, not Shoey demo rows', () => {
   it('lists computer, SSO, license, approval, and Approve for pending seats', async () => {
     const store = memoryStore()
     await store.upsertSeat({
@@ -400,15 +400,15 @@ describe('licenses pane is real seats with Tony approval, not Shoey demo rows', 
       lat: 45.5,
       lon: -73.5,
       last_index_at: null,
-      hostname: 'Tonys-MacBook-Pro',
-      sso_email: 'twalteur@amaris.com',
+      hostname: 'Example-MacBook-Pro',
+      sso_email: 'ops@example.com',
       license: 'licensed',
       approval: 'pending'
     })
     const html = await page(store)
     const licenses = html.slice(html.indexOf('data-page="licenses"'), html.indexOf('data-page="notifications"'))
-    expect(licenses).toContain('Tonys-MacBook-Pro')
-    expect(licenses).toContain('twalteur@amaris.com')
+    expect(licenses).toContain('Example-MacBook-Pro')
+    expect(licenses).toContain('ops@example.com')
     expect(licenses).toContain('licensed')
     expect(licenses).toContain('pending')
     expect(licenses).toContain('data-license-approve="device-a"')
@@ -423,7 +423,7 @@ describe('licenses pane is real seats with Tony approval, not Shoey demo rows', 
     expect(notices).toContain('<th>Profile</th>')
     expect(notices).toContain('<th>City</th>')
     expect(notices).toContain('<th>OS</th>')
-    expect(notices).toContain('Tonys-MacBook-Pro')
+    expect(notices).toContain('Example-MacBook-Pro')
     expect(notices).toContain('Longueuil')
     expect(notices).toContain('darwin')
   })
@@ -437,8 +437,8 @@ describe('profiles hostname and SSO email', () => {
       JSON.stringify({
         os: 'darwin',
         appVersion: '1.8.2',
-        hostname: 'Tonys-MacBook-Pro',
-        ssoEmail: 'Twalteur@amaris.com'
+        hostname: 'Example-MacBook-Pro',
+        ssoEmail: 'Ops@example.com'
       })
     )
     expect((await handleRequest(req, env(), {}, { store, now: NOW })).status).toBe(200)
@@ -448,13 +448,13 @@ describe('profiles hostname and SSO email', () => {
       { access: tonyAccess },
       { store, now: NOW }
     ).then((r) => r.text())
-    expect(html).toContain('Tonys-MacBook-Pro')
-    expect(html).toContain('twalteur@amaris.com')
+    expect(html).toContain('Example-MacBook-Pro')
+    expect(html).toContain('ops@example.com')
     expect(html).toContain('data-page="sessions"')
     expect(html).toContain('data-page="licenses"')
     const seats = await store.listSeats()
-    expect(seats[0]?.hostname).toBe('Tonys-MacBook-Pro')
-    expect(seats[0]?.sso_email).toBe('twalteur@amaris.com')
+    expect(seats[0]?.hostname).toBe('Example-MacBook-Pro')
+    expect(seats[0]?.sso_email).toBe('ops@example.com')
   })
 
   it('uses an em dash when hostname or email is missing, never invented people', async () => {
@@ -491,13 +491,13 @@ describe('realtime and map use live heartbeats, not leftover OpenPanel', () => {
       lat: 45.531,
       lon: -73.518,
       last_index_at: null,
-      hostname: 'Tonys-MacBook-Pro',
-      sso_email: 'twalteur@amaris.com',
+      hostname: 'Example-MacBook-Pro',
+      sso_email: 'ops@example.com',
       license: 'licensed',
       approval: 'approved'
     })
     const html = await page(store)
-    expect(html).toContain('Tonys-MacBook-Pro')
+    expect(html).toContain('Example-MacBook-Pro')
     expect(html).toContain('data-iso="CA"')
     expect(await cssOf(store)).toMatch(/--map-land:\s*#[0-9a-f]{3,8}/i)
     expect(await cssOf(store)).toContain('fill: var(--map-land)')
@@ -552,7 +552,7 @@ describe('realtime.geo.json is city-level Shoey rows', () => {
     const store = memoryStore()
     const req = await signedRequest(
       '/v1/heartbeat',
-      JSON.stringify({ os: 'darwin', appVersion: '1.8.3', hostname: 'Tonys-MacBook-Pro' })
+      JSON.stringify({ os: 'darwin', appVersion: '1.8.3', hostname: 'Example-MacBook-Pro' })
     )
     expect(
       (
