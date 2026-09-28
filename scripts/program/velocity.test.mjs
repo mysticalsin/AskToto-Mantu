@@ -24,6 +24,8 @@ function record(ticket, evidenceLevel, recordedAt, overrides = {}) {
     result: 'PASS',
     implementer_session: { model: 'claude-sonnet-5', id: `impl-${ticket}-${evidenceLevel}` },
     validator_session: { model: 'claude-sonnet-5', id: `valid-${ticket}-${evidenceLevel}` },
+    pr: 197,
+    ci_run_id: 36372662647,
     environment: { kind: 'ci', host: 'ubuntu-latest' },
     command: 'node --test scripts/program/velocity.test.mjs',
     exit_code: 0,
