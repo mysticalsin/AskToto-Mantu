@@ -4,7 +4,7 @@ Date: 2026-08-31
 
 Status: **Active.** Overlay Hide / Island / Bar orb stay frozen. Do not pack a 1.8.2 DMG/EXE in this slice.
 
-This is the design for two coupled product failures: Tony cannot import audio in a runnable Métis because Parakeet weights are missing, and he can only hand the app one meeting at a time.
+This is the design for two coupled product failures: the owner cannot import audio in a runnable Métis because Parakeet weights are missing, and he can only hand the app one meeting at a time.
 
 ## Outcome
 
@@ -12,7 +12,7 @@ This is the design for two coupled product failures: Tony cannot import audio in
 2. Several meetings import in one gesture. Native picker uses `multiSelections`. Drop several files in one go. Each file is its own durable `ImportJob`. All start, run with a concurrency cap of 2 (so one huge file cannot hold the decoder slot forever), survive overlay close, and resume after fail or quit. The UI is a quiet queue: name, progress, resume, cancel, done.
 3. Renderer still never receives raw paths as a general filesystem read. Tokens or main-owned jobs only. 500 MB cap per file. Magic sniff stays.
 
-## Default engine and first-run download (Tony, 2026-08-31)
+## Default engine and first-run download (the owner, 2026-08-31)
 
 Parakeet is the **default** live ASR engine (`asrEngine: 'parakeet'` in `DEFAULT_SETTINGS` and the Zod schema). Whisper and Apple stay available in Settings.
 

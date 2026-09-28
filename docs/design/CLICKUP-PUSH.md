@@ -3,7 +3,7 @@ project: Métis
 type: design-system-contract
 surface: Review post-meeting ClickUp push
 date: 2026-09-02
-owner: Tony
+owner: the owner
 status: active contract — implement only what this file states
 ready-to-merge: no
 ---
@@ -12,7 +12,7 @@ ready-to-merge: no
 
 **Status:** Active contract — implement only what this file states (see frontmatter `status`).
 
-Tony cannot push a meeting into ClickUp. The current path calls the wrong MCP tool (`attach_task_file`) with `{title, description, project_id}` and ClickUp answers **invalid parameters**. Destination is a blank "project ID" paste. That is the bug.
+the owner cannot push a meeting into ClickUp. The current path calls the wrong MCP tool (`attach_task_file`) with `{title, description, project_id}` and ClickUp answers **invalid parameters**. Destination is a blank "project ID" paste. That is the bug.
 
 This file is the gate. Write it before UI. Overlay, Operator, Listen, appearance, pack, and Aria stay out.
 
@@ -26,7 +26,7 @@ Book next steps, when ClickUp is checked, creates one task per action item in th
 
 | Hat | Ships only if | Rejects |
 |---|---|---|
-| Product | Confirm creates a task in a named list. Destination is automatic. | Attaching a file. Asking Tony to paste a list/project ID as the common path. A tool dropdown that includes `attach_task_file`. |
+| Product | Confirm creates a task in a named list. Destination is automatic. | Attaching a file. Asking the owner to paste a list/project ID as the common path. A tool dropdown that includes `attach_task_file`. |
 | Destination | Screen says `Task in {list name}` (space › folder › list when known) before Confirm. | Empty destination. Silent first-list. "Project ID (optional)". |
 | Tool | Wire tool is create-task (`clickup_create_task` / `create_task`). Args: `name`, `list_id`, optional `markdown_description`. Never `workspace_id`. | `attach_task_file`, comment, update, delete. Args `title` / `project_id` / `description` as the ClickUp wire names. |
 | Trust | Confirm click only. Confidential still blocked. | `useEffect` / mount / timer / Intelligence index / import calling `mcpPush`. |

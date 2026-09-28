@@ -13,7 +13,7 @@ import {
   runSmoke
 } from './smoke.mjs'
 
-const BASE = 'https://metis-operator.tony-walteur.workers.dev'
+const BASE = 'https://metis-operator.example.workers.dev'
 
 /** Minimal fake `Response`-like object, just what these checkers read. */
 function fakeResponse({ status = 200, headers = {}, jsonBody, textBody } = {}) {

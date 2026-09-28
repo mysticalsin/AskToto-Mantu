@@ -17,6 +17,7 @@ import { availableParallelism } from 'node:os'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { auditLog, mainLog } from '../logger'
+import { observeSidecar } from '../infra/observability/sidecar-events'
 import { errMsg } from './shared'
 import { recordSidecarIntent, recordSidecarSpawned } from '../infra/process/registry'
 
@@ -372,6 +373,7 @@ function spawnAndWaitHealthy(
       return
     }
     child = proc
+    observeSidecar('llama-server', proc, auditLog)
     let settled = false
     let boundPort: number | null = null
     // The "listening on" line can arrive split across separate stdout/stderr `data` events (llama-server

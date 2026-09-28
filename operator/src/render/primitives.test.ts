@@ -140,25 +140,25 @@ describe('osGlyph / osChip', () => {
 
 describe('avatar', () => {
   it('is deterministic for the same identity and varies for different ones', () => {
-    const a1 = avatar({ name: 'Tonys-MacBook-Pro' })
-    const a2 = avatar({ name: 'Tonys-MacBook-Pro' })
+    const a1 = avatar({ name: 'Example-MacBook-Pro' })
+    const a2 = avatar({ name: 'Example-MacBook-Pro' })
     const b = avatar({ name: 'Other-PC' })
     expect(a1).toBe(a2)
     expect(a1).not.toBe(b)
-    expect(a1).toContain('TM')
+    expect(a1).toContain('EM')
   })
   it('shows a live dot only when live is true', () => {
     expect(avatar({ name: 'X', live: true })).toContain('avatar-live')
     expect(avatar({ name: 'X', live: false })).not.toContain('avatar-live')
   })
   it('never hard-codes a hex colour and never emits an inline style attribute (plan D6: no style-src unsafe-inline)', () => {
-    const html = avatar({ name: 'Tonys-MacBook-Pro' })
+    const html = avatar({ name: 'Example-MacBook-Pro' })
     expect(html).toMatch(/data-hue="\d+"/)
     expect(html).not.toContain('style="')
     expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}/)
   })
   it('buckets different identities into different data-hue values', () => {
-    const a = avatar({ name: 'Tonys-MacBook-Pro' })
+    const a = avatar({ name: 'Example-MacBook-Pro' })
     const b = avatar({ name: 'Other-PC' })
     const hueOf = (html: string) => html.match(/data-hue="(\d+)"/)?.[1]
     expect(hueOf(a)).toBeDefined()

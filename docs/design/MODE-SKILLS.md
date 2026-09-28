@@ -11,7 +11,7 @@ ready-to-merge: no until Devon Mac-shows Interview + Cold Calling + Support answ
 **Status:** Draft — ready-to-merge: no until Devon Mac-shows Interview + Cold Calling + Support
 answers that use the skill (see frontmatter).
 
-Tony's rule: the visible prompt in Settings → Personalize stays user-editable. The thing that actually makes the LLM sharp is a **shipped skill** that runs in the background. Nobody can change that skill unless Tony ships a Métis release of that specific file.
+the owner's rule: the visible prompt in Settings → Personalize stays user-editable. The thing that actually makes the LLM sharp is a **shipped skill** that runs in the background. Nobody can change that skill unless the owner ships a Métis release of that specific file.
 
 This file is the contract. Implement only what it names.
 
@@ -22,7 +22,7 @@ Nine builtin modes (`CONVERSATION_MODES` in `src/shared/ipc.ts`):
 | id | label | Skill job |
 | --- | --- | --- |
 | `interview` | Interview | Candidate copilot. Best answers. STAR / CAR unlabeled. I, not we. First sentence answers the real question. |
-| `recruiting` | Recruiting | Interviewer. Drive Tony's Amaris / Mantu interview sheet through conversation. One open question at a time. |
+| `recruiting` | Recruiting | Interviewer. Drive the owner's Amaris / Mantu interview sheet through conversation. One open question at a time. |
 | `meeting` | Meeting | Live copilot. Next 15 to 40 seconds, or the one question that unblocks the room. |
 | `sales` | Sales | Live seller. Discovery before talking. One move. Next step. |
 | `negotiation` | Negotiation | Live deal. One move. Never concede for free. |
@@ -69,11 +69,11 @@ Cited here only. None of these files are copied into `skills/`.
 - [noamseg/interview-coach-skill](https://github.com/noamseg/interview-coach-skill) and Melodic Software interview-coach. Interviewer inner monologue. Two or three follow-ups. Probe for specifics (number, owner, trade-off).
 - [conorbronsdon/avoid-ai-writing](https://github.com/conorbronsdon/avoid-ai-writing) and [hannsxpeter/humanizer](https://github.com/hannsxpeter/humanizer). Em dashes out. No Certainly / Great question / I hope this helps. No delve, leverage, robust, seamless, game-changer. No "It's not X, it's Y". Contractions. Mix short and long. Spoken register. Never invent first-person experience the transcript does not support.
 
-## Recruiting spine (Tony's interview sheet)
+## Recruiting spine (the owner's interview sheet)
 
 `recruiting` is the interviewer. `interview` is the candidate. Do not mix them.
 
-Tony's Amaris / Mantu interview sheet is the **recruiting** skill's backbone. Drive the sheet through conversation. Track which cells are already filled from the live transcript. The next question is the highest-value **empty** cell. Do not read the form out loud. Never yes / no. After they answer, one precise follow-up, then score silently.
+the owner's Amaris / Mantu interview sheet is the **recruiting** skill's backbone. Drive the sheet through conversation. Track which cells are already filled from the live transcript. The next question is the highest-value **empty** cell. Do not read the form out loud. Never yes / no. After they answer, one precise follow-up, then score silently.
 
 Sheet cells the skill must cover over a live interview (not in one dump):
 

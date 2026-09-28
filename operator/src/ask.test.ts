@@ -7,7 +7,7 @@ import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { parseUseBody } from './use'
 import { PORTAL_CF_DEEPSEEK_FLASH, PORTAL_CF_DEEPSEEK_PRO } from '../../src/shared/ask-routing'
@@ -15,19 +15,20 @@ import { PORTAL_CF_DEEPSEEK_FLASH, PORTAL_CF_DEEPSEEK_PRO } from '../../src/shar
 const NOW = 1_725_000_000_000
 const SECRET = 'sk-cf-OPERATOR-VAULT-TEST-only-xx99'
 const OPENAI_SECRET = 'sk-OPENAI-OPERATOR-VAULT-TEST-only-xx99'
-const ANTHROPIC_SECRET = 'sk-ant-api03-OPERATOR-VAULT-TEST-only-xx99'
+const ANTHROPIC_SECRET = syntheticProviderKey('anthropic')
 const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 function env(): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 async function signedRequest(
   path: string,
@@ -65,8 +66,8 @@ async function approveDevice(store: ReturnType<typeof memoryStore>, deviceId = '
     lat: 45.5,
     lon: -73.5,
     last_index_at: null,
-    hostname: 'Tonys-MacBook-Pro',
-    sso_email: 'tony.walteur@gmail.com',
+    hostname: 'Example-MacBook-Pro',
+    sso_email: 'owner@example.test',
     license: 'licensed',
     approval: 'approved'
   })
@@ -90,7 +91,7 @@ async function addCloudflareKey(store: ReturnType<typeof memoryStore>) {
       body: JSON.stringify({ provider: 'cloudflare', secret: SECRET, accountId: 'acct-test' })
     }),
     env(),
-    { access: tony },
+    { access: ownerAccess },
     { store, now: NOW, cfFetch: gatewayOkFetch() }
   )
   expect(res.status).toBe(200)
@@ -108,7 +109,7 @@ async function addProviderKey(
       body: JSON.stringify({ provider, secret })
     }),
     env(),
-    { access: tony },
+    { access: ownerAccess },
     { store, now: NOW }
   )
   expect(res.status).toBe(200)

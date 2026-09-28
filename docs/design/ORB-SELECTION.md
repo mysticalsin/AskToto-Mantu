@@ -13,7 +13,7 @@ does-not-own:
   - island/geometry hit rects
   - Goldberg Aria
   - Hide/Island minimize-to-circle
-notes: DESIGN before UI. Tony lock 2026-09-06 live fail on 286ff55. Default Circle is Jakub thinking-orbs. Jarvis is the particle sphere. Never call Circle Jarvis. Never label Jarvis Obsidian.
+notes: DESIGN before UI. Owner lock 2026-09-06 live fail on 286ff55. Default Circle is Jakub thinking-orbs. Jarvis is the particle sphere. Never call Circle Jarvis. Never label Jarvis Obsidian.
 ---
 
 # Orb selection (Bar rest look)
@@ -25,11 +25,11 @@ notes: DESIGN before UI. Tony lock 2026-09-06 live fail on 286ff55. Default Circ
 
 This file is the contract for one Settings power choice. Hide / Island / Bar overlay chrome stays frozen.
 
-Tony lock 2026-09-06 (after the 286ff55 live fail) is source of truth.
+Owner lock 2026-09-06 (after the 286ff55 live fail) is source of truth.
 
 ## Why this exists
 
-Tony already picks Hide / Island / Bar. That picker is perfect. Keep it.
+the owner already picks Hide / Island / Bar. That picker is perfect. Keep it.
 
 Bar rest is a second choice: **Circle** (default, original thinking-orb) or **Jarvis** (tonys-jarvis particle sphere). No Full bar card.
 

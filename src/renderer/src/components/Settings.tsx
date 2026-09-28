@@ -102,7 +102,8 @@ import {
   type UpdateCheckResult,
   type McpConnectionKind,
   type LicenseStatusResult,
-  type ScreenCaptureCheckResult
+  type ScreenCaptureCheckResult,
+  type PreservedBrainIndexCopy
 } from '@shared/ipc'
 import { nextScreenCheckPass } from '@shared/screen-capture-check'
 import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
@@ -147,6 +148,11 @@ import {
   proveDustConnection,
   type DustInstantValidateResult
 } from '@shared/dust-validate'
+
+declare const __METIS_FEEDBACK_EMAIL__: string
+
+export const METIS_FEEDBACK_EMAIL =
+  typeof __METIS_FEEDBACK_EMAIL__ === 'string' ? __METIS_FEEDBACK_EMAIL__.trim() : ''
 
 // Name the OS credential facility the way the user's own OS names it — "Keychain" is macOS-only, and
 // telling a Windows user to "restore Keychain access" names something their machine does not have. Two
@@ -6469,7 +6475,7 @@ export function Settings({
         </div>
       )}
 
-      {/* TOP tab bar (Tony: "setting bar at the top") — horizontal, scrolls if narrow */}
+      {/* TOP tab bar (the owner: "setting bar at the top") — horizontal, scrolls if narrow */}
       <nav
         role="tablist"
         aria-label="Settings sections"
@@ -7439,7 +7445,7 @@ export function Settings({
                 </Section>
                 {/* Model/library license attributions live in THIRD_PARTY_NOTICES.md, shipped in the
                     app's install directory (electron-builder extraFiles) — kept out of the UI on
-                    purpose (Tony, 2026-07-05). */}
+                    purpose (the owner, 2026-07-05). */}
                 <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
                   <MantuLogo size={190} />
                   <div className="text-[13px] font-semibold text-[color:var(--cl-foreground)]">
@@ -7463,40 +7469,27 @@ export function Settings({
                     >
                       Data handling
                     </a>
-                    <span aria-hidden>·</span>
-                    <a
-                      href="mailto:twalteur@amaris.com"
-                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
-                    >
-                      Support
-                    </a>
-                    <span aria-hidden>·</span>
-                    <a
-                      href="mailto:twalteur@amaris.com?subject=M%C3%A9tis%20feedback"
-                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
-                    >
-                      Send feedback
-                    </a>
-                    <span aria-hidden>·</span>
-                    <a
-                      href="https://www.linkedin.com/in/tonywalteur/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
-                    >
-                      LinkedIn
-                    </a>
+                    {METIS_FEEDBACK_EMAIL ? (
+                      <>
+                        <span aria-hidden>·</span>
+                        <a
+                          href={`mailto:${METIS_FEEDBACK_EMAIL}`}
+                          className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                        >
+                          Support
+                        </a>
+                        <span aria-hidden>·</span>
+                        <a
+                          href={`mailto:${METIS_FEEDBACK_EMAIL}?subject=M%C3%A9tis%20feedback`}
+                          className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                        >
+                          Send feedback
+                        </a>
+                      </>
+                    ) : null}
                   </div>
                   <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                    Built at Mantu · Built by{' '}
-                    <a
-                      href="https://www.linkedin.com/in/tonywalteur/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-medium text-[color:var(--cl-primary)] transition-colors hover:underline"
-                    >
-                      Tony Walteur
-                    </a>
+                    Built at Mantu
                   </div>
                 </div>
               </div>
@@ -8224,6 +8217,14 @@ const RETENTION_OPTIONS: { days: number; label: string }[] = [
   { days: 365, label: '1 year' }
 ]
 
+function formatPreservedIndexSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${kb.toFixed(kb >= 10 ? 0 : 1)} KB`
+  const mb = kb / 1024
+  return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`
+}
+
 /** GDPR/CCPA-facing controls: auto-retention window + a real "delete everything" action. Meeting
  *  recordings capture OTHER people's speech, not just the operator's — this is the one place in
  *  Settings that lets that be bounded or fully erased on demand, not just left to manual per-file cleanup. */
@@ -8236,6 +8237,18 @@ function DangerZoneSection({
 }): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; deleted: number; error?: string } | null>(null)
+  const [preservedBusy, setPreservedBusy] = useState<string | null>(null)
+  const [preservedMsg, setPreservedMsg] = useState<string | null>(null)
+  const [preservedCopies, setPreservedCopies] = useState<PreservedBrainIndexCopy[]>([])
+
+  const refreshPreservedCopies = useCallback(async (): Promise<void> => {
+    const r = await window.toto.preservedBrainIndexesList()
+    setPreservedCopies(r.copies)
+  }, [])
+
+  useEffect(() => {
+    void refreshPreservedCopies()
+  }, [refreshPreservedCopies])
 
   const deleteAll = async (): Promise<void> => {
     setBusy(true)
@@ -8243,6 +8256,24 @@ function DangerZoneSection({
     const r = await window.toto.recallDeleteAll()
     setResult(r)
     setBusy(false)
+  }
+
+  const restorePreserved = async (id: string): Promise<void> => {
+    setPreservedBusy(id)
+    setPreservedMsg(null)
+    const r = await window.toto.preservedBrainIndexRestore(id)
+    setPreservedMsg(r.ok ? 'Restored the preserved brain index.' : r.error === 'cancelled' ? 'Cancelled. Nothing was changed.' : r.error || 'Could not restore that preserved copy.')
+    await refreshPreservedCopies()
+    setPreservedBusy(null)
+  }
+
+  const deletePreserved = async (id: string): Promise<void> => {
+    setPreservedBusy(id)
+    setPreservedMsg(null)
+    const r = await window.toto.preservedBrainIndexDelete(id)
+    setPreservedMsg(r.ok ? 'Deleted the preserved brain index copy.' : r.error === 'cancelled' ? 'Cancelled. Nothing was deleted.' : r.error || 'Could not delete that preserved copy.')
+    await refreshPreservedCopies()
+    setPreservedBusy(null)
   }
 
   return (
@@ -8283,6 +8314,52 @@ function DangerZoneSection({
           <Trash2 size={13} /> {busy ? 'Deleting…' : 'Delete everything'}
         </button>
       </div>
+      {preservedCopies.length > 0 && (
+        <div className="mt-4 space-y-2">
+          <div>
+            <div className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Preserved brain indexes</div>
+            <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              Copies kept after rebuilds or restores. Settings shows only date, size, and whether this install can unlock them.
+            </div>
+          </div>
+          {preservedCopies.map((copy) => (
+            <div
+              key={copy.id}
+              className="flex items-center justify-between gap-3 rounded-lg border border-[var(--cl-input)] bg-white/[0.03] px-3 py-2"
+            >
+              <div className="min-w-0">
+                <div className="truncate text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                  {new Date(copy.createdAt).toLocaleString()}
+                </div>
+                <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                  {formatPreservedIndexSize(copy.size)} · {copy.restorable ? 'Can restore on this install' : 'Locked on this install'}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {copy.restorable && (
+                  <button
+                    type="button"
+                    onClick={() => void restorePreserved(copy.id)}
+                    disabled={preservedBusy !== null}
+                    className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
+                  >
+                    <RotateCcw size={13} /> Restore
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void deletePreserved(copy.id)}
+                  disabled={preservedBusy !== null}
+                  className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-destructive)]/40 bg-[var(--cl-destructive)]/10 px-3 py-2 text-[12px] text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
+                >
+                  <Trash2 size={13} /> Delete
+                </button>
+              </div>
+            </div>
+          ))}
+          {preservedMsg && <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{preservedMsg}</div>}
+        </div>
+      )}
       {result && (
         <div
           className={[

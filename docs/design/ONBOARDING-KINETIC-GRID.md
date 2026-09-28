@@ -12,12 +12,12 @@ mac-show: Totos-Mac / PR 101
 **Status:** Draft — implement-exactly, ready-to-merge: no, frozen scene contract (see frontmatter
 `status`).
 
-Tony 11:34–35pm America/Toronto. Exclusive first-run is one scene. The first beat is the lady looking at space. After that click, the only bed is a Mantu-purple KineticGrid. No second space shot. No starfield. No Skip. Do not pack. Do not merge. READY TO MERGE stays no. Version stays 1.8.3.
+the owner 11:34–35pm America/Toronto. Exclusive first-run is one scene. The first beat is the lady looking at space. After that click, the only bed is a Mantu-purple KineticGrid. No second space shot. No starfield. No Skip. Do not pack. Do not merge. READY TO MERGE stays no. Version stays 1.8.3.
 
 ## Outcome
 
 1. First image is the lady-and-universe clip. That is the only space shot.
-2. After Next (Tony: “once you log in”), KineticGrid is the only background until Ready finishes the tour.
+2. After Next (the owner: “once you log in”), KineticGrid is the only background until Ready finishes the tour.
 3. Mouse warps **tiles**. The stage does not slide. Canvas `pointer-events: none`. CTAs stay visible.
 4. Users cannot skip. Replay after a completed tour (Settings) still works and still halts Goldberg first.
 

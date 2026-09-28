@@ -1,6 +1,6 @@
 # G11 — Portal Ask E2E (prove host only)
 
-Prove host (lock): `https://metis-operator.tony-walteur.workers.dev/`
+Prove host (lock): `https://metis-operator.example.workers.dev/`
 Worker: `metis-operator`. Pack HOLD. OAuth LAST. No seat-local keys.
 
 ## Ultron paste (Keys)
@@ -28,10 +28,10 @@ Zero Trust: add **Bypass / Everyone** for path `/v1/ask` (clone `/v1/use`). Do n
 Unauth probe (Access must not wrap):
 
 ```sh
-curl -sI https://metis-operator.tony-walteur.workers.dev/v1/ask
+curl -sI https://metis-operator.example.workers.dev/v1/ask
 # expect HTTP 401, NOT 302
 
-curl -s -X POST https://metis-operator.tony-walteur.workers.dev/v1/ask \
+curl -s -X POST https://metis-operator.example.workers.dev/v1/ask \
   -H 'content-type: application/json' -d '{}'
 # expect {"ok":false,"error":"missing HMAC headers"}
 ```
@@ -45,7 +45,7 @@ Licensed seat Ask (HMAC, no seat-local CF/DeepSeek key):
 # never a vault secret in the stream
 ```
 
-## Stamp gate (Tony)
+## Stamp gate (the owner)
 
 1. Flash stream works with **no seat-local key**. Default model `@cf/deepseek-ai/deepseek-v4-flash-0731` (`portal-cf`).
 2. Portal Overview + Keys show **two lines**: `portal-cf` vs `portal-direct` with tokens + list-price estimate, or `not reported`. Never `$0`.
