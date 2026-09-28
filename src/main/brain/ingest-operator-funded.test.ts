@@ -8,7 +8,7 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { PORTAL_CF_DEEPSEEK_PRO } from '@shared/ask-routing'
 import { clearApiKey, getApiKey, getSettings, setSettings } from '../store'
 import type { StreamOptions } from '../llm/shared'
-import { brainBackfillProgress, startBackfill, whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress, startBackfill, whenDrainSettles, whenIndexWritesSettle } from './ingest'
 import { startIntelligencePass } from './intelligence-pass'
 import { readIndex } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
@@ -58,6 +58,7 @@ describe('license-funded meeting extraction', () => {
   })
 
   afterEach(async () => {
+    await whenDrainSettles()
     await whenIndexWritesSettle()
     rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
@@ -65,6 +66,7 @@ describe('license-funded meeting extraction', () => {
 
   async function settle(): Promise<void> {
     await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
+    await whenDrainSettles()
     await whenIndexWritesSettle()
   }
 

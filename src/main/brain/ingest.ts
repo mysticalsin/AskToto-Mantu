@@ -1372,6 +1372,12 @@ function observeSourceRefreshWorkFromIndex(idx: BrainIndex): void {
   for (const key of claimSourceRefreshWork(idx)) observeSource(key)
 }
 
+function preserveSourceRefreshWork(idx: BrainIndex): void {
+  const keys = claimSourceRefreshWork(idx)
+  if (keys.size > 0) sourceRefreshWorkKeys = keys
+  observeClaimedSourceRefreshWork()
+}
+
 class PublicationFailure extends Error {
   constructor(error: unknown) { super(error instanceof Error ? error.message : String(error)) }
 }
@@ -2310,6 +2316,7 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   if (localOnlyError) return { queued: 0, error: localOnlyError }
   const before = await readIndexAsync(s)
   const preserveSourceRefresh = options.sourceRefresh || before.sourceRefreshRequested
+  if (preserveSourceRefresh) preserveSourceRefreshWork(before)
   // Fix 2 (sync guard): a corrupt/blocked journal fails the gate — refuse before touching the store.
   const gate = await readCorrectionsJournalSafe(s)
   if (!gate.ok) return { queued: 0, error: gate.error }
@@ -2549,6 +2556,8 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
   const observer: BackfillObserver = { run, resolve, s: getSettings(), sources: new Map(), preparing: true, gates: 0, settling: false, published: false }
   backfillObserver = observer
   for (const job of [...queue, ...inFlightJobs]) observeSource(jobKey(job))
+  observeClaimedSourceRefreshWork()
+  for (const key of sourceRefreshScanRetryKeys) observeSource(key)
   addCompletionGate(observer, beforeComplete)
   try {
     run.result = await requestBackfill(options)
