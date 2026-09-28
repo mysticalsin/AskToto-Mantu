@@ -1537,7 +1537,7 @@ export function brainBackfillProgress(): { total: number; done: number; failed?:
     ...(backfillFailed > 0 ? { failed: backfillFailed } : {}),
     ...(backfillPreparing ? { preparing: true } : {}),
     running: backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayQueued || !!rebuildReplayTask ||
-      hasActiveBackfill() || backfillLintPending || !!backfillFinalization || !!drainTask || !!backfillObserver?.settling
+      hasActiveBackfill() || backfillLintPending || !!backfillFinalization
   }
 }
 
@@ -2195,12 +2195,15 @@ function replayAfterDrain(s: Settings, onFinished?: () => void | Promise<void>):
 
 async function startReplayBackfill(s: Settings, options: BackfillStartOptions, onFinished?: () => void | Promise<void>): Promise<BackfillStartResult> {
   const callback = replayAfterDrain(s, onFinished)
+  if (options.allowSourceRefresh && sourceRefreshWorkKeys.size > 0) {
+    sourceRefreshScanRetryKeys = new Set([...sourceRefreshScanRetryKeys, ...sourceRefreshWorkKeys])
+  }
   try { return await startBackfill(callback, options) } catch (error) {
     // A failed scan must not leave a phantom queued replay that prevents a later repaired-folder retry
     // from registering the real callback.
     unregisterDrainCallback(callback)
     if (callback) rebuildReplayQueued = false
-    if (options.allowSourceRefresh) sourceRefreshScanRetryKeys = new Set(sourceRefreshWorkKeys)
+    if (options.allowSourceRefresh) sourceRefreshScanRetryKeys = new Set([...sourceRefreshScanRetryKeys, ...sourceRefreshWorkKeys])
     completionError('scan-failed')
     throw new BackfillScanFailure(error)
   }
