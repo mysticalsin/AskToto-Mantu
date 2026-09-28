@@ -814,7 +814,9 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       id: 'RV-2-macos-open-new-instance',
       reason: 'second-instance',
       prepare: hideBeforeReveal,
-      run: () => runProcess('open', ['-n', target], 10_000),
+      // open -n cannot forward ASKTOTO_USERDATA, so the second boot misses the smoke lock, never emits
+      // second-instance reveal, and leaves a second Metis alive after Quit (processes_survived).
+      run: () => runProcess(executable, [], 10_000, { env }),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
     })
 
