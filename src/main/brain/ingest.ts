@@ -1,4 +1,4 @@
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import type { Settings, AskStart } from '@shared/ipc'
 import {
@@ -34,7 +34,8 @@ import { localBaseReady } from '../llm/local-routing'
 import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@shared/intelligence-pass'
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
-import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
+import { decodeSaved, readSavedFile, resolveMeetingsFolder } from '../transcripts'
+import { storageAt } from '../infra/storage/meetings-storage'
 // Static (eager) import — NOT `await import()`: the main process is bytecode-compiled and dynamic import
 // throws there (see llm/dust.ts's own note). dustcli.ts imports nothing from brain/, so no cycle.
 import { refreshDustCliSession } from '../dustcli'
@@ -1610,6 +1611,20 @@ function observeSourceFile(file: string): SourceObservation {
   }
 }
 
+async function readSourceText(file: string): Promise<
+  | { status: 'ok'; text: string; observation: SourceObservation }
+  | { status: 'missing' }
+  | { status: 'not-on-device'; observation: SourceObservation }
+  | { status: 'unreadable'; error: unknown; observation: SourceObservation }
+> {
+  const read = await storageAt(dirname(file)).read(basename(file))
+  if (read.status === 'missing') return { status: 'missing' }
+  const observation = 'version' in read ? { version: `${Math.round(read.version.mtimeMs)}:${read.version.size}`, changedAtMs: Math.round(read.version.ctimeMs) } : {}
+  if (read.status === 'dataless' || read.status === 'unknown') return { status: 'not-on-device', observation }
+  if (read.status !== 'ok') return { status: 'unreadable', error: new Error(read.status === 'unavailable' ? read.code : read.status), observation }
+  return { status: 'ok', text: decodeSaved(read.bytes), observation }
+}
+
 /**
  * The full post-extraction ingest: stamp provenance from the transcript's frontmatter (the model
  * can't know its own source file/date), persist the extraction, merge into entities/graph, mark the
@@ -1649,11 +1664,8 @@ export async function ingestExtraction(
   }
   let date = readFrontmatterDate('date') ?? readFrontmatterDate('start')
   if (!date) {
-    try {
-      date = statSync(file).mtime.toISOString()
-    } catch {
-      date = ''
-    }
+    const source = observeSourceFile(file)
+    date = source.version ? new Date(Number(source.version.split(':')[0])).toISOString() : ''
     mainLog.warn(`[brain] ${key}: no usable date/start frontmatter, falling back to ${date || 'an empty date'}`)
   }
   const ref: MeetingRef = { file: key, date, title: x.title24 || key }
@@ -1726,14 +1738,15 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
   // live-lint below — matches the pre-concurrency behavior of reading Settings once per job rather than
   // re-reading (and risking a mid-job change) between the extraction and ingest stages.
   const s = getSettings()
-  let md: string
   try {
-    md = readSavedFile(job.file)
-  } catch (error) {
+    const source = await readSourceText(job.file)
+    if (source.status === 'missing') return { job, s, ok: false, error: new Error('Meeting file not found.'), unreadable: true }
+    if (source.status === 'not-on-device') {
+      return { job, s, ok: false, error: new Error('Meeting file is not available on this device.'), unreadable: true }
+    }
+    if (source.status === 'unreadable') return { job, s, ok: false, error: source.error, unreadable: true }
+    const md = source.text
     // A read failure says nothing about the transcript, so it must not spend an attempt.
-    return { job, s, ok: false, error, unreadable: true }
-  }
-  try {
     if (job.strategy === 'reconcile') {
       // Extraction persistence happens before entity/graph merge so a crash can leave a valid meeting
       // JSON alongside an `ok:false` (or absent) index entry. Re-use that exact deterministic result:

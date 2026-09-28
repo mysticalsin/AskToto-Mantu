@@ -1,8 +1,9 @@
-import { readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
+import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { exciseDeletedMeeting } from './brain/ingest'
 import { join, basename } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
-import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved, formatTranscript, DEBRIEF_HEADING, readSavedFile } from './transcripts'
+import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, isEncryptedFile, writeSaved, formatTranscript, DEBRIEF_HEADING, readSavedFile } from './transcripts'
+import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 import { getSettings } from './store'
 import { detectLanguage } from '@shared/lang-id'
 import { measuredDurationMs } from '@shared/meeting-duration'
@@ -56,14 +57,9 @@ function recapSectionEndIndex(afterNotesHeading: string, type: string | undefine
 }
 
 async function meetingFiles(folder: string): Promise<string[]> {
-  try {
-    const entries = await readdir(folder, { withFileTypes: true })
-    return entries
-      .filter((e) => e.isFile() && e.name.endsWith('.md') && e.name !== 'README.md' && e.name !== 'index.md')
-      .map((e) => e.name)
-  } catch {
-    return []
-  }
+  const listing = await storageAt(folder).list('')
+  if (listing.status !== 'ok') return []
+  return listing.names.filter((name) => name.endsWith('.md') && name !== 'README.md' && name !== 'index.md')
 }
 
 interface Read {
@@ -138,19 +134,25 @@ const UNREADABLE = Symbol('unreadable')
  *  Served from readCache when the file is unchanged since the last read. */
 async function readMeeting(folder: string, file: string): Promise<Read | null> {
   const path = join(folder, file)
-  let mtimeMs: number
-  let size: number
-  try {
-    const st = await stat(path)
-    mtimeMs = st.mtimeMs
-    size = st.size
-  } catch {
+  const fileClass = (await classifyAll(storageAt(folder), [file])).get(file)
+  if (!fileClass || fileClass.status === 'missing') {
     readCache.delete(path)
     return null
   }
+  if (!('version' in fileClass)) {
+    readCache.delete(path)
+    const stub = lockedStub(file, 'Unavailable')
+    return stub ? { text: '', sum: stub } : null
+  }
+  const { mtimeMs, size } = fileClass.version
   const hit = readCache.get(path)
   if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.read
-  const read = await readMeetingUncached(path, file)
+  if (fileClass.status !== 'ok') {
+    readCache.delete(path)
+    const stub = lockedStub(file, 'Unavailable')
+    return stub ? { text: '', sum: stub } : null
+  }
+  const read = await readMeetingUncached(folder, file)
   if (read === UNREADABLE) {
     // Drop any stale entry and cache nothing, so the next list/search retries the read instead of
     // serving a transient failure the user has no way to invalidate. The meeting keeps its row as a
@@ -164,24 +166,22 @@ async function readMeeting(folder: string, file: string): Promise<Read | null> {
   return read
 }
 
-async function readMeetingUncached(path: string, file: string): Promise<Read | null | typeof UNREADABLE> {
-  let raw: Buffer
-  try {
-    raw = await readFile(path)
-  } catch {
+async function readMeetingUncached(folder: string, file: string): Promise<Read | null | typeof UNREADABLE> {
+  const raw = await storageAt(folder).read(file)
+  if (raw.status !== 'ok') {
     // A THROWN read means "can't read it right now", which is not the same verdict as "not a meeting
     // file" — the caller must not cache it, and must not drop the meeting. Split out from the catch
     // below so only the read itself can produce it: decodeSaved never throws (see transcripts.ts).
     return UNREADABLE
   }
   try {
-    const text = decodeSaved(raw)
+    const text = decodeSaved(raw.bytes)
     if (!text) {
       // decodeSaved returns '' both for "not a meeting file" and for a REAL meeting encrypted at rest
       // that this device's keychain can't decrypt (a different machine/user — see transcripts.ts's
       // UNDECRYPTABLE_MSG). Only the latter should still show up, as a locked stub, so it never just
       // vanishes; a file that isn't one of Métis's encrypted saves at all stays dropped.
-      if (!isEncryptedFile(path)) return null
+      if (!isEncryptedBytes(raw.bytes)) return null
       const stub = lockedStub(file)
       return stub ? { text: '', sum: stub } : null
     }
@@ -236,7 +236,8 @@ export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; 
 /** Newest-first list of saved meetings. */
 export async function listMeetings(): Promise<MeetingSummary[]> {
   const folder = resolveMeetingsFolder(getSettings())
-  const read = await Promise.all((await meetingFiles(folder)).map((f) => readMeeting(folder, f)))
+  const read: Array<Read | null> = []
+  for (const f of await meetingFiles(folder)) read.push(await readMeeting(folder, f))
   return read
     .filter((r): r is Read => r !== null)
     .map((r) => r.sum)
@@ -255,13 +256,12 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
   if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
-  const fullPath = join(folder, safeName)
-  let text: string
-  try {
-    text = decodeSaved(await readFile(fullPath))
-  } catch {
+  const read = await storageAt(folder).read(safeName)
+  if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
+  if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
   }
+  const text = decodeSaved(read.bytes)
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 
   const fm = frontmatter(text)
@@ -448,7 +448,7 @@ export async function renameMeeting(
     return { ok: false, error: 'Could not read the meeting file.' }
   }
 
-  const wasEncrypted = isEncryptedFile(fullPath)
+  const wasEncrypted = isEncryptedBytes(raw)
   const text = decodeSaved(raw)
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 

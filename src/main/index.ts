@@ -561,10 +561,13 @@ import {
 } from './intelligence'
 import {
   readIndex as readBrainIndex,
+  loadIndexForStatus as loadBrainIndexForStatus,
   writeIndex as writeBrainIndex,
   indexUnavailable,
+  indexUnavailableAsync,
   indexUnavailableMessage,
   readGraph as readBrainGraph,
+  loadGraph as loadBrainGraph,
   writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
   writePerson as writeBrainPerson,
@@ -573,6 +576,7 @@ import {
   readDeal as readBrainDeal,
   writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
+  loadEntitySlugs as loadBrainEntitySlugs,
   listMeetingExtractions as listBrainMeetingExtractions,
   readMeetingExtraction as readBrainMeetingExtraction,
   purgeBrain,
@@ -1153,16 +1157,16 @@ type BrainStatusCounts = { people: number; accounts: number; deals: number; node
 let brainStatusCountsCache: { folder: string; revision: number; counts: BrainStatusCounts } | null = null
 
 /** Status is polled frequently by two windows. Re-scan graph/entity directories only after a revision change. */
-function brainStatusCounts(s: ReturnType<typeof getSettings>, revision: number): BrainStatusCounts {
+async function brainStatusCounts(s: ReturnType<typeof getSettings>, revision: number): Promise<BrainStatusCounts> {
   const folder = resolveMeetingsFolder(s)
   if (brainStatusCountsCache?.folder === folder && brainStatusCountsCache.revision === revision) {
     return brainStatusCountsCache.counts
   }
-  const graph = readBrainGraph(s)
+  const graph = await loadBrainGraph(s)
   const counts = {
-    people: listBrainEntities(s, 'person').length,
-    accounts: listBrainEntities(s, 'account').length,
-    deals: listBrainEntities(s, 'deal').length,
+    people: (await loadBrainEntitySlugs(s, 'person')).length,
+    accounts: (await loadBrainEntitySlugs(s, 'account')).length,
+    deals: (await loadBrainEntitySlugs(s, 'deal')).length,
     nodes: graph.nodes.length,
     edges: graph.edges.length
   }
@@ -8029,7 +8033,7 @@ function registerIpc(): void {
     })()
     return result
   })
-  ipcMain.handle(IPC.brainStatus, (e) => {
+  ipcMain.handle(IPC.brainStatus, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) {
       return {
@@ -8046,11 +8050,11 @@ function registerIpc(): void {
       }
     }
     const s = getSettings()
-    const idx = readBrainIndex(s)
+    const idx = await loadBrainIndexForStatus(s)
     // M2-0003: non-null while an existing index.json exists but cannot be used on this device — idx
     // above is then only the empty stand-in, so this must be read before deciding what "no data" means.
-    const unavailable = indexUnavailable(s)
-    const counts = brainStatusCounts(s, idx.revision)
+    const unavailable = await indexUnavailableAsync(s)
+    const counts = await brainStatusCounts(s, idx.revision)
     // T6 6c: durable failure counts read straight from the index — unlike backfill.failed below (an
     // ephemeral per-run counter), these stay visible for as long as a source has ok:false, independent
     // of whether a backfill run happens to be active right now.

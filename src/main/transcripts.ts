@@ -23,6 +23,7 @@ import { safeMeetingBasename } from './meeting-path'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
 import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-duration'
+import { storageAt } from './infra/storage/meetings-storage'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -340,11 +341,15 @@ export function readSavedFile(path: string): string {
   return decodeSaved(readFileSync(path))
 }
 
+export function isEncryptedBytes(bytes: Buffer): boolean {
+  const head = bytes.subarray(0, MARKER_LEN)
+  return head.equals(ENC_MARKER) || head.equals(ENC_MARKER_V2)
+}
+
 /** True if the file on disk is one of Métis's encrypted transcripts. */
 export function isEncryptedFile(path: string): boolean {
   try {
-    const head = readFileSync(path).subarray(0, MARKER_LEN)
-    return head.equals(ENC_MARKER) || head.equals(ENC_MARKER_V2)
+    return isEncryptedBytes(readFileSync(path))
   } catch {
     return false
   }
@@ -913,11 +918,10 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
   let recovered = 0
   try {
     const folder = resolveMeetingsFolder(settings)
-    if (!existsSync(folder)) return { recovered }
-    for (const dirent of readdirSync(folder, { withFileTypes: true })) {
-      const f = dirent.name
+    const listing = await storageAt(folder).list('')
+    if (listing.status !== 'ok') return { recovered }
+    for (const f of listing.names) {
       if (!f.startsWith('.autosave-draft-') || !f.endsWith('.md')) continue
-      if (!dirent.isFile()) continue // never follow a symlink planted with a draft-shaped name
       const draftPath = join(folder, f)
       try {
         const stampPart = f.slice('.autosave-draft-'.length, -'.md'.length)
@@ -939,8 +943,10 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
         // on holds recorded third-party speech; promoting it under a since-disabled toggle would rewrite
         // it as unmarked cleartext into the (OneDrive-synced) meetings folder — a silent at-rest
         // downgrade, with no prompt and no way back.
-        const wasEncrypted = isEncryptedFile(draftPath)
-        const text = decodeSaved(readFileSync(draftPath))
+        const read = await storageAt(folder).read(f)
+        if (read.status !== 'ok') continue
+        const wasEncrypted = isEncryptedBytes(read.bytes)
+        const text = decodeSaved(read.bytes)
         if (!text) continue // undecryptable on this device — leave it alone
         const promoted = text
           .replace('type: meeting-transcript-draft', 'type: meeting-transcript')

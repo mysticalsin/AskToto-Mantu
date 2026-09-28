@@ -37,6 +37,7 @@ import {
   type IndexUnavailableCause
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
+import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
 
@@ -224,7 +225,7 @@ function ensureDirs(settings: Settings): string {
 // re-read + decrypted + JSON.parsed + zod-validated every file from scratch. A stat() replaces that full
 // round trip when the file is unchanged; any mtime/size change (including our own writes, see writeJson
 // below) re-reads. Corrupt/absent files cache `null` too, so they stop costing repeated reads.
-const jsonCache = new Map<string, { mtimeMs: number; size: number; value: unknown }>()
+const jsonCache = new Map<string, { mtimeMs: number; ctimeMs?: number; size: number; value: unknown }>()
 const JSON_CACHE_MAX = 2000 // safety valve — see recall.ts's identical guard
 
 /** Bumps on every writeJson. Receipt Mode's match-key cache must not rely on directory mtime alone:
@@ -263,6 +264,46 @@ export function readJson<T>(settings: Settings, rel: string, parse: (v: unknown)
   if (jsonCache.size >= JSON_CACHE_MAX) jsonCache.clear()
   jsonCache.set(p, { mtimeMs, size, value })
   return value
+}
+
+type BrainFileLoad<T> = { status: 'ok'; value: T | null } | { status: 'unavailable' }
+
+async function loadJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T): Promise<BrainFileLoad<T>> {
+  const p = join(brainDir(settings), rel)
+  const gateway = storageAt(resolveMeetingsFolder(settings))
+  const path = join('.brain', rel)
+  const fileClass = (await classifyAll(gateway, [path])).get(path)
+  if (!fileClass || fileClass.status === 'missing') {
+    jsonCache.delete(p)
+    return { status: 'ok', value: null }
+  }
+  if (!('version' in fileClass)) return { status: 'unavailable' }
+  const { mtimeMs, ctimeMs, size } = fileClass.version
+  const hit = jsonCache.get(p)
+  if (hit && hit.mtimeMs === mtimeMs && hit.ctimeMs === ctimeMs && hit.size === size) return { status: 'ok', value: hit.value as T | null }
+  if (fileClass.status !== 'ok') return { status: 'unavailable' }
+  const read = await gateway.read(path)
+  if (read.status === 'missing') {
+    jsonCache.delete(p)
+    return { status: 'ok', value: null }
+  }
+  if (read.status !== 'ok') return { status: 'unavailable' }
+  let value: T | null
+  try {
+    const decoded = decodeSavedResult(read.bytes)
+    value = decoded.ok ? parse(JSON.parse(decoded.text)) : null
+  } catch {
+    value = null
+  }
+  if (jsonCache.size >= JSON_CACHE_MAX) jsonCache.clear()
+  jsonCache.set(p, { mtimeMs, ctimeMs, size, value })
+  return { status: 'ok', value }
+}
+
+async function listBrainNames(settings: Settings, relDir: string): Promise<string[] | null> {
+  const listing = await storageAt(resolveMeetingsFolder(settings)).list(join('.brain', relDir))
+  if (listing.status === 'ok') return listing.names
+  return listing.status === 'missing' ? [] : null
 }
 
 export async function writeJson(settings: Settings, rel: string, value: unknown): Promise<void> {
@@ -635,6 +676,42 @@ function loadIndex(s: Settings): ResolvedIndex {
   return load
 }
 
+async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
+  const p = join(brainDir(s), INDEX_REL)
+  const hit = indexCache.get(p)
+  const gateway = storageAt(resolveMeetingsFolder(s))
+  const fileClass = (await classifyAll(gateway, [join('.brain', INDEX_REL)])).get(join('.brain', INDEX_REL))
+  if (!fileClass || fileClass.status === 'missing') {
+    indexCache.delete(p)
+    return { kind: 'absent' }
+  }
+  if (!('version' in fileClass)) {
+    return recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: fileClass.status })
+  }
+  const { mtimeMs, size } = fileClass.version
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size && !ioRetryDue(hit)) return hit.load
+  if (fileClass.status !== 'ok') {
+    return recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: fileClass.status })
+  }
+  const read = await gateway.read(join('.brain', INDEX_REL))
+  if (read.status === 'missing') {
+    indexCache.delete(p)
+    return { kind: 'absent' }
+  }
+  if (read.status !== 'ok') {
+    return recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: read.status })
+  }
+  const classified = classifyIndexBytes(read.bytes)
+  const load: ResolvedIndex = classified.kind === 'corrupt' ? setAsideCorruptIndex(p) : classified
+  if (load.kind === 'absent') {
+    indexCache.delete(p)
+    return load
+  }
+  if (load.kind === 'unavailable') return recordUnavailable(p, hit, mtimeMs, size, load)
+  indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
+  return load
+}
+
 /** The index, or an empty stand-in when there is none or it is read-only (see indexUnavailable). The
  *  stand-in can never be persisted over unreadable bytes: writeIndex refuses. Callers still clone before
  *  mutating (see updateIndex) — an unchanged file serves the same cached object on every call. */
@@ -643,9 +720,19 @@ export const readIndex = (s: Settings): BrainIndex => {
   return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
 }
 
+export const loadIndexForStatus = async (s: Settings): Promise<BrainIndex> => {
+  const load = await loadIndexAsync(s)
+  return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
+}
+
 /** Non-null while an existing index.json cannot be used here: the index is read-only for the session. */
 export function indexUnavailable(s: Settings): IndexUnavailableCause | null {
   const load = loadIndex(s)
+  return load.kind === 'unavailable' ? load.cause : null
+}
+
+export async function indexUnavailableAsync(s: Settings): Promise<IndexUnavailableCause | null> {
+  const load = await loadIndexAsync(s)
   return load.kind === 'unavailable' ? load.cause : null
 }
 
@@ -679,6 +766,10 @@ export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
 // ── Typed accessors ──────────────────────────────────────────────────────────
 export const readGraph = (s: Settings): BrainGraph =>
   readJson(s, 'graph.json', (v) => BrainGraphSchema.parse(v)) ?? BrainGraphSchema.parse({})
+export const loadGraph = async (s: Settings): Promise<BrainGraph> => {
+  const loaded = await loadJson(s, 'graph.json', (v) => BrainGraphSchema.parse(v))
+  return loaded.status === 'ok' && loaded.value ? loaded.value : BrainGraphSchema.parse({})
+}
 export const writeGraph = (s: Settings, v: BrainGraph): Promise<void> => writeJson(s, 'graph.json', v)
 
 export const readMeetingExtraction = (s: Settings, fileSlug: string): MeetingExtraction | null =>
@@ -748,6 +839,10 @@ export function listEntities(s: Settings, kind: 'person' | 'account' | 'deal'): 
     .filter((f) => f.endsWith('.json'))
     .map((f) => basename(f, '.json'))
     .sort()
+}
+
+export async function loadEntitySlugs(s: Settings, kind: 'person' | 'account' | 'deal'): Promise<string[]> {
+  return (await listBrainNames(s, join('entities', kind)))?.filter((f) => f.endsWith('.json')).map((f) => basename(f, '.json')).sort() ?? []
 }
 
 export function listMeetingExtractions(s: Settings): string[] {

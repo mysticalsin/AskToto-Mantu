@@ -226,6 +226,14 @@ export function createStorageGateway({
   const failures = new Map<string, { result: Unread; expiresAt: number }>()
   let resolvedRoot: { root: string; real: string } | undefined
 
+  function currentRoot(): { status: 'ok'; root: string } | StorageFailure {
+    try {
+      return { status: 'ok', root: root() }
+    } catch (error) {
+      return { status: 'unavailable', code: (error as NodeJS.ErrnoException | null)?.code ?? 'ROOT_UNAVAILABLE' }
+    }
+  }
+
   /** null once the request holds a permit, else why it got none. */
   async function admit(lane: Lane, request: Request): Promise<StorageFailure | null> {
     const acquired = await admission.acquire(lane, request.signal)
@@ -315,7 +323,9 @@ export function createStorageGateway({
 
   return {
     async list(relDir, { signal } = {}) {
-      const dir = underRoot(root(), relDir)
+      const base = currentRoot()
+      if (base.status !== 'ok') return base
+      const dir = underRoot(base.root, relDir)
       if (!dir) return outsideRoot()
       const request = openRequest(METADATA_DEADLINE_MS, signal)
       try {
@@ -327,7 +337,9 @@ export function createStorageGateway({
     },
 
     async classify(relPaths, { signal } = {}) {
-      const base = root()
+      const current = currentRoot()
+      if (current.status !== 'ok') return new Map(relPaths.map((rel): [string, FileClass] => [rel, current]))
+      const base = current.root
       const request = openRequest(METADATA_DEADLINE_MS, signal)
       try {
         const stats = await Promise.all(
@@ -351,7 +363,9 @@ export function createStorageGateway({
     },
 
     async read(relPath, { signal } = {}) {
-      const base = root()
+      const current = currentRoot()
+      if (current.status !== 'ok') return current
+      const base = current.root
       const path = underRoot(base, relPath)
       if (!path) return outsideRoot()
       const remembered = failures.get(path)
