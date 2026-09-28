@@ -1352,6 +1352,14 @@ function observeSource(key: string): void {
   if (backfillObserver && !backfillObserver.sources.has(key)) backfillObserver.sources.set(key, false)
 }
 
+function claimSourceRefreshWork(idx: BrainIndex): Set<string> {
+  return new Set(
+    Object.entries(idx.ingested)
+      .filter(([, record]) => record.ok)
+      .map(([key]) => key)
+  )
+}
+
 function observeClaimedSourceRefreshWork(): void {
   for (const key of sourceRefreshWorkKeys) observeSource(key)
 }
@@ -2358,16 +2366,19 @@ export async function exciseDeletedMeeting(s: Settings, file: string): Promise<{
 /** Persisted source edits/deletions are replayed as a clean rebuild when a provider is ready. */
 export async function requestSourceRefresh(s: Settings = getSettings()): Promise<void> {
   try {
-    const [scan, idx] = await Promise.all([scanMeetingSources(s), readIndexAsync(s)])
-    sourceRefreshWorkKeys = new Set(
+    const idx = await readIndexAsync(s)
+    sourceRefreshWorkKeys = claimSourceRefreshWork(idx)
+    const scan = await scanMeetingSources(s)
+    const localKeys = new Set(
       scan.flatMap((folder) =>
         folder.status === 'ok'
           ? folder.sources.filter((source) => source.local && idx.ingested[source.key]?.ok).map((source) => source.key)
           : []
       )
     )
+    if (localKeys.size > 0) sourceRefreshWorkKeys = localKeys
   } catch {
-    sourceRefreshWorkKeys = new Set()
+    if (sourceRefreshWorkKeys.size === 0) sourceRefreshWorkKeys = claimSourceRefreshWork(readIndex(s))
   }
   await updateIndex(s, (idx) => {
     idx.sourceRefreshRequested = true
@@ -2808,6 +2819,7 @@ async function consumeDailyBackfillRun(s: Settings): Promise<boolean> {
 
 async function requestBackfillAsync(options: BackfillStartOptions = {}): Promise<BackfillStartResult> {
   const s = getSettings()
+  if (options.trigger === 'user') promoteQueuedBackfill()
   // Preserve the existing synchronous no-provider contract so the renderer can show the actionable
   // setup guidance immediately, while retaining the durable resume flag.
   if (!hasUsableProvider(s)) {
