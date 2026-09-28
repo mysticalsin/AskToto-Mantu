@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
 import type { SpawnOptions } from 'node:child_process'
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
@@ -21,6 +22,8 @@ function fakeProc(pid = 1234): import('node:child_process').ChildProcess {
   Object.assign(proc, {
     pid,
     killed: false,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
     kill: vi.fn(() => {
       ;(proc as import('node:child_process').ChildProcess & { killed: boolean }).killed = true
       return true
@@ -80,7 +83,8 @@ describe('spawnSidecarProcess', () => {
       'darwin'
     )
 
-    expect(result).toEqual({ child, supervised: true })
+    expect(result.supervised).toBe(true)
+    expect(result.child.pid).toBe(child.pid)
     const [command, args, passedOptions] = spawnMock.spawn.mock.calls[0]
     expect(String(command).endsWith('metis-mac-helper')).toBe(true)
     expect(args).toEqual([
@@ -95,6 +99,36 @@ describe('spawnSidecarProcess', () => {
     ])
     expect(passedOptions).toBe(options)
     expect(audit).not.toHaveBeenCalled()
+  })
+
+  it('falls back to direct spawn and audits when the supervised wrapper emits an async spawn error', async () => {
+    const wrapper = fakeProc()
+    const direct = fakeProc(2468)
+    spawnMock.spawn.mockReturnValueOnce(wrapper).mockReturnValueOnce(direct)
+    const audit = vi.fn()
+    const options: SpawnOptions = { stdio: ['ignore', 'pipe', 'pipe'] }
+
+    const result = spawnSidecarProcess(
+      'llama-server',
+      '/bin/llama-server',
+      ['--port', '0'],
+      options,
+      audit,
+      { METIS_SIDECAR_SUPERVISION: '1' },
+      'darwin'
+    )
+
+    wrapper.emit('error', new Error('bad helper'))
+    await Promise.resolve()
+
+    expect(result.supervised).toBe(true)
+    expect(result.child.pid).toBe(2468)
+    expect(spawnMock.spawn).toHaveBeenLastCalledWith('/bin/llama-server', ['--port', '0'], options)
+    expect(audit).toHaveBeenCalledWith('sidecar.unsupervised', {
+      name: 'llama-server',
+      reason: 'wrapper-spawn-failed',
+      error: 'bad helper'
+    })
   })
 
   it('falls back to direct spawn and audits when the wrapper is missing', () => {
@@ -158,7 +192,7 @@ describe('stopSidecarProcess', () => {
   function supervisedFake(pid = 4321): import('node:child_process').ChildProcess {
     const child = fakeProc(pid)
     spawnMock.spawn.mockReturnValue(child)
-    spawnSidecarProcess(
+    return spawnSidecarProcess(
       'llama-server',
       '/bin/llama-server',
       [],
@@ -166,8 +200,7 @@ describe('stopSidecarProcess', () => {
       vi.fn(),
       { METIS_SIDECAR_SUPERVISION: '1' },
       'darwin'
-    )
-    return child
+    ).child
   }
 
   it('kills a supervised wrapper process group first on POSIX, using the negative child pid', () => {

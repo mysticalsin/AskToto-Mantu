@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import type { AuditSink } from '../../logger'
 
 export interface SupervisedSpawnResult {
@@ -10,6 +12,7 @@ export interface SupervisedSpawnResult {
 
 const supervisedProcesses = new WeakSet<ChildProcess>()
 const supervisedPlatforms = new WeakMap<ChildProcess, NodeJS.Platform>()
+const supervisedProcessState = new WeakMap<ChildProcess, { current: ChildProcess; supervised: boolean }>()
 
 export function sidecarSupervisionEnabled(
   env: NodeJS.ProcessEnv = process.env,
@@ -60,7 +63,8 @@ export function spawnSidecarProcess(
   }
 
   try {
-    const child = spawn(helper, ['supervise', '--parent', String(process.pid), '--', command, ...args], options)
+    const wrapper = spawn(helper, ['supervise', '--parent', String(process.pid), '--', command, ...args], options)
+    const child = fallbackCapableSupervisedChild(wrapper, name, command, args, options, audit)
     supervisedProcesses.add(child)
     supervisedPlatforms.set(child, platform)
     return { child, supervised: true }
@@ -77,7 +81,13 @@ export function spawnSidecarProcess(
 export function stopSidecarProcess(child: ChildProcess, signal: NodeJS.Signals = 'SIGKILL'): void {
   if (child.killed) return
   const supervisedPlatform = supervisedPlatforms.get(child)
-  if (supervisedProcesses.has(child) && supervisedPlatform !== 'win32' && typeof child.pid === 'number') {
+  const state = supervisedProcessState.get(child)
+  if (
+    supervisedProcesses.has(child) &&
+    (state?.supervised ?? true) &&
+    supervisedPlatform !== 'win32' &&
+    typeof child.pid === 'number'
+  ) {
     try {
       process.kill(-child.pid, signal)
       return
@@ -85,5 +95,95 @@ export function stopSidecarProcess(child: ChildProcess, signal: NodeJS.Signals =
       // Direct, unsupervised children are not guaranteed to be process-group leaders.
     }
   }
-  child.kill(signal)
+  ;(state?.current ?? child).kill(signal)
+}
+
+function fallbackCapableSupervisedChild(
+  wrapper: ChildProcess,
+  name: 'llama-server' | 'fm-serve',
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+  audit: AuditSink
+): ChildProcess {
+  const proxy = new EventEmitterChildProcess()
+  const state = { current: wrapper, supervised: true }
+  supervisedProcessState.set(proxy.child, state)
+  proxy.attach(wrapper, state, {
+    onError: (error) => {
+      audit('sidecar.unsupervised', {
+        name,
+        reason: 'wrapper-spawn-failed',
+        error: error instanceof Error ? error.message : String(error)
+      })
+      try {
+        const direct = spawn(command, [...args], options)
+        state.current = direct
+        state.supervised = false
+        proxy.attach(direct, state)
+      } catch (fallbackError) {
+        proxy.emitError(fallbackError)
+      }
+    }
+  })
+  return proxy.child
+}
+
+class EventEmitterChildProcess {
+  readonly stdout = new PassThrough()
+  readonly stderr = new PassThrough()
+  readonly child: ChildProcess
+  private readonly emitter = new EventEmitter()
+
+  constructor() {
+    const self = this
+    this.child = {
+      stdout: this.stdout,
+      stderr: this.stderr,
+      stdin: null,
+      stdio: [null, this.stdout, this.stderr, null, null],
+      get pid() {
+        return supervisedProcessState.get(self.child)?.current.pid
+      },
+      get killed() {
+        return supervisedProcessState.get(self.child)?.current.killed ?? false
+      },
+      kill(signal?: NodeJS.Signals | number) {
+        const state = supervisedProcessState.get(self.child)
+        return state?.current.kill(signal) ?? false
+      },
+      on: this.emitter.on.bind(this.emitter),
+      once: this.emitter.once.bind(this.emitter),
+      off: this.emitter.off.bind(this.emitter),
+      removeListener: this.emitter.removeListener.bind(this.emitter),
+      emit: this.emitter.emit.bind(this.emitter)
+    } as unknown as ChildProcess
+  }
+
+  attach(
+    proc: ChildProcess,
+    state: { current: ChildProcess; supervised: boolean },
+    hooks: { onError?: (error: Error) => void } = {}
+  ): void {
+    proc.stdout?.pipe(this.stdout, { end: false })
+    proc.stderr?.pipe(this.stderr, { end: false })
+    proc.once('error', (error) => {
+      if (state.current !== proc) return
+      if (hooks.onError) hooks.onError(error)
+      else this.emitError(error)
+    })
+    proc.once('exit', (code, signal) => {
+      if (state.current !== proc) return
+      this.stdout.end()
+      this.stderr.end()
+      this.emitter.emit('exit', code, signal)
+      this.emitter.emit('close', code, signal)
+    })
+  }
+
+  emitError(error: unknown): void {
+    this.stdout.end()
+    this.stderr.end()
+    this.emitter.emit('error', error)
+  }
 }
