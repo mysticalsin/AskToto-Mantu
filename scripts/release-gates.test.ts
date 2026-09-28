@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
+import { formatCommand, releasePlans } from './release/orchestrate.mjs'
 
 const root = join(__dirname, '..')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
@@ -11,6 +12,8 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
   devDependencies: Record<string, string>
   engines: { node: string }
 }
+
+const releaseCommands = (target: keyof typeof releasePlans): string[] => releasePlans[target].map(formatCommand)
 
 describe('installer branding', () => {
   it('uses a customer-facing Métis file description without internal migration notes', () => {
@@ -26,9 +29,11 @@ describe('installer branding', () => {
     expect(overlay).toContain("!node_modules/sherpa-onnx-linux-*{,/**/*}")
     expect(overlay).toContain("!node_modules/@img/sharp-linux-*{,/**/*}")
 
-    for (const script of ['dist:win', 'dist:win:appx', 'release:build:win', 'release:win:store']) {
+    for (const script of ['dist:win', 'dist:win:appx']) {
       expect(pkg.scripts[script]).toContain('--config electron-builder.win.yml')
     }
+    expect(releaseCommands('win').join('\n')).toContain('--config electron-builder.win.yml')
+    expect(releaseCommands('win-store').join('\n')).toContain('--config electron-builder.win.yml')
     const installerBuilder = readFileSync(join(root, 'scripts', 'build-installers.mjs'), 'utf8')
     expect(installerBuilder).toMatch(/'--config',\s*'electron-builder\.win\.yml'/)
   })
@@ -134,6 +139,9 @@ describe('deterministic packaging toolchain', () => {
         expect(body, `${name} sets the universal flag but does not build --universal`).toContain('--universal')
       }
     }
+    const macRelease = releaseCommands('mac').join('\n')
+    expect(macRelease).toContain('ASKTOTO_MAC_UNIVERSAL=1')
+    expect(macRelease).toContain('electron-builder --mac --universal')
   })
 
   it('MQA-207: single-architecture Windows chains keep their bytecode', () => {
@@ -204,8 +212,8 @@ describe('direct release signing gates', () => {
   })
 
   it('verifies produced signatures in both direct release commands', () => {
-    expect(pkg.scripts['release:build:mac']).toContain('node scripts/verify-signing.mjs --require-notarized')
-    expect(pkg.scripts['release:build:win']).toContain('node scripts/verify-signing.mjs')
+    expect(releaseCommands('mac').join('\n')).toContain('scripts/verify-signing.mjs --require-notarized')
+    expect(releaseCommands('win').join('\n')).toContain('scripts/verify-signing.mjs')
   })
 
   it('refuses macOS release when Developer ID or notarization inputs are missing, including in CI', () => {
@@ -264,15 +272,12 @@ describe('direct release signing gates', () => {
 
 describe('embedded-credential placeholder gate (M2-0056)', () => {
   it('wires check-provisioned-secrets into every release chain that runs check-release-secrets, before electron-builder', () => {
-    const releaseChains = Object.entries(pkg.scripts).filter(
-      ([name, body]) => name.startsWith('release:') && body.includes('check-release-secrets.mjs')
-    )
-    // release:build:mac, release:build:win, release:mas, release:win:store. `release` and `release:win`
-    // are excluded here — they only delegate via `npm run release:build:*` and never repeat the gate text.
+    const releaseChains = Object.entries(releasePlans)
     expect(releaseChains.length).toBeGreaterThanOrEqual(4)
-    for (const [name, body] of releaseChains) {
+    for (const [name, steps] of releaseChains) {
+      const body = steps.map(formatCommand).join('\n')
       expect(body, `${name} must gate on check-provisioned-secrets.mjs --profile release`).toContain(
-        'node scripts/check-provisioned-secrets.mjs --profile release'
+        'scripts/check-provisioned-secrets.mjs --profile release'
       )
       const secretsIndex = body.indexOf('check-release-secrets.mjs')
       const provisionedIndex = body.indexOf('check-provisioned-secrets.mjs')
