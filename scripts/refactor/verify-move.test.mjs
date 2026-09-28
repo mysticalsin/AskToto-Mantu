@@ -182,6 +182,13 @@ test('token multiset ignores comments but preserves non-import string literals',
   assert.deepEqual(compareMultisets(left, right), [])
 })
 
+test('token multiset reads regex literals as code, not as comments or strings', () => {
+  const before = normalizedTokenSequence(String.raw`const r = /a\/\//; const q = /"/; run(1)`)
+  const after = normalizedTokenSequence(String.raw`const r = /a\/\//; const q = /"/; run(2)`)
+  assert.notDeepEqual(before, after)
+  assert.deepEqual(normalizedTokenSequence('const d = a / b / c'), ['const', 'd', '=', 'a', '/', 'b', '/', 'c'])
+})
+
 test('token multiset preserves string literals that contain comment markers', () => {
   const left = tokenMultiset('export const endpoint = "https://old.example/api" // old endpoint\n')
   const right = tokenMultiset('export const endpoint = "https://new.example/api" // new endpoint\n')

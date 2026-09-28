@@ -31,6 +31,8 @@ jobs:
       - name: Check refactor classification
         id: refactor
         run: node scripts/refactor/check-pr-classification.mjs --pr-event "$GITHUB_EVENT_PATH"
+      - name: Test the refactor governance tools
+        run: node --test scripts/refactor/verify-move.test.mjs
       - name: Verify pure-move refactor
         if: steps.refactor.outputs.classification == 'pure-move'
         run: node scripts/refactor/verify-move.mjs --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}"

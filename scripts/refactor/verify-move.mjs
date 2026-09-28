@@ -174,6 +174,10 @@ function stripComments(source) {
       output += char
       state = char
       index += 1
+    } else if (state === 'code' && char === '/' && startsRegexLiteral(output)) {
+      const end = regexLiteralEnd(source, index)
+      output += source.slice(index, end)
+      index = end
     } else if (state === 'line' && char === '\n') {
       output += char
       state = 'code'
@@ -200,6 +204,41 @@ function stripComments(source) {
     }
   }
   return output
+}
+
+// A slash starts a regex literal (not a division) unless the last code token can end an operand.
+function startsRegexLiteral(output) {
+  const before = output.trimEnd()
+  if (before === '') return true
+  if (/[)\]}\w$]$/.test(before)) {
+    return /(?:^|[^\w$.])(?:return|typeof|case|delete|void|throw|in|of|instanceof|yield|await)$/.test(before)
+  }
+  return true
+}
+
+// Index just past the regex literal (body and flags) starting at `start`; an unterminated one ends at its line.
+function regexLiteralEnd(source, start) {
+  let index = start + 1
+  let inClass = false
+  while (index < source.length && source[index] !== '\n') {
+    const char = source[index]
+    if (char === '\\') {
+      index += 2
+    } else if (char === '[') {
+      inClass = true
+      index += 1
+    } else if (char === ']') {
+      inClass = false
+      index += 1
+    } else if (char === '/' && !inClass) {
+      index += 1
+      while (/[a-z]/i.test(source[index] ?? '')) index += 1
+      return index
+    } else {
+      index += 1
+    }
+  }
+  return Math.min(index, source.length)
 }
 
 function git(args, options = {}) {
