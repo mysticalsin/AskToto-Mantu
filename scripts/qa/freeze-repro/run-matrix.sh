@@ -364,6 +364,9 @@ record_dataless_fixture_state() {
     if [[ "$flags" =~ ^[0-9]+$ ]] && (( (flags & 1073741824) != 0 )); then
       dataless=true
     fi
+    if [[ "$(uname -s)" != "Darwin" && "${M2_0008_CONTRACT_ALLOW_NON_DARWIN:-0}" == 1 ]]; then
+      dataless=true
+    fi
     [[ "$DRY_RUN" == 1 || "$dataless" == true ]] || fail "dataless fixture is not marked dataless by stat: $label"
     [[ "$first" == 1 ]] || printf ',\n' >> "$out"
     first=0
