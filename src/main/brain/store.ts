@@ -296,7 +296,7 @@ export function cloneEntity<T>(entity: T): T {
   return JSON.parse(JSON.stringify(entity)) as T
 }
 
-let entityMutationLock: Promise<void> = Promise.resolve()
+export let entityMutationLock: Promise<void> = Promise.resolve()
 export function withEntityLock<T>(fn: () => Promise<T>): Promise<T> {
   const run = entityMutationLock.then(fn)
   // Never let a rejection wedge the lane for the next caller — mirrors ingest.ts's own indexLock

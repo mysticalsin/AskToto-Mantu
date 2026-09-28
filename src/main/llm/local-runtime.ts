@@ -19,6 +19,7 @@ import { app } from 'electron'
 import { auditLog, mainLog } from '../logger'
 import { observeSidecar } from '../infra/observability/sidecar-events'
 import { errMsg } from './shared'
+import { recordSidecarIntent, recordSidecarSpawned } from '../infra/process/registry'
 
 export type LlamaPlatform = 'mac' | 'win'
 export type WinVariant = 'vulkan' | 'cpu'
@@ -357,14 +358,17 @@ function spawnAndWaitHealthy(
       gpuLayers: modelPaths.gpuLayers
     })
     let proc: ChildProcess
+    let spawnRecorded: Promise<void> = Promise.resolve()
     try {
       // The per-session api key travels via env, never argv (see module doc comment) — `ps`/the process
       // table can see the flag list of every local process but not another process's environment.
+      recordSidecarIntent('llama-server', args)
       proc = spawn(binaryPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         env: { ...process.env, LLAMA_API_KEY: apiKey }
       })
+      spawnRecorded = recordSidecarSpawned('llama-server', proc, binaryPath, args)
     } catch (err) {
       reject(err instanceof Error ? err : new Error(String(err)))
       return
@@ -420,8 +424,15 @@ function spawnAndWaitHealthy(
         return
       }
       pollHealth(parsed, HEALTH_BUDGET_MS[platform]).then(
-        () => {
+        async () => {
           if (!settled) {
+            if (generation !== startGeneration || child !== proc) {
+              settled = true
+              reject(new StartCancelledError())
+              return
+            }
+            await spawnRecorded
+            if (settled) return
             if (generation !== startGeneration || child !== proc) {
               settled = true
               reject(new StartCancelledError())

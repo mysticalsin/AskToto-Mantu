@@ -21,7 +21,9 @@ export const TEST_WORKFLOW = '.github/workflows/build.yml'
 export const M2_0008_DEFAULT_BUNDLE = 'out/m2-0008-freeze-repro'
 
 const READY_DEP = new Set(['ENGINEERING_COMPLETE', 'DONE', 'DEFERRED', 'BLOCKED_EXTERNAL'])
-const IN_HOUSE = new Set(['DESIGNED', 'LOCALLY_TESTED'])
+// The evidence levels ENGINEERING_COMPLETE can prove without an external party (§ ENGINEERING_COMPLETE
+// gate); backfill.mjs reuses this to know which levels a capped ticket must still show a PASS for.
+export const IN_HOUSE = new Set(['DESIGNED', 'LOCALLY_TESTED'])
 export const CLOSED = new Set(['DONE', 'ENGINEERING_COMPLETE'])
 const READY_STATUSES = new Set(['IN_PROGRESS', 'ENGINEERING_COMPLETE', 'DEFERRED', 'DONE'])
 const TICKET_RE = /^M2-\d{4}$/
@@ -509,7 +511,29 @@ export function githubApi(repo, token, fetchImpl = fetch) {
     return json.status === 'ahead'
   }
 
-  return { run, isAncestor }
+  /**
+   * Every merged pull request, oldest first. A hard page cap (not a total-count guess) stops a
+   * misbehaving API from looping forever; 50 pages of 100 is far past this repo's merged-PR count.
+   * @returns {Promise<{number: number, headSha: string, body: string, mergedAt: string}[]>}
+   */
+  async function mergedPullRequests() {
+    const results = []
+    for (let page = 1; page <= 50; page += 1) {
+      const response = await fetchImpl(
+        `https://api.github.com/repos/${repo}/pulls?state=closed&sort=updated&direction=asc&per_page=100&page=${page}`,
+        { headers }
+      )
+      if (!response.ok) throw new Error(`GitHub API returned ${response.status} listing pull requests (page ${page})`)
+      const json = await response.json()
+      for (const pr of json) {
+        if (pr.merged_at) results.push({ number: pr.number, headSha: pr.head.sha, body: pr.body ?? '', mergedAt: pr.merged_at })
+      }
+      if (json.length < 100) break
+    }
+    return results
+  }
+
+  return { run, isAncestor, mergedPullRequests }
 }
 
 function usageExit(message) {

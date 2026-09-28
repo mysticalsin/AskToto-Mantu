@@ -660,7 +660,7 @@ describe('Operator control plane lives on Cloudflare, not in Settings', () => {
 })
 
 describe('locked mode skills — Settings has no editor for shipped skill files', () => {
-  const personalize = blockAfter('function ModePromptEditor(', '\nconst TEXT_FILE_RE')
+  const personalize = blockAfter('function ModePromptEditor(', '\nexport const TEXT_FILE_RE')
 
   it('shows a read-only locked line and never edits skill files', () => {
     expect(personalize).toMatch(/Operator skill v/)

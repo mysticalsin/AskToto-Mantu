@@ -29,6 +29,7 @@ import {
   type IntelligenceIndexResult,
   type IntelligenceIndexCompletion
 } from './intelligence-index'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 const auditLogMock = vi.hoisted(() => vi.fn())
 vi.mock('electron')
@@ -55,7 +56,8 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await settleBrainWritesForTests()
   vi.restoreAllMocks()
   resetIntelligenceIndexLockForTests()
   setIntelligenceIndexWork(null)
@@ -320,6 +322,7 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
     uptime = 121_000
     scheduled[0].run()
     await expect(pending).resolves.toMatchObject({ ran: true, queued: 1 })
+    await settleBrainWritesForTests()
     expect(work).toHaveBeenCalledOnce()
   })
 

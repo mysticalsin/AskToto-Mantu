@@ -51,10 +51,10 @@ jobs:
         if: runner.os == 'Linux'
         run: npm run check:layering
       # FF-01 test crossings and FF-02..FF-14 as per-file counts that may only fall
-      # (scripts/architecture-baseline.json). Report-only: a differing count shows here but does not fail the job.
+      # (scripts/architecture-baseline.json). Blocking since 2026-09-28 (M2-0237): the report-only period
+      # (M2-0047) is over, so a differing count fails the job instead of only showing here.
       - name: Architecture ratchet
         if: runner.os == 'Linux'
-        continue-on-error: true
         run: npm run check:architecture
       - run: npm run build
       - name: QA fault-hook deterministic repeat
@@ -71,6 +71,11 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - run: npm test
+      # MQA-252 (M2-0048): every skipped test must be declared and stay within its per-OS baseline, so a
+      # newly-skipped test fails the build instead of quietly joining the pile. Runs its own vitest pass
+      # (scripts/check-skipped-tests.mjs collects a fresh JSON report) against the same checkout npm test
+      # just verified.
+      - run: npm run check:skips
 
   operator:
     # Métis Operator (the fleet control-plane Worker under operator/) is a separate deployable with

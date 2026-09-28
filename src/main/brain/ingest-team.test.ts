@@ -6,8 +6,9 @@ import { app } from 'electron'
 import { PROVIDER_IDS } from '@shared/providers'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
-import { brainBackfillProgress, extractionSlug, startBackfill, whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress, extractionSlug, startBackfill } from './ingest'
 import { readIndex, readMeetingExtraction, writeIndex, writeMeetingExtraction } from './store'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -50,7 +51,7 @@ describe('team-transcript ingest', () => {
     // finalization still schedules its lint/publication/index writes after that point. Wait for the real
     // worker lifecycle first, then its serialized index tail, before deleting this profile.
     await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(sharedRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
@@ -143,7 +144,7 @@ describe('team-transcript ingest', () => {
     // Files On-Demand can make the shared folder vanish for a moment; purging the whole brain because
     // of that would be far worse than waiting for it to come back.
     startBackfill()
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     expect(readIndex(getSettings()).sourceRefreshRequested).toBeFalsy()
   })
 })

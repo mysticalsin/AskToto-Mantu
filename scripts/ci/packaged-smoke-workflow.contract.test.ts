@@ -17,12 +17,25 @@ interface WorkflowDispatchEvent {
   changedPaths?: string[]
 }
 
-type GitHubEvent = PushEvent | WorkflowDispatchEvent
+interface PullRequestEvent {
+  eventName: 'pull_request'
+  action: string
+  baseRef: string
+  number: number
+  ref: string
+}
+
+type GitHubEvent = PushEvent | WorkflowDispatchEvent | PullRequestEvent
 
 interface PushFilters {
   branches: string[]
   tagsIgnore: string[]
   paths: string[]
+}
+
+interface PullRequestFilters {
+  branches: string[]
+  types: string[]
 }
 
 function eventBlock(eventName: string): string[] {
@@ -71,6 +84,14 @@ function pushFilters(): PushFilters {
   }
 }
 
+function pullRequestFilters(): PullRequestFilters {
+  const block = eventBlock('pull_request')
+  return {
+    branches: listValue(block, 'branches'),
+    types: listValue(block, 'types')
+  }
+}
+
 function globMatches(pattern: string, value: string): boolean {
   if (pattern === '**') return true
   if (!pattern.includes('*')) return pattern === value
@@ -85,6 +106,12 @@ function globMatches(pattern: string, value: string): boolean {
 
 function packagedSmokeRuns(event: GitHubEvent): boolean {
   if (event.eventName === 'workflow_dispatch') return true
+  if (event.eventName === 'pull_request') {
+    const filters = pullRequestFilters()
+    if (filters.types.length > 0 && !filters.types.includes(event.action)) return false
+    if (filters.branches.length > 0 && !filters.branches.some((pattern) => globMatches(pattern, event.baseRef))) return false
+    return true
+  }
 
   const filters = pushFilters()
   const branch = event.ref.startsWith('refs/heads/') ? event.ref.slice('refs/heads/'.length) : null
@@ -97,13 +124,67 @@ function packagedSmokeRuns(event: GitHubEvent): boolean {
   return true
 }
 
+function packagedSmokeConcurrencyGroup(event: GitHubEvent): string {
+  const expression = workflow.match(/\nconcurrency:\n  group:\s+(.+)\n/)?.[1]
+  expect(expression).toBe("${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}")
+
+  if (event.eventName === 'pull_request') return `packaged-smoke-pr-${event.number}`
+  return `packaged-smoke-${event.ref}`
+}
+
+function packagedSmokeJobRuns(event: GitHubEvent): boolean {
+  const jobIfs = [...workflow.matchAll(/\n    if:\s+(.+)\n/g)].map((match) => match[1])
+  expect(jobIfs).toEqual([
+    "github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/')",
+    "github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/')"
+  ])
+
+  return event.eventName === 'pull_request' || event.ref.startsWith('refs/heads/')
+}
+
 describe('packaged-smoke workflow trigger', () => {
-  it('runs on every push to m2/integration, including ordinary source-only app changes', () => {
+  it('runs when a pull request into m2/integration is marked ready for review', () => {
+    const event: PullRequestEvent = {
+      eventName: 'pull_request',
+      action: 'ready_for_review',
+      baseRef: 'm2/integration',
+      number: 234,
+      ref: 'refs/pull/234/merge'
+    }
+
+    expect(packagedSmokeRuns(event)).toBe(true)
+    expect(packagedSmokeJobRuns(event)).toBe(true)
+  })
+
+  it('does not run on other pull request actions before review', () => {
     expect(packagedSmokeRuns({
+      eventName: 'pull_request',
+      action: 'opened',
+      baseRef: 'm2/integration',
+      number: 234,
+      ref: 'refs/pull/234/merge'
+    })).toBe(false)
+  })
+
+  it('does not run on pull requests into other branches', () => {
+    expect(packagedSmokeRuns({
+      eventName: 'pull_request',
+      action: 'ready_for_review',
+      baseRef: 'main',
+      number: 234,
+      ref: 'refs/pull/234/merge'
+    })).toBe(false)
+  })
+
+  it('runs on every push to m2/integration, including ordinary source-only app changes', () => {
+    const event: PushEvent = {
       eventName: 'push',
       ref: 'refs/heads/m2/integration',
       changedPaths: ['src/main/index.ts']
-    })).toBe(true)
+    }
+
+    expect(packagedSmokeRuns(event)).toBe(true)
+    expect(packagedSmokeJobRuns(event)).toBe(true)
   })
 
   it('does not run on other branch pushes', () => {
@@ -127,5 +208,24 @@ describe('packaged-smoke workflow trigger', () => {
       eventName: 'workflow_dispatch',
       ref: 'refs/heads/m2/M2-0229-packaged-smoke'
     })).toBe(true)
+  })
+
+  it('keeps pull request and integration push concurrency groups separate', () => {
+    const pullRequestGroup = packagedSmokeConcurrencyGroup({
+      eventName: 'pull_request',
+      action: 'ready_for_review',
+      baseRef: 'm2/integration',
+      number: 234,
+      ref: 'refs/pull/234/merge'
+    })
+    const integrationGroup = packagedSmokeConcurrencyGroup({
+      eventName: 'push',
+      ref: 'refs/heads/m2/integration',
+      changedPaths: ['src/main/index.ts']
+    })
+
+    expect(pullRequestGroup).toBe('packaged-smoke-pr-234')
+    expect(integrationGroup).toBe('packaged-smoke-refs/heads/m2/integration')
+    expect(pullRequestGroup).not.toBe(integrationGroup)
   })
 })

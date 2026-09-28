@@ -362,11 +362,68 @@ describe('darwin wire protocol (stand-in helper)', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------
-// The real Windows PowerShell attribute probe (skipped off win32)
+// The win32 wire protocol, driven by a stand-in helper (`node -e`) so it runs on every CI OS.
+//
+// Mirrors the darwin block above: the real production code path (presenceProbeFor -> runAttributeProbe
+// -> AttributeWordsSchema -> presenceFromWinAttributes) is exercised end to end, only the process at the
+// other end of the pipe is swapped for a deterministic stand-in. This is what CI-FLAKE-2026-09-28 was
+// missing — every win32 assertion used to depend on a real powershell.exe cold start, so a slow hosted
+// runner made the classifier's OWN 10 s budget (WIN_PROBE_TIMEOUT_MS) win the race and answer 'unknown'
+// before the process even finished starting. None of that spawn-timing variance reaches this block.
 // ---------------------------------------------------------------------------------------------------
 
+/** Mimics WIN_ATTRIBUTES_SCRIPT's own stdout construction ('[' + words.join(',') + ']', 'null' unquoted
+ *  for a missing path) so this test proves the exact string this module's JSON.parse has to handle. */
+const WIN_WORDS_BY_NAME = "{ 'local.md': 128, 'offline.md': 4096, \"Métis réunion.md\": 128 }"
+const WIN_STAND_IN =
+  `const words = ${WIN_WORDS_BY_NAME}\n` +
+  `const paths = require('node:fs').readFileSync(0, 'utf8').split('\\0')\n` +
+  `const out = paths.map((p) => { const w = words[require('node:path').basename(p)]; return w === undefined ? 'null' : String(w) })\n` +
+  `process.stdout.write('[' + out.join(',') + ']')`
+
+async function classifyWithWinProbe(paths: string[], spawnSpec = { command: process.execPath, args: ['-e', WIN_STAND_IN] }) {
+  return createDatalessDetector(presenceProbeFor('win32', { spawnSpec })).classify(paths.map((p) => fileVersion(p)))
+}
+
+describe('win32 wire protocol (stand-in helper)', () => {
+  it('sends NUL-separated UTF-8 paths on stdin, keeps input order, reports FILE_ATTRIBUTE_OFFLINE, decodes a non-ASCII path and answers unknown for a missing path', async () => {
+    const result = await classifyWithWinProbe(['/x/local.md', '/x/offline.md', '/x/Métis réunion.md', '/x/gone.md'])
+
+    expect([...result.values()]).toEqual(['local', 'dataless', 'local', 'unknown'])
+  })
+
+  const brokenHelpers: Array<[string, string]> = [
+    ['exits non-zero', "require('node:fs').readFileSync(0); process.exit(1)"],
+    ['prints garbage', "require('node:fs').readFileSync(0); process.stdout.write('not json')"],
+    ['answers the wrong count', "require('node:fs').readFileSync(0); process.stdout.write('[0]')"]
+  ]
+
+  it.each(brokenHelpers)('a helper that %s leaves every file unknown', async (_label, script) => {
+    const result = await classifyWithWinProbe(['/x/a.md', '/x/b.md'], { command: process.execPath, args: ['-e', script] })
+
+    expect([...result.values()]).toEqual(['unknown', 'unknown'])
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// The real Windows PowerShell attribute probe (skipped off win32).
+//
+// Root cause (CI-FLAKE-2026-09-28, windows-latest, 2026-09-27/28): this is the only test that spawns the
+// real powershell.exe, and on a cold hosted runner that FIRST spawn measured ~10.5 s end to end — just
+// past WIN_PROBE_TIMEOUT_MS (10 s), the production query budget. The classifier's own AbortSignal.timeout
+// then wins the race and every path answers 'unknown', which the test read as a flaky assertion failure
+// rather than a timeout. WIN_PROBE_TIMEOUT_MS's 0.5-1.9 s figure (see dataless.ts) is measured on a
+// managed real-machine install; a hosted runner's cold image start is a CI property, not a real-install
+// one, so this test alone gets a wider budget instead of changing production behavior for every user.
+// A single attempt, never a retry loop: a retry would only mask the same cold start under more wall time.
+// ---------------------------------------------------------------------------------------------------
+
+/** Generous enough to absorb a cold hosted-runner powershell.exe spawn (observed ~10.5 s) with margin,
+ *  without weakening WIN_PROBE_TIMEOUT_MS, the production budget every real install runs under. */
+const WIN_COLD_RUNNER_PROBE_TIMEOUT_MS = 25_000
+
 it.runIf(process.platform === 'win32')(
-  'win32: one PowerShell query reports FILE_ATTRIBUTE_OFFLINE, keeps input order, decodes a non-ASCII path and answers unknown for a missing path',
+  'win32: one PowerShell query reports FILE_ATTRIBUTE_OFFLINE, keeps input order, decodes a non-ASCII path and answers unknown for a missing path (real PowerShell, cold-runner budget)',
   async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dataless-'))
     const localFile = join(dir, 'local.md')
@@ -398,7 +455,7 @@ it.runIf(process.platform === 'win32')(
       }
       const files = [localFile, offlineFile, unicodeFile, missingFile].map(versionOf)
 
-      const detector = createDatalessDetector(presenceProbeFor('win32'))
+      const detector = createDatalessDetector(presenceProbeFor('win32', { timeoutMs: WIN_COLD_RUNNER_PROBE_TIMEOUT_MS }))
       const result = await detector.classify(files)
 
       expect(result.get(localFile)).toBe('local')
@@ -408,5 +465,6 @@ it.runIf(process.platform === 'win32')(
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }
+  },
+  WIN_COLD_RUNNER_PROBE_TIMEOUT_MS + 10_000
 )

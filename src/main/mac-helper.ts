@@ -17,6 +17,8 @@
  *     above it fails SAFE, not open: infra/storage/dataless.ts classifies every file 'unknown' (never
  *     read by list or search) when the helper is missing or fails. check-mac-helper.mjs keeps the
  *     helper in every mac package; a dev checkout needs `node scripts/build-mac-helper.mjs` once.
+ *   - `proc-info`: one-shot process identity for the sidecar registry/reaper. It returns the kernel
+ *     process start time and executable realpath so PID reuse cannot be mistaken for ownership.
  *   - `stall-watch`: long-running, one per boot, samples main when `run-alive.json` stops changing;
  *     infra/observability/stall-sampler.ts owns its arguments and protocol.
  *
@@ -47,6 +49,7 @@ const OCR_MAX_CHARS = 1_500
 /** screen-metrics is a single NSScreen.screens enumeration with no I/O — generous but bounded so a
  *  hung/misbehaving helper can't stall the overlay's top-anchor path forever. */
 const SCREEN_METRICS_TIMEOUT_MS = 3_000
+const PROC_INFO_TIMEOUT_MS = 3_000
 
 export interface OcrLine {
   text: string
@@ -59,6 +62,15 @@ export interface OcrResult {
   width: number
   height: number
   lines: OcrLine[]
+}
+
+export interface ProcessIdentity {
+  pid: number
+  ppid?: number
+  pgid?: number
+  osStartTime: string
+  exeRealpath: string
+  args: string[]
 }
 
 function findRepoRoot(startDir: string): string {
@@ -105,6 +117,11 @@ export function macStatFlagsSpawnSpec(): { command: string; args: string[] } | n
   return { command: macHelperPath(), args: ['stat-flags'] }
 }
 
+export function macProcInfoSpawnSpec(pid: number): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  return { command: macHelperPath(), args: ['proc-info', String(pid)] }
+}
+
 /** Flag `diagnostics.stall_sampler` (ARCHITECTURE C15). false restores the pre-M2-0192 boot exactly: no
  *  stall-watch helper, no capture sweep, no new audit events. */
 const STALL_SAMPLER_ENABLED = true
@@ -132,6 +149,15 @@ const ScreenMetricSchema = z.object({
 })
 const ScreenMetricsResultSchema = z.object({ screens: z.array(ScreenMetricSchema) })
 export type RawScreenMetric = z.infer<typeof ScreenMetricSchema>
+
+const ProcessIdentitySchema = z.object({
+  pid: z.number(),
+  ppid: z.number().optional(),
+  pgid: z.number().optional(),
+  osStartTime: z.string(),
+  exeRealpath: z.string(),
+  args: z.array(z.string())
+})
 
 /**
  * One-shot fetch of every connected display's notch/menu-bar metrics via the helper's `screen-metrics`
@@ -186,6 +212,61 @@ export function getMacScreenMetrics(): Promise<RawScreenMetric[] | null> {
         settle(parsed.screens)
       } catch (e) {
         mainLog.warn('[mac-helper] screen-metrics: malformed JSON', e instanceof Error ? e.message : String(e))
+        settle(null)
+      }
+    })
+  })
+}
+
+export function getProcessIdentity(pid: number): Promise<ProcessIdentity | null> {
+  return new Promise((resolve) => {
+    const spec = macProcInfoSpawnSpec(pid)
+    if (!spec) {
+      resolve(null)
+      return
+    }
+    let proc: ReturnType<typeof spawn>
+    try {
+      proc = spawn(spec.command, spec.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (e) {
+      mainLog.warn('[mac-helper] proc-info spawn failed', e instanceof Error ? e.message : String(e))
+      resolve(null)
+      return
+    }
+    let settled = false
+    const settle = (value: ProcessIdentity | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL')
+      settle(null)
+    }, PROC_INFO_TIMEOUT_MS)
+    let stdout = ''
+    let stderr = ''
+    proc.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')))
+    proc.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')))
+    proc.once('error', (e) => {
+      mainLog.warn('[mac-helper] proc-info error', e instanceof Error ? e.message : String(e))
+      settle(null)
+    })
+    proc.once('close', (code) => {
+      if (code !== 0) {
+        if (stderr.trim()) mainLog.warn(`[mac-helper] proc-info exited ${code}: ${stderr.trim().slice(0, 300)}`)
+        settle(null)
+        return
+      }
+      const body = stdout.trim()
+      if (!body) {
+        settle(null)
+        return
+      }
+      try {
+        settle(ProcessIdentitySchema.parse(JSON.parse(body)))
+      } catch (e) {
+        mainLog.warn('[mac-helper] proc-info: malformed JSON', e instanceof Error ? e.message : String(e))
         settle(null)
       }
     })
