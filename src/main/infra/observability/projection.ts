@@ -28,6 +28,19 @@ export const MAX_MESSAGE_CHARS = 300
 export const REVEAL_REASONS = ['activate', 'second-instance', 'ensure-window'] as const
 export const REVEAL_OUTCOMES = ['created', 'shown', 'already-visible', 'failed'] as const
 export const SIDECAR_NAMES = ['llama-server', 'fm-serve', 'stall-watch'] as const
+export const SIDECAR_REAP_REASONS = ['registry', 'legacy-orphan'] as const
+export const SIDECAR_REAP_SKIP_REASONS = [
+  'corrupt-registry',
+  'incomplete-entry',
+  'pid-not-alive',
+  'start-time-mismatch',
+  'exe-mismatch',
+  'args-mismatch',
+  'pid-mismatch',
+  'process-info-failed',
+  'kill-failed',
+  'ambiguous-entry'
+] as const
 export const HISTORY_STAGES = ['received', 'served', 'settled'] as const
 export const HISTORY_OUTCOMES = ['ok', 'failed', 'discarded'] as const
 const RENDER_GONE_REASONS = [
@@ -186,6 +199,19 @@ export const OBSERVABILITY_EVENTS = {
     code: 'int',
     signal: 'token',
     uptimeMs: 'ms'
+  },
+  /** Boot reaper killed a process whose identity matched a safe ownership rule. */
+  'sidecar.reaped': {
+    name: SIDECAR_NAMES,
+    pid: 'int',
+    reason: SIDECAR_REAP_REASONS
+  },
+  /** Boot reaper found a stale, corrupt, ambiguous, or non-owned entry and left it alive. */
+  'sidecar.reap.skipped': {
+    name: SIDECAR_NAMES,
+    pid: 'int',
+    reason: SIDECAR_REAP_SKIP_REASONS,
+    error: 'errorText'
   },
   /** History list request timing across renderer and main. */
   'history.request': {
