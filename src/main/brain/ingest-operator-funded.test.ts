@@ -8,10 +8,11 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { PORTAL_CF_DEEPSEEK_PRO } from '@shared/ask-routing'
 import { clearApiKey, getApiKey, getSettings, setSettings } from '../store'
 import type { StreamOptions } from '../llm/shared'
-import { brainBackfillProgress, startBackfill, whenDrainSettles, whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress, startBackfill } from './ingest'
 import { startIntelligencePass } from './intelligence-pass'
 import { readIndex } from './store'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 const hosted = vi.hoisted(() => ({
@@ -58,16 +59,14 @@ describe('license-funded meeting extraction', () => {
   })
 
   afterEach(async () => {
-    await whenDrainSettles()
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
   })
 
   async function settle(): Promise<void> {
     await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
-    await whenDrainSettles()
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
   }
 
   function meeting(): void {

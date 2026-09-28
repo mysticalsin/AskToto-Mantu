@@ -15,11 +15,11 @@ import {
   requestSourceRefresh,
   startBackfill,
   startRebuild,
-  updateIndex,
-  whenIndexWritesSettle
+  updateIndex
 } from './ingest'
 import { brainDir, indexUnavailable, readIndex } from './store'
 import { writeSaved } from '../transcripts'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import { resetSecretKeyCache } from '../secrets'
 
 vi.mock('electron')
@@ -46,7 +46,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
   }
 
   const respondJson = (json = '{}') => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {

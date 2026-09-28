@@ -9,8 +9,9 @@ import { createStream } from '../llm'
 import * as brainStore from './store'
 import * as publish from './publish'
 import { MeetingExtractionSchema } from '@shared/brain'
-import { requestBackfillRun, requestSourceRefresh, resumeBackfillIfPending, startBackfill, startRebuild, enqueueIngest, brainBackfillProgress, whenDrainSettles, whenIndexWritesSettle } from './ingest'
+import { requestBackfillRun, requestSourceRefresh, resumeBackfillIfPending, startBackfill, startRebuild, enqueueIngest, brainBackfillProgress } from './ingest'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 vi.mock('../llm', () => ({ createStream: vi.fn() }))
@@ -60,8 +61,7 @@ describe('backfill run completion observes real work', () => {
     setSettings({ meetingsFolder: folder, teamTranscriptFolders: [] })
     await startBackfill(undefined, { force: true })
     await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
-    await whenDrainSettles()
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(profile, { recursive: true, force: true })
     rmSync(folder, { recursive: true, force: true })
     vi.unstubAllEnvs()
@@ -171,7 +171,7 @@ describe('backfill run completion observes real work', () => {
     const file = meeting('refresh.md')
     await (await requestBackfillRun({ force: true })).completion
     await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false))
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     writeFileSync(file, '---\ndate: 2026-01-01\n---\nSynthetic edited meeting, new content.\n')
     const replayPublication = trackedGate()
     let replaying = false

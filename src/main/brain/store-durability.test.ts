@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync as realRmSync, readFileSync, writeFileSync, mkdirSy
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -65,7 +66,8 @@ describe('purgeBrain — escrow recovery on a failed wipe (Fix F)', () => {
     mockRmSyncFailOnce = false
     mockCpSyncFailOnce = false
   })
-  afterEach(() => {
+  afterEach(async () => {
+    await settleBrainWritesForTests()
     mockRmSyncFailOnce = false
     mockCpSyncFailOnce = false
     realRmSync(folder, { recursive: true, force: true })
@@ -119,7 +121,8 @@ describe('ensureV1Backup — retry after a failed cpSync, no partial dir mistake
     mockRmSyncFailOnce = false
     mockCpSyncFailOnce = false
   })
-  afterEach(() => {
+  afterEach(async () => {
+    await settleBrainWritesForTests()
     mockRmSyncFailOnce = false
     mockCpSyncFailOnce = false
     realRmSync(folder, { recursive: true, force: true })

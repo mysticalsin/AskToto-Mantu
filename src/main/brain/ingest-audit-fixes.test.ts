@@ -19,10 +19,10 @@ import {
   settleCommitment,
   startBackfill,
   startRebuild,
-  updateIndex,
-  whenIndexWritesSettle
+  updateIndex
 } from './ingest'
 import { readDeal, readIndex, setDealOutcome, withEntityLock, writeDeal } from './store'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -87,7 +87,7 @@ describe('brain ingest — audited fixes', () => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
   }
 
   const respondJson = (json = '{}') => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
@@ -161,7 +161,7 @@ describe('brain ingest — audited fixes', () => {
   })
 
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
@@ -212,7 +212,7 @@ describe('brain ingest — audited fixes', () => {
 
     releaseHeld()
     await vi.waitFor(() => expect(okCount()).toBe(1), { timeout: 10_000 })
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
   })
 
   // ── MQA-085 ────────────────────────────────────────────────────────────────

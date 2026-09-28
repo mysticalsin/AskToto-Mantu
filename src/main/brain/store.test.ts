@@ -7,6 +7,7 @@ import type { Settings } from '@shared/ipc'
 import { BrainIndexSchema, type PersonEntity, type AccountEntity } from '@shared/brain'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import type { StorageFs } from '../infra/storage/gateway'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -122,7 +123,8 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     failRenameOnce = null
     renameSyncSpy.mockClear()
   })
-  afterEach(() => {
+  afterEach(async () => {
+    await settleBrainWritesForTests()
     failReadOnce = null
     failReadPersistent = null
     failRenameOnce = null

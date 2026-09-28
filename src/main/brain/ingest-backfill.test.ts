@@ -7,8 +7,9 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
 import { mainLog } from '../logger'
-import { startBackfill, brainBackfillProgress, reconcileMeetingsInBackground, whenIndexWritesSettle } from './ingest'
+import { startBackfill, brainBackfillProgress, reconcileMeetingsInBackground } from './ingest'
 import { readAccount, readDeal, readIndex, slugify, writeIndex, writeMeetingExtraction } from './store'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -32,7 +33,7 @@ describe('startBackfill with no configured provider', () => {
       },
       { timeout: 15_000 }
     )
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
   }
 
   beforeEach(() => {

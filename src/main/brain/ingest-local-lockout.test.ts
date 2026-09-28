@@ -9,10 +9,10 @@ import { clearApiKey, getSettings, setSettings } from '../store'
 import {
   brainBackfillProgress,
   startBackfill,
-  startRebuild,
-  whenIndexWritesSettle
+  startRebuild
 } from './ingest'
 import { readIndex } from './store'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -88,7 +88,7 @@ describe('brain ingest — exclusive local summary vs runtime lockout (MQA-271, 
   })
 
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
@@ -137,7 +137,7 @@ describe('brain ingest — exclusive local summary vs runtime lockout (MQA-271, 
       },
       { timeout: 10_000 }
     )
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
 
     expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
     expect(createStreamMock.mock.calls[0][0].providerId).toBe('local')
