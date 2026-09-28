@@ -313,6 +313,11 @@ export type AuditEvent =
   | 'local.runtime.missing'
   | 'sidecar.reaped'
   | 'sidecar.reap.skipped'
+  // M2-0028: content-free markers from the packaged HK-M proof (main/qa-hk-m.ts), written only when
+  // METIS_HK_M_SCENARIO selects a row on an isolated QA profile.
+  | 'hk-m.active-inference'
+  | 'hk-m.ffmpeg-import'
+  | 'hk-m.registry-write'
   | 'local.model.checksum_fail'
   // First-run weight download (local-model-download.ts). The weights are no longer bundled, so these
   // are the audit trail for the only network fetch installed code makes for model files.

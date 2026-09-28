@@ -9,24 +9,47 @@ export interface SupervisedSpawnResult {
   readonly child: ChildProcess
   readonly supervised: boolean
   readonly waitForUnsupervisedFallback?: () => Promise<void>
+  // Present when the wrapper was launched: what the registry must fingerprint for the wrapper process itself.
+  readonly wrapperLaunch?: { readonly executable: string; readonly args: readonly string[] }
 }
+
+interface SupervisedState {
+  current: ChildProcess
+  supervised: boolean
+  usable: boolean
+  // Set once we ask the sidecar to stop, so the wrapper's exit is ours and never triggers the direct fallback.
+  stopping: boolean
+  fallbackRecorded?: Promise<void>
+}
+
+// Exit status of `mac-helper supervise` when its own setup failed and the sidecar was never started.
+const SUPERVISE_SETUP_FAILURE_STATUS = 125
 
 const supervisedProcesses = new WeakSet<ChildProcess>()
 const supervisedPlatforms = new WeakMap<ChildProcess, NodeJS.Platform>()
-const supervisedProcessState = new WeakMap<
-  ChildProcess,
-  { current: ChildProcess; supervised: boolean; usable: boolean; fallbackRecorded?: Promise<void> }
->()
-type UnsupervisedReason = 'wrapper-spawn-failed' | 'wrapper-exited-before-usable'
+const supervisedProcessState = new WeakMap<ChildProcess, SupervisedState>()
+type UnsupervisedReason = 'wrapper-spawn-failed' | 'wrapper-setup-failed'
 export interface SupervisedSpawnHooks {
   readonly onUnsupervisedFallbackSpawned?: (child: ChildProcess) => Promise<void> | void
 }
 
+// The named `supervision` flag: `--supervision=on|off` on argv or METIS_SUPERVISION=on|off in the environment
+// (argv wins). METIS_SIDECAR_SUPERVISION=1 is the older spelling of `on`. Default is off until HK-M passes 20/20
+// on the release candidate; `off` always restores the plain direct spawn.
+function supervisionFlag(env: NodeJS.ProcessEnv, argv: readonly string[]): 'on' | 'off' {
+  for (const value of ['on', 'off'] as const) {
+    if (argv.includes(`--supervision=${value}`) || argv.includes(`supervision=${value}`)) return value
+  }
+  if (env.METIS_SUPERVISION === 'on' || env.METIS_SUPERVISION === 'off') return env.METIS_SUPERVISION
+  return env.METIS_SIDECAR_SUPERVISION === '1' ? 'on' : 'off'
+}
+
 export function sidecarSupervisionEnabled(
   env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  argv: readonly string[] = process.argv
 ): boolean {
-  return platform === 'darwin' && env.METIS_SIDECAR_SUPERVISION === '1'
+  return platform === 'darwin' && supervisionFlag(env, argv) === 'on'
 }
 
 function findRepoRoot(startDir: string): string {
@@ -59,9 +82,10 @@ export function spawnSidecarProcess(
   audit: AuditSink,
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
-  hooks: SupervisedSpawnHooks = {}
+  hooks: SupervisedSpawnHooks = {},
+  argv: readonly string[] = process.argv
 ): SupervisedSpawnResult {
-  if (!sidecarSupervisionEnabled(env, platform)) {
+  if (!sidecarSupervisionEnabled(env, platform, argv)) {
     return { child: spawn(command, [...args], options), supervised: false }
   }
 
@@ -72,7 +96,8 @@ export function spawnSidecarProcess(
   }
 
   try {
-    const wrapper = spawn(helper, ['supervise', '--parent', String(process.pid), '--', command, ...args], options)
+    const wrapperArgs = ['supervise', '--parent', String(process.pid), '--', command, ...args]
+    const wrapper = spawn(helper, wrapperArgs, options)
     const { child, waitForUnsupervisedFallback } = fallbackCapableSupervisedChild(
       wrapper,
       name,
@@ -84,7 +109,12 @@ export function spawnSidecarProcess(
     )
     supervisedProcesses.add(child)
     supervisedPlatforms.set(child, platform)
-    return { child, supervised: true, waitForUnsupervisedFallback }
+    return {
+      child,
+      supervised: true,
+      waitForUnsupervisedFallback,
+      wrapperLaunch: { executable: helper, args: wrapperArgs }
+    }
   } catch (error) {
     audit('sidecar.unsupervised', {
       name,
@@ -99,6 +129,7 @@ export function stopSidecarProcess(child: ChildProcess, signal: NodeJS.Signals =
   if (child.killed) return
   const supervisedPlatform = supervisedPlatforms.get(child)
   const state = supervisedProcessState.get(child)
+  if (state) state.stopping = true
   if (
     supervisedProcesses.has(child) &&
     (state?.supervised ?? true) &&
@@ -130,10 +161,11 @@ function fallbackCapableSupervisedChild(
   hooks: SupervisedSpawnHooks
 ): { child: ChildProcess; waitForUnsupervisedFallback: () => Promise<void> } {
   const proxy = new EventEmitterChildProcess()
-  const state: { current: ChildProcess; supervised: boolean; usable: boolean; fallbackRecorded?: Promise<void> } = {
+  const state: SupervisedState = {
     current: wrapper,
     supervised: true,
-    usable: false
+    usable: false,
+    stopping: false
   }
   supervisedProcessState.set(proxy.child, state)
   const fallbackToDirect = (reason: UnsupervisedReason, error?: string): void => {
@@ -156,8 +188,8 @@ function fallbackCapableSupervisedChild(
     onError: (error) => {
       fallbackToDirect('wrapper-spawn-failed', error instanceof Error ? error.message : String(error))
     },
-    onExitBeforeUsable: (code, signal) => {
-      fallbackToDirect('wrapper-exited-before-usable', `code=${code}, signal=${signal}`)
+    onSetupFailure: (code, signal) => {
+      fallbackToDirect('wrapper-setup-failed', `code=${code}, signal=${signal}`)
     }
   })
   return {
@@ -187,6 +219,7 @@ class EventEmitterChildProcess {
       },
       kill(signal?: NodeJS.Signals | number) {
         const state = supervisedProcessState.get(self.child)
+        if (state) state.stopping = true
         return state?.current.kill(signal) ?? false
       },
       on: this.emitter.on.bind(this.emitter),
@@ -199,10 +232,10 @@ class EventEmitterChildProcess {
 
   attach(
     proc: ChildProcess,
-    state: { current: ChildProcess; supervised: boolean; usable: boolean },
+    state: SupervisedState,
     hooks: {
       onError?: (error: Error) => void
-      onExitBeforeUsable?: (code: number | null, signal: NodeJS.Signals | null) => void
+      onSetupFailure?: (code: number | null, signal: NodeJS.Signals | null) => void
     } = {}
   ): void {
     proc.stdout?.pipe(this.stdout, { end: false })
@@ -214,8 +247,10 @@ class EventEmitterChildProcess {
     })
     proc.once('exit', (code, signal) => {
       if (state.current !== proc) return
-      if (hooks.onExitBeforeUsable && !state.usable) {
-        hooks.onExitBeforeUsable(code, signal)
+      // Only the helper's own setup-failure status means the sidecar never started; a supervised sidecar that
+      // exits before becoming usable is a normal start failure and must not be respawned unsupervised.
+      if (hooks.onSetupFailure && !state.usable && !state.stopping && code === SUPERVISE_SETUP_FAILURE_STATUS) {
+        hooks.onSetupFailure(code, signal)
         return
       }
       this.stdout.end()

@@ -31,7 +31,7 @@ export const SIDECAR_NAMES = ['llama-server', 'fm-serve', 'stall-watch'] as cons
 export const SIDECAR_UNSUPERVISED_REASONS = [
   'wrapper-missing',
   'wrapper-spawn-failed',
-  'wrapper-exited-before-usable'
+  'wrapper-setup-failed'
 ] as const
 export const SIDECAR_REAP_REASONS = ['registry', 'legacy-orphan'] as const
 export const SIDECAR_REAP_SKIP_REASONS = [

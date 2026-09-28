@@ -538,6 +538,18 @@ func exitWithChildStatus(_ status: Int32) -> Never {
     exit(1)
 }
 
+// Exit status of a supervise setup failure (bad arguments, setpgid, kqueue, spawn). The supervised child was
+// never started, so the caller may spawn it directly. Any other status is the child's own or a later abort.
+let superviseSetupFailureStatus: Int32 = 125
+
+func superviseSetupFailure(_ message: String) -> Never {
+    FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
+    exit(superviseSetupFailureStatus)
+}
+
+// TERM the group, wait up to 2 s for the direct child, then SIGKILL the whole group unconditionally so
+// grandchildren that ignore TERM die too. The helper leads the group, so the final SIGKILL ends it as well:
+// callers write any diagnostic before calling.
 func terminateSupervisedGroup() {
     guard supervisedChildPid > 0 else { return }
     signal(SIGTERM, SIG_IGN)
@@ -549,24 +561,34 @@ func terminateSupervisedGroup() {
         let waited = waitpid(supervisedChildPid, &status, WNOHANG)
         if waited == supervisedChildPid {
             supervisedChildPid = -1
-            return
+            break
         }
         usleep(50_000)
     }
     killpg(getpgrp(), SIGKILL)
 }
 
+func abortSupervise(_ message: String? = nil) -> Never {
+    if let message { FileHandle.standardError.write((message + "\n").data(using: .utf8)!) }
+    terminateSupervisedGroup()
+    exit(1)
+}
+
 func runSupervise(_ options: [String]) -> Never {
     guard options.count >= 4, options[0] == "--parent", let parent = pid_t(options[1]), options[2] == "--" else {
-        fail("usage: metis-mac-helper supervise --parent <pid> -- <cmd> [args...]")
+        superviseSetupFailure("usage: metis-mac-helper supervise --parent <pid> -- <cmd> [args...]")
     }
     let command = options[3]
     let childArgs = Array(options.dropFirst(3))
-    guard getppid() == parent else { fail("supervise: --parent \(parent) is not this helper's parent") }
-    guard setpgid(0, 0) == 0 else { fail("supervise: setpgid failed: \(String(cString: strerror(errno)))") }
+    guard getppid() == parent else {
+        superviseSetupFailure("supervise: --parent \(parent) is not this helper's parent")
+    }
+    guard setpgid(0, 0) == 0 else {
+        superviseSetupFailure("supervise: setpgid failed: \(String(cString: strerror(errno)))")
+    }
 
     let kq = kqueue()
-    guard kq >= 0 else { fail("supervise: kqueue failed: \(String(cString: strerror(errno)))") }
+    guard kq >= 0 else { superviseSetupFailure("supervise: kqueue failed: \(String(cString: strerror(errno)))") }
     var parentEvent = kevent(
         ident: UInt(parent),
         filter: Int16(EVFILT_PROC),
@@ -576,12 +598,9 @@ func runSupervise(_ options: [String]) -> Never {
         udata: nil
     )
     guard kevent(kq, &parentEvent, 1, nil, 0, nil) == 0 else {
-        fail("supervise: parent watch failed: \(String(cString: strerror(errno)))")
+        superviseSetupFailure("supervise: parent watch failed: \(String(cString: strerror(errno)))")
     }
-    guard getppid() == parent else {
-        terminateSupervisedGroup()
-        exit(1)
-    }
+    guard getppid() == parent else { superviseSetupFailure("supervise: parent exited before the watch was armed") }
 
     let argv = childArgs.map { strdup($0) } + [nil]
     defer {
@@ -594,7 +613,7 @@ func runSupervise(_ options: [String]) -> Never {
         }
     }
     guard spawnResult == 0 else {
-        fail("supervise: spawn failed: \(String(cString: strerror(spawnResult)))")
+        superviseSetupFailure("supervise: spawn failed: \(String(cString: strerror(spawnResult)))")
     }
     supervisedChildPid = child
     signal(SIGTERM, signalForwarder)
@@ -608,23 +627,19 @@ func runSupervise(_ options: [String]) -> Never {
             exitWithChildStatus(status)
         }
         if waited < 0 && errno != EINTR {
-            terminateSupervisedGroup()
-            fail("supervise: waitpid failed: \(String(cString: strerror(errno)))")
+            abortSupervise("supervise: waitpid failed: \(String(cString: strerror(errno)))")
         }
         if getppid() != parent {
-            terminateSupervisedGroup()
-            exit(1)
+            abortSupervise()
         }
         var out = kevent()
         var timeout = timespec(tv_sec: 0, tv_nsec: 50_000_000)
         let events = kevent(kq, nil, 0, &out, 1, &timeout)
         if events > 0 {
-            terminateSupervisedGroup()
-            exit(1)
+            abortSupervise()
         }
         if events < 0 && errno != EINTR {
-            terminateSupervisedGroup()
-            fail("supervise: parent watch read failed: \(String(cString: strerror(errno)))")
+            abortSupervise("supervise: parent watch read failed: \(String(cString: strerror(errno)))")
         }
         if forwardedSignal != 0 {
             usleep(50_000)

@@ -26,6 +26,7 @@ import { existsSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { auditLog, mainLog } from '../logger'
 import { observeSidecar } from '../infra/observability/sidecar-events'
+import { recordSidecarSupervisedSpawned } from '../infra/process/registry'
 import { markSidecarProcessUsable, spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
 import { errMsg } from './shared'
 
@@ -284,9 +285,16 @@ function registerCrash(): void {
 async function spawnAndWaitHealthy(generation: number): Promise<void> {
   const targetPort = await findFreePort()
   if (generation !== startGeneration) throw new Error('fm runtime start cancelled')
-  const proc = spawnSidecarProcess('fm-serve', FM_BINARY_PATH, buildServeArgs(targetPort), {
+  const serveArgs = buildServeArgs(targetPort)
+  const launched = spawnSidecarProcess('fm-serve', FM_BINARY_PATH, serveArgs, {
     stdio: ['ignore', 'pipe', 'pipe']
-  }, auditLog).child
+  }, auditLog)
+  const proc = launched.child
+  // A supervised launch registers the wrapper and the fm process it spawns so the reaper still covers them.
+  const { wrapperLaunch } = launched
+  const supervisedRecorded: Promise<void> = wrapperLaunch
+    ? recordSidecarSupervisedSpawned('fm-serve', proc, wrapperLaunch, { executable: FM_BINARY_PATH, args: serveArgs })
+    : Promise.resolve()
   child = proc
   observeSidecar('fm-serve', proc, auditLog)
   let exited = false
@@ -325,6 +333,7 @@ async function spawnAndWaitHealthy(generation: number): Promise<void> {
     }
     throw exited ? new Error(`fm serve exited before becoming healthy (${exitDetail})`) : err
   }
+  await supervisedRecorded
   if (generation !== startGeneration || child !== proc) throw new Error('fm runtime start cancelled')
   markSidecarProcessUsable(proc)
   port = targetPort

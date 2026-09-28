@@ -33,6 +33,10 @@ const SCENARIOS = Object.freeze(['idle', 'model-starting', 'active-inference', '
 const LOCAL_MODEL_ROLES = Object.freeze(['llama-server', 'fm'])
 const LOCAL_MODEL_AUDIT_NAMES = Object.freeze(['llama-server', 'fm-serve'])
 const UNRELATED_SAME_NAME_ROLE = 'llama-server'
+const SUPERVISOR_HELPER_ROLE = 'metis-mac-helper'
+const SCENARIO_TIMEOUT_MS = 240_000
+const RELAUNCH_SETTLE_MS = 3_000
+const MODEL_SCENARIOS = Object.freeze(['model-starting', 'active-inference'])
 
 function usage() {
   console.error('usage: node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20]')
@@ -127,7 +131,7 @@ export function scenarioEvidence(scenario, { records, registry, sidecars }) {
         ok: false,
         status: 'BLOCKED_EXTERNAL',
         failure: 'scenario_not_triggered',
-        unblock: 'Expose the packaged HK-M model-starting trigger so this row starts a local model sidecar.',
+        unblock: 'The app did not start a local model sidecar for this row: confirm the bundled local model is packaged and intact.',
         evidence
       }
     }
@@ -140,7 +144,7 @@ export function scenarioEvidence(scenario, { records, registry, sidecars }) {
         ok: false,
         status: 'BLOCKED_EXTERNAL',
         failure: 'scenario_not_triggered',
-        unblock: 'Expose the packaged HK-M active-inference trigger and content-free audit marker.',
+        unblock: 'The app never reported a live completion (hk-m.active-inference): confirm the bundled local model starts on this runner.',
         evidence
       }
     }
@@ -153,7 +157,7 @@ export function scenarioEvidence(scenario, { records, registry, sidecars }) {
         ok: false,
         status: 'BLOCKED_EXTERNAL',
         failure: 'scenario_not_triggered',
-        unblock: 'Expose the packaged HK-M ffmpeg-import trigger and content-free audit marker.',
+        unblock: 'The app never reported a held ffmpeg decode (hk-m.ffmpeg-import): confirm the reviewed ffmpeg sidecar is packaged.',
         evidence
       }
     }
@@ -166,7 +170,7 @@ export function scenarioEvidence(scenario, { records, registry, sidecars }) {
         ok: false,
         status: 'BLOCKED_EXTERNAL',
         failure: 'scenario_not_triggered',
-        unblock: 'Expose the packaged HK-M registry-write trigger and content-free audit marker.',
+        unblock: 'The app never reported a registry write loop (hk-m.registry-write).',
         evidence
       }
     }
@@ -176,6 +180,38 @@ export function scenarioEvidence(scenario, { records, registry, sidecars }) {
     return { ok: true, evidence }
   }
   return { ok: false, status: 'FAIL', failure: 'unknown_scenario', evidence }
+}
+
+/**
+ * "Relaunch does not duplicate runtimes": after the SIGKILL cycle the app is started again on the same
+ * profile. Each runtime role must have at most one process; a row that starts a model must end with exactly one.
+ */
+export function runtimeRoleVerdict(sidecars, expectRuntime) {
+  const counts = roleCounts(sidecars.filter((entry) => LOCAL_MODEL_ROLES.includes(entry.role)))
+  const duplicated = Object.keys(counts).filter((role) => counts[role] > 1)
+  if (duplicated.length > 0) return { ok: false, failure: 'duplicate_runtime_after_relaunch', counts }
+  if (expectRuntime) {
+    const total = Object.values(counts).reduce((sum, count) => sum + count, 0)
+    if (total !== 1) return { ok: false, failure: total === 0 ? 'runtime_missing_after_relaunch' : 'multiple_runtime_roles_after_relaunch', counts }
+  }
+  return { ok: true, counts }
+}
+
+/**
+ * The codesign/entitlement criterion, observed live: the packaged llama-server cold-started as a child of the
+ * supervise wrapper (so the shipped entitlements allowed the helper to spawn it) and never fell back to a
+ * direct spawn. `requireHealthy` additionally demands that it reached health.
+ */
+export function supervisedColdStartVerdict({ records, sidecars, table, requireHealthy }) {
+  const runtime = sidecars.find((entry) => entry.role === 'llama-server')
+  if (!runtime) return { ok: false, failure: 'supervised_runtime_absent' }
+  const parent = table.find((entry) => entry.pid === runtime.ppid)
+  if (!parent || parent.role !== SUPERVISOR_HELPER_ROLE) return { ok: false, failure: 'runtime_not_supervised' }
+  if (hasEvent(records, 'sidecar.unsupervised')) return { ok: false, failure: 'sidecar_unsupervised_fallback' }
+  if (requireHealthy && countEvent(records, 'local.runtime.start') === 0) {
+    return { ok: false, failure: 'supervised_cold_start_unhealthy' }
+  }
+  return { ok: true }
 }
 
 function macExecutable(appPath) {
@@ -288,6 +324,65 @@ async function startUnrelatedSameNameFixture() {
   }
 }
 
+// A row's proof is still "coming" while its marker has not landed, or the marker landed a beat before the
+// sidecar process became visible. Any other failure is final.
+export function scenarioStillStarting(proof) {
+  return !proof.ok && (proof.status === 'BLOCKED_EXTERNAL' || proof.failure === 'expected_model_sidecar_absent')
+}
+
+/**
+ * Starts the app again on the profile the killed instance used, then requires at most one process per runtime
+ * role (exactly one when the row had started a model) and nothing owned left over after this instance is killed.
+ */
+async function relaunchAndCountRuntimes({ executable, installRoot, profile, env, expectRuntime }) {
+  const child = spawn(executable, [], {
+    env: { ...env, METIS_HK_M_SCENARIO: expectRuntime ? 'model-starting' : 'idle' },
+    stdio: 'ignore'
+  })
+  let exited = false
+  child.once('exit', () => {
+    exited = true
+  })
+  child.once('error', () => {
+    exited = true
+  })
+  const owned = () => ownedProcesses(listProcesses('darwin'), { mainPid: child.pid, installRoot, platform: 'darwin' })
+  const sidecars = () => owned().filter((entry) => entry.pid !== child.pid)
+  let ownedAtKill = []
+  try {
+    const readyDeadline = Date.now() + READY_TIMEOUT_MS
+    // The profile's audit log spans both boots, so the second renderer.ready marks this instance.
+    while (!exited && Date.now() < readyDeadline && countEvent(readAudit(profile), 'app.renderer.ready') < 2) {
+      await sleep(POLL_MS)
+    }
+    if (exited || countEvent(readAudit(profile), 'app.renderer.ready') < 2) return { ok: false, failure: 'relaunch_not_ready' }
+    if (expectRuntime) {
+      const runtimeDeadline = Date.now() + SCENARIO_TIMEOUT_MS
+      while (!exited && Date.now() < runtimeDeadline && !hasRole(sidecars(), LOCAL_MODEL_ROLES)) await sleep(POLL_MS)
+    }
+    // A duplicate start would have spawned its second runtime by now.
+    await sleep(RELAUNCH_SETTLE_MS)
+    ownedAtKill = owned()
+    const verdict = runtimeRoleVerdict(
+      ownedAtKill.filter((entry) => entry.pid !== child.pid),
+      expectRuntime
+    )
+    if (!verdict.ok) return verdict
+    hardKill(child.pid)
+    const killedAt = Date.now()
+    let left = []
+    while (Date.now() - killedAt <= SURVIVOR_BOUND_MS) {
+      left = computeSurvivors(ownedAtKill, listProcesses('darwin'), { installRoot, platform: 'darwin' })
+      if (left.length === 0) return { ok: true, counts: verdict.counts }
+      await sleep(POLL_MS)
+    }
+    for (const entry of left) hardKill(entry.pid)
+    return { ok: false, failure: 'relaunch_owned_processes_survived', counts: verdict.counts }
+  } finally {
+    if (child.pid && !exited) hardKill(child.pid)
+  }
+}
+
 async function runCycle({ executable, installRoot, scenario, cycle }) {
   const rootResidents = ownedProcesses(listProcesses('darwin'), { mainPid: null, installRoot, platform: 'darwin' })
   if (rootResidents.length > 0) {
@@ -308,7 +403,8 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
   const env = {
     ...process.env,
     ASKTOTO_USERDATA: profile,
-    METIS_SIDECAR_SUPERVISION: '1',
+    METIS_SUPERVISION: 'on',
+    METIS_DISABLE_APPLE_FM: '1',
     METIS_HK_M_SCENARIO: scenario
   }
   for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
@@ -340,9 +436,28 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
       return terminalRow(scenario, cycle, 'FAIL', { failure: 'renderer_not_ready' })
     }
 
-    const recordsAtKill = readAudit(profile)
-    const registryAtKill = readRegistry(profile)
-    const ownedAtKill = ownedProcesses(listProcesses('darwin'), { mainPid: child.pid, installRoot, platform: 'darwin' })
+    const snapshot = () => {
+      const records = readAudit(profile)
+      const registry = readRegistry(profile)
+      const table = listProcesses('darwin')
+      const owned = ownedProcesses(table, { mainPid: child.pid, installRoot, platform: 'darwin' })
+      const sidecars = owned.filter((entry) => entry.pid !== child.pid)
+      return { records, registry, table, owned, sidecars, proof: scenarioEvidence(scenario, { records, registry, sidecars }) }
+    }
+    // The app stamps each row's marker once its work is genuinely in flight (a model can take a while to load),
+    // so wait for it rather than killing main on a fixed timer.
+    let snap = snapshot()
+    const scenarioDeadline = Date.now() + SCENARIO_TIMEOUT_MS
+    while (scenarioStillStarting(snap.proof) && Date.now() < scenarioDeadline && !exitInfo.settled) {
+      await sleep(POLL_MS)
+      snap = snapshot()
+    }
+    if (exitInfo.settled) {
+      return terminalRow(scenario, cycle, 'FAIL', { failure: 'exited_before_scenario', exit: exitInfo })
+    }
+    const recordsAtKill = snap.records
+    const registryAtKill = snap.registry
+    const ownedAtKill = snap.owned
     if (!ownedAtKill.some((entry) => entry.pid === child.pid)) {
       hardKill(child.pid)
       return terminalRow(scenario, cycle, 'FAIL', { failure: 'main_not_owned' })
@@ -372,6 +487,18 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
         ...(scenarioProof.unblock ? { unblock: scenarioProof.unblock } : {})
       })
     }
+    if (MODEL_SCENARIOS.includes(scenario)) {
+      const coldStart = supervisedColdStartVerdict({
+        records: recordsAtKill,
+        sidecars: sidecarsAtKill,
+        table: snap.table,
+        requireHealthy: scenario === 'active-inference'
+      })
+      if (!coldStart.ok) {
+        hardKill(child.pid)
+        return terminalRow(scenario, cycle, 'FAIL', { failure: coldStart.failure, evidence: scenarioProof.evidence })
+      }
+    }
 
     const killedAt = Date.now()
     hardKill(child.pid)
@@ -386,10 +513,26 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
       }
       survivors = computeSurvivors(ownedAtKill, table, { installRoot, platform: 'darwin' })
       if (survivors.length === 0) {
+        const survivorsGoneMs = Date.now() - killedAt
+        const relaunch = await relaunchAndCountRuntimes({
+          executable,
+          installRoot,
+          profile,
+          env,
+          expectRuntime: MODEL_SCENARIOS.includes(scenario)
+        })
+        if (!relaunch.ok) {
+          return terminalRow(scenario, cycle, 'FAIL', {
+            failure: relaunch.failure,
+            relaunch: { runtimes: relaunch.counts ?? {} },
+            evidence: scenarioProof.evidence
+          })
+        }
         return terminalRow(scenario, cycle, 'PASS', {
-          timingsMs: { survivorsGone: Date.now() - killedAt },
+          timingsMs: { survivorsGone: survivorsGoneMs },
           processes: { atKill: roleCounts(ownedAtKill), survivors: {} },
           unrelatedSameName: { role: unrelated.role, survived: true },
+          relaunch: { runtimes: relaunch.counts },
           evidence: scenarioProof.evidence
         })
       }

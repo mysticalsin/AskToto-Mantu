@@ -177,7 +177,7 @@ import {
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
-import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
+import { configureSidecarRegistry, createSidecarRegistry, recordSidecarIntent } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
 import {
   createSpeakerId,
@@ -527,6 +527,7 @@ import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
+import { hkMScenarioFromEnv, productionHkMDeps, runHkMScenario } from './qa-hk-m'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
@@ -2592,6 +2593,26 @@ function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
   }
 }
 
+// M2-0028: the packaged HK-M proof picks a row with METIS_HK_M_SCENARIO. Runs once per boot, on an isolated QA
+// profile only (see qa-hk-m.ts), and writes content-free markers the harness reads before it SIGKILLs main.
+let hkMScenarioStarted = false
+function startHkMScenarioIfRequested(): void {
+  const scenario = hkMScenarioFromEnv(process.env, app.isPackaged)
+  if (!scenario || hkMScenarioStarted) return
+  hkMScenarioStarted = true
+  const resourcesDir = process.resourcesPath
+  void runHkMScenario(
+    scenario,
+    productionHkMDeps(
+      { ensureLocalRuntimeStarted, localRuntime, bundledFfmpegPath, startFfmpegDecode, recordSidecarIntent },
+      (event) => auditLog(event),
+      (row, error) => mainLog.warn(`[hk-m] ${row} setup failed`, error instanceof Error ? error.message : String(error)),
+      app.getPath('userData'),
+      resourcesDir
+    )
+  )
+}
+
 function createWindow(targetDisplay?: Electron.Display): void {
   // Idempotent: `second-instance` is registered before app-ready and can call ensureWindow() while boot's
   // own runStep('createWindow') is still queued behind its awaits. Without this, the boot step would
@@ -2943,6 +2964,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // above. A session with app.started but no renderer.ready must always be visible in the audit log.
   bindReadinessThenNavigate(win, rendererUrl, () => {
     auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+    startHkMScenarioIfRequested()
   })
   const overlay = win
   let exclusiveRevealed = false

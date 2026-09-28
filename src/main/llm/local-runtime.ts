@@ -19,7 +19,7 @@ import { app } from 'electron'
 import { auditLog, mainLog } from '../logger'
 import { observeSidecar } from '../infra/observability/sidecar-events'
 import { errMsg } from './shared'
-import { recordSidecarIntent, recordSidecarSpawned } from '../infra/process/registry'
+import { recordSidecarIntent, recordSidecarSpawned, recordSidecarSupervisedSpawned } from '../infra/process/registry'
 import { markSidecarProcessUsable, spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
 
 export type LlamaPlatform = 'mac' | 'win'
@@ -373,7 +373,18 @@ function spawnAndWaitHealthy(
       })
       proc = launched.child
       if (launched.supervised) {
-        waitForSpawnRecorded = () => launched.waitForUnsupervisedFallback?.() ?? Promise.resolve()
+        // Both the wrapper and the sidecar it spawns are registered, so the next-launch reaper still finds
+        // them if the wrapper itself dies; a later direct fallback registers its own spawn via the hook.
+        const supervisedRecorded = launched.wrapperLaunch
+          ? recordSidecarSupervisedSpawned('llama-server', proc, launched.wrapperLaunch, {
+              executable: binaryPath,
+              args
+            })
+          : Promise.resolve()
+        waitForSpawnRecorded = async () => {
+          await supervisedRecorded
+          await launched.waitForUnsupervisedFallback?.()
+        }
       } else {
         const spawnRecorded = recordSidecarSpawned('llama-server', proc, binaryPath, args)
         waitForSpawnRecorded = () => spawnRecorded

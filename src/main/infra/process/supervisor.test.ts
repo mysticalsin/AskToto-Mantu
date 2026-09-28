@@ -57,6 +57,16 @@ describe('sidecar supervision flag', () => {
     expect(sidecarSupervisionEnabled({ METIS_SIDECAR_SUPERVISION: '1' }, 'darwin')).toBe(true)
     expect(sidecarSupervisionEnabled({ METIS_SIDECAR_SUPERVISION: '1' }, 'win32')).toBe(false)
   })
+
+  it('honours the named supervision flag from env and argv, with off winning over the legacy env var', () => {
+    expect(sidecarSupervisionEnabled({ METIS_SUPERVISION: 'on' }, 'darwin', [])).toBe(true)
+    expect(sidecarSupervisionEnabled({}, 'darwin', ['--supervision=on'])).toBe(true)
+    expect(sidecarSupervisionEnabled({ METIS_SUPERVISION: 'on' }, 'darwin', ['--supervision=off'])).toBe(false)
+    expect(sidecarSupervisionEnabled({ METIS_SIDECAR_SUPERVISION: '1', METIS_SUPERVISION: 'off' }, 'darwin', [])).toBe(
+      false
+    )
+    expect(sidecarSupervisionEnabled({ METIS_SUPERVISION: 'on' }, 'win32', [])).toBe(false)
+  })
 })
 
 describe('spawnSidecarProcess', () => {
@@ -137,7 +147,7 @@ describe('spawnSidecarProcess', () => {
     })
   })
 
-  it('falls back to direct spawn and audits when the supervised wrapper exits before the sidecar is usable', async () => {
+  it('falls back to direct spawn and audits when the helper reports a setup failure before the sidecar is usable', async () => {
     const wrapper = fakeProc()
     const direct = fakeProc(2468)
     spawnMock.spawn.mockReturnValueOnce(wrapper).mockReturnValueOnce(direct)
@@ -154,7 +164,7 @@ describe('spawnSidecarProcess', () => {
       'darwin'
     )
 
-    wrapper.emit('exit', 1, null)
+    wrapper.emit('exit', 125, null)
     await Promise.resolve()
 
     expect(result.supervised).toBe(true)
@@ -162,9 +172,64 @@ describe('spawnSidecarProcess', () => {
     expect(spawnMock.spawn).toHaveBeenLastCalledWith('/bin/llama-server', ['--port', '0'], options)
     expect(audit).toHaveBeenCalledWith('sidecar.unsupervised', {
       name: 'llama-server',
-      reason: 'wrapper-exited-before-usable',
-      error: 'code=1, signal=null'
+      reason: 'wrapper-setup-failed',
+      error: 'code=125, signal=null'
     })
+  })
+
+  it('propagates the exit of a supervised sidecar that dies before it is usable, with no direct respawn', async () => {
+    const wrapper = fakeProc()
+    spawnMock.spawn.mockReturnValue(wrapper)
+    const audit = vi.fn()
+
+    const result = spawnSidecarProcess(
+      'llama-server',
+      '/bin/llama-server',
+      [],
+      { stdio: ['ignore', 'pipe', 'pipe'] } satisfies SpawnOptions,
+      audit,
+      { METIS_SIDECAR_SUPERVISION: '1' },
+      'darwin'
+    )
+    const exit = vi.fn()
+    result.child.once('exit', exit)
+
+    wrapper.emit('exit', 1, null)
+    await Promise.resolve()
+
+    expect(spawnMock.spawn).toHaveBeenCalledTimes(1)
+    expect(audit).not.toHaveBeenCalled()
+    expect(exit).toHaveBeenCalledWith(1, null)
+  })
+
+  it.each([
+    ['stopSidecarProcess', (child: import('node:child_process').ChildProcess) => stopSidecarProcess(child)],
+    ['child.kill', (child: import('node:child_process').ChildProcess) => child.kill('SIGKILL')]
+  ])('spawns no direct child when %s is followed by the wrapper exiting before usable', async (_label, stop) => {
+    const wrapper = fakeProc()
+    spawnMock.spawn.mockReturnValue(wrapper)
+    const audit = vi.fn()
+    vi.spyOn(process, 'kill').mockImplementation(() => true)
+
+    const result = spawnSidecarProcess(
+      'llama-server',
+      '/bin/llama-server',
+      [],
+      { stdio: ['ignore', 'pipe', 'pipe'] } satisfies SpawnOptions,
+      audit,
+      { METIS_SIDECAR_SUPERVISION: '1' },
+      'darwin'
+    )
+    const exit = vi.fn()
+    result.child.once('exit', exit)
+
+    stop(result.child)
+    wrapper.emit('exit', 125, null)
+    await Promise.resolve()
+
+    expect(spawnMock.spawn).toHaveBeenCalledTimes(1)
+    expect(audit).not.toHaveBeenCalled()
+    expect(exit).toHaveBeenCalledWith(125, null)
   })
 
   it('propagates supervised wrapper exit after the sidecar is marked usable', async () => {

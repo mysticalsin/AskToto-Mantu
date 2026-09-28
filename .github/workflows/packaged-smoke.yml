@@ -93,23 +93,30 @@ jobs:
         run: node scripts/qa/sidecar-boot-reaper.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/sidecar-boot-reaper.json
       - name: Verify packaged macOS signature
         run: codesign --verify --deep --strict "$RUNNER_TEMP/smoke/Metis.app"
+      # Behaviour proof of the shipped helper's `supervise` mode (setup-failure statuses, exit-status and stdio
+      # pass-through, signal forwarding, group kill on parent death including a TERM-ignoring member).
+      - name: Prove mac-helper supervise behaviour
+        id: supervise-helper
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node scripts/qa/mac-helper-supervise.mjs "$RUNNER_TEMP/smoke/Metis.app/Contents/Resources/mac-helper/metis-mac-helper" smoke-report/mac-helper-supervise.json
       # continue-on-error for the same reason as sidecar-reaper above: HK-M's own report.result already
       # distinguishes a genuine owned-process leak ('fail') from a scenario this hosted runner cannot yet
-      # trigger live ('blocked', e.g. model-starting/active-inference/ffmpeg-import/registry-write with no
-      # packaged trigger wired in yet) — only the former should ever red the smoke lane. The gate step below
+      # trigger live ('blocked', e.g. a row whose bundled model or ffmpeg sidecar is missing on the
+      # runner) — only the former should ever red the smoke lane. The gate step below
       # reads smoke-report/hk-m.json (not just the step outcome, since 'blocked' also exits non-zero) to
       # make that distinction; supervision's default-on decision still requires a genuine 20/20 'pass'.
       - name: Prove HK-M supervised sidecar cleanup after SIGKILL
         id: hk-m
         continue-on-error: true
-        timeout-minutes: 45
+        timeout-minutes: 90
         run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles 20
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         timeout-minutes: 10
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/packaged-smoke.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.hk-m.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
+        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.supervise-helper.outcome != 'skipped' || steps.hk-m.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
         with:
           name: packaged-smoke-macos
           path: smoke-report/
@@ -117,6 +124,9 @@ jobs:
           retention-days: 14
       - name: Fail the job if the sidecar boot reaper proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.sidecar-reaper.outcome == 'failure'
+        run: exit 1
+      - name: Fail the job if the mac-helper supervise behaviour proof failed
+        if: always() && steps.supervise-helper.outcome == 'failure'
         run: exit 1
       - name: Fail the job if HK-M found a genuine owned-process leak (not a BLOCKED_EXTERNAL row)
         if: always() && steps.hk-m.outcome == 'failure'
