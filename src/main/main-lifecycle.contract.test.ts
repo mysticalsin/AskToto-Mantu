@@ -131,6 +131,13 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
     expect(reveal).toHaveBeenNthCalledWith(2, 'second-instance', { focus: true })
   })
 
+  it('M2-0231 — a boot-time pending second-instance flush is audited as a reveal row', () => {
+    const boot = sliceBetween("runStep('createWindow', createWindow)", "clearBootWatchOnce('createWindow')")
+
+    expect(boot).toContain('revealController.hasPendingReveal()')
+    expect(boot).toContain("reveals.trace('second-instance', () => revealController.markBootComplete())")
+  })
+
   it('M2-0036 — activate, second-instance, tray, hotkey and notification click all route through reveal()', () => {
     expect(indexSrc).toContain("reveal('activate', { focus: true })")
     expect(indexSrc).toContain("reveal('second-instance', { focus: true })")

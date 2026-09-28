@@ -53,7 +53,14 @@ interface Observation {
     reason: string
     automation: string
     status: string
-    evidence: { event: string; reason: string; outcome: string | null; parked?: boolean; layout?: string | null } | null
+    evidence: {
+      event: string
+      reason: string
+      outcome: string | null
+      isVisible?: boolean
+      parked?: boolean
+      layout?: string | null
+    } | null
     unblock: string | null
   }>
   navigationGuard: Array<{
@@ -290,10 +297,11 @@ describe('smokeVerdict', () => {
 })
 
 describe('isPassingRevealEvidence', () => {
-  it('accepts created and shown reveals only when they started parked', () => {
+  it('accepts created and shown reveals when the route made a parked or hidden window visible', () => {
     expect(isPassingRevealEvidence({ outcome: 'created', parked: true })).toBe(true)
     expect(isPassingRevealEvidence({ outcome: 'shown', parked: true })).toBe(true)
-    expect(isPassingRevealEvidence({ outcome: 'shown', parked: false })).toBe(false)
+    expect(isPassingRevealEvidence({ outcome: 'shown', parked: false, isVisible: false })).toBe(true)
+    expect(isPassingRevealEvidence({ outcome: 'shown', parked: false, isVisible: true })).toBe(false)
     expect(isPassingRevealEvidence({ outcome: 'already-visible', parked: true })).toBe(false)
     expect(isPassingRevealEvidence(null)).toBe(false)
   })

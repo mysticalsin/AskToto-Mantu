@@ -591,7 +591,9 @@ function revealCount(auditLogPath, reason) {
 }
 
 export function isPassingRevealEvidence(reveal) {
-  return reveal !== null && reveal.parked === true && (reveal.outcome === 'created' || reveal.outcome === 'shown')
+  return reveal !== null &&
+    (reveal.outcome === 'created' || reveal.outcome === 'shown') &&
+    (reveal.parked === true || reveal.isVisible === false)
 }
 
 export async function runRevealRow({
@@ -616,6 +618,7 @@ export async function runRevealRow({
       event: 'reveal',
       reason,
       outcome: reveal.outcome ?? null,
+      isVisible: reveal.isVisible === true,
       parked: reveal.parked === true,
       layout: typeof reveal.layout === 'string' ? reveal.layout : null
     } : null,

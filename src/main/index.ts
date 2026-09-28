@@ -9600,7 +9600,11 @@ if (!app.requestSingleInstanceLock()) {
   runStep('registerIpc', registerIpc)
   clearBootWatchOnce('registerIpc')
   runStep('createWindow', createWindow)
-  revealController.markBootComplete()
+  if (revealController.hasPendingReveal()) {
+    reveals.trace('second-instance', () => revealController.markBootComplete())
+  } else {
+    revealController.markBootComplete()
+  }
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
   // FITO-185-G-TIMER: also setImmediate + unlock-screen so App Nap / locked-screen cannot leave
