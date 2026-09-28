@@ -40,7 +40,9 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * 2026-08-24: 159 → 139 → 129 → 36 → 30.
  * 2026-09-06: 30 → 29 (updater.test.ts delete-on-required Process fields).
  * 2026-09-06: 29 → 26 after merging origin/release/1.8.3 KineticGrid onto this tip.
- * 2026-09-27: 26 → 16 after the M2-0009 branch removed ten stale test-type errors.
+ * 2026-09-27: 26 → 24 → 20 after test type debt was paid down in W0 ticket work.
+ * 2026-09-27: 20 → 16 after the M2-0009 branch removed four more stale test-type errors.
+ * 2026-09-28: 16 → 14 after the M2-0008 merge resolution revealed two more errors already gone.
  *
  * The last pass typed the mocks to the signatures production actually calls, rather than letting them be
  * inferred from a stub body — which is what had made `mock.calls[0][0]` a type error against a call the
