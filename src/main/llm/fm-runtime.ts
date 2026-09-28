@@ -26,7 +26,7 @@ import { existsSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { auditLog, mainLog } from '../logger'
 import { observeSidecar } from '../infra/observability/sidecar-events'
-import { spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
+import { markSidecarProcessUsable, spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
 import { errMsg } from './shared'
 
 export const FM_BINARY_PATH = '/usr/bin/fm'
@@ -326,6 +326,7 @@ async function spawnAndWaitHealthy(generation: number): Promise<void> {
     throw exited ? new Error(`fm serve exited before becoming healthy (${exitDetail})`) : err
   }
   if (generation !== startGeneration || child !== proc) throw new Error('fm runtime start cancelled')
+  markSidecarProcessUsable(proc)
   port = targetPort
 }
 

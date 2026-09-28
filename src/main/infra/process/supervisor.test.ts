@@ -15,7 +15,13 @@ vi.mock('node:fs', async (importOriginal) => {
 const spawnMock = vi.hoisted(() => ({ spawn: vi.fn() }))
 vi.mock('node:child_process', () => ({ spawn: spawnMock.spawn }))
 
-import { macSupervisorHelperPath, spawnSidecarProcess, stopSidecarProcess, sidecarSupervisionEnabled } from './supervisor'
+import {
+  macSupervisorHelperPath,
+  markSidecarProcessUsable,
+  spawnSidecarProcess,
+  stopSidecarProcess,
+  sidecarSupervisionEnabled
+} from './supervisor'
 
 function fakeProc(pid = 1234): import('node:child_process').ChildProcess {
   const proc = new EventEmitter() as import('node:child_process').ChildProcess
@@ -129,6 +135,63 @@ describe('spawnSidecarProcess', () => {
       reason: 'wrapper-spawn-failed',
       error: 'bad helper'
     })
+  })
+
+  it('falls back to direct spawn and audits when the supervised wrapper exits before the sidecar is usable', async () => {
+    const wrapper = fakeProc()
+    const direct = fakeProc(2468)
+    spawnMock.spawn.mockReturnValueOnce(wrapper).mockReturnValueOnce(direct)
+    const audit = vi.fn()
+    const options: SpawnOptions = { stdio: ['ignore', 'pipe', 'pipe'] }
+
+    const result = spawnSidecarProcess(
+      'llama-server',
+      '/bin/llama-server',
+      ['--port', '0'],
+      options,
+      audit,
+      { METIS_SIDECAR_SUPERVISION: '1' },
+      'darwin'
+    )
+
+    wrapper.emit('exit', 1, null)
+    await Promise.resolve()
+
+    expect(result.supervised).toBe(true)
+    expect(result.child.pid).toBe(2468)
+    expect(spawnMock.spawn).toHaveBeenLastCalledWith('/bin/llama-server', ['--port', '0'], options)
+    expect(audit).toHaveBeenCalledWith('sidecar.unsupervised', {
+      name: 'llama-server',
+      reason: 'wrapper-exited-before-usable',
+      error: 'code=1, signal=null'
+    })
+  })
+
+  it('propagates supervised wrapper exit after the sidecar is marked usable', async () => {
+    const wrapper = fakeProc()
+    spawnMock.spawn.mockReturnValue(wrapper)
+    const audit = vi.fn()
+    const options: SpawnOptions = { stdio: ['ignore', 'pipe', 'pipe'] }
+
+    const result = spawnSidecarProcess(
+      'fm-serve',
+      '/usr/bin/fm',
+      ['serve'],
+      options,
+      audit,
+      { METIS_SIDECAR_SUPERVISION: '1' },
+      'darwin'
+    )
+    const exit = vi.fn()
+    result.child.once('exit', exit)
+
+    markSidecarProcessUsable(result.child)
+    wrapper.emit('exit', 0, null)
+    await Promise.resolve()
+
+    expect(spawnMock.spawn).toHaveBeenCalledTimes(1)
+    expect(audit).not.toHaveBeenCalled()
+    expect(exit).toHaveBeenCalledWith(0, null)
   })
 
   it('falls back to direct spawn and audits when the wrapper is missing', () => {

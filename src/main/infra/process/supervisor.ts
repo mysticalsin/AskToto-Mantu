@@ -12,7 +12,11 @@ export interface SupervisedSpawnResult {
 
 const supervisedProcesses = new WeakSet<ChildProcess>()
 const supervisedPlatforms = new WeakMap<ChildProcess, NodeJS.Platform>()
-const supervisedProcessState = new WeakMap<ChildProcess, { current: ChildProcess; supervised: boolean }>()
+const supervisedProcessState = new WeakMap<
+  ChildProcess,
+  { current: ChildProcess; supervised: boolean; usable: boolean }
+>()
+type UnsupervisedReason = 'wrapper-spawn-failed' | 'wrapper-exited-before-usable'
 
 export function sidecarSupervisionEnabled(
   env: NodeJS.ProcessEnv = process.env,
@@ -98,6 +102,11 @@ export function stopSidecarProcess(child: ChildProcess, signal: NodeJS.Signals =
   ;(state?.current ?? child).kill(signal)
 }
 
+export function markSidecarProcessUsable(child: ChildProcess): void {
+  const state = supervisedProcessState.get(child)
+  if (state) state.usable = true
+}
+
 function fallbackCapableSupervisedChild(
   wrapper: ChildProcess,
   name: 'llama-server' | 'fm-serve',
@@ -107,23 +116,29 @@ function fallbackCapableSupervisedChild(
   audit: AuditSink
 ): ChildProcess {
   const proxy = new EventEmitterChildProcess()
-  const state = { current: wrapper, supervised: true }
+  const state = { current: wrapper, supervised: true, usable: false }
   supervisedProcessState.set(proxy.child, state)
+  const fallbackToDirect = (reason: UnsupervisedReason, error?: string): void => {
+    audit('sidecar.unsupervised', {
+      name,
+      reason,
+      ...(error ? { error } : {})
+    })
+    try {
+      const direct = spawn(command, [...args], options)
+      state.current = direct
+      state.supervised = false
+      proxy.attach(direct, state)
+    } catch (fallbackError) {
+      proxy.emitError(fallbackError)
+    }
+  }
   proxy.attach(wrapper, state, {
     onError: (error) => {
-      audit('sidecar.unsupervised', {
-        name,
-        reason: 'wrapper-spawn-failed',
-        error: error instanceof Error ? error.message : String(error)
-      })
-      try {
-        const direct = spawn(command, [...args], options)
-        state.current = direct
-        state.supervised = false
-        proxy.attach(direct, state)
-      } catch (fallbackError) {
-        proxy.emitError(fallbackError)
-      }
+      fallbackToDirect('wrapper-spawn-failed', error instanceof Error ? error.message : String(error))
+    },
+    onExitBeforeUsable: (code, signal) => {
+      fallbackToDirect('wrapper-exited-before-usable', `code=${code}, signal=${signal}`)
     }
   })
   return proxy.child
@@ -162,8 +177,11 @@ class EventEmitterChildProcess {
 
   attach(
     proc: ChildProcess,
-    state: { current: ChildProcess; supervised: boolean },
-    hooks: { onError?: (error: Error) => void } = {}
+    state: { current: ChildProcess; supervised: boolean; usable: boolean },
+    hooks: {
+      onError?: (error: Error) => void
+      onExitBeforeUsable?: (code: number | null, signal: NodeJS.Signals | null) => void
+    } = {}
   ): void {
     proc.stdout?.pipe(this.stdout, { end: false })
     proc.stderr?.pipe(this.stderr, { end: false })
@@ -174,6 +192,10 @@ class EventEmitterChildProcess {
     })
     proc.once('exit', (code, signal) => {
       if (state.current !== proc) return
+      if (hooks.onExitBeforeUsable && !state.usable) {
+        hooks.onExitBeforeUsable(code, signal)
+        return
+      }
       this.stdout.end()
       this.stderr.end()
       this.emitter.emit('exit', code, signal)

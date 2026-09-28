@@ -20,7 +20,7 @@ import { auditLog, mainLog } from '../logger'
 import { observeSidecar } from '../infra/observability/sidecar-events'
 import { errMsg } from './shared'
 import { recordSidecarIntent, recordSidecarSpawned } from '../infra/process/registry'
-import { spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
+import { markSidecarProcessUsable, spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
 
 export type LlamaPlatform = 'mac' | 'win'
 export type WinVariant = 'vulkan' | 'cpu'
@@ -440,6 +440,7 @@ function spawnAndWaitHealthy(
               reject(new StartCancelledError())
               return
             }
+            markSidecarProcessUsable(proc)
             port = parsed
             settled = true
             resolve()
