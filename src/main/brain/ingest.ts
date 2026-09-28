@@ -95,7 +95,12 @@ import {
   type SourceScan
 } from './inputs'
 import { admitSource, retryStateAfterFailure, reviveExhausted, type WorkTrigger } from '../infra/scheduler/policy'
-import { reportDeferred, runAsMaintenance } from '../infra/scheduler/maintenance'
+import {
+  beginMaintenance,
+  maintenanceDeferral,
+  onMaintenanceMayBegin,
+  reportDeferred
+} from '../infra/scheduler/maintenance'
 
 /** Default ingest waterfall, or the Update Intelligence button's local-first then API-once route. */
 export type IngestRoute = 'default' | 'intelligence-pass'
@@ -1493,13 +1498,6 @@ function hasActiveLiveIngest(): boolean {
   return queue.some((job) => job.origin === 'live') || [...inFlightJobs].some((job) => job.origin === 'live')
 }
 
-function extractionStage(job: Job): Promise<JobResult> {
-  if (job.origin === 'backfill' && job.trigger !== 'user' && job.strategy !== 'reconcile') {
-    return runAsMaintenance(() => runExtractionStage(job))
-  }
-  return runExtractionStage(job)
-}
-
 export function brainLiveIngestProgress(): { pending: number; running: boolean } {
   const pending = queue.filter((job) => job.origin === 'live').length + [...inFlightJobs].filter((job) => job.origin === 'live').length
   return { pending, running: pending > 0 }
@@ -1623,7 +1621,7 @@ export function readMeetingSourceMode(md: string): string {
 const retryDelayMs = (attempts: number): number => Math.min(30 * 60_000, 60_000 * 2 ** Math.max(0, attempts - 1))
 
 /** Consecutive-failure ceiling per source. Crossing it marks the record `exhausted` (finishJob) — a
- *  terminal state the automatic reconcile tick (startBackfill's respectRetryBackoff scans) stops
+ *  terminal state automatic backfill scans stop
  *  requeuing, so a permanently dead provider/model can't spin the queue on the same doomed transcript
  *  forever. Any OTHER caller (Index/Retry button, dashboard-open check, boot resume, rebuild) already
  *  ignores retryAfter backoff the same way it ignores this cap — see the two scan loops below. */
@@ -1963,6 +1961,13 @@ function pump(): void {
     let s: Settings | null = null
     const idx = queue.findIndex((j) => {
       if (j.origin !== 'backfill' || j.strategy === 'reconcile') return true
+      if (j.trigger !== 'user') {
+        const deferral = maintenanceDeferral()
+        if (deferral) {
+          reportDeferred('backfill', deferral)
+          return false
+        }
+      }
       s ??= getSettings()
       return hasUsableProvider(s) && !localExtractionShouldYield(s)
     })
@@ -1985,7 +1990,10 @@ function pump(): void {
     const [job] = queue.splice(idx, 1)
     extracting.add(job)
     inFlightJobs.add(job)
-    void extractionStage(job).then((result) => {
+    const endMaintenance = job.origin === 'backfill' && job.trigger !== 'user' && job.strategy !== 'reconcile'
+      ? beginMaintenance()
+      : undefined
+    void runExtractionStage(job).then((result) => {
       extracting.delete(job)
       pump() // a slot just freed — start the next eligible extraction now, without waiting on this job's ingest
       void withEntityLock(() => finishJob(result))
@@ -1997,6 +2005,7 @@ function pump(): void {
         // this is belt-and-suspenders.
         .catch((e) => mainLog.error('[brain] unexpected error finishing a brain ingest job:', e))
         .finally(() => {
+          endMaintenance?.()
           inFlightJobs.delete(job)
           pump() // this job's ingest just completed — re-check for a drain, and for newly-eligible backfill work
         })
@@ -2004,6 +2013,8 @@ function pump(): void {
   }
   maybeFinishDrain()
 }
+
+onMaintenanceMayBegin(pump)
 
 /**
  * Durable enqueue for a just-saved meeting. The lightweight index write happens before a network-bound
@@ -2428,7 +2439,6 @@ export type BackfillStartResult = {
   upToDate?: boolean
 }
 export type BackfillStartOptions = {
-  respectRetryBackoff?: boolean
   allowSourceRefresh?: boolean
   force?: boolean
   trigger?: WorkTrigger
@@ -2622,7 +2632,7 @@ async function scanAndQueue(options: BackfillStartOptions = {}): Promise<Backfil
   // gave a fresh attempts budget.
   const toUnexhaust: string[] = []
   const held = { exhausted: 0, backedOff: 0, unreadable: 0 }
-  const trigger: WorkTrigger = options.trigger ?? (options.force || !options.respectRetryBackoff ? 'user' : 'automatic')
+  const trigger: WorkTrigger = options.trigger ?? 'automatic'
   if (extractions === null || scan.some((folder) => folder.status === 'failed')) throw new Error('a meetings folder could not be listed')
   for (const source of scan.flatMap((folder) => folder.sources)) {
     if (already.has(source.key) || inFlight.has(source.key)) continue
@@ -2773,7 +2783,11 @@ export async function requestBackfill(options: BackfillStartOptions = {}): Promi
 }
 
 async function hasUnextracted(s: Settings): Promise<boolean> {
-  if ((await loadIndex(s)).kind !== 'ready') return false
+  const load = await loadIndex(s)
+  if (load.kind === 'unavailable') {
+    reportDeferred('backfill', 'ledger_unavailable')
+    return false
+  }
   return countUnextracted(await scanMeetingSources(s), readIndex(s)) > 0
 }
 
@@ -2808,7 +2822,7 @@ export async function reconcileMeetingsInBackground(): Promise<void> {
     const extractedSlugs = new Set((extractions ?? []).map((n) => n.replace(/\.json$/, '')))
     const candidate = extractions === null ? false : hasSavedReconciliationCandidate(scan, idx, extractedSlugs)
     if (!hasUsableProvider(s) && !candidate) return
-    await requestBackfill({ respectRetryBackoff: true, trigger: 'automatic' })
+    await requestBackfill({ trigger: 'automatic' })
   } catch (error) {
     mainLog.warn(`[brain] background meeting reconciliation skipped: ${error instanceof Error ? error.message : String(error)}`)
   }

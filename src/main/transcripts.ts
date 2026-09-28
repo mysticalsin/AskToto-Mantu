@@ -9,7 +9,7 @@ import {
   unlinkSync,
   renameSync
 } from 'node:fs'
-import { writeFile, rename, unlink } from 'node:fs/promises'
+import { appendFile, writeFile, rename, unlink } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
@@ -344,11 +344,15 @@ export function readSavedFile(path: string): string {
 /** True if the file on disk is one of Métis's encrypted transcripts. */
 export function isEncryptedFile(path: string): boolean {
   try {
-    const head = readFileSync(path).subarray(0, MARKER_LEN)
-    return head.equals(ENC_MARKER) || head.equals(ENC_MARKER_V2)
+    return isEncryptedBytes(readFileSync(path))
   } catch {
     return false
   }
+}
+
+export function isEncryptedBytes(bytes: Buffer): boolean {
+  const head = bytes.subarray(0, MARKER_LEN)
+  return head.equals(ENC_MARKER) || head.equals(ENC_MARKER_V2)
 }
 
 /** Atomic write; encrypts at rest when `encrypt` is true. Cleans up temp on failure.
@@ -406,12 +410,12 @@ let tempCleanupHooked = false
  *  into Keychain recovery for an old 'S:'-wrapped meeting despite the forced local keystore — see
  *  decryptEnvelopeV2's doc comment. Bulk list/search paths (recall.ts) go through decodeSaved instead and
  *  never set this, so they stay exactly as boot-prompt-free as commit 486227d intended. */
-export function decryptToTemp(path: string): string {
+export function decryptBytesToTemp(path: string, bytes: Buffer): string {
   // Read + decrypt defensively: a foreign-keychain file yields the notice instead of throwing and
   // leaving the user with a dead "Open" click.
   let content: string
   try {
-    const decoded = tryDecodeSaved(readFileSync(path), true, path)
+    const decoded = tryDecodeSaved(bytes, true, path)
     content = decoded.ok ? decoded.text : UNDECRYPTABLE_MSG
   } catch {
     content = UNDECRYPTABLE_MSG
@@ -437,6 +441,10 @@ export function decryptToTemp(path: string): string {
     })
   }
   return tmp
+}
+
+export function decryptToTemp(path: string): string {
+  return decryptBytesToTemp(path, readFileSync(path))
 }
 
 /**
@@ -500,15 +508,30 @@ export function ensureMeetingsFolder(settings: Settings): string {
   return folder
 }
 
-function appendIndexRow(folder: string, dateStr: string, title: string, mode: string, durMin: number, fileName: string): void {
+async function appendIndexRow(folder: string, dateStr: string, title: string, mode: string, durMin: number, fileName: string): Promise<void> {
   try {
     const index = join(folder, 'index.md')
-    if (!existsSync(index)) writeFileSync(index, INDEX_HEADER, 'utf8')
+    const indexClass = (await storageAt(folder).classify(['index.md'])).get('index.md')
+    if (indexClass?.status === 'missing') await writeFile(index, INDEX_HEADER, 'utf8')
     const safeTitle = title.replace(/\|/g, '/')
     const safeMode = mode.replace(/\|/g, '/').replace(/[\r\n]/g, ' ')
-    appendFileSync(index, `| ${dateStr} | ${safeTitle} | ${safeMode} | ${durMin} min | [open](${fileName}) |\n`, 'utf8')
+    await appendFile(index, `| ${dateStr} | ${safeTitle} | ${safeMode} | ${durMin} min | [open](${fileName}) |\n`, 'utf8')
   } catch {
     /* ignore */
+  }
+}
+
+async function nextAvailableFile(
+  folder: string,
+  first: string,
+  next: (n: number) => string
+): Promise<string> {
+  let file = first
+  for (let n = 2; ; n++) {
+    const rel = basename(file)
+    const fileClass = (await storageAt(folder).classify([rel])).get(rel)
+    if (fileClass?.status === 'missing') return file
+    file = next(n)
   }
 }
 
@@ -615,10 +638,11 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
   const title = cleanTitle(n.title || n.question || 'Note') || 'Note'
   // Encrypted at rest → the filename must not leak the plaintext title either (see opaqueNamePart above).
   const namePart = settings.encryptTranscripts ? opaqueNamePart() : slug(title)
-  let file = join(folder, `${stamp(started)}-note-${namePart}.md`)
-  for (let i = 2; existsSync(file); i++) {
-    file = join(folder, `${stamp(started)}-note-${namePart}-${i}.md`)
-  }
+  const file = await nextAvailableFile(
+    folder,
+    join(folder, `${stamp(started)}-note-${namePart}.md`),
+    (i) => join(folder, `${stamp(started)}-note-${namePart}-${i}.md`)
+  )
   const frontmatter = [
     '---',
     'type: note',
@@ -641,7 +665,7 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
   if (!settings.encryptTranscripts) {
     const di = new Date(started)
     const dateStr = `${di.getFullYear()}-${pad(di.getMonth() + 1)}-${pad(di.getDate())} ${pad(di.getHours())}:${pad(di.getMinutes())}`
-    appendIndexRow(folder, dateStr, title, 'note', 0, file.slice(folder.length + 1))
+    await appendIndexRow(folder, dateStr, title, 'note', 0, file.slice(folder.length + 1))
   }
   return file
 }
@@ -677,10 +701,11 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
 
   // Encrypted at rest → the filename must not leak the plaintext title either (see opaqueNamePart above).
   const namePart = settings.encryptTranscripts ? opaqueNamePart() : slug(title)
-  let file = join(folder, `${stamp(started)}-${namePart}.md`)
-  for (let n = 2; existsSync(file); n++) {
-    file = join(folder, `${stamp(started)}-${namePart}-${n}.md`)
-  }
+  const file = await nextAvailableFile(
+    folder,
+    join(folder, `${stamp(started)}-${namePart}.md`),
+    (n) => join(folder, `${stamp(started)}-${namePart}-${n}.md`)
+  )
 
   const durMin = meetingDurationMin(m)
   const participants = Array.from(new Set(m.lines.map((l) => speakerLabel(l.speaker))))
@@ -721,7 +746,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   if (!settings.encryptTranscripts) {
     const di = new Date(started)
     const dateStr = `${di.getFullYear()}-${pad(di.getMonth() + 1)}-${pad(di.getDate())} ${pad(di.getHours())}:${pad(di.getMinutes())}`
-    appendIndexRow(folder, dateStr, title, m.mode, durMin, file.slice(folder.length + 1))
+    await appendIndexRow(folder, dateStr, title, m.mode, durMin, file.slice(folder.length + 1))
   }
   return file
 }
@@ -797,7 +822,7 @@ export async function appendDebrief(
   // renameMeeting), NOT the live encryptTranscripts toggle. Otherwise appending a debrief to a file
   // that was saved while encryption was on would rewrite the whole transcript as plaintext once the
   // toggle is later turned off — a silent at-rest downgrade of already-recorded third-party speech.
-  const wasEncrypted = isEncryptedFile(path)
+  const wasEncrypted = isEncryptedBytes(read.bytes)
   await writeSaved(path, updated, wasEncrypted)
   return { ok: true }
 }
@@ -877,7 +902,6 @@ const transcript = formatTranscript(m.lines)
 export async function clearDraftTranscript(settings: Settings, startedAt: number): Promise<void> {
   try {
     const file = join(resolveMeetingsFolder(settings), draftFilename(startedAt))
-    if (!existsSync(file)) return
     for (let attempt = 0; ; attempt++) {
       try {
         await unlink(file)
@@ -974,7 +998,7 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
           // mode is now written quoted (see saveDraftTranscript); strip the wrapping quotes so a
           // recovered meeting's index row shows the bare value, same as before that change.
           const mode = modeLine ? modeLine.slice('mode: '.length).replace(/^"|"$/g, '') : 'meeting'
-          appendIndexRow(folder, dateStr, title, mode, 0, basename(out))
+          await appendIndexRow(folder, dateStr, title, mode, 0, basename(out))
         }
       } catch {
         /* one unreadable draft must not block recovering the others */

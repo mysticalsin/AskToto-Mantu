@@ -141,6 +141,11 @@ export function indexUnavailable(s: Settings): IndexUnavailableCause | null {
   return load.kind === 'unavailable' ? load.cause : null
 }
 
+export function forgetIndex(s: Settings): void {
+  ledger.delete(indexPath(s))
+  writes += 1
+}
+
 /** User-facing, content-free explanation for brainStatus.error. */
 export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
   switch (cause) {

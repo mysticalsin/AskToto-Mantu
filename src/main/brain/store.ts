@@ -44,6 +44,7 @@ import {
   INDEX_REL,
   classifyIndexBytes
 } from './index-state'
+import { forgetIndex } from './ledger'
 
 export { BRAIN_INDEX_ERROR_CODE, BrainIndexRebuildError, classifyIndexBytes } from './index-state'
 
@@ -697,38 +698,35 @@ function isPreservedIndexName(name: string): boolean {
   return name.startsWith('index.') && name.endsWith('.json')
 }
 
-function preservedIndexRestorable(path: string): boolean {
-  try {
-    return classifyIndexBytes(readFileSync(path)).kind === 'ready'
-  } catch {
-    return false
-  }
+async function preservedIndexRestorable(settings: Settings, id: string): Promise<boolean> {
+  const read = await storageAt(resolveMeetingsFolder(settings)).read(join('.brain-preserved', id))
+  return read.status === 'ok' && classifyIndexBytes(read.bytes).kind === 'ready'
 }
 
-export function listPreservedBrainIndexes(settings: Settings): PreservedBrainIndexCopy[] {
-  const dir = preservedIndexDir(settings)
-  if (!existsSync(dir)) return []
-  return readdirSync(dir)
-    .filter(isPreservedIndexName)
-    .map((id): PreservedBrainIndexCopy | null => {
-      try {
-        const st = statSync(join(dir, id))
-        if (!st.isFile()) return null
-        return { id, createdAt: st.mtimeMs, size: st.size, restorable: preservedIndexRestorable(join(dir, id)) }
-      } catch {
-        return null
-      }
-    })
+export async function listPreservedBrainIndexes(settings: Settings): Promise<PreservedBrainIndexCopy[]> {
+  const gateway = storageAt(resolveMeetingsFolder(settings))
+  const listing = await gateway.list('.brain-preserved')
+  if (listing.status !== 'ok') return []
+  const ids = listing.names.filter(isPreservedIndexName)
+  const classes = await classifyAll(gateway, ids.map((id) => join('.brain-preserved', id)))
+  const copies = await Promise.all(ids.map(async (id): Promise<PreservedBrainIndexCopy | null> => {
+    const fileClass = classes.get(join('.brain-preserved', id))
+    if (!fileClass || fileClass.status !== 'ok') return null
+    return {
+      id,
+      createdAt: fileClass.version.mtimeMs,
+      size: fileClass.version.size,
+      restorable: await preservedIndexRestorable(settings, id)
+    }
+  }))
+  return copies
     .filter((copy): copy is PreservedBrainIndexCopy => copy !== null)
     .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
 }
 
-export function currentBrainIndexIsReadable(settings: Settings): boolean {
-  try {
-    return classifyIndexBytes(readFileSync(join(brainDir(settings), INDEX_REL))).kind === 'ready'
-  } catch {
-    return false
-  }
+export async function currentBrainIndexIsReadable(settings: Settings): Promise<boolean> {
+  const file = await readBrainFile(settings, INDEX_REL)
+  return file.status === 'ok' && classifyIndexBytes(file.bytes).kind === 'ready'
 }
 
 function preserveCurrentIndexBeforeRestore(settings: Settings): void {
@@ -742,25 +740,22 @@ function preserveCurrentIndexBeforeRestore(settings: Settings): void {
   fsyncDirectoryIfSupported(preserveDir)
 }
 
-export function restorePreservedBrainIndex(
+export async function restorePreservedBrainIndex(
   settings: Settings,
   id: string,
   opts: { allowReplaceReadable: boolean }
-): { ok: boolean; error?: 'not-found' | 'not-restorable' | 'current-readable' | 'failed' } {
+): Promise<{ ok: boolean; error?: 'not-found' | 'not-restorable' | 'current-readable' | 'failed' }> {
   let source: string
   try {
     source = preservedIndexPath(settings, id)
   } catch {
     return { ok: false, error: 'not-found' }
   }
-  let sourceBytes: Buffer
-  try {
-    sourceBytes = readFileSync(source)
-  } catch {
-    return { ok: false, error: 'not-found' }
-  }
+  const sourceRead = await storageAt(resolveMeetingsFolder(settings)).read(join('.brain-preserved', id))
+  if (sourceRead.status !== 'ok') return { ok: false, error: 'not-found' }
+  const sourceBytes = sourceRead.bytes
   if (classifyIndexBytes(sourceBytes).kind !== 'ready') return { ok: false, error: 'not-restorable' }
-  if (!opts.allowReplaceReadable && currentBrainIndexIsReadable(settings)) return { ok: false, error: 'current-readable' }
+  if (!opts.allowReplaceReadable && await currentBrainIndexIsReadable(settings)) return { ok: false, error: 'current-readable' }
 
   const root = brainDir(settings)
   const target = join(root, INDEX_REL)
@@ -773,6 +768,7 @@ export function restorePreservedBrainIndex(
     renameSync(tmp, target)
     fsyncDirectoryIfSupported(root)
     _writeGen += 1
+    forgetIndex(settings)
     return { ok: true }
   } catch {
     try {

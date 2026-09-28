@@ -99,6 +99,11 @@ export interface Storage {
   at(root: string): StorageGateway
 }
 
+export interface StorageGatewayOptions extends StorageOptions {
+  /** Called by each public method so a settings-folder move is observed without rebuilding the gateway. */
+  root: () => string
+}
+
 type Settled<T> = { status: 'ok'; value: T } | StorageFailure
 type Unread = Exclude<ReadResult, { status: 'ok' }>
 type PresenceOf = (files: readonly FileVersion[]) => Promise<Map<string, ContentPresence>>
@@ -112,7 +117,7 @@ export interface StorageOptions {
 
 /** Read outcomes that describe the file itself: repeating the read inside the TTL would only pin another
  *  pool thread or spawn another probe. */
-const REMEMBERED: ReadonlySet<ReadResult['status']> = new Set<ReadResult['status']>(['dataless', 'unknown', 'unavailable', 'timeout'])
+const REMEMBERED: ReadonlySet<ReadResult['status']> = new Set<ReadResult['status']>(['dataless', 'unknown', 'timeout'])
 
 /** The libuv pool size for a UV_THREADPOOL_SIZE value, never above libuv's own reading of it (libuv reads
  *  a negative value as a huge unsigned one; here it counts as 1). */
@@ -326,17 +331,19 @@ export function createStorage({
       return leavesBase(relative(realBase.value, real.value)) ? outsideRoot() : real
     }
 
-    async function readLocal(path: string, request: Request): Promise<ReadResult> {
+    async function readLocal(path: string, request: Request): Promise<{ result: ReadResult; remember: boolean }> {
       const file = await statFile(path, request)
-      if (file.status !== 'ok') return file
+      if (file.status !== 'ok') return { result: file, remember: file.status === 'unavailable' }
       const version = versionOf(file.value)
       const presence = (await presenceWithin([file.value], request)).get(path)
-      if (request.signal.aborted) return request.ended('waiting')
-      if (presence !== 'local') return { status: presence ?? 'unknown', version }
+      if (request.signal.aborted) return { result: request.ended('waiting'), remember: false }
+      if (presence !== 'local') return { result: { status: presence ?? 'unknown', version }, remember: true }
       const real = await resolveInside(path, request)
-      if (real.status !== 'ok') return real
+      if (real.status !== 'ok') return { result: real, remember: real.status === 'timeout' }
       const bytes = await readShared(real.value, version, request)
-      return bytes.status === 'ok' ? { status: 'ok', version, bytes: bytes.value } : bytes
+      return bytes.status === 'ok'
+        ? { result: { status: 'ok', version, bytes: bytes.value }, remember: false }
+        : { result: bytes, remember: bytes.status === 'timeout' }
     }
 
     return {
@@ -407,8 +414,8 @@ export function createStorage({
         const generation = currentGeneration(path)
         const request = openRequest(CONTENT_DEADLINE_MS, signal)
         try {
-          const result = await readLocal(path, request)
-          if (result.status !== 'ok' && REMEMBERED.has(result.status) && currentGeneration(path) === generation) remember(path, result)
+          const { result, remember: rememberResult } = await readLocal(path, request)
+          if (result.status !== 'ok' && (REMEMBERED.has(result.status) || rememberResult) && currentGeneration(path) === generation) remember(path, result)
           return result
         } finally {
           request.close()
@@ -442,6 +449,40 @@ export function createStorage({
         gateways.set(root, gateway)
       }
       return gateway
+    }
+  }
+}
+
+export function createStorageGateway(options: StorageGatewayOptions): StorageGateway {
+  const storage = createStorage(options)
+  const unavailable = (error: unknown): StorageFailure => ({
+    status: 'unavailable',
+    code: error instanceof Error && error.message ? error.message : 'ROOT_UNAVAILABLE'
+  })
+  const current = (): StorageGateway | StorageFailure => {
+    try {
+      return storage.at(options.root())
+    } catch (error) {
+      return unavailable(error)
+    }
+  }
+  return {
+    async list(relDir, requestOptions) {
+      const gateway = current()
+      return 'list' in gateway ? gateway.list(relDir, requestOptions) : gateway
+    },
+    async classify(relPaths, requestOptions) {
+      const gateway = current()
+      if ('classify' in gateway) return gateway.classify(relPaths, requestOptions)
+      return new Map(relPaths.map((rel): [string, FileClass] => [rel, gateway]))
+    },
+    async read(relPath, requestOptions) {
+      const gateway = current()
+      return 'read' in gateway ? gateway.read(relPath, requestOptions) : gateway
+    },
+    async noteWritten(relPath, requestOptions) {
+      const gateway = current()
+      return 'noteWritten' in gateway ? gateway.noteWritten(relPath, requestOptions) : gateway
     }
   }
 }

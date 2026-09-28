@@ -9,8 +9,10 @@ import { intelligenceNoProviderMessage, LOCAL_ONLY_INTELLIGENCE_UNAVAILABLE } fr
 import { getSettings } from '../store'
 import { loadJson, peekJson, writeJson } from './store'
 import { requestBackfillRun, type BackfillStartResult, type BackfillCompletion } from './ingest'
+import { loadIndex } from './ledger'
 import { auditLog, mainLog } from '../logger'
-import { reportDeferred } from '../infra/scheduler/maintenance'
+import { reportDeferred, whenMaintenanceWindowOpens } from '../infra/scheduler/maintenance'
+import type { WorkTrigger } from '../infra/scheduler/policy'
 
 export const INTELLIGENCE_INDEX_TZ = 'America/Toronto'
 export const INTELLIGENCE_INDEX_HOURS = [6, 12, 18] as const
@@ -18,11 +20,16 @@ export const INTELLIGENCE_INDEX_STATE_FILE = 'intelligence-index.json'
 
 const StateSchema = z.object({
   lastSuccessAt: z.number().nonnegative(),
+  lastFinishedAt: z.number().nonnegative().optional(),
   lastError: z.string().optional()
 })
 export type IntelligenceIndexState = z.infer<typeof StateSchema>
 
 export type IntelligenceIndexReason = 'click' | 'schedule' | 'catch-up' | 'import-idle'
+
+export function triggerForReason(reason: IntelligenceIndexReason): WorkTrigger {
+  return reason === 'click' ? 'user' : 'automatic'
+}
 
 export const NO_PROVIDER_INDEX_COPY =
   'Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.'
@@ -241,6 +248,14 @@ export async function runIntelligenceIndex(
   reason: IntelligenceIndexReason,
   s: Settings = getSettings()
 ): Promise<IntelligenceIndexResult> {
+  const trigger = triggerForReason(reason)
+  if (trigger === 'automatic') {
+    if ((await loadIndex(s)).kind === 'unavailable') {
+      reportDeferred('intelligence-index', 'ledger_unavailable')
+      return { ran: false, queued: 0, error: INCOMPLETE_INDEX_COPY, lastIndexedAt: lastIndexedAt(s) }
+    }
+    await whenMaintenanceWindowOpens()
+  }
   if ((await loadIntelligenceIndexState(s)) === null) {
     reportDeferred('intelligence-index', 'ledger_unavailable')
     return { ran: false, queued: 0, error: INCOMPLETE_INDEX_COPY, lastIndexedAt: lastIndexedAt(s) }
@@ -270,7 +285,7 @@ export async function runIntelligenceIndex(
   }
   try {
     const run: IntelligenceIndexRun = indexWork ? await indexWork(reason) : await (async () => {
-      const backfill = await requestBackfillRun({ force: true })
+      const backfill = await requestBackfillRun({ force: true, trigger })
       return {
         result: { ...backfill.result, ran: !backfill.result.deferred },
         completion: backfill.completion.then((outcome) => ({ ok: outcome.ok, error: backfillCompletionError(outcome, s) }))
@@ -292,7 +307,7 @@ export async function runIntelligenceIndex(
           await recordFailure(error)
           return
         }
-        await writeIntelligenceIndexState({ lastSuccessAt: Date.now() }, s)
+        await writeIntelligenceIndexState({ lastSuccessAt: Date.now(), lastFinishedAt: Date.now() }, s)
         auditLog('brain.intelligence_index', { reason, queued: result.queued, recapped: outcome.recapped ?? 0 })
         mainLog.info(`[intelligence-index] ${reason} completed; recapped ${outcome.recapped ?? 0}`)
       } catch (error) {
@@ -343,12 +358,16 @@ export async function catchUpIntelligenceIndexIfNeeded(
   now = Date.now(),
   s: Settings = getSettings()
 ): Promise<IntelligenceIndexResult | { ran: false; queued: 0; reason: 'current' | 'unavailable' }> {
+  if ((await loadIndex(s)).kind === 'unavailable') {
+    reportDeferred('intelligence-index', 'ledger_unavailable')
+    return { ran: false, queued: 0, reason: 'unavailable' }
+  }
   const state = await loadIntelligenceIndexState(s)
   if (state === null) {
     reportDeferred('intelligence-index', 'ledger_unavailable')
     return { ran: false, queued: 0, reason: 'unavailable' }
   }
-  const last = state.lastSuccessAt
+  const last = state.lastFinishedAt ?? state.lastSuccessAt
   if (!shouldCatchUp(last, now)) return { ran: false, queued: 0, reason: 'current' }
   mainLog.info(
     `[intelligence-index] catch-up: last success ${last || 0} is before slot ${mostRecentlyElapsedSlot(now)}`

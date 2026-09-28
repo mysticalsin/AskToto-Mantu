@@ -35,7 +35,12 @@ import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
-import { runAsMaintenance } from './infra/scheduler/maintenance'
+import {
+  noteUserInput,
+  runAsMaintenance,
+  settlePriorExit,
+  startMaintenanceGate
+} from './infra/scheduler/maintenance'
 import { operatorVisionModel } from '@shared/operator-vision'
 import {
   IPC,
@@ -169,7 +174,7 @@ import {
 } from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
-import { extractScreenText } from './mac-helper'
+import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,
@@ -631,6 +636,9 @@ import { createHistoryTracer } from './infra/observability/history-trace'
 import { copyDiagnosticsSummary } from './infra/observability/diagnostics-summary'
 import { createReloadBudget } from './lifecycle/reload-budget'
 import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './lifecycle/render-loop-halted-dialog'
+import { createStopAll } from './infra/process/stop-all'
+import { installExitPaths } from './lifecycle/exit-paths'
+import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
@@ -715,11 +723,12 @@ import {
   recapMarkdownToHtml,
   resolveMeetingsFolder,
   ensureMeetingsFolder,
-  isEncryptedFile,
-  decryptToTemp,
-  sweepStaleTempFiles,
-  readSavedFile
+  decodeSaved,
+  isEncryptedBytes,
+  decryptBytesToTemp,
+  sweepStaleTempFiles
 } from './transcripts'
+import { storageAt } from './infra/storage/meetings-storage'
 import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
 import {
@@ -814,6 +823,7 @@ import {
   refreshPlaneToken,
   PLANE_MCP_OAUTH_ENDPOINT,
   PLANE_MCP_PAT_ENDPOINT,
+  savePlaneClientAndTokens,
   tryAcquirePlaneTokenLock,
   releasePlaneTokenLock
 } from './mcp/planeOAuth'
@@ -1673,7 +1683,7 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
 }
 
 function wireIntelligenceIndexWork(): void {
-  setIntelligenceIndexWork(() => startIntelligenceWork({
+  setIntelligenceIndexWork((reason) => startIntelligenceWork({
     list: listMeetingsNeedingRecap,
     generate: (meeting) => runImportedRecap({
       jobId: `index-${meeting.file}`,
@@ -1683,7 +1693,7 @@ function wireIntelligenceIndexWork(): void {
     save: (file, recap, status) => updateMeetingRecap(getSettings(), file, recap, status),
     backfill: requestBackfillRun,
     logFailure: (error) => mainLog.error('[intelligence-index] recap failed:', error)
-  }))
+  }, reason))
 }
 
 function initializeImportJobs(): void {
@@ -2549,8 +2559,10 @@ function createWindow(targetDisplay?: Electron.Display): void {
       arch: process.arch,
       uvThreadpoolSize: process.env.UV_THREADPOOL_SIZE,
       audit: auditLog,
-      powerMonitor
+      powerMonitor,
+      stallWatchCommand: macStallWatchCommand()
     })
+    settlePriorExit(observability.priorShutdown)
     emittedAppStarted = true
   }
   // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
@@ -4222,68 +4234,24 @@ const shortcutActions: Record<string, () => void> = {
 // itself is unresponsive, macOS's native Option+Command+Escape remains the recovery path.
 const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command+Control+Escape'
 
-// `before-quit` gives a live meeting 2s to flush before it re-quits, so the polite path needs longer
-// than that to finish. Past it, being polite is the bug: a renderer wedged mid-onboarding never answers
-// the flush hotkey and its unresponsive window can keep the quit from completing at all — which is the
-// exact freeze this accelerator exists to escape. The user pressed the escape hatch; it must escape.
-const EMERGENCY_FORCE_QUIT_GRACE_MS = 4000
+const stopAllSidecars = createStopAll(
+  [
+    { name: 'screen-preprocess', stop: () => screenPreprocess.stop() },
+    { name: 'import-decoders', stop: () => ffmpegDecoders.forEach((decoder) => decoder.cancel()) },
+    { name: 'local-runtime', stop: () => localRuntime.stop() },
+    { name: 'fm-runtime', stop: () => fmRuntime.stop() }
+  ],
+  (name, error) => mainLog.warn(`[stop-all] ${name} failed to stop`, error)
+)
 
-let emergencyQuitWatchdog: NodeJS.Timeout | null = null
-
-/** Kill what outlives the process when it dies without `will-quit`. `app.exit()` never emits that event,
- *  so the hard path has to repeat its sidecar teardown here: an orphaned llama-server, fm-serve loopback
- *  or screen-watcher child outliving the app is strictly worse than the freeze the user just escaped.
- *  Deliberately a copy rather than a shared helper — several source-contract tests pin these exact calls
- *  inside the `will-quit` handler body, and each step keeps its own try so one throw cannot skip a kill. */
-function stopSidecarsForHardExit(): void {
-  try {
-    screenPreprocess.stop()
-  } catch (e) {
-    mainLog.warn('[force-quit] screenPreprocess.stop failed', e)
-  }
-  try {
-    localRuntime.stop()
-  } catch (e) {
-    mainLog.warn('[force-quit] localRuntime.stop failed', e)
-  }
-  try {
-    fmRuntime.stop()
-  } catch (e) {
-    mainLog.warn('[force-quit] fmRuntime.stop failed', e)
-  }
-  // A deliberate quit is a normal exit, not an early death — close the boot watch so the NEXT launch is
-  // not pushed into safe start by a user who simply escaped a hung window (mirrors `will-quit`).
-  try {
+const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
+  stopAll: stopAllSidecars,
+  closeBootWatch: () => {
     setBootPowerSaveBlock(false)
     endBootWatch(app.getPath('userData'))
-  } catch (e) {
-    mainLog.warn('[force-quit] endBootWatch failed', e)
-  }
-}
-
-function forceQuitMétis(): void {
-  // Second press means the first one did not get the process down. Stop asking.
-  if (emergencyQuitWatchdog) {
-    mainLog.warn('[lifecycle] emergency quit pressed again — exiting now')
-    stopSidecarsForHardExit()
-    app.exit(0)
-    return
-  }
-  mainLog.warn('[lifecycle] emergency graceful quit requested')
-  app.quit()
-  emergencyQuitWatchdog = setTimeout(() => {
-    mainLog.warn('[lifecycle] graceful quit did not complete — forcing exit')
-    stopSidecarsForHardExit()
-    app.exit(0)
-  }, EMERGENCY_FORCE_QUIT_GRACE_MS)
-  // Never let the watchdog itself be the handle that keeps a quitting process alive.
-  emergencyQuitWatchdog.unref?.()
-}
-
-function exitAndRelaunch(): void {
-  app.relaunch()
-  app.exit(0)
-}
+  },
+  warn: (...args) => mainLog.warn(...args)
+})
 
 function registerEmergencyForceQuitShortcut(): boolean {
   if (process.platform !== 'darwin') return false
@@ -5758,7 +5726,7 @@ function registerIpc(): void {
   // failure, which is an acceptable (and honest — "reconnect ClickUp") outcome for a background retry.
   async function retryOutboundAction(action: OutboundAction): Promise<{ ok: boolean; error?: string }> {
     // Re-check disk on every retry tick — a meeting flagged confidential AFTER enqueue must never leave.
-    if (action.meetingFile && isMeetingConfidentialOnDisk(getSettings(), action.meetingFile)) {
+    if (action.meetingFile && await isMeetingConfidentialOnDisk(getSettings(), action.meetingFile)) {
       // Dequeue without sending — returning ok:true removes the entry; a hard error would retry forever.
       auditLog('mcp.push.skipped_confidential', { kind: action.kind, action: action.action, source: 'disk' })
       return { ok: true }
@@ -5940,7 +5908,7 @@ function registerIpc(): void {
     const s = getSettings()
     // Wave 4 / QA defense-in-depth: never push confidential meetings. Prefer disk frontmatter over the
     // renderer flag — a buggy UI could omit args.confidential. Unreadable files fail closed.
-    const diskConfidential = meetingFile ? isMeetingConfidentialOnDisk(s, meetingFile) : false
+    const diskConfidential = meetingFile ? await isMeetingConfidentialOnDisk(s, meetingFile) : false
     const argConfidential = args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true
     if (diskConfidential || argConfidential) {
       auditLog('mcp.push.skipped_confidential', {
@@ -6122,12 +6090,16 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const tokens = await runPlaneOAuth()
-    if (!tokens.ok || !tokens.accessToken) return { ok: false, error: tokens.error || 'Could not connect Plane.' }
+    if (!tokens.ok || !tokens.accessToken || !tokens.clientId || !tokens.clientSecret) {
+      return { ok: false, error: tokens.error || 'Could not connect Plane.' }
+    }
     const r = await connectMcp(PLANE_MCP_OAUTH_ENDPOINT, tokens.accessToken, {}, 'Plane')
     if (!r.ok) return r
     try {
-      setMcpApiKey('plane', tokens.accessToken)
-      setMcpRefreshToken('plane', tokens.refreshToken ?? '')
+      savePlaneClientAndTokens(
+        { clientId: tokens.clientId, clientSecret: tokens.clientSecret },
+        { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken ?? '' }
+      )
       const s = getSettings()
       const entry: McpConnection = {
         id: 'plane',
@@ -6254,9 +6226,12 @@ function registerIpc(): void {
       return { ok: false, error: 'Not a saved meeting file.' }
     }
     try {
-      const source = join(resolveMeetingsFolder(getSettings()), safeName)
-      const text = readSavedFile(source) // decodes the ATKENC2 envelope when the file is encrypted
-      // readSavedFile returns '' (never throws) when the envelope can't be decrypted on this device —
+      const folder = resolveMeetingsFolder(getSettings())
+      const source = join(folder, safeName)
+      const read = await storageAt(folder).read(safeName)
+      if (read.status !== 'ok') return { ok: false, error: 'Could not read the meeting file.' }
+      const text = decodeSaved(read.bytes) // decodes the ATKENC2 envelope when the file is encrypted
+      // decodeSaved returns '' (never throws) when the envelope can't be decrypted on this device —
       // without this guard the export would "succeed" as a 0-byte file (adversarial review finding).
       if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
       const dialogOpts = {
@@ -8071,10 +8046,10 @@ function registerIpc(): void {
     auditLog('brain.backfill.start', { queued: r.queued, rebuild: true })
     return r
   })
-  ipcMain.handle(IPC.brainPreservedIndexesList, (e) => {
+  ipcMain.handle(IPC.brainPreservedIndexesList, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { copies: [] }
-    return { copies: listPreservedBrainIndexes(getSettings()) }
+    return { copies: await listPreservedBrainIndexes(getSettings()) }
   })
   ipcMain.handle(IPC.brainPreservedIndexRestore, async (e, raw) => {
     assertMainWindow(e)
@@ -8082,7 +8057,7 @@ function registerIpc(): void {
     const id = String((raw as { id?: unknown } | null)?.id ?? '')
     if (!id) return { ok: false, error: 'Missing preserved copy.' }
     let allowReplaceReadable = false
-    if (currentBrainIndexIsReadable(getSettings())) {
+    if (await currentBrainIndexIsReadable(getSettings())) {
       const dialogOpts = {
         type: 'warning' as const,
         title: 'Restore preserved brain index',
@@ -8097,7 +8072,7 @@ function registerIpc(): void {
       if (response !== 0) return { ok: false, error: 'cancelled' }
       allowReplaceReadable = true
     }
-    const r = restorePreservedBrainIndex(getSettings(), id, { allowReplaceReadable })
+    const r = await restorePreservedBrainIndex(getSettings(), id, { allowReplaceReadable })
     auditLog('brain.index.preserved_restore', { ok: r.ok, error: r.error })
     return r.ok ? { ok: true } : { ok: false, error: r.error || 'Restore failed.' }
   })
@@ -8660,7 +8635,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     return requireAuth() ? searchMeetings(String(q ?? '')) : []
   })
-  ipcMain.handle(IPC.recallOpen, (e, file: string) => {
+  ipcMain.handle(IPC.recallOpen, async (e, file: string) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
     const folder = resolveMeetingsFolder(getSettings())
@@ -8670,10 +8645,12 @@ function registerIpc(): void {
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
     if (!safeName) return ''
     const path = join(folder, safeName)
-    const encrypted = isEncryptedFile(path)
+    const read = await storageAt(folder).read(safeName)
+    if (read.status !== 'ok') return ''
+    const encrypted = isEncryptedBytes(read.bytes)
     auditLog('recall.open', { encrypted })
     // Encrypted transcripts are unreadable in an editor — open a decrypted temp copy instead.
-    if (encrypted) return shell.openPath(decryptToTemp(path))
+    if (encrypted) return shell.openPath(decryptBytesToTemp(path, read.bytes))
     return shell.openPath(path)
   })
   ipcMain.handle(IPC.historySettled, (e, report: unknown) => {
@@ -8925,6 +8902,10 @@ if (!app.requestSingleInstanceLock()) {
   }))
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
+  app.on('web-contents-created', (_event, contents) => {
+    contents.on('input-event', (_inputEvent, input) => noteUserInput(input.type))
+  })
   // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
   // proxy/CLI/key seeding before first paint — hoist tray+IPC+window for wiped-profile exclusive.
   // Call createTray/registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared
@@ -9068,6 +9049,7 @@ if (!app.requestSingleInstanceLock()) {
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
   process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
   process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
+  if (QA_IDENTITY_BUILD) installQaFaultHook()
   // devEnv(ASKTOTO_SELFTEST) keeps self-test out of packaged builds; runSelfTest() itself refuses to run
   // unless userData is exactly the throwaway directory redirectSelfTestUserData() created (M2-0004).
   const selfTestOut = devEnv('ASKTOTO_SELFTEST')

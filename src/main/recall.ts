@@ -2,7 +2,7 @@ import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { exciseDeletedMeeting } from './brain/ingest'
 import { join, basename } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
-import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved, formatTranscript, DEBRIEF_HEADING, readSavedFile } from './transcripts'
+import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
 import { getSettings } from './store'
 import { storageAt, classifyAll } from './infra/storage/meetings-storage'
 import { detectLanguage } from '@shared/lang-id'
@@ -46,6 +46,13 @@ const RETENTION_HEADING_RE = /^## Retention\b/m
 
 function isMeetingDocumentType(type: string | undefined): boolean {
   return !type || MEETING_DOCUMENT_TYPES.has(type)
+}
+
+async function readMeetingBytes(folder: string, file: string): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: string }> {
+  const read = await storageAt(folder).read(file)
+  if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
+  if (read.status !== 'ok') return { ok: false, error: 'Could not read the meeting file.' }
+  return { ok: true, bytes: read.bytes }
 }
 
 function recapSectionEndRe(type: string | undefined): RegExp {
@@ -439,16 +446,10 @@ export async function renameMeeting(
   if (!title) return { ok: false, error: 'Enter a title.' }
 
   const fullPath = join(folder, safeName)
-  let raw: Buffer
-  try {
-    raw = await readFile(fullPath)
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
-    return { ok: false, error: 'Could not read the meeting file.' }
-  }
-
-  const wasEncrypted = isEncryptedFile(fullPath)
+  const rawRead = await readMeetingBytes(folder, safeName)
+  if (!rawRead.ok) return rawRead
+  const raw = rawRead.bytes
+  const wasEncrypted = isEncryptedBytes(raw)
   const text = decodeSaved(raw)
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 
@@ -554,16 +555,10 @@ export async function updateMeetingRecap(
   const recap = sanitizeRecap(newRecap)
   const body = recap.trim()
   const fullPath = join(folder, safeName)
-  let raw: Buffer
-  try {
-    raw = await readFile(fullPath)
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
-    return { ok: false, error: 'Could not read the meeting file.' }
-  }
-
-  const wasEncrypted = isEncryptedFile(fullPath)
+  const rawRead = await readMeetingBytes(folder, safeName)
+  if (!rawRead.ok) return rawRead
+  const raw = rawRead.bytes
+  const wasEncrypted = isEncryptedBytes(raw)
   const text = decodeSaved(raw)
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
   const type = frontmatter(text).type
@@ -641,16 +636,10 @@ export async function updateMeetingTranscript(
   }
 
   const fullPath = join(folder, safeName)
-  let raw: Buffer
-  try {
-    raw = await readFile(fullPath)
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
-    return { ok: false, error: 'Could not read the meeting file.' }
-  }
-
-  const wasEncrypted = isEncryptedFile(fullPath)
+  const rawRead = await readMeetingBytes(folder, safeName)
+  if (!rawRead.ok) return rawRead
+  const raw = rawRead.bytes
+  const wasEncrypted = isEncryptedBytes(raw)
   const text = decodeSaved(raw)
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 
@@ -707,16 +696,10 @@ export async function setMeetingCrmPushed(
   if (!/^[a-z0-9]{1,32}$/.test(key)) return { ok: false, error: 'Invalid CRM push key.' }
 
   const fullPath = join(folder, safeName)
-  let raw: Buffer
-  try {
-    raw = await readFile(fullPath)
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
-    return { ok: false, error: 'Could not read the meeting file.' }
-  }
-
-  const wasEncrypted = isEncryptedFile(fullPath)
+  const rawRead = await readMeetingBytes(folder, safeName)
+  if (!rawRead.ok) return rawRead
+  const raw = rawRead.bytes
+  const wasEncrypted = isEncryptedBytes(raw)
   const text = decodeSaved(raw)
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 
@@ -755,16 +738,10 @@ export async function setMeetingConfidential(
   }
 
   const fullPath = join(folder, safeName)
-  let raw: Buffer
-  try {
-    raw = await readFile(fullPath)
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
-    return { ok: false, error: 'Could not read the meeting file.' }
-  }
-
-  const wasEncrypted = isEncryptedFile(fullPath)
+  const rawRead = await readMeetingBytes(folder, safeName)
+  if (!rawRead.ok) return rawRead
+  const raw = rawRead.bytes
+  const wasEncrypted = isEncryptedBytes(raw)
   const text = decodeSaved(raw)
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 
@@ -798,18 +775,15 @@ export async function setMeetingConfidential(
  * frontmatter. Unreadable / undecryptable / missing frontmatter fails CLOSED (same as publish MQA-077):
  * treat as confidential so nothing leaves the device.
  */
-export function isMeetingConfidentialOnDisk(settings: Settings, file: string): boolean {
+export async function isMeetingConfidentialOnDisk(settings: Settings, file: string): Promise<boolean> {
   const safeName = basename(file)
   if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
     return true
   }
-  const fullPath = join(resolveMeetingsFolder(settings), safeName)
-  let text: string
-  try {
-    text = readSavedFile(fullPath)
-  } catch {
-    return true // missing / unreadable — fail closed
-  }
+  const folder = resolveMeetingsFolder(settings)
+  const raw = await storageAt(folder).read(safeName)
+  if (raw.status !== 'ok') return true // missing / unreadable — fail closed
+  const text = decodeSaved(raw.bytes)
   if (!text) return true
   const fmMatch = text.match(/^---\n([\s\S]*?)\n---/)
   if (!fmMatch) return true
@@ -836,11 +810,8 @@ const OWNED_FRONTMATTER_TYPES = new Set(['meeting-transcript', 'meeting-summary'
  */
 async function isOwnedMeetingFile(folder: string, file: string): Promise<boolean | typeof UNREADABLE> {
   if (DRAFT_FILENAME.test(file) || FILENAME_TIMESTAMP.test(file)) return true
-  const path = join(folder, file)
-  let raw: Buffer
-  try {
-    raw = await readFile(path)
-  } catch {
+  const raw = await storageAt(folder).read(file)
+  if (raw.status !== 'ok') {
     // A THROWN read is a transient "can't read it right now" (an EBUSY/EPERM AV/EDR or OneDrive
     // upload-hash lock, or an unhydrated Files-On-Demand placeholder — routine on this folder, see
     // transcripts.ts), NOT "not a meeting file". Report UNREADABLE so deleteAllMeetings surfaces it as a
@@ -848,8 +819,8 @@ async function isOwnedMeetingFile(folder: string, file: string): Promise<boolean
     return UNREADABLE
   }
   try {
-    const text = decodeSaved(raw)
-    if (!text) return isEncryptedFile(path)
+    const text = decodeSaved(raw.bytes)
+    if (!text) return isEncryptedBytes(raw.bytes)
     return OWNED_FRONTMATTER_TYPES.has(frontmatter(text).type)
   } catch {
     return false // decoded but unparseable — never guess, skip rather than risk deleting the wrong file

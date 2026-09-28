@@ -1,0 +1,140 @@
+name: ST-1 Storage Stall
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: 'Run id that produced the packaged QA candidate artifacts'
+        required: true
+        type: string
+      candidate_artifact:
+        description: 'Packaged candidate artifact name'
+        required: true
+        type: string
+      provenance_artifact:
+        description: 'Provenance artifact name'
+        required: true
+        type: string
+      fixtures:
+        description: 'Fixture mode for macOS lane'
+        required: true
+        default: fifo
+        type: choice
+        options:
+          - fifo
+          - dataless
+      minutes:
+        description: 'Minutes to measure'
+        required: true
+        default: '5'
+        type: string
+      windows_cloud_dir:
+        description: 'Optional Windows cloud-provider fixture directory'
+        required: false
+        type: string
+      windows_main_log:
+        description: 'Optional Windows packaged-app main log path'
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  macos:
+    name: ST-1 macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download candidate
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.candidate_run_id }}
+          name: ${{ inputs.candidate_artifact }}
+          path: ${{ runner.temp }}/candidate
+          github-token: ${{ github.token }}
+
+      - name: Download provenance
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.candidate_run_id }}
+          name: ${{ inputs.provenance_artifact }}
+          path: ${{ runner.temp }}/provenance
+          github-token: ${{ github.token }}
+
+      - name: Run ST-1
+        shell: bash
+        run: |
+          set -euo pipefail
+          installer="$(find "$RUNNER_TEMP/candidate" -type f \( -name '*.zip' -o -name '*.dmg' \) | head -n 1)"
+          provenance="$(find "$RUNNER_TEMP/provenance" -type f -name '*.json' | head -n 1)"
+          node scripts/qa/st-1.mjs \
+            --installer "$installer" \
+            --provenance "$provenance" \
+            --fixtures "${{ inputs.fixtures }}" \
+            --minutes "${{ inputs.minutes }}" \
+            --out "$RUNNER_TEMP/st-1-report-macos.json"
+
+      - name: Upload ST-1 report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: st-1-report-macos
+          path: ${{ runner.temp }}/st-1-report-macos.json
+          if-no-files-found: warn
+
+  windows:
+    name: ST-1-W Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download candidate
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.candidate_run_id }}
+          name: ${{ inputs.candidate_artifact }}
+          path: ${{ runner.temp }}\candidate
+          github-token: ${{ github.token }}
+
+      - name: Download provenance
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.candidate_run_id }}
+          name: ${{ inputs.provenance_artifact }}
+          path: ${{ runner.temp }}\provenance
+          github-token: ${{ github.token }}
+
+      - name: Run or mark ST-1-W
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'st-1-report-windows.json'
+          if (-not '${{ inputs.windows_cloud_dir }}' -or -not '${{ inputs.windows_main_log }}') {
+            @{
+              status = 'BLOCKED_EXTERNAL'
+              unblock = 'Dispatch this workflow with windows_cloud_dir and windows_main_log pointing at a Windows cloud-file-provider fixture and packaged-app main log.'
+              fixture = 'dataless'
+              platform = 'windows'
+            } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 $out
+            exit 0
+          }
+          $installer = Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP 'candidate') -Recurse -File -Include '*.exe' | Select-Object -First 1
+          $provenance = Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP 'provenance') -Recurse -File -Filter '*.json' | Select-Object -First 1
+          node scripts/qa/st-1.mjs `
+            --installer $installer.FullName `
+            --provenance $provenance.FullName `
+            --fixtures dataless `
+            --cloud-dir '${{ inputs.windows_cloud_dir }}' `
+            --main-log '${{ inputs.windows_main_log }}' `
+            --minutes '${{ inputs.minutes }}' `
+            --out $out
+
+      - name: Upload ST-1-W report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: st-1-report-windows
+          path: ${{ runner.temp }}\st-1-report-windows.json
+          if-no-files-found: warn
