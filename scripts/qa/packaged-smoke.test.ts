@@ -11,6 +11,7 @@ import {
   isOverlayUrl,
   parseAuditLog,
   readObservationTail,
+  initialRvRows,
   smokeReport,
   smokeVerdict
 } from './packaged-smoke.mjs'
@@ -42,6 +43,14 @@ interface Observation {
   exitMs: number | null
   audit: AuditRecord[]
   marker: boolean | null
+  rv: Array<{
+    id: string
+    reason: string
+    automation: string
+    status: string
+    evidence: { event: string; reason: string; outcome: string | null } | null
+    unblock: string | null
+  }>
   survivors: ProcessEntry[] | null
   survivorsGoneMs: number | null
 }
@@ -106,6 +115,48 @@ function goodObservation(): Observation {
       { event: 'app.shutdown.clean' }
     ],
     marker: true,
+    rv: [
+      {
+        id: 'RV-1-macos-open-activate',
+        reason: 'activate',
+        automation: 'open-app-path',
+        status: 'PASS',
+        evidence: { event: 'reveal', reason: 'activate', outcome: 'already-visible' },
+        unblock: null
+      },
+      {
+        id: 'RV-2-macos-open-new-instance',
+        reason: 'second-instance',
+        automation: 'open-new-instance',
+        status: 'PASS',
+        evidence: { event: 'reveal', reason: 'second-instance', outcome: 'already-visible' },
+        unblock: null
+      },
+      {
+        id: 'RV-4-tray-show',
+        reason: 'tray',
+        automation: 'external-ui',
+        status: 'BLOCKED_EXTERNAL',
+        evidence: null,
+        unblock: 'Run this row on a QA desktop with the packaged app installed and file the content-free smoke artifact.'
+      },
+      {
+        id: 'RV-4-global-hotkey',
+        reason: 'hotkey',
+        automation: 'external-ui',
+        status: 'BLOCKED_EXTERNAL',
+        evidence: null,
+        unblock: 'Run this row on a QA desktop with the packaged app installed and file the content-free smoke artifact.'
+      },
+      {
+        id: 'RV-1-macos-finder-spotlight-launchpad',
+        reason: 'activate',
+        automation: 'external-ui',
+        status: 'BLOCKED_EXTERNAL',
+        evidence: null,
+        unblock: 'Run this row on a QA desktop with the packaged app installed and file the content-free smoke artifact.'
+      }
+    ],
     survivors: [],
     survivorsGoneMs: 300
   }
@@ -148,6 +199,11 @@ describe('smokeVerdict', () => {
       'a process survived the bound',
       (o) => { o.survivors = [{ pid: 999, ppid: 1, startedMs: 1, exe: null, role: 'Straggler' }] },
       'processes_survived'
+    ],
+    [
+      'an automated RV row failed',
+      (o) => { o.rv[0] = { ...o.rv[0], status: 'FAIL', evidence: null } },
+      'rv_reopen_failed'
     ]
   ]
 
@@ -172,6 +228,7 @@ describe('smokeVerdict', () => {
       exitMs: null,
       audit: [{ event: 'app.started', version: '1.9.7', platform: 'darwin', arch: 'arm64' }],
       marker: null,
+      rv: initialRvRows('darwin'),
       survivors: null,
       survivorsGoneMs: null
     }
@@ -181,7 +238,7 @@ describe('smokeVerdict', () => {
 })
 
 describe('smokeReport', () => {
-  it('returns exactly the schema-1 key set and leaks no path, command-line or free-text content', () => {
+  it('returns exactly the schema-1 key set and leaks no path, command-line or audit detail', () => {
     const secretPath = '/opt/smoke/should-not-leak/crash.log'
     const secretBootId = 'BOOT-SECRET-1234'
     const observation = {
@@ -217,6 +274,7 @@ describe('smokeReport', () => {
       'timingsMs',
       'exit',
       'shutdown',
+      'rv',
       'processes'
     ])
     expect(Object.keys(report.app ?? {})).toEqual(['version', 'platform', 'arch'])
@@ -241,6 +299,7 @@ describe('smokeReport', () => {
       exitMs: null,
       audit: [],
       marker: null,
+      rv: initialRvRows('darwin'),
       survivors: null,
       survivorsGoneMs: null
     }
@@ -258,6 +317,36 @@ describe('smokeReport', () => {
     })
     expect(report.timingsMs).toEqual({ ready: null, exit: null, survivorsGone: null })
     expect(report.processes).toEqual({ atQuit: null, survivors: null })
+  })
+})
+
+describe('initialRvRows', () => {
+  it('tracks the macOS hosted reopen rows and marks shell UI paths as explicit external blockers', () => {
+    const rows = initialRvRows('darwin')
+
+    expect(rows.map((row) => row.id)).toEqual([
+      'RV-1-macos-open-activate',
+      'RV-2-macos-open-new-instance',
+      'RV-4-tray-show',
+      'RV-4-global-hotkey',
+      'RV-1-macos-finder-spotlight-launchpad'
+    ])
+    expect(rows.find((row) => row.id === 'RV-1-macos-open-activate')?.status).toBe('PENDING')
+    expect(rows.find((row) => row.id === 'RV-4-tray-show')?.status).toBe('BLOCKED_EXTERNAL')
+    expect(rows.find((row) => row.id === 'RV-4-tray-show')?.unblock).toContain('QA desktop')
+  })
+
+  it('tracks the Windows hosted relaunch row plus the desktop-only shortcut rows', () => {
+    const rows = initialRvRows('win32')
+
+    expect(rows.map((row) => row.id)).toEqual([
+      'RV-3-windows-exe-relaunch',
+      'RV-4-tray-show',
+      'RV-4-global-hotkey',
+      'RV-3-windows-shortcut-relaunch'
+    ])
+    expect(rows.find((row) => row.id === 'RV-3-windows-exe-relaunch')?.status).toBe('PENDING')
+    expect(rows.find((row) => row.id === 'RV-3-windows-shortcut-relaunch')?.status).toBe('BLOCKED_EXTERNAL')
   })
 })
 

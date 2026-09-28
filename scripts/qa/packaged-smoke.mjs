@@ -37,6 +37,7 @@ const QUIT_TIMEOUT_MS = 30_000 // before-quit defers at most 2s (live meeting on
 const SURVIVOR_BOUND_MS = 5_000 // owned processes must be gone within 5s of main exiting (M2-0028, M2-0029)
 const AUDIT_POLL_MS = 250
 const CENSUS_POLL_MS = 500
+const RV_TIMEOUT_MS = 15_000
 
 export const LIFECYCLE_EVENTS = Object.freeze([
   'app.started',
@@ -45,6 +46,16 @@ export const LIFECYCLE_EVENTS = Object.freeze([
   'app.crash',
   'app.unresponsive',
   'app.shutdown.clean'
+])
+
+export const RV_SCENARIOS = Object.freeze([
+  { id: 'RV-1-macos-open-activate', platform: 'darwin', reason: 'activate', automation: 'open-app-path' },
+  { id: 'RV-2-macos-open-new-instance', platform: 'darwin', reason: 'second-instance', automation: 'open-new-instance' },
+  { id: 'RV-3-windows-exe-relaunch', platform: 'win32', reason: 'second-instance', automation: 'exe-relaunch' },
+  { id: 'RV-4-tray-show', platform: 'all', reason: 'tray', automation: 'external-ui' },
+  { id: 'RV-4-global-hotkey', platform: 'all', reason: 'hotkey', automation: 'external-ui' },
+  { id: 'RV-1-macos-finder-spotlight-launchpad', platform: 'darwin', reason: 'activate', automation: 'external-ui' },
+  { id: 'RV-3-windows-shortcut-relaunch', platform: 'win32', reason: 'second-instance', automation: 'external-ui' }
 ])
 
 /** JSON-lines audit transport ('{text}', logger.ts): blank and malformed lines are skipped, never guessed. */
@@ -108,12 +119,16 @@ export function smokeVerdict(observation) {
       (!hasEvent(observation.audit, 'app.shutdown.clean') || observation.marker !== true)
   )
   fail('processes_survived', observation.survivors !== null && observation.survivors.length > 0)
+  fail(
+    'rv_reopen_failed',
+    Array.isArray(observation.rv) && observation.rv.some((row) => row.status === 'FAIL' && row.automation !== 'external-ui')
+  )
   fail('smoke_incomplete', failures.length === 0 && observation.survivors === null)
 
   return { result: failures.length === 0 ? 'pass' : 'fail', failures }
 }
 
-/** The schema-1, content-free report: no paths, command lines, env values, audit detail or free text. */
+/** The schema-1, content-free report: no paths, command lines, env values or audit detail. */
 export function smokeReport(observation) {
   const { result, failures } = smokeVerdict(observation)
   const started = observation.audit.find((record) => record.event === 'app.started')
@@ -137,10 +152,105 @@ export function smokeReport(observation) {
       audited: hasEvent(observation.audit, 'app.shutdown.clean'),
       marker: observation.marker
     },
+    rv: observation.rv,
     processes: {
       atQuit: observation.ownedAtQuit === null ? null : roleCounts(observation.ownedAtQuit),
       survivors: observation.survivors === null ? null : roleCounts(observation.survivors)
     }
+  }
+}
+
+export function initialRvRows(platform) {
+  return RV_SCENARIOS
+    .filter((scenario) => scenario.platform === 'all' || scenario.platform === platform)
+    .map((scenario) => ({
+      id: scenario.id,
+      reason: scenario.reason,
+      automation: scenario.automation,
+      status: scenario.automation === 'external-ui' ? 'BLOCKED_EXTERNAL' : 'PENDING',
+      evidence: null,
+      unblock:
+        scenario.automation === 'external-ui'
+          ? 'Run this row on a QA desktop with the packaged app installed and file the content-free smoke artifact.'
+          : null
+    }))
+}
+
+function completeRvRow(rows, id, patch) {
+  const row = rows.find((entry) => entry.id === id)
+  if (row) Object.assign(row, patch)
+}
+
+function runProcess(file, args, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false
+    const child = spawn(file, args, { stdio: 'ignore', detached: false })
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        /* already gone */
+      }
+      resolve({ code: null, signal: 'timeout', error: false })
+    }, timeoutMs)
+    child.once('error', () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ code: null, signal: null, error: true })
+    })
+    child.once('exit', (code, signal) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ code, signal, error: false })
+    })
+  })
+}
+
+async function waitForReveal(auditLogPath, reason, seenCount) {
+  const deadline = Date.now() + RV_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    const records = parseAuditLog(readAuditLog(auditLogPath))
+    const matches = records.filter((record) => record.event === 'reveal' && record.reason === reason)
+    if (matches.length > seenCount) return matches[matches.length - 1]
+    await sleep(AUDIT_POLL_MS)
+  }
+  return null
+}
+
+async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows }) {
+  if (platform === 'darwin') {
+    const activateSeen = parseAuditLog(readAuditLog(auditLogPath)).filter((r) => r.event === 'reveal' && r.reason === 'activate').length
+    const activate = await runProcess('open', [target], 10_000)
+    const activateReveal = activate.error ? null : await waitForReveal(auditLogPath, 'activate', activateSeen)
+    completeRvRow(rows, 'RV-1-macos-open-activate', {
+      status: activateReveal ? 'PASS' : 'FAIL',
+      evidence: activateReveal ? { event: 'reveal', reason: 'activate', outcome: activateReveal.outcome ?? null } : null,
+      unblock: activateReveal ? null : 'Inspect the packaged-smoke artifact and the app audit log for the missing activate reveal event.'
+    })
+
+    const secondSeen = parseAuditLog(readAuditLog(auditLogPath)).filter((r) => r.event === 'reveal' && r.reason === 'second-instance').length
+    const second = await runProcess('open', ['-n', target], 10_000)
+    const secondReveal = second.error ? null : await waitForReveal(auditLogPath, 'second-instance', secondSeen)
+    completeRvRow(rows, 'RV-2-macos-open-new-instance', {
+      status: secondReveal ? 'PASS' : 'FAIL',
+      evidence: secondReveal ? { event: 'reveal', reason: 'second-instance', outcome: secondReveal.outcome ?? null } : null,
+      unblock: secondReveal ? null : 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
+    })
+  }
+
+  if (platform === 'win32') {
+    const secondSeen = parseAuditLog(readAuditLog(auditLogPath)).filter((r) => r.event === 'reveal' && r.reason === 'second-instance').length
+    const second = await runProcess(executable, [], 10_000)
+    const secondReveal = second.error ? null : await waitForReveal(auditLogPath, 'second-instance', secondSeen)
+    completeRvRow(rows, 'RV-3-windows-exe-relaunch', {
+      status: secondReveal ? 'PASS' : 'FAIL',
+      evidence: secondReveal ? { event: 'reveal', reason: 'second-instance', outcome: secondReveal.outcome ?? null } : null,
+      unblock: secondReveal ? null : 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
+    })
   }
 }
 
@@ -263,6 +373,7 @@ async function main() {
     exitMs: null,
     audit: [],
     marker: null,
+    rv: initialRvRows(platform),
     survivors: null,
     survivorsGoneMs: null
   }
@@ -320,6 +431,8 @@ async function main() {
     if (observation.launchFailed) return
 
     if (observation.readyMs !== null && !observation.exitedEarly) {
+      await runPackagedRvRows({ platform, target, executable, auditLogPath, rows: observation.rv })
+
       const survivalDeadline = Date.now() + SURVIVAL_MS
       while (Date.now() < survivalDeadline) {
         const records = parseAuditLog(readAuditLog(auditLogPath))
