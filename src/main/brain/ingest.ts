@@ -1379,6 +1379,11 @@ function preserveSourceRefreshWork(idx: BrainIndex): void {
   observeClaimedSourceRefreshWork()
 }
 
+function preserveSourceRefreshRetryWork(keys: ReadonlySet<string>): void {
+  if (keys.size === 0) return
+  sourceRefreshScanRetryKeys = new Set([...sourceRefreshScanRetryKeys, ...keys])
+}
+
 class PublicationFailure extends Error {
   constructor(error: unknown) { super(error instanceof Error ? error.message : String(error)) }
 }
@@ -2195,15 +2200,14 @@ function replayAfterDrain(s: Settings, onFinished?: () => void | Promise<void>):
 
 async function startReplayBackfill(s: Settings, options: BackfillStartOptions, onFinished?: () => void | Promise<void>): Promise<BackfillStartResult> {
   const callback = replayAfterDrain(s, onFinished)
-  if (options.allowSourceRefresh && sourceRefreshWorkKeys.size > 0) {
-    sourceRefreshScanRetryKeys = new Set([...sourceRefreshScanRetryKeys, ...sourceRefreshWorkKeys])
-  }
+  const retryKeys = options.allowSourceRefresh ? new Set(sourceRefreshWorkKeys) : new Set<string>()
+  preserveSourceRefreshRetryWork(retryKeys)
   try { return await startBackfill(callback, options) } catch (error) {
     // A failed scan must not leave a phantom queued replay that prevents a later repaired-folder retry
     // from registering the real callback.
     unregisterDrainCallback(callback)
     if (callback) rebuildReplayQueued = false
-    if (options.allowSourceRefresh) sourceRefreshScanRetryKeys = new Set([...sourceRefreshScanRetryKeys, ...sourceRefreshWorkKeys])
+    preserveSourceRefreshRetryWork(retryKeys)
     completionError('scan-failed')
     throw new BackfillScanFailure(error)
   }
@@ -2399,6 +2403,7 @@ export async function requestSourceRefresh(s: Settings = getSettings()): Promise
   try {
     const idx = await readIndexAsync(s)
     sourceRefreshWorkKeys = claimSourceRefreshWork(idx)
+    preserveSourceRefreshRetryWork(sourceRefreshWorkKeys)
     const scan = await scanMeetingSources(s)
     const localKeys = new Set(
       scan.flatMap((folder) =>
@@ -2408,8 +2413,10 @@ export async function requestSourceRefresh(s: Settings = getSettings()): Promise
       )
     )
     if (localKeys.size > 0) sourceRefreshWorkKeys = localKeys
+    preserveSourceRefreshRetryWork(sourceRefreshWorkKeys)
   } catch {
     if (sourceRefreshWorkKeys.size === 0) sourceRefreshWorkKeys = claimSourceRefreshWork(readIndex(s))
+    preserveSourceRefreshRetryWork(sourceRefreshWorkKeys)
   }
   await updateIndex(s, (idx) => {
     idx.sourceRefreshRequested = true
@@ -2428,6 +2435,8 @@ async function maybeStartSourceRefreshAsync(): Promise<void> {
   }
   const idx = await readIndexAsync(s)
   if (!idx.sourceRefreshRequested || idx.replayPending || !hasUsableProvider(s)) return
+  preserveSourceRefreshWork(idx)
+  preserveSourceRefreshRetryWork(sourceRefreshWorkKeys)
   sourceRefreshRunning = true
   void startRebuild(s, {
     sourceRefresh: true,
