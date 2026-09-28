@@ -609,7 +609,7 @@ func runSupervise(_ options: [String]) -> Never {
     var child: pid_t = 0
     let spawnResult = command.withCString { commandC in
         argv.withUnsafeBufferPointer { buffer in
-            posix_spawn(&child, commandC, nil, nil, UnsafeMutablePointer(mutating: buffer.baseAddress!), _NSGetEnviron()!.pointee)
+            posix_spawn(&child, commandC, nil, nil, UnsafeMutablePointer(mutating: buffer.baseAddress!), environ)
         }
     }
     guard spawnResult == 0 else {
