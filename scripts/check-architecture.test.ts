@@ -169,6 +169,8 @@ function createLayeringFixture(): { root: string } {
     'export const cycleB = true',
   ].join('\n'))
   writeFixtureFile(root, 'src/dead.ts', 'export const dead = true\n')
+  // Test-only helper no entry point reaches: FF-03 must not count it (dead.ts above is still counted).
+  writeFixtureFile(root, 'src/main/test-helpers/settle.ts', 'export const settle = true\n')
   writeFixtureFile(root, 'src/shared/alias-target.ts', 'export const sharedAlias = true\n')
   writeFixtureFile(root, 'src/alias-root.ts', 'export const rootAlias = true\n')
   writeFixtureFile(root, 'src/renderer/src/lib/whisper.worker.ts', 'export const workerEntry = true\n')

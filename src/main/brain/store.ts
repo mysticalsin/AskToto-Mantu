@@ -296,7 +296,7 @@ export function cloneEntity<T>(entity: T): T {
   return JSON.parse(JSON.stringify(entity)) as T
 }
 
-let entityMutationLock: Promise<void> = Promise.resolve()
+export let entityMutationLock: Promise<void> = Promise.resolve()
 export function withEntityLock<T>(fn: () => Promise<T>): Promise<T> {
   const run = entityMutationLock.then(fn)
   // Never let a rejection wedge the lane for the next caller — mirrors ingest.ts's own indexLock
@@ -306,19 +306,6 @@ export function withEntityLock<T>(fn: () => Promise<T>): Promise<T> {
     () => undefined
   )
   return run
-}
-
-/** Test-only: wait for the entity-mutation lane (account/person/deal/graph writes, corrections, publish)
- *  to go idle. Loops because a write already in flight can chain another (e.g. a correction replay, or
- *  the publish call inside a backfill's own withEntityLock) before a single await would return — a
- *  suite's cleanup that deletes the profile right after only the FIRST write settled would still race the
- *  next one. */
-export async function whenEntityWritesSettle(): Promise<void> {
-  let seen: Promise<void> | null = null
-  while (seen !== entityMutationLock) {
-    seen = entityMutationLock
-    await seen
-  }
 }
 
 // ── v1 → v2 lazy migration (B2) ──────────────────────────────────────────────
