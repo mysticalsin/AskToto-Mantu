@@ -43,12 +43,12 @@
   "FF-04": {
     "src/main/auth.ts": 999,
     "src/main/brain/corrections.ts": 1629,
-    "src/main/brain/ingest.ts": 2905,
+    "src/main/brain/ingest.ts": 2911,
     "src/main/brain/publish.ts": 990,
     "src/main/brain/store.ts": 1043,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 9845,
+    "src/main/index.ts": 9883,
     "src/main/recall.ts": 979,
     "src/main/store.ts": 1367,
     "src/main/transcripts.ts": 1193,
@@ -60,9 +60,9 @@
     "src/renderer/src/components/OnboardingExperience.tsx": 1921,
     "src/renderer/src/components/RecallView.tsx": 1349,
     "src/renderer/src/components/Review.tsx": 1950,
-    "src/renderer/src/components/Settings.tsx": 9481,
+    "src/renderer/src/components/Settings.tsx": 9535,
     "src/renderer/src/lib/listen.ts": 3153,
-    "src/shared/ipc.ts": 2443
+    "src/shared/ipc.ts": 2451
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
@@ -110,6 +110,7 @@
     "src/main/mcp/pushQueue.ts": 4,
     "src/main/metrics.ts": 2,
     "src/main/mode-skills.ts": 12,
+    "src/main/model-policy-client.ts": 6,
     "src/main/operator-queue.ts": 7,
     "src/main/operator-skill-key.ts": 2,
     "src/main/parakeet.ts": 2,
@@ -197,6 +198,7 @@
     "src/main/main-lifecycle.contract.test.ts": 2,
     "src/main/managed-node.test.ts": 1,
     "src/main/metis-command-boundary.contract.test.ts": 4,
+    "src/main/model-policy-contract.test.ts": 12,
     "src/main/mqa-175-brain-index-poison.test.ts": 5,
     "src/main/no-emotion-inference.contract.test.ts": 5,
     "src/main/no-show-steals-focus.contract.test.ts": 2,
