@@ -189,10 +189,13 @@ describe('spawnSidecarProcess', () => {
 })
 
 describe('stopSidecarProcess', () => {
-  function supervisedFake(pid = 4321): import('node:child_process').ChildProcess {
-    const child = fakeProc(pid)
-    spawnMock.spawn.mockReturnValue(child)
-    return spawnSidecarProcess(
+  function supervisedFake(pid = 4321): {
+    supervised: import('node:child_process').ChildProcess
+    wrapper: import('node:child_process').ChildProcess
+  } {
+    const wrapper = fakeProc(pid)
+    spawnMock.spawn.mockReturnValue(wrapper)
+    const supervised = spawnSidecarProcess(
       'llama-server',
       '/bin/llama-server',
       [],
@@ -201,27 +204,28 @@ describe('stopSidecarProcess', () => {
       { METIS_SIDECAR_SUPERVISION: '1' },
       'darwin'
     ).child
+    return { supervised, wrapper }
   }
 
   it('kills a supervised wrapper process group first on POSIX, using the negative child pid', () => {
-    const child = supervisedFake(4321)
+    const { supervised, wrapper } = supervisedFake(4321)
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
 
-    stopSidecarProcess(child)
+    stopSidecarProcess(supervised)
 
     expect(kill).toHaveBeenCalledWith(-4321, 'SIGKILL')
-    expect(child.kill).not.toHaveBeenCalled()
+    expect(wrapper.kill).not.toHaveBeenCalled()
   })
 
   it('falls back to child.kill when the process group is unavailable', () => {
-    const child = supervisedFake(4321)
+    const { supervised, wrapper } = supervisedFake(4321)
     vi.spyOn(process, 'kill').mockImplementation(() => {
       throw new Error('no group')
     })
 
-    stopSidecarProcess(child)
+    stopSidecarProcess(supervised)
 
-    expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(wrapper.kill).toHaveBeenCalledWith('SIGKILL')
   })
 
   it('uses the original direct child kill for unsupervised processes', () => {
