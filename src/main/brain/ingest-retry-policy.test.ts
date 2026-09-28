@@ -160,6 +160,9 @@ describe('M2-0033 retry policy across backfill callers', () => {
     resetSecretKeyCache()
     const storage = await import('../infra/storage/meetings-storage')
     storage.useStorageForTests()
+    const freshStore = await import('../store')
+    freshStore.setSettings({ meetingsFolder })
+    freshStore.setApiKey('anthropic', 'fake-anthropic-key')
     const ingest = await import('./ingest')
     const consolidate = await import('./consolidate')
     const intelligence = await import('./intelligence-index')
@@ -173,7 +176,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
     ingest.requestBackfill()
     await intelligence.catchUpIntelligenceIndexIfNeeded()
     await waitForIdle(ingest)
-    return { ingest, store: await import('./store') }
+    return { ingest, store: await import('./store'), ledger: await import('./ledger'), appStore: freshStore }
   }
 
   beforeEach(async () => {
@@ -205,9 +208,10 @@ describe('M2-0033 retry policy across backfill callers', () => {
       unreadable: readIndex(getSettings()).ingested['unreadable.md']
     }
 
-    for (let i = 0; i < 3; i++) await relaunch()
+    let launched!: Awaited<ReturnType<typeof relaunch>>
+    for (let i = 0; i < 3; i++) launched = await relaunch()
 
-    const idx = readIndex(getSettings())
+    const idx = launched.ledger.readIndex(getSettings())
     expect(idx.ingested['backedoff.md']).toEqual(seeded.backedoff)
     expect(idx.ingested['exhausted.md']).toEqual(seeded.exhausted)
     expect(idx.ingested['unreadable.md']).toEqual(seeded.unreadable)
@@ -217,15 +221,17 @@ describe('M2-0033 retry policy across backfill callers', () => {
   })
 
   it('EX-1: an eligible source is extracted exactly once across three relaunches', async () => {
-    for (let i = 0; i < 3; i++) await relaunch()
+    let launched!: Awaited<ReturnType<typeof relaunch>>
+    for (let i = 0; i < 3; i++) launched = await relaunch()
     expect(modelMarkers.filter((marker) => marker === 'eligible')).toHaveLength(1)
-    expect(readIndex(getSettings()).ingested['eligible.md']?.ok).toBe(true)
+    expect(launched.ledger.readIndex(getSettings()).ingested['eligible.md']?.ok).toBe(true)
   })
 
   it('EX-1: a completed-but-unacknowledged extraction is merged without any model call and is not repeated', async () => {
-    for (let i = 0; i < 3; i++) await relaunch()
+    let launched!: Awaited<ReturnType<typeof relaunch>>
+    for (let i = 0; i < 3; i++) launched = await relaunch()
     expect(modelMarkers).not.toContain('unacked')
-    expect(readIndex(getSettings()).ingested['unacked.md']?.ok).toBe(true)
+    expect(launched.ledger.readIndex(getSettings()).ingested['unacked.md']?.ok).toBe(true)
   })
 
   it('EX-1: each automatic scan audits scheduler.job with heldExhausted, heldBackedOff and heldUnreadable counts and no file names', async () => {

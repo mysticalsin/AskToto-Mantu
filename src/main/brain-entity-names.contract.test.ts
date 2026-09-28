@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
  * wants one deduped name list. This pins that flat shape so a future refactor can't split it back into
  * { people, accounts } and silently break every reader again.
  */
-const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const dashboardReadSrc = readFileSync(join(__dirname, 'brain', 'dashboard-read.ts'), 'utf8')
 const ipcSrc = readFileSync(join(__dirname, '..', 'shared', 'ipc.ts'), 'utf8')
 
 describe('MQA-115 — brainEntityNames returns a flat { names }, not { people, accounts }', () => {
@@ -23,15 +23,11 @@ describe('MQA-115 — brainEntityNames returns a flat { names }, not { people, a
   })
 
   it('the handler merges people + accounts into one deduped names array', () => {
-    const handler = indexSrc.slice(
-      indexSrc.indexOf('ipcMain.handle(IPC.brainEntityNames'),
-      indexSrc.indexOf('ipcMain.handle(IPC.brainSetDealOutcome')
-    )
     // Both sources feed the one array…
-    expect(handler).toMatch(/loadBrainEntitySlugs\(s, 'person'\)/)
-    expect(handler).toMatch(/loadBrainEntitySlugs\(s, 'account'\)/)
+    expect(dashboardReadSrc).toMatch(/loadEntitySlugs\(s, 'person'\)/)
+    expect(dashboardReadSrc).toMatch(/loadEntitySlugs\(s, 'account'\)/)
     // …merged + deduped into a single { names } return, never a { people, accounts } object.
-    expect(handler).toMatch(/return \{ names: Array\.from\(new Set\(\[\.\.\.personNames, \.\.\.accountNames\]\)\)/)
-    expect(handler).not.toMatch(/return \{\s*people,\s*accounts\s*\}/)
+    expect(dashboardReadSrc).toMatch(/return \{ names: Array\.from\(new Set\(\[\.\.\.personNames, \.\.\.accountNames\]\)\)/)
+    expect(dashboardReadSrc).not.toMatch(/return \{\s*people,\s*accounts\s*\}/)
   })
 })

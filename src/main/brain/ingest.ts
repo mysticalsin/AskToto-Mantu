@@ -1459,8 +1459,7 @@ function hasActiveBackfill(): boolean {
  * zero throughput while occupying the slot the live meeting's own summary/recap needs. One at a time is
  * all the sidecar can actually do, and it leaves the live path a slot to land on.
  */
-function extractConcurrency(s: Settings, job?: Job): number {
-  if (job?.origin === 'backfill' && job.trigger !== 'user' && job.strategy !== 'reconcile') return 1
+function extractConcurrency(s: Settings): number {
   return pickProviderCandidates(s)[0]?.provider === 'local' ? 1 : EXTRACT_CONCURRENCY
 }
 
@@ -1985,7 +1984,7 @@ function pump(): void {
     // MQA-048: the sidecar cannot run two extractions at once, so starting a second only steals the live
     // meeting's slot. Checked after the search, not in the while condition, so the single-job path never
     // pays for a Settings read it cannot act on.
-    if (extracting.size > 0 && extractConcurrency(s ?? getSettings(), queue[idx]) <= extracting.size) break
+    if (extracting.size > 0 && extractConcurrency(s ?? getSettings()) <= extracting.size) break
     loggedNoProviderStall = false
     const [job] = queue.splice(idx, 1)
     extracting.add(job)
@@ -2265,7 +2264,6 @@ export async function startRebuild(s: Settings, options: StartRebuildOptions = {
 }
 
 async function performStartRebuild(s: Settings, options: StartRebuildOptions): Promise<{ queued: number; error?: string }> {
-  const beforeEntry = readIndex(s)
   // Do not wipe usable derived data just to discover that no configured provider can recreate it.
   if (!hasUsableProvider(s)) {
     return { queued: 0, error: intelligenceNoProviderMessage(s, 'Connect an AI provider in Settings → AI, or enable Métis Local summaries before rebuilding Mantu Intelligence.') }
@@ -2318,9 +2316,6 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
     i.revision = before.revision + 1
     i.sourceRefreshRequested = preserveSourceRefresh
   })
-  {
-    const afterPurge = readIndex(s)
-  }
   const r = await startReplayBackfill(s, { allowSourceRefresh: true }, options.onFinished)
   return { queued: r.queued }
 }

@@ -10,31 +10,17 @@ vi.mock('electron')
  * MI-2.5-JOURNAL Fix F + Fix H — durability of two store.ts safety nets under a simulated mid-operation
  * failure: purgeBrain's correction-journal escrow (Fix F) and ensureV1Backup's one-time safety copy
  * (Fix H). Both need a REAL fs failure partway through a multi-step operation, which a plain temp
- * directory can't reproduce deterministically — so `node:fs`'s `rmSync`/`cpSync` are partially mocked
+ * directory can't reproduce deterministically — so `node:fs/promises`'s `rm` and `node:fs`'s `cpSync` are partially mocked
  * here (one-shot, opt-in per test) rather than in the shared brain.test.ts, to avoid destabilizing every
  * other brain test that also exercises the real filesystem through the same module.
  */
-let mockRmSyncFailOnce = false
+let mockRmAsyncFailOnce = false
 let mockCpSyncFailOnce = false
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
   return {
     ...actual,
-    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
-      // Really deletes (so the caller ends up in the REALISTIC "root actually got wiped" state), then
-      // reports failure — simulating an rmSync call that completes its work but surfaces a late error
-      // (or, from the caller's point of view, is indistinguishable from one that failed after doing
-      // most/all of its job — the property under test is recovery, not exactly which files survived).
-      const result = actual.rmSync(...args)
-      if (mockRmSyncFailOnce) {
-        mockRmSyncFailOnce = false
-        const err = new Error('EPERM: simulated file lock (OneDrive/AV) mid-wipe') as NodeJS.ErrnoException
-        err.code = 'EPERM'
-        throw err
-      }
-      return result
-    },
     cpSync: (...args: Parameters<typeof actual.cpSync>) => {
       if (mockCpSyncFailOnce) {
         mockCpSyncFailOnce = false
@@ -52,6 +38,25 @@ vi.mock('node:fs', async (importOriginal) => {
   }
 })
 
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    rm: async (...args: Parameters<typeof actual.rm>) => {
+      // Really deletes (so the caller ends up in the REALISTIC "root actually got wiped" state), then
+      // reports failure — simulating an rm call that completes its work but surfaces a late error.
+      const result = await actual.rm(...args)
+      if (mockRmAsyncFailOnce) {
+        mockRmAsyncFailOnce = false
+        const err = new Error('EPERM: simulated file lock (OneDrive/AV) mid-wipe') as NodeJS.ErrnoException
+        err.code = 'EPERM'
+        throw err
+      }
+      return result
+    }
+  }
+})
+
 // Imported AFTER the mock factory is declared (vi.mock is hoisted above this regardless of source order).
 const { purgeBrain, brainDir, readPerson, writePerson } = await import('./store')
 
@@ -62,11 +67,11 @@ describe('purgeBrain — escrow recovery on a failed wipe (Fix F)', () => {
   beforeEach(() => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-purge-escrow-'))
     s = { meetingsFolder: folder } as Settings
-    mockRmSyncFailOnce = false
+    mockRmAsyncFailOnce = false
     mockCpSyncFailOnce = false
   })
   afterEach(() => {
-    mockRmSyncFailOnce = false
+    mockRmAsyncFailOnce = false
     mockCpSyncFailOnce = false
     realRmSync(folder, { recursive: true, force: true })
   })
@@ -84,7 +89,7 @@ describe('purgeBrain — escrow recovery on a failed wipe (Fix F)', () => {
     ]
     writeFileSync(join(brainDir(s), 'corrections.json'), JSON.stringify(journalContent), 'utf8')
 
-    mockRmSyncFailOnce = true
+    mockRmAsyncFailOnce = true
     const r = await purgeBrain(s, { mode: 'rebuild', preserveCorrections: true })
 
     expect(r.ok).toBe(false) // the wipe genuinely failed — caller must abort, not assume success
@@ -116,11 +121,11 @@ describe('ensureV1Backup — retry after a failed cpSync, no partial dir mistake
   beforeEach(() => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-backup-retry-'))
     s = { meetingsFolder: folder } as Settings
-    mockRmSyncFailOnce = false
+    mockRmAsyncFailOnce = false
     mockCpSyncFailOnce = false
   })
   afterEach(() => {
-    mockRmSyncFailOnce = false
+    mockRmAsyncFailOnce = false
     mockCpSyncFailOnce = false
     realRmSync(folder, { recursive: true, force: true })
   })

@@ -1186,8 +1186,11 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     const before = parseEnvelope(file)
     process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
     decryptToTemp(file)
-    const after = parseEnvelope(file)
     expect((before.kLocal as string).startsWith('S:')).toBe(true)
+    await vi.waitFor(() => {
+      expect((parseEnvelope(file).kLocal as string).startsWith('F:')).toBe(true)
+    })
+    const after = parseEnvelope(file)
     expect((after.kLocal as string).startsWith('F:')).toBe(true)
     expect(after.iv).toBe(before.iv)
     expect(after.tag).toBe(before.tag)

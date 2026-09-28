@@ -311,9 +311,9 @@ describe('rebuild preserves unreadable indexes', () => {
     const bytes = foreignFileEnvelope()
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
-    vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => {
+    vi.spyOn(fsp, 'rm').mockImplementation(async (path, options) => {
       if (path === brainDir(settings)) throw new Error('simulated crash')
-      return actualFs.rmSync!(path, options)
+      return actualFsp.rm!(path, options)
     })
 
     expect((await purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })).ok).toBe(false)

@@ -232,13 +232,13 @@ async function ensureDirs(settings: Settings): Promise<void> {
   await Promise.all(leaves.map((leaf) => mkdir(join(root, leaf), { recursive: true })))
 }
 
-// Per-file parse cache validated by (mtimeMs, size), mirroring the proven pattern in recall.ts (readCache).
+// Per-file parse cache validated by (mtimeMs, ctimeMs, size), mirroring the proven pattern in recall.ts (readCache).
 // Three independent pollers (Mantu Intelligence dashboard status, RecallView's brain badge, the full
 // brainRead dataset) hit these same index/graph/entity files every 3-10s — without this, every poll
 // re-read + decrypted + JSON.parsed + zod-validated every file from scratch. A stat() replaces that full
-// round trip when the file is unchanged; any mtime/size change (including our own writes, see writeJson
+// round trip when the file is unchanged; any mtime/ctime/size change (including our own writes, see writeJson
 // below) re-reads. Corrupt/absent files cache `null` too, so they stop costing repeated reads.
-const jsonCache = new Map<string, { mtimeMs: number; size: number; value: unknown }>()
+const jsonCache = new Map<string, { mtimeMs: number; ctimeMs: number; size: number; value: unknown }>()
 const JSON_CACHE_MAX = 2000 // safety valve — see recall.ts's identical guard
 
 /** Bumps on every writeJson. Receipt Mode's match-key cache must not rely on directory mtime alone:
@@ -255,17 +255,19 @@ export function brainWriteGeneration(): number {
 export function readJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T): T | null {
   const p = join(brainDir(settings), rel)
   let mtimeMs: number
+  let ctimeMs: number
   let size: number
   try {
     const st = statSync(p)
     mtimeMs = st.mtimeMs
+    ctimeMs = st.ctimeMs
     size = st.size
   } catch {
     jsonCache.delete(p)
     return null
   }
   const hit = jsonCache.get(p)
-  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.value as T
+  if (hit && hit.mtimeMs === mtimeMs && hit.ctimeMs === ctimeMs && hit.size === size) return hit.value as T
   let value: T | null
   try {
     value = parse(JSON.parse(readSavedFile(p)))
@@ -275,12 +277,12 @@ export function readJson<T>(settings: Settings, rel: string, parse: (v: unknown)
     value = null
   }
   if (jsonCache.size >= JSON_CACHE_MAX) jsonCache.clear()
-  jsonCache.set(p, { mtimeMs, size, value })
+  jsonCache.set(p, { mtimeMs, ctimeMs, size, value })
   return value
 }
 
 /** Content identity of a file version (M2-0003's key): what changes when the bytes change. */
-export type ContentIdentity = Pick<ContentVersion, 'mtimeMs' | 'size'>
+export type ContentIdentity = Pick<ContentVersion, 'mtimeMs' | 'ctimeMs' | 'size'>
 
 export type BrainFileRead<Held> =
   | { status: 'unchanged'; held: Held }
@@ -289,8 +291,8 @@ export type BrainFileRead<Held> =
   | { status: 'cloud-only' }
   | { status: 'unreadable'; code: string }
 
-function identityOf({ mtimeMs, size }: ContentIdentity): ContentIdentity {
-  return { mtimeMs, size }
+function identityOf({ mtimeMs, ctimeMs, size }: ContentIdentity): ContentIdentity {
+  return { mtimeMs, ctimeMs, size }
 }
 
 function failureCode(fileClass: { status: string; code?: string }): string {
@@ -306,8 +308,8 @@ export async function readBrainFile<Held extends ContentIdentity>(s: Settings, r
   const fileClass = (await classifyAll(gateway, [path])).get(path) ?? { status: 'degraded' as const }
   if (fileClass.status === 'missing') return { status: 'missing' }
   if (!('version' in fileClass)) return { status: 'unreadable', code: failureCode(fileClass) }
-  const { mtimeMs, size } = fileClass.version
-  if (held && held.mtimeMs === mtimeMs && held.size === size) return { status: 'unchanged', held }
+  const { mtimeMs, ctimeMs, size } = fileClass.version
+  if (held && held.mtimeMs === mtimeMs && held.ctimeMs === ctimeMs && held.size === size) return { status: 'unchanged', held }
   if (fileClass.status !== 'ok') return { status: 'cloud-only' }
   const read = await gateway.read(path)
   if (read.status === 'ok') return { status: 'ok', identity: identityOf(read.version), bytes: read.bytes }
@@ -898,6 +900,7 @@ export async function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; pr
     if (preserve) await cpAsync(journalPath, preserveTo, { force: true })
     const preservedDir = preservedIndexDir(settings)
     await rmAsync(root, { recursive: true, force: true })
+    forgetIndex(settings)
     if (opts.mode === 'erase') await rmAsync(preservedDir, { recursive: true, force: true })
     resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus
     if (preserve) {

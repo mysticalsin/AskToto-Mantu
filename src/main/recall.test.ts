@@ -745,12 +745,7 @@ describe("recall — deleteAllMeetings erases only Métis's own files (MQA-032)"
     const renamed = 'acme-renewal.md'
     writeFileSync(join(folder, renamed), '---\ntype: meeting-transcript\n---\n\n# Acme\n', 'utf8')
     // The read of exactly that file throws (a transient lock); every other read passes through untouched.
-    const fsp = await import('node:fs/promises')
-    const realReadFile = fsp.readFile
-    vi.spyOn(fsp, 'readFile').mockImplementation((async (p: Parameters<typeof realReadFile>[0], ...rest: unknown[]) => {
-      if (String(p).endsWith(renamed)) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
-      return (realReadFile as (...a: unknown[]) => unknown)(p, ...rest)
-    }) as typeof realReadFile)
+    unreadablePaths.add(join(folder, renamed))
 
     const r = await deleteAllMeetings()
 
