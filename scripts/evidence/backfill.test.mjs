@@ -7,9 +7,11 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RECORD_SCHEMA } from './record.mjs'
 import { TEST_WORKFLOW } from './check.mjs'
+import { closedSince } from './sample.mjs'
 import {
   DEFAULT_OUT,
   buildBackfill,
+  earliestRecordedAt,
   requiredLevelsFor,
   resolveBackfill,
   verifiedRecordsByTicket,
@@ -110,6 +112,8 @@ test('resolveBackfill: a DONE ticket with no verified record for a required leve
   assert.equal(gaps.length, 1)
   assert.equal(gaps[0].ticket, 'M2-0001')
   assert.equal(gaps[0].level, 'MEASURED')
+  // MEASURED is not an in-house level and LOCALLY_TESTED still has a verified PASS, so this ticket has a floor.
+  assert.equal(gaps[0].target_status, 'ENGINEERING_COMPLETE')
 })
 
 test('resolveBackfill: latest record governs — a later verified FAIL withdraws an earlier verified PASS', () => {
@@ -121,6 +125,8 @@ test('resolveBackfill: latest record governs — a later verified FAIL withdraws
   const { backfilled, gaps } = resolveBackfill({ tickets: [t] }, recordsByTicket)
   assert.equal(gaps.length, 1)
   assert.equal(backfilled.get('M2-0001')[0].result, 'FAIL')
+  // LOCALLY_TESTED is in-house and it is the one that failed, so this ticket has no floor.
+  assert.equal(gaps[0].target_status, 'IN_PROGRESS')
 })
 
 test('resolveBackfill: an ENGINEERING_COMPLETE ticket is not gapped on a level it does not need in-house', () => {
@@ -149,13 +155,19 @@ test('buildBackfill end-to-end: verifies PR bodies, then resolves gaps against t
   })
   assert.equal(result.backfilled.has('M2-0001'), true)
   assert.equal(result.backfilled.has('M2-0002'), false)
-  assert.deepEqual(result.gaps, [{ ticket: 'M2-0002', status: 'DONE', level: 'LOCALLY_TESTED', reason: 'no verified PR evidence found for this level' }])
+  assert.deepEqual(result.gaps, [{
+    ticket: 'M2-0002', status: 'DONE', level: 'LOCALLY_TESTED',
+    reason: 'no verified PR evidence found for this level', target_status: 'IN_PROGRESS'
+  }])
 })
 
 test('writeBackfill writes one JSONL file per backfilled ticket, a gaps.jsonl and a lead-action README', () => {
   const outDir = mkdtempSync(join(tmpdir(), 'evidence-backfill-'))
   const backfilled = new Map([['M2-0001', [record({ ticket: 'M2-0001' })]]])
-  const gaps = [{ ticket: 'M2-0002', status: 'DONE', level: 'MEASURED', reason: 'no verified PR evidence found for this level' }]
+  const gaps = [{
+    ticket: 'M2-0002', status: 'DONE', level: 'MEASURED',
+    reason: 'no verified PR evidence found for this level', target_status: 'ENGINEERING_COMPLETE'
+  }]
 
   writeBackfill(outDir, { backfilled, gaps })
 
@@ -170,10 +182,43 @@ test('writeBackfill writes one JSONL file per backfilled ticket, a gaps.jsonl an
   assert.match(readme, /LEAD_ACTION: file these records/)
   assert.match(readme, /M2-0001/)
   assert.match(readme, /LEAD_ACTION: revert tickets with no verified evidence/)
-  assert.match(readme, /M2-0002/)
+  // the target status the lead should revert the gap ticket to, not just that a gap exists
+  assert.match(readme, /M2-0002 \[DONE -> ENGINEERING_COMPLETE\]/)
   assert.match(readme, /M2-0047 and M2-0144/)
+  // known limitation: wired/repro existence checks run against this checkout's HEAD, not the PR's own commit
+  assert.match(readme, /current HEAD, not each PR's own commit/)
 
   assert.deepEqual(readdirSync(outDir).sort(), ['README.md', 'gaps.jsonl', 'records'])
+})
+
+test('earliestRecordedAt: the oldest recorded_at across every backfilled ticket, string order not insertion order', () => {
+  const backfilled = new Map([
+    ['M2-0002', [record({ ticket: 'M2-0002', recorded_at: '2026-09-15T00:00:00Z' })]],
+    ['M2-0001', [record({ ticket: 'M2-0001', recorded_at: '2026-06-01T12:00:00Z' })]]
+  ])
+  assert.equal(earliestRecordedAt(backfilled), '2026-06-01T12:00:00Z')
+  assert.equal(earliestRecordedAt(new Map()), null)
+})
+
+test("README's re-execution sample instruction uses a --since that keeps the whole back-filled population " +
+  "(sample.mjs's closedSince drops any ticket whose newest record predates --since)", () => {
+  const outDir = mkdtempSync(join(tmpdir(), 'evidence-backfill-'))
+  const backfilled = new Map([
+    // both PR-dated well before any plausible "previous gate date" a lead might otherwise type in
+    ['M2-0001', [record({ ticket: 'M2-0001', recorded_at: '2026-01-10T00:00:00Z' })]],
+    ['M2-0002', [record({ ticket: 'M2-0002', recorded_at: '2026-03-05T00:00:00Z' })]]
+  ])
+
+  writeBackfill(outDir, { backfilled, gaps: [] })
+  const readme = readFileSync(join(outDir, 'README.md'), 'utf8')
+
+  const sinceMatch = readme.match(/--since (\S+)/)
+  assert.ok(sinceMatch, 'README must give a concrete --since instant, not a placeholder the lead has to guess')
+  const since = sinceMatch[1]
+
+  const ledger = { tickets: [...backfilled.keys()].map((id) => ticket({ id, status: 'DONE' })) }
+  const population = closedSince(ledger, backfilled, since)
+  assert.deepEqual(population.sort(), ['M2-0001', 'M2-0002'])
 })
 
 test('CLI: missing --repo or an unreadable ledger exits 2 with a usage message, before any network call', () => {

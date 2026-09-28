@@ -69,4 +69,6 @@ jobs:
         with:
           node-version: 22.22.3
       - name: Run the ledger + records check (L1-L15)
-        run: node .evidence-checker/scripts/evidence/check.mjs --ledger "${{ inputs.ledger-path }}"
+        env:
+          LEDGER_PATH: ${{ inputs.ledger-path }}
+        run: node .evidence-checker/scripts/evidence/check.mjs --ledger "$LEDGER_PATH"

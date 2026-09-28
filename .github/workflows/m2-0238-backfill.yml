@@ -5,12 +5,14 @@ name: M2-0238 evidence back-fill
 # public-safe out/ bundle (records/<id>.jsonl per backfilled ticket, gaps.jsonl for tickets with no
 # verified record for a required level, and a LEAD_ACTION README). It never writes a ledger or a
 # program-repository file; the lead files the bundle's records into the private evidence store from
-# the uploaded artifact.
+# the uploaded artifact. A gap is an expected outcome (a ticket the lead needs to review), not a tool
+# failure, so the job stays green with the gap count in its summary rather than turning red.
 #
 # The ledger itself lives in the private program repository (AGENTS.md #1), which this workflow never
-# names: leave ledger_repository blank to point ledger_path at a fixture already inside this checkout
-# (what the CI run below does), or supply ledger_repository (and a LEDGER_REPO_TOKEN repository secret
-# with read access to it) at dispatch time to back-fill against the real ledger.
+# names: leave ledger_repository blank to point ledger_path at a path already inside this checkout (for
+# example a fixture you add to the dispatching branch before running it), or supply ledger_repository
+# (and a LEDGER_REPO_TOKEN repository secret with read access to it) at dispatch time to back-fill
+# against the real ledger.
 on:
   workflow_dispatch:
     inputs:
@@ -71,6 +73,9 @@ jobs:
             resolved_ledger="$LEDGER_PATH"
           fi
           node scripts/evidence/backfill.mjs --repo "$GITHUB_REPOSITORY" --ledger "$resolved_ledger" --out out/m2-0238-backfill
+      - name: Summarize the back-fill bundle
+        if: always()
+        run: cat out/m2-0238-backfill/README.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

@@ -59,11 +59,26 @@ export async function verifiedRecordsByTicket(prs, { github, fileExists }) {
 }
 
 /**
+ * A DONE ticket whose gap is only in an external (non-in-house) level still has PASS in-house evidence,
+ * so it can be capped as ENGINEERING_COMPLETE instead of dropped all the way to IN_PROGRESS. A ticket
+ * that is missing an in-house level, or was already capped, has no such floor.
+ * @param {object} ticket
+ * @param {Map<string, object>} latest
+ * @returns {'ENGINEERING_COMPLETE' | 'IN_PROGRESS'}
+ */
+function targetStatusForGap(ticket, latest) {
+  if (ticket.status !== 'DONE') return 'IN_PROGRESS'
+  const inHouseRequired = (ticket.required_evidence ?? []).filter((level) => IN_HOUSE.has(level))
+  const inHouseOk = inHouseRequired.every((level) => latest.get(level)?.result === 'PASS')
+  return inHouseOk ? 'ENGINEERING_COMPLETE' : 'IN_PROGRESS'
+}
+
+/**
  * The back-fill result: the latest verified record per level for every closed ticket that has one,
  * and a gap entry for every required level that still has none.
  * @param {object} ledger
  * @param {Map<string, object[]>} recordsByTicket
- * @returns {{ backfilled: Map<string, object[]>, gaps: {ticket: string, status: string, level: string, reason: string}[] }}
+ * @returns {{ backfilled: Map<string, object[]>, gaps: {ticket: string, status: string, level: string, reason: string, target_status: string}[] }}
  */
 export function resolveBackfill(ledger, recordsByTicket) {
   const tickets = (Array.isArray(ledger?.tickets) ? ledger.tickets : []).filter((t) => CLOSED.has(t?.status))
@@ -75,15 +90,18 @@ export function resolveBackfill(ledger, recordsByTicket) {
     const latest = latestByLevel(records)
     if (latest.size > 0) backfilled.set(ticket.id, [...latest.values()])
 
-    for (const level of requiredLevelsFor(ticket)) {
-      const record = latest.get(level)
-      if (!record || record.result !== 'PASS') {
-        gaps.push({
-          ticket: ticket.id,
-          status: ticket.status,
-          level,
-          reason: record ? 'latest verified record is not PASS' : 'no verified PR evidence found for this level'
-        })
+    const ticketGaps = requiredLevelsFor(ticket)
+      .map((level) => {
+        const record = latest.get(level)
+        if (record && record.result === 'PASS') return null
+        return { level, reason: record ? 'latest verified record is not PASS' : 'no verified PR evidence found for this level' }
+      })
+      .filter((gap) => gap !== null)
+
+    if (ticketGaps.length > 0) {
+      const targetStatus = targetStatusForGap(ticket, latest)
+      for (const { level, reason } of ticketGaps) {
+        gaps.push({ ticket: ticket.id, status: ticket.status, level, reason, target_status: targetStatus })
       }
     }
   }
@@ -93,6 +111,27 @@ export function resolveBackfill(ledger, recordsByTicket) {
 
 function jsonlLine(record) {
   return `${JSON.stringify(record)}\n`
+}
+
+/**
+ * The oldest `recorded_at` across every backfilled record, in its original `YYYY-MM-DDTHH:MM:SSZ` form
+ * (fixed-width, so string order is chronological order — no Date round-trip needed). `sample.mjs`'s
+ * `closedSince` keeps only tickets whose *newest* record is at or after `--since`; back-filled records
+ * keep their original PR `recorded_at`, so a `--since` any later than this instant would silently drop
+ * the whole back-filled set from the re-execution sample.
+ * @param {Map<string, object[]>} backfilled
+ * @returns {string | null}
+ */
+export function earliestRecordedAt(backfilled) {
+  let earliest = null
+  for (const records of backfilled.values()) {
+    for (const record of records) {
+      if (typeof record.recorded_at === 'string' && (earliest === null || record.recorded_at < earliest)) {
+        earliest = record.recorded_at
+      }
+    }
+  }
+  return earliest
 }
 
 function leadActionReadme({ backfilled, gaps }) {
@@ -114,15 +153,23 @@ function leadActionReadme({ backfilled, gaps }) {
 
   if (gaps.length > 0) {
     lines.push('## LEAD_ACTION: revert tickets with no verified evidence for a required level')
-    lines.push('Acceptance requires reverting these to IN_PROGRESS (or ENGINEERING_COMPLETE, if still capped) in ledger/tickets.json.')
+    lines.push('Acceptance requires reverting each ticket below to the target status shown for it in ledger/tickets.json.')
+    lines.push(
+      'Note: the wired.client/contract_fake and repro.test existence checks above ran against this ' +
+      'checkout\'s current HEAD, not each PR\'s own commit, so a path renamed after a PR merged can show up ' +
+      'as a gap here even though the PR\'s evidence was valid when it merged. That only ever reopens a ' +
+      'ticket, never falsely closes one — before reverting, check whether a gap\'s wired/repro path used to ' +
+      'exist under a different name.'
+    )
     const byTicket = new Map()
     for (const gap of gaps) {
       if (!byTicket.has(gap.ticket)) byTicket.set(gap.ticket, [])
       byTicket.get(gap.ticket).push(gap)
     }
     for (const id of [...byTicket.keys()].sort()) {
-      const levels = byTicket.get(id).map((g) => `${g.level} (${g.reason})`).join(', ')
-      lines.push(`- ${id} [${byTicket.get(id)[0].status}]: ${levels}`)
+      const ticketGaps = byTicket.get(id)
+      const levels = ticketGaps.map((g) => `${g.level} (${g.reason})`).join(', ')
+      lines.push(`- ${id} [${ticketGaps[0].status} -> ${ticketGaps[0].target_status}]: ${levels}`)
     }
     lines.push('')
   }
@@ -136,10 +183,25 @@ function leadActionReadme({ backfilled, gaps }) {
   lines.push('')
 
   lines.push('## LEAD_ACTION: draw and record the re-execution sample')
-  lines.push(
-    'Run `node scripts/evidence/sample.mjs --ledger <private ledger path> --since <previous gate date> ' +
-    '--seed <gate commit sha>` against the filed records above and record the result.'
-  )
+  const earliest = earliestRecordedAt(backfilled)
+  if (earliest) {
+    lines.push(
+      `Run \`node scripts/evidence/sample.mjs --ledger <private ledger path> --since ${earliest} ` +
+      '--seed <gate commit sha>` against the filed records above and record the result.'
+    )
+    lines.push(
+      `--since must be at or before ${earliest} (the oldest recorded_at among the back-filled records, ` +
+      'printed above) — for example the program start. sample.mjs\'s closedSince keeps only tickets whose ' +
+      'newest record is at or after --since, and every back-filled record keeps its original PR ' +
+      'recorded_at; a later --since (such as the previous gate date) would silently drop the whole ' +
+      'back-filled set from the sample.'
+    )
+  } else {
+    lines.push(
+      'Run `node scripts/evidence/sample.mjs --ledger <private ledger path> --since <program start> ' +
+      '--seed <gate commit sha>` against the filed records above and record the result.'
+    )
+  }
   lines.push('')
 
   return `${lines.join('\n')}`
@@ -207,7 +269,8 @@ async function main() {
   writeBackfill(outDir, result)
 
   console.log(`evidence backfill: ${result.backfilled.size} ticket(s) backfilled, ${result.gaps.length} gap(s) -> ${outDir}`)
-  if (result.gaps.length > 0) process.exitCode = 1
+  // A gap is an expected outcome of this tool (a ticket needing lead review), not a tool failure: the
+  // job stays green and the artifact + this line carry the gap count for the lead to act on.
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
