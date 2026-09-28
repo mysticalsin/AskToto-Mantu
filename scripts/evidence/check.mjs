@@ -615,7 +615,7 @@ export function m2_0008BundleProblems(bundlePath) {
     problems.push('diagnostic-reports.json: consented must be recorded')
   }
   if (typeof diagnosticReports?.filter !== 'string' || !/Metis\/AskToto process names or sampled process ids only/.test(diagnosticReports.filter)) {
-    problems.push('diagnostic-reports.json: collection filter must be restricted to Metis/AskToto process names or sampled process ids')
+    problems.push('DiagnosticReports collection filter must be restricted to Metis/AskToto process names or sampled process ids')
   }
   if (!Array.isArray(diagnosticReports?.copied)) problems.push('diagnostic-reports.json: copied must be an array')
 
