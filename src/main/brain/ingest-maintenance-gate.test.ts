@@ -25,6 +25,7 @@ import {
   settlePriorExit,
   startMaintenanceGate
 } from '../infra/scheduler/maintenance'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 
@@ -95,6 +96,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'metis-m2-0033-gate-ud-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'metis-m2-0033-gate-meetings-'))
     uptime = 121_000

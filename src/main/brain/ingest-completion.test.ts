@@ -11,6 +11,7 @@ import * as brainLedger from './ledger'
 import * as publish from './publish'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { requestBackfillRun, requestSourceRefresh, resumeBackfillIfPending, startBackfill, startRebuild, enqueueIngest, brainBackfillProgress, whenDrainSettles, whenIndexWritesSettle } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 vi.mock('../llm', () => ({ createStream: vi.fn() }))
@@ -41,6 +42,7 @@ describe('backfill run completion observes real work', () => {
   const trackedGate = () => { const g = gate(); releases.push(g.release); return g }
 
   beforeEach(() => {
+    useStorageForTests()
     profile = mkdtempSync(join(tmpdir(), 'metis-completion-profile-'))
     folder = mkdtempSync(join(tmpdir(), 'metis-completion-meetings-'))
     vi.mocked(app.getPath).mockImplementation((name) => name === 'userData' ? profile : join(profile, name))

@@ -85,7 +85,7 @@ describe('purgeBrain — escrow recovery on a failed wipe (Fix F)', () => {
     writeFileSync(join(brainDir(s), 'corrections.json'), JSON.stringify(journalContent), 'utf8')
 
     mockRmSyncFailOnce = true
-    const r = purgeBrain(s, { mode: 'rebuild', preserveCorrections: true })
+    const r = await purgeBrain(s, { mode: 'rebuild', preserveCorrections: true })
 
     expect(r.ok).toBe(false) // the wipe genuinely failed — caller must abort, not assume success
 
@@ -99,11 +99,11 @@ describe('purgeBrain — escrow recovery on a failed wipe (Fix F)', () => {
     expect(journal[0].payload.newName).toBe('Someone Else')
   })
 
-  it('purgeBrain still succeeds normally when nothing fails', () => {
+  it('purgeBrain still succeeds normally when nothing fails', async () => {
     const dir = join(brainDir(s), 'entities', 'person')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'someone.json'), '{}', 'utf8')
-    const r = purgeBrain(s, { mode: 'erase' })
+    const r = await purgeBrain(s, { mode: 'erase' })
     expect(r.ok).toBe(true)
     expect(existsSync(brainDir(s))).toBe(false)
   })

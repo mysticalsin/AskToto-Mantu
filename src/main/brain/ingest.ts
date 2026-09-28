@@ -2296,7 +2296,7 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   // half-deleted store.
   let purge: { ok: boolean }
   try {
-    purge = purgeBrain(s, { mode: 'rebuild', preserveCorrections: true })
+    purge = await purgeBrain(s, { mode: 'rebuild', preserveCorrections: true })
   } catch (error) {
     if (error instanceof BrainIndexRebuildError) {
       return { queued: 0, error: rebuildRefusalMessage(error.code) }
@@ -2335,7 +2335,7 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
  */
 export async function exciseDeletedMeeting(s: Settings, file: string): Promise<{ gone: boolean }> {
   const key = basename(file)
-  const removed = removeMeetingExtraction(s, extractionSlug(key))
+  const removed = await removeMeetingExtraction(s, extractionSlug(key))
   await updateIndex(s, (idx) => {
     if (idx.ingested[key]) delete idx.ingested[key]
     idx.revision += 1

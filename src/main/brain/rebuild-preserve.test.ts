@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
 import * as fs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import * as fsp from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app, safeStorage } from 'electron'
@@ -11,6 +12,10 @@ import type { Settings } from '@shared/ipc'
 const actualFs = vi.hoisted(() => ({
   copyFileSync: undefined as undefined | typeof import('node:fs').copyFileSync,
   rmSync: undefined as undefined | typeof import('node:fs').rmSync
+}))
+const actualFsp = vi.hoisted(() => ({
+  rm: undefined as undefined | typeof import('node:fs/promises').rm,
+  writeFile: undefined as undefined | typeof import('node:fs/promises').writeFile
 }))
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -23,12 +28,23 @@ vi.mock('node:fs', async (importOriginal) => {
     rmSync: vi.fn(actual.rmSync)
   }
 })
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  actualFsp.rm = actual.rm
+  actualFsp.writeFile = actual.writeFile
+  return {
+    ...actual,
+    rm: vi.fn(actual.rm),
+    writeFile: vi.fn(actual.writeFile)
+  }
+})
 vi.mock('electron')
 
 import { resetSecretKeyCache } from '../secrets'
 import { setSettings } from '../store'
 import { envelopeKeyKind, writeSaved } from '../transcripts'
 import { startBackfill } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import {
   brainDir,
   BrainIndexRebuildError,
@@ -82,9 +98,11 @@ function decryptElectronMockBuffer(buf: Buffer): string {
 }
 
 function restoreFsMocks(): void {
-  if (!actualFs.copyFileSync || !actualFs.rmSync) throw new Error('node:fs mock was not initialised')
+  if (!actualFs.copyFileSync || !actualFs.rmSync || !actualFsp.rm || !actualFsp.writeFile) throw new Error('fs mocks were not initialised')
   vi.mocked(fs.copyFileSync).mockImplementation(actualFs.copyFileSync)
   vi.mocked(fs.rmSync).mockImplementation(actualFs.rmSync)
+  vi.mocked(fsp.rm).mockImplementation(actualFsp.rm)
+  vi.mocked(fsp.writeFile).mockImplementation(actualFsp.writeFile)
 }
 
 function restoreElectronMocks(userData: string): void {
@@ -115,6 +133,7 @@ describe('rebuild preserves unreadable indexes', () => {
   let primary: string
 
   beforeEach(() => {
+    useStorageForTests()
     restoreFsMocks()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-preserve-ud-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-preserve-meetings-'))
@@ -137,54 +156,51 @@ describe('rebuild preserves unreadable indexes', () => {
     vi.restoreAllMocks()
   })
 
-  it('preserves an undecryptable index before rebuild', () => {
+  async function captureRebuildError(): Promise<unknown> {
+    try {
+      await purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })
+      return undefined
+    } catch (e) {
+      return e
+    }
+  }
+
+  it('preserves an undecryptable index before rebuild', async () => {
     const bytes = foreignFileEnvelope()
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
 
-    expect(purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
+    expect((await purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })).ok).toBe(true)
 
     const preserved = join(meetingsFolder, '.brain-preserved')
     expect(fs.readdirSync(preserved)).toHaveLength(1)
     expectBytesUnchanged(join(preserved, fs.readdirSync(preserved)[0]), expected)
   })
 
-  it('aborts rebuild without deleting when preserving fails', () => {
+  it('aborts rebuild without deleting when preserving fails', async () => {
     const bytes = foreignFileEnvelope()
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
-    vi.spyOn(fs, 'copyFileSync').mockImplementation(() => {
+    vi.mocked(fsp.writeFile).mockImplementation(async () => {
       throw new Error('copy failed')
     })
 
-    const error = (() => {
-      try {
-        purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })
-      } catch (e) {
-        return e
-      }
-    })()
+    const error = await captureRebuildError()
 
     expectRebuildError(error, 'brain-index-preserve-failed')
     expectBytesUnchanged(primary, expected)
   })
 
-  it('aborts rebuild when the index changes before purge', () => {
+  it('aborts rebuild when the index changes before purge', async () => {
     const bytes = foreignFileEnvelope()
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
-    vi.spyOn(fs, 'copyFileSync').mockImplementation((from, to, mode) => {
-      actualFs.copyFileSync!(from, to, mode)
-      writeFileSync(primary, foreignFileEnvelope())
+    vi.mocked(fsp.writeFile).mockImplementation(async (...args: Parameters<typeof fsp.writeFile>) => {
+      await actualFsp.writeFile!(...args)
+      if (String(args[0]).includes('.brain-preserved')) writeFileSync(primary, foreignFileEnvelope())
     })
 
-    const error = (() => {
-      try {
-        purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })
-      } catch (e) {
-        return e
-      }
-    })()
+    const error = await captureRebuildError()
 
     expectRebuildError(error, 'brain-index-changed-during-rebuild')
     expectBytesUnchanged(join(meetingsFolder, '.brain-preserved', fs.readdirSync(join(meetingsFolder, '.brain-preserved'))[0]), expected)
@@ -203,13 +219,7 @@ describe('rebuild preserves unreadable indexes', () => {
         return text.startsWith('enc:') ? text.slice(4) : text
       })
 
-    const error = (() => {
-      try {
-        purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })
-      } catch (e) {
-        return e
-      }
-    })()
+    const error = await captureRebuildError()
 
     expectRebuildError(error, 'brain-index-readable-again')
     expectBytesUnchanged(primary, expected)
@@ -221,31 +231,19 @@ describe('rebuild preserves unreadable indexes', () => {
     const expected = sha256(readFileSync(primary))
     makeKeychainUnavailable()
 
-    const error = (() => {
-      try {
-        purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })
-      } catch (e) {
-        return e
-      }
-    })()
+    const error = await captureRebuildError()
 
     expectRebuildError(error, 'brain-index-keystore-unavailable')
     expectBytesUnchanged(primary, expected)
   })
 
-  it('refuses rebuild of a legacy keychain index while the keychain is unavailable', () => {
+  it('refuses rebuild of a legacy keychain index while the keychain is unavailable', async () => {
     const bytes = legacyKeychainEnvelope(indexJson())
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
     makeKeychainUnavailable()
 
-    const error = (() => {
-      try {
-        purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })
-      } catch (e) {
-        return e
-      }
-    })()
+    const error = await captureRebuildError()
 
     expectRebuildError(error, 'brain-index-keystore-unavailable')
     expectBytesUnchanged(primary, expected)
@@ -257,13 +255,7 @@ describe('rebuild preserves unreadable indexes', () => {
     const expected = sha256(readFileSync(primary))
     process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
 
-    const error = (() => {
-      try {
-        purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })
-      } catch (e) {
-        return e
-      }
-    })()
+    const error = await captureRebuildError()
 
     expectRebuildError(error, 'brain-index-keystore-unavailable')
     expectBytesUnchanged(primary, expected)
@@ -276,13 +268,7 @@ describe('rebuild preserves unreadable indexes', () => {
     makeKeychainUnavailable()
     const expected = sha256(readFileSync(primary))
 
-    const error = (() => {
-      try {
-        purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })
-      } catch (e) {
-        return e
-      }
-    })()
+    const error = await captureRebuildError()
 
     expectRebuildError(error, 'brain-index-keystore-unavailable')
     expectBytesUnchanged(primary, expected)
@@ -294,46 +280,34 @@ describe('rebuild preserves unreadable indexes', () => {
     rmSync(join(userData, 'secret-key.bin'), { force: true })
     resetSecretKeyCache()
 
-    expect(purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
+    expect((await purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })).ok).toBe(true)
     expect(existsSync(join(userData, 'secret-key.bin'))).toBe(false)
 
     const preserved = join(meetingsFolder, '.brain-preserved', fs.readdirSync(join(meetingsFolder, '.brain-preserved'))[0])
     expectBytesUnchanged(preserved, expected)
   })
 
-  it('refuses rebuild while the index cannot be read', () => {
+  it('refuses rebuild while the index cannot be read', async () => {
     rmSync(primary, { force: true })
     mkdirSync(primary)
 
-    const error = (() => {
-      try {
-        purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })
-      } catch (e) {
-        return e
-      }
-    })()
+    const error = await captureRebuildError()
 
     expectRebuildError(error, 'brain-index-keystore-unavailable')
   })
 
-  it('refuses rebuild of a future-schema index', () => {
+  it('refuses rebuild of a future-schema index', async () => {
     const bytes = futureSchemaIndexBytes()
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
 
-    const error = (() => {
-      try {
-        purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })
-      } catch (e) {
-        return e
-      }
-    })()
+    const error = await captureRebuildError()
 
     expectRebuildError(error, 'brain-index-unsupported-version')
     expectBytesUnchanged(primary, expected)
   })
 
-  it('a crash between preserve and purge leaves the primary index in place', () => {
+  it('a crash between preserve and purge leaves the primary index in place', async () => {
     const bytes = foreignFileEnvelope()
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
@@ -342,45 +316,45 @@ describe('rebuild preserves unreadable indexes', () => {
       return actualFs.rmSync!(path, options)
     })
 
-    expect(purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(false)
+    expect((await purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })).ok).toBe(false)
 
     expectBytesUnchanged(primary, expected)
     const preserved = join(meetingsFolder, '.brain-preserved', fs.readdirSync(join(meetingsFolder, '.brain-preserved'))[0])
     expectBytesUnchanged(preserved, expected)
   })
 
-  it('rebuild keeps the corrections journal', () => {
+  it('rebuild keeps the corrections journal', async () => {
     const bytes = foreignFileEnvelope()
     writeFileSync(primary, bytes)
     const corrections = join(brainDir(settings), 'corrections.json')
     writeFileSync(corrections, JSON.stringify({ entries: [] }), 'utf8')
     const expected = sha256(readFileSync(corrections))
 
-    expect(purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
+    expect((await purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true })).ok).toBe(true)
 
     expectBytesUnchanged(corrections, expected)
   })
 
-  it('delete-all erases preserved indexes', () => {
+  it('delete-all erases preserved indexes', async () => {
     const preserved = join(meetingsFolder, '.brain-preserved')
     mkdirSync(preserved, { recursive: true })
     writeFileSync(join(preserved, 'index.unreadable-sample.json'), foreignFileEnvelope())
 
-    expect(purgeBrain(settings, { mode: 'erase' }).ok).toBe(true)
+    expect((await purgeBrain(settings, { mode: 'erase' })).ok).toBe(true)
 
     expect(existsSync(preserved)).toBe(false)
   })
 
-  it('delete-all reports failure when preserved indexes remain after the erase attempt', () => {
+  it('delete-all reports failure when preserved indexes remain after the erase attempt', async () => {
     const preserved = join(meetingsFolder, '.brain-preserved')
     mkdirSync(preserved, { recursive: true })
     writeFileSync(join(preserved, 'index.unreadable-sample.json'), foreignFileEnvelope())
-    vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => {
+    vi.mocked(fsp.rm).mockImplementation(async (path, options) => {
       if (path === preserved) return
-      return actualFs.rmSync!(path, options)
+      return actualFsp.rm!(path, options)
     })
 
-    expect(purgeBrain(settings, { mode: 'erase' }).ok).toBe(false)
+    expect((await purgeBrain(settings, { mode: 'erase' })).ok).toBe(false)
 
     expect(existsSync(brainDir(settings))).toBe(false)
     expect(existsSync(preserved)).toBe(true)
@@ -441,9 +415,9 @@ describe('rebuild preserves unreadable indexes', () => {
     const verifiedBytes = sha256(readFileSync(copy))
     const changedBytes = Buffer.from(JSON.stringify(BrainIndexSchema.parse({ ingested: { 'changed.md': { at: 2, ok: true } } })), 'utf8')
     const changedSha = sha256(changedBytes)
-    vi.spyOn(fs, 'copyFileSync').mockImplementation((from, to, mode) => {
-      actualFs.copyFileSync!(from, to, mode)
-      if (from === primary) writeFileSync(copy, changedBytes)
+    vi.mocked(fsp.writeFile).mockImplementation(async (...args: Parameters<typeof fsp.writeFile>) => {
+      await actualFsp.writeFile!(...args)
+      if (String(args[0]).includes('index.before-restore-')) writeFileSync(copy, changedBytes)
     })
 
     await expect(restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: true })).resolves.toEqual({ ok: true })

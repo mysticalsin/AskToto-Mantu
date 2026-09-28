@@ -14,7 +14,7 @@ import {
   statSync,
   writeFileSync
 } from 'node:fs'
-import { mkdir, rename as renameAsync, rm as rmAsync, writeFile as writeFileAsync } from 'node:fs/promises'
+import { access, cp as cpAsync, mkdir, readdir as readdirAsync, rename as renameAsync, rm as rmAsync, writeFile as writeFileAsync } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import type { PreservedBrainIndexCopy, Settings } from '@shared/ipc'
@@ -649,15 +649,20 @@ export async function loadMeetingExtractionSlugs(s: Settings): Promise<string[]>
  * no-ops for as long as no provider is usable. Best-effort like purgeBrain: never throws, returns
  * whether the file is gone (absent counts as gone — there is nothing left to erase).
  */
-export function removeMeetingExtraction(s: Settings, fileSlug: string): { gone: boolean } {
+export async function removeMeetingExtraction(s: Settings, fileSlug: string): Promise<{ gone: boolean }> {
   const p = join(brainDir(s), 'meetings', `${fileSlug}.json`)
   try {
-    rmSync(p, { force: true })
+    await rmAsync(p, { force: true })
   } catch {
     /* fall through to the existence check — a locked file reports gone:false */
   }
   jsonCache.delete(p)
-  return { gone: !existsSync(p) }
+  try {
+    await access(p)
+    return { gone: false }
+  } catch {
+    return { gone: true }
+  }
 }
 
 function hashBytes(buf: Buffer): string {
@@ -734,8 +739,8 @@ async function preserveCurrentIndexBeforeRestore(settings: Settings): Promise<vo
   if (current.status !== 'ok') return
   const preserveDir = preservedIndexDir(settings)
   const preservePath = join(preserveDir, `index.before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
-  mkdirSync(preserveDir, { recursive: true })
-  writeFileSync(preservePath, current.bytes, { flag: 'wx' })
+  await mkdir(preserveDir, { recursive: true })
+  await writeFileAsync(preservePath, current.bytes, { flag: 'wx' })
   fsyncFilePath(preservePath)
   fsyncDirectoryIfSupported(preserveDir)
 }
@@ -811,16 +816,11 @@ function assertRebuildKeyContextAllowsPreserve(indexBytes: Buffer): void {
   }
 }
 
-function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
-  const root = brainDir(settings)
-  const indexPath = join(root, INDEX_REL)
-  let indexBytes: Buffer
-  try {
-    indexBytes = readFileSync(indexPath)
-  } catch (e) {
-    if (errnoCode(e) === 'ENOENT') return
-    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
-  }
+async function preserveUnreadableIndexBeforeRebuild(settings: Settings): Promise<void> {
+  const current = await readBrainFile(settings, INDEX_REL)
+  if (current.status === 'missing') return
+  if (current.status !== 'ok') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
+  const indexBytes = current.bytes
   const load = classifyIndexBytes(indexBytes)
   if (load.kind !== 'unavailable') return
   if (load.cause === 'unsupported') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.unsupportedVersion)
@@ -832,23 +832,23 @@ function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
   const preserveDir = preservedIndexDir(settings)
   const preservePath = join(preserveDir, `index.unreadable-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
   try {
-    mkdirSync(preserveDir, { recursive: true })
-    copyFileSync(indexPath, preservePath, constants.COPYFILE_EXCL)
+    await mkdir(preserveDir, { recursive: true })
+    await writeFileAsync(preservePath, indexBytes, { flag: 'wx' })
     fsyncFilePath(preservePath)
     fsyncDirectoryIfSupported(preserveDir)
-    if (hashBytes(readFileSync(preservePath)) !== classifiedHash) {
+    const gateway = storageAt(resolveMeetingsFolder(settings))
+    await gateway.noteWritten(join('.brain-preserved', basename(preservePath)))
+    const preserved = await gateway.read(join('.brain-preserved', basename(preservePath)))
+    if (preserved.status !== 'ok' || hashBytes(preserved.bytes) !== classifiedHash) {
       throw new Error('preserved copy hash mismatch')
     }
   } catch {
     throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.preserveFailed)
   }
 
-  let currentBytes: Buffer
-  try {
-    currentBytes = readFileSync(indexPath)
-  } catch {
-    throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
-  }
+  const reloaded = await readBrainFile(settings, INDEX_REL)
+  if (reloaded.status !== 'ok') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
+  const currentBytes = reloaded.bytes
   if (hashBytes(currentBytes) !== classifiedHash) throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.changedDuringRebuild)
   const rechecked = classifyIndexBytes(currentBytes)
   if (rechecked.kind === 'ready' || rechecked.kind === 'corrupt') throw new BrainIndexRebuildError(BRAIN_INDEX_ERROR_CODE.readableAgain)
@@ -876,29 +876,47 @@ function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
  * graph" gone, corrections included. Copies the journal's raw on-disk bytes (respects encryption,
  * mirroring ensureV1Backup's cpSync convention above) rather than decrypting/re-encrypting it.
  */
-export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserveCorrections: boolean } | { mode: 'erase' }): { ok: boolean } {
+export async function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserveCorrections: boolean } | { mode: 'erase' }): Promise<{ ok: boolean }> {
   const root = brainDir(settings)
-  if (opts.mode === 'rebuild') preserveUnreadableIndexBeforeRebuild(settings)
+  if (opts.mode === 'rebuild') await preserveUnreadableIndexBeforeRebuild(settings)
   const journalPath = join(root, 'corrections.json')
   const preserveTo = `${root}.corrections-preserve.json`
   let preserve = false
   try {
-    preserve = opts.mode === 'rebuild' && opts.preserveCorrections && existsSync(journalPath)
-    if (preserve) cpSync(journalPath, preserveTo)
+    if (opts.mode === 'rebuild' && opts.preserveCorrections) {
+      try {
+        await access(journalPath)
+        preserve = true
+      } catch {
+        preserve = false
+      }
+    }
+    if (preserve) await cpAsync(journalPath, preserveTo, { force: true })
     const preservedDir = preservedIndexDir(settings)
-    if (existsSync(root)) rmSync(root, { recursive: true, force: true })
-    if (opts.mode === 'erase') rmSync(preservedDir, { recursive: true, force: true })
+    await rmAsync(root, { recursive: true, force: true })
+    if (opts.mode === 'erase') await rmAsync(preservedDir, { recursive: true, force: true })
     resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus
     if (preserve) {
-      mkdirSync(root, { recursive: true })
-      cpSync(preserveTo, journalPath)
-      rmSync(preserveTo, { force: true })
+      await mkdir(root, { recursive: true })
+      await cpAsync(preserveTo, journalPath, { force: true })
+      await rmAsync(preserveTo, { force: true })
       // Everything except the restored journal is confirmed gone; the journal's presence here is
       // deliberate, not a failed wipe — success means "nothing but the preserved file remains".
-      const remaining = readdirSync(root)
+      const remaining = await readdirAsync(root)
       return { ok: remaining.length === 1 && remaining[0] === 'corrections.json' }
     }
-    return { ok: !existsSync(root) && (opts.mode !== 'erase' || !existsSync(preservedDir)) }
+    try {
+      await access(root)
+      return { ok: false }
+    } catch {
+      if (opts.mode !== 'erase') return { ok: true }
+      try {
+        await access(preservedDir)
+        return { ok: false }
+      } catch {
+        return { ok: true }
+      }
+    }
   } catch (e) {
     console.warn('[brain] purgeBrain: could not remove', root, e)
     // MI-2.5 Fix F: a mid-wipe failure (OneDrive/AV holding a file open partway through the recursive
@@ -909,11 +927,10 @@ export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserve
     // an unverified store.
     if (preserve) {
       try {
-        if (existsSync(preserveTo)) {
-          if (!existsSync(root)) mkdirSync(root, { recursive: true })
-          cpSync(preserveTo, journalPath)
-          rmSync(preserveTo, { force: true })
-        }
+        await access(preserveTo)
+        await mkdir(root, { recursive: true })
+        await cpAsync(preserveTo, journalPath, { force: true })
+        await rmAsync(preserveTo, { force: true })
       } catch (restoreErr) {
         console.warn('[brain] purgeBrain: could not restore preserved journal after failed wipe', restoreErr)
       }

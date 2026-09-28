@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { readFile as readFileAsync } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,6 +11,7 @@ import type { StreamHandle, StreamHandlers, StreamOptions } from '../llm/shared'
 import type { BackfillStartOptions } from './ingest'
 import { MAX_INGEST_ATTEMPTS } from '../infra/scheduler/policy'
 import { resetSecretKeyCache } from '../secrets'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
 import { brainBackfillProgress, reconcileMeetingsInBackground, requestBackfill, requestBackfillRun, resumeBackfillIfPending, startBackfill, whenIndexWritesSettle } from './ingest'
 import { catchUpIntelligenceIndexIfNeeded } from './intelligence-index'
@@ -157,6 +158,8 @@ describe('M2-0033 retry policy across backfill callers', () => {
       return join(userData, name)
     })
     resetSecretKeyCache()
+    const storage = await import('../infra/storage/meetings-storage')
+    storage.useStorageForTests()
     const ingest = await import('./ingest')
     const consolidate = await import('./consolidate')
     const intelligence = await import('./intelligence-index')
@@ -174,8 +177,9 @@ describe('M2-0033 retry policy across backfill callers', () => {
   }
 
   beforeEach(async () => {
-    userData = mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-ud-'))
-    meetingsFolder = mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-meetings-'))
+    useStorageForTests()
+    userData = realpathSync.native(mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-ud-')))
+    meetingsFolder = realpathSync.native(mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-meetings-')))
     modelMarkers = []
     unreadablePaths.clear()
     configureSettings()

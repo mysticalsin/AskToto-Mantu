@@ -9,6 +9,7 @@ import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
 import { brainBackfillProgress, ingestFailureCounts, ingestFailureDetails, startBackfill, MAX_INGEST_ATTEMPTS, whenIndexWritesSettle } from './ingest'
 import { readIndex } from './ledger'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 
@@ -44,6 +45,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-resilience-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-resilience-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {

@@ -23,6 +23,7 @@ import {
 } from './ingest'
 import { readIndex } from './ledger'
 import { readDeal, setDealOutcome, withEntityLock, writeDeal } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 
@@ -123,6 +124,7 @@ describe('brain ingest — audited fixes', () => {
   const settle = (ms = 30): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-audit-fixes-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-audit-fixes-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {

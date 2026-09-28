@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, renameSync, statSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync, existsSync, renameSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { saveMeeting, isEncryptedFile } from './transcripts'
 import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk, meetingTextNeedsRecap } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
+import { useStorageForTests } from './infra/storage/meetings-storage'
 
 /**
  * The lines a successful read must have.
@@ -676,7 +677,8 @@ describe("recall — deleteAllMeetings erases only Métis's own files (MQA-032)"
   let folder: string
 
   beforeEach(() => {
-    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-own-'))
+    useStorageForTests()
+    folder = realpathSync.native(mkdtempSync(join(tmpdir(), 'asktoto-recall-own-')))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
 
@@ -768,7 +770,8 @@ describe('recall — a transient read failure never hides a meeting (MQA-033)', 
   let folder: string
 
   beforeEach(() => {
-    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-unreadable-'))
+    useStorageForTests()
+    folder = realpathSync.native(mkdtempSync(join(tmpdir(), 'asktoto-recall-unreadable-')))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
 
