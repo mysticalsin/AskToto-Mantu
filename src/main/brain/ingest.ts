@@ -2513,6 +2513,7 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
     // A capped request can return "preparing" without dispatching anything. That is not completed work.
     if (run.result.preparing && !backfillPreparing && !sourceRefreshRunning && !rebuildStarting && !rebuildReplayTask && !hasActiveBackfill() && !backfillLintPending) completionError('incomplete')
   } catch (error) {
+    await observeSourcesReachableDuringFailedScan(observer)
     completionError('scan-failed')
     mainLog.error('[brain] backfill request scan failed:', error)
   } finally {
@@ -2524,6 +2525,22 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
 
 export function requestBackfillRun(options: BackfillStartOptions = {}, beforeComplete?: Promise<unknown>): BackfillRunHandle {
   return backfillRunHandle(requestBackfillRunAsync(options, beforeComplete))
+}
+
+async function observeSourcesReachableDuringFailedScan(observer: BackfillObserver): Promise<void> {
+  try {
+    const [scan, idx] = await Promise.all([scanMeetingSources(observer.s), readIndexAsync(observer.s)])
+    for (const folder of scan) {
+      if (folder.status !== 'ok') continue
+      for (const source of folder.sources) {
+        const record = idx.ingested[source.key]
+        if (record?.ok && record.sourceVersion === source.version) continue
+        observeSource(source.key)
+      }
+    }
+  } catch {
+    /* The original scan failure is the useful error; this is only best-effort completion accounting. */
+  }
 }
 
 function addCompletionGate(observer: BackfillObserver, prerequisite?: Promise<unknown>): void {
@@ -2768,11 +2785,11 @@ async function consumeDailyBackfillRun(s: Settings): Promise<boolean> {
 
 async function requestBackfillAsync(options: BackfillStartOptions = {}): Promise<BackfillStartResult> {
   const s = getSettings()
-  const unextracted = await hasUnextractedMeetings(s)
   // Preserve the existing synchronous no-provider contract so the renderer can show the actionable
   // setup guidance immediately, while retaining the durable resume flag.
   if (!hasUsableProvider(s)) {
     const r = await startBackfill(undefined, options)
+    const unextracted = await hasUnextractedMeetings(s)
     if (unextracted && r.queued === 0 && r.deferred !== 'no-provider') {
       return { queued: 0, deferred: 'no-provider' }
     }
@@ -2793,6 +2810,7 @@ async function requestBackfillAsync(options: BackfillStartOptions = {}): Promise
   // bypass the old 3-per-day reconcile budget. queued:0 + upToDate is illegal when meetings
   // exist but have not been extracted.
   if (!options.force && !(await consumeDailyBackfillRun(s))) {
+    const unextracted = await hasUnextractedMeetings(s)
     if (unextracted) return { queued: 0, preparing: true }
     return { queued: 0, upToDate: true }
   }
@@ -2814,7 +2832,6 @@ async function requestBackfillAsync(options: BackfillStartOptions = {}): Promise
         maybeFinishDrain()
       })
   })
-  if (unextracted) return { queued: 0, preparing: true }
   return { queued: 0, preparing: true }
 }
 
