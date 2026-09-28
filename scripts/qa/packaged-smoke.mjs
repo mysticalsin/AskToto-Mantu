@@ -604,6 +604,37 @@ export async function runRevealRow({
   })
 }
 
+/**
+ * A .lnk shortcut cannot carry process environment variables, so Windows-shortcut reopen targets a tiny
+ * generated .cmd that sets ASKTOTO_USERDATA (and the smoke reopen probe) before starting Metis.exe.
+ * Without that indirection, the shortcut launches the executable directly with none of this run's
+ * isolated env, so the relaunch resolves the real default profile instead of colliding with this run's
+ * single-instance lock: it never reveals the window under test, and it is never quit, leaving an
+ * unmanaged orphan under the install root after quit.
+ */
+export function buildWindowsShortcutLauncher({ auditLogDir, executable, userData, reopenProbe = '' }) {
+  if (typeof userData !== 'string' || userData.length === 0) {
+    throw new Error('windows shortcut smoke requires ASKTOTO_USERDATA in the reopen env')
+  }
+  const shortcutPath = join(auditLogDir, 'Metis-smoke.lnk')
+  const launcherPath = join(auditLogDir, 'Metis-smoke-launch.cmd')
+  const launcherBody = [
+    '@echo off',
+    `set "ASKTOTO_USERDATA=${userData}"`,
+    `set "ASKTOTO_SMOKE_REOPEN_PROBE=${reopenProbe}"`,
+    `start "" ${JSON.stringify(executable)}`
+  ].join('\r\n')
+  const shortcutScript = [
+    '$shell = New-Object -ComObject WScript.Shell',
+    `$shortcut = $shell.CreateShortcut(${JSON.stringify(shortcutPath)})`,
+    `$shortcut.TargetPath = ${JSON.stringify(launcherPath)}`,
+    `$shortcut.WorkingDirectory = ${JSON.stringify(dirname(executable))}`,
+    '$shortcut.Save()',
+    `Start-Process -FilePath ${JSON.stringify(shortcutPath)}`
+  ].join('; ')
+  return { shortcutPath, launcherPath, launcherBody, shortcutScript }
+}
+
 async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows, env }) {
   const hideBeforeReveal = () => runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
   if (platform === 'darwin') {
@@ -623,7 +654,13 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       id: 'RV-2-macos-open-new-instance',
       reason: 'second-instance',
       prepare: hideBeforeReveal,
-      run: () => runProcess('open', ['-n', target], 10_000),
+      // `open -n` launches through LaunchServices, which does not forward the calling process's
+      // environment to the app it starts — ASKTOTO_USERDATA would never reach it, so the relaunch would
+      // boot against the real default profile instead of colliding with this run's isolated lock and
+      // would leave an unmanaged, unquit orphan behind. A direct relaunch of the installed executable (the
+      // same single-instance-lock code path `open -n` would hit) reliably carries the isolated env, exactly
+      // like the RV-3 Windows exe relaunch below.
+      run: () => runProcess(executable, [], 10_000, { env }),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
     })
 
@@ -659,14 +696,13 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
     })
 
-    const shortcutPath = join(dirname(auditLogPath), 'Metis-smoke.lnk')
-    const shortcutScript = [
-      '$shell = New-Object -ComObject WScript.Shell',
-      `$shortcut = $shell.CreateShortcut(${JSON.stringify(shortcutPath)})`,
-      `$shortcut.TargetPath = ${JSON.stringify(executable)}`,
-      '$shortcut.Save()',
-      `Start-Process -FilePath ${JSON.stringify(shortcutPath)}`
-    ].join('; ')
+    const { launcherPath, launcherBody, shortcutScript } = buildWindowsShortcutLauncher({
+      auditLogDir: dirname(auditLogPath),
+      executable,
+      userData: env.ASKTOTO_USERDATA,
+      reopenProbe: env.ASKTOTO_SMOKE_REOPEN_PROBE
+    })
+    writeFileSync(launcherPath, launcherBody, 'utf8')
     await runRevealRow({
       auditLogPath,
       rows,
@@ -708,6 +744,25 @@ function readAuditLog(auditLogPath) {
   } catch {
     return ''
   }
+}
+
+/**
+ * A brand-new profile boots with onboarding still live: parkOverlayAfterHideSpring (src/main/index.ts)
+ * refuses to park the overlay while the exclusive onboarding tour owns the display, so every RV row's
+ * `parked` evidence would read false forever and every reopen row would fail. Seed settings.json before
+ * launch so the app starts already onboarded, exactly like a real user's second launch — the scenario
+ * every RV row is actually testing. Plain JSON is a supported read path (store.ts's legacy-plaintext
+ * fallback), so no encryption/IPC bootstrap is needed.
+ */
+export function seedOnboardedProfile(profile) {
+  const settings = {
+    onboardingDone: true,
+    onboardingDoneAt: Date.now(),
+    // Explicit, not just relying on the schema default: RV parking (parkOverlayAfterHideSpring) only
+    // engages for a hover layout (overlayUsesHover), so this must stay 'hide' or 'island', never 'bar'.
+    overlayLayout: 'hide'
+  }
+  writeFileSync(join(profile, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 })
 }
 
 function readCleanMarker(userData) {
@@ -835,6 +890,7 @@ async function main() {
     }
 
     profile = mkdtempSync(join(tmpdir(), 'metis-smoke-'))
+    seedOnboardedProfile(profile)
     const port = await freeLoopbackPort()
     const auditLogPath = join(profile, 'logs', 'audit.log')
 
