@@ -4,7 +4,7 @@
  * QA-identity package must always carry it — otherwise scripts/qa/fault-fatal-relaunch.mjs cannot drive it.
  */
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
-import { getRawHeader, uncache } from '@electron/asar'
+import { getRawHeader, listPackage, uncache } from '@electron/asar'
 
 /** The string only the QA fault hook (src/main/qa-identity.ts) puts into a main-process bundle. */
 export const QA_FAULT_MARKER = 'METIS_QA_FAULT_HOOK'
@@ -21,13 +21,18 @@ export function assertQaFaultHookMatchesIdentity(archive) {
   try {
     const { header, headerSize } = getRawHeader(archive)
     assertArchiveBytesComplete(archive, header, headerSize)
-    const filesByPosix = new Map(listPackedFiles(header).map((entry) => [entry.path, entry.file]))
-    const packageJson = filesByPosix.get('/package.json')
+    // Keep the same raw-key normalization verifyPackagedDependencyPruning uses: listPackage reports
+    // host-separator entries, while the header stores POSIX paths and raw reads use header offsets.
+    const rawEntries = listPackage(archive)
+    const toPosix = (entry) => `/${entry.split('\\').join('/').replace(/^\/+/, '')}`
+    const rawByPosix = new Map(rawEntries.map((entry) => [toPosix(entry), entry]))
+    const packedFilesByPosix = new Map(listPackedFiles(header).map((entry) => [entry.path, entry.file]))
+    const packageJson = packedFilesByPosix.get('/package.json')
     if (!packageJson) throw new Error('app.asar has no package.json — the packaged app identity is missing')
     const qaIdentity = JSON.parse(readPackedFile(archive, headerSize, packageJson, 'package.json').toString('utf8')).name === QA_IDENTITY_PACKAGE_NAME
-    const mainFiles = [...filesByPosix.keys()].filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
+    const mainFiles = [...rawByPosix.keys()].filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
     const carriesHook = mainFiles.some((entry) =>
-      readPackedFile(archive, headerSize, filesByPosix.get(entry), entry).includes(QA_FAULT_MARKER)
+      readPackedFile(archive, headerSize, packedFilesByPosix.get(entry), rawByPosix.get(entry)).includes(QA_FAULT_MARKER)
     )
     if (carriesHook !== qaIdentity) {
       throw new Error(
