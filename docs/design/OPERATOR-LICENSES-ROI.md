@@ -19,7 +19,7 @@ ready-to-merge: no
 
 **Status:** Draft — design before UI, ready-to-merge: no (see frontmatter).
 
-Tony-only console at `https://metis-operator.tony-walteur.workers.dev/`. Cloudflare Access is the door. No homemade password page. Two emails, nobody else.
+Owner-only console at `https://metis-operator.example.workers.dev/`. Cloudflare Access is the door. No homemade password page. Two emails, nobody else.
 
 This slice makes two existing Operator surfaces honest and complete:
 
@@ -42,4 +42,4 @@ Same Operator chrome (`docs/design/OPERATOR.md`): near-black, Geist, uppercase e
 
 ## What landing looks like
 
-Tony opens Access, lands on the packed console, sees Keys / Licenses / Devices map already in the pre-Shoey chrome. Licenses lists every heartbeat seat or the honest empty line. ROI uses the same ask log the Cost cards use.
+the owner opens Access, lands on the packed console, sees Keys / Licenses / Devices map already in the pre-Shoey chrome. Licenses lists every heartbeat seat or the honest empty line. ROI uses the same ask log the Cost cards use.

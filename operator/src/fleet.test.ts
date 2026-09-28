@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { syntheticSecretLikeText } from './test-fixtures'
 import {
   approvalOf,
   isApprovedSeat,
@@ -26,7 +27,7 @@ describe('real seats vs usage-import', () => {
         device_id: '6be389767fb160f7503de8e0227f4965',
         os: 'darwin',
         app_version: '1.8.3',
-        hostname: 'Tonys-MacBook-Pro'
+        hostname: 'Example-MacBook-Pro'
       })
     ).toBe(true)
   })
@@ -55,7 +56,7 @@ describe('approval gate', () => {
       exp: 1_725_000_000 + 7 * 24 * 60 * 60,
       revoked: 0,
       created_at: 1_725_000_000_000,
-      created_by: 'tony.walteur@gmail.com'
+      created_by: 'owner@example.test'
     })
     const now = 1_725_000_000_000
     expect(
@@ -85,7 +86,7 @@ describe('approval gate', () => {
   it('never lets a heartbeat self-approve', () => {
     expect(licenseFromIngest({ license: 'approved' })).toBeNull()
     expect(licenseFromIngest({ license: 'licensed', licenseLast4: 'cfc3' })).toBe('licensed · cfc3')
-    expect(licenseFromIngest({ license: 'sk-ant-secret-value' })).toBeNull()
+    expect(licenseFromIngest({ license: syntheticSecretLikeText('secret-value') })).toBeNull()
   })
 
   it('prefers licensed over member-pass unlicensed when Operator jti or last4 is present', () => {

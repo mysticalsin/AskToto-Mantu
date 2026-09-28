@@ -22,7 +22,7 @@ function ctx(overrides: Partial<AdminCtx> = {}): AdminCtx {
     url: new URL('https://operator.test/v1/admin/licenses/generate'),
     env: env(),
     store: memoryStore(),
-    email: 'tony.walteur@gmail.com',
+    email: 'owner@example.test',
     now: NOW,
     opts: {},
     ...overrides
@@ -61,19 +61,19 @@ describe('mintOperatorLicense', () => {
       days: 90,
       groupId: 'amaris-ab12',
       tier: 'metis-light',
-      member: 'a@amaris.com',
+      member: 'member@example.test',
       actor: c.email,
       action: 'group-license-generate'
     })
     if (!result.ok) throw new Error('expected ok')
     expect(result.groupId).toBe('amaris-ab12')
     expect(result.tier).toBe('metis-light')
-    expect(result.member).toBe('a@amaris.com')
+    expect(result.member).toBe('member@example.test')
 
     const stored = await c.store.getIssuedLicense(result.jti)
     expect(stored?.group_id).toBe('amaris-ab12')
     expect(stored?.tier).toBe('metis-light')
-    expect(stored?.member).toBe('a@amaris.com')
+    expect(stored?.member).toBe('member@example.test')
 
     const audit = await c.store.listAudit(10)
     expect(audit[0].action).toBe('group-license-generate')

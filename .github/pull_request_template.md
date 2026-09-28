@@ -3,13 +3,13 @@
 - Program ticket: `M2-____` (or `fix/…` hotfix)
 - Kit references satisfied: <!-- e.g. TASK-027, UC-014, OBU-02 -->
 - Review findings closed: <!-- e.g. B2-F1, L01-F3 -->
-- Evidence record: `docs/metis-2.0/evidence/records/M2-____.jsonl` (private program repository)
+- Evidence record: attach the private evidence artifact or link in the internal tracker
 - Implementer model: <!-- e.g. claude-sonnet-5 -->
 - Reviewing model: <!-- the validator; its session must differ from the implementer's -->
 
 ## What changed and why
 
-<!-- One paragraph. Link the ticket (docs/metis-2.0/ledger/tickets/M2-####.md in the private program repository). -->
+<!-- One paragraph. Link the ticket in the internal tracker. -->
 
 ## Evidence
 

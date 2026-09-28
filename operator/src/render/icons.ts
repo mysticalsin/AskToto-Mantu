@@ -45,7 +45,7 @@ export const NAV_ICON_PATHS: Record<string, string> = {
   'arrow-up-down': '<path d="m21 16-4 4-4-4"/><path d="M17 20V4"/><path d="m3 8 4-4 4 4"/><path d="M7 4v16"/>'
 }
 
-/** Icon-by-kind tint map (Tony 9c2). Every ingest kind gets a fixed color and glyph. */
+/** Icon-by-kind tint map (the owner 9c2). Every ingest kind gets a fixed color and glyph. */
 export const KIND_ICON_PATHS: Record<string, string> = {
   heartbeat: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
   ask: '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"/>',

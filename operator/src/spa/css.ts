@@ -7,7 +7,7 @@ import { GENERATED_FONTS } from './fonts.generated'
  * Design system: Shoey (OpenPanel) console structure -- rail, tiles, tables, drawers, world
  * map, density rules -- wearing the Amaris Fit Studio visual language: lavender canvas, violet
  * ink, one purple accent, Space Grotesk numerals, purple-tinted shadows, spring motion. The
- * world map is a light choropleth panel matching the page canvas (Tony, 2026-09-06: the map is
+ * world map is a light choropleth panel matching the page canvas (the owner, 2026-09-06: the map is
  * not a dark focal panel), coloured by a sequential violet scale (--chart-scale-01..05). Every
  * section below is labelled with the plan section it implements so a reviewer can check this
  * file against the spec line by line.
@@ -56,7 +56,7 @@ const LIGHT_TOKENS = `
   --data-3: #0a9e7d;
   --data-4: #d98a00;
   --data-track: #efeafb;
-  /* -- map (Tony, 2026-09-06: not a dark focal panel -- a light choropleth matching the page
+  /* -- map (the owner, 2026-09-06: not a dark focal panel -- a light choropleth matching the page
      canvas). --map-stroke is used at 0.5px, --map-graticule at 60% opacity. -- */
   --map-ocean: #ffffff;
   --map-land: #f0f0f0;
@@ -542,7 +542,7 @@ button.danger { color: var(--danger); }
 .delta.flat { color: var(--ink3); }
 .rt-grid { display: grid; grid-template-columns: minmax(220px, 28%) minmax(0, 1fr); gap: 16px; align-items: stretch; }
 .rt-map { min-width: 0; min-height: 480px; position: relative; }
-/* -- plan 6.3: light choropleth map panel matching the page canvas, 18px radius (Tony,
+/* -- plan 6.3: light choropleth map panel matching the page canvas, 18px radius (the owner,
    2026-09-06: not a dark focal panel). -- */
 .rt-map #map-root { min-height: 480px; height: 100%; background: var(--map-ocean); border-radius: var(--radius-map); }
 #map-root[data-land="inline"] { min-height: 480px; background: var(--map-ocean); border-radius: var(--radius-map); }
