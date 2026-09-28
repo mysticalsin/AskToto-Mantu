@@ -323,6 +323,17 @@ async function restoreHoverParkableLayout(page) {
   })
 }
 
+async function settleOverlayForRvRows({ page, executable, env }) {
+  await dismissNavigationGuardIfOpen(page)
+  await ensureIdleBar(page)
+  await restoreHoverParkableLayout(page)
+  // Let main apply the hover layout before park-window probes overlayUsesHover.
+  await page.waitForTimeout(500)
+  const parked = await runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
+  if (parked.error) throw new Error('park-window after navigation guard failed')
+  await sleep(750)
+}
+
 async function ensureHistory(page) {
   const search = page.getByLabel('Search past meetings')
   if (await locatorVisible(search)) return
@@ -649,7 +660,7 @@ async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
       return { decision: 'save', entry: 'review-recent-meeting', persistedBeforeNavigation: true }
     })
 
-    await restoreHoverParkableLayout(page)
+    await settleOverlayForRvRows({ page, executable, env })
   })
 }
 
@@ -770,7 +781,12 @@ export function buildWindowsShortcutLauncher({ auditLogDir, executable, userData
 }
 
 async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows, env }) {
-  const hideBeforeReveal = () => runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
+  const hideBeforeReveal = async () => {
+    const result = await runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
+    // Hosted macOS can still report the pre-park bounds if the reopen probe races the park spring.
+    await sleep(750)
+    return result
+  }
   if (platform === 'darwin') {
     await runRevealRow({
       auditLogPath,
