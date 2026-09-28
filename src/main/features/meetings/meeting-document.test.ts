@@ -61,7 +61,7 @@ describe('meeting-document codec', () => {
   it('reads a summary-only meeting document', () => {
     const text = '---\ntype: meeting-summary\ntitle: "Recap"\n---\n\n## Notes & follow-ups\n\nx\n\n## Retention\n'
     expect(readMeetingFields(text).type).toBe('meeting-summary')
-    expect(stripMeetingFrontmatter(text).startsWith('## Notes & follow-ups')).toBe(true)
+    expect(stripMeetingFrontmatter(text)).toBe('\n## Notes & follow-ups\n\nx\n\n## Retention\n')
   })
 
   it('strips the frontmatter block and the line ending after it for LF and CRLF', () => {

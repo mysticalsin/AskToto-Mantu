@@ -11,7 +11,7 @@ const DEFAULT_OUT = 'out/m2-0018-targeted-review'
 
 const reviewedScopes = [
   { path: 'src/main/brain/corrections.ts', expectedLines: 1629, axis: 'brain-corrections' },
-  { path: 'src/main/brain/publish.ts', expectedLines: 990, axis: 'brain-publish' },
+  { path: 'src/main/brain/publish.ts', expectedLines: 974, axis: 'brain-publish' },
   { path: 'src/main/llm/prewarm.ts', expectedLines: 62, axis: 'local-model-prewarm' },
   { path: 'src/main/index.ts', axis: 'local-model-prewarm' },
   { path: 'src/main/infra/scheduler/maintenance.ts', axis: 'scheduler-policy' },
