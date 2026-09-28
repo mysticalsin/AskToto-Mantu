@@ -15,6 +15,7 @@ import {
   ingestExtraction } from './ingest'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { readAccount, readIndex, slugify, writeMeetingExtraction } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -54,6 +55,7 @@ describe('backfill progress bookkeeping across runs', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-progress-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-progress-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {

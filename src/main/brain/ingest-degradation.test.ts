@@ -14,6 +14,7 @@ import {
   startRebuild
 } from './ingest'
 import { listMeetingExtractions, readIndex } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -108,6 +109,7 @@ describe('brain ingest — provider-degradation paths', () => {
   const okCount = (): number => Object.values(readIndex(getSettings()).ingested).filter((r) => r.ok).length
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-degradation-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-degradation-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {

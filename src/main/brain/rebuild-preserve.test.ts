@@ -29,6 +29,7 @@ import { resetSecretKeyCache } from '../secrets'
 import { setSettings } from '../store'
 import { envelopeKeyKind, writeSaved } from '../transcripts'
 import { startBackfill } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import {
   brainDir,
   BrainIndexRebuildError,
@@ -117,6 +118,7 @@ describe('rebuild preserves unreadable indexes', () => {
 
   beforeEach(() => {
     restoreFsMocks()
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-preserve-ud-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-preserve-meetings-'))
     restoreElectronMocks(userData)

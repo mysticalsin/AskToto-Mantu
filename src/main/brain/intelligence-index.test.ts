@@ -29,6 +29,7 @@ import {
   type IntelligenceIndexResult,
   type IntelligenceIndexCompletion
 } from './intelligence-index'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 const auditLogMock = vi.hoisted(() => vi.fn())
@@ -49,6 +50,7 @@ function completionGate() {
 let userData: string
 
 beforeEach(() => {
+  useStorageForTests()
   userData = mkdtempSync(join(tmpdir(), 'intel-idx-userdata-'))
   ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
     if (name === 'userData') return userData

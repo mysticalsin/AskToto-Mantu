@@ -9,6 +9,7 @@ import { getSettings, setSettings } from '../store'
 import { mainLog } from '../logger'
 import { startBackfill, brainBackfillProgress, reconcileMeetingsInBackground } from './ingest'
 import { readAccount, readDeal, readIndex, slugify, writeIndex, writeMeetingExtraction } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -37,6 +38,7 @@ describe('startBackfill with no configured provider', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-backfill-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-backfill-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {

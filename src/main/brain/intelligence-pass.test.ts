@@ -10,6 +10,7 @@ import { brainBackfillProgress, startBackfill } from './ingest'
 import { startIntelligencePass } from './intelligence-pass'
 import { INTELLIGENCE_PASS_NO_PROVIDER } from './intelligence-pass-route'
 import { readIndex } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -53,6 +54,7 @@ describe('Update Intelligence pass — local first, API once', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-intel-pass-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-intel-pass-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {

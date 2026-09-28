@@ -8,6 +8,7 @@ import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
 import { brainBackfillProgress, enqueueIngest, startBackfill } from './ingest'
 import { readIndex, readMeetingExtraction } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -34,6 +35,7 @@ describe('automatic brain ingest with Métis Local', () => {
   let meetingsFolder: string
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-local-brain-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-local-brain-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {

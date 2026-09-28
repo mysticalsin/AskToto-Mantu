@@ -8,6 +8,7 @@ import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
 import { brainBackfillProgress, ingestFailureDetails, startBackfill } from './ingest'
 import { readIndex } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -63,6 +64,7 @@ describe('brain ingest — local last-resort index fallback', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-index-fallback-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-index-fallback-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {

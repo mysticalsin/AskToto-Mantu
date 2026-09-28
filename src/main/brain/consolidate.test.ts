@@ -8,6 +8,7 @@ import { getSettings, setSettings, setApiKey } from '../store'
 import * as brainStore from './store'
 import { canConsolidateToday, recordConsolidationPass, runConsolidationIfDue, resetConsolidationLockForTests } from './consolidate'
 import { brainBackfillProgress } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -28,6 +29,7 @@ let userData: string
 let meetingsFolder: string
 
 beforeEach(() => {
+  useStorageForTests()
   // No consolidation job from a previous case may survive into a fresh profile.
   expect(brainBackfillProgress().running).toBe(false)
   resetConsolidationLockForTests()
