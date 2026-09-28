@@ -546,6 +546,7 @@ import {
   readFieldProvenance,
   rejectCommitment,
   isJournalCorruptionBlocked,
+  isJournalCorruptionBlockedAsync,
   clearJournalCorruptionLock,
   readCorrectionsJournal,
   readAliasMap,
@@ -8082,7 +8083,7 @@ function registerIpc(): void {
       ...(failure.topError ? { topError: failure.topError } : {}),
       // MI-2.5 review round 3: computed fresh from the on-disk sentinel each poll — lets BrainView offer
       // the in-app "Reset corrections lock" recovery instead of a hand-deleted hidden .brain file.
-      corruptionBlocked: isJournalCorruptionBlocked(s),
+      corruptionBlocked: await isJournalCorruptionBlockedAsync(s),
       // MQA-230: entity files can still hold items attributed to an already-deleted meeting until the
       // deferred source refresh runs (it needs a usable provider). Surfaced so the UI can say the
       // cleanup is pending instead of silently claiming the delete was complete.

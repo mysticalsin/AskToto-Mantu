@@ -326,7 +326,7 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
   it('an automatic pass with an unavailable ledger runs no work and audits ledger_unavailable, while a click still runs', async () => {
     const folder = mkdtempSync(join(tmpdir(), 'intel-idx-'))
     const s = { ...DEFAULT_SETTINGS, meetingsFolder: folder, encryptTranscripts: false }
-    const indexUnavailableSpy = vi.spyOn(brainStore, 'indexUnavailable').mockReturnValue('undecryptable')
+    const indexUnavailableSpy = vi.spyOn(brainStore, 'indexUnavailableAsync').mockResolvedValue('undecryptable')
     const work = vi.fn(async () => completedRun({ ran: true, queued: 1 }))
     setIntelligenceIndexWork(work)
     const scheduled = await runIntelligenceIndex('schedule', s)
@@ -338,7 +338,7 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
       deferredReason: 'ledger_unavailable'
     })
 
-    indexUnavailableSpy.mockReturnValue(null)
+    indexUnavailableSpy.mockResolvedValue(null)
     const click = await runIntelligenceIndex('click', s)
     expect(click).toMatchObject({ ran: true, queued: 1 })
   })

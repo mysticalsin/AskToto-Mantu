@@ -8,7 +8,7 @@ import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
 import { intelligenceNoProviderMessage, LOCAL_ONLY_INTELLIGENCE_UNAVAILABLE } from '@shared/intelligence-pass'
 import { getSettings } from '../store'
-import { indexUnavailableAsync, loadJson, readJson, writeJson } from './store'
+import { indexUnavailableAsync as indexUnavailable, loadJson, readJson, writeJson } from './store'
 import { requestBackfillRun, type BackfillStartResult, type BackfillCompletion } from './ingest'
 import { auditLog, mainLog } from '../logger'
 import { reportDeferred, whenMaintenanceWindowOpens } from '../infra/scheduler/maintenance'
@@ -276,7 +276,7 @@ export async function runIntelligenceIndex(
     mainLog.info(`[intelligence-index] coalesced (${reason}); a pass is already running`)
     return { ran: false, queued: 0, coalesced: true, lastIndexedAt: await lastIndexedAtAsync(settings) }
   }
-  if (trigger === 'automatic' && await indexUnavailableAsync(settings)) {
+  if (trigger === 'automatic' && await indexUnavailable(settings)) {
     reportDeferred('intelligence-index', 'ledger_unavailable')
     return { ran: false, queued: 0, lastIndexedAt: await lastIndexedAtAsync(settings) }
   }

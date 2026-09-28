@@ -101,6 +101,7 @@ export interface StorageGatewayOptions {
 
 type Settled<T> = { status: 'ok'; value: T } | StorageFailure
 type Unread = Exclude<ReadResult, { status: 'ok' }>
+type LocalRead = { result: ReadResult; rememberUnavailable: boolean }
 type PresenceOf = (files: readonly FileVersion[]) => Promise<Map<string, ContentPresence>>
 
 /** Read outcomes that describe the file itself: repeating the read inside the TTL would only pin another
@@ -300,17 +301,17 @@ export function createStorageGateway({
     return untilEnded(reading, request, 'running')
   }
 
-  async function readLocal(base: string, path: string, request: Request): Promise<ReadResult> {
+  async function readLocal(base: string, path: string, request: Request): Promise<LocalRead> {
     const file = await statFile(path, request)
-    if (file.status !== 'ok') return file
+    if (file.status !== 'ok') return { result: file, rememberUnavailable: file.status === 'unavailable' }
     const version = versionOf(file.value)
     const presence = (await presenceWithin([file.value], request)).get(path)
-    if (request.signal.aborted) return request.ended('waiting')
-    if (presence !== 'local') return { status: presence ?? 'unknown', version }
+    if (request.signal.aborted) return { result: request.ended('waiting'), rememberUnavailable: false }
+    if (presence !== 'local') return { result: { status: presence ?? 'unknown', version }, rememberUnavailable: false }
     const real = await resolveInside(base, path, request)
-    if (real.status !== 'ok') return real
+    if (real.status !== 'ok') return { result: real, rememberUnavailable: false }
     const bytes = await readShared(real.value, version, request)
-    return bytes.status === 'ok' ? { status: 'ok', version, bytes: bytes.value } : bytes
+    return { result: bytes.status === 'ok' ? { status: 'ok', version, bytes: bytes.value } : bytes, rememberUnavailable: false }
   }
 
   function remember(path: string, result: Unread): void {
@@ -374,8 +375,8 @@ export function createStorageGateway({
       if (remembered && remembered.expiresAt > performance.now()) return remembered.result
       const request = openRequest(CONTENT_DEADLINE_MS, signal)
       try {
-        const result = await readLocal(base, path, request)
-        if (result.status !== 'ok' && REMEMBERED.has(result.status)) remember(path, result)
+        const { result, rememberUnavailable } = await readLocal(base, path, request)
+        if (result.status !== 'ok' && (REMEMBERED.has(result.status) || (rememberUnavailable && result.status === 'unavailable'))) remember(path, result)
         return result
       } finally {
         request.close()
