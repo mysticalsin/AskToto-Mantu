@@ -458,7 +458,7 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
 
   it('ClickUp and Plane default cards have no MCP URL field', () => {
     const clickup = blockAfter('function ClickupCard(', '\nexport function PlaneCard(')
-    const plane = blockAfter('function PlaneCard(', '\nexport function AgentPicker(')
+    const plane = blockAfter('function PlaneCard(', '\nexport const OPERATOR_ENTITLEMENT_LABELS')
     expect(productCopy).not.toMatch(/MCP endpoint URL/)
     expect(clickup).toMatch(/<ClickUpMark/)
     expect(plane).toMatch(/<PlaneMark/)
