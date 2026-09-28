@@ -14,11 +14,12 @@ describe('MQA-304 — one working licence activation surface', () => {
   })
 
   it('Identity uses the verified Operator flow and its live status, not memberLicenseActivate', () => {
-    const source = readFileSync(join(__dirname, '../features/settings/SettingsPanel.tsx'), 'utf8')
-    const profile = source.slice(source.indexOf("{tab === 'profile' && ("), source.indexOf("{tab === 'about' && ("))
+    const panelSource = readFileSync(join(__dirname, '../features/settings/SettingsPanel.tsx'), 'utf8')
+    const integrationsSource = readFileSync(join(__dirname, '../features/settings/Integrations.tsx'), 'utf8')
+    const profile = panelSource.slice(panelSource.indexOf("{tab === 'profile' && ("), panelSource.indexOf("{tab === 'about' && ("))
     expect(profile).toContain('<OperatorLicenseCard refreshSettings={refreshSettings} showIdentity />')
-    expect(source).toContain('<IdentitySection managedTier={status?.tier ?? null} />')
-    expect(source).toContain("aria-label=\"Métis licence key\"")
+    expect(integrationsSource).toContain('<IdentitySection managedTier={status?.tier ?? null} />')
+    expect(integrationsSource).toContain("aria-label=\"Métis licence key\"")
     const identity = readFileSync(join(__dirname, 'IdentitySection.tsx'), 'utf8')
     expect(identity).not.toMatch(/memberLicenseActivate|memberLicenseImportFile/)
   })

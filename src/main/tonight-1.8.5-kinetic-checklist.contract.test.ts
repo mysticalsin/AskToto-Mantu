@@ -23,7 +23,8 @@ const settings = [
   'AiSection.tsx',
   'CliIntegration.tsx',
   'DustSetup.tsx',
-  'Integrations.tsx'
+  'Integrations.tsx',
+  'IntelligenceSection.tsx'
 ].map((file) => readFileSync(join(root, 'src/renderer/src/features/settings', file), 'utf8')).join('\n')
 const intel = readFileSync(join(root, 'src/main/intelligence.ts'), 'utf8')
 const intelButton = readFileSync(join(root, 'intelligence/src/components/IntelligenceUpdateButton.tsx'), 'utf8')
