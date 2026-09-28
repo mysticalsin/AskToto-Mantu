@@ -38,6 +38,7 @@ import {
   purgeBrain,
   restorePreservedBrainIndex
 } from './store'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 function sha256(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex')
@@ -126,9 +127,10 @@ describe('rebuild preserves unreadable indexes', () => {
     primary = join(brainDir(settings), 'index.json')
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     // Tests may leave fs spies throwing; cleanup must run through the real implementations first.
     restoreFsMocks()
+    await settleBrainWritesForTests()
     delete process.env.ASKTOTO_LOCAL_KEYSTORE
     resetSecretKeyCache()
     restoreElectronMocks(userData)

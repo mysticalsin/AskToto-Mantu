@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
 import { BrainIndexSchema } from '@shared/brain'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -120,7 +121,8 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     failRenameOnce = null
     renameSyncSpy.mockClear()
   })
-  afterEach(() => {
+  afterEach(async () => {
+    await settleBrainWritesForTests()
     failReadOnce = null
     failReadPersistent = null
     failRenameOnce = null

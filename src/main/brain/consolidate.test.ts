@@ -6,7 +6,8 @@ import { app } from 'electron'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { getSettings, setSettings, setApiKey } from '../store'
 import { canConsolidateToday, recordConsolidationPass, runConsolidationIfDue, resetConsolidationLockForTests } from './consolidate'
-import { brainBackfillProgress, whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress } from './ingest'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -49,7 +50,7 @@ afterEach(async () => {
   // Dispatch/budget persistence returns before extraction, merge, lint, and publication. The current
   // index-lock tail alone cannot observe writes those still-active jobs have not enqueued yet.
   await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
-  await whenIndexWritesSettle()
+  await settleBrainWritesForTests()
   rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   vi.unstubAllEnvs()

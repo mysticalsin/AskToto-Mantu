@@ -4,6 +4,7 @@ import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, Che
 import type { TranscriptLine, MeetingSummary, McpConnection, RecapExport } from '@shared/ipc'
 import type { RecapStatus } from '@shared/recap-status'
 import type { AnswerState } from '../state'
+import type { NavigationGuardService } from '../lib/navigation-guard'
 import { isNonSpeechLine } from '@shared/transcript-filter'
 import { reviewDurationSeconds } from '@shared/meeting-duration'
 import { reviewSpeakerLabel } from '@shared/speaker-summary'
@@ -250,6 +251,7 @@ export const Review = memo(function Review({
   isPastMeeting,
   onRecapSaved,
   onUpdateRecap,
+  navigationGuard,
   onDirtyChange,
   recapUnavailable,
   finishingTranscript,
@@ -308,9 +310,10 @@ export const Review = memo(function Review({
   onRecapSaved?: (recap: string) => void
   /** App-owned same-file ordering boundary. Status is intentionally omitted for manual edits. */
   onUpdateRecap?: (file: string, recap: string) => Promise<{ ok: boolean; error?: string }>
+  navigationGuard: NavigationGuardService
   /** Mirrors recapDirty (below) up to the owner (App) so its global Escape handler can gate on the same
    *  unsaved-edit check this component's own in-panel exits already run. Called with `false` on unmount. */
-  onDirtyChange?: (dirty: boolean) => void
+  onDirtyChange?: (dirty: boolean, save?: () => Promise<boolean>) => void
   /** Live session only: the recap was deliberately skipped (no AI provider configured) instead of being
    *  fired and left to fail with a red error. Shown in place of the "writing detailed notes…" spinner,
    *  which would otherwise spin forever since no recap request was ever sent. */
@@ -415,20 +418,6 @@ export const Review = memo(function Review({
   // just a draft/text mismatch) because recapDraft is left holding its last value after Cancel/Save, so
   // comparing the two alone would still read "dirty" once editingRecap is already false.
   const recapDirty = editingRecap && recapDraft !== recapText
-  // Surface the dirty state to the owner (App) — its global Escape handler doesn't render inside this
-  // component's own exit buttons, so it can't call confirmDiscardRecapEdit directly; this keeps App's ref
-  // in sync so Escape can gate on the same check the in-panel exits below already use. Reset on unmount so
-  // a stale "dirty" flag can never survive after Review closes.
-  useEffect(() => {
-    onDirtyChange?.(recapDirty)
-    return () => onDirtyChange?.(false)
-  }, [recapDirty, onDirtyChange])
-  // onResume/onDone/"Recent meetings" all navigate away from this screen unconditionally; a reused Review
-  // instance would then reset editingRecap/editedRecap (see the savedPath effect above) with the edit never
-  // saved. Confirm once before discarding; no-op (returns true immediately) when there is nothing to lose.
-  const confirmDiscardRecapEdit = (): boolean =>
-    !recapDirty || window.confirm('You have unsaved changes to this recap. Discard them?')
-
   const startEditRecap = (): void => {
     setRecapDraft(recapText)
     setRecapEditError(null)
@@ -438,8 +427,8 @@ export const Review = memo(function Review({
     setEditingRecap(false)
     setRecapEditError(null)
   }
-  const saveRecap = async (): Promise<void> => {
-    if (!savedPath || recapSaving) return
+  const saveRecap = async (): Promise<boolean> => {
+    if (!savedPath || recapSaving) return false
     const forPath = savedPath
     setRecapSaving(true)
     setRecapEditError(null)
@@ -450,7 +439,7 @@ export const Review = memo(function Review({
         : window.toto.recallUpdateRecap(file, recapDraft))
       // The disk write already targeted the right file, but if the user navigated to a different meeting
       // while it was in flight, drop the result rather than paint meeting A's edit onto meeting B.
-      if (savedPathRef.current !== forPath) return
+      if (savedPathRef.current !== forPath) return false
       if (r.ok) {
         // Store the trimmed value so the in-place copy matches exactly what a disk re-read would return
         // (updateMeetingRecap + recallRead both trim the recap section).
@@ -458,15 +447,42 @@ export const Review = memo(function Review({
         setEditedRecap({ base: recap?.text ?? '', text: saved })
         onRecapSaved?.(saved)
         setEditingRecap(false)
+        return true
       } else {
         setRecapEditError(r.error || 'Could not save your changes.')
+        return false
       }
     } catch (e) {
-      if (savedPathRef.current !== forPath) return
+      if (savedPathRef.current !== forPath) return false
       setRecapEditError(`Could not save your changes: ${e instanceof Error ? e.message : String(e)}`)
+      return false
     } finally {
       setRecapSaving(false)
     }
+  }
+  // Surface the dirty state to the owner (App) — its global Escape handler doesn't render inside this
+  // component's own exit buttons, so it needs the same async save boundary used below. Reset on unmount so
+  // a stale "dirty" flag can never survive after Review closes.
+  useEffect(() => {
+    onDirtyChange?.(recapDirty, saveRecap)
+    return () => onDirtyChange?.(false)
+  }, [recapDirty, onDirtyChange, saveRecap])
+  // onResume/onDone/"Recent meetings" all navigate away from this screen unconditionally; a reused Review
+  // instance would then reset editingRecap/editedRecap (see the savedPath effect above) with the edit never
+  // saved. Ask once before leaving; no-op when there is nothing to lose.
+  const guardRecapEditNavigation = async (): Promise<boolean> => {
+    if (!recapDirty) return true
+    const choice = await navigationGuard.request({
+      title: 'Save recap changes?',
+      message: 'You have unsaved edits in this recap. Save them before leaving, discard them, or cancel to keep editing.',
+      saveLabel: 'Save',
+      discardLabel: 'Discard',
+      cancelLabel: 'Cancel',
+      destructive: true
+    })
+    if (choice === 'cancel') return false
+    if (choice === 'save') return saveRecap()
+    return true
   }
 
   useEffect(() => {
@@ -988,7 +1004,9 @@ export const Review = memo(function Review({
             <Chip
               icon={Play}
               onClick={() => {
-                if (confirmDiscardRecapEdit()) onResume()
+                void (async () => {
+                  if (await guardRecapEditNavigation()) onResume()
+                })()
               }}
               variant="accent"
             >
@@ -1013,7 +1031,9 @@ export const Review = memo(function Review({
             <Chip
               icon={isPastMeeting ? ArrowLeft : RotateCcw}
               onClick={() => {
-                if (confirmDiscardRecapEdit()) onDone()
+                void (async () => {
+                  if (await guardRecapEditNavigation()) onDone()
+                })()
               }}
               variant="accent"
             >
@@ -1903,7 +1923,9 @@ export const Review = memo(function Review({
                     key={item.file}
                     type="button"
                     onClick={() => {
-                      if (confirmDiscardRecapEdit()) onOpenPastMeeting?.(item.file)
+                      void (async () => {
+                        if (await guardRecapEditNavigation()) onOpenPastMeeting?.(item.file)
+                      })()
                     }}
                     className="no-drag focus-ring flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
                   >

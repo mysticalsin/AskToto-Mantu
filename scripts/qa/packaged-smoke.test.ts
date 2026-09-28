@@ -1,19 +1,24 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   LIFECYCLE_EVENTS,
+  buildWindowsShortcutLauncher,
+  NAVIGATION_GUARD_BOOTSTRAP_PATCH,
   childPidReserved,
   computeCleanupTargets,
   isOverlayUrl,
   isPassingRevealEvidence,
+  waitUntilParked,
   parseAuditLog,
   readObservationTail,
   initialRvRows,
+  initialNavigationGuardRows,
   runRevealRow,
+  seedOnboardedProfile,
   smokeReport,
   smokeVerdict
 } from './packaged-smoke.mjs'
@@ -51,6 +56,14 @@ interface Observation {
     automation: string
     status: string
     evidence: { event: string; reason: string; outcome: string | null; parked?: boolean; layout?: string | null } | null
+    unblock: string | null
+  }>
+  navigationGuard: Array<{
+    id: string
+    state: string
+    entry: string
+    status: string
+    evidence: Record<string, unknown> | null
     unblock: string | null
   }>
   survivors: ProcessEntry[] | null
@@ -159,6 +172,11 @@ function goodObservation(): Observation {
         unblock: null
       }
     ],
+    navigationGuard: initialNavigationGuardRows().map((row) => ({
+      ...row,
+      status: 'PASS',
+      evidence: { observed: true }
+    })),
     survivors: [],
     survivorsGoneMs: 300
   }
@@ -211,6 +229,16 @@ describe('smokeVerdict', () => {
       'an automated RV row never completed after renderer readiness',
       (o) => { o.rv[0] = { ...o.rv[0], status: 'PENDING', evidence: null } },
       'rv_reopen_incomplete'
+    ],
+    [
+      'an automated navigation guard row failed',
+      (o) => { o.navigationGuard[0] = { ...o.navigationGuard[0], status: 'FAIL', evidence: null } },
+      'navigation_guard_failed'
+    ],
+    [
+      'an automated navigation guard row never completed after renderer readiness',
+      (o) => { o.navigationGuard[0] = { ...o.navigationGuard[0], status: 'PENDING', evidence: null } },
+      'navigation_guard_incomplete'
     ]
   ]
 
@@ -236,11 +264,30 @@ describe('smokeVerdict', () => {
       audit: [{ event: 'app.started', version: '1.9.7', platform: 'darwin', arch: 'arm64' }],
       marker: null,
       rv: goodObservation().rv,
+      navigationGuard: goodObservation().navigationGuard,
       survivors: null,
       survivorsGoneMs: null
     }
 
     expect(smokeVerdict(observation)).toEqual({ result: 'fail', failures: ['smoke_incomplete'] })
+  })
+
+  it('does not fail a completed smoke observation for BLOCKED_EXTERNAL rows', () => {
+    const observation = goodObservation()
+    observation.rv[0] = {
+      ...observation.rv[0],
+      status: 'BLOCKED_EXTERNAL',
+      evidence: null,
+      unblock: 'Run this row where the outside dependency is available.'
+    }
+    observation.navigationGuard[0] = {
+      ...observation.navigationGuard[0],
+      status: 'BLOCKED_EXTERNAL',
+      evidence: null,
+      unblock: 'Run this row where the outside dependency is available.'
+    }
+
+    expect(smokeVerdict(observation)).toEqual({ result: 'pass', failures: [] })
   })
 })
 
@@ -251,6 +298,38 @@ describe('isPassingRevealEvidence', () => {
     expect(isPassingRevealEvidence({ outcome: 'shown', parked: false })).toBe(false)
     expect(isPassingRevealEvidence({ outcome: 'already-visible', parked: true })).toBe(false)
     expect(isPassingRevealEvidence(null)).toBe(false)
+  })
+})
+
+describe('waitUntilParked', () => {
+  it('resolves when smoke-park-state.json reports parked after sinceMs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-park-prove-'))
+    try {
+      const since = Date.now() - 1_000
+      writeFileSync(
+        join(dir, 'smoke-park-state.json'),
+        JSON.stringify({ at: Date.now(), parked: true, visible: true, layout: 'hide' })
+      )
+      const state = await waitUntilParked(dir, since, 2_000)
+      expect(state?.parked).toBe(true)
+      expect(state?.layout).toBe('hide')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('times out when the marker stays unparked', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-park-prove-'))
+    try {
+      writeFileSync(
+        join(dir, 'smoke-park-state.json'),
+        JSON.stringify({ at: Date.now(), parked: false, visible: true, layout: 'hide' })
+      )
+      const state = await waitUntilParked(dir, 0, 400)
+      expect(state).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -326,6 +405,7 @@ describe('smokeReport', () => {
       'exit',
       'shutdown',
       'rv',
+      'navigationGuard',
       'processes'
     ])
     expect(Object.keys(report.app ?? {})).toEqual(['version', 'platform', 'arch'])
@@ -351,6 +431,7 @@ describe('smokeReport', () => {
       audit: [],
       marker: null,
       rv: initialRvRows('darwin'),
+      navigationGuard: initialNavigationGuardRows(),
       survivors: null,
       survivorsGoneMs: null
     }
@@ -397,6 +478,94 @@ describe('initialRvRows', () => {
     ])
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
+  })
+})
+
+describe('initialNavigationGuardRows', () => {
+  it('tracks clean and dirty History navigation entry points as pending automation', () => {
+    const rows = initialNavigationGuardRows()
+
+    expect(rows.map((row) => row.id)).toEqual([
+      'HIST-clean-bar-open',
+      'HIST-clean-settings-open',
+      'HIST-clean-row-doubleclick',
+      'HIST-clean-bottom-open',
+      'HIST-clean-back',
+      'HIST-clean-recent-meeting',
+      'HIST-dirty-cancel-bar',
+      'HIST-dirty-discard-bar',
+      'HIST-dirty-save-bar',
+      'HIST-dirty-cancel-settings-open',
+      'HIST-dirty-discard-settings-open',
+      'HIST-dirty-save-settings-open',
+      'HIST-dirty-cancel-back',
+      'HIST-dirty-discard-back',
+      'HIST-dirty-save-back',
+      'HIST-dirty-cancel-recent',
+      'HIST-dirty-discard-recent',
+      'HIST-dirty-save-recent'
+    ])
+    expect(rows.some((row) => row.state === 'clean')).toBe(true)
+    expect(rows.some((row) => row.state === 'dirty')).toBe(true)
+    expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
+    expect(rows.every((row) => row.unblock === null)).toBe(true)
+  })
+})
+
+describe('seedOnboardedProfile', () => {
+  it('writes a plain-JSON settings.json that skips onboarding and keeps a hover-parkable overlay layout', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'metis-smoke-test-'))
+    try {
+      seedOnboardedProfile(profile)
+      const settings = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'))
+
+      expect(settings.onboardingDone).toBe(true)
+      expect(typeof settings.onboardingDoneAt).toBe('number')
+      expect(settings.overlayLayout).toBe('hide')
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('buildWindowsShortcutLauncher', () => {
+  it('points the .lnk at a launcher that carries the isolated ASKTOTO_USERDATA and reopen probe into Metis.exe', () => {
+    const built = buildWindowsShortcutLauncher({
+      auditLogDir: 'C:\\Users\\runner\\AppData\\Local\\Temp\\metis-smoke-xyz\\logs',
+      executable: 'C:\\Program Files\\Metis\\Metis.exe',
+      userData: 'C:\\Users\\runner\\AppData\\Local\\Temp\\metis-smoke-xyz',
+      reopenProbe: '1'
+    })
+
+    expect(built.shortcutPath.replace(/\\/g, '/')).toMatch(/Metis-smoke\.lnk$/)
+    expect(built.launcherPath.replace(/\\/g, '/')).toMatch(/Metis-smoke-launch\.cmd$/)
+    expect(built.launcherBody).toContain('set "ASKTOTO_USERDATA=C:\\Users\\runner\\AppData\\Local\\Temp\\metis-smoke-xyz"')
+    expect(built.launcherBody).toContain('set "ASKTOTO_SMOKE_REOPEN_PROBE=1"')
+    expect(built.launcherBody).toContain(`start "" ${JSON.stringify('C:\\Program Files\\Metis\\Metis.exe')}`)
+    expect(built.shortcutScript).toContain('CreateShortcut')
+    expect(built.shortcutScript).toContain('Metis-smoke-launch.cmd')
+    expect(built.shortcutScript).toContain('WorkingDirectory')
+  })
+
+  it('refuses to build a launcher without ASKTOTO_USERDATA, rather than silently dropping the isolated profile', () => {
+    expect(() =>
+      buildWindowsShortcutLauncher({
+        auditLogDir: 'C:\\tmp\\logs',
+        executable: 'C:\\Metis\\Metis.exe',
+        userData: ''
+      })
+    ).toThrow(/ASKTOTO_USERDATA/)
+  })
+})
+
+describe('NAVIGATION_GUARD_BOOTSTRAP_PATCH', () => {
+  it('is a completed-onboarding, bar-layout, auto-hide-off settings patch — the same shape a real user leaves after picking the bar layout and finishing onboarding', () => {
+    expect(NAVIGATION_GUARD_BOOTSTRAP_PATCH).toEqual({
+      onboardingDone: true,
+      recordingConsent: true,
+      overlayLayout: 'bar',
+      autoHideOverlay: false
+    })
   })
 })
 

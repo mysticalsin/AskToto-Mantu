@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - m2/M2-0178-*
       - m2/M2-0212-film-toolchain-spike
 
 permissions:
@@ -23,6 +24,31 @@ defaults:
     working-directory: film/toolchain
 
 jobs:
+  claims:
+    name: Verify the launch-film claim gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+        working-directory: .
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Test the claim gate behavior
+        run: node --test media/launch-film/check-claims.test.mjs
+      - name: Generate the readiness report
+        run: node media/launch-film/check-claims.mjs --out "$RUNNER_TEMP/launch-film-claims"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: launch-film-claim-readiness
+          path: ${{ runner.temp }}/launch-film-claims/claim-readiness.json
+          if-no-files-found: error
+
   spike:
     name: Render and verify the 4K spike
     # Named, not ubuntu-latest: the FFmpeg pin below is a package version of this Ubuntu release.
