@@ -359,7 +359,7 @@ function spawnAndWaitHealthy(
       gpuLayers: modelPaths.gpuLayers
     })
     let proc: ChildProcess
-    let spawnRecorded: Promise<void> = Promise.resolve()
+    let waitForSpawnRecorded = (): Promise<void> => Promise.resolve()
     try {
       // The per-session api key travels via env, never argv (see module doc comment) — `ps`/the process
       // table can see the flag list of every local process but not another process's environment.
@@ -368,9 +368,16 @@ function spawnAndWaitHealthy(
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         env: { ...process.env, LLAMA_API_KEY: apiKey }
-      }, auditLog)
+      }, auditLog, process.env, process.platform, {
+        onUnsupervisedFallbackSpawned: (fallback) => recordSidecarSpawned('llama-server', fallback, binaryPath, args)
+      })
       proc = launched.child
-      spawnRecorded = launched.supervised ? Promise.resolve() : recordSidecarSpawned('llama-server', proc, binaryPath, args)
+      if (launched.supervised) {
+        waitForSpawnRecorded = () => launched.waitForUnsupervisedFallback?.() ?? Promise.resolve()
+      } else {
+        const spawnRecorded = recordSidecarSpawned('llama-server', proc, binaryPath, args)
+        waitForSpawnRecorded = () => spawnRecorded
+      }
     } catch (err) {
       reject(err instanceof Error ? err : new Error(String(err)))
       return
@@ -433,7 +440,7 @@ function spawnAndWaitHealthy(
               reject(new StartCancelledError())
               return
             }
-            await spawnRecorded
+            await waitForSpawnRecorded()
             if (settled) return
             if (generation !== startGeneration || child !== proc) {
               settled = true

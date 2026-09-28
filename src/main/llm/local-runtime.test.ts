@@ -336,7 +336,10 @@ interface Harness {
   }
 }
 
-async function loadIsolatedRuntime(options: { spawnedRegistryWrite?: Promise<void> } = {}): Promise<Harness> {
+async function loadIsolatedRuntime(options: {
+  spawnedRegistryWrite?: Promise<void>
+  supervisorMode?: 'real' | 'async-fallback'
+} = {}): Promise<Harness> {
   vi.resetModules()
   const procs: FakeProc[] = []
   const calls: Array<{ path: string; args: string[] }> = []
@@ -370,6 +373,43 @@ async function loadIsolatedRuntime(options: { spawnedRegistryWrite?: Promise<voi
     const actual = await importOriginal<typeof import('node:fs')>()
     return { ...actual, existsSync: () => true }
   })
+  vi.doUnmock('../infra/process/supervisor')
+  if (options.supervisorMode === 'async-fallback') {
+    vi.doMock('../infra/process/supervisor', async () => {
+      const childProcess = await import('node:child_process')
+      return {
+        spawnSidecarProcess: vi.fn(
+          (
+            name: 'llama-server',
+            command: string,
+            args: readonly string[],
+            spawnOptions: import('node:child_process').SpawnOptions,
+            audit: (event: string, fields: Record<string, unknown>) => void,
+            _env?: NodeJS.ProcessEnv,
+            _platform?: NodeJS.Platform,
+            hooks?: { onUnsupervisedFallbackSpawned?: (child: import('node:child_process').ChildProcess) => Promise<void> | void }
+          ) => {
+            const child = childProcess.spawn(command, [...args], spawnOptions)
+            const fallbackRecorded = Promise.resolve(hooks?.onUnsupervisedFallbackSpawned?.(child))
+            audit('sidecar.unsupervised', {
+              name,
+              reason: 'wrapper-exited-before-usable',
+              error: 'code=1, signal=null'
+            })
+            return {
+              child,
+              supervised: true,
+              waitForUnsupervisedFallback: () => fallbackRecorded
+            }
+          }
+        ),
+        stopSidecarProcess: vi.fn((child: import('node:child_process').ChildProcess) => {
+          child.kill('SIGKILL')
+        }),
+        markSidecarProcessUsable: vi.fn()
+      }
+    })
+  }
   // Imported from the freshly-reset registry so both objects are the ones the isolated runtime actually
   // holds — the module-level vi.mock factories re-run on reset and hand out new vi.fn()s.
   const runtime = await import('./local-runtime')
@@ -471,6 +511,36 @@ describe('sidecar registry ordering', () => {
     await started
 
     expect(resolved).toBe(true)
+  })
+
+  it('records an async supervised-fallback direct child before reporting the sidecar as started', async () => {
+    let releaseRegistryWrite!: () => void
+    const registryWrite = new Promise<void>((resolve) => {
+      releaseRegistryWrite = resolve
+    })
+    const h = await loadIsolatedRuntime({ spawnedRegistryWrite: registryWrite, supervisorMode: 'async-fallback' })
+    vi.stubGlobal('fetch', async () => ({ status: 200 }))
+
+    let resolved = false
+    const started = h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(() => {
+      resolved = true
+    })
+    emitListening(h, 0, 55902)
+    await waitUntil(() => h.registry.recordSidecarSpawned.mock.calls.length === 1)
+    await Promise.resolve()
+
+    expect(h.registry.recordSidecarSpawned.mock.calls[0][0]).toBe('llama-server')
+    expect(h.registry.recordSidecarSpawned.mock.calls[0][1]).toBe(h.procs[0])
+    expect(resolved).toBe(false)
+
+    releaseRegistryWrite()
+    await started
+
+    expect(resolved).toBe(true)
+    expect(h.logger.auditLog).toHaveBeenCalledWith(
+      'sidecar.unsupervised',
+      expect.objectContaining({ name: 'llama-server', reason: 'wrapper-exited-before-usable' })
+    )
   })
 })
 

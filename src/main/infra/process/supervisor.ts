@@ -8,15 +8,19 @@ import type { AuditSink } from '../../logger'
 export interface SupervisedSpawnResult {
   readonly child: ChildProcess
   readonly supervised: boolean
+  readonly waitForUnsupervisedFallback?: () => Promise<void>
 }
 
 const supervisedProcesses = new WeakSet<ChildProcess>()
 const supervisedPlatforms = new WeakMap<ChildProcess, NodeJS.Platform>()
 const supervisedProcessState = new WeakMap<
   ChildProcess,
-  { current: ChildProcess; supervised: boolean; usable: boolean }
+  { current: ChildProcess; supervised: boolean; usable: boolean; fallbackRecorded?: Promise<void> }
 >()
 type UnsupervisedReason = 'wrapper-spawn-failed' | 'wrapper-exited-before-usable'
+export interface SupervisedSpawnHooks {
+  readonly onUnsupervisedFallbackSpawned?: (child: ChildProcess) => Promise<void> | void
+}
 
 export function sidecarSupervisionEnabled(
   env: NodeJS.ProcessEnv = process.env,
@@ -54,7 +58,8 @@ export function spawnSidecarProcess(
   options: SpawnOptions,
   audit: AuditSink,
   env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  hooks: SupervisedSpawnHooks = {}
 ): SupervisedSpawnResult {
   if (!sidecarSupervisionEnabled(env, platform)) {
     return { child: spawn(command, [...args], options), supervised: false }
@@ -68,10 +73,18 @@ export function spawnSidecarProcess(
 
   try {
     const wrapper = spawn(helper, ['supervise', '--parent', String(process.pid), '--', command, ...args], options)
-    const child = fallbackCapableSupervisedChild(wrapper, name, command, args, options, audit)
+    const { child, waitForUnsupervisedFallback } = fallbackCapableSupervisedChild(
+      wrapper,
+      name,
+      command,
+      args,
+      options,
+      audit,
+      hooks
+    )
     supervisedProcesses.add(child)
     supervisedPlatforms.set(child, platform)
-    return { child, supervised: true }
+    return { child, supervised: true, waitForUnsupervisedFallback }
   } catch (error) {
     audit('sidecar.unsupervised', {
       name,
@@ -113,10 +126,15 @@ function fallbackCapableSupervisedChild(
   command: string,
   args: readonly string[],
   options: SpawnOptions,
-  audit: AuditSink
-): ChildProcess {
+  audit: AuditSink,
+  hooks: SupervisedSpawnHooks
+): { child: ChildProcess; waitForUnsupervisedFallback: () => Promise<void> } {
   const proxy = new EventEmitterChildProcess()
-  const state = { current: wrapper, supervised: true, usable: false }
+  const state: { current: ChildProcess; supervised: boolean; usable: boolean; fallbackRecorded?: Promise<void> } = {
+    current: wrapper,
+    supervised: true,
+    usable: false
+  }
   supervisedProcessState.set(proxy.child, state)
   const fallbackToDirect = (reason: UnsupervisedReason, error?: string): void => {
     audit('sidecar.unsupervised', {
@@ -128,6 +146,7 @@ function fallbackCapableSupervisedChild(
       const direct = spawn(command, [...args], options)
       state.current = direct
       state.supervised = false
+      state.fallbackRecorded = Promise.resolve(hooks.onUnsupervisedFallbackSpawned?.(direct))
       proxy.attach(direct, state)
     } catch (fallbackError) {
       proxy.emitError(fallbackError)
@@ -141,7 +160,10 @@ function fallbackCapableSupervisedChild(
       fallbackToDirect('wrapper-exited-before-usable', `code=${code}, signal=${signal}`)
     }
   })
-  return proxy.child
+  return {
+    child: proxy.child,
+    waitForUnsupervisedFallback: () => state.fallbackRecorded ?? Promise.resolve()
+  }
 }
 
 class EventEmitterChildProcess {
