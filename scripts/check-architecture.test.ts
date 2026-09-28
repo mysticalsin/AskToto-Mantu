@@ -3,6 +3,7 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -637,6 +638,26 @@ describe('architecture ratchet CLI', () => {
     }
   })
 
+  it("adding a new non-test source file over 800 lines under src/main: exits 1 with a line naming FF-04 and '0 -> 801'", () => {
+    const fixture = createArchitectureFixture()
+    try {
+      const seed = readTrailingJson(runArchitectureCli(fixture.root).out)
+      writeFixtureFile(fixture.root, 'scripts/architecture-baseline.json', formatBaseline(seed))
+
+      writeFixtureFile(
+        fixture.root,
+        'src/main/new-long.ts',
+        `${Array.from({ length: 801 }, (_, index) => `export const line${index + 1} = ${index + 1}`).join('\n')}\n`,
+      )
+
+      const result = runArchitectureCli(fixture.root)
+      expect(result.code, result.out).toBe(1)
+      expect(result.out).toContain('FF-04 src/main/new-long.ts: 0 -> 801 (rose')
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
   it("adding one import that creates a new cycle: exits 1 with a line naming FF-02 and '0 -> 1', no JSON printed because nothing fell", () => {
     const fixture = createArchitectureFixture()
     try {
@@ -710,5 +731,23 @@ describe('architecture ratchet CLI', () => {
     } finally {
       rmSync(fixture.root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('build.yml Architecture ratchet step is blocking (M2-0237)', () => {
+  function architectureRatchetStepBlock(): string {
+    const workflow = readFileSync(join(__dirname, '..', '.github', 'workflows', 'build.yml'), 'utf8')
+    const marker = workflow.indexOf('\n      - name: Architecture ratchet\n')
+    expect(marker, 'Architecture ratchet step not found in build.yml').toBeGreaterThan(-1)
+    const nextStep = workflow.indexOf('\n      - name:', marker + 1)
+    return nextStep === -1 ? workflow.slice(marker) : workflow.slice(marker, nextStep)
+  }
+
+  it('has no continue-on-error, so a differing count fails the job instead of only being reported', () => {
+    expect(architectureRatchetStepBlock()).not.toContain('continue-on-error')
+  })
+
+  it('still runs check:architecture', () => {
+    expect(architectureRatchetStepBlock()).toContain('run: npm run check:architecture')
   })
 })
