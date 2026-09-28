@@ -15,6 +15,7 @@ import { brainBackfillProgress, reconcileMeetingsInBackground, requestBackfill, 
 import { catchUpIntelligenceIndexIfNeeded } from './intelligence-index'
 import { runConsolidationIfDue } from './consolidate'
 import { brainDir, readIndex, writeIndex, writeMeetingExtraction } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 
@@ -143,6 +144,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
       return join(userData, name)
     })
     resetSecretKeyCache()
+    ;(await import('../infra/storage/meetings-storage')).useStorageForTests()
     const ingest = await import('./ingest')
     const consolidate = await import('./consolidate')
     const intelligence = await import('./intelligence-index')
@@ -160,6 +162,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
   }
 
   beforeEach(async () => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-ud-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-meetings-'))
     modelMarkers = []

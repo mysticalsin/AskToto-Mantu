@@ -11,6 +11,7 @@ import type { StreamOptions } from '../llm/shared'
 import { brainBackfillProgress, startBackfill, whenIndexWritesSettle } from './ingest'
 import { startIntelligencePass } from './intelligence-pass'
 import { readIndex } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 const hosted = vi.hoisted(() => ({
@@ -42,6 +43,7 @@ describe('license-funded meeting extraction', () => {
   let meetings: string
 
   beforeEach(() => {
+    useStorageForTests()
     profile = mkdtempSync(join(tmpdir(), 'metis-funded-brain-'))
     meetings = join(profile, 'meetings')
     mkdirSync(meetings)
@@ -72,7 +74,7 @@ describe('license-funded meeting extraction', () => {
 
   it.each(['backfill', 'intelligence pass'] as const)('indexes through %s with a license and no device API key or Cloudflare endpoint', async (path) => {
     meeting()
-    const result = path === 'backfill' ? startBackfill() : startIntelligencePass()
+    const result = path === 'backfill' ? await startBackfill() : await startIntelligencePass()
     expect(result).toEqual({ queued: 1 })
     await settle()
     expect(readIndex(getSettings()).ingested['funded.md']?.ok).toBe(true)

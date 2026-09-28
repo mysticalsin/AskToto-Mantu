@@ -10,6 +10,7 @@ import { MAX_INGEST_ATTEMPTS } from '../infra/scheduler/policy'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
 import { brainBackfillProgress, ingestFailureCounts, ingestFailureDetails, startBackfill, whenIndexWritesSettle, type BackfillStartOptions } from './ingest'
 import { readIndex } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 
@@ -47,6 +48,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-resilience-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-resilience-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -178,7 +180,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockImplementation(respondError('404 page not found'))
 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i++) {
-      startBackfill(undefined, userTrigger)
+      await startBackfill(undefined, userTrigger)
       await waitForIdle()
     }
     expect(readIndex(getSettings()).ingested['always-fails-2.md']?.exhausted).toBe(true)
@@ -199,7 +201,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockImplementation(respondError('404 page not found'))
 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i++) {
-      startBackfill(undefined, userTrigger)
+      await startBackfill(undefined, userTrigger)
       await waitForIdle()
     }
     expect(readIndex(getSettings()).ingested['always-fails-3.md']?.exhausted).toBe(true)

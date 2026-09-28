@@ -10,6 +10,7 @@ import * as brainStore from './store'
 import * as publish from './publish'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { requestBackfillRun, requestSourceRefresh, resumeBackfillIfPending, startBackfill, startRebuild, enqueueIngest, brainBackfillProgress, whenIndexWritesSettle } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 vi.mock('../llm', () => ({ createStream: vi.fn() }))
@@ -40,6 +41,7 @@ describe('backfill run completion observes real work', () => {
   const trackedGate = () => { const g = gate(); releases.push(g.release); return g }
 
   beforeEach(() => {
+    useStorageForTests()
     profile = mkdtempSync(join(tmpdir(), 'metis-completion-profile-'))
     folder = mkdtempSync(join(tmpdir(), 'metis-completion-meetings-'))
     vi.mocked(app.getPath).mockImplementation((name) => name === 'userData' ? profile : join(profile, name))
@@ -56,7 +58,7 @@ describe('backfill run completion observes real work', () => {
     setApiKey('anthropic', 'synthetic-test-key')
     vi.mocked(createStream).mockImplementation(success)
     setSettings({ meetingsFolder: folder, teamTranscriptFolders: [] })
-    startBackfill(undefined, { force: true })
+    await startBackfill(undefined, { force: true })
     await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
     await whenIndexWritesSettle()
     rmSync(profile, { recursive: true, force: true })
@@ -95,7 +97,7 @@ describe('backfill run completion observes real work', () => {
     const extraction = trackedGate()
     vi.mocked(createStream).mockImplementationOnce((opts) => { void extraction.promise.then(() => success(opts)); return { abort: () => {} } })
     const callback = vi.fn()
-    startBackfill(callback)
+    await startBackfill(callback)
     const first = requestBackfillRun({ force: true })
     const second = requestBackfillRun({ force: true })
     expect(second.completion).toBe(first.completion)
@@ -254,7 +256,7 @@ describe('backfill run completion observes real work', () => {
       throw new Error('synthetic persistent disk failure')
     })
     const callback = vi.fn()
-    startBackfill(callback, { force: true })
+    await startBackfill(callback, { force: true })
     const run = requestBackfillRun({ force: true })
     await vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(1), { timeout: 200, interval: 10 })
     await expect(run.completion).resolves.toEqual({ ok: false, error: 'write-failed', total: 0, failed: 0 })

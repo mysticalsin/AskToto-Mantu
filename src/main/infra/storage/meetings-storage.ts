@@ -4,11 +4,12 @@ import { createStorageGateway, type FileClass, type StorageFs, type StorageGatew
 const CLASSIFY_BATCH = 1_000
 
 let gateways = new Map<string, StorageGateway>()
+let testStorageOptions: { detector?: DatalessDetector; fs?: StorageFs; poolSize?: number } | undefined
 
 export function storageAt(root: string): StorageGateway {
   const existing = gateways.get(root)
   if (existing) return existing
-  const gateway = createStorageGateway({ root: () => root })
+  const gateway = createStorageGateway({ root: () => root, ...testStorageOptions })
   gateways.set(root, gateway)
   return gateway
 }
@@ -31,15 +32,10 @@ const EVERY_FILE_LOCAL: DatalessDetector = {
 }
 
 export function useStorageForTests(options: { detector?: DatalessDetector; fs?: StorageFs; poolSize?: number } = {}): void {
-  gateways = new Map([
-    [
-      '',
-      createStorageGateway({
-        root: () => '',
-        detector: options.detector ?? EVERY_FILE_LOCAL,
-        fs: options.fs,
-        poolSize: options.poolSize
-      })
-    ]
-  ])
+  testStorageOptions = {
+    detector: options.detector ?? EVERY_FILE_LOCAL,
+    ...(options.fs ? { fs: options.fs } : {}),
+    ...(options.poolSize !== undefined ? { poolSize: options.poolSize } : {})
+  }
+  gateways = new Map()
 }
