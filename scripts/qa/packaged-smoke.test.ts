@@ -13,6 +13,7 @@ import {
   parseAuditLog,
   readObservationTail,
   initialRvRows,
+  initialNavigationGuardRows,
   runRevealRow,
   smokeReport,
   smokeVerdict
@@ -51,6 +52,14 @@ interface Observation {
     automation: string
     status: string
     evidence: { event: string; reason: string; outcome: string | null; parked?: boolean; layout?: string | null } | null
+    unblock: string | null
+  }>
+  navigationGuard: Array<{
+    id: string
+    state: string
+    entry: string
+    status: string
+    evidence: Record<string, unknown> | null
     unblock: string | null
   }>
   survivors: ProcessEntry[] | null
@@ -159,6 +168,11 @@ function goodObservation(): Observation {
         unblock: null
       }
     ],
+    navigationGuard: initialNavigationGuardRows().map((row) => ({
+      ...row,
+      status: 'PASS',
+      evidence: { observed: true }
+    })),
     survivors: [],
     survivorsGoneMs: 300
   }
@@ -211,6 +225,16 @@ describe('smokeVerdict', () => {
       'an automated RV row never completed after renderer readiness',
       (o) => { o.rv[0] = { ...o.rv[0], status: 'PENDING', evidence: null } },
       'rv_reopen_incomplete'
+    ],
+    [
+      'an automated navigation guard row failed',
+      (o) => { o.navigationGuard[0] = { ...o.navigationGuard[0], status: 'FAIL', evidence: null } },
+      'navigation_guard_failed'
+    ],
+    [
+      'an automated navigation guard row never completed after renderer readiness',
+      (o) => { o.navigationGuard[0] = { ...o.navigationGuard[0], status: 'PENDING', evidence: null } },
+      'navigation_guard_incomplete'
     ]
   ]
 
@@ -236,6 +260,7 @@ describe('smokeVerdict', () => {
       audit: [{ event: 'app.started', version: '1.9.7', platform: 'darwin', arch: 'arm64' }],
       marker: null,
       rv: goodObservation().rv,
+      navigationGuard: goodObservation().navigationGuard,
       survivors: null,
       survivorsGoneMs: null
     }
@@ -326,6 +351,7 @@ describe('smokeReport', () => {
       'exit',
       'shutdown',
       'rv',
+      'navigationGuard',
       'processes'
     ])
     expect(Object.keys(report.app ?? {})).toEqual(['version', 'platform', 'arch'])
@@ -351,6 +377,7 @@ describe('smokeReport', () => {
       audit: [],
       marker: null,
       rv: initialRvRows('darwin'),
+      navigationGuard: initialNavigationGuardRows(),
       survivors: null,
       survivorsGoneMs: null
     }
@@ -395,6 +422,26 @@ describe('initialRvRows', () => {
       'RV-4-global-hotkey',
       'RV-3-windows-shortcut-relaunch'
     ])
+    expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
+    expect(rows.every((row) => row.unblock === null)).toBe(true)
+  })
+})
+
+describe('initialNavigationGuardRows', () => {
+  it('tracks clean and dirty History navigation entry points as pending automation', () => {
+    const rows = initialNavigationGuardRows()
+
+    expect(rows.map((row) => row.id)).toEqual([
+      'HIST-clean-bar-open',
+      'HIST-clean-row-doubleclick',
+      'HIST-clean-back',
+      'HIST-clean-bottom-open',
+      'HIST-dirty-cancel-back',
+      'HIST-dirty-discard-back',
+      'HIST-dirty-save-recent'
+    ])
+    expect(rows.some((row) => row.state === 'clean')).toBe(true)
+    expect(rows.some((row) => row.state === 'dirty')).toBe(true)
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
   })
