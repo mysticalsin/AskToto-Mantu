@@ -3910,8 +3910,7 @@ export function AgentPicker({
           ].join(' ')}
         />
       </button>
-      {open && (
-        <div className="absolute left-0 right-0 top-full z-30 mt-1 flex flex-col overflow-hidden rounded-[10px] border border-[var(--cl-border)] bg-[var(--cl-bg,#1a1a2e)] shadow-lg">
+      <div hidden={!open} className={['absolute left-0 right-0 top-full z-30 mt-1 flex flex-col overflow-hidden rounded-[10px] border border-[var(--cl-border)] bg-[var(--cl-bg,#1a1a2e)] shadow-lg', open ? '' : 'hidden'].join(' ')}>
           <div className="relative border-b border-[var(--cl-border)] p-1.5">
             <Search
               size={12}
@@ -3972,8 +3971,7 @@ export function AgentPicker({
               )
             })}
           </div>
-        </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -4056,6 +4054,7 @@ export function DustSetup({
   const hasWs = !!settings.dustWorkspaceId.trim()
   // Credentials on disk are not a live proof — green Connected / Use Dust wait for a non-empty agent list.
   const listProved = !!agents && agents.length > 0 && !err
+  const checkingDustConnection = loading || (keySaved && hasWs && agents === null && !err)
   const connected = keySaved && hasWs && !!agent && listProved
   const selectedAgentName = agents?.find((a) => a.sId === agent)?.name
   const selectedAgent = agents?.find((a) => a.sId === agent)
@@ -4483,7 +4482,7 @@ export function DustSetup({
                       workspaceId: settings.dustWorkspaceId
                     })}
                   </>
-                ) : loading ? (
+                ) : checkingDustConnection ? (
                   <>
                     <InlineOrb kind="connecting" />
                     Checking Dust connection…

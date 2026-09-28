@@ -185,7 +185,7 @@ describe('the Custom provider tile can actually be selected (finding 5)', () => 
 
 describe('About footer version', () => {
   it('reads the release version from package.json instead of hard-coding a stale value', () => {
-    expect(source).toContain("import appPackage from '../../../../package.json'")
+    expect(source).toContain("import appPackage from '../../../../../package.json'")
     expect(source).toMatch(/Métis \{appPackage\.version\} · Mantu/)
     expect(source).not.toMatch(/Métis 1\.0\.0 · Mantu/)
   })
@@ -437,7 +437,7 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
 
   it('ClickUp and Plane default cards have no MCP URL field', () => {
     const clickup = blockAfter('function ClickupCard(', '\nfunction PlaneCard(')
-    const plane = blockAfter('function PlaneCard(', '\nfunction AgentPicker(')
+    const plane = blockAfter('function PlaneCard(', '\nexport function AgentPicker(')
     expect(productCopy).not.toMatch(/MCP endpoint URL/)
     expect(clickup).toMatch(/<ClickUpMark/)
     expect(plane).toMatch(/<PlaneMark/)

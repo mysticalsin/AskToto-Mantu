@@ -56,7 +56,7 @@
     "src/renderer/src/components/OnboardingExperience.tsx": 1921,
     "src/renderer/src/components/RecallView.tsx": 1332,
     "src/renderer/src/components/Review.tsx": 1928,
-    "src/renderer/src/features/settings/Settings.tsx": 9330,
+    "src/renderer/src/features/settings/Settings.tsx": 9329,
     "src/renderer/src/lib/listen.ts": 3153,
     "src/shared/ipc.ts": 2407
   },
