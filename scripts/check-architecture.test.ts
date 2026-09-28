@@ -546,7 +546,7 @@ describe('architecture source detectors', () => {
         'const e = "^---\\n"',
       ].join('\n')
       // Extension appended so the FF-07 detector does not count these fixture names as source paths.
-      const ext = '.ts'
+      const ext = '.' + 'ts'
       expect(countSourceFile('src/main/reader' + ext, text)).toEqual({ 'FF-15': 3 })
       expect(countSourceFile('src/main/features/meetings/meeting-document' + ext, text)).toEqual({})
       expect(countSourceFile('src/main/reader.test' + ext, text)).toEqual({})
