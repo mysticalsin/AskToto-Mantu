@@ -41,6 +41,9 @@ let interacted = false
 let holding = false
 let windowOpenAudited = false
 let interactiveRecheckArmed = false
+let listenerGeneration = 0
+let listenersNotifiedForOpenWindow = false
+let listenerNotificationQueued = false
 const windowWaiters: Array<() => void> = []
 const waiters: Waiter[] = []
 const listeners = new Set<() => void>()
@@ -97,6 +100,7 @@ export function beginMaintenance(): () => void {
   const reason = maintenanceDeferral()
   if (reason) throw new Error(`maintenance is deferred (${reason})`)
   holding = true
+  listenersNotifiedForOpenWindow = false
   let released = false
   return () => {
     if (released) return
@@ -148,6 +152,9 @@ export function resetMaintenanceGateForTests(): void {
   holding = false
   windowOpenAudited = false
   interactiveRecheckArmed = false
+  listenerGeneration += 1
+  listenersNotifiedForOpenWindow = false
+  listenerNotificationQueued = false
   windowWaiters.splice(0, windowWaiters.length)
   waiters.splice(0, waiters.length)
   listeners.clear()
@@ -181,9 +188,21 @@ function wake(): void {
       wake()
     }, INTERACTIVE_RECHECK_MS)
   }
-  if (maintenanceDeferral() === null) queueMicrotask(() => {
-    if (maintenanceDeferral() !== null) return
-    for (const listener of persistentListeners) listener()
-    for (const listener of listeners) listener()
-  })
+  const open = maintenanceDeferral() === null
+  if (!open) listenersNotifiedForOpenWindow = false
+  if (open && !listenersNotifiedForOpenWindow && !listenerNotificationQueued) {
+    listenersNotifiedForOpenWindow = true
+    listenerNotificationQueued = true
+    const generation = listenerGeneration
+    queueMicrotask(() => {
+      if (generation !== listenerGeneration) return
+      listenerNotificationQueued = false
+      if (maintenanceDeferral() !== null) {
+        listenersNotifiedForOpenWindow = false
+        return
+      }
+      for (const listener of persistentListeners) listener()
+      for (const listener of listeners) listener()
+    })
+  }
 }
