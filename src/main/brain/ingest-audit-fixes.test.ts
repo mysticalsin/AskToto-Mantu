@@ -7,6 +7,7 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { DealEntitySchema, type BrainIndex } from '@shared/brain'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getApiKey, getSettings, setApiKey, setSettings } from '../store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import {
   brainBackfillProgress,
   enqueueIngest,
@@ -122,6 +123,7 @@ describe('brain ingest — audited fixes', () => {
   const settle = (ms = 30): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-audit-fixes-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-audit-fixes-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
