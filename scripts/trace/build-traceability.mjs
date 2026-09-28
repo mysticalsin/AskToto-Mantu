@@ -363,6 +363,46 @@ const ticketActions = [
   }
 ]
 
+const REQUIRED_SCOPE_AXES = [
+  'brain-corrections',
+  'brain-publish',
+  'local-model-prewarm',
+  'scheduler-policy',
+  'proof-harnesses',
+  'packaging-inputs',
+  'command-wake'
+]
+
+const REQUIRED_FINDING_AXES = [
+  'brain-corrections',
+  'brain-publish',
+  'local-model-prewarm',
+  'proof-harnesses',
+  'packaging-inputs',
+  'command-wake'
+]
+
+const REQUIRED_FINDING_MAPPINGS = [
+  ['M2-0018-F01', 'brain-corrections', 'acceptance_line', 'M2-0018'],
+  ['M2-0018-F02', 'brain-publish', 'acceptance_line', 'M2-0018'],
+  ['M2-0018-F03', 'local-model-prewarm', 'acceptance_line', 'M2-0018'],
+  ['M2-0018-F04', 'proof-harnesses', 'new_ticket', 'Add Windows packaged ASR decode gate to candidate validation'],
+  ['M2-0018-F05', 'proof-harnesses', 'new_ticket', 'Bind packaged lifecycle smoke evidence to candidate artifacts'],
+  ['M2-0018-F06', 'proof-harnesses', 'new_ticket', 'Cover packaged native audio picker wiring separately from ASR decode'],
+  ['M2-0018-F07', 'proof-harnesses', 'new_ticket', 'Add macOS packaged two-slice launch evidence'],
+  ['M2-0018-F08', 'proof-harnesses', 'new_ticket', 'Run packaged visual onboarding smoke after install'],
+  ['M2-0018-F09', 'packaging-inputs', 'new_ticket', 'Add a lightweight online installer profile'],
+  ['M2-0018-F10', 'packaging-inputs', 'new_ticket', 'Remove quarantine-clearing scripts from public install paths'],
+  ['M2-0018-F11', 'packaging-inputs', 'new_ticket', 'Make Windows Portable QA-only or explicitly non-managed'],
+  ['M2-0018-F12', 'packaging-inputs', 'new_ticket', 'Align managed-config docs with implemented enterprise controls'],
+  ['M2-0018-F13', 'command-wake', 'acceptance_line', 'M2-0013'],
+  ['M2-0018-F14', 'command-wake', 'acceptance_line', 'M2-0079'],
+  ['M2-0018-F15', 'command-wake', 'new_ticket', 'Wire explicit command mic to main-owned command capture'],
+  ['M2-0018-F16', 'command-wake', 'new_ticket', 'Render verified command listening and proposal UX'],
+  ['M2-0018-F17', 'command-wake', 'new_ticket', 'Unify command session authority boundary'],
+  ['M2-0018-F18', 'command-wake', 'new_ticket', 'Add CI coverage for end-to-end command mic flow']
+]
+
 function rel(path) {
   return path.split('\\').join('/')
 }
@@ -383,24 +423,76 @@ function scopeRecord(scope) {
   return { ...scope, exists: true, lines, sha256: sha256(text) }
 }
 
+function leadAction(finding) {
+  if (finding.ledger_action?.kind === 'new_ticket') {
+    return `LEAD_ACTION: Lead creates new ledger ticket from ${finding.public_ref}: ${finding.ledger_action.title ?? 'missing title'}.`
+  }
+  if (finding.ledger_action?.kind === 'acceptance_line') {
+    return `LEAD_ACTION: Lead adds acceptance evidence from ${finding.public_ref} to ${finding.ledger_action.ticket ?? 'missing ticket'}.`
+  }
+  return `LEAD_ACTION: Lead reviews malformed ledger action for ${finding.public_ref}.`
+}
+
+function findingReportRecord(finding) {
+  return {
+    ...finding,
+    lead_action: leadAction(finding)
+  }
+}
+
 function checkReport(report) {
   const problems = []
+  const scopeAxes = new Set(report.reviewed_scopes.map((scope) => scope.axis))
+  for (const axis of REQUIRED_SCOPE_AXES) {
+    if (!scopeAxes.has(axis)) problems.push(`scope axis ${axis}: missing reviewed scope`)
+  }
   for (const scope of report.reviewed_scopes) {
     if (!scope.exists) problems.push(`${scope.path}: missing scoped file`)
     if (scope.expectedLines !== undefined && scope.lines !== scope.expectedLines) {
       problems.push(`${scope.path}: expected ${scope.expectedLines} lines, found ${scope.lines}`)
     }
   }
+  const findingAxes = new Set(report.findings.map((finding) => finding.axis))
+  for (const axis of REQUIRED_FINDING_AXES) {
+    if (!findingAxes.has(axis)) problems.push(`finding axis ${axis}: missing mapped finding`)
+  }
   const refs = new Set()
+  const findingsByRef = new Map()
   for (const finding of report.findings) {
     if (refs.has(finding.public_ref)) problems.push(`${finding.public_ref}: duplicate public_ref`)
     refs.add(finding.public_ref)
+    findingsByRef.set(finding.public_ref, finding)
     if (!finding.ledger_action) problems.push(`${finding.public_ref}: missing ledger_action`)
     if (finding.ledger_action?.kind === 'new_ticket' && !Array.isArray(finding.ledger_action.acceptance)) {
       problems.push(`${finding.public_ref}: new_ticket requires acceptance lines`)
     }
+    if (finding.ledger_action?.kind === 'new_ticket' && Array.isArray(finding.ledger_action.acceptance) && finding.ledger_action.acceptance.length === 0) {
+      problems.push(`${finding.public_ref}: new_ticket acceptance lines cannot be empty`)
+    }
     if (finding.ledger_action?.kind === 'acceptance_line' && !/^M2-\d{4}$/.test(finding.ledger_action.ticket ?? '')) {
       problems.push(`${finding.public_ref}: acceptance_line requires an M2 ticket`)
+    }
+    if (typeof finding.lead_action !== 'string' || !finding.lead_action.startsWith('LEAD_ACTION: ')) {
+      problems.push(`${finding.public_ref}: missing LEAD_ACTION lead handoff`)
+    }
+  }
+  for (const [publicRef, axis, kind, target] of REQUIRED_FINDING_MAPPINGS) {
+    const finding = findingsByRef.get(publicRef)
+    if (!finding) {
+      problems.push(`${publicRef}: missing required finding mapping`)
+      continue
+    }
+    if (finding.axis !== axis) problems.push(`${publicRef}: expected axis ${axis}, found ${finding.axis}`)
+    if (finding.ledger_action?.kind !== kind) {
+      problems.push(`${publicRef}: expected ledger_action kind ${kind}, found ${finding.ledger_action?.kind ?? 'missing'}`)
+      continue
+    }
+    const actualTarget = kind === 'new_ticket' ? finding.ledger_action.title : finding.ledger_action.ticket
+    if (actualTarget !== target) problems.push(`${publicRef}: expected target ${target}, found ${actualTarget}`)
+  }
+  for (const publicRef of refs) {
+    if (!REQUIRED_FINDING_MAPPINGS.some(([expectedRef]) => expectedRef === publicRef)) {
+      problems.push(`${publicRef}: unexpected finding mapping`)
     }
   }
   const serialized = JSON.stringify(report)
@@ -413,9 +505,9 @@ function checkReport(report) {
 function markdown(report) {
   const findingLines = report.findings.map((finding) => {
     const action = finding.ledger_action.kind === 'new_ticket'
-      ? `new ticket: ${finding.ledger_action.title}`
-      : `${finding.ledger_action.ticket} acceptance line`
-    return `- ${finding.public_ref} (${finding.axis}): ${finding.verdict}; ${action}`
+      ? `lead must create a new ticket: ${finding.ledger_action.title}`
+      : `lead must add an acceptance line to ${finding.ledger_action.ticket}`
+    return `- ${finding.public_ref} (${finding.axis}): ${finding.verdict}; ${action}; ${finding.lead_action}`
   })
   return [
     '# M2-0018 Targeted Review Traceability',
@@ -434,7 +526,7 @@ function markdown(report) {
     '',
     '## Verification',
     '',
-    `- ${report.check.problems.length === 0 ? 'PASS' : 'FAIL'}: every finding has a ledger action and private-reference hygiene passed.`
+    `- ${report.check.problems.length === 0 ? 'PASS' : 'FAIL'}: required scope axes, finding mappings, lead actions, and private-reference hygiene passed.`
   ].join('\n')
 }
 
@@ -452,7 +544,7 @@ const report = {
   evidence_level: 'DESIGNED',
   generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
   reviewed_scopes: reviewedScopes.map(scopeRecord),
-  findings: ticketActions,
+  findings: ticketActions.map(findingReportRecord),
   check: { problems: [] }
 }
 report.check.problems = checkReport(report)
