@@ -124,8 +124,11 @@ export function whenMaintenanceWindowOpens(): Promise<void> {
   })
 }
 
-export function onMaintenanceMayBegin(listener: () => void): void {
+export function onMaintenanceMayBegin(listener: () => void): () => void {
   listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
 }
 
 export function reportDeferred(kind: SchedulerJobKind, reason: DeferredReason): void {
@@ -147,7 +150,6 @@ export function resetMaintenanceGateForTests(): void {
   interactiveRecheckArmed = false
   windowWaiters.splice(0, windowWaiters.length)
   waiters.splice(0, waiters.length)
-  listeners.clear()
   reportedDeferrals.clear()
 }
 
