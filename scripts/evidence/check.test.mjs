@@ -731,3 +731,30 @@ test('G1 githubApi builds the expected URLs, the bearer header, and maps run/com
   assert.ok(calls.at(-1).url.includes(`/compare/${SHA1_B}...${SHA1_A}`))
   assert.equal(await withToken.isAncestor(SHA1_A, SHA1_B), false)
 })
+
+test('G2 mergedPullRequests pages until a short page, keeps only merged PRs, and maps head/body/number', async () => {
+  const page1 = Array.from({ length: 100 }, (_, i) => ({
+    number: i + 1, merged_at: i % 2 === 0 ? '2026-09-01T00:00:00Z' : null,
+    head: { sha: `${i}`.padStart(40, '0') }, body: `pr ${i + 1}`
+  }))
+  const page2 = [{ number: 101, merged_at: '2026-09-02T00:00:00Z', head: { sha: SHA1_A }, body: 'pr 101' }]
+  const calls = []
+  const fetchImpl = async (url) => {
+    calls.push(url)
+    const page = new URL(url).searchParams.get('page')
+    if (page === '1') return { ok: true, status: 200, json: async () => page1 }
+    if (page === '2') return { ok: true, status: 200, json: async () => page2 }
+    return { ok: true, status: 200, json: async () => [] }
+  }
+  const api = githubApi('mysticalsin/AskToto-Mantu', undefined, fetchImpl)
+  const merged = await api.mergedPullRequests()
+  assert.equal(merged.length, 51)
+  assert.ok(merged.every((pr) => pr.number % 2 === 1))
+  assert.deepEqual(merged.at(-1), { number: 101, headSha: SHA1_A, body: 'pr 101', mergedAt: '2026-09-02T00:00:00Z' })
+  assert.equal(calls.length, 2)
+})
+
+test('G3 mergedPullRequests raises on a non-OK response instead of silently truncating', async () => {
+  const api = githubApi('mysticalsin/AskToto-Mantu', undefined, async () => ({ ok: false, status: 502, json: async () => [] }))
+  await assert.rejects(() => api.mergedPullRequests(), /502/)
+})
