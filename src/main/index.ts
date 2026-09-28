@@ -3788,13 +3788,19 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
 
   const w = ensureWindow()
   if (!w) return true
-  if (action === 'park-window' || action === 'hide-window') {
+  if (action === 'park-window') {
     if (!parkOverlayAfterHideSpring(true)) w.hide()
     return true
   }
+  if (action === 'hide-window') {
+    w.hide()
+    return true
+  }
 
-  if (!parkOverlayAfterHideSpring(true)) w.hide()
-  toggleVisible('tray')
+  if (action === 'tray-show') {
+    if (!parkOverlayAfterHideSpring(true)) w.hide()
+    reveal('tray', { focus: true })
+  }
   return true
 }
 

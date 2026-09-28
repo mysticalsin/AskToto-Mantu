@@ -613,25 +613,44 @@ export function isPassingRevealEvidence(reveal) {
     (reveal.parked === true || reveal.isVisible === false)
 }
 
-export async function runRevealRow({
+/**
+ * @param {{
+ *   auditLogPath: string,
+ *   rows: Array<Record<string, unknown>>,
+ *   id: string,
+ *   reason: string,
+ *   prepare?: (() => Promise<{ code?: number | null, signal?: string | null, error?: boolean }>) | null,
+ *   run: () => Promise<{ code?: number | null, signal?: string | null, error?: boolean }>,
+ *   failure: string,
+ *   hostedRunnerBlocker?: ((result: { code?: number | null, signal?: string | null, error?: boolean }) => string | null) | null,
+ *   countReveals?: (auditLogPath: string, reason: string) => number,
+ *   waitForRevealRecord?: (auditLogPath: string, reason: string, seenCount: number) => Promise<Record<string, unknown> | null>
+ * }} options
+ */
+export async function runRevealRow(options) {
+  const {
   auditLogPath,
   rows,
   id,
   reason,
-  prepare,
+  prepare = null,
   run,
   failure,
+  hostedRunnerBlocker = null,
   countReveals = revealCount,
   waitForRevealRecord = waitForReveal
-}) {
+  } = options
   const prepared = prepare ? await prepare() : { error: false }
   const seen = countReveals(auditLogPath, reason)
   const launched = prepared.error ? prepared : await run()
   const reveal = launched.error ? null : await waitForRevealRecord(auditLogPath, reason, seen)
   const after = countReveals(auditLogPath, reason)
   const pass = isPassingRevealEvidence(reveal)
+  const unblock = !pass && launched.error && hostedRunnerBlocker ? hostedRunnerBlocker(launched) : null
   const rootCause = pass
     ? 'reopen_revealed_window'
+    : unblock
+      ? 'hosted_runner_cannot_drive_route'
     : prepared.error
       ? 'prep_driver_failed'
       : launched.error
@@ -640,7 +659,7 @@ export async function runRevealRow({
           ? 'missing_reveal_audit_event'
           : 'reveal_did_not_make_window_visible'
   completeRvRow(rows, id, {
-    status: pass ? 'PASS' : 'FAIL',
+    status: pass ? 'PASS' : unblock ? 'BLOCKED_EXTERNAL' : 'FAIL',
     evidence: revealEvidence(reveal),
     diagnosis: {
       rootCause,
@@ -652,7 +671,7 @@ export async function runRevealRow({
         error: launched.error === true
       }
     },
-    unblock: pass ? null : failure
+    unblock: pass ? null : unblock ?? failure
   })
 }
 
@@ -686,6 +705,7 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       reason: 'activate',
       prepare: hideBeforeReveal,
       run: () => runAppleScript(`tell application "Finder" to open POSIX file ${JSON.stringify(target)}`, 10_000),
+      hostedRunnerBlocker: () => 'Run this row on a macOS host where Finder automation for opening the installed app can be granted.',
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing Finder activate reveal event.'
     })
 

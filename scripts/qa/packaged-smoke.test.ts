@@ -313,13 +313,19 @@ describe('smokeVerdict', () => {
     expect(smokeVerdict(observation)).toEqual({ result: 'fail', failures: ['smoke_incomplete'] })
   })
 
-  it('does not fail a completed smoke observation for BLOCKED_EXTERNAL rows', () => {
+  it('treats an explicit hosted-runner automation blocker as a completed RV row, not a fake pass', () => {
     const observation = goodObservation()
     observation.rv[0] = {
       ...observation.rv[0],
       status: 'BLOCKED_EXTERNAL',
       evidence: null,
-      unblock: 'Run this row where the outside dependency is available.'
+      diagnosis: {
+        rootCause: 'hosted_runner_cannot_drive_route',
+        revealEventsBefore: 0,
+        revealEventsAfter: 0,
+        driverExit: { code: 1, signal: null, error: true }
+      },
+      unblock: 'Run this row on a machine where the OS automation permission can be granted.'
     }
     observation.navigationGuard[0] = {
       ...observation.navigationGuard[0],
@@ -330,6 +336,7 @@ describe('smokeVerdict', () => {
 
     expect(smokeVerdict(observation)).toEqual({ result: 'pass', failures: [] })
   })
+
 })
 
 describe('isPassingRevealEvidence', () => {
@@ -358,6 +365,7 @@ describe('runRevealRow', () => {
         reveals.push({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' })
         return { error: false }
       },
+      hostedRunnerBlocker: undefined,
       run: async () => {
         exercisedReopen = true
         return { error: false }
@@ -391,6 +399,7 @@ describe('runRevealRow', () => {
       id: 'RV-1-macos-open-activate',
       reason: 'activate',
       prepare: undefined,
+      hostedRunnerBlocker: undefined,
       run: async () => ({ code: 7, signal: null, error: true }),
       countReveals: () => 0,
       waitForRevealRecord: async () => {
@@ -409,6 +418,35 @@ describe('runRevealRow', () => {
         driverExit: { code: 7, signal: null, error: true }
       },
       unblock: 'activate driver failed'
+    })
+  })
+
+  it('records a non-drivable hosted-runner route as BLOCKED_EXTERNAL with the exact unblock step', async () => {
+    const rows = initialRvRows('darwin')
+
+    await runRevealRow({
+      auditLogPath: '/tmp/metis-smoke-audit.log',
+      rows,
+      id: 'RV-4-global-hotkey',
+      reason: 'hotkey',
+      prepare: undefined,
+      run: async () => ({ code: 1, signal: null, error: true }),
+      countReveals: () => 0,
+      waitForRevealRecord: async () => null,
+      failure: 'global hotkey driver failed',
+      hostedRunnerBlocker: () => 'Grant OS keyboard automation on a physical QA host.'
+    })
+
+    expect(rows.find((row) => row.id === 'RV-4-global-hotkey')).toMatchObject({
+      status: 'BLOCKED_EXTERNAL',
+      evidence: null,
+      diagnosis: {
+        rootCause: 'hosted_runner_cannot_drive_route',
+        revealEventsBefore: 0,
+        revealEventsAfter: 0,
+        driverExit: { code: 1, signal: null, error: true }
+      },
+      unblock: 'Grant OS keyboard automation on a physical QA host.'
     })
   })
 })

@@ -153,6 +153,16 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
     expect(body).not.toMatch(/setIgnoreMouseEvents/)
   })
 
+  it('M2-0231 — smoke reopen probes set a deterministic hidden or parked precondition before measuring reveal', () => {
+    const body = sliceBetween('function handleSmokeReopenProbe', 'let fatalHandled = false')
+
+    expect(body).toContain("if (action === 'park-window') {")
+    expect(body).toContain("if (action === 'hide-window') {")
+    expect(body).toContain("if (action === 'tray-show') {")
+    expect(body).toContain("reveal('tray', { focus: true })")
+    expect(body).not.toContain("toggleVisible('tray')")
+  })
+
   it('MQA-172 — createWindow() is idempotent, so the boot step cannot orphan a recovered window', () => {
     // ensureWindow() may now run during the async gap between the handler registration and boot's own
     // runStep('createWindow'). Without this guard the boot step would overwrite `win` with a second
