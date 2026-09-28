@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from '../index'
 import { encryptVault } from '../crypto'
 import { memoryStore, type IntegrationRow } from '../store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from '../test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from '../test-fixtures'
 import { readIntegrationExtra } from '../connectors/data'
 
 const NOW = 1_725_000_000_000
@@ -11,13 +11,14 @@ function env(overrides: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY,
     ...overrides
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function post(path: string, body: unknown, headers: Record<string, string> = {}): Request {
   return new Request(`https://operator.test${path}`, {
@@ -47,7 +48,7 @@ async function addHubspot(store: ReturnType<typeof memoryStore>, overrides: Reco
   const res = await handleRequest(
     post('/v1/admin/integrations', { kind: 'hubspot', label: 'Hubspot prod', credential: 'pat-na1-secret-value-123', ...overrides }),
     env(),
-    { access: tony },
+    { access: ownerAccess },
     { store, now: NOW }
   )
   return (await res.json()) as { ok: boolean; integration?: { id: string; last4?: string; kind: string } }
@@ -56,7 +57,7 @@ async function addHubspot(store: ReturnType<typeof memoryStore>, overrides: Reco
 describe('GET /v1/admin/connectors/catalog', () => {
   it('lists every kind with fields, never a probe URL or body template', async () => {
     const store = memoryStore()
-    const res = await handleRequest(get('/v1/admin/connectors/catalog'), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(get('/v1/admin/connectors/catalog'), env(), { access: ownerAccess }, { store, now: NOW })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; catalog: { kind: string; fields: unknown[] }[] }
     expect(body.ok).toBe(true)
@@ -83,7 +84,7 @@ describe('unauth and CSRF', () => {
     const res = await handleRequest(
       post('/v1/admin/integrations', { kind: 'hubspot', credential: 'x' }, { 'sec-fetch-site': 'cross-site' }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(403)
@@ -94,7 +95,7 @@ describe('unauth and CSRF', () => {
 describe('POST /v1/admin/integrations', () => {
   it('refuses an unknown kind', async () => {
     const store = memoryStore()
-    const res = await handleRequest(post('/v1/admin/integrations', { kind: 'not-a-kind', credential: 'x' }), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(post('/v1/admin/integrations', { kind: 'not-a-kind', credential: 'x' }), env(), { access: ownerAccess }, { store, now: NOW })
     expect(res.status).toBe(400)
     expect((await res.json()) as { code: string }).toMatchObject({ code: 'unknown-kind' })
   })
@@ -104,7 +105,7 @@ describe('POST /v1/admin/integrations', () => {
     const res = await handleRequest(
       post('/v1/admin/integrations', { kind: 'salesforce', label: 'SF', credential: 'x' }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(400)
@@ -117,7 +118,7 @@ describe('POST /v1/admin/integrations', () => {
     const res = await handleRequest(
       post('/v1/admin/integrations', { kind: 'hubspot', label: 'Hubspot prod', credential: 'pat-na1-x' }),
       env({ OPERATOR_VAULT_KEY: undefined }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(503)
@@ -129,7 +130,7 @@ describe('POST /v1/admin/integrations', () => {
     const res = await handleRequest(
       post('/v1/admin/integrations', { kind: 'jira', label: 'Jira', credential: 'tok', config: { email: 'a@b.com' } }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(400)
@@ -141,7 +142,7 @@ describe('POST /v1/admin/integrations', () => {
     const res = await handleRequest(
       post('/v1/admin/integrations', { kind: 'hubspot', label: 'Hubspot prod', credential: secret }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -172,7 +173,7 @@ describe('POST /v1/admin/integrations', () => {
     const res = await handleRequest(
       post('/v1/admin/integrations', { kind: 'hubspot', label: 'Hubspot prod', credential: 'pat-na1-abcd', mode: 'direct' }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await res.json()) as { integration: { mode: string } }
@@ -188,7 +189,7 @@ describe('PATCH /v1/admin/integrations/:id', () => {
     const res = await handleRequest(
       patch(`/v1/admin/integrations/${id}`, { label: 'Renamed', notes: 'careful', credential: 'sneaky', scope: { tiers: ['metis'] } }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW + 1 }
     )
     expect(res.status).toBe(200)
@@ -205,7 +206,7 @@ describe('PATCH /v1/admin/integrations/:id', () => {
 
   it('404s an unknown id', async () => {
     const store = memoryStore()
-    const res = await handleRequest(patch('/v1/admin/integrations/missing', { label: 'x' }), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(patch('/v1/admin/integrations/missing', { label: 'x' }), env(), { access: ownerAccess }, { store, now: NOW })
     expect(res.status).toBe(404)
   })
 })
@@ -215,7 +216,7 @@ describe('rotate / revoke / delete', () => {
     const store = memoryStore()
     const added = await addHubspot(store)
     const id = added.integration!.id
-    const res = await handleRequest(post(`/v1/admin/integrations/${id}/rotate`, { credential: 'pat-na1-newvalue-7777' }), env(), { access: tony }, { store, now: NOW + 1 })
+    const res = await handleRequest(post(`/v1/admin/integrations/${id}/rotate`, { credential: 'pat-na1-newvalue-7777' }), env(), { access: ownerAccess }, { store, now: NOW + 1 })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { last4: string; status: string }
     expect(body.last4).toBe('7777')
@@ -229,8 +230,8 @@ describe('rotate / revoke / delete', () => {
     const store = memoryStore()
     const added = await addHubspot(store)
     const id = added.integration!.id
-    await handleRequest(post(`/v1/admin/integrations/${id}/revoke`, {}), env(), { access: tony }, { store, now: NOW })
-    const res = await handleRequest(post(`/v1/admin/integrations/${id}/rotate`, { credential: 'x' }), env(), { access: tony }, { store, now: NOW + 1 })
+    await handleRequest(post(`/v1/admin/integrations/${id}/revoke`, {}), env(), { access: ownerAccess }, { store, now: NOW })
+    const res = await handleRequest(post(`/v1/admin/integrations/${id}/rotate`, { credential: 'x' }), env(), { access: ownerAccess }, { store, now: NOW + 1 })
     expect(res.status).toBe(400)
   })
 
@@ -238,7 +239,7 @@ describe('rotate / revoke / delete', () => {
     const store = memoryStore()
     const added = await addHubspot(store)
     const id = added.integration!.id
-    const res = await handleRequest(post(`/v1/admin/integrations/${id}/revoke`, {}), env(), { access: tony }, { store, now: NOW + 2 })
+    const res = await handleRequest(post(`/v1/admin/integrations/${id}/revoke`, {}), env(), { access: ownerAccess }, { store, now: NOW + 2 })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true, id, status: 'revoked' })
     const row = await store.getIntegration(id)
@@ -252,11 +253,11 @@ describe('rotate / revoke / delete', () => {
     const store = memoryStore()
     const added = await addHubspot(store)
     const id = added.integration!.id
-    const beforeRevoke = await handleRequest(del(`/v1/admin/integrations/${id}`), env(), { access: tony }, { store, now: NOW })
+    const beforeRevoke = await handleRequest(del(`/v1/admin/integrations/${id}`), env(), { access: ownerAccess }, { store, now: NOW })
     expect(beforeRevoke.status).toBe(400)
 
-    await handleRequest(post(`/v1/admin/integrations/${id}/revoke`, {}), env(), { access: tony }, { store, now: NOW })
-    const afterRevoke = await handleRequest(del(`/v1/admin/integrations/${id}`), env(), { access: tony }, { store, now: NOW })
+    await handleRequest(post(`/v1/admin/integrations/${id}/revoke`, {}), env(), { access: ownerAccess }, { store, now: NOW })
+    const afterRevoke = await handleRequest(del(`/v1/admin/integrations/${id}`), env(), { access: ownerAccess }, { store, now: NOW })
     expect(afterRevoke.status).toBe(501)
     expect((await afterRevoke.json()) as { code: string }).toMatchObject({ code: 'no-db' })
   })
@@ -271,7 +272,7 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
     const res = await handleRequest(
       post('/v1/admin/integrations/test', { kind: 'hubspot', credential: 'pat-na1-draft-secret' }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, providerFetch: fakeFetch }
     )
     expect(res.status).toBe(200)
@@ -286,7 +287,7 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
 
   it('draft test refuses a needs-oauth kind', async () => {
     const store = memoryStore()
-    const res = await handleRequest(post('/v1/admin/integrations/test', { kind: 'zoho', credential: 'x' }), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(post('/v1/admin/integrations/test', { kind: 'zoho', credential: 'x' }), env(), { access: ownerAccess }, { store, now: NOW })
     expect(res.status).toBe(400)
     expect((await res.json()) as { code: string }).toMatchObject({ code: 'needs-oauth' })
   })
@@ -305,7 +306,7 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
       scope_json: '{}',
       status: 'active',
       created_at: NOW,
-      created_by: 'admin@example.com',
+      created_by: 'owner@example.test',
       rotated_at: null,
       revoked_at: null,
       last_used_at: null,
@@ -348,7 +349,7 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
     const res = await handleRequest(
       post('/v1/admin/integrations/int-mcp/test', {}),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW + 5, providerFetch: fakeFetch }
     )
     expect(res.status).toBe(200)
@@ -373,7 +374,7 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
     const added = await addHubspot(store)
     const id = added.integration!.id
     const fakeFetch = (async () => new Response('nope', { status: 401 })) as typeof fetch
-    const res = await handleRequest(post(`/v1/admin/integrations/${id}/test`, {}), env(), { access: tony }, { store, now: NOW + 9, providerFetch: fakeFetch })
+    const res = await handleRequest(post(`/v1/admin/integrations/${id}/test`, {}), env(), { access: ownerAccess }, { store, now: NOW + 9, providerFetch: fakeFetch })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { result: { ok: boolean }; health: string }
     expect(body.result.ok).toBe(false)
@@ -383,7 +384,7 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
     const row = await store.getIntegration(id)
     expect(row!.status).toBe('active')
 
-    const list = await handleRequest(get('/v1/admin/integrations'), env(), { access: tony }, { store, now: NOW + 9 })
+    const list = await handleRequest(get('/v1/admin/integrations'), env(), { access: ownerAccess }, { store, now: NOW + 9 })
     const listBody = (await list.json()) as { integrations: { id: string; status: string; health: string }[] }
     const listed = listBody.integrations.find((i) => i.id === id)
     expect(listed?.status).toBe('active')
@@ -394,7 +395,7 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
     const store = memoryStore()
     const added = await addHubspot(store)
     const id = added.integration!.id
-    const list = await handleRequest(get('/v1/admin/integrations'), env(), { access: tony }, { store, now: NOW })
+    const list = await handleRequest(get('/v1/admin/integrations'), env(), { access: ownerAccess }, { store, now: NOW })
     const listBody = (await list.json()) as { integrations: { id: string; status: string; health: string }[] }
     const listed = listBody.integrations.find((i) => i.id === id)
     expect(listed?.status).toBe('active')

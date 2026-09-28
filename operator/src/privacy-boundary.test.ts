@@ -2,20 +2,21 @@ import { describe, expect, it } from 'vitest'
 import { buildDashboard, buildLiveSnapshot } from './dashboard'
 import { handleRequest, type Env } from './index'
 import { memoryStore, type AskRow } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
 const PRIVATE_ASK = 'Example Customer acquisition plan'
 const PRIVATE_CRM = 'Patient diagnosis and private meeting notes'
-const PRIVATE_EVENT = '/home/example/Example Customer/private-meeting.md'
-const PRIVATE_EVIDENCE = 'Ask said to acquire Example Customer tomorrow'
+const PRIVATE_EVENT = '/private/synthetic-home/Customer Alpha/private-meeting.md'
+const PRIVATE_EVIDENCE = 'Ask said to acquire Customer Alpha tomorrow'
 
-const tonyAccess = { getIdentity: async () => ({ email: 'admin@example.com' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function env(overrides: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: '',
     ...overrides
   }
@@ -38,7 +39,7 @@ describe('legacy server privacy projections', () => {
     await store.insertAsk(legacyAsk())
 
     const list = await handleRequest(
-      new Request('https://operator.test/v1/admin/asks'), env(), { access: tonyAccess }, { store, now: NOW }
+      new Request('https://operator.test/v1/admin/asks'), env(), { access: ownerAccess }, { store, now: NOW }
     )
     expect(list.status).toBe(200)
     const listBody = (await list.json()) as { asks: Record<string, unknown>[] }
@@ -54,7 +55,7 @@ describe('legacy server privacy projections', () => {
     const reveal = await handleRequest(
       new Request('https://operator.test/v1/admin/asks/legacy-ask'),
       env({ OPERATOR_PROMPT_KEY: '' }),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(reveal.status).toBe(410)
@@ -67,7 +68,7 @@ describe('legacy server privacy projections', () => {
     await store.putProposal({
       id: 'legacy-proposal', skill_id: 'interview', from_version: '1.0.0',
       evidence_json: JSON.stringify([PRIVATE_EVIDENCE]), diff: '# safe admin-authored diff',
-      rationale: PRIVATE_EVIDENCE, status: 'pending', created_by: 'admin@example.com',
+      rationale: PRIVATE_EVIDENCE, status: 'pending', created_by: 'owner@example.test',
       created_at: NOW - 1, decided_at: null, reject_reason: null
     })
 
@@ -75,7 +76,7 @@ describe('legacy server privacy projections', () => {
       new Request('https://operator.test/v1/admin/skills/draft', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ skillId: 'interview' })
       }),
-      env(), { access: tonyAccess }, { store, now: NOW }
+      env(), { access: ownerAccess }, { store, now: NOW }
     )
     expect(draft.status).toBe(200)
     const proposals = await store.listProposals(10)
@@ -83,7 +84,7 @@ describe('legacy server privacy projections', () => {
     expect(created?.evidence_json).toBe('[]')
     expect(`${created?.evidence_json} ${created?.rationale}`).not.toContain(PRIVATE_ASK)
 
-    const dashboard = await buildDashboard(store, 'admin@example.com', NOW)
+    const dashboard = await buildDashboard(store, 'owner@example.test', NOW)
     const dashboardText = JSON.stringify(dashboard)
     expect(dashboardText).not.toContain(PRIVATE_EVIDENCE)
     expect(dashboardText).not.toContain(PRIVATE_ASK)
@@ -102,7 +103,7 @@ describe('legacy server privacy projections', () => {
       id: 'legacy-event', ts: NOW, kind: 'heartbeat', actor: null, device_id: 'device-a', country: 'CA', detail: PRIVATE_EVENT
     })
 
-    const dashboard = await buildDashboard(store, 'admin@example.com', NOW)
+    const dashboard = await buildDashboard(store, 'owner@example.test', NOW)
     const live = await buildLiveSnapshot(store, NOW)
     const output = JSON.stringify({ dashboard, live })
     for (const forbidden of [PRIVATE_ASK, PRIVATE_CRM, PRIVATE_EVENT, 'patient-42', 'send-diagnosis']) {
@@ -126,7 +127,7 @@ describe('legacy server privacy projections', () => {
     })
     const response = await handleRequest(
       new Request('https://operator.test/v1/admin/crm/retry-crm/retry', { method: 'POST', body: '{}' }),
-      env(), { access: tonyAccess }, { store, now: NOW }
+      env(), { access: ownerAccess }, { store, now: NOW }
     )
     expect(response.status).toBe(200)
     const row = await store.getCrm('retry-crm')

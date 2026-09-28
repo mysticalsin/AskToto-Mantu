@@ -14,20 +14,21 @@ import {
 import { d1Store, type D1DatabaseLike } from './d1'
 import { handleRequest, type Env } from './index'
 import { memoryStore, type OperatorStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_TEAM_DOMAIN, TEST_VAULT_KEY } from './test-fixtures'
 import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 
 const NOW = 1_725_000_000_000
-const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 const TOKEN = 'cf-oauth-access-token-xx42'
-const ACCOUNT = '294885a27b3cc0a1cbe5d0ccbe38de4f'
+const ACCOUNT = '00000000000000000000000000000000'
 
 function env(extra: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY,
     TEAM_DOMAIN: TEST_TEAM_DOMAIN,
@@ -47,7 +48,7 @@ async function startCloudflareOAuth(store: OperatorStore): Promise<{ cookie: str
   const start = await handleRequest(
     new Request(`https://operator.test${CF_CONNECT_PATH}`),
     env(),
-    { access: tony },
+    { access: ownerAccess },
     { store, now: NOW }
   )
   const cookie = (start.headers.get('set-cookie') || '').split(';')[0]
@@ -67,7 +68,7 @@ function cfFetch(input: RequestInfo | URL): Promise<Response> {
   }
   if (url.pathname === '/client/v4/accounts' || url.pathname.endsWith('/accounts')) {
     return Promise.resolve(
-      new Response(JSON.stringify({ result: [{ id: ACCOUNT, name: 'Example' }] }), {
+      new Response(JSON.stringify({ result: [{ id: ACCOUNT, name: 'the owner' }] }), {
         status: 200,
         headers: { 'content-type': 'application/json' }
       })
@@ -95,7 +96,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     const res = await handleRequest(
       new Request(`https://operator.test${CF_CONNECT_PATH}`),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store: memoryStore(), now: NOW }
     )
     expect(res.status).toBe(302)
@@ -118,7 +119,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     const res = await handleRequest(
       new Request(`https://operator.test${CF_CONNECT_PATH}`),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store: memoryStore(), now: NOW }
     )
     const loc = res.headers.get('location') || ''
@@ -130,7 +131,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     const res = await handleRequest(
       new Request(`https://operator.test${CF_CONNECT_PATH}`),
       env({ CF_OAUTH_CLIENT_ID: '', CF_OAUTH_CLIENT_SECRET: '' }),
-      { access: tony },
+      { access: ownerAccess },
       { store: memoryStore(), now: NOW }
     )
     expect(res.status).toBe(503)
@@ -145,7 +146,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
         headers: { cookie }
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch }
     )
     expect(cb.status).toBe(303)
@@ -170,7 +171,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
         headers: { cookie }
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch: countingCfFetch }
     )
     expect(cb.status).toBe(303)
@@ -197,7 +198,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
           headers: { cookie }
         }),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW, cfFetch: unsafeCfFetch }
       )
       expect(cb.status).toBe(303)
@@ -216,7 +217,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
         headers: { cookie }
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch }
     )
     await store.upsertSeat({
@@ -232,7 +233,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
       lon: -73.5,
       last_index_at: null,
       hostname: 'Example-MacBook-Pro',
-      sso_email: 'admin@example.com',
+      sso_email: 'owner@example.test',
       license: 'licensed',
       approval: 'approved'
     })
@@ -273,7 +274,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store: memoryStore(), now: NOW }
     ).then((r) => r.text())
     expect(html).toContain('id="cf-connect"')
@@ -365,7 +366,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
           headers: { cookie }
         }),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW, cfFetch }
       )
       expect(cb.status).toBe(303)
@@ -376,7 +377,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
       // of each per row.
       const { audits, events } = await vaultWriteAuditAndEvents(store)
       expect(audits).toHaveLength(1)
-      expect(audits[0]).toMatchObject({ actor: 'admin@example.com' })
+      expect(audits[0]).toMatchObject({ actor: 'owner@example.test' })
       expect((audits[0] as { detail: string }).detail).toContain('cloudflare ·')
       expect((audits[0] as { detail: string }).detail).toContain('cloudflare-account ·')
       expect(events).toHaveLength(1)
@@ -397,7 +398,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
           headers: { cookie }
         }),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW, cfFetch }
       )
       await expect(cb).rejects.toThrow('transient vault write failure')
@@ -425,7 +426,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
           headers: { cookie: first.cookie }
         }),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW, cfFetch }
       )
       const before = await store.listVaultRows()
@@ -441,7 +442,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
           headers: { cookie: second.cookie }
         }),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW + 1, cfFetch }
       )
       await expect(reconnect).rejects.toThrow('transient vault write failure')
@@ -471,7 +472,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
             headers: { cookie }
           }),
           env(),
-          { access: tony },
+          { access: ownerAccess },
           { store, now: NOW, cfFetch }
         )
         await expect(cb).rejects.toThrow('transient vault write failure')
@@ -495,7 +496,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
             headers: { cookie: first.cookie }
           }),
           env(),
-          { access: tony },
+          { access: ownerAccess },
           { store, now: NOW, cfFetch }
         )
         const before = await store.listVaultRows()
@@ -510,7 +511,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
             headers: { cookie: second.cookie }
           }),
           env(),
-          { access: tony },
+          { access: ownerAccess },
           { store, now: NOW + 1, cfFetch }
         )
         await expect(reconnect).rejects.toThrow('transient vault write failure')
@@ -533,7 +534,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
           headers: { cookie: first.cookie }
         }),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW, cfFetch }
       )
       const before = await store.listVaultRows()
@@ -546,7 +547,7 @@ describe('Cloudflare AI Gateway provisioning is atomic against D1', () => {
           headers: { cookie: second.cookie }
         }),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW + 1, cfFetch }
       )
       expect(cb.status).toBe(303)

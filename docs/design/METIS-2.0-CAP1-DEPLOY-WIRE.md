@@ -1,7 +1,7 @@
-# Cap1 Keys → existing Operator Worker (Tony fuse)
+# Cap1 Keys → existing Operator Worker (the owner fuse)
 **When:** 20 Sep 2026 ~1:12pm ET  
-**Tip with Keys UI:** `9568d21` on `metis-2.0-inventory`  
-**Target:** https://metis-operator.tony-walteur.workers.dev (Worker name `metis-operator`)  
+**Tip with Keys UI:** `9568d21` on `implementation branch`<br>
+**Target:** https://metis-operator.example.workers.dev (Worker name `metis-operator`)<br>
 **NOT:** a second portal/Worker
 
 **Status:** Historical — point-in-time deploy snapshot (20 Sep 2026), superseded by current Operator
@@ -15,5 +15,5 @@ deploy state; kept for lineage.
 | Deploy wire | `node operator/scripts/deploy.mjs --env production` |
 | Dry-run | OK — same URL, version stamp `9568d21c` |
 
-## Action for Ultron/Tony
+## Action for Ultron/the owner
 Run production deploy from Totos-Mac (wrangler auth) after Cap2 tip push if Keys UI must be live for feel. Cap2 deterministic path does not require Jev live.

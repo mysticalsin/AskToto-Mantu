@@ -4,7 +4,7 @@
  * (WorldMap.tsx, shared/MapCanvas.tsx, shared/ZoomPan.tsx, demo-shoey-0c94a954/CountryMap.tsx)
  * faithfully: same Mercator constants, same greedy clustering, same choropleth formula.
  *
- * Realtime uplift (Tony 2026-09-13): dark ocean + subtle grid, country flag pills
+ * Realtime uplift (the owner 2026-09-13): dark ocean + subtle grid, country flag pills
  * (`{Country} · {N} devices · {places} places` = fleet geo, not Live), city labels beside pulsing dots.
  * `clusterPins` still drives badge placement distance; country rollups supply pill text.
  */
@@ -343,7 +343,7 @@ export function countryPillsFromPoints(
     const avgX = agg.xs.reduce((a, b) => a + b, 0) / agg.xs.length
     const avgY = agg.ys.reduce((a, b) => a + b, 0) / agg.ys.length
     const centroid = CENTROIDS_1152[iso]
-    // Prefer country centroid when available so the pill sits on land (Tony Canada pill),
+    // Prefer country centroid when available so the pill sits on land (the owner Canada pill),
     // not on top of city labels. Fall back to mean of reporting points.
     const x = centroid ? centroid[0] : avgX
     const y = centroid ? centroid[1] : avgY
@@ -371,7 +371,7 @@ export function countryPillsFromPoints(
     maxBadges: 24
   })
   const keep = new Set(badgeClusters.map((c) => c.members[0]?.country))
-  // Design: country cluster pill stays for multi-place countries (Tony flag pill).
+  // Design: country cluster pill stays for multi-place countries (the owner flag pill).
   return pills
     .filter((p) => keep.has(p.iso) && p.places >= 2)
     .sort((a, b) => b.seats - a.seats)

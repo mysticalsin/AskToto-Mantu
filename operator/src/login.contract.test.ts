@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { ADMIN_EMAILS, accessJwtFromRequest, accessLoginLocation, accessTeamDomain } from './access'
+import { adminEmailsFromEnv, accessJwtFromRequest, accessLoginLocation, accessTeamDomain } from './access'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_TEAM_DOMAIN } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { SPA_CSS_PATH, SPA_JS_PATH } from './spa/manifest'
 
@@ -12,6 +12,7 @@ function env(extra: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     TEAM_DOMAIN: TEST_TEAM_DOMAIN,
     ...extra
@@ -203,8 +204,28 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
     })
   })
 
+  it.each([undefined, '', ' , '])('denies every admin check when ADMIN_EMAILS is not configured (%s)', async (adminEmails) => {
+    const store = memoryStore()
+    const home = await handleRequest(
+      new Request('https://operator.test/'),
+      env({ ADMIN_EMAILS: adminEmails }),
+      { access: access('owner@example.test') },
+      { store, now: NOW }
+    )
+    expect(home.status).toBe(401)
+
+    const api = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env({ ADMIN_EMAILS: adminEmails }),
+      { access: access('owner@example.test') },
+      { store, now: NOW }
+    )
+    expect(api.status).toBe(401)
+    expect(await api.json()).toEqual({ ok: false, error: 'Access required' })
+  })
+
   it('serves the console after Access identity for allowlisted emails, including /keys', async () => {
-    for (const email of ADMIN_EMAILS) {
+    for (const email of adminEmailsFromEnv(env()) ?? []) {
       const store = memoryStore()
       const home = await handleRequest(
         new Request('https://operator.test/'),
@@ -240,7 +261,7 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
     const res = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: access('other@example.com') },
+      { access: access('other@example.test') },
       { store: memoryStore(), now: NOW }
     )
     expect(res.status).toBe(401)
@@ -252,7 +273,7 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
       new Request('https://operator.test/login', {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: 'email=admin@example.com&password=anything'
+        body: 'email=owner@example.test&password=anything'
       }),
       env(),
       {},

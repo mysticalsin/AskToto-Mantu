@@ -260,9 +260,7 @@ native addons cannot load from inside an asar.
   Beyond the codesign issue, expect general OneDrive sync friction during development: file-lock
   contention or slower I/O in `out/`, `release/`, and `node_modules/` during `npm run dev`/`npm run
   build`, especially right after a sync event. `npm run dist:local` intentionally overrides
-  `directories.output` to an OneDrive-free path
-  (`local-release`, per the script and the electron-builder.yml comment
-  "Local rebuilds that need keychain-safe signing + an OneDrive-free output dir") — use the same pattern
+  `directories.output` to `ASKTOTO_LOCAL_RELEASE_DIR` (default `release-local`) — use the same pattern
   if OneDrive sync is causing you build flakiness.
 - **Bytecode-compiled main process — dynamic `import()` fails only in built/packaged builds.** See §3.
   This is the single most common "works in dev, breaks in the build" bug in this codebase.

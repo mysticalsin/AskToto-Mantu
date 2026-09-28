@@ -10,14 +10,14 @@
  * Model resolution order:
  *   1. ASKTOTO_PROVE_MODEL_DIR env — a directory containing the pinned 0.8B gguf + mmproj (any filenames;
  *      matched by exact pinned byte size, then sha256-verified). Point this at
- *      fixtures/local-model for the already-downloaded proof run.
+ *      a local model directory for an already-downloaded proof run.
  *   2. This checkout's build-provisioned `resources/local-llm` payload.
  *   3. A legacy userData model directory left by an older development build.
  *   4. Otherwise, this developer proof script downloads the pinned 0.8B gguf + mmproj from the manifest URLs (verified
  *      sha256) into a script-owned cache dir.
  *
  * Usage: node scripts/prove-local-ttft.mjs
- *        ASKTOTO_PROVE_MODEL_DIR=fixtures/local-model node scripts/prove-local-ttft.mjs
+ *        ASKTOTO_PROVE_MODEL_DIR=/path/to/local/model-dir node scripts/prove-local-ttft.mjs
  */
 import { createHash, randomBytes } from 'node:crypto'
 import {

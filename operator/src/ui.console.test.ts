@@ -4,7 +4,7 @@ import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, syntheticSecretLikeText } from './test-fixtures'
 import { findBandSubpaths } from './map-bands'
 import { FORBIDDEN_NAV, NAV_IDS } from './nav'
 import { tokenPatternForTests } from './redact'
@@ -16,12 +16,13 @@ function env(): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused'
   }
 }
 
-const tonyAccess = {
-  getIdentity: async () => ({ email: 'admin@example.com' })
+const ownerAccess = {
+  getIdentity: async () => ({ email: 'owner@example.test' })
 }
 
 async function signedRequest(
@@ -51,7 +52,7 @@ async function page(store = memoryStore()): Promise<string> {
   const home = await handleRequest(
     new Request('https://operator.test/'),
     env(),
-    { access: tonyAccess },
+    { access: ownerAccess },
     { store, now: NOW }
   )
   return home.text()
@@ -197,7 +198,7 @@ describe('product sidebar (#105)', () => {
       lon: -73.5,
       last_index_at: null,
       hostname: 'Example-MacBook-Pro',
-      sso_email: 'ops@example.com',
+      sso_email: 'admin@example.test',
       license: 'licensed',
       approval: 'pending'
     })
@@ -235,7 +236,7 @@ describe('product sidebar (#105)', () => {
         os: 'darwin',
         appVersion: '1.8.3',
         hostname: 'Example-MacBook-Pro',
-        ssoEmail: 'ops@example.com',
+        ssoEmail: 'admin@example.test',
         license: 'licensed'
       })
     )
@@ -264,7 +265,7 @@ describe('product sidebar (#105)', () => {
     expect(overview).toContain('class="ago"')
     expect(overview).toMatch(/>now</)
     expect(overview).toContain('city Longueuil')
-    expect(overview).toContain('ops@example.com')
+    expect(overview).toContain('admin@example.test')
   })
 })
 
@@ -287,7 +288,7 @@ describe('map has no repeating horizontal band', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     expect(findBandSubpaths(html)).toEqual([])
@@ -318,7 +319,7 @@ describe('events keep seat OS after a later ask ingest', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     const events = eventsHtml(html)
@@ -340,7 +341,7 @@ describe('events never render token-like strings', () => {
       id: 'tok-1',
       ts: NOW,
       kind: 'ask',
-      actor: 'ops@example.com',
+      actor: 'admin@example.test',
       device_id: 'device-a',
       country: 'CA',
       detail: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signaturexx'
@@ -358,7 +359,7 @@ describe('events never render token-like strings', () => {
       lon: -73.5,
       last_index_at: null,
       hostname: 'Example-MacBook-Pro',
-      sso_email: 'ops@example.com',
+      sso_email: 'admin@example.test',
       license: 'approved'
     })
     const ingest = await signedRequest(
@@ -366,7 +367,7 @@ describe('events never render token-like strings', () => {
       JSON.stringify({
         id: 'ask-token',
         mode: 'interview',
-        question: 'Bearer sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345',
+        question: `Bearer ${syntheticSecretLikeText('abcdefghijklmnopqrstuvwxyz012345')}`,
         cacheStatus: 'hit'
       })
     )
@@ -374,7 +375,7 @@ describe('events never render token-like strings', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     const events = eventsHtml(html)
@@ -385,7 +386,7 @@ describe('events never render token-like strings', () => {
   })
 })
 
-describe('licenses pane is real seats with Example approval, not Shoey demo rows', () => {
+describe('licenses pane is real seats with owner approval, not Shoey demo rows', () => {
   it('lists computer, SSO, license, approval, and Approve for pending seats', async () => {
     const store = memoryStore()
     await store.upsertSeat({
@@ -401,14 +402,14 @@ describe('licenses pane is real seats with Example approval, not Shoey demo rows
       lon: -73.5,
       last_index_at: null,
       hostname: 'Example-MacBook-Pro',
-      sso_email: 'ops@example.com',
+      sso_email: 'admin@example.test',
       license: 'licensed',
       approval: 'pending'
     })
     const html = await page(store)
     const licenses = html.slice(html.indexOf('data-page="licenses"'), html.indexOf('data-page="notifications"'))
     expect(licenses).toContain('Example-MacBook-Pro')
-    expect(licenses).toContain('ops@example.com')
+    expect(licenses).toContain('admin@example.test')
     expect(licenses).toContain('licensed')
     expect(licenses).toContain('pending')
     expect(licenses).toContain('data-license-approve="device-a"')
@@ -438,23 +439,23 @@ describe('profiles hostname and SSO email', () => {
         os: 'darwin',
         appVersion: '1.8.2',
         hostname: 'Example-MacBook-Pro',
-        ssoEmail: 'Ops@example.com'
+        ssoEmail: 'Admin@Example.test'
       })
     )
     expect((await handleRequest(req, env(), {}, { store, now: NOW })).status).toBe(200)
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     expect(html).toContain('Example-MacBook-Pro')
-    expect(html).toContain('ops@example.com')
+    expect(html).toContain('admin@example.test')
     expect(html).toContain('data-page="sessions"')
     expect(html).toContain('data-page="licenses"')
     const seats = await store.listSeats()
     expect(seats[0]?.hostname).toBe('Example-MacBook-Pro')
-    expect(seats[0]?.sso_email).toBe('ops@example.com')
+    expect(seats[0]?.sso_email).toBe('admin@example.test')
   })
 
   it('uses an em dash when hostname or email is missing, never invented people', async () => {
@@ -464,7 +465,7 @@ describe('profiles hostname and SSO email', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     expect(html).toContain('—')
@@ -492,7 +493,7 @@ describe('realtime and map use live heartbeats, not leftover OpenPanel', () => {
       lon: -73.518,
       last_index_at: null,
       hostname: 'Example-MacBook-Pro',
-      sso_email: 'ops@example.com',
+      sso_email: 'admin@example.test',
       license: 'licensed',
       approval: 'approved'
     })
@@ -566,7 +567,7 @@ describe('realtime.geo.json is city-level Shoey rows', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/realtime.geo.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)

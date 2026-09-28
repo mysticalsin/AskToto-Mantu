@@ -3779,18 +3779,19 @@ function reveal(reason: RevealReason, options: { focus?: boolean } = {}): void {
 function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   if (process.env.ASKTOTO_SMOKE_REOPEN_PROBE !== '1') return false
   const action = commandLine
-    .map((arg) => arg.match(/^--metis-smoke-reopen=(hide-window|tray-show)$/)?.[1])
-    .find((value): value is 'hide-window' | 'tray-show' => value === 'hide-window' || value === 'tray-show')
+    .map((arg) => arg.match(/^--metis-smoke-reopen=(park-window|hide-window|tray-show)$/)?.[1])
+    .find((value): value is 'park-window' | 'hide-window' | 'tray-show' =>
+      value === 'park-window' || value === 'hide-window' || value === 'tray-show')
   if (!action) return false
 
   const w = ensureWindow()
   if (!w) return true
-  if (action === 'hide-window') {
-    w.hide()
+  if (action === 'park-window' || action === 'hide-window') {
+    if (!parkOverlayAfterHideSpring(true)) w.hide()
     return true
   }
 
-  w.hide()
+  if (!parkOverlayAfterHideSpring(true)) w.hide()
   toggleVisible('tray')
   return true
 }

@@ -38,7 +38,7 @@ import {
 import { type CrmSendRow } from '../crm'
 import { QUESTION_TYPES, QUESTION_TYPE_LABELS, type QuestionType } from '../../../src/shared/question-type'
 
-export const FIXTURE_EMAIL = 'admin@example.com'
+export const FIXTURE_EMAIL = 'owner@example.test'
 export const FIXTURE_NOW = Date.UTC(2026, 8, 6, 14, 0, 0)
 
 const MIN = 60 * 1000

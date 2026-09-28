@@ -58,7 +58,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
         cache_uncached: 40
       })
     )
-    const dash = await buildDashboard(store, 'admin@example.com', NOW)
+    const dash = await buildDashboard(store, 'owner@example.test', NOW)
     expect(dash.profiles).toEqual([])
     expect(dash.licenses.empty).toBe(true)
     expect(dash.licenses.error).toBe('No licenses in D1')
@@ -85,12 +85,12 @@ describe('ROI and licenses from real D1 ingest only', () => {
       lon: -73.5,
       last_index_at: null,
       hostname: 'Example-MacBook-Pro',
-      sso_email: 'ops@example.com',
+      sso_email: 'admin@example.test',
       license: 'licensed',
       approval: 'approved'
     })
     await store.insertAsk(ask({ id: 'op-1', provider: 'anthropic', mode: 'answer', cache_read: 800, cache_uncached: 40 }))
-    const dash = await buildDashboard(store, 'admin@example.com', NOW)
+    const dash = await buildDashboard(store, 'owner@example.test', NOW)
     expect(dash.roi.liveSeats).toBe(1)
     expect(dash.roi.seats30m).toBe(1)
     expect(dash.kpis.live).toBe(1)
@@ -98,7 +98,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.licenses.rows[0]?.approval).toBe('approved')
     expect(dash.licenses.rows[0]?.license).toBe('licensed')
     expect(dash.profiles[0]?.hostname).toBe('Example-MacBook-Pro')
-    expect(dash.profiles[0]?.email).toBe('ops@example.com')
+    expect(dash.profiles[0]?.email).toBe('admin@example.test')
     expect(dash.profiles[0]?.city).toBe('Longueuil')
     expect(dash.geo[0]).toMatchObject({
       country: 'CA',
@@ -139,7 +139,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
       exp: Math.floor(NOW / 1000) + 7 * 24 * 60 * 60,
       revoked: 0,
       created_at: NOW,
-      created_by: 'admin@example.com',
+      created_by: 'owner@example.test',
       activated_device: 'baa2dc6edd670a9894ed402b5a9b9246',
       activated_at: NOW
     })
@@ -161,7 +161,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
       approval: 'pending',
       license_jti: '626f3683991c12c6'
     })
-    const dash = await buildDashboard(store, 'admin@example.com', NOW)
+    const dash = await buildDashboard(store, 'owner@example.test', NOW)
     expect(dash.licenses.empty).toBe(false)
     expect(dash.licenses.rows[0]?.hostname).toBe('Totos-Mac.local')
     expect(dash.licenses.rows[0]?.license).toBe('licensed · ZRl4')
@@ -171,7 +171,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
   })
 
   it('does not invent cost when no asks were ingested', async () => {
-    const dash = await buildDashboard(memoryStore(), 'admin@example.com', NOW)
+    const dash = await buildDashboard(memoryStore(), 'owner@example.test', NOW)
     expect(dash.roi.costToday).toBeNull()
     expect(dash.roi.cost7d).toBeNull()
     expect(dash.roi.cacheHit).toBeNull()
@@ -218,7 +218,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
         path_tag: 'portal-direct'
       })
     )
-    const dash = await buildDashboard(store, 'admin@example.com', NOW)
+    const dash = await buildDashboard(store, 'owner@example.test', NOW)
     expect(dash.roi.portalCf).toMatch(/tok/)
     expect(dash.roi.portalCf).toMatch(/estimate, list price/)
     expect(dash.roi.portalCf).not.toBe('$0')
@@ -262,7 +262,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
         path_tag: 'portal-direct'
       })
     )
-    const dash = await buildDashboard(store, 'admin@example.com', NOW)
+    const dash = await buildDashboard(store, 'owner@example.test', NOW)
     expect(dash.roi.portalDirect).toBe('1000 tok')
     expect(dash.roi.portalDirect).not.toMatch(/tok · not reported/)
     expect(dash.roi.portalDirect).not.toContain('not reported')
@@ -302,7 +302,7 @@ describe('ROI and licenses from real D1 ingest only', () => {
         path_tag: null
       })
     )
-    const dash = await buildDashboard(store, 'admin@example.com', NOW)
+    const dash = await buildDashboard(store, 'owner@example.test', NOW)
     expect(dash.roi.portalCf).toMatch(/150 tok/)
     expect(dash.roi.portalDirect).toMatch(/225 tok/)
     expect(dash.roi.portalCf).not.toMatch(/tok · not reported/)
@@ -316,13 +316,13 @@ describe('ROI and licenses from real D1 ingest only', () => {
       id: 'recap-1',
       ts: NOW,
       kind: 'recap',
-      actor: 'ops@example.com',
+      actor: 'admin@example.test',
       device_id: 'dev-a',
       country: 'CA',
       detail: '60m'
     })
     await store.insertAsk(ask({ id: 'op-2', provider: 'anthropic', mode: 'answer' }))
-    const dash = await buildDashboard(store, 'admin@example.com', NOW)
+    const dash = await buildDashboard(store, 'owner@example.test', NOW)
     expect(dash.roi.timeSaved).toBe('12 min')
     expect(dash.roi.timeSavedSub).toBe('1 recaps · estimate')
     expect(dash.roi.value).not.toBe('not reported')

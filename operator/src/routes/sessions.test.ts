@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from '../index'
 import { memoryStore, type AskRow, type SeatRow } from '../store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from '../test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from '../test-fixtures'
 
 const NOW = 1_725_000_000_000
 
 function env(): Env {
-  return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY, OPERATOR_SKILL_PRIVATE_KEY: '' }
+  return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'admin@example.com' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow {
   return {
@@ -25,7 +26,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lon: null,
     last_index_at: null,
     hostname: 'Example-MacBook-Pro',
-    sso_email: 'ops@example.com',
+    sso_email: 'admin@example.test',
     license: 'approved',
     approval: 'approved',
     ...overrides
@@ -65,7 +66,7 @@ describe('GET /v1/admin/sessions.json', () => {
     await store.upsertSeat(seat({ device_id: 'dev-a' }))
     await store.touchSession('dev-a', NOW - 60_000, 'heartbeat', { country: 'CA', city: 'Longueuil' }, { os: 'darwin', app_version: '1.8.5' })
 
-    const res = await handleRequest(new Request('https://operator.test/v1/admin/sessions.json'), env(), { access: tonyAccess }, { store, now: NOW })
+    const res = await handleRequest(new Request('https://operator.test/v1/admin/sessions.json'), env(), { access: ownerAccess }, { store, now: NOW })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { rows: { deviceId: string; tier: string | null; live: boolean; hostname: string | null }[] }
     expect(body.rows).toHaveLength(1)
@@ -80,7 +81,7 @@ describe('GET /v1/admin/sessions.json', () => {
     const wrongCountry = await handleRequest(
       new Request('https://operator.test/v1/admin/sessions.json?country=US'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(((await wrongCountry.json()) as { rows: unknown[] }).rows).toHaveLength(0)
@@ -88,7 +89,7 @@ describe('GET /v1/admin/sessions.json', () => {
     const rightCountry = await handleRequest(
       new Request('https://operator.test/v1/admin/sessions.json?country=CA&os=darwin'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(((await rightCountry.json()) as { rows: unknown[] }).rows).toHaveLength(1)
@@ -113,7 +114,7 @@ describe('GET /v1/admin/sessions/:id.json', () => {
     const res = await handleRequest(
       new Request(`https://operator.test/v1/admin/sessions/${session.id}.json`),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -143,7 +144,7 @@ describe('GET /v1/admin/sessions/:id.json', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/sessions/nope.json'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(404)

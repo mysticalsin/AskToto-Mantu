@@ -3,7 +3,7 @@ import { OPERATOR_LICENSE_HEADER } from '@shared/operator-hmac'
 import { hashOperatorId, operatorHmacHeaders } from '../../src/main/operator-hmac-sign'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
 
 describe('MQA-293 desktop licence handshake with the Operator Worker', () => {
   it.each(['text', 'screenshot'] as const)('mints, activates and streams a %s Ask using the desktop signer without a fleet secret on the device', async (kind) => {
@@ -12,10 +12,11 @@ describe('MQA-293 desktop licence handshake with the Operator Worker', () => {
     const env: Env = {
       OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
       OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
       OPERATOR_SKILL_PRIVATE_KEY: '',
       OPERATOR_VAULT_KEY: TEST_VAULT_KEY
     }
-    const access = { getIdentity: async () => ({ email: 'admin@example.com' }) }
+    const access = { getIdentity: async () => ({ email: 'owner@example.test' }) }
     const adminPost = (path: string, body: Record<string, unknown>) => handleRequest(
       new Request(`https://operator.test${path}`, { method: 'POST', body: JSON.stringify(body) }),
       env, { access }, { store, now }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from '../index'
 import { decryptVault } from '../crypto'
 import { memoryStore } from '../store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from '../test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from '../test-fixtures'
 import { readIntegrationExtra } from '../connectors/data'
 import { mintOAuthState } from '../connectors/oauth'
 
@@ -14,13 +14,14 @@ function env(overrides: Record<string, unknown> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY,
     ...overrides
   } as Env
 }
 
-const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function get(path: string): Request {
   return new Request(`${ORIGIN}${path}`)
@@ -43,21 +44,21 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
 
   it('400s a kind that has no OAuth config at all', async () => {
     const store = memoryStore()
-    const res = await handleRequest(sameOriginGet('/v1/admin/connectors/hubspot/oauth/start'), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(sameOriginGet('/v1/admin/connectors/hubspot/oauth/start'), env(), { access: ownerAccess }, { store, now: NOW })
     expect(res.status).toBe(400)
     expect((await res.json()) as { code: string }).toMatchObject({ code: 'not-oauth' })
   })
 
   it('400s a client-credentials kind (no browser flow exists for it)', async () => {
     const store = memoryStore()
-    const res = await handleRequest(sameOriginGet('/v1/admin/connectors/salesforce/oauth/start'), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(sameOriginGet('/v1/admin/connectors/salesforce/oauth/start'), env(), { access: ownerAccess }, { store, now: NOW })
     expect(res.status).toBe(400)
     expect((await res.json()) as { code: string }).toMatchObject({ code: 'not-oauth' })
   })
 
   it('503s naming the exact missing env vars when the OAuth client is unconfigured', async () => {
     const store = memoryStore()
-    const res = await handleRequest(sameOriginGet('/v1/admin/connectors/googledrive/oauth/start'), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(sameOriginGet('/v1/admin/connectors/googledrive/oauth/start'), env(), { access: ownerAccess }, { store, now: NOW })
     expect(res.status).toBe(503)
     const body = (await res.json()) as { code: string; missing: string[] }
     expect(body.code).toBe('oauth-unconfigured')
@@ -69,7 +70,7 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
     const res = await handleRequest(
       sameOriginGet('/v1/admin/connectors/googledrive/oauth/start'),
       env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'client-id-only' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await res.json()) as { missing: string[] }
@@ -81,7 +82,7 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
     const res = await handleRequest(
       sameOriginGet('/v1/admin/connectors/zoho/oauth/start'),
       env({ OAUTH_ZOHO_CLIENT_ID: 'id', OAUTH_ZOHO_CLIENT_SECRET: 'secret' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(400)
@@ -93,7 +94,7 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
     const res = await handleRequest(
       sameOriginGet('/v1/admin/connectors/googledrive/oauth/start'),
       env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'g-client-id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'g-client-secret' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(302)
@@ -116,7 +117,7 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
     const res = await handleRequest(
       sameOriginGet('/v1/admin/connectors/zoho/oauth/start?dataCenter=accounts.zoho.eu'),
       env({ OAUTH_ZOHO_CLIENT_ID: 'z-id', OAUTH_ZOHO_CLIENT_SECRET: 'z-secret' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(302)
@@ -135,7 +136,7 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
     const res = await handleRequest(
       sameOriginGet('/v1/admin/connectors/zoho/oauth/start?dataCenter=evil.example'),
       env({ OAUTH_ZOHO_CLIENT_ID: 'z-id', OAUTH_ZOHO_CLIENT_SECRET: 'z-secret' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(400)
@@ -151,7 +152,7 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
     const res = await handleRequest(
       sameOriginGet('/v1/admin/connectors/zoho/oauth/start?dataCenter=accounts.zoho.eu.evil.example'),
       env({ OAUTH_ZOHO_CLIENT_ID: 'z-id', OAUTH_ZOHO_CLIENT_SECRET: 'z-secret' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(400)
@@ -164,7 +165,7 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
     const res = await handleRequest(
       req,
       env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'g-client-id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'g-client-secret' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(403)
@@ -179,7 +180,7 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
     const res = await handleRequest(
       get('/v1/admin/connectors/googledrive/oauth/start'),
       env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'g-client-id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'g-client-secret' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(403)
@@ -196,7 +197,7 @@ describe('GET /v1/admin/connectors/oauth/callback', () => {
 
   it('shows a failure page (never a raw JSON 500) when the vendor reports ?error=', async () => {
     const store = memoryStore()
-    const res = await handleRequest(get('/v1/admin/connectors/oauth/callback?error=access_denied'), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(get('/v1/admin/connectors/oauth/callback?error=access_denied'), env(), { access: ownerAccess }, { store, now: NOW })
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toMatch(/text\/html/)
     const html = await res.text()
@@ -207,7 +208,7 @@ describe('GET /v1/admin/connectors/oauth/callback', () => {
 
   it('rejects a forged state (bad signature) with a failure page, never storing a row', async () => {
     const store = memoryStore()
-    const res = await handleRequest(get('/v1/admin/connectors/oauth/callback?code=abc&state=not-a-real-state'), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(get('/v1/admin/connectors/oauth/callback?code=abc&state=not-a-real-state'), env(), { access: ownerAccess }, { store, now: NOW })
     const html = await res.text()
     expect(html).toContain('Connection failed')
     expect(await store.listIntegrationRows()).toHaveLength(0)
@@ -215,24 +216,24 @@ describe('GET /v1/admin/connectors/oauth/callback', () => {
 
   it('rejects a replayed state (the same state used twice)', async () => {
     const store = memoryStore()
-    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'admin@example.com', crypto.randomUUID(), NOW)
+    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'owner@example.test', crypto.randomUUID(), NOW)
     const e = env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'secret' })
     const fakeFetch = (async () =>
       new Response(JSON.stringify({ access_token: 'tok', refresh_token: 'ref', expires_in: 3600 }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
-    const first = await handleRequest(get(`/v1/admin/connectors/oauth/callback?code=abc&state=${encodeURIComponent(state)}`), e, { access: tony }, { store, now: NOW, providerFetch: fakeFetch })
+    const first = await handleRequest(get(`/v1/admin/connectors/oauth/callback?code=abc&state=${encodeURIComponent(state)}`), e, { access: ownerAccess }, { store, now: NOW, providerFetch: fakeFetch })
     expect((await first.text())).toContain('Connected')
-    const second = await handleRequest(get(`/v1/admin/connectors/oauth/callback?code=abc&state=${encodeURIComponent(state)}`), e, { access: tony }, { store, now: NOW + 1, providerFetch: fakeFetch })
+    const second = await handleRequest(get(`/v1/admin/connectors/oauth/callback?code=abc&state=${encodeURIComponent(state)}`), e, { access: ownerAccess }, { store, now: NOW + 1, providerFetch: fakeFetch })
     expect((await second.text())).toContain('Connection failed')
     expect(await store.listIntegrationRows()).toHaveLength(1) // only the first exchange ever stored a row
   })
 
   it('rejects a state minted for a different admin actor', async () => {
     const store = memoryStore()
-    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'someone-else@example.com', crypto.randomUUID(), NOW)
+    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'someone-else.test', crypto.randomUUID(), NOW)
     const res = await handleRequest(
       get(`/v1/admin/connectors/oauth/callback?code=abc&state=${encodeURIComponent(state)}`),
       env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'secret' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const html = await res.text()
@@ -243,11 +244,11 @@ describe('GET /v1/admin/connectors/oauth/callback', () => {
 
   it('rejects an expired state', async () => {
     const store = memoryStore()
-    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'admin@example.com', crypto.randomUUID(), NOW - 11 * 60_000)
+    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'owner@example.test', crypto.randomUUID(), NOW - 11 * 60_000)
     const res = await handleRequest(
       get(`/v1/admin/connectors/oauth/callback?code=abc&state=${encodeURIComponent(state)}`),
       env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'secret' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const html = await res.text()
@@ -257,7 +258,7 @@ describe('GET /v1/admin/connectors/oauth/callback', () => {
   it('successfully exchanges the code and stores the tokens encrypted, mode brokered, last4 of the access token only - never the raw token in any JSON', async () => {
     const store = memoryStore()
     const nonce = crypto.randomUUID()
-    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'admin@example.com', nonce, NOW)
+    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'owner@example.test', nonce, NOW)
     const fakeFetch = (async (_url: string, init: RequestInit) => {
       const body = new URLSearchParams(String(init.body))
       expect(body.get('client_secret')).toBe('g-client-secret')
@@ -269,7 +270,7 @@ describe('GET /v1/admin/connectors/oauth/callback', () => {
     const res = await handleRequest(
       get(`/v1/admin/connectors/oauth/callback?code=auth-code&state=${encodeURIComponent(state)}`),
       env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'g-client-id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'g-client-secret' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, providerFetch: fakeFetch }
     )
     expect(res.status).toBe(200)
@@ -301,12 +302,12 @@ describe('GET /v1/admin/connectors/oauth/callback', () => {
 
   it('a failed exchange (upstream rejects the code) shows a failure page and stores nothing', async () => {
     const store = memoryStore()
-    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'admin@example.com', crypto.randomUUID(), NOW)
+    const state = await mintOAuthState(TEST_INGEST_SECRET, 'googledrive', 'owner@example.test', crypto.randomUUID(), NOW)
     const fakeFetch = (async () => new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 })) as typeof fetch
     const res = await handleRequest(
       get(`/v1/admin/connectors/oauth/callback?code=bad-code&state=${encodeURIComponent(state)}`),
       env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'secret' }),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, providerFetch: fakeFetch }
     )
     const html = await res.text()

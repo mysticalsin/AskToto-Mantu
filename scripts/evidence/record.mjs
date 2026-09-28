@@ -1,8 +1,9 @@
 // Evidence record schema and parsing (ADR-017, M2-0002).
 //
 // A record is one immutable, checkable fact about one ticket's evidence: a commit, a CI run id, a file
-// hash, a named session — never prose standing in for one of those. This module is the schema as code.
-// It validates one record in isolation (recordProblems) and reads the
+// hash, a named session — never prose standing in for one of those. This module is the schema as code
+// (record.mjs is the single source of truth; the program evidence schema prose lives outside this public
+// repository). It validates one record in isolation (recordProblems) and reads the
 // append-only, one-file-per-ticket JSONL store (readRecordStore). It never judges whether a ticket may
 // close — that is scripts/evidence/check.mjs, which needs the ledger too.
 import { createHash } from 'node:crypto'

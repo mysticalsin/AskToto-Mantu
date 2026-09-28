@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from '../index'
 import { memoryStore, type SeatRow } from '../store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from '../test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from '../test-fixtures'
 import { parseKinds, parseLimit, resolveRange } from './events'
 
 const NOW = 1_725_000_000_000
@@ -55,10 +55,11 @@ describe('resolveRange', () => {
 })
 
 function env(): Env {
-  return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY, OPERATOR_SKILL_PRIVATE_KEY: '' }
+  return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS, OPERATOR_SKILL_PRIVATE_KEY: '' }
 }
 
-const tonyAccess = { getIdentity: async () => ({ email: 'admin@example.com' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow {
   return {
@@ -74,7 +75,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lon: null,
     last_index_at: null,
     hostname: 'Example-MacBook-Pro',
-    sso_email: 'ops@example.com',
+    sso_email: 'admin@example.test',
     license: 'approved',
     approval: 'approved',
     ...overrides
@@ -89,7 +90,7 @@ describe('GET /v1/admin/events.json', () => {
     }
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/events.json?q=albatross&limit=1'),
-      env(), { access: tonyAccess }, { store, now: NOW }
+      env(), { access: ownerAccess }, { store, now: NOW }
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as { rows: unknown[]; nextCursor: string | null }
@@ -106,7 +107,7 @@ describe('GET /v1/admin/events.json', () => {
     const first = await handleRequest(
       new Request('https://operator.test/v1/admin/events.json?limit=2'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(first.status).toBe(200)
@@ -116,14 +117,14 @@ describe('GET /v1/admin/events.json', () => {
       counts: Record<string, number>
     }
     expect(body1.rows).toHaveLength(2)
-    expect(body1.rows[0]).toMatchObject({ hostname: 'Example-MacBook-Pro', email: 'ops@example.com', os: 'darwin', appVersion: '1.8.5' })
+    expect(body1.rows[0]).toMatchObject({ hostname: 'Example-MacBook-Pro', email: 'admin@example.test', os: 'darwin', appVersion: '1.8.5' })
     expect(body1.nextCursor).toBeTruthy()
     expect(body1.counts.heartbeat).toBe(3)
 
     const second = await handleRequest(
       new Request(`https://operator.test/v1/admin/events.json?limit=2&cursor=${encodeURIComponent(body1.nextCursor!)}`),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body2 = (await second.json()) as { rows: unknown[]; nextCursor: string | null }
@@ -138,7 +139,7 @@ describe('GET /v1/admin/events.json', () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/events.json?kinds=ask'),
       env(),
-      { access: tonyAccess },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await res.json()) as { rows: { kind: string }[]; counts: Record<string, number> }
@@ -150,7 +151,7 @@ describe('GET /v1/admin/events.json', () => {
   it('never leaks prompt ciphertext or IVs', async () => {
     const store = memoryStore()
     await store.insertEvent({ id: 'e1', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'answer' })
-    const res = await handleRequest(new Request('https://operator.test/v1/admin/events.json'), env(), { access: tonyAccess }, { store, now: NOW })
+    const res = await handleRequest(new Request('https://operator.test/v1/admin/events.json'), env(), { access: ownerAccess }, { store, now: NOW })
     const text = await res.text()
     expect(text).not.toMatch(/cipher/i)
     expect(text.toLowerCase()).not.toContain('prompt_iv')
@@ -160,12 +161,12 @@ describe('GET /v1/admin/events.json', () => {
     const store = memoryStore()
     await store.insertEvent({ id: 'a', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Example Customer private ask' })
     await store.insertEvent({ id: 'c', ts: NOW - 1, kind: 'crm', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Patient diagnosis CRM payload' })
-    await store.insertEvent({ id: 'h', ts: NOW - 2, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: '/home/example/private.md' })
-    const res = await handleRequest(new Request('https://operator.test/v1/admin/events.json'), env(), { access: tonyAccess }, { store, now: NOW })
+    await store.insertEvent({ id: 'h', ts: NOW - 2, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: '/private/synthetic-home/private.md' })
+    const res = await handleRequest(new Request('https://operator.test/v1/admin/events.json'), env(), { access: ownerAccess }, { store, now: NOW })
     const body = (await res.json()) as { rows: { id: string; detail: string | null }[] }
     expect(body.rows.map((row) => row.detail)).toEqual([null, null, null])
     expect(JSON.stringify(body)).not.toContain('Example Customer')
     expect(JSON.stringify(body)).not.toContain('Patient diagnosis')
-    expect(JSON.stringify(body)).not.toContain('/home/example')
+    expect(JSON.stringify(body)).not.toContain('/private/synthetic-home')
   })
 })

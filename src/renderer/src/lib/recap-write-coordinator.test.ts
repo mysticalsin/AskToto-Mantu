@@ -71,8 +71,8 @@ describe('recap write coordination', () => {
   })
 
   it.each([
-    ['/home/example/Meetings/meeting.md', 'meeting.md'],
-    ['C:\\Users\\Example\\Meetings\\meeting.md', 'meeting.md']
+    ['/Users/example-owner/Meetings/meeting.md', 'meeting.md'],
+    ['C:\\Users\\ExampleOwner\\Meetings\\meeting.md', 'meeting.md']
   ])('treats absolute %s and reopened basename %s as the same ordered file', async (absolute, basename) => {
     const generation = deferred<void>()
     const calls: string[] = []

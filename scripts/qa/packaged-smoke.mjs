@@ -238,7 +238,7 @@ function revealCount(auditLogPath, reason) {
 }
 
 export function isPassingRevealEvidence(reveal) {
-  return reveal !== null && (reveal.outcome === 'created' || reveal.outcome === 'shown')
+  return reveal !== null && reveal.parked === true && (reveal.outcome === 'created' || reveal.outcome === 'shown')
 }
 
 async function runRevealRow({ auditLogPath, rows, id, reason, run, failure }) {
@@ -248,13 +248,19 @@ async function runRevealRow({ auditLogPath, rows, id, reason, run, failure }) {
   const pass = isPassingRevealEvidence(reveal)
   completeRvRow(rows, id, {
     status: pass ? 'PASS' : 'FAIL',
-    evidence: reveal ? { event: 'reveal', reason, outcome: reveal.outcome ?? null } : null,
+    evidence: reveal ? {
+      event: 'reveal',
+      reason,
+      outcome: reveal.outcome ?? null,
+      parked: reveal.parked === true,
+      layout: typeof reveal.layout === 'string' ? reveal.layout : null
+    } : null,
     unblock: pass ? null : failure
   })
 }
 
 async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows, env }) {
-  const hideBeforeReveal = () => runProcess(executable, ['--metis-smoke-reopen=hide-window'], 10_000, { env })
+  const hideBeforeReveal = () => runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
   if (platform === 'darwin') {
     await runRevealRow({
       auditLogPath,
@@ -298,7 +304,7 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       id: 'RV-4-global-hotkey',
       reason: 'hotkey',
       run: async () => {
-        await runProcess(executable, ['--metis-smoke-reopen=hide-window'], 10_000, { env })
+        await runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
         return runAppleScript('tell application "System Events" to keystroke return using {command down, shift down}', 10_000)
       },
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing global-hotkey reveal event.'
@@ -344,7 +350,7 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
       id: 'RV-4-global-hotkey',
       reason: 'hotkey',
       run: async () => {
-        await runProcess(executable, ['--metis-smoke-reopen=hide-window'], 10_000, { env })
+        await runProcess(executable, ['--metis-smoke-reopen=park-window'], 10_000, { env })
         return runPowerShell("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^+{ENTER}')", 10_000)
       },
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing global-hotkey reveal event.'

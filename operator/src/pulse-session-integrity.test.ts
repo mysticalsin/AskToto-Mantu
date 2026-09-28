@@ -8,12 +8,12 @@ import { sha256Hex } from './crypto'
 import { d1Store, type D1DatabaseLike } from './d1'
 import { hmacHex } from './hmac'
 import { handleRequest, type Env } from './index'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
 const DEVICE = 'pulse-retry-device'
 const ASK_ID = 'pulse-retry-ask'
-const ENV: Env = { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY }
+const ENV: Env = { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY, ADMIN_EMAILS: TEST_ADMIN_EMAILS }
 
 function sqliteD1WithOneFailedSessionWrite(db: DatabaseSync, failOnSessionWrite = 1): D1DatabaseLike {
   let sessionWrites = 0

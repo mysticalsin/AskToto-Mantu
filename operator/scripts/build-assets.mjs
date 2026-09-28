@@ -174,8 +174,8 @@ function monogramLetter(label) {
 }
 
 /**
- * Real, publicly documented brand colours for the connector kinds Simple Icons dropped (Tony,
- * 2026-09-06: "make monograms good"). Best-effort at the time this was written -- Tony can
+ * Real, publicly documented brand colours for the connector kinds Simple Icons dropped (the owner,
+ * 2026-09-06: "make monograms good"). Best-effort at the time this was written -- the owner can
  * override any of these (or any brand logo at all) by dropping the vendor's own SVG in
  * operator/assets/logos-brand/<kind>.svg, which build-assets.mjs always prefers (see
  * copyBrandOverrides() below). custom-mcp / custom-rest have no real brand, so they keep the
@@ -200,7 +200,7 @@ const MONOGRAM_BRAND_COLORS = {
   microsoftteams: '#6264A7'
 }
 
-/** Plan 3.6 / P0.3 brief / Tony 2026-09-06 ("make monograms good"): a rounded square, 6px
+/** Plan 3.6 / P0.3 brief / the owner 2026-09-06 ("make monograms good"): a rounded square, 6px
  *  radius. A kind with a real, documented brand colour (MONOGRAM_BRAND_COLORS) gets that colour
  *  with a white 600-weight initial; a kind with no real brand (custom-mcp, custom-rest) keeps
  *  the original --accent-soft background with --accent ink. Generated, not hand-drawn -- literal
@@ -277,7 +277,7 @@ async function buildLogos() {
 }
 
 /**
- * Plan brief (Tony, 2026-09-06): "add an override path... so Tony can drop official brand SVGs
+ * Plan brief (the owner, 2026-09-06): "add an override path... so the owner can drop official brand SVGs
  * in and they win." Any file at operator/assets/logos-brand/<kind>.svg is copied verbatim over
  * the generated logo for that kind, after every brand/monogram logo above has already been
  * written -- so an override always wins regardless of whether Simple Icons had that slug.

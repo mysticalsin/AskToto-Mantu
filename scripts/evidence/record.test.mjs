@@ -25,7 +25,7 @@ function base(overrides = {}) {
     evidence_level: 'DESIGNED',
     recorded_at: '2026-09-26T00:00:00Z',
     kit_refs: { 'M2-REL-01': 'PARTIAL' },
-    finding_refs: ['CHATGPT-A10'],
+    finding_refs: ['PUBLIC-A10'],
     commit: SHA1_A,
     result: 'PASS',
     implementer_session: session('impl-1'),

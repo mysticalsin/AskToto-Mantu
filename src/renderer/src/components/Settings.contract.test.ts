@@ -191,20 +191,26 @@ describe('About footer version', () => {
   })
 })
 
-describe('About footer Support / Send feedback route to the maintained mailbox', () => {
-  // Both the "Support" and "Send feedback" links must reach ops@example.com. The prior
-  // support@mantu.com mailbox is not monitored for this app, so a bug report or feedback sent there
-  // is silently lost — pin the live address so an edit can't quietly revert it.
-  it('Support links to ops@example.com', () => {
-    expect(source).toMatch(/href="mailto:ops@example\.com"[\s\S]{0,120}?>\s*Support/)
+describe('About footer Support / Send feedback address', () => {
+  it('reads the mailbox from a build-time constant', () => {
+    expect(source).toMatch(/declare const __METIS_FEEDBACK_EMAIL__:\s*string/)
+    expect(source).toMatch(/typeof __METIS_FEEDBACK_EMAIL__ === 'string'/)
+    expect(source).toMatch(/__METIS_FEEDBACK_EMAIL__\.trim\(\) : ''/)
   })
 
-  it('Send feedback links to ops@example.com (subject preserved)', () => {
-    expect(source).toMatch(/href="mailto:ops@example\.com\?subject=[^"]*"[\s\S]{0,120}?>\s*Send feedback/)
+  it('hides both feedback links when the build-time constant is unset', () => {
+    const block = blockAfter('METIS_FEEDBACK_EMAIL ? (', ') : null')
+    expect(block).toContain('Support')
+    expect(block).toContain('Send feedback')
   })
 
-  it('the unmonitored support@mantu.com mailbox is gone from the footer', () => {
-    expect(source).not.toMatch(/mailto:support@mantu\.com/)
+  it('preserves the feedback subject on the configured mailto link', () => {
+    expect(source).toMatch(/href=\{`mailto:\$\{METIS_FEEDBACK_EMAIL\}`\}/)
+    expect(source).toMatch(/href=\{`mailto:\$\{METIS_FEEDBACK_EMAIL\}\?subject=M%C3%A9tis%20feedback`\}/)
+  })
+
+  it('contains no literal mailbox in the footer', () => {
+    expect(source).not.toMatch(/mailto:[^`$"]/)
   })
 })
 

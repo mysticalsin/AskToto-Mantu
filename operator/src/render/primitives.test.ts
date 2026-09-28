@@ -145,7 +145,7 @@ describe('avatar', () => {
     const b = avatar({ name: 'Other-PC' })
     expect(a1).toBe(a2)
     expect(a1).not.toBe(b)
-    expect(a1).toContain('TM')
+    expect(a1).toContain('EM')
   })
   it('shows a live dot only when live is true', () => {
     expect(avatar({ name: 'X', live: true })).toContain('avatar-live')

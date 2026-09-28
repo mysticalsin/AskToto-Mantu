@@ -49,7 +49,7 @@ interface Observation {
     reason: string
     automation: string
     status: string
-    evidence: { event: string; reason: string; outcome: string | null } | null
+    evidence: { event: string; reason: string; outcome: string | null; parked?: boolean; layout?: string | null } | null
     unblock: string | null
   }>
   survivors: ProcessEntry[] | null
@@ -122,7 +122,7 @@ function goodObservation(): Observation {
         reason: 'activate',
         automation: 'open-app-path',
         status: 'PASS',
-        evidence: { event: 'reveal', reason: 'activate', outcome: 'shown' },
+        evidence: { event: 'reveal', reason: 'activate', outcome: 'shown', parked: true, layout: 'hide' },
         unblock: null
       },
       {
@@ -130,7 +130,7 @@ function goodObservation(): Observation {
         reason: 'second-instance',
         automation: 'open-new-instance',
         status: 'PASS',
-        evidence: { event: 'reveal', reason: 'second-instance', outcome: 'shown' },
+        evidence: { event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' },
         unblock: null
       },
       {
@@ -138,7 +138,7 @@ function goodObservation(): Observation {
         reason: 'tray',
         automation: 'tray-menu',
         status: 'PASS',
-        evidence: { event: 'reveal', reason: 'tray', outcome: 'shown' },
+        evidence: { event: 'reveal', reason: 'tray', outcome: 'shown', parked: true, layout: 'hide' },
         unblock: null
       },
       {
@@ -146,7 +146,7 @@ function goodObservation(): Observation {
         reason: 'hotkey',
         automation: 'global-hotkey',
         status: 'PASS',
-        evidence: { event: 'reveal', reason: 'hotkey', outcome: 'shown' },
+        evidence: { event: 'reveal', reason: 'hotkey', outcome: 'shown', parked: true, layout: 'hide' },
         unblock: null
       },
       {
@@ -154,7 +154,7 @@ function goodObservation(): Observation {
         reason: 'activate',
         automation: 'finder-open-app-file',
         status: 'PASS',
-        evidence: { event: 'reveal', reason: 'activate', outcome: 'shown' },
+        evidence: { event: 'reveal', reason: 'activate', outcome: 'shown', parked: true, layout: 'hide' },
         unblock: null
       }
     ],
@@ -244,10 +244,11 @@ describe('smokeVerdict', () => {
 })
 
 describe('isPassingRevealEvidence', () => {
-  it('accepts created and shown reveals, but rejects already-visible no-ops', () => {
-    expect(isPassingRevealEvidence({ outcome: 'created' })).toBe(true)
-    expect(isPassingRevealEvidence({ outcome: 'shown' })).toBe(true)
-    expect(isPassingRevealEvidence({ outcome: 'already-visible' })).toBe(false)
+  it('accepts created and shown reveals only when they started parked', () => {
+    expect(isPassingRevealEvidence({ outcome: 'created', parked: true })).toBe(true)
+    expect(isPassingRevealEvidence({ outcome: 'shown', parked: true })).toBe(true)
+    expect(isPassingRevealEvidence({ outcome: 'shown', parked: false })).toBe(false)
+    expect(isPassingRevealEvidence({ outcome: 'already-visible', parked: true })).toBe(false)
     expect(isPassingRevealEvidence(null)).toBe(false)
   })
 })

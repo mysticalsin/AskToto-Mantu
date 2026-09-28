@@ -2,7 +2,7 @@ import { reviewedGatewayReply } from './ai-gateway.privacy-fixture'
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { FORBIDDEN_VAULT_PROVIDERS } from './vault'
 
@@ -12,25 +12,26 @@ function env(): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 describe('admin keys write / rotate / revoke', () => {
   it('adds a key, returns last4 only, and never echoes the secret', async () => {
     const store = memoryStore()
-    const secret = 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-xx99'
+    const secret = syntheticProviderKey('anthropic', 'xx99')
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'anthropic', label: 'Example cloud', secret })
+        body: JSON.stringify({ provider: 'anthropic', label: 'Primary cloud', secret })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -44,7 +45,7 @@ describe('admin keys write / rotate / revoke', () => {
     const list = await handleRequest(
       new Request('https://operator.test/v1/admin/keys'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await list.json()) as {
@@ -62,7 +63,7 @@ describe('admin keys write / rotate / revoke', () => {
     const home = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(home.status).toBe(200)
@@ -93,7 +94,7 @@ describe('admin keys write / rotate / revoke', () => {
   it('accepts provider=cloudflare with accountId and shows last4 only', async () => {
     const store = memoryStore()
     const secret = 'cf-api-token-TESTKEYONLY-not-a-real-secret-66fd'
-    const accountId = '294885a27b3cc0a1cbe5d0ccbe38de4f'
+    const accountId = '00000000000000000000000000000000'
     const missing = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', {
         method: 'POST',
@@ -101,7 +102,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(missing.status).toBe(400)
@@ -114,7 +115,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret, accountId })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch: async () => reviewedGatewayReply() }
     )
     expect(res.status).toBe(200)
@@ -129,7 +130,7 @@ describe('admin keys write / rotate / revoke', () => {
     const list = await handleRequest(
       new Request('https://operator.test/v1/admin/keys'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const body = (await list.json()) as { vault: { provider: string; last4: string; status: string }[] }
@@ -142,7 +143,7 @@ describe('admin keys write / rotate / revoke', () => {
     const home = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const html = await home.text()
@@ -154,7 +155,7 @@ describe('admin keys write / rotate / revoke', () => {
   it('paste provider=cloudflare + accountId calls verifyDefaultGatewayPrivacy before Ask can run', async () => {
     const store = memoryStore()
     const secret = 'cf-api-token-TESTKEYONLY-not-a-real-secret-66fd'
-    const accountId = '294885a27b3cc0a1cbe5d0ccbe38de4f'
+    const accountId = '00000000000000000000000000000000'
     const gatewayReads: { url: string; method?: string; auth?: string; body?: string }[] = []
     const cfFetch: typeof fetch = async (input, init) => {
       const url = String(input)
@@ -178,7 +179,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret, accountId })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch }
     )
     expect(res.status).toBe(200)
@@ -212,7 +213,7 @@ describe('admin keys write / rotate / revoke', () => {
         })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch }
     )
     expect(res.status).toBe(503)
@@ -230,7 +231,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret, accountId: 'acct-test' })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch: async () => reviewedGatewayReply() }
     )
     expect(added.status).toBe(200)
@@ -244,7 +245,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ secret: 'cf-api-token-TESTKEYONLY-not-a-real-secret-99zz' })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch }
     )
     expect(res.status).toBe(503)
@@ -263,12 +264,12 @@ describe('admin keys write / rotate / revoke', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           provider: 'anthropic',
-          label: 'Example cloud',
-          secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-xx99'
+          label: 'Primary cloud',
+          secret: syntheticProviderKey('anthropic', 'xx99')
         })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch: cfFetch as typeof fetch }
     )
     expect(res.status).toBe(200)
@@ -284,7 +285,7 @@ describe('admin keys write / rotate / revoke', () => {
           body: JSON.stringify({ provider, secret: 'not-a-cli-token' })
         }),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW }
       )
       expect(res.status, provider).toBe(400)
@@ -301,7 +302,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ provider: 'openai', secret: 'sk-proj-oldkey-abcd' })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const id = ((await created.json()) as { id: string }).id
@@ -312,7 +313,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({ secret: 'sk-proj-newkey-wxyz' })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW + 1 }
     )
     const rot = (await rotated.json()) as { last4: string; secret?: string }
@@ -354,7 +355,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: '{}'
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW + 2 }
     )
     expect(approved.status).toBe(200)
@@ -388,7 +389,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: '{}'
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW + 3 }
     )
     expect(((await revoked.json()) as { status: string }).status).toBe('revoked')
@@ -404,19 +405,19 @@ describe('admin keys write / rotate / revoke', () => {
     const home = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(home.status).toBe(200)
     const setCookie = home.headers.get('set-cookie') || ''
     expect(setCookie).toContain('metis_operator_session=')
-    expect(setCookie).toContain('admin%40example.com')
+    expect(setCookie).toContain('owner%40example.test')
     expect(setCookie).toMatch(/HttpOnly/)
     expect(setCookie).toMatch(/SameSite=Lax/)
     const sessionPair = setCookie.split(';')[0]
     const token = home.headers.get('X-Metis-Session') || ''
     expect(token).toMatch(/^v1\|/)
-    expect(token).toContain('admin@example.com')
+    expect(token).toContain('owner@example.test')
     const html = await home.text()
     expect(html).not.toContain('name="metis-session"')
     expect(html).not.toContain(token)
@@ -424,7 +425,7 @@ describe('admin keys write / rotate / revoke', () => {
     const who = await handleRequest(
       new Request('https://operator.test/session'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(who.status).toBe(200)
@@ -440,7 +441,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({
           provider: 'anthropic',
           label: 'qa-walk',
-          secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-zz42'
+          secret: syntheticProviderKey('anthropic', 'zz42')
         })
       }),
       env(),
@@ -460,7 +461,7 @@ describe('admin keys write / rotate / revoke', () => {
         body: JSON.stringify({
           provider: 'anthropic',
           label: 'qa-walk-bearer',
-          secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-aa77'
+          secret: syntheticProviderKey('anthropic', 'aa77')
         })
       }),
       env(),
@@ -475,9 +476,9 @@ describe('admin keys write / rotate / revoke', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          cookie: 'metis_operator_session=v1|9999999999999|admin@example.com|deadbeef'
+          cookie: 'metis_operator_session=v1|9999999999999|owner@example.test|deadbeef'
         },
-        body: JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-api03-TESTKEYONLY-nope' })
+        body: JSON.stringify({ provider: 'anthropic', secret: syntheticProviderKey('anthropic', 'nope') })
       }),
       env(),
       {},
@@ -487,12 +488,12 @@ describe('admin keys write / rotate / revoke', () => {
     expect(await forged.json()).toEqual({ ok: false, error: 'Access required' })
   })
 
-  it('requires Example identity and never serves keys to a stranger', async () => {
+  it('requires owner identity and never serves keys to a stranger', async () => {
     const denied = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-nope' })
+        body: JSON.stringify({ provider: 'anthropic', secret: syntheticProviderKey('anthropic', 'nope') })
       }),
       env(),
       {},
@@ -503,10 +504,10 @@ describe('admin keys write / rotate / revoke', () => {
       new Request('https://operator.test/v1/admin/keys', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-nope' })
+        body: JSON.stringify({ provider: 'anthropic', secret: syntheticProviderKey('anthropic', 'nope') })
       }),
       env(),
-      { access: { getIdentity: async () => ({ email: 'other@example.com' }) } },
+      { access: { getIdentity: async () => ({ email: 'other@example.test' }) } },
       { store: memoryStore(), now: NOW }
     )
     expect(other.status).toBe(401)

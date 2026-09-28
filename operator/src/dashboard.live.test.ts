@@ -17,7 +17,7 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
     lon: -73.5,
     last_index_at: null,
     hostname: 'Example-MacBook-Pro',
-    sso_email: 'ops@example.com',
+    sso_email: 'admin@example.test',
     license: 'licensed',
     approval: 'approved',
     ...overrides
@@ -100,7 +100,7 @@ describe('DashboardPayload.questions', () => {
     await store.insertAsk(ask({ id: 'a3', mode: 'interview', question_type: 'behavioral' }))
     await store.insertAsk(ask({ id: 'a4', mode: 'interview', question_type: null }))
 
-    const dash = await buildDashboard(store, 'admin@example.com', NOW)
+    const dash = await buildDashboard(store, 'owner@example.test', NOW)
     expect(dash.questions.mix.total).toBe(4)
     expect(dash.questions.mix.classified).toBe(3)
     expect(dash.questions.coverage).toBeCloseTo(0.75)
@@ -112,7 +112,7 @@ describe('DashboardPayload.questions', () => {
   })
 
   it('reports zero/null honestly when no asks carry a type', async () => {
-    const dash = await buildDashboard(memoryStore(), 'admin@example.com', NOW)
+    const dash = await buildDashboard(memoryStore(), 'owner@example.test', NOW)
     expect(dash.questions.mix.total).toBe(0)
     expect(dash.questions.mix.coverage).toBeNull()
     expect(dash.questions.byMode).toEqual([])

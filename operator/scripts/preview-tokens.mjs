@@ -123,7 +123,7 @@ function extractLightTokens(css) {
  * token, otherwise the light value (plan 3.2: "dark redefines only tokens"). Without this, the
  * dark preview's swatches would render correctly (the browser resolves var() against the page's
  * own data-theme) while the printed hex text next to them stayed the light value -- a real,
- * user-visible mismatch on the exact page meant to let Tony verify tokens.
+ * user-visible mismatch on the exact page meant to let the owner verify tokens.
  */
 function extractDarkTokens(css) {
   const rootMatch = css.match(/:root\s*\{([\s\S]*?)\n\}/)
@@ -224,7 +224,7 @@ const PREVIEW_CSS = `
 `
 
 /**
- * Real markup from the four plan 3.5c / 3.6 / 6.10b primitives, so Tony sees exactly what
+ * Real markup from the four plan 3.5c / 3.6 / 6.10b primitives, so the owner sees exactly what
  * countryCell()/flagStrip(), connectorRow()/connectorGroup(), dataTable({variant:'card'}) and
  * alertBadge() render rather than a hand-typed stand-in that could drift from the real functions.
  */

@@ -6,21 +6,22 @@ import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operato
 import { verifyOperatorLicense } from '../../src/shared/operator-license'
 import { buildDashboard } from './dashboard'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
-const SECRET = 'sk-ant-api03-OPERATOR-VAULT-TEST-only-xx99'
+const SECRET = syntheticProviderKey('anthropic')
 
 function env(): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY
   }
 }
 
-const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 async function signed(
   path: string,
@@ -53,7 +54,7 @@ async function signed(
 let store = memoryStore()
 
 describe('Operator generate license', () => {
-  it('mints a token Example can paste, stores last4 only, and 401s without Access', async () => {
+  it('mints a token the owner can paste, stores last4 only, and 401s without Access', async () => {
     store = memoryStore()
     const unauth = await handleRequest(
       new Request('https://operator.test/v1/admin/licenses/generate', {
@@ -74,7 +75,7 @@ describe('Operator generate license', () => {
         body: JSON.stringify({ days: 30 })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(res.status).toBe(200)
@@ -102,7 +103,7 @@ describe('Operator generate license', () => {
         body: JSON.stringify({ days: 999 })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(badDays.status).toBe(400)
@@ -117,7 +118,7 @@ describe('Operator generate license', () => {
         body: JSON.stringify({ provider: 'anthropic', secret: SECRET })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const minted = await handleRequest(
@@ -127,7 +128,7 @@ describe('Operator generate license', () => {
         body: JSON.stringify({ days: 7 })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const lic = (await minted.json()) as { jti: string; last4: string; exp: number }
@@ -223,7 +224,7 @@ describe('Operator generate license', () => {
         body: JSON.stringify({ days: 7 })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const lic = (await minted.json()) as { jti: string; last4: string }
@@ -255,7 +256,7 @@ describe('Operator generate license', () => {
     expect(wipe.status).toBe(200)
     expect((await store.getSeat('baa2dc6edd670a9894ed402b5a9b9246'))?.license).toBe(`licensed · ${lic.last4}`)
 
-    const dash = await buildDashboard(store, 'admin@example.com', NOW)
+    const dash = await buildDashboard(store, 'owner@example.test', NOW)
     const row = dash.licenses.rows.find((r) => r.device === 'baa2dc6edd670a9894ed402b5a9b9246')
     expect(row?.hostname).toBe('Totos-Mac.local')
     expect(row?.license).toBe(`licensed · ${lic.last4}`)

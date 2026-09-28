@@ -2,15 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { CF_TOKEN_MISSING, CF_TOKEN_REJECTED } from './cloudflare'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
-const tony = { getIdentity: async () => ({ email: 'admin@example.com' }) }
+const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
 function env(): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
     OPERATOR_VAULT_KEY: TEST_VAULT_KEY
   }
@@ -22,7 +23,7 @@ describe('Cloudflare Overview fail-loud', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     ).then((r) => r.text())
     expect(html).toContain('data-cf-overview')
@@ -35,7 +36,7 @@ describe('Cloudflare Overview fail-loud', () => {
       await handleRequest(
         new Request('https://operator.test/v1/admin/dashboard'),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW }
       )
     ).json()) as { cloudflare: { error: string | null; requests: number | null; token?: string } }
@@ -45,7 +46,7 @@ describe('Cloudflare Overview fail-loud', () => {
     expect(JSON.stringify(dash)).not.toMatch(/\"token\"|cf-token|Bearer /)
   })
 
-  it('pulls token-free Worker/D1/analytics after Example connects Cloudflare', async () => {
+  it('pulls token-free Worker/D1/analytics after an admin connects Cloudflare', async () => {
     const store = memoryStore()
     const token = 'cf-acct-token-not-real-zzzz'
     const added = await handleRequest(
@@ -54,12 +55,12 @@ describe('Cloudflare Overview fail-loud', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           provider: 'cloudflare-account',
-          accountId: '294885a27b3cc0a1cbe5d0ccbe38de4f',
+          accountId: '00000000000000000000000000000000',
           token
         })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     expect(((await added.json()) as { last4: string }).last4).toBe('zzzz')
@@ -94,7 +95,7 @@ describe('Cloudflare Overview fail-loud', () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch: cfFetch as typeof fetch }
     ).then((r) => r.text())
     expect(html).toContain('metis-operator')
@@ -105,7 +106,7 @@ describe('Cloudflare Overview fail-loud', () => {
       await handleRequest(
         new Request('https://operator.test/v1/admin/dashboard'),
         env(),
-        { access: tony },
+        { access: ownerAccess },
         { store, now: NOW, cfFetch: cfFetch as typeof fetch }
       )
     ).json()) as { cloudflare: { requests: number; errors: number; cpuMs: number; error: string | null } }
@@ -121,19 +122,19 @@ describe('Cloudflare Overview fail-loud', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           provider: 'cloudflare-account',
-          accountId: '294885a27b3cc0a1cbe5d0ccbe38de4f',
+          accountId: '00000000000000000000000000000000',
           token: 'dead-token-aaaa'
         })
       }),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW }
     )
     const cfFetch = async () => ({ status: 403, json: async () => ({ success: false }) })
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
-      { access: tony },
+      { access: ownerAccess },
       { store, now: NOW, cfFetch: cfFetch as typeof fetch }
     ).then((r) => r.text())
     expect(html).toContain(CF_TOKEN_REJECTED)

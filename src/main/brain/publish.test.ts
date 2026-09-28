@@ -468,7 +468,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
               date: '2026-02-01',
               status: 'open',
               confidence: 'EXTRACTED',
-              quote: 'send the revised pricing',
+              quote: 'stated aloud',
               due_hint: ''
             }
           ]
@@ -695,7 +695,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
               date: '2026-02-01',
               status: 'open',
               confidence: 'EXTRACTED',
-              quote: 'drop the floor price to 40k',
+              quote: 'stated aloud',
               due_hint: ''
             }
           ]

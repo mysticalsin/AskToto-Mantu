@@ -242,8 +242,8 @@ describe('start() integration — real binary + real Qwen3.5-0.8B model', () => 
   // This test SPAWNS the binary, so it needs the slice this process can actually execute — the
   // universal package's other arch is present on disk but would fail with an exec-format error.
   const macBinary = join(REPO_ROOT, 'resources', 'llama', 'mac', process.arch, 'llama-server')
-  const gguf = 'fixtures/local-model/Qwen3.5-0.8B-UD-Q4_K_XL.gguf'
-  const mmproj = 'fixtures/local-model/mmproj-F16.gguf'
+  const gguf = '/Users/example-owner/local-models/llama-spike/Qwen3.5-0.8B-UD-Q4_K_XL.gguf'
+  const mmproj = '/Users/example-owner/local-models/llama-spike/mmproj-F16.gguf'
 
   const missing: string[] = []
   if (!existsSync(macBinary)) missing.push(`mac binary (${macBinary})`)

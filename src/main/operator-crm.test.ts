@@ -16,7 +16,7 @@ describe('shouldIngestCrm', () => {
 
 describe('meetingFileHash', () => {
   it('hashes the basename only, never a path', () => {
-    const a = meetingFileHash('/home/example/Meetings/Acme.md')
+    const a = meetingFileHash('/Users/example-owner/Meetings/Acme.md')
     const b = meetingFileHash('C:\\\\Meetings\\\\Acme.md')
     const c = meetingFileHash('Acme.md')
     expect(a).toBe(c)

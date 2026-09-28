@@ -266,7 +266,7 @@ describe('brain ingest — local last-resort index fallback', () => {
         'mac-meeting.md': {
           at: 1,
           ok: false,
-          error: 'EACCES: permission denied, open /home/example/Documents/meetings/mac-meeting.md'
+          error: 'EACCES: permission denied, open /Users/example-owner/Documents/meetings/mac-meeting.md'
         },
         'fine.md': { at: 3, ok: true }
       }
@@ -276,7 +276,7 @@ describe('brain ingest — local last-resort index fallback', () => {
     expect(details[0].error).not.toContain('Example')
     expect(details[0].error).toContain('ENOENT')
     expect(details[0].error).toContain('bad-meeting.md') // basename survives — still actionable
-    expect(details[1].error).not.toContain('/home/example')
+    expect(details[1].error).not.toContain('/Users/example-owner')
     expect(details[1].error).toContain('mac-meeting.md')
   })
 
