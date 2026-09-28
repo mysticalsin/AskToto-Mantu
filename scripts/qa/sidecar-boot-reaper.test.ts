@@ -3,6 +3,7 @@ import {
   combinedReport,
   hasAtLeastEvent,
   observedReapedOrphan,
+  parseMacHelperProcInfo,
   parseSidecarRegistry,
   registryHasSpawnedPid,
   summarizeProof
@@ -81,5 +82,31 @@ describe('sidecar boot reaper proof helpers', () => {
 
     expect(realLlama.timingsMs).toMatchObject({ sidecarStarted: 2, llamaStarted: 2 })
     expect(realLlama.pids).toMatchObject({ sidecar: 11, orphan: 11 })
+  })
+
+  it('preserves a stand-in argv element containing spaces exactly, the way KERN_PROCARGS2 does but a re-split ps command column cannot', () => {
+    const stdout = `${JSON.stringify({
+      pid: 4242,
+      ppid: 1,
+      pgid: 4242,
+      osStartTime: '2026-01-01T00:00:00.000Z',
+      exeRealpath: '/usr/local/bin/node',
+      args: ['/usr/local/bin/node', '-e', 'setInterval(() => {}, 1000)']
+    })}\n`
+
+    const identity = parseMacHelperProcInfo(stdout)
+    if (!identity) throw new Error('expected a parsed identity')
+
+    expect(identity).toMatchObject({ pid: 4242, ppid: 1, pgid: 4242, exeRealpath: '/usr/local/bin/node' })
+    expect(identity.args).toEqual(['/usr/local/bin/node', '-e', 'setInterval(() => {}, 1000)'])
+  })
+
+  it('rejects proc-info output that is not JSON or is missing a required identity field', () => {
+    expect(parseMacHelperProcInfo('')).toBeNull()
+    expect(parseMacHelperProcInfo('not json')).toBeNull()
+    expect(parseMacHelperProcInfo(JSON.stringify({ pid: 4242, osStartTime: '2026-01-01T00:00:00.000Z' }))).toBeNull()
+    expect(
+      parseMacHelperProcInfo(JSON.stringify({ pid: 4242, osStartTime: '2026-01-01T00:00:00.000Z', exeRealpath: '/bin/x', args: 'not-an-array' }))
+    ).toBeNull()
   })
 })

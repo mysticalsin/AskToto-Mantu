@@ -185,7 +185,7 @@ import {
   type SpeakerId,
   type SpeakerLabel
 } from './speaker-id'
-import { releaseSpeakerEmbedding } from './speaker-embedding-client'
+import { releaseSpeakerEmbedding, killSpeakerEmbeddingHostForQuit } from './speaker-embedding-client'
 import {
   clampAxis,
   clampAxisMargin,
@@ -667,7 +667,8 @@ import {
   ensureParakeetModel,
   parakeetTranscribe,
   parakeetRelease,
-  parakeetAddonError
+  parakeetAddonError,
+  killParakeetHostForQuit
 } from './parakeet'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
@@ -4409,13 +4410,17 @@ const shortcutActions: Record<string, () => void> = {
 const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command+Control+Escape'
 
 // Every child process this app spawns that the OS does not end with it, in teardown order: the producers of
-// local-model work (screen pre-analysis, which owns the foreground watcher, and import decodes) before the
-// runtimes they feed. utilityProcess hosts (Parakeet, Whisper, speaker embedding) are not here: Electron ends
-// them on quit and exit alike (ADR-003), and the packaged census checks it.
+// local-model work (screen pre-analysis, which owns the foreground watcher, import decodes, and the ASR/
+// speaker-embedding utilityProcess hosts they use) before the runtimes they feed. The packaged smoke
+// (M2-0231) caught these utilityProcess hosts surviving quit on Windows, so each gets its own explicit,
+// signal-only kill here rather than trusting Electron to end them on its own.
 const stopAllSidecars = createStopAll(
   [
     { name: 'screen-preprocess', stop: () => screenPreprocess.stop() },
     { name: 'import-decoders', stop: () => ffmpegDecoders.forEach((decoder) => decoder.cancel()) },
+    { name: 'whisper-import-host', stop: () => void stopWhisperHost().catch(() => undefined) },
+    { name: 'parakeet-host', stop: () => killParakeetHostForQuit() },
+    { name: 'speaker-embedding-host', stop: () => killSpeakerEmbeddingHostForQuit() },
     { name: 'local-runtime', stop: () => localRuntime.stop() },
     { name: 'fm-runtime', stop: () => fmRuntime.stop() }
   ],

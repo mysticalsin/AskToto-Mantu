@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   LIFECYCLE_EVENTS,
+  buildWindowsShortcutLauncher,
   childPidReserved,
   computeCleanupTargets,
   isOverlayUrl,
@@ -15,6 +16,7 @@ import {
   initialRvRows,
   initialNavigationGuardRows,
   runRevealRow,
+  seedOnboardedProfile,
   smokeReport,
   smokeVerdict
 } from './packaged-smoke.mjs'
@@ -473,6 +475,52 @@ describe('initialNavigationGuardRows', () => {
     expect(rows.some((row) => row.state === 'dirty')).toBe(true)
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
+  })
+})
+
+describe('seedOnboardedProfile', () => {
+  it('writes a plain-JSON settings.json that skips onboarding and keeps a hover-parkable overlay layout', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'metis-smoke-test-'))
+    try {
+      seedOnboardedProfile(profile)
+      const settings = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'))
+
+      expect(settings.onboardingDone).toBe(true)
+      expect(typeof settings.onboardingDoneAt).toBe('number')
+      expect(settings.overlayLayout).toBe('hide')
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('buildWindowsShortcutLauncher', () => {
+  it('points the .lnk at a launcher that carries the isolated ASKTOTO_USERDATA and reopen probe into Metis.exe', () => {
+    const built = buildWindowsShortcutLauncher({
+      auditLogDir: 'C:\\Users\\runner\\AppData\\Local\\Temp\\metis-smoke-xyz\\logs',
+      executable: 'C:\\Program Files\\Metis\\Metis.exe',
+      userData: 'C:\\Users\\runner\\AppData\\Local\\Temp\\metis-smoke-xyz',
+      reopenProbe: '1'
+    })
+
+    expect(built.shortcutPath.replace(/\\/g, '/')).toMatch(/Metis-smoke\.lnk$/)
+    expect(built.launcherPath.replace(/\\/g, '/')).toMatch(/Metis-smoke-launch\.cmd$/)
+    expect(built.launcherBody).toContain('set "ASKTOTO_USERDATA=C:\\Users\\runner\\AppData\\Local\\Temp\\metis-smoke-xyz"')
+    expect(built.launcherBody).toContain('set "ASKTOTO_SMOKE_REOPEN_PROBE=1"')
+    expect(built.launcherBody).toContain(`start "" ${JSON.stringify('C:\\Program Files\\Metis\\Metis.exe')}`)
+    expect(built.shortcutScript).toContain('CreateShortcut')
+    expect(built.shortcutScript).toContain('Metis-smoke-launch.cmd')
+    expect(built.shortcutScript).toContain('WorkingDirectory')
+  })
+
+  it('refuses to build a launcher without ASKTOTO_USERDATA, rather than silently dropping the isolated profile', () => {
+    expect(() =>
+      buildWindowsShortcutLauncher({
+        auditLogDir: 'C:\\tmp\\logs',
+        executable: 'C:\\Metis\\Metis.exe',
+        userData: ''
+      })
+    ).toThrow(/ASKTOTO_USERDATA/)
   })
 })
 
