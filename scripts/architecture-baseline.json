@@ -136,7 +136,7 @@
     "intelligence/src/lib/dashboard-state.contract.test.ts": 8,
     "intelligence/src/lib/intelligence-update.contract.test.ts": 2,
     "intelligence/src/lib/intelligence-update.test.ts": 2,
-    "scripts/check-architecture.test.ts": 113,
+    "scripts/check-architecture.test.ts": 114,
     "scripts/check-test-types.test.ts": 4,
     "scripts/ci-secret-scan.contract.test.ts": 1,
     "scripts/ci/packaged-smoke-workflow.contract.test.ts": 2,
