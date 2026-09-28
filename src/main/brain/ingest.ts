@@ -2233,6 +2233,7 @@ async function performRebuildReplay(s: Settings): Promise<void> {
   // so a retry regenerates ALL entity pages rather than mistakenly publishing only index pages.
   await trackedPublication(() => publishAll(s))
   const sourceRefreshStillNeeded = await hasMeetingSourceDrift(s, await readIndexAsync(s))
+  let sourceRefreshPending = true
   await updateIndex(s, (i) => {
     i.replayPending = false
     i.replayError = undefined
@@ -2241,7 +2242,16 @@ async function performRebuildReplay(s: Settings): Promise<void> {
     // legitimately contain synthetic/legacy index entries without a source file; periodic source scans
     // still discover real drift, but must not turn that replay into an unrelated purge.
     if (i.sourceRefreshRequested) i.sourceRefreshRequested = sourceRefreshStillNeeded
+    sourceRefreshPending = i.sourceRefreshRequested
   })
+  // A refresh whose own rebuild failed before registering its onFinished (so sourceRefreshWorkKeys/
+  // sourceRefreshScanRetryKeys were never cleared) can still be completed here by an unrelated replay.
+  // Those in-memory claims must live exactly as long as the durable marker they were claimed for, or a
+  // stale key leaks into every later run's completion total.
+  if (!sourceRefreshPending) {
+    sourceRefreshWorkKeys = new Set()
+    sourceRefreshScanRetryKeys = new Set()
+  }
   queueMicrotask(maybeStartSourceRefresh)
 }
 
