@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSyn
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
-import { storageAt } from '../infra/storage/meetings-storage'
+import { storageAtRoot } from '../infra/storage/meetings-storage'
 import {
   BRAIN_SCHEMA_VERSION,
   PersonEntitySchema,
@@ -98,7 +98,7 @@ export function isJournalCorruptionBlocked(s: Settings): boolean {
 /** isJournalCorruptionBlocked through the storage gateway, for the polled brain:status. */
 export async function journalCorruptionBlocked(s: Settings): Promise<boolean> {
   const rel = join('.brain', CORRUPTION_LOCK_REL)
-  const fileClass = (await storageAt(resolveMeetingsFolder(s)).classify([rel])).get(rel)
+  const fileClass = (await storageAtRoot(() => resolveMeetingsFolder(s)).classify([rel])).get(rel)
   return fileClass !== undefined && 'version' in fileClass
 }
 

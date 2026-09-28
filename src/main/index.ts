@@ -558,27 +558,19 @@ import {
   isIntelligenceSender,
   syncIntelContentProtection
 } from './intelligence'
-import {
-  readIndex as readBrainIndex,
-  loadIndex
-} from './brain/ledger'
+import { loadIndex } from './brain/ledger'
 import { readBrainStatus } from './brain/status'
+import { readBrainDashboard, readBrainEntityNames } from './brain/dashboard-read'
 import {
-  loadGraph as loadBrainGraph,
   writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
-  loadPerson as loadBrainPerson,
   writePerson as writeBrainPerson,
   readAccount as readBrainAccount,
-  loadAccount as loadBrainAccount,
   writeAccount as writeBrainAccount,
   readDeal as readBrainDeal,
-  loadDeal as loadBrainDeal,
   writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
-  loadEntitySlugs as loadBrainEntitySlugs,
   loadMeetingExtraction as loadBrainMeetingExtraction,
-  loadMeetingExtractionSlugs as loadBrainMeetingExtractionSlugs,
   purgeBrain,
   listPreservedBrainIndexes,
   currentBrainIndexIsReadable,
@@ -728,7 +720,7 @@ import {
   decryptBytesToTemp,
   sweepStaleTempFiles
 } from './transcripts'
-import { storageAt } from './infra/storage/meetings-storage'
+import { storageAtRoot } from './infra/storage/meetings-storage'
 import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
 import {
@@ -6226,9 +6218,7 @@ function registerIpc(): void {
       return { ok: false, error: 'Not a saved meeting file.' }
     }
     try {
-      const folder = resolveMeetingsFolder(getSettings())
-      const source = join(folder, safeName)
-      const read = await storageAt(folder).read(safeName)
+      const read = await storageAtRoot(() => resolveMeetingsFolder(getSettings())).read(safeName)
       if (read.status !== 'ok') return { ok: false, error: 'Could not read the meeting file.' }
       const text = decodeSaved(read.bytes) // decodes the ATKENC2 envelope when the file is encrypted
       // decodeSaved returns '' (never throws) when the envelope can't be decrypted on this device —
@@ -8111,31 +8101,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.brainRead, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    const s = getSettings()
-    await loadIndex(s)
-    const index = readBrainIndex(s)
-    const [graph, personSlugs, accountSlugs, dealSlugs, meetingSlugs] = await Promise.all([
-      loadBrainGraph(s),
-      loadBrainEntitySlugs(s, 'person'),
-      loadBrainEntitySlugs(s, 'account'),
-      loadBrainEntitySlugs(s, 'deal'),
-      loadBrainMeetingExtractionSlugs(s)
-    ])
-    const [people, accounts, deals, meetings] = await Promise.all([
-      Promise.all(personSlugs.map((slug) => loadBrainPerson(s, slug))),
-      Promise.all(accountSlugs.map((slug) => loadBrainAccount(s, slug))),
-      Promise.all(dealSlugs.map((slug) => loadBrainDeal(s, slug))),
-      Promise.all(meetingSlugs.map((slug) => loadBrainMeetingExtraction(s, slug)))
-    ])
-    return {
-      index,
-      graph,
-      people: people.filter((person): person is NonNullable<typeof person> => !!person),
-      accounts: accounts.filter((account): account is NonNullable<typeof account> => !!account),
-      deals: deals.filter((deal): deal is NonNullable<typeof deal> => !!deal),
-      meetings: meetings
-        .filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
-    }
+    return readBrainDashboard(getSettings())
   })
   // Canonical people/account NAMES ONLY (never quotes, roles, deals, or any other entity field) — feeds
   // the renderer's ASR entity-casing bias (lib/entity-casing.ts) so a live transcript can spell a known
@@ -8144,18 +8110,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.brainEntityNames, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { names: [] }
-    const s = getSettings()
-    const [personSlugs, accountSlugs] = await Promise.all([
-      loadBrainEntitySlugs(s, 'person'),
-      loadBrainEntitySlugs(s, 'account')
-    ])
-    const [people, accounts] = await Promise.all([
-      Promise.all(personSlugs.map((slug) => loadBrainPerson(s, slug))),
-      Promise.all(accountSlugs.map((slug) => loadBrainAccount(s, slug)))
-    ])
-    const personNames = people.map((person) => person?.name).filter((n): n is string => !!n)
-    const accountNames = accounts.map((account) => account?.name).filter((n): n is string => !!n)
-    return { names: Array.from(new Set([...personNames, ...accountNames])).slice(0, 500) }
+    return readBrainEntityNames(getSettings())
   })
   // Deal outcome — the human closes the loop the LLM never may (see DealEntitySchema.outcome). Main-window
   // only: it's a brain WRITE, like brainCommitmentSettle. Same slug convention too: the renderer sends the
@@ -8638,15 +8593,14 @@ function registerIpc(): void {
   ipcMain.handle(IPC.recallOpen, async (e, file: string) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
-    const folder = resolveMeetingsFolder(getSettings())
     const safeName = safeMeetingBasename(file)
     // Only ever open Métis's own .md meeting transcripts. The meetings folder is user-chosen
     // (could be Desktop/Downloads), and shell.openPath launches the OS handler for whatever it finds,
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
     if (!safeName) return ''
-    const path = join(folder, safeName)
-    const read = await storageAt(folder).read(safeName)
+    const read = await storageAtRoot(() => resolveMeetingsFolder(getSettings())).read(safeName)
     if (read.status !== 'ok') return ''
+    const path = join(resolveMeetingsFolder(getSettings()), safeName)
     const encrypted = isEncryptedBytes(read.bytes)
     auditLog('recall.open', { encrypted })
     // Encrypted transcripts are unreadable in an editor — open a decrypted temp copy instead.

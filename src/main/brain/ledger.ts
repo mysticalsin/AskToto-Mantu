@@ -6,7 +6,7 @@ import type { Settings } from '@shared/ipc'
 import { BrainIndexSchema, type BrainIndex, type IndexUnavailableCause } from '@shared/brain'
 import { resolveMeetingsFolder } from '../transcripts'
 import { mainLog, auditLog } from '../logger'
-import { storageAt } from '../infra/storage/meetings-storage'
+import { storageAtRoot } from '../infra/storage/meetings-storage'
 import { brainDir, persistJson, readBrainFile, type ContentIdentity } from './store'
 import {
   BrainIndexUnavailableError,
@@ -85,7 +85,7 @@ function recordUnavailable(
  * `INDEX_AUTO_SNAPSHOT_CAP` on disk, counting only this scheme's own `index.corrupt-auto-` prefix.
  */
 async function setAsideCorruptIndex(s: Settings): Promise<ResolvedIndex> {
-  const listing = await storageAt(resolveMeetingsFolder(s)).list('.brain')
+  const listing = await storageAtRoot(() => resolveMeetingsFolder(s)).list('.brain')
   if (listing.status !== 'ok') return { kind: 'unavailable', cause: 'corrupt-kept', detail: listing.status }
   const kept = listing.names.filter((f) => f.startsWith(INDEX_AUTO_SNAPSHOT_PREFIX)).length
   if (kept >= INDEX_AUTO_SNAPSHOT_CAP) return { kind: 'unavailable', cause: 'corrupt-kept', detail: 'snapshot cap reached' }

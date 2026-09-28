@@ -18,7 +18,7 @@ import { access, cp as cpAsync, mkdir, readdir as readdirAsync, rename as rename
 import { join, basename } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import type { PreservedBrainIndexCopy, Settings } from '@shared/ipc'
-import { storageAt, classifyAll } from '../infra/storage/meetings-storage'
+import { storageAtRoot, classifyAll } from '../infra/storage/meetings-storage'
 import type { ContentVersion } from '../infra/storage/gateway'
 import { invalidateMatchKeyDir, resetMatchKeyCacheForTests } from './match-key-cache'
 import {
@@ -63,6 +63,10 @@ function errnoCode(e: unknown): string | undefined {
 
 export function brainDir(settings: Settings): string {
   return join(resolveMeetingsFolder(settings), '.brain')
+}
+
+function brainStorage(settings: Settings) {
+  return storageAtRoot(() => resolveMeetingsFolder(settings))
 }
 
 // Windows reserved device names — a path whose basename (before the first '.') case-insensitively
@@ -297,7 +301,7 @@ function failureCode(fileClass: { status: string; code?: string }): string {
  *  while that identity still matches, nothing is read and `held` comes back. A file whose bytes may not be
  *  local is never opened. */
 export async function readBrainFile<Held extends ContentIdentity>(s: Settings, rel: string, held?: Held): Promise<BrainFileRead<Held>> {
-  const gateway = storageAt(resolveMeetingsFolder(s))
+  const gateway = brainStorage(s)
   const path = join('.brain', rel)
   const fileClass = (await classifyAll(gateway, [path])).get(path) ?? { status: 'degraded' as const }
   if (fileClass.status === 'missing') return { status: 'missing' }
@@ -344,7 +348,7 @@ export function peekJson<T>(settings: Settings, rel: string): T | null | undefin
 /** Entry names of a directory under .brain through the gateway: [] when it does not exist, null when it
  *  could not be listed. */
 export async function listBrainNames(settings: Settings, relDir: string): Promise<string[] | null> {
-  const listing = await storageAt(resolveMeetingsFolder(settings)).list(join('.brain', relDir))
+  const listing = await brainStorage(settings).list(join('.brain', relDir))
   if (listing.status === 'ok') return listing.names
   return listing.status === 'missing' ? [] : null
 }
@@ -360,7 +364,7 @@ export async function persistJson(settings: Settings, rel: string, value: unknow
   // and relying on mtime alone risks a same-mtime rapid write-then-read on low-resolution filesystems.
   jsonCache.delete(p)
   _writeGen += 1
-  const noted = await storageAt(resolveMeetingsFolder(settings)).noteWritten(join('.brain', rel))
+  const noted = await brainStorage(settings).noteWritten(join('.brain', rel))
   return noted.status === 'ok' ? identityOf(noted.version) : null
 }
 
@@ -704,12 +708,12 @@ function isPreservedIndexName(name: string): boolean {
 }
 
 async function preservedIndexRestorable(settings: Settings, id: string): Promise<boolean> {
-  const read = await storageAt(resolveMeetingsFolder(settings)).read(join('.brain-preserved', id))
+  const read = await brainStorage(settings).read(join('.brain-preserved', id))
   return read.status === 'ok' && classifyIndexBytes(read.bytes).kind === 'ready'
 }
 
 export async function listPreservedBrainIndexes(settings: Settings): Promise<PreservedBrainIndexCopy[]> {
-  const gateway = storageAt(resolveMeetingsFolder(settings))
+  const gateway = brainStorage(settings)
   const listing = await gateway.list('.brain-preserved')
   if (listing.status !== 'ok') return []
   const ids = listing.names.filter(isPreservedIndexName)
@@ -755,7 +759,7 @@ export async function restorePreservedBrainIndex(
   } catch {
     return { ok: false, error: 'not-found' }
   }
-  const sourceRead = await storageAt(resolveMeetingsFolder(settings)).read(join('.brain-preserved', id))
+  const sourceRead = await brainStorage(settings).read(join('.brain-preserved', id))
   if (sourceRead.status !== 'ok') return { ok: false, error: 'not-found' }
   const sourceBytes = sourceRead.bytes
   if (classifyIndexBytes(sourceBytes).kind !== 'ready') return { ok: false, error: 'not-restorable' }
@@ -791,12 +795,12 @@ export async function deletePreservedBrainIndex(settings: Settings, id: string):
   } catch {
     return { ok: false, error: 'not-found' }
   }
-  const fileClass = (await storageAt(resolveMeetingsFolder(settings)).classify([join('.brain-preserved', id)])).get(join('.brain-preserved', id))
+  const fileClass = (await brainStorage(settings).classify([join('.brain-preserved', id)])).get(join('.brain-preserved', id))
   if (!fileClass || fileClass.status === 'missing') return { ok: false, error: 'not-found' }
   if (!('version' in fileClass)) return { ok: false, error: 'failed' }
   try {
     await rmAsync(path, { force: true })
-    const after = (await storageAt(resolveMeetingsFolder(settings)).classify([join('.brain-preserved', id)])).get(join('.brain-preserved', id))
+    const after = (await brainStorage(settings).classify([join('.brain-preserved', id)])).get(join('.brain-preserved', id))
     return !after || after.status === 'missing' ? { ok: true } : { ok: false, error: 'failed' }
   } catch {
     return { ok: false, error: 'failed' }
@@ -836,7 +840,7 @@ async function preserveUnreadableIndexBeforeRebuild(settings: Settings): Promise
     await writeFileAsync(preservePath, indexBytes, { flag: 'wx' })
     fsyncFilePath(preservePath)
     fsyncDirectoryIfSupported(preserveDir)
-    const gateway = storageAt(resolveMeetingsFolder(settings))
+    const gateway = brainStorage(settings)
     await gateway.noteWritten(join('.brain-preserved', basename(preservePath)))
     const preserved = await gateway.read(join('.brain-preserved', basename(preservePath)))
     if (preserved.status !== 'ok' || hashBytes(preserved.bytes) !== classifiedHash) {

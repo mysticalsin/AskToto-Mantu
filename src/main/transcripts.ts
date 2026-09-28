@@ -2,12 +2,10 @@ import { app, safeStorage } from 'electron'
 import {
   readdirSync,
   readFileSync,
-  existsSync,
   mkdirSync,
   writeFileSync,
   appendFileSync,
-  unlinkSync,
-  renameSync
+  unlinkSync
 } from 'node:fs'
 import { appendFile, writeFile, rename, unlink } from 'node:fs/promises'
 import { join, basename } from 'node:path'
@@ -56,10 +54,8 @@ function resolveEscrowPem(raw: string | null | undefined): string | null {
   if (!v) return null
   if (v.includes('-----BEGIN')) return v // inline PEM (env can hold newlines; managed-config a JSON string)
   try {
-    if (existsSync(v)) {
-      const f = readFileSync(v, 'utf8')
-      if (f.includes('-----BEGIN')) return f
-    }
+    const f = readFileSync(v, 'utf8')
+    if (f.includes('-----BEGIN')) return f
   } catch {
     /* not a readable path */
   }
@@ -245,24 +241,28 @@ function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?
     // Gating on useFileBackend() keeps the convergence for the macOS forced-keystore case it was written for
     // and makes it a no-op wherever safeStorage is the writer.
     if (canRecover && filePath && useFileBackend()) {
-      const tmp = `${filePath}.${randomBytes(6).toString('hex')}.tmp`
-      try {
-        const updated: EnvelopeV2 = { ...env, kLocal: 'F:' + encryptSecret(contentKeyB64).toString('base64') }
-        writeFileSync(tmp, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(updated), 'utf8')]), { mode: 0o600 })
-        renameSync(tmp, filePath)
-      } catch {
-        try {
-          if (existsSync(tmp)) unlinkSync(tmp) // don't leave an orphaned .tmp behind on a failed rewrap
-        } catch {
-          /* best-effort cleanup */
-        }
-      }
+      void rewrapEnvelopeWithFileKey(filePath, env, contentKeyB64)
     }
   }
   const contentKey = Buffer.from(contentKeyB64, 'base64')
   const decipher = createDecipheriv('aes-256-gcm', contentKey, Buffer.from(env.iv, 'base64'))
   decipher.setAuthTag(Buffer.from(env.tag, 'base64'))
   return Buffer.concat([decipher.update(Buffer.from(env.ct, 'base64')), decipher.final()]).toString('utf8')
+}
+
+async function rewrapEnvelopeWithFileKey(filePath: string, env: EnvelopeV2, contentKeyB64: string): Promise<void> {
+  const tmp = `${filePath}.${randomBytes(6).toString('hex')}.tmp`
+  try {
+    const updated: EnvelopeV2 = { ...env, kLocal: 'F:' + encryptSecret(contentKeyB64).toString('base64') }
+    await writeFile(tmp, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(updated), 'utf8')]), { mode: 0o600 })
+    await rename(tmp, filePath)
+  } catch {
+    try {
+      await unlink(tmp)
+    } catch {
+      /* best-effort cleanup */
+    }
+  }
 }
 
 // Shown in place of a transcript that can't be decrypted on this device (e.g. encrypted under a different
@@ -388,7 +388,7 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
     }
   } catch (e) {
     try {
-      if (existsSync(tmp)) await unlink(tmp) // don't leave an orphaned .tmp on failure
+      await unlink(tmp) // don't leave an orphaned .tmp on failure
     } catch {
       /* ignore */
     }
@@ -432,7 +432,7 @@ export function decryptBytesToTemp(path: string, bytes: Buffer): string {
     app.on('will-quit', () => {
       for (const t of decryptedTemps) {
         try {
-          if (existsSync(t)) unlinkSync(t)
+          unlinkSync(t)
         } catch {
           /* best-effort cleanup */
         }
@@ -497,13 +497,21 @@ const INDEX_HEADER = `# Métis Meetings — Index
 export function ensureMeetingsFolder(settings: Settings): string {
   const folder = resolveMeetingsFolder(settings)
   try {
-    if (!existsSync(folder)) mkdirSync(folder, { recursive: true })
-    const readme = join(folder, 'README.md')
-    if (!existsSync(readme)) writeFileSync(readme, README, 'utf8')
-    const index = join(folder, 'index.md')
-    if (!existsSync(index)) writeFileSync(index, INDEX_HEADER, 'utf8')
+    mkdirSync(folder, { recursive: true })
   } catch {
     /* fail-open: folder may be offline/unwritable */
+  }
+  try {
+    const readme = join(folder, 'README.md')
+    writeFileSync(readme, README, { encoding: 'utf8', flag: 'wx' })
+  } catch {
+    /* already exists or cannot be written */
+  }
+  try {
+    const index = join(folder, 'index.md')
+    writeFileSync(index, INDEX_HEADER, { encoding: 'utf8', flag: 'wx' })
+  } catch {
+    /* already exists or cannot be written */
   }
   return folder
 }

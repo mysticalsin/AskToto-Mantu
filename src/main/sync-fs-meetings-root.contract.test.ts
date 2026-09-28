@@ -78,7 +78,7 @@ type TargetFile = typeof FILES[number]
  * Only ever revise an entry DOWNWARD when that file is migrated further; never raise it.
  */
 const BASELINE: Record<TargetFile, number> = {
-  'transcripts.ts': 12,
+  'transcripts.ts': 11,
   'brain/ledger.ts': 0,
   'brain/ingest.ts': 0,
   'brain/inputs.ts': 0,
@@ -89,7 +89,7 @@ const BASELINE: Record<TargetFile, number> = {
   'brain/intelligence-pass.ts': 0,
   'brain/corrections.ts': 10,
   'brain/match-key-cache.ts': 4,
-  'brain/store.ts': 23,
+  'brain/store.ts': 16,
   'recall.ts': 0
 }
 
