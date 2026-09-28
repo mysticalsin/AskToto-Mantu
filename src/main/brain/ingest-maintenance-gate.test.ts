@@ -63,7 +63,8 @@ describe('M2-0033 maintenance gate for background ingest', () => {
   let scheduled: Array<{ run: () => void; ms: number }>
   let held: Array<() => void>
 
-  const startGate = (prior: 'clean' | 'unclean' | undefined = 'clean') => {
+  const startGate = (...args: [] | [prior: 'clean' | 'unclean' | undefined]) => {
+    const prior = args.length === 0 ? 'clean' : args[0]
     resetMaintenanceGateForTests()
     scheduled = []
     startMaintenanceGate({
@@ -71,7 +72,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
       interactiveActive: () => interactiveActive,
       schedule: (run: () => void, ms: number) => { scheduled.push({ run, ms }) }
     })
-    if (prior) settlePriorExit(prior)
+    if (prior !== undefined) settlePriorExit(prior)
   }
 
   const waitForIdle = async (): Promise<void> => {
