@@ -556,10 +556,12 @@ export function m2_0008BundleProblems(bundlePath) {
     'dataless-fixtures.json',
     'external-blockers.json',
     'fifo-fixtures.json',
+    'diagnostic-reports.json',
     'matrix.jsonl',
     'interrupt-results.jsonl',
     'launch-plan.json',
-    'M2-0008.records.README.md'
+    'M2-0008.records.README.md',
+    'M2-0008.lead-action.md'
   ]
 
   for (const file of requiredFiles) {
@@ -572,8 +574,10 @@ export function m2_0008BundleProblems(bundlePath) {
   const fifo = readJsonFile(join(root, 'fifo-fixtures.json'), problems, 'fifo-fixtures.json')
   const dataless = readJsonFile(join(root, 'dataless-fixtures.json'), problems, 'dataless-fixtures.json')
   const blockers = readJsonFile(join(root, 'external-blockers.json'), problems, 'external-blockers.json')
+  const diagnosticReports = readJsonFile(join(root, 'diagnostic-reports.json'), problems, 'diagnostic-reports.json')
   const rows = jsonlRows(join(root, 'matrix.jsonl'), problems, 'matrix.jsonl')
   const interrupts = jsonlRows(join(root, 'interrupt-results.jsonl'), problems, 'interrupt-results.jsonl')
+  const leadAction = readFileSync(join(root, 'M2-0008.lead-action.md'), 'utf8')
 
   if (environment?.ticket !== 'M2-0008') problems.push('environment.json: ticket must be M2-0008')
   if (typeof environment?.artifact_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(environment.artifact_sha256)) {
@@ -604,6 +608,13 @@ export function m2_0008BundleProblems(bundlePath) {
       }
     }
   }
+  if (typeof diagnosticReports?.consented !== 'boolean') {
+    problems.push('diagnostic-reports.json: consented must be recorded')
+  }
+  if (typeof diagnosticReports?.filter !== 'string' || !/Metis\/AskToto process names or sampled process ids only/.test(diagnosticReports.filter)) {
+    problems.push('diagnostic-reports.json: collection filter must be restricted to Metis/AskToto process names or sampled process ids')
+  }
+  if (!Array.isArray(diagnosticReports?.copied)) problems.push('diagnostic-reports.json: copied must be an array')
 
   const rowIds = new Set(rows.map((row) => row.row))
   for (const row of [
@@ -620,6 +631,17 @@ export function m2_0008BundleProblems(bundlePath) {
   const interruptIds = new Set(interrupts.map((row) => row.interrupt))
   for (const interrupt of ['network-off', 'file-provider-cancel', 'process-signal']) {
     if (!interruptIds.has(interrupt)) problems.push(`interrupt-results.jsonl: missing ${interrupt}`)
+  }
+
+  if (!leadAction.includes('LEAD_ACTION:')) problems.push('M2-0008.lead-action.md: missing LEAD_ACTION handoff')
+  if (!leadAction.includes('two M2-0008 owner-bug evidence records')) {
+    problems.push('M2-0008.lead-action.md: must hand off filing the two owner-bug evidence records')
+  }
+  if (!leadAction.includes('hypothesis ranking')) {
+    problems.push('M2-0008.lead-action.md: must hand off hypothesis ranking update')
+  }
+  if (!leadAction.includes('OBSERVED') || !leadAction.includes('DERIVED')) {
+    problems.push('M2-0008.lead-action.md: must require OBSERVED/DERIVED labels')
   }
 
   return problems

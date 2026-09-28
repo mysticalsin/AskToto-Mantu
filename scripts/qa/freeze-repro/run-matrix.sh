@@ -25,6 +25,7 @@ Options:
   --qa-host-label <label>      public QA host label for the evidence record (default: qa-mac-1)
   --implementer-model <id>     implementer model label for the evidence record
   --validator-model <id>       validator model label for the evidence record
+  --collect-diagnostic-reports explicit consent to collect matching Metis/AskToto .spin/.hang reports
   --dry-run                    create fixtures and reports without launching or sampling; if --app is provided,
                                record the app executable hash and NODE_OPTIONS fuse state
 USAGE
@@ -218,6 +219,7 @@ sample_app() {
     return
   fi
   local main_sampled=true
+  printf '%s\n' "$APP_PID" >> "$OUT/app-pids.txt"
   if ! sample_pid "$APP_PID" "$row-main"; then
     main_sampled=false
     SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
@@ -226,6 +228,7 @@ sample_app() {
   while IFS= read -r rp; do
     [[ -n "$rp" ]] || continue
     renderer_attempts=$((renderer_attempts + 1))
+    printf '%s\n' "$rp" >> "$OUT/app-pids.txt"
     if sample_pid "$rp" "$row-renderer-$rp"; then
       renderer_successes=$((renderer_successes + 1))
     else
@@ -247,14 +250,47 @@ EOF_LAUNCH
 
 copy_diagnostic_reports() {
   local stamp=$1
+  cat > "$OUT/diagnostic-reports.json" <<EOF_DIAG
+{"consented":$([[ "$COLLECT_DIAGNOSTIC_REPORTS" == 1 ]] && printf true || printf false),"source":"Library/Logs/DiagnosticReports","filter":"Metis/AskToto process names or sampled process ids only","copied":[]}
+EOF_DIAG
+  [[ "$COLLECT_DIAGNOSTIC_REPORTS" == 1 ]] || return 0
   local reports="$OUT/diagnostic-reports"
   mkdir -p "$reports"
   [[ -d /Library/Logs/DiagnosticReports ]] || return 0
+  local copied_json=""
   find /Library/Logs/DiagnosticReports -type f \( -name '*.spin' -o -name '*.hang' \) -newer "$stamp" -print 2>/dev/null |
     while IFS= read -r report; do
+      diagnostic_report_matches_app "$report" || continue
       local dest="$reports/$(basename "$report").txt"
-      redact_to_file "$report" "$dest" || true
+      if redact_to_file "$report" "$dest"; then
+        local item
+        item=$(json_string "diagnostic-reports/$(basename "$dest")")
+        [[ -z "$copied_json" ]] || copied_json+=","
+        copied_json+="$item"
+        printf '{"consented":true,"source":"Library/Logs/DiagnosticReports","filter":"Metis/AskToto process names or sampled process ids only","copied":[%s]}\n' "$copied_json" > "$OUT/diagnostic-reports.json"
+      fi
     done
+}
+
+diagnostic_report_matches_app() {
+  local report=$1
+  local name
+  name=$(basename "$report")
+  if [[ "$name" =~ (Metis|AskToto|asktoto) ]]; then
+    return 0
+  fi
+  if grep -E -m 1 '^(Process|Path|Identifier): .*([Mm]etis|AskToto|asktoto)' "$report" >/dev/null 2>&1; then
+    return 0
+  fi
+  [[ -s "$OUT/app-pids.txt" ]] || return 1
+  local pid
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if grep -E -m 1 "(^Process: .+\\[$pid\\]$|pid[[:space:]]*[:=][[:space:]]*$pid|PID[[:space:]]*[:=][[:space:]]*$pid)" "$report" >/dev/null 2>&1; then
+      return 0
+    fi
+  done < "$OUT/app-pids.txt"
+  return 1
 }
 
 record_fuse_state() {
@@ -508,6 +544,12 @@ Use those content-free files to file the controlled program evidence records aft
 EOF_RECORDS
 }
 
+write_lead_action() {
+  cat > "$OUT/M2-0008.lead-action.md" <<'EOF_LEAD_ACTION'
+LEAD_ACTION: Import this public bundle into the controlled program evidence chain: file the two M2-0008 owner-bug evidence records from owner-bug-records.json and M2-0008.evidence-import.json, then update the M2-0008 hypothesis ranking from matrix.jsonl, interrupt-results.jsonl, fifo-fixtures.json, dataless-fixtures.json, and node-options-fuse.json using OBSERVED for directly measured rows and DERIVED for rankings inferred from those measurements.
+EOF_LEAD_ACTION
+}
+
 live_result() {
   [[ "$DRY_RUN" == 1 ]] && {
     printf 'PASS'
@@ -549,6 +591,7 @@ VALIDATOR_SESSION_ID=""
 IMPLEMENTER_MODEL="claude-sonnet-4-6"
 VALIDATOR_MODEL="claude-opus-4-6"
 QA_HOST_LABEL="qa-mac-1"
+COLLECT_DIAGNOSTIC_REPORTS=0
 SAMPLE_FAILURES=0
 MATRIX_RESULT_FAILURES=0
 INTERRUPT_RESULT_FAILURES=0
@@ -569,6 +612,7 @@ while [[ $# -gt 0 ]]; do
     --implementer-model) IMPLEMENTER_MODEL=${2:-}; shift 2 ;;
     --validator-model) VALIDATOR_MODEL=${2:-}; shift 2 ;;
     --qa-host-label) QA_HOST_LABEL=${2:-}; shift 2 ;;
+    --collect-diagnostic-reports) COLLECT_DIAGNOSTIC_REPORTS=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --qa-account) QA_ACCOUNT=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -601,6 +645,7 @@ SAMPLE_DIR="$OUT/samples"
 mkdir -p "$SAMPLE_DIR"
 : > "$OUT/matrix.jsonl"
 : > "$OUT/interrupt-results.jsonl"
+: > "$OUT/app-pids.txt"
 STAMP="$OUT/run-start.stamp"
 : > "$STAMP"
 
@@ -695,6 +740,7 @@ write_fixture_manifest
 copy_diagnostic_reports "$STAMP"
 RESULT=$(live_result)
 write_evidence_records "$RESULT"
+write_lead_action
 
 cat > "$OUT/README.md" <<EOF_README
 # M2-0008 Freeze Repro Bundle
@@ -708,8 +754,10 @@ cat > "$OUT/README.md" <<EOF_README
 - Hosted/QA account blockers: \`external-blockers.json\`
 - Main/renderer samples: \`samples/\`
 - DiagnosticReports .spin/.hang copies, if any: \`diagnostic-reports/\`
+- DiagnosticReports consent/filter manifest: \`diagnostic-reports.json\`
 - Evidence import manifest: \`M2-0008.evidence-import.json\`
 - Owner-bug record summary: \`owner-bug-records.json\`
+- Lead filing handoff: \`M2-0008.lead-action.md\`
 EOF_README
 
 printf '[M2-0008] wrote content-free bundle: %s\n' "$OUT"

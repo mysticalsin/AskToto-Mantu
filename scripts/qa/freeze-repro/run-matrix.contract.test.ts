@@ -23,6 +23,11 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       expect(readFileSync(join(out, 'dataless-fixtures.json'), 'utf8')).toContain('"fixtures"')
       expect(readFileSync(join(out, 'external-blockers.json'), 'utf8')).toContain('"BLOCKED_EXTERNAL"')
       expect(readFileSync(join(out, 'launch-plan.json'), 'utf8')).toContain('"electron_user_data_dir_switch":true')
+      expect(readFileSync(join(out, 'diagnostic-reports.json'), 'utf8')).toContain('"consented":false')
+      expect(readFileSync(join(out, 'diagnostic-reports.json'), 'utf8')).toContain('Metis/AskToto process names or sampled process ids only')
+      expect(readFileSync(join(out, 'M2-0008.lead-action.md'), 'utf8')).toContain('LEAD_ACTION:')
+      expect(readFileSync(join(out, 'M2-0008.lead-action.md'), 'utf8')).toContain('OBSERVED')
+      expect(readFileSync(join(out, 'M2-0008.lead-action.md'), 'utf8')).toContain('DERIVED')
 
       const fixtures = JSON.parse(readFileSync(join(out, 'fifo-fixtures.json'), 'utf8')) as {
         kind: string
@@ -147,6 +152,7 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       expect(manifest).toContain('"required_evidence_level": "LIVE_VERIFIED"')
       expect(readFileSync(join(out, 'owner-bug-records.json'), 'utf8')).toContain('"history-freeze"')
       expect(readFileSync(join(out, 'owner-bug-records.json'), 'utf8')).toContain('"no-reopen"')
+      expect(readFileSync(join(out, 'diagnostic-reports.json'), 'utf8')).toContain('"consented":false')
     } finally {
       rmSync(out, { recursive: true, force: true })
       rmSync(profile, { recursive: true, force: true })
@@ -211,6 +217,24 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       rmSync(profile, { recursive: true, force: true })
       rmSync(fixtureRoot, { recursive: true, force: true })
       rmSync(pathRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('collects DiagnosticReports only with explicit consent and process-scoped matching', () => {
+    const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
+    try {
+      const result = spawnSync('bash', [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--out', out, '--dry-run', '--collect-diagnostic-reports'], {
+        encoding: 'utf8',
+        timeout: 30_000
+      })
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+      const diagnosticReports = readFileSync(join(out, 'diagnostic-reports.json'), 'utf8')
+      expect(diagnosticReports).toContain('"consented":true')
+      expect(diagnosticReports).toContain('Metis/AskToto process names or sampled process ids only')
+      expect(diagnosticReports).toContain('"copied":[')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
     }
   })
 })

@@ -403,11 +403,18 @@ test('C27 M2-0008 bundle check requires the content-free freeze repro matrix art
   const writeJson = (name, value) => writeFileSync(join(root, name), `${JSON.stringify(value, null, 2)}\n`)
   writeFileSync(join(root, 'README.md'), '# M2-0008\n')
   writeFileSync(join(root, 'M2-0008.records.README.md'), '# Evidence Import Not Emitted\n')
+  writeFileSync(join(root, 'M2-0008.lead-action.md'), 'LEAD_ACTION: File the two M2-0008 owner-bug evidence records and update the hypothesis ranking using OBSERVED and DERIVED labels.\n')
   writeJson('environment.json', { ticket: 'M2-0008', artifact_sha256: 'a'.repeat(64), dry_run: 1 })
   writeJson('node-options-fuse.json', { node_options_fuse: 'DISABLED_OR_UNAVAILABLE', detail: 'probe recorded' })
   writeJson('dataless-fixtures.json', { fixtures: [] })
   writeJson('external-blockers.json', { ticket: 'M2-0008', blockers: [{ status: 'BLOCKED_EXTERNAL', unblock_step: 'Run on QA account.' }] })
   writeJson('launch-plan.json', { electron_user_data_dir_switch: true })
+  writeJson('diagnostic-reports.json', {
+    consented: false,
+    source: 'Library/Logs/DiagnosticReports',
+    filter: 'Metis/AskToto process names or sampled process ids only',
+    copied: []
+  })
   writeJson('fifo-fixtures.json', {
     kind: 'fifo',
     count: 6,
@@ -441,6 +448,31 @@ test('C27 M2-0008 bundle check requires the content-free freeze repro matrix art
   assertProblem(problems, 'at least six FIFO fixtures')
   assertProblem(problems, 'blocked .brain/index.json')
   assertProblem(problems, 'opened_by_1_9_6')
+
+  writeJson('fifo-fixtures.json', {
+    kind: 'fifo',
+    count: 6,
+    fixtures: [
+      { path: 'one.md', opened_by_1_9_6: false },
+      { path: 'two.md', opened_by_1_9_6: false },
+      { path: 'three.md', opened_by_1_9_6: false },
+      { path: 'four.md', opened_by_1_9_6: false },
+      { path: '.brain/index.json', opened_by_1_9_6: false },
+      { path: '.brain/entities/person/person.json', opened_by_1_9_6: false }
+    ]
+  })
+  writeJson('diagnostic-reports.json', { consented: true, filter: 'all newer reports', copied: [] })
+  assertProblem(m2_0008BundleProblems(root), 'DiagnosticReports', 'restricted')
+
+  writeJson('diagnostic-reports.json', {
+    consented: true,
+    source: 'Library/Logs/DiagnosticReports',
+    filter: 'Metis/AskToto process names or sampled process ids only',
+    copied: []
+  })
+  writeFileSync(join(root, 'M2-0008.lead-action.md'), 'LEAD_ACTION: File the evidence records only.\n')
+  assertProblem(m2_0008BundleProblems(root), 'hypothesis ranking')
+  assertProblem(m2_0008BundleProblems(root), 'OBSERVED/DERIVED')
 })
 
 test('C28 CLI --ticket M2-0008 validates a freeze repro bundle path', () => {
@@ -448,11 +480,18 @@ test('C28 CLI --ticket M2-0008 validates a freeze repro bundle path', () => {
   const writeJson = (name, value) => writeFileSync(join(root, name), `${JSON.stringify(value)}\n`)
   writeFileSync(join(root, 'README.md'), '# M2-0008\n')
   writeFileSync(join(root, 'M2-0008.records.README.md'), '# Evidence Import Not Emitted\n')
+  writeFileSync(join(root, 'M2-0008.lead-action.md'), 'LEAD_ACTION: File the two M2-0008 owner-bug evidence records and update the hypothesis ranking using OBSERVED and DERIVED labels.\n')
   writeJson('environment.json', { ticket: 'M2-0008', artifact_sha256: 'a'.repeat(64) })
   writeJson('node-options-fuse.json', { node_options_fuse: 'NOT_EXERCISED', detail: 'dry-run' })
   writeJson('dataless-fixtures.json', { fixtures: [] })
   writeJson('external-blockers.json', { ticket: 'M2-0008', blockers: [{ status: 'BLOCKED_EXTERNAL', unblock_step: 'Run on QA account.' }] })
   writeJson('launch-plan.json', { electron_user_data_dir_switch: true })
+  writeJson('diagnostic-reports.json', {
+    consented: false,
+    source: 'Library/Logs/DiagnosticReports',
+    filter: 'Metis/AskToto process names or sampled process ids only',
+    copied: []
+  })
   writeJson('fifo-fixtures.json', {
     kind: 'fifo',
     count: 6,
