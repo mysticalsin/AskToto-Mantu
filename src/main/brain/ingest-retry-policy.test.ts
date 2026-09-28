@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app } from 'electron'
@@ -11,7 +12,7 @@ import type { BackfillStartOptions } from './ingest'
 import { MAX_INGEST_ATTEMPTS } from '../infra/scheduler/policy'
 import { resetSecretKeyCache } from '../secrets'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, reconcileMeetingsInBackground, requestBackfill, requestBackfillRun, resumeBackfillIfPending, startBackfill, whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress, reconcileMeetingsInBackground, requestBackfill, requestBackfillRun, resumeBackfillIfPending, startBackfill, whenDrainSettles, whenIndexWritesSettle } from './ingest'
 import { catchUpIntelligenceIndexIfNeeded } from './intelligence-index'
 import { runConsolidationIfDue } from './consolidate'
 import { brainDir, readIndex, writeIndex, writeMeetingExtraction } from './store'
@@ -25,21 +26,6 @@ const unreadablePaths = vi.hoisted(() => new Set<string>())
 
 vi.mock('../llm', () => ({ createStream: createStreamMock }))
 vi.mock('../logger', async (orig) => ({ ...(await orig()), auditLog: auditLogMock }))
-vi.mock('../transcripts', async (orig) => {
-  const actual = await orig<typeof import('../transcripts')>()
-  return {
-    ...actual,
-    readSavedFile: (file: string) => {
-      if (unreadablePaths.has(file)) {
-        const error = new Error('synthetic cloud placeholder timeout') as NodeJS.ErrnoException
-        error.code = 'ETIMEDOUT'
-        throw error
-      }
-      return actual.readSavedFile(file)
-    }
-  }
-})
-
 const userTrigger: BackfillStartOptions = { trigger: 'user' }
 
 function respondJson(markerCalls: string[], json = '{}') {
@@ -162,9 +148,23 @@ describe('M2-0033 retry policy across backfill callers', () => {
   }
 
   beforeEach(async () => {
-    useStorageForTests()
+    useStorageForTests({
+      fs: {
+        readdir,
+        realpath,
+        stat,
+        readFile: async (path) => {
+          if (unreadablePaths.has(path)) {
+            const error = new Error('synthetic cloud placeholder timeout') as NodeJS.ErrnoException
+            error.code = 'ETIMEDOUT'
+            throw error
+          }
+          return readFile(path)
+        }
+      }
+    })
     userData = mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-ud-'))
-    meetingsFolder = mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-meetings-'))
+    meetingsFolder = realpathSync.native(mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-meetings-')))
     modelMarkers = []
     unreadablePaths.clear()
     configureSettings()
@@ -176,6 +176,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
   })
 
   afterEach(async () => {
+    await whenDrainSettles()
     await whenIndexWritesSettle()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })

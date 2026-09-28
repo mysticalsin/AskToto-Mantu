@@ -14,6 +14,7 @@ import {
   requestBackfillRun,
   resumeBackfillIfPending,
   startBackfill,
+  whenDrainSettles,
   whenIndexWritesSettle
 } from './ingest'
 import { readIndex, writeIndex, writeMeetingExtraction } from './store'
@@ -123,6 +124,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     interactiveActive = false
     startGate('clean')
     await releaseHeldWork()
+    await whenDrainSettles()
     await whenIndexWritesSettle()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
