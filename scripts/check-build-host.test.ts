@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { formatCommand, releasePlans } from './release/orchestrate.mjs'
 
 const REPO = join(__dirname, '..')
 const SCRIPT = join(REPO, 'scripts', 'check-build-host.mjs')
@@ -42,11 +43,13 @@ describe('check-build-host — the .exe may only be built where it can be launch
   it('guards EVERY Windows packaging entry point, as its first step', () => {
     // First in the chain on purpose: the point is to fail in seconds with a clear reason, not several
     // minutes in when a downstream gate trips over a binary it cannot execute.
-    for (const name of ['predist:win', 'dist:win', 'release:build:win']) {
+    for (const name of ['predist:win', 'dist:win']) {
       const script = pkg.scripts[name]
       expect(script, `${name} must exist`).toBeTruthy()
       expect(script.startsWith('node scripts/check-build-host.mjs win'), `${name} must lead with the host guard`).toBe(true)
     }
+    const releaseWin = releasePlans.win.map(formatCommand)
+    expect(releaseWin[0]).toContain('scripts/check-build-host.mjs win')
   })
 
   it('offers no override flag — an escape hatch would be used exactly once, in a hurry', () => {
