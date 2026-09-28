@@ -97,6 +97,28 @@ test('rejects a same-token behavior edit hidden inside a moved file', () => {
   ])
 })
 
+test('rejects behavior edits to string literals containing comment markers', () => {
+  const entries = [
+    { status: 'D', code: 'D', path: 'src/old/endpoint.ts' },
+    { status: 'A', code: 'A', path: 'src/new/endpoint.ts' }
+  ]
+  const contents = new Map([
+    ['base:src/old/endpoint.ts', 'export const endpoint = "https://old.example/api"\n'],
+    ['head:src/new/endpoint.ts', 'export const endpoint = "https://new.example/api"\n']
+  ])
+
+  const result = verifyPureMove({
+    entries,
+    readAtRevision: (side, path) => contents.get(`${side}:${path}`)
+  })
+
+  assert.equal(result.ok, false)
+  assert.deepEqual(result.tokenProblems, [
+    { token: '"https://new.example/api"', removed: 0, added: 1 },
+    { token: '"https://old.example/api"', removed: 1, added: 0 }
+  ])
+})
+
 test('rejects same-token behavior edits redistributed across moved files', () => {
   const entries = [
     { status: 'D', code: 'D', path: 'src/old/subtract.ts' },
@@ -158,6 +180,16 @@ test('token multiset ignores comments but preserves non-import string literals',
   const left = tokenMultiset("import x from './a'\n// moved\nconst label = './a'\n")
   const right = tokenMultiset("import x from './b'\n/* moved */\nconst label = './a'\n")
   assert.deepEqual(compareMultisets(left, right), [])
+})
+
+test('token multiset preserves string literals that contain comment markers', () => {
+  const left = tokenMultiset('export const endpoint = "https://old.example/api" // old endpoint\n')
+  const right = tokenMultiset('export const endpoint = "https://new.example/api" // new endpoint\n')
+
+  assert.deepEqual(compareMultisets(left, right), [
+    { token: '"https://new.example/api"', removed: 0, added: 1 },
+    { token: '"https://old.example/api"', removed: 1, added: 0 }
+  ])
 })
 
 test('CLI writes an artifact and fails when a pure move changes tokens', () => {

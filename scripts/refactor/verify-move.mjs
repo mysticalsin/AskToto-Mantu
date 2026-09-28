@@ -170,6 +170,10 @@ function stripComments(source) {
     } else if (state === 'code' && char === '/' && next === '*') {
       state = 'block'
       index += 2
+    } else if (state === 'code' && (char === '"' || char === "'" || char === '`')) {
+      output += char
+      state = char
+      index += 1
     } else if (state === 'line' && char === '\n') {
       output += char
       state = 'code'
@@ -177,7 +181,18 @@ function stripComments(source) {
     } else if (state === 'block' && char === '*' && next === '/') {
       state = 'code'
       index += 2
+    } else if ((state === '"' || state === "'" || state === '`') && char === '\\') {
+      output += char
+      if (next !== undefined) output += next
+      index += next === undefined ? 1 : 2
+    } else if ((state === '"' || state === "'" || state === '`') && char === state) {
+      output += char
+      state = 'code'
+      index += 1
     } else if (state === 'code') {
+      output += char
+      index += 1
+    } else if (state === '"' || state === "'" || state === '`') {
       output += char
       index += 1
     } else {
