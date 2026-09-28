@@ -262,6 +262,8 @@ export type AuditEvent =
   | 'sidecar.spawn'
   // M2-0215: long-lived local sidecar process exited.
   | 'sidecar.exit'
+  // M2-0028: a supervised sidecar launch fell back to direct spawn because the wrapper was unavailable.
+  | 'sidecar.unsupervised'
   // M2-0215: History list request timing across renderer and main.
   | 'history.request'
   // M2-0037 (B3-RC2): render-process-gone's reload budget was exhausted (>=3 reloads within 60s with no

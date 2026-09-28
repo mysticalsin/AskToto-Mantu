@@ -45,6 +45,11 @@
 //                     time in ISO-8601 UTC. Used by the sidecar registry/reaper; name is deliberately not
 //                     part of the identity, because names are not safe across PID reuse.
 //
+//   supervise --parent <pid> -- <cmd> [args...]  Long-running wrapper. Creates a process group, spawns
+//                     <cmd> with inherited stdout/stderr, watches <pid> with kqueue NOTE_EXIT, and
+//                     kills the process group if the parent dies. This is the source-of-orphan fix for
+//                     local sidecars; the registry/reaper remains the next-launch safety net.
+//
 //   stall-watch       Long-running, one per boot. --pid <main> --alive <file> --capture-prefix <path>
 //                     --stale-after-ms <ms>. Every 5 s it stats <file>; when its mtime has not changed
 //                     for more than <ms> of awake time it runs /usr/bin/sample on <main> into
@@ -56,6 +61,9 @@ import AppKit
 import Darwin
 import Speech
 import Vision
+
+@_silgen_name("environ")
+var processEnvironment: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>!
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
@@ -497,11 +505,130 @@ func runStallWatch(_ options: [String]) -> Never {
     }
 }
 
+// MARK: - supervise
+
+private var supervisedChildPid: pid_t = -1
+private var forwardedSignal: Int32 = 0
+
+func signalForwarder(_ signal: Int32) {
+    forwardedSignal = signal
+    if supervisedChildPid > 0 {
+        kill(supervisedChildPid, signal)
+    }
+}
+
+func exitWithChildStatus(_ status: Int32) -> Never {
+    if WIFEXITED(status) {
+        exit(WEXITSTATUS(status))
+    }
+    if WIFSIGNALED(status) {
+        signal(SIGTERM, SIG_DFL)
+        signal(WTERMSIG(status), SIG_DFL)
+        raise(WTERMSIG(status))
+        exit(128 + WTERMSIG(status))
+    }
+    exit(1)
+}
+
+func terminateSupervisedGroup() {
+    guard supervisedChildPid > 0 else { return }
+    signal(SIGTERM, SIG_IGN)
+    signal(SIGINT, SIG_IGN)
+    killpg(getpgrp(), SIGTERM)
+    let deadline = Date().addingTimeInterval(2)
+    var status: Int32 = 0
+    while Date() < deadline {
+        let waited = waitpid(supervisedChildPid, &status, WNOHANG)
+        if waited == supervisedChildPid {
+            supervisedChildPid = -1
+            return
+        }
+        usleep(50_000)
+    }
+    killpg(getpgrp(), SIGKILL)
+}
+
+func runSupervise(_ options: [String]) -> Never {
+    guard options.count >= 4, options[0] == "--parent", let parent = pid_t(options[1]), options[2] == "--" else {
+        fail("usage: metis-mac-helper supervise --parent <pid> -- <cmd> [args...]")
+    }
+    let command = options[3]
+    let childArgs = Array(options.dropFirst(3))
+    guard getppid() == parent else { fail("supervise: --parent \(parent) is not this helper's parent") }
+    guard setpgid(0, 0) == 0 else { fail("supervise: setpgid failed: \(String(cString: strerror(errno)))") }
+
+    let kq = kqueue()
+    guard kq >= 0 else { fail("supervise: kqueue failed: \(String(cString: strerror(errno)))") }
+    var parentEvent = kevent(
+        ident: UInt(parent),
+        filter: Int16(EVFILT_PROC),
+        flags: UInt16(EV_ADD | EV_ENABLE),
+        fflags: UInt32(NOTE_EXIT),
+        data: 0,
+        udata: nil
+    )
+    guard kevent(kq, &parentEvent, 1, nil, 0, nil) == 0 else {
+        fail("supervise: parent watch failed: \(String(cString: strerror(errno)))")
+    }
+    guard getppid() == parent else {
+        terminateSupervisedGroup()
+        exit(1)
+    }
+
+    let argv = childArgs.map { strdup($0) } + [nil]
+    defer {
+        for arg in argv where arg != nil { free(arg) }
+    }
+    var child: pid_t = 0
+    let spawnResult = command.withCString { commandC in
+        argv.withUnsafeBufferPointer { buffer in
+            posix_spawn(&child, commandC, nil, nil, UnsafeMutablePointer(mutating: buffer.baseAddress!), processEnvironment)
+        }
+    }
+    guard spawnResult == 0 else {
+        fail("supervise: spawn failed: \(String(cString: strerror(spawnResult)))")
+    }
+    supervisedChildPid = child
+    signal(SIGTERM, signalForwarder)
+    signal(SIGINT, signalForwarder)
+
+    var status: Int32 = 0
+    while true {
+        let waited = waitpid(child, &status, WNOHANG)
+        if waited == child {
+            supervisedChildPid = -1
+            exitWithChildStatus(status)
+        }
+        if waited < 0 && errno != EINTR {
+            terminateSupervisedGroup()
+            fail("supervise: waitpid failed: \(String(cString: strerror(errno)))")
+        }
+        if getppid() != parent {
+            terminateSupervisedGroup()
+            exit(1)
+        }
+        var out = kevent()
+        var timeout = timespec(tv_sec: 0, tv_nsec: 50_000_000)
+        let events = kevent(kq, nil, 0, &out, 1, &timeout)
+        if events > 0 {
+            terminateSupervisedGroup()
+            exit(1)
+        }
+        if events < 0 && errno != EINTR {
+            terminateSupervisedGroup()
+            fail("supervise: parent watch read failed: \(String(cString: strerror(errno)))")
+        }
+        if forwardedSignal != 0 {
+            usleep(50_000)
+        }
+    }
+}
+
 // MARK: - entry point
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|stall-watch> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -522,6 +649,8 @@ case "proc-info":
         fail("usage: metis-mac-helper proc-info <pid>")
     }
     runProcInfo(pidText: arguments[2])
+case "supervise":
+    runSupervise(Array(arguments.dropFirst(2)))
 case "stall-watch":
     runStallWatch(Array(arguments.dropFirst(2)))
 default:

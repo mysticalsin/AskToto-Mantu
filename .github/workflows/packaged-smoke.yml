@@ -82,12 +82,18 @@ jobs:
         id: sidecar-reaper
         timeout-minutes: 10
         run: node scripts/qa/sidecar-boot-reaper.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/sidecar-boot-reaper.json
+      - name: Verify packaged macOS signature
+        run: codesign --verify --deep --strict "$RUNNER_TEMP/smoke/Metis.app"
+      - name: Prove HK-M supervised sidecar cleanup after SIGKILL
+        id: hk-m
+        timeout-minutes: 45
+        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles 20
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         timeout-minutes: 10
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/packaged-smoke.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
+        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.hk-m.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
         with:
           name: packaged-smoke-macos
           path: smoke-report/

@@ -28,6 +28,7 @@ export const MAX_MESSAGE_CHARS = 300
 export const REVEAL_REASONS = ['activate', 'second-instance', 'tray', 'hotkey', 'notification-click', 'ensure-window'] as const
 export const REVEAL_OUTCOMES = ['created', 'shown', 'already-visible', 'failed'] as const
 export const SIDECAR_NAMES = ['llama-server', 'fm-serve', 'stall-watch'] as const
+export const SIDECAR_UNSUPERVISED_REASONS = ['wrapper-missing', 'wrapper-spawn-failed'] as const
 export const SIDECAR_REAP_REASONS = ['registry', 'legacy-orphan'] as const
 export const SIDECAR_REAP_SKIP_REASONS = [
   'corrupt-registry',
@@ -199,6 +200,12 @@ export const OBSERVABILITY_EVENTS = {
     code: 'int',
     signal: 'token',
     uptimeMs: 'ms'
+  },
+  /** Supervision requested but wrapper launch was not available; direct spawn remains the safety net. */
+  'sidecar.unsupervised': {
+    name: SIDECAR_NAMES,
+    reason: SIDECAR_UNSUPERVISED_REASONS,
+    error: 'errorText'
   },
   /** Boot reaper killed a process whose identity matched a safe ownership rule. */
   'sidecar.reaped': {
