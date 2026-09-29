@@ -91,6 +91,29 @@ jobs:
         continue-on-error: true
         timeout-minutes: 10
         run: node scripts/qa/sidecar-boot-reaper.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/sidecar-boot-reaper.json
+      - name: Verify packaged macOS signature
+        run: codesign --verify --deep --strict "$RUNNER_TEMP/smoke/Metis.app"
+      # Behaviour proof of the shipped helper's `supervise` mode (setup-failure statuses, exit-status and stdio
+      # pass-through, signal forwarding, group kill on parent death including a TERM-ignoring member).
+      - name: Prove mac-helper supervise behaviour
+        id: supervise-helper
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node scripts/qa/mac-helper-supervise.mjs "$RUNNER_TEMP/smoke/Metis.app/Contents/Resources/mac-helper/metis-mac-helper" smoke-report/mac-helper-supervise.json
+      # continue-on-error for the same reason as sidecar-reaper above: HK-M's own report.result already
+      # distinguishes a genuine owned-process leak ('fail') from a scenario this hosted runner cannot yet
+      # trigger live ('blocked', e.g. a row whose bundled model or ffmpeg sidecar is missing on the
+      # runner) — only the former should ever red the smoke lane. The gate step below
+      # reads smoke-report/hk-m.json (not just the step outcome, since 'blocked' also exits non-zero) to
+      # make that distinction; supervision's default-on decision still requires a genuine 20/20 'pass'.
+      - name: Prove HK-M supervised sidecar cleanup after SIGKILL
+        id: hk-m
+        continue-on-error: true
+        timeout-minutes: 25
+        # One SIGKILL per scenario under a 20 min wall-clock budget: hk-m.mjs prints a line per row and writes
+        # its report (unreached rows NOT_RUN) even when cut off. The 20-cycle proof runs on the candidate in
+        # hk-m-candidate.yml.
+        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles 1 --budget-ms 1200000
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         timeout-minutes: 10
@@ -103,7 +126,7 @@ jobs:
         timeout-minutes: 5
         run: node scripts/qa/policy-smoke.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/policy-smoke.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.smoke.outcome != 'skipped' || steps.policy-smoke.outcome != 'skipped') }}
+        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.supervise-helper.outcome != 'skipped' || steps.hk-m.outcome != 'skipped' || steps.smoke.outcome != 'skipped' || steps.policy-smoke.outcome != 'skipped') }}
         with:
           name: packaged-smoke-macos
           path: smoke-report/
@@ -115,6 +138,18 @@ jobs:
       - name: Fail the job if the POLICY-01 proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.policy-smoke.outcome == 'failure'
         run: exit 1
+      - name: Fail the job if the mac-helper supervise behaviour proof failed
+        if: always() && steps.supervise-helper.outcome == 'failure'
+        run: exit 1
+      - name: Fail the job if HK-M found a genuine owned-process leak (not a BLOCKED_EXTERNAL row)
+        if: always() && steps.hk-m.outcome == 'failure'
+        run: |
+          result=$(node -e "console.log(JSON.parse(require('fs').readFileSync('smoke-report/hk-m.json','utf8')).result)")
+          if [ "$result" = "fail" ]; then
+            echo "HK-M reported a genuine owned-process cleanup failure (see smoke-report/hk-m.json)" >&2
+            exit 1
+          fi
+          echo "::warning title=HK-M blocked::HK-M result=$result — not a live 20/20 pass, so supervision stays off by default; see smoke-report/hk-m.json for the exact unblock steps."
 
   windows:
     name: Packaged smoke (Windows)

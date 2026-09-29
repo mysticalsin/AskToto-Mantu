@@ -1,0 +1,86 @@
+name: HK-M candidate
+
+# Full HK-M proof (M2-0028): 20 cycles x 5 scenarios of SIGKILL on main, against the installer of a named
+# qa-candidate run, installed by sha256. The per-PR packaged smoke only runs one bounded cycle; this job is the
+# 20/20 evidence that decides whether supervision ships default-on. Dispatch it on the release candidate:
+# gh workflow run hk-m-candidate.yml -f candidate_run=<qa-candidate run id> -f dmg_sha256=<sha256>
+# It never signs, publishes, or pushes a tag.
+run-name: HK-M candidate ${{ inputs.candidate_run }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run:
+        description: Run id of the QA candidate workflow run that built the installer
+        required: true
+        type: string
+      dmg_sha256:
+        description: sha256 of the macOS DMG to test, as listed in that run's SHA256SUMS.txt
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  hk-m:
+    name: HK-M 20 cycles (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Download the candidate installer and its provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-provenance --dir provenance
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-mac --dir assets
+      - name: Verify the installer against the provenance and the requested sha256
+        env:
+          DMG_SHA256: ${{ inputs.dmg_sha256 }}
+        run: |
+          node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac
+          dmg=$(ls assets/*.dmg)
+          [ "$(shasum -a 256 "$dmg" | cut -d' ' -f1)" = "$DMG_SHA256" ] \
+            || { echo "::error::The candidate DMG does not match the requested sha256."; exit 1; }
+      - name: Install from the DMG into a fresh directory
+        run: |
+          mkdir -p hk-m-report
+          shasum -a 256 assets/*.dmg > hk-m-report/SHA256SUMS.txt
+          volume="$RUNNER_TEMP/volume"
+          hdiutil attach -nobrowse -readonly -mountpoint "$volume" assets/*.dmg > /dev/null
+          bundle=$(cd "$volume" && ls -d *.app)
+          mkdir -p "$RUNNER_TEMP/hk-m"
+          ditto "$volume/$bundle" "$RUNNER_TEMP/hk-m/Metis.app"
+          hdiutil detach "$volume" > /dev/null
+      - name: Verify the installed app signature
+        run: codesign --verify --deep --strict "$RUNNER_TEMP/hk-m/Metis.app"
+      # The budget ends the run below the step timeout so the report is written and uploaded.
+      - name: Prove HK-M supervised sidecar cleanup after SIGKILL (20 cycles)
+        id: hk-m
+        continue-on-error: true
+        timeout-minutes: 140
+        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/hk-m/Metis.app" hk-m-report/hk-m.json --cycles 20 --budget-ms 8100000
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: hk-m-candidate
+          path: hk-m-report/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Fail unless HK-M passed 20 of 20
+        if: always() && steps.hk-m.outcome != 'success'
+        run: |
+          echo "::error::HK-M did not pass every row; supervision must not ship default-on (see hk-m-report/hk-m.json)."
+          exit 1
