@@ -102,7 +102,7 @@ describe('M2-0430: background extraction fits a 4,096-token local slot and never
     const lines = Array.from({ length: 90 }, (_, i) => `THEM: Synthetic line ${i} about the rollout plan and its owners.`)
     writeFileSync(join(meetingsFolder, 'long.md'), `---\ndate: 2026-09-29\n---\n${lines.join('\n')}`, 'utf8')
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await drain()
 
     expect(readIndex(getSettings()).ingested['long.md']?.ok).toBe(true)
@@ -115,7 +115,7 @@ describe('M2-0430: background extraction fits a 4,096-token local slot and never
     // One unbroken line: windows never split a line, so no window can fit the slot.
     writeFileSync(join(meetingsFolder, 'one-line.md'), `---\ndate: 2026-09-29\n---\nTHEM: ${'word '.repeat(4000)}`, 'utf8')
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await drain()
 
     const record = readIndex(getSettings()).ingested['one-line.md']
@@ -125,7 +125,7 @@ describe('M2-0430: background extraction fits a 4,096-token local slot and never
 
     // Every automatic trigger holds an exhausted source: no second ok:false, no model call.
     for (let i = 0; i < 3; i++) {
-      expect(startBackfill()).toEqual({ queued: 0 })
+      expect(await startBackfill()).toEqual({ queued: 0 })
       await drain()
     }
     expect(createStreamMock).not.toHaveBeenCalled()
@@ -140,9 +140,9 @@ describe('M2-0430: background extraction fits a 4,096-token local slot and never
       return { abort: () => {} }
     })
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await drain()
-    expect(startBackfill()).toEqual({ queued: 0 })
+    expect(await startBackfill()).toEqual({ queued: 0 })
     await drain()
 
     expect(readIndex(getSettings()).ingested['dense.md']).toMatchObject({ ok: false, exhausted: true })
@@ -157,7 +157,7 @@ describe('M2-0430: background extraction fits a 4,096-token local slot and never
       return { abort: () => {} }
     })
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await drain()
 
     expect(readIndex(getSettings()).ingested['preempted.md']?.ok).toBe(true)
