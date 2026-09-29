@@ -85,7 +85,7 @@
     "src/main/import-magic.ts": 3,
     "src/main/index.ts": 23,
     "src/main/infra/observability/stall-sampler.ts": 1,
-    "src/main/infra/process/reaper.ts": 4,
+    "src/main/infra/process/reaper.ts": 3,
     "src/main/infra/process/registry.ts": 3,
     "src/main/infra/process/supervisor.ts": 3,
     "src/main/infra/storage/paths.ts": 13,

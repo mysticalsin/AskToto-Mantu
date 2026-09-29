@@ -70,3 +70,67 @@ export async function buildTrayInStages<Icon>(stages: TrayStages<Icon>): Promise
     stages.fail(error)
   }
 }
+
+/** Returns a starter that ignores every call while a previous run is still in flight, so a second createTray
+ *  during a staged build cannot add a duplicate status item. A settled run (fulfilled or rejected) frees it. */
+export function createSingleFlight(): (run: () => Promise<void>) => void {
+  let inFlight = false
+  return (run) => {
+    if (inFlight) return
+    inFlight = true
+    void run()
+      .catch(() => undefined)
+      .finally(() => {
+        inFlight = false
+      })
+  }
+}
+
+export interface TraySize {
+  width: number
+  height: number
+}
+
+/** The slice of Electron's NativeImage the tray icon loader uses. */
+export interface TrayIconImage<I> {
+  isEmpty(): boolean
+  resize(size: TraySize): I
+}
+
+/** The slice of Electron's nativeImage module the tray icon loader uses. */
+export interface TrayImageLoader<I extends TrayIconImage<I>> {
+  createThumbnailFromPath(path: string, size: TraySize): Promise<I>
+  createFromPath(path: string): I
+}
+
+export const TRAY_ICON_SIZE: TraySize = { width: 18, height: 18 }
+/** Bound on the off-thread thumbnail; past it the icon is decoded in-process so the tray still appears. */
+export const TRAY_THUMBNAIL_TIMEOUT_MS = 2000
+
+/** The 18 px tray image. The bundled icon is a 1024² PNG whose in-process decode and resize held the main thread
+ *  for hundreds of ms, so on macOS it is decoded off the main thread by the system thumbnailer; elsewhere, or if
+ *  the thumbnailer fails, returns an empty image or does not answer in time, it falls back to the in-process decode. */
+export async function loadTrayIcon<I extends TrayIconImage<I>>(
+  images: TrayImageLoader<I>,
+  iconPath: string,
+  platform: NodeJS.Platform
+): Promise<I> {
+  if (platform === 'darwin') {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const thumbnail = await Promise.race([
+        images.createThumbnailFromPath(iconPath, TRAY_ICON_SIZE),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), TRAY_THUMBNAIL_TIMEOUT_MS)
+        })
+      ])
+      if (thumbnail && !thumbnail.isEmpty()) return thumbnail
+    } catch {
+      /* fall back to the in-process decode below */
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  const img = images.createFromPath(iconPath)
+  return img.isEmpty() ? img : img.resize(TRAY_ICON_SIZE)
+}

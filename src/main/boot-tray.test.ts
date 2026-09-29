@@ -1,6 +1,16 @@
 import { EventEmitter } from 'node:events'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildTrayInStages, scheduleTrayAfterFirstPaint, yieldToEventLoop, type TrayGateWindow } from './boot-tray'
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
+import {
+  buildTrayInStages,
+  createSingleFlight,
+  loadTrayIcon,
+  scheduleTrayAfterFirstPaint,
+  TRAY_ICON_SIZE,
+  TRAY_THUMBNAIL_TIMEOUT_MS,
+  yieldToEventLoop,
+  type TrayGateWindow,
+  type TraySize
+} from './boot-tray'
 
 function fakeWindow(opts: { loading?: boolean; url?: string; destroyed?: boolean } = {}) {
   type Gate = Omit<TrayGateWindow, 'webContents'> & { webContents: EventEmitter & TrayGateWindow['webContents'] }
@@ -130,5 +140,79 @@ describe('scheduleTrayAfterFirstPaint (M2-0422)', () => {
     await yieldToEventLoop()
     order.push('after-yield')
     expect(order).toEqual(['immediate', 'after-yield'])
+  })
+})
+
+describe('createSingleFlight (M2-0031)', () => {
+  it('ignores starts while a run is in flight and accepts one after it settles, rejected or not', async () => {
+    const start = createSingleFlight()
+    let finish: (() => void) | undefined
+    const first = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)))
+    const second = vi.fn(async () => undefined)
+    start(first)
+    start(second)
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(second).not.toHaveBeenCalled()
+    finish?.()
+    await yieldToEventLoop()
+    const failing = vi.fn(() => Promise.reject(new Error('stage failed')))
+    start(failing)
+    expect(failing).toHaveBeenCalledTimes(1)
+    await yieldToEventLoop()
+    start(second)
+    expect(second).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('loadTrayIcon (M2-0031)', () => {
+  type FakeImage = { name: string; isEmpty(): boolean; resize: Mock<(size: TraySize) => FakeImage> }
+  const image = (name: string, empty = false): FakeImage => ({
+    name,
+    isEmpty: () => empty,
+    resize: vi.fn((_size: TraySize): FakeImage => image(`${name}@resized`))
+  })
+  const loader = (thumbnail: () => Promise<FakeImage>, full = image('full')) => ({
+    createThumbnailFromPath: vi.fn((_path: string, _size: TraySize) => thumbnail()),
+    createFromPath: vi.fn((_path: string) => full)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('on macOS uses the off-thread thumbnail at the tray size and never decodes in-process', async () => {
+    const images = loader(async () => image('thumb'))
+    const icon = await loadTrayIcon(images, '/icon.png', 'darwin')
+    expect(icon.name).toBe('thumb')
+    expect(images.createThumbnailFromPath).toHaveBeenCalledExactlyOnceWith('/icon.png', TRAY_ICON_SIZE)
+    expect(images.createFromPath).not.toHaveBeenCalled()
+  })
+
+  it('off macOS decodes in-process and resizes, without the thumbnailer', async () => {
+    const images = loader(async () => image('thumb'))
+    const icon = await loadTrayIcon(images, '/icon.png', 'win32')
+    expect(icon.name).toBe('full@resized')
+    expect(images.createThumbnailFromPath).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the in-process decode when the thumbnail is empty or rejects', async () => {
+    expect((await loadTrayIcon(loader(async () => image('thumb', true)), '/icon.png', 'darwin')).name).toBe('full@resized')
+    const rejecting = loader(() => Promise.reject(new Error('no thumbnailer')))
+    expect((await loadTrayIcon(rejecting, '/icon.png', 'darwin')).name).toBe('full@resized')
+  })
+
+  it('falls back to the in-process decode when the thumbnailer does not answer in time', async () => {
+    vi.useFakeTimers()
+    const images = loader(() => new Promise<FakeImage>(() => undefined))
+    const pending = loadTrayIcon(images, '/icon.png', 'darwin')
+    await vi.advanceTimersByTimeAsync(TRAY_THUMBNAIL_TIMEOUT_MS)
+    expect((await pending).name).toBe('full@resized')
+  })
+
+  it('returns an empty in-process image without resizing it', async () => {
+    const empty = image('empty', true)
+    const icon = await loadTrayIcon(loader(async () => image('thumb'), empty), '/icon.png', 'linux')
+    expect(icon).toBe(empty)
+    expect(empty.resize).not.toHaveBeenCalled()
   })
 })
