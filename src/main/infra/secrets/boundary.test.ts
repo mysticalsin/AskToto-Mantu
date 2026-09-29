@@ -34,7 +34,7 @@ describe('safeStorage boundary', () => {
   it('finds the one legitimate importer, so the scan cannot pass by matching nothing', () => {
     const importers = sourceFiles(SRC)
       .filter((file) => IMPORTS_SAFE_STORAGE.some((rule) => rule.test(readFileSync(file, 'utf8'))))
-      .map((file) => relative(SRC, file).split(sep).join('/'))
-    expect(importers).toEqual(['main/infra/secrets/keychain.ts'])
+      .map((file) => relative(SRC, file).split(sep).join('/').replace(/\.ts$/, ''))
+    expect(importers).toEqual(['main/infra/secrets/keychain'])
   })
 })
