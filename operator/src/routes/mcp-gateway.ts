@@ -63,6 +63,11 @@ export async function handleMcpGateway(
   const extra = readIntegrationExtra(row as unknown as Record<string, unknown>)
   if (extra.mode !== 'brokered' || !row.base_url || !row.cipher || !row.iv) return json({ ok: false, error: 'not found' }, 404)
 
+  // A declared oversize length is refused before any of the body is read.
+  const declared = Number(request.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > MCP_GATEWAY_MAX_BODY_BYTES) {
+    return json({ ok: false, error: 'request too large' }, 413)
+  }
   const body = await request.text()
   if (new TextEncoder().encode(body).length > MCP_GATEWAY_MAX_BODY_BYTES) {
     return json({ ok: false, error: 'request too large' }, 413)

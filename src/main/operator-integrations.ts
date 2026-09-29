@@ -25,6 +25,9 @@ import { connectMcp, pushToMcp, type McpPushResult } from './mcp/mcpClient'
 import { mainLog } from './logger'
 
 const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000
+/** A brokered row's gateway token lives 1 h on the Worker; refetch well inside that so the MCP client
+ *  never presents an expired bearer. */
+const BROKERED_REFRESH_INTERVAL_MS = 45 * 60 * 1000
 
 export interface OperatorIntegrationsCache {
   version: number
@@ -37,8 +40,8 @@ export function emptyOperatorIntegrationsCache(): OperatorIntegrationsCache {
   return { version: 0, fetchedAt: 0, integrations: [] }
 }
 
-/** Pure: refetch when nothing has been fetched yet, the heartbeat-reported version moved, or the 6 h
- *  cache has gone stale. */
+/** Pure: refetch when nothing has been fetched yet, the heartbeat-reported version moved, the 6 h
+ *  cache has gone stale, or a cached brokered gateway token is nearing its 1 h expiry. */
 export function shouldRefetchOperatorIntegrations(
   cache: OperatorIntegrationsCache,
   latestVersion: number,
@@ -46,7 +49,8 @@ export function shouldRefetchOperatorIntegrations(
 ): boolean {
   if (cache.fetchedAt <= 0) return true
   if (latestVersion !== cache.version) return true
-  return now - cache.fetchedAt >= REFRESH_INTERVAL_MS
+  const interval = cache.integrations.some((i) => i.brokered) ? BROKERED_REFRESH_INTERVAL_MS : REFRESH_INTERVAL_MS
+  return now - cache.fetchedAt >= interval
 }
 
 export interface OperatorMcpRegistration {
