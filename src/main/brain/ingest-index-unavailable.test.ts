@@ -233,6 +233,26 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     expect(existsSync(sentinelPath)).toBe(true)
   })
 
+  it("I7c: startRebuild refuses a 'corrupt-kept' index with recovery copy (no 'Update Métis') and keeps it byte-identical", async () => {
+    for (let i = 0; i < 5; i++) {
+      writeFileSync(join(brainDir(s), `index.corrupt-auto-2026-09-2${i}T00-00-00-000Z-seed${i}.json`), `seed-snapshot-${i}`)
+    }
+    writeFileSync(primary, Buffer.from('{"ingested": tru', 'utf8'))
+    expect(indexUnavailable(s)).toBe('corrupt-kept')
+    const beforeIndex = sha256(readFileSync(primary))
+
+    const r = await startRebuild(s)
+    await waitForIdle()
+
+    expect(r.queued).toBe(0)
+    expect(r.error).toContain('The index was kept, so no data was lost')
+    expect(r.error).toContain('index.corrupt-auto-')
+    expect(r.error).not.toContain('Update Métis')
+    expect(createStreamMock).not.toHaveBeenCalled()
+    expect(sha256(readFileSync(primary))).toBe(beforeIndex)
+    expect(existsSync(sentinelPath)).toBe(true)
+  })
+
   it('I8: startRebuild reports a keychain refusal message and leaves a keychain-wrapped index unchanged', async () => {
     ;(app as typeof app & { isPackaged?: boolean }).isPackaged = true
     ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(true)
@@ -245,7 +265,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
 
     expect(r).toEqual({
       queued: 0,
-      error: "Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. Nothing was changed."
+      error: "Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. The index was kept, so no data was lost. Nothing was changed."
     })
     expect(r.error).toContain('keychain')
     expect(sha256(readFileSync(primary))).toBe(beforeIndex)

@@ -2354,6 +2354,9 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   await whenIndexWritesSettle()
   // Live work can arrive while integrity/journal checks await IO. Refuse before the destructive step.
   if (rebuildWorkBusy()) return { queued: 0, error: REBUILD_BUSY_ERROR }
+  // The awaits above can outlast the first gate: the index may have become unavailable meanwhile.
+  const unavailableNow = rebuildUnavailableError(s)
+  if (unavailableNow) return { queued: 0, error: unavailableNow }
   // Fix F: preserveCorrections copies the journal to escrow and restores it even if the wipe fails —
   // check the result and abort (nothing re-extracted, corrections safe) rather than rebuild atop a
   // half-deleted store.
