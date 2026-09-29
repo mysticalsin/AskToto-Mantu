@@ -581,7 +581,6 @@ import {
   indexUnavailable,
   indexUnavailableAsync,
   indexUnavailableMessage,
-  loadGraph as loadBrainGraph,
   writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
   writePerson as writeBrainPerson,
@@ -590,7 +589,6 @@ import {
   readDeal as readBrainDeal,
   writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
-  loadEntitySlugs as loadBrainEntitySlugs,
   loadEntityDisplayNames as loadBrainEntityDisplayNames,
   loadMeetingExtraction as loadBrainMeetingExtraction,
   purgeBrain,
@@ -602,7 +600,7 @@ import {
   slugify as brainSlugify,
   brainDir as brainStoreDir
 } from './brain/store'
-import { readBrainDashboard } from './brain/dashboard-read'
+import { brainStatusCounts, readBrainDashboard } from './brain/dashboard-read'
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { applyCaveman } from '@shared/caveman-ask'
@@ -644,7 +642,7 @@ import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { scheduleTrayAfterFirstPaint, yieldToEventLoop } from './boot-tray'
-import { scheduleFirstShow } from './lifecycle/first-show'
+import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
@@ -1201,27 +1199,6 @@ function speculativeLocalWorkAllowed(): boolean {
 // "Notified once" keys. Bounded: a session that runs for days imports many files, and an unbounded Set
 // here was one of the two module-level structures that only ever grew (RAM audit, 2026-09-05).
 const notifiedImportJobs = new BoundedSet<string>(500)
-
-type BrainStatusCounts = { people: number; accounts: number; deals: number; nodes: number; edges: number }
-let brainStatusCountsCache: { folder: string; revision: number; counts: BrainStatusCounts } | null = null
-
-/** Status is polled frequently by two windows. Re-scan graph/entity directories only after a revision change. */
-async function brainStatusCounts(s: ReturnType<typeof getSettings>, revision: number): Promise<BrainStatusCounts> {
-  const folder = resolveMeetingsFolder(s)
-  if (brainStatusCountsCache?.folder === folder && brainStatusCountsCache.revision === revision) {
-    return brainStatusCountsCache.counts
-  }
-  const graph = await loadBrainGraph(s)
-  const counts = {
-    people: (await loadBrainEntitySlugs(s, 'person')).length,
-    accounts: (await loadBrainEntitySlugs(s, 'account')).length,
-    deals: (await loadBrainEntitySlugs(s, 'deal')).length,
-    nodes: graph.nodes.length,
-    edges: graph.edges.length
-  }
-  brainStatusCountsCache = { folder, revision, counts }
-  return counts
-}
 
 function noteIpcDenied(reason: 'no_window' | 'sender' | 'frame'): void {
   if (!shouldSampleIpcDeny()) return
@@ -2160,9 +2137,6 @@ function overlayRendererUrl(): string {
  * opaque; overlay after onboardingDone must be created transparent. Recreate when they disagree.
  */
 let overlayWindowTransparent = true
-// M2-0031: true only while withBootFirstShowDeferred() runs boot's createWindow(), so the boot window's first show is its own task.
-// Every other createWindow() caller (replay handoff, recovery) keeps the synchronous constructor show.
-let bootWindowFirstShowDeferred = false
 let emittedAppStarted = false
 // M2-0006: set once, at the same point app.started fires — will-quit calls observability.shutdownClean()
 // on it, and it is meaningless before that first createWindow() has run.
@@ -2672,7 +2646,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   }
   const chrome = overlayWindowChrome(onboardingLive)
   overlayWindowTransparent = chrome.transparent
-  const deferFirstShow = bootWindowFirstShowDeferred
+  const deferFirstShow = isBootFirstShowDeferred()
   win = new BrowserWindow({
     title: 'Métis', // Electron otherwise titles the window with the package name until the renderer's <title> loads
     width: firstPaint.width,
@@ -2700,8 +2674,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // 185-Y hid exclusive until paint (ctor show gated off while onboarding live) and left
     // the window off-screen ~5s (WINDOW_AT≈5s) — Ultron stamp bar FAIL: Act1 ≤300ms from
     // PROCESS START. Shell (CSS poster + Métis + Next) is in first HTML parse; never wait.
-    // M2-0031: the boot window is built hidden (paintWhenInitiallyHidden stays at its default, so the
-    // first frame is prepared while hidden) and shown by scheduleFirstShow below in the next task.
+    // M2-0031: the boot window is built hidden (default paintWhenInitiallyHidden prepares its first frame) and shown next task.
     show: !deferFirstShow,
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
@@ -2733,8 +2706,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // FITO-185-Z: show exclusive NOW (ctor show:true + activating show). The no-JS Act1
   // shell (poster CSS + Métis + Next) is in index.html — never hide-for-seconds.
   // FITO-185-T: activating show (not showInactive) so Act 1 is not behind Finder.
-  // M2-0031: the boot window is constructed hidden and takes this same activating show in the very
-  // next task (scheduleFirstShow below), so its native construction and first show are separate tasks.
+  // M2-0031: a boot window built hidden takes this same show in the next task (scheduleCurrentFirstShow below).
   if (onboardingLive && !deferFirstShow) {
     try {
       showForExclusiveOnboarding(win)
@@ -2773,19 +2745,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
     win = null
     throw e
   }
-  if (deferFirstShow) {
-    // Exclusive keeps its activating show (FITO-185-T); the overlay reveal never steals focus (MQA-275).
-    const firstShown = win
-    scheduleFirstShow(firstShown, () => {
-      if (win !== firstShown) return
-      try {
-        if (onboardingLive) showForExclusiveOnboarding(firstShown)
-        else if (!firstShown.isVisible()) firstShown.showInactive()
-      } catch {
-        /* headless */
-      }
-    })
-  }
+  // Exclusive keeps its activating show (FITO-185-T); the overlay reveal never steals focus (MQA-275).
+  if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) =>
+    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.showInactive())
 
   // Capture THIS window instance so a late 'closed' from a crashed/replaced window can't null out a
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
@@ -3029,16 +2991,6 @@ function createWindow(targetDisplay?: Electron.Display): void {
   startOverlayCursorWatch()
   applyHideClickThrough()
   applyOverlaySurfaceChrome()
-}
-
-/** Boot's createWindow runs inside this: its native construction is one task and its first show the next (M2-0031). */
-function withBootFirstShowDeferred(create: () => void): void {
-  bootWindowFirstShowDeferred = true
-  try {
-    create()
-  } finally {
-    bootWindowFirstShowDeferred = false
-  }
 }
 
 function resizeTo(height: number): void {

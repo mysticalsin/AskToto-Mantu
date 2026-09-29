@@ -1,6 +1,12 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
-import { scheduleFirstShow, type FirstShowWindow } from './first-show'
+import {
+  isBootFirstShowDeferred,
+  scheduleCurrentFirstShow,
+  scheduleFirstShow,
+  withBootFirstShowDeferred,
+  type FirstShowWindow
+} from './first-show'
 
 function fakeWindow(opts: { destroyed?: boolean } = {}): EventEmitter & FirstShowWindow {
   const win = new EventEmitter() as EventEmitter & FirstShowWindow
@@ -42,6 +48,45 @@ describe('scheduleFirstShow (M2-0031)', () => {
   it('does not show a window destroyed before its turn', async () => {
     const show = vi.fn()
     scheduleFirstShow(fakeWindow({ destroyed: true }), show)
+    await flush()
+    expect(show).not.toHaveBeenCalled()
+  })
+})
+
+describe('boot first-show deferral (M2-0031)', () => {
+  it('is on only while withBootFirstShowDeferred runs, including after a throwing create', () => {
+    expect(isBootFirstShowDeferred()).toBe(false)
+    let seen: boolean | null = null
+    withBootFirstShowDeferred(() => {
+      seen = isBootFirstShowDeferred()
+    })
+    expect(seen).toBe(true)
+    expect(isBootFirstShowDeferred()).toBe(false)
+    expect(() =>
+      withBootFirstShowDeferred(() => {
+        throw new Error('construct failed')
+      })
+    ).toThrow('construct failed')
+    expect(isBootFirstShowDeferred()).toBe(false)
+  })
+
+  it('shows the window in the next task while it is still the current window', async () => {
+    const win = fakeWindow()
+    const show = vi.fn()
+    scheduleCurrentFirstShow(win, () => win, show)
+    expect(show).not.toHaveBeenCalled()
+    await flush()
+    expect(show).toHaveBeenCalledWith(win)
+  })
+
+  it('skips a window replaced before its first show, and swallows a throwing show', async () => {
+    const replaced = fakeWindow()
+    const show = vi.fn()
+    scheduleCurrentFirstShow(replaced, () => fakeWindow(), show)
+    const headless = fakeWindow()
+    scheduleCurrentFirstShow(headless, () => headless, () => {
+      throw new Error('headless')
+    })
     await flush()
     expect(show).not.toHaveBeenCalled()
   })

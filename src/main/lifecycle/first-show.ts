@@ -22,3 +22,38 @@ export function scheduleFirstShow(win: FirstShowWindow, show: () => void): void 
   const immediate = setImmediate(run)
   win.once('ready-to-show', run)
 }
+
+let bootFirstShowDeferred = false
+
+/** True only while withBootFirstShowDeferred runs boot's createWindow, so only the boot window is built hidden.
+ *  Every other createWindow caller (replay handoff, recovery) keeps the synchronous constructor show. */
+export function isBootFirstShowDeferred(): boolean {
+  return bootFirstShowDeferred
+}
+
+/** Runs boot's createWindow so its native construction is one task and its first show the next. */
+export function withBootFirstShowDeferred(create: () => void): void {
+  bootFirstShowDeferred = true
+  try {
+    create()
+  } finally {
+    bootFirstShowDeferred = false
+  }
+}
+
+/** scheduleFirstShow for a window that may be replaced before its first show: `show` runs only while
+ *  `current()` is still this window, and a throwing show (headless) is swallowed. */
+export function scheduleCurrentFirstShow<W extends FirstShowWindow>(
+  win: W,
+  current: () => unknown,
+  show: (win: W) => void
+): void {
+  scheduleFirstShow(win, () => {
+    if (current() !== win) return
+    try {
+      show(win)
+    } catch {
+      /* headless */
+    }
+  })
+}
