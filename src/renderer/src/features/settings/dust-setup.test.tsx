@@ -1,14 +1,15 @@
 /**
- * Behaviour tests for the Dust setup card and its agent picker (M2-0071 slice 1, written before either moves
- * out of Settings.tsx). The suite runs in a node environment with no DOM, so components are driven through a
- * tiny hook harness: useState/useRef/useId keep their slots between renders, effects never run (mount-time
- * probes are not under test), and the returned element tree is searched for the handlers a user would hit.
+ * Behaviour tests for the Dust setup card and its agent picker (M2-0071). The suite runs in a node environment
+ * with no DOM, so components are driven through a tiny hook harness: useState/useRef/useId keep their slots
+ * between renders, effects never run (mount-time probes are not under test), and the returned element tree is
+ * searched for the handlers a user would hit.
  */
 import { isValidElement, type ReactElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, DUST_BASE_AGENT_ID, PublicSettingsSchema, type DustAgent, type PublicSettings } from '@shared/ipc'
 import { DUST_WORKSPACE_MISSING_SETUP_ERROR } from '@shared/dust-validate'
-import { AgentPicker, DustSetup } from './Settings'
+import { AgentPicker } from './AgentPicker'
+import { DustSetup } from './DustSetup'
 
 const hooks = vi.hoisted(() => ({ slots: new Map<number, { current: unknown }>(), next: 0 }))
 
