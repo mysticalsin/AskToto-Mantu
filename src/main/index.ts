@@ -180,6 +180,7 @@ import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
+import { startAvailableMemorySampler } from './llm/available-memory'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,
@@ -9150,6 +9151,7 @@ if (!app.requestSingleInstanceLock()) {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
   await runBootSidecarReaper(app.getPath('userData'))
+  startAvailableMemorySampler() // M2-0430: background vm_stat reading for the local-model memory gate
   // M2-0033: unattended model work waits for the maintenance gate.
   startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
   app.on('web-contents-created', (_event, contents) => {
