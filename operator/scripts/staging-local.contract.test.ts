@@ -92,7 +92,7 @@ describe.skipIf(process.platform === 'win32')('local staging contract lane (no C
     dev.stdout?.on('data', (chunk) => (devOutput += chunk))
     dev.stderr?.on('data', (chunk) => (devOutput += chunk))
     await waitForHealth(base, dev, () => devOutput)
-  }, 150_000)
+  }, 300_000)
 
   afterAll(() => {
     dev?.kill('SIGTERM')

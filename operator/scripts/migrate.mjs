@@ -187,6 +187,25 @@ export async function runStatement(stmt, target, databaseName, envName, options 
   }
 }
 
+/** Local-only fast path: one wrangler process per schema file instead of one per statement (about 110
+ *  spawns otherwise, minutes on a CI runner). A non-zero exit is not a verdict; the caller falls back to
+ *  the per-statement runner, which knows which failures are already-applied no-ops. */
+export function runLocalFile(path, databaseName, envName, options = {}) {
+  const args = ['d1', 'execute', databaseName, '--file', path, '--local']
+  if (envName) args.push('--env', envName)
+  if (options.persistTo) args.push('--persist-to', options.persistTo)
+  const command = localNodeCommand('wrangler', args)
+  const execute = options.spawn ?? spawnSync
+  try {
+    const result = execute(command.cmd, command.args, {
+      cwd: OPERATOR_ROOT, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8'
+    })
+    return result.status === 0 && !result.signal && !result.error
+  } catch {
+    return false
+  }
+}
+
 function summarize(label, results) {
   const applied = results.filter((r) => r.status === 'applied').length
   const skipped = results.filter((r) => r.status === 'skipped').length
@@ -265,6 +284,10 @@ async function main() {
     if (dryRun) {
       console.log(`--- ${file}: ${statements.length} statement(s) (database: ${databaseName}) ---`)
       for (const stmt of statements) console.log(shortStmt(stmt))
+      continue
+    }
+    if (target === 'local' && runLocalFile(join(OPERATOR_ROOT, file), databaseName, envName, { persistTo })) {
+      console.log(`--- Applied ${file} (${statements.length} statement(s)) to local in one call (database: ${databaseName}${envName ? `, env: ${envName}` : ''}) ---`)
       continue
     }
     console.log(`--- Applying ${file} (${statements.length} statement(s)) to ${target} (database: ${databaseName}${envName ? `, env: ${envName}` : ''}) ---`)

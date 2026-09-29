@@ -1,7 +1,8 @@
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isRetrySafeStatement, parseStatements, runStatement, seedDefaultTiers } from './migrate.mjs'
+import { isRetrySafeStatement, parseStatements, runLocalFile, runStatement, seedDefaultTiers } from './migrate.mjs'
 
 const statement = 'ALTER TABLE seats ADD COLUMN country TEXT'
 const failed = (stderr = '', extra = {}) => ({ status: 1, signal: null, stdout: '', stderr, ...extra })
@@ -38,6 +39,28 @@ describe('MQA-313 fail-closed migration execution', () => {
       resolve(__dirname, '../../node_modules/wrangler/bin/wrangler.js'),
       'd1', 'execute', 'metis-operator-staging', '--command', statement, '--local', '--env', 'staging'
     ])
+  })
+
+  it('applies a local schema file in one wrangler call, and reports failure so the caller falls back', () => {
+    const ok = fixture(succeeded)
+    expect(runLocalFile('/tmp/schema.sql', 'metis-operator-staging', 'staging', { ...ok, persistTo: '/tmp/state' })).toBe(true)
+    expect(ok.spawn).toHaveBeenCalledTimes(1)
+    expect(ok.spawn.mock.calls[0][1]).toEqual([
+      resolve(__dirname, '../../node_modules/wrangler/bin/wrangler.js'),
+      'd1', 'execute', 'metis-operator-staging', '--file', '/tmp/schema.sql', '--local', '--env', 'staging',
+      '--persist-to', '/tmp/state'
+    ])
+    const bad = fixture(failed('duplicate column name: country [SQLITE_ERROR]'))
+    expect(runLocalFile('/tmp/schema.sql', 'metis-operator', null, bad)).toBe(false)
+  })
+
+  it('runs --local against the staging placeholder id but refuses --remote', () => {
+    const run = (target: string) =>
+      spawnSync(process.execPath, [resolve(__dirname, 'migrate.mjs'), target, '--env', 'staging', '--dry-run'], { encoding: 'utf8' })
+    expect(run('--local').status).toBe(0)
+    const remote = run('--remote')
+    expect(remote.status).toBe(1)
+    expect(remote.stderr).toContain('REPLACE_AFTER_D1_CREATE')
   })
 
   it('skips a completed duplicate-column response without retry', async () => {
