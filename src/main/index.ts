@@ -644,6 +644,7 @@ import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { scheduleTrayAfterFirstPaint, yieldToEventLoop } from './boot-tray'
+import { scheduleFirstShow } from './lifecycle/first-show'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
@@ -2159,6 +2160,9 @@ function overlayRendererUrl(): string {
  * opaque; overlay after onboardingDone must be created transparent. Recreate when they disagree.
  */
 let overlayWindowTransparent = true
+// M2-0031: true only while withBootFirstShowDeferred() runs boot's createWindow(), so the boot window's first show is its own task.
+// Every other createWindow() caller (replay handoff, recovery) keeps the synchronous constructor show.
+let bootWindowFirstShowDeferred = false
 let emittedAppStarted = false
 // M2-0006: set once, at the same point app.started fires — will-quit calls observability.shutdownClean()
 // on it, and it is meaningless before that first createWindow() has run.
@@ -2668,6 +2672,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   }
   const chrome = overlayWindowChrome(onboardingLive)
   overlayWindowTransparent = chrome.transparent
+  const deferFirstShow = bootWindowFirstShowDeferred
   win = new BrowserWindow({
     title: 'Métis', // Electron otherwise titles the window with the package name until the renderer's <title> loads
     width: firstPaint.width,
@@ -2695,7 +2700,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // 185-Y hid exclusive until paint (ctor show gated off while onboarding live) and left
     // the window off-screen ~5s (WINDOW_AT≈5s) — Ultron stamp bar FAIL: Act1 ≤300ms from
     // PROCESS START. Shell (CSS poster + Métis + Next) is in first HTML parse; never wait.
-    show: true,
+    // M2-0031: the boot window is built hidden (paintWhenInitiallyHidden stays at its default, so the
+    // first frame is prepared while hidden) and shown by scheduleFirstShow below in the next task.
+    show: !deferFirstShow,
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2726,7 +2733,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // FITO-185-Z: show exclusive NOW (ctor show:true + activating show). The no-JS Act1
   // shell (poster CSS + Métis + Next) is in index.html — never hide-for-seconds.
   // FITO-185-T: activating show (not showInactive) so Act 1 is not behind Finder.
-  if (onboardingLive) {
+  // M2-0031: the boot window is constructed hidden and takes this same activating show in the very
+  // next task (scheduleFirstShow below), so its native construction and first show are separate tasks.
+  if (onboardingLive && !deferFirstShow) {
     try {
       showForExclusiveOnboarding(win)
     } catch {
@@ -2763,6 +2772,19 @@ function createWindow(targetDisplay?: Electron.Display): void {
     }
     win = null
     throw e
+  }
+  if (deferFirstShow) {
+    // Exclusive keeps its activating show (FITO-185-T); the overlay reveal never steals focus (MQA-275).
+    const firstShown = win
+    scheduleFirstShow(firstShown, () => {
+      if (win !== firstShown) return
+      try {
+        if (onboardingLive) showForExclusiveOnboarding(firstShown)
+        else if (!firstShown.isVisible()) firstShown.showInactive()
+      } catch {
+        /* headless */
+      }
+    })
   }
 
   // Capture THIS window instance so a late 'closed' from a crashed/replaced window can't null out a
@@ -3007,6 +3029,16 @@ function createWindow(targetDisplay?: Electron.Display): void {
   startOverlayCursorWatch()
   applyHideClickThrough()
   applyOverlaySurfaceChrome()
+}
+
+/** Boot's createWindow runs inside this: its native construction is one task and its first show the next (M2-0031). */
+function withBootFirstShowDeferred(create: () => void): void {
+  bootWindowFirstShowDeferred = true
+  try {
+    create()
+  } finally {
+    bootWindowFirstShowDeferred = false
+  }
 }
 
 function resizeTo(height: number): void {
@@ -9130,7 +9162,8 @@ if (!app.requestSingleInstanceLock()) {
   if (onboardingExclusiveLive()) {
     try {
       registerIpc()
-      createWindow()
+      await yieldToEventLoop() // M2-0031: IPC registration, window construction and first show are separate tasks
+      withBootFirstShowDeferred(createWindow)
     } catch (e) {
       mainLog.warn('[boot] FITO-185-Z early exclusive window failed:', e)
     }
@@ -9613,7 +9646,7 @@ if (!app.requestSingleInstanceLock()) {
   runStep('registerIpc', registerIpc)
   clearBootWatchOnce('registerIpc')
   await yieldToEventLoop() // M2-0422: window construction is its own task
-  runStep('createWindow', createWindow)
+  withBootFirstShowDeferred(() => runStep('createWindow', createWindow))
   scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
   revealController.markBootComplete()
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
