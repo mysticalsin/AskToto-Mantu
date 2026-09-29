@@ -63,12 +63,14 @@ function seed(content: string | Buffer): void {
 /**
  * Seed a genuine host-native executable that exits non-zero on `-L` without printing a
  * licence banner, and return the exit code it really produces. Used where a shebang
- * script cannot be loaded (Windows). The node binary running this test is by definition a
- * valid image for this host, and rejects `-L` during argument parsing — before any script
- * or NODE_OPTIONS require would run — so it cannot accidentally emit a banner.
+ * script cannot be loaded (Windows). where.exe ships with every Windows install, is a
+ * valid image for this host, and rejects `-L` as an invalid option without printing a
+ * banner. It is small on purpose: copying the ~80 MB node.exe made the first launch of the
+ * freshly written file slow enough (on-access scanning) to time out on loaded runners.
  */
 function seedHostBinaryRejectingDashL(): number {
-  seed(readFileSync(process.execPath))
+  const systemRoot = process.env.SystemRoot ?? process.env.windir ?? ''
+  seed(readFileSync(join(systemRoot, 'System32', 'where.exe')))
   const probe = spawnSync(join(cwd, 'resources', 'ffmpeg', `${platform}-${arch}`, binaryName), ['-L'], {
     encoding: 'utf8'
   })
