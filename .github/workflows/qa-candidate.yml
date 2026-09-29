@@ -351,11 +351,13 @@ jobs:
           node scripts/check-packaged-launch.mjs (Get-Item assets/Metis-Portable-*.exe).FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  # Report-only per owner decision OD-24; M2-0433 makes it blocking again once ST-1 passes strictly (OD-21).
   st1-mac-fifo:
     name: ST-1 fifo stall row (macOS)
     needs: provenance
     runs-on: macos-latest
     timeout-minutes: 20
+    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -374,6 +376,7 @@ jobs:
       - name: Verify every byte against the provenance
         run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure packaged stall resilience
+        continue-on-error: true
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
