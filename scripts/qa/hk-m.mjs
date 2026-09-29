@@ -269,6 +269,20 @@ export function exitCodeForReportResult(result) {
   return result === 'pass' ? 0 : 1
 }
 
+// A killed app can still land a late write in its temp dir while it is removed. That is a cleanup problem, not an
+// owned-process leak: retry, then record a warning. It never throws and never changes a scenario result.
+export const cleanupWarnings = []
+
+export function removeTempDir(dir, warnings = cleanupWarnings, remove = rmSync) {
+  try {
+    remove(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    return true
+  } catch (error) {
+    warnings.push({ code: error?.code ?? 'UNKNOWN', message: error instanceof Error ? error.message : String(error) })
+    return false
+  }
+}
+
 function stopUnrelatedFixture(fixture) {
   if (!fixture?.proc?.pid) return
   hardKill(fixture.proc.pid)
@@ -299,7 +313,7 @@ async function startUnrelatedSameNameFixture() {
     while (Date.now() < deadline) {
       if (spawnError) {
         stopUnrelatedFixture({ proc })
-        rmSync(dir, { recursive: true, force: true })
+        removeTempDir(dir)
         return {
           ok: false,
           failure: 'unrelated_same_name_fixture_unavailable',
@@ -308,7 +322,7 @@ async function startUnrelatedSameNameFixture() {
       }
       if (exited) {
         stopUnrelatedFixture({ proc })
-        rmSync(dir, { recursive: true, force: true })
+        removeTempDir(dir)
         return { ok: false, failure: 'unrelated_same_name_fixture_exited_early' }
       }
       const table = listProcesses('darwin')
@@ -316,7 +330,7 @@ async function startUnrelatedSameNameFixture() {
       if (entry) {
         if (entry.role !== UNRELATED_SAME_NAME_ROLE) {
           stopUnrelatedFixture({ proc })
-          rmSync(dir, { recursive: true, force: true })
+          removeTempDir(dir)
           return {
             ok: false,
             failure: 'unrelated_same_name_fixture_role_mismatch',
@@ -329,11 +343,11 @@ async function startUnrelatedSameNameFixture() {
       await sleep(POLL_MS)
     }
     stopUnrelatedFixture({ proc })
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
     return { ok: false, failure: 'unrelated_same_name_fixture_not_observed' }
   } catch (error) {
     if (proc) stopUnrelatedFixture({ proc })
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
     return {
       ok: false,
       failure: 'unrelated_same_name_fixture_unavailable',
@@ -575,8 +589,8 @@ async function runCycle({ executable, installRoot, scenario, cycle, timings }) {
   } finally {
     if (child.pid && !exitInfo.settled) hardKill(child.pid)
     stopUnrelatedFixture(unrelated)
-    rmSync(unrelated.dir, { recursive: true, force: true })
-    rmSync(profile, { recursive: true, force: true })
+    removeTempDir(unrelated.dir)
+    removeTempDir(profile)
   }
 }
 
@@ -644,6 +658,7 @@ async function main() {
       }
     }
   } finally {
+    if (cleanupWarnings.length > 0) report.cleanupWarnings = cleanupWarnings
     finalize(budgetSpent() ? 'budget_exhausted' : 'aborted')
   }
   const exitCode = exitCodeForReportResult(report.result)

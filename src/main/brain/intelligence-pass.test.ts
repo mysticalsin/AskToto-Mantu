@@ -10,6 +10,7 @@ import { brainBackfillProgress, startBackfill } from './ingest'
 import { startIntelligencePass } from './intelligence-pass'
 import { INTELLIGENCE_PASS_NO_PROVIDER } from './intelligence-pass-route'
 import { readIndex } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -53,6 +54,7 @@ describe('Update Intelligence pass — local first, API once', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-intel-pass-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-intel-pass-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -93,7 +95,7 @@ describe('Update Intelligence pass — local first, API once', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startIntelligencePass()).toEqual({ queued: 1 })
+    expect(await startIntelligencePass()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['local-first.md']?.ok).toBe(true)
@@ -108,7 +110,7 @@ describe('Update Intelligence pass — local first, API once', () => {
       .mockImplementationOnce(respondError('llama-server refused the load'))
       .mockImplementationOnce(respondJson())
 
-    expect(startIntelligencePass()).toEqual({ queued: 1 })
+    expect(await startIntelligencePass()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['local-error.md']?.ok).toBe(true)
@@ -123,7 +125,7 @@ describe('Update Intelligence pass — local first, API once', () => {
     localBaseReadyMock.mockReturnValue(false)
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startIntelligencePass()).toEqual({ queued: 1 })
+    expect(await startIntelligencePass()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['ram-refused.md']?.ok).toBe(true)
@@ -131,11 +133,11 @@ describe('Update Intelligence pass — local first, API once', () => {
     expect(createStreamMock.mock.calls[0][0].providerId).toBe('anthropic')
   })
 
-  it('fails loud when Local is missing and no API is configured', () => {
+  it('fails loud when Local is missing and no API is configured', async () => {
     localBaseReadyMock.mockReturnValue(false)
     writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: [] }), 'utf8')
     writeFileSync(join(meetingsFolder, 'none.md'), '---\ndate: 2026-08-04\n---\nNo provider.', 'utf8')
-    expect(startIntelligencePass()).toEqual({ queued: 0, error: INTELLIGENCE_PASS_NO_PROVIDER })
+    expect(await startIntelligencePass()).toEqual({ queued: 0, error: INTELLIGENCE_PASS_NO_PROVIDER })
     expect(createStreamMock).not.toHaveBeenCalled()
   })
 
@@ -144,7 +146,7 @@ describe('Update Intelligence pass — local first, API once', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(respondError('provider down'))
 
-    expect(startIntelligencePass()).toEqual({ queued: 1 })
+    expect(await startIntelligencePass()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['both-fail.md']?.ok).toBe(false)
@@ -157,7 +159,7 @@ describe('Update Intelligence pass — local first, API once', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(createStreamMock.mock.calls[0][0].providerId).toBe('anthropic')

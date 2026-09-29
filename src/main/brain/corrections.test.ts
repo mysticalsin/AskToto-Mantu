@@ -6,6 +6,7 @@ import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type MeetingExtraction, type CorrectionEntry } from '@shared/brain'
 import { ingestExtraction } from './ingest'
 import { buildBrainContext } from './context'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import {
   brainDir,
@@ -85,6 +86,7 @@ describe('corrections engine', () => {
   let s: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-corrections-test-'))
     s = settingsFor(folder)
   })

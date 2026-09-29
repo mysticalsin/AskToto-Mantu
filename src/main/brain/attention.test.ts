@@ -9,6 +9,7 @@ import { updateEntityField } from './corrections'
 import { slugify, setDealOutcome, readMeetingExtraction, readDeal, writeDeal } from './store'
 import { computeAttention } from './attention'
 import { formatDeal } from './context'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -23,6 +24,7 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
   let s: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-attention-test-'))
     s = settingsFor(folder)
   })
@@ -174,6 +176,7 @@ describe('brain:meetingExtraction store contract', () => {
   let s: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-meeting-extraction-test-'))
     s = settingsFor(folder)
   })
@@ -252,6 +255,7 @@ describe('render-gate property — no unverified NUMBER ever reaches the Attenti
   let folder: string
   let s: Settings
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-attention-gate-'))
     s = settingsFor(folder)
   })

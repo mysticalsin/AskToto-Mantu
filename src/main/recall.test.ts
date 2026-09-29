@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, renameSync, statSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync, existsSync, renameSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { saveMeeting, isEncryptedFile } from './transcripts'
 import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk, meetingTextNeedsRecap } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
+import { useStorageForTests } from './infra/storage/meetings-storage'
 
 /**
  * The lines a successful read must have.
@@ -53,6 +54,7 @@ describe('recall — language tags round-trip through save → recallRead', () =
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-lang-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -111,6 +113,7 @@ describe('recall — managed summary-only meetings', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-summary-only-'))
     testSettings = {
       meetingsFolder: folder,
@@ -164,6 +167,7 @@ describe('recall — deleteMeeting', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -241,6 +245,7 @@ describe('recall — deleteAllMeetings', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -281,6 +286,7 @@ describe('recall — sweepExpiredMeetings (retention)', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -334,6 +340,7 @@ describe('recall — recallRead recap extraction', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -413,6 +420,7 @@ describe('recall — updateMeetingRecap', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -549,6 +557,7 @@ describe('recall — renameMeeting', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -612,6 +621,7 @@ describe('recall — undecryptable rows degrade gracefully', () => {
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -676,6 +686,7 @@ describe("recall — deleteAllMeetings erases only Métis's own files (MQA-032)"
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-own-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -768,7 +779,8 @@ describe('recall — a transient read failure never hides a meeting (MQA-033)', 
   let folder: string
 
   beforeEach(() => {
-    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-unreadable-'))
+    useStorageForTests()
+    folder = realpathSync.native(mkdtempSync(join(tmpdir(), 'asktoto-recall-unreadable-')))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
 
@@ -839,6 +851,7 @@ describe('recall — quote/backslash titles round-trip through the reader (MQA-0
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-quote-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -901,6 +914,7 @@ describe('recall — sub-second start times do not shift the transcript a day (M
   let folder: string
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-midnight-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -975,6 +989,7 @@ describe('setMeetingCrmPushed — the durable "already pushed to the CRM" marker
   }
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-crm-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -1055,6 +1070,7 @@ describe('isMeetingConfidentialOnDisk — MCP push defense-in-depth', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-conf-'))
     testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })
@@ -1062,13 +1078,13 @@ describe('isMeetingConfidentialOnDisk — MCP push defense-in-depth', () => {
 
   it('is false for a normal meeting and true after setMeetingConfidential', async () => {
     const file = await saveMeeting(testSettings, meeting)
-    expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).toBe(false)
+    await expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).resolves.toBe(false)
     expect(await setMeetingConfidential(testSettings, basename(file), true)).toEqual({ ok: true })
-    expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).toBe(true)
+    await expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).resolves.toBe(true)
   })
 
-  it('fails closed on a missing or path-traversal file name', () => {
-    expect(isMeetingConfidentialOnDisk(testSettings, 'no-such-meeting.md')).toBe(true)
-    expect(isMeetingConfidentialOnDisk(testSettings, '../escape.md')).toBe(true)
+  it('fails closed on a missing or path-traversal file name', async () => {
+    await expect(isMeetingConfidentialOnDisk(testSettings, 'no-such-meeting.md')).resolves.toBe(true)
+    await expect(isMeetingConfidentialOnDisk(testSettings, '../escape.md')).resolves.toBe(true)
   })
 })

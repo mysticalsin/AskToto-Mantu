@@ -118,6 +118,13 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(create).toMatch(/backgroundColor: chrome\.backgroundColor/)
     // FITO-185-Z: exclusive shows immediately (never show:!onboardingLive hide-for-seconds)
     expect(create).toMatch(/show:\s*true/)
+    // M2-0031: the constructor shows at once for every caller except boot, whose first show is the very
+    // next task (scheduleCurrentFirstShow, never gated on renderer JS — lifecycle/first-show.test.ts).
+    expect(create).toMatch(/show:\s*!deferFirstShow/)
+    expect(create).toMatch(/scheduleCurrentFirstShow\(win,[\s\S]*?onboardingLive \? showForExclusiveOnboarding\(firstShown\)/)
+    // The overlay's deferred first show activates like the constructor's show:true did (focus + front).
+    expect(create).toMatch(/showForExclusiveOnboarding\(firstShown\) : firstShown\.isVisible\(\) \|\| firstShown\.show\(\)\)/)
+    expect(create).not.toMatch(/firstShown\.showInactive\(\)/)
     expect(create).not.toMatch(/show:\s*!onboardingLive/)
     expect(create).toMatch(/FITO-185-Z/)
     expect(create).toMatch(/pollAct1Paint/)

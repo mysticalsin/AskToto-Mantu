@@ -17,6 +17,7 @@ import {
   enqueueIngest, SELF_PERSON_SLUG } from './ingest'
 import { readDeal, readMeetingExtraction, readPerson, slugify } from './store'
 import { formatDeal } from './context'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 /**
@@ -387,6 +388,7 @@ describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createS
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-d2-userdata-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-d2-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
