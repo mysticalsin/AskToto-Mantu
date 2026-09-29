@@ -41,7 +41,7 @@ $managedRows = @(
 if (-not $PlanOnly) {
   if (-not $App) { throw '-App is required unless -PlanOnly is set.' }
   if (-not $QaProfile) { throw '-QaProfile or METIS_QA_PROFILE is required: a fresh profile is not representative.' }
-  if (-not (Test-Path (Join-Path $QaProfile 'resource-census-profile.json'))) { throw "resource-census-profile.json is missing from $QaProfile: measure only a representative profile." }
+  if (-not (Test-Path (Join-Path $QaProfile 'resource-census-profile.json'))) { throw "resource-census-profile.json is missing from ${QaProfile}: measure only a representative profile." }
 }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
