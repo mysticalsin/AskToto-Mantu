@@ -244,6 +244,36 @@ jobs:
           docker run --rm -v "$PWD:/repo" -w /repo \
             zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             detect --source=/repo --config=/repo/.gitleaks.toml --redact -v --no-banner --exit-code=1
+      # Canary per file class (M2-0259). .gitleaks.toml carries no path exemptions, so a secret in a test
+      # file, QA script, doc, fixture or generated asset must fail the scan. This step proves it: it plants
+      # one synthetic GitHub-token-shaped canary per class in a throwaway directory (never in the tree, so
+      # the real scan stays green), runs the pinned gitleaks image with the repo's own config, and requires
+      # a github-pat finding for each. The value is assembled at run time and the scan runs with --redact,
+      # so neither the workflow text nor any report ever holds the value; the step also fails if the
+      # value shows up in gitleaks's output.
+      - name: Gitleaks canaries (one per file class)
+        run: |
+          canary="ghp_$(printf '%s' aB3dE5gH7jK9 mN1pQ3sT5vW7 yZ2bD4fH6jL8)"
+          for entry in test:src/canary.test.ts qa:scripts/qa/canary.mjs doc:docs/canary.md \
+                       fixture:src/fixtures/canary.json generated:out/generated/canary.js; do
+            class="${entry%%:*}"; rel="${entry#*:}"
+            dir="$(mktemp -d)"
+            mkdir -p "$dir/$(dirname "$rel")"
+            printf 'const token = "%s"\n' "$canary" > "$dir/$rel"
+            set +e
+            report="$(docker run --rm -v "$PWD/.gitleaks.toml:/cfg/.gitleaks.toml:ro" -v "$dir:/canary" \
+              zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+              detect --no-git --source=/canary --config=/cfg/.gitleaks.toml --redact -v --no-banner --exit-code=1 2>&1)"
+            status=$?
+            set -e
+            if [ "$status" -ne 1 ] || ! grep -q 'RuleID:[[:space:]]*github-pat' <<<"$report"; then
+              echo "::error::Gitleaks did not flag the $class canary ($rel)"; exit 1
+            fi
+            if grep -qF "$canary" <<<"$report"; then
+              echo "::error::Gitleaks output printed the canary value ($class)"; exit 1
+            fi
+            echo "$class canary flagged, value redacted."
+          done
       # Blocks a committed absolute per-user path or agent scratch-session path in tracked source.
       # Scans every tracked file git ls-files reports for the globs check-no-scratch-paths.mjs
       # declares; a pre-existing hit outside this gate's own scope is grandfathered in that

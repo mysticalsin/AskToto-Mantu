@@ -22,25 +22,16 @@ useDefault = true
 # Cloudflare key — see MISTAKES/QA harness notes) did not trip gitleaks's default ruleset directly, but is
 # allowlisted below on the same basis: it must never be treated as a real credential either.
 #
-# The allowlist below is PATH-scoped, not string-scoped, and deliberately mirrors the existing narrow
-# scan's own exclusions (--exclude='*.test.ts' --exclude-dir=qa in build.yml) so the two secret gates stay
-# in the same policy rather than drifting: a real secret pasted into product source still fails both.
+# The allowlist below is VALUE-scoped, never path-scoped (M2-0259). Test files, the QA harness, docs,
+# fixtures and generated assets are all scanned like product source: a real secret pasted into any of
+# them fails this gate. Each entry matches ONE exact fake value (gitleaks matches `regexes` against the
+# secret itself), so a real secret pasted beside a fixture still fails. The Security job plants one
+# synthetic canary per file class and requires this config to flag each of them (build.yml).
 [allowlist]
-description = "Test fixtures and the physical QA harness — deliberately fake or invalid credentials, never real ones."
-paths = [
-  # Unit/contract test fixtures across the repo (src/, scripts/, license-server/) — same class of file
-  # the narrow scan already excludes via --exclude='*.test.ts' --exclude='*.test.tsx'.
-  '''.*\.test\.tsx?$''',
-  '''.*\.test\.mjs$''',
-  # The physical QA harness (scripts/qa/**) plants deliberately-invalid keys (e.g. 'qa-proxy-key') to
-  # exercise degrade/redaction paths — same directory the narrow scan already excludes via --exclude-dir=qa.
-  '''^scripts/qa/.*'''
-]
-# Known false positives, matched by the exact fake value so a real secret pasted beside them still
-# fails. Documentation is deliberately NOT path-exempt: docs/**.md is scanned like any other file (M2-0049).
+description = "Known deliberately-fake credentials, matched by exact value."
 regexes = [
-  # The fixture the redaction unit tests use, when a doc quotes it.
+  # The fixture the redaction unit tests use (src/shared/redact.test.ts), and when a doc quotes it.
   '''^['"]?ABCDEF123456['"]?$''',
-  # The license-server test fixture key, when a doc quotes it.
+  # The license-server test fixture key (license-server/ops.test.mjs), and when a doc quotes it.
   '''^ATK-HY2JVMZ3P3JF8CGAQWPR$'''
 ]
