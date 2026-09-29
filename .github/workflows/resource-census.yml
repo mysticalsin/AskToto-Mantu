@@ -1,15 +1,21 @@
 name: Resource census
 
-# Manual evidence lane for M2-0009. It downloads an existing packaged release artifact, installs it on
+# Manual evidence lane for M2-0009. It downloads an existing packaged release artifact, verifies it against the
+# release's published SHA256SUMS (a mismatch fails the job before install), installs it on
 # hosted macOS and Windows runners, measures the reusable process census, and uploads only content-free
 # JSON/log artifacts. It never builds, signs, publishes, tags, or changes release.yml.
 on:
   workflow_dispatch:
     inputs:
+      release_repo:
+        description: Repository that publishes the packaged artifacts and SHA256SUMS
+        required: true
+        default: mysticalsin/Metis-Releases
+        type: string
       release_tag:
         description: Release tag to measure
         required: true
-        default: v1.9.6
+        default: v1.9.6-unsigned
         type: string
 
 permissions:
@@ -28,6 +34,7 @@ jobs:
     name: Resource census (macOS)
     runs-on: macos-latest
     timeout-minutes: 80
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -40,11 +47,13 @@ jobs:
       - name: Download the packaged release artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ inputs.release_repo }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          mkdir -p release-artifact census-output
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-*.dmg' --dir release-artifact --clobber
-          shasum -a 256 release-artifact/* > census-output/SHA256SUMS.txt
+          mkdir -p release-artifact release-sums census-output
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-*.dmg' --dir release-artifact --clobber
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir release-sums --clobber
+          node scripts/qa/verify-sha256sums.mjs release-artifact release-sums/SHA256SUMS* | tee census-output/SHA256SUMS.txt
       - name: Install into runner temp
         run: |
           volume="$RUNNER_TEMP/resource-census-volume"
@@ -97,6 +106,7 @@ jobs:
     name: Resource census (Windows)
     runs-on: windows-latest
     timeout-minutes: 80
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -109,11 +119,13 @@ jobs:
       - name: Download the packaged release artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ inputs.release_repo }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          mkdir -p release-artifact census-output
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-Setup-*.exe' --dir release-artifact --clobber
-          sha256sum release-artifact/* > census-output/SHA256SUMS.txt
+          mkdir -p release-artifact release-sums census-output
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-Setup-*.exe' --dir release-artifact --clobber
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir release-sums --clobber
+          node scripts/qa/verify-sha256sums.mjs release-artifact release-sums/SHA256SUMS* | tee census-output/SHA256SUMS.txt
       - name: Install into runner temp
         shell: pwsh
         run: |
