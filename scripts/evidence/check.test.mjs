@@ -592,7 +592,9 @@ test('C29 M2-0194 bundle check requires the matrix, the four excerpts and stall 
 
   writeM2_0194Bundle(root)
   writeFileSync(join(root, 'M2-0194.lead-action.md'), 'File it.\n')
-  assertProblem(m2_0194BundleProblems(root), 'LEAD_ACTION', 'LIVE_VERIFIED')
+  const leadProblems = m2_0194BundleProblems(root)
+  assertProblem(leadProblems, 'missing LEAD_ACTION handoff')
+  assertProblem(leadProblems, 'LIVE_VERIFIED')
 
   rmSync(join(root, 'sampler-excerpt.jsonl'))
   assertProblem(m2_0194BundleProblems(root), 'sampler-excerpt.jsonl: missing from M2-0194 bundle')
