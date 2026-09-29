@@ -27,6 +27,8 @@ import { parseOperatorHeartbeatEntitlements } from '@shared/operator-entitlement
 import { refreshModelPolicy } from './model-policy-client'
 
 const HEARTBEAT_MS = 60_000
+// Half the <=60s fleet-policy bound, so a change lands inside it despite timer drift and a slow fetch.
+const POLICY_POLL_MS = 30_000
 
 export interface OperatorRuntimeSettings {
   operatorUrl?: string
@@ -40,6 +42,7 @@ export interface OperatorRuntimeSettings {
 }
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+let policyTimer: ReturnType<typeof setInterval> | null = null
 let runtimeGeneration = 0
 let lastAskId: string | null = null
 let fetchImpl: typeof fetch = fetch
@@ -58,6 +61,10 @@ export function stopOperatorRuntime(): void {
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer)
     heartbeatTimer = null
+  }
+  if (policyTimer) {
+    clearInterval(policyTimer)
+    policyTimer = null
   }
 }
 
@@ -370,13 +377,6 @@ export function startOperatorRuntime(
   if (!operatorUrlConfigured(settings) || !resolveSecret(settings)) return
   const tick = async (): Promise<void> => {
     const generation = runtimeGeneration
-    // M2-0412: piggyback the fleet model policy poll on the same <=60s tick rather than a second timer.
-    // Started BEFORE the heartbeat and never awaited with it, so a slow queue drain or heartbeat cannot
-    // push a policy change past the 60 s bound. Best-effort — a failed fetch never blocks the heartbeat.
-    // Broadcast once it settles so Settings' managed/locked display reflects a newly applied policy.
-    void refreshModelPolicy(getSettings()).then(() => {
-      if (generation === runtimeGeneration) hooks?.onReadinessChanged?.()
-    })
     const beat = await operatorHeartbeat(getSettings())
     if (generation !== runtimeGeneration) return
     hooks?.onReadinessChanged?.()
@@ -384,12 +384,23 @@ export function startOperatorRuntime(
       await hooks.onCrmRetry(beat.retry)
     }
   }
+  // M2-0412: the fleet model policy polls on its own timer so a slow queue drain or heartbeat can never
+  // push a policy change past the 60 s bound. Best-effort — a failed fetch never blocks the heartbeat.
+  // Broadcast once it settles so Settings' managed/locked display reflects a newly applied policy.
+  const policyGeneration = runtimeGeneration
+  const pollPolicy = (): void => {
+    void refreshModelPolicy(getSettings()).then(() => {
+      if (policyGeneration === runtimeGeneration) hooks?.onReadinessChanged?.()
+    })
+  }
+  pollPolicy()
   void tick()
   heartbeatTimer = setInterval(() => {
     void tick()
   }, HEARTBEAT_MS)
-  if (typeof heartbeatTimer === 'object' && heartbeatTimer && 'unref' in heartbeatTimer) {
-    heartbeatTimer.unref()
+  policyTimer = setInterval(pollPolicy, POLICY_POLL_MS)
+  for (const timer of [heartbeatTimer, policyTimer]) {
+    if (typeof timer === 'object' && timer && 'unref' in timer) timer.unref()
   }
 }
 

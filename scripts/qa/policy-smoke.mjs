@@ -6,7 +6,7 @@
  * launches the installed packaged app pointed at it via `METIS_OPERATOR_URL`/
  * `METIS_OPERATOR_INGEST_SECRET`, and proves the running app's cached fleet model policy switches to
  * a NEW version the test Operator starts serving mid-run, within 60 s, through nothing but its own
- * <=60s heartbeat cycle — never a restart, never a fake result.
+ * 30s policy poll — never a restart, never a fake result.
  *
  * TLS: the app's Operator client only ever accepts `https://` (resolveOperatorBaseUrl), so the test
  * Operator needs a real certificate even though it is local-only. Minted on the fly with the `openssl`

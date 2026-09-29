@@ -5,9 +5,8 @@
  * right secret to reuse today), caches the last verified document to disk for offline use, and
  * exposes the pure resolution helpers every model call site consults.
  *
- * Polling piggybacks on the existing 60s Operator heartbeat tick (`operator-ingest.ts`'s
- * `startOperatorRuntime`) rather than adding a second timer — call `refreshModelPolicy` once per
- * tick. A tampered, unsigned, or schema-invalid response is rejected outright (audited, never
+ * Polling runs on its own 30s timer in `operator-ingest.ts`'s `startOperatorRuntime` (half the <=60s
+ * bound) — call `refreshModelPolicy` once per poll. A tampered, unsigned, or schema-invalid response is rejected outright (audited, never
  * applied) and the last verified cache — in memory, or reloaded from disk after a relaunch — is kept.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto'
