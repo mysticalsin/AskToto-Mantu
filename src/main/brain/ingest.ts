@@ -17,7 +17,6 @@ import {
   type MeetingRef,
   type BrainGraph,
   type BrainIndex,
-  type IndexUnavailableCause,
   type Confidence,
   type ProvenanceState,
   type ProvenantField,
@@ -83,8 +82,7 @@ import {
   readMeetingExtraction,
   withEntityLock,
   cloneEntity,
-  purgeBrain,
-  indexUnavailableMessage,
+  purgeBrain, rebuildUnavailableError,
   BRAIN_INDEX_ERROR_CODE,
   BrainIndexRebuildError
 } from './store'
@@ -2317,18 +2315,6 @@ function rebuildRefusalMessage(code: BrainIndexRebuildError['code']): string {
   }
 }
 
-function rebuildUnavailableMessage(cause: IndexUnavailableCause): string {
-  switch (cause) {
-    case 'undecryptable':
-    case 'io':
-      return rebuildRefusalMessage(BRAIN_INDEX_ERROR_CODE.keystoreUnavailable)
-    case 'unsupported':
-      return 'This index was written by a newer Métis. It was kept as is; nothing was changed. Update Métis, then retry.'
-    case 'corrupt-kept':
-      return indexUnavailableMessage(cause)
-  }
-}
-
 function rebuildWorkBusy(): boolean {
   return queue.length > 0 || inFlightJobs.size > 0 || backfillPreparing || backfillLintPending ||
     !!backfillFinalization || !!drainTask || rebuildReplayQueued || !!rebuildReplayTask || !!backfillObserver?.settling
@@ -2350,12 +2336,8 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   if (!hasUsableProvider(s)) {
     return { queued: 0, error: intelligenceNoProviderMessage(s, 'Connect an AI provider in Settings → AI, or enable Métis Local summaries before rebuilding Mantu Intelligence.') }
   }
-  const localOnlyError = await localOnlyRebuildBlocked(s)
+  const localOnlyError = rebuildUnavailableError(s) ?? await localOnlyRebuildBlocked(s)
   if (localOnlyError) return { queued: 0, error: localOnlyError }
-  // An existing index this device cannot use is kept, never rebuilt: readIndex would hand back an empty
-  // stand-in and purgeBrain would delete the only copy. Refuse before any store mutation.
-  const blocked = indexUnavailable(s)
-  if (blocked) return { queued: 0, error: rebuildUnavailableMessage(blocked) }
   const before = readIndex(s)
   const preserveSourceRefresh = options.sourceRefresh || before.sourceRefreshRequested
   // Fix 2 (sync guard): a corrupt/blocked journal fails the gate — refuse before touching the store.

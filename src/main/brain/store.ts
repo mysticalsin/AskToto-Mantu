@@ -668,6 +668,16 @@ export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
   }
 }
 
+/** Refusal copy for an explicit rebuild while the existing index is unavailable; null when it is usable. */
+export function rebuildUnavailableError(s: Settings): string | null {
+  const cause = indexUnavailable(s)
+  if (!cause) return null
+  if (cause === 'undecryptable' || cause === 'io') {
+    return 'Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. Nothing was changed.'
+  }
+  return `${indexUnavailableMessage(cause)} The index was kept, so no data was lost. Update Métis, then retry.`
+}
+
 /** Fail-closed write: never replaces bytes this process could not fully decode. */
 export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
   const blocked = indexUnavailable(s)
