@@ -197,7 +197,13 @@ describe('packaged-smoke tccutil probe (M2-0472)', () => {
       if (/\btccutil\b/.test(line)) expect(line).not.toMatch(/\bsudo\b/)
     }
     expect(commands).not.toMatch(/sudo\s+(-\S+\s+)*\/usr\/bin/)
-    expect(commands.match(/\bsudo\b/g)?.length).toBe(4)
+    // Every sudo is the row-B sqlite3 seed/cleanup, the `tcc_has sudo` read of that database, or the root-user notice.
+    const remaining = commands
+      .replace(/\bsudo sqlite3\b/g, '')
+      .replace(/\btcc_has sudo\b/g, '')
+      .replace(/so a non-sudo reset cannot be measured/, '')
+    expect(remaining).not.toMatch(/\bsudo\b/)
+    expect(commands.match(/\bsudo sqlite3\b/g)).toHaveLength(2)
   })
 
   it('cannot fail the job', () => {
