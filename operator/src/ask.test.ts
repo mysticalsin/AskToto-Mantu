@@ -474,7 +474,38 @@ describe('G5 POST /v1/ask SSE', () => {
       providerFetch
     })
     expect(res.status).toBe(503)
-    expect(await res.json()).toMatchObject({ ok: false, code: 'GATEWAY_CONFIGURATION_UNSAFE' })
+    expect(await res.json()).toMatchObject({ ok: false, code: 'GATEWAY_CONFIGURATION_UNSAFE', readiness: 'BLOCKED' })
+    expect(calls.some((u) => u.includes('/ai/v1/chat/completions'))).toBe(false)
+  })
+
+  it('reports an unreviewed gateway as UNREVIEWED when the readback is 404, and never calls the model', async () => {
+    const store = memoryStore()
+    await addCloudflareKey(store)
+    await approveDevice(store)
+    const calls: string[] = []
+    const providerFetch: typeof fetch = async (input) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.includes('/ai-gateway/gateways')) {
+        return new Response(JSON.stringify({ success: false, errors: [{ code: 2001, message: 'Gateway not found' }] }), {
+          status: 404,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      throw new Error('must not call the chat-completions endpoint when the gateway is unreviewed')
+    }
+    const body = JSON.stringify({
+      provider: 'cloudflare',
+      model: PORTAL_CF_DEEPSEEK_FLASH,
+      messages: [{ role: 'user', content: 'hi' }]
+    })
+    const res = await handleRequest(await signedRequest('/v1/ask', body, 'ask-unreviewed-gateway'), env(), {}, {
+      store,
+      now: NOW,
+      providerFetch
+    })
+    expect(res.status).toBe(503)
+    expect(await res.json()).toMatchObject({ ok: false, code: 'GATEWAY_REVIEW_REQUIRED', readiness: 'UNREVIEWED' })
     expect(calls.some((u) => u.includes('/ai/v1/chat/completions'))).toBe(false)
   })
 

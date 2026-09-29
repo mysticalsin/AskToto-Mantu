@@ -14,8 +14,14 @@ Scope: Operator inference routes (`/v1/use`, `/v1/ask`) that reach Cloudflare AI
 | Worker/CDN caching | Every Operator response carries `cache-control: no-store` (`operator/src/http.ts`); the gateway readback uses `cache: 'no-store'`. Inference is POST-only and never cached. |
 | Traces | The per-request log line (`logRequest`) holds route, method, status, latency, device and ray id. No request or response body, prompt, or image is logged anywhere in the Operator. |
 
-The metadata-only entry follows the owner decision D-12 (default: keep metadata-only gateway logs). That is `ASSUMED`
-until the owner confirms it; flipping it means changing the single `rest` branch of `gatewayPrivacyHeaders`.
+The metadata-only entry follows the owner decision D-12, recorded as the default (keep metadata-only gateway logs) on
+2026-09-27; flipping it means changing the single `rest` branch of `gatewayPrivacyHeaders`.
+
+No Operator route uses the Worker AI binding or an unproven transport today; both branches of `gatewayPrivacyHeaders` are
+guarded by unit tests only, ahead of any such route.
+
+`HOST_CONFIGURED` evidence is outstanding. LEAD_ACTION: run `verifyDefaultGatewayPrivacy` (or the equivalent authenticated
+readback of the `default` gateway) against the deployed staging gateway and record the returned configuration and readiness.
 
 ## Readiness states (per route)
 
