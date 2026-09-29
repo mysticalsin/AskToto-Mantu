@@ -7,6 +7,7 @@ import { MeetingExtractionSchema, type MeetingExtraction } from '@shared/brain'
 import { computeSilence } from '@shared/silence'
 import { buildMarsWeek } from '@shared/mars'
 import { ingestExtraction, settleCommitment } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import {
   slugify,
@@ -110,6 +111,7 @@ describe.each([
   let extractions: MeetingExtraction[]
 
   beforeAll(async () => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-e2e-proof-'))
     s = { meetingsFolder: folder, encryptTranscripts: encrypt } as Settings
 

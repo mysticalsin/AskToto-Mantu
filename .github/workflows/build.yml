@@ -211,12 +211,22 @@ jobs:
         run: npx tsc --noEmit -p operator/tsconfig.json
       - name: Typecheck operator (client)
         run: npx tsc --noEmit -p operator/client/tsconfig.json
+      - name: Operator Worker bundle carries no in-memory store
+        run: npm run check:operator-bundle
       - name: Install Playwright Chromium for Operator layout tests
         run: npx playwright install --with-deps chromium
       - name: Operator test suite
         run: npx vitest run --config operator/vitest.config.ts
-      - name: Operator scripts contract tests (deploy/smoke/backup/dev-session)
+      - name: Operator scripts contract tests (deploy/smoke/backup/dev-session/local staging lane)
         run: npx vitest run --config operator/scripts/vitest.config.ts
+      - name: Staging deploy plan targets staging only (dry run, nothing executes)
+        run: |
+          node operator/scripts/deploy.mjs --env staging --dry-run | tee staging-plan.txt
+          grep -q 'worker:        metis-operator-staging' staging-plan.txt
+          grep -q 'd1 database:   metis-operator-staging' staging-plan.txt
+          grep -q 'migrate.mjs --remote --env staging' staging-plan.txt
+          grep -Eq 'wrangler.js deploy .*--env staging' staging-plan.txt
+          if grep -q 'metis-operator$' staging-plan.txt; then echo "plan names the production Worker or D1"; exit 1; fi
 
   security:
     name: Security & supply chain

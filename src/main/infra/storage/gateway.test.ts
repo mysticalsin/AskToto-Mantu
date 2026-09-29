@@ -30,7 +30,7 @@ afterEach(() => {
 // Test harness
 // ---------------------------------------------------------------------------------------------------
 
-type FsMethod = 'readdir' | 'readFile' | 'realpath' | 'stat'
+type FsMethod = 'readdir' | 'readFile' | 'realpath' | 'stat' | 'lstat'
 
 interface HeldCall {
   release(): void
@@ -46,6 +46,8 @@ interface TestFs extends StorageFs {
   hold(method: FsMethod, name: string): HeldCall
   fail(method: FsMethod, name: string, code?: string): void
   touch(name: string): void
+  /** Marks an already-registered name as a symlink, the way `lstat` alone (never `stat`) would report it. */
+  markSymlink(name: string): void
 }
 
 function errnoError(code?: string): NodeJS.ErrnoException {
@@ -64,6 +66,7 @@ function memoryFs(files: Record<string, string>): TestFs {
   const entries = new Map<string, { content: string; mtimeMs: number; ctimeMs: number }>()
   const keyOf = (name: string): string => (isAbsolute(name) ? name : join(ROOT, name))
   for (const [name, content] of Object.entries(files)) entries.set(keyOf(name), { content, mtimeMs: 1_000, ctimeMs: 1_000 })
+  const symlinks = new Set<string>()
 
   const calls: string[] = []
   const paths: string[] = []
@@ -115,6 +118,9 @@ function memoryFs(files: Record<string, string>): TestFs {
         entry.ctimeMs += 1
       }
     },
+    markSymlink(name) {
+      symlinks.add(keyOf(name))
+    },
     async readdir(path) {
       return invoke('readdir', path, () => [...entries.keys()].map((key) => basename(key)))
     },
@@ -134,6 +140,12 @@ function memoryFs(files: Record<string, string>): TestFs {
     },
     async realpath(path) {
       return invoke('realpath', path, () => path)
+    },
+    async lstat(path) {
+      return invoke('lstat', path, () => {
+        if (!entries.has(path)) throw errnoError('ENOENT')
+        return { isSymbolicLink: symlinks.has(path) }
+      })
     }
   }
 }
@@ -385,6 +397,18 @@ describe('classify-before-read (D1-D6)', () => {
     const probed = detector.classify.mock.calls[0][0] as readonly FileVersion[]
     expect(probed).toHaveLength(3)
     for (const file of probed) expect(file).toMatchObject({ mtimeMs: 1_000, ctimeMs: 1_000 })
+  })
+
+  it("classify reports a plain file's own isSymlink false and a symlink's true, from lstat alone", async () => {
+    const fs = memoryFs({ 'a.md': 'A', 'linked.md': 'A' })
+    fs.markSymlink('linked.md')
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 4 })
+
+    const result = await gateway.classify(['a.md', 'linked.md'])
+
+    expect(result.get('a.md')).toMatchObject({ status: 'ok', isSymlink: false })
+    expect(result.get('linked.md')).toMatchObject({ status: 'ok', isSymlink: true })
+    expect(fs.calls).toContain('lstat linked.md')
   })
 
   it('read never opens a file the detector calls dataless or unknown', async () => {

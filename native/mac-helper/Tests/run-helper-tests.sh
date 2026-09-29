@@ -48,6 +48,29 @@ expect_exit "stall-watch non-numeric --pid exits 1" 1 "$code"
 expect_exit "stall-watch refuses a --pid that is not its parent" 1 "$code"
 if grep -q "is not this helper's parent" "$work/err"; then pass "stall-watch names the parent mismatch"; else fail "stall-watch parent-mismatch message"; fi
 
+# --- supervise argument parsing (setup failures exit 125, never the child's status) ----------------
+err="$("$helper" supervise 2>&1 >/dev/null)"; code=$?
+expect_exit "supervise with no options exits 125" 125 "$code"
+case "$err" in *"usage: metis-mac-helper supervise --parent"*) pass "supervise prints its usage" ;; *) fail "supervise usage: $err" ;; esac
+
+"$helper" supervise --parent notanumber -- /usr/bin/true >/dev/null 2>&1; code=$?
+expect_exit "supervise non-numeric --parent exits 125" 125 "$code"
+
+"$helper" supervise --parent $$ >/dev/null 2>&1; code=$?
+expect_exit "supervise without '-- <cmd>' exits 125" 125 "$code"
+
+"$helper" supervise --parent $$ -- >/dev/null 2>&1; code=$?
+expect_exit "supervise with an empty command exits 125" 125 "$code"
+
+"$helper" supervise --parent 1 -- /usr/bin/true >/dev/null 2>"$work/err"; code=$?
+expect_exit "supervise refuses a --parent that is not its parent" 125 "$code"
+if grep -q "is not this helper's parent" "$work/err"; then pass "supervise names the parent mismatch"; else fail "supervise parent-mismatch message"; fi
+
+# A valid invocation reaches supervision: the child runs and its exit status is passed through.
+# The wrapper shell passes its own pid as --parent; the trailing exit keeps it from exec-ing the helper away.
+sh -c '"$0" supervise --parent $$ -- /bin/sh -c "exit 7"; exit $?' "$helper" >/dev/null 2>&1; code=$?
+expect_exit "supervise exits with the child's status" 7 "$code"
+
 # --- proc-info -------------------------------------------------------------------------------------
 "$helper" proc-info >/dev/null 2>&1; code=$?
 expect_exit "proc-info without a pid exits 1" 1 "$code"
