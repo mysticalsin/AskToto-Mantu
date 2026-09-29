@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import {
   ONBOARDING_BAR_LAND_GAIN,
@@ -11,7 +12,7 @@ import { shouldMountStarfield } from './onboarding-starfield-spec'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
 const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 const portal = readFileSync(join(__dirname, './onboarding-portal.ts'), 'utf8')
 
 describe('Mac-show tour stay-visible + quieter bar land', () => {
