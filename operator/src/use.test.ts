@@ -317,8 +317,55 @@ describe('HMAC POST /v1/use', () => {
       store, now: NOW, providerFetch
     })
     expect(res.status).toBe(503)
-    expect(await res.json()).toMatchObject({ ok: false, code: 'GATEWAY_CONFIGURATION_UNSAFE' })
+    expect(await res.json()).toMatchObject({ ok: false, code: 'GATEWAY_CONFIGURATION_UNSAFE', readiness: 'BLOCKED' })
     expect(calls.some((u) => u.includes('/ai/v1/chat/completions'))).toBe(false)
+  })
+
+  it('reports an absent gateway as UNREVIEWED and never creates one', async () => {
+    const store = memoryStore()
+    await addCloudflareKey(store)
+    await approveDevice(store)
+    const methods: string[] = []
+    const providerFetch: typeof fetch = async (_input, init) => {
+      methods.push(String(init?.method))
+      return new Response(JSON.stringify({ success: false }), { status: 404, headers: { 'content-type': 'application/json' } })
+    }
+    const body = JSON.stringify({
+      provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_FLASH, tier: 'base',
+      messages: [{ role: 'user', content: 'hi' }]
+    })
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-missing-gateway'), env(), {}, {
+      store, now: NOW, providerFetch
+    })
+    expect(res.status).toBe(503)
+    expect(await res.json()).toMatchObject({ code: 'GATEWAY_REVIEW_REQUIRED', readiness: 'UNREVIEWED' })
+    expect(methods).toEqual(['GET'])
+  })
+
+  it('sends the three privacy headers on a cloudflare inference call after the readback', async () => {
+    const store = memoryStore()
+    await addCloudflareKey(store)
+    await approveDevice(store)
+    let inferenceHeaders: Headers | undefined
+    const providerFetch: typeof fetch = async (input, init) => {
+      if (String(input).includes('/ai-gateway/gateways')) return reviewedGatewayReply()
+      inferenceHeaders = new Headers(init?.headers)
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+        status: 200, headers: { 'content-type': 'application/json' }
+      })
+    }
+    const body = JSON.stringify({
+      provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_FLASH, tier: 'base',
+      messages: [{ role: 'user', content: 'hi' }]
+    })
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-aig-headers'), env(), {}, {
+      store, now: NOW, providerFetch
+    })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(inferenceHeaders?.get('cf-aig-collect-log')).toBe('true')
+    expect(inferenceHeaders?.get('cf-aig-collect-log-payload')).toBe('false')
+    expect(inferenceHeaders?.get('cf-aig-skip-cache')).toBe('true')
   })
 
   it('binds the persisted ask row to the caller-supplied clientAskId', async () => {
