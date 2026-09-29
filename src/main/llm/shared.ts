@@ -97,6 +97,12 @@ export interface StreamOptions {
    * (openai.ts's rejection ladder) rather than failing the request.
    */
   responseFormat?: { type: 'json_object' }
+  /**
+   * Unattended work (brain extraction). Métis Local only: a user-facing summary pre-empts it, failing it
+   * with LOCAL_PREEMPTED_MESSAGE so the caller can resume once whenLocalInteractiveIdle() resolves.
+   * Ignored by every other provider.
+   */
+  background?: boolean
 }
 
 export const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))

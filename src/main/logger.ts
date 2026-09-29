@@ -164,6 +164,7 @@ export type AuditEvent =
   | 'capture.failed'
   | 'capture.check'
   | 'transcript.saved'
+  | 'writeup.span'
   | 'transcript.deleted'
   | 'transcript.renamed'
   | 'transcript.recap_edited'

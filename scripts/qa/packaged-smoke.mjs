@@ -872,6 +872,9 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
   }
 
   if (platform === 'win32') {
+    // A cold hosted runner can spend more than the 10 s row budget just starting PowerShell, which kills
+    // the shortcut script before it launches anything. Warm it once, outside every row's budget.
+    await runPowerShell('exit 0', 120_000)
     await runRevealRow({
       auditLogPath,
       rows,

@@ -9,6 +9,7 @@ import { looksLikeSecret, providerRefusedPayload } from './redact'
 import type { OperatorStore, VaultKeyRow } from './store'
 import { persistProxyAsk, proxyTokenCount } from './ask-meter'
 import { seatHasEntitlement } from './tiers'
+import { operatorCallableProvider } from './provider-guard'
 import { decodeVaultPlaintext, isForbiddenVaultProvider, isVaultLlmProvider } from './vault'
 
 const SYSTEM_CAP = 32_000
@@ -431,10 +432,8 @@ export async function handleUse(
   }
   const unlocked = await decryptActiveLlmSecret(store, env.OPERATOR_VAULT_KEY, parsed.req.provider)
   if (!unlocked) return fail('Operator cannot issue a use', 503)
-  const def = parsed.req.provider in PROVIDERS ? PROVIDERS[parsed.req.provider as ProviderId] : null
-  if (!def || def.kind === 'cli' || def.kind === 'dust' || def.kind === 'local') {
-    return fail('provider not allowed', 400)
-  }
+  const def = operatorCallableProvider(parsed.req.provider)
+  if (!def) return fail('provider not allowed', 400)
   const timedFetch = withProviderTimeout(providerFetch)
   let out: { text: string; inputTokens?: number; outputTokens?: number } | UseFail
   try {

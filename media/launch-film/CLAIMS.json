@@ -1,16 +1,35 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "ticket_id": "M2-0178",
+  "rekey_ticket_id": "M2-0349",
   "release_claims_approved": false,
+  "film_status": "concept preview",
   "decisions": {
     "D-12": "Privacy lines must use the verified privacy sentence exactly or be cut.",
-    "D-27": "Competitive, superiority, affiliation and infallibility claims are cut unless the competitive qualification evidence is present for that slice."
+    "D-27": "Competitive, superiority, affiliation and infallibility claims are cut unless the competitive qualification evidence is present for that slice.",
+    "D-29": "An unsigned Windows candidate is BLOCKED and is not available; platform claims need release evidence for that platform."
   },
   "privacy_line": {
     "status": "cut",
     "text": "",
     "evidence_record_id": null
   },
+  "release_evidence": [
+    {
+      "platform": "macos",
+      "status": "BLOCKED",
+      "signed": false,
+      "evidence_record_id": null,
+      "note": "No release evidence for a macOS candidate is on file."
+    },
+    {
+      "platform": "windows",
+      "status": "BLOCKED",
+      "signed": false,
+      "evidence_record_id": null,
+      "note": "D-29: the Windows candidate is unsigned and BLOCKED, so it is not available."
+    }
+  ],
   "forbidden_claims": [
     {
       "id": "forbidden-remembers-everything",
@@ -88,7 +107,47 @@
   "storyboard_scenes": [
     {
       "id": "LF-01",
-      "title": "Cold open desktop overlay",
+      "title": "Cold open",
+      "start_s": 0,
+      "end_s": 6,
+      "state": "concept",
+      "claim_id": null,
+      "evidence_record_id": null,
+      "visible_label": "Concept UI sequence",
+      "script": "Abstract title footage opens the film.",
+      "captions": [
+        "Concept UI sequence"
+      ],
+      "variants": {
+        "live": "Use only footage captured from a verified build.",
+        "concept": "Show the scene with the visible concept label.",
+        "cut": "Replace with a neutral title card."
+      }
+    },
+    {
+      "id": "LF-02",
+      "title": "The meeting problem",
+      "start_s": 6,
+      "end_s": 14,
+      "state": "concept",
+      "claim_id": null,
+      "evidence_record_id": null,
+      "visible_label": "Reconstruction",
+      "script": "A reconstructed meeting beat sets up the problem with approved sample dialogue.",
+      "captions": [
+        "Reconstruction"
+      ],
+      "variants": {
+        "live": "Use only with a live verified receipt for the exact capture.",
+        "concept": "Use synthetic dialogue and the visible reconstruction label.",
+        "cut": "Replace with a neutral title card."
+      }
+    },
+    {
+      "id": "LF-03",
+      "title": "Overlay appears",
+      "start_s": 14,
+      "end_s": 24,
       "state": "concept",
       "claim_id": "CL-01",
       "evidence_record_id": "EV-M2-0178-REGISTER",
@@ -104,8 +163,10 @@
       }
     },
     {
-      "id": "LF-02",
-      "title": "Live meeting capture",
+      "id": "LF-04",
+      "title": "Live capture and notes",
+      "start_s": 24,
+      "end_s": 36,
       "state": "concept",
       "claim_id": "CL-02",
       "evidence_record_id": "EV-M2-0178-REGISTER",
@@ -121,8 +182,10 @@
       }
     },
     {
-      "id": "LF-03",
-      "title": "Hindsight memory recall",
+      "id": "LF-05",
+      "title": "Hindsight recall",
+      "start_s": 36,
+      "end_s": 46,
       "state": "concept",
       "claim_id": "CL-03",
       "evidence_record_id": "EV-M2-0178-REGISTER",
@@ -139,50 +202,58 @@
       }
     },
     {
-      "id": "LF-04",
-      "title": "Privacy assurance",
-      "state": "cut",
-      "claim_id": null,
-      "evidence_record_id": null,
-      "visible_label": "Cut pending exact verified privacy sentence",
-      "script": "",
-      "captions": [],
-      "variants": {
-        "live": "Use the exact verified privacy sentence only after the privacy evidence exists.",
-        "concept": "No concept privacy line is allowed.",
-        "cut": "Cut the privacy line."
-      }
-    },
-    {
-      "id": "LF-05",
-      "title": "Comparison montage",
-      "state": "cut",
-      "claim_id": null,
-      "evidence_record_id": null,
-      "visible_label": "Cut pending competitive qualification",
-      "script": "",
-      "captions": [],
-      "variants": {
-        "live": "Use only slices recorded by M2-0185 with final signed Windows and native Mac QA receipts.",
-        "concept": "No comparative concept line is allowed.",
-        "cut": "Cut the comparative beat."
-      }
-    },
-    {
       "id": "LF-06",
-      "title": "Toolchain proof card",
-      "state": "live",
-      "claim_id": "CL-06",
-      "evidence_record_id": "EV-M2-0212-TOOLCHAIN",
-      "visible_label": "",
-      "script": "The film render path is controlled by a pinned toolchain.",
+      "title": "Ask and act",
+      "start_s": 46,
+      "end_s": 54,
+      "state": "concept",
+      "claim_id": null,
+      "evidence_record_id": null,
+      "visible_label": "Concept UI sequence",
+      "script": "A concept sequence shows a follow-up question answered inside the overlay.",
       "captions": [
-        "Pinned film toolchain"
+        "Concept UI sequence"
       ],
       "variants": {
-        "live": "Show only as render-path proof, never as product verification.",
-        "concept": "Show as a process diagram with concept label.",
-        "cut": "Remove the card."
+        "live": "Use only after a packaged app QA receipt proves the exact captured state.",
+        "concept": "Show the scene with the visible concept label.",
+        "cut": "Remove the scene."
+      }
+    },
+    {
+      "id": "LF-07",
+      "title": "Runs on Mac and Windows",
+      "start_s": 54,
+      "end_s": 62,
+      "state": "cut",
+      "claim_id": "CL-07",
+      "evidence_record_id": null,
+      "visible_label": "Cut pending release evidence for each platform",
+      "script": "",
+      "captions": [],
+      "variants": {
+        "live": "Use only for platforms with release evidence on file.",
+        "concept": "No concept platform line is allowed.",
+        "cut": "Cut the platform beat."
+      }
+    },
+    {
+      "id": "LF-08",
+      "title": "Close",
+      "start_s": 62,
+      "end_s": 70,
+      "state": "concept",
+      "claim_id": null,
+      "evidence_record_id": null,
+      "visible_label": "Concept title card",
+      "script": "A closing title card ends the film.",
+      "captions": [
+        "Concept title card"
+      ],
+      "variants": {
+        "live": "Use only text backed by verified claims.",
+        "concept": "Show the card with the visible concept label.",
+        "cut": "Replace with a neutral end card."
       }
     }
   ],
@@ -191,6 +262,8 @@
       "id": "CL-01",
       "text": "The launch film may depict the desktop overlay only as a concept until exact packaged-app QA evidence exists.",
       "type": "concept-treatment",
+      "capability_class": "implemented-unverified",
+      "build_hash": null,
       "evidence_record_id": "EV-M2-0178-REGISTER",
       "allowed_states": [
         "concept",
@@ -206,6 +279,8 @@
       "id": "CL-02",
       "text": "Meeting capture scenes are reconstructions unless backed by live verified capture and transcript evidence.",
       "type": "reconstruction-treatment",
+      "capability_class": "implemented-unverified",
+      "build_hash": null,
       "evidence_record_id": "EV-M2-0178-REGISTER",
       "allowed_states": [
         "concept",
@@ -221,6 +296,8 @@
       "id": "CL-03",
       "text": "Hindsight memory is a concept sequence unless the memory proof evidence is LIVE_VERIFIED.",
       "type": "memory-treatment",
+      "capability_class": "implemented-unverified",
+      "build_hash": null,
       "evidence_record_id": "EV-M2-0178-REGISTER",
       "allowed_states": [
         "concept",
@@ -236,6 +313,8 @@
       "id": "CL-06",
       "text": "The launch film uses a pinned render toolchain.",
       "type": "render-path",
+      "capability_class": "implemented-unverified",
+      "build_hash": null,
       "evidence_record_id": "EV-M2-0212-TOOLCHAIN",
       "allowed_states": [
         "live",
@@ -246,6 +325,27 @@
         "live": "Use as render-path proof only.",
         "concept": "Show as a process diagram with a visible concept label.",
         "cut": "Cut the render-path claim if the toolchain evidence is unavailable."
+      }
+    },
+    {
+      "id": "CL-07",
+      "text": "Métis is available on macOS and Windows.",
+      "type": "platform-availability",
+      "platforms": [
+        "macos",
+        "windows"
+      ],
+      "capability_class": "unavailable",
+      "build_hash": null,
+      "evidence_record_id": "EV-M2-0178-REGISTER",
+      "allowed_states": [
+        "concept",
+        "cut"
+      ],
+      "variants": {
+        "live": "Promote only for platforms whose release evidence is AVAILABLE and signed.",
+        "concept": "No concept platform line is allowed.",
+        "cut": "Cut the platform claim."
       }
     }
   ]
