@@ -8,6 +8,7 @@ import {
   parkAfterExclusiveOnboarding,
   resolveOverlayPlacement,
   rightEdgePlacementFits,
+  rightAnchoredParkPosition,
   rightEdgeHoverRestRect,
   rightEdgeParkLayout,
   rightEdgeSidecarBounds,
@@ -91,6 +92,17 @@ describe('right-edge overlay placement', () => {
     )
     expect(hideParkWindowOpacity('hide', true)).toBe(0)
     expect(hideParkWindowOpacity('island', true)).toBe(1)
+  })
+
+  it('keeps a widened Hide park flush with the work-area edge (Windows minimum window width)', () => {
+    // Windows packaged smoke: the 4 px band read back 32 px wide at the requested x, crossing the edge.
+    const band = rightEdgeHoverRestRect(0.5, METRICS)
+    const edge = WORK_AREA.x + WORK_AREA.width
+    const widened = rightAnchoredParkPosition(band, 32)
+    expect(widened).toEqual({ x: edge - 32, y: band.y })
+    expect(widened.x + 32).toBe(edge)
+    // A park the OS kept at the requested width is placed as requested.
+    expect(rightAnchoredParkPosition(band, band.width)).toEqual({ x: band.x, y: band.y })
   })
 
   it('parks Hide as the visible rail where another display continues past the right edge', () => {

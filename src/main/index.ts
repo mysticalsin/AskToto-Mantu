@@ -207,6 +207,7 @@ import {
   overlayPlacementPosition,
   rightEdgeSidecarBounds,
   rightEdgeParkLayout,
+  rightAnchoredParkPosition,
   resolveOverlayPlacement,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
@@ -2356,7 +2357,10 @@ function commitParkedOverlayBounds(park: { x: number; y: number; width: number; 
   win.setBounds(park, false)
   try {
     const after = win.getBounds()
-    if (after.x !== park.x || after.y !== park.y) win.setPosition(park.x, park.y, false)
+    // A right-edge park the OS widened (Windows minimum width) keeps its right edge at the work-area edge.
+    const rightEdge = resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(park)) === 'right-edge'
+    const target = rightEdge ? rightAnchoredParkPosition(park, after.width) : park
+    if (after.x !== target.x || after.y !== target.y) win.setPosition(target.x, target.y, false)
   } catch {
     /* headless */
   }

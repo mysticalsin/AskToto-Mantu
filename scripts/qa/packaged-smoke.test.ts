@@ -25,6 +25,7 @@ import {
   initialNavigationGuardRows,
   initialRightEdgeHideRows,
   rightEdgeExpectedRects,
+  rightEdgeHideParkMatches,
   rightEdgeStateMatches,
   runRevealRow,
   seedOnboardedProfile,
@@ -542,6 +543,50 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     // An open drawer rendered inside a parked window is the RE-HIDE-4 failure.
     expect(rightEdgeStateMatches({ win: win(tab, 1, false), page: open }, 'parked', 'island')).toBe(false)
     expect(rightEdgeStateMatches({ win: win(tab, 0, false), page }, 'parked', 'island')).toBe(false)
+  })
+
+  // Windows packaged smoke: a 1024x768 runner with a 48 px taskbar and a 32 px minimum window width.
+  const windows: DisplayMetrics = {
+    bounds: { x: 0, y: 0, width: 1024, height: 768 },
+    workArea: { x: 0, y: 0, width: 1024, height: 720 },
+    hasNotch: false,
+    notchWidth: 0,
+    menuBarHeight: 0,
+    source: 'heuristic'
+  }
+
+  it('matches main on the Windows runner work area, including the Island rail y', () => {
+    const expected = rightEdgeExpectedRects(windows.workArea)
+    expect(expected.drawer).toEqual(rightEdgeSidecarBounds(windows, { open: true }))
+    expect(expected.tab).toEqual(parkAfterExclusiveOnboarding('island', windows, 8, 'right-edge'))
+    expect(expected.band).toEqual(parkAfterExclusiveOnboarding('hide', windows, 8, 'right-edge'))
+    // The observed Windows parks: Island rail at y 141, Hide band at the drawer's y 39.
+    expect(expected.tab).toEqual({ x: 960, y: 141, width: 52, height: 52 })
+    expect(expected.band.y).toBe(39)
+  })
+
+  it('accepts a Hide park the OS widened only when its right edge stays at the work-area edge', () => {
+    const { band } = rightEdgeExpectedRects(windows.workArea)
+    const edge = windows.workArea.x + windows.workArea.width
+    const win = (bounds: { x: number; y: number; width: number; height: number }) => ({
+      bounds,
+      opacity: 0,
+      clickThrough: true,
+      visible: true,
+      displayBounds: windows.bounds,
+      workArea: windows.workArea
+    })
+    const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
+    const flush = { x: edge - 32, y: band.y, width: 32, height: band.height }
+    expect(rightEdgeHideParkMatches(flush, band)).toBe(true)
+    expect(rightEdgeStateMatches({ win: win(flush), page }, 'parked', 'hide')).toBe(true)
+    // Run 36575074348: widened at the requested x, the window crossed the work-area edge.
+    const crossing = { x: band.x, y: band.y, width: 32, height: band.height }
+    expect(rightEdgeHideParkMatches(crossing, band)).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(crossing), page }, 'parked', 'hide')).toBe(false)
+    // Inset from the edge, or the old tab square, is still not a Hide park.
+    expect(rightEdgeHideParkMatches({ ...flush, x: flush.x - 12 }, band)).toBe(false)
+    expect(rightEdgeHideParkMatches(rightEdgeExpectedRects(windows.workArea).tab, band)).toBe(false)
   })
 })
 

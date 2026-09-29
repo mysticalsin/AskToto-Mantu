@@ -996,6 +996,21 @@ function rectMatches(actual, expected, tolerance = 2) {
   return ['x', 'y', 'width', 'height'].every((key) => Math.abs(actual[key] - expected[key]) <= tolerance)
 }
 
+/**
+ * Parked Hide against the reveal band main requests. Windows enforces a minimum width on frameless
+ * windows, so the band may read back wider; main then keeps its right edge at the work-area edge
+ * (src/main/island/geometry.ts rightAnchoredParkPosition). Accept the requested y, height and right edge
+ * at any width the OS allowed, never a window that crosses the edge or sits inset from it.
+ */
+export function rightEdgeHideParkMatches(bounds, band, tolerance = 2) {
+  return (
+    Math.abs(bounds.y - band.y) <= tolerance &&
+    Math.abs(bounds.height - band.height) <= tolerance &&
+    Math.abs(bounds.x + bounds.width - (band.x + band.width)) <= tolerance &&
+    bounds.width >= band.width - tolerance
+  )
+}
+
 function insideWorkArea(bounds, workArea) {
   return (
     bounds.x >= workArea.x &&
@@ -1021,7 +1036,7 @@ export function rightEdgeStateMatches(observation, state, layout) {
   }
   if (!insideWorkArea(win.bounds, win.workArea) || page.drawer) return false
   if (layout === 'hide') {
-    return rectMatches(win.bounds, expected.band) && win.opacity === 0 && win.clickThrough === true
+    return rightEdgeHideParkMatches(win.bounds, expected.band) && win.opacity === 0 && win.clickThrough === true
   }
   return rectMatches(win.bounds, expected.tab) && win.opacity === 1 && win.clickThrough === false && page.rail === true
 }
@@ -1071,6 +1086,7 @@ async function rightEdgePageState(page) {
     const input = document.querySelector('.right-edge-sidecar__chat-input')
     const drawer = document.querySelector('.right-edge-sidecar__drawer') !== null
     return {
+      dock: document.querySelector('.right-edge-sidecar') !== null,
       drawer,
       rail: !drawer && document.querySelector('.right-edge-sidecar__tab') !== null,
       hideControl: document.querySelector('button[aria-label="Hide Métis"]') !== null,
@@ -1088,18 +1104,22 @@ function summarize(observation) {
   const expected = rightEdgeExpectedRects(win.workArea)
   const kind = rectMatches(win.bounds, expected.drawer)
     ? 'drawer'
-    : rectMatches(win.bounds, expected.band)
+    : rightEdgeHideParkMatches(win.bounds, expected.band)
       ? 'hide-band'
       : rectMatches(win.bounds, expected.tab)
         ? 'island-rail'
         : 'other'
   return {
     kind,
+    // Requested vs actual: the OS may widen a parked Hide band (Windows minimum window width).
+    requestedHideBand: expected.band,
     bounds: win.bounds,
+    workArea: win.workArea,
     opacity: win.opacity,
     clickThrough: win.clickThrough,
     drawerRendered: observation.page?.drawer ?? null,
-    railRendered: observation.page?.rail ?? null
+    railRendered: observation.page?.rail ?? null,
+    dockRendered: observation.page?.dock ?? null
   }
 }
 
@@ -1138,11 +1158,20 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
       layout
     )
   }
+  // The navigation rows before these leave a full view (History/Review) open, which replaces the dock
+  // entirely. Escape backs out of it exactly as a user would; it is only sent while no dock is rendered.
+  const leaveFullViews = async () => {
+    for (let attempt = 0; attempt < 4 && !(await rightEdgePageState(page)).dock; attempt++) {
+      await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+      await wait(200)
+    }
+  }
   const park = async (layout) => {
     const current = await observe()
     if (!current.win) throw new Error('overlay window not found in the main process')
     await setCursor(awayPoint(current.win))
     await setLayout(layout)
+    await leaveFullViews()
     if (!rightEdgeStateMatches(await observe(), 'parked', layout)) {
       await page.evaluate(() => window.toto.parkAfterHide(true))
     }
@@ -1167,7 +1196,7 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
       complete(id, {
         status: 'FAIL',
         evidence: null,
-        unblock: `Inspect the packaged-smoke artifact; RE-HIDE scenario failed: ${String(err?.message ?? err).split('\n')[0].slice(0, 300)}`
+        unblock: `Inspect the packaged-smoke artifact; RE-HIDE scenario failed: ${String(err?.message ?? err).split('\n')[0].slice(0, 700)}`
       })
     }
   }

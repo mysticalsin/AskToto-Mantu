@@ -326,6 +326,17 @@ export function rightEdgeHoverRestRect(normalizedY: number | undefined, m: Displ
 }
 
 /**
+ * Position for a right-edge park the OS widened past `requested` (Windows enforces a minimum width on
+ * frameless windows, so the 4 px Hide band reads back 32 px wide): the right edge stays where requested,
+ * so the parked window never crosses the work-area edge. The window is invisible and click-through, and
+ * the cursor watch uses the computed band, so the extra width is harmless.
+ */
+export function rightAnchoredParkPosition(requested: Rect, actualWidth: number): { x: number; y: number } {
+  if (actualWidth <= requested.width) return { x: requested.x, y: requested.y }
+  return { x: requested.x + requested.width - actualWidth, y: requested.y }
+}
+
+/**
  * Hide parks invisibly at the right edge only where the pointer can stop there. When another display
  * continues past this display's right edge beside the drawer, a pushed pointer crosses into it instead,
  * so Hide parks as the visible Island rail on that display. Every other layout is unchanged.
