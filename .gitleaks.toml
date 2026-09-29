@@ -38,19 +38,23 @@ regexes = [
   # the HMAC/transport tests share. Anchored to the whole value; a real seat token has a different shape.
   '''^METIS-OP-1\.(fixture|test|old|new|replacement|licensed-seat)$''',
   '''^METIS-OP-1\.abcdef0123456789\.100\.200\.abcdefghijklmnopqrstuv$''',
-  # Test-only placeholders that name themselves as synthetic (whole value, no random characters), so a
-  # real high-entropy secret never matches; the canary token contains none of these words.
-  '''^[a-z0-9_.-]*(fixture|synthetic|dummy|not-a-real|qa-only|for-tests|test-[a-z]+-key|test-admin|-example-)[a-z0-9_.-]*$''',
+  # Test-only placeholders that name themselves as synthetic: the exact strings the tests feed to the code under
+  # test, each anchored whole so a real high-entropy secret never matches.
+  '''^(METIS-OP-1\.fixture|synthetic-seat-license|synthetic-upstream-key|synthetic-license|synthetic-no-credential|synthetic-secret|synthetic-password-never-log|synthetic-environment-credential)$''',
+  '''^(shared-secret-for-tests|operator-ingest-secret-for-tests|metis-proxy-key-for-tests|account-token-for-tests|test-admin-token|test-mcp-key-123|qa-only-invalid-token)$''',
+  '''^(placeholder-not-a-real-key|sk-test-not-a-real-key-0123456789abcdef|sk-proj-not-a-real-key-0123456789|sk-synthetic-example-credential-abcdefghijklmnop)$''',
+  '''^cf-api-token-TESTKEYONLY-not-a-real-secret-(66fd|99zz|77ab)$''',
   # Fixtures of the redaction, provider-detection and operator tests: each value is exactly the fake string
   # the test feeds to the code under test, anchored whole so a real key of the same shape does not match.
   '''^(ghp_0123456789abcdefghijABCDEFG|AKIAIOSFODNN7EXAMPLE|sk-proj-AbCdEf0123456789xyzQWERTY|sk-0123456789abcdefghijklmno)$''',
   '''^(sk-ant-api03-abcdefghijklmnop|sk-ant-api03-verylongsecretkeyvalue|sk-ant-api03-SUPERSECRETTOKEN1234|sk-ant-abc123DEF456ghi789|sk-abc123DEF456ghi789)$''',
   '''^(sk-proj-abcdefghijklmnopqrstuvwxyz123456|sk-dead0000000000000000000000000000000000|sk-cf-OPERATOR-VAULT-TEST-only-xx99|sk-OPENAI-OPERATOR-VAULT-TEST-only-xx99)$''',
-  '''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0In0(\.[A-Za-z0-9_-]+)?$''',
-  '''^(ingest-secret|shared-secret|old-shared-secret|secret-token|fresh-token|test-token|tok-rotated|plane-tok-1|tok_(eu|us)_123|clickup-(at|rt)-1|plane-(at|rt)-[A-Za-z0-9]+|plane-secret-[A-Za-z0-9]+|fresh-ported-secret)$''',
-  # A source identifier (SCREAMING_SNAKE constant name, e.g. `promptKey: PROMPT_KEY_B64`) captured as the value
-  # of a key-like property: it is a variable reference, not a literal, and needs an underscore to match.
-  '''^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$''',
+  '''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0In0(\.signaturexx)?$''',
+  '''^(ingest-secret|shared-secret|old-shared-secret|secret-token|fresh-token|test-token|tok-rotated|plane-tok-1|tok_(eu|us)_123|clickup-(at|rt)-1|plane-(at|rt)-(1|A|B|B2)|plane-secret-(1|xyz)|fresh-ported-secret)$''',
+  # Source identifiers (SCREAMING_SNAKE constant names, e.g. `promptKey: PROMPT_KEY_B64`) captured as the value
+  # of a key-like property: variable references, not literals. Each name is listed exactly.
+  '''^(PROMPT_KEY_B64|DUMMY_TOKEN|ADMIN_TOKEN|WEBHOOK_SECRET|TEST_INGEST_SECRET|IMPORT_RECAP_CACHE_KEY|DESCRIBE_MAX_TOKENS|SETTINGS_KEYS|SECTION_ALIASES|SECRET_SUBMITTED_TEXT|METIS_PROXY_KEY|HTTPS_PROXY)$''',
+  '''^OAUTH_(ZOHO|SHAREPOINT|SALESFORCE|MICROSOFTTEAMS|GOOGLEDRIVE|DYNAMICS365)_CLIENT_SECRET$''',
   # Exact fake credentials of the operator connector probe test and the CLI/MCP tests.
   '''^(close-api-key-abcdef123456|sk-secret-should-not-leak|sk-ant-veryprivate-88123|sk-bidstack-abc|operator-ingest-test-secret|test-operator-secret)$''',
   # The lease-signing fixture: the PEM private half of DEV_LEASE_PUBLIC_KEY, base64-embedded in the two lease

@@ -175,6 +175,7 @@ describe('gitleaks config — no whole-path exemptions, canary per file class (M
     for (const entry of entries) {
       expect(entry, `unanchored allowlist entry: ${entry}`).toMatch(/^\^.*\$$/)
       expect(entry, `wildcard allowlist entry: ${entry}`).not.toMatch(/\.\*|\.\+/)
+      expect(entry, `quantified character class in allowlist entry: ${entry}`).not.toMatch(/\][*+]/)
     }
     // A fake fixture passes; a real-looking token beside it does not.
     const compiled = entries.map((entry) => new RegExp(entry))
