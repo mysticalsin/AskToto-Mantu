@@ -22,6 +22,22 @@ export function captureFileName(stateId, { theme, scale, motion }) {
   return `${stateId}__${theme}__${scale}x__${motion === 'reduce' ? 'reduced-motion' : 'motion'}.png`
 }
 
+/** Pixel size of a PNG, read from its IHDR chunk (width and height are big-endian uint32 at bytes 16 and 20). */
+export function pngSize(bytes) {
+  const buf = Buffer.from(bytes)
+  if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) throw new Error('Not a PNG')
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
+}
+
+/** Fails when a shot is not `scale x viewport` pixels, so a silent 1x capture cannot pass as 2x. */
+export function assertPngSize(bytes, viewport, scale, label) {
+  const want = { width: viewport.width * scale, height: viewport.height * scale }
+  const got = pngSize(bytes)
+  if (got.width !== want.width || got.height !== want.height) {
+    throw new Error(`${label}: expected ${want.width}x${want.height}, got ${got.width}x${got.height}`)
+  }
+}
+
 export function sha256Hex(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
 }
@@ -33,6 +49,8 @@ export function buildManifest({ commit, platform, shots }) {
   return {
     commit,
     platform,
+    // Pulse and caret animations are caught mid-cycle: only reduced-motion shots are byte-reproducible.
+    reproducibleMotions: ['reduce'],
     entries: shots.map(({ state, theme, scale, motion, file, bytes }) => ({
       state,
       theme,

@@ -9,6 +9,8 @@ import {
   buildManifest,
   captureFileName,
   captureMatrix,
+  assertPngSize,
+  pngSize,
   sha256Hex
 } from './capture-manifest.mjs'
 import { DESIGN_STATES, DESIGN_STATE_IDS, resolveDesignState } from '../../src/renderer/src/design-capture/states'
@@ -133,5 +135,33 @@ describe('capture matrix and manifest', () => {
       }
     ])
     expect(manifest.entries[0].sha256).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('marks only reduced-motion shots as reproducible', () => {
+    expect(buildManifest({ commit: 'abc123', platform: 'darwin', shots: [] }).reproducibleMotions).toEqual(['reduce'])
+  })
+})
+
+describe('png size check', () => {
+  const png = (width: number, height: number): Buffer => {
+    const b = Buffer.alloc(24)
+    b.writeUInt32BE(0x89504e47, 0)
+    b.writeUInt32BE(width, 16)
+    b.writeUInt32BE(height, 20)
+    return b
+  }
+  const viewport = { width: 960, height: 640 }
+
+  it('reads the pixel size from the header', () => {
+    expect(pngSize(png(1920, 1280))).toEqual({ width: 1920, height: 1280 })
+  })
+
+  it('accepts a shot at scale x viewport and rejects a silent 1x capture as 2x', () => {
+    expect(() => assertPngSize(png(1920, 1280), viewport, 2, 'a.png')).not.toThrow()
+    expect(() => assertPngSize(png(960, 640), viewport, 2, 'a.png')).toThrow(/expected 1920x1280, got 960x640/)
+  })
+
+  it('rejects bytes that are not a PNG', () => {
+    expect(() => pngSize(Buffer.alloc(30))).toThrow(/Not a PNG/)
   })
 })

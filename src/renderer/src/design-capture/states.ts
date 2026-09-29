@@ -1,7 +1,7 @@
 /**
- * State list of the design-capture surface: every screen the design prototypes describe, with neutral
- * sample data only. The capture job reads `DESIGN_STATE_IDS` from the running page, so this list is the
- * single source of what gets screenshotted.
+ * State list of the design-capture surface, with neutral sample data only. The capture job reads
+ * `DESIGN_STATE_IDS` from the running page, so this list is the single source of what gets screenshotted.
+ * These are placeholder states for the capture pipeline, not the M2-0201 prototype state list.
  */
 export type DesignPhase = 'idle' | 'listening'
 

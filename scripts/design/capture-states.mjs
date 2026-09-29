@@ -12,7 +12,7 @@ import { _electron as electron } from 'playwright'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { buildManifest, captureFileName, captureMatrix } from './capture-manifest.mjs'
+import { assertPngSize, buildManifest, captureFileName, captureMatrix } from './capture-manifest.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '..', '..')
@@ -54,7 +54,9 @@ try {
       const file = captureFileName(state, row)
       const path = join(outDir, file)
       await page.screenshot({ path })
-      shots.push({ state, ...row, file, bytes: readFileSync(path) })
+      const bytes = readFileSync(path)
+      assertPngSize(bytes, VIEWPORT, row.scale, file)
+      shots.push({ state, ...row, file, bytes })
       console.log(`wrote ${file}`)
     }
   }
