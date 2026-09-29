@@ -17,6 +17,7 @@ import {
   overlayHoverIdle,
   overlayHoverForced,
   overlayLayoutCopy,
+  overlaySurfaceSettingsChanged,
   overlayAllowsHugWidth,
   overlayHugNextWidth,
   overlayHugWidthFloor,
@@ -323,5 +324,12 @@ describe('overlay chrome modes', () => {
     expect(overlayHoverIdle({ ...meeting, capturing: true })).toBe(false)
     expect(overlayHoverIdle({ ...meeting, view: 'review' })).toBe(false)
     expect(overlayHoverIdle({ ...meeting, view: 'history' })).toBe(false)
+  })
+
+  it('a layout or placement change is a surface change the page must be told about', () => {
+    const topHide = { overlayLayout: 'hide', overlayPlacement: 'top-center' }
+    expect(overlaySurfaceSettingsChanged(topHide, { ...topHide, overlayPlacement: 'right-edge' })).toBe(true)
+    expect(overlaySurfaceSettingsChanged(topHide, { ...topHide, overlayLayout: 'island' })).toBe(true)
+    expect(overlaySurfaceSettingsChanged(topHide, { ...topHide })).toBe(false)
   })
 })

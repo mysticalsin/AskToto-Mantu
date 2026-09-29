@@ -248,6 +248,7 @@ import {
   overlayAllowsMinimize,
   overlayHugNextWidth,
   overlayRevealedContentHeight,
+  overlaySurfaceSettingsChanged,
   overlayUsesHover,
   parseOverlayLayout,
   rememberBarContentHeight,
@@ -5374,7 +5375,7 @@ function registerIpc(): void {
       startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
       startOperatorOverlayPoll(() => getSettings())
       notifySettingsChanged()
-    }
+    } else if (overlaySurfaceSettingsChanged(cur, next)) notifySettingsChanged() // the window moved; the page follows
     return publicSettings()
   })
 

@@ -1152,11 +1152,14 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const { drawer } = rightEdgeExpectedRects(win.workArea)
     return { x: win.displayBounds.x + win.displayBounds.width - 1, y: drawer.y + Math.round(drawer.height / 2) }
   }
+  // Main broadcasts the placement/layout change, and the page re-renders from its refreshed settings.
+  // Give that refresh time to land, so an Escape below never reaches a stale top-center page.
   const setLayout = async (layout) => {
     await page.evaluate(
       (next) => window.toto.setSettings({ overlayPlacement: 'right-edge', overlayLayout: next, autoHideOverlay: true }),
       layout
     )
+    for (let waited = 0; waited < 1_500 && !(await rightEdgePageState(page)).dock; waited += 100) await wait(100)
   }
   // The navigation rows before these leave a full view (History/Review) open, which replaces the dock
   // entirely. Escape backs out of it exactly as a user would; it is only sent while no dock is rendered.

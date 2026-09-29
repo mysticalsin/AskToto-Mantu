@@ -38,6 +38,19 @@ export function overlayLayoutCopy(placement: OverlayPlacement): Record<OverlayLa
   }
 }
 
+/**
+ * Main re-lays out and parks the native window as soon as the overlay layout or placement changes. The
+ * page renders the matching surface only from its own settings copy, so main must tell it about every
+ * such change, including a write the page did not make itself; otherwise a right-edge window shows the
+ * top-center page (no dock, no rail) and a hover reveal opens an empty window.
+ */
+export function overlaySurfaceSettingsChanged(
+  before: { overlayLayout?: unknown; overlayPlacement?: unknown },
+  after: { overlayLayout?: unknown; overlayPlacement?: unknown }
+): boolean {
+  return before.overlayLayout !== after.overlayLayout || before.overlayPlacement !== after.overlayPlacement
+}
+
 export function isOverlayLayout(v: unknown): v is OverlayLayout {
   return v === 'hide' || v === 'island' || v === 'bar'
 }
