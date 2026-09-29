@@ -144,6 +144,54 @@ else
   fail "render ocr fixture"
 fi
 
+# --- code-identity (read-only; M2-0429) ------------------------------------------------------------
+"$helper" code-identity >/dev/null 2>&1; code=$?
+expect_exit "code-identity without a path exits 1" 1 "$code"
+"$helper" code-identity "$work/missing.app" >/dev/null 2>&1; code=$?
+expect_exit "code-identity on a missing path exits 1" 1 "$code"
+
+# An explicitly ad-hoc-signed copy, so the result does not depend on the runner's linker defaults.
+cp "$helper" "$work/adhoc-bin"
+if codesign --force --sign - "$work/adhoc-bin" >/dev/null 2>&1; then
+  out="$("$helper" code-identity "$work/adhoc-bin")"; code=$?
+  expect_exit "code-identity exits 0 on ad-hoc code" 0 "$code"
+  expected="$(codesign -dvvv "$work/adhoc-bin" 2>&1 | sed -n 's/^CDHash=//p')"
+  if printf '%s' "$out" | EXPECTED="$expected" py '
+import json, os, re, sys
+d = json.load(sys.stdin)
+assert set(d) == {"identifier", "cdhash", "teamId", "adhoc"}, sorted(d)
+assert d["adhoc"] is True, d
+assert re.fullmatch(r"[0-9a-f]{40}", d["cdhash"]), d["cdhash"]
+assert d["cdhash"] == os.environ["EXPECTED"].lower(), (d["cdhash"], os.environ["EXPECTED"])
+assert d["teamId"] == "", d
+'; then pass "code-identity reports adhoc and the same 40-hex cdhash codesign shows"; else fail "code-identity JSON: $out"; fi
+else
+  fail "ad-hoc sign the code-identity fixture"
+fi
+
+# --- bundle-copies (read-only; M2-0429) ------------------------------------------------------------
+"$helper" bundle-copies >/dev/null 2>&1; code=$?
+expect_exit "bundle-copies without a bundle id exits 1" 1 "$code"
+
+out="$("$helper" bundle-copies com.mantu.asktoto.helper-test-missing)"; code=$?
+expect_exit "bundle-copies exits 0 for an unknown bundle id" 0 "$code"
+if printf '%s' "$out" | py '
+import json, sys
+assert json.load(sys.stdin) == {"copies": []}
+'; then pass "bundle-copies reports no copies for an unknown bundle id"; else fail "bundle-copies unknown id JSON: $out"; fi
+
+out="$("$helper" bundle-copies com.apple.finder)"; code=$?
+expect_exit "bundle-copies exits 0 for Finder" 0 "$code"
+if printf '%s' "$out" | py '
+import json, sys
+d = json.load(sys.stdin)
+assert list(d) == ["copies"], list(d)
+assert d["copies"], d
+for c in d["copies"]:
+    assert set(c) == {"path", "version"}, c
+assert any(c["path"].endswith("/Finder.app") for c in d["copies"]), d
+'; then pass "bundle-copies lists path + version for every copy LaunchServices knows"; else fail "bundle-copies Finder JSON: $out"; fi
+
 if [ "$failures" -eq 0 ]; then echo "all helper tests passed"; exit 0; fi
 echo "$failures helper test(s) failed"
 exit 1

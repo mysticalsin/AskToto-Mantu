@@ -28,9 +28,11 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
-      - name: Check refactor classification
+      - name: Check refactor kind, relocated blocks and source map
         id: refactor
-        run: node scripts/refactor/check-pr-classification.mjs --pr-event "$GITHUB_EVENT_PATH"
+        run: node scripts/refactor/check-pr-kind.mjs --pr-event "$GITHUB_EVENT_PATH" --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}"
+      - name: Check guard and test inventory
+        run: node scripts/refactor/guard-test-inventory.mjs --pr-event "$GITHUB_EVENT_PATH" --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}"
       - name: Test the refactor governance tools
         run: node --test scripts/refactor/verify-move.test.mjs
       - name: Verify pure-move refactor
