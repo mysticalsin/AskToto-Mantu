@@ -7,6 +7,13 @@
 - Implementer model: <!-- e.g. claude-sonnet-5 -->
 - Reviewing model: <!-- the validator; its session must differ from the implementer's -->
 
+## Refactor classification
+
+Select exactly one. Mixed refactor PRs are rejected; send the pure move first, then the behaviour change.
+
+- [ ] Pure move
+- [ ] Behaviour change
+
 ## What changed and why
 
 <!-- One paragraph. Link the ticket in the internal tracker. -->
