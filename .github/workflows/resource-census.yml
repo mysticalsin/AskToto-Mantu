@@ -86,8 +86,8 @@ jobs:
             --output census-output/darwin-footprint.json
       - name: Build representative synthetic profile
         run: |
-          # Read the manifest from the path profile.mjs prints, so a Windows RUNNER_TEMP (D:\a\_temp) cannot
-          # diverge between where the script writes and where this step reads.
+          # Read resource-census-profile.json from the path profile.mjs prints, so a Windows RUNNER_TEMP
+          # (D:\a\_temp) cannot diverge between where the script writes and where this step reads.
           node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile" | tee census-output/profile.log
           manifest=$(sed -n 's/^\[census-profile\] manifest //p' census-output/profile.log)
           test -n "$manifest"

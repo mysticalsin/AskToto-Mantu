@@ -566,7 +566,7 @@ describe('resource census representative profile', () => {
   it('detects the entry point for a Windows-style argv[1] as well as a POSIX one', () => {
     expect(isMainModule('file:///D:/a/repo/scripts/qa/census/profile.mjs', 'D:\\a\\repo\\scripts\\qa\\census\\profile.mjs', { windows: true })).toBe(true)
     expect(isMainModule('file:///D:/a/repo/scripts/qa/census/profile.mjs', 'D:\\a\\repo\\other.mjs', { windows: true })).toBe(false)
-    expect(isMainModule('file:///tmp/profile.mjs', '/tmp/profile.mjs')).toBe(true)
+    expect(isMainModule('file:///tmp/profile.mjs', '/tmp/profile.mjs', { windows: false })).toBe(true)
     expect(isMainModule('file:///tmp/profile.mjs', undefined)).toBe(false)
   })
 
