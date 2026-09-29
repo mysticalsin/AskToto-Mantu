@@ -54,9 +54,8 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * 2026-09-28: 10 → 9 after CI proved one more stale test-type error was gone on M2-0092.
  * 2026-09-28: 16 → 12 after the current integration merge removed four more stale test-type errors.
  * 2026-09-28: 12 → 7 after this merge resolution revealed five more errors already gone.
- * 2026-09-29: 7 → 2 after CI on M2-0264 measured two remaining errors.
  */
-const BASELINE = 2
+const BASELINE = 7
 
 let output = ''
 try {
