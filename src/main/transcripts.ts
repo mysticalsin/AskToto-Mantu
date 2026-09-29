@@ -391,11 +391,7 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
     // These bytes are on this device: reading them back must not wait on a placeholder probe.
     await recordLocalWrite(file)
   } catch (e) {
-    try {
-      if (existsSync(tmp)) await unlink(tmp) // don't leave an orphaned .tmp on failure
-    } catch {
-      /* ignore */
-    }
+    if (existsSync(tmp)) await unlink(tmp).catch(() => {}) // don't leave an orphaned .tmp on failure
     throw e
   }
 }
