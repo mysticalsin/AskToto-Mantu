@@ -266,6 +266,75 @@ describe('projectOperatorIngestMetadata', () => {
     })
   })
 
+  it('drops developer-efficiency metrics from every event payload', () => {
+    const devMetrics = { graphTokens: 1200, compactionTokens: 800, indexCommit: 'abc1234', searchCount: 9, devTokens: 5000 }
+    const sources = [
+      { id: 'ask-1', ts: 1, outcome: 'ok', inputTokens: 3, ...devMetrics },
+      { event: 'rating', id: 'rate-1', rating: 'up', ...devMetrics },
+      { event: 'listen', id: 'listen-1', minutes: 5, ...devMetrics },
+      { event: 'recap', id: 'recap-1', minutes: 2, ...devMetrics },
+      { event: 'crm', id: 'crm-1', status: 'failed', attempt: 1, ...devMetrics }
+    ]
+    for (const source of sources) {
+      const projected = projectOperatorIngestMetadata(source)
+      expect(projected).not.toBeNull()
+      for (const key of Object.keys(devMetrics)) expect(projected).not.toHaveProperty(key)
+      expect(JSON.stringify(projected)).not.toContain('abc1234')
+    }
+  })
+
+  it('maps graph and compaction events to null so they are never sent', () => {
+    for (const event of ['graph', 'compaction', 'index', 'search', 'dev']) {
+      expect(projectOperatorIngestMetadata({ event, id: `${event}-1`, graphTokens: 1, compactionTokens: 1 })).toBeNull()
+    }
+  })
+
+  it('freezes the ask key set: a new key needs an explicit change here', () => {
+    const projected = projectOperatorIngestMetadata({
+      id: 'ask-keys',
+      ts: 1,
+      mode: 'answer',
+      skillId: 'how-to',
+      skillVersion: '1.0.0',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      ttftMs: 1,
+      totalMs: 1,
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheRead: 1,
+      cacheWrite: 1,
+      cacheUncached: 1,
+      cacheStatus: 'hit',
+      cacheTtl: '1h',
+      outcome: 'error',
+      questionType: 'how-to',
+      error: 'x',
+      seatHash: 'seat-abc',
+      os: 'darwin',
+      appVersion: '1.8.9',
+      hostname: 'example-mac',
+      ssoEmail: 'owner@example.test',
+      license: 'licensed',
+      licenseId: 'abcdef0123456789',
+      licenseLast4: 'Z9Z9',
+      lastIndexAt: 100,
+      graphTokens: 1,
+      compactionTokens: 1,
+      indexCommit: 'abc1234',
+      searchCount: 1,
+      devTokens: 1
+    })
+    expect(Object.keys(projected ?? {}).sort()).toEqual(
+      [
+        'id', 'ts', 'mode', 'skillId', 'skillVersion', 'provider', 'model', 'ttftMs', 'totalMs',
+        'inputTokens', 'outputTokens', 'cacheRead', 'cacheWrite', 'cacheUncached', 'cacheStatus',
+        'cacheTtl', 'outcome', 'questionType', 'error', 'seatHash', 'os', 'appVersion', 'hostname',
+        'ssoEmail', 'license', 'licenseId', 'licenseLast4', 'lastIndexAt'
+      ].sort()
+    )
+  })
+
   it('fails closed for unsupported events and malformed required identifiers', () => {
     expect(projectOperatorIngestMetadata({ event: 'future-event', id: 'future-1', body: 'private' })).toBeNull()
     expect(projectOperatorIngestMetadata({ event: 'rating', id: 'contains private words', rating: 'up' })).toBeNull()
