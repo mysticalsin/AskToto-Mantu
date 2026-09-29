@@ -45,8 +45,8 @@
     "src/main/brain/store.ts": 1197,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 9818,
-    "src/main/recall.ts": 950,
+    "src/main/index.ts": 9825,
+    "src/main/recall.ts": 984,
     "src/main/store.ts": 1367,
     "src/main/transcripts.ts": 1211,
     "src/renderer/src/App.tsx": 4306,
@@ -59,7 +59,7 @@
     "src/renderer/src/components/Review.tsx": 1950,
     "src/renderer/src/components/Settings.tsx": 9481,
     "src/renderer/src/lib/listen.ts": 3153,
-    "src/shared/ipc.ts": 2443
+    "src/shared/ipc.ts": 2446
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
@@ -124,7 +124,6 @@
     "src/main/brain/publish.ts": 20,
     "src/main/brain/store.ts": 63,
     "src/main/graphify.ts": 17,
-    "src/main/recall.ts": 5,
     "src/main/transcripts.ts": 33
   },
   "FF-06": {},
