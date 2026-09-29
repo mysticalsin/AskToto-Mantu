@@ -1,5 +1,9 @@
 name: M2-0008 freeze repro
 
+# With candidate_run set (M2-0424) the same matrix runs against the installers of that qa-candidate.yml run,
+# after they are verified against that run's provenance and the sha256 inputs, and the job emits and checks
+# the M2-0194 attribution bundle.
+
 # Manual hosted run for the M2-0008 public-repo tool. Hosted runners can verify the unmodified 1.9.6
 # artifact hash, run the fixture/report harness, and upload the content-free bundle. Rows that require a
 # real QA account, cloud-file provider hydration, or a physical desktop session remain BLOCKED_EXTERNAL
@@ -21,9 +25,18 @@ on:
       windows_artifact_sha256:
         description: SHA-256 of the Windows 1.9.6 installer under test.
         required: true
+      candidate_run:
+        description: >-
+          Optional qa-candidate.yml run id. When set, the installers come from that run's candidate-mac and
+          candidate-win artifacts (release_repo and release_tag are ignored), the two SHA-256 inputs above are
+          the hashes they must match, and the run emits the M2-0194 attribution bundle instead of M2-0008's.
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: m2-0008-freeze-repro-${{ github.ref }}
@@ -46,17 +59,30 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
-      - name: Download and verify the 1.9.6 macOS artifact
+      - name: Download the QA candidate macOS installer and verify it against its provenance
+        if: inputs.candidate_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/m2-0008-artifact" "$RUNNER_TEMP/m2-0194-provenance"
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-provenance --dir "$RUNNER_TEMP/m2-0194-provenance"
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-mac --dir "$RUNNER_TEMP/m2-0008-artifact"
+          node scripts/qa/provenance.mjs verify "$RUNNER_TEMP/m2-0194-provenance/provenance.json" "$RUNNER_TEMP/m2-0008-artifact" mac
+      - name: Download and verify the 1.9.6 macOS artifact, check its hash, and extract the app
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPO: ${{ inputs.release_repo }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_SHA256: ${{ inputs.macos_artifact_sha256 }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
         run: |
           mkdir -p "$RUNNER_TEMP/m2-0008-artifact" "$RUNNER_TEMP/m2-0008-sums" "$RUNNER_TEMP/m2-0008-app"
-          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-*.dmg' --dir "$RUNNER_TEMP/m2-0008-artifact"
-          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir "$RUNNER_TEMP/m2-0008-sums"
-          node scripts/qa/verify-sha256sums.mjs "$RUNNER_TEMP/m2-0008-artifact" "$(find "$RUNNER_TEMP/m2-0008-sums" -type f -name 'SHA256SUMS*' -print -quit)"
+          if [ -z "$CANDIDATE_RUN" ]; then
+            gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-*.dmg' --dir "$RUNNER_TEMP/m2-0008-artifact"
+            gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir "$RUNNER_TEMP/m2-0008-sums"
+            node scripts/qa/verify-sha256sums.mjs "$RUNNER_TEMP/m2-0008-artifact" "$(find "$RUNNER_TEMP/m2-0008-sums" -type f -name 'SHA256SUMS*' -print -quit)"
+          fi
           artifact="$(find "$RUNNER_TEMP/m2-0008-artifact" -type f -name '*.dmg' -print -quit)"
           test -n "$artifact"
           printf '%s  %s\n' "$EXPECTED_SHA256" "$artifact" | shasum -a 256 -c -
@@ -65,6 +91,7 @@ jobs:
           ditto "$volume/Metis.app" "$RUNNER_TEMP/m2-0008-app/Metis.app"
           hdiutil detach "$volume" > /dev/null
       - name: Run the M2-0008 hosted bundle check
+        if: inputs.candidate_run == ''
         env:
           ARTIFACT_SHA256: ${{ inputs.macos_artifact_sha256 }}
         run: |
@@ -75,11 +102,32 @@ jobs:
             --out out/m2-0008-freeze-repro \
             --dry-run
           node scripts/evidence/check.mjs --ticket M2-0008 --bundle out/m2-0008-freeze-repro
+      - name: Run the M2-0194 attribution bundle check
+        if: inputs.candidate_run != ''
+        env:
+          ARTIFACT_SHA256: ${{ inputs.macos_artifact_sha256 }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          bash scripts/qa/freeze-repro/run-matrix.sh \
+            --artifact "$ARTIFACT_SHA256" \
+            --build-run-id "$GITHUB_RUN_ID" \
+            --candidate-run "$CANDIDATE_RUN" \
+            --app "$RUNNER_TEMP/m2-0008-app/Metis.app" \
+            --out out/m2-0194-freeze-repro \
+            --dry-run
+          node scripts/evidence/check.mjs --ticket M2-0194 --bundle out/m2-0194-freeze-repro
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.candidate_run == '' }}
         with:
           name: m2-0008-freeze-repro-macos
           path: out/m2-0008-freeze-repro/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() && inputs.candidate_run != '' }}
+        with:
+          name: m2-0194-freeze-repro-macos
+          path: out/m2-0194-freeze-repro/
           if-no-files-found: error
           retention-days: 14
 
@@ -95,18 +143,31 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
-      - name: Download, verify, and install the 1.9.6 Windows artifact
+      - name: Download the QA candidate Windows installer and verify it against its provenance
+        if: inputs.candidate_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/m2-0008-artifact" "$RUNNER_TEMP/m2-0194-provenance"
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-provenance --dir "$RUNNER_TEMP/m2-0194-provenance"
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-win --dir "$RUNNER_TEMP/m2-0008-artifact"
+          node scripts/qa/provenance.mjs verify "$RUNNER_TEMP/m2-0194-provenance/provenance.json" "$RUNNER_TEMP/m2-0008-artifact" win
+      - name: Download, verify, check the hash of, and install the Windows artifact
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPO: ${{ inputs.release_repo }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_SHA256: ${{ inputs.windows_artifact_sha256 }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
         run: |
           mkdir -p "$RUNNER_TEMP/m2-0008-artifact" "$RUNNER_TEMP/m2-0008-sums" "$RUNNER_TEMP/m2-0008-install"
-          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-Setup-*.exe' --dir "$RUNNER_TEMP/m2-0008-artifact"
-          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir "$RUNNER_TEMP/m2-0008-sums"
-          node scripts/qa/verify-sha256sums.mjs "$RUNNER_TEMP/m2-0008-artifact" "$(find "$RUNNER_TEMP/m2-0008-sums" -type f -name 'SHA256SUMS*' -print -quit)"
-          artifact="$(find "$RUNNER_TEMP/m2-0008-artifact" -type f -name '*.exe' -print -quit)"
+          if [ -z "$CANDIDATE_RUN" ]; then
+            gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-Setup-*.exe' --dir "$RUNNER_TEMP/m2-0008-artifact"
+            gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir "$RUNNER_TEMP/m2-0008-sums"
+            node scripts/qa/verify-sha256sums.mjs "$RUNNER_TEMP/m2-0008-artifact" "$(find "$RUNNER_TEMP/m2-0008-sums" -type f -name 'SHA256SUMS*' -print -quit)"
+          fi
+          artifact="$(find "$RUNNER_TEMP/m2-0008-artifact" -type f -name 'Metis-Setup-*.exe' -print -quit)"
           test -n "$artifact"
           printf '%s  %s\n' "$EXPECTED_SHA256" "$artifact" | sha256sum -c -
           install_dir="$(cygpath -w "$RUNNER_TEMP/m2-0008-install")"
@@ -118,6 +179,7 @@ jobs:
           PS1
           powershell -NoProfile -File "$RUNNER_TEMP/m2-0008-install.ps1" -Artifact "$artifact_win" -InstallDir "$install_dir"
       - name: Run the M2-0008 hosted bundle check
+        if: inputs.candidate_run == ''
         env:
           ARTIFACT_SHA256: ${{ inputs.windows_artifact_sha256 }}
         run: |
@@ -128,10 +190,31 @@ jobs:
             --out out/m2-0008-freeze-repro \
             --dry-run
           node scripts/evidence/check.mjs --ticket M2-0008 --bundle out/m2-0008-freeze-repro
+      - name: Run the M2-0194 attribution bundle check
+        if: inputs.candidate_run != ''
+        env:
+          ARTIFACT_SHA256: ${{ inputs.windows_artifact_sha256 }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          bash scripts/qa/freeze-repro/run-matrix.sh \
+            --artifact "$ARTIFACT_SHA256" \
+            --build-run-id "$GITHUB_RUN_ID" \
+            --candidate-run "$CANDIDATE_RUN" \
+            --app "$RUNNER_TEMP/m2-0008-install/Metis.exe" \
+            --out out/m2-0194-freeze-repro \
+            --dry-run
+          node scripts/evidence/check.mjs --ticket M2-0194 --bundle out/m2-0194-freeze-repro
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.candidate_run == '' }}
         with:
           name: m2-0008-freeze-repro-windows
           path: out/m2-0008-freeze-repro/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() && inputs.candidate_run != '' }}
+        with:
+          name: m2-0194-freeze-repro-windows
+          path: out/m2-0194-freeze-repro/
           if-no-files-found: error
           retention-days: 14

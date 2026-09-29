@@ -228,6 +228,49 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
     }
   })
 
+  it('--candidate-run emits an M2-0194 attribution bundle that check.mjs accepts', () => {
+    const out = mkdtempSync(join(tmpdir(), 'm2-0194-freeze-contract-'))
+    try {
+      const run = spawnSync('bash', [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--candidate-run', '456', '--out', out, '--dry-run'], {
+        encoding: 'utf8',
+        timeout: 30_000
+      })
+      expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0)
+
+      const environment = JSON.parse(readFileSync(join(out, 'environment.json'), 'utf8')) as { ticket: string; candidate_run: string }
+      expect(environment.ticket).toBe('M2-0194')
+      expect(environment.candidate_run).toBe('456')
+      expect(readFileSync(join(out, 'M2-0194.lead-action.md'), 'utf8')).toContain('LIVE_VERIFIED')
+      for (const file of ['stall-excerpt.jsonl', 'sampler-excerpt.jsonl', 'reveal-excerpt.jsonl', 'sidecar-excerpt.jsonl']) {
+        expect(readFileSync(join(out, file), 'utf8')).toBe('')
+      }
+      expect(JSON.parse(readFileSync(join(out, 'stall-bundle-names.json'), 'utf8'))).toEqual({ names: [] })
+
+      const check = spawnSync(process.execPath, ['scripts/evidence/check.mjs', '--ticket', 'M2-0194', '--bundle', out], {
+        encoding: 'utf8',
+        timeout: 30_000
+      })
+      expect(check.status, `${check.stdout}\n${check.stderr}`).toBe(0)
+      expect(check.stdout).toContain('M2-0194 bundle: OK')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a --candidate-run that is not a run id', () => {
+    const out = mkdtempSync(join(tmpdir(), 'm2-0194-freeze-contract-'))
+    try {
+      const result = spawnSync('bash', [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--candidate-run', 'abc', '--out', out, '--dry-run'], {
+        encoding: 'utf8',
+        timeout: 30_000
+      })
+      expect(result.status).toBe(2)
+      expect(result.stderr).toContain('--candidate-run must be a positive integer')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  })
+
   it('collects DiagnosticReports only with explicit consent and process-scoped matching', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
     try {

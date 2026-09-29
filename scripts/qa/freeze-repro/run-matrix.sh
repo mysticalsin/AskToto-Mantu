@@ -25,11 +25,15 @@ Options:
   --qa-host-label <label>      public QA host label for the evidence record (default: qa-mac-1)
   --implementer-model <id>     implementer model label for the evidence record
   --validator-model <id>       validator model label for the evidence record
+  --candidate-run <id>         qa-candidate.yml run id that built the app under test; switches the bundle to the
+                               M2-0194 attribution shape (adds audit excerpts and stall-bundle names)
   --collect-diagnostic-reports explicit consent to collect matching Metis/AskToto .spin/.hang reports
   --dry-run                    create fixtures and reports without launching or sampling; if --app is provided,
                                record the app executable hash and NODE_OPTIONS fuse state
 USAGE
 }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 fail() {
   echo "[M2-0008] FAIL: $*" >&2
@@ -395,9 +399,10 @@ make_fifo_fixtures() {
 write_environment() {
   {
     printf '{\n'
-    printf '  "ticket": "M2-0008",\n'
+    printf '  "ticket": "%s",\n' "$TICKET"
     printf '  "artifact_sha256": %s,\n' "$(json_string "$ARTIFACT")"
     printf '  "build_run_id": %s,\n' "$(json_string "$BUILD_RUN_ID")"
+    [[ -z "$CANDIDATE_RUN" ]] || printf '  "candidate_run": %s,\n' "$(json_string "$CANDIDATE_RUN")"
     printf '  "qa_account_asserted": %s,\n' "$QA_ACCOUNT"
     printf '  "dry_run": %s,\n' "$DRY_RUN"
     printf '  "app_executable_sha256": %s,\n' "$(json_string "${APP_EXE_SHA:-not-recorded}")"
@@ -411,12 +416,12 @@ write_environment() {
 
 write_external_blockers() {
   if [[ "$DRY_RUN" == 0 ]]; then
-    printf '{"ticket":"M2-0008","blockers":[]}\n' > "$OUT/external-blockers.json"
+    printf '{"ticket":"%s","blockers":[]}\n' "$TICKET" > "$OUT/external-blockers.json"
     return
   fi
-  cat > "$OUT/external-blockers.json" <<'EOF_BLOCKERS'
+  cat > "$OUT/external-blockers.json" <<EOF_BLOCKERS
 {
-  "ticket": "M2-0008",
+  "ticket": "$TICKET",
   "blockers": [
     {
       "status": "BLOCKED_EXTERNAL",
@@ -550,6 +555,14 @@ LEAD_ACTION: Import this public bundle into the controlled program evidence chai
 EOF_LEAD_ACTION
 }
 
+write_attribution_bundle() {
+  stop_app
+  node "$SCRIPT_DIR/attribution-bundle.mjs" --out "$OUT" --profile "$PROFILE" --profile "$IDLE_PROFILE"
+  cat > "$OUT/M2-0194.lead-action.md" <<EOF_LEAD_ACTION_0194
+LEAD_ACTION: Import this public bundle into the controlled program evidence chain: file the M2-0194 LIVE_VERIFIED record for qa-candidate run $CANDIDATE_RUN (artifact sha256 $ARTIFACT) from matrix.jsonl, interrupt-results.jsonl, the stall, sampler, reveal and sidecar excerpts, and stall-bundle-names.json. Rows listed in external-blockers.json are BLOCKED_EXTERNAL until they are run on the QA account.
+EOF_LEAD_ACTION_0194
+}
+
 live_result() {
   [[ "$DRY_RUN" == 1 ]] && {
     printf 'PASS'
@@ -578,6 +591,7 @@ live_failure_summary() {
 
 ARTIFACT=""
 BUILD_RUN_ID=""
+CANDIDATE_RUN=""
 APP=""
 PROFILE_TEMPLATE=""
 OUT=""
@@ -601,6 +615,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --artifact) ARTIFACT=${2:-}; shift 2 ;;
     --build-run-id) BUILD_RUN_ID=${2:-}; shift 2 ;;
+    --candidate-run) CANDIDATE_RUN=${2:-}; shift 2 ;;
     --app) APP=${2:-}; shift 2 ;;
     --profile-template) PROFILE_TEMPLATE=${2:-}; shift 2 ;;
     --out) OUT=${2:-}; shift 2 ;;
@@ -622,7 +637,10 @@ done
 
 [[ "$ARTIFACT" =~ ^[0-9a-f]{64}$ ]] || fail "--artifact must be a lowercase sha256"
 [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]] || fail "--build-run-id must be a positive integer"
+[[ -z "$CANDIDATE_RUN" || "$CANDIDATE_RUN" =~ ^[1-9][0-9]*$ ]] || fail "--candidate-run must be a positive integer run id"
 [[ "$MINUTES" =~ ^[0-9]+$ && "$MINUTES" -gt 0 ]] || fail "--minutes must be a positive integer"
+TICKET=M2-0008
+[[ -z "$CANDIDATE_RUN" ]] || TICKET=M2-0194
 [[ "$DRY_RUN" == 1 || "$QA_ACCOUNT" == 1 ]] || fail "--qa-account is required for live runs"
 [[ "$DRY_RUN" == 1 || -n "$APP" ]] || fail "--app is required for live runs"
 [[ "$DRY_RUN" == 1 || -d "$PROFILE_TEMPLATE" ]] || fail "--profile-template must exist for live runs"
@@ -739,11 +757,17 @@ record_interrupt_result "process-signal" "$interrupt"
 write_fixture_manifest
 copy_diagnostic_reports "$STAMP"
 RESULT=$(live_result)
-write_evidence_records "$RESULT"
-write_lead_action
+if [[ -n "$CANDIDATE_RUN" ]]; then
+  write_attribution_bundle
+else
+  write_evidence_records "$RESULT"
+  write_lead_action
+fi
 
 cat > "$OUT/README.md" <<EOF_README
-# M2-0008 Freeze Repro Bundle
+# $TICKET Freeze Repro Bundle
+
+$([[ -z "$CANDIDATE_RUN" ]] || printf -- '- QA candidate run: `%s`\n- Attribution excerpts: `stall-excerpt.jsonl`, `sampler-excerpt.jsonl`, `reveal-excerpt.jsonl`, `sidecar-excerpt.jsonl`\n- Stall bundle file names only: `stall-bundle-names.json`\n- Lead filing handoff: `M2-0194.lead-action.md`\n' "$CANDIDATE_RUN")
 
 - Artifact sha256: \`$ARTIFACT\`
 - Build run id: \`$BUILD_RUN_ID\`
