@@ -273,6 +273,7 @@ describe('MQA-301 managed screenshot Ask', () => {
     expect(JSON.stringify(upstreamBody.messages.slice(0, -1))).not.toContain(SCREENSHOT_PNG)
     if (provider === 'cloudflare') {
       expect(upstreamBody.model).toBe('@cf/meta/llama-4-scout-17b-16e-instruct')
+      expect(new Headers(inference?.init?.headers).get('cf-aig-collect-log')).toBe('true')
       expect(new Headers(inference?.init?.headers).get('cf-aig-collect-log-payload')).toBe('false')
       expect(new Headers(inference?.init?.headers).get('cf-aig-skip-cache')).toBe('true')
       expect(JSON.stringify(seen.filter((call) => call.url.includes('/ai-gateway/gateways')))).not.toContain(SCREENSHOT_PNG)
