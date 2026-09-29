@@ -641,7 +641,7 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
-import { buildTrayInStages, createSingleFlight, loadTrayIcon, scheduleTrayAfterFirstPaint, yieldToEventLoop } from './boot-tray'
+import { buildTrayInStages, createSingleFlight, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
@@ -2976,7 +2976,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   overlay.webContents.on('dom-ready', () => {
     pollAct1Paint()
   })
-  overlay.once('ready-to-show', pollAct1Paint)
+  overlay.once('ready-to-show', pollAct1Paint) // never fires under paintWhenInitiallyHidden:false; the other triggers reveal Act1
   overlay.webContents.once('did-finish-load', pollAct1Paint)
   // FITO-185-G-SHOW: hard reassert at 2s (already shown; belt-and-suspenders).
   if (onboardingLive) {
@@ -4677,9 +4677,9 @@ function createTray(): void {
   // boot awaits and boot's own runStep('createTray') runs it again — without this the second call adds a duplicate
   // menu-bar item and orphans the first Tray. A build still in flight counts as created (startTrayBuild ignores it).
   if (tray && !tray.isDestroyed()) return
-  const iconPath = app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png')
+  const iconPaths = trayIconPaths(app.isPackaged ? process.resourcesPath : join(__dirname, '../../build'))
   startTrayBuild(() => buildTrayInStages<Electron.NativeImage>({
-    loadIcon: () => loadTrayIcon(nativeImage, iconPath, process.platform),
+    loadIcon: (time) => loadPresizedTrayIcon(nativeImage, iconPaths, process.platform, time),
     create(img) {
       const emptyIcon = img.isEmpty()
       tray = new Tray(emptyIcon ? nativeImage.createEmpty() : img)

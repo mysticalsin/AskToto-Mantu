@@ -300,6 +300,16 @@ describe('boot sidecar reaper', () => {
     ])
   })
 
+  it('filters a full ps listing by owned names but resolves every line of an explicit pid lookup', () => {
+    const full = testOnly.psCandidateFilter()
+    expect(full(LLAMA)).toBe(true)
+    expect(full('/usr/libexec/unrelated')).toBe(false)
+    expect(testOnly.psCandidateFilter([])('/usr/libexec/unrelated')).toBe(false)
+    const lookup = testOnly.psCandidateFilter([501])
+    expect(lookup('/usr/libexec/unrelated')).toBe(true)
+    expect(lookup(LLAMA)).toBe(true)
+  })
+
   it('requires a provable absolute userData model path for the legacy orphan rule', () => {
     expect(testOnly.legacyArgsPointAtUserModel(['-m', 'local-llm/models/qwen/model.gguf'], '/profile/local-llm/')).toBe(false)
     expect(testOnly.legacyArgsPointAtUserModel(['-m', '/profile/local-llm/models/qwen/model.gguf'], '/profile/local-llm/')).toBe(true)

@@ -317,7 +317,12 @@ async function listPosixProcesses(pids?: readonly number[]): Promise<ProcessIden
     ? ['-o', 'pid=,ppid=,pgid=,lstart=,command=', '-p', pids.join(',')]
     : ['-axo', 'pid=,ppid=,pgid=,lstart=,command=']
   const { stdout } = await execFileAsync('/bin/ps', args, { encoding: 'utf8', timeout: 5_000 })
-  return parsePosixPsListing(stdout, pids?.length ? () => true : isOwnedProcessName)
+  return parsePosixPsListing(stdout, psCandidateFilter(pids))
+}
+
+/** A lookup of explicit pids resolves every returned line; a full listing resolves only owned sidecar names. */
+function psCandidateFilter(pids?: readonly number[]): (exe: string) => boolean {
+  return pids?.length ? () => true : isOwnedProcessName
 }
 
 /** Executable names of the sidecars Métis spawns; a full `ps` listing resolves realpaths only for these. */
@@ -428,5 +433,6 @@ export const testOnly = {
   isOwnedProcessName,
   parsePosixPsLine,
   parsePosixPsListing,
+  psCandidateFilter,
   startedBefore
 }

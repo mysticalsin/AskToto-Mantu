@@ -1,11 +1,14 @@
 import { EventEmitter } from 'node:events'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import {
   buildTrayInStages,
   createSingleFlight,
+  loadPresizedTrayIcon,
   loadTrayIcon,
   scheduleTrayAfterFirstPaint,
   TRAY_ICON_SIZE,
+  trayIconPaths,
   TRAY_THUMBNAIL_TIMEOUT_MS,
   yieldToEventLoop,
   type TrayGateWindow,
@@ -214,5 +217,83 @@ describe('loadTrayIcon (M2-0031)', () => {
     const icon = await loadTrayIcon(loader(async () => image('thumb'), empty), '/icon.png', 'linux')
     expect(icon).toBe(empty)
     expect(empty.resize).not.toHaveBeenCalled()
+  })
+})
+
+describe('loadPresizedTrayIcon (M2-0031)', () => {
+  type FakeImage = { name: string; isEmpty(): boolean; resize: Mock<(size: TraySize) => FakeImage> }
+  const image = (name: string, empty = false): FakeImage => ({
+    name,
+    isEmpty: () => empty,
+    resize: vi.fn((_size: TraySize): FakeImage => image(`${name}@resized`))
+  })
+  const PATHS = { presized: '/res/tray/tray.png', fullSize: '/res/icon.png' }
+  const loader = (byPath: Record<string, FakeImage>) => ({
+    createThumbnailFromPath: vi.fn(async (_path: string, _size: TraySize) => image('thumb')),
+    createFromPath: vi.fn((path: string) => byPath[path] ?? image(`missing:${path}`, true))
+  })
+  const recordingTimer = () => {
+    const labels: string[] = []
+    const time = <T>(label: string, fn: () => T): T => {
+      labels.push(label)
+      return fn()
+    }
+    return { labels, time }
+  }
+
+  it.each(['darwin', 'win32', 'linux'] as const)('on %s loads the pre-sized image without resizing or thumbnailing', async (platform) => {
+    const presized = image('tray')
+    const full = image('full')
+    const images = loader({ [PATHS.presized]: presized, [PATHS.fullSize]: full })
+    const { labels, time } = recordingTimer()
+
+    const icon = await loadPresizedTrayIcon(images, PATHS, platform, time)
+
+    expect(icon).toBe(presized)
+    expect(presized.resize).not.toHaveBeenCalled()
+    expect(full.resize).not.toHaveBeenCalled()
+    expect(images.createFromPath).toHaveBeenCalledExactlyOnceWith(PATHS.presized)
+    expect(images.createThumbnailFromPath).not.toHaveBeenCalled()
+    expect(labels).toEqual(['createTray.loadIcon'])
+  })
+
+  it('falls back to the full-size icon only when the pre-sized image is missing, timing that decode on its own', async () => {
+    const full = image('full')
+    const images = loader({ [PATHS.fullSize]: full })
+    const { labels, time } = recordingTimer()
+
+    const icon = await loadPresizedTrayIcon(images, PATHS, 'win32', time)
+
+    expect(icon.name).toBe('full@resized')
+    expect(images.createFromPath.mock.calls.map(([path]) => path)).toEqual([PATHS.presized, PATHS.fullSize])
+    expect(labels).toEqual(['createTray.loadIcon', 'createTray.loadIcon.fallback'])
+  })
+
+  it('names the pre-sized image under tray/ and the full-size icon beside it in the resources directory', () => {
+    expect(trayIconPaths(join('res'))).toEqual({ presized: join('res', 'tray', 'tray.png'), fullSize: join('res', 'icon.png') })
+  })
+
+  it('buildTrayInStages hands its phase timer to loadIcon, so the icon load is timed as its own phase', async () => {
+    const { labels, time } = recordingTimer()
+    const images = loader({ [PATHS.presized]: image('tray') })
+    await buildTrayInStages({
+      loadIcon: (t) => loadPresizedTrayIcon(images, PATHS, 'darwin', t),
+      create: () => undefined,
+      attachMenu: () => undefined,
+      time,
+      fail: (error) => {
+        throw error
+      }
+    })
+    expect(labels).toEqual(['createTray.loadIcon', 'createTray.newTray', 'createTray.attachMenu'])
+  })
+
+  it('on macOS a missing pre-sized image falls back to the off-thread thumbnail of the full-size icon', async () => {
+    const images = loader({})
+
+    const icon = await loadPresizedTrayIcon(images, PATHS, 'darwin')
+
+    expect(icon.name).toBe('thumb')
+    expect(images.createThumbnailFromPath).toHaveBeenCalledExactlyOnceWith(PATHS.fullSize, TRAY_ICON_SIZE)
   })
 })

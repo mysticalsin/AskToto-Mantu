@@ -1,3 +1,5 @@
+import { join } from 'node:path'
+
 /** The slice of BrowserWindow the tray scheduler reads. */
 export interface TrayGateWindow {
   isDestroyed(): boolean
@@ -45,14 +47,14 @@ export function scheduleTrayAfterFirstPaint(win: TrayGateWindow | null | undefin
 }
 
 export interface TrayStages<Icon> {
-  /** Produces the sized tray image; the decode must not run as one long main-thread task. */
-  loadIcon(): Promise<Icon>
+  /** Produces the sized tray image with the build's phase timer; the decode must not run as one long main-thread task. */
+  loadIcon(time: TrayPhaseTimer): Promise<Icon>
   /** Constructs the native tray item from the loaded image. */
   create(icon: Icon): void
   /** Builds and attaches the context menu. */
   attachMenu(): void
   /** Times one stage (the boot phase trace), so a slow stage is named on its own. */
-  time<T>(label: string, fn: () => T): T
+  time: TrayPhaseTimer
   fail(error: unknown): void
 }
 
@@ -61,7 +63,7 @@ export interface TrayStages<Icon> {
  *  is reported once through `fail` and ends the build; a tray already created stays usable. */
 export async function buildTrayInStages<Icon>(stages: TrayStages<Icon>): Promise<void> {
   try {
-    const icon = await stages.loadIcon()
+    const icon = await stages.loadIcon(stages.time)
     await yieldToEventLoop()
     stages.time('createTray.newTray', () => stages.create(icon))
     await yieldToEventLoop()
@@ -103,6 +105,10 @@ export interface TrayImageLoader<I extends TrayIconImage<I>> {
   createFromPath(path: string): I
 }
 
+/** Times one synchronous step of the tray icon load under a boot phase label. */
+export type TrayPhaseTimer = <T>(label: string, fn: () => T) => T
+const untimed: TrayPhaseTimer = (_label, fn) => fn()
+
 export const TRAY_ICON_SIZE: TraySize = { width: 18, height: 18 }
 /** Bound on the off-thread thumbnail; past it the icon is decoded in-process so the tray still appears. */
 export const TRAY_THUMBNAIL_TIMEOUT_MS = 2000
@@ -113,7 +119,8 @@ export const TRAY_THUMBNAIL_TIMEOUT_MS = 2000
 export async function loadTrayIcon<I extends TrayIconImage<I>>(
   images: TrayImageLoader<I>,
   iconPath: string,
-  platform: NodeJS.Platform
+  platform: NodeJS.Platform,
+  time: TrayPhaseTimer = untimed
 ): Promise<I> {
   if (platform === 'darwin') {
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -131,6 +138,34 @@ export async function loadTrayIcon<I extends TrayIconImage<I>>(
       clearTimeout(timer)
     }
   }
-  const img = images.createFromPath(iconPath)
-  return img.isEmpty() ? img : img.resize(TRAY_ICON_SIZE)
+  return time('createTray.loadIcon.fallback', () => {
+    const img = images.createFromPath(iconPath)
+    return img.isEmpty() ? img : img.resize(TRAY_ICON_SIZE)
+  })
+}
+
+/** The tray images built from the app icon at build time (scripts/make-tray-icons.mjs) and the icon itself. */
+export interface TrayIconPaths {
+  /** 18 px image; Electron picks up its 36 px `@2x` sibling on HiDPI displays by itself. */
+  presized: string
+  /** The 1024² app icon, decoded and resized only when the pre-sized image is missing or unreadable. */
+  fullSize: string
+}
+
+/** The tray image paths inside a resources directory (the packaged app's, or build/ in development). */
+export function trayIconPaths(resourcesDir: string): TrayIconPaths {
+  return { presized: join(resourcesDir, 'tray', 'tray.png'), fullSize: join(resourcesDir, 'icon.png') }
+}
+
+/** The tray image on every platform. The pre-sized image loads as-is, so nothing is resized or rasterized on the
+ *  main thread; only if it is missing or empty does the load fall back to `loadTrayIcon` on the full-size icon. */
+export async function loadPresizedTrayIcon<I extends TrayIconImage<I>>(
+  images: TrayImageLoader<I>,
+  paths: TrayIconPaths,
+  platform: NodeJS.Platform,
+  time: TrayPhaseTimer = untimed
+): Promise<I> {
+  const presized = time('createTray.loadIcon', () => images.createFromPath(paths.presized))
+  if (!presized.isEmpty()) return presized
+  return loadTrayIcon(images, paths.fullSize, platform, time)
 }
