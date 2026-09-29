@@ -23,6 +23,8 @@ on:
       - .github/workflows/qa-candidate.yml
       - build/qa-identity.electron-builder.yml
       - scripts/qa/provenance.mjs
+      - scripts/qa/st-1.mjs
+      - scripts/qa/lib/st-1-core.mjs
 
 permissions:
   contents: read
@@ -348,3 +350,128 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/check-packaged-launch.mjs (Get-Item assets/Metis-Portable-*.exe).FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # Report-only per owner decision OD-24; M2-0433 makes it blocking again once ST-1 passes strictly (OD-21).
+  st1-mac-fifo:
+    name: ST-1 fifo stall row (macOS)
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - name: Verify every byte against the provenance
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+      - name: Measure packaged stall resilience
+        continue-on-error: true
+        run: |
+          mkdir -p st1-report
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          if [ -z "$installer" ]; then
+            echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
+            exit 1
+          fi
+          node scripts/qa/st-1.mjs \
+            --installer "$installer" \
+            --provenance provenance/provenance.json \
+            --fixtures fifo \
+            --minutes 5 \
+            --out st1-report/st-1-macos-fifo.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: st-1-macos-fifo
+          path: st1-report/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+  # Report-only: the same candidate and measurement with no fixture, so a block the fifo row shows can be
+  # told apart from a block that happens at every launch. Its verdict never fails the run.
+  st1-mac-control:
+    name: ST-1 control (no fixtures)
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - name: Verify every byte against the provenance
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+      - name: Measure the packaged app with no fixture
+        continue-on-error: true
+        run: |
+          mkdir -p st1-report
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          if [ -z "$installer" ]; then
+            echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
+            exit 1
+          fi
+          node scripts/qa/st-1.mjs \
+            --installer "$installer" \
+            --provenance provenance/provenance.json \
+            --fixtures none \
+            --minutes 5 \
+            --out st1-report/st-1-macos-none.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: st-1-macos-control
+          path: st1-report/
+          if-no-files-found: warn
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+  st1-windows-external:
+    name: ST-1-W external unblock record
+    needs: provenance
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - name: Record the Windows ST-1-W unblock step
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force st1-report | Out-Null
+          @'
+          {
+            "harness": "ST-1-W",
+            "verdict": "BLOCKED_EXTERNAL",
+            "reason": "Requires a managed Windows QA laptop or hosted account with real cloud-provider dataless placeholders.",
+            "unblockStep": "Run scripts/qa/st-1.mjs against the verified candidate installer on the managed Windows QA laptop with --fixtures dataless, --cloud-dir pointing at evicted placeholder files, --main-log pointing at the candidate main log, --minutes 5, and upload the JSON report.",
+            "provenanceArtifact": "candidate-provenance"
+          }
+          '@ | Set-Content -NoNewline st1-report/st-1-windows-blocked.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: st-1-windows-blocked
+          path: st1-report/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}

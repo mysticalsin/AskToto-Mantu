@@ -24,7 +24,7 @@
     "check:packaged-runtime": "node scripts/check-packaged-runtime.mjs",
     "check:update-metadata": "node scripts/check-update-metadata.mjs",
     "check:built-offline": "node scripts/check-built-offline.mjs",
-    "prebuild": "node scripts/ensure-electron-runtime.mjs --check-only && node scripts/check-no-dynamic-import.mjs && node scripts/check-offline-package.mjs && node scripts/ensure-intelligence-bundle.mjs",
+    "prebuild": "node scripts/ensure-electron-runtime.mjs --check-only && node scripts/check-no-dynamic-import.mjs && node scripts/check-offline-package.mjs && node scripts/ensure-intelligence-bundle.mjs && node scripts/make-tray-icons.mjs",
     "build": "electron-vite build",
     "postbuild": "node scripts/check-built-offline.mjs",
     "preview": "node scripts/ensure-electron-runtime.mjs --check-only && electron-vite preview",

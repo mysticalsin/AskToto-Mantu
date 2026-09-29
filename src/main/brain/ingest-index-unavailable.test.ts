@@ -19,6 +19,7 @@ import {
 } from './ingest'
 import { brainDir, indexUnavailable, readIndex } from './store'
 import { writeSaved } from '../transcripts'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import { resetSecretKeyCache } from '../secrets'
 
@@ -102,6 +103,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     delete process.env.ASKTOTO_LOCAL_KEYSTORE
     resetSecretKeyCache()
     userData = mkdtempSync(join(tmpdir(), 'metis-index-unavailable-ud-'))
@@ -142,7 +144,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     const beforeIndex = sha256(readFileSync(primary))
     const beforeSentinel = readFileSync(sentinelPath)
 
-    expect(startBackfill()).toEqual({ queued: 0 })
+    expect(await startBackfill()).toEqual({ queued: 0 })
     await waitForIdle()
 
     expect(createStreamMock).not.toHaveBeenCalled()
