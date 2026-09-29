@@ -526,7 +526,7 @@ import { createScreenPreprocess, type ScreenPreprocess } from './screen-preproce
 import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
-import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
+import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
@@ -639,6 +639,7 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
+import { scheduleTrayAfterFirstPaint, yieldToEventLoop } from './boot-tray'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
@@ -9140,13 +9141,11 @@ if (!app.requestSingleInstanceLock()) {
     contents.on('input-event', (_inputEvent, input) => noteUserInput(input.type))
   })
   // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
-  // proxy/CLI/key seeding before first paint — hoist tray+IPC+window for wiped-profile exclusive.
-  // Call createTray/registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared
-  // later in this whenReady callback — using them here fails CI typecheck "used before declaration").
+  // proxy/CLI/key seeding before first paint — hoist IPC+window for wiped-profile exclusive (tray: M2-0422).
+  // Call registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared later in this whenReady callback — "used before declaration").
   // Later boot still runs createWindow idempotently (early return if win exists).
   if (onboardingExclusiveLive()) {
     try {
-      createTray()
       registerIpc()
       createWindow()
     } catch (e) {
@@ -9621,10 +9620,8 @@ if (!app.requestSingleInstanceLock()) {
   // Catch the case where encryption was already on (managed-config or a previous run) with a stale
   // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
   runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
-  // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above).
   // FITO-185-X: registerIpc also stays ahead of createWindow — handlers read win/tray lazily at
   // invocation time, and first paint must not race loadURL before settings/auth IPC exists.
-  runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   // FITO-185-X: registerIpc BEFORE createWindow/loadURL so getSettings/authStatus/licenseGate
   // handlers exist before the renderer can invoke. FITO-185-H put IPC immediately after createWindow
@@ -9632,7 +9629,9 @@ if (!app.requestSingleInstanceLock()) {
   // "Loading" strip Tony still hits when exclusive exits or settings IPC is late.
   runStep('registerIpc', registerIpc)
   clearBootWatchOnce('registerIpc')
+  await yieldToEventLoop() // M2-0422: window construction is its own task
   runStep('createWindow', createWindow)
+  scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
   revealController.markBootComplete()
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
@@ -9644,6 +9643,7 @@ if (!app.requestSingleInstanceLock()) {
   } catch (e) {
     mainLog.warn('[boot] powerMonitor unlock-screen hook failed:', e)
   }
+  await yieldToEventLoop() // M2-0422: post-window boot steps are a separate task
   // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
   // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
   // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow+registerIpc:
