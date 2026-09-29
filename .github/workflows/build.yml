@@ -119,6 +119,25 @@ jobs:
           xcodebuild -project Metis.xcodeproj -scheme Metis -configuration Debug \
             -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build
 
+  license-server:
+    # license-server is a separate npm project (own package-lock) that neither `quality` nor `operator`
+    # reaches, so its `node --test` suite had no CI coverage (M2-0051). `npm test` there is the hermetic
+    # wrapper around `node --test`: it runs the suite in a sandboxed HOME, never the runner's real one.
+    name: License server (node --test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: license-server/package-lock.json
+      - run: npm ci
+        working-directory: license-server
+      - run: npm test
+        working-directory: license-server
+
   operator:
     # Métis Operator (the fleet control-plane Worker under operator/) is a separate deployable with
     # its own tsconfig, its own vitest config, and two GENERATED files committed to the repo
