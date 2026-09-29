@@ -223,7 +223,9 @@ const deadline = Date.now() + timeoutSeconds * 1000
 while (Date.now() < deadline) {
   await sleep(5000)
   titles = windowTitles()
-  if (titles.length) break
+  // A window exists before its page loads and then carries the package name, so only the app's own
+  // title or an error dialog ends the wait; the first title of any kind is not proof of a paint.
+  if (titles.some((t) => /M.tis/i.test(t) || /^Error$/i.test(t))) break
   if (exited) break
 }
 
