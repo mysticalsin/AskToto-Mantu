@@ -1,0 +1,153 @@
+@keyframes metis-bar-land {
+  from {
+    opacity: 0.85;
+    transform: scale(0.92) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+html.metis-bar-land .aw-widget {
+  transform-origin: top center;
+  animation: metis-bar-land 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.onboard-starfield {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.onboard-starfield canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.onboard-kinetic-grid {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+  background: #05010a;
+}
+.onboard-kinetic-grid canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.aw-orb {
+  display: block;
+  position: relative;
+  width: 41px;
+  height: 41px;
+  flex-shrink: 0;
+  padding: 0;
+  margin: 0;
+  /* FITO-185 / Ultron: Tony hollow-outline fail — fill the 41 circle (same disc as Jarvis).
+     thinking-orbs dots paint on top; transparent host read as empty ring left of Ask. */
+  overflow: hidden;
+  border: none;
+  border-radius: 50%;
+  background: #050508;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  contain: layout;
+  filter: none;
+  touch-action: none;
+  cursor: pointer;
+  transform-origin: center center;
+}
+.aw-orb:hover,
+.aw-orb:active,
+.aw-orb:focus {
+  width: 41px;
+  height: 41px;
+  border-radius: 50%;
+}
+.aw-orb[data-hug-width] {
+  cursor: grab;
+}
+.aw-orb[data-hug-width]:active {
+  cursor: grabbing;
+}
+/* Avatar stays 64 CSS + 2x backing. Visible 41 is a compositor scale, not a 1x bitmap shrink. */
+.aw-orb__host {
+  display: block;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 64px;
+  height: 64px;
+  border-radius: 0;
+  pointer-events: none;
+  background: transparent;
+  transform: translate(-50%, -50%) scale(calc(41 / 64));
+  transform-origin: center center;
+}
+.aw-orb__canvas {
+  display: block;
+  width: 64px !important;
+  height: 64px !important;
+  border-radius: 0;
+  pointer-events: none;
+  background: transparent;
+}
+
+/* Left Settings M: a locked circle. Listen / rec chrome may grow the Bar.
+   This slot must not shrink, stretch into a capsule, or clip into a bar. */
+.aw-bar-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  max-width: 30px;
+  max-height: 30px;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  justify-self: start;
+  overflow: visible;
+  flex-shrink: 0;
+}
+.aw-bar-mark__disk {
+  display: block;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.aw-bar-mark img {
+  display: block;
+  width: 30px !important;
+  height: 30px !important;
+  max-width: none !important;
+  max-height: none;
+  object-fit: contain;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+.aw-orb[data-orb-mood='idle'],
+.aw-orb[data-orb-mood='thinking'],
+.aw-orb[data-orb-mood='factcheck'],
+.aw-orb[data-orb-mood='connecting'] {
+  border-radius: 50%;
+}

@@ -21,6 +21,8 @@
  *     process start time and executable realpath so PID reuse cannot be mistaken for ownership.
  *   - `stall-watch`: long-running, one per boot, samples main when `run-alive.json` stops changing;
  *     infra/observability/stall-sampler.ts owns its arguments and protocol.
+ *   - `code-identity` / `bundle-copies`: one-shot, read-only signing identity and installed-copy census for
+ *     the Screen Recording diagnosis (capture-permissions/). Neither touches the permissions database.
  *
  * Everything here degrades to null/absent — a missing or broken helper must leave the app exactly as it
  * behaved before the helper existed (VLM describe, 6s-timer-only mac trigger, floating non-notch island),
@@ -50,6 +52,9 @@ const OCR_MAX_CHARS = 1_500
  *  hung/misbehaving helper can't stall the overlay's top-anchor path forever. */
 const SCREEN_METRICS_TIMEOUT_MS = 3_000
 const PROC_INFO_TIMEOUT_MS = 3_000
+/** code-identity reads one signature; bundle-copies is one LaunchServices query. Both are bounded so a hung
+ *  helper leaves the permission diagnosis on its version-only fallback instead of waiting. */
+const IDENTITY_TIMEOUT_MS = 5_000
 
 export interface OcrLine {
   text: string
@@ -122,6 +127,18 @@ export function macProcInfoSpawnSpec(pid: number): { command: string; args: stri
   return { command: macHelperPath(), args: ['proc-info', String(pid)] }
 }
 
+/** Read-only `code-identity` (M2-0429): the static signature of an app bundle or binary. */
+export function macCodeIdentitySpawnSpec(path: string): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  return { command: macHelperPath(), args: ['code-identity', path] }
+}
+
+/** Read-only `bundle-copies` (M2-0429): every installed app LaunchServices knows for a bundle id. */
+export function macBundleCopiesSpawnSpec(bundleId: string): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  return { command: macHelperPath(), args: ['bundle-copies', bundleId] }
+}
+
 /** Flag `diagnostics.stall_sampler` (ARCHITECTURE C15). false restores the pre-M2-0192 boot exactly: no
  *  stall-watch helper, no capture sweep, no new audit events. */
 const STALL_SAMPLER_ENABLED = true
@@ -149,6 +166,96 @@ const ScreenMetricSchema = z.object({
 })
 const ScreenMetricsResultSchema = z.object({ screens: z.array(ScreenMetricSchema) })
 export type RawScreenMetric = z.infer<typeof ScreenMetricSchema>
+
+const HelperCodeIdentitySchema = z.object({
+  identifier: z.string(),
+  cdhash: z.string().regex(/^(?:[0-9a-f]{40,64})?$/),
+  teamId: z.string(),
+  adhoc: z.boolean()
+})
+export type HelperCodeIdentity = z.infer<typeof HelperCodeIdentitySchema>
+const BundleCopiesSchema = z.object({
+  copies: z.array(z.object({ path: z.string(), version: z.string() }))
+})
+export type HelperBundleCopy = z.infer<typeof BundleCopiesSchema>['copies'][number]
+
+/** Parse `code-identity` stdout; null for anything that is not the documented shape. */
+export function parseCodeIdentity(stdout: string): HelperCodeIdentity | null {
+  try {
+    return HelperCodeIdentitySchema.parse(JSON.parse(stdout))
+  } catch {
+    return null
+  }
+}
+
+/** Parse `bundle-copies` stdout; null for anything that is not the documented shape. */
+export function parseBundleCopies(stdout: string): HelperBundleCopy[] | null {
+  try {
+    return BundleCopiesSchema.parse(JSON.parse(stdout)).copies
+  } catch {
+    return null
+  }
+}
+
+/** Run a one-shot read-only helper command and parse its stdout. Null on any failure, like every mode here. */
+function runHelperOnce<T>(
+  spec: { command: string; args: string[] } | null,
+  parse: (stdout: string) => T | null,
+  timeoutMs: number
+): Promise<T | null> {
+  return new Promise((resolve) => {
+    if (!spec) {
+      resolve(null)
+      return
+    }
+    const label = spec.args[0]
+    let proc: ReturnType<typeof spawn>
+    try {
+      proc = spawn(spec.command, spec.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (e) {
+      mainLog.warn(`[mac-helper] ${label} spawn failed`, e instanceof Error ? e.message : String(e))
+      resolve(null)
+      return
+    }
+    let settled = false
+    const settle = (value: T | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL')
+      settle(null)
+    }, timeoutMs)
+    let stdout = ''
+    let stderr = ''
+    proc.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')))
+    proc.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')))
+    proc.once('error', (e) => {
+      mainLog.warn(`[mac-helper] ${label} error`, e instanceof Error ? e.message : String(e))
+      settle(null)
+    })
+    proc.once('close', (code) => {
+      if (code !== 0) {
+        if (stderr.trim()) mainLog.warn(`[mac-helper] ${label} exited ${code}: ${stderr.trim().slice(0, 300)}`)
+        settle(null)
+        return
+      }
+      settle(parse(stdout.trim()))
+    })
+  })
+}
+
+/** This app's signing identity (cdhash, teamId, adhoc), or null without a helper. */
+export function getCodeIdentity(path: string): Promise<HelperCodeIdentity | null> {
+  return runHelperOnce(macCodeIdentitySpawnSpec(path), parseCodeIdentity, IDENTITY_TIMEOUT_MS)
+}
+
+/** Every installed copy of a bundle id, or null without a helper. */
+export function getBundleCopies(bundleId: string): Promise<HelperBundleCopy[] | null> {
+  return runHelperOnce(macBundleCopiesSpawnSpec(bundleId), parseBundleCopies, IDENTITY_TIMEOUT_MS)
+}
 
 const ProcessIdentitySchema = z.object({
   pid: z.number(),
