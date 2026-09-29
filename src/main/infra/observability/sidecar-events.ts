@@ -1,6 +1,9 @@
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import type { AuditSink } from '../../logger'
 import type { SIDECAR_NAMES } from './projection'
+
+const execFileAsync = promisify(execFile)
 
 export type SidecarName = (typeof SIDECAR_NAMES)[number]
 
@@ -10,10 +13,15 @@ export interface SidecarProcess {
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown
 }
 
-export type ProcessGroupResolver = (pid: number) => number | null
+type PgidResult = number | null
+
+/** Resolves a pid's process group. May be asynchronous: the production resolver runs `ps`, which must never
+ *  block the main thread at boot. */
+export type ProcessGroupResolver = (pid: number) => PgidResult | Promise<PgidResult>
 
 /** Audit a sidecar's spawn and its exit, paired by pid/pgid. Exit can land after `app.shutdown.clean`, or
- *  never land because the process exits first. */
+ *  never land because the process exits first. A resolver that returns a promise defers the spawn audit until
+ *  the pgid is known; an exit that lands first is audited after it, so spawn always precedes exit. */
 export function observeSidecar(
   name: SidecarName,
   child: SidecarProcess,
@@ -23,29 +31,27 @@ export function observeSidecar(
 ): void {
   const pid = child.pid
   if (pid === undefined) return
-  const pgid = resolveProcessGroupId(pid)
   const startedAt = clock()
-  audit('sidecar.spawn', { name, pid, pgid })
+  const resolved = resolveProcessGroupId(pid)
+  const whenPgid = (fn: (pgid: PgidResult) => void): void => {
+    if (resolved instanceof Promise) void resolved.then(fn, () => fn(null))
+    else fn(resolved)
+  }
+  whenPgid((pgid) => audit('sidecar.spawn', { name, pid, pgid }))
   child.once('exit', (code, signal) => {
-    audit('sidecar.exit', {
-      name,
-      pid,
-      pgid,
-      code,
-      signal,
-      uptimeMs: Math.max(0, clock() - startedAt)
-    })
+    const uptimeMs = Math.max(0, clock() - startedAt)
+    whenPgid((pgid) => audit('sidecar.exit', { name, pid, pgid, code, signal, uptimeMs }))
   })
 }
 
-function processGroupId(pid: number): number | null {
+async function processGroupId(pid: number): Promise<PgidResult> {
   if (process.platform === 'win32') return null
   try {
-    const output = execFileSync('ps', ['-o', 'pgid=', '-p', String(pid)], {
+    const { stdout } = await execFileAsync('ps', ['-o', 'pgid=', '-p', String(pid)], {
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
-    }).trim()
-    const pgid = Number(output)
+      timeout: 2_000
+    })
+    const pgid = Number(stdout.trim())
     return Number.isSafeInteger(pgid) && pgid > 0 ? pgid : null
   } catch {
     return null
