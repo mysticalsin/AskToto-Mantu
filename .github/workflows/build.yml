@@ -98,8 +98,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Never bare `swift test` (M2-0190): the wrapper provides the sandboxed HOME that HermeticHomeTests asserts.
       - name: MetisKit swift test
-        run: swift test --package-path native-app/MetisKit
+        run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
       - name: mac-helper behavioural tests
         run: bash native/mac-helper/Tests/run-helper-tests.sh
       - name: Install xcodegen
