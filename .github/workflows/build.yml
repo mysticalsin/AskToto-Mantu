@@ -89,6 +89,36 @@ jobs:
       # just verified.
       - run: npm run check:skips
 
+  native:
+    # The two Swift halves of the product that no Node job can reach (M2-0050): the MetisKit package's
+    # tests, the native SwiftUI shell, and the shipped metis-mac-helper sidecar. Until this job existed the
+    # README's "26 tests green" was a claim nothing executed and the helper had no behavioural test at all.
+    name: Native (MetisKit, App, mac-helper)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Never bare `swift test` (M2-0190): the wrapper provides the sandboxed HOME that HermeticHomeTests asserts.
+      - name: MetisKit swift test
+        run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
+      - name: mac-helper behavioural tests
+        run: bash native/mac-helper/Tests/run-helper-tests.sh
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Generate the Xcode project
+        working-directory: native-app
+        run: xcodegen generate
+      # Report-only for its first week (2026-09-28 to 2026-10-05): the SwiftUI shell has never been built in
+      # CI, so a first red here may be a pre-existing break rather than a regression. After 2026-10-05
+      # delete `continue-on-error` so a failing App build blocks the merge. Same flags as
+      # scripts/build-native-mac.mjs, minus signing: CI only needs the compile to succeed.
+      - name: Build the native App (macOS)
+        continue-on-error: true
+        working-directory: native-app
+        run: |
+          xcodebuild -project Metis.xcodeproj -scheme Metis -configuration Debug \
+            -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build
+
   operator:
     # Métis Operator (the fleet control-plane Worker under operator/) is a separate deployable with
     # its own tsconfig, its own vitest config, and two GENERATED files committed to the repo
