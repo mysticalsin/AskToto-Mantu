@@ -175,6 +175,8 @@ export interface OperatorIntegration {
   baseUrl: string | null
   credential: string | null
   scopes: string[]
+  /** True when `credential` is a short-lived gateway token (brokered mode), not a long-lived key. */
+  brokered?: true
 }
 
 function parseOperatorIntegration(raw: unknown): OperatorIntegration | null {
@@ -183,10 +185,15 @@ function parseOperatorIntegration(raw: unknown): OperatorIntegration | null {
   if (typeof o.id !== 'string' || !o.id.trim()) return null
   if (!isConnectorKind(o.kind)) return null
   if (typeof o.label !== 'string' || !o.label.trim()) return null
-  const baseUrl = typeof o.baseUrl === 'string' && o.baseUrl.trim() ? o.baseUrl.trim() : null
-  const credential = typeof o.credential === 'string' && o.credential ? o.credential : null
+  // A brokered row carries `{ endpoint, gatewayToken }` instead of `{ baseUrl, credential }`: the endpoint
+  // is a path on the Operator itself and the gateway token is the bearer the MCP client presents there.
+  const brokered = o.mode === 'brokered'
+  const rawBase = brokered ? o.endpoint : o.baseUrl
+  const rawCredential = brokered ? o.gatewayToken : o.credential
+  const baseUrl = typeof rawBase === 'string' && rawBase.trim() ? rawBase.trim() : null
+  const credential = typeof rawCredential === 'string' && rawCredential ? rawCredential : null
   const scopes = Array.isArray(o.scopes) ? o.scopes.filter((s): s is string => typeof s === 'string') : []
-  return { id: o.id, kind: o.kind, label: o.label, baseUrl, credential, scopes }
+  return { id: o.id, kind: o.kind, label: o.label, baseUrl, credential, scopes, ...(brokered ? { brokered: true as const } : {}) }
 }
 
 export interface OperatorIntegrationsResponse {
