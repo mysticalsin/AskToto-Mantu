@@ -1,0 +1,85 @@
+name: Windows 1.9.6 baseline
+
+# Manual evidence lane for M2-0415. Downloads the existing packaged 1.9.6 Windows installer, verifies it
+# against the release's published SHA256SUMS (a mismatch fails the job before install), installs it on a
+# hosted windows-latest runner and runs scripts/qa/windows/baseline.ps1. Rows that need the managed laptop
+# or a signed-in account are reported BLOCKED_EXTERNAL inside the uploaded content-free bundle. It never
+# builds, signs, publishes, tags, or changes release.yml. Runs only from main; there is no pull_request trigger.
+on:
+  workflow_dispatch:
+    inputs:
+      release_repo:
+        description: Repository that publishes the packaged artifacts and SHA256SUMS
+        required: true
+        default: mysticalsin/Metis-Releases
+        type: string
+      release_tag:
+        description: Release tag to measure
+        required: true
+        default: v1.9.6-unsigned
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-baseline-${{ github.ref }}-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  baseline:
+    name: Windows baseline
+    runs-on: windows-latest
+    timeout-minutes: 80
+    if: github.ref == 'refs/heads/main'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Download and verify the packaged release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ inputs.release_repo }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path release-artifact, release-sums, baseline-output | Out-Null
+          gh release download $env:RELEASE_TAG --repo $env:RELEASE_REPO --pattern 'Metis-Setup-*.exe' --dir release-artifact --clobber
+          gh release download $env:RELEASE_TAG --repo $env:RELEASE_REPO --pattern 'SHA256SUMS*' --dir release-sums --clobber
+          $sums = (Get-Item release-sums/SHA256SUMS*).FullName
+          node scripts/qa/verify-sha256sums.mjs release-artifact $sums | Tee-Object -FilePath baseline-output/SHA256SUMS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'SHA256SUMS verification failed.' }
+      - name: Install into runner temp
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = Join-Path $env:RUNNER_TEMP 'windows-baseline-install'
+          if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+          New-Item -ItemType Directory -Path $target | Out-Null
+          $setup = Get-Item release-artifact/Metis-Setup-*.exe
+          $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+      - name: Build representative synthetic profile
+        run: node scripts/qa/census/profile.mjs "$env:RUNNER_TEMP/metis-baseline-profile"
+      - name: Run the baseline harness
+        env:
+          METIS_QA_PROFILE: ${{ runner.temp }}/metis-baseline-profile
+        run: |
+          ./scripts/qa/windows/baseline.ps1 `
+            -App "$env:RUNNER_TEMP\windows-baseline-install\Metis.exe" `
+            -OutDir baseline-output
+          Get-Content baseline-output/baseline.json | Add-Content $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: windows-baseline-${{ inputs.release_tag }}
+          path: baseline-output/
+          if-no-files-found: error
+          retention-days: 30
