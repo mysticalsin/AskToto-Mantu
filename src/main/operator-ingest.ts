@@ -370,15 +370,16 @@ export function startOperatorRuntime(
   if (!operatorUrlConfigured(settings) || !resolveSecret(settings)) return
   const tick = async (): Promise<void> => {
     const generation = runtimeGeneration
-    const beat = await operatorHeartbeat(getSettings())
-    if (generation !== runtimeGeneration) return
-    hooks?.onReadinessChanged?.()
-    // M2-0412: piggyback the fleet model policy poll on the same <=60s heartbeat cadence rather than a
-    // second timer. Best-effort — a failed fetch never blocks or fails the heartbeat itself.
+    // M2-0412: piggyback the fleet model policy poll on the same <=60s tick rather than a second timer.
+    // Started BEFORE the heartbeat and never awaited with it, so a slow queue drain or heartbeat cannot
+    // push a policy change past the 60 s bound. Best-effort — a failed fetch never blocks the heartbeat.
     // Broadcast once it settles so Settings' managed/locked display reflects a newly applied policy.
     void refreshModelPolicy(getSettings()).then(() => {
       if (generation === runtimeGeneration) hooks?.onReadinessChanged?.()
     })
+    const beat = await operatorHeartbeat(getSettings())
+    if (generation !== runtimeGeneration) return
+    hooks?.onReadinessChanged?.()
     if (beat.retry.length && hooks?.onCrmRetry) {
       await hooks.onCrmRetry(beat.retry)
     }
