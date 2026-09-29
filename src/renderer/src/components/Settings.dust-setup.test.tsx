@@ -187,8 +187,11 @@ describe('AgentPicker', () => {
   it('offers an empty row on top only when emptyOption is set', () => {
     const onSelect = vi.fn()
     const picker = mount(AgentPicker, { ...base, emptyOption: 'Same as base agent', onSelect })
-    picker.button(/Pick an agent/).props.onClick()
+    // The empty row is the current selection, so the trigger already reads as the empty option.
     picker.button(/Same as base agent/).props.onClick()
+    const rows = picker.view().all.filter((e) => e.type === 'button' && /Same as base agent/.test(textOf(e.props.children)))
+    expect(rows).toHaveLength(2)
+    rows[1].props.onClick()
     expect(onSelect).toHaveBeenCalledWith('')
 
     const without = mount(AgentPicker, { ...base, onSelect })
