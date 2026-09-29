@@ -4187,7 +4187,7 @@ export function App(): JSX.Element {
           {/* Desk Tap Control is calibrated but won't arm on this microphone. Not dismissible: it isn't a
               one-off event, it's a standing state that lasts until the user recalibrates. */}
           {tapMismatch && view !== 'settings' && (
-            <div className="fade-up rounded-xl border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-1.5 text-[11px] leading-snug text-[color:var(--color-warn,#fac775)]">
+            <div className="fade-up rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-1.5 text-[11px] leading-snug text-[color:var(--color-warn)]">
               Desk Tap Control is paused. It was calibrated on a different microphone. Recalibrate it in
               Settings → Audio.
             </div>
@@ -4221,7 +4221,7 @@ export function App(): JSX.Element {
               <button
                 type="button"
                 onClick={() => openSettings('ai', `${what}. Métis is answering with another provider meanwhile.`)}
-                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-warn,#fac775)]"
+                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-warn)]"
               >
                 {what}. Métis is using another provider. {remedy} in Settings → AI.
               </button>

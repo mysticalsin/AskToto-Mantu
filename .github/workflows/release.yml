@@ -19,6 +19,11 @@ on:
         default: true
         type: boolean
 
+# Least privilege: the built-in token only reads this repository (checkout, ffmpeg sidecar download).
+# Publishing to the feed repository authenticates with the separate GH_TOKEN secret, not this token.
+permissions:
+  contents: read
+
 # A retry for the same tag must never race another run while both mutate the same feed release.
 concurrency:
   group: metis-release-${{ github.ref }}
