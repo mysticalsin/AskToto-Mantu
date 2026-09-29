@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync, realpathSync } from 'node:fs'
+import { realpath } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, join, posix, resolve, win32 } from 'node:path'
 import type * as childProcess from 'node:child_process'
@@ -316,31 +317,56 @@ async function listPosixProcesses(pids?: readonly number[]): Promise<ProcessIden
     ? ['-o', 'pid=,ppid=,pgid=,lstart=,command=', '-p', pids.join(',')]
     : ['-axo', 'pid=,ppid=,pgid=,lstart=,command=']
   const { stdout } = await execFileAsync('/bin/ps', args, { encoding: 'utf8', timeout: 5_000 })
+  return parsePosixPsListing(stdout, pids?.length ? () => true : isOwnedProcessName)
+}
+
+/** Executable names of the sidecars Métis spawns; a full `ps` listing resolves realpaths only for these. */
+const OWNED_PROCESS_NAMES = new Set(['llama-server', 'fm-serve', 'ffmpeg', 'metis-mac-helper'])
+/** Candidate lines resolved between yields, so a long listing never holds the main loop in one task. */
+const PS_YIELD_EVERY = 50
+
+function isOwnedProcessName(exe: string): boolean {
+  return OWNED_PROCESS_NAMES.has(posix.basename(exe))
+}
+
+/**
+ * Parses `ps` output. Only lines whose executable passes `isCandidate` are resolved, each with an async realpath,
+ * so a full listing costs no filesystem call for processes Métis does not own. Ownership is still decided by the
+ * caller on the resolved realpath, registry identity and args.
+ */
+async function parsePosixPsListing(
+  stdout: string,
+  isCandidate: (exe: string) => boolean,
+  resolveRealpath: (path: string) => Promise<string> = (path) => realpath(path)
+): Promise<ProcessIdentity[]> {
   const out: ProcessIdentity[] = []
+  let resolved = 0
   for (const line of stdout.split('\n')) {
     const parsed = parsePosixPsLine(line)
-    if (parsed) out.push(parsed)
+    if (!parsed || !isCandidate(parsed.exe)) continue
+    if (resolved > 0 && resolved % PS_YIELD_EVERY === 0) await new Promise<void>((done) => setImmediate(done))
+    resolved++
+    let exeRealpath: string
+    try {
+      exeRealpath = await resolveRealpath(parsed.exe)
+    } catch {
+      continue
+    }
+    out.push({ pid: parsed.pid, ppid: parsed.ppid, pgid: parsed.pgid, osStartTime: parsed.osStartTime, exeRealpath, args: parsed.args })
   }
   return out
 }
 
-function parsePosixPsLine(line: string): ProcessIdentity | null {
+function parsePosixPsLine(line: string): (Omit<ProcessIdentity, 'exeRealpath'> & { exe: string }) | null {
   const match = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(.{24})\s+(.+)$/.exec(line)
   if (!match) return null
   const command = match[5].trim()
-  const exe = command.split(/\s+/)[0]
-  let exeRealpath: string
-  try {
-    exeRealpath = realpathSync(exe)
-  } catch {
-    return null
-  }
   return {
     pid: Number(match[1]),
     ppid: Number(match[2]),
     pgid: Number(match[3]),
     osStartTime: new Date(match[4]).toISOString(),
-    exeRealpath,
+    exe: command.split(/\s+/)[0],
     args: splitCommand(command)
   }
 }
@@ -399,6 +425,8 @@ export const testOnly = {
   argsFingerprint,
   legacyArgsPointAtUserModel,
   liveArgsMatchFingerprint,
+  isOwnedProcessName,
   parsePosixPsLine,
+  parsePosixPsListing,
   startedBefore
 }

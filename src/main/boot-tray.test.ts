@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { scheduleTrayAfterFirstPaint, yieldToEventLoop, type TrayGateWindow } from './boot-tray'
+import { buildTrayInStages, scheduleTrayAfterFirstPaint, yieldToEventLoop, type TrayGateWindow } from './boot-tray'
 
 function fakeWindow(opts: { loading?: boolean; url?: string; destroyed?: boolean } = {}) {
   type Gate = Omit<TrayGateWindow, 'webContents'> & { webContents: EventEmitter & TrayGateWindow['webContents'] }
@@ -63,6 +63,65 @@ describe('scheduleTrayAfterFirstPaint (M2-0422)', () => {
     scheduleTrayAfterFirstPaint(fakeWindow(), build)
     await vi.advanceTimersByTimeAsync(5000)
     expect(build).toHaveBeenCalledTimes(1)
+  })
+
+  it('buildTrayInStages loads the icon, creates the tray and attaches the menu in three separate tasks', async () => {
+    const order: string[] = []
+    const labels: string[] = []
+    const fail = vi.fn()
+    const done = buildTrayInStages<string>({
+      loadIcon: async () => {
+        order.push('load')
+        return 'icon'
+      },
+      create: (icon) => order.push(`create:${icon}`),
+      attachMenu: () => order.push('menu'),
+      time: (label, fn) => {
+        labels.push(label)
+        return fn()
+      },
+      fail
+    })
+    // Every stage boundary is a task boundary: an immediate queued now runs before the tray is created,
+    // and one queued after the create runs before the menu is attached.
+    setImmediate(() => {
+      order.push('between-load-and-create')
+      setImmediate(() => order.push('between-create-and-menu'))
+    })
+    await done
+    expect(order).toEqual(['load', 'between-load-and-create', 'create:icon', 'between-create-and-menu', 'menu'])
+    expect(labels).toEqual(['createTray.newTray', 'createTray.attachMenu'])
+    expect(fail).not.toHaveBeenCalled()
+  })
+
+  it('buildTrayInStages reports a failing stage once and runs no later stage', async () => {
+    const attachMenu = vi.fn()
+    const fail = vi.fn()
+    await buildTrayInStages<string>({
+      loadIcon: async () => 'icon',
+      create: () => {
+        throw new Error('status item refused')
+      },
+      attachMenu,
+      time: (_label, fn) => fn(),
+      fail
+    })
+    expect(attachMenu).not.toHaveBeenCalled()
+    expect(fail).toHaveBeenCalledExactlyOnceWith(new Error('status item refused'))
+  })
+
+  it('buildTrayInStages reports an icon load rejection without creating a tray', async () => {
+    const create = vi.fn()
+    const fail = vi.fn()
+    await buildTrayInStages<string>({
+      loadIcon: () => Promise.reject(new Error('decode failed')),
+      create,
+      attachMenu: vi.fn(),
+      time: (_label, fn) => fn(),
+      fail
+    })
+    expect(create).not.toHaveBeenCalled()
+    expect(fail).toHaveBeenCalledExactlyOnceWith(new Error('decode failed'))
   })
 
   it('yieldToEventLoop resolves in a later task', async () => {

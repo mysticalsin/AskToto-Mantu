@@ -18,7 +18,8 @@ import {
   clipboard,
   powerSaveBlocker,
   powerMonitor,
-  systemPreferences
+  systemPreferences,
+  type NativeImage
 } from 'electron'
 import { join, basename, dirname, resolve } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
@@ -641,7 +642,7 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
-import { scheduleTrayAfterFirstPaint, yieldToEventLoop } from './boot-tray'
+import { buildTrayInStages, scheduleTrayAfterFirstPaint, yieldToEventLoop } from './boot-tray'
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
@@ -2675,8 +2676,11 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // 185-Y hid exclusive until paint (ctor show gated off while onboarding live) and left
     // the window off-screen ~5s (WINDOW_AT≈5s) — Ultron stamp bar FAIL: Act1 ≤300ms from
     // PROCESS START. Shell (CSS poster + Métis + Next) is in first HTML parse; never wait.
-    // M2-0031: the boot window is built hidden (default paintWhenInitiallyHidden prepares its first frame) and shown next task.
+    // M2-0031: the boot window is built hidden and shown next task (scheduleCurrentFirstShow, never gated on
+    // 'ready-to-show'). paintWhenInitiallyHidden:false keeps the first compositor frame out of the constructor's
+    // task: it is produced in the show task. Windows built with show:true are unaffected.
     show: !deferFirstShow,
+    paintWhenInitiallyHidden: false,
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -4671,30 +4675,66 @@ function buildTrayMenu(): Menu {
   ])
 }
 
+let trayBuilding = false
 function createTray(): void {
   // FITO-185-AB: idempotent, same contract as createWindow. The exclusive-onboarding hoist runs
   // createTray before the boot awaits and boot's own runStep('createTray') runs it again — without
-  // this the second call adds a duplicate menu-bar item and orphans the first Tray.
-  if (tray && !tray.isDestroyed()) return
-  try {
-    const iconPath = app.isPackaged
-      ? join(process.resourcesPath, 'icon.png')
-      : join(__dirname, '../../build/icon.png')
-    let img = nativeImage.createFromPath(iconPath)
-    if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
-    const emptyIcon = img.isEmpty()
-    tray = new Tray(emptyIcon ? nativeImage.createEmpty() : img)
-    // FITO-185-F: always give AXExtrasMenuBar a title on darwin (empty-icon fallback used to be the
-    // only path; hardprove saw kAXErrorCannotComplete with a title-less LSUIElement status item).
-    if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
-    tray.setToolTip('Métis')
-    tray.setContextMenu(buildTrayMenu())
-    // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
-    tray.on('click', () => sendHotkey('settings'))
-    auditLog('tray.created', { emptyIcon })
-  } catch (e) {
-    auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
+  // this the second call adds a duplicate menu-bar item and orphans the first Tray. A build still in
+  // flight counts as created.
+  if ((tray && !tray.isDestroyed()) || trayBuilding) return
+  trayBuilding = true
+  void buildTrayInStages<NativeImage>({
+    loadIcon: loadTrayIcon,
+    create(img) {
+      const emptyIcon = img.isEmpty()
+      tray = new Tray(emptyIcon ? nativeImage.createEmpty() : img)
+      // FITO-185-F: always give AXExtrasMenuBar a title on darwin (empty-icon fallback used to be the
+      // only path; hardprove saw kAXErrorCannotComplete with a title-less LSUIElement status item).
+      if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
+      tray.setToolTip('Métis')
+      // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
+      tray.on('click', () => sendHotkey('settings'))
+      auditLog('tray.created', { emptyIcon })
+    },
+    attachMenu: () => tray?.setContextMenu(buildTrayMenu()),
+    time: (label, fn) => (observability ? observability.timePhase(label, fn) : fn()),
+    fail(e) {
+      auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
+    }
+  }).finally(() => {
+    trayBuilding = false
+  })
+}
+
+const TRAY_ICON_SIZE = { width: 18, height: 18 }
+/** Bound on the off-thread thumbnail; past it the icon is decoded in-process so the tray still appears. */
+const TRAY_THUMBNAIL_TIMEOUT_MS = 2000
+
+/** The 18 px tray image. The bundled icon is a 1024² PNG whose in-process decode and resize held the main thread
+ *  for hundreds of ms, so on macOS it is decoded off the main thread by the system thumbnailer; elsewhere, or if
+ *  the thumbnailer fails or does not answer in time, it falls back to the in-process decode. */
+async function loadTrayIcon(): Promise<NativeImage> {
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'icon.png')
+    : join(__dirname, '../../build/icon.png')
+  if (process.platform === 'darwin') {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const thumbnail = await Promise.race([
+        nativeImage.createThumbnailFromPath(iconPath, TRAY_ICON_SIZE),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), TRAY_THUMBNAIL_TIMEOUT_MS)
+        })
+      ])
+      if (thumbnail && !thumbnail.isEmpty()) return thumbnail
+    } catch {
+      /* fall back to the in-process decode below */
+    } finally {
+      clearTimeout(timer)
+    }
   }
+  const img = nativeImage.createFromPath(iconPath)
+  return img.isEmpty() ? img : img.resize(TRAY_ICON_SIZE)
 }
 
 /** Rebuild the tray's context menu after a shortcut rebind. createTray() only builds the menu once at

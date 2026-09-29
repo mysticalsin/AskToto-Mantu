@@ -43,3 +43,30 @@ export function scheduleTrayAfterFirstPaint(win: TrayGateWindow | null | undefin
   win.webContents.once('did-finish-load', start)
   setTimeout(startFromTimer, FALLBACK_MS).unref?.()
 }
+
+export interface TrayStages<Icon> {
+  /** Produces the sized tray image; the decode must not run as one long main-thread task. */
+  loadIcon(): Promise<Icon>
+  /** Constructs the native tray item from the loaded image. */
+  create(icon: Icon): void
+  /** Builds and attaches the context menu. */
+  attachMenu(): void
+  /** Times one stage (the boot phase trace), so a slow stage is named on its own. */
+  time<T>(label: string, fn: () => T): T
+  fail(error: unknown): void
+}
+
+/** M2-0031: the tray is built in three separate main-thread tasks (image load, native item, menu), so no single
+ *  task holds the image decode, the status-item construction and the menu build together. A failure in any stage
+ *  is reported once through `fail` and ends the build; a tray already created stays usable. */
+export async function buildTrayInStages<Icon>(stages: TrayStages<Icon>): Promise<void> {
+  try {
+    const icon = await stages.loadIcon()
+    await yieldToEventLoop()
+    stages.time('createTray.newTray', () => stages.create(icon))
+    await yieldToEventLoop()
+    stages.time('createTray.attachMenu', () => stages.attachMenu())
+  } catch (error) {
+    stages.fail(error)
+  }
+}

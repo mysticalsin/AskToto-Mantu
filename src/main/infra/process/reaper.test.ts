@@ -263,6 +263,43 @@ describe('boot sidecar reaper', () => {
     })
   })
 
+  it('resolves no realpath for a 2,000-line ps listing that has no owned sidecar', async () => {
+    const lines = Array.from(
+      { length: 2_000 },
+      (_, i) => `${1000 + i}     1  ${1000 + i} Sun Sep 27 09:00:00 2026     /usr/libexec/daemon-${i} --flag value`
+    )
+    const resolveRealpath = vi.fn(async (path: string) => path)
+
+    const out = await testOnly.parsePosixPsListing(lines.join('\n'), testOnly.isOwnedProcessName, resolveRealpath)
+
+    expect(out).toEqual([])
+    expect(resolveRealpath).not.toHaveBeenCalled()
+  })
+
+  it('resolves only owned sidecar lines of a ps listing and keeps their identity', async () => {
+    const lines = [
+      '  501     1   501 Sun Sep 27 09:00:00 2026     /usr/libexec/unrelated --x',
+      `   74     1    74 Sun Sep 27 09:00:00 2026     ${LLAMA} -m /profile/local-llm/models/qwen/model.gguf`,
+      '  502     1   502 Sun Sep 27 09:00:00 2026     /usr/bin/other'
+    ]
+    const resolveRealpath = vi.fn(async (path: string) => path)
+
+    const out = await testOnly.parsePosixPsListing(lines.join('\n'), testOnly.isOwnedProcessName, resolveRealpath)
+
+    expect(resolveRealpath).toHaveBeenCalledTimes(1)
+    expect(resolveRealpath).toHaveBeenCalledWith(LLAMA)
+    expect(out).toEqual([
+      {
+        pid: 74,
+        ppid: 1,
+        pgid: 74,
+        osStartTime: new Date('Sun Sep 27 09:00:00 2026').toISOString(),
+        exeRealpath: LLAMA,
+        args: [LLAMA, '-m', '/profile/local-llm/models/qwen/model.gguf']
+      }
+    ])
+  })
+
   it('requires a provable absolute userData model path for the legacy orphan rule', () => {
     expect(testOnly.legacyArgsPointAtUserModel(['-m', 'local-llm/models/qwen/model.gguf'], '/profile/local-llm/')).toBe(false)
     expect(testOnly.legacyArgsPointAtUserModel(['-m', '/profile/local-llm/models/qwen/model.gguf'], '/profile/local-llm/')).toBe(true)
