@@ -18,6 +18,11 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Least privilege: every job only checks out, tests and packages. The ffmpeg sidecar download uses the
+# built-in token read-only, so no job needs a write scope.
+permissions:
+  contents: read
+
 # Superseded runs of a ticket branch or PR are cancelled by the next push; every other run (main,
 # m2/integration, tags, dispatch, schedule) has a run-unique group and is never cancelled, so each head keeps
 # its own complete run.
