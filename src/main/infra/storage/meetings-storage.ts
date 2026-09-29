@@ -1,16 +1,21 @@
+import { resolve } from 'node:path'
 import type { ContentPresence, DatalessDetector } from './dataless'
-import { createStorageGateway, type FileClass, type StorageFs, type StorageGateway } from './gateway'
+import { createStorageGateway, poolAdmission, type FileClass, type StorageFs, type StorageGateway } from './gateway'
 
 const CLASSIFY_BATCH = 1_000
 
+/** One gateway per resolved root, so two spellings of one folder share its caches. */
 let gateways = new Map<string, StorageGateway>()
 let testStorageOptions: { detector?: DatalessDetector; fs?: StorageFs; poolSize?: number } | undefined
+/** Every gateway's fs calls run under this one cap: the roots share the process's libuv pool. */
+let admission = poolAdmission()
 
 export function storageAt(root: string): StorageGateway {
-  const existing = gateways.get(root)
+  const key = resolve(root)
+  const existing = gateways.get(key)
   if (existing) return existing
-  const gateway = createStorageGateway({ root: () => root, ...testStorageOptions })
-  gateways.set(root, gateway)
+  const gateway = createStorageGateway({ root: () => root, ...testStorageOptions, admission })
+  gateways.set(key, gateway)
   return gateway
 }
 
@@ -38,4 +43,5 @@ export function useStorageForTests(options: { detector?: DatalessDetector; fs?: 
     ...(options.poolSize !== undefined ? { poolSize: options.poolSize } : {})
   }
   gateways = new Map()
+  admission = poolAdmission(options.poolSize)
 }

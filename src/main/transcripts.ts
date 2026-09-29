@@ -410,13 +410,14 @@ let tempCleanupHooked = false
  *  This is an explicit single-file user read (the only caller is recallOpen's "Open" click), so it opts
  *  into Keychain recovery for an old 'S:'-wrapped meeting despite the forced local keystore — see
  *  decryptEnvelopeV2's doc comment. Bulk list/search paths (recall.ts) go through decodeSaved instead and
- *  never set this, so they stay exactly as boot-prompt-free as commit 486227d intended. */
-export function decryptToTemp(path: string): string {
+ *  never set this, so they stay exactly as boot-prompt-free as commit 486227d intended. Given `bytes` (read
+ *  through the storage gateway by History's Open, history-actions.ts), the file is never read here. */
+export function decryptToTemp(path: string, bytes?: Buffer): string {
   // Read + decrypt defensively: a foreign-keychain file yields the notice instead of throwing and
   // leaving the user with a dead "Open" click.
   let content: string
   try {
-    const decoded = tryDecodeSaved(readFileSync(path), true, path)
+    const decoded = tryDecodeSaved(bytes ?? readFileSync(path), true, path)
     content = decoded.ok ? decoded.text : UNDECRYPTABLE_MSG
   } catch {
     content = UNDECRYPTABLE_MSG

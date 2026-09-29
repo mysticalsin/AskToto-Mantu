@@ -66,7 +66,8 @@ const FILES = [
   'brain/corrections.ts',
   'brain/store.ts',
   'brain/match-key-cache.ts',
-  'recall.ts'
+  'recall.ts',
+  'history-actions.ts'
 ] as const
 
 type TargetFile = typeof FILES[number]
@@ -86,7 +87,8 @@ const BASELINE: Record<TargetFile, number> = {
   'brain/corrections.ts': 10,
   'brain/store.ts': 63,
   'brain/match-key-cache.ts': 4,
-  'recall.ts': 0
+  'recall.ts': 0,
+  'history-actions.ts': 0
 }
 
 const GATEWAY_MIGRATED_ZERO_FILES = [
@@ -96,7 +98,8 @@ const GATEWAY_MIGRATED_ZERO_FILES = [
   'brain/intelligence-index.ts',
   'brain/intelligence-work.ts',
   'brain/intelligence-pass.ts',
-  'recall.ts'
+  'recall.ts',
+  'history-actions.ts'
 ] as const satisfies readonly TargetFile[]
 
 interface SyncFsCall {

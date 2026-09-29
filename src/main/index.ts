@@ -739,11 +739,9 @@ import {
   recapMarkdownToHtml,
   resolveMeetingsFolder,
   ensureMeetingsFolder,
-  isEncryptedFile,
-  decryptToTemp,
-  sweepStaleTempFiles,
-  readSavedFile
+  sweepStaleTempFiles
 } from './transcripts'
+import { meetingOpenTarget, readSavedMeeting } from './history-actions'
 import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
 import {
@@ -1526,6 +1524,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
   closingDecoderJobId = null
   decoderExpectedUrl = ''
   decoderWin = new BrowserWindow({
+    title: 'Métis',
     show: false,
     skipTaskbar: true,
     webPreferences: {
@@ -2669,6 +2668,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   const chrome = overlayWindowChrome(onboardingLive)
   overlayWindowTransparent = chrome.transparent
   win = new BrowserWindow({
+    title: 'Métis', // Electron otherwise titles the window with the package name until the renderer's <title> loads
     width: firstPaint.width,
     height: firstPaint.height,
     x: firstPaint.x,
@@ -6443,9 +6443,9 @@ function registerIpc(): void {
       return { ok: false, error: 'Not a saved meeting file.' }
     }
     try {
-      const source = join(resolveMeetingsFolder(getSettings()), safeName)
-      const text = readSavedFile(source) // decodes the ATKENC2 envelope when the file is encrypted
-      // readSavedFile returns '' (never throws) when the envelope can't be decrypted on this device —
+      // Decodes the ATKENC2 envelope when the file is encrypted; read through the storage gateway.
+      const text = await readSavedMeeting(resolveMeetingsFolder(getSettings()), safeName)
+      // readSavedMeeting returns '' (never throws) when the envelope can't be decrypted on this device —
       // without this guard the export would "succeed" as a 0-byte file (adversarial review finding).
       if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
       const dialogOpts = {
@@ -8756,6 +8756,7 @@ function registerIpc(): void {
     if (r.canceled || !r.filePath) return { ok: false as const }
     const html = recapMarkdownToHtml(md, input?.title)
     const pdfWin = new BrowserWindow({
+      title: 'Métis',
       show: false,
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: DEVTOOLS_ENABLED, webSecurity: true }
     })
@@ -8856,7 +8857,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     return requireAuth() ? searchMeetings(String(q ?? '')) : []
   })
-  ipcMain.handle(IPC.recallOpen, (e, file: string) => {
+  ipcMain.handle(IPC.recallOpen, async (e, file: string) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
     const folder = resolveMeetingsFolder(getSettings())
@@ -8865,12 +8866,11 @@ function registerIpc(): void {
     // (could be Desktop/Downloads), and shell.openPath launches the OS handler for whatever it finds,
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
     if (!safeName) return ''
-    const path = join(folder, safeName)
-    const encrypted = isEncryptedFile(path)
-    auditLog('recall.open', { encrypted })
-    // Encrypted transcripts are unreadable in an editor — open a decrypted temp copy instead.
-    if (encrypted) return shell.openPath(decryptToTemp(path))
-    return shell.openPath(path)
+    // Encrypted transcripts are unreadable in an editor — the target is a decrypted temp copy instead.
+    const target = await meetingOpenTarget(folder, safeName)
+    if (!target.ok) return target.error
+    auditLog('recall.open', { encrypted: target.encrypted })
+    return shell.openPath(target.path)
   })
   ipcMain.handle(IPC.historySettled, (e, report: unknown) => {
     assertMainWindow(e)

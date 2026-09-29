@@ -16,7 +16,8 @@
  *   - Async only. Every method resolves, never rejects, and settles by its deadline (2 s for list and
  *     classify, 5 s for read) whatever the fs or the probe does.
  *   - At most `poolSize - 2` (at least 1) meetings-root fs calls run at once (admission.ts), so two pool
- *     threads stay free. The cap is per gateway: create one per process and share it.
+ *     threads stay free. The cap belongs to the admission, and every gateway in the process shares one
+ *     (meetings-storage.ts): gateways over different roots still run on the same pool.
  *   - A deadline or an abort releases the caller; the fs call keeps its permit until it settles.
  *   - Content is read only after the dataless detector says the bytes are on this device. 'dataless' and
  *     'unknown' files are never opened, and at most one detector probe runs at a time.
@@ -28,7 +29,7 @@
  */
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, normalize, relative, sep } from 'node:path'
-import { createAdmission, type Lane } from './admission'
+import { createAdmission, type Admission, type Lane } from './admission'
 import { createDatalessDetector, type ContentPresence, type DatalessDetector, type FileVersion } from './dataless'
 
 /** Threads libuv starts when UV_THREADPOOL_SIZE is unset, and the most it accepts (libuv src/threadpool.c). */
@@ -109,6 +110,9 @@ export interface StorageGatewayOptions {
   fs?: StorageFs
   /** The libuv pool size; this process's by default. */
   poolSize?: number
+  /** The cap this gateway's fs calls run under; its own `poolAdmission(poolSize)` by default. Pass one
+   *  admission to every gateway of a process, or blocked reads under several roots can fill the pool. */
+  admission?: Admission
 }
 
 type Settled<T> = { status: 'ok'; value: T } | StorageFailure
@@ -128,6 +132,11 @@ export function threadpoolSize(value: string | undefined): number {
   if (value === undefined) return DEFAULT_POOL_SIZE
   const size = Number.parseInt(value, 10)
   return size > 0 ? Math.min(size, MAX_POOL_SIZE) : 1
+}
+
+/** An admission that keeps RESERVED_POOL_THREADS of a `poolSize`-thread pool free. */
+export function poolAdmission(poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE)): Admission {
+  return createAdmission(Math.max(1, poolSize - RESERVED_POOL_THREADS))
 }
 
 function outsideRoot(): StorageFailure {
@@ -231,9 +240,9 @@ export function createStorageGateway({
   root,
   detector = createDatalessDetector(),
   fs = { readdir, readFile, realpath, stat, lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() })) },
-  poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE)
+  poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE),
+  admission = poolAdmission(poolSize)
 }: StorageGatewayOptions): StorageGateway {
-  const admission = createAdmission(Math.max(1, poolSize - RESERVED_POOL_THREADS))
   const presenceOf = createPresenceQueue(detector)
   /** Running content reads, by resolved path and version. */
   const reads = new Map<string, Promise<Settled<Buffer>>>()

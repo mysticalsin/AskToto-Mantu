@@ -10,11 +10,19 @@
  * kinds stand in for a cloud-only meetings-root file that blocks the thread reading it:
  *   - `fifo`: real FIFOs (POSIX only) placed as meeting and `.brain` files.
  *   - `dataless`: real evicted (dataless) files, read from `--cloud-dir`.
+ * `none` places no fixture: the control row, which tells a boot-time block apart from a fixture reader.
+ *
+ * Attribution evidence, reported and never judged: every sample's time since spawn, the loop's max since
+ * the previous sample and the active libuv resources; a CPU profile of the first 90 s; the profile's
+ * audit logs, stall bundles and this launch's main.log; which FIFOs had a reader; and, from +20 s,
+ * History's own IPC round trip (recallList + brainStatus) measured in the main window. All of it lands in
+ * the report directory (`--report-dir`, else the `--out` file's directory, else out/st-1).
  *
  * Usage:
  *   node scripts/qa/st-1.mjs --installer <Metis-QA-<v>.zip | Metis-Setup-<v>.exe> --provenance <provenance.json>
- *       --fixtures fifo|dataless [--count 6] [--cloud-dir <folder of evicted files>] [--main-log <main.log>]
+ *       --fixtures fifo|dataless|none [--count 6] [--cloud-dir <folder of evicted files>] [--main-log <main.log>]
  *       [--exe <installed executable>] [--profile-template <userData dir>] [--minutes 5] [--out <report.json>]
+ *       [--report-dir <dir>]
  *
  * Exit codes: 0 PASS, 1 FAIL or NOT_EXERCISED, 2 usage.
  */
@@ -33,7 +41,7 @@ import {
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 import { sha256File } from './provenance.mjs'
 import { createFifo, releaseFifo } from './fixtures/fifo.mjs'
 
@@ -44,6 +52,15 @@ const LOOP_RESOLUTION_MS = 10
 const INSPECTOR_WAIT_MS = 60_000
 const SAMPLE_INTERVAL_MS = 1_000
 const EVALUATE_TIMEOUT_MS = 1_000
+/** The CPU profile covers boot: it starts at SETUP and stops this long after spawn. */
+const PROFILE_UNTIL_MS = 90_000
+const PROFILE_SAMPLING_US = 1_000
+const PROFILE_STOP_TIMEOUT_MS = 30_000
+/** History's IPC round trip is measured from this long after spawn, this often. */
+const HISTORY_FROM_MS = 20_000
+const HISTORY_EVERY_MS = 5_000
+const HISTORY_TIMEOUT_MS = 15_000
+const MAIN_LOG_QUERY_TIMEOUT_MS = 10_000
 
 /** `--cloud-dir` etc. become `args.cloudDir`, matching every camelCase read below. */
 function parseArgs(argv) {
@@ -244,7 +261,7 @@ async function inspectorUrl(child) {
   })
 }
 
-/** A minimal Chrome DevTools Protocol client: Runtime.evaluate with a per-call answer budget. */
+/** A minimal Chrome DevTools Protocol client: any method, and Runtime.evaluate, each with an answer budget. */
 function cdpClient(wsUrl) {
   const socket = new WebSocket(wsUrl)
   const pending = new Map()
@@ -254,34 +271,55 @@ function cdpClient(wsUrl) {
     const resolver = pending.get(message.id)
     if (!resolver) return
     pending.delete(message.id)
-    resolver(message.result)
+    resolver(message)
   })
   const ready = new Promise((resolve, reject) => {
     socket.addEventListener('open', () => resolve())
     socket.addEventListener('error', () => reject(new Error('inspector socket failed to connect')))
   })
-  async function evaluate(expression) {
+  /** The method's result, or `{ late: true }` when it did not answer within `timeoutMs`. Throws on a
+   *  protocol error. */
+  async function send(method, params, timeoutMs) {
     await ready
     const id = nextId++
     const answer = new Promise((resolve) => pending.set(id, resolve))
-    socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }))
-    const timeout = new Promise((resolve) => setTimeout(() => resolve(undefined), EVALUATE_TIMEOUT_MS))
-    const result = await Promise.race([answer, timeout])
-    if (result === undefined) return { late: true }
-    if (result.exceptionDetails) throw new Error(result.exceptionDetails.text)
-    return { late: false, value: result.result?.value }
+    socket.send(JSON.stringify({ id, method, params }))
+    let timer
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(undefined), timeoutMs)
+    })
+    const message = await Promise.race([answer, timeout])
+    clearTimeout(timer)
+    if (message === undefined) return { late: true }
+    if (message.error) throw new Error(`${method}: ${message.error.message}`)
+    return { late: false, result: message.result }
   }
-  return { evaluate, close: () => socket.close() }
+  async function evaluate(expression, timeoutMs = EVALUATE_TIMEOUT_MS) {
+    const answer = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, timeoutMs)
+    if (answer.late) return answer
+    if (answer.result.exceptionDetails) throw new Error(answer.result.exceptionDetails.text)
+    return { late: false, value: answer.result.result?.value }
+  }
+  return { send, evaluate, close: () => socket.close() }
 }
 
+/** `__st1` covers the whole run for the criteria; `__st1since` is read and reset at every sample. */
 const SETUP = `(() => {
   const { monitorEventLoopDelay } = process.getBuiltinModule('node:perf_hooks')
   globalThis.__st1 = monitorEventLoopDelay({ resolution: ${LOOP_RESOLUTION_MS} })
   globalThis.__st1.enable()
+  globalThis.__st1since = monitorEventLoopDelay({ resolution: ${LOOP_RESOLUTION_MS} })
+  globalThis.__st1since.enable()
   return process.env.UV_THREADPOOL_SIZE ?? 'default'
 })()`
 
 const sample = (probeFile) => `(async () => {
+  const loopMaxSinceLastMs = __st1since.max / 1e6
+  __st1since.reset()
+  const resources = {}
+  if (typeof process.getActiveResourcesInfo === 'function') {
+    for (const type of process.getActiveResourcesInfo()) resources[type] = (resources[type] ?? 0) + 1
+  }
   const { writeFile } = process.getBuiltinModule('node:fs/promises')
   const { lookup } = process.getBuiltinModule('node:dns/promises')
   let started = performance.now()
@@ -289,32 +327,186 @@ const sample = (probeFile) => `(async () => {
   const writeMs = performance.now() - started
   started = performance.now()
   await lookup('localhost')
-  return { writeMs, lookupMs: performance.now() - started }
+  return { writeMs, lookupMs: performance.now() - started, loopMaxSinceLastMs, resources }
 })()`
 
 const SUMMARY = '({ p99Ms: __st1.percentile(99) / 1e6, maxMs: __st1.max / 1e6 })'
 
-async function measure(cdp, profile, minutes) {
+/** Where the candidate's electron-log main.log lives: app.getPath('logs'), which ASKTOTO_USERDATA does
+ *  not relocate on macOS. */
+const MAIN_LOG_PATH = `(() => {
+  const load = process.mainModule?.require
+  if (typeof load !== 'function') return { error: 'process.mainModule.require is unavailable in the compiled main' }
+  try {
+    return { path: load('node:path').join(load('electron').app.getPath('logs'), 'main.log') }
+  } catch (error) {
+    return { error: String(error?.message ?? error) }
+  }
+})()`
+
+/** One History round trip through the real preload bridge, timed inside the main process. The results
+ *  stay in the renderer: only whether they settled comes back. */
+const HISTORY_PROBE = `(async () => {
+  const load = process.mainModule?.require
+  if (typeof load !== 'function') return { skipped: 'process.mainModule.require is unavailable in the compiled main' }
+  const { BrowserWindow } = load('electron')
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    const bridged = await win.webContents.executeJavaScript(
+      "typeof window.toto?.recallList === 'function' && typeof window.toto?.brainStatus === 'function'"
+    )
+    if (!bridged) continue
+    const started = performance.now()
+    try {
+      await win.webContents.executeJavaScript('Promise.all([window.toto.recallList(), window.toto.brainStatus()]).then(() => true)')
+      return { ms: performance.now() - started }
+    } catch (error) {
+      return { ms: performance.now() - started, error: String(error?.message ?? error) }
+    }
+  }
+  return { skipped: 'no window exposes window.toto.recallList and brainStatus' }
+})()`
+
+/** Starts the sampling CPU profiler; reports why when it cannot. */
+async function startProfiler(cdp) {
+  try {
+    await cdp.send('Profiler.enable', {}, EVALUATE_TIMEOUT_MS)
+    await cdp.send('Profiler.setSamplingInterval', { interval: PROFILE_SAMPLING_US }, EVALUATE_TIMEOUT_MS)
+    const started = await cdp.send('Profiler.start', {}, EVALUATE_TIMEOUT_MS)
+    return started.late ? { running: false, error: 'Profiler.start did not answer' } : { running: true }
+  } catch (error) {
+    return { running: false, error: error.message }
+  }
+}
+
+/** Stops the profiler and writes its .cpuprofile. */
+async function stopProfiler(cdp, profiler, path, tMs) {
+  profiler.running = false
+  profiler.stoppedAtMs = tMs
+  try {
+    const stopped = await cdp.send('Profiler.stop', {}, PROFILE_STOP_TIMEOUT_MS)
+    if (stopped.late) {
+      profiler.error = 'Profiler.stop did not answer'
+      return
+    }
+    writeFileSync(path, JSON.stringify(stopped.result.profile))
+    profiler.file = basename(path)
+  } catch (error) {
+    profiler.error = error.message
+  }
+}
+
+/** One History probe; never throws. */
+async function probeHistory(cdp, tMs) {
+  try {
+    const answer = await cdp.evaluate(HISTORY_PROBE, HISTORY_TIMEOUT_MS)
+    return answer.late ? { tMs, late: true } : { tMs, ...answer.value }
+  } catch (error) {
+    return { tMs, error: error.message }
+  }
+}
+
+async function measure(cdp, { profile, minutes, spawnedAt, cpuProfilePath }) {
+  const sinceSpawn = () => Math.round(performance.now() - spawnedAt)
+  const setupAtMs = sinceSpawn()
   const poolSize = (await cdp.evaluate(SETUP)).value
+  const profiler = { startedAtMs: sinceSpawn(), ...(await startProfiler(cdp)) }
   const probeFile = join(profile, 'st1-probe.txt')
   const samples = []
-  let lateSamples = 0
+  const late = []
+  const history = []
+  let historyRunning = null
+  let historyLastMs = -Infinity
   const deadline = Date.now() + minutes * 60_000
   while (Date.now() < deadline) {
+    const tMs = sinceSpawn()
+    if (profiler.running && tMs >= PROFILE_UNTIL_MS) await stopProfiler(cdp, profiler, cpuProfilePath, tMs)
+    if (!historyRunning && tMs >= HISTORY_FROM_MS && tMs - historyLastMs >= HISTORY_EVERY_MS) {
+      historyLastMs = tMs
+      historyRunning = probeHistory(cdp, tMs).then((probe) => {
+        history.push(probe)
+        historyRunning = null
+      })
+    }
     const result = await cdp.evaluate(sample(probeFile))
-    if (result.late) lateSamples += 1
-    else samples.push(result.value)
+    if (result.late) late.push({ tMs })
+    else samples.push({ tMs, ...result.value })
     await new Promise((resolve) => setTimeout(resolve, SAMPLE_INTERVAL_MS))
   }
+  if (profiler.running) await stopProfiler(cdp, profiler, cpuProfilePath, sinceSpawn())
+  await historyRunning
   const summary = await cdp.evaluate(SUMMARY)
-  return { poolSize, samples, lateSamples, loop: summary.late ? { p99Ms: Infinity, maxMs: Infinity } : summary.value }
+  return {
+    poolSize,
+    setupAtMs,
+    samples,
+    late,
+    lateSamples: late.length,
+    history,
+    profiler,
+    loop: summary.late ? { p99Ms: Infinity, maxMs: Infinity } : summary.value
+  }
+}
+
+/** Where this launch's main.log is, and the byte it starts at. The file's own birth time tells whether
+ *  this launch created it (then the whole file is this launch); otherwise its size when the path became
+ *  known is the best offset, and boot lines before SETUP may be missing. */
+async function locateMainLog(cdp, spawnedWallMs) {
+  try {
+    const answer = await cdp.evaluate(MAIN_LOG_PATH, MAIN_LOG_QUERY_TIMEOUT_MS)
+    if (answer.late) return { error: 'the main.log path query did not answer' }
+    if (answer.value.error) return { error: answer.value.error }
+    const path = answer.value.path
+    if (!existsSync(path)) return { path, fromByte: 0, exactLaunchOffset: true }
+    const stats = statSync(path)
+    const createdByLaunch = stats.birthtimeMs >= spawnedWallMs
+    return { path, fromByte: createdByLaunch ? 0 : stats.size, exactLaunchOffset: createdByLaunch }
+  } catch (error) {
+    return { error: error.message }
+  }
+}
+
+/** Copies the profile's audit logs, stall bundles and this launch's main.log into `dir`. Never throws:
+ *  missing evidence is reported, never allowed to hide the measurement. */
+function copyAppEvidence(profile, mainLog, dir) {
+  const copied = []
+  const errors = []
+  const attempt = (label, copy) => {
+    try {
+      if (copy()) copied.push(label)
+    } catch (error) {
+      errors.push(`${label}: ${error.message}`)
+    }
+  }
+  attempt('logs/audit*.log', () => {
+    const logs = join(profile, 'logs')
+    const audits = existsSync(logs) ? readdirSync(logs).filter((entry) => /^audit.*\.log$/.test(entry)) : []
+    for (const name of audits) cpSync(join(logs, name), join(dir, 'logs', name))
+    return audits.length > 0
+  })
+  attempt('diagnostics/stalls', () => {
+    const stalls = join(profile, 'diagnostics', 'stalls')
+    if (!existsSync(stalls)) return false
+    cpSync(stalls, join(dir, 'diagnostics', 'stalls'), { recursive: true })
+    return true
+  })
+  if (mainLog?.path) {
+    attempt('main.log', () => {
+      if (!existsSync(mainLog.path)) return false
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'main.log'), readFileSync(mainLog.path).subarray(mainLog.fromByte))
+      return true
+    })
+  }
+  return { dir: basename(dir), copied, errors }
 }
 
 /** Whether the run actually reached the fixtures, and (dataless only) whether they stayed unread. */
-function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset) {
+function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset, root) {
+  if (kind === 'none') return { exercised: null }
   if (kind === 'fifo') {
-    const opened = fixtures.filter((fifo) => releaseFifo(fifo)).length
-    return { exercised: opened >= 1 }
+    const opened = fixtures.filter((fifo) => releaseFifo(fifo))
+    return { exercised: opened.length >= 1, fixturesOpened: opened.map((fifo) => relative(root, fifo)) }
   }
   const stillDataless = datalessFlags(fixtures).every(Boolean)
   const mainLogTail = mainLogPath && existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').slice(mainLogOffset) : ''
@@ -367,7 +559,7 @@ function buildLaunchFailureReport({ row, args, candidate, fixtures, reason }) {
   }
 }
 
-function buildReport({ row, args, candidate, measured, evidence, fixtures }) {
+function buildReport({ row, args, candidate, measured, evidence, fixtures, attribution }) {
   const criteria = [
     { name: 'inspector', pass: true }, // only reached once inspectorUrl() actually produced a working inspector
     { name: 'has-samples', pass: measured.samples.length > 0 },
@@ -379,7 +571,9 @@ function buildReport({ row, args, candidate, measured, evidence, fixtures }) {
   ]
   if (row === 'dataless') criteria.push({ name: 'still-dataless', pass: evidence.stillDataless === true })
 
-  const verdict = !evidence.exercised ? 'NOT_EXERCISED' : criteria.every((c) => c.pass) ? 'PASS' : 'FAIL'
+  // The control row has nothing to exercise: its verdict is the criteria alone.
+  const exercised = row === 'none' || evidence.exercised
+  const verdict = !exercised ? 'NOT_EXERCISED' : criteria.every((c) => c.pass) ? 'PASS' : 'FAIL'
   return {
     harness: 'ST-1',
     row,
@@ -397,20 +591,30 @@ function buildReport({ row, args, candidate, measured, evidence, fixtures }) {
     write: { maxMs: Math.max(0, ...measured.samples.map((s) => s.writeMs)) },
     lookup: { maxMs: Math.max(0, ...measured.samples.map((s) => s.lookupMs)) },
     exercised: evidence.exercised,
+    ...(row === 'fifo' ? { fixturesOpened: evidence.fixturesOpened } : {}),
     ...(row === 'dataless' ? { stillDataless: evidence.stillDataless } : {}),
     criteria,
-    verdict
+    verdict,
+    // Report-only attribution evidence (see the header); no criterion reads it.
+    setupAtMs: measured.setupAtMs,
+    timeline: [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs),
+    history: measured.history,
+    cpuProfile: measured.profiler,
+    mainLog: attribution.mainLog.error
+      ? { error: attribution.mainLog.error }
+      : { fromByte: attribution.mainLog.fromByte, exactLaunchOffset: attribution.mainLog.exactLaunchOffset },
+    appEvidence: attribution.appEvidence
   }
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (!args.installer || !args.provenance || !args.fixtures) {
-    console.error('usage: node scripts/qa/st-1.mjs --installer <path> --provenance <path> --fixtures fifo|dataless [options]')
+    console.error('usage: node scripts/qa/st-1.mjs --installer <path> --provenance <path> --fixtures fifo|dataless|none [options]')
     return 2
   }
-  if (args.fixtures !== 'fifo' && args.fixtures !== 'dataless') {
-    console.error(`[st-1] FAIL — --fixtures must be fifo or dataless, got ${JSON.stringify(args.fixtures)}`)
+  if (args.fixtures !== 'fifo' && args.fixtures !== 'dataless' && args.fixtures !== 'none') {
+    console.error(`[st-1] FAIL — --fixtures must be fifo, dataless or none, got ${JSON.stringify(args.fixtures)}`)
     return 2
   }
   if (args.fixtures === 'fifo' && process.platform === 'win32') {
@@ -435,6 +639,9 @@ async function main() {
   }
 
   const candidate = await verifyCandidate(args.installer, args.provenance)
+  const reportDir = args.reportDir ?? (args.out ? dirname(args.out) : join('out', 'st-1'))
+  mkdirSync(reportDir, { recursive: true })
+  const reportBase = `st-1-${process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : process.platform}-${args.fixtures}`
 
   // Everything that creates state to clean up — the unzip dir, the profile, the fixtures/junction and the
   // child process — lives inside this one try, so a failure anywhere here (a usage error placing
@@ -446,6 +653,9 @@ async function main() {
   let child = null
   let cdp = null
   let report
+  /** A finished measurement, turned into the report once the app evidence is copied. */
+  let measuredRun = null
+  let appEvidence = null
   try {
     const resolved = resolveExecutable(args.installer, args.exe)
     unzipDir = resolved.unzipDir
@@ -454,12 +664,15 @@ async function main() {
 
     const count = args.fixtures === 'fifo' ? Number(args.count ?? DEFAULT_FIFO_COUNT) : undefined
     const mainLogOffset = args.mainLog && existsSync(args.mainLog) ? statSync(args.mainLog).size : 0
-    const fixtures = args.fixtures === 'fifo' ? placeFifoFixtures(root, count) : placeDatalessFixtures(root, args.cloudDir)
+    const fixtures =
+      args.fixtures === 'fifo' ? placeFifoFixtures(root, count) : args.fixtures === 'dataless' ? placeDatalessFixtures(root, args.cloudDir) : []
 
     // `child` is assigned before anything can fail waiting for it, so the shared `finally` below always
     // owns a child to stop — including when the inspector never answers (fuse off), the exe is bad
     // ('error') or the candidate dies early ('exit'): every one of those becomes a launch-failure report
     // instead of a detached, unkillable process.
+    const spawnedWallMs = Date.now()
+    const spawnedAt = performance.now()
     child = spawnCandidate(resolved.exe, profile)
     let wsUrl
     try {
@@ -470,14 +683,26 @@ async function main() {
 
     if (wsUrl) {
       cdp = cdpClient(wsUrl)
-      const measured = await measure(cdp, profile, minutes)
-      const evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset)
-      report = buildReport({ row: args.fixtures, args, candidate, measured, evidence, fixtures })
+      const cpuProfilePath = join(reportDir, `${reportBase}.cpuprofile`)
+      // Asked alongside SETUP, not after the run: when this launch did not create main.log, the size now
+      // is the offset.
+      const mainLogLocated = args.mainLog
+        ? Promise.resolve({ path: args.mainLog, fromByte: mainLogOffset, exactLaunchOffset: true })
+        : locateMainLog(cdp, spawnedWallMs)
+      const measured = await measure(cdp, { profile, minutes, spawnedAt, cpuProfilePath })
+      const mainLog = await mainLogLocated
+      const evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset, root)
+      measuredRun = { measured, evidence, fixtures, mainLog }
     }
   } finally {
     cdp?.close()
     if (child) stopChild(child)
+    if (measuredRun && profile) appEvidence = copyAppEvidence(profile, measuredRun.mainLog, join(reportDir, `${reportBase}-app`))
     cleanup({ kind: args.fixtures, root, profile, unzipDir })
+  }
+  if (measuredRun) {
+    const { measured, evidence, fixtures, mainLog } = measuredRun
+    report = buildReport({ row: args.fixtures, args, candidate, measured, evidence, fixtures, attribution: { mainLog, appEvidence } })
   }
 
   console.log(JSON.stringify(report, null, 2))
