@@ -29,6 +29,7 @@ import { observeSidecar } from '../infra/observability/sidecar-events'
 import { recordSidecarSupervisedSpawned } from '../infra/process/registry'
 import { markSidecarProcessUsable, spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
 import { errMsg } from './shared'
+import { pinChildEnv } from '../net/egress-policy'
 
 export const FM_BINARY_PATH = '/usr/bin/fm'
 /** Model id `fm serve`'s Chat Completions endpoint expects for the on-device system model. */
@@ -174,7 +175,7 @@ function runProbe(): Promise<FmAvailability> {
   return new Promise((resolve) => {
     let proc: ChildProcess
     try {
-      proc = spawn(FM_BINARY_PATH, ['available'], { stdio: ['ignore', 'pipe', 'pipe'] })
+      proc = spawn(FM_BINARY_PATH, ['available'], { env: pinChildEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (err) {
       resolve({ available: false, reason: `probe-failed: ${errMsg(err)}` })
       return

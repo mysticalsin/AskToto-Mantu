@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Readable } from 'node:stream'
 import { IMPORT_CHUNK_SECONDS } from '@shared/ipc'
+import { pinChildEnv } from './net/egress-policy'
 import { IMPORT_NOT_MEDIA, sniffMediaFile } from './import-magic'
 
 export const FFMPEG_SAMPLE_RATE = 16_000
@@ -40,7 +41,7 @@ async function probeDurationSeconds(executable: string, sourcePath: string, sign
     child = spawn(
       executable,
       ['-nostdin', '-hide_banner', '-loglevel', 'info', '-i', sourcePath, '-vn', '-t', '0', '-f', 'null', '-'],
-      { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, signal, killSignal: 'SIGKILL' }
+      { stdio: ['ignore', 'ignore', 'pipe'], env: pinChildEnv(process.env), windowsHide: true, signal, killSignal: 'SIGKILL' }
     )
   } catch {
     return null
@@ -117,7 +118,7 @@ export function startFfmpegDecode(
     child = spawn(
       executable,
       ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', sourcePath, '-vn', '-ac', '1', '-ar', String(FFMPEG_SAMPLE_RATE), '-f', 'f32le', 'pipe:1'],
-      { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, signal: abort.signal, killSignal: 'SIGKILL' }
+      { stdio: ['ignore', 'pipe', 'pipe'], env: pinChildEnv(process.env), windowsHide: true, signal: abort.signal, killSignal: 'SIGKILL' }
     )
   } catch (error) {
     const completed = callbacks.onError(error instanceof Error ? error : new Error(String(error)))

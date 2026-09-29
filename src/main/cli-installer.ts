@@ -37,6 +37,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { app } from 'electron'
 import { ensureManagedNode, resolveManagedNode } from './managed-node'
+import { pinChildEnv } from './net/egress-policy'
 import {
   NPM_MISSING_NODE_ERROR,
   humanizeNpmInstallError,
@@ -716,7 +717,7 @@ export function npmInstallProduction(packageDir: string, signal?: AbortSignal): 
       reject(err instanceof Error ? err : new ManagedNpmMissingError())
       return
     }
-    const env = withNodeOnPath({ ...sanitizedSpawnEnv(), CI: '1', ...spec.env }, spec.command)
+    const env = pinChildEnv(withNodeOnPath({ ...sanitizedSpawnEnv(), CI: '1', ...spec.env }, spec.command)) as Record<string, string>
     const child = spawn(spec.command, spec.args, {
       cwd: packageDir,
       env,

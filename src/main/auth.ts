@@ -479,8 +479,9 @@ function clearSession(): void {
 
 /**
  * Why a cached session should no longer be trusted, or null if it's still valid. Validity = within the
- * max local age AND (when SSO is configured) still matching the allowed domain and tenant (tenantMatches,
- * case-folded; a session without a string tid cannot prove it). Past these bounds: fresh interactive sign-in.
+ * max local age AND (when SSO is configured) still matching the allowed domain and the configured tenant.
+ * The tenant compare is tenantMatches (case-folded, like the sign-in gate), and a session read from disk
+ * without a string tid cannot prove its tenant. Anything past these bounds forces fresh interactive sign-in.
  */
 function expiryReason(s: Session, cfg: AzureConfig | null): 'max_age' | 'domain' | 'tenant' | null {
   if (typeof s.at !== 'number' || Date.now() - s.at > MAX_SESSION_AGE_MS) return 'max_age'
@@ -610,7 +611,8 @@ function loadSession(): void {
     session = null
   }
   // Treat the file as a CACHE: a session past the max local age is evicted on read (memory + disk),
-  // forcing fresh interactive sign-in. (Domain/tenant re-validation needs cfg: authStatus and the sweep.)
+  // forcing fresh interactive sign-in. (Config re-validation, domain and tenant, needs cfg and runs in
+  // authStatus and the sweep.)
   if (session && (typeof session.at !== 'number' || Date.now() - session.at > MAX_SESSION_AGE_MS)) {
     clearSession()
     auditLog('auth.expired', { reason: 'max_age' })

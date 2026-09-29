@@ -86,8 +86,9 @@ export function childNetworkBlocked(allow: readonly string[] | null = activePoli
   return allow !== null
 }
 
-/** Unroutable loopback proxy: connections to it are refused, so a proxy-honoring child fails closed. */
-export const DEAD_PROXY_URL = 'http://127.0.0.1:9'
+/** Proxy on a reserved `.invalid` name (RFC 2606): it never resolves and nothing can listen on it, so a
+ *  proxy-honoring child fails closed instead of hanging on a local listener. */
+export const DEAD_PROXY_URL = 'http://egress-blocked.invalid:9'
 
 const PROXY_VARS = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'] as const
 

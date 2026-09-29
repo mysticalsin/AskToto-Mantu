@@ -24,9 +24,11 @@ const BODY_HEADERS = ['content-encoding', 'content-language', 'content-location'
  * admin can see what a policy is stopping without the log filling up.
  *
  * Child processes open their own sockets, so they are handled at their spawn sites from the policy this
- * function publishes (egress-policy.ts: childNetworkBlocked, pinChildEnv). Libraries that open raw
- * `https.request` sockets (MSAL's token client) are not seen; docs/NETWORK-EGRESS.md lists them in the
- * transport matrix. Loopback is always allowed.
+ * function publishes (egress-policy.ts): the CLI providers are not spawned under a policy
+ * (childNetworkBlocked, cli.ts) and cliEnv/ffmpeg get a pinned proxy environment (pinChildEnv). MSAL's
+ * token client sends through the guarded `fetch` (guarded-network-client.ts). Any other library that
+ * opens a raw `https.request` socket is not seen; docs/NETWORK-EGRESS.md lists every transport in its
+ * matrix. Loopback is always allowed.
  */
 
 export interface WebRequestLike {

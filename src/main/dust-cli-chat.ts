@@ -17,6 +17,7 @@ import { dustAgentUnavailableMessage } from '@shared/quick-actions'
 import { installManagedCli, managedCliEntry, type CliInstallProgress } from './cli-installer'
 import { ensureManagedNode, resolveManagedNode, vcredistExePath, vcredistQuietArgs } from './managed-node'
 import { killWindowsProcessTree } from './cli'
+import { childNetworkBlocked } from './net/egress-policy'
 
 export const DUST_SPOTLIGHT_REF_AGENT_NAME = 'Spotlight Ref'
 export const DUST_MANAGED_CLI_ID = 'dust' as const
@@ -217,6 +218,10 @@ export async function runManagedDustChat(opts: {
   projectName?: string
   onProgress?: (p: CliInstallProgress) => void
 }): Promise<{ ok: true; text: string } | { ok: false; kind: DustChatKind; error: string }> {
+  // The Dust CLI opens its own connections, which a managed egressAllowlist cannot filter.
+  if (childNetworkBlocked()) {
+    return { ok: false, kind: 'error', error: 'Dust CLI chat is blocked by your organization\'s network policy (egressAllowlist).' }
+  }
   const ensured = await ensureManagedDustCli(opts.onProgress)
   if (!ensured.ok) {
     return { ok: false, kind: 'missing-cli', error: messageForDustCliKind('missing-cli', ensured.error) }
