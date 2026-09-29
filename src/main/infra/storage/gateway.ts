@@ -134,9 +134,14 @@ export function threadpoolSize(value: string | undefined): number {
   return size > 0 ? Math.min(size, MAX_POOL_SIZE) : 1
 }
 
+/** How many pool threads background fs work may hold at once: all but RESERVED_POOL_THREADS, at least 1. */
+export function reservedPoolCapacity(poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE)): number {
+  return Math.max(1, poolSize - RESERVED_POOL_THREADS)
+}
+
 /** An admission that keeps RESERVED_POOL_THREADS of a `poolSize`-thread pool free. */
 export function poolAdmission(poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE)): Admission {
-  return createAdmission(Math.max(1, poolSize - RESERVED_POOL_THREADS))
+  return createAdmission(reservedPoolCapacity(poolSize))
 }
 
 function outsideRoot(): StorageFailure {

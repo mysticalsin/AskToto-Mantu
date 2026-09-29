@@ -643,6 +643,7 @@ import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-prefere
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { scheduleTrayAfterFirstPaint, yieldToEventLoop } from './boot-tray'
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
+import { createBootWork } from './lifecycle/boot-work'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
@@ -2745,9 +2746,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
     win = null
     throw e
   }
-  // Exclusive keeps its activating show (FITO-185-T); the overlay reveal never steals focus (MQA-275).
+  // Both keep the ctor show:true activation (focus + front): exclusive via FITO-185-T, the overlay via show().
   if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) =>
-    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.showInactive())
+    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show())
 
   // Capture THIS window instance so a late 'closed' from a crashed/replaced window can't null out a
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
@@ -9100,6 +9101,7 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
   configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
   await runBootSidecarReaper(app.getPath('userData'))
   // M2-0033: unattended model work waits for the maintenance gate.
@@ -9600,6 +9602,7 @@ if (!app.requestSingleInstanceLock()) {
   await yieldToEventLoop() // M2-0422: window construction is its own task
   withBootFirstShowDeferred(() => runStep('createWindow', createWindow))
   scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
+  bootWork.releaseAfterFirstShow(win)
   revealController.markBootComplete()
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
@@ -9619,24 +9622,23 @@ if (!app.requestSingleInstanceLock()) {
   // IPC must be live first so the renderer's getSettings() is not blocked waiting on preprocess.
   // Silent on macOS by construction: eligibility now requires the Screen Recording grant to ALREADY exist
   // (screenCaptureGranted above), so this reconcile can never be what raises the TCC prompt (MQA-209).
-  runStep('refreshScreenPreprocess', refreshScreenPreprocess)
-  // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
-  // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
-  // first use), so it no longer sits ahead of createWindow on the boot path.
-  runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
+  bootWork.run('refreshScreenPreprocess', () => runStep('refreshScreenPreprocess', refreshScreenPreprocess))
+  // Synchronous OneDrive fs work (mkdir + two writeFileSync on first run) that nothing needs before the first show:
+  // saveMeeting/saveNote create the folder themselves on first use.
+  bootWork.run('ensureMeetingsFolder', () => runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings())))
   runStep('initializeImportJobs', initializeImportJobs)
   startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
   startOperatorOverlayPoll(() => getSettings())
   // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
   // can safely report chunks as soon as it starts, without delaying first paint.
-  const recoverImports = (): void => {
+  const recoverImports = (): Promise<unknown> | undefined => {
     if (!requireAuth()) {
       setTimeout(recoverImports, 1000)
-      return
+      return undefined
     }
-    void importJobs?.recover().catch((error) => mainLog.warn('[import-jobs] recovery failed:', error))
+    return importJobs?.recover().catch((error) => mainLog.warn('[import-jobs] recovery failed:', error))
   }
-  recoverImports()
+  bootWork.run('recoverImports', recoverImports)
   runStep('registerScreenListeners', registerScreenListeners)
   // Notch/menu-bar metrics for the island top clamp (MQA-275) — invalidate-on-topology-change, same
   // event set registerScreenListeners just subscribed to, plus powerMonitor resume (a notch MacBook can
@@ -9674,12 +9676,12 @@ if (!app.requestSingleInstanceLock()) {
       } else {
         // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
         try {
-          void resumeBackfillIfPending().catch((e) => mainLog.warn('[boot] resumeBackfillIfPending failed:', e))
+          bootWork.run('resumeBackfillIfPending', () => resumeBackfillIfPending().catch((e) => mainLog.warn('[boot] resumeBackfillIfPending failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
         }
         try {
-          void reconcileMeetingsInBackground().catch((e) => mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e))
+          bootWork.run('reconcileMeetingsInBackground', () => reconcileMeetingsInBackground().catch((e) => mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
         }
@@ -9696,9 +9698,7 @@ if (!app.requestSingleInstanceLock()) {
           mainLog.warn('[boot] wireIntelligenceIndexWork failed:', e)
         }
         try {
-          void catchUpIntelligenceIndexIfNeeded().catch((e) =>
-            mainLog.error('[intelligence-index] launch catch-up failed:', e)
-          )
+          bootWork.run('catchUpIntelligenceIndexIfNeeded', () => catchUpIntelligenceIndexIfNeeded().catch((e) => mainLog.error('[intelligence-index] launch catch-up failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] catchUpIntelligenceIndexIfNeeded failed:', e)
         }
@@ -9709,7 +9709,7 @@ if (!app.requestSingleInstanceLock()) {
         }
         // Consolidation runs once per launch; the named slots own the recurring pass. Both are automatic triggers (infra/scheduler/policy.ts).
         try {
-          void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
+          bootWork.run('runConsolidationIfDue', () => runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] runConsolidationIfDue failed:', e)
         }
