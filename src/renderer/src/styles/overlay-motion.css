@@ -1,0 +1,248 @@
+@keyframes overlay-peek-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* One-surface hide/reveal transition. It only translates the already-opaque surface: scaling the full
+   native window made the onboarding placement step and right-edge dock visibly zoom in and out. */
+.overlay-spring {
+  transform-origin: top center;
+  will-change: transform, opacity;
+}
+.overlay-spring--in {
+  animation: overlay-spring-in 360ms var(--ease-spring) both;
+}
+.overlay-spring--out {
+  animation: overlay-spring-out 320ms var(--ease-spring) both;
+}
+.overlay-spring--settled {
+  transform: none;
+  opacity: 1;
+}
+.overlay-spring--edge-right {
+  transform-origin: right center;
+}
+.overlay-spring--edge-right.overlay-spring--in {
+  animation-name: overlay-spring-in-right;
+}
+.overlay-spring--edge-right.overlay-spring--out {
+  animation-name: overlay-spring-out-right;
+}
+.overlay-spring--in .glass,
+.overlay-spring--out .glass,
+.overlay-spring--in .glass-strong,
+.overlay-spring--out .glass-strong {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.overlay-spring--in .right-edge-sidecar__drawer,
+.overlay-spring--out .right-edge-sidecar__drawer {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+@keyframes overlay-spring-in {
+  from {
+    opacity: 1;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes overlay-spring-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-5px);
+  }
+}
+@keyframes overlay-spring-in-right {
+  from {
+    opacity: 1;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes overlay-spring-out-right {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(10px);
+  }
+}
+/* Circle/Jarvis rest → Ask bar. Same spring family. Not a hard cut. */
+.circle-rest-spring {
+  transform-origin: top center;
+  will-change: transform, opacity;
+}
+.circle-rest-spring--expand {
+  animation: circle-rest-expand 420ms var(--ease-spring) both;
+}
+.circle-rest-spring--collapse {
+  animation: circle-rest-collapse 340ms var(--ease-spring) both;
+}
+@keyframes circle-rest-expand {
+  0% {
+    opacity: 0;
+    transform: scale(0.22) translateY(-6px);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.02) translateY(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes circle-rest-collapse {
+  0% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.22) translateY(-6px);
+  }
+}
+
+/* markdown surface inside the answer panel */
+.md {
+  font-size: 13.5px;
+  line-height: 1.62;
+  color: var(--color-ink);
+  overflow-wrap: anywhere;
+}
+/* Code blocks keep their intrinsic width and horizontal scroll (streamdown puts overflow-x-auto on the
+   <pre>); the anywhere-wrap above is for prose only, so reset it here or long tokens break mid-character. */
+.md :where(pre, pre code) {
+  overflow-wrap: normal;
+}
+.md :where(h1, h2, h3, h4) {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0.8em 0 0.4em;
+}
+.md :where(p, ul, ol) {
+  margin: 0.5em 0;
+}
+.md :where(ul, ol) {
+  padding-left: 1.2em;
+}
+.md a {
+  color: #b388f0; /* lighter Mantu purple — clears AA on the dark surface */
+  text-decoration: underline; /* don't rely on color alone as the only cue */
+  text-underline-offset: 2px;
+}
+.md code:not(pre code) {
+  background: rgba(255, 255, 255, 0.09);
+  padding: 0.1em 0.36em;
+  border-radius: 5px;
+  font-size: 0.9em;
+}
+.md pre {
+  border-radius: 12px !important;
+  border: 1px solid var(--color-hair-soft);
+  font-size: 12.5px;
+}
+.md :where(table) {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+}
+.md :where(th, td) {
+  border: 1px solid var(--color-hair-soft);
+  padding: 4px 8px;
+  text-align: left;
+  word-break: break-word;
+}
+
+/* Luxury agent status — caption then thinking-orbs. Isolation keeps the 2D canvas on its own
+   compositor layer so the 60fps orb does not hitch the glass. The orb slot is reserved
+   (--orb-size) so the first frame cannot shift the word. No CSS keyframe spinner. */
+.agent-status {
+  isolation: isolate;
+}
+.agent-status__orb {
+  flex: 0 0 var(--orb-size, 64px);
+  width: var(--orb-size, 64px);
+  height: var(--orb-size, 64px);
+  contain: strict;
+}
+.agent-status canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  contain: strict;
+}
+.agent-status__word {
+  font-family: var(--font-ui);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--color-ink-2);
+}
+.agent-status--hero {
+  gap: 14px;
+  padding: 48px 32px;
+}
+.agent-status--hero .agent-status__word {
+  font-size: 15px;
+}
+.agent-status--inline .agent-status__word {
+  font-size: 12px;
+}
+
+@keyframes asktoto-loading-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    transition-duration: 0ms !important;
+  }
+  /* The recording dot is a liveness + consent signal — it must keep moving, not freeze. Opacity-only
+     pulse (no scale) respects reduced-motion while still clearly reading as "we are live". */
+  .rec-dot {
+    animation: asktoto-loading-pulse 1.4s ease-in-out infinite !important;
+    animation-duration: 1.4s !important;
+  }
+  /* The rainbow contour signals "agent is working" — keep it alive without rotation via a gentle
+     opacity breathe (the static gradient still reads as the rainbow outline). */
+  .rainbow-ring::before {
+    animation: asktoto-loading-pulse 1.6s ease-in-out infinite !important;
+    animation-duration: 1.6s !important;
+  }
+  .work-progress__value {
+    transition: opacity 150ms var(--ease-spring);
+  }
+  .work-progress__pulse {
+    transform: translateX(0);
+    animation: work-progress-reduced-pulse 1.2s var(--ease-spring) infinite !important;
+    animation-duration: 1.2s !important;
+  }
+}

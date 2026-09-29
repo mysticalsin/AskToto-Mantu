@@ -76,6 +76,9 @@ jobs:
       # (scripts/check-skipped-tests.mjs collects a fresh JSON report) against the same checkout npm test
       # just verified.
       - run: npm run check:skips
+      # M2-0411: hex colour literals in renderer .css/.tsx may only ratchet down from
+      # scripts/color-literal-baseline.json, and design tokens live only in tokens.css.
+      - run: npm run check:colors
 
   operator:
     # Métis Operator (the fleet control-plane Worker under operator/) is a separate deployable with

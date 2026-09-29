@@ -86,6 +86,7 @@
     "check:build-host": "node scripts/check-build-host.mjs",
     "typecheck:tests": "node scripts/check-test-types.mjs",
     "check:skips": "node scripts/check-skipped-tests.mjs",
+    "check:colors": "node scripts/check-color-literals.mjs",
     "check:cf-key": "node scripts/check-cloudflare-key-valid.mjs",
     "check:scratch-paths": "node operator/scripts/check-no-scratch-paths.mjs",
     "rotate:embedded-keys": "node scripts/rotate-embedded-keys.mjs"
