@@ -1905,6 +1905,9 @@ export interface MeetingSummary {
   /** True for a real encrypted meeting that failed to decrypt on this device — listed as a locked
    *  stub (no preview) so it's visible with a lock affordance instead of silently vanishing. */
   locked?: boolean
+  /** True when the file's bytes are not on this device (a cloud-only placeholder): listed from its name,
+   *  never read. Opening it hydrates it explicitly. */
+  notDownloaded?: boolean
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string

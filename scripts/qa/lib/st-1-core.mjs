@@ -88,6 +88,23 @@ export function historyEntry(tMs, outcome) {
   return { tMs, ...outcome.value }
 }
 
+/** How long History's first round trip may take with fixtures present (M2-0193). Report-only. */
+export const HISTORY_FIRST_CALL_BUDGET_MS = 250
+
+/** Per-call History latency for the report: the first call (cold open) apart from the rest, and how many
+ *  calls never settled. Report-only: it feeds no ST-1 criterion. */
+export function summarizeHistory(history) {
+  const ms = history.map((h) => h.ms).filter((v) => typeof v === 'number')
+  const first = history[0]?.ms ?? null
+  return {
+    calls: history.length,
+    hung: history.filter((h) => h.hung).length,
+    firstMs: first,
+    firstWithinBudget: first === null ? null : first < HISTORY_FIRST_CALL_BUDGET_MS && !history[0].hung,
+    maxMs: ms.length > 0 ? Math.max(...ms) : null
+  }
+}
+
 /** The pass/fail criteria. They read only the measurement, never the attribution evidence. */
 export function evaluateCriteria(row, measured, evidence) {
   const criteria = [
@@ -147,6 +164,7 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
     setupAtMs: measured.setupAtMs,
     timeline: [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs),
     history: measured.history,
+    historySummary: summarizeHistory(measured.history),
     cpuProfile: measured.profiler,
     mainLog: !attribution.mainLog
       ? null

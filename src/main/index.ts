@@ -8839,9 +8839,16 @@ function registerIpc(): void {
     assertMainWindow(e)
     return history.traceList(trace, () => (requireAuth() ? listMeetings() : Promise.resolve([])))
   })
+  // A newer keystroke supersedes the search still queued at the storage gateway.
+  let activeSearch: AbortController | null = null
   ipcMain.handle(IPC.recallSearch, (e, q: string) => {
     assertMainWindow(e)
-    return requireAuth() ? searchMeetings(String(q ?? '')) : []
+    if (!requireAuth()) return []
+    activeSearch?.abort()
+    const search = (activeSearch = new AbortController())
+    return searchMeetings(String(q ?? ''), search.signal).finally(() => {
+      if (activeSearch === search) activeSearch = null
+    })
   })
   ipcMain.handle(IPC.recallOpen, async (e, file: string) => {
     assertMainWindow(e)

@@ -1,9 +1,10 @@
-import { unlink, writeFile } from 'node:fs/promises'
+import { Lru, removeFile, writeTextFile } from './recall-io'
 import { exciseDeletedMeeting } from './brain/ingest'
 import { join, basename } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
+import type { FileClass } from './infra/storage/gateway'
 import { getSettings } from './store'
 import { detectLanguage } from '@shared/lang-id'
 import { measuredDurationMs } from '@shared/meeting-duration'
@@ -135,12 +136,22 @@ function lockedStub(file: string, label = 'Locked'): LockedMeetingSummary | null
 // that degrades linearly as the library grows, with decryption work on the main process. A stat()
 // replaces the full read+decode when the file is unchanged; any mtime/size change re-reads, and a
 // vanished file drops its entry. Saved meetings are immutable-after-write, so hits are the norm.
-// Null results (non-meeting or undecryptable files) are cached too, so they stop costing reads — but
-// a file that could not be READ at all is deliberately never cached (see UNREADABLE below).
-const readCache = new Map<string, { mtimeMs: number; size: number; read: Read | null }>()
-// Safety valve: the cache is bounded by the meetings folder size in practice, but never let a
-// pathological folder (or repeated folder switches) grow it without limit.
+// Null results (non-meeting or undecryptable files) are cached too, so they stop costing reads. A file
+// whose bytes are not on this device (dataless, unknown, or a read that timed out) is cached as its
+// 'Not downloaded' stub for NOT_LOCAL_TTL_MS, so a keystroke does not retry every such file. Any other
+// failed read (a share-lock, a transient error) is deliberately never cached (see UNREADABLE below).
+interface CacheEntry {
+  mtimeMs: number
+  size: number
+  read: Read | null
+  /** Set on a not-downloaded stub only: it lapses then, because hydration changes neither mtimeMs nor size. */
+  expiresAt?: number
+}
+// Least-recently-used, so a pathological folder (or repeated folder switches) cannot grow it without
+// limit and a full cache drops one cold entry instead of every warm one.
 const READ_CACHE_MAX = 2000
+const NOT_LOCAL_TTL_MS = 30_000
+const readCache = new Lru<CacheEntry>(READ_CACHE_MAX)
 
 /** Sentinel for "this file could not be READ at all" — an unhydrated OneDrive Files-On-Demand
  *  placeholder while offline, or an AV/EDR share-lock (the same transient conditions writeSaved
@@ -150,45 +161,68 @@ const READ_CACHE_MAX = 2000
  *  to a value nothing invalidates and the meeting would stay invisible until the app restarts. */
 const UNREADABLE = Symbol('unreadable')
 
+/** The row for a file whose bytes are not on this device: listed, never read. */
+function notDownloadedRow(file: string): Read | null {
+  const stub = lockedStub(file, 'Not downloaded')
+  return stub ? { text: '', sum: { ...stub, notDownloaded: true } } : null
+}
+
+function unavailableRow(file: string): Read | null {
+  const stub = lockedStub(file, 'Unavailable')
+  return stub ? { text: '', sum: stub } : null
+}
+
 /** Read + decode one file (async), parse its frontmatter. Null if it isn't a saved meeting.
- *  Served from readCache when the file is unchanged since the last read. */
-async function readMeeting(folder: string, file: string): Promise<Read | null> {
+ *  `fileClass` comes from the listing's one batched classify, so a file classified dataless or unknown is
+ *  answered as a 'Not downloaded' row without ever being read. Served from readCache when the file is
+ *  unchanged since the last read. */
+async function readMeeting(folder: string, file: string, fileClass: FileClass | undefined, signal?: AbortSignal): Promise<Read | null> {
   const path = join(folder, file)
-  const fileClass = (await classifyAll(storageAt(folder), [file])).get(file)
   if (!fileClass || fileClass.status === 'missing') {
     readCache.delete(path)
     return null
   }
   if (!('version' in fileClass)) {
     readCache.delete(path)
-    const stub = lockedStub(file, 'Unavailable')
-    return stub ? { text: '', sum: stub } : null
+    return unavailableRow(file)
   }
   const { mtimeMs, size } = fileClass.version
   const hit = readCache.get(path)
-  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.read
-  if (fileClass.status !== 'ok') {
-    readCache.delete(path)
-    const stub = lockedStub(file, 'Unavailable')
-    return stub ? { text: '', sum: stub } : null
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size && (hit.expiresAt === undefined || hit.expiresAt > performance.now())) return hit.read
+  const notLocal = (): Read | null => {
+    const read = notDownloadedRow(file)
+    readCache.set(path, { mtimeMs, size, read, expiresAt: performance.now() + NOT_LOCAL_TTL_MS })
+    return read
   }
-  const read = await readMeetingUncached(folder, file)
+  if (fileClass.status !== 'ok') return notLocal()
+  const read = await readMeetingUncached(folder, file, signal)
+  if (read === NOT_LOCAL) return notLocal()
   if (read === UNREADABLE) {
     // Drop any stale entry and cache nothing, so the next list/search retries the read instead of
     // serving a transient failure the user has no way to invalidate. The meeting keeps its row as a
     // stub rather than disappearing from History and search with no signal at all.
     readCache.delete(path)
-    const stub = lockedStub(file, 'Unavailable')
-    return stub ? { text: '', sum: stub } : null
+    return unavailableRow(file)
   }
-  if (readCache.size >= READ_CACHE_MAX) readCache.clear()
   readCache.set(path, { mtimeMs, size, read })
   return read
 }
 
-async function readMeetingUncached(folder: string, file: string): Promise<Read | null | typeof UNREADABLE> {
-  const raw = await storageAt(folder).read(file)
+/** Reads one listing's files: a single batched classify, then a read of each file classified local. Aborting
+ *  `signal` ends the classify and every queued read at the gateway, and the listing comes back empty. */
+async function readMeetings(folder: string, files: readonly string[], signal?: AbortSignal): Promise<Array<Read | null>> {
+  const classes = await classifyAll(storageAt(folder), files, signal)
+  if (signal?.aborted) return []
+  return Promise.all(files.map((f) => readMeeting(folder, f, classes.get(f), signal)))
+}
+
+/** The gateway says this file's bytes are not on this device (or would not arrive in time). */
+const NOT_LOCAL = Symbol('not-local')
+
+async function readMeetingUncached(folder: string, file: string, signal?: AbortSignal): Promise<Read | null | typeof UNREADABLE | typeof NOT_LOCAL> {
+  const raw = await storageAt(folder).read(file, { signal })
   if (raw.status !== 'ok') {
+    if (raw.status === 'dataless' || raw.status === 'unknown' || raw.status === 'timeout') return NOT_LOCAL
     // A THROWN read means "can't read it right now", which is not the same verdict as "not a meeting
     // file" — the caller must not cache it, and must not drop the meeting. Split out from the catch
     // below so only the read itself can produce it: decodeSaved never throws (see transcripts.ts).
@@ -242,8 +276,9 @@ export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; 
   const folder = resolveMeetingsFolder(getSettings())
   const files = await meetingFiles(folder)
   const out: Array<{ file: string; mode: string; lines: TranscriptLine[] }> = []
-  for (const f of files) {
-    const read = await readMeeting(folder, f)
+  const reads = await readMeetings(folder, files)
+  for (const [i, f] of files.entries()) {
+    const read = reads[i]
     if (!read || read.sum.locked) continue
     if (!meetingTextNeedsRecap(read.text)) continue
     const parsed = await recallRead(f)
@@ -256,8 +291,7 @@ export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; 
 /** Newest-first list of saved meetings. */
 export async function listMeetings(): Promise<MeetingSummary[]> {
   const folder = resolveMeetingsFolder(getSettings())
-  const read: Array<Read | null> = []
-  for (const f of await meetingFiles(folder)) read.push(await readMeeting(folder, f))
+  const read = await readMeetings(folder, await meetingFiles(folder))
   return read
     .filter((r): r is Read => r !== null)
     .map((r) => r.sum)
@@ -395,7 +429,7 @@ export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?
   }
   const fullPath = join(folder, safeName)
   try {
-    await unlink(fullPath)
+    await removeFile(fullPath)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
@@ -412,7 +446,7 @@ export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?
       .split('\n')
       .filter((line) => !new RegExp(`\\(${escaped}\\)`).test(line))
       .join('\n')
-    if (filtered !== raw) await writeFile(indexPath, filtered, 'utf8')
+    if (filtered !== raw) await writeTextFile(indexPath, filtered)
   } catch {
     /* index update is best-effort; never fail the delete because of it */
   }
@@ -509,7 +543,7 @@ export async function renameMeeting(
           return cells.join('|')
         })
         .join('\n')
-      if (changed) await writeFile(indexPath, updatedIndex, 'utf8')
+      if (changed) await writeTextFile(indexPath, updatedIndex)
     } catch {
       /* index update is best-effort; never fail the rename because of it */
     }
@@ -866,14 +900,14 @@ export async function deleteAllMeetings(): Promise<{
       continue
     }
     try {
-      await unlink(join(folder, file))
+      await removeFile(join(folder, file))
       deleted++
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') failed.push(file)
     }
   }
   try {
-    await unlink(join(folder, 'index.md')) // recreated fresh (header-only) on the next save
+    await removeFile(join(folder, 'index.md')) // recreated fresh (header-only) on the next save
   } catch {
     /* best-effort — a missing/unwritable index doesn't fail the overall wipe */
   }
@@ -917,11 +951,11 @@ export async function sweepExpiredMeetings(retentionDays: number): Promise<{ del
 }
 
 /** Keyword search across saved meetings; returns scored hits with a snippet. */
-export async function searchMeetings(query: string): Promise<RecallHit[]> {
+export async function searchMeetings(query: string, signal?: AbortSignal): Promise<RecallHit[]> {
   const folder = resolveMeetingsFolder(getSettings())
   const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 1)
   if (!terms.length) return []
-  const read = await Promise.all((await meetingFiles(folder)).map((f) => readMeeting(folder, f)))
+  const read = await readMeetings(folder, await meetingFiles(folder), signal)
   const hits: RecallHit[] = []
   for (const r of read) {
     if (!r) continue

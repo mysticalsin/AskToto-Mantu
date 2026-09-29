@@ -19,14 +19,14 @@ export function storageAt(root: string): StorageGateway {
   return gateway
 }
 
-export async function classifyAll(gateway: StorageGateway, relPaths: readonly string[]): Promise<Map<string, FileClass>> {
+export async function classifyAll(gateway: StorageGateway, relPaths: readonly string[], signal?: AbortSignal): Promise<Map<string, FileClass>> {
   const classes = new Map<string, FileClass>()
   for (let start = 0; start < relPaths.length; start += CLASSIFY_BATCH) {
     const batch = relPaths.slice(start, start + CLASSIFY_BATCH)
-    for (const [rel, fileClass] of await gateway.classify(batch)) classes.set(rel, fileClass)
+    for (const [rel, fileClass] of await gateway.classify(batch, { signal })) classes.set(rel, fileClass)
     const unknown = batch.filter((rel) => classes.get(rel)?.status === 'unknown')
-    if (unknown.length > 0) {
-      for (const [rel, fileClass] of await gateway.classify(unknown)) classes.set(rel, fileClass)
+    if (unknown.length > 0 && !signal?.aborted) {
+      for (const [rel, fileClass] of await gateway.classify(unknown, { signal })) classes.set(rel, fileClass)
     }
   }
   return classes

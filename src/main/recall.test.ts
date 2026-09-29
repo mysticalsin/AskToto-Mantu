@@ -1088,3 +1088,78 @@ describe('isMeetingConfidentialOnDisk — MCP push defense-in-depth', () => {
     await expect(isMeetingConfidentialOnDisk(testSettings, '../escape.md')).resolves.toBe(true)
   })
 })
+
+// M2-0193 — History list and search classify the listing once and never read a file whose bytes are not
+// on this device; a cloud-only meeting is a 'Not downloaded' row, not a hydration.
+describe('recall — dataless files are listed, never read (M2-0193)', () => {
+  let folder: string
+  let reads: string[]
+  let cloudOnly: Set<string>
+
+  beforeEach(async () => {
+    const { readdir, readFile, realpath, stat, lstat } = await import('node:fs/promises')
+    reads = []
+    cloudOnly = new Set()
+    useStorageForTests({
+      detector: { classify: async (files) => new Map(files.map((f) => [f.path, cloudOnly.has(f.path) ? 'dataless' : 'local'] as const)) },
+      fs: {
+        readdir: (p) => readdir(p),
+        readFile: (p) => {
+          reads.push(p)
+          return readFile(p)
+        },
+        realpath: (p) => realpath(p),
+        stat: (p) => stat(p),
+        lstat: (p) => lstat(p).then((s) => ({ isSymbolicLink: s.isSymbolicLink() }))
+      }
+    })
+    folder = realpathSync.native(mkdtempSync(join(tmpdir(), 'asktoto-recall-dataless-')))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const meeting = (title: string, startedAt: number): SaveMeeting => ({
+    title,
+    mode: 'meeting',
+    startedAt,
+    lines: [{ speaker: 'them', text: 'Pilot goes live in March', t: startedAt }],
+    recap: 'Pilot in March.'
+  })
+
+  it('lists a dataless meeting as a not-downloaded row without reading it, and keeps the local one whole', async () => {
+    const local = await saveMeeting(testSettings, meeting('Local sync', 1_700_000_000_000))
+    const remote = await saveMeeting(testSettings, meeting('Cloud sync', 1_700_100_000_000))
+    cloudOnly.add(remote)
+    reads.length = 0
+
+    const list = await listMeetings()
+    expect(reads).toEqual([local])
+    const row = list.find((m) => m.file === basename(remote))
+    expect(row?.notDownloaded).toBe(true)
+    expect(row?.title).toContain('Not downloaded')
+    expect(list.find((m) => m.file === basename(local))?.title).toBe('Local sync')
+  })
+
+  it('searches without reading the dataless meeting', async () => {
+    const remote = await saveMeeting(testSettings, meeting('Cloud sync', 1_700_100_000_000))
+    cloudOnly.add(remote)
+    reads.length = 0
+
+    expect(await searchMeetings('march')).toHaveLength(0)
+    expect(await searchMeetings('marc')).toHaveLength(0)
+    expect(reads).toEqual([])
+  })
+
+  it('an aborted search returns nothing and reads nothing', async () => {
+    await saveMeeting(testSettings, meeting('Local sync', 1_700_000_000_000))
+    reads.length = 0
+    const controller = new AbortController()
+    controller.abort()
+    expect(await searchMeetings('march', controller.signal)).toEqual([])
+    expect(reads).toEqual([])
+  })
+})
