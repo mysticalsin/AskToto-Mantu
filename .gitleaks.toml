@@ -41,5 +41,26 @@ regexes = [
   # Test-only placeholders that name themselves as synthetic (whole value, no random characters), so a
   # real high-entropy secret never matches; the canary token contains none of these words.
   '''^[a-z0-9_.-]*(fixture|synthetic|dummy|not-a-real|qa-only|for-tests|test-[a-z]+-key|test-admin|-example-)[a-z0-9_.-]*$''',
+  # Fixtures of the redaction, provider-detection and operator tests: each value is exactly the fake string
+  # the test feeds to the code under test, anchored whole so a real key of the same shape does not match.
+  '''^(ghp_0123456789abcdefghijABCDEFG|AKIAIOSFODNN7EXAMPLE|sk-proj-AbCdEf0123456789xyzQWERTY|sk-0123456789abcdefghijklmno)$''',
+  '''^(sk-ant-api03-abcdefghijklmnop|sk-ant-api03-verylongsecretkeyvalue|sk-ant-api03-SUPERSECRETTOKEN1234|sk-ant-abc123DEF456ghi789|sk-abc123DEF456ghi789)$''',
+  '''^(sk-proj-abcdefghijklmnopqrstuvwxyz123456|sk-dead0000000000000000000000000000000000|sk-cf-OPERATOR-VAULT-TEST-only-xx99|sk-OPENAI-OPERATOR-VAULT-TEST-only-xx99)$''',
+  '''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0In0(\.[A-Za-z0-9_-]+)?$''',
   '''^(ingest-secret|shared-secret|old-shared-secret|secret-token|fresh-token|test-token|tok-rotated|plane-tok-1|tok_(eu|us)_123|clickup-(at|rt)-1|plane-(at|rt)-[A-Za-z0-9]+|plane-secret-[A-Za-z0-9]+|fresh-ported-secret)$'''
+]
+
+# The lease-signing test fixture: the PEM private half of the DEV_LEASE_PUBLIC_KEY, base64-embedded in the two
+# lease tests so they can sign a genuine lease. Gitleaks reports the decoded PEM, so the entry needs BOTH
+# conditions: it applies only in these two files AND only to a decoded Ed25519 PKCS#8 body (the fixed
+# "MC4CAQAwBQYDK2VwBCIEI" header). A private key of any other shape, or in any other file, still fails.
+[[allowlists]]
+description = "Lease-signing test fixture key (decoded PEM), scoped to its two test files."
+condition = "AND"
+paths = [
+  '''^src/main/license\.test\.ts$''',
+  '''^src/main/license-lease-verify\.test\.ts$''',
+]
+regexes = [
+  '''MC4CAQAwBQYDK2VwBCIEI''',
 ]
