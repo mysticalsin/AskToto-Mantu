@@ -5,7 +5,7 @@
 import { operatorCallableProvider } from './provider-guard'
 import { PORTAL_CF_DEEPSEEK_PRO, resolvePortalCloudflareModel } from '../../src/shared/ask-routing'
 import { persistProxyAsk } from './ask-meter'
-import { GatewayPrivacyError, verifyDefaultGatewayPrivacy } from './ai-gateway'
+import { GatewayPrivacyError, readinessForError, verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { json } from './http'
 import { providerRefusedPayload } from './redact'
@@ -543,7 +543,7 @@ export async function handleAsk(
     })
   } catch (error) {
     if (error instanceof GatewayPrivacyError) {
-      return fail('Cloudflare gateway privacy is not verified.', 503, { code: error.code })
+      return fail('Cloudflare gateway privacy is not verified.', 503, { code: error.code, readiness: readinessForError(error) })
     }
     return fail('Operator cannot issue a use', 503)
   }

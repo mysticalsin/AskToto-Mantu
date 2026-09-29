@@ -8,6 +8,7 @@ import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
 import { brainBackfillProgress, extractionSlug, startBackfill } from './ingest'
 import { readIndex, readMeetingExtraction, writeIndex, writeMeetingExtraction } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -25,6 +26,7 @@ describe('team-transcript ingest', () => {
   let sharedRoot: string
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-team-userdata-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-team-meetings-'))
     sharedRoot = mkdtempSync(join(tmpdir(), 'asktoto-team-shared-'))
@@ -69,7 +71,7 @@ describe('team-transcript ingest', () => {
     const key = `team/alice/${file}`
     await writeMeetingExtraction(getSettings(), extractionSlug(key), MeetingExtractionSchema.parse({ title24: 'Alice sync' }))
 
-    startBackfill()
+    await startBackfill()
 
     await vi.waitFor(() => {
       // Indexed under the namespaced key — NOT the bare basename.
@@ -91,7 +93,7 @@ describe('team-transcript ingest', () => {
     await writeMeetingExtraction(getSettings(), extractionSlug(file), MeetingExtractionSchema.parse({ title24: 'My standup' }))
     await writeMeetingExtraction(getSettings(), extractionSlug(`team/bob/${file}`), MeetingExtractionSchema.parse({ title24: 'Bob standup' }))
 
-    startBackfill()
+    await startBackfill()
 
     await vi.waitFor(() => {
       const idx = readIndex(getSettings())
@@ -103,12 +105,12 @@ describe('team-transcript ingest', () => {
     expect(readMeetingExtraction(getSettings(), extractionSlug(`team/bob/${file}`))?.source_team).toBe('bob')
   })
 
-  it('ignores an unavailable team folder without failing the own-meeting scan', () => {
+  it('ignores an unavailable team folder without failing the own-meeting scan', async () => {
     writeFileSync(join(meetingsFolder, 'own.md'), '---\ndate: 2026-02-03\n---\nOwn only.', 'utf8')
     setSettings({ meetingsFolder, teamTranscriptFolders: [join(sharedRoot, 'does-not-exist')] })
 
     // OneDrive can make a shared folder briefly unavailable; the scan must stay safe (no throw).
-    expect(() => startBackfill()).not.toThrow()
+    await expect(startBackfill()).resolves.toMatchObject({ queued: 0 })
   })
 
   it('MQA-160 — an edited team transcript that already indexed OK is marked for a clean rebuild', async () => {
@@ -126,7 +128,7 @@ describe('team-transcript ingest', () => {
       ingested: { [key]: { at: Date.now(), ok: true, sourceVersion: 'stale-version' } }
     } as never)
 
-    expect(startBackfill().queued).toBe(0)
+    expect((await startBackfill()).queued).toBe(0)
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).sourceRefreshRequested).toBe(true)
     }, { timeout: 10_000 })

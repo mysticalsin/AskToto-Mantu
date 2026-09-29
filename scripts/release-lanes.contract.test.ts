@@ -22,6 +22,7 @@ const SHARED = ['release-quality']
 const MAC = ['release-macos', 'publish-macos']
 const WIN = ['release-windows', 'publish-windows']
 const DRY_RUN = ['release-dry-run']
+const DECISION = ['release-decision']
 
 function parseNeeds(value: string, job: string): string[] {
   const trimmed = value.trim()
@@ -238,7 +239,17 @@ describe('release.yml independent platform publication lanes (M2-0053)', () => {
 
   it('models every job in release.yml', () => {
     const { jobs } = modelReleaseWorkflow()
-    expect(Object.keys(jobs).sort()).toEqual([...DRY_RUN, ...SHARED, ...MAC, ...WIN].sort())
+    expect(Object.keys(jobs).sort()).toEqual([...DRY_RUN, ...DECISION, ...SHARED, ...MAC, ...WIN].sort())
+  })
+
+  it('the computed release decision stands alone: it needs no job and gates no publication (M2-0171)', () => {
+    const { jobs } = modelReleaseWorkflow()
+    expect(jobs['release-decision'].condition).toBe("github.event_name == 'push'")
+    expect(jobs['release-decision'].needs).toEqual([])
+    expect(jobs['release-decision'].uploads).toEqual(['release-decision'])
+    for (const [name, job] of Object.entries(jobs)) {
+      expect(job.needs, `${name} must not wait on the decision`).not.toContain('release-decision')
+    }
   })
 
   it('keeps a manual dry-run lane for proving the contract without publishing', () => {

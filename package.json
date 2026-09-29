@@ -24,7 +24,7 @@
     "check:packaged-runtime": "node scripts/check-packaged-runtime.mjs",
     "check:update-metadata": "node scripts/check-update-metadata.mjs",
     "check:built-offline": "node scripts/check-built-offline.mjs",
-    "prebuild": "node scripts/ensure-electron-runtime.mjs --check-only && node scripts/check-no-dynamic-import.mjs && node scripts/check-offline-package.mjs && node scripts/ensure-intelligence-bundle.mjs",
+    "prebuild": "node scripts/ensure-electron-runtime.mjs --check-only && node scripts/check-no-dynamic-import.mjs && node scripts/check-offline-package.mjs && node scripts/ensure-intelligence-bundle.mjs && node scripts/make-tray-icons.mjs",
     "build": "electron-vite build",
     "postbuild": "node scripts/check-built-offline.mjs",
     "preview": "node scripts/ensure-electron-runtime.mjs --check-only && electron-vite preview",
@@ -88,6 +88,7 @@
     "check:skips": "node scripts/check-skipped-tests.mjs",
     "check:cf-key": "node scripts/check-cloudflare-key-valid.mjs",
     "check:scratch-paths": "node operator/scripts/check-no-scratch-paths.mjs",
+    "check:operator-bundle": "node operator/scripts/check-worker-bundle.mjs",
     "rotate:embedded-keys": "node scripts/rotate-embedded-keys.mjs"
   },
   "comment": "Only main-process runtime deps live in 'dependencies' (electron-builder bundles these into the app). All renderer deps are bundled by Vite at build time and kept in devDependencies to keep the package small.",
