@@ -4,6 +4,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 
 const root = join(__dirname, '../..')
@@ -27,7 +28,7 @@ const geometry = readFileSync(join(root, 'src/main/island/geometry.ts'), 'utf8')
 const jarvis = readFileSync(join(root, 'src/renderer/src/lib/jarvis-orb.ts'), 'utf8')
 const flow = readFileSync(join(root, 'src/renderer/src/lib/onboarding-flow.ts'), 'utf8')
 const kinetic = readFileSync(join(root, 'src/renderer/src/lib/onboarding-kinetic-grid.ts'), 'utf8')
-const css = readFileSync(join(root, 'src/renderer/src/styles.css'), 'utf8')
+const css = readAppCss()
 
 describe('KineticGrid release checklist', () => {
   it('1 KineticGrid after lady, no Skip, Ready-only done, no rotating stripe wash', () => {

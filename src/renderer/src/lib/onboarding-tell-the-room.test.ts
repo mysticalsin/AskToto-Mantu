@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import {
   TELL_THE_ROOM_CHECKBOX,
@@ -11,7 +12,7 @@ import {
 } from './onboarding-tell-the-room'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 const copy = readFileSync(join(__dirname, './onboarding-tell-the-room.ts'), 'utf8')
 
 function stripComments(src: string): string {

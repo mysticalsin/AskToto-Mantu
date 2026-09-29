@@ -1,0 +1,201 @@
+/* Animated rainbow contour — shown around the ask bar while the agent is working (replaces the old
+   stop-square as the "thinking" signal). A rotating conic-gradient is masked to a thin border ring so
+   only the outline is colored; the input/buttons inside stay untouched. pointer-events:none so it
+   never intercepts clicks. */
+@property --rainbow-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes cl-rainbow-spin {
+  to {
+    --rainbow-angle: 360deg;
+  }
+}
+.rainbow-ring {
+  position: relative;
+}
+.rainbow-ring::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--rainbow-angle),
+    #ff3b30,
+    #ff9500,
+    #34c759,
+    #32ade6,
+    #007aff,
+    #af52de,
+    #ff2d55,
+    #ff3b30
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: cl-rainbow-spin 2.6s linear infinite;
+  /* Stepped instead of continuous — repaints ~9x/s instead of every frame; still reads as rotating. */
+  animation-timing-function: steps(24, end);
+  pointer-events: none;
+  z-index: var(--z-ring);
+}
+
+/* QuickActions chips are a true `rounded-full` pill — the end-caps clamp to a tight semicircle, and at
+   that curvature the mask-composite cutout above is unstable in Chromium (visible as stray pixels from
+   the conic-gradient's color stops, most noticeably green, flickering through). A prior attempt tried to
+   keep the ::before pseudo-element and hide it behind the chip via z-index:-1 — but `.glass-chip.rainbow-
+   ring` has no isolated stacking context (just `position: relative`, no `isolation`/z-index of its own),
+   so that negative z-index wasn't reliably contained to this one chip; it could still peek through
+   depending on paint order, which read as the same glitch. Real fix: drop the pseudo-element entirely for
+   this case and paint the ring as a second `background-image` layer on the chip itself, clipped to the
+   border-box while the chip's own fill/scrim stay clipped to the padding-box — a plain multi-layer
+   background paint has no masking, no z-index, no stacking-context ambiguity to get wrong. */
+.glass-chip.rainbow-ring::before {
+  content: none;
+}
+.glass-chip.rainbow-ring {
+  border: 1.5px solid transparent;
+  background-image:
+    linear-gradient(var(--glass-fill), var(--glass-fill)),
+    linear-gradient(var(--glass-scrim-bar), var(--glass-scrim-bar)),
+    conic-gradient(
+      from var(--rainbow-angle),
+      #ff3b30,
+      #ff9500,
+      #34c759,
+      #32ade6,
+      #007aff,
+      #af52de,
+      #ff2d55,
+      #ff3b30
+    );
+  background-origin: padding-box, padding-box, border-box;
+  background-clip: padding-box, padding-box, border-box;
+  animation: cl-rainbow-spin 2.6s linear infinite;
+  /* Stepped instead of continuous — repaints ~9x/s instead of every frame; still reads as rotating. */
+  animation-timing-function: steps(24, end);
+}
+
+/* "Hidden from screen sharing" (stealth ON = contentProtection on) indicator — a multi-colour aurora
+   GLOW around the whole overlay so the user can see at a glance that Métis won't appear on a screen
+   they share or record. Toggled by the bar's eye button. Two layers: a crisp masked conic-gradient RIM
+   right on the edge, and a soft coloured HALO that spills outward past it (the "glow").
+
+   Why box-shadow for the halo and not a blurred pseudo-element: .aw-widget is `overflow:hidden` (for its
+   rounded blur backdrop), which clips every child/pseudo — a ::after halo would be cut off at the edge.
+   Only the element's OWN box-shadow is painted by the parent, OUTSIDE that clip, so it is the one thing
+   that can spill past the widget. The overlay root adds breathing room while stealth is on (App.tsx
+   `stealth-glow`) so the halo isn't clipped at the window boundary in turn.
+
+   Static, not spinning: an always-on indicator must never burn a per-frame repaint — animating the
+   conic angle or the box-shadow every frame is exactly the paint-storm this file fights elsewhere. A
+   rich static halo reads as a glow without one. */
+.aw-hidden-rainbow {
+  position: relative;
+  /* Brand-violet core, cyan + magenta flanks → "multi-colour" without a per-frame gradient. Reaches
+     ~34px, which the stealth-glow root padding leaves room for. */
+  box-shadow:
+    0 0 0 1.5px rgba(175, 82, 222, 0.6),
+    0 0 12px 0 rgba(175, 82, 222, 0.85),
+    0 0 20px 2px rgba(127, 0, 218, 0.6),
+    0 0 24px 4px rgba(50, 173, 230, 0.45),
+    0 0 28px 6px rgba(255, 45, 85, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.aw-hidden-rainbow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 2.5px;
+  background: conic-gradient(
+    from var(--rainbow-angle),
+    #ff3b30,
+    #ff9500,
+    #34c759,
+    #32ade6,
+    #007aff,
+    #af52de,
+    #ff2d55,
+    #ff3b30
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: var(--z-ring);
+  filter: saturate(1.25);
+  opacity: 1;
+  /* A slow, gentle breathe so the rim reads as "alive" without a repaint storm. opacity is a
+     compositor-only property (its own layer), so this animates on the GPU — no per-frame paint,
+     unlike the conic-angle spin this indicator used to run. */
+  animation: aw-hidden-breathe 4.2s ease-in-out infinite;
+}
+@keyframes aw-hidden-breathe {
+  0%,
+  100% {
+    opacity: 0.82;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aw-hidden-rainbow::before {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* Act 2 (Demo) synthetic cursor (MQA-277) — a small drawn pointer the onboarding demo moves to (and
+   really clicks) the "What to say next" / "Fact-check" chips, so the scripted meeting reads as
+   something guiding YOUR attention rather than the UI changing on its own. Position is set every rAF
+   frame from JS (OnboardingDemoScene.tsx, via the pure easing in lib/synthetic-cursor.ts) as an inline
+   `transform: translate(x, y)` — no CSS transition on transform here, which would fight that per-frame
+   value and lag a full frame behind the measured target. The click itself gets a one-shot expanding
+   ring (same "static end-state, ::before/::after created fresh on mount" trick as .rec-dot's
+   mic-burst above), and the whole cursor is never rendered at all under prefers-reduced-motion — the
+   component checks the media query itself and skips straight to a static demo, matching Act 1's rule. */
+.demo-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-accent-2);
+  box-shadow:
+    0 0 0 3px rgba(127, 0, 218, 0.28),
+    0 2px 10px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 40;
+}
+@keyframes demo-cursor-click {
+  from {
+    transform: scale(0.5);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+.demo-cursor-press::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid var(--color-accent-2);
+  animation: demo-cursor-click 420ms ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .demo-cursor {
+    display: none;
+  }
+}

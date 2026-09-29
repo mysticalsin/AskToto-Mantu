@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -8,7 +9,7 @@ import { RightEdgeSidecar, SidecarChat, dockEscapeHides } from './RightEdgeSidec
 const sidecar = readFileSync(join(__dirname, './RightEdgeSidecar.tsx'), 'utf8')
 const answer = readFileSync(join(__dirname, './Answer.tsx'), 'utf8')
 const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 const e2eSmoke = readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8')
 
 function findElement(node: ReactNode, type: string): ReactElement<Record<string, unknown>> | null {

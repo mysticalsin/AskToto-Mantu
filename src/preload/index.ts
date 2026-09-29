@@ -62,6 +62,8 @@ import {
   type ImportAudioProgress,
   type ImportAssetsProgress,
   type HistorySettled,
+  type AppleEngineStatus,
+  type WriteupSpanPayload,
   type HistoryTrace,
   type RendererCrashReport,
   type AsrAssetsStatus,
@@ -440,7 +442,11 @@ const api = {
   // Fire-and-forget: keep the local sidecar's per-slot KV cache hot while a meeting is live (PLAN.md
   // §4.4's pre-warm path). The renderer never learns the sidecar's port/key — this only ever sends
   // transcript text; main resolves the runtime/model/session key on its own.
-  localPrewarm: (text: string): Promise<void> => ipcRenderer.invoke(IPC.localPrewarm, { text }),
+  localPrewarm: (text: string, purpose?: 'summary'): Promise<void> =>
+    ipcRenderer.invoke(IPC.localPrewarm, purpose ? { text, purpose } : { text }),
+  localAppleEngineStatus: (): Promise<AppleEngineStatus> => ipcRenderer.invoke(IPC.localAppleEngineStatus),
+  // Content-free post-meeting latency span (M2-0430): a span name and a millisecond count, nothing else.
+  reportWriteupSpan: (report: WriteupSpanPayload): Promise<void> => ipcRenderer.invoke(IPC.writeupSpan, report),
 
   resize: (height: number, width?: number): Promise<void> =>
     ipcRenderer.invoke(IPC.windowResize, { height, width }),
