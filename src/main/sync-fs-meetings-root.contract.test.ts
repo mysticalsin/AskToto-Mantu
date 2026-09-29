@@ -55,28 +55,11 @@ const syncNames = [
 
 const syncNameSet = new Set<string>(syncNames)
 
-const FILES = [
-  'transcripts.ts',
-  'brain/ingest.ts',
-  'brain/inputs.ts',
-  'brain/consolidate.ts',
-  'brain/intelligence-index.ts',
-  'brain/intelligence-work.ts',
-  'brain/intelligence-pass.ts',
-  'brain/corrections.ts',
-  'brain/store.ts',
-  'brain/match-key-cache.ts',
-  'recall.ts',
-  'history-actions.ts'
-] as const
-
-type TargetFile = typeof FILES[number]
-
 /**
- * Accepted sync node:fs call sites as of the M2-0031 gateway migration seed.
+ * Accepted sync node:fs call sites as of the M2-0031 gateway migration seed; its keys are the scanned files.
  * Only ever revise an entry DOWNWARD when that file is migrated further; never raise it.
  */
-const BASELINE: Record<TargetFile, number> = {
+const BASELINE = {
   'transcripts.ts': 27,
   'brain/ingest.ts': 0,
   'brain/inputs.ts': 0,
@@ -89,7 +72,11 @@ const BASELINE: Record<TargetFile, number> = {
   'brain/match-key-cache.ts': 4,
   'recall.ts': 0,
   'history-actions.ts': 0
-}
+} satisfies Record<string, number>
+
+type TargetFile = keyof typeof BASELINE
+
+const FILES = Object.keys(BASELINE) as TargetFile[]
 
 const GATEWAY_MIGRATED_ZERO_FILES = [
   'brain/ingest.ts',

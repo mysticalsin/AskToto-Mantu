@@ -78,6 +78,22 @@ describe.skipIf(process.platform === 'win32')('storageAt shares one admission ac
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
   }, 20_000)
+})
+
+describe('storageAt keys gateways by resolved root', () => {
+  let rootA: string
+  let rootB: string
+
+  beforeEach(() => {
+    useStorageForTests()
+    rootA = mkdtempSync(join(tmpdir(), 'meetings-storage-a-'))
+    rootB = mkdtempSync(join(tmpdir(), 'meetings-storage-b-'))
+  })
+
+  afterEach(() => {
+    rmSync(rootA, { recursive: true, force: true })
+    rmSync(rootB, { recursive: true, force: true })
+  })
 
   it('two spellings of one folder get the same gateway', () => {
     expect(storageAt(rootA + sep)).toBe(storageAt(rootA))
