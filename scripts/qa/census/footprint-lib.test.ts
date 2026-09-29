@@ -153,4 +153,3 @@ describe('runWithTempPeak', () => {
     expect(directoryBytes(join(root, 'scratch')).bytes).toBe(0)
   })
 })
-})

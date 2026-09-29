@@ -102,6 +102,7 @@ export function findDuplicates(root, { minBytes = DEFAULT_DUPLICATE_MIN_BYTES } 
 /**
  * Runs a command with TEMP/TMP/TMPDIR pointed at tempDir and polls that directory, so the bytes an installer
  * unpacks and later deletes are captured. peakBytes is the largest sample, including one taken at exit.
+ * @param {{ command: string, args?: string[], tempDir: string, intervalMs?: number }} options
  */
 export async function runWithTempPeak({ command, args = [], tempDir, intervalMs = 100 }) {
   const dir = resolve(tempDir)
