@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "ticket_id": "M2-0213",
+  "note": "Slots run in order. A scene slot resolves to the source of the scene's active variant in storyboard.json; a cut scene contributes its bridge scene, or nothing. Swapping a concept shot for its rc1 live twin means changing the scene's active_variant, never the slots.",
+  "slots": [
+    { "id": "S01", "non_product": "NP-01" },
+    { "id": "S02", "scene_id": "LF-01" },
+    { "id": "S03", "scene_id": "LF-02" },
+    { "id": "S04", "scene_id": "LF-03" },
+    { "id": "S05", "scene_id": "LF-04" },
+    { "id": "S06", "scene_id": "LF-05" },
+    { "id": "S07", "scene_id": "LF-06" },
+    { "id": "S08", "non_product": "NP-04" }
+  ]
+}
