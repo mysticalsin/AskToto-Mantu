@@ -33,7 +33,7 @@ regexes = [
   # The fixture the redaction unit tests use (src/shared/redact.test.ts), and when a doc quotes it.
   '''^['"]?ABCDEF123456['"]?$''',
   # The license-server test fixture key (license-server/ops.test.mjs), and when a doc quotes it.
-  '''^ATK-HY2JVMZ3P3JF8CGAQWPR$''',
+  '''^ATK-(HY2JVMZ3P3JF8CGAQWPR|7QHM2K9X3VBN8ZC1FGJ0)$''',
   # Operator seat-token fixtures: the fixed "METIS-OP-1.<word>" placeholders and the one long sample token
   # the HMAC/transport tests share. Anchored to the whole value; a real seat token has a different shape.
   '''^METIS-OP-1\.(fixture|test|old|new|replacement|licensed-seat)$''',
