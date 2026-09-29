@@ -2,6 +2,9 @@
  * State list of the design-capture surface, with neutral sample data only. The capture job reads
  * `DESIGN_STATE_IDS` from the running page, so this list is the single source of what gets screenshotted.
  * These are placeholder states for the capture pipeline, not the M2-0201 prototype state list.
+ *
+ * BLOCKED_EXTERNAL: the lead supplies the M2-0201 prototype manifest state ids from the program tracker; they
+ * replace `DESIGN_STATES` in this file one to one before the capture job's artifact is filed as M2-0201 evidence.
  */
 export type DesignPhase = 'idle' | 'listening'
 

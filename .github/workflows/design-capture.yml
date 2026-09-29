@@ -1,8 +1,12 @@
 name: Design capture
 
-# Renders every design-capture state (src/renderer/src/design-capture) in the real Electron renderer on the
-# hosted macOS and Windows runners: light and dark, 1x and 2x, motion and reduced motion. Each job uploads
-# the PNGs with manifest.json (state id, sha256, commit) as an artifact; the lead files that evidence.
+# Renders every state in the design-capture list (src/renderer/src/design-capture) in the real Electron
+# renderer on the hosted macOS and Windows runners: light and dark, 1x and 2x, motion and reduced motion.
+# Each job uploads the PNGs with manifest.json (state id, sha256, commit) as an artifact; the lead files
+# that evidence.
+#
+# The current states are pipeline placeholders. BLOCKED_EXTERNAL: the M2-0201 prototype state ids come from
+# the program tracker and replace them one to one before the artifact is filed as M2-0201 evidence.
 #
 # On demand only: gh workflow run design-capture.yml --ref <branch>. The QA-only renderer entry is built
 # here with METIS_DESIGN_CAPTURE=1 and is excluded from every installer (electron-builder*.yml), so this
