@@ -1,0 +1,218 @@
+name: verification-baseline
+
+# M2-0425 — measures the verification baseline of commit 2bf21f1c under the hermetic harness. Dispatch only:
+# nothing here runs on push or pull_request, and nothing here gates a merge.
+#
+# The baseline predates the hermetic harness (M2-0001 sandboxed vitest; M2-0190 extended it to swift test,
+# license-server and the honeypot check), and a run of the raw baseline resolved the developer's real
+# meetings folder. So this workflow checks the baseline out into `baseline/`, applies ONLY the two harness
+# changes as patches taken from this repository's history, and runs every gate against that tree. No other
+# file of the baseline is changed, so each gate measures the baseline's own code.
+#
+# The overlay is `git apply`, not a file copy: a harness file whose baseline pre-image differs from what the
+# harness commit expected makes `git apply --check` fail and the run stop before any gate executes.
+#
+# Every gate runs through gate() (written to baseline-out/gate.sh): it records the exit code and a log and
+# always returns 0, so one red gate never hides the others. The summary step fails the job only when a gate
+# left no exit code, i.e. when the harness itself broke. A red gate is a baseline number, not a failed run.
+#
+# The lead dispatches this after merge and files the artifact into the baseline document; the run itself
+# is LOCALLY_TESTED evidence at most.
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: >-
+          Full SHA of the baseline commit. The default is the commit the M2-0005 design names. If it cannot be
+          fetched, 22d1fbadea6493f8b0ab7b1b7ada3a4acb86331f (on main) has the identical tree; the tree check
+          below accepts either and rejects any other tree.
+        required: false
+        default: 2bf21f1ceefe117838325342574b57852e5cadcb
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_TREE: 945c28fb6938712bf6c52bccfc8d31591aea9ced
+  # M2-0001: sandboxed vitest configs, electron mock, isolation test.
+  HARNESS_COMMIT_1: 56677e7df2b3106f23bee7491d1e4c9bfa9035fb
+  # M2-0190: swift test wrapper, license-server wrapper, honeypot, sandbox guard.
+  HARNESS_COMMIT_2: 6579470314320924d049baedea9858be54afffb5
+
+jobs:
+  baseline:
+    name: Baseline gates (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Patches are generated and applied as LF on every OS, or `git apply` would reject them on Windows.
+      - run: git config --global core.autocrlf false
+      - name: Check out the harness (this repository's default branch)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: harness
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out the baseline commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: baseline
+          ref: ${{ inputs.baseline_ref }}
+          persist-credentials: false
+      - name: Assert the baseline tree is the one M2-0005 names
+        run: |
+          actual="$(git -C baseline rev-parse 'HEAD^{tree}')"
+          if [ "$actual" != "$BASELINE_TREE" ]; then
+            echo "::error::baseline tree is $actual, expected $BASELINE_TREE"; exit 1
+          fi
+      - name: Overlay the M2-0001 and M2-0190 harness files, and nothing else
+        run: |
+          set -euo pipefail
+          mkdir -p baseline-out
+          for c in "$HARNESS_COMMIT_1" "$HARNESS_COMMIT_2"; do
+            git -C harness merge-base --is-ancestor "$c" HEAD \
+              || { echo "::error::harness commit $c is not in this repository's history"; exit 1; }
+          done
+
+          apply_overlay() {
+            local name="$1" commit="$2"; shift 2
+            git -C harness diff --binary "$commit^1" "$commit" -- "$@" > "baseline-out/overlay-$name.patch"
+            [ -s "baseline-out/overlay-$name.patch" ] \
+              || { echo "::error::overlay $name is empty"; exit 1; }
+            git -C baseline apply --check --whitespace=nowarn "../baseline-out/overlay-$name.patch" \
+              || { echo "::error::overlay $name does not apply to the baseline"; exit 1; }
+            git -C baseline apply --whitespace=nowarn "../baseline-out/overlay-$name.patch"
+          }
+
+          apply_overlay m2-0001 "$HARNESS_COMMIT_1" \
+            __mocks__/electron.ts \
+            cloudflare-proxy/vitest.config.ts \
+            operator/scripts/vitest.config.ts \
+            operator/vitest.config.ts \
+            src/main/test-hermetic-home.test.ts \
+            vitest.config.ts
+          # Applied second: its vitest.config.ts hunk is written against the M2-0001 result.
+          apply_overlay m2-0190 "$HARNESS_COMMIT_2" \
+            license-server/hermetic-home.test.mjs \
+            license-server/package.json \
+            native-app/MetisKit/Tests/MetisKitTests/HermeticHomeTests.swift \
+            scripts/hermetic \
+            scripts/qa/lib \
+            vitest.config.ts
+          git -C baseline status --short | tee baseline-out/overlay-files.txt
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: |
+            baseline/package-lock.json
+            baseline/license-server/package-lock.json
+      - run: npm ci
+        working-directory: baseline
+      - run: npm ci
+        working-directory: baseline/license-server
+      # The browser-backed layout test needs the binary, which `npm ci` does not install.
+      - name: Install Playwright Chromium
+        working-directory: baseline
+        run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
+      # Real-home honeypots the gates must never touch. detectOneDrive()'s macOS-shaped path is checked on
+      # every platform, and ~/OneDrive is the bare fallback.
+      - name: Seed real-home honeypots
+        run: |
+          bash baseline/scripts/hermetic/honeypot.sh seed "$HOME/Library/CloudStorage/OneDrive-Honeypot"
+          bash baseline/scripts/hermetic/honeypot.sh seed "$HOME/OneDrive"
+      - name: Write the gate runner
+        run: |
+          cat > baseline-out/gate.sh <<'GATE'
+          # gate <name> <dir> <command...> — runs <command> in <dir> (relative to the workspace), records
+          # its exit code, duration and log under baseline-out/, and returns 0 whatever the command did.
+          gate() {
+            local name="$1" dir="$2"; shift 2
+            local started code
+            mkdir -p baseline-out/gates baseline-out/logs
+            started="$(date +%s)"
+            ( cd "$dir" && "$@" ) > "baseline-out/logs/$name.log" 2>&1 && code=0 || code=$?
+            echo "$code" > "baseline-out/gates/$name.exit"
+            echo "$(( $(date +%s) - started ))" > "baseline-out/gates/$name.seconds"
+            echo "::group::gate $name exited $code (last 60 log lines)"
+            tail -n 60 "baseline-out/logs/$name.log"
+            echo "::endgroup::"
+            return 0
+          }
+          GATE
+      - name: Gate — typecheck
+        run: source baseline-out/gate.sh && gate typecheck baseline npm run typecheck
+      - name: Gate — mode-skills lock
+        run: source baseline-out/gate.sh && gate mode-skills-lock baseline node scripts/lock-mode-skills.mjs --check
+      - name: Gate — check:bugs
+        run: source baseline-out/gate.sh && gate check-bugs baseline npm run check:bugs
+      # The three suites write the Vitest JSON that is uploaded; check:skips reads the root one.
+      - name: Gate — root tests
+        run: |
+          source baseline-out/gate.sh
+          gate tests-root baseline npx vitest run --reporter=default --reporter=json --outputFile.json=../baseline-out/vitest-root.json
+      - name: Gate — proxy tests
+        run: |
+          source baseline-out/gate.sh
+          gate tests-proxy baseline npx vitest run --config cloudflare-proxy/vitest.config.ts --reporter=default --reporter=json --outputFile.json=../baseline-out/vitest-proxy.json
+      - name: Gate — operator tests
+        run: |
+          source baseline-out/gate.sh
+          gate tests-operator baseline npx vitest run --config operator/vitest.config.ts --reporter=default --reporter=json --outputFile.json=../baseline-out/vitest-operator.json
+      # Reads the root report above. check:skips re-runs the whole suite when handed a missing report, so a
+      # missing report is a failure here rather than a silent second run.
+      - name: Gate — check:skips
+        run: |
+          source baseline-out/gate.sh
+          gate check-skips baseline bash -c '[ -f ../baseline-out/vitest-root.json ] || { echo "no root Vitest report: tests-root produced none"; exit 1; }; npm run check:skips -- ../baseline-out/vitest-root.json'
+      - name: Gate — license-server node --test
+        run: source baseline-out/gate.sh && gate license-server baseline/license-server npm test
+      # Never bare `swift test`: the wrapper provides the sandboxed HOME that HermeticHomeTests asserts.
+      - name: Gate — MetisKit swift test
+        if: runner.os == 'macOS'
+        run: source baseline-out/gate.sh && gate metiskit-swift-test baseline bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
+      - name: Gate — honeypots untouched
+        run: |
+          source baseline-out/gate.sh
+          gate honeypots baseline bash -c 'bash scripts/hermetic/honeypot.sh check "$HOME/Library/CloudStorage/OneDrive-Honeypot" && bash scripts/hermetic/honeypot.sh check "$HOME/OneDrive"'
+      - name: Summarise the gates
+        if: always()
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+        run: |
+          expected="typecheck mode-skills-lock check-bugs tests-root tests-proxy tests-operator check-skips license-server honeypots"
+          if [ "$RUNNER_OS" = "macOS" ]; then expected="$expected metiskit-swift-test"; fi
+
+          missing=""
+          {
+            echo "### Baseline gates on ${RUNNER_OS} (baseline ${BASELINE_REF})"
+            echo
+            echo "| Gate | Exit code | Seconds |"
+            echo "|---|---|---|"
+            for g in $expected; do
+              if [ -f "baseline-out/gates/$g.exit" ]; then
+                echo "| $g | $(cat "baseline-out/gates/$g.exit") | $(cat "baseline-out/gates/$g.seconds") |"
+              else
+                echo "| $g | NOT RUN | - |"
+                missing="$missing $g"
+              fi
+            done
+          } | tee baseline-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$missing" ]; then
+            echo "::error::gates that never recorded an exit code:$missing"; exit 1
+          fi
+      - name: Upload the baseline evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: baseline-${{ matrix.os }}
+          path: baseline-out
+          if-no-files-found: error
