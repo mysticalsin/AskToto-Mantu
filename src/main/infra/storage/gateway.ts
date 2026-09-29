@@ -364,8 +364,8 @@ export function createStorageGateway({
   async function readLocal(base: string, path: string, request: Request, { hydrate, onProgress }: ReadOptions): Promise<LocalRead> {
     const stated = await statFile(path, request)
     if (stated.status !== 'ok') return { result: stated, rememberUnavailable: stated.status === 'unavailable' }
-    // An explicit open never reads a FIFO, socket or device: it would hold a pool thread until the peer appears.
-    if (hydrate && !stated.value.regular) return { result: { status: 'unavailable', code: 'NOT_REGULAR' }, rememberUnavailable: false }
+    // No read, listing or explicit open, touches a FIFO, socket or device: it would hold a pool thread until the peer appears.
+    if (!stated.value.regular) return { result: { status: 'unavailable', code: 'NOT_REGULAR' }, rememberUnavailable: false }
     const version = versionOf(stated.value.file)
     if (!hydrate) {
       const presence = (await presenceWithin([stated.value.file], request)).get(path)
