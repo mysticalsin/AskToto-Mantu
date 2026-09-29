@@ -442,6 +442,64 @@ jobs:
           if-no-files-found: warn
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
+  # Report-only measurement (M2-0433), never a gate: the window constructor's cost per chrome configuration, both
+  # launches on one runner so the numbers compare. A first-run profile builds the opaque exclusive onboarding
+  # window; an onboarded bar profile builds the transparent overlay. Each report's bootStages carries
+  # createWindow.construct and createWindow.firstShow for its launch.
+  st1-mac-window:
+    name: ST-1 window construction per chrome (report-only)
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - name: Verify every byte against the provenance
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+      - name: Measure the opaque first-run window
+        continue-on-error: true
+        run: |
+          mkdir -p st1-report
+          node scripts/qa/st-1.mjs \
+            --installer "$(find assets -maxdepth 1 -name '*.zip' -print -quit)" \
+            --provenance provenance/provenance.json \
+            --fixtures none \
+            --minutes 1 \
+            --out st1-report/st-1-macos-window-opaque.json
+      - name: Measure the transparent overlay window
+        continue-on-error: true
+        run: |
+          mkdir -p st1-report onboarded-profile
+          # The durable settings of a user who finished onboarding with the bar layout (plain JSON is a supported read path).
+          printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
+          node scripts/qa/st-1.mjs \
+            --installer "$(find assets -maxdepth 1 -name '*.zip' -print -quit)" \
+            --provenance provenance/provenance.json \
+            --fixtures none \
+            --profile-template onboarded-profile \
+            --minutes 1 \
+            --out st1-report/st-1-macos-window-transparent.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: st-1-macos-window
+          path: st1-report/
+          if-no-files-found: warn
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
   st1-windows-external:
     name: ST-1-W external unblock record
     needs: provenance
