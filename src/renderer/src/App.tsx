@@ -718,7 +718,9 @@ export function App(): JSX.Element {
     forceParkAfterHideRef.current = true
     setRightEdgeDockDismissed(true)
     dispatchAutoHide({ type: 'collapse-now' })
-  }, [])
+    // Auto-hide is off while a capture runs, so no exit spring will request this park: request it now.
+    if (!overlayIdle) parkCurrentOverlayAfterHide()
+  }, [overlayIdle, parkCurrentOverlayAfterHide])
   useEffect(() => {
     dispatchAutoHide({ type: 'set-enabled', enabled: overlayIdle })
   }, [overlayIdle])
@@ -897,6 +899,12 @@ export function App(): JSX.Element {
         setRightEdgeDockDismissed(false)
         dispatchAutoHide({ type: 'reveal-now' })
       } else {
+        // Main parked a dock the page still shows open: render the rail now (draft kept), not a clipped drawer.
+        if (d.parked && rightEdgePresentation && overlayRevealedRef.current) {
+          wasRevealedRef.current = false
+          setRightEdgeDockDismissed(true)
+          setOverlaySpring('rest')
+        }
         dispatchAutoHide({ type: 'pointer-leave' })
       }
     })
@@ -3072,6 +3080,12 @@ export function App(): JSX.Element {
         setView(listen.listening ? 'copilot' : 'answer')
         setCollapsed(false)
         setFocusSignal((x) => x + 1)
+        // A summoned right-edge dock opens at once with the composer focused, even after an explicit Hide.
+        if (rightEdgePresentation) {
+          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-reveal' })
+          setRightEdgeDockDismissed(false)
+          dispatchAutoHide({ type: 'reveal-now' })
+        }
       })
     } else if (a === 'hide') {
       // toggle(), not hide(): Desk Tap Control is the only caller that reaches this branch (the keyboard
@@ -3191,6 +3205,9 @@ export function App(): JSX.Element {
       setView('answer')
     } else if (!collapsed) {
       setCollapsed(true)
+    } else if (rightEdgePresentation) {
+      // A hidden right-edge window would reopen from the band; park it like the dock's Hide control.
+      closeRightEdgeDock()
     } else {
       void window.toto.hide()
     }
@@ -3982,7 +3999,8 @@ export function App(): JSX.Element {
             open={false}
             onOpen={revealOverlay}
             onClose={closeRightEdgeDock}
-            canClose={overlayIdle && !autoHideForced}
+            canClose={rightEdgeDockVisible}
+            focusSignal={focusSignal}
             commandState={commandState}
             value={input}
             onChange={setInput}
@@ -4046,7 +4064,8 @@ export function App(): JSX.Element {
               open={true}
               onOpen={revealOverlay}
               onClose={closeRightEdgeDock}
-              canClose={overlayIdle && !autoHideForced}
+              canClose={rightEdgeDockVisible}
+              focusSignal={focusSignal}
               commandState={commandState}
               value={input}
               onChange={setInput}

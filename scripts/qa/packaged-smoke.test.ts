@@ -5,6 +5,12 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
+  hoverWatchRestRect,
+  parkAfterExclusiveOnboarding,
+  rightEdgeSidecarBounds,
+  type DisplayMetrics
+} from '../../src/main/island/geometry'
+import {
   LIFECYCLE_EVENTS,
   buildWindowsShortcutLauncher,
   NAVIGATION_GUARD_BOOTSTRAP_PATCH,
@@ -17,6 +23,9 @@ import {
   readObservationTail,
   initialRvRows,
   initialNavigationGuardRows,
+  initialRightEdgeHideRows,
+  rightEdgeExpectedRects,
+  rightEdgeStateMatches,
   runRevealRow,
   seedOnboardedProfile,
   smokeReport,
@@ -62,6 +71,13 @@ interface Observation {
     id: string
     state: string
     entry: string
+    status: string
+    evidence: Record<string, unknown> | null
+    unblock: string | null
+  }>
+  rightEdgeHide?: Array<{
+    id: string
+    layout: string
     status: string
     evidence: Record<string, unknown> | null
     unblock: string | null
@@ -177,6 +193,11 @@ function goodObservation(): Observation {
       status: 'PASS',
       evidence: { observed: true }
     })),
+    rightEdgeHide: initialRightEdgeHideRows().map((row) => ({
+      ...row,
+      status: 'PASS',
+      evidence: { observed: true }
+    })),
     survivors: [],
     survivorsGoneMs: 300
   }
@@ -239,6 +260,16 @@ describe('smokeVerdict', () => {
       'an automated navigation guard row never completed after renderer readiness',
       (o) => { o.navigationGuard[0] = { ...o.navigationGuard[0], status: 'PENDING', evidence: null } },
       'navigation_guard_incomplete'
+    ],
+    [
+      'an automated right-edge Hide row failed',
+      (o) => { o.rightEdgeHide![0] = { ...o.rightEdgeHide![0], status: 'FAIL', evidence: null } },
+      'right_edge_hide_failed'
+    ],
+    [
+      'an automated right-edge Hide row never completed after renderer readiness',
+      (o) => { o.rightEdgeHide![0] = { ...o.rightEdgeHide![0], status: 'PENDING', evidence: null } },
+      'right_edge_hide_incomplete'
     ]
   ]
 
@@ -406,6 +437,7 @@ describe('smokeReport', () => {
       'shutdown',
       'rv',
       'navigationGuard',
+      'rightEdgeHide',
       'processes'
     ])
     expect(Object.keys(report.app ?? {})).toEqual(['version', 'platform', 'arch'])
@@ -449,6 +481,67 @@ describe('smokeReport', () => {
     })
     expect(report.timingsMs).toEqual({ ready: null, exit: null, survivorsGone: null })
     expect(report.processes).toEqual({ atQuit: null, survivors: null })
+  })
+})
+
+describe('right-edge Hide rows (RE-HIDE)', () => {
+  const display: DisplayMetrics = {
+    bounds: { x: 0, y: 0, width: 1512, height: 982 },
+    workArea: { x: 0, y: 33, width: 1512, height: 949 },
+    hasNotch: true,
+    notchWidth: 200,
+    menuBarHeight: 33,
+    source: 'helper'
+  }
+
+  it('tracks every RE-HIDE scenario as pending automation, meeting rows last', () => {
+    const rows = initialRightEdgeHideRows()
+    expect(rows.map((row) => row.id)).toEqual([
+      'RE-HIDE-1-edge-reveals',
+      'RE-HIDE-2-inset-stays-parked',
+      'RE-HIDE-3-draft-hide-and-escape',
+      'RE-HIDE-5-toggle-hide-latches',
+      'RE-HIDE-6-toggle-reveals-hide',
+      'RE-HIDE-6-toggle-reveals-island',
+      'RE-HIDE-7-layout-change-chrome',
+      'RE-HIDE-3-meeting-hide',
+      'RE-HIDE-4-island-meeting-leave-parks'
+    ])
+    expect(rows.every((row) => row.status === 'PENDING' && row.evidence === null && row.unblock === null)).toBe(true)
+  })
+
+  it('expects exactly the geometry main computes for a fresh profile', () => {
+    const expected = rightEdgeExpectedRects(display.workArea)
+    expect(expected.drawer).toEqual(rightEdgeSidecarBounds(display, { open: true }))
+    expect(expected.tab).toEqual(rightEdgeSidecarBounds(display, { open: false }))
+    expect(expected.band).toEqual(parkAfterExclusiveOnboarding('hide', display, 8, 'right-edge'))
+    expect(expected.band).toEqual(hoverWatchRestRect('hide', display, 'right-edge'))
+    expect(expected.tab).toEqual(parkAfterExclusiveOnboarding('island', display, 8, 'right-edge'))
+  })
+
+  it('accepts only the documented revealed and parked chrome', () => {
+    const { drawer, tab, band } = rightEdgeExpectedRects(display.workArea)
+    const win = (bounds: { x: number; y: number; width: number; height: number }, opacity: number, clickThrough: boolean | null) => ({
+      bounds,
+      opacity,
+      clickThrough,
+      visible: true,
+      displayBounds: display.bounds,
+      workArea: display.workArea
+    })
+    const page = { drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
+    const open = { ...page, drawer: true, rail: false, hideControl: true }
+    expect(rightEdgeStateMatches({ win: win(drawer, 1, false), page: open }, 'revealed')).toBe(true)
+    expect(rightEdgeStateMatches({ win: win(drawer, 1, true), page: open }, 'revealed')).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(drawer, 1, false), page }, 'revealed')).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(band, 0, true), page }, 'parked', 'hide')).toBe(true)
+    // The 1.9.6 park: the inset tab, invisible and click-through, is not a Hide park any more.
+    expect(rightEdgeStateMatches({ win: win(tab, 0, true), page }, 'parked', 'hide')).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(band, 1, true), page }, 'parked', 'hide')).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(tab, 1, false), page }, 'parked', 'island')).toBe(true)
+    // An open drawer rendered inside a parked window is the RE-HIDE-4 failure.
+    expect(rightEdgeStateMatches({ win: win(tab, 1, false), page: open }, 'parked', 'island')).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(tab, 0, false), page }, 'parked', 'island')).toBe(false)
   })
 })
 

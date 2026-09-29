@@ -8,9 +8,11 @@
 
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
+import type { OverlayPlacement } from '@shared/overlay-placement'
 import { HOVER_ISLAND_HEIGHT_MAX_PX, type Rect } from './geometry'
 
-/** Cap leftover 44px slabs so Teams mute at Y=40 still misses. Width stays full top edge. */
+/** Cap leftover 44px slabs so Teams mute at Y=40 still misses. Width stays full top edge. Top edge only:
+ *  the right-edge reveal band spans the drawer's height and must never be cut to 40 px. */
 export function clampHoverRestRect(rect: Rect): Rect {
   const height = Math.min(rect.height, HOVER_ISLAND_HEIGHT_MAX_PX)
   if (height === rect.height) return rect
@@ -54,6 +56,13 @@ export const CURSOR_LEAVE_GRACE_PX = 8
  * Must land inside 1–2s. Do not reset this timer on every hide tick.
  */
 export const OVERLAY_LEAVE_PARK_MS = 800
+/**
+ * Right edge only. A keyboard, tray or relaunch reveal of the right-edge dock opens it without the pointer
+ * ever visiting it, so the OS-hover latch never arms leave → park. Once the pointer has stayed away from
+ * the band and the drawer this long, main reports a leave; the page then applies its own grace and keeps
+ * the dock open while a draft or notice forces it.
+ */
+export const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = 3000
 
 /**
  * Revealed Hide/Island + cursor outside the bar and the top-edge strip → park,
@@ -89,13 +98,15 @@ export function overlayWatchStep(input: {
   windowVisible: boolean
   osHoverSeen: boolean
   hugStub?: boolean
+  placement?: OverlayPlacement
 }): { action: OverlayWatchAction; osHoverSeen: boolean } {
   const revealed = overlayWatchTreatAsRevealed(input.islandResting, input.windowVisible)
   const decision = decideCursorWatch({
     cursor: input.cursor,
     restRect: input.restRect,
     revealedRect: input.revealedRect,
-    revealed
+    revealed,
+    placement: input.placement
   })
   if (
     overlayWatchNeedsRestore({
@@ -151,8 +162,9 @@ export function decideCursorWatch(input: {
   revealedRect: Rect
   revealed: boolean
   gracePx?: number
+  placement?: OverlayPlacement
 }): CursorWatchDecision {
-  const restRect = clampHoverRestRect(input.restRect)
+  const restRect = input.placement === 'right-edge' ? input.restRect : clampHoverRestRect(input.restRect)
   if (!input.revealed) {
     return pointInRect(input.cursor, restRect) ? 'reveal' : 'stay'
   }

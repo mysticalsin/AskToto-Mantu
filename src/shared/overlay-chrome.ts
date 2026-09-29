@@ -1,4 +1,5 @@
 import { CIRCLE_REST_HOST_PX, CIRCLE_REST_SHADOW_PAD_PX } from './overlay-orb'
+import type { OverlayPlacement } from './overlay-placement'
 import { SETTINGS_SURFACE_BACKGROUND, SETTINGS_WINDOW_MIN } from './settings-bounds'
 
 /**
@@ -24,6 +25,16 @@ export const OVERLAY_LAYOUT_COPY: Record<OverlayLayout, { title: string; desc: s
   bar: {
     title: 'Bar',
     desc: 'The bar stays on screen.'
+  }
+}
+
+/** Settings copy for the selected placement: right-edge chrome is summoned from the right edge, never the top. */
+export function overlayLayoutCopy(placement: OverlayPlacement): Record<OverlayLayout, { title: string; desc: string }> {
+  if (placement !== 'right-edge') return OVERLAY_LAYOUT_COPY
+  return {
+    ...OVERLAY_LAYOUT_COPY,
+    hide: { title: 'Hide', desc: 'Hidden until you move to the right edge.' },
+    island: { title: 'Island', desc: 'A slim rail stays at the right edge. Hover opens it.' }
   }
 }
 
@@ -81,10 +92,11 @@ export function shouldForceParkOnBecameIdle(input: { becameIdle: boolean; usesHo
 }
 
 /**
- * Hide/Island stay hover-idle on the answer surface even with a live answer or
- * listening chrome (Tony 2026-09-06). A leftover Circle minimized flag must not
- * block park — Hide never rests as Expand Métis. Settings / History / Review /
- * capture stay fully shown.
+ * Hide/Island stay hover-idle on the answer surface and on the live meeting
+ * (copilot) surface, with a live answer or listening chrome (Tony 2026-09-06), so
+ * a meeting can still be hidden and parks on leave. A leftover Circle minimized
+ * flag must not block park — Hide never rests as Expand Métis. Settings /
+ * History / Review / capture stay fully shown.
  */
 export function overlayHoverIdle(input: {
   usesHover: boolean
@@ -96,7 +108,7 @@ export function overlayHoverIdle(input: {
   return (
     input.usesHover &&
     input.onboardingDone &&
-    input.view === 'answer' &&
+    (input.view === 'answer' || input.view === 'copilot') &&
     !input.capturing
   )
 }

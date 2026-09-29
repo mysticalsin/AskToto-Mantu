@@ -16,6 +16,7 @@ import {
   overlayUsesSafeTop,
   overlayHoverIdle,
   overlayHoverForced,
+  overlayLayoutCopy,
   overlayAllowsHugWidth,
   overlayHugNextWidth,
   overlayHugWidthFloor,
@@ -305,5 +306,22 @@ describe('overlay chrome modes', () => {
       .join(' ')
     expect(all).not.toMatch(/\u2014/)
     expect(all).not.toMatch(/Vibe Island/)
+  })
+
+  it('right-edge Settings copy says to move to the right edge, never the top', () => {
+    const rightEdge = overlayLayoutCopy('right-edge')
+    expect(rightEdge.hide.title).toBe('Hide')
+    expect(rightEdge.hide.desc).toMatch(/move to the right edge/)
+    expect(rightEdge.hide.desc).not.toMatch(/top/)
+    expect(rightEdge.island.desc).toMatch(/right edge/)
+    expect(overlayLayoutCopy('top-center')).toEqual(OVERLAY_LAYOUT_COPY)
+  })
+
+  it('a live meeting (copilot) stays hover-idle so it can be hidden and parks on leave', () => {
+    const meeting = { usesHover: true, minimized: false, onboardingDone: true, view: 'copilot', capturing: false }
+    expect(overlayHoverIdle(meeting)).toBe(true)
+    expect(overlayHoverIdle({ ...meeting, capturing: true })).toBe(false)
+    expect(overlayHoverIdle({ ...meeting, view: 'review' })).toBe(false)
+    expect(overlayHoverIdle({ ...meeting, view: 'history' })).toBe(false)
   })
 })

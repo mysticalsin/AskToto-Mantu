@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
-import { AudioLines, Brain, ChevronLeft, CornerDownLeft, FileSearch, Image, LoaderCircle, Pause, Play, Settings, Square, X } from 'lucide-react'
+import { AudioLines, Brain, ChevronRight, CornerDownLeft, FileSearch, Image, LoaderCircle, Pause, Play, Settings, Square, X } from 'lucide-react'
 import type { MetisCommandState } from '@shared/ipc'
 import { ElapsedClock } from './Bar'
 import { MantuMark } from './MantuMark'
@@ -128,6 +128,12 @@ function compactLiveNotice(notice: string): string {
   return notice
 }
 
+/** Escape hides the dock whenever it can park, except while an IME composition owns the key (Escape
+ *  cancels the composition there and must never hide the dock). */
+export function dockEscapeHides(event: { key: string; isComposing: boolean }, canClose: boolean): boolean {
+  return event.key === 'Escape' && !event.isComposing && canClose
+}
+
 export interface RightEdgeDockActions {
   listening?: boolean
   paused?: boolean
@@ -158,6 +164,7 @@ export function RightEdgeSidecar({
   onOpen,
   onClose,
   canClose = true,
+  focusSignal = 0,
   commandState = { proposalId: null },
   value,
   onChange,
@@ -189,6 +196,8 @@ export function RightEdgeSidecar({
   onClose: () => void
   /** The dock only offers dismissal when the current overlay state can actually park. */
   canClose?: boolean
+  /** Bumped by a summon (hotkey, toggle, tray) so an already-open drawer hands the caret back to the composer. */
+  focusSignal?: number
   /** Opaque state only. Main has not supplied a verified action preview in this version. */
   commandState?: MetisCommandState
 } & SidecarChatProps & RightEdgeDockActions): JSX.Element {
@@ -203,7 +212,7 @@ export function RightEdgeSidecar({
     if (!open) return
     const frame = window.requestAnimationFrame(() => composerRef.current?.focus())
     return () => window.cancelAnimationFrame(frame)
-  }, [open])
+  }, [open, focusSignal])
 
   const cancelPendingCommand = (): void => {
     if (!commandState.proposalId) return
@@ -256,7 +265,7 @@ export function RightEdgeSidecar({
           className="right-edge-sidecar__drawer"
           style={{ maxWidth: RIGHT_EDGE_DRAWER_WIDTH }}
           onKeyDown={(event) => {
-            if (event.key === 'Escape' && canClose) {
+            if (dockEscapeHides({ key: event.key, isComposing: event.nativeEvent.isComposing }, canClose)) {
               event.preventDefault()
               event.stopPropagation()
               close()
@@ -267,8 +276,8 @@ export function RightEdgeSidecar({
             <header className="right-edge-sidecar__header">
               <span className="right-edge-sidecar__header-leading">
                 {canClose ? (
-                  <button type="button" aria-label="Close Métis" onClick={close} className="right-edge-sidecar__header-back no-drag focus-ring">
-                    <ChevronLeft size={18} strokeWidth={1.9} />
+                  <button type="button" aria-label="Hide Métis" title="Hide" onClick={close} className="right-edge-sidecar__header-back no-drag focus-ring">
+                    <ChevronRight size={18} strokeWidth={1.9} aria-hidden="true" />
                   </button>
                 ) : null}
                 <span className="right-edge-sidecar__identity">
