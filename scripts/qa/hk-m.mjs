@@ -3,7 +3,11 @@
  * HK-M packaged sidecar supervision proof. Runs only against an installed macOS app on hosted QA.
  *
  * Usage:
- *   node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20]
+ *   node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20] [--budget-ms N]
+ *
+ * --budget-ms is a total wall-clock budget: no wait starts or continues past it, and every row not reached is
+ * reported NOT_RUN (a failure). One progress line per row goes to stdout, and the report is written even when
+ * the run is interrupted, so a step timeout still leaves a partial report.
  *
  * The report is content-free: no paths, command lines, profile locations, transcripts, or secrets.
  */
@@ -39,7 +43,7 @@ const RELAUNCH_SETTLE_MS = 3_000
 const MODEL_SCENARIOS = Object.freeze(['model-starting', 'active-inference'])
 
 function usage() {
-  console.error('usage: node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20]')
+  console.error('usage: node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20] [--budget-ms N]')
   process.exit(2)
 }
 
@@ -52,8 +56,17 @@ function parseArgs(argv) {
   const cyclesIndex = argv.indexOf('--cycles')
   const cycles = cyclesIndex === -1 ? 20 : Number(argv[cyclesIndex + 1])
   if (!Number.isInteger(cycles) || cycles < 1) usage()
-  return { appPath: argv[0], reportPath: argv[1], cycles }
+  const budgetIndex = argv.indexOf('--budget-ms')
+  const budgetMs = budgetIndex === -1 ? null : Number(argv[budgetIndex + 1])
+  if (budgetMs !== null && (!Number.isInteger(budgetMs) || budgetMs < 1)) usage()
+  return { appPath: argv[0], reportPath: argv[1], cycles, budgetMs }
 }
+
+// Wall-clock end of the run's budget; Infinity when no budget was given.
+let budgetEnd = Infinity
+const budgetSpent = () => Date.now() >= budgetEnd
+// A wait deadline that never outlives the budget.
+const boundedDeadline = (ms) => Math.min(Date.now() + ms, budgetEnd)
 
 function parseAuditLog(text) {
   const records = []
@@ -242,7 +255,7 @@ function terminalRow(scenario, cycle, status, detail = {}) {
 }
 
 export function reportResultForRows(rows) {
-  if (rows.some((row) => row.status === 'FAIL')) return 'fail'
+  if (rows.some((row) => row.status === 'FAIL' || row.status === 'NOT_RUN')) return 'fail'
   if (rows.some((row) => row.status === 'BLOCKED_EXTERNAL')) return 'blocked'
   return 'pass'
 }
@@ -350,15 +363,18 @@ async function relaunchAndCountRuntimes({ executable, installRoot, profile, env,
   const sidecars = () => owned().filter((entry) => entry.pid !== child.pid)
   let ownedAtKill = []
   try {
-    const readyDeadline = Date.now() + READY_TIMEOUT_MS
+    const readyDeadline = boundedDeadline(READY_TIMEOUT_MS)
     // The profile's audit log spans both boots, so the second renderer.ready marks this instance.
     while (!exited && Date.now() < readyDeadline && countEvent(readAudit(profile), 'app.renderer.ready') < 2) {
       await sleep(POLL_MS)
     }
-    if (exited || countEvent(readAudit(profile), 'app.renderer.ready') < 2) return { ok: false, failure: 'relaunch_not_ready' }
+    if (exited || countEvent(readAudit(profile), 'app.renderer.ready') < 2) {
+      return { ok: false, failure: budgetSpent() ? 'budget_exhausted' : 'relaunch_not_ready' }
+    }
     if (expectRuntime) {
-      const runtimeDeadline = Date.now() + SCENARIO_TIMEOUT_MS
+      const runtimeDeadline = boundedDeadline(SCENARIO_TIMEOUT_MS)
       while (!exited && Date.now() < runtimeDeadline && !hasRole(sidecars(), LOCAL_MODEL_ROLES)) await sleep(POLL_MS)
+      if (!hasRole(sidecars(), LOCAL_MODEL_ROLES) && budgetSpent()) return { ok: false, failure: 'budget_exhausted' }
     }
     // A duplicate start would have spawned its second runtime by now.
     await sleep(RELAUNCH_SETTLE_MS)
@@ -383,7 +399,7 @@ async function relaunchAndCountRuntimes({ executable, installRoot, profile, env,
   }
 }
 
-async function runCycle({ executable, installRoot, scenario, cycle }) {
+async function runCycle({ executable, installRoot, scenario, cycle, timings }) {
   const rootResidents = ownedProcesses(listProcesses('darwin'), { mainPid: null, installRoot, platform: 'darwin' })
   if (rootResidents.length > 0) {
     return terminalRow(scenario, cycle, 'FAIL', { failure: 'install_root_busy', before: roleCounts(rootResidents) })
@@ -423,7 +439,8 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
   })
 
   try {
-    const readyDeadline = Date.now() + READY_TIMEOUT_MS
+    const startedAt = Date.now()
+    const readyDeadline = boundedDeadline(READY_TIMEOUT_MS)
     while (Date.now() < readyDeadline) {
       if (exitInfo.settled) {
         return terminalRow(scenario, cycle, 'FAIL', { failure: 'exited_before_ready', exit: exitInfo })
@@ -433,8 +450,10 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
     }
     if (!hasEvent(readAudit(profile), 'app.renderer.ready')) {
       hardKill(child.pid)
+      if (budgetSpent()) return terminalRow(scenario, cycle, 'NOT_RUN', { failure: 'budget_exhausted' })
       return terminalRow(scenario, cycle, 'FAIL', { failure: 'renderer_not_ready' })
     }
+    timings.ready = Date.now() - startedAt
 
     const snapshot = () => {
       const records = readAudit(profile)
@@ -447,13 +466,17 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
     // The app stamps each row's marker once its work is genuinely in flight (a model can take a while to load),
     // so wait for it rather than killing main on a fixed timer.
     let snap = snapshot()
-    const scenarioDeadline = Date.now() + SCENARIO_TIMEOUT_MS
+    const scenarioDeadline = boundedDeadline(SCENARIO_TIMEOUT_MS)
     while (scenarioStillStarting(snap.proof) && Date.now() < scenarioDeadline && !exitInfo.settled) {
       await sleep(POLL_MS)
       snap = snapshot()
     }
     if (exitInfo.settled) {
       return terminalRow(scenario, cycle, 'FAIL', { failure: 'exited_before_scenario', exit: exitInfo })
+    }
+    if (scenarioStillStarting(snap.proof) && budgetSpent()) {
+      hardKill(child.pid)
+      return terminalRow(scenario, cycle, 'NOT_RUN', { failure: 'budget_exhausted' })
     }
     const recordsAtKill = snap.records
     const registryAtKill = snap.registry
@@ -522,6 +545,7 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
           expectRuntime: MODEL_SCENARIOS.includes(scenario)
         })
         if (!relaunch.ok) {
+          if (relaunch.failure === 'budget_exhausted') return terminalRow(scenario, cycle, 'NOT_RUN', { failure: 'budget_exhausted' })
           return terminalRow(scenario, cycle, 'FAIL', {
             failure: relaunch.failure,
             relaunch: { runtimes: relaunch.counts ?? {} },
@@ -551,14 +575,23 @@ async function runCycle({ executable, installRoot, scenario, cycle }) {
   }
 }
 
+// One content-free line per row: no paths or command lines.
+function progressLine(row) {
+  const t = row.timingsMs ?? {}
+  const survivors = JSON.stringify(row.processes?.survivors ?? {})
+  return `[hk-m] scenario=${row.scenario} cycle=${row.cycle} status=${row.status} readyMs=${t.ready ?? '-'} killToCleanMs=${t.survivorsGone ?? '-'} survivors=${survivors}${row.failure ? ` failure=${row.failure}` : ''}`
+}
+
 async function main() {
-  const { appPath, reportPath, cycles } = parseArgs(process.argv.slice(2))
+  const { appPath, reportPath, cycles, budgetMs } = parseArgs(process.argv.slice(2))
   mkdirSync(dirname(reportPath), { recursive: true })
+  if (budgetMs !== null) budgetEnd = Date.now() + budgetMs
   const report = {
     schema: 1,
     ticket: 'M2-0028',
     platform: process.platform,
     cycles,
+    ...(budgetMs !== null ? { budgetMs } : {}),
     scenarios: SCENARIOS,
     result: 'fail',
     rows: []
@@ -573,16 +606,41 @@ async function main() {
     process.exit(exitCodeForReportResult(report.result))
   }
 
-  const installRoot = realpathSync.native(appPath)
-  const executable = macExecutable(installRoot)
-  for (let cycle = 1; cycle <= cycles; cycle++) {
-    for (const scenario of SCENARIOS) {
-      report.rows.push(await runCycle({ executable, installRoot, scenario, cycle }))
+  // Every planned row that was not reached is recorded, so a partial report still states what did not run.
+  const finalize = (reason) => {
+    for (let cycle = 1; cycle <= cycles; cycle++) {
+      for (const scenario of SCENARIOS) {
+        if (!report.rows.some((row) => row.scenario === scenario && row.cycle === cycle)) {
+          report.rows.push(terminalRow(scenario, cycle, 'NOT_RUN', { failure: reason }))
+        }
+      }
     }
+    report.result = reportResultForRows(report.rows)
+    writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)
+  }
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.once(signal, () => {
+      finalize('interrupted')
+      process.exit(1)
+    })
   }
 
-  report.result = reportResultForRows(report.rows)
-  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)
+  try {
+    const installRoot = realpathSync.native(appPath)
+    const executable = macExecutable(installRoot)
+    for (let cycle = 1; cycle <= cycles && !budgetSpent(); cycle++) {
+      for (const scenario of SCENARIOS) {
+        if (budgetSpent()) break
+        const timings = {}
+        const row = await runCycle({ executable, installRoot, scenario, cycle, timings })
+        if (timings.ready !== undefined) row.timingsMs = { ...timings, ...row.timingsMs }
+        report.rows.push(row)
+        console.log(progressLine(row))
+      }
+    }
+  } finally {
+    finalize(budgetSpent() ? 'budget_exhausted' : 'aborted')
+  }
   const exitCode = exitCodeForReportResult(report.result)
   if (exitCode !== 0) process.exit(exitCode)
 }

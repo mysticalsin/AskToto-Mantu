@@ -91,6 +91,13 @@ describe('HK-M report result', () => {
     expect(exitCodeForReportResult(result)).toBe(1)
   })
 
+  it('fails when a row was not run, so an exhausted budget can never read as a pass', () => {
+    const result = reportResultForRows([{ status: 'PASS' }, { status: 'NOT_RUN' }])
+
+    expect(result).toBe('fail')
+    expect(exitCodeForReportResult(result)).toBe(1)
+  })
+
   it('fails when any row fails', () => {
     const result = reportResultForRows([{ status: 'PASS' }, { status: 'FAIL' }, { status: 'BLOCKED_EXTERNAL' }])
 

@@ -109,8 +109,11 @@ jobs:
       - name: Prove HK-M supervised sidecar cleanup after SIGKILL
         id: hk-m
         continue-on-error: true
-        timeout-minutes: 90
-        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles 20
+        timeout-minutes: 25
+        # One SIGKILL per scenario under a 20 min wall-clock budget: hk-m.mjs prints a line per row and writes
+        # its report (unreached rows NOT_RUN) even when cut off. The 20-cycle proof runs on the candidate in
+        # hk-m-candidate.yml.
+        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles 1 --budget-ms 1200000
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         timeout-minutes: 10
