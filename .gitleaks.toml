@@ -33,5 +33,13 @@ regexes = [
   # The fixture the redaction unit tests use (src/shared/redact.test.ts), and when a doc quotes it.
   '''^['"]?ABCDEF123456['"]?$''',
   # The license-server test fixture key (license-server/ops.test.mjs), and when a doc quotes it.
-  '''^ATK-HY2JVMZ3P3JF8CGAQWPR$'''
+  '''^ATK-HY2JVMZ3P3JF8CGAQWPR$''',
+  # Operator seat-token fixtures: the fixed "METIS-OP-1.<word>" placeholders and the one long sample token
+  # the HMAC/transport tests share. Anchored to the whole value; a real seat token has a different shape.
+  '''^METIS-OP-1\.(fixture|test|old|new|replacement|licensed-seat)$''',
+  '''^METIS-OP-1\.abcdef0123456789\.100\.200\.abcdefghijklmnopqrstuv$''',
+  # Test-only placeholders that name themselves as synthetic (whole value, no random characters), so a
+  # real high-entropy secret never matches; the canary token contains none of these words.
+  '''^[a-z0-9_.-]*(fixture|synthetic|dummy|not-a-real|qa-only|for-tests|test-[a-z]+-key|test-admin|-example-)[a-z0-9_.-]*$''',
+  '''^(ingest-secret|shared-secret|old-shared-secret|secret-token|fresh-token|test-token|tok-rotated|plane-tok-1|tok_(eu|us)_123|clickup-(at|rt)-1|plane-(at|rt)-[A-Za-z0-9]+|plane-secret-[A-Za-z0-9]+|fresh-ported-secret)$'''
 ]
