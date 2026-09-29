@@ -24,6 +24,7 @@ import {
   settlePriorExit,
   startMaintenanceGate
 } from '../infra/scheduler/maintenance'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 
@@ -94,6 +95,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'metis-m2-0033-gate-ud-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'metis-m2-0033-gate-meetings-'))
     uptime = 121_000
@@ -193,7 +195,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     writeMeeting('retry-a.md')
     writeMeeting('retry-b.md')
     writeMeeting('retry-c.md')
-    requestBackfillRun({ force: true, ...userTrigger })
+    await requestBackfillRun({ force: true, ...userTrigger })
     await vi.waitFor(() => expect(createStreamMock.mock.calls.length).toBeGreaterThan(1), { timeout: 10_000 })
     await releaseHeldWork()
   })
@@ -214,9 +216,9 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     startGate('clean')
     writeMeeting('promote.md')
     requestBackfill()
-    expect(brainBackfillProgress().preparing).toBe(true)
+    await vi.waitFor(() => expect(brainBackfillProgress().preparing).toBe(true), { timeout: 10_000 })
     expect(createStreamMock).not.toHaveBeenCalled()
-    requestBackfillRun({ force: true, ...userTrigger })
+    await requestBackfillRun({ force: true, ...userTrigger })
     await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(1), { timeout: 10_000 })
     await releaseHeldWork()
   })
@@ -225,9 +227,9 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     uptime = 0
     startGate('clean')
     writeMeeting('queued-promote.md')
-    expect(startBackfill().queued).toBe(1)
+    expect((await startBackfill()).queued).toBe(1)
     expect(createStreamMock).not.toHaveBeenCalled()
-    requestBackfillRun({ force: true, ...userTrigger })
+    await requestBackfillRun({ force: true, ...userTrigger })
     await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(1), { timeout: 10_000 })
     await releaseHeldWork()
   })
@@ -243,7 +245,7 @@ describe('M2-0033 maintenance gate for background ingest', () => {
     createStreamMock.mockClear()
     writeMeeting('repair.md')
     await writeMeetingExtraction(getSettings(), 'repair-md', MeetingExtractionSchema.parse({ title24: 'Repair synthetic extraction' }))
-    startBackfill(undefined, { force: true })
+    await startBackfill(undefined, { force: true })
     await waitForIdle()
     expect(readIndex(getSettings()).ingested['repair.md']?.ok).toBe(true)
     expect(createStreamMock).not.toHaveBeenCalled()

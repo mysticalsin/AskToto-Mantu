@@ -1,6 +1,10 @@
 /**
- * Storage gateway: the only way main-process code reads the meetings root, the synced folder (OneDrive or
- * Documents) that holds the meetings and `.brain`.
+ * Storage gateway: the only way the verified-stall path (brainStatus IPC, the boot block's backfill/
+ * intelligence-catch-up/consolidation resume, History-open backfill, extraction and draft recovery — the
+ * readers M2-0031 moved) reads the meetings root, the synced folder (OneDrive or Documents) that holds the
+ * meetings and `.brain`. Other meetings-root readers are migrating file by file; the sync node:fs call
+ * sites still outside the gateway are enumerated and ratcheted down in sync-fs-meetings-root.contract.test.ts
+ * (tracked for M2-0047 — do not treat this comment as claiming full coverage).
  *
  * Reading a cloud-only (dataless) file makes the OS download it and blocks the reading thread until the
  * provider answers, for minutes when offline; on the main thread that froze the whole app. Async fs moves
@@ -12,7 +16,8 @@
  *   - Async only. Every method resolves, never rejects, and settles by its deadline (2 s for list and
  *     classify, 5 s for read) whatever the fs or the probe does.
  *   - At most `poolSize - 2` (at least 1) meetings-root fs calls run at once (admission.ts), so two pool
- *     threads stay free. The cap is per gateway: create one per process and share it.
+ *     threads stay free. The cap belongs to the admission, and every gateway in the process shares one
+ *     (meetings-storage.ts): gateways over different roots still run on the same pool.
  *   - A deadline or an abort releases the caller; the fs call keeps its permit until it settles.
  *   - Content is read only after the dataless detector says the bytes are on this device. 'dataless' and
  *     'unknown' files are never opened, and at most one detector probe runs at a time.
@@ -22,9 +27,9 @@
  *   - Only ENOENT and ENOTDIR are 'missing'. 'unavailable', 'timeout' and 'degraded' say nothing about
  *     whether a file exists; callers must never treat them as a deletion.
  */
-import { readdir, readFile, realpath, stat } from 'node:fs/promises'
+import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, normalize, relative, sep } from 'node:path'
-import { createAdmission, type Lane } from './admission'
+import { createAdmission, type Admission, type Lane } from './admission'
 import { createDatalessDetector, type ContentPresence, type DatalessDetector, type FileVersion } from './dataless'
 
 /** Threads libuv starts when UV_THREADPOOL_SIZE is unset, and the most it accepts (libuv src/threadpool.c). */
@@ -53,8 +58,11 @@ export type StorageFailure =
 /** mtime, ctime and size: the version identity the detector keys on (FileVersion in dataless.ts). */
 export type ContentVersion = Omit<FileVersion, 'path'>
 
-/** 'ok': the bytes are on this device. 'dataless' | 'unknown': they may not be, so nothing reads them. */
-export type FileClass = { status: 'ok' | 'dataless' | 'unknown'; version: ContentVersion } | StorageFailure
+/** 'ok': the bytes are on this device. 'dataless' | 'unknown': they may not be, so nothing reads them.
+ *  `isSymlink` is the directory entry's own type, never the target's — a caller that treats a name as
+ *  identity (e.g. promoting a draft-named file into History) must reject `isSymlink: true` rather than
+ *  read through it, even though `read()` itself still follows in-root symlinks. */
+export type FileClass = { status: 'ok' | 'dataless' | 'unknown'; version: ContentVersion; isSymlink: boolean } | StorageFailure
 
 export type ReadResult =
   | { status: 'ok'; version: ContentVersion; bytes: Buffer }
@@ -86,6 +94,11 @@ export interface StorageFs {
   readFile(path: string): Promise<Buffer>
   realpath(path: string): Promise<string>
   stat(path: string): Promise<{ mtimeMs: number; ctimeMs: number; size: number }>
+  /** Unlike `stat`, never follows the final path component: the only way to tell a plain file apart
+   *  from a symlink wearing its name (e.g. a symlink planted with a draft-shaped name that points at
+   *  another meeting already inside the root — `stat`/`realpath`'s in-root check alone would not catch
+   *  that, since the *target* is still inside the root). */
+  lstat(path: string): Promise<{ isSymbolicLink: boolean }>
 }
 
 export interface StorageGatewayOptions {
@@ -97,15 +110,21 @@ export interface StorageGatewayOptions {
   fs?: StorageFs
   /** The libuv pool size; this process's by default. */
   poolSize?: number
+  /** The cap this gateway's fs calls run under; its own `poolAdmission(poolSize)` by default. Pass one
+   *  admission to every gateway of a process, or blocked reads under several roots can fill the pool. */
+  admission?: Admission
 }
 
 type Settled<T> = { status: 'ok'; value: T } | StorageFailure
 type Unread = Exclude<ReadResult, { status: 'ok' }>
+type LocalRead = { result: ReadResult; rememberUnavailable: boolean }
 type PresenceOf = (files: readonly FileVersion[]) => Promise<Map<string, ContentPresence>>
 
 /** Read outcomes that describe the file itself: repeating the read inside the TTL would only pin another
- *  pool thread or spawn another probe. */
-const REMEMBERED: ReadonlySet<ReadResult['status']> = new Set<ReadResult['status']>(['dataless', 'unknown', 'unavailable', 'timeout'])
+ *  pool thread or spawn another probe. Do not remember 'unavailable' here: once stat has succeeded,
+ *  later realpath/readFile unavailability can be a transient lock or hydration failure that must recover
+ *  on the next read attempt. */
+const REMEMBERED: ReadonlySet<ReadResult['status']> = new Set<ReadResult['status']>(['dataless', 'unknown', 'timeout'])
 
 /** The libuv pool size for a UV_THREADPOOL_SIZE value, never above libuv's own reading of it (libuv reads
  *  a negative value as a huge unsigned one; here it counts as 1). */
@@ -113,6 +132,16 @@ export function threadpoolSize(value: string | undefined): number {
   if (value === undefined) return DEFAULT_POOL_SIZE
   const size = Number.parseInt(value, 10)
   return size > 0 ? Math.min(size, MAX_POOL_SIZE) : 1
+}
+
+/** How many pool threads background fs work may hold at once: all but RESERVED_POOL_THREADS, at least 1. */
+export function reservedPoolCapacity(poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE)): number {
+  return Math.max(1, poolSize - RESERVED_POOL_THREADS)
+}
+
+/** An admission that keeps RESERVED_POOL_THREADS of a `poolSize`-thread pool free. */
+export function poolAdmission(poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE)): Admission {
+  return createAdmission(reservedPoolCapacity(poolSize))
 }
 
 function outsideRoot(): StorageFailure {
@@ -215,16 +244,24 @@ function createPresenceQueue(detector: DatalessDetector): PresenceOf {
 export function createStorageGateway({
   root,
   detector = createDatalessDetector(),
-  fs = { readdir, readFile, realpath, stat },
-  poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE)
+  fs = { readdir, readFile, realpath, stat, lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() })) },
+  poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE),
+  admission = poolAdmission(poolSize)
 }: StorageGatewayOptions): StorageGateway {
-  const admission = createAdmission(Math.max(1, poolSize - RESERVED_POOL_THREADS))
   const presenceOf = createPresenceQueue(detector)
   /** Running content reads, by resolved path and version. */
   const reads = new Map<string, Promise<Settled<Buffer>>>()
   /** Recent reads that returned no content, by path. The TTL is constant, so insertion order is expiry order. */
   const failures = new Map<string, { result: Unread; expiresAt: number }>()
   let resolvedRoot: { root: string; real: string } | undefined
+
+  function currentRoot(): { status: 'ok'; root: string } | StorageFailure {
+    try {
+      return { status: 'ok', root: root() }
+    } catch (error) {
+      return { status: 'unavailable', code: (error as NodeJS.ErrnoException | null)?.code ?? 'ROOT_UNAVAILABLE' }
+    }
+  }
 
   /** null once the request holds a permit, else why it got none. */
   async function admit(lane: Lane, request: Request): Promise<StorageFailure | null> {
@@ -248,6 +285,13 @@ export function createStorageGateway({
     if (stats.status !== 'ok') return stats
     const { mtimeMs, ctimeMs, size } = stats.value
     return { status: 'ok', value: { path, mtimeMs, ctimeMs, size } }
+  }
+
+  /** Whether `path` names a symlink itself. Unreadable (settled failure) counts as a symlink: a caller
+   *  that cannot verify the entry's own type must not treat it as a plain file. */
+  async function isSymlink(path: string, request: Request): Promise<boolean> {
+    const result = await call('metadata', request, () => fs.lstat(path))
+    return result.status !== 'ok' || result.value.isSymbolicLink
   }
 
   /** The detector's verdicts, or none (every file then counts as unknown) when the request ends first. The
@@ -290,17 +334,17 @@ export function createStorageGateway({
     return untilEnded(reading, request, 'running')
   }
 
-  async function readLocal(base: string, path: string, request: Request): Promise<ReadResult> {
+  async function readLocal(base: string, path: string, request: Request): Promise<LocalRead> {
     const file = await statFile(path, request)
-    if (file.status !== 'ok') return file
+    if (file.status !== 'ok') return { result: file, rememberUnavailable: file.status === 'unavailable' }
     const version = versionOf(file.value)
     const presence = (await presenceWithin([file.value], request)).get(path)
-    if (request.signal.aborted) return request.ended('waiting')
-    if (presence !== 'local') return { status: presence ?? 'unknown', version }
+    if (request.signal.aborted) return { result: request.ended('waiting'), rememberUnavailable: false }
+    if (presence !== 'local') return { result: { status: presence ?? 'unknown', version }, rememberUnavailable: false }
     const real = await resolveInside(base, path, request)
-    if (real.status !== 'ok') return real
+    if (real.status !== 'ok') return { result: real, rememberUnavailable: false }
     const bytes = await readShared(real.value, version, request)
-    return bytes.status === 'ok' ? { status: 'ok', version, bytes: bytes.value } : bytes
+    return { result: bytes.status === 'ok' ? { status: 'ok', version, bytes: bytes.value } : bytes, rememberUnavailable: false }
   }
 
   function remember(path: string, result: Unread): void {
@@ -315,7 +359,9 @@ export function createStorageGateway({
 
   return {
     async list(relDir, { signal } = {}) {
-      const dir = underRoot(root(), relDir)
+      const base = currentRoot()
+      if (base.status !== 'ok') return base
+      const dir = underRoot(base.root, relDir)
       if (!dir) return outsideRoot()
       const request = openRequest(METADATA_DEADLINE_MS, signal)
       try {
@@ -327,22 +373,26 @@ export function createStorageGateway({
     },
 
     async classify(relPaths, { signal } = {}) {
-      const base = root()
+      const current = currentRoot()
+      if (current.status !== 'ok') return new Map(relPaths.map((rel): [string, FileClass] => [rel, current]))
+      const base = current.root
       const request = openRequest(METADATA_DEADLINE_MS, signal)
       try {
         const stats = await Promise.all(
-          relPaths.map(async (rel): Promise<[string, Settled<FileVersion>]> => {
+          relPaths.map(async (rel): Promise<[string, Settled<FileVersion>, boolean]> => {
             const path = underRoot(base, rel)
-            return [rel, path ? await statFile(path, request) : outsideRoot()]
+            if (!path) return [rel, outsideRoot(), true]
+            const [file, link] = await Promise.all([statFile(path, request), isSymlink(path, request)])
+            return [rel, file, link]
           })
         )
         const files = stats.flatMap(([, file]) => (file.status === 'ok' ? [file.value] : []))
         const presence = files.length > 0 ? await presenceWithin(files, request) : new Map<string, ContentPresence>()
         return new Map(
-          stats.map(([rel, file]): [string, FileClass] => {
+          stats.map(([rel, file, link]): [string, FileClass] => {
             if (file.status !== 'ok') return [rel, file]
             const verdict = presence.get(file.value.path)
-            return [rel, { status: verdict === 'local' ? 'ok' : (verdict ?? 'unknown'), version: versionOf(file.value) }]
+            return [rel, { status: verdict === 'local' ? 'ok' : (verdict ?? 'unknown'), version: versionOf(file.value), isSymlink: link }]
           })
         )
       } finally {
@@ -351,15 +401,17 @@ export function createStorageGateway({
     },
 
     async read(relPath, { signal } = {}) {
-      const base = root()
+      const current = currentRoot()
+      if (current.status !== 'ok') return current
+      const base = current.root
       const path = underRoot(base, relPath)
       if (!path) return outsideRoot()
       const remembered = failures.get(path)
       if (remembered && remembered.expiresAt > performance.now()) return remembered.result
       const request = openRequest(CONTENT_DEADLINE_MS, signal)
       try {
-        const result = await readLocal(base, path, request)
-        if (result.status !== 'ok' && REMEMBERED.has(result.status)) remember(path, result)
+        const { result, rememberUnavailable } = await readLocal(base, path, request)
+        if (result.status !== 'ok' && (REMEMBERED.has(result.status) || (rememberUnavailable && result.status === 'unavailable'))) remember(path, result)
         return result
       } finally {
         request.close()
