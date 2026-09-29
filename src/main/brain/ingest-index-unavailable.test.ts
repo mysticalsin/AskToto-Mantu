@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash, randomBytes } from 'node:crypto'
@@ -202,20 +202,35 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     expect(createStreamMock).not.toHaveBeenCalled()
   })
 
-  it('I7: explicit rebuild (startRebuild) is the repair path — it purges and writes a readable index', async () => {
+  it('I7: explicit rebuild (startRebuild) refuses an unreadable index and keeps .brain byte-identical', async () => {
+    const beforeIndex = sha256(readFileSync(primary))
+    const beforeSentinel = readFileSync(sentinelPath)
+
+    const r = await startRebuild(s)
+    await waitForIdle()
+
+    expect(r.queued).toBe(0)
+    expect(r.error).toContain('Nothing was changed')
+    expect(createStreamMock).not.toHaveBeenCalled()
+    expect(indexUnavailable(s)).toBe('undecryptable')
+    expect(sha256(readFileSync(primary))).toBe(beforeIndex)
+    expect(readFileSync(sentinelPath)).toEqual(beforeSentinel)
+    expect(existsSync(join(meetingsFolder, '.brain-preserved'))).toBe(false)
+  })
+
+  it('I7b: startRebuild refuses a compatible-shape future-schema index and keeps it byte-identical', async () => {
+    writeFileSync(primary, JSON.stringify({ ...readIndex(s), schema_version: 99 }), 'utf8')
+    expect(indexUnavailable(s)).toBe('unsupported')
     const beforeIndex = sha256(readFileSync(primary))
 
     const r = await startRebuild(s)
     await waitForIdle()
 
-    expect(r.queued).toBeGreaterThan(0)
-    expect(createStreamMock).toHaveBeenCalled()
-    expect(indexUnavailable(s)).toBeNull()
-    expect(readIndex(s).ingested['unreachable-a.md']?.ok).toBe(true)
-    const preservedDir = join(meetingsFolder, '.brain-preserved')
-    const preserved = readdirSync(preservedDir)
-    expect(preserved).toHaveLength(1)
-    expect(sha256(readFileSync(join(preservedDir, preserved[0])))).toBe(beforeIndex)
+    expect(r.queued).toBe(0)
+    expect(r.error).toContain('newer Métis')
+    expect(createStreamMock).not.toHaveBeenCalled()
+    expect(sha256(readFileSync(primary))).toBe(beforeIndex)
+    expect(existsSync(sentinelPath)).toBe(true)
   })
 
   it('I8: startRebuild reports a keychain refusal message and leaves a keychain-wrapped index unchanged', async () => {
