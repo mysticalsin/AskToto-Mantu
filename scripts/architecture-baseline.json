@@ -43,7 +43,7 @@
     "src/main/brain/ingest.ts": 3010,
     "src/main/brain/publish.ts": 990,
     "src/main/brain/store.ts": 1197,
-    "src/main/cli.ts": 1690,
+    "src/main/cli.ts": 1678,
     "src/main/import-jobs.ts": 1198,
     "src/main/index.ts": 9818,
     "src/main/recall.ts": 950,
