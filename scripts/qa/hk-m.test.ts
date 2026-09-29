@@ -5,7 +5,8 @@ import {
   runtimeRoleVerdict,
   scenarioEvidence,
   scenarioStillStarting,
-  supervisedColdStartVerdict
+  supervisedColdStartVerdict,
+  UNRELATED_FIXTURE_LIFETIME_MS
 } from './hk-m.mjs'
 
 const modelSidecar = { pid: 101, ppid: 100, startedMs: 1001, exe: '/tmp/llama-server', role: 'llama-server' }
@@ -189,5 +190,13 @@ describe('HK-M scenario waiting', () => {
     expect(scenarioStillStarting({ ok: false, status: 'FAIL', failure: 'expected_model_sidecar_absent' })).toBe(true)
     expect(scenarioStillStarting({ ok: false, status: 'FAIL', failure: 'expected_ffmpeg_sidecar_absent' })).toBe(false)
     expect(scenarioStillStarting({ ok: true })).toBe(false)
+  })
+})
+
+describe('HK-M same-name fixture', () => {
+  // Cause of the model-row failures: the reaper matches by exe realpath and registry identity, never by name, so the
+  // fixture (a temp copy of sleep) was not killed by the app; its former 60 s lifetime expired during a slow model load.
+  it('outlives the ready wait, the scenario wait and the survivor bound', () => {
+    expect(UNRELATED_FIXTURE_LIFETIME_MS).toBeGreaterThan(150_000 + 240_000 + 5_000)
   })
 })

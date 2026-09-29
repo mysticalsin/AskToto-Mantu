@@ -40,6 +40,11 @@ const UNRELATED_SAME_NAME_ROLE = 'llama-server'
 const SUPERVISOR_HELPER_ROLE = 'metis-mac-helper'
 const SCENARIO_TIMEOUT_MS = 240_000
 const RELAUNCH_SETTLE_MS = 3_000
+// The same-name fixture is an independent `sleep` that must outlive the slowest row: ready wait, scenario wait, the
+// survivor bound and the relaunch check, plus a margin. A shorter fixture expires mid-row on a slow model load and
+// masquerades as a process Métis killed (model rows: unrelated_same_name_fixture_died_before_kill).
+export const UNRELATED_FIXTURE_LIFETIME_MS =
+  READY_TIMEOUT_MS + SCENARIO_TIMEOUT_MS + SURVIVOR_BOUND_MS + READY_TIMEOUT_MS + RELAUNCH_SETTLE_MS + 60_000
 const MODEL_SCENARIOS = Object.freeze(['model-starting', 'active-inference'])
 
 function usage() {
@@ -281,7 +286,7 @@ async function startUnrelatedSameNameFixture() {
   try {
     copyFileSync('/bin/sleep', executable)
     chmodSync(executable, 0o755)
-    proc = spawn(executable, ['60'], { stdio: 'ignore' })
+    proc = spawn(executable, [String(Math.ceil(UNRELATED_FIXTURE_LIFETIME_MS / 1000))], { stdio: 'ignore' })
     let spawnError = null
     let exited = false
     proc.once('error', (error) => {
