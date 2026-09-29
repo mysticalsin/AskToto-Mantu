@@ -32,7 +32,7 @@ from `http://localhost` and remote fallbacks mask local failures. Smoke-test the
 a direct probe — Playwright `_electron.launch({ executablePath })`, then
 `win.evaluate(() => fetch('scheme://…'))` from both the window and a Worker — and assert
 `ok === true` plus expected byte lengths. Any repo bundling offline assets behind a custom scheme
-should keep such a probe next to its build scripts (here: `.forge/probe-asr-protocol.mjs`).
+should keep such a probe next to its build scripts (here: `.forge/probe-asr-protocol.mjs`, a scratch script that is no longer tracked in the repo).
 
 ## 2. electron-builder winCodeSign cache: symlink privilege breaks all Windows signing
 
