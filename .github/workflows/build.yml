@@ -23,6 +23,13 @@ on:
 permissions:
   contents: read
 
+# Superseded runs of a ticket branch or PR are cancelled by the next push; every other run (main,
+# m2/integration, tags, dispatch, schedule) has a run-unique group and is never cancelled, so each head keeps
+# its own complete run.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'push' && !contains(fromJSON('["refs/heads/main","refs/heads/master","refs/heads/m2/integration"]'), github.ref) && startsWith(github.ref, 'refs/heads/') && github.ref) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && !contains(fromJSON('["refs/heads/main","refs/heads/master","refs/heads/m2/integration"]'), github.ref)) }}
+
 jobs:
   quality:
     # Matrix over both host platforms is LOAD-BEARING. This job was ubuntu-only for the app's whole
