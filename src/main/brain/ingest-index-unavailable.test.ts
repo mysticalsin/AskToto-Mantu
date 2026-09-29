@@ -227,7 +227,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     await waitForIdle()
 
     expect(r.queued).toBe(0)
-    expect(r.error).toContain('newer Métis')
+    expect(r.error).toContain('newer version of Métis')
     expect(createStreamMock).not.toHaveBeenCalled()
     expect(sha256(readFileSync(primary))).toBe(beforeIndex)
     expect(existsSync(sentinelPath)).toBe(true)
