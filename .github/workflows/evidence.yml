@@ -23,10 +23,27 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
+      - name: Check refactor classification
+        id: refactor
+        run: node scripts/refactor/check-pr-classification.mjs --pr-event "$GITHUB_EVENT_PATH"
+      - name: Test the refactor governance tools
+        run: node --test scripts/refactor/verify-move.test.mjs
+      - name: Verify pure-move refactor
+        if: steps.refactor.outputs.classification == 'pure-move'
+        run: node scripts/refactor/verify-move.mjs --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}"
+      - name: Upload refactor reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: refactor-governance
+          path: out/refactor/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify the evidence records in the PR body
         run: node scripts/evidence/check.mjs --pr-event "$GITHUB_EVENT_PATH"
         env:

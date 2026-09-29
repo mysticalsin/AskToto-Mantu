@@ -124,8 +124,11 @@ export function whenMaintenanceWindowOpens(): Promise<void> {
   })
 }
 
-export function onMaintenanceMayBegin(listener: () => void): void {
+export function onMaintenanceMayBegin(listener: () => void): () => void {
   listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
 }
 
 export function reportDeferred(kind: SchedulerJobKind, reason: DeferredReason): void {
