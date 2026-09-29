@@ -639,6 +639,7 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
+import { scheduleTrayAfterFirstPaint, yieldToEventLoop } from './boot-tray'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
@@ -9140,9 +9141,8 @@ if (!app.requestSingleInstanceLock()) {
     contents.on('input-event', (_inputEvent, input) => noteUserInput(input.type))
   })
   // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
-  // proxy/CLI/key seeding before first paint — hoist IPC+window for wiped-profile exclusive (the tray follows first paint, M2-0422).
-  // Call registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared
-  // later in this whenReady callback — using them here fails CI typecheck "used before declaration").
+  // proxy/CLI/key seeding before first paint — hoist IPC+window for wiped-profile exclusive (tray: M2-0422).
+  // Call registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared later in this whenReady callback — "used before declaration").
   // Later boot still runs createWindow idempotently (early return if win exists).
   if (onboardingExclusiveLive()) {
     try {
@@ -9353,34 +9353,6 @@ if (!app.requestSingleInstanceLock()) {
     // (it starts inside createWindow itself); those run un-timed since no heartbeat exists yet to blame.
     if (observability) observability.timePhase(name, run)
     else run()
-  }
-
-  const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
-
-  // M2-0422: the tray is not needed to paint, so it is built in its own task after the window's first paint.
-  // If the window never came up (createWindow threw) the tray is the user's only Show/Quit path, so it is
-  // built at once; a paint that never reports is covered by a bounded fallback timer.
-  const startTrayAfterFirstPaint = (): void => {
-    const target = win
-    if (!target || target.isDestroyed()) {
-      runStep('createTray', createTray)
-      return
-    }
-    let started = false
-    const start = (): void => {
-      if (started) return
-      started = true
-      setImmediate(() => runStep('createTray', createTray))
-    }
-    // The exclusive-onboarding hoist can have created the window (and painted it) before this runs.
-    if (!target.webContents.isLoading() && target.webContents.getURL() !== '') {
-      start()
-      return
-    }
-    target.once('ready-to-show', start)
-    target.webContents.once('did-finish-load', start)
-    const fallback = setTimeout(start, 5000)
-    fallback.unref?.()
   }
 
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
@@ -9648,8 +9620,6 @@ if (!app.requestSingleInstanceLock()) {
   // Catch the case where encryption was already on (managed-config or a previous run) with a stale
   // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
   runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
-  // M2-0422: native tray construction (~20% of the boot main-thread stretch) moved behind first paint; see
-  // startTrayAfterFirstPaint below. registerShortcuts still stays ahead of createWindow.
   // FITO-185-X: registerIpc also stays ahead of createWindow — handlers read win/tray lazily at
   // invocation time, and first paint must not race loadURL before settings/auth IPC exists.
   runStep('registerShortcuts', registerShortcuts)
@@ -9659,10 +9629,9 @@ if (!app.requestSingleInstanceLock()) {
   // "Loading" strip Tony still hits when exclusive exits or settings IPC is late.
   runStep('registerIpc', registerIpc)
   clearBootWatchOnce('registerIpc')
-  // M2-0422: yield so window construction is its own task, not chained onto the shortcut/IPC registration.
-  await yieldToEventLoop()
+  await yieldToEventLoop() // M2-0422: window construction is its own task
   runStep('createWindow', createWindow)
-  startTrayAfterFirstPaint()
+  scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
   revealController.markBootComplete()
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
@@ -9674,8 +9643,7 @@ if (!app.requestSingleInstanceLock()) {
   } catch (e) {
     mainLog.warn('[boot] powerMonitor unlock-screen hook failed:', e)
   }
-  // M2-0422: the post-window boot steps run as a separate task from createWindow.
-  await yieldToEventLoop()
+  await yieldToEventLoop() // M2-0422: post-window boot steps are a separate task
   // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
   // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
   // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow+registerIpc:

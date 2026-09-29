@@ -3,8 +3,6 @@ import { promisify } from 'node:util'
 import type { AuditSink } from '../../logger'
 import type { SIDECAR_NAMES } from './projection'
 
-const execFileAsync = promisify(execFile)
-
 export type SidecarName = (typeof SIDECAR_NAMES)[number]
 
 /** The ChildProcess surface this module reads. */
@@ -44,9 +42,14 @@ export function observeSidecar(
   })
 }
 
-async function processGroupId(pid: number): Promise<PgidResult> {
+function processGroupId(pid: number): PgidResult | Promise<PgidResult> {
   if (process.platform === 'win32') return null
+  return posixProcessGroupId(pid)
+}
+
+async function posixProcessGroupId(pid: number): Promise<PgidResult> {
   try {
+    const execFileAsync = promisify(execFile)
     const { stdout } = await execFileAsync('ps', ['-o', 'pgid=', '-p', String(pid)], {
       encoding: 'utf8',
       timeout: 2_000
