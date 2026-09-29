@@ -29,7 +29,7 @@ import { computeIntegrationsVersion, handleIntegrationsSeat } from './routes/int
 import { pruneRetention } from './retention'
 import { d1SchemaStatus } from './routes/admin-core'
 import { looksLikeSecret } from './redact'
-import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
+import type { AskRow, OperatorStore, SeatRow } from './store'
 import { resolveTierAndEntitlements } from './tiers'
 import { binaryAssetResponse, isBinaryAssetPath, isPublicAssetPath, publicAssetResponse } from './assets'
 import { handleAsk } from './ask'
@@ -162,9 +162,8 @@ const HEALTH_D1_TIMEOUT_MS = 2000
 async function healthD1Status(db: D1DatabaseLike | undefined): Promise<'ok' | 'error' | 'unbound'> {
   if (!db) return 'unbound'
   const timeout = new Promise<'error'>((resolve) => setTimeout(() => resolve('error'), HEALTH_D1_TIMEOUT_MS))
-  const probe = db
-    .prepare('SELECT 1')
-    .all()
+  const probe = Promise.resolve()
+    .then(() => db.prepare('SELECT 1').all())
     .then(() => 'ok' as const)
     .catch(() => 'error' as const)
   return Promise.race([probe, timeout])
@@ -202,7 +201,9 @@ async function lastCronAt(store: OperatorStore): Promise<number | null> {
 
 async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: HandleOpts = {}): Promise<Response> {
   const url = new URL(request.url)
-  const store = opts.store ?? (env.DB ? d1Store(env.DB) : memoryStore())
+  // The Worker never constructs an ephemeral store: without a D1 binding it refuses to serve (a tests-only
+  // `opts.store` is the one injection seam), so an unbound deploy can never look live.
+  const store = opts.store ?? (env.DB ? d1Store(env.DB) : null)
   const now = opts.now ?? Date.now()
   const accessCtx: AccessCtx = opts.access ? { access: opts.access } : ctx
 
@@ -210,22 +211,30 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     const [d1, schema, lastIngest, lastCron] = await Promise.all([
       healthD1Status(env.DB),
       healthSchemaStatus(env.DB),
-      lastIngestAt(store),
-      lastCronAt(store)
+      store ? lastIngestAt(store) : null,
+      store ? lastCronAt(store) : null
     ])
-    return json({
-      ok: true,
-      service: 'metis-operator',
-      configured: Boolean(env.OPERATOR_INGEST_SECRET && env.OPERATOR_PROMPT_KEY),
-      version: env.OPERATOR_VERSION?.trim() || 'dev',
-      builtAt: env.OPERATOR_BUILT_AT?.trim() || null,
-      env: env.OPERATOR_ENV?.trim() || 'production',
-      d1,
-      schema,
-      lastIngestAt: lastIngest,
-      lastCronAt: lastCron
-    })
+    // Ready only when there is a store behind the Worker and, if D1 is bound, it answers and matches the
+    // migration head; anything else is degraded, never live.
+    const ready = store !== null && (!env.DB || (d1 === 'ok' && schema === 'ok'))
+    return json(
+      {
+        ok: ready,
+        service: 'metis-operator',
+        configured: Boolean(env.OPERATOR_INGEST_SECRET && env.OPERATOR_PROMPT_KEY),
+        version: env.OPERATOR_VERSION?.trim() || 'dev',
+        builtAt: env.OPERATOR_BUILT_AT?.trim() || null,
+        env: env.OPERATOR_ENV?.trim() || 'production',
+        d1,
+        schema,
+        lastIngestAt: lastIngest,
+        lastCronAt: lastCron
+      },
+      ready ? 200 : 503
+    )
   }
+
+  if (!store) return json({ ok: false, error: 'operator store unavailable: D1 binding missing' }, 503)
 
   if (isPublicAssetPath(url.pathname)) {
     if (isBinaryAssetPath(url.pathname)) return binaryAssetResponse(request, env)
@@ -619,7 +628,11 @@ export default {
     return handleRequest(request, env, ctx)
   },
   async scheduled(_event: unknown, env: Env, _ctx: unknown): Promise<void> {
-    const store: OperatorStore = env.DB ? d1Store(env.DB) : memoryStore()
+    if (!env.DB) {
+      console.error(JSON.stringify({ t: 'retention', ok: false, error: 'D1 binding missing; cron skipped' }))
+      return
+    }
+    const store: OperatorStore = d1Store(env.DB)
     // `pruneRetention` closes stale sessions itself as its last step, so the cron needs only the one
     // call; `db` is only for the two raw-table prunes (`integration_grants`, `mcp_calls`) that live
     // outside `OperatorStore`.
