@@ -2,14 +2,14 @@
    stop-square as the "thinking" signal). A rotating conic-gradient is masked to a thin border ring so
    only the outline is colored; the input/buttons inside stay untouched. pointer-events:none so it
    never intercepts clicks. */
-@property --cl-rainbow-angle {
+@property --rainbow-angle {
   syntax: '<angle>';
   initial-value: 0deg;
   inherits: false;
 }
 @keyframes cl-rainbow-spin {
   to {
-    --cl-rainbow-angle: 360deg;
+    --rainbow-angle: 360deg;
   }
 }
 .rainbow-ring {
@@ -22,7 +22,7 @@
   border-radius: inherit;
   padding: 1.5px;
   background: conic-gradient(
-    from var(--cl-rainbow-angle),
+    from var(--rainbow-angle),
     #ff3b30,
     #ff9500,
     #34c759,
@@ -63,7 +63,7 @@
     linear-gradient(var(--glass-fill), var(--glass-fill)),
     linear-gradient(var(--glass-scrim-bar), var(--glass-scrim-bar)),
     conic-gradient(
-      from var(--cl-rainbow-angle),
+      from var(--rainbow-angle),
       #ff3b30,
       #ff9500,
       #34c759,
@@ -113,7 +113,7 @@
   border-radius: inherit;
   padding: 2.5px;
   background: conic-gradient(
-    from var(--cl-rainbow-angle),
+    from var(--rainbow-angle),
     #ff3b30,
     #ff9500,
     #34c759,

@@ -23,7 +23,7 @@ export const TOKENS_FILE = 'src/renderer/src/tokens.css'
 const RENDERER_DIR = 'src/renderer/src'
 const BASELINE_FILE = 'scripts/color-literal-baseline.json'
 const HEX_LITERAL = /#[0-9a-fA-F]{3,8}\b/
-const TOKEN_DECLARATION = /^\s*--(?:color|cl|aw|pass|glass|space|radius|shadow|blur)-[\w-]+\s*:/
+const TOKEN_DECLARATION = /(?:^|[{;])\s*--(?:color|cl|aw|pass|glass|space|radius|shadow|blur)-[\w-]+\s*:/
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
