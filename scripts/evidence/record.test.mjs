@@ -131,6 +131,39 @@ test('R6 environment.kind must match the level: in-house only for LOCALLY_TESTED
   assertProblem(recordProblems(liveVerified({ environment: { kind: 'ci', host: 'ubuntu-latest' } })), 'environment.kind')
 })
 
+test('R6b hosted-runner: accepted on HOST_CONFIGURED, LIVE_VERIFIED and MEASURED for the two hosted hosts only', () => {
+  const macLive = liveVerified({ environment: { kind: 'hosted-runner', host: 'macos-latest' }, ci_run_id: 303 })
+  assert.deepEqual(recordProblems(macLive), [])
+  const winHost = hostConfigured({ environment: { kind: 'hosted-runner', host: 'windows-latest' }, ci_run_id: 303 })
+  assert.deepEqual(recordProblems(winHost), [])
+  const winMeasured = measured({ environment: { kind: 'hosted-runner', host: 'windows-latest' }, ci_run_id: 303 })
+  assert.deepEqual(recordProblems(winMeasured), [])
+  // one run may both build and test the bytes
+  assert.deepEqual(recordProblems({ ...macLive, ci_run_id: 202 }), [])
+
+  for (const host of ['qa-mac-1', 'ubuntu-latest']) {
+    const problems = recordProblems(liveVerified({ environment: { kind: 'hosted-runner', host }, ci_run_id: 303 }))
+    assertProblem(problems, 'environment.host', 'macos-latest', 'windows-latest')
+  }
+})
+
+test('R6c hosted-runner is rejected for LOCALLY_TESTED and needs ci_run_id at each hosted level', () => {
+  assertProblem(
+    recordProblems(locallyTested({ environment: { kind: 'hosted-runner', host: 'macos-latest' } })),
+    "environment.kind: expected 'ci'"
+  )
+  const hosted = { kind: 'hosted-runner', host: 'macos-latest' }
+  for (const [level, build] of [['HOST_CONFIGURED', hostConfigured], ['LIVE_VERIFIED', liveVerified], ['MEASURED', measured]]) {
+    assertProblem(recordProblems(build({ environment: hosted })), `ci_run_id: required for a hosted-runner ${level} record`)
+  }
+})
+
+test('R6d the other kinds keep the generic host-label rule', () => {
+  assert.deepEqual(recordProblems(hostConfigured({ environment: { kind: 'windows-runner', host: 'windows-latest' } })), [])
+  assert.deepEqual(recordProblems(liveVerified({ environment: { kind: 'owner-mac', host: 'ubuntu-latest' } })), [])
+  assertProblem(recordProblems(liveVerified({ environment: { kind: 'qa-mac', host: 'Bad Host' } })), 'environment.host')
+})
+
 test('R7 the same session id as implementer and validator is rejected', () => {
   const record = locallyTested({ implementer_session: session('same'), validator_session: session('same') })
   assertProblem(recordProblems(record), 'validator_session.id')

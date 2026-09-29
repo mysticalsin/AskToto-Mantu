@@ -575,6 +575,36 @@ test('P2 a valid LOCALLY_TESTED block with a green run on the head SHA passes', 
   assert.deepEqual(problems, [])
 })
 
+const liveRecord = (environment, overrides = {}) => record({
+  evidence_level: 'LIVE_VERIFIED',
+  pr: undefined,
+  ci_run_id: 303,
+  artifact_sha256: 'a'.repeat(64),
+  build_run_id: 303,
+  environment,
+  command: 'npm run check:packaged-launch',
+  output: { path: 'evidence/raw/M2-0001/launch.json', sha256: 'a'.repeat(64) },
+  ...overrides
+})
+
+test('H1 a LIVE_VERIFIED requirement closes on a hosted-runner record and not on a ci record', () => {
+  const t = ticket({ id: 'M2-0001', status: 'DONE', required_evidence: ['LIVE_VERIFIED'] })
+  const hosted = liveRecord({ kind: 'hosted-runner', host: 'macos-latest' })
+  assert.deepEqual(ledgerProblems(ledger({ tickets: [t] }), new Map([['M2-0001', [hosted]]])), [])
+
+  const ci = liveRecord({ kind: 'ci', host: 'ubuntu-latest' })
+  assertProblem(ledgerProblems(ledger({ tickets: [t] }), new Map([['M2-0001', [ci]]])), 'M2-0001', 'LIVE_VERIFIED')
+})
+
+test('H2 --pr-event accepts a hosted-runner LIVE_VERIFIED block without resolving ci_run_id as a Build & Test run', async () => {
+  const rec = liveRecord({ kind: 'hosted-runner', host: 'windows-latest' })
+  const problems = await prProblems({
+    body: evidenceBody(rec), headSha: SHA1_A, prNumber: 42,
+    github: fakeGithub({ throwOnRun: true }), fileExists: () => true
+  })
+  assert.deepEqual(problems, [])
+})
+
 test('P3 a stale commit or a mismatched PR number is a problem', async () => {
   const github = fakeGithub({ runs: { 101: greenRun } })
   const staleCommit = await prProblems({ body: evidenceBody(record({ commit: SHA1_A })), headSha: SHA1_B, prNumber: 42, github, fileExists: () => true })
