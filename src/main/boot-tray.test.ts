@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import {
+  attachMenuOnFirstOpen,
   buildTrayInStages,
   createSingleFlight,
   formatTrayAccelerator,
@@ -359,6 +360,114 @@ describe('loadPresizedTrayIcon (M2-0031)', () => {
 
     expect(icon.name).toBe('thumb')
     expect(images.createThumbnailFromPath).toHaveBeenCalledExactlyOnceWith(PATHS.fullSize, TRAY_ICON_SIZE)
+  })
+})
+
+describe('buildTrayInStages image and lazy-menu stages (M2-0433)', () => {
+  it('gives the bare item its image in a task of its own, and attaches no menu at boot when there is no attachMenu', async () => {
+    const order: string[] = []
+    const labels: string[] = []
+    await buildTrayInStages<string>({
+      loadIcon: async () => 'icon',
+      create: () => {
+        order.push('create')
+        setImmediate(() => order.push('task-after-create'))
+      },
+      setImage: (icon) => {
+        order.push(`setImage:${icon}`)
+        setImmediate(() => order.push('task-after-setImage'))
+      },
+      decorate: () => order.push('decorate'),
+      time: (label, fn) => {
+        labels.push(label)
+        return fn()
+      },
+      fail: (error) => {
+        throw error
+      }
+    })
+    expect(order).toEqual(['create', 'task-after-create', 'setImage:icon', 'task-after-setImage', 'decorate'])
+    expect(labels).toEqual(['createTray.newTray', 'createTray.setImage', 'createTray.decorate'])
+  })
+})
+
+describe('attachMenuOnFirstOpen (M2-0433)', () => {
+  function fakeTray() {
+    const state = { destroyed: false }
+    return Object.assign(new EventEmitter(), {
+      state,
+      isDestroyed: () => state.destroyed,
+      setContextMenu: vi.fn<(menu: string | null) => void>(),
+      popUpContextMenu: vi.fn<(menu?: string) => void>()
+    })
+  }
+
+  it.each(['darwin', 'win32'] as const)('on %s builds and attaches nothing until the first right-click, then pops that menu up once', (platform) => {
+    const tray = fakeTray()
+    const buildMenu = vi.fn(() => 'menu-1')
+    const labels: string[] = []
+    attachMenuOnFirstOpen(tray, platform, buildMenu, (label, fn) => {
+      labels.push(label)
+      return fn()
+    })
+    expect(buildMenu).not.toHaveBeenCalled()
+    expect(tray.setContextMenu).not.toHaveBeenCalled()
+
+    tray.emit('right-click')
+    expect(buildMenu).toHaveBeenCalledTimes(1)
+    expect(tray.setContextMenu).toHaveBeenCalledExactlyOnceWith('menu-1')
+    expect(tray.popUpContextMenu).toHaveBeenCalledExactlyOnceWith('menu-1')
+    expect(labels).toEqual(['createTray.buildMenu', 'createTray.attachMenu'])
+
+    // Later opens are the native attached menu's own.
+    tray.emit('right-click')
+    tray.emit('click')
+    expect(buildMenu).toHaveBeenCalledTimes(1)
+    expect(tray.popUpContextMenu).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens the menu on the first macOS left click (an attached menu opens on it natively) but not on a Windows left click', () => {
+    const mac = fakeTray()
+    attachMenuOnFirstOpen(mac, 'darwin', () => 'menu')
+    mac.emit('click')
+    expect(mac.popUpContextMenu).toHaveBeenCalledExactlyOnceWith('menu')
+
+    const windows = fakeTray()
+    attachMenuOnFirstOpen(windows, 'win32', () => 'menu')
+    windows.emit('click')
+    expect(windows.setContextMenu).not.toHaveBeenCalled()
+    expect(windows.popUpContextMenu).not.toHaveBeenCalled()
+  })
+
+  it('attaches at once where the tray emits no open event', () => {
+    const tray = fakeTray()
+    attachMenuOnFirstOpen(tray, 'linux', () => 'menu')
+    expect(tray.setContextMenu).toHaveBeenCalledExactlyOnceWith('menu')
+    expect(tray.popUpContextMenu).not.toHaveBeenCalled()
+  })
+
+  it('rebuild does nothing before the first open and replaces the attached menu after it', () => {
+    const tray = fakeTray()
+    let built = 0
+    const menu = attachMenuOnFirstOpen(tray, 'darwin', () => `menu-${++built}`)
+    menu.rebuild()
+    expect(built).toBe(0)
+    expect(tray.setContextMenu).not.toHaveBeenCalled()
+
+    tray.emit('right-click')
+    menu.rebuild()
+    expect(tray.setContextMenu).toHaveBeenLastCalledWith('menu-2')
+  })
+
+  it('does nothing on an open or a rebuild once the tray is destroyed', () => {
+    const tray = fakeTray()
+    const buildMenu = vi.fn(() => 'menu')
+    const menu = attachMenuOnFirstOpen(tray, 'win32', buildMenu)
+    tray.state.destroyed = true
+    tray.emit('right-click')
+    menu.rebuild()
+    expect(buildMenu).not.toHaveBeenCalled()
+    expect(tray.setContextMenu).not.toHaveBeenCalled()
   })
 })
 

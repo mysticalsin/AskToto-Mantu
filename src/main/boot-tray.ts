@@ -52,25 +52,32 @@ export interface TrayStages<Icon, Menu = unknown> {
   loadIcon(time: TrayPhaseTimer): Promise<Icon>
   /** Constructs the native tray item from the loaded image. */
   create(icon: Icon): void
-  /** Sets the created item's title, tooltip and click handler; receives the image `create` was given. */
+  /** Gives the created item its image, when `create` built it without one. */
+  setImage?(icon: Icon): void
+  /** Sets the created item's title, tooltip and click handler; receives the loaded image. */
   decorate?(icon: Icon): void
   /** Builds the context menu handed to `attachMenu`. */
   buildMenu?(): Menu
-  /** Attaches the menu `buildMenu` built (undefined when there is no `buildMenu`, so it builds the menu itself). */
-  attachMenu(menu: Menu | undefined): void
+  /** Attaches the menu `buildMenu` built (undefined when there is no `buildMenu`, so it builds the menu itself).
+   *  Absent when the menu is attached later, on the tray's first open (attachMenuOnFirstOpen). */
+  attachMenu?(menu: Menu | undefined): void
   /** Times one stage (the boot phase trace), so a slow stage is named on its own. */
   time: TrayPhaseTimer
   fail(error: unknown): void
 }
 
-/** M2-0031, M2-0433: every tray stage (image load, native item, its title, the menu build, the menu attach) runs
- *  in a main-thread task of its own, so no single task holds two native steps together. A failure in any stage
- *  is reported once through `fail` and ends the build; a tray already created stays usable. */
+/** M2-0031, M2-0433: every tray stage (image load, native item, its image, its title, the menu build, the menu
+ *  attach) runs in a main-thread task of its own, so no single task holds two native steps together. A failure in
+ *  any stage is reported once through `fail` and ends the build; a tray already created stays usable. */
 export async function buildTrayInStages<Icon, Menu = unknown>(stages: TrayStages<Icon, Menu>): Promise<void> {
   try {
     const icon = await stages.loadIcon(stages.time)
     await yieldToEventLoop()
     stages.time('createTray.newTray', () => stages.create(icon))
+    if (stages.setImage) {
+      await yieldToEventLoop()
+      stages.time('createTray.setImage', () => stages.setImage?.(icon))
+    }
     if (stages.decorate) {
       await yieldToEventLoop()
       stages.time('createTray.decorate', () => stages.decorate?.(icon))
@@ -80,10 +87,62 @@ export async function buildTrayInStages<Icon, Menu = unknown>(stages: TrayStages
       await yieldToEventLoop()
       menu = stages.time('createTray.buildMenu', () => stages.buildMenu?.())
     }
-    await yieldToEventLoop()
-    stages.time('createTray.attachMenu', () => stages.attachMenu(menu))
+    if (stages.attachMenu) {
+      await yieldToEventLoop()
+      stages.time('createTray.attachMenu', () => stages.attachMenu?.(menu))
+    }
   } catch (error) {
     stages.fail(error)
+  }
+}
+
+/** The slice of Electron's Tray the lazy context menu uses. */
+export interface LazyMenuTray<Menu> {
+  isDestroyed(): boolean
+  on(event: 'click', listener: () => void): unknown
+  on(event: 'right-click', listener: () => void): unknown
+  setContextMenu(menu: Menu | null): void
+  popUpContextMenu(menu?: Menu): void
+}
+
+export interface LazyTrayMenu {
+  /** Rebuilds the attached menu (fresh accelerator labels); before the first open there is nothing to rebuild,
+   *  since that open builds the menu from current settings. */
+  rebuild(): void
+}
+
+/** M2-0433: building and attaching the context menu held the main thread for hundreds of ms at boot, so on macOS
+ *  and Windows the menu is built and attached on the tray's first open (right-click everywhere, and the macOS
+ *  left click, which opens an attached menu natively) and popped up in that same task; every later open is
+ *  native. Platforms that emit no open event get the menu at once. The build and the attach are timed as
+ *  'createTray.buildMenu' and 'createTray.attachMenu' whenever they run. */
+export function attachMenuOnFirstOpen<Menu>(
+  tray: LazyMenuTray<Menu>,
+  platform: NodeJS.Platform,
+  buildMenu: () => Menu,
+  time: TrayPhaseTimer = untimed
+): LazyTrayMenu {
+  let attached = false
+  const attach = (): Menu => {
+    const menu = time('createTray.buildMenu', buildMenu)
+    time('createTray.attachMenu', () => tray.setContextMenu(menu))
+    attached = true
+    return menu
+  }
+  const openFirst = (): void => {
+    if (attached || tray.isDestroyed()) return
+    tray.popUpContextMenu(attach())
+  }
+  if (platform === 'darwin' || platform === 'win32') {
+    tray.on('right-click', openFirst)
+    if (platform === 'darwin') tray.on('click', openFirst)
+  } else {
+    attach()
+  }
+  return {
+    rebuild() {
+      if (attached && !tray.isDestroyed()) tray.setContextMenu(buildMenu())
+    }
   }
 }
 

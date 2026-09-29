@@ -641,7 +641,18 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
-import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
+import {
+  attachMenuOnFirstOpen,
+  buildTrayInStages,
+  createSingleFlight,
+  formatTrayAccelerator,
+  loadPresizedTrayIcon,
+  scheduleTrayAfterFirstPaint,
+  trayIconPaths,
+  yieldToEventLoop,
+  type LazyTrayMenu,
+  type TrayPhaseTimer
+} from './boot-tray'
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
@@ -1028,6 +1039,7 @@ function privateViewOn(): boolean {
 
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
+let trayMenu: LazyTrayMenu | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
 const commandControl = new CommandControl({
   execute: executeDesktopAction,
@@ -4676,9 +4688,15 @@ function createTray(): void {
   // menu-bar item and orphans the first Tray. A build still in flight counts as created (startTrayBuild ignores it).
   if (tray && !tray.isDestroyed()) return
   const iconPaths = trayIconPaths(app.isPackaged ? process.resourcesPath : join(__dirname, '../../build'))
-  startTrayBuild(() => buildTrayInStages<Electron.NativeImage, Menu>({
+  const timeStage: TrayPhaseTimer = (label, fn) => timeBootStage(observability, label, fn)
+  startTrayBuild(() => buildTrayInStages<Electron.NativeImage>({
     loadIcon: (time) => loadPresizedTrayIcon(nativeImage, iconPaths, process.platform, time),
-    create: (img) => { tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img) },
+    // M2-0433: the status item is created bare and given its image in the next task, so neither native step
+    // shares a task with the other.
+    create: () => { tray = new Tray(nativeImage.createEmpty()) },
+    setImage(img) {
+      if (tray && !tray.isDestroyed() && !img.isEmpty()) tray.setImage(img)
+    },
     decorate(img) {
       if (!tray || tray.isDestroyed()) return
       const emptyIcon = img.isEmpty()
@@ -4688,23 +4706,21 @@ function createTray(): void {
       tray.setToolTip('Métis')
       // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
       tray.on('click', () => sendHotkey('settings'))
+      trayMenu = attachMenuOnFirstOpen(tray, process.platform, buildTrayMenu, timeStage)
       auditLog('tray.created', { emptyIcon })
     },
-    buildMenu: buildTrayMenu,
-    attachMenu: (menu) => tray?.setContextMenu(menu ?? buildTrayMenu()),
-    time: (label, fn) => timeBootStage(observability, label, fn),
+    time: timeStage,
     fail: (e) => auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
   }))
 }
 
-/** Rebuild the tray's context menu after a shortcut rebind. createTray() only builds the menu once at
- *  boot (accelerator strings baked in from settings read at that moment); without this, the tray keeps
+/** Rebuild the tray's context menu after a shortcut rebind. The menu is built once, on the tray's first open
+ *  (accelerator strings baked in from settings read at that moment); without this, the tray keeps
  *  showing stale accelerators for the rest of the process life after settingsSet's registerShortcuts()
- *  re-registers the new bindings. No-op if the tray was never created (optional feature). */
+ *  re-registers the new bindings. No-op if the tray was never created or never opened (optional feature). */
 function rebuildTrayMenu(): void {
-  if (!tray) return
   try {
-    tray.setContextMenu(buildTrayMenu())
+    trayMenu?.rebuild()
   } catch {
     /* tray optional */
   }

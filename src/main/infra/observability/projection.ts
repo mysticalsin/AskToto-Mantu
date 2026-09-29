@@ -46,11 +46,13 @@ export const SIDECAR_REAP_SKIP_REASONS = [
   'kill-failed',
   'ambiguous-entry'
 ] as const
-/** The native boot stages timed on their own (M2-0433): each runs in a main-thread task of its own. */
+/** The native tray and window stages, each timed on its own (M2-0433). The tray menu's build and attach run on
+ *  the tray's first open, not at boot, on macOS and Windows. */
 export const BOOT_STAGES = [
   'createTray.loadIcon',
   'createTray.loadIcon.fallback',
   'createTray.newTray',
+  'createTray.setImage',
   'createTray.decorate',
   'createTray.buildMenu',
   'createTray.attachMenu',
@@ -58,7 +60,7 @@ export const BOOT_STAGES = [
   'createWindow.firstShow'
 ] as const
 export type BootStage = (typeof BOOT_STAGES)[number]
-export const HISTORY_STAGES =['received', 'served', 'settled'] as const
+export const HISTORY_STAGES = ['received', 'served', 'settled'] as const
 export const HISTORY_OUTCOMES = ['ok', 'failed', 'discarded'] as const
 const RENDER_GONE_REASONS = [
   'clean-exit',

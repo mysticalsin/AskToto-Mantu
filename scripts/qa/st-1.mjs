@@ -13,7 +13,8 @@
  * `none` places no fixture: the control row, which tells a boot-time block apart from a fixture reader.
  *
  * Attribution evidence, reported and never judged: every sample's time since spawn, the loop's max since
- * the previous sample and the active libuv resources; a CPU profile of the first 90 s; the profile's
+ * the previous sample, the loop's max during its write (a slow write whose value is close to it waited on a
+ * main-thread block, not on the libuv pool) and the active libuv resources; a CPU profile of the first 90 s; the profile's
  * audit logs, stall bundles and this launch's main.log; which FIFOs had a reader; and, from +20 s,
  * History's own IPC round trip (recallList + brainStatus) measured in the main window; and the app's own
  * native boot stage timings (`bootStages`: tray loadIcon/newTray/decorate/buildMenu/attachMenu, window
@@ -373,9 +374,11 @@ const sample = (probeFile) => `(async () => {
   let started = performance.now()
   await writeFile(${JSON.stringify(probeFile)}, String(started))
   const writeMs = performance.now() - started
+  // Read, not reset: the next sample's loopMaxSinceLastMs still covers this write.
+  const loopMaxDuringWriteMs = __st1since.max / 1e6
   started = performance.now()
   await lookup('localhost')
-  return { writeMs, lookupMs: performance.now() - started, loopMaxSinceLastMs, resources }
+  return { writeMs, loopMaxDuringWriteMs, lookupMs: performance.now() - started, loopMaxSinceLastMs, resources }
 })()`
 
 const SUMMARY = '({ p99Ms: __st1.percentile(99) / 1e6, maxMs: __st1.max / 1e6 })'
