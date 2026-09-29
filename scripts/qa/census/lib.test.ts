@@ -607,4 +607,16 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow.match(/run-identity\.json/g)?.length).toBeGreaterThanOrEqual(4)
     expect(workflow.match(/FILES\.sha256/g)?.length).toBeGreaterThanOrEqual(4)
   })
+
+  it('downloads the real 1.9.6 release, verifies SHA256SUMS before install, and only runs on main', () => {
+    expect(workflow).toContain('default: mysticalsin/Metis-Releases')
+    expect(workflow).toContain('default: v1.9.6-unsigned')
+    expect(workflow).not.toContain('"$GITHUB_REPOSITORY"')
+    expect(workflow.match(/--repo "\$RELEASE_REPO" --pattern 'SHA256SUMS\*'/g)).toHaveLength(2)
+    expect(workflow.match(/node scripts\/qa\/verify-sha256sums\.mjs/g)).toHaveLength(2)
+    expect(workflow.indexOf('verify-sha256sums.mjs')).toBeLessThan(workflow.indexOf('hdiutil attach'))
+    expect(workflow.lastIndexOf('verify-sha256sums.mjs')).toBeLessThan(workflow.indexOf('$setup.FullName /S'))
+    expect(workflow.match(/if: github\.ref == 'refs\/heads\/main'/g)).toHaveLength(2)
+    expect(workflow).not.toContain('secrets.')
+  })
 })

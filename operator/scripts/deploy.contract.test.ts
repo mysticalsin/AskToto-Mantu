@@ -8,7 +8,8 @@ import {
   buildSmokeArgs,
   extractDeployedUrl,
   formatBuiltAt,
-  parseArgs
+  parseArgs,
+  productionDeployRefusals
 } from './deploy.mjs'
 
 describe('parseArgs', () => {
@@ -138,5 +139,87 @@ describe('MQA-313 local deployment executables', () => {
     expect(stamp).toBeTruthy()
     expect(output).toContain(`--expected-version ${stamp}`)
     expect(output).not.toMatch(/&& npx /)
+  })
+})
+
+describe('M2-0103 owner-only production deploy gate', () => {
+  const okGit = { fetchOriginMain: () => true, headOnOriginMain: () => true }
+  const owner = parseArgs(['--env', 'production', '--owner-confirm'])
+
+  it('allows production only with confirmation, a terminal, and HEAD on a freshly fetched origin/main', () => {
+    expect(productionDeployRefusals({ args: owner, processEnv: {}, git: okGit })).toEqual([])
+  })
+
+  it('refuses without the explicit owner confirmation', () => {
+    const args = parseArgs(['--env', 'production'])
+    expect(productionDeployRefusals({ args, processEnv: {}, git: okGit }).join(' ')).toMatch(/--owner-confirm/)
+  })
+
+  it('refuses --allow-dirty outright, even with confirmation', () => {
+    const args = parseArgs(['--env', 'production', '--owner-confirm', '--allow-dirty'])
+    expect(productionDeployRefusals({ args, processEnv: {}, git: okGit }).join(' ')).toMatch(/--allow-dirty/)
+  })
+
+  it.each(['CI', 'GITHUB_ACTIONS', 'CLAUDECODE', 'CODEX_SANDBOX', 'AI_AGENT'])('refuses inside %s', (name) => {
+    const refusals = productionDeployRefusals({ args: owner, processEnv: { [name]: '1' }, git: okGit })
+    expect(refusals.join(' ')).toMatch(/CI or an agent/)
+  })
+
+  it('does not treat CI=false as automation', () => {
+    expect(productionDeployRefusals({ args: owner, processEnv: { CI: 'false' }, git: okGit })).toEqual([])
+  })
+
+  it('refuses a HEAD that is not on origin/main', () => {
+    const git = { fetchOriginMain: () => true, headOnOriginMain: () => false }
+    expect(productionDeployRefusals({ args: owner, processEnv: {}, git }).join(' ')).toMatch(/not reachable from origin\/main/)
+  })
+
+  it('refuses when origin/main cannot be freshly fetched, and never trusts a stale ref', () => {
+    let checked = false
+    const git = {
+      fetchOriginMain: () => false,
+      headOnOriginMain: () => {
+        checked = true
+        return true
+      }
+    }
+    expect(productionDeployRefusals({ args: owner, processEnv: {}, git }).join(' ')).toMatch(/could not fetch/)
+    expect(checked).toBe(false)
+  })
+
+  it('does not fetch when an earlier rule already refused', () => {
+    let fetched = false
+    const git = {
+      fetchOriginMain: () => {
+        fetched = true
+        return true
+      },
+      headOnOriginMain: () => true
+    }
+    productionDeployRefusals({ args: parseArgs(['--env', 'production']), processEnv: {}, git })
+    expect(fetched).toBe(false)
+  })
+
+  it('the CLI refuses a real production run before any step executes', () => {
+    const run = () =>
+      execFileSync(process.execPath, [resolve(__dirname, 'deploy.mjs'), '--env', 'production', '--owner-confirm'], {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: { ...process.env, CI: 'true' }
+      })
+    expect(run).toThrow(/production deploy refused/)
+  })
+})
+
+describe('M2-0103 staging is the default deploy target', () => {
+  it('a dry run with no --env plans the staging Worker and D1 only', () => {
+    const output = execFileSync(process.execPath, [resolve(__dirname, 'deploy.mjs'), '--dry-run'], {
+      encoding: 'utf8'
+    }).replace(/\\/g, '/')
+    expect(output).toContain('environment:   staging')
+    expect(output).toContain('worker:        metis-operator-staging')
+    expect(output).toContain('d1 database:   metis-operator-staging')
+    expect(output).toContain('operator/scripts/migrate.mjs --remote --env staging')
+    expect(output).toMatch(/wrangler\.js deploy .*--env staging/)
   })
 })
