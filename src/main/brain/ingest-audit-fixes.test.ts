@@ -442,7 +442,9 @@ describe('brain ingest — audited fixes', () => {
 
     expect(await startBackfill()).toEqual({ queued: 4 })
     // Three concurrent summary-mode requests all pin id_slot 1 — they cannot run in parallel, they only
-    // take the slot the live meeting needs.
+    // take the slot the live meeting needs. The first extraction starts only after its gateway read settles,
+    // so wait for it, then give a second one time to (wrongly) start alongside it.
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
     await settle()
     expect(held).toHaveLength(1)
 
