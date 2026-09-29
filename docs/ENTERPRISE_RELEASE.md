@@ -26,7 +26,7 @@ none of the gates below execute. See `docs/MANTU-IT-REQUEST.md` for the recorded
   release fails unless Developer ID + notarization inputs are present, then verifies Gatekeeper
   acceptance before the macOS publish job can run.
 - `scripts/verify-signing.mjs` checks the produced artifacts on the current platform.
-- Machine-wide managed config can lock SSO, license server, license gate, provider policy, encryption, redaction, and retention.
+- Machine-wide managed config can lock SSO, license server URL, provider policy, encryption, redaction, and retention. The license gate is compiled off until the licensing tickets re-enable and verify it, so it is not a lockable control. The Windows admin path is `%ProgramData%\Métis\managed-config.json` (`adminManagedConfigPath`), the only one the app reads.
 - The license server supports activation, heartbeat, revocation, expiry, and seat caps.
 
 ## Operator Setup
