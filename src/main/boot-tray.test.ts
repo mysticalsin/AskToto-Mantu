@@ -107,6 +107,37 @@ describe('scheduleTrayAfterFirstPaint (M2-0422)', () => {
     expect(fail).not.toHaveBeenCalled()
   })
 
+  it('buildTrayInStages runs decorate and buildMenu, when given, each in a task of its own and timed under its own label (M2-0433)', async () => {
+    const order: string[] = []
+    const labels: string[] = []
+    const done = buildTrayInStages<string>({
+      loadIcon: async () => 'icon',
+      create: () => {
+        order.push('create')
+        setImmediate(() => order.push('task-after-create'))
+      },
+      decorate: () => {
+        order.push('decorate')
+        setImmediate(() => order.push('task-after-decorate'))
+      },
+      buildMenu: () => {
+        order.push('buildMenu')
+        setImmediate(() => order.push('task-after-buildMenu'))
+      },
+      attachMenu: () => order.push('attachMenu'),
+      time: (label, fn) => {
+        labels.push(label)
+        return fn()
+      },
+      fail: (error) => {
+        throw error
+      }
+    })
+    await done
+    expect(order).toEqual(['create', 'task-after-create', 'decorate', 'task-after-decorate', 'buildMenu', 'task-after-buildMenu', 'attachMenu'])
+    expect(labels).toEqual(['createTray.newTray', 'createTray.decorate', 'createTray.buildMenu', 'createTray.attachMenu'])
+  })
+
   it('buildTrayInStages reports a failing stage once and runs no later stage', async () => {
     const attachMenu = vi.fn()
     const fail = vi.fn()

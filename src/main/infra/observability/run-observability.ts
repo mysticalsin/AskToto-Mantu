@@ -10,8 +10,10 @@
  * "inject everything Electron-specific" shape as stall-monitor.ts's test seams, so this module stays
  * importable and testable outside a real Electron process.
  */
+import { performance } from 'node:perf_hooks'
 import { beginRunWatch, markAlive, markShutdownClean, type PriorShutdown } from '../../boot-sentinel'
 import type { AuditSink } from '../../logger'
+import type { BootStage } from './projection'
 import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from './stall-monitor'
 import { startStallSampler, type StallSampler, type StallSamplerOptions } from './stall-sampler'
 
@@ -49,6 +51,7 @@ export interface RunObservabilityOptions {
     startStallSampler?: (opts: StallSamplerOptions) => StallSampler
     setIntervalFn?: (handler: () => void, ms: number) => Timer
     clearIntervalFn?: (handle: Timer) => void
+    now?: () => number
   }
 }
 
@@ -60,6 +63,13 @@ export interface RunObservability {
    *  clearing it every tick (stall-monitor.ts). Wrap any boot step or background-timer callback worth
    *  naming on a late tick; returns `fn`'s result. */
   timePhase<T>(label: string, fn: () => T): T
+  /** timePhase for a native boot stage that runs in a main-thread task of its own (M2-0433). Its duration is
+   *  also audited as `app.boot.stage`, whether `fn` returns or throws, so every run names each stage's cost
+   *  without a CPU profile. The audit write is outside the measured time. */
+  timeBootStage<T>(stage: BootStage, fn: () => T): T
+  /** Audits `app.boot.stage` for a stage the caller timed itself (a constructor whose assignment must stay
+   *  in place). */
+  recordBootStage(stage: BootStage, ms: number): void
   /** Stop the heartbeat and the stall monitor and audit `app.shutdown.clean`. Call once, last, from
    *  `will-quit`. Idempotent. */
   shutdownClean(uptimeS: number): void
@@ -77,6 +87,7 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   const doStartStallSampler = deps.startStallSampler ?? startStallSampler
   const setIntervalFn = deps.setIntervalFn ?? setInterval
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval
+  const now = deps.now ?? (() => performance.now())
   const powerMonitor = opts.powerMonitor
 
   const { bootId, prior } = doBeginRunWatch(opts.userData)
@@ -129,12 +140,30 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   powerMonitor.on('resume', onWake)
   powerMonitor.on('unlock-screen', onWake)
 
+  const recordBootStage = (stage: BootStage, ms: number): void => opts.audit('app.boot.stage', { bootId, stage, ms })
+
   let stopped = false
   return {
     priorShutdown: prior.prevShutdown,
     timePhase<T>(label: string, fn: () => T): T {
       return stallMonitor.timePhase(label, fn)
     },
+    timeBootStage<T>(stage: BootStage, fn: () => T): T {
+      let ms = 0
+      try {
+        return stallMonitor.timePhase(stage, () => {
+          const start = now()
+          try {
+            return fn()
+          } finally {
+            ms = now() - start
+          }
+        })
+      } finally {
+        recordBootStage(stage, ms)
+      }
+    },
+    recordBootStage,
     shutdownClean(uptimeS: number): void {
       if (stopped) return
       stopped = true

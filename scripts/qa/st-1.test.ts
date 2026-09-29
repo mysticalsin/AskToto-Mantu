@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   PENDING_GLOBAL,
+  bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
   emptyRun,
@@ -222,6 +223,29 @@ describe('buildReport', () => {
       exactLaunchOffset: false
     })
     expect(report({ attribution: { mainLog: { error: 'no require' }, appEvidence: null } }).mainLog).toEqual({ error: 'no require' })
+  })
+})
+
+describe('bootStagesFromAudit', () => {
+  it("lifts every app.boot.stage record out of the audit trail, in order, and skips other events and torn lines", () => {
+    const text = [
+      JSON.stringify({ ts: '2026-09-29T10:00:00.000Z', seq: 1, event: 'app.started', bootId: 'b' }),
+      JSON.stringify({ ts: '2026-09-29T10:00:00.400Z', seq: 2, event: 'app.boot.stage', bootId: 'b', stage: 'createWindow.construct', ms: 170.26 }),
+      JSON.stringify({ ts: '2026-09-29T10:00:01.000Z', seq: 3, event: 'app.boot.stage', bootId: 'b', stage: 'createTray.newTray', ms: 312 }),
+      '{"ts":"2026-09-29T10:00:01.100Z","event":"app.boot.stage","stage":"createTray.attach',
+      ''
+    ].join('\n')
+    expect(bootStagesFromAudit(text)).toEqual([
+      { stage: 'createWindow.construct', ms: 170.3, ts: '2026-09-29T10:00:00.400Z' },
+      { stage: 'createTray.newTray', ms: 312, ts: '2026-09-29T10:00:01.000Z' }
+    ])
+  })
+
+  it('reports the stages it is given without judging them: no criterion reads them', () => {
+    const bootStages = { stages: [{ stage: 'createTray.newTray', ms: 319, ts: 't' }] }
+    const built = report({ attribution: { mainLog: null, appEvidence: null, bootStages } })
+    expect(built.bootStages).toEqual(bootStages)
+    expect(built.verdict).toBe('PASS')
   })
 })
 

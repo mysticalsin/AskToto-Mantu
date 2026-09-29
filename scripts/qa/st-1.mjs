@@ -15,7 +15,9 @@
  * Attribution evidence, reported and never judged: every sample's time since spawn, the loop's max since
  * the previous sample and the active libuv resources; a CPU profile of the first 90 s; the profile's
  * audit logs, stall bundles and this launch's main.log; which FIFOs had a reader; and, from +20 s,
- * History's own IPC round trip (recallList + brainStatus) measured in the main window. All of it lands in
+ * History's own IPC round trip (recallList + brainStatus) measured in the main window; and the app's own
+ * native boot stage timings (`bootStages`: tray loadIcon/newTray/decorate/buildMenu/attachMenu, window
+ * construct/firstShow), read from the profile's audit trail. All of it lands in
  * the report directory (`--report-dir`, else the `--out` file's directory, else out/st-1).
  *
  * Usage:
@@ -51,6 +53,7 @@ import { sha256File } from './provenance.mjs'
 import { createFifo, releaseFifo } from './fixtures/fifo.mjs'
 import {
   buildLaunchFailureReport,
+  bootStagesFromAudit,
   buildReport,
   emptyRun,
   failureRecord,
@@ -534,6 +537,19 @@ function copyAppEvidence(profile, mainLog, dir) {
   return { dir: basename(dir), copied, errors }
 }
 
+/** The app's boot stage timings from the profile's audit logs (rotated generations first, the live audit.log
+ *  last). Never throws: an unreadable trail is reported as `{ error }`. */
+function readBootStages(profile) {
+  try {
+    const logs = join(profile, 'logs')
+    const names = existsSync(logs) ? readdirSync(logs).filter((entry) => /^audit.*\.log$/.test(entry)) : []
+    names.sort((a, b) => (a === 'audit.log') - (b === 'audit.log') || a.localeCompare(b))
+    return { stages: names.flatMap((name) => bootStagesFromAudit(readFileSync(join(logs, name), 'utf8'))) }
+  } catch (error) {
+    return { error: error.message }
+  }
+}
+
 /** Whether the run actually reached the fixtures, and (dataless only) whether they stayed unread. */
 function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset, root) {
   if (kind === 'none') return { exercised: null }
@@ -627,6 +643,7 @@ async function main() {
   let evidence = null
   let mainLog = null
   let appEvidence = null
+  let bootStages = null
   let complete = false
   let harnessError = null
   const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
@@ -638,7 +655,7 @@ async function main() {
       minutes,
       measured: run,
       evidence,
-      attribution: { mainLog, appEvidence },
+      attribution: { mainLog, appEvidence, bootStages },
       complete,
       harnessError
     })
@@ -709,7 +726,10 @@ async function main() {
     }
     cdp?.close()
     if (child) stopChild(child)
-    if (child && profile && !launchFailure) appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
+    if (child && profile && !launchFailure) {
+      appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
+      bootStages = readBootStages(profile)
+    }
     try {
       cleanup({ kind: args.fixtures, root, profile, unzipDir })
     } catch (error) {

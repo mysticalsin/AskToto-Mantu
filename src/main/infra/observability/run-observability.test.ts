@@ -202,6 +202,53 @@ describe('startRunObservability', () => {
     expect(result).toBe(42) // forwards the stall monitor's return value, not just the call
   })
 
+  it('timeBootStage times the stage as a stall phase and audits app.boot.stage with its own duration, even when it throws (M2-0433)', () => {
+    const audit = vi.fn()
+    const phases: string[] = []
+    let clock = 0
+    const observability = startRunObservability({
+      userData: '/fake',
+      version: '1.9.7',
+      platform: 'darwin',
+      arch: 'arm64',
+      audit,
+      powerMonitor: fakePowerMonitor(),
+      deps: {
+        beginRunWatch: () => ({ bootId: 'boot-7', prior: fakePrior() }),
+        startStallMonitor: vi.fn(() =>
+          fakeStallMonitor({
+            timePhase: (label, fn) => {
+              phases.push(label)
+              return fn()
+            }
+          })
+        ),
+        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+        clearIntervalFn: vi.fn(),
+        now: () => clock
+      }
+    })
+
+    const result = observability.timeBootStage('createTray.newTray', () => {
+      clock += 312
+      return 'tray'
+    })
+    expect(result).toBe('tray')
+    expect(phases).toEqual(['createTray.newTray'])
+    expect(audit).toHaveBeenCalledWith('app.boot.stage', { bootId: 'boot-7', stage: 'createTray.newTray', ms: 312 })
+
+    expect(() =>
+      observability.timeBootStage('createWindow.construct', () => {
+        clock += 40
+        throw new Error('no compositor')
+      })
+    ).toThrow('no compositor')
+    expect(audit).toHaveBeenLastCalledWith('app.boot.stage', { bootId: 'boot-7', stage: 'createWindow.construct', ms: 40 })
+
+    observability.recordBootStage('createWindow.construct', 170)
+    expect(audit).toHaveBeenLastCalledWith('app.boot.stage', { bootId: 'boot-7', stage: 'createWindow.construct', ms: 170 })
+  })
+
   it("suspend calls pause(); resume and unlock-screen each call restartIfPaused(), unconditionally and with no local flag gating either", () => {
     const pause = vi.fn()
     const restartIfPaused = vi.fn()

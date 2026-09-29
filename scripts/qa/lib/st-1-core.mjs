@@ -88,6 +88,25 @@ export function historyEntry(tMs, outcome) {
   return { tMs, ...outcome.value }
 }
 
+/** The app's own native boot stage timings (tray stages, window construction and first show): every
+ *  `app.boot.stage` record of an audit log's text, in order, so each run names its long stretches without a
+ *  CPU profile. Lines that are not a complete JSON record are skipped. */
+export function bootStagesFromAudit(auditText) {
+  const stages = []
+  for (const line of auditText.split('\n')) {
+    if (!line.includes('"app.boot.stage"')) continue
+    let record
+    try {
+      record = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (record.event !== 'app.boot.stage') continue
+    stages.push({ stage: record.stage, ms: typeof record.ms === 'number' ? Math.round(record.ms * 10) / 10 : null, ts: record.ts })
+  }
+  return stages
+}
+
 /** The pass/fail criteria. They read only the measurement, never the attribution evidence. */
 export function evaluateCriteria(row, measured, evidence) {
   const criteria = [
@@ -148,6 +167,7 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
     timeline: [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs),
     history: measured.history,
     cpuProfile: measured.profiler,
+    bootStages: attribution.bootStages ?? null,
     mainLog: !attribution.mainLog
       ? null
       : attribution.mainLog.error

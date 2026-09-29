@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import type { BootStage } from './infra/observability/projection'
 
 /** The slice of BrowserWindow the tray scheduler reads. */
 export interface TrayGateWindow {
@@ -51,21 +52,33 @@ export interface TrayStages<Icon> {
   loadIcon(time: TrayPhaseTimer): Promise<Icon>
   /** Constructs the native tray item from the loaded image. */
   create(icon: Icon): void
-  /** Builds and attaches the context menu. */
+  /** Sets the created item's title, tooltip and click handler. */
+  decorate?(): void
+  /** Builds the context menu for `attachMenu`. */
+  buildMenu?(): void
+  /** Attaches the context menu (building it here when there is no `buildMenu`). */
   attachMenu(): void
   /** Times one stage (the boot phase trace), so a slow stage is named on its own. */
   time: TrayPhaseTimer
   fail(error: unknown): void
 }
 
-/** M2-0031: the tray is built in three separate main-thread tasks (image load, native item, menu), so no single
- *  task holds the image decode, the status-item construction and the menu build together. A failure in any stage
+/** M2-0031, M2-0433: every tray stage (image load, native item, its title, the menu build, the menu attach) runs
+ *  in a main-thread task of its own, so no single task holds two native steps together. A failure in any stage
  *  is reported once through `fail` and ends the build; a tray already created stays usable. */
 export async function buildTrayInStages<Icon>(stages: TrayStages<Icon>): Promise<void> {
   try {
     const icon = await stages.loadIcon(stages.time)
     await yieldToEventLoop()
     stages.time('createTray.newTray', () => stages.create(icon))
+    if (stages.decorate) {
+      await yieldToEventLoop()
+      stages.time('createTray.decorate', () => stages.decorate?.())
+    }
+    if (stages.buildMenu) {
+      await yieldToEventLoop()
+      stages.time('createTray.buildMenu', () => stages.buildMenu?.())
+    }
     await yieldToEventLoop()
     stages.time('createTray.attachMenu', () => stages.attachMenu())
   } catch (error) {
@@ -105,8 +118,8 @@ export interface TrayImageLoader<I extends TrayIconImage<I>> {
   createFromPath(path: string): I
 }
 
-/** Times one synchronous step of the tray icon load under a boot phase label. */
-export type TrayPhaseTimer = <T>(label: string, fn: () => T) => T
+/** Times one synchronous step of the tray build under its boot stage label. */
+export type TrayPhaseTimer = <T>(label: BootStage, fn: () => T) => T
 const untimed: TrayPhaseTimer = (_label, fn) => fn()
 
 export const TRAY_ICON_SIZE: TraySize = { width: 18, height: 18 }
