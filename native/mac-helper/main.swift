@@ -80,6 +80,13 @@ func emitFrontmost(_ app: NSRunningApplication?) {
 }
 
 func watchFrontmost() -> Never {
+    // Exit the moment the launching process dies: this watcher only prints on app activation, so without the
+    // parent watch a hard-killed main would leave it running until its next write hits a closed pipe.
+    let parent = getppid()
+    let parentWatch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
+    parentWatch.setEventHandler { exit(0) }
+    parentWatch.resume()
+    if getppid() != parent { exit(0) }
     // Emit the current app immediately so the consumer has initial state without waiting for a switch.
     emitFrontmost(NSWorkspace.shared.frontmostApplication)
     NSWorkspace.shared.notificationCenter.addObserver(
@@ -472,12 +479,34 @@ func runStallWatch(_ options: [String]) -> Never {
     }
     guard getppid() == pid else { fail("stall-watch: --pid \(pid) is not this helper's parent") }
 
+    // The poll wait is a kqueue wait on the parent, so main's death ends this helper at once instead of at the
+    // next 5 s tick: a hard-killed app must leave no helper behind within the supervision bound.
+    let kq = kqueue()
+    if kq >= 0 {
+        var parentEvent = kevent(
+            ident: UInt(pid),
+            filter: Int16(EVFILT_PROC),
+            flags: UInt16(EV_ADD | EV_ENABLE),
+            fflags: UInt32(NOTE_EXIT),
+            data: 0,
+            udata: nil
+        )
+        _ = kevent(kq, &parentEvent, 1, nil, 0, nil)
+    }
+    guard getppid() == pid else { exit(0) }
+
     var lastMtime = mtimeNs(alivePath)
     var lastChangeAt = awakeMs()
     var sampledThisStall = false
     var lastSampleAt: UInt64?
     while true {
-        sleep(stallPollSeconds)
+        if kq >= 0 {
+            var out = kevent()
+            var timeout = timespec(tv_sec: Int(stallPollSeconds), tv_nsec: 0)
+            if kevent(kq, nil, 0, &out, 1, &timeout) > 0 { exit(0) }
+        } else {
+            sleep(stallPollSeconds)
+        }
         // A dead parent reparents this helper, so getppid() changes: exit rather than ever sample a
         // process this helper did not come from.
         guard getppid() == pid else { exit(0) }
