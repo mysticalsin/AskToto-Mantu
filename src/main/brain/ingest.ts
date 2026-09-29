@@ -34,7 +34,11 @@ import { localBaseReady } from '../llm/local-routing'
 import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@shared/intelligence-pass'
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
-import { LOCAL_CHARS_PER_TOKEN, isLocalPreemption, localSlotTokens, whenLocalInteractiveIdle } from '../llm/local'
+import { isLocalPreemption, localSlotTokens, whenLocalInteractiveIdle } from '../llm/local'
+import {
+  EXTRACTION_REMINDER, ExtractionDoesNotFitError, LOCAL_EXTRACTION_OUTPUT_TOKENS, MIN_LOCAL_WINDOW_CHARS,
+  assertLocalWindowsFit, fitWindowChars, isContextOverflow
+} from './local-extraction-fit'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
 // Static (eager) import — NOT `await import()`: the main process is bytecode-compiled and dynamic import
 // throws there (see llm/dust.ts's own note). dustcli.ts imports nothing from brain/, so no cycle.
@@ -405,29 +409,10 @@ const WINDOW_SIZE = 24000
 // window — small relative to WINDOW_SIZE, so it never meaningfully multiplies completion-call volume.
 const WINDOW_OVERLAP = 1000
 
-// ── Local context fit (M2-0430) ──────────────────────────────────────────────────────────────────────
-// INV-FIT: when Métis Local serves extraction first, every request it is sent (extraction prompt, JSON
-// reminder, transcript window and the reserved answer) fits one llama-server slot at LOCAL_CHARS_PER_TOKEN.
-// A meeting that cannot be windowed that way is recorded exhausted without a model call; it is never sent
-// to fail on the context size and never retried automatically.
-const LOCAL_EXTRACTION_OUTPUT_TOKENS = 1536
-const EXTRACTION_REMINDER = '\n\nREMINDER: your ENTIRE reply must be one valid JSON object. No fences, no prose.'
-/** The user-turn wrapper around a window: file label, quoting, and the summary-mode framing (shared.ts). */
-const EXTRACTION_USER_OVERHEAD_CHARS = 512
-/** Chat-template tokens and tokenizer slack on top of the character estimate. */
-const CONTEXT_MARGIN_TOKENS = 256
-/** Below this a window holds a few lines at most: not a meaningful extraction. */
-const MIN_LOCAL_WINDOW_CHARS = 1000
-/** Bounds the unattended model calls one meeting may cost on a small slot (the CPU profile's 4,096 tokens
- *  gives roughly 1,000-character windows); a longer meeting is recorded exhausted instead. */
-const MAX_LOCAL_WINDOWS = 12
-
-/** The largest window (chars) whose local extraction request fits a slot of `slotTokens`, capped at WINDOW_SIZE. */
+/** The largest window (chars) whose local extraction request fits a slot of `slotTokens` (INV-FIT in
+ *  local-extraction-fit.ts), capped at WINDOW_SIZE. */
 export function localExtractionWindowChars(slotTokens: number): number {
-  const promptChars = buildExtractionSystem(EXTRACTION_REMINDER).length + EXTRACTION_USER_OVERHEAD_CHARS
-  const promptTokens = Math.ceil(promptChars / LOCAL_CHARS_PER_TOKEN)
-  const windowTokens = slotTokens - LOCAL_EXTRACTION_OUTPUT_TOKENS - CONTEXT_MARGIN_TOKENS - promptTokens
-  return Math.min(WINDOW_SIZE, Math.max(0, windowTokens * LOCAL_CHARS_PER_TOKEN))
+  return fitWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
 }
 
 /** Window size for this route: fitted to the local slot when Métis Local is asked first, else WINDOW_SIZE.
@@ -443,23 +428,6 @@ function extractionWindowSize(s: Settings, route: IngestRoute): { size: number; 
     return { size: WINDOW_SIZE, local: false }
   }
   return { size: localExtractionWindowChars(slotTokens), local: true }
-}
-
-/** A meeting whose extraction cannot fit the local model's context on this machine. Permanent for the
- *  current bytes and profile: finishJob records it exhausted, and only an explicit Retry resends it. */
-export class ExtractionDoesNotFitError extends Error {
-  constructor() {
-    super(
-      'This meeting does not fit the on-device model\'s context on this Mac, so it was not indexed. ' +
-      'Select Retry after closing other apps, or index it with a cloud provider.'
-    )
-    this.name = 'ExtractionDoesNotFitError'
-  }
-}
-
-function isContextOverflow(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return /exceeds the available context size/i.test(message)
 }
 
 /** Split `text` into sequential windows of at most `size` chars, cut at line boundaries so a window
@@ -725,10 +693,7 @@ async function extractMeeting(
   const fit = extractionWindowSize(s, route)
   if (fit.local && fit.size < MIN_LOCAL_WINDOW_CHARS) throw new ExtractionDoesNotFitError()
   const windows = prepareMeetingWindows(s, transcriptMd, fit.size)
-  // splitIntoWindows keeps a line whole, so a single line longer than the slot still overflows it.
-  if (fit.local && (windows.length > MAX_LOCAL_WINDOWS || windows.some((w) => w.length > fit.size))) {
-    throw new ExtractionDoesNotFitError()
-  }
+  if (fit.local) assertLocalWindowsFit(fit.size, windows)
 
   const runWindow = async (window: string): Promise<MeetingExtraction> => {
     const user = `Meeting transcript (file: ${basename(sourceFile)}):\n\n"""\n${window}\n"""`

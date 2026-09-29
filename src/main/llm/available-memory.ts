@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process'
 import { freemem } from 'node:os'
+import { readVmStat } from '../infra/process/vm-stat'
 
 /**
  * Memory the OS can hand to a new allocation without swapping, in bytes.
@@ -36,7 +36,7 @@ export function parseVmStatAvailableBytes(output: string): number | null {
 const defaultDeps: MemoryReadingDeps = {
   platform: process.platform,
   freemem: () => freemem(),
-  vmStat: () => execFileSync('/usr/bin/vm_stat', { encoding: 'utf8', timeout: 2_000 })
+  vmStat: readVmStat
 }
 
 export function readAvailableMemoryBytes(deps: MemoryReadingDeps = defaultDeps): number {

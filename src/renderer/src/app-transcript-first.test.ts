@@ -9,7 +9,8 @@ import { WriteupSpans } from './lib/writeup-spans'
 // M2-0430: executes App's actual maybeFireRecap (the callback that runs once the post-Stop drain completes)
 // without booting App, the same way app-recap-lifecycle.test.ts runs its boundary callbacks. The host only
 // supplies refs, settings and the two IPC-facing effects: the live transcript save and the recap request.
-const app = ts.createSourceFile('App.tsx', readFileSync(join(__dirname, 'App.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+const appPath = join(__dirname, 'App.tsx')
+const app = ts.createSourceFile(appPath, readFileSync(appPath, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
 
 function callbackSource(name: string): string {
   const found: ts.Node[] = []

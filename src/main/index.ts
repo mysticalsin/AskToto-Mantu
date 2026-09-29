@@ -86,7 +86,6 @@ import {
   ImportDecoderCompleteSchema,
   ImportDecoderFailedSchema,
   LocalPrewarmPayloadSchema,
-  WriteupSpanPayloadSchema,
   ProviderIdSchema,
   DEFAULT_SHORTCUTS,
   ASK_MEMORY_IDLE_MS,
@@ -175,7 +174,8 @@ import {
   portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
-import { appleEngineStatus, ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
+import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
+import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
@@ -7073,16 +7073,7 @@ function registerIpc(): void {
     void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed)
       .catch(warmFailed)
   })
-  ipcMain.handle(IPC.localAppleEngineStatus, (e) => {
-    assertMainWindow(e)
-    return appleEngineStatus()
-  })
-  ipcMain.handle(IPC.writeupSpan, (e, report: unknown) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return
-    const parsed = WriteupSpanPayloadSchema.safeParse(report)
-    if (parsed.success) auditLog('writeup.span', { span: parsed.data.span, ms: parsed.data.ms })
-  })
+  registerWriteupIpc(assertMainWindow)
 
   // --- Screen capture ---
   ipcMain.handle(IPC.captureScreen, async (event) => {
