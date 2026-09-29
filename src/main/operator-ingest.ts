@@ -42,7 +42,6 @@ export interface OperatorRuntimeSettings {
 }
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
-let policyTimer: ReturnType<typeof setInterval> | null = null
 let runtimeGeneration = 0
 let lastAskId: string | null = null
 let fetchImpl: typeof fetch = fetch
@@ -61,10 +60,6 @@ export function stopOperatorRuntime(): void {
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer)
     heartbeatTimer = null
-  }
-  if (policyTimer) {
-    clearInterval(policyTimer)
-    policyTimer = null
   }
 }
 
@@ -395,12 +390,15 @@ export function startOperatorRuntime(
   }
   pollPolicy()
   void tick()
+  // One timer at the policy cadence: every firing polls the policy, every second firing runs the heartbeat.
+  let firings = 0
   heartbeatTimer = setInterval(() => {
-    void tick()
-  }, HEARTBEAT_MS)
-  policyTimer = setInterval(pollPolicy, POLICY_POLL_MS)
-  for (const timer of [heartbeatTimer, policyTimer]) {
-    if (typeof timer === 'object' && timer && 'unref' in timer) timer.unref()
+    pollPolicy()
+    firings += 1
+    if (firings % (HEARTBEAT_MS / POLICY_POLL_MS) === 0) void tick()
+  }, POLICY_POLL_MS)
+  if (typeof heartbeatTimer === 'object' && heartbeatTimer && 'unref' in heartbeatTimer) {
+    heartbeatTimer.unref()
   }
 }
 
