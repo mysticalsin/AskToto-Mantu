@@ -120,6 +120,8 @@ function decisionEntry(ledger) {
     id: DECISION_ID,
     status: status ?? 'UNKNOWN',
     ownerApproved,
+    // An OPEN decision proceeds on its recorded default order, labelled ASSUMED until the owner answers.
+    assumed: !ownerApproved && status === 'OPEN',
     changedOrder,
     source: raw === undefined ? 'missing' : 'ledger'
   }
@@ -212,7 +214,7 @@ export function analyzeProgram({ ledger, recordsByTicket, asOf, gate = 'm3' }) {
     ? new Date(Date.parse(`${analysisDate}T00:00:00Z`) + Math.ceil(totalRemainingHours / velocityHoursPerDay) * 86_400_000).toISOString().slice(0, 10)
     : null
   const decision = decisionEntry(ledger)
-  if (!decision.ownerApproved) {
+  if (!decision.ownerApproved && !decision.assumed) {
     problems.push(`${DECISION_ID}: owner-approved degrade order is not recorded as approved in the ledger`)
   }
   if (decision.status === 'ANSWERED_CHANGED' && decision.changedOrder.order.length === 0) {
@@ -285,7 +287,7 @@ ${table(['Milestone', 'Estimated hours', 'Tickets'], remainingRows)}
 ## D-14 Degrade Order
 
 **Decision status:** ${forecast.decision.status}
-**Owner approved:** ${forecast.decision.ownerApproved ? 'yes' : 'no'}
+**Owner approved:** ${forecast.decision.ownerApproved ? 'yes' : forecast.decision.assumed ? 'no (ASSUMED: default order while OPEN)' : 'no'}
 
 ${table(['Rank', 'Ticket', 'Invariant'], degradeRows)}
 

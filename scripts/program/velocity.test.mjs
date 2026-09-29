@@ -221,7 +221,7 @@ test('analyzeProgram counts ENGINEERING_COMPLETE capped by a blocked dependency 
   ])
 })
 
-test('analyzeProgram records D-14 degrade order and flags an unapproved decision', () => {
+test('analyzeProgram records the default D-14 degrade order as ASSUMED while the decision is OPEN', () => {
   const ledger = {
     decisions: { 'D-14': 'OPEN' },
     tickets: [ticket('M2-0197', { status: 'IN_PROGRESS', needs_decision: ['D-14'] })]
@@ -231,7 +231,24 @@ test('analyzeProgram records D-14 degrade order and flags an unapproved decision
 
   assert.deepEqual(forecast.degradeOrder.map((entry) => entry.ticket), DEFAULT_DEGRADE_ORDER)
   assert.equal(forecast.decision.id, 'D-14')
+  assert.equal(forecast.decision.status, 'OPEN')
   assert.equal(forecast.decision.ownerApproved, false)
+  assert.equal(forecast.decision.assumed, true)
+  assert.deepEqual(forecast.problems, [])
+  assert.match(renderForecastMarkdown(forecast), /ASSUMED: default order while OPEN/)
+})
+
+test('analyzeProgram flags a ledger with no recorded D-14 decision', () => {
+  const ledger = {
+    decisions: {},
+    tickets: [ticket('M2-0197', { status: 'IN_PROGRESS', needs_decision: ['D-14'] })]
+  }
+
+  const forecast = analyzeProgram({ ledger, recordsByTicket: new Map(), asOf: '2026-09-24' })
+
+  assert.deepEqual(forecast.degradeOrder.map((entry) => entry.ticket), DEFAULT_DEGRADE_ORDER)
+  assert.equal(forecast.decision.ownerApproved, false)
+  assert.equal(forecast.decision.assumed, false)
   assert.ok(forecast.problems.some((problem) => problem.includes('D-14')))
 })
 
@@ -307,6 +324,29 @@ test('runCli writes forecast artifacts to the requested output directory', () =>
     assert.equal(code, 0)
     assert.ok(existsSync(join(outDir, 'FORECAST.md')))
     assert.ok(existsSync(join(outDir, 'forecast.json')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('runCli succeeds on a ledger whose D-14 decision is still OPEN', () => {
+  const dir = tempDir()
+  try {
+    const ledgerDir = join(dir, 'ledger')
+    const outDir = join(dir, 'out')
+    mkdirSync(ledgerDir, { recursive: true })
+    const ledgerPath = join(ledgerDir, 'tickets.json')
+    writeFileSync(ledgerPath, JSON.stringify({
+      decisions: { 'D-14': 'OPEN' },
+      tickets: [ticket('M2-0197', { status: 'IN_PROGRESS', needs_decision: ['D-14'] })]
+    }))
+    const recordsDir = writeRecords(dir, {})
+
+    const code = runCli(['--ledger', ledgerPath, '--records', recordsDir, '--out-dir', outDir, '--as-of', '2026-09-24'])
+
+    assert.equal(code, 0)
+    const forecast = JSON.parse(readFileSync(join(outDir, 'forecast.json'), 'utf8'))
+    assert.equal(forecast.decision.assumed, true)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

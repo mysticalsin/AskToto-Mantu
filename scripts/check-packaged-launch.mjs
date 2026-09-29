@@ -36,6 +36,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, existsSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { launchVerdict } from './launch-window-verdict.mjs'
 
 const target = process.argv[2]
 const timeoutIndex = process.argv.indexOf('--timeout-seconds')
@@ -217,16 +218,15 @@ let exited = null
 child.on('exit', (code, signal) => (exited = { code, signal }))
 
 let titles = []
+let verdict = 'pending'
 const deadline = Date.now() + timeoutSeconds * 1000
 // A portable build unpacks well over a gigabyte before the first paint, so poll rather than
-// assuming a fixed warm-up.
-while (Date.now() < deadline) {
+// assuming a fixed warm-up. A non-empty title list is not a verdict: Electron titles a new window with
+// the package name until the renderer loads, so keep sampling until launchVerdict() is terminal.
+while (verdict === 'pending') {
   await sleep(5000)
   titles = windowTitles()
-  // A window exists before its page loads and then carries the package name, so only the app's own
-  // title or an error dialog ends the wait; the first title of any kind is not proof of a paint.
-  if (titles.some((t) => /M.tis/i.test(t) || /^Error$/i.test(t))) break
-  if (exited) break
+  verdict = launchVerdict({ titles, exited, deadlinePassed: Date.now() >= deadline })
 }
 
 let appLog = ''
@@ -238,10 +238,9 @@ if (existsSync(logDir)) {
 }
 
 const haystack = `${stdio}\n${appLog}`
-const healthy = titles.some((t) => /M.tis/i.test(t))
-const errorDialog = titles.some((t) => /^Error$/i.test(t))
+const healthy = verdict === 'healthy'
 let dialogText = ''
-if (errorDialog || !healthy) dialogText = readErrorDialog()
+if (!healthy) dialogText = readErrorDialog()
 
 const combined = `${haystack}\n${dialogText}`
 const bytecodeDoa = /cachedDataRejected|Invalid or incompatible cached data/i.test(combined)
@@ -267,6 +266,8 @@ if (bytecodeDoa) {
   )
 } else if (mainProcessError) {
   console.error('[check:launch] the main process threw before the first window.')
+} else if (verdict === 'error-dialog') {
+  console.error('[check:launch] the app showed an "Error" dialog.')
 } else if (!titles.length) {
   console.error('[check:launch] no window ever appeared within the timeout.')
 }

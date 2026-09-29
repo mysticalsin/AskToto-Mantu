@@ -1522,6 +1522,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
   closingDecoderJobId = null
   decoderExpectedUrl = ''
   decoderWin = new BrowserWindow({
+    title: 'Métis',
     show: false,
     skipTaskbar: true,
     webPreferences: {
@@ -2665,6 +2666,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   const chrome = overlayWindowChrome(onboardingLive)
   overlayWindowTransparent = chrome.transparent
   win = new BrowserWindow({
+    title: 'Métis', // Electron otherwise titles the window with the package name until the renderer's <title> loads
     width: firstPaint.width,
     height: firstPaint.height,
     x: firstPaint.x,
@@ -8770,6 +8772,7 @@ function registerIpc(): void {
     if (r.canceled || !r.filePath) return { ok: false as const }
     const html = recapMarkdownToHtml(md, input?.title)
     const pdfWin = new BrowserWindow({
+      title: 'Métis',
       show: false,
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: DEVTOOLS_ENABLED, webSecurity: true }
     })
