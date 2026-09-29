@@ -7,6 +7,7 @@ import { saveMeeting, isEncryptedFile } from './transcripts'
 import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk, meetingTextNeedsRecap } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 import { useStorageForTests } from './infra/storage/meetings-storage'
+import type { ContentPresence } from './infra/storage/dataless'
 
 /**
  * The lines a successful read must have.
@@ -106,6 +107,51 @@ describe('recall — language tags round-trip through save → recallRead', () =
     // The exact rewrite the Speaker Intelligence backfill performs: formatTranscript over reparsed lines.
     const { formatTranscript } = await import('./transcripts')
     expect(formatTranscript(r.lines ?? [])).toContain('_[conversation switches to English]_')
+  })
+})
+
+// M2-0445: on a slow Windows machine the placeholder probe (a cold powershell.exe) outlives the storage
+// gateway's read deadline. An import saved its meeting, then recallRead of that just-written file came back
+// 'degraded' (probe still running) or 'unknown' (probe failed) and the meeting read as having no transcript.
+describe('recall — a just-saved meeting reads back while the placeholder probe cannot answer', () => {
+  let folder: string
+  const meeting = (): SaveMeeting => ({
+    title: 'Synthetic import', mode: 'meeting', startedAt: 1_700_000_000_000, durationMs: 4_000, recap: '',
+    lines: [{ t: 1_700_000_000_000, speaker: 'unknown', text: 'Synthetic decoded speech.' }]
+  })
+  const probes = {
+    'outlives the read deadline': () => new Promise<never>(() => {}),
+    'fails': async (files: readonly { path: string }[]) =>
+      new Map(files.map((f): [string, ContentPresence] => [f.path, 'unknown']))
+  }
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-probe-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it.each(Object.entries(probes))('returns the saved transcript lines when the probe %s', async (_, classify) => {
+    useStorageForTests({ detector: { classify } })
+    const file = await saveMeeting(testSettings, meeting())
+    const r = await recallRead(basename(file))
+    expect(r.error).toBeUndefined()
+    expect(r.ok).toBe(true)
+    expect(linesOf(r).map((l) => l.text)).toEqual(['Synthetic decoded speech.'])
+  })
+
+  it('still leaves a version it did not write to the probe', async () => {
+    useStorageForTests({ detector: { classify: probes.fails } })
+    const file = await saveMeeting(testSettings, meeting())
+    // Another writer (or a sync client) changed the file after the save: this version is not ours.
+    writeFileSync(file, `${readFileSync(file, 'utf8')}\n`)
+    const r = await recallRead(basename(file))
+    expect(r.ok).toBe(false)
+    expect(r.lines).toBeUndefined()
   })
 })
 

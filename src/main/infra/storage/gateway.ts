@@ -31,6 +31,7 @@ import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { createAdmission, type Admission, type Lane } from './admission'
 import { createDatalessDetector, type ContentPresence, type DatalessDetector, type FileVersion } from './dataless'
+import { isLocalWrite } from './local-writes'
 
 /** Threads libuv starts when UV_THREADPOOL_SIZE is unset, and the most it accepts (libuv src/threadpool.c). */
 const DEFAULT_POOL_SIZE = 4
@@ -295,10 +296,14 @@ export function createStorageGateway({
   }
 
   /** The detector's verdicts, or none (every file then counts as unknown) when the request ends first. The
-   *  probe runs on, and the detector caches its answer for the next call. */
+   *  probe runs on, and the detector caches its answer for the next call. A version this process wrote
+   *  itself is local without a probe (local-writes.ts), so it never waits on one. */
   async function presenceWithin(files: readonly FileVersion[], request: Request): Promise<Map<string, ContentPresence>> {
-    const verdicts = await untilEnded(presenceOf(files), request, 'waiting')
-    return verdicts instanceof Map ? verdicts : new Map<string, ContentPresence>()
+    const unwritten = files.filter((file) => !isLocalWrite(file))
+    const verdicts = unwritten.length > 0 ? await untilEnded(presenceOf(unwritten), request, 'waiting') : undefined
+    const presence = verdicts instanceof Map ? new Map(verdicts) : new Map<string, ContentPresence>()
+    for (const file of files) if (isLocalWrite(file)) presence.set(file.path, 'local')
+    return presence
   }
 
   async function resolveRoot(base: string, request: Request): Promise<Settled<string>> {

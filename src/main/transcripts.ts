@@ -24,6 +24,7 @@ import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
 import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-duration'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
+import { recordLocalWrite } from './infra/storage/local-writes'
 import type { FileClass } from './infra/storage/gateway'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
@@ -387,6 +388,8 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
         await new Promise((r) => setTimeout(r, 40 * 2 ** attempt))
       }
     }
+    // These bytes are on this device: reading them back must not wait on a placeholder probe.
+    await recordLocalWrite(file)
   } catch (e) {
     try {
       if (existsSync(tmp)) await unlink(tmp) // don't leave an orphaned .tmp on failure

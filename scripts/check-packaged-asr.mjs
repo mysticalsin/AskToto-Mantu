@@ -50,6 +50,7 @@ import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { assertPackagedAsrEvidence, installAsrObserver } from './lib/packaged-asr-evidence.mjs'
+import { describeFixture, fixtureProblem, importDiagnostics } from './lib/packaged-asr-fixture.mjs'
 
 const root = resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -73,32 +74,52 @@ const POWERSHELL = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'Wi
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // ── 1. Synthesize the fixture. No repo bytes — SAPI speaks it fresh every run. ─────────────────────
+// M2-0445: a slow runner can make SAPI take 10x its usual time. A fixture that came out truncated, too
+// short or silent cannot prove a decode, so it is verified before any import and re-synthesized ONCE;
+// a second bad fixture fails the gate as a harness fault, never as a product pass.
 const workDir = mkdtempSync(join(tmpdir(), 'metis-asr-gate-'))
 const wavPath = join(workDir, 'asr-fixture.wav')
+function synthesizeFixture() {
+  rmSync(wavPath, { force: true })
+  const started = Date.now()
+  try {
+    execFileSync(
+      POWERSHELL,
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Add-Type -AssemblyName System.Speech; ` +
+          `$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; ` +
+          `$s.SetOutputToWaveFile('${wavPath.replace(/'/g, "''")}'); ` +
+          `$s.Speak('${PHRASE}'); ` +
+          `$s.Dispose()`
+      ],
+      { encoding: 'utf8', timeout: 60000 }
+    )
+  } catch (error) {
+    console.error(`[check:packaged-asr] FAIL — could not synthesize the SAPI fixture: ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  }
+  if (!existsSync(wavPath)) {
+    console.error('[check:packaged-asr] FAIL — SAPI reported success but the fixture WAV does not exist.')
+    process.exit(1)
+  }
+  const bytes = readFileSync(wavPath)
+  console.log(`[check:packaged-asr]   fixture synthesized in ${Date.now() - started} ms: ${describeFixture(bytes)}`)
+  return fixtureProblem(bytes)
+}
 console.log('[check:packaged-asr] synthesizing fixture via Windows SAPI…')
-try {
-  execFileSync(
-    POWERSHELL,
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      `Add-Type -AssemblyName System.Speech; ` +
-        `$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; ` +
-        `$s.SetOutputToWaveFile('${wavPath.replace(/'/g, "''")}'); ` +
-        `$s.Speak('${PHRASE}'); ` +
-        `$s.Dispose()`
-    ],
-    { encoding: 'utf8', timeout: 60000 }
-  )
-} catch (error) {
-  console.error(`[check:packaged-asr] FAIL — could not synthesize the SAPI fixture: ${error instanceof Error ? error.message : String(error)}`)
+let fixtureFault = synthesizeFixture()
+if (fixtureFault) {
+  console.log(`[check:packaged-asr]   fixture rejected (${fixtureFault}); re-synthesizing once.`)
+  fixtureFault = synthesizeFixture()
+}
+if (fixtureFault) {
+  console.error(`[check:packaged-asr] FAIL — harness fault: the SAPI fixture is unusable twice (${fixtureFault}).`)
   process.exit(1)
 }
-if (!existsSync(wavPath)) {
-  console.error('[check:packaged-asr] FAIL — SAPI reported success but the fixture WAV does not exist.')
-  process.exit(1)
-}
+const fixtureSummary = describeFixture(readFileSync(wavPath))
 console.log(`[check:packaged-asr]   fixture: ${wavPath}`)
 
 // ── 2. Launch the packaged app under Playwright's Electron driver, isolated profile. ───────────────
@@ -192,6 +213,17 @@ for (const engine of ENGINES) {
 
   const jobDeadline = Date.now() + timeoutSeconds * 1000
   let job = started
+  let meeting
+  // Every failure after the import starts first prints what the gate saw of it (content-free), so a red
+  // run separates a product fault (job, read-back, native ASR) from a harness one (fixture) by itself.
+  const failImport = async (reason) => {
+    const observed = await app.evaluate(() => globalThis.__metisPackagedAsrGate).catch(() => undefined)
+    const mainLog = existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').slice(logOffset) : ''
+    for (const line of importDiagnostics({ engine, job, meeting, fixture: fixtureSummary, observed, afterSequence, mainLog })) {
+      console.error(`[check:packaged-asr]   ${line}`)
+    }
+    return fail(reason)
+  }
   while (Date.now() < jobDeadline) {
     await sleep(1000)
     job = await page.evaluate(
@@ -200,21 +232,27 @@ for (const engine of ENGINES) {
     )
     if (job?.state === 'done' || job?.state === 'failed') break
   }
-  if (!job) return fail(`${engine}: the import job disappeared from importJobsList().`)
-  if (job.state === 'failed') return fail(`${engine}: the import job failed: ${job.error || '(no error message)'}`)
-  if (job.state !== 'done') return fail(`${engine}: the import job did not finish within ${timeoutSeconds}s (last state: ${job.state}).`)
-  if (!job.file) return fail(`${engine}: the import job reported done but has no saved meeting file.`)
+  if (!job) return failImport(`${engine}: the import job disappeared from importJobsList().`)
+  if (job.state === 'failed') return failImport(`${engine}: the import job failed: ${job.error || '(no error message)'}`)
+  if (job.state !== 'done') return failImport(`${engine}: the import job did not finish within ${timeoutSeconds}s (last state: ${job.state}).`)
+  if (!job.file) return failImport(`${engine}: the import job reported done but has no saved meeting file.`)
 
   // A ready message is emitted before lazy model loading, so it cannot satisfy this gate on its own.
   // Match a real PCM request/result from the exact bundled host/model AND the saved transcript.
-  const meeting = await page.evaluate((file) => window.toto.recallRead(file), job.file)
-  if (!meeting?.ok || !meeting.lines?.length) return fail(`${engine}: the saved meeting has no transcript lines.`)
+  meeting = await page.evaluate((file) => window.toto.recallRead(file), job.file)
+  if (!meeting?.ok) return failImport(`${engine}: the saved meeting could not be read back: ${meeting?.error || '(no error message)'}`)
+  if (!meeting.lines?.length) return failImport(`${engine}: the saved meeting has no transcript lines.`)
   const transcript = meeting.lines.map((line) => line.text).join(' ')
   const observed = await app.evaluate(() => globalThis.__metisPackagedAsrGate)
-  const verified = assertPackagedAsrEvidence(engine, {
-    ...observed, resourcesPath, afterSequence, transcript,
-    mainLog: readFileSync(mainLogPath, 'utf8').slice(logOffset)
-  })
+  let verified
+  try {
+    verified = assertPackagedAsrEvidence(engine, {
+      ...observed, resourcesPath, afterSequence, transcript,
+      mainLog: readFileSync(mainLogPath, 'utf8').slice(logOffset)
+    })
+  } catch (error) {
+    return failImport(error instanceof Error ? error.message : String(error))
+  }
   console.log(`[check:packaged-asr] ${engine} decoded transcript: "${transcript}"`)
   console.log(`[check:packaged-asr] VERIFIED ${JSON.stringify(verified)}`)
 }
