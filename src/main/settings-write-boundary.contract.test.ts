@@ -20,7 +20,7 @@ const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 function strippedKeys(): string[] {
   const start = indexSrc.indexOf('const p = patch ?? {}')
   expect(start).toBeGreaterThan(-1)
-  const region = indexSrc.slice(start, start + 3000)
+  const region = indexSrc.slice(start, start + 4000)
   const keys: string[] = []
   for (const m of region.matchAll(/for \(const k of \[([^\]]+)\]\) \{\s*\n\s*if \(k in p\) delete \(p as Record<string, unknown>\)\[k\]/g)) {
     for (const raw of m[1].split(',')) {
@@ -32,6 +32,11 @@ function strippedKeys(): string[] {
 }
 
 describe('settings:set — main-owned keys are not renderer-writable', () => {
+  // M2-0429: the Screen Recording diagnosis reads this history to decide whether a capture may reach macOS.
+  it('strips the Screen Recording permission history', () => {
+    expect(strippedKeys()).toContain('permissionState')
+  })
+
   it('strips the server-authoritative license state (self-issued license)', () => {
     const keys = strippedKeys()
     for (const k of ['licenseKey', 'licenseValid', 'licenseSeatCap', 'licenseExpiresAt', 'licenseLastValidatedAt']) {

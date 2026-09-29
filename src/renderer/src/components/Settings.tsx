@@ -107,6 +107,7 @@ import {
   type PreservedBrainIndexCopy
 } from '@shared/ipc'
 import { nextScreenCheckPass } from '@shared/screen-capture-check'
+import { PermissionDot, ScreenPermissionRow } from './ScreenPermissionRow'
 import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   PROVIDERS,
@@ -8919,16 +8920,6 @@ function CalendarTab({
   )
 }
 
-function PermissionDot({ status }: { status: string }): JSX.Element {
-  const color =
-    status === 'granted'
-      ? 'bg-[var(--cl-success)]'
-      : status === 'denied'
-        ? 'bg-[var(--cl-destructive)]'
-        : 'bg-white/30'
-  return <span className={`inline-block h-2 w-2 rounded-full ${color}`} aria-hidden="true" />
-}
-
 /**
  * True exactly on the rising edge: screen recording just flipped to 'granted' after this component had
  * already observed it as something else. `prev === null` means "first observation since mount" and must
@@ -9032,6 +9023,12 @@ function PermissionsSection(): JSX.Element {
         const notYetAsked = !isWin && (r.status === 'not-determined' || r.status === 'unknown')
         const showFix = denied || notYetAsked || (isWin && r.fixLabel)
         const showRestart = r.kind === 'screenRecording' && needsRestart
+        // M2-0429: on macOS the raw status cannot tell "never asked" from "on in System Settings but held by
+        // another build or copy"; the diagnosis can, and owns this row's copy and actions.
+        const screenDiagnosis = r.kind === 'screenRecording' && !isWin ? permissions.screenDiagnosis : undefined
+        if (screenDiagnosis) {
+          return <ScreenPermissionRow key={r.label} status={r.status} diagnosis={screenDiagnosis} restarting={restarting} onRestart={restart} />
+        }
         return (
           <div key={r.label} className="cl-card flex items-start gap-2 px-2.5 py-2">
             <PermissionDot status={r.status} />
