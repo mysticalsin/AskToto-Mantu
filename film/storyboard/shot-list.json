@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "ticket_id": "M2-0213",
+  "capture_source": "Packaged rc1 candidate on macOS and Windows, captured on a GitHub-hosted or owner-designated QA machine after the freeze.",
+  "rules": [
+    "Every live shot needs a receipt for the exact captured state before it may replace its concept twin.",
+    "Dialogue in every shot is synthetic; no real meeting, transcript or user content is captured.",
+    "Concept shots are produced before the freeze from the designed UI; live shots are captured from rc1."
+  ],
+  "shots": [
+    {
+      "id": "SH-01L",
+      "scene_id": "LF-01",
+      "form": "live",
+      "duration_seconds": 6,
+      "framing": "Full-screen 3840x2160 capture, overlay docked at the top edge beside a synthetic meeting workspace.",
+      "action": "Overlay slides in, holds idle for two seconds, then expands its first panel.",
+      "prerequisites": "rc1 installed on a clean profile; synthetic workspace window open.",
+      "required_evidence_level": "LIVE_VERIFIED"
+    },
+    {
+      "id": "SH-01C",
+      "scene_id": "LF-01",
+      "form": "concept",
+      "duration_seconds": 6,
+      "framing": "Designed render at 3840x2160 with the same layout as SH-01L.",
+      "action": "Same motion as SH-01L, with the concept label held on screen throughout.",
+      "prerequisites": "Designed overlay frames; no product capture needed.",
+      "required_evidence_level": "DESIGNED"
+    },
+    {
+      "id": "SH-02L",
+      "scene_id": "LF-02",
+      "form": "live",
+      "duration_seconds": 8,
+      "framing": "Full-screen capture with the overlay and its notes panel in frame.",
+      "action": "Approved sample dialogue plays from a synthetic recording while notes form in the panel.",
+      "prerequisites": "rc1 with the approved sample dialogue file; live receipt covering capture, transcript and note output.",
+      "required_evidence_level": "LIVE_VERIFIED"
+    },
+    {
+      "id": "SH-02C",
+      "scene_id": "LF-02",
+      "form": "concept",
+      "duration_seconds": 8,
+      "framing": "Designed render with a synthetic dialogue strip beside a notes panel.",
+      "action": "Same beat as SH-02L, with the reconstruction label held on screen throughout.",
+      "prerequisites": "Designed frames and the synthetic dialogue script; no product capture needed.",
+      "required_evidence_level": "DESIGNED"
+    },
+    {
+      "id": "SH-03L",
+      "scene_id": "LF-03",
+      "form": "live",
+      "duration_seconds": 8,
+      "framing": "Full-screen capture with the Hindsight panel open over the synthetic workspace.",
+      "action": "User types a question about prior context; a bounded answer streams in and settles.",
+      "prerequisites": "rc1 with a synthetic prior-meeting history seeded; memory proof evidence record at LIVE_VERIFIED.",
+      "required_evidence_level": "LIVE_VERIFIED"
+    },
+    {
+      "id": "SH-03C",
+      "scene_id": "LF-03",
+      "form": "concept",
+      "duration_seconds": 8,
+      "framing": "Designed render of the Hindsight panel with the same layout as SH-03L.",
+      "action": "Same question and bounded answer as SH-03L, with the concept memory label held on screen throughout.",
+      "prerequisites": "Designed frames and the synthetic question and answer text; no product capture needed.",
+      "required_evidence_level": "DESIGNED"
+    }
+  ]
+}
