@@ -9,6 +9,7 @@ import { getSettings, setSettings } from './store'
 import { auditLog, mainLog, setAuditActor } from './logger'
 import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
 import { readTrustedAdminManaged } from './win-security'
+import { createGuardedNetworkClient } from './net/guarded-network-client'
 
 // Scopes requested at sign-in: identity + read-only calendar (so the agenda can be pulled later with no
 // extra consent prompt). Least privilege — Calendars.Read, never ReadWrite.
@@ -354,7 +355,8 @@ function msal(): typeof import('@azure/msal-node') {
 async function makePca(cfg: AzureConfig): Promise<PublicClientApplication> {
   return new (msal().PublicClientApplication)({
     auth: { clientId: cfg.clientId, authority: `https://login.microsoftonline.com/${cfg.tenantId}` },
-    cache: { cachePlugin: makeCachePlugin() }
+    cache: { cachePlugin: makeCachePlugin() },
+    system: { networkClient: createGuardedNetworkClient() }
   })
 }
 

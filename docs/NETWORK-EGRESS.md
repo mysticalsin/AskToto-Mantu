@@ -83,8 +83,8 @@ Managed config (machine-wide `managed-config.json`, see `docs/ENTERPRISE_RELEASE
   Intelligence window). A refused request fails like a dead network, so the existing offline handling and
   error copy apply. Each refused host is written once per session to the audit log as `net.egress.blocked`
   (hostname only). The policy itself is recorded at boot as `net.egress.policy`.
-- Known gaps, stated rather than hidden: raw `https.request` sockets opened by libraries (MSAL's token client
-  for Microsoft sign-in) and child processes are not seen by the guard. Put those on the proxy allowlist.
+- Known gaps, stated rather than hidden: child processes and other raw `https.request` sockets opened by libraries are not seen by the guard
+  (MSAL's token client now sends through the guarded `fetch`). Put those on the proxy allowlist.
 - Precedence matches `allowedProviders`: the admin (machine) file wins over the per-user file.
 
 ## Proof
