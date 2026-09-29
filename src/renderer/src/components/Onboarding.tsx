@@ -248,12 +248,12 @@ function CheckRow({
   return (
     <div
       className={`flex items-start gap-2.5 rounded-lg ${
-        ok ? '' : 'border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 p-2'
+        ok ? '' : 'border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 p-2'
       }`}
     >
       <span
         className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full ${
-          ok ? 'bg-[var(--color-success)] text-white' : 'bg-[var(--color-warn,#fac775)] text-[#3d2c00]'
+          ok ? 'bg-[var(--color-success)] text-white' : 'bg-[var(--color-warn)] text-[#3d2c00]'
         }`}
       >
         {ok ? <Check size={11} /> : <AlertCircle size={11} />}
