@@ -21,8 +21,8 @@
  *   - A deadline or an abort releases the caller; the fs call keeps its permit until it settles.
  *   - Content is read only after the dataless detector says the bytes are on this device. 'dataless' and
  *     'unknown' files are never opened, and at most one detector probe runs at a time. The one exception is
- *     a `hydrate` read: the user's explicit open of a single file, under a content permit. A non-regular
- *     file (FIFO, socket, device) is never read at all.
+ *     a `hydrate` read: the user's explicit open of a single file, under a content permit. A `hydrate`
+ *     read refuses a non-regular file (FIFO, socket, device).
  *   - Paths are relative to the injected root and never leave it. A read resolves symlinks only after
  *     classification (on Windows, resolving a path opens the file) and reads the resolved path only if it
  *     lies inside the resolved root.
@@ -66,7 +66,7 @@ export type ContentVersion = Omit<FileVersion, 'path'>
  *  `isSymlink` is the directory entry's own type, never the target's — a caller that treats a name as
  *  identity (e.g. promoting a draft-named file into History) must reject `isSymlink: true` rather than
  *  read through it, even though `read()` itself still follows in-root symlinks. `isRegular` is the stat of
- *  the target: a FIFO, socket or device is not a file to read, and `read()` refuses one. */
+ *  the target: a FIFO, socket or device is not a file to read, and a `hydrate` read refuses one. */
 export type FileClass =
   | { status: 'ok' | 'dataless' | 'unknown'; version: ContentVersion; isSymlink: boolean; isRegular: boolean }
   | StorageFailure
@@ -364,8 +364,8 @@ export function createStorageGateway({
   async function readLocal(base: string, path: string, request: Request, { hydrate, onProgress }: ReadOptions): Promise<LocalRead> {
     const stated = await statFile(path, request)
     if (stated.status !== 'ok') return { result: stated, rememberUnavailable: stated.status === 'unavailable' }
-    // A FIFO, socket or device blocks a pool thread on open or read whatever the detector says.
-    if (!stated.value.regular) return { result: { status: 'unavailable', code: 'NOT_REGULAR' }, rememberUnavailable: false }
+    // An explicit open never reads a FIFO, socket or device: it would hold a pool thread until the peer appears.
+    if (hydrate && !stated.value.regular) return { result: { status: 'unavailable', code: 'NOT_REGULAR' }, rememberUnavailable: false }
     const version = versionOf(stated.value.file)
     if (!hydrate) {
       const presence = (await presenceWithin([stated.value.file], request)).get(path)

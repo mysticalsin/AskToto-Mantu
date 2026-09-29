@@ -421,14 +421,13 @@ describe('classify-before-read (D1-D6)', () => {
     expect(fs.calls.some((call) => call.startsWith('realpath') || call.startsWith('readFile'))).toBe(false)
   })
 
-  it('classify and read refuse a non-regular file without probing or reading it', async () => {
+  it('classify flags a non-regular file without probing it and an explicit open refuses to read it', async () => {
     const memory = memoryFs({ 'pipe.md': 'P' })
     const fs = { ...memory, stat: async (path: string) => ({ ...(await memory.stat(path)), isFile: () => false }) }
     const detector = fakeDetector()
     const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
 
     expect((await gateway.classify(['pipe.md'])).get('pipe.md')).toMatchObject({ isRegular: false })
-    await expect(gateway.read('pipe.md')).resolves.toEqual({ status: 'unavailable', code: 'NOT_REGULAR' })
     await expect(gateway.read('pipe.md', { hydrate: true })).resolves.toEqual({ status: 'unavailable', code: 'NOT_REGULAR' })
     expect(detector.classify).not.toHaveBeenCalled()
     expect(memory.calls.some((call) => call.startsWith('readFile'))).toBe(false)
