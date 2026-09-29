@@ -28,6 +28,12 @@ export function scheduleTrayAfterFirstPaint(win: TrayGateWindow | null | undefin
     started = true
     setImmediate(buildTray)
   }
+  // A timer callback already starts a task of its own, so the fallback builds the tray directly.
+  const startFromTimer = (): void => {
+    if (started) return
+    started = true
+    buildTray()
+  }
   // The exclusive-onboarding hoist can have created the window (and painted it) before this runs.
   if (!win.webContents.isLoading() && win.webContents.getURL() !== '') {
     start()
@@ -35,5 +41,5 @@ export function scheduleTrayAfterFirstPaint(win: TrayGateWindow | null | undefin
   }
   win.once('ready-to-show', start)
   win.webContents.once('did-finish-load', start)
-  setTimeout(start, FALLBACK_MS).unref?.()
+  setTimeout(startFromTimer, FALLBACK_MS).unref?.()
 }
