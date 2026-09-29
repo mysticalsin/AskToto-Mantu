@@ -67,7 +67,12 @@ jobs:
           $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
       - name: Build representative synthetic profile
-        run: node scripts/qa/census/profile.mjs "$env:RUNNER_TEMP/metis-baseline-profile"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $profileDir = Join-Path $env:RUNNER_TEMP 'metis-baseline-profile'
+          node scripts/qa/census/profile.mjs $profileDir
+          if ($LASTEXITCODE -ne 0) { throw 'Profile generation failed.' }
+          Copy-Item (Join-Path $profileDir 'resource-census-profile.json') baseline-output/resource-census-profile.json
       - name: Run the baseline harness
         env:
           METIS_QA_PROFILE: ${{ runner.temp }}/metis-baseline-profile

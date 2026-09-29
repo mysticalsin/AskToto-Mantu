@@ -17,7 +17,7 @@
 #>
 param(
   [string]$App = '',
-  [string]$Profile = $env:METIS_QA_PROFILE,
+  [string]$QaProfile = $env:METIS_QA_PROFILE,
   [Parameter(Mandatory = $true)][string]$OutDir,
   [int]$Seconds = 300,
   [switch]$PlanOnly
@@ -40,7 +40,8 @@ $managedRows = @(
 
 if (-not $PlanOnly) {
   if (-not $App) { throw '-App is required unless -PlanOnly is set.' }
-  if (-not $Profile) { throw '-Profile or METIS_QA_PROFILE is required: a fresh profile is not representative.' }
+  if (-not $QaProfile) { throw '-QaProfile or METIS_QA_PROFILE is required: a fresh profile is not representative.' }
+  if (-not (Test-Path (Join-Path $QaProfile 'resource-census-profile.json'))) { throw "resource-census-profile.json is missing from $QaProfile: measure only a representative profile." }
 }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -52,7 +53,7 @@ foreach ($state in $measuredStates) {
     $rows += [ordered]@{ id = "census-$state"; state = $state; status = 'SUPPORTED_NOT_RUN'; artifact = $artifact }
     continue
   }
-  $env:METIS_QA_PROFILE = $Profile
+  $env:METIS_QA_PROFILE = $QaProfile
   & node $census --state $state --seconds $Seconds --app $App --output (Join-Path $OutDir $artifact)
   $ok = ($LASTEXITCODE -eq 0) -and (Test-Path (Join-Path $OutDir $artifact))
   $status = if ($ok) { 'MEASURED' } else { 'FAILED' }

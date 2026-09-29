@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { ATTRIBUTABLE_PROCESS_KINDS } from './lib.mjs'
 
 const SYNTHETIC_STARTED_AT = Date.UTC(2026, 8, 27, 13, 0, 0)
@@ -144,7 +145,7 @@ function usage() {
   return 'Usage: node scripts/qa/census/profile.mjs <profile-dir>'
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const profileDir = process.argv[2]
   if (!profileDir) {
     console.error(usage())

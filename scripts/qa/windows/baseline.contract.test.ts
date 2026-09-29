@@ -54,4 +54,31 @@ describe('M2-0415 Windows 1.9.6 baseline harness', () => {
       rmSync(out, { recursive: true, force: true })
     }
   })
+
+  it('refuses to measure without a representative profile manifest', () => {
+    const out = mkdtempSync(join(tmpdir(), 'm2-0415-baseline-'))
+    const blank = mkdtempSync(join(tmpdir(), 'm2-0415-blank-profile-'))
+    const env = { ...process.env }
+    delete env.METIS_QA_PROFILE
+    try {
+      const missing = spawnSync('pwsh', ['-NoProfile', '-File', SCRIPT, '-OutDir', out, '-App', 'Metis.exe'], {
+        encoding: 'utf8',
+        env,
+        timeout: 60_000
+      })
+      expect(missing.status).not.toBe(0)
+      expect(`${missing.stdout}${missing.stderr}`).toContain('-QaProfile or METIS_QA_PROFILE is required')
+
+      const empty = spawnSync(
+        'pwsh',
+        ['-NoProfile', '-File', SCRIPT, '-OutDir', out, '-App', 'Metis.exe', '-QaProfile', blank],
+        { encoding: 'utf8', env, timeout: 60_000 }
+      )
+      expect(empty.status).not.toBe(0)
+      expect(`${empty.stdout}${empty.stderr}`).toContain('resource-census-profile.json is missing')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+      rmSync(blank, { recursive: true, force: true })
+    }
+  })
 })
