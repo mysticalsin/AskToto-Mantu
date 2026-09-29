@@ -136,3 +136,6 @@ native-app/**/*.xcodeproj/xcuserdata/
 # columns, hashed license keys, seat rows — never belongs in git history. See
 # docs/operator/RUNBOOKS.md for the backup/restore procedure.
 operator/backups/
+
+# wrangler dev bundle/state scratch (operator/.wrangler/), never source.
+.wrangler/

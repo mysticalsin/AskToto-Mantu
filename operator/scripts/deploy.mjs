@@ -4,7 +4,11 @@
  *
  *   node operator/scripts/deploy.mjs --dry-run [--env staging|production]
  *   node operator/scripts/deploy.mjs --env staging
- *   node operator/scripts/deploy.mjs --env production
+ *   node operator/scripts/deploy.mjs --env production --owner-confirm   (owner only, see below)
+ *
+ * Staging is the default target. A real production deploy is owner-only: it refuses --allow-dirty,
+ * any CI or agent context, a missing --owner-confirm, and a HEAD that is not reachable from a freshly
+ * fetched origin/main (productionDeployRefusals).
  *
  * Order of operations (every step is fatal on failure — no step after a failure runs):
  *   1. Refuse a dirty git tree (`git status --porcelain`), unless --allow-dirty.
@@ -30,9 +34,10 @@
  * Rollback: `cd operator && node ../node_modules/wrangler/bin/wrangler.js rollback [--env staging]`.
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, posix } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resolveDatabaseName, stripJsonComments } from './migrate.mjs'
 import { commandFailureDetails, localNodeCommand } from './toolchain.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -51,12 +56,49 @@ export function parseArgs(argv) {
     if (a === '--env') args.env = argv[++i]
     else if (a === '--dry-run') args.dryRun = true
     else if (a === '--allow-dirty') args.allowDirty = true
+    else if (a === '--owner-confirm') args.ownerConfirm = true
     else if (a === '--help' || a === '-h') args.help = true
   }
   if (args.env !== 'production' && args.env !== 'staging') {
     throw new Error(`--env must be "production" or "staging", got ${JSON.stringify(args.env)}`)
   }
   return args
+}
+
+/** Variables set by CI runners and by coding agents. Production is deployed by the owner from a
+ *  terminal, so any of these being set means this is not that context. */
+const AUTOMATION_ENV_VARS = [
+  'CI',
+  'GITHUB_ACTIONS',
+  'CLAUDECODE',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CODEX_SANDBOX',
+  'CODEX_CI',
+  'CURSOR_AGENT',
+  'AI_AGENT'
+]
+
+function isAutomationContext(processEnv) {
+  return AUTOMATION_ENV_VARS.some((name) => {
+    const value = (processEnv[name] ?? '').trim().toLowerCase()
+    return value !== '' && value !== '0' && value !== 'false'
+  })
+}
+
+/** Pure: why a real production deploy must not proceed (empty list = allowed). Production is
+ *  owner-only: it needs explicit confirmation, a clean tree, a terminal that is neither CI nor an
+ *  agent, and a HEAD that is reachable from a freshly fetched origin/main. `git` supplies the two
+ *  repository facts so the rule is testable without a checkout. */
+export function productionDeployRefusals({ args, processEnv, git }) {
+  const refusals = []
+  if (args.allowDirty) refusals.push('--allow-dirty is refused for production')
+  if (isAutomationContext(processEnv)) refusals.push('production deploys never run from CI or an agent context')
+  if (!args.ownerConfirm) refusals.push('production deploys need --owner-confirm from the account owner')
+  // Only touch the network once nothing else has already refused.
+  if (refusals.length) return refusals
+  if (!git.fetchOriginMain()) refusals.push('could not fetch origin/main, so HEAD cannot be checked against it')
+  else if (!git.headOnOriginMain()) refusals.push('HEAD is not reachable from origin/main (unreviewed ref)')
+  return refusals
 }
 
 /** Pure: builds the wrangler deploy argv (no cwd, no execution). */
@@ -91,6 +133,15 @@ export function extractDeployedUrl(stdout, env) {
   return DEPLOYED_URLS[env]
 }
 
+/** Pure: the Worker name and D1 database a deploy to `env` lands on, read from wrangler.jsonc, so
+ *  the printed plan names the real targets instead of repeating the env label. */
+export function resolveDeployTarget(wranglerJsoncText, env) {
+  const config = JSON.parse(stripJsonComments(wranglerJsoncText))
+  const worker = env === 'staging' ? config.env?.staging?.name : config.name
+  const { databaseName } = resolveDatabaseName(wranglerJsoncText, env === 'staging' ? 'staging' : null)
+  return { worker, database: databaseName }
+}
+
 export function formatBuiltAt(date = new Date()) {
   return date.toISOString()
 }
@@ -100,7 +151,9 @@ function printHelp() {
 
 Default --env is staging. --dry-run prints every command this script would run (including the
 resolved version/timestamp) without executing typecheck, tests, builds, migrations, or wrangler.
---allow-dirty skips the "clean git tree" gate (never use this for a production deploy).`)
+--allow-dirty skips the "clean git tree" gate (refused for production).
+A real --env production deploy is owner-only: it needs --owner-confirm, a clean tree, a terminal
+that is not CI or an agent, and HEAD reachable from a freshly fetched origin/main.`)
 }
 
 function run(label, cmd, args, { cwd = REPO_ROOT, dryRun, capture = false } = {}) {
@@ -137,6 +190,13 @@ function gitIsDirty() {
   return (res.stdout || '').trim().length > 0
 }
 
+const repoGit = {
+  fetchOriginMain: () => spawnSync('git', ['fetch', 'origin', 'main'], { cwd: REPO_ROOT, stdio: 'ignore' }).status === 0,
+  headOnOriginMain: () =>
+    spawnSync('git', ['merge-base', '--is-ancestor', 'HEAD', 'origin/main'], { cwd: REPO_ROOT, stdio: 'ignore' })
+      .status === 0
+}
+
 function gitShortSha() {
   const res = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' })
   if (res.status !== 0) throw new Error('git rev-parse --short HEAD failed — is this a git checkout?')
@@ -156,7 +216,14 @@ async function main() {
   }
 
   const { env, dryRun, allowDirty } = args
-  const receipt = { env, version: null, builtAt: null, url: null, migration: null, smoke: null }
+  const target = resolveDeployTarget(readFileSync(join(OPERATOR_ROOT, 'wrangler.jsonc'), 'utf8'), env)
+  const receipt = { env, ...target, version: null, builtAt: null, url: null, migration: null, smoke: null }
+
+  // 0. Owner-only production gate (a dry-run only prints the plan, so it is not gated).
+  if (env === 'production' && !dryRun) {
+    const refusals = productionDeployRefusals({ args, processEnv: process.env, git: repoGit })
+    if (refusals.length) fatal(`production deploy refused:\n  - ${refusals.join('\n  - ')}`)
+  }
 
   // 1. Clean tree gate.
   if (!dryRun && !allowDirty && gitIsDirty()) {
@@ -239,6 +306,8 @@ async function main() {
 function printReceipt(receipt) {
   console.log('\n=== Métis Operator deploy receipt ===')
   console.log(`  environment:   ${receipt.env}`)
+  console.log(`  worker:        ${receipt.worker}`)
+  console.log(`  d1 database:   ${receipt.database}`)
   console.log(`  version:       ${receipt.version}`)
   console.log(`  built at:      ${receipt.builtAt}`)
   console.log(`  url:           ${receipt.url}`)
