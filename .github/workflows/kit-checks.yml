@@ -24,8 +24,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  skill-registry:
-    name: Skill registry
+  kit-checks:
+    name: Kit checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -35,6 +35,13 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
+      - name: Inputs point at existing files
+        env:
+          REGISTRY: ${{ inputs.registry }}
+          KIT_DIR: ${{ inputs.kit_dir }}
+        run: |
+          test -f "$REGISTRY" || { echo "::error::registry input '$REGISTRY' is not a file in this checkout"; exit 1; }
+          test -f "$KIT_DIR/check_hindsight_package.py" || { echo "::error::kit_dir input '$KIT_DIR' has no check_hindsight_package.py"; exit 1; }
       - name: One entry, auto_install and auto_capture false
         env:
           REGISTRY: ${{ inputs.registry }}
