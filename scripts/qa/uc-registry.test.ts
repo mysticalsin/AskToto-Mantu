@@ -8,7 +8,7 @@ const shipped = JSON.parse(readFileSync(join(__dirname, 'uc-registry.json'), 'ut
 const mapped = (id: string, over: Record<string, unknown> = {}) => ({
   id,
   tickets: ['M2-0441'],
-  tests: [{ id: `t-${id}`, file: 'scripts/qa/x.test.ts' }],
+  tests: [{ id: `t-${id}`, file: 'scripts/qa/x.test.mjs' }],
   evidence: 'LOCALLY_TESTED',
   externalBlocker: null,
   ...over
