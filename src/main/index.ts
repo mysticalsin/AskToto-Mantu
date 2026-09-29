@@ -641,11 +641,10 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
-import { buildTrayInStages, createSingleFlight, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
+import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
-import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
-import type { BootStage } from './infra/observability/projection'
+import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
 import { crashDetail, type CrashKind } from './infra/observability/crash-taxonomy'
@@ -2143,10 +2142,6 @@ let emittedAppStarted = false
 // M2-0006: set once, at the same point app.started fires — will-quit calls observability.shutdownClean()
 // on it, and it is meaningless before that first createWindow() has run.
 let observability: RunObservability | null = null
-/** Runs one native boot stage, audited with its duration once observability has started (M2-0433). */
-function timeBootStage<T>(stage: BootStage, fn: () => T): T {
-  return observability ? observability.timeBootStage(stage, fn) : fn()
-}
 /** Consumed by the next transparent window created when Act 6 finishes. Never persisted. */
 let postOnboardingDestination: 'answer' | 'settings' = 'answer'
 const ONBOARDING_EXIT_FALLBACK_MS = 5_000
@@ -2653,8 +2648,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   const chrome = overlayWindowChrome(onboardingLive)
   overlayWindowTransparent = chrome.transparent
   const deferFirstShow = isBootFirstShowDeferred()
-  // M2-0433: the native constructor's own cost is audited on every run (ST-1 reports it per run).
-  const constructStartedMs = performance.now()
+  const constructStartedMs = performance.now() // M2-0433: ST-1 reports the native constructor's cost per run
   win = new BrowserWindow({
     title: 'Métis', // Electron otherwise titles the window with the package name until the renderer's <title> loads
     width: firstPaint.width,
@@ -2756,7 +2750,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   }
   // Both keep the ctor show:true activation (focus + front): exclusive via FITO-185-T, the overlay via show().
   if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) =>
-    timeBootStage('createWindow.firstShow', () =>
+    timeBootStage(observability, 'createWindow.firstShow', () =>
       onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show()))
 
   // Capture THIS window instance so a late 'closed' from a crashed/replaced window can't null out a
@@ -4639,13 +4633,8 @@ function startMeetingNotifier(): void {
  *  accelerator labels never go stale — see rebuildTrayMenu(). */
 function buildTrayMenu(): Menu {
   const user = getSettings().shortcuts ?? {}
-  const winKeys = process.platform === 'win32'
-  const fmtAccel = (a: string): string =>
-    !a ? '' : winKeys
-      ? a.replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl').replace(/Command|Meta|Super/g, 'Win').replace(/Return/g, 'Enter')
-      : a.replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘').replace(/Shift/g, '⇧').replace(/Alt/g, '⌥').replace(/Control/g, 'Ctrl').replace(/Return/g, '↵').replace(/\+/g, '')
   const label = (base: string, action: HotkeyAction): string => {
-    const k = fmtAccel(resolveShortcut(action, user))
+    const k = formatTrayAccelerator(resolveShortcut(action, user), process.platform)
     return k ? `${base}  (${k})` : base
   }
   return Menu.buildFromTemplate([
@@ -4687,16 +4676,12 @@ function createTray(): void {
   // menu-bar item and orphans the first Tray. A build still in flight counts as created (startTrayBuild ignores it).
   if (tray && !tray.isDestroyed()) return
   const iconPaths = trayIconPaths(app.isPackaged ? process.resourcesPath : join(__dirname, '../../build'))
-  let menu: Menu | null = null
-  let emptyIcon = false
-  startTrayBuild(() => buildTrayInStages<Electron.NativeImage>({
+  startTrayBuild(() => buildTrayInStages<Electron.NativeImage, Menu>({
     loadIcon: (time) => loadPresizedTrayIcon(nativeImage, iconPaths, process.platform, time),
-    create(img) {
-      emptyIcon = img.isEmpty()
-      tray = new Tray(emptyIcon ? nativeImage.createEmpty() : img)
-    },
-    decorate() {
+    create: (img) => { tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img) },
+    decorate(img) {
       if (!tray || tray.isDestroyed()) return
+      const emptyIcon = img.isEmpty()
       // FITO-185-F: always give AXExtrasMenuBar a title on darwin (empty-icon fallback used to be the
       // only path; hardprove saw kAXErrorCannotComplete with a title-less LSUIElement status item).
       if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
@@ -4705,11 +4690,9 @@ function createTray(): void {
       tray.on('click', () => sendHotkey('settings'))
       auditLog('tray.created', { emptyIcon })
     },
-    buildMenu: () => {
-      menu = buildTrayMenu()
-    },
-    attachMenu: () => tray?.setContextMenu(menu ?? buildTrayMenu()),
-    time: (label, fn) => timeBootStage(label, fn),
+    buildMenu: buildTrayMenu,
+    attachMenu: (menu) => tray?.setContextMenu(menu ?? buildTrayMenu()),
+    time: (label, fn) => timeBootStage(observability, label, fn),
     fail: (e) => auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
   }))
 }

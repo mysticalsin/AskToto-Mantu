@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { startRunObservability } from './run-observability'
+import { startRunObservability, timeBootStage, type RunObservability } from './run-observability'
 import { startStallMonitor } from './stall-monitor'
 import type { PriorRun } from '../../boot-sentinel'
 import type { StallMonitor, StallMonitorOptions } from './stall-monitor'
@@ -247,6 +247,14 @@ describe('startRunObservability', () => {
 
     observability.recordBootStage('createWindow.construct', 170)
     expect(audit).toHaveBeenLastCalledWith('app.boot.stage', { bootId: 'boot-7', stage: 'createWindow.construct', ms: 170 })
+  })
+
+  it('the free timeBootStage runs the stage untimed before observability starts and through it after (M2-0433)', () => {
+    expect(timeBootStage(null, 'createTray.newTray', () => 'untimed')).toBe('untimed')
+    const stage = vi.fn(<T,>(_stage: string, fn: () => T): T => fn())
+    const observability = { timeBootStage: stage } as unknown as RunObservability
+    expect(timeBootStage(observability, 'createWindow.firstShow', () => 'timed')).toBe('timed')
+    expect(stage).toHaveBeenCalledExactlyOnceWith('createWindow.firstShow', expect.any(Function))
   })
 
   it("suspend calls pause(); resume and unlock-screen each call restartIfPaused(), unconditionally and with no local flag gating either", () => {

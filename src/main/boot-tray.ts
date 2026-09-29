@@ -47,17 +47,17 @@ export function scheduleTrayAfterFirstPaint(win: TrayGateWindow | null | undefin
   setTimeout(startFromTimer, FALLBACK_MS).unref?.()
 }
 
-export interface TrayStages<Icon> {
+export interface TrayStages<Icon, Menu = unknown> {
   /** Produces the sized tray image with the build's phase timer; the decode must not run as one long main-thread task. */
   loadIcon(time: TrayPhaseTimer): Promise<Icon>
   /** Constructs the native tray item from the loaded image. */
   create(icon: Icon): void
-  /** Sets the created item's title, tooltip and click handler. */
-  decorate?(): void
-  /** Builds the context menu for `attachMenu`. */
-  buildMenu?(): void
-  /** Attaches the context menu (building it here when there is no `buildMenu`). */
-  attachMenu(): void
+  /** Sets the created item's title, tooltip and click handler; receives the image `create` was given. */
+  decorate?(icon: Icon): void
+  /** Builds the context menu handed to `attachMenu`. */
+  buildMenu?(): Menu
+  /** Attaches the menu `buildMenu` built (undefined when there is no `buildMenu`, so it builds the menu itself). */
+  attachMenu(menu: Menu | undefined): void
   /** Times one stage (the boot phase trace), so a slow stage is named on its own. */
   time: TrayPhaseTimer
   fail(error: unknown): void
@@ -66,21 +66,22 @@ export interface TrayStages<Icon> {
 /** M2-0031, M2-0433: every tray stage (image load, native item, its title, the menu build, the menu attach) runs
  *  in a main-thread task of its own, so no single task holds two native steps together. A failure in any stage
  *  is reported once through `fail` and ends the build; a tray already created stays usable. */
-export async function buildTrayInStages<Icon>(stages: TrayStages<Icon>): Promise<void> {
+export async function buildTrayInStages<Icon, Menu = unknown>(stages: TrayStages<Icon, Menu>): Promise<void> {
   try {
     const icon = await stages.loadIcon(stages.time)
     await yieldToEventLoop()
     stages.time('createTray.newTray', () => stages.create(icon))
     if (stages.decorate) {
       await yieldToEventLoop()
-      stages.time('createTray.decorate', () => stages.decorate?.())
+      stages.time('createTray.decorate', () => stages.decorate?.(icon))
     }
+    let menu: Menu | undefined
     if (stages.buildMenu) {
       await yieldToEventLoop()
-      stages.time('createTray.buildMenu', () => stages.buildMenu?.())
+      menu = stages.time('createTray.buildMenu', () => stages.buildMenu?.())
     }
     await yieldToEventLoop()
-    stages.time('createTray.attachMenu', () => stages.attachMenu())
+    stages.time('createTray.attachMenu', () => stages.attachMenu(menu))
   } catch (error) {
     stages.fail(error)
   }
@@ -99,6 +100,15 @@ export function createSingleFlight(): (run: () => Promise<void>) => void {
         inFlight = false
       })
   }
+}
+
+/** The tray menu's label for an Electron accelerator: Windows key names on win32, macOS modifier symbols elsewhere;
+ *  an unbound shortcut ('') gives ''. */
+export function formatTrayAccelerator(accelerator: string, platform: NodeJS.Platform): string {
+  if (!accelerator) return ''
+  return platform === 'win32'
+    ? accelerator.replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl').replace(/Command|Meta|Super/g, 'Win').replace(/Return/g, 'Enter')
+    : accelerator.replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘').replace(/Shift/g, '⇧').replace(/Alt/g, '⌥').replace(/Control/g, 'Ctrl').replace(/Return/g, '↵').replace(/\+/g, '')
 }
 
 export interface TraySize {

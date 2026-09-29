@@ -75,6 +75,12 @@ export interface RunObservability {
   shutdownClean(uptimeS: number): void
 }
 
+/** Runs one native boot stage through `observability.timeBootStage` once observability has started, and untimed
+ *  before that (M2-0433). */
+export function timeBootStage<T>(observability: RunObservability | null, stage: BootStage, fn: () => T): T {
+  return observability ? observability.timeBootStage(stage, fn) : fn()
+}
+
 const ALIVE_INTERVAL_MS = 10_000
 
 /** Start this boot's observability. Call once, at the same point the app is ready to claim a window. */

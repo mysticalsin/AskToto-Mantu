@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import {
   buildTrayInStages,
   createSingleFlight,
+  formatTrayAccelerator,
   loadPresizedTrayIcon,
   loadTrayIcon,
   scheduleTrayAfterFirstPaint,
@@ -136,6 +137,38 @@ describe('scheduleTrayAfterFirstPaint (M2-0422)', () => {
     await done
     expect(order).toEqual(['create', 'task-after-create', 'decorate', 'task-after-decorate', 'buildMenu', 'task-after-buildMenu', 'attachMenu'])
     expect(labels).toEqual(['createTray.newTray', 'createTray.decorate', 'createTray.buildMenu', 'createTray.attachMenu'])
+  })
+
+  it('buildTrayInStages hands the loaded icon to decorate and the built menu to attachMenu (M2-0433)', async () => {
+    const decorate = vi.fn()
+    const attachMenu = vi.fn()
+    await buildTrayInStages<string, { items: number }>({
+      loadIcon: async () => 'icon',
+      create: vi.fn(),
+      decorate,
+      buildMenu: () => ({ items: 3 }),
+      attachMenu,
+      time: (_label, fn) => fn(),
+      fail: (error) => {
+        throw error
+      }
+    })
+    expect(decorate).toHaveBeenCalledExactlyOnceWith('icon')
+    expect(attachMenu).toHaveBeenCalledExactlyOnceWith({ items: 3 })
+  })
+
+  it('buildTrayInStages attaches with no prebuilt menu when there is no buildMenu stage (M2-0433)', async () => {
+    const attachMenu = vi.fn()
+    await buildTrayInStages<string, string>({
+      loadIcon: async () => 'icon',
+      create: vi.fn(),
+      attachMenu,
+      time: (_label, fn) => fn(),
+      fail: (error) => {
+        throw error
+      }
+    })
+    expect(attachMenu).toHaveBeenCalledExactlyOnceWith(undefined)
   })
 
   it('buildTrayInStages reports a failing stage once and runs no later stage', async () => {
@@ -326,5 +359,22 @@ describe('loadPresizedTrayIcon (M2-0031)', () => {
 
     expect(icon.name).toBe('thumb')
     expect(images.createThumbnailFromPath).toHaveBeenCalledExactlyOnceWith(PATHS.fullSize, TRAY_ICON_SIZE)
+  })
+})
+
+describe('formatTrayAccelerator (M2-0433)', () => {
+  it('spells an accelerator with Windows key names on win32', () => {
+    expect(formatTrayAccelerator('CommandOrControl+Shift+Return', 'win32')).toBe('Ctrl+Shift+Enter')
+    expect(formatTrayAccelerator('Super+Alt+K', 'win32')).toBe('Win+Alt+K')
+  })
+
+  it('spells an accelerator with macOS modifier symbols elsewhere', () => {
+    expect(formatTrayAccelerator('CommandOrControl+Shift+Alt+Return', 'darwin')).toBe('⌘⇧⌥↵')
+    expect(formatTrayAccelerator('Control+K', 'linux')).toBe('CtrlK')
+  })
+
+  it('returns an empty label for an unbound shortcut', () => {
+    expect(formatTrayAccelerator('', 'darwin')).toBe('')
+    expect(formatTrayAccelerator('', 'win32')).toBe('')
   })
 })
