@@ -29,7 +29,7 @@ meeting copilot / note-taker: a frameless, transparent, always-on-top overlay fo
 | `intelligence/` | Mantu Intelligence sub-app bundle |
 | `native-app/`, `native/` | Swift MetisKit / native macOS helper |
 | `scripts/` | Build, packaging, release and gate scripts |
-| `docs/` | Product and engineering docs. Internal 2.0 program docs stay outside this public repository. |
+| `docs/` | Product and engineering docs, mapped in [`docs/README.md`](docs/README.md); runbooks in [`docs/runbooks/`](docs/runbooks/qa.md). Internal 2.0 program docs stay outside this public repository. |
 
 ## 3. Commands
 
@@ -50,6 +50,23 @@ repository code. The commands below are subject to this rule.
 | Dev app | `npm run dev` |
 | Production bundle (no installer) | `npm run build` |
 | Skipped-test audit | `npm run check:skips` |
+
+`scripts/docs/verify-commands.mjs` resolves each command below against the release commit (a script, file or config it names
+must exist there); it never runs them. The one-test-file example names a real test so it resolves.
+
+```bash verify-dry
+npm ci
+npm run typecheck
+npm test
+npx vitest run scripts/docs/verify-commands.test.ts
+npm run dev
+npm run build
+npm run check:skips
+npx tsc --noEmit -p tsconfig.node.json
+npx tsc --noEmit -p tsconfig.web.json
+npx tsc --noEmit -p tsconfig.tests.json
+gh run view
+```
 
 Never run `dist*`, `release*`, `installers*`, `deploy:operator`, `migrate:operator` or `embed-cloudflare-key`
 scripts unless the ticket explicitly authorizes it: they embed keys, sign binaries, deploy or migrate.
