@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ScreenDiagnosis, ScreenDiagnosisState } from '@shared/ipc'
+import type { ScreenDiagnosis, ScreenDiagnosisState } from '@shared/screen-permission'
 import { acquireLoopbackScreenSource, isOrphanScreenSourcesRejection, type LoopbackScreenSourceDeps } from './loopback-grant'
 
 type Src = { id: string; usable: boolean }

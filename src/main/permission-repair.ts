@@ -11,7 +11,7 @@
  * If tccutil fails (an entry in the system database needs an admin), the caller shows the manual path instead:
  * remove Métis with "–" in the pane, then add it back with "+".
  */
-import type { ScreenRepairResult } from '@shared/ipc'
+import type { ScreenRepairResult } from '@shared/screen-permission'
 import { SCREEN_REPAIR_MANUAL_GUIDANCE } from '@shared/screen-capture'
 
 export { SCREEN_REPAIR_MANUAL_GUIDANCE }

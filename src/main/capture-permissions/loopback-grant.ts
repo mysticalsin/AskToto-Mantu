@@ -8,7 +8,7 @@
  * capture.failed { reason: 'screen_permission_denied' } and never call getSources. The one non-granted state
  * that still asks is 'not-asked', because that first attempt is what makes macOS show its prompt.
  */
-import type { ScreenDiagnosis } from '@shared/ipc'
+import type { ScreenDiagnosis } from '@shared/screen-permission'
 import { getScreenSourcesWithRetry } from '../screen-capture'
 import { screenCaptureMayProceed } from './diagnose'
 

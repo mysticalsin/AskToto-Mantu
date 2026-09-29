@@ -21,7 +21,6 @@ import {
   systemPreferences
 } from 'electron'
 import { join, basename, dirname, resolve } from 'node:path'
-import { execFile } from 'node:child_process'
 import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
 
 // Enterprise checkbox: DevTools stay reachable only where they are a development tool. No secret ever
@@ -177,10 +176,10 @@ import {
 } from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
-import { extractScreenText, macStallWatchCommand, getCodeIdentity, getBundleCopies } from './mac-helper'
-import { createScreenPermission, type ScreenPermission } from './capture-permissions/screen-permission'
-import { acquireLoopbackScreenSource, isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
-import { repairScreenPermission, resumeScreenRepair } from './permission-repair'
+import { extractScreenText, macStallWatchCommand } from './mac-helper'
+import * as screenPerm from './capture-permissions/screen-permission-runtime'
+import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
+import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
 import {
@@ -745,13 +744,7 @@ import {
   sweepStaleTempFiles,
   readSavedFile
 } from './transcripts'
-import {
-  getPlatformPermissions,
-  probeScreenCapture,
-  noteScreenCaptureOutcome,
-  setScreenDiagnosisProvider,
-  windowsScreenStatus
-} from './platform-perms'
+import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
 import {
   VISION_CHECK_PROMPT,
@@ -3845,8 +3838,7 @@ let fatalHandled = false
 function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
   // M2-0429: a refused macOS capture, already audited as capture.failed by its caller — not a crash.
   if (kind === 'unhandledRejection' && isOrphanScreenSourcesRejection(err, process.platform)) {
-    mainLog.warn('[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)')
-    return
+    return void mainLog.warn('[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)')
   }
   const detail = err instanceof Error ? err.stack || err.message : String(err)
   persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
@@ -3874,56 +3866,6 @@ async function showFatalDialog(): Promise<void> {
   } catch {
     /* if the dialog itself fails, leave the app running */
   }
-}
-
-// --- Screen Recording diagnosis (M2-0429) -----------------------------------------------------------------
-// The raw macOS status reads 'denied' both for a never-asked build and for a grant held by another copy or
-// build; capture-permissions/ tells them apart from the persisted history plus this build's identity. Created
-// on first use, which the boot sequence forces early so the launch-time status is the real one.
-const APP_BUNDLE_ID = QA_IDENTITY_BUILD ? 'com.mantu.asktoto.qa' : 'com.mantu.asktoto'
-let screenPermissionInstance: ScreenPermission | null = null
-function screenPermission(): ScreenPermission {
-  screenPermissionInstance ??= createScreenPermission({
-    platform: process.platform,
-    appVersion: app.getVersion(),
-    execPath: process.execPath,
-    bundleId: APP_BUNDLE_ID,
-    launchedAt: Math.round(Date.now() - process.uptime() * 1000),
-    readStatus: () => (process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : windowsScreenStatus()),
-    getState: () => getSettings().permissionState,
-    setState: (next) => {
-      try {
-        setSettings({ permissionState: next })
-      } catch (e) {
-        mainLog.warn('[permissions] could not persist Screen Recording history:', e instanceof Error ? e.message : String(e))
-      }
-    },
-    loadIdentity: getCodeIdentity,
-    loadCopies: getBundleCopies
-  })
-  return screenPermissionInstance
-}
-
-/** Boot: pin the launch-time status, register the diagnosis with every permissions answer, and read this
- *  build's signature and installed copies in the background (read-only helper calls). */
-function initScreenPermission(): void {
-  const sp = screenPermission()
-  setScreenDiagnosisProvider(() => ({ screenDiagnosis: sp.diagnose(), identity: sp.identity() }))
-  void sp.loadInstallFacts().catch((e) => mainLog.warn('[permissions] install facts unavailable:', e instanceof Error ? e.message : String(e)))
-}
-
-/** Deny a display-media request. Electron maps a null stream set to a clean capture failure; `{}` is rejected
- *  with a thrown TypeError when the request asked for video (the macOS loopback always does). Electron's
- *  typings do not list null, hence the cast. */
-const DENY_DISPLAY_MEDIA = null as unknown as Electron.Streams
-
-/** A deliberate ask (onboarding, the post-Repair boot, the Settings check): on macOS this capture is what
- *  registers the running build and raises the prompt, so it is recorded as this build's ask. */
-async function probeScreenWithHistory(): Promise<boolean> {
-  screenPermission().noteAttempt()
-  const ok = await probeScreenCapture()
-  screenPermission().noteOutcome(ok)
-  return ok
 }
 
 // --- Screen capture (cached + pre-warmable for vision latency) -----------------------------------------
@@ -3970,8 +3912,8 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   // MQA-110: this real capture just proved whether screen recording works right now — fold that back
   // into the readiness cache so a permission revoked after the boot probe stops reporting stale 'granted'.
   noteScreenCaptureOutcome(sources.length > 0)
-  screenPermission().noteOutcome(sources.length > 0)
-  const matched =sources.find((s) => String(s.display_id) === String(disp.id))
+  screenPerm.screenPermission().noteOutcome(sources.length > 0)
+  const matched = sources.find((s) => String(s.display_id) === String(disp.id))
   if (!matched && sources.length > 1) {
     auditLog('capture.display_mismatch', {
       requested: String(disp.id),
@@ -5012,63 +4954,8 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, reason: 'invalid_confirmation' }
     return commandControl.cancel({ ...parsed.data, webContentsId: e.sender.id })
   })
-  // Deep-link to the relevant macOS Privacy pane once a permission has been denied — getUserMedia never
-  // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it. The
-  // x-apple.systempreferences scheme only exists on macOS; a no-op elsewhere.
-  ipcMain.handle(IPC.permissionsOpenSettings, (e, kind: unknown) => {
-    assertMainWindow(e)
-    if (process.platform === 'darwin') {
-      const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
-      void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
-      return
-    }
-    if (process.platform === 'win32') {
-      // Windows has no single TCC-style "Screen Recording" permission like macOS; the closest deep link
-      // is the App graphics capture privacy page (added in the Windows 10 2004 update). Picked over the
-      // generic 'ms-settings:privacy' page because it's the actual per-capability toggle; on Windows
-      // builds that predate it, an unrecognized ms-settings URI opens the Settings home instead of
-      // erroring, so no separate fallback URI is needed here.
-      const uri = kind === 'screenRecording' ? 'ms-settings:privacy-graphicscaptureprogrammatic' : 'ms-settings:privacy-microphone'
-      void shell.openExternal(uri)
-    }
-  })
-  // M2-0429 one-click Repair: reset ONLY this app's Screen Recording entry (allowlisted bundle id, fixed argv,
-  // execFile with no shell), audit permission.repair, relaunch. The next boot re-probes once and opens the pane
-  // (resumeScreenRepair below). On failure the renderer shows the manual remove-then-add guidance.
-  ipcMain.handle(IPC.permissionsRepairScreen, async (e) => {
-    assertMainWindow(e)
-    return await repairScreenPermission({
-      platform: process.platform,
-      bundleId: APP_BUNDLE_ID,
-      execFile: (file, args, options, callback) => {
-        execFile(file, [...args], options, (error) => callback(error))
-      },
-      audit: (event, data) => auditLog(event, data),
-      onRepairStarted: () => screenPermission().noteRepairStarted(),
-      onRepairFailed: () => screenPermission().noteRepairFailed(),
-      relaunch: () => {
-        app.relaunch()
-        app.quit()
-      }
-    })
-  })
-  // "It's already on": the user sees Métis switched on in System Settings. Record it and relaunch; if this
-  // build still cannot capture after that, the diagnosis says the switch belongs to another copy or build.
-  ipcMain.handle(IPC.permissionsAttestScreen, (e) => {
-    assertMainWindow(e)
-    if (process.platform !== 'darwin') return
-    screenPermission().attest()
-    app.relaunch()
-    app.quit()
-  })
-  // Show a duplicate copy in Finder. Only a path the diagnosis itself listed is accepted, never an arbitrary
-  // renderer-supplied one.
-  ipcMain.handle(IPC.permissionsRevealCopy, (e, path: unknown) => {
-    assertMainWindow(e)
-    if (typeof path !== 'string') return
-    if (!screenPermission().diagnose().duplicates.some((copy) => copy.path === path)) return
-    shell.showItemInFolder(path)
-  })
+  // Open the Privacy pane, and the M2-0429 Screen Recording Repair / "It's already on" / Show in Finder.
+  registerScreenPermissionIpc(assertMainWindow)
   // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
   // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
   // prompt API; Screen Recording has none, but a 1px desktopCapturer probe registers the app with
@@ -5086,7 +4973,7 @@ function registerIpc(): void {
           await systemPreferences.askForMediaAccess('microphone').catch(() => false)
         }
         if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
-          await probeScreenWithHistory()
+          await screenPerm.probeScreenWithHistory()
         }
       }
       if (process.platform === 'win32') {
@@ -5225,8 +5112,9 @@ function registerIpc(): void {
     // connection first: mcpSaveConnection, mcpClickupConnect and mcpDisconnect. The renderer's own
     // patch({ mcpConnections }) calls are redundant echoes of what main just persisted, and state.ts's
     // patch() re-seeds React state from this handler's return value, so dropping the key here costs the
-    // UI nothing. clickupClientId is main-owned too (written only by the DCR step).
-    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId']) {
+    // UI nothing. clickupClientId is main-owned too (written only by the DCR step), and so is the M2-0429
+    // Screen Recording history (permissionState): a renderer patch must not fake it to steer the diagnosis.
+    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId', 'permissionState']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
     // Operator entitlement state (PLAN.md P2.2b #2): only a successful heartbeat
@@ -5243,11 +5131,6 @@ function registerIpc(): void {
       'operatorLicenseLast4',
       'operatorLicenseExpiresAt'
     ]) {
-      if (k in p) delete (p as Record<string, unknown>)[k]
-    }
-    // M2-0429: the Screen Recording history is main-owned evidence (which build was asked, which captured);
-    // a renderer patch must not be able to fake it and steer the diagnosis.
-    for (const k of ['permissionState']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
     const cur = getSettings()
@@ -9466,7 +9349,7 @@ if (!app.requestSingleInstanceLock()) {
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
   // hand back the system audio loopback device (the "Them" channel) only.
   // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
-  runStep('initScreenPermission', initScreenPermission)
+  runStep('initScreenPermission', screenPerm.initScreenPermission)
   runStep('setDisplayMediaHandler', () => {
   session.defaultSession.setDisplayMediaRequestHandler(
     async (request, callback) => {
@@ -9564,17 +9447,8 @@ if (!app.requestSingleInstanceLock()) {
       // callback(null), never callback({}): for a request that asked for video, Electron rejects {} with
       // "Video was requested, but no video stream was provided". The renderer's getDisplayMedia then rejects
       // and listen.ts falls back to the microphone with the diagnosis-backed note.
-      const screenSrc = await acquireLoopbackScreenSource<Electron.DesktopCapturerSource>({
-        platform: process.platform,
-        diagnose: () => screenPermission().diagnose(),
-        getSources: () => desktopCapturer.getSources({ types: ['screen'] }),
-        isUsable: isUsableScreenSource,
-        noteAttempt: () => screenPermission().noteAttempt(),
-        noteOutcome: (ok) => screenPermission().noteOutcome(ok),
-        audit: (event, data) => auditLog(event, data),
-        log: (message) => mainLog.warn(message)
-      })
-      callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : DENY_DISPLAY_MEDIA)
+      const screenSrc = await screenPerm.acquireListenScreenSource()
+      callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : screenPerm.DENY_DISPLAY_MEDIA)
   }
   })
 
@@ -9793,18 +9667,7 @@ if (!app.requestSingleInstanceLock()) {
       void probeScreenCapture().catch(() => false)
     })
   }
-  // M2-0429: the boot half of a Repair the user just ran — re-probe once so this build is the one macOS lists,
-  // then open the Screen Recording pane. A no-op on every launch that does not follow a Repair.
-  if (process.platform === 'darwin') {
-    runStep('resumeScreenRepair', () => {
-      void resumeScreenRepair({
-        takePending: () => screenPermission().takePendingRepair(),
-        probe: probeScreenWithHistory,
-        openScreenRecordingPane: () =>
-          void shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
-      })
-    })
-  }
+  runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(() => win))
   // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.

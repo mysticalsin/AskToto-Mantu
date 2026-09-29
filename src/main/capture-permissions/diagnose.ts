@@ -25,7 +25,7 @@ import type {
   ScreenDiagnosis,
   ScreenDiagnosisAction,
   ScreenDiagnosisReason
-} from '@shared/ipc'
+} from '@shared/screen-permission'
 
 export interface ScreenDiagnoseInput {
   platform: NodeJS.Platform | string

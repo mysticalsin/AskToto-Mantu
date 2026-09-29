@@ -38,7 +38,6 @@ import {
   type UpdateDownloadStart,
   type RecallBackfillSpeakersResult,
   type PlatformPermissions,
-  type ScreenRepairResult,
   type ShortcutFailure,
   type McpTestConnectionPayload,
   type McpSaveConnectionPayload,
@@ -74,6 +73,7 @@ import {
   type MetisCommandConfirmation,
   type PreservedBrainIndexListResult
 } from '@shared/ipc'
+import type { ScreenRepairResult } from '@shared/screen-permission'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
 

@@ -5,6 +5,9 @@ import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
+import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
+export type { PermissionStatus, PlatformPermissions, ScreenCaptureCheckResult } from './screen-permission'
+export { ScreenCaptureCheckPassSchema, ScreenCaptureCheckPayloadSchema, ScreenCaptureCheckResultSchema } from './screen-permission'
 
 /** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
 export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
@@ -244,11 +247,9 @@ export const IPC = {
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
   permissionsRequestUpfront: 'permissions:requestUpfront',
-  /** M2-0429: reset only this app's Screen Recording entry, then relaunch (macOS). */
+  // M2-0429 (main/ipc/screen-permission-ipc.ts): Repair, "It's already on", Show a duplicate copy in Finder.
   permissionsRepairScreen: 'permissions:repairScreen',
-  /** M2-0429: the user says Screen Recording is already on in System Settings; record it and relaunch. */
   permissionsAttestScreen: 'permissions:attestScreen',
-  /** M2-0429: reveal another installed copy of the app in Finder (paths come from the diagnosis only). */
   permissionsRevealCopy: 'permissions:revealCopy',
   // Settings / overlay self-check: first pass is the OS probe; second pass is a real vision ask.
   // Result stays on this device — never forwarded to a teammate, CRM, or askStart overlay chat.
@@ -962,37 +963,6 @@ export type McpConnection = z.infer<typeof McpConnectionSchema>
  */
 export const METIS_WORKER_URL = 'https://metis-cloudflare-proxy.tony-walteur.workers.dev/v1'
 
-/** One build as macOS's permission database sees it: the app version plus its code-directory hash. An
- *  empty cdhash means "not known" (helper missing, or not macOS), never "unsigned". */
-export const AppIdentitySchema = z.object({
-  version: z.string().max(64),
-  cdhash: z.string().max(128)
-})
-export type AppIdentity = z.infer<typeof AppIdentitySchema>
-
-export const PermissionStateSchema = z.object({
-  /** The build that last let a real capture attempt through to macOS (which is what raises its prompt).
-   *  macOS asks only once per identity, so a later attempt by the same build can only fail silently. */
-  screenAskedFor: AppIdentitySchema.nullable().default(null),
-  /** The build that last completed a real screen capture: the one the system switch was proven to serve. */
-  screenGrantedFor: AppIdentitySchema.nullable().default(null),
-  /** When the user said "It's already on" in System Settings (ms, 0 = never). Still denied after the
-   *  relaunch that follows means the switch belongs to another copy or build. */
-  attestedOnAt: z.number().default(0),
-  /** A Repair reset the entry and relaunched (ms, 0 = none pending). The next boot re-probes once. */
-  repairStartedAt: z.number().default(0),
-  /** The last Repair's tccutil call failed, so the copy guides the manual remove-then-add instead. */
-  repairFailed: z.boolean().default(false)
-})
-export type PermissionState = z.infer<typeof PermissionStateSchema>
-export const DEFAULT_PERMISSION_STATE: PermissionState = {
-  screenAskedFor: null,
-  screenGrantedFor: null,
-  attestedOnAt: 0,
-  repairStartedAt: 0,
-  repairFailed: false
-}
-
 export const BaseSettingsSchema = z.object({
   // Default provider: Cloudflare (Tony, 2026-08-21), replacing NVIDIA NIM (2026-08-14). One endpoint the
   // operator deploys reaches Workers AI, OpenAI, Anthropic and Google on a single account credential, so
@@ -1558,10 +1528,7 @@ export const BaseSettingsSchema = z.object({
   /** Epoch ms of the last successful heartbeat that carried entitlements. 0 = never — grace window
    *  (operator-entitlements.ts) treats this the same as "no snapshot at all". */
   operatorEntitlementsAt: z.number().default(0),
-  /** Main-owned Screen Recording history (M2-0429). macOS pins the grant to one exact code identity, and every
-   *  ad-hoc build has a new one, so "System Settings shows it on" and "this build can capture" can disagree.
-   *  These facts are what let the diagnosis tell that apart from a plain denial. Only main writes them;
-   *  settings:set strips the key from renderer patches. */
+  /** Main-owned Screen Recording history (M2-0429); see shared/screen-permission.ts. */
   permissionState: PermissionStateSchema.default(DEFAULT_PERMISSION_STATE)
 })
 
@@ -1928,52 +1895,6 @@ export interface ShortcutFailure {
   accel: string
 }
 
-export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-required'
-
-/**
- * What stands between this build and a working screen / meeting-audio capture (M2-0429). The raw macOS status
- * cannot say it: it reads 'denied' both for a never-asked app and for a grant that belongs to another copy or
- * build of Métis. See src/main/capture-permissions/diagnose.ts for how each state is reached.
- */
-export type ScreenDiagnosisState = 'granted' | 'not-asked' | 'denied' | 'needs-relaunch' | 'not-effective' | 'restricted'
-export type ScreenDiagnosisReason = 'identity-changed' | 'duplicate-bundles' | 'attested-then-relaunched' | 'translocated'
-export type ScreenDiagnosisAction = 'none' | 'request' | 'open-settings' | 'relaunch' | 'repair' | 'move-to-applications'
-/** Another installed app bundle that carries this app's bundle id. */
-export interface AppBundleCopy {
-  path: string
-  version: string
-}
-export interface ScreenDiagnosis {
-  state: ScreenDiagnosisState
-  reasons: ScreenDiagnosisReason[]
-  action: ScreenDiagnosisAction
-  /** Other copies with this bundle id; macOS may resolve the Settings switch to any of them. */
-  duplicates: AppBundleCopy[]
-  /** The build last seen capturing, when it is not this one: the build the switch most likely serves. */
-  grantedFor: AppIdentity | null
-  /** The last Repair could not reset the entry; guide the manual remove-then-add instead. */
-  repairFailed: boolean
-}
-/** This running build's code-signing identity, read by metis-mac-helper `code-identity`. */
-export interface CodeIdentity {
-  version: string
-  cdhash: string
-  teamId: string
-  adhoc: boolean
-}
-export interface PlatformPermissions {
-  microphone: PermissionStatus
-  screenRecording: PermissionStatus
-  /** The diagnosis behind screenRecording. Absent only from callers that predate it. */
-  screenDiagnosis?: ScreenDiagnosis
-  /** macOS only; null until the helper has answered or where it is unavailable. */
-  identity?: CodeIdentity | null
-}
-/** permissions:repairScreen result. `guidance` is the manual fallback when the reset could not run. */
-export type ScreenRepairResult =
-  | { ok: true }
-  | { ok: false; reason: 'unsupported-platform' | 'bundle-not-allowed' | 'tccutil-failed'; exitCode: number | null; guidance: string }
-
 export interface MeetingSummary {
   file: string
   title: string
@@ -2007,21 +1928,6 @@ export const TestApiKeyPayloadSchema = z.object({
   provider: ProviderIdSchema,
   key: z.string()
 })
-
-export const ScreenCaptureCheckPassSchema = z.enum(['probe', 'vision'])
-export const ScreenCaptureCheckPayloadSchema = z.object({
-  pass: ScreenCaptureCheckPassSchema
-})
-export const ScreenCaptureCheckResultSchema = z.object({
-  ok: z.boolean(),
-  pass: ScreenCaptureCheckPassSchema,
-  backend: z.enum(['probe', 'local', 'api']).optional(),
-  backendLabel: z.string().max(200).optional(),
-  failedOver: z.boolean().optional(),
-  message: z.string().max(2000),
-  preview: z.string().max(200).optional()
-})
-export type ScreenCaptureCheckResult = z.infer<typeof ScreenCaptureCheckResultSchema>
 
 export interface TestKeyResponse {
   ok: boolean

@@ -11,7 +11,7 @@
  * Dependency-injected (no Electron import) so the history rules are unit-tested directly. Persistence only
  * happens when a value actually changes, so a capture that keeps succeeding never rewrites the profile.
  */
-import type { AppBundleCopy, AppIdentity, CodeIdentity, PermissionState, ScreenDiagnosis } from '@shared/ipc'
+import type { AppBundleCopy, AppIdentity, CodeIdentity, PermissionState, ScreenDiagnosis } from '@shared/screen-permission'
 import {
   appBundlePathFromExecPath,
   diagnoseScreenPermission,

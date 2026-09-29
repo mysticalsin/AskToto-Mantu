@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type { PlatformPermissions, ScreenDiagnosisState } from '@shared/ipc'
+import type { PlatformPermissions, ScreenDiagnosisState } from '@shared/screen-permission'
 import { MEETING_AUDIO_SCREEN_LABEL, MEETING_AUDIO_SCREEN_WHY } from '../lib/screen-permission-copy'
 import {
   ONBOARDING_RESUME_SETUP_KEY,
   markOnboardingResumeSetup,
   screenRowStatus,
   takeOnboardingResumeSetup
-} from './OnboardingExperience'
+} from './OnboardingScreenSetup'
 
 /**
  * M2-0429 — onboarding asks for "Meeting audio & screen" up front, and the row turns green ONLY on a real

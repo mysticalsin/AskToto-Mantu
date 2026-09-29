@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PERMISSION_STATE, type PermissionState } from '@shared/ipc'
+import { DEFAULT_PERMISSION_STATE, type PermissionState } from '@shared/screen-permission'
 import {
   appBundlePathFromExecPath,
   diagnoseScreenPermission,

@@ -7,7 +7,7 @@
  * Settings" alone — that switch already shows on. It names which build or copy holds the grant and offers
  * Repair instead.
  */
-import type { ScreenDiagnosis, ScreenRepairResult } from '@shared/ipc'
+import type { ScreenDiagnosis, ScreenRepairResult } from '@shared/screen-permission'
 import { SCREEN_REPAIR_MANUAL_GUIDANCE } from '@shared/screen-capture'
 
 export interface ScreenPermissionCopy {
@@ -90,6 +90,32 @@ export function listenScreenNote(d: ScreenDiagnosis | null | undefined, micOnly:
   if (!copy) return null
   const lead = micOnly ? 'Listening to your microphone only: the other side of the call needs Screen Recording.' : 'Could not capture the other side of the call.'
   return { note: `${lead} ${copy.text}`, repair: copy.repair }
+}
+
+/** The slice of Listen's state the mic-only note lives in (structural, so this module never imports listen). */
+interface DegradedNote {
+  side: 'them' | 'you'
+  note: string
+  permission: boolean
+  repair?: boolean
+}
+
+/**
+ * The Listen state with its missing-'them' note replaced by the diagnosis-backed one, keeping the sticky error
+ * in step when it showed that note, and the remembered 'them' cause (`themRef`) with it. Returns `s` itself
+ * when nothing changes, so a repeating permission poll never re-renders the tree.
+ */
+export function withDiagnosedThemNote<S extends { error: string | null; captureDegraded: DegradedNote | null }>(
+  s: S,
+  d: ScreenDiagnosis | null | undefined,
+  themRef: { current: DegradedNote | null }
+): S {
+  const cur = s.captureDegraded
+  const next = cur?.side === 'them' ? listenScreenNote(d, true) : null
+  if (!cur || !next || (cur.note === next.note && !!cur.repair === next.repair)) return s
+  const captureDegraded: DegradedNote = { ...cur, note: next.note, permission: true, repair: next.repair }
+  themRef.current = captureDegraded
+  return { ...s, error: s.error === cur.note ? next.note : s.error, captureDegraded }
 }
 
 /** Run Repair. On success main relaunches; on failure open the pane and hand back the manual guidance. */

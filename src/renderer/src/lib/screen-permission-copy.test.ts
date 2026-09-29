@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { ScreenDiagnosis } from '@shared/ipc'
+import type { ScreenDiagnosis } from '@shared/screen-permission'
 import { SCREEN_REPAIR_MANUAL_GUIDANCE } from '@shared/screen-capture'
-import { listenScreenNote, screenGrantHolder, screenPermissionCopy } from './screen-permission-copy'
+import { listenScreenNote, screenGrantHolder, screenPermissionCopy, withDiagnosedThemNote } from './screen-permission-copy'
 
 const base: ScreenDiagnosis = {
   state: 'denied',
@@ -80,5 +80,47 @@ describe('listenScreenNote', () => {
 
   it('is null when there is nothing to say', () => {
     expect(listenScreenNote(diag({ state: 'granted', action: 'none' }), true)).toBeNull()
+  })
+})
+
+describe('withDiagnosedThemNote — the Listen note and Bar chip follow the diagnosis', () => {
+  const START_NOTE = 'System audio needs Screen Recording permission. Listening to microphone only.'
+  const notEffective = diag({
+    state: 'not-effective',
+    action: 'repair',
+    reasons: ['identity-changed'],
+    grantedFor: { version: '1.9.6', cdhash: 'b'.repeat(40) }
+  })
+  const micOnly = () => ({
+    error: START_NOTE as string | null,
+    captureDegraded: { side: 'them' as const, note: START_NOTE, permission: true },
+    listening: true
+  })
+
+  it('replaces the start-time mic-only note with one naming the holder, flags Repair, and keeps the error in step', () => {
+    const themRef = { current: null as ReturnType<typeof micOnly>['captureDegraded'] | null }
+    const next = withDiagnosedThemNote(micOnly(), notEffective, themRef)
+    expect(next.captureDegraded?.note).toContain('belongs to Métis 1.9.6')
+    expect(next.captureDegraded).toMatchObject({ side: 'them', permission: true, repair: true })
+    expect(next.error).toBe(next.captureDegraded?.note)
+    expect(next.listening).toBe(true)
+    expect(themRef.current).toEqual(next.captureDegraded)
+  })
+
+  it('returns the same state object when nothing would change, so a repeating poll never re-renders', () => {
+    const themRef = { current: null }
+    const once = withDiagnosedThemNote(micOnly(), notEffective, themRef)
+    expect(withDiagnosedThemNote(once, notEffective, themRef)).toBe(once)
+    const s = micOnly()
+    expect(withDiagnosedThemNote(s, diag({ state: 'granted', action: 'none' }), themRef)).toBe(s)
+    expect(withDiagnosedThemNote(s, undefined, themRef)).toBe(s)
+  })
+
+  it('never touches a missing-microphone note or an unrelated error', () => {
+    const themRef = { current: null }
+    const noMic = { error: 'Microphone unavailable.', captureDegraded: { side: 'you' as const, note: 'Microphone unavailable.', permission: false } }
+    expect(withDiagnosedThemNote(noMic, notEffective, themRef)).toBe(noMic)
+    const other = { ...micOnly(), error: 'Transcription fell behind.' }
+    expect(withDiagnosedThemNote(other, notEffective, themRef).error).toBe('Transcription fell behind.')
   })
 })

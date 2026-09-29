@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { runLoopbackSelfTest } from './listen'
+import { runLoopbackSelfTest } from './loopback-self-test'
 
 /**
  * M2-0429 — onboarding's "Meeting audio & screen" row turns green only on a REAL loopback: a live system-audio
