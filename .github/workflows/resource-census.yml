@@ -44,17 +44,26 @@ jobs:
         run: |
           mkdir -p release-artifact census-output
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-*.dmg' --dir release-artifact --clobber
+          [ "$(ls release-artifact/Metis-*.dmg | wc -l)" -eq 1 ] || { echo "expected exactly one DMG in $RELEASE_TAG"; exit 1; }
           shasum -a 256 release-artifact/* > census-output/SHA256SUMS.txt
       - name: Install into runner temp
         run: |
           volume="$RUNNER_TEMP/resource-census-volume"
           target="$RUNNER_TEMP/resource-census-install"
-          rm -rf "$volume" "$target"
+          rm -rf "$volume" "$target" "$RUNNER_TEMP/resource-census-install-tmp"
           mkdir -p "$target"
-          hdiutil attach -nobrowse -readonly -mountpoint "$volume" release-artifact/Metis-*.dmg > /dev/null
-          app=$(find "$volume" -maxdepth 1 -name '*.app' -print -quit)
-          ditto "$app" "$target/Metis.app"
-          hdiutil detach "$volume" > /dev/null
+          # The mount-and-copy runs with TMPDIR pointed at a dedicated directory whose peak size is the
+          # temporary install footprint (macOS copies straight into the target, so this may be near zero).
+          node scripts/qa/census/measure-install.mjs \
+            --temp-dir "$RUNNER_TEMP/resource-census-install-tmp" \
+            --output census-output/darwin-temp-peak.json \
+            -- bash -c '
+              set -e
+              hdiutil attach -nobrowse -readonly -mountpoint "$1" "$3" > /dev/null
+              app=$(find "$1" -maxdepth 1 -name "*.app" -print -quit)
+              ditto "$app" "$2/Metis.app"
+              hdiutil detach "$1" > /dev/null
+            ' _ "$volume" "$target" release-artifact/Metis-*.dmg
       - name: Measure install footprint
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -63,7 +72,7 @@ jobs:
           node scripts/qa/census/footprint.mjs \
             --artifact release-artifact/Metis-*.dmg \
             --install-root "$RUNNER_TEMP/resource-census-install/Metis.app" \
-            --temp-dir "$RUNNER_TEMP" \
+            --temp-peak census-output/darwin-temp-peak.json \
             --release-tag "$RELEASE_TAG" \
             --ttfc-output census-output/bench-asr-ttfc.log \
             --output census-output/darwin-footprint.json
@@ -106,6 +115,7 @@ jobs:
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$RELEASE_TAG" > census-output/run-identity.json
           (cd census-output && shasum -a 256 $(ls | grep -v '^FILES.sha256$') > FILES.sha256)
           cat census-output/run-identity.json census-output/FILES.sha256
+          echo "LEAD_ACTION: file resource-baseline.md in the program tracker from this run ID and the artifact sha256 above; the managed-laptop, NPU, audio-device and live capture-to-caption rows stay BLOCKED_EXTERNAL."
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -134,17 +144,21 @@ jobs:
         run: |
           mkdir -p release-artifact census-output
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-Setup-*.exe' --dir release-artifact --clobber
+          [ "$(ls release-artifact/Metis-Setup-*.exe | wc -l)" -eq 1 ] || { echo "expected exactly one installer in $RELEASE_TAG"; exit 1; }
           sha256sum release-artifact/* > census-output/SHA256SUMS.txt
       - name: Install into runner temp
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $target = Join-Path $env:RUNNER_TEMP 'resource-census-install'
-          if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+          $scratch = Join-Path $env:RUNNER_TEMP 'resource-census-install-tmp'
+          foreach ($path in $target, $scratch) { if (Test-Path $path) { Remove-Item $path -Recurse -Force } }
           New-Item -ItemType Directory -Path $target | Out-Null
           $setup = Get-Item release-artifact/Metis-Setup-*.exe
-          $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+          # NSIS unpacks into %TEMP% and deletes it before exiting, so TEMP/TMP point at a dedicated
+          # directory whose peak size, polled during the install, is the temporary install footprint.
+          node scripts/qa/census/measure-install.mjs --temp-dir $scratch --output census-output/win32-temp-peak.json -- $setup.FullName /S "/D=$target"
+          if ($LASTEXITCODE -ne 0) { throw "Setup exited with $LASTEXITCODE." }
       - name: Measure install footprint
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -153,7 +167,7 @@ jobs:
           node scripts/qa/census/footprint.mjs \
             --artifact release-artifact/Metis-Setup-*.exe \
             --install-root "$RUNNER_TEMP/resource-census-install" \
-            --temp-dir "$RUNNER_TEMP" \
+            --temp-peak census-output/win32-temp-peak.json \
             --release-tag "$RELEASE_TAG" \
             --ttfc-output census-output/bench-asr-ttfc.log \
             --output census-output/win32-footprint.json
@@ -181,6 +195,7 @@ jobs:
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$RELEASE_TAG" > census-output/run-identity.json
           (cd census-output && sha256sum $(ls | grep -v '^FILES.sha256$') > FILES.sha256)
           cat census-output/run-identity.json census-output/FILES.sha256
+          echo "LEAD_ACTION: file resource-baseline.md in the program tracker from this run ID and the artifact sha256 above; the managed-laptop, NPU, audio-device and live capture-to-caption rows stay BLOCKED_EXTERNAL."
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

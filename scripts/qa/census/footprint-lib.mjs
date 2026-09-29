@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, lstatSync, openSync, readdirSync, readSync } from 'node:fs'
+import { closeSync, lstatSync, mkdirSync, openSync, readdirSync, readSync } from 'node:fs'
 import { arch, cpus, platform as osPlatform, release, totalmem } from 'node:os'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
 
@@ -9,7 +9,7 @@ export const FOOTPRINT_SCHEMA = 'metis-resource-footprint/1'
 export const DEFAULT_DUPLICATE_MIN_BYTES = 1024 * 1024
 
 const WEIGHT_EXTENSIONS = new Set(['.gguf', '.onnx', '.safetensors', '.mlmodel', '.mlpackage', '.ggml', '.bin'])
-const RUNTIME_EXTENSIONS = new Set(['.dylib', '.dll', '.node', '.so', '.exe', '.framework'])
+const RUNTIME_EXTENSIONS = new Set(['.dylib', '.dll', '.node', '.so', '.exe'])
 
 export function classifyFile(relativePath) {
   const ext = extname(relativePath).toLowerCase()
@@ -99,6 +99,37 @@ export function findDuplicates(root, { minBytes = DEFAULT_DUPLICATE_MIN_BYTES } 
   }
 }
 
+/**
+ * Runs a command with TEMP/TMP/TMPDIR pointed at tempDir and polls that directory, so the bytes an installer
+ * unpacks and later deletes are captured. peakBytes is the largest sample, including one taken at exit.
+ */
+export async function runWithTempPeak({ command, args = [], tempDir, intervalMs = 100 }) {
+  const dir = resolve(tempDir)
+  mkdirSync(dir, { recursive: true })
+  let peakBytes = 0
+  let samples = 0
+  const sample = () => {
+    try {
+      peakBytes = Math.max(peakBytes, directoryBytes(dir).bytes)
+      samples += 1
+    } catch {
+      // A file vanished between listing and stat while the installer cleaned up; the next sample recovers.
+    }
+  }
+  const child = spawn(command, args, { stdio: 'inherit', env: { ...process.env, TEMP: dir, TMP: dir, TMPDIR: dir } })
+  const timer = setInterval(sample, intervalMs)
+  try {
+    const exitCode = await new Promise((done, fail) => {
+      child.once('error', fail)
+      child.once('close', (code) => done(code ?? 1))
+    })
+    sample()
+    return { exitCode, peakBytes, samples, intervalMs }
+  } finally {
+    clearInterval(timer)
+  }
+}
+
 export function parseTtfcBenchOutput(text) {
   const output = String(text ?? '')
   const match = /^\s*TTFC budget:\s*(\d+)\s*ms\s*$/im.exec(output)
@@ -182,7 +213,7 @@ export function collectInventory({ installRoot, platform = osPlatform() }) {
 }
 
 /** Rows a hosted runner cannot measure. Each names the exact step that unblocks it. */
-export function unmeasuredRows({ hasLiveCaptureLatency }) {
+export function unmeasuredRows({ hasLiveCaptureLatency, hasTemporaryInstallBytes = true }) {
   const rows = [
     {
       row: 'managed-laptop-footprint',
@@ -200,6 +231,14 @@ export function unmeasuredRows({ hasLiveCaptureLatency }) {
       unblock: 'Hosted runners have no microphone or loopback device; enumerate on a physical QA machine.'
     }
   ]
+  if (!hasTemporaryInstallBytes) {
+    rows.push({
+      row: 'temporary-install-bytes',
+      status: 'UNKNOWN',
+      unblock:
+        'Run the install through scripts/qa/census/measure-install.mjs and pass its JSON to footprint.mjs --temp-peak.'
+    })
+  }
   if (!hasLiveCaptureLatency) {
     rows.push({
       row: 'live-capture-to-caption-latency',
@@ -223,12 +262,15 @@ export function buildFootprintReport({ releaseTag, runId, artifact, unpacked, te
       compressedBytes: artifact.bytes,
       unpackedBytes: unpacked.bytes,
       unpackedFileCount: unpacked.fileCount,
-      temporaryBytes: temporary.bytes,
-      temporaryScope: temporary.scope
+      temporaryBytes: temporary?.peakBytes ?? null,
+      temporaryScope: temporary?.scope ?? null
     },
     duplicates,
     latency,
     inventory,
-    unmeasured: unmeasuredRows({ hasLiveCaptureLatency: latency.liveCaptureToCaptionMs != null })
+    unmeasured: unmeasuredRows({
+      hasLiveCaptureLatency: latency.liveCaptureToCaptionMs != null,
+      hasTemporaryInstallBytes: temporary != null
+    })
   }
 }

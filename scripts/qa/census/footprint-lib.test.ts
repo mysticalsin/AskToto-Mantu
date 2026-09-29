@@ -10,6 +10,7 @@ import {
   parseMacGpus,
   parseTtfcBenchOutput,
   parseWindowsGpus,
+  runWithTempPeak,
   shippedLocales,
   unmeasuredRows
 } from './footprint-lib.mjs'
@@ -107,7 +108,7 @@ describe('footprint report', () => {
       runId: '42',
       artifact: { name: 'Metis.dmg', bytes: 10, sha256: 'ab' },
       unpacked: { bytes: 30, fileCount: 3 },
-      temporary: { bytes: 5, scope: 'temp' },
+      temporary: { peakBytes: 5, scope: 'temp' },
       duplicates: { minBytes: 1, groups: [], wastedBytes: 0, wastedByKind: { runtime: 0, weights: 0, other: 0 } },
       latency: { schedulingBudgetMs: 1600, stubDecodeMs: 400, source: 's', liveCaptureToCaptionMs: null },
       inventory: { platform: 'darwin', arch: 'arm64' } as never
@@ -116,4 +117,40 @@ describe('footprint report', () => {
     expect(report.runId).toBe('42')
     expect(report.unmeasured.length).toBeGreaterThan(0)
   })
+
+  it('reports temporary install bytes as unmeasured instead of publishing a number without a peak', () => {
+    expect(unmeasuredRows({ hasLiveCaptureLatency: true, hasTemporaryInstallBytes: false })).toContainEqual(
+      expect.objectContaining({ row: 'temporary-install-bytes' })
+    )
+    const report = buildFootprintReport({
+      releaseTag: 'v1.9.6',
+      runId: null,
+      artifact: { name: 'Metis.dmg', bytes: 10, sha256: 'ab' },
+      unpacked: { bytes: 30, fileCount: 3 },
+      temporary: null,
+      duplicates: { minBytes: 1, groups: [], wastedBytes: 0, wastedByKind: { runtime: 0, weights: 0, other: 0 } },
+      latency: { schedulingBudgetMs: null, stubDecodeMs: null, source: null, liveCaptureToCaptionMs: null },
+      inventory: { platform: 'darwin', arch: 'arm64' } as never
+    })
+    expect(report.sizes.temporaryBytes).toBeNull()
+    expect(report.unmeasured.map((r: { row: string }) => r.row)).toContain('temporary-install-bytes')
+  })
+})
+
+describe('runWithTempPeak', () => {
+  it('captures files a command writes into the dedicated temp dir and later deletes', async () => {
+    const script =
+      "const fs=require('fs'),p=require('path');const f=p.join(process.env.TEMP,'unpacked.bin');" +
+      "fs.writeFileSync(f,Buffer.alloc(4096));setTimeout(()=>fs.rmSync(f),400)"
+    const result = await runWithTempPeak({
+      command: process.execPath,
+      args: ['-e', script],
+      tempDir: join(root, 'scratch'),
+      intervalMs: 20
+    })
+    expect(result.exitCode).toBe(0)
+    expect(result.peakBytes).toBe(4096)
+    expect(directoryBytes(join(root, 'scratch')).bytes).toBe(0)
+  })
+})
 })

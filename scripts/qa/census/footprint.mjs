@@ -12,13 +12,13 @@ import {
 
 function usage() {
   return `Usage:
-  node scripts/qa/census/footprint.mjs --artifact <dmg|exe> --install-root <dir> --temp-dir <dir> --release-tag <tag> [--output <json>]
+  node scripts/qa/census/footprint.mjs --artifact <dmg|exe> --install-root <dir> [--temp-peak <json>] --release-tag <tag> [--output <json>]
 
 Inputs:
   --artifact <path>      Downloaded release artifact (compressed size and sha256 are measured from it).
   --install-root <dir>   Installed app root (Metis.app directory on macOS, install directory on Windows).
-  --temp-dir <dir>       Runner temp directory after install; its bytes outside the install root and the
-                         downloaded artifact are the temporary install footprint.
+  --temp-peak <json>     Output of measure-install.mjs: peak bytes of the dedicated temp directory the
+                         installer unpacked into. Omit it and temporary-install-bytes is reported unmeasured.
   --release-tag <tag>    Release the artifact was downloaded from.
   --ttfc-output <path>   Saved stdout of scripts/bench-asr-ttfc.mjs (scheduling budget only, not live latency).
   --output <path>        JSON output. Defaults to metis-census-output/footprint.json.
@@ -28,7 +28,7 @@ Inputs:
 const FLAGS = {
   '--artifact': 'artifact',
   '--install-root': 'installRoot',
-  '--temp-dir': 'tempDir',
+  '--temp-peak': 'tempPeak',
   '--release-tag': 'releaseTag',
   '--ttfc-output': 'ttfcOutput',
   '--output': 'output'
@@ -55,25 +55,28 @@ function main() {
     return
   }
   for (const [flag, key] of Object.entries(FLAGS)) {
-    if (key !== 'ttfcOutput' && key !== 'output' && !args[key]) throw new Error(`${flag} is required`)
+    if (key !== 'ttfcOutput' && key !== 'tempPeak' && key !== 'output' && !args[key]) throw new Error(`${flag} is required`)
   }
   const artifactPath = resolve(args.artifact)
   const installRoot = resolve(args.installRoot)
   const latency = args.ttfcOutput
     ? {
         ...parseTtfcBenchOutput(readFileSync(args.ttfcOutput, 'utf8')),
-        source: 'scripts/bench-asr-ttfc.mjs (scheduling, decode stubbed)'
+        source: 'scripts/bench-asr-ttfc.mjs (scheduling, decode stubbed)',
+        note: 'schedulingBudgetMs is a constant of the stubbed decode (identical every run), not a measured latency.'
       }
-    : { schedulingBudgetMs: null, stubDecodeMs: null, source: null }
+    : { schedulingBudgetMs: null, stubDecodeMs: null, source: null, note: null }
   const report = buildFootprintReport({
     releaseTag: args.releaseTag,
     runId: process.env.GITHUB_RUN_ID ?? null,
     artifact: { name: basename(artifactPath), bytes: statSync(artifactPath).size, sha256: sha256File(artifactPath) },
     unpacked: directoryBytes(installRoot),
-    temporary: {
-      ...directoryBytes(args.tempDir, { exclude: [installRoot, artifactPath] }),
-      scope: 'runner temp directory after install, excluding the install root and the downloaded artifact'
-    },
+    temporary: args.tempPeak
+      ? {
+          peakBytes: JSON.parse(readFileSync(args.tempPeak, 'utf8')).peakBytes,
+          scope: 'peak bytes of the installer-dedicated TEMP directory, polled during install'
+        }
+      : null,
     duplicates: findDuplicates(installRoot),
     latency: { ...latency, liveCaptureToCaptionMs: null },
     inventory: collectInventory({ installRoot })
