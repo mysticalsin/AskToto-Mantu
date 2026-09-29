@@ -29,6 +29,7 @@ import { resetSecretKeyCache } from '../secrets'
 import { setSettings } from '../store'
 import { envelopeKeyKind, writeSaved } from '../transcripts'
 import { startBackfill } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import {
   brainDir,
   BrainIndexRebuildError,
@@ -38,6 +39,7 @@ import {
   purgeBrain,
   restorePreservedBrainIndex
 } from './store'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 function sha256(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex')
@@ -116,6 +118,7 @@ describe('rebuild preserves unreadable indexes', () => {
 
   beforeEach(() => {
     restoreFsMocks()
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-preserve-ud-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-preserve-meetings-'))
     restoreElectronMocks(userData)
@@ -126,9 +129,10 @@ describe('rebuild preserves unreadable indexes', () => {
     primary = join(brainDir(settings), 'index.json')
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     // Tests may leave fs spies throwing; cleanup must run through the real implementations first.
     restoreFsMocks()
+    await settleBrainWritesForTests()
     delete process.env.ASKTOTO_LOCAL_KEYSTORE
     resetSecretKeyCache()
     restoreElectronMocks(userData)
@@ -480,12 +484,12 @@ describe('rebuild preserves unreadable indexes', () => {
     expect(existsSync(join(preserved, 'index.unreadable-b.json'))).toBe(true)
   })
 
-  it('automatic paths never rebuild an unavailable index', () => {
+  it('automatic paths never rebuild an unavailable index', async () => {
     const bytes = foreignFileEnvelope()
     writeFileSync(primary, bytes)
     const expected = sha256(bytes)
 
-    expect(startBackfill().queued).toBe(0)
+    expect((await startBackfill()).queued).toBe(0)
 
     expectBytesUnchanged(primary, expected)
     expect(existsSync(join(meetingsFolder, '.brain-preserved'))).toBe(false)

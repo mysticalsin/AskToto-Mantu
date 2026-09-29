@@ -7,6 +7,7 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { DealEntitySchema, type BrainIndex } from '@shared/brain'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getApiKey, getSettings, setApiKey, setSettings } from '../store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import {
   brainBackfillProgress,
   enqueueIngest,
@@ -18,10 +19,10 @@ import {
   settleCommitment,
   startBackfill,
   startRebuild,
-  updateIndex,
-  whenIndexWritesSettle
+  updateIndex
 } from './ingest'
 import { readDeal, readIndex, setDealOutcome, withEntityLock, writeDeal } from './store'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -86,7 +87,7 @@ describe('brain ingest — audited fixes', () => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
   }
 
   const respondJson = (json = '{}') => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
@@ -122,6 +123,7 @@ describe('brain ingest — audited fixes', () => {
   const settle = (ms = 30): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-audit-fixes-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-audit-fixes-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -159,7 +161,7 @@ describe('brain ingest — audited fixes', () => {
   })
 
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
@@ -210,7 +212,7 @@ describe('brain ingest — audited fixes', () => {
 
     releaseHeld()
     await vi.waitFor(() => expect(okCount()).toBe(1), { timeout: 10_000 })
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
   })
 
   // ── MQA-085 ────────────────────────────────────────────────────────────────
@@ -330,7 +332,7 @@ describe('brain ingest — audited fixes', () => {
     setSettings({ dustWorkspaceId: 'ws-old', dustBaseUrl: 'https://dust.tt' })
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     const opts = createStreamMock.mock.calls[0][0] as StreamOptions
@@ -361,7 +363,7 @@ describe('brain ingest — audited fixes', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect((createStreamMock.mock.calls[0][0] as StreamOptions).refreshDustAuth).toBeUndefined()
@@ -378,7 +380,7 @@ describe('brain ingest — audited fixes', () => {
     setSettings({ cliConnected: { 'codex-cli': true } })
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['codex-served.md']?.ok).toBe(true)
@@ -392,7 +394,7 @@ describe('brain ingest — audited fixes', () => {
     allowProviders(['anthropic'])
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(respondJson())
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     trace.length = 0
@@ -422,7 +424,7 @@ describe('brain ingest — audited fixes', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(holdStream)
 
-    expect(startBackfill()).toEqual({ queued: 4 })
+    expect(await startBackfill()).toEqual({ queued: 4 })
     // The clamp below must not become a global slowdown: cloud extraction still runs three at a time.
     await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 10_000 })
 
@@ -438,9 +440,11 @@ describe('brain ingest — audited fixes', () => {
     allowProviders(['local']) // no cloud candidate: the sidecar is what indexes this profile
     createStreamMock.mockImplementation(holdStream)
 
-    expect(startBackfill()).toEqual({ queued: 4 })
+    expect(await startBackfill()).toEqual({ queued: 4 })
     // Three concurrent summary-mode requests all pin id_slot 1 — they cannot run in parallel, they only
-    // take the slot the live meeting needs.
+    // take the slot the live meeting needs. The first extraction starts only after its gateway read settles,
+    // so wait for it, then give a second one time to (wrongly) start alongside it.
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
     await settle()
     expect(held).toHaveLength(1)
 
@@ -459,7 +463,7 @@ describe('brain ingest — audited fixes', () => {
     createStreamMock.mockImplementation(holdStream)
     activeStreamsMock.mockReturnValue(1) // a live suggest/summary is attached right now
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await settle()
     expect(held).toHaveLength(0)
     expect(createStreamMock).not.toHaveBeenCalled()
@@ -487,7 +491,7 @@ describe('brain ingest — audited fixes', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(holdStream)
 
-    expect(startBackfill()).toEqual({ queued: 4 })
+    expect(await startBackfill()).toEqual({ queued: 4 })
     await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 10_000 })
 
     // The key is rotated (or an admin pushes an allowlist) while the batch is running.

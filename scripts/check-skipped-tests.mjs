@@ -80,12 +80,44 @@ const REASONS = [
   {
     match: 'gateway.test.ts',
     why: 'Pins libuv pool threads with real FIFOs, the kernel-blocking stand-in for a cloud-only read. Windows has no FIFOs; the admission, deadline, sharing and dataless rules run on every platform through an in-memory fs whose calls can be held open.'
+  },
+  {
+    match: 'transcripts.test.ts',
+    why: 'Plants a real file symlink with a draft-shaped name to prove recovery never follows it. File symlinks need elevation or Developer Mode on Windows; the gateway isSymlink classification itself runs on every platform in gateway.test.ts.'
+  },
+  {
+    match: 'meetings-storage.test.ts',
+    why: 'Pins libuv pool threads with real FIFOs under several root spellings to prove every storageAt gateway shares one admission. Windows has no FIFOs; the per-root gateway keying runs on every platform in the same file, and the admission cap itself in gateway.test.ts through an in-memory fs.'
+  },
+  {
+    match: 'history-actions.test.ts',
+    why: 'Opens and exports a meeting file that is a real FIFO, the kernel-blocking stand-in for a cloud-only read, to prove History settles within the read deadline with the event loop free. Windows has no FIFOs; the Open and Export copy decoding, missing-file and cloud-only paths run on every platform in the same file.'
+  },
+  {
+    match: 'OnboardingExperience.browser.test.ts',
+    why: 'Opt-in Playwright/Chromium browser check for the onboarding demo (ASKTOTO_BROWSER_QA=1) — mounts the real component in a real browser outside Electron. Off by default so ordinary CI does not spin up a live Chromium session on every push; the source-level navigation and media-failure regressions these tests would catch are covered cross-platform without the browser opt-in (MQA-338), and installed QA remains the place this runs for real.'
+  },
+  {
+    match: 'mac-helper-privacy.test.ts',
+    why: 'Reads the Speech Recognition usage string out of the real compiled macOS helper binary (MQA-347). The binary only exists on a mac packaging host with the helper built, so it is absent from a fresh checkout and every hosted CI runner.'
+  },
+  {
+    match: 'verify-signing.test.ts',
+    why: 'Loads a real Windows Authenticode signature through the system PowerShell with an inherited, incompatible PSModulePath (MQA-300) — needs the real windows powershell.exe and its built-in signature module, so it only runs on a Windows host.'
+  },
+  {
+    match: 'install-proxy.test.ts',
+    why: 'Proves a lowercase https_proxy is refused separately from HTTPS_PROXY. process.env keys are case-insensitive on Windows, so the two names collapse into one variable there and the distinct-case scenario this test sets up cannot occur.'
+  },
+  {
+    match: 'cli-resolve-bin.test.ts',
+    why: "Drives the real POSIX login shell ($SHELL -lc) that resolveBin's mac/Linux branch shells out through (M2-0147). Windows has no equivalent shell-resolution path; that side is covered by cli-win.test.ts."
   }
 ]
 
 /** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
  *  Lower it when a skip is retired; never raise it for an undeclared skip. */
-const BASELINE = { win32: 16, darwin: 2, linux: 19 }
+const BASELINE = { win32: 34, darwin: 2, linux: 28 }
 
 const platform = process.platform
 const allowed = BASELINE[platform]

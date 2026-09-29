@@ -16,7 +16,9 @@ import {
 } from '@shared/brain'
 import { writeDeal, writeAccount, writePerson, writeMeetingExtraction, writeIndex, slugify } from './store'
 import { readAliasMap } from './corrections'
-import { ingestExtraction, whenIndexWritesSettle } from './ingest'
+import { ingestExtraction } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import {
   publishEntity,
   publishMeetingCard,
@@ -159,6 +161,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
   let s: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-publish-test-'))
     s = settingsFor(folder)
     readFaults.throwOn.clear()
@@ -169,7 +172,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
   // parallel load the rename then lands on a directory this line already deleted, failing an
   // unrelated test in whichever file happened to be running.
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
   // ── 1. Render gate — the LOAD-BEARING guarantee, extended from MI-4 to the wiki ────────────────────

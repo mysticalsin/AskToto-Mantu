@@ -14,9 +14,11 @@ import {
   verifyExtraction,
   mergeExtraction,
   parseExtractionPayload,
-  enqueueIngest, whenIndexWritesSettle, SELF_PERSON_SLUG } from './ingest'
+  enqueueIngest, SELF_PERSON_SLUG } from './ingest'
 import { readDeal, readMeetingExtraction, readPerson, slugify } from './store'
 import { formatDeal } from './context'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 /**
  * Task MI-4 — the verified numbers lane. Three surfaces under test:
@@ -238,7 +240,7 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
   // parallel load the rename then lands on a directory this line already deleted, failing an
   // unrelated test in whichever file happened to be running.
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
   const dealExtraction = (overrides: Partial<NonNullable<MeetingExtraction['deal']>>): MeetingExtraction =>
@@ -386,6 +388,7 @@ describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createS
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-d2-userdata-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-d2-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -399,7 +402,7 @@ describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createS
   // MQA-007: settle the index-write lane before removing either profile dir — see the note on the
   // sibling teardown above.
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.restoreAllMocks()

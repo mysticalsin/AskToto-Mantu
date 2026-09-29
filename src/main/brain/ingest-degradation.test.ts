@@ -11,10 +11,11 @@ import {
   reconcileMeetingsInBackground,
   requestBackfill,
   startBackfill,
-  startRebuild,
-  whenIndexWritesSettle
+  startRebuild
 } from './ingest'
 import { listMeetingExtractions, readIndex } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -72,9 +73,9 @@ describe('brain ingest — provider-degradation paths', () => {
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
     // MQA-007: `running` going false is NOT "every write has landed" — the last job's own index record
-    // is still queued on the serialized lane at that moment (see whenIndexWritesSettle's own note). Every
-    // assertion after this reads index.json, so settling here is what makes them deterministic.
-    await whenIndexWritesSettle()
+    // is still queued on the serialized lane at that moment (see settleBrainWritesForTests's own note).
+    // Every assertion after this reads index.json, so settling here is what makes them deterministic.
+    await settleBrainWritesForTests()
   }
 
   const respondError = (message: string) => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
@@ -108,6 +109,7 @@ describe('brain ingest — provider-degradation paths', () => {
   const okCount = (): number => Object.values(readIndex(getSettings()).ingested).filter((r) => r.ok).length
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-degradation-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-degradation-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -144,7 +146,7 @@ describe('brain ingest — provider-degradation paths', () => {
   })
 
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
@@ -166,7 +168,7 @@ describe('brain ingest — provider-degradation paths', () => {
         : respondJson()(opts)
     )
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['expired-token.md']?.ok).toBe(true)
@@ -181,7 +183,7 @@ describe('brain ingest — provider-degradation paths', () => {
       opts.providerId === 'anthropic' ? respondError('The request was aborted.')(opts) : respondJson()(opts)
     )
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     // An abort means the user is gone, not that this provider is broken — the walk must stop, so local is
@@ -200,7 +202,7 @@ describe('brain ingest — provider-degradation paths', () => {
     setSettings({ cliConnected: { 'codex-cli': true } })
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['codex-only.md']?.ok).toBe(true)
@@ -216,7 +218,7 @@ describe('brain ingest — provider-degradation paths', () => {
     writeFileSync(join(meetingsFolder, 'indexed.md'), '---\ndate: 2026-02-04\n---\nAcme renewal call.', 'utf8')
     allowProviders(['local']) // zero cloud candidates: a single-provider install with its one key removed
     createStreamMock.mockImplementation(respondJson())
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
     expect(listMeetingExtractions(getSettings())).toHaveLength(1)
 
@@ -241,7 +243,7 @@ describe('brain ingest — provider-degradation paths', () => {
     writeFileSync(join(meetingsFolder, 'healthy-local.md'), '---\ndate: 2026-02-05\n---\nAcme call.', 'utf8')
     allowProviders(['local'])
     createStreamMock.mockImplementation(respondJson())
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     // 'stopped' is the normal idle state (the sidecar stops after 15 idle minutes) — it is not a lockout,
@@ -266,7 +268,7 @@ describe('brain ingest — provider-degradation paths', () => {
       writeFileSync(join(meetingsFolder, 'precious.md'), '---\ndate: 2026-02-07\n---\nAcme renewal call.', 'utf8')
       allowProviders(['local'])
       createStreamMock.mockImplementation(respondJson())
-      expect(startBackfill()).toEqual({ queued: 1 })
+      expect(await startBackfill()).toEqual({ queued: 1 })
       await waitForIdle()
       expect(listMeetingExtractions(getSettings())).toHaveLength(1)
 
@@ -293,7 +295,7 @@ describe('brain ingest — provider-degradation paths', () => {
     allowProviders(['anthropic', 'local'])
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(respondJson())
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     // A corrupt local model is irrelevant when a cloud candidate can recreate the brain — and re-hashing
@@ -322,7 +324,7 @@ describe('brain ingest — provider-degradation paths', () => {
     setApiKey('anthropic', 'fake-anthropic-key')
     createStreamMock.mockImplementation(holdStream)
 
-    expect(startBackfill()).toEqual({ queued: 4 })
+    expect(await startBackfill()).toEqual({ queued: 4 })
     // EXTRACT_CONCURRENCY jobs occupy the workers; the 4th waits in the queue.
     await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 10_000 })
 
@@ -377,7 +379,7 @@ describe('brain ingest — provider-degradation paths', () => {
       writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: ['local'] }), 'utf8')
       createStreamMock.mockImplementation(respondJson())
 
-      expect(startBackfill()).toEqual({ queued: 1 })
+      expect(await startBackfill()).toEqual({ queued: 1 })
       await waitForIdle()
 
       const localCall = createStreamMock.mock.calls.find((c) => c[0].providerId === 'local')
@@ -390,7 +392,7 @@ describe('brain ingest — provider-degradation paths', () => {
       setApiKey('anthropic', 'fake-anthropic-key')
       createStreamMock.mockImplementation(respondJson())
 
-      expect(startBackfill()).toEqual({ queued: 1 })
+      expect(await startBackfill()).toEqual({ queued: 1 })
       await waitForIdle()
 
       const cloudCall = createStreamMock.mock.calls.find((c) => c[0].providerId === 'anthropic')

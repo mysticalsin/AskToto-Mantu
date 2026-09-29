@@ -4,11 +4,13 @@ import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type DealEntity } from '@shared/brain'
-import { ingestExtraction, updateIndex, whenIndexWritesSettle } from './ingest'
+import { ingestExtraction, updateIndex } from './ingest'
 import { updateEntityField } from './corrections'
 import { slugify, setDealOutcome, readMeetingExtraction, readDeal, writeDeal } from './store'
 import { computeAttention } from './attention'
 import { formatDeal } from './context'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -22,6 +24,7 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
   let s: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-attention-test-'))
     s = settingsFor(folder)
   })
@@ -30,7 +33,7 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
   // parallel load the rename then lands on a directory this line already deleted, failing an
   // unrelated test in whichever file happened to be running.
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
   it('a clean brain (no entities) produces no items', () => {
@@ -173,6 +176,7 @@ describe('brain:meetingExtraction store contract', () => {
   let s: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-meeting-extraction-test-'))
     s = settingsFor(folder)
   })
@@ -181,7 +185,7 @@ describe('brain:meetingExtraction store contract', () => {
   // parallel load the rename then lands on a directory this line already deleted, failing an
   // unrelated test in whichever file happened to be running.
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
   it('returns the stored extraction for an ingested meeting, keyed by slugify(basename(file))', async () => {
@@ -251,6 +255,7 @@ describe('render-gate property — no unverified NUMBER ever reaches the Attenti
   let folder: string
   let s: Settings
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-attention-gate-'))
     s = settingsFor(folder)
   })
@@ -259,7 +264,7 @@ describe('render-gate property — no unverified NUMBER ever reaches the Attenti
   // parallel load the rename then lands on a directory this line already deleted, failing an
   // unrelated test in whichever file happened to be running.
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
   it('Leak A: an AMBIGUOUS amount never puts its raw figure into the attention detail', async () => {

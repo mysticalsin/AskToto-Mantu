@@ -86,7 +86,7 @@ describe('startStallSampler', () => {
     if (POSIX) expect(statSync(captureDir(userData)).mode & 0o777).toBe(0o700)
   })
 
-  it("audits the stall-watch helper's spawn and exit", () => {
+  it("audits the stall-watch helper's spawn and exit", async () => {
     const child = fakeChild(9876)
     const audit = vi.fn()
     const collect = vi.fn(async (): Promise<CaptureOutcome[]> => [])
@@ -99,16 +99,21 @@ describe('startStallSampler', () => {
       deps: { spawn: (() => child) as unknown as typeof nodeSpawn, collect }
     })
 
-    expect(audit).toHaveBeenCalledWith('sidecar.spawn', { name: 'stall-watch', pid: 9876, pgid: null })
+    // The pgid lookup is asynchronous (M2-0422), so the spawn audit lands after the lookup settles.
+    await vi.waitFor(() =>
+      expect(audit).toHaveBeenCalledWith('sidecar.spawn', { name: 'stall-watch', pid: 9876, pgid: null })
+    )
     child.emit('exit', 0, null)
-    expect(audit).toHaveBeenCalledWith('sidecar.exit', {
+    await vi.waitFor(() =>
+      expect(audit).toHaveBeenCalledWith('sidecar.exit', {
       name: 'stall-watch',
       pid: 9876,
       pgid: null,
       code: 0,
       signal: null,
       uptimeMs: expect.any(Number)
-    })
+      })
+    )
   })
 
   it("collects once at start, before any stdout line — an outcome for a different bootId is audited under that outcome's own bootId", async () => {

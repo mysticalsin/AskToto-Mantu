@@ -8,8 +8,10 @@ import { BrainIndexSchema } from '@shared/brain'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { MAX_INGEST_ATTEMPTS } from '../infra/scheduler/policy'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, ingestFailureCounts, ingestFailureDetails, startBackfill, whenIndexWritesSettle, type BackfillStartOptions } from './ingest'
+import { brainBackfillProgress, ingestFailureCounts, ingestFailureDetails, startBackfill, type BackfillStartOptions } from './ingest'
 import { readIndex } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -31,7 +33,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
   }
 
   const respondError = (message: string) => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
@@ -47,6 +49,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-resilience-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-resilience-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -74,7 +77,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     // The queue draining is not the same as the writes landing: the last job’s index.json record is
     // still on ingest.ts’s serialized lane at that moment. Await it, or the stale write lands during
     // the NEXT test (and races this rmSync — ENOTEMPTY on the Windows CI runner).
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
@@ -88,7 +91,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
 
     createStreamMock.mockImplementationOnce(respondError('503 Service Unavailable')).mockImplementationOnce(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['failover.md']?.ok).toBe(true)
@@ -104,7 +107,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
 
     createStreamMock.mockImplementationOnce(respondError('404 page not found')).mockImplementationOnce(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['dead-model.md']?.ok).toBe(true)
@@ -120,7 +123,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     // Not valid JSON — a parse failure, not a transport one, so failover must NOT engage here.
     createStreamMock.mockImplementationOnce(respondJson('not json at all')).mockImplementationOnce(respondJson())
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['parse-fail.md']?.ok).toBe(true)
@@ -135,7 +138,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     setApiKey('openai', 'fake-openai-key')
     createStreamMock.mockImplementation(respondError('503 Service Unavailable'))
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await waitForIdle()
 
     expect(readIndex(getSettings()).ingested['all-down.md']?.ok).toBe(false)
@@ -156,7 +159,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockImplementation(respondError('404 page not found'))
 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i++) {
-      expect(startBackfill(undefined, userTrigger).queued).toBe(1)
+      expect((await startBackfill(undefined, userTrigger)).queued).toBe(1)
       await waitForIdle()
     }
 
@@ -168,7 +171,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     // The automatic default must never touch an exhausted record, even once its own backoff window has
     // already elapsed.
     createStreamMock.mockClear()
-    expect(startBackfill().queued).toBe(0)
+    expect((await startBackfill()).queued).toBe(0)
     expect(createStreamMock).not.toHaveBeenCalled()
   })
 
@@ -178,14 +181,14 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockImplementation(respondError('404 page not found'))
 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i++) {
-      startBackfill(undefined, userTrigger)
+      await startBackfill(undefined, userTrigger)
       await waitForIdle()
     }
     expect(readIndex(getSettings()).ingested['always-fails-2.md']?.exhausted).toBe(true)
 
     // Manual retry requeues it despite `exhausted`, and clears the flag + resets attempts before this
     // next failure — one more failure afterward must land at attempts:1, never attempts:7 / re-exhausted.
-    expect(startBackfill(undefined, userTrigger).queued).toBe(1)
+    expect((await startBackfill(undefined, userTrigger)).queued).toBe(1)
     await waitForIdle()
 
     const record = readIndex(getSettings()).ingested['always-fails-2.md']
@@ -199,7 +202,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockImplementation(respondError('404 page not found'))
 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i++) {
-      startBackfill(undefined, userTrigger)
+      await startBackfill(undefined, userTrigger)
       await waitForIdle()
     }
     expect(readIndex(getSettings()).ingested['always-fails-3.md']?.exhausted).toBe(true)
@@ -207,7 +210,7 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockReset()
     createStreamMock.mockImplementation(respondJson())
 
-    expect(startBackfill(undefined, userTrigger).queued).toBe(1)
+    expect((await startBackfill(undefined, userTrigger)).queued).toBe(1)
     await waitForIdle()
 
     const record = readIndex(getSettings()).ingested['always-fails-3.md']

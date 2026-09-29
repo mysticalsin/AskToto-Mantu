@@ -19,6 +19,11 @@ on:
         default: true
         type: boolean
 
+# Least privilege: the built-in token only reads this repository (checkout, ffmpeg sidecar download).
+# Publishing to the feed repository authenticates with the separate GH_TOKEN secret, not this token.
+permissions:
+  contents: read
+
 # A retry for the same tag must never race another run while both mutate the same feed release.
 concurrency:
   group: metis-release-${{ github.ref }}
@@ -41,6 +46,43 @@ jobs:
       - run: npm ci
       - name: Prove release lane independence
         run: npx vitest run scripts/release-lanes.contract.test.ts
+
+  # The computed release decision (M2-0171): the ten section 27 contract checks over the evidence registry
+  # and traceability matrix, on the tagged commit. It stands alone, needing and needed by no other job,
+  # so a FAIL is a visible red lane and an attached report without ever holding one platform's publish
+  # hostage to the other's (M2-0053). The ledger, receipts and matrix live in the private program
+  # repository and is checked out beside this one; when that is not configured the lane fails at the
+  # checkout, never a skipped or assumed PASS.
+  release-decision:
+    name: Release decision
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ vars.METIS_PROGRAM_REPOSITORY }}
+          token: ${{ secrets.METIS_PROGRAM_TOKEN }}
+          path: program
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      # The artifact of this public repository is the public-safe report (check ids, statuses, counts,
+      # ticket ids). The full report needs --detail-out and belongs to the private program repository's CI.
+      - name: Compute the release decision
+        run: node scripts/release/decide.mjs --commit "$GITHUB_SHA" --ledger program/ledger/tickets.json --matrix program/traceability/matrix.json --out out/release-decision
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: release-decision
+          retention-days: 30
+          if-no-files-found: error
+          path: out/release-decision/
 
   release-quality:
     name: Release source gate (${{ matrix.os }})

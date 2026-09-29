@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import * as store from './store'
-import { updateIndex, whenIndexWritesSettle } from './ingest'
+import { updateIndex } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 vi.mock('./store', async (original) => {
@@ -17,6 +19,7 @@ describe('index mutations own their unpublished snapshot', () => {
   let settings: Settings
 
   beforeEach(async () => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'metis-index-durability-'))
     vi.stubEnv('ASKTOTO_USERDATA', folder)
     settings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
@@ -24,7 +27,7 @@ describe('index mutations own their unpublished snapshot', () => {
   })
 
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     vi.restoreAllMocks()
     vi.unstubAllEnvs()
     rmSync(folder, { recursive: true, force: true })

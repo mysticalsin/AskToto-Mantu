@@ -9,10 +9,11 @@ import { clearApiKey, getSettings, setSettings } from '../store'
 import {
   brainBackfillProgress,
   startBackfill,
-  startRebuild,
-  whenIndexWritesSettle
+  startRebuild
 } from './ingest'
 import { readIndex } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
 
@@ -52,6 +53,7 @@ describe('brain ingest — exclusive local summary vs runtime lockout (MQA-271, 
   let meetingsFolder: string
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-local-lockout-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-local-lockout-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -88,7 +90,7 @@ describe('brain ingest — exclusive local summary vs runtime lockout (MQA-271, 
   })
 
   afterEach(async () => {
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
@@ -130,14 +132,14 @@ describe('brain ingest — exclusive local summary vs runtime lockout (MQA-271, 
     // fully intact, so the guard only bites the genuine lockout and nothing else.
     localRuntimeStateMock.mockReturnValue('stopped')
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await vi.waitFor(
       () => {
         expect(brainBackfillProgress().running).toBe(false)
       },
       { timeout: 10_000 }
     )
-    await whenIndexWritesSettle()
+    await settleBrainWritesForTests()
 
     expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
     expect(createStreamMock.mock.calls[0][0].providerId).toBe('local')
