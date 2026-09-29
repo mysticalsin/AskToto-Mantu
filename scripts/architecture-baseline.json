@@ -158,6 +158,7 @@
     "src/main/audit-log-chain.test.ts": 1,
     "src/main/bank-grade-hardening.contract.test.ts": 1,
     "src/main/bar-idle-ghost.contract.test.ts": 2,
+    "src/main/boot-nonblocking.contract.test.ts": 1,
     "src/main/brain-entity-names.contract.test.ts": 2,
     "src/main/brain/intelligence-pass.test.ts": 5,
     "src/main/c-main-fixes.contract.test.ts": 3,
