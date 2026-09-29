@@ -48,6 +48,11 @@ regexes = [
   '''^(sk-proj-abcdefghijklmnopqrstuvwxyz123456|sk-dead0000000000000000000000000000000000|sk-cf-OPERATOR-VAULT-TEST-only-xx99|sk-OPENAI-OPERATOR-VAULT-TEST-only-xx99)$''',
   '''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0In0(\.[A-Za-z0-9_-]+)?$''',
   '''^(ingest-secret|shared-secret|old-shared-secret|secret-token|fresh-token|test-token|tok-rotated|plane-tok-1|tok_(eu|us)_123|clickup-(at|rt)-1|plane-(at|rt)-[A-Za-z0-9]+|plane-secret-[A-Za-z0-9]+|fresh-ported-secret)$''',
+  # A source identifier (SCREAMING_SNAKE constant name, e.g. `promptKey: PROMPT_KEY_B64`) captured as the value
+  # of a key-like property: it is a variable reference, not a literal, and needs an underscore to match.
+  '''^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$''',
+  # Exact fake credentials of the operator connector probe test and the CLI/MCP tests.
+  '''^(close-api-key-abcdef123456|sk-secret-should-not-leak|sk-ant-veryprivate-88123|sk-bidstack-abc|operator-ingest-test-secret|test-operator-secret)$''',
   # The lease-signing fixture: the PEM private half of DEV_LEASE_PUBLIC_KEY, base64-embedded in the two lease
   # tests so they can sign a genuine lease. Gitleaks reports the decoded PEM, so the entry is the whole decoded
   # PEM, exact key body included; any other private key still fails.
