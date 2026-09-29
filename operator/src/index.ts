@@ -211,8 +211,8 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     const [d1, schema, lastIngest, lastCron] = await Promise.all([
       healthD1Status(env.DB),
       healthSchemaStatus(env.DB),
-      store ? lastIngestAt(store) : null,
-      store ? lastCronAt(store) : null
+      store ? lastIngestAt(store).catch(() => null) : null,
+      store ? lastCronAt(store).catch(() => null) : null
     ])
     // Ready only when there is a store behind the Worker and, if D1 is bound, it answers and matches the
     // migration head; anything else is degraded, never live.
