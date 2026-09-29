@@ -145,6 +145,11 @@ test('R6b hosted-runner: accepted on HOST_CONFIGURED, LIVE_VERIFIED and MEASURED
     const problems = recordProblems(liveVerified({ environment: { kind: 'hosted-runner', host }, ci_run_id: 303 }))
     assertProblem(problems, 'environment.host', 'macos-latest', 'windows-latest')
   }
+  // a host that is not even a valid label still fails, with the generic host message
+  assertProblem(
+    recordProblems(liveVerified({ environment: { kind: 'hosted-runner', host: 'Bad Host' }, ci_run_id: 303 })),
+    'environment.host'
+  )
 })
 
 test('R6c hosted-runner is rejected for LOCALLY_TESTED and needs ci_run_id at each hosted level', () => {
