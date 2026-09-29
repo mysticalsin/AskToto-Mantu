@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { ATTRIBUTABLE_PROCESS_KINDS } from './lib.mjs'
 
 const SYNTHETIC_STARTED_AT = Date.UTC(2026, 8, 27, 13, 0, 0)
@@ -144,7 +145,13 @@ function usage() {
   return 'Usage: node scripts/qa/census/profile.mjs <profile-dir>'
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+/** True when this module is the process entry point. `pathToFileURL` yields `file:///D:/...` for a Windows
+ *  argv[1], which a hand-built `file://${argv1}` never matches, so the CLI silently wrote nothing there. */
+export function isMainModule(metaUrl, argv1, pathOptions) {
+  return Boolean(argv1) && metaUrl === pathToFileURL(argv1, pathOptions).href
+}
+
+if (isMainModule(import.meta.url, process.argv[1])) {
   const profileDir = process.argv[2]
   if (!profileDir) {
     console.error(usage())
@@ -152,4 +159,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   const profile = writeRepresentativeProfile(profileDir)
   console.log(`[census-profile] wrote ${profile.profileDir}`)
+  console.log(`[census-profile] manifest ${join(profile.profileDir, 'resource-census-profile.json')}`)
 }
