@@ -5,7 +5,8 @@
  */
 import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { atomicWriteSync } from '../infra/fs/atomic-write'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 
@@ -35,9 +36,7 @@ function emptyIdentity(): InstallIdentity {
 function persist(path: string, data: InstallIdentity): void {
   const dir = dirname(path)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  const tmp = `${path}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 })
-  renameSync(tmp, path)
+  atomicWriteSync(path, `${JSON.stringify(data, null, 2)}\n`)
 }
 
 export function readInstallIdentity(userData?: string): InstallIdentity {

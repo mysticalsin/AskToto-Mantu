@@ -1,4 +1,4 @@
-import { app, safeStorage } from 'electron'
+import { app } from 'electron'
 import {
   readdirSync,
   readFileSync,
@@ -6,15 +6,24 @@ import {
   mkdirSync,
   writeFileSync,
   appendFileSync,
-  unlinkSync,
-  renameSync
+  unlinkSync
 } from 'node:fs'
-import { writeFile, rename, unlink } from 'node:fs/promises'
+import { unlink } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
-import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
+import { encryptSecret, isKeychainAvailable, useFileBackend } from './secrets'
+import { atomicWrite, atomicWriteSync, uniqueTmpPath } from './infra/fs/atomic-write'
+import {
+  MARKER_ATKENC1,
+  MARKER_ATKENC2,
+  SETTINGS_FORMAT,
+  open,
+  openWrappedKey,
+  sealWrappedKey,
+  wrappedKeyBackend
+} from './infra/secrets/envelope'
 import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
 import { mainLog, auditLog } from './logger'
 import { resolveMeetingsFolder } from './infra/storage/paths'
@@ -31,8 +40,8 @@ import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-dura
 //     transcript; the content key is wrapped for the LOCAL keychain (kLocal, always) and, when an org
 //     escrow public key is configured, also for an out-of-band admin (kEscrow). Envelope encryption lets
 //     an org recover a transcript via the escrow private key even if the device/keychain is lost.
-const ENC_MARKER = Buffer.from('ATKENC1\n')
-const ENC_MARKER_V2 = Buffer.from('ATKENC2\n')
+const ENC_MARKER = MARKER_ATKENC1
+const ENC_MARKER_V2 = MARKER_ATKENC2
 const MARKER_LEN = ENC_MARKER.length // v1 and v2 markers are the same length — share one prefix check
 
 type EnvelopeV2 = {
@@ -121,35 +130,6 @@ function readEscrowPubKey(): string | null {
   return null
 }
 
-// The ONE native boundary in this file, and the one place a read can die in a way no JS can observe.
-//
-// safeStorage.decryptString drops into Chromium's OSCrypt. Its Windows implementation
-// (components/os_crypt/sync/os_crypt_win.cc) reads a 'v10'-prefixed blob as 'v10' + 12-byte nonce +
-// AES-GCM ciphertext + tag, and slices out the body with `ciphertext.substr(15)` — no length check
-// first. std::string::substr throws std::out_of_range when the position is past the end, and that is a
-// native C++ exception (0xE06D7363): it unwinds straight past V8, so `uncaughtException`, the
-// surrounding try/catch, and every fatal handler this app installs are all blind to it. The process
-// simply vanishes — no window, no dialog, no crash-*.log, no audit line. That is MQA-175, observed on
-// six consecutive launches of the shipped 1.5.4 Windows build against a sync-mangled
-// `.brain/index.json`. A bad blob that is merely WRONG (right length, wrong bytes) is fine — OSCrypt
-// returns false and Electron throws an ordinary JS error. Only a SHORT one kills the process.
-//
-// So the length is checked here, on the JS side, before the boundary is crossed. The bound is exactly
-// the position os_crypt_win.cc indexes to, not the size of a well-formed blob: a real Windows envelope
-// is at least 31 bytes (3 + 12 + 16) and macOS's AES-128-CBC form at least 19, so anything legitimate
-// clears this by a wide margin while every blob that could throw is refused as a normal JS Error — which
-// tryDecodeSaved below already turns into a typed "undecryptable" outcome.
-const OSCRYPT_V10_PREFIX = Buffer.from('v10', 'utf8')
-const OSCRYPT_V10_MIN_INDEXABLE = OSCRYPT_V10_PREFIX.length + 12 // the substr(15) os_crypt_win.cc does
-
-function unwrapWithKeychain(blob: Buffer): string {
-  if (blob.length === 0) throw new Error('wrapped key is empty')
-  if (blob.subarray(0, OSCRYPT_V10_PREFIX.length).equals(OSCRYPT_V10_PREFIX) && blob.length < OSCRYPT_V10_MIN_INDEXABLE) {
-    throw new Error('wrapped key is a truncated OSCrypt v10 blob')
-  }
-  return safeStorage.decryptString(blob)
-}
-
 /**
  * Build the v2 envelope on-disk buffer (marker + JSON).
  *
@@ -168,16 +148,11 @@ function encryptEnvelopeV2(content: string): Buffer {
   const cipher = createCipheriv('aes-256-gcm', contentKey, iv)
   const ct = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()])
   const tag = cipher.getAuthTag()
-  // LOCAL wrap: prefer the OS keychain (safeStorage); when the file backend is in force (un-notarized
-  // build — see the keystore note in index.ts) or safeStorage is unavailable (Linux / CI / no
-  // secret-service), wrap with the AES-GCM file-backend key from secrets.ts instead so recording never
-  // triggers a Keychain prompt mid-meeting. Either way the content key is always encrypted at rest.
-  let kLocalField: string
-  if (!useFileBackend() && safeStorage.isEncryptionAvailable()) {
-    kLocalField = 'S:' + safeStorage.encryptString(contentKey.toString('base64')).toString('base64')
-  } else {
-    kLocalField = 'F:' + encryptSecret(contentKey.toString('base64')).toString('base64')
-  }
+  // LOCAL wrap: prefer the OS keychain; when the file backend is in force (un-notarized build — see the
+  // keystore note in index.ts) or the keychain is unavailable (Linux / CI / no secret-service), wrap with
+  // the AES-GCM file-backend key from secrets.ts instead so recording never triggers a Keychain prompt
+  // mid-meeting. Either way the content key is always encrypted at rest.
+  const kLocalField = sealWrappedKey(contentKey.toString('base64'))
   const env: EnvelopeV2 = {
     v: 2,
     iv: iv.toString('base64'),
@@ -218,44 +193,36 @@ function encryptEnvelopeV2(content: string): Buffer {
  *  `filePath`, when given, lets a successful recovery self-heal (see the rewrap below). */
 function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?: string): string {
   const env = JSON.parse(buf.subarray(MARKER_LEN).toString('utf8')) as EnvelopeV2
-  let contentKeyB64: string
-  if (env.kLocal.startsWith('F:')) {
-    // File-backend path: content key was wrapped by secrets.ts AES-GCM (no keychain required).
-    contentKeyB64 = decryptSecret(Buffer.from(env.kLocal.slice(2), 'base64'))
-  } else {
-    // safeStorage path: 'S:' prefix (new) or legacy bare base64 (no prefix, backward compat).
-    const canRecover = allowKeychainRecovery && safeStorage.isEncryptionAvailable()
-    if (process.env.ASKTOTO_LOCAL_KEYSTORE && !canRecover) {
-      throw new Error('Keychain-wrapped transcript is unavailable while the local keystore is active')
-    }
-    const raw = env.kLocal.startsWith('S:') ? env.kLocal.slice(2) : env.kLocal
-    contentKeyB64 = unwrapWithKeychain(Buffer.from(raw, 'base64'))
-    // Self-healing: this device's Keychain just proved it can still unwrap the SAME content key —
-    // rewrap it under the current file-backend key so every later read (bulk list/search included)
-    // converges to 'F:' without ever touching the Keychain again. iv/tag/ct are untouched; only kLocal
-    // changes. Atomic tmp+rename (mirrors writeSaved above), done synchronously like store.ts's own
-    // legacy-format migration since this runs inside an otherwise-synchronous read. Best-effort: a
-    // rewrap failure must never fail this read — the caller already has the decrypted content either way.
-    //
-    // Only converge when the file backend is the ACTIVE write backend. On packaged Windows it is not:
-    // safeStorage (DPAPI) is the writer, so every new transcript is 'S:', and safeStorage.isEncryptionAvailable()
-    // is always true there — which made canRecover true and rewrapped every meeting to 'F:' the moment it was
-    // opened, silently materialising a secret-key.bin the profile never needed and moving the meeting off DPAPI.
-    // Gating on useFileBackend() keeps the convergence for the macOS forced-keystore case it was written for
-    // and makes it a no-op wherever safeStorage is the writer.
-    if (canRecover && filePath && useFileBackend()) {
-      const tmp = `${filePath}.${randomBytes(6).toString('hex')}.tmp`
-      try {
-        const updated: EnvelopeV2 = { ...env, kLocal: 'F:' + encryptSecret(contentKeyB64).toString('base64') }
-        writeFileSync(tmp, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(updated), 'utf8')]), { mode: 0o600 })
-        renameSync(tmp, filePath)
-      } catch {
-        try {
-          if (existsSync(tmp)) unlinkSync(tmp) // don't leave an orphaned .tmp behind on a failed rewrap
-        } catch {
-          /* best-effort cleanup */
-        }
-      }
+  // 'F:' is wrapped by the file backend (no keychain required); 'S:' or legacy bare base64 by the keychain.
+  const keychainWrapped = wrappedKeyBackend(env.kLocal) === 'keychain'
+  const canRecover = keychainWrapped && allowKeychainRecovery && isKeychainAvailable()
+  if (keychainWrapped && process.env.ASKTOTO_LOCAL_KEYSTORE && !canRecover) {
+    throw new Error('Keychain-wrapped transcript is unavailable while the local keystore is active')
+  }
+  const unwrapped = openWrappedKey(env.kLocal, { keychain: true })
+  if (unwrapped.kind !== 'file' && unwrapped.kind !== 'keychain') throw new Error(unwrapped.reason)
+  const contentKeyB64 = unwrapped.text
+  // Self-healing: this device's Keychain just proved it can still unwrap the SAME content key —
+  // rewrap it under the current file-backend key so every later read (bulk list/search included)
+  // converges to 'F:' without ever touching the Keychain again. iv/tag/ct are untouched; only kLocal
+  // changes. Atomic write, done synchronously like store.ts's own legacy-format migration since this runs
+  // inside an otherwise-synchronous read. Best-effort: a rewrap failure must never fail this read — the
+  // caller already has the decrypted content either way.
+  //
+  // Only converge when the file backend is the ACTIVE write backend. On packaged Windows it is not:
+  // the keychain (DPAPI) is the writer, so every new transcript is 'S:', and the keychain is always
+  // available there — which made canRecover true and rewrapped every meeting to 'F:' the moment it was
+  // opened, silently materialising a secret-key.bin the profile never needed and moving the meeting off DPAPI.
+  // Gating on useFileBackend() keeps the convergence for the macOS forced-keystore case it was written for
+  // and makes it a no-op wherever the keychain is the writer.
+  if (canRecover && filePath && useFileBackend()) {
+    try {
+      const updated: EnvelopeV2 = { ...env, kLocal: 'F:' + encryptSecret(contentKeyB64).toString('base64') }
+      atomicWriteSync(filePath, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(updated), 'utf8')]), {
+        tmp: uniqueTmpPath(filePath)
+      })
+    } catch {
+      /* best-effort: atomicWriteSync already removed its tmp file */
     }
   }
   const contentKey = Buffer.from(contentKeyB64, 'base64')
@@ -307,17 +274,15 @@ function tryDecodeSaved(buf: Buffer, allowKeychainRecovery = false, filePath?: s
       return { ok: false, reason: e instanceof Error ? e.message : String(e) }
     }
   }
-  // v1 (legacy): safeStorage-direct. Kept for full backward compatibility with existing transcripts.
+  // v1 (legacy): keychain-direct. Kept for full backward compatibility with existing transcripts.
   if (buf.length >= ENC_MARKER.length && buf.subarray(0, ENC_MARKER.length).equals(ENC_MARKER)) {
-    const canRecover = allowKeychainRecovery && safeStorage.isEncryptionAvailable()
+    const canRecover = allowKeychainRecovery && isKeychainAvailable()
     if (process.env.ASKTOTO_LOCAL_KEYSTORE && !canRecover) {
       return { ok: false, reason: 'keychain-wrapped transcript is unavailable while the local keystore is active' }
     }
-    try {
-      return { ok: true, text: unwrapWithKeychain(buf.subarray(ENC_MARKER.length)) }
-    } catch (e) {
-      return { ok: false, reason: e instanceof Error ? e.message : String(e) }
-    }
+    const opened = open(buf, SETTINGS_FORMAT, { keychain: true })
+    if (opened.kind === 'malformed' || opened.kind === 'foreign-key') return { ok: false, reason: opened.reason }
+    return { ok: true, text: opened.text }
   }
   return { ok: true, text: buf.toString('utf8') }
 }
@@ -356,39 +321,16 @@ export function isEncryptedFile(path: string): boolean {
 export async function writeSaved(file: string, content: string, encrypt: boolean): Promise<void> {
   let data: Buffer = Buffer.from(content, 'utf8')
   if (encrypt) {
-    // encryptEnvelopeV2 always produces an ATKENC2-marked encrypted envelope — safeStorage path
+    // encryptEnvelopeV2 always produces an ATKENC2-marked encrypted envelope — keychain path
     // when the keychain is available, AES-GCM file-backend path otherwise. Any error propagates
     // to the caller (fail-closed): plaintext is never silently written when encryption is on.
     data = encryptEnvelopeV2(content)
   }
   // Unique per-call tmp name: two concurrent writers to the SAME target (e.g. a background brain
   // ingest and an IPC-driven edit both updating one entity file) would otherwise share `${file}.tmp` —
-  // the first rename steals the second writer's bytes and the second rename throws ENOENT.
-  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
-  try {
-    await writeFile(tmp, data, { mode: 0o600 }) // async: off the main-process event loop
-    // The default meetings folder lives under OneDrive, which routinely holds a just-written file
-    // open (upload hashing) or gets grabbed by AV/EDR real-time scanning — rename() then throws
-    // EPERM/EBUSY on Windows even though nothing is actually wrong. Bounded retry rides out that
-    // transient lock instead of losing the save; any other error (or exhausted retries) still throws.
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await rename(tmp, file)
-        break
-      } catch (e) {
-        const code = (e as NodeJS.ErrnoException).code
-        if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw e
-        await new Promise((r) => setTimeout(r, 40 * 2 ** attempt))
-      }
-    }
-  } catch (e) {
-    try {
-      if (existsSync(tmp)) await unlink(tmp) // don't leave an orphaned .tmp on failure
-    } catch {
-      /* ignore */
-    }
-    throw e
-  }
+  // the first rename steals the second writer's bytes and the second rename throws ENOENT. The default
+  // meetings folder lives under OneDrive, so atomicWrite's EPERM/EBUSY rename retry matters here.
+  await atomicWrite(file, data, { tmp: uniqueTmpPath(file) })
 }
 
 // Decrypted temp copies are tracked and deleted on quit so an encrypted transcript never leaves a

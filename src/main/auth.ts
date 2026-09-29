@@ -1,4 +1,4 @@
-import { app, shell, safeStorage } from 'electron'
+import { app, shell } from 'electron'
 import { createServer } from 'node:http'
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
@@ -7,7 +7,8 @@ import type { PublicClientApplication } from '@azure/msal-node'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings, setSettings } from './store'
 import { auditLog, mainLog, setAuditActor } from './logger'
-import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
+import { isKeychainAvailable, useFileBackend } from './secrets'
+import { BARE_FORMAT, open, seal } from './infra/secrets/envelope'
 import { readTrustedAdminManaged } from './win-security'
 
 // Scopes requested at sign-in: identity + read-only calendar (so the agenda can be pulled later with no
@@ -295,29 +296,16 @@ function makeCachePlugin(): any {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     beforeCacheAccess: async (ctx: any): Promise<void> => {
       try {
-        const buf = readFileSync(msalCachePath())
-        let json: string | null = null
-
-        if (useFileBackend()) {
-          try { json = decryptSecret(buf) } catch { /* not AES-GCM format — try safeStorage below */ }
-        }
-        // Fallback / migration: try safeStorage (old installs or prod reads on prod path). Skipped when
-        // the file backend is in force, so an old safeStorage-wrapped token can't re-open the Keychain
-        // prompt we route around on an un-notarized build — the user just re-authenticates once instead.
-        if (json === null && !useFileBackend() && safeStorage.isEncryptionAvailable()) {
-          try { json = safeStorage.decryptString(buf) } catch { /* not a safeStorage blob either */ }
-          // If we read it via safeStorage while in file-backend mode, migrate now (best-effort)
-          if (json !== null && useFileBackend()) {
-            try { writeFileSync(msalCachePath(), encryptSecret(json), { mode: 0o600 }) } catch { /* best-effort */ }
-          }
-        }
-        // Reverse migration (mirrors loadSession): the cache may have been written by a build that
-        // FORCED the file keystore on a platform that no longer does. Without this the Graph token
-        // cache is dropped on upgrade and the user must re-authenticate interactively.
-        if (json === null && !useFileBackend()) {
-          try { json = decryptSecret(buf) } catch { /* not AES-GCM either, or the file key is unrecoverable */ }
-        }
-        if (json !== null) ctx.tokenCache.deserialize(json)
+        // The Keychain is asked only when the file backend is NOT in force, so an old Keychain-wrapped token
+        // can't re-open the prompt we route around on an un-notarized build — the user just re-authenticates
+        // once instead. When it is off, a file-key blob written by a build that FORCED the file keystore on a
+        // platform that no longer does is still read, so the Graph token cache survives the upgrade.
+        const fileBackend = useFileBackend()
+        const opened = open(readFileSync(msalCachePath()), BARE_FORMAT, {
+          keychain: !fileBackend && isKeychainAvailable(),
+          fileFirst: fileBackend
+        })
+        if (opened.kind === 'file' || opened.kind === 'keychain') ctx.tokenCache.deserialize(opened.text)
       } catch {
         /* no cache yet — start empty */
       }
@@ -326,13 +314,8 @@ function makeCachePlugin(): any {
     afterCacheAccess: async (ctx: any): Promise<void> => {
       if (!ctx.cacheHasChanged) return
       try {
-        const json = ctx.tokenCache.serialize()
-        const blob = useFileBackend()
-          ? encryptSecret(json)
-          : safeStorage.isEncryptionAvailable()
-            ? safeStorage.encryptString(json)
-            : null
-        if (blob) writeFileSync(msalCachePath(), blob, { mode: 0o600 })
+        const sealed = seal(ctx.tokenCache.serialize(), BARE_FORMAT)
+        if (sealed.kind !== 'unavailable') writeFileSync(msalCachePath(), sealed.bytes, { mode: 0o600 })
       } catch {
         /* best-effort: token simply won't persist this run */
       }
@@ -577,32 +560,27 @@ function loadSession(): void {
   if (loaded) return
   loaded = true
   try {
+    // The file key is tried first when the file backend is in force (dev + new prod installs). The Keychain
+    // is asked only when this build did not explicitly opt out of it: the unsigned package sets
+    // ASKTOTO_LOCAL_KEYSTORE so an old auth-session.bin can never place a hidden Keychain dialog in front
+    // of onboarding; it is treated as an expired local cache. When the file backend is off, a file-key blob
+    // written by a build that FORCED the file keystore on a platform that no longer does (Windows, once the
+    // forced local keystore became darwin-only) is still read, or every upgrading user is silently signed out.
     const buf = readFileSync(sessionPath())
+    const opened = open(buf, BARE_FORMAT, {
+      keychain: !process.env.ASKTOTO_LOCAL_KEYSTORE && isKeychainAvailable(),
+      fileFirst: useFileBackend()
+    })
     let json: string | null = null
-
-    // Try the file backend (covers dev + new prod installs).
-    if (useFileBackend()) {
-      try { json = decryptSecret(buf) } catch { /* not AES-GCM format — try safeStorage below */ }
-    }
-    // Fallback / migration: try safeStorage only when this build did not explicitly opt out of
-    // Keychain. The unsigned package sets ASKTOTO_LOCAL_KEYSTORE so an old auth-session.bin can never
-    // place a hidden Keychain dialog in front of onboarding; it is treated as an expired local cache.
-    if (json === null && !process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
-      try { json = safeStorage.decryptString(buf) } catch { /* not a safeStorage blob */ }
-      // Migrate to file backend if we're now in file-backend mode (best-effort).
-      if (json !== null && useFileBackend()) {
-        try { writeFileSync(sessionPath(), encryptSecret(json), { mode: 0o600 }) } catch { /* best-effort */ }
-      }
-    }
-    // Reverse migration: this file may have been written by a build that FORCED the file keystore on a
-    // platform that no longer does (Windows, once the forced local keystore became darwin-only). Without
-    // this the AES-GCM blob is never even tried and every upgrading user is silently signed out. Only
-    // runs when the file backend is off, so a keystore-forced build still never probes the Keychain here.
-    if (json === null && !useFileBackend()) {
-      try { json = decryptSecret(buf) } catch { /* not AES-GCM either, or the file key is unrecoverable */ }
-      if (json !== null && safeStorage.isEncryptionAvailable()) {
-        try { writeFileSync(sessionPath(), safeStorage.encryptString(json), { mode: 0o600 }) } catch { /* best-effort */ }
-      }
+    if (opened.kind === 'file' || opened.kind === 'keychain') {
+      json = opened.text
+      // Migrate to the backend now in force when another one wrote the file (best-effort).
+      try {
+        const current = seal(json, BARE_FORMAT)
+        if (current.kind !== 'unavailable' && current.kind !== opened.kind) {
+          writeFileSync(sessionPath(), current.bytes, { mode: 0o600 })
+        }
+      } catch { /* best-effort */ }
     }
     session = json !== null ? (JSON.parse(json) as Session) : null
   } catch {
@@ -624,12 +602,8 @@ function saveSession(s: Session): void {
   // defence-in-depth, but the file backend removes the "must have keychain" blocker for dev/CI.
   try {
     const json = JSON.stringify(s)
-    const blob = useFileBackend()
-      ? encryptSecret(json)
-      : safeStorage.isEncryptionAvailable()
-        ? safeStorage.encryptString(json)
-        : null
-    if (blob) writeFileSync(sessionPath(), blob, { mode: 0o600 })
+    const sealed = seal(json, BARE_FORMAT)
+    if (sealed.kind !== 'unavailable') writeFileSync(sessionPath(), sealed.bytes, { mode: 0o600 })
   } catch (e) {
     // Session persisted to memory only — sign-in still works for this run, but will silently sign
     // the user out on next launch with no trace unless we log it. Never log session contents

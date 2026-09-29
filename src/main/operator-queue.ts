@@ -9,7 +9,8 @@
  * markFailed, consumeDropped, backoffForAttempt) is a pure function over QueueState so the scheduling
  * logic is testable without touching disk.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { atomicWriteSync } from './infra/fs/atomic-write'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -146,18 +147,11 @@ export function loadQueueState(userDataDir: string): QueueState {
  *  Best-effort: a write failure is logged, never thrown (a lost heartbeat tick must not crash the app). */
 export function saveQueueState(userDataDir: string, state: QueueState): void {
   const p = queueFilePath(userDataDir)
-  const tmp = `${p}.tmp`
   try {
     mkdirSync(userDataDir, { recursive: true })
-    writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 })
-    renameSync(tmp, p)
+    atomicWriteSync(p, JSON.stringify(state))
   } catch (e) {
     mainLog.warn('[operator-queue] failed to persist queue file:', e)
-    try {
-      if (existsSync(tmp)) rmSync(tmp)
-    } catch {
-      /* best-effort cleanup only */
-    }
   }
 }
 

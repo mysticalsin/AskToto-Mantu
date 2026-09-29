@@ -18,8 +18,8 @@
  *
  *   SAFE-STORAGE backend — packaged app, safeStorage available, env override off.
  *   → OS Keychain (macOS), Windows DPAPI, or Linux secret-service.
- *   → Callers continue to call safeStorage directly in the prod path; this module is the
- *     file-backend half only, imported where safeStorage was used before.
+ *   → Callers seal and open through infra/secrets/envelope.ts, which picks the backend and is the only
+ *     path to safeStorage (infra/secrets/keychain.ts); this module is the file-backend half.
  *
  * CODE-SIGNING NOTE (prod):
  *   The file-backend REMOVES dev keychain prompts NOW. For production, code-signing still
@@ -33,11 +33,15 @@
  *   electron-builder.yml already has hardenedRuntime:true and the entitlements wired.
  */
 
-import { app, safeStorage } from 'electron'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { app } from 'electron'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX } from '@shared/encrypted-profile-recovery'
+import { atomicWriteSync } from './infra/fs/atomic-write'
+import { isKeychainAvailable, keychainDecrypt, keychainEncrypt } from './infra/secrets/keychain'
+
+export { isKeychainAvailable }
 
 const KEY_FILE = 'secret-key.bin'
 const ALG = 'aes-256-gcm' as const
@@ -77,7 +81,7 @@ let _key: Buffer | null = null
  */
 export function useFileBackend(): boolean {
   try {
-    return !app.isPackaged || !!process.env.ASKTOTO_LOCAL_KEYSTORE || !safeStorage.isEncryptionAvailable()
+    return !app.isPackaged || !!process.env.ASKTOTO_LOCAL_KEYSTORE || !isKeychainAvailable()
   } catch {
     // app not ready (test environment) — default to file backend
     return true
@@ -92,7 +96,7 @@ export function useFileBackend(): boolean {
  *
  * KEY-ENCRYPTION-KEY (KEK):
  *   When safeStorage.isEncryptionAvailable() is true the 32-byte key is wrapped with
- *   safeStorage.encryptString(base64(key)) before writing, so a bare copy of secret-key.bin
+ *   keychainEncrypt(base64(key)) before writing, so a bare copy of secret-key.bin
  *   is not directly usable without this device's keychain.
  *   Legacy files (exactly 32 raw bytes, written before this change) are detected on read and
  *   migrated to the wrapped format in-place.
@@ -108,16 +112,8 @@ export function useFileBackend(): boolean {
  *   Windows account comes back; settings > Recovery (settings:recoverProfile) is the escape hatch
  *   that archives them and starts a fresh local profile without deleting anything.
  */
-export function isKeychainAvailable(): boolean {
-  try {
-    return safeStorage.isEncryptionAvailable()
-  } catch {
-    return false
-  }
-}
-
 /**
- * Replace secret-key.bin via tmp+rename, never in place.
+ * Replace secret-key.bin via an atomic write, never in place.
  *
  * Used for BOTH migration directions, and that is load-bearing for the forward (raw -> wrapped) one:
  * it runs on the boot READ path, synchronously inside the first getSettings(), for every upgrading
@@ -128,17 +124,7 @@ export function isKeychainAvailable(): boolean {
  * in-memory key still works for the session, and the migration simply retries on the next launch.
  */
 function persistKeyFileAtomically(p: string, key: Buffer): void {
-  const tmp = `${p}.migrate.tmp`
-  try {
-    writeFileSync(tmp, key, { mode: 0o600 })
-    renameSync(tmp, p)
-  } finally {
-    try {
-      if (existsSync(tmp)) rmSync(tmp)
-    } catch {
-      /* best-effort cleanup; the original key remains intact if rename failed */
-    }
-  }
+  atomicWriteSync(p, key, { tmp: `${p}.migrate.tmp` })
 }
 
 function loadKey({
@@ -175,7 +161,7 @@ function loadKey({
         // copy of the KEK (see persistKeyFileAtomically).
         _key = buf
         try {
-          persistKeyFileAtomically(p, safeStorage.encryptString(buf.toString('base64')))
+          persistKeyFileAtomically(p, keychainEncrypt(buf.toString('base64')))
         } catch {
           // Migration is best-effort; the raw key is still usable this session and retried next launch.
         }
@@ -184,7 +170,7 @@ function loadKey({
         // valuable encrypted profile state: if the Keychain cannot unlock it, fail closed instead of
         // regenerating a key and making every existing ciphertext permanently unreadable.
         try {
-          const unwrapped = Buffer.from(safeStorage.decryptString(buf), 'base64')
+          const unwrapped = Buffer.from(keychainDecrypt(buf), 'base64')
           // AES-256 requires exactly 32 bytes. A stale, truncated, or foreign wrapped value must
           // never reach createCipheriv(), where it would crash every encrypted write with the
           // unhelpful "Invalid key length" error.
@@ -207,7 +193,7 @@ function loadKey({
         // local keystore never reaches this branch: it surfaces the recovery action instead of hiding
         // a Keychain prompt behind onboarding.
         try {
-          const unwrapped = Buffer.from(safeStorage.decryptString(buf), 'base64')
+          const unwrapped = Buffer.from(keychainDecrypt(buf), 'base64')
           if (unwrapped.length !== 32) throw new KeychainKeyRecoveryError()
           persistKeyFileAtomically(p, unwrapped)
           _key = unwrapped
@@ -240,7 +226,7 @@ function loadKey({
 
   _key = randomBytes(32)
   if (canWrap) {
-    writeFileSync(p, safeStorage.encryptString(_key.toString('base64')), { mode: 0o600 })
+    writeFileSync(p, keychainEncrypt(_key.toString('base64')), { mode: 0o600 })
   } else {
     writeFileSync(p, _key, { mode: 0o600 })
   }
@@ -280,7 +266,7 @@ export function fileKeyState(): 'absent' | 'locked' | 'available' {
   if (buf.length === 32) return 'available'
   if (process.env.ASKTOTO_LOCAL_KEYSTORE || !isKeychainAvailable()) return 'locked'
   try {
-    return Buffer.from(safeStorage.decryptString(buf), 'base64').length === 32 ? 'available' : 'locked'
+    return Buffer.from(keychainDecrypt(buf), 'base64').length === 32 ? 'available' : 'locked'
   } catch {
     return 'locked'
   }

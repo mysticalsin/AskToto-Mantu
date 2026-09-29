@@ -14,7 +14,8 @@
  * enqueuer (a future auto-push from brain consolidation, say) inherits the guarantee for free: a
  * confidential action is never sent, no matter how many times processDue retries it.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
+import { atomicWriteSync } from '../infra/fs/atomic-write'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { app } from 'electron'
@@ -193,9 +194,7 @@ export function createPushQueue(deps: PushQueueDeps = {}): PushQueue {
     try {
       const p = storePath()
       mkdirSync(dirname(p), { recursive: true })
-      const tmp = `${p}.tmp`
-      writeFileSync(tmp, JSON.stringify({ version: 1, actions: load() }, null, 2), { mode: 0o600 })
-      renameSync(tmp, p)
+      atomicWriteSync(p, JSON.stringify({ version: 1, actions: load() }, null, 2))
     } catch (e) {
       mainLog.warn('[mcp-push-queue] save failed', e instanceof Error ? e.message : String(e))
     }

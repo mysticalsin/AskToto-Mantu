@@ -36,6 +36,7 @@ import { gunzipSync } from 'node:zlib'
 import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { app } from 'electron'
+import { atomicWriteSync } from './infra/fs/atomic-write'
 import { ensureManagedNode, resolveManagedNode } from './managed-node'
 import {
   NPM_MISSING_NODE_ERROR,
@@ -332,14 +333,14 @@ function currentJsonPath(id: ManagedCliId): string {
   return join(installRoot(id), 'current.json')
 }
 
-/** Temp-file + rename so a crash mid-write can never leave a torn current.json for managedCliEntry() to
+/** Atomic write so a crash mid-write can never leave a torn current.json for managedCliEntry() to
  *  read (rename is atomic on both APFS and NTFS within the same volume, which installRoot() always is). */
 function writeCurrentPointerAtomic(id: ManagedCliId, pointer: CurrentPointer): void {
   const dir = installRoot(id)
   mkdirSync(dir, { recursive: true })
-  const tmp = join(dir, `.current.json.tmp-${randomBytes(6).toString('hex')}`)
-  writeFileSync(tmp, JSON.stringify(pointer, null, 2), 'utf8')
-  renameSync(tmp, currentJsonPath(id))
+  atomicWriteSync(currentJsonPath(id), JSON.stringify(pointer, null, 2), {
+    tmp: join(dir, `.current.json.tmp-${randomBytes(6).toString('hex')}`)
+  })
 }
 
 // ─── installManagedCli ──────────────────────────────────────────────────────────────

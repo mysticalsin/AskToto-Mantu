@@ -4,11 +4,12 @@
  * Dev / Linux CI: the existing file-backend (encryptSecret).
  * Never write a raw license key to settings.json.
  */
-import { app, safeStorage } from 'electron'
+import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
-import { decryptSecret, encryptSecret, useFileBackend } from '../secrets'
+import { encryptSecret, isKeychainAvailable, useFileBackend } from '../secrets'
+import { BARE_FORMAT, open, seal } from '../infra/secrets/envelope'
 import type { LicenseEdition, LicenseSource } from '@shared/license-types'
 
 const CacheSchema = z.object({
@@ -32,28 +33,17 @@ export function licenseCachePath(userData?: string): string {
 
 function wrap(plain: string): Buffer {
   try {
-    if (!useFileBackend() && safeStorage.isEncryptionAvailable()) {
-      return safeStorage.encryptString(plain)
-    }
+    const sealed = seal(plain, BARE_FORMAT, { fallbackToFile: true })
+    if (sealed.kind !== 'unavailable') return sealed.bytes
   } catch {
-    /* fall through to file backend */
+    /* the Keychain failed to encrypt: fall through to the file backend */
   }
   return encryptSecret(plain)
 }
 
 function unwrap(buf: Buffer): string | null {
-  try {
-    if (!useFileBackend() && safeStorage.isEncryptionAvailable()) {
-      return safeStorage.decryptString(buf)
-    }
-  } catch {
-    /* try file backend */
-  }
-  try {
-    return decryptSecret(buf)
-  } catch {
-    return null
-  }
+  const opened = open(buf, BARE_FORMAT, { keychain: !useFileBackend() && isKeychainAvailable() })
+  return opened.kind === 'file' || opened.kind === 'keychain' ? opened.text : null
 }
 
 export function readLicenseCache(userData?: string): LicenseCache | null {

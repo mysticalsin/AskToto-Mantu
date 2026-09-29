@@ -1,4 +1,4 @@
-import { app, safeStorage } from 'electron'
+import { app } from 'electron'
 import {
   readFileSync,
   writeFileSync,
@@ -34,12 +34,22 @@ import { DUST_EMPTY_AGENTS_ERROR } from '@shared/dust-validate'
 import { mainLog } from './logger'
 import {
   KeychainKeyRecoveryError,
-  decryptSecret,
-  encryptSecret,
+  isKeychainAvailable,
   prepareFileKeyForWrite,
   resetSecretKeyCache,
   useFileBackend
 } from './secrets'
+import { atomicWriteSync } from './infra/fs/atomic-write'
+import {
+  API_KEY_FORMAT,
+  MARKER_API_KEY_FILE,
+  MARKER_ATKENC1,
+  MARKER_ATKENC2,
+  SETTINGS_FORMAT,
+  hasMarker,
+  open,
+  seal
+} from './infra/secrets/envelope'
 import { adminManagedConfigPath, readTrustedAdminManaged } from './win-security'
 import { parseEgressAllowlist } from './net/egress-policy'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
@@ -333,8 +343,7 @@ export function getEnvKeyProviders(): string[] {
 // be decoded in any of the three formats above, its original bytes are copied here (preserveUnreadableSettings)
 // before the caller returns fail-closed null and serves conservative defaults, so subsequent settings writes
 // are refused rather than destroying the only copy. See readUserRaw() and tryRecoveredSettings().
-const ENC_MARKER_V1 = Buffer.from('ATKENC1\n') // legacy: safeStorage (prod)
-const ENC_MARKER_V2 = Buffer.from('ATKENC2\n') // new: AES-GCM file backend
+// The formats themselves live in infra/secrets/envelope.ts (SETTINGS_FORMAT).
 
 /**
  * Decode a settings buffer through the three known on-disk formats (V2 AES-GCM → legacy V1 safeStorage →
@@ -345,25 +354,12 @@ const ENC_MARKER_V2 = Buffer.from('ATKENC2\n') // new: AES-GCM file backend
  * tryRecoveredSettings' `.recovered` path so both decode through exactly one cascade.
  */
 function tryParseSettingsBuffer(buf: Buffer): Record<string, unknown> | null {
-  if (buf.length >= ENC_MARKER_V2.length && buf.subarray(0, ENC_MARKER_V2.length).equals(ENC_MARKER_V2)) {
-    try {
-      return JSON.parse(decryptSecret(buf.subarray(ENC_MARKER_V2.length)))
-    } catch {
-      return null
-    }
-  }
-  if (buf.length >= ENC_MARKER_V1.length && buf.subarray(0, ENC_MARKER_V1.length).equals(ENC_MARKER_V1)) {
-    // Only touch safeStorage (the Keychain) when the file backend is NOT in force — see readUserRaw's
-    // comment for why a keystore-forced build must never probe it here.
-    if (useFileBackend() || !safeStorage.isEncryptionAvailable()) return null
-    try {
-      return JSON.parse(safeStorage.decryptString(buf.subarray(ENC_MARKER_V1.length)))
-    } catch {
-      return null
-    }
-  }
+  // Only touch the Keychain when the file backend is NOT in force — see readUserRaw's comment for why a
+  // keystore-forced build must never probe it here.
+  const opened = open(buf, SETTINGS_FORMAT, { keychain: !useFileBackend() && isKeychainAvailable() })
+  if (opened.kind === 'malformed' || opened.kind === 'foreign-key') return null
   try {
-    return JSON.parse(buf.toString('utf8'))
+    return JSON.parse(opened.text)
   } catch {
     return null
   }
@@ -432,7 +428,7 @@ function readUserRaw(): Record<string, unknown> | null {
   }
 
   // ── New AES-GCM format (file backend) ────────────────────────────────────────
-  if (buf.length >= ENC_MARKER_V2.length && buf.subarray(0, ENC_MARKER_V2.length).equals(ENC_MARKER_V2)) {
+  if (hasMarker(buf, MARKER_ATKENC2)) {
     const parsed = tryParseSettingsBuffer(buf)
     if (parsed) return parsed
     // Corrupt or key rotated — don't brick the app. Try `.recovered` BEFORE overwriting it: a `.recovered`
@@ -445,8 +441,8 @@ function readUserRaw(): Record<string, unknown> | null {
   }
 
   // ── Legacy safeStorage format (ATKENC1) — migrate to file backend on next write ──
-  if (buf.length >= ENC_MARKER_V1.length && buf.subarray(0, ENC_MARKER_V1.length).equals(ENC_MARKER_V1)) {
-    // Only touch safeStorage (the Keychain) when the file backend is NOT in force. On a keystore-forced
+  if (hasMarker(buf, MARKER_ATKENC1)) {
+    // Only touch the credential store (the Keychain) when the file backend is NOT in force. On a keystore-forced
     // build, reading a legacy V1 blob would re-open the very Keychain prompt we route around at boot — so
     // treat it as unreadable and serve conservative defaults without caching it as fresh, never prompting.
     if (useFileBackend()) {
@@ -455,21 +451,18 @@ function readUserRaw(): Record<string, unknown> | null {
       preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed')
       return null
     }
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!isKeychainAvailable()) {
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
-      preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine')
+      preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — the credential store is unavailable on this machine')
       return null
     }
     const parsed = tryParseSettingsBuffer(buf)
     if (parsed) {
-      // Best-effort migration: write the current backend format so subsequent reads don't need safeStorage.
+      // Best-effort migration: write the current backend format so subsequent reads don't need the Keychain.
       if (useFileBackend()) {
         try {
-          const p = settingsPath()
-          const tmp = `${p}.tmp`
-          writeFileSync(tmp, serializeUserRaw(parsed), { mode: 0o600 })
-          renameSync(tmp, p)
+          atomicWriteSync(settingsPath(), serializeUserRaw(parsed))
         } catch { /* migration is best-effort; old format still works */ }
       }
       return parsed
@@ -493,19 +486,19 @@ function readUserRaw(): Record<string, unknown> | null {
 /** Serialize user overrides, encrypted at rest. */
 function serializeUserRaw(obj: Record<string, unknown>): Buffer {
   const json = JSON.stringify(obj, null, 2)
-  if (useFileBackend()) {
-    return Buffer.concat([ENC_MARKER_V2, encryptSecret(json)])
-  }
+  let sealed: ReturnType<typeof seal>
   try {
-    if (safeStorage.isEncryptionAvailable()) {
-      return Buffer.concat([ENC_MARKER_V1, safeStorage.encryptString(json)])
-    }
+    sealed = seal(json, SETTINGS_FORMAT)
   } catch (e) {
+    // A file-key failure (e.g. KeychainKeyRecoveryError) carries its own recovery message; only a
+    // credential-store failure is reported as unavailable encryption.
+    if (useFileBackend()) throw e
     throw new Error(
       `Encryption unavailable — refusing to write settings as plaintext (${e instanceof Error ? e.message : String(e)})`
     )
   }
-  throw new Error('Encryption unavailable — refusing to write settings as plaintext')
+  if (sealed.kind === 'unavailable') throw new Error('Encryption unavailable — refusing to write settings as plaintext')
+  return sealed.bytes
 }
 
 /**
@@ -814,17 +807,9 @@ export function setSettings(patch: Partial<Settings>): Settings {
   }
   // Atomic write: a crash mid-write must not corrupt settings.json and wipe every setting + context doc.
   // Encrypted at rest (context docs + profile PII never hit disk as plaintext).
-  const p = settingsPath()
-  const tmp = `${p}.tmp`
   try {
-    writeFileSync(tmp, serializeUserRaw(next), { mode: 0o600 })
-    renameSync(tmp, p)
+    atomicWriteSync(settingsPath(), serializeUserRaw(next))
   } catch (e) {
-    try {
-      if (existsSync(tmp)) rmSync(tmp) // don't leave an orphaned .tmp behind
-    } catch {
-      /* ignore */
-    }
     throw new Error(
       `Couldn't save settings — Métis can't write to its data folder${
         e instanceof Error && e.message ? ` (${e.message})` : ''
@@ -834,9 +819,6 @@ export function setSettings(patch: Partial<Settings>): Settings {
   _settingsCache = null // invalidate so getSettings re-reads the just-written file
   return getSettings()
 }
-
-// Format marker prepended to AES-GCM encrypted key blobs (8 bytes, ASCII, no clash with safeStorage blobs).
-const AES_KEY_MARKER = Buffer.from('ATKAES1\n')
 
 // ─── API-key memoisation ─────────────────────────────────────────────────────────
 // getApiKey() is called inside every IPC handler that needs the key (ask, test, dust agents…).
@@ -902,6 +884,19 @@ export function archiveEncryptedProfile(): EncryptedProfileArchive {
   return { backupDir, files: moved }
 }
 
+/**
+ * Seal a secret file body under the backend in force, failing closed first: an existing key file may be an
+ * ATKAES1 blob written under a file key this machine can no longer unwrap, and overwriting it with a fresh
+ * credential-store blob would destroy the only copy of the previous secret, which is still recoverable while
+ * the bytes survive. The key preparation is a no-op on a profile that has no file key at all (fresh install),
+ * so it costs a packaged Windows install nothing.
+ */
+function sealSecretFile(plaintext: string, unavailableMessage: string): Buffer {
+  const sealed = seal(plaintext, API_KEY_FORMAT, { prepareKey: true })
+  if (sealed.kind === 'unavailable') throw new Error(unavailableMessage)
+  return sealed.bytes
+}
+
 export function setApiKey(provider: ProviderId, key: string): void {
   ensureDir()
   const trimmed = key.trim()
@@ -911,38 +906,16 @@ export function setApiKey(provider: ProviderId, key: string): void {
     clearApiKey(provider)
     return
   }
-  let blob: Buffer
-  if (useFileBackend()) {
-    // AES-GCM file backend — always available, never touches the keychain.
-    prepareFileKeyForWrite()
-    blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(trimmed)])
-  } else {
-    // Same fail-closed check as the file-backend branch. An existing key-<provider>.bin may be an
-    // ATKAES1 blob written under a file key this machine can no longer unwrap; overwriting it with a
-    // fresh safeStorage blob would destroy the only copy of the previous secret, which is still
-    // recoverable while the bytes survive. prepareFileKeyForWrite() is a no-op on a profile that has
-    // no file key at all (fresh install), so this costs a packaged Windows install nothing.
-    prepareFileKeyForWrite()
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error(
-        'Encryption is unavailable on this machine. Métis cannot safely store your API key. ' +
-          'Grant keychain access or set the key via the environment variable instead.'
-      )
-    }
-    blob = safeStorage.encryptString(trimmed)
-  }
+  const blob = sealSecretFile(
+    trimmed,
+    'Encryption is unavailable on this machine. Métis cannot safely store your API key. ' +
+      'Grant keychain access or set the key via the environment variable instead.'
+  )
   // Atomic write: a crash mid-write must not leave a truncated/corrupt key file (which would silently
-  // read back as "no key"). Mirrors the tmp-file + rename pattern already used in setSettings.
-  const tmp = `${p}.tmp`
+  // read back as "no key").
   try {
-    writeFileSync(tmp, blob, { mode: 0o600 })
-    renameSync(tmp, p)
+    atomicWriteSync(p, blob)
   } catch (e) {
-    try {
-      if (existsSync(tmp)) rmSync(tmp) // don't leave an orphaned .tmp behind
-    } catch {
-      /* ignore */
-    }
     throw new Error(
       `Couldn't save your API key — Métis can't write to its data folder${
         e instanceof Error && e.message ? ` (${e.message})` : ''
@@ -1149,31 +1122,26 @@ export function getApiKey(provider: ProviderId): string {
   try {
     const buf = readFileSync(keyPath(provider))
 
-    // ── Legacy plaintext (oldest format) ──────────────────────────────────────
-    if (buf.subarray(0, 6).toString('utf8') === 'plain:') {
-      const plain = buf.subarray(6).toString('utf8')
-      // Migrate to current backend on first read (defense-in-depth for disk backups).
-      // setApiKey will delete _apiKeyCache[provider]; we re-set it below.
-      try { setApiKey(provider, plain) } catch { /* keep the plaintext file; key still works */ }
-      key = plain
-    } else if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
-      // ── New AES-GCM format (ATKAES1 marker) ────────────────────────────────
-      try {
-        key = decryptSecret(buf.subarray(AES_KEY_MARKER.length))
-      } catch (e) {
-        mainLog.warn('[store] key file undecryptable for', provider, e)
-        key = '' // Corrupt or key rotated
-      }
-    } else if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
-      // ── Legacy safeStorage blob (no marker) — migrate to current backend ────
-      try {
-        const plain = safeStorage.decryptString(buf)
-        // Best-effort migration: re-save with the current backend so future reads don't need keychain.
-        try { setApiKey(provider, plain) } catch { /* keep the old blob; key still works */ }
-        key = plain
-      } catch {
-        /* not a safeStorage blob for this OS user — unreadable */
-      }
+    const opened = open(buf, API_KEY_FORMAT, { keychain: !process.env.ASKTOTO_LOCAL_KEYSTORE && isKeychainAvailable() })
+    switch (opened.kind) {
+      case 'plain':
+        // Legacy plaintext (oldest format). Migrate to current backend on first read (defense-in-depth for
+        // disk backups). setApiKey will delete _apiKeyCache[provider]; we re-set it below.
+        try { setApiKey(provider, opened.text) } catch { /* keep the plaintext file; key still works */ }
+        key = opened.text
+        break
+      case 'keychain':
+        // Legacy bare credential-store blob — best-effort migration: re-save with the current backend so
+        // future reads don't need the keychain.
+        try { setApiKey(provider, opened.text) } catch { /* keep the old blob; key still works */ }
+        key = opened.text
+        break
+      case 'file':
+        key = opened.text
+        break
+      default:
+        // Corrupt or key rotated (ATKAES1), or a blob this OS user cannot unwrap: unreadable.
+        if (hasMarker(buf, MARKER_API_KEY_FILE)) mainLog.warn('[store] key file undecryptable for', provider, opened.reason)
     }
   } catch {
     /* file missing or unreadable */
@@ -1203,27 +1171,13 @@ export function setDustRefreshToken(token: string): void {
     clearDustRefreshToken()
     return
   }
-  let blob: Buffer
-  if (useFileBackend()) {
-    prepareFileKeyForWrite()
-    blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(trimmed)])
-  } else {
-    prepareFileKeyForWrite()
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('Encryption is unavailable on this machine. Métis cannot safely store your Dust session.')
-    }
-    blob = safeStorage.encryptString(trimmed)
-  }
-  const tmp = `${p}.tmp`
+  const blob = sealSecretFile(
+    trimmed,
+    'Encryption is unavailable on this machine. Métis cannot safely store your Dust session.'
+  )
   try {
-    writeFileSync(tmp, blob, { mode: 0o600 })
-    renameSync(tmp, p)
+    atomicWriteSync(p, blob)
   } catch (e) {
-    try {
-      if (existsSync(tmp)) rmSync(tmp)
-    } catch {
-      /* ignore */
-    }
     throw new Error(
       `Couldn't save your Dust session — Métis can't write to its data folder${
         e instanceof Error && e.message ? ` (${e.message})` : ''
@@ -1234,18 +1188,11 @@ export function setDustRefreshToken(token: string): void {
 
 export function getDustRefreshToken(): string {
   try {
-    const buf = readFileSync(dustRefreshTokenPath())
-    if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
-      return decryptSecret(buf.subarray(AES_KEY_MARKER.length))
-    }
-    if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
-      try {
-        return safeStorage.decryptString(buf)
-      } catch {
-        return ''
-      }
-    }
-    return ''
+    const opened = open(readFileSync(dustRefreshTokenPath()), API_KEY_FORMAT, {
+      keychain: !process.env.ASKTOTO_LOCAL_KEYSTORE && isKeychainAvailable()
+    })
+    // This secret never had a plaintext format, so only a decrypted blob is a token.
+    return opened.kind === 'file' || opened.kind === 'keychain' ? opened.text : ''
   } catch {
     return ''
   }
@@ -1287,20 +1234,8 @@ export function setSonioxApiKey(key: string): void {
     clearSonioxApiKey()
     return
   }
-  let blob: Buffer
-  if (useFileBackend()) {
-    prepareFileKeyForWrite()
-    blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(trimmed)])
-  } else {
-    prepareFileKeyForWrite()
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('Encryption is unavailable on this machine. Metis cannot safely store your Soniox key.')
-    }
-    blob = safeStorage.encryptString(trimmed)
-  }
-  const tmp = `${path}.tmp`
-  writeFileSync(tmp, blob, { mode: 0o600 })
-  renameSync(tmp, path)
+  const blob = sealSecretFile(trimmed, 'Encryption is unavailable on this machine. Metis cannot safely store your Soniox key.')
+  atomicWriteSync(path, blob)
   _sonioxKeyCache = trimmed
 }
 
@@ -1342,11 +1277,9 @@ export function getSonioxApiKeyStored(): string {
       return ''
     }
     const buf = readFileSync(path)
-    if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
-      key = decryptSecret(buf.subarray(AES_KEY_MARKER.length))
-    } else if (safeStorage.isEncryptionAvailable()) {
-      key = safeStorage.decryptString(buf)
-    }
+    const opened = open(buf, API_KEY_FORMAT, { keychain: isKeychainAvailable() })
+    if (opened.kind === 'file' || opened.kind === 'keychain') key = opened.text
+    else if (opened.kind !== 'plain') throw new Error(opened.reason)
   } catch (e) {
     mainLog.warn('[store] soniox key undecryptable', e)
     key = ''

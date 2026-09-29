@@ -35,7 +35,8 @@
  * OPERATOR_PROFILE_NAME) that listProfiles() never surfaces — it exists purely for echo defense, never as a
  * "person" a user could see or delete from a future enrollment UI by mistake.
  */
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync } from 'node:fs'
+import { atomicWriteSync } from './infra/fs/atomic-write'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { mainLog } from './logger'
@@ -285,9 +286,7 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
     try {
       const p = storePath()
       mkdirSync(dirname(p), { recursive: true })
-      const tmp = `${p}.tmp`
-      writeFileSync(tmp, JSON.stringify({ version: 1, profiles: loadProfiles() }, null, 2), { mode: 0o600 })
-      renameSync(tmp, p)
+      atomicWriteSync(p, JSON.stringify({ version: 1, profiles: loadProfiles() }, null, 2))
     } catch (e) {
       mainLog.warn('[speaker-id] voiceprint save failed', e instanceof Error ? e.message : String(e))
     }
