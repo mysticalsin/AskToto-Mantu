@@ -123,7 +123,7 @@ Then provide:
 |---|---|
 | Application (client) ID | `AZURE_CLIENT_ID` |
 | Directory (tenant) ID | `AZURE_TENANT_ID` |
-| Allowed email domain (e.g. `mantu.com`) | `azureAllowedDomain` (managed-config) |
+| Allowed email domain (e.g. `example.com`) | `azureAllowedDomain` (managed-config) |
 
 **Security notes for review:** the app is a public PKCE client (no secret to leak). The Graph access token is
 obtained on-device via the system browser, stored only in an OS-keychain-encrypted cache, never logged, and

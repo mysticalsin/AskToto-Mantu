@@ -15,26 +15,27 @@ const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8').repl
 
 /**
  * Top-level managed-config keys that are read straight from the policy file and are NOT Settings keys.
- * Every entry names the code that reads it.
+ * Every entry names the file and the identifier in it that reads the key; a self-check below verifies both.
  */
-const GOVERNANCE_KEYS: Record<string, string> = {
-  locked: 'src/main/store.ts (getLockedKeys: `obj.locked ?? obj.lockedKeys`)',
-  requireAuth: 'src/main/auth.ts (authEnforced: `requireAuth === true`)',
-  allowedProviders: 'src/main/store.ts (allowedProvidersFromText)',
-  escrowPubKey: 'src/main/transcripts.ts (escrow key parse from managed-config text)',
-  disableAutoUpdate: 'src/main/updater.ts (`disableAutoUpdate === true`)',
-  updateFeedUrl: 'src/main/updater.ts (admin-policy feed override)',
-  egressAllowlist: 'src/main/net/egress-policy.ts (`egressAllowlist` host list)'
+const GOVERNANCE_KEYS: Record<string, { file: string; symbol: string }> = {
+  locked: { file: 'src/main/store.ts', symbol: 'obj.locked ?? obj.lockedKeys' },
+  requireAuth: { file: 'src/main/auth.ts', symbol: 'authEnforced' },
+  allowedProviders: { file: 'src/main/store.ts', symbol: 'parseAllowedContent' },
+  escrowPubKey: { file: 'src/main/transcripts.ts', symbol: 'escrowPubKey' },
+  disableAutoUpdate: { file: 'src/main/updater.ts', symbol: 'disableAutoUpdate' },
+  updateFeedUrl: { file: 'src/main/updater.ts', symbol: 'updateFeedUrl' },
+  egressAllowlist: { file: 'src/main/net/egress-policy.ts', symbol: 'egressAllowlist' }
 }
 
 const EXAMPLES = ['build/managed-config.example.json', 'build/managed-config.enterprise.example.json']
 
 /**
- * Device licensing is compiled off (LICENSE_ENFORCEMENT and LICENSE_UI_ENABLED). The licensing drift
- * contract test reads those constants and fails when they change, so the tickets that re-enable
- * enforcement flip this value together with the examples and docs.
+ * Device licensing is compiled off when both constants are false, derived from source the way the licensing
+ * drift contract test does; the tickets that re-enable enforcement flip the constants and the docs together.
  */
-const enforcementCompiledOff = true
+const enforcementCompiledOff =
+  /const LICENSE_ENFORCEMENT = false/.test(read('src/renderer/src/App.tsx')) &&
+  /const LICENSE_UI_ENABLED: boolean = false/.test(read('src/renderer/src/components/Settings.tsx'))
 
 /** `_comment*` keys are prose, not policy. */
 const policyKeys = (json: string): string[] =>
@@ -99,7 +100,9 @@ describe('managed-config check functions fire on a bad fixture', () => {
   })
 
   it('the governance list documents where every key is read', () => {
-    for (const [key, ref] of Object.entries(GOVERNANCE_KEYS)) expect(ref, key).toMatch(/^src\//)
+    for (const [key, { file, symbol }] of Object.entries(GOVERNANCE_KEYS)) {
+      expect(read(file), `${key}: ${file} must contain ${symbol}`).toContain(symbol)
+    }
   })
 })
 
