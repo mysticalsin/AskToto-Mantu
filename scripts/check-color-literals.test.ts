@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -91,19 +92,27 @@ describe('styles.css split', () => {
   })
 })
 
-describe('rendered parity between colour schemes (Playwright Chromium)', () => {
+describe('rendered parity with the pre-split stylesheet (Playwright Chromium)', () => {
   let browser: import('playwright').Browser | null = null
 
   afterAll(async () => {
     await browser?.close()
   })
 
-  // The overlay is dark-only (`color-scheme: dark`, no light theme), so emulating either OS colour scheme
-  // must paint the same pixels. Any token that leaked into a prefers-color-scheme branch during the split
-  // would show up as a byte difference here.
-  it('paints the same surfaces under light and dark emulation with tokens resolved', async () => {
-    const css = readAppCss().replace(/^@import .*$/gm, '').replace(/^@(source|custom-variant) .*$/gm, '').replace('@theme {', ':root {')
-    const html = `<!doctype html><html><head><style>${css}</style></head><body style="background:#111">
+  // The split must not change a pixel: render the stylesheet as it was before the split (the parent of the
+  // commit that introduced tokens.css, read with `git show`) next to the split one, once per colour scheme,
+  // and require identical screenshots. Needs full history, so the CI checkout uses fetch-depth: 0.
+  const git = (...args: string[]) =>
+    execFileSync('git', args, { cwd: resolve(__dirname, '..'), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  const flatten = (css: string) =>
+    css.replace(/^@import .*$/gm, '').replace(/^@(source|custom-variant) .*$/gm, '').replace('@theme {', ':root {')
+
+  it('paints the same pixels as the pre-split stylesheet under dark and light emulation', async () => {
+    const splitCommit = git('log', '--diff-filter=A', '--format=%H', '--', 'src/renderer/src/tokens.css').trim().split('\n').pop()
+    expect(splitCommit, 'full git history is required to find the pre-split stylesheet').toBeTruthy()
+    const before = flatten(git('show', `${splitCommit}^:src/renderer/src/styles.css`).replace(/\r\n/g, '\n'))
+    const after = flatten(readAppCss())
+    const page = (css: string) => `<!doctype html><html><head><style>${css}</style></head><body style="background:#111">
       <div class="glass" style="width:200px;height:60px;margin:8px">glass</div>
       <div class="glass-strong" style="width:200px;height:60px;margin:8px">strong</div>
       <div class="cl-root"><div class="cl-card" style="width:200px;height:60px;margin:8px">card</div></div>
@@ -112,27 +121,29 @@ describe('rendered parity between colour schemes (Playwright Chromium)', () => {
     </body></html>`
     const { chromium } = await import('playwright')
     browser = await chromium.launch({ headless: true })
-    const shots: Buffer[] = []
     for (const colorScheme of ['dark', 'light'] as const) {
-      const page = await browser.newPage({ viewport: { width: 420, height: 520 }, colorScheme })
-      await page.setContent(html, { waitUntil: 'domcontentloaded' })
-      // A string script: this file is type-checked without the DOM lib.
-      const resolved = (await page.evaluate(`(() => {
-        const style = (selector) => getComputedStyle(document.querySelector(selector))
-        return {
-          accent: style('.aw-widget').getPropertyValue('--color-accent').trim(),
-          radius: style('.aw-widget').getPropertyValue('--radius-outer').trim(),
-          cardBackground: style('.cl-card').backgroundColor,
-          passInk: style('.metis-pass').getPropertyValue('--pass-ink').trim()
-        }
-      })()`)) as { accent: string; radius: string; cardBackground: string; passInk: string }
-      expect(resolved.accent).toBe('#7f00da')
-      expect(resolved.radius).toBe('16px')
-      expect(resolved.cardBackground).not.toBe('rgba(0, 0, 0, 0)')
-      expect(resolved.passInk).toBe('#ffffff')
-      shots.push(await page.screenshot())
-      await page.close()
+      const shots: Buffer[] = []
+      for (const css of [before, after]) {
+        const tab = await browser.newPage({ viewport: { width: 420, height: 520 }, colorScheme })
+        await tab.setContent(page(css), { waitUntil: 'domcontentloaded' })
+        // A string script: this file is type-checked without the DOM lib.
+        const resolved = (await tab.evaluate(`(() => {
+          const style = (selector) => getComputedStyle(document.querySelector(selector))
+          return {
+            accent: style('.aw-widget').getPropertyValue('--color-accent').trim(),
+            radius: style('.aw-widget').getPropertyValue('--radius-outer').trim(),
+            cardBackground: style('.cl-card').backgroundColor,
+            passInk: style('.metis-pass').getPropertyValue('--pass-ink').trim()
+          }
+        })()`)) as { accent: string; radius: string; cardBackground: string; passInk: string }
+        expect(resolved.accent).toBe('#7f00da')
+        expect(resolved.radius).toBe('16px')
+        expect(resolved.cardBackground).not.toBe('rgba(0, 0, 0, 0)')
+        expect(resolved.passInk).toBe('#ffffff')
+        shots.push(await tab.screenshot())
+        await tab.close()
+      }
+      expect(shots[0].equals(shots[1]), `${colorScheme} render differs from the pre-split stylesheet`).toBe(true)
     }
-    expect(shots[0].equals(shots[1])).toBe(true)
   }, 60_000)
 })
