@@ -1,6 +1,6 @@
 import { session as electronSession } from 'electron'
 import { auditLog, mainLog } from '../logger'
-import { hostAllowed, requestHostname } from './egress-policy'
+import { hostAllowed, requestHostname, setActiveEgressPolicy } from './egress-policy'
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 const MAX_REDIRECTS = 20
@@ -23,8 +23,10 @@ const BODY_HEADERS = ['content-encoding', 'content-language', 'content-location'
  * hang. Each blocked host is audited once per session ('net.egress.blocked', hostname only) so a fleet
  * admin can see what a policy is stopping without the log filling up.
  *
- * Not covered, and documented in docs/NETWORK-EGRESS.md: libraries that open raw `https.request` sockets
- * (MSAL's token client) and child processes (the CLI providers, ffmpeg). Loopback is always allowed.
+ * Child processes open their own sockets, so they are handled at their spawn sites from the policy this
+ * function publishes (egress-policy.ts: childNetworkBlocked, pinChildEnv). Libraries that open raw
+ * `https.request` sockets (MSAL's token client) are not seen; docs/NETWORK-EGRESS.md lists them in the
+ * transport matrix. Loopback is always allowed.
  */
 
 export interface WebRequestLike {
@@ -67,6 +69,7 @@ export function installEgressGuard(allow: readonly string[] | null, deps: Egress
       globalThis.fetch = f
     })
   const blocked = new Set<string>()
+  setActiveEgressPolicy(allow)
 
   if (allow === null) {
     log.info('[net] no egressAllowlist in managed config; outbound hosts are not restricted')
@@ -136,7 +139,10 @@ export function installEgressGuard(allow: readonly string[] | null, deps: Egress
     enforcing: true,
     fetch: guardedFetch,
     blocked,
-    restore: () => setGlobalFetch(baseFetch)
+    restore: () => {
+      setActiveEgressPolicy(null)
+      setGlobalFetch(baseFetch)
+    }
   }
 }
 

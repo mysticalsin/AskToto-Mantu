@@ -67,6 +67,45 @@ export function hostAllowed(hostname: string, allow: readonly string[] | null): 
   return false
 }
 
+/**
+ * The policy the boot guard is enforcing, kept here (no Electron, no I/O) so child-process spawn sites can
+ * consult it without importing the guard. Null = no policy. Only installEgressGuard() sets it.
+ */
+let activePolicy: readonly string[] | null = null
+
+export function setActiveEgressPolicy(allow: readonly string[] | null): void {
+  activePolicy = allow
+}
+
+/**
+ * True when a child process that reaches the network on its own (the CLI providers) must not be spawned.
+ * A child opens its own sockets, which no in-process hook sees, so under any policy the only hard guarantee
+ * is to refuse the spawn. Loopback-only children (local model servers) are not covered by this.
+ */
+export function childNetworkBlocked(allow: readonly string[] | null = activePolicy): boolean {
+  return allow !== null
+}
+
+/** Unroutable loopback proxy: connections to it are refused, so a proxy-honoring child fails closed. */
+export const DEAD_PROXY_URL = 'http://127.0.0.1:9'
+
+const PROXY_VARS = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'] as const
+
+/**
+ * `env` for a child process. With no policy it is returned unchanged. Under a policy every proxy variable
+ * is pinned to DEAD_PROXY_URL and NO_PROXY is emptied, so a child that honors the environment cannot
+ * reach a host directly or through the machine's proxy. Defense in depth behind childNetworkBlocked():
+ * a binary that ignores proxy variables is only stopped by not being spawned.
+ */
+export function pinChildEnv(env: NodeJS.ProcessEnv, allow: readonly string[] | null = activePolicy): NodeJS.ProcessEnv {
+  if (allow === null) return env
+  const pinned: NodeJS.ProcessEnv = { ...env }
+  for (const key of PROXY_VARS) pinned[key] = DEAD_PROXY_URL
+  pinned.NO_PROXY = ''
+  pinned.no_proxy = ''
+  return pinned
+}
+
 /** Hostname of a fetch input (string, URL, or Request), or null when it has none (relative, data:, blob:). */
 export function requestHostname(input: unknown): string | null {
   let url: string | null = null
