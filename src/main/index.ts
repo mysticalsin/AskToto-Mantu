@@ -175,6 +175,7 @@ import {
   workingCliOrder
 } from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
+import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import * as screenPerm from './capture-permissions/screen-permission-runtime'
@@ -182,6 +183,7 @@ import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-g
 import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
+import { startAvailableMemorySampler } from './infra/scheduler/memory-sampler'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,
@@ -7028,15 +7030,29 @@ function registerIpc(): void {
     const s = getSettings()
     // publicSettings().providerReady is the same "can a cloud/CLI provider actually answer" test the ask
     // path uses — when it is false, local is what will serve the next suggest, so it is worth warming.
-    if (!speculativeLocalWorkAllowed() || !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) return
+    const purpose = parsed.data.purpose ?? 'suggest'
+    if (
+      !speculativeLocalWorkAllowed() ||
+      !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady, undefined, purpose)
+    ) return
     // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
     // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
     // so any future drift between the live suggest path and what prewarm warms fails a test.
     // prewarmLocal (llm/local.ts) is engine-aware: it warms whichever engine pickLocalEngine would give
     // the next real suggest — fm serve on macOS 27+ with Apple Intelligence live, llama-server otherwise.
+    const warmFailed = (err: unknown): void =>
+      mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err))
+    if (purpose === 'summary') {
+      // M2-0430: the Stop-time warm targets the summary slot with the recap's own prefix, so the recap
+      // that follows the drain starts on a loaded model instead of queueing behind a cold start.
+      const summaryMessages = buildPrewarmMessages(parsed.data.text, s, 'summary')
+      void prewarmLocal(s.localLlm.modelId, summaryMessages, speculativeLocalWorkAllowed, 'summary').catch(warmFailed)
+      return
+    }
     void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed)
-      .catch((err) => mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err)))
+      .catch(warmFailed)
   })
+  registerWriteupIpc(assertMainWindow)
 
   // --- Screen capture ---
   ipcMain.handle(IPC.captureScreen, async (event) => {
@@ -9095,6 +9111,7 @@ if (!app.requestSingleInstanceLock()) {
   const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
   configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
   await runBootSidecarReaper(app.getPath('userData'))
+  startAvailableMemorySampler() // M2-0430: background vm_stat reading for the local-model memory gate
   // M2-0033: unattended model work waits for the maintenance gate.
   startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
   app.on('web-contents-created', (_event, contents) => {

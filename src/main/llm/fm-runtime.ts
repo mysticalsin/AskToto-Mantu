@@ -36,6 +36,9 @@ export const FM_SYSTEM_MODEL = 'system'
 
 export type FmRuntimeState = 'stopped' | 'starting' | 'running' | 'unavailable'
 
+/** Availability reason while the Foundation Models CLI licence has not been accepted on this Mac. */
+export const FM_UNLICENSED_REASON = 'cli-license-not-accepted'
+
 export interface FmAvailability {
   available: boolean
   /** Machine-ish reason when unavailable — e.g. 'appleIntelligenceNotEnabled', 'binary-missing',
@@ -88,6 +91,11 @@ export function stripAnsi(text: string): string {
  */
 export function parseAvailability(output: string): FmAvailability {
   const text = stripAnsi(output)
+  // Until the owner accepts the CLI terms (`sudo fm license`), `fm available` prints only the legal notice.
+  // That is a known state with a known owner action, not an unrecognized format.
+  if (/have not agreed to the foundation models cli legal notice/i.test(text)) {
+    return { available: false, reason: FM_UNLICENSED_REASON }
+  }
   const unavailable = /system model unavailable:?\s*([\w.-]+)?/i.exec(text)
   if (unavailable) return { available: false, reason: unavailable[1] ?? 'unknown' }
   const systemLine = text
