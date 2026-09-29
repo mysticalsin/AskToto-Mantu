@@ -108,12 +108,9 @@ jobs:
       - name: Generate the Xcode project
         working-directory: native-app
         run: xcodegen generate
-      # Report-only for its first week (2026-09-28 to 2026-10-05): the SwiftUI shell has never been built in
-      # CI, so a first red here may be a pre-existing break rather than a regression. After 2026-10-05
-      # delete `continue-on-error` so a failing App build blocks the merge. Same flags as
+      # Blocking (M2-0421): a failing native App build fails this job and blocks the merge. Same flags as
       # scripts/build-native-mac.mjs, minus signing: CI only needs the compile to succeed.
       - name: Build the native App (macOS)
-        continue-on-error: true
         working-directory: native-app
         run: |
           xcodebuild -project Metis.xcodeproj -scheme Metis -configuration Debug \
