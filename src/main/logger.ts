@@ -262,6 +262,8 @@ export type AuditEvent =
   | 'sidecar.spawn'
   // M2-0215: long-lived local sidecar process exited.
   | 'sidecar.exit'
+  // M2-0028: a supervised sidecar launch fell back to direct spawn because the wrapper was unavailable.
+  | 'sidecar.unsupervised'
   // M2-0215: History list request timing across renderer and main.
   | 'history.request'
   // M2-0037 (B3-RC2): render-process-gone's reload budget was exhausted (>=3 reloads within 60s with no
@@ -311,6 +313,11 @@ export type AuditEvent =
   | 'local.runtime.missing'
   | 'sidecar.reaped'
   | 'sidecar.reap.skipped'
+  // M2-0028: content-free markers from the packaged HK-M proof (main/qa-hk-m.ts), written only when
+  // METIS_HK_M_SCENARIO selects a row on an isolated QA profile.
+  | 'hk-m.active-inference'
+  | 'hk-m.ffmpeg-import'
+  | 'hk-m.registry-write'
   | 'local.model.checksum_fail'
   // First-run weight download (local-model-download.ts). The weights are no longer bundled, so these
   // are the audit trail for the only network fetch installed code makes for model files.

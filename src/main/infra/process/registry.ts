@@ -33,6 +33,24 @@ export interface SidecarRegistry {
   readonly path: string
   readonly recordIntent: (name: string, args: readonly string[]) => void
   readonly recordSpawned: (name: string, child: ChildProcess, executable: string, args: readonly string[]) => Promise<void>
+  // A sidecar launched through the supervise wrapper: records the wrapper (`wrapper.executable`/`args`) and the
+  // real sidecar it spawned as its only child, so the reaper can kill either if the other is gone.
+  readonly recordSupervisedSpawned: (
+    name: string,
+    wrapper: ChildProcess,
+    wrapperLaunch: SidecarLaunch,
+    sidecarLaunch: SidecarLaunch
+  ) => Promise<void>
+}
+
+export interface SidecarLaunch {
+  readonly executable: string
+  readonly args: readonly string[]
+}
+
+export interface SidecarRegistryAdapters {
+  readonly getIdentity: (pid: number, executable: string) => Promise<ProcessIdentity | null>
+  readonly findChildPid: (parentPid: number) => Promise<number | null>
 }
 
 export interface ProcessIdentity {
@@ -54,10 +72,53 @@ function appendRecord(path: string, record: SidecarRecord): void {
   appendFileSync(path, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 })
 }
 
-export function createSidecarRegistry(userData: string, sessionId = randomUUID()): SidecarRegistry {
+const CHILD_LOOKUP_ATTEMPTS = 20
+const CHILD_LOOKUP_DELAY_MS = 100
+
+// The helper spawns the sidecar just after it starts, so the child may not exist yet on the first look.
+async function findChildPidWithPgrep(parentPid: number): Promise<number | null> {
+  for (let attempt = 0; attempt < CHILD_LOOKUP_ATTEMPTS; attempt++) {
+    try {
+      const { stdout } = await execFileAsync('/usr/bin/pgrep', ['-P', String(parentPid)], {
+        encoding: 'utf8',
+        timeout: 5_000
+      })
+      const pid = Number(stdout.trim().split('\n')[0])
+      if (Number.isInteger(pid) && pid > 0) return pid
+    } catch {
+      // pgrep exits 1 while the parent has no child yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, CHILD_LOOKUP_DELAY_MS))
+  }
+  return null
+}
+
+export function createSidecarRegistry(
+  userData: string,
+  sessionId = randomUUID(),
+  adapters: SidecarRegistryAdapters = { getIdentity: getProcessIdentity, findChildPid: findChildPidWithPgrep }
+): SidecarRegistry {
   const runDir = join(userData, 'run')
   mkdirSync(runDir, { recursive: true, mode: 0o700 })
   const path = join(runDir, `sidecars-${sessionId}.json`)
+  async function recordIdentity(name: string, pid: number, executable: string, args: readonly string[]): Promise<void> {
+    const identity = await adapters.getIdentity(pid, executable)
+    const exeRealpath = safeRealpath(executable)
+    if (!identity || !exeRealpath) return
+    if (identity.pid !== pid || identity.exeRealpath !== exeRealpath) return
+    if (!identityArgsMatchFingerprint(identity.args, argsFingerprint(args))) return
+    appendRecord(path, {
+      kind: 'spawned',
+      sessionId,
+      name,
+      pid,
+      pgid: identity.pgid ?? pid,
+      osStartTime: identity.osStartTime,
+      exeRealpath,
+      argsFingerprint: argsFingerprint(args),
+      recordedAt: new Date().toISOString()
+    })
+  }
   return {
     sessionId,
     path,
@@ -73,22 +134,14 @@ export function createSidecarRegistry(userData: string, sessionId = randomUUID()
     async recordSpawned(name, child, executable, args) {
       const pid = child.pid
       if (typeof pid !== 'number') return
-      const identity = await getProcessIdentity(pid, executable)
-      const exeRealpath = safeRealpath(executable)
-      if (!identity || !exeRealpath) return
-      if (identity.pid !== pid || identity.exeRealpath !== exeRealpath) return
-      if (!identityArgsMatchFingerprint(identity.args, argsFingerprint(args))) return
-      appendRecord(path, {
-        kind: 'spawned',
-        sessionId,
-        name,
-        pid,
-        pgid: identity.pgid ?? pid,
-        osStartTime: identity.osStartTime,
-        exeRealpath,
-        argsFingerprint: argsFingerprint(args),
-        recordedAt: new Date().toISOString()
-      })
+      await recordIdentity(name, pid, executable, args)
+    },
+    async recordSupervisedSpawned(name, wrapper, wrapperLaunch, sidecarLaunch) {
+      const wrapperPid = wrapper.pid
+      if (typeof wrapperPid !== 'number') return
+      await recordIdentity(name, wrapperPid, wrapperLaunch.executable, wrapperLaunch.args)
+      const sidecarPid = await adapters.findChildPid(wrapperPid)
+      if (sidecarPid !== null) await recordIdentity(name, sidecarPid, sidecarLaunch.executable, sidecarLaunch.args)
     }
   }
 }
@@ -193,6 +246,19 @@ export function recordSidecarIntent(name: string, args: readonly string[]): void
   } catch (error) {
     mainLog.warn('[sidecar.registry] intent write failed', error)
   }
+}
+
+export function recordSidecarSupervisedSpawned(
+  name: string,
+  wrapper: ChildProcess,
+  wrapperLaunch: SidecarLaunch,
+  sidecarLaunch: SidecarLaunch
+): Promise<void> {
+  const registry = configuredRegistry
+  if (!registry) return Promise.resolve()
+  return registry.recordSupervisedSpawned(name, wrapper, wrapperLaunch, sidecarLaunch).catch((error) => {
+    mainLog.warn('[sidecar.registry] supervised spawned write failed', error)
+  })
 }
 
 export function recordSidecarSpawned(name: string, child: ChildProcess, executable: string, args: readonly string[]): Promise<void> {
