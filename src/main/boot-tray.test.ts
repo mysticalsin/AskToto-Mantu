@@ -1,6 +1,19 @@
 import { EventEmitter } from 'node:events'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { scheduleTrayAfterFirstPaint, yieldToEventLoop, type TrayGateWindow } from './boot-tray'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
+import {
+  buildTrayInStages,
+  createSingleFlight,
+  loadPresizedTrayIcon,
+  loadTrayIcon,
+  scheduleTrayAfterFirstPaint,
+  TRAY_ICON_SIZE,
+  trayIconPaths,
+  TRAY_THUMBNAIL_TIMEOUT_MS,
+  yieldToEventLoop,
+  type TrayGateWindow,
+  type TraySize
+} from './boot-tray'
 
 function fakeWindow(opts: { loading?: boolean; url?: string; destroyed?: boolean } = {}) {
   type Gate = Omit<TrayGateWindow, 'webContents'> & { webContents: EventEmitter & TrayGateWindow['webContents'] }
@@ -65,11 +78,222 @@ describe('scheduleTrayAfterFirstPaint (M2-0422)', () => {
     expect(build).toHaveBeenCalledTimes(1)
   })
 
+  it('buildTrayInStages loads the icon, creates the tray and attaches the menu in three separate tasks', async () => {
+    const order: string[] = []
+    const labels: string[] = []
+    const fail = vi.fn()
+    const done = buildTrayInStages<string>({
+      loadIcon: async () => {
+        order.push('load')
+        return 'icon'
+      },
+      create: (icon) => order.push(`create:${icon}`),
+      attachMenu: () => order.push('menu'),
+      time: (label, fn) => {
+        labels.push(label)
+        return fn()
+      },
+      fail
+    })
+    // Every stage boundary is a task boundary: an immediate queued now runs before the tray is created,
+    // and one queued after the create runs before the menu is attached.
+    setImmediate(() => {
+      order.push('between-load-and-create')
+      setImmediate(() => order.push('between-create-and-menu'))
+    })
+    await done
+    expect(order).toEqual(['load', 'between-load-and-create', 'create:icon', 'between-create-and-menu', 'menu'])
+    expect(labels).toEqual(['createTray.newTray', 'createTray.attachMenu'])
+    expect(fail).not.toHaveBeenCalled()
+  })
+
+  it('buildTrayInStages reports a failing stage once and runs no later stage', async () => {
+    const attachMenu = vi.fn()
+    const fail = vi.fn()
+    await buildTrayInStages<string>({
+      loadIcon: async () => 'icon',
+      create: () => {
+        throw new Error('status item refused')
+      },
+      attachMenu,
+      time: (_label, fn) => fn(),
+      fail
+    })
+    expect(attachMenu).not.toHaveBeenCalled()
+    expect(fail).toHaveBeenCalledExactlyOnceWith(new Error('status item refused'))
+  })
+
+  it('buildTrayInStages reports an icon load rejection without creating a tray', async () => {
+    const create = vi.fn()
+    const fail = vi.fn()
+    await buildTrayInStages<string>({
+      loadIcon: () => Promise.reject(new Error('decode failed')),
+      create,
+      attachMenu: vi.fn(),
+      time: (_label, fn) => fn(),
+      fail
+    })
+    expect(create).not.toHaveBeenCalled()
+    expect(fail).toHaveBeenCalledExactlyOnceWith(new Error('decode failed'))
+  })
+
   it('yieldToEventLoop resolves in a later task', async () => {
     const order: string[] = []
     setImmediate(() => order.push('immediate'))
     await yieldToEventLoop()
     order.push('after-yield')
     expect(order).toEqual(['immediate', 'after-yield'])
+  })
+})
+
+describe('createSingleFlight (M2-0031)', () => {
+  it('ignores starts while a run is in flight and accepts one after it settles, rejected or not', async () => {
+    const start = createSingleFlight()
+    let finish: (() => void) | undefined
+    const first = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)))
+    const second = vi.fn(async () => undefined)
+    start(first)
+    start(second)
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(second).not.toHaveBeenCalled()
+    finish?.()
+    await yieldToEventLoop()
+    const failing = vi.fn(() => Promise.reject(new Error('stage failed')))
+    start(failing)
+    expect(failing).toHaveBeenCalledTimes(1)
+    await yieldToEventLoop()
+    start(second)
+    expect(second).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('loadTrayIcon (M2-0031)', () => {
+  type FakeImage = { name: string; isEmpty(): boolean; resize: Mock<(size: TraySize) => FakeImage> }
+  const image = (name: string, empty = false): FakeImage => ({
+    name,
+    isEmpty: () => empty,
+    resize: vi.fn((_size: TraySize): FakeImage => image(`${name}@resized`))
+  })
+  const loader = (thumbnail: () => Promise<FakeImage>, full = image('full')) => ({
+    createThumbnailFromPath: vi.fn((_path: string, _size: TraySize) => thumbnail()),
+    createFromPath: vi.fn((_path: string) => full)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('on macOS uses the off-thread thumbnail at the tray size and never decodes in-process', async () => {
+    const images = loader(async () => image('thumb'))
+    const icon = await loadTrayIcon(images, '/icon.png', 'darwin')
+    expect(icon.name).toBe('thumb')
+    expect(images.createThumbnailFromPath).toHaveBeenCalledExactlyOnceWith('/icon.png', TRAY_ICON_SIZE)
+    expect(images.createFromPath).not.toHaveBeenCalled()
+  })
+
+  it('off macOS decodes in-process and resizes, without the thumbnailer', async () => {
+    const images = loader(async () => image('thumb'))
+    const icon = await loadTrayIcon(images, '/icon.png', 'win32')
+    expect(icon.name).toBe('full@resized')
+    expect(images.createThumbnailFromPath).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the in-process decode when the thumbnail is empty or rejects', async () => {
+    expect((await loadTrayIcon(loader(async () => image('thumb', true)), '/icon.png', 'darwin')).name).toBe('full@resized')
+    const rejecting = loader(() => Promise.reject(new Error('no thumbnailer')))
+    expect((await loadTrayIcon(rejecting, '/icon.png', 'darwin')).name).toBe('full@resized')
+  })
+
+  it('falls back to the in-process decode when the thumbnailer does not answer in time', async () => {
+    vi.useFakeTimers()
+    const images = loader(() => new Promise<FakeImage>(() => undefined))
+    const pending = loadTrayIcon(images, '/icon.png', 'darwin')
+    await vi.advanceTimersByTimeAsync(TRAY_THUMBNAIL_TIMEOUT_MS)
+    expect((await pending).name).toBe('full@resized')
+  })
+
+  it('returns an empty in-process image without resizing it', async () => {
+    const empty = image('empty', true)
+    const icon = await loadTrayIcon(loader(async () => image('thumb'), empty), '/icon.png', 'linux')
+    expect(icon).toBe(empty)
+    expect(empty.resize).not.toHaveBeenCalled()
+  })
+})
+
+describe('loadPresizedTrayIcon (M2-0031)', () => {
+  type FakeImage = { name: string; isEmpty(): boolean; resize: Mock<(size: TraySize) => FakeImage> }
+  const image = (name: string, empty = false): FakeImage => ({
+    name,
+    isEmpty: () => empty,
+    resize: vi.fn((_size: TraySize): FakeImage => image(`${name}@resized`))
+  })
+  const PATHS = { presized: '/res/tray/tray.png', fullSize: '/res/icon.png' }
+  const loader = (byPath: Record<string, FakeImage>) => ({
+    createThumbnailFromPath: vi.fn(async (_path: string, _size: TraySize) => image('thumb')),
+    createFromPath: vi.fn((path: string) => byPath[path] ?? image(`missing:${path}`, true))
+  })
+  const recordingTimer = () => {
+    const labels: string[] = []
+    const time = <T>(label: string, fn: () => T): T => {
+      labels.push(label)
+      return fn()
+    }
+    return { labels, time }
+  }
+
+  it.each(['darwin', 'win32', 'linux'] as const)('on %s loads the pre-sized image without resizing or thumbnailing', async (platform) => {
+    const presized = image('tray')
+    const full = image('full')
+    const images = loader({ [PATHS.presized]: presized, [PATHS.fullSize]: full })
+    const { labels, time } = recordingTimer()
+
+    const icon = await loadPresizedTrayIcon(images, PATHS, platform, time)
+
+    expect(icon).toBe(presized)
+    expect(presized.resize).not.toHaveBeenCalled()
+    expect(full.resize).not.toHaveBeenCalled()
+    expect(images.createFromPath).toHaveBeenCalledExactlyOnceWith(PATHS.presized)
+    expect(images.createThumbnailFromPath).not.toHaveBeenCalled()
+    expect(labels).toEqual(['createTray.loadIcon'])
+  })
+
+  it('falls back to the full-size icon only when the pre-sized image is missing, timing that decode on its own', async () => {
+    const full = image('full')
+    const images = loader({ [PATHS.fullSize]: full })
+    const { labels, time } = recordingTimer()
+
+    const icon = await loadPresizedTrayIcon(images, PATHS, 'win32', time)
+
+    expect(icon.name).toBe('full@resized')
+    expect(images.createFromPath.mock.calls.map(([path]) => path)).toEqual([PATHS.presized, PATHS.fullSize])
+    expect(labels).toEqual(['createTray.loadIcon', 'createTray.loadIcon.fallback'])
+  })
+
+  it('names the pre-sized image under tray/ and the full-size icon beside it in the resources directory', () => {
+    expect(trayIconPaths(join('res'))).toEqual({ presized: join('res', 'tray', 'tray.png'), fullSize: join('res', 'icon.png') })
+  })
+
+  it('buildTrayInStages hands its phase timer to loadIcon, so the icon load is timed as its own phase', async () => {
+    const { labels, time } = recordingTimer()
+    const images = loader({ [PATHS.presized]: image('tray') })
+    await buildTrayInStages({
+      loadIcon: (t) => loadPresizedTrayIcon(images, PATHS, 'darwin', t),
+      create: () => undefined,
+      attachMenu: () => undefined,
+      time,
+      fail: (error) => {
+        throw error
+      }
+    })
+    expect(labels).toEqual(['createTray.loadIcon', 'createTray.newTray', 'createTray.attachMenu'])
+  })
+
+  it('on macOS a missing pre-sized image falls back to the off-thread thumbnail of the full-size icon', async () => {
+    const images = loader({})
+
+    const icon = await loadPresizedTrayIcon(images, PATHS, 'darwin')
+
+    expect(icon.name).toBe('thumb')
+    expect(images.createThumbnailFromPath).toHaveBeenCalledExactlyOnceWith(PATHS.fullSize, TRAY_ICON_SIZE)
   })
 })

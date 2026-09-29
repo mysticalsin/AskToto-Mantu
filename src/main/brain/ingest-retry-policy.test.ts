@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app } from 'electron'
@@ -18,6 +19,7 @@ import { whenIngestWorkSettles } from '../test-helpers/settle-brain-writes'
 import { catchUpIntelligenceIndexIfNeeded, settleIntelligenceIndexForTests } from './intelligence-index'
 import { runConsolidationIfDue } from './consolidate'
 import { brainDir, readIndex, writeIndex, writeMeetingExtraction } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 
@@ -27,21 +29,6 @@ const unreadablePaths = vi.hoisted(() => new Set<string>())
 
 vi.mock('../llm', () => ({ createStream: createStreamMock }))
 vi.mock('../logger', async (orig) => ({ ...(await orig()), auditLog: auditLogMock }))
-vi.mock('../transcripts', async (orig) => {
-  const actual = await orig<typeof import('../transcripts')>()
-  return {
-    ...actual,
-    readSavedFile: (file: string) => {
-      if (unreadablePaths.has(file)) {
-        const error = new Error('synthetic cloud placeholder timeout') as NodeJS.ErrnoException
-        error.code = 'ETIMEDOUT'
-        throw error
-      }
-      return actual.readSavedFile(file)
-    }
-  }
-})
-
 const userTrigger: BackfillStartOptions = { trigger: 'user' }
 
 function respondJson(markerCalls: string[], json = '{}') {
@@ -152,6 +139,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
       return join(userData, name)
     })
     resetSecretKeyCache()
+    ;(await import('../infra/storage/meetings-storage')).useStorageForTests()
     const ingest = await import('./ingest')
     const consolidate = await import('./consolidate')
     const intelligence = await import('./intelligence-index')
@@ -169,8 +157,24 @@ describe('M2-0033 retry policy across backfill callers', () => {
   }
 
   beforeEach(async () => {
+    useStorageForTests({
+      fs: {
+        readdir,
+        realpath,
+        stat,
+        lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() })),
+        readFile: async (path) => {
+          if (unreadablePaths.has(path)) {
+            const error = new Error('synthetic cloud placeholder timeout') as NodeJS.ErrnoException
+            error.code = 'ETIMEDOUT'
+            throw error
+          }
+          return readFile(path)
+        }
+      }
+    })
     userData = mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-ud-'))
-    meetingsFolder = mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-meetings-'))
+    meetingsFolder = realpathSync.native(mkdtempSync(join(tmpdir(), 'metis-m2-0033-retry-meetings-')))
     modelMarkers = []
     unreadablePaths.clear()
     configureSettings()
@@ -237,7 +241,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
   it('EX-3: an explicit Retry (requestBackfillRun({ force: true, trigger: \'user\' })) revives an exhausted source; one more failure lands at attempts 1, not 7', async () => {
     createStreamMock.mockReset()
     createStreamMock.mockImplementation(respondError('synthetic model failure', modelMarkers))
-    const { completion } = requestBackfillRun({ force: true, ...userTrigger })
+    const { completion } = await requestBackfillRun({ force: true, ...userTrigger })
     await completion
     await waitForIdle()
     const record = readIndex(getSettings()).ingested['exhausted.md']
@@ -258,7 +262,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
     modelMarkers = []
     createStreamMock.mockReset()
     createStreamMock.mockImplementation(respondError('synthetic model failure', modelMarkers))
-    const { completion } = requestBackfillRun({ force: true, ...userTrigger })
+    const { completion } = await requestBackfillRun({ force: true, ...userTrigger })
     await completion
     await waitForIdle()
 
@@ -275,7 +279,7 @@ describe('M2-0033 retry policy across backfill callers', () => {
       ingested: {}
     } as never)
     unreadablePaths.add(file)
-    expect(startBackfill(undefined, { force: true }).queued).toBe(5)
+    expect((await startBackfill(undefined, { force: true })).queued).toBe(5)
     await waitForIdle()
     const failed = readIndex(getSettings()).ingested['unreadable.md']
     expect(failed?.attempts).toBe(0)
@@ -284,12 +288,12 @@ describe('M2-0033 retry policy across backfill callers', () => {
     expect(failed?.unreadable?.changedAtMs).toBe(Math.round(statSync(file).ctimeMs))
 
     createStreamMock.mockClear()
-    expect(startBackfill().queued).toBe(0)
+    expect((await startBackfill()).queued).toBe(0)
     expect(createStreamMock).not.toHaveBeenCalled()
 
     unreadablePaths.delete(file)
     writeFileSync(file, '---\ndate: 2026-01-04\n---\nunreadable transcript body hydrated', 'utf8')
-    expect(startBackfill().queued).toBe(1)
+    expect((await startBackfill()).queued).toBe(1)
     await waitForIdle()
     expect(readIndex(getSettings()).ingested['unreadable.md']?.ok).toBe(true)
   })
