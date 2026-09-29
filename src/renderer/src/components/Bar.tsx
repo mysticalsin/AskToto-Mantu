@@ -25,6 +25,7 @@ import type { ConversationMode, CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
 import { accelLabel } from '../lib/keys'
 import type { CaptureDegraded, CaptureHealth, RecognizerStatus } from '../lib/listen'
+import { runScreenRepair } from '../lib/screen-permission-copy'
 import { ObsidianOrb } from './ObsidianOrb'
 import { JarvisOrbButton } from './JarvisOrbButton'
 import { BAR_MARK_SIZE_PX, type OrbMood } from '../lib/bar-pill-orb'
@@ -510,6 +511,20 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                   <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn)]" />
                   <AudioLines size={11} strokeWidth={ICON_STROKE} />
                   {props.captureDegraded.side === 'them' ? 'Mic only' : 'No mic'}
+                  {/* M2-0429: the grant belongs to another build or copy (the tooltip names it); the switch
+                      in System Settings already shows on, so the one useful action is Repair. */}
+                  {props.captureDegraded.repair && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void runScreenRepair()
+                      }}
+                      className="no-drag focus-ring ml-1 rounded-full bg-white/10 px-1.5 text-[10px] font-semibold hover:bg-white/20"
+                    >
+                      Repair
+                    </button>
+                  )}
                 </>
               ) : props.captureHealth?.selectionOutcome === 'unavailable' ? (
                 <>

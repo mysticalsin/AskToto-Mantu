@@ -63,9 +63,17 @@ import type {
   ConversationMode,
   LocalModelSummary,
   PermissionStatus,
+  PlatformPermissions,
   ProfileRecoveryResult,
   PublicSettings
 } from '@shared/ipc'
+import { runLoopbackSelfTest } from '../lib/listen'
+import {
+  MEETING_AUDIO_SCREEN_LABEL,
+  MEETING_AUDIO_SCREEN_WHY,
+  runScreenRepair,
+  screenPermissionCopy
+} from '../lib/screen-permission-copy'
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
@@ -383,6 +391,188 @@ export function micRowStatus(status: PermissionStatus | undefined): { state: Set
   if (status === 'granted') return { state: 'ready', detail: 'granted' }
   if (status === 'denied') return { state: 'blocked', detail: 'permission denied' }
   return { state: 'action', detail: 'needs permission' }
+}
+
+/** The real loopback self-test behind the "Meeting audio & screen" row (runLoopbackSelfTest in lib/listen). */
+export type LoopbackCheck = 'idle' | 'running' | 'passed' | 'failed'
+
+/**
+ * M2-0429: the "Meeting audio & screen" row. On macOS it follows the Screen Recording diagnosis, and it is
+ * green ONLY when a real loopback self-test produced a live system-audio track: a 'granted' status alone has
+ * shown green for builds that could not capture. Windows needs no grant (desktopCapturer captures without
+ * one), so it stays available as before.
+ */
+export function screenRowStatus(
+  perms: Pick<PlatformPermissions, 'screenRecording' | 'screenDiagnosis'> | null | undefined,
+  check: LoopbackCheck,
+  windows: boolean
+): { state: SetupRowState; detail: string } {
+  if (windows) return { state: 'ready', detail: 'available' }
+  if (!perms) return { state: 'checking', detail: '' }
+  const state = perms.screenDiagnosis?.state ?? (perms.screenRecording === 'granted' ? 'granted' : 'not-asked')
+  switch (state) {
+    case 'granted':
+      if (check === 'passed') return { state: 'ready', detail: 'meeting audio works' }
+      if (check === 'failed') return { state: 'action', detail: 'meeting audio test failed' }
+      return { state: 'checking', detail: 'testing meeting audio…' }
+    case 'needs-relaunch':
+      return { state: 'restart', detail: 'granted' }
+    case 'not-asked':
+      return { state: 'action', detail: 'needs permission' }
+    case 'denied':
+      return { state: 'blocked', detail: 'permission denied' }
+    case 'not-effective':
+      return { state: 'blocked', detail: 'on in System Settings, but not for this copy of Métis' }
+    case 'restricted':
+      return { state: 'blocked', detail: 'managed by your organization' }
+  }
+}
+
+/** Survives the relaunch a fresh grant needs, so setup resumes where the user left it (then runs the test). */
+export const ONBOARDING_RESUME_SETUP_KEY = 'metis.onboarding.resumeSetup'
+
+/** Set while the setup scene is showing (a relaunch from there — ours, or macOS's "Quit & Reopen" after a
+ *  grant — resumes it) and cleared on every other scene, so an ordinary relaunch never skips ahead. */
+export function markOnboardingResumeSetup(storage: Pick<Storage, 'setItem' | 'removeItem'>, onSetup: boolean): void {
+  try {
+    if (onSetup) storage.setItem(ONBOARDING_RESUME_SETUP_KEY, '1')
+    else storage.removeItem(ONBOARDING_RESUME_SETUP_KEY)
+  } catch {
+    /* storage unavailable: setup simply starts from the beginning */
+  }
+}
+
+/** True when the previous process was relaunched from the setup scene; the marker is consumed either way. */
+export function takeOnboardingResumeSetup(storage: Pick<Storage, 'getItem' | 'removeItem'>): boolean {
+  try {
+    const pending = storage.getItem(ONBOARDING_RESUME_SETUP_KEY) === '1'
+    storage.removeItem(ONBOARDING_RESUME_SETUP_KEY)
+    return pending
+  } catch {
+    return false
+  }
+}
+
+// Read once per page load: a state initializer can run twice (StrictMode), and the marker is consumed.
+let resumeSetupDecision: boolean | null = null
+function resumeSetupAtLoad(): boolean {
+  if (resumeSetupDecision === null) {
+    try {
+      resumeSetupDecision = takeOnboardingResumeSetup(window.localStorage)
+    } catch {
+      resumeSetupDecision = false
+    }
+  }
+  return resumeSetupDecision
+}
+
+const SETUP_PRIMARY_BUTTON =
+  'no-drag focus-ring rounded-full bg-[var(--color-accent)] px-2.5 py-1 text-[11px] font-semibold text-white hover:brightness-110 disabled:opacity-60'
+const SETUP_SOFT_BUTTON =
+  'no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25'
+const SETUP_LINK_BUTTON = 'no-drag focus-ring text-[11px] font-medium text-[color:var(--color-accent-2)] hover:underline'
+
+/**
+ * M2-0429: the "Meeting audio & screen" row's why-copy and actions, from the diagnosis. Why-before-prompt, a
+ * primary ask while macOS has not asked yet, Repair (never "open Settings" alone) when the switch already
+ * shows on for another copy or build, and a retry when the real self-test heard nothing.
+ */
+function ScreenSetupActions({
+  perms,
+  check,
+  onRequest,
+  onRetryCheck
+}: {
+  perms: PlatformPermissions | null
+  check: LoopbackCheck
+  onRequest: () => void
+  onRetryCheck: () => void
+}): JSX.Element | null {
+  const [repairBusy, setRepairBusy] = useState(false)
+  const [repairGuidance, setRepairGuidance] = useState<string | null>(null)
+  if (isWindows || !perms) return null
+  const diagnosis = perms.screenDiagnosis
+  const state = diagnosis?.state ?? (perms.screenRecording === 'granted' ? 'granted' : 'not-asked')
+  const note = (text: string): JSX.Element => (
+    <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">{text}</span>
+  )
+  if (state === 'granted') {
+    if (check !== 'failed') return null
+    return (
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        {note('Métis could not hear system audio in the test. Check that sound plays on this Mac, then try again.')}
+        <button type="button" onClick={onRetryCheck} className={SETUP_SOFT_BUTTON}>
+          Try again
+        </button>
+      </div>
+    )
+  }
+  if (state === 'not-asked') {
+    return (
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        {note(MEETING_AUDIO_SCREEN_WHY)}
+        <button type="button" onClick={onRequest} className={SETUP_PRIMARY_BUTTON}>
+          Allow meeting audio & screen
+        </button>
+      </div>
+    )
+  }
+  const copy = screenPermissionCopy(diagnosis)
+  if (!copy) return null
+  const repair = (): void => {
+    setRepairBusy(true)
+    void runScreenRepair().then((result) => {
+      // Success relaunches from main, and setup resumes here; only a failure comes back.
+      if (!result.ok) setRepairGuidance(result.guidance || null)
+      setRepairBusy(false)
+    })
+  }
+  return (
+    <div className="mt-1.5 flex flex-col gap-1.5">
+      {note(repairGuidance ?? copy.text)}
+      <div className="flex flex-wrap items-center gap-2">
+        {copy.repair && !repairGuidance && (
+          <button type="button" onClick={repair} disabled={repairBusy} className={SETUP_PRIMARY_BUTTON}>
+            {repairBusy ? 'Repairing…' : 'Repair'}
+          </button>
+        )}
+        {(copy.openSettings || repairGuidance) && (
+          <button type="button" onClick={() => void window.toto.openPermissionSettings('screenRecording')} className={SETUP_SOFT_BUTTON}>
+            Open Screen Recording Settings
+          </button>
+        )}
+        {copy.attest && (
+          <button type="button" onClick={() => void window.toto.attestScreenPermission().catch(() => {})} className={SETUP_LINK_BUTTON}>
+            It’s already on
+          </button>
+        )}
+      </div>
+      {diagnosis && diagnosis.duplicates.length > 0 && (
+        <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+          {diagnosis.duplicates.map((c) => (
+            <li key={c.path} className="flex items-center justify-between gap-2 text-[11px] text-[color:var(--color-ink-3)]">
+              <span className="min-w-0 truncate" title={c.path}>
+                {c.path}
+                {c.version ? ` (${c.version})` : ''}
+              </span>
+              <button type="button" onClick={() => void window.toto.revealAppCopy(c.path).catch(() => {})} className={SETUP_LINK_BUTTON}>
+                Show in Finder
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** The same storage, written on every scene change; a no-op where storage is unavailable. */
+function rememberSetupScene(onSetup: boolean): void {
+  try {
+    markOnboardingResumeSetup(window.localStorage, onSetup)
+  } catch {
+    /* storage unavailable */
+  }
 }
 
 /** Act 3's AI row (MQA-279): "Ready" only ever means what `providerReady` means everywhere else in the
@@ -1108,8 +1298,13 @@ export function OnboardingExperience({
   useLayoutEffect(() => {
     requestOnboardingPortalOpen()
   }, [])
-  const [scene, setScene] = useState<Scene>('hero')
+  const [scene, setScene] = useState<Scene>(() => (resumeSetupAtLoad() ? 'setup' : 'hero'))
   const [rows, setRows] = useState<SetupRow[]>([])
+  // M2-0429: the latest permission snapshot and the real loopback self-test behind the screen row.
+  const [screenPerms, setScreenPerms] = useState<PlatformPermissions | null>(null)
+  const [loopbackCheck, setLoopbackCheck] = useState<LoopbackCheck>('idle')
+  const loopbackCheckRef = useRef<LoopbackCheck>('idle')
+  loopbackCheckRef.current = loopbackCheck
   const [mode, setMode] = useState<ConversationMode>('general')
   const [appearance, setAppearance] = useState<OverlayLayout>(() => seedOnboardingAppearance(settings))
   const [placement, setPlacement] = useState<OverlayPlacement>(() => seedOnboardingPlacement(settings))
@@ -1218,11 +1413,27 @@ export function OnboardingExperience({
       unsub?.()
     }
   }, [])
-  // Tracks the last-seen screenRecording status across polls so a false→true flip mid-scene (the user
-  // just toggled it on in System Settings) can be told apart from "was already granted on mount" — only
-  // the former needs a restart, since this process's ScreenCaptureKit handle never saw the earlier one.
-  const screenGrantedRef = useRef<boolean | null>(null)
   const [restarting, setRestarting] = useState(false)
+  // M2-0429: a relaunch while setup is showing (ours after a grant, or macOS's own "Quit & Reopen") resumes
+  // setup, where the loopback self-test then runs.
+  useEffect(() => {
+    rememberSetupScene(scene === 'setup')
+  }, [scene])
+  // The screen row is derived, never set piecemeal: the diagnosis (fresh grant needing a relaunch, a grant
+  // held by another copy, …) plus the self-test result. Green only once the self-test heard system audio.
+  useEffect(() => {
+    if (scene !== 'setup') return
+    const s = screenRowStatus(screenPerms, loopbackCheck, isWindows)
+    setRows((rs) => rs.map((r) => (r.key === 'screen' ? { ...r, state: s.state, detail: s.detail } : r)))
+  }, [scene, screenPerms, loopbackCheck])
+  // Run the real self-test once the diagnosis says this build can capture (after the grant and relaunch).
+  const screenCaptureReady =
+    (screenPerms?.screenDiagnosis?.state ?? (screenPerms?.screenRecording === 'granted' ? 'granted' : null)) === 'granted'
+  useEffect(() => {
+    if (scene !== 'setup' || isWindows || !screenCaptureReady || loopbackCheck !== 'idle') return
+    setLoopbackCheck('running')
+    void runLoopbackSelfTest().then((ok) => setLoopbackCheck(ok ? 'passed' : 'failed'))
+  }, [scene, screenCaptureReady, loopbackCheck])
   // P0: any post-hero scene must keep portal mask open (Example: after Next → black).
   useEffect(() => {
     if (scene === 'hero') return
@@ -1248,15 +1459,15 @@ export function OnboardingExperience({
       { key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' },
       { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
       { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
-      { key: 'screen', label: 'Screen context', icon: MonitorUp, state: 'checking' },
+      // M2-0429: asked up front as a primary step — it is what lets Métis hear the other side of a call.
+      { key: 'screen', label: MEETING_AUDIO_SCREEN_LABEL, icon: MonitorUp, state: 'checking' },
       // Act 3 (MQA-279): AI readiness, derived from the SAME `providerReady`/`provider` publicSettings()
       // computes for every other gate in the app — see `aiRowStatus` above.
       { key: 'ai', label: 'Métis AI', icon: Cloud, state: 'checking' },
       { key: 'local', label: 'On-device model', icon: Cpu, state: 'checking' }
     ]
     setRows(base)
-    screenGrantedRef.current = null
-    const set = (key: string, state: SetupRowState, detail?: string, progress?: number): void => {
+    const set =(key: string, state: SetupRowState, detail?: string, progress?: number): void => {
       if (!live) return
       setRows((rs) => rs.map((r) => (r.key === key ? { ...r, state, detail, progress } : r)))
     }
@@ -1307,11 +1518,12 @@ export function OnboardingExperience({
       set('mic', mic.state, mic.detail)
       await delay(350)
       // Windows has no per-app Screen Recording permission — desktopCapturer captures without one, so the
-      // status stays 'unknown' forever there. Treat isWindows as screen-available (matches Onboarding.tsx
-      // and listen.ts) so the scene never demands a grant the OS can't give and can actually reach "ready".
-      const screenGranted = isWindows || perms?.screenRecording === 'granted'
-      screenGrantedRef.current = screenGranted
-      set('screen', screenGranted ? 'ready' : 'action', isWindows ? 'available' : screenGranted ? 'granted' : 'needs permission')
+      // status stays 'unknown' forever there. screenRowStatus treats isWindows as available (matches
+      // Onboarding.tsx and listen.ts) so the scene never demands a grant the OS can't give. On macOS the row
+      // follows the diagnosis and turns green only on the loopback self-test (effects above).
+      if (live) setScreenPerms(perms)
+      const screenRow = screenRowStatus(perms, loopbackCheckRef.current, isWindows)
+      set('screen', screenRow.state, screenRow.detail)
       // Proactively trigger the real OS consent flow the moment setup lands, instead of waiting for a
       // button press: macOS pops the mic prompt and registers Métis in the Screen Recording TCC list
       // (the pane doesn't even list an app until it has probed once); Windows resolves mic consent via a
@@ -1365,6 +1577,9 @@ export function OnboardingExperience({
       const lm = current ? localModelRowStatus(local, current.localLlm.enabled,
         !current.allowedProviders || current.allowedProviders.includes('local')) : { state: 'checking' as const, detail: '' }
       const asr = asrStatusNow ? asrAssetsRowStatus(asrStatusNow, current?.asrEngine) : null
+      // The screen row re-derives from this snapshot (effect above); a fresh grant mid-scene reads
+      // needs-relaunch from main's diagnosis, since macOS applies it to the next launch only.
+      if (perms) setScreenPerms(perms)
       setRows((rs) =>
         rs.map((r) => {
           if (r.key === 'asr' && asr) {
@@ -1375,19 +1590,6 @@ export function OnboardingExperience({
           if (r.key === 'mic') {
             const mic = micRowStatus(perms.microphone)
             return { ...r, state: mic.state, detail: mic.detail }
-          }
-          if (r.key === 'screen') {
-            // On Windows screen capture needs no grant (see mount effect) — always available, never a
-            // restart. The false→true "just granted, needs restart" dance is macOS ScreenCaptureKit only.
-            const granted = isWindows || perms.screenRecording === 'granted'
-            const justGranted = !isWindows && screenGrantedRef.current === false && granted
-            screenGrantedRef.current = granted
-            const needsRestart = justGranted || (!isWindows && r.state === 'restart')
-            return {
-              ...r,
-              state: needsRestart ? 'restart' : granted ? 'ready' : 'action',
-              detail: needsRestart ? 'granted' : isWindows ? 'available' : granted ? 'granted' : 'needs permission'
-            }
           }
           return r
         })
@@ -1433,6 +1635,13 @@ export function OnboardingExperience({
   const restartApp = (): void => {
     setRestarting(true)
     void window.toto.relaunch().catch(() => setRestarting(false))
+  }
+
+  // M2-0429: the primary "Meeting audio & screen" ask. On macOS main's probe registers this build and raises
+  // the system prompt; the fresh snapshot then drives the row (usually needs-relaunch after a grant).
+  const requestScreen = async (): Promise<void> => {
+    const perms = await window.toto.requestPermissionsUpfront().catch(() => null)
+    if (perms) setScreenPerms(perms)
   }
 
   // Act 6 (Ready, MQA-283): this is now the narrative's actual finish — invoked from the Ready scene's
@@ -1661,19 +1870,13 @@ export function OnboardingExperience({
                       </button>
                     </div>
                   )}
-                  {r.key === 'screen' && r.state === 'action' && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        Lets Métis answer questions about what's on your screen.
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void window.toto.openPermissionSettings('screenRecording')}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                      >
-                        Open Screen Recording Settings
-                      </button>
-                    </div>
+                  {r.key === 'screen' && (r.state === 'action' || r.state === 'blocked') && (
+                    <ScreenSetupActions
+                      perms={screenPerms}
+                      check={loopbackCheck}
+                      onRequest={() => void requestScreen()}
+                      onRetryCheck={() => setLoopbackCheck('idle')}
+                    />
                   )}
                   {r.key === 'screen' && r.state === 'restart' && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-2">

@@ -26,6 +26,7 @@ import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
 import { transcriptToText } from './transcript'
 import { shouldUseBundledAsr } from './asr-offline'
+import { listenScreenNote } from './screen-permission-copy'
 
 const SR = 16000
 const NO_SPEECH_WARNING_MS = 30_000
@@ -427,6 +428,8 @@ export interface CaptureDegraded {
   note: string
   /** True when the cause is the macOS Screen Recording permission ('them' only). */
   permission: boolean
+  /** M2-0429: the diagnosis says the grant belongs to another build or copy; the chip offers Repair. */
+  repair?: boolean
 }
 
 export type CaptureSelectionOutcome = 'system-default' | 'requested-device' | 'fallback-default' | 'unavailable'
@@ -2576,13 +2579,23 @@ export function useListen(
             sysErr.name === 'NotAllowedError' ||
             /abort/i.test(sysErr.message ?? ''))
 
+        // M2-0429: on macOS, ask main WHY the other side failed. Its diagnosis tells a grant held by another
+        // build or copy (the switch already shows on, so "open System Settings" would be a dead end) from a
+        // plain denial, and names the holder. Only fetched when system audio was wanted and did not come up.
+        const screenNote =
+          !isWindows && source !== 'mic' && !sysOk
+            ? listenScreenNote((await window.toto.getPermissions().catch(() => null))?.screenDiagnosis, micOk)
+            : null
+
         if (!captureAdmissionIsOpen(myEpoch)) return
         if (!micOk && !sysOk) {
           let msg: string
           if (source === 'system') {
             msg = isWindows
               ? 'Could not capture system audio. Make sure the meeting plays through your default output device and no other app has it exclusively, or switch Listen to your microphone in Settings, Audio tab.'
-              : isSysPermDenied
+              : screenNote
+                ? screenNote.note
+                : isSysPermDenied
                 ? 'System audio needs Screen Recording permission. Grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
                 : "Couldn't capture system audio. Grant Screen Recording in System Settings, or switch Listen to your microphone in Settings → Audio."
           } else {
@@ -2606,7 +2619,9 @@ export function useListen(
         if (source === 'both' && micOk && !sysOk) {
           note = isWindows
             ? 'System audio unavailable. Listening to your microphone only. Check that the meeting plays through your default output device.'
-            : isSysPermDenied
+            : screenNote
+              ? screenNote.note
+              : isSysPermDenied
               ? 'System audio needs Screen Recording permission. Listening to microphone only; grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
               : 'System audio unavailable. Listening to your microphone only. Grant Screen Recording to hear the other side.'
         } else if (source === 'both' && !micOk && sysOk) {
@@ -2618,7 +2633,12 @@ export function useListen(
         // and is invisible with the panel collapsed or the widget minimized — exactly how a whole meeting
         // ran mic-only unnoticed on 2026-07-20.
         const captureDegraded: CaptureDegraded | null = note
-          ? { side: micOk ? 'them' : 'you', note, permission: micOk && isSysPermDenied }
+          ? {
+              side: micOk ? 'them' : 'you',
+              note,
+              permission: micOk && (isSysPermDenied || !!screenNote),
+              repair: micOk && !!screenNote?.repair
+            }
           : null
         themDegradedRef.current = captureDegraded?.side === 'them' ? captureDegraded : null
         // At least one channel (mic and/or system loopback) is confirmed open here — this is the point
@@ -3150,4 +3170,23 @@ export function useListen(
     () => ({ ...state, lines, start, stop, pause, resume, clear, text, setLanguage }),
     [state, lines, start, stop, pause, resume, clear, text, setLanguage]
   )
+}
+
+/**
+ * M2-0429: onboarding's real meeting-audio check. Arms the loopback, acquires it exactly the way Listen does,
+ * and passes only when a live system-audio track came back. Unlike a Listen session nothing consumes the
+ * stream, so every track is stopped and the arm released on every path: nothing keeps capturing afterwards.
+ */
+export async function runLoopbackSelfTest(): Promise<boolean> {
+  let sys: MediaStream | null = null
+  try {
+    await window.toto.armAudio(true)
+    sys = await acquireLoopback()
+    return sys.getAudioTracks().some((t) => t.readyState === 'live')
+  } catch {
+    return false
+  } finally {
+    sys?.getTracks().forEach((t) => t.stop())
+    await window.toto.armAudio(false).catch(() => {})
+  }
 }
