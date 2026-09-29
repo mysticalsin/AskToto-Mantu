@@ -6,13 +6,14 @@
  *   lint    the correctness rules in biome.json. Each changed file may not have MORE diagnostics than the same
  *           file has at the merge base, so violations that already exist are baselined by construction (a file
  *           that was already dirty may stay dirty, never get dirtier) and a new or clean file must stay clean.
- *   format  `biome format` on the changed files. Blocking or not is decided by the workflow step, not here.
+ *   format  `biome format` on the changed files. Report-only (exit 0) before FORMAT_BLOCKING_FROM, blocking on
+ *           and after it, so the switch needs no workflow edit.
  *
  * Biome is fetched by exact version through npx rather than added as a dependency, so it touches neither
  * package-lock.json nor `npm ci`. Bump BIOME_VERSION here to upgrade it.
  *
  * Run: `node scripts/ci/lint-ratchet.mjs [lint|format] [--base <ref>]` (wired as `npm run lint:changed` and
- * `npm run format:changed`). Exit 0 = pass; 1 = regression or unformatted file, listed on stderr.
+ * `npm run format:changed`). Exit 0 = pass; 1 = regression or (once blocking) unformatted file, listed on stderr.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -22,13 +23,23 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export const BIOME_VERSION = '2.3.10'
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+// First day an unformatted changed file fails the format check (one week after the gate landed).
+export const FORMAT_BLOCKING_FROM = '2026-10-06'
+// The roots in biome.json's files.includes. A path outside them is ignored by Biome, and Biome fails a run in which
+// every path it is given is ignored, so such paths are never passed.
+const ROOTS = ['src/', 'operator/', 'cloudflare-proxy/', 'license-server/', 'scripts/']
 const LINTABLE = /\.(?:[cm]?[jt]s|[jt]sx)$/
 // Same exclusions as biome.json's files.includes: generated output is never hand-edited.
 const GENERATED = /(?:^|\/)[^/]*\.generated\.[cm]?[jt]s$/
 
 /** The changed paths Biome should look at. */
 export function lintablePaths(paths) {
-  return paths.filter((p) => LINTABLE.test(p) && !GENERATED.test(p))
+  return paths.filter((p) => ROOTS.some((root) => p.startsWith(root)) && LINTABLE.test(p) && !GENERATED.test(p))
+}
+
+/** Whether an unformatted file fails the format check on `now` (a Date; UTC calendar day). */
+export function formatIsBlocking(now) {
+  return now.toISOString().slice(0, 10) >= FORMAT_BLOCKING_FROM
 }
 
 /** Diagnostic count per file from a `biome lint --reporter=json` document. */
@@ -107,7 +118,10 @@ function main(argv) {
     const run = biome(['format', ...files], REPO_ROOT)
     process.stdout.write(run.stdout ?? '')
     process.stderr.write(run.stderr ?? '')
-    return run.status === 0 ? 0 : 1
+    if (run.status === 0) return 0
+    if (formatIsBlocking(new Date())) return 1
+    console.error(`Format check is report-only until ${FORMAT_BLOCKING_FROM}; it blocks from that day.`)
+    return 0
   }
 
   const head = lintCounts(REPO_ROOT, files)

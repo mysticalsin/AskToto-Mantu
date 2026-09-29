@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { countByFile, lintablePaths, regressions } from './lint-ratchet.mjs'
+import { countByFile, formatIsBlocking, lintablePaths, regressions } from './lint-ratchet.mjs'
 
 /**
  * lint-ratchet.contract.test.ts — M2-0052. The lint gate lets a changed file keep the diagnostics it already had
  * and fails it the moment it gains one; a new file starts from zero. These tests pin that arithmetic and the
- * wiring (biome.json rules, npm scripts, blocking lint step, report-only format step).
+ * wiring (biome.json rules, npm scripts, blocking lint step, format step whose blocking date the script owns).
  */
 
 const root = join(__dirname, '..', '..')
@@ -15,8 +15,34 @@ const read = (...parts: string[]): string => readFileSync(join(root, ...parts), 
 describe('lintablePaths', () => {
   it('keeps source files and drops docs, config and generated output', () => {
     expect(
-      lintablePaths(['src/a.ts', 'src/b.tsx', 'scripts/c.mjs', 'README.md', 'package.json', 'operator/src/spa/client.generated.ts'])
+      lintablePaths([
+        'src/a.ts',
+        'src/b.tsx',
+        'scripts/c.mjs',
+        'README.md',
+        'package.json',
+        'operator/src/spa/client.generated.ts'
+      ])
     ).toEqual(['src/a.ts', 'src/b.tsx', 'scripts/c.mjs'])
+  })
+
+  it('drops source files outside the roots biome.json lints, so an all-ignored change set is empty', () => {
+    expect(lintablePaths(['vitest.config.ts', 'native/tool.js', 'docs/x.mjs'])).toEqual([])
+  })
+
+  it('keeps exactly the roots listed in biome.json files.includes', () => {
+    const config = JSON.parse(read('biome.json')) as { files: { includes: string[] } }
+    const roots = config.files.includes.filter((g) => !g.startsWith('!')).map((g) => g.replace(/\*\*$/, ''))
+    expect(lintablePaths(roots.map((r) => `${r}x.ts`))).toHaveLength(roots.length)
+  })
+})
+
+describe('formatIsBlocking', () => {
+  it('is report-only through 2026-10-05 and blocking from 2026-10-06', () => {
+    expect(formatIsBlocking(new Date('2026-09-29T12:00:00Z'))).toBe(false)
+    expect(formatIsBlocking(new Date('2026-10-05T23:59:59Z'))).toBe(false)
+    expect(formatIsBlocking(new Date('2026-10-06T00:00:00Z'))).toBe(true)
+    expect(formatIsBlocking(new Date('2027-01-01T00:00:00Z'))).toBe(true)
   })
 })
 
@@ -66,15 +92,14 @@ describe('wiring', () => {
     expect(pkg.scripts['format:changed']).toBe('node scripts/ci/lint-ratchet.mjs format')
   })
 
-  it('runs lint as a blocking step and format as a report-only step in build.yml', () => {
+  it('runs lint and format as job-failing steps in build.yml (the script owns the format date)', () => {
     const workflow = read('.github', 'workflows', 'build.yml')
     const start = workflow.indexOf('\n  lint:\n')
     expect(start).toBeGreaterThan(-1)
     const block = workflow.slice(start + 1, workflow.indexOf('\n  license-server:\n'))
     expect(block).toContain('fetch-depth: 0')
     expect(block).toMatch(/- name: Lint ratchet \(changed files\)\n {8}run: npm run lint:changed\n/)
-    expect(block).toMatch(
-      /- name: Format check \(changed files\)\n {8}continue-on-error: true\n {8}run: npm run format:changed\n/
-    )
+    expect(block).toMatch(/- name: Format check \(changed files\)\n {8}run: npm run format:changed\n/)
+    expect(block).not.toContain('continue-on-error')
   })
 })

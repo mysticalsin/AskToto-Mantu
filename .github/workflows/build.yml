@@ -136,11 +136,10 @@ jobs:
       # Blocking. A changed file may not gain lint diagnostics; the ones already in it are the baseline.
       - name: Lint ratchet (changed files)
         run: npm run lint:changed
-      # Report-only for its first week (2026-09-29 to 2026-10-06): no file has ever been formatted, so a
-      # first red may be old style rather than a regression. After 2026-10-06 delete `continue-on-error`
-      # so an unformatted changed file blocks the merge.
+      # Report-only for its first week (2026-09-29 to 2026-10-05): no file has ever been formatted, so a
+      # first red may be old style rather than a regression. From 2026-10-06 the script itself exits 1 for
+      # an unformatted changed file (FORMAT_BLOCKING_FROM in lint-ratchet.mjs), so this step needs no edit.
       - name: Format check (changed files)
-        continue-on-error: true
         run: npm run format:changed
 
   license-server:
