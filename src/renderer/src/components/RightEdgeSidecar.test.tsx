@@ -9,7 +9,11 @@ const sidecar = readFileSync(join(__dirname, './RightEdgeSidecar.tsx'), 'utf8')
 const answer = readFileSync(join(__dirname, './Answer.tsx'), 'utf8')
 const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
-const e2eSmoke = readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8')
+const e2eSmoke = [
+  readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8'),
+  readFileSync(join(__dirname, '../../../../scripts/qa/golden-flows/onboarding-flows.mjs'), 'utf8'),
+  readFileSync(join(__dirname, '../../../../scripts/qa/golden-flows/sidecar-flow.mjs'), 'utf8')
+].join('\n')
 
 function findElement(node: ReactNode, type: string): ReactElement<Record<string, unknown>> | null {
   if (!isValidElement(node)) return null

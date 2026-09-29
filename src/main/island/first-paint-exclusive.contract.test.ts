@@ -192,7 +192,10 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
   })
 
   it('smoke tests full native onboarding bounds instead of creating a compact onboarding window', () => {
-    const smoke = readFileSync(join(__dirname, '../../../scripts/e2e-smoke.mjs'), 'utf8')
+    const smoke = [
+      readFileSync(join(__dirname, '../../../scripts/e2e-smoke.mjs'), 'utf8'),
+      readFileSync(join(__dirname, '../../../scripts/qa/golden-flows/onboarding-flows.mjs'), 'utf8')
+    ].join('\n')
     expect(smoke).not.toContain('COMPACT_ONBOARDING')
     expect(smoke).not.toContain('setCompactOnboardingBounds')
     expect(smoke).toMatch(/assertExclusiveOnboardingNativeBounds/)

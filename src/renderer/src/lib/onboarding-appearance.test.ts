@@ -45,7 +45,10 @@ const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const design = readFileSync(join(__dirname, '../../../../DESIGN.md'), 'utf8')
 const geometry = readFileSync(join(__dirname, '../../../main/island/geometry.ts'), 'utf8')
 const indexMain = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
-const e2eSmoke = readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8')
+const e2eSmoke = [
+  readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8'),
+  readFileSync(join(__dirname, '../../../../scripts/qa/golden-flows/onboarding-flows.mjs'), 'utf8')
+].join('\n')
 
 describe('onboarding appearance — persist existing overlay', () => {
   it('seeds Hidden on a fresh install and keeps a saved island or bar', () => {
