@@ -1,0 +1,52 @@
+name: Design capture
+
+# Renders every design-capture state (src/renderer/src/design-capture) in the real Electron renderer on the
+# hosted macOS and Windows runners: light and dark, 1x and 2x, motion and reduced motion. Each job uploads
+# the PNGs with manifest.json (state id, sha256, commit) as an artifact; the lead files that evidence.
+#
+# On demand only: gh workflow run design-capture.yml --ref <branch>. The QA-only renderer entry is built
+# here with METIS_DESIGN_CAPTURE=1 and is excluded from every installer (electron-builder*.yml), so this
+# job's build is never a release artifact. Never on tags.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  capture:
+    name: Capture (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Build the renderer with the design-capture entry
+        env:
+          METIS_DESIGN_CAPTURE: '1'
+        run: npm run build
+      - name: Capture every state
+        run: node scripts/design/capture-states.mjs out-design-capture
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: design-capture-${{ runner.os }}
+          path: out-design-capture/
+          if-no-files-found: error

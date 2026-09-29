@@ -1,5 +1,6 @@
 node_modules/
 out/
+out-design-capture/
 dist/
 release/
 !scripts/release/

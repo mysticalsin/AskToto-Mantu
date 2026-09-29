@@ -2,6 +2,7 @@ import { resolve } from 'path'
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { rendererInputs } from './scripts/design/renderer-inputs'
 
 // MQA-207. A V8 code cache is per-ARCHITECTURE: V8 only accepts cached data produced by a matching
 // V8 build. electron-vite emits exactly ONE out/main/index.jsc, compiled by spawning the build host's
@@ -102,10 +103,8 @@ export default defineConfig({
       // crash-log stack traces; the renderer is where the cold-start parse cost lives.
       minify: 'esbuild',
       rollupOptions: {
-        input: {
-          index: resolve(__dirname, 'src/renderer/index.html'),
-          decoder: resolve(__dirname, 'src/renderer/decoder.html')
-        }
+        // The QA-only design-capture entry joins only when METIS_DESIGN_CAPTURE=1 (scripts/design/renderer-inputs.ts).
+        input: rendererInputs(resolve(__dirname, 'src/renderer'), process.env)
       }
     },
     // transformers.js ships wasm + workers; don't pre-bundle it

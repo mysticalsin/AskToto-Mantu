@@ -26,6 +26,9 @@ files:
   - '!node_modules/@img/sharp-libvips-darwin-*{,/**/*}'
   - '!node_modules/@img/sharp-linux-*{,/**/*}'
   - '!node_modules/@img/sharp-libvips-linux-*{,/**/*}'
+  # QA-only design-capture entry (METIS_DESIGN_CAPTURE=1 builds only): never in an installer.
+  - '!out/renderer/design-capture.html'
+  - '!out/renderer/assets/design-capture-*'
   - '!out/**/*.map'
   - '!**/*.d.ts'
 win:
