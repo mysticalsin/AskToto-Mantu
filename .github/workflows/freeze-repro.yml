@@ -7,10 +7,14 @@ name: M2-0008 freeze repro
 on:
   workflow_dispatch:
     inputs:
+      release_repo:
+        description: Repository that publishes the 1.9.6 artifacts and SHA256SUMS.
+        required: true
+        default: mysticalsin/Metis-Releases
       release_tag:
         description: Existing release tag that contains the unmodified 1.9.6 artifacts.
         required: true
-        default: v1.9.6
+        default: v1.9.6-unsigned
       macos_artifact_sha256:
         description: SHA-256 of the macOS 1.9.6 DMG under test.
         required: true
@@ -34,7 +38,7 @@ jobs:
     name: M2-0008 hosted bundle (macOS)
     runs-on: macos-latest
     timeout-minutes: 45
-    if: startsWith(github.ref, 'refs/heads/')
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -45,11 +49,14 @@ jobs:
       - name: Download and verify the 1.9.6 macOS artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ inputs.release_repo }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_SHA256: ${{ inputs.macos_artifact_sha256 }}
         run: |
-          mkdir -p "$RUNNER_TEMP/m2-0008-artifact" "$RUNNER_TEMP/m2-0008-app"
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-*.dmg' --dir "$RUNNER_TEMP/m2-0008-artifact"
+          mkdir -p "$RUNNER_TEMP/m2-0008-artifact" "$RUNNER_TEMP/m2-0008-sums" "$RUNNER_TEMP/m2-0008-app"
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-*.dmg' --dir "$RUNNER_TEMP/m2-0008-artifact"
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir "$RUNNER_TEMP/m2-0008-sums"
+          node scripts/qa/verify-sha256sums.mjs "$RUNNER_TEMP/m2-0008-artifact" "$(find "$RUNNER_TEMP/m2-0008-sums" -type f -name 'SHA256SUMS*' -print -quit)"
           artifact="$(find "$RUNNER_TEMP/m2-0008-artifact" -type f -name '*.dmg' -print -quit)"
           test -n "$artifact"
           printf '%s  %s\n' "$EXPECTED_SHA256" "$artifact" | shasum -a 256 -c -
@@ -80,7 +87,7 @@ jobs:
     name: M2-0008 hosted bundle (Windows)
     runs-on: windows-latest
     timeout-minutes: 45
-    if: startsWith(github.ref, 'refs/heads/')
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -91,11 +98,14 @@ jobs:
       - name: Download, verify, and install the 1.9.6 Windows artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ inputs.release_repo }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_SHA256: ${{ inputs.windows_artifact_sha256 }}
         run: |
-          mkdir -p "$RUNNER_TEMP/m2-0008-artifact" "$RUNNER_TEMP/m2-0008-install"
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-Setup-*.exe' --dir "$RUNNER_TEMP/m2-0008-artifact"
+          mkdir -p "$RUNNER_TEMP/m2-0008-artifact" "$RUNNER_TEMP/m2-0008-sums" "$RUNNER_TEMP/m2-0008-install"
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-Setup-*.exe' --dir "$RUNNER_TEMP/m2-0008-artifact"
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir "$RUNNER_TEMP/m2-0008-sums"
+          node scripts/qa/verify-sha256sums.mjs "$RUNNER_TEMP/m2-0008-artifact" "$(find "$RUNNER_TEMP/m2-0008-sums" -type f -name 'SHA256SUMS*' -print -quit)"
           artifact="$(find "$RUNNER_TEMP/m2-0008-artifact" -type f -name '*.exe' -print -quit)"
           test -n "$artifact"
           printf '%s  %s\n' "$EXPECTED_SHA256" "$artifact" | sha256sum -c -

@@ -97,7 +97,7 @@ import {
   loadMeetingExtraction,
   withEntityLock,
   cloneEntity,
-  purgeBrain,
+  purgeBrain, rebuildUnavailableError,
   BRAIN_INDEX_ERROR_CODE,
   BrainIndexRebuildError
 } from './store'
@@ -2343,7 +2343,7 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   if (!hasUsableProvider(s)) {
     return { queued: 0, error: intelligenceNoProviderMessage(s, 'Connect an AI provider in Settings → AI, or enable Métis Local summaries before rebuilding Mantu Intelligence.') }
   }
-  const localOnlyError = await localOnlyRebuildBlocked(s)
+  const localOnlyError = await rebuildUnavailableError(s) ?? await localOnlyRebuildBlocked(s)
   if (localOnlyError) return { queued: 0, error: localOnlyError }
   const before = await readIndexAsync(s)
   const preserveSourceRefresh = options.sourceRefresh || before.sourceRefreshRequested
@@ -2360,7 +2360,11 @@ async function performStartRebuild(s: Settings, options: StartRebuildOptions): P
   // and a wiped brain reports itself fully indexed. Settling the lane first is what makes the purge the
   // last writer; everything queued after this point is startRebuild's own work on the fresh store.
   await whenIndexWritesSettle()
-  // Live work can arrive while integrity/journal checks await IO. Refuse before the destructive step.
+  // The awaits above can outlast the first gate: the index may have become unavailable meanwhile.
+  const unavailableNow = await rebuildUnavailableError(s)
+  if (unavailableNow) return { queued: 0, error: unavailableNow }
+  // Live work can arrive while integrity/journal checks await IO. Refuse before the destructive step;
+  // no await sits between this check and the purge below.
   if (rebuildWorkBusy()) return { queued: 0, error: REBUILD_BUSY_ERROR }
   // Fix F: preserveCorrections copies the journal to escrow and restores it even if the wipe fails —
   // check the result and abort (nothing re-extracted, corrections safe) rather than rebuild atop a
