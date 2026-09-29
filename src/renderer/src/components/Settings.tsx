@@ -95,6 +95,7 @@ import {
   type MeetingSummary,
   type ShortcutFailure,
   type LocalModelSummary,
+  type AppleEngineStatus,
   type PlatformPermissions,
   type UpdateCheckResult,
   type McpConnectionKind,
@@ -103,6 +104,7 @@ import {
   type PreservedBrainIndexCopy
 } from '@shared/ipc'
 import { nextScreenCheckPass } from '@shared/screen-capture-check'
+import { PermissionDot, ScreenPermissionRow } from './ScreenPermissionRow'
 import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   PROVIDERS,
@@ -1975,6 +1977,22 @@ export function CoreAsrAssetsRow({ initialStatus }: { initialStatus?: AsrAssetsS
   )
 }
 
+/** M2-0430: Apple's on-device model is present but unusable until the owner accepts the Foundation Models
+ *  CLI terms. Only that state renders: every other status needs no action, or none the user can take. */
+export function AppleEngineNotice({ status }: { status: AppleEngineStatus }): JSX.Element | null {
+  if (status !== 'unlicensed') return null
+  return (
+    <div className="flex items-start gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+      <Cpu size={13} className="mt-[1px] shrink-0" />
+      <span>
+        Apple Intelligence is available on this Mac, but its Foundation Models tool is waiting for a one-time
+        license acceptance. To enable it, open Terminal, run <code>sudo fm license</code> and accept the terms,
+        then restart Métis. Métis then prefers Apple&apos;s model for suggestions and summaries that fit it.
+      </span>
+    </div>
+  )
+}
+
 export function LocalAiSection({
   settings,
   patch
@@ -1984,6 +2002,15 @@ export function LocalAiSection({
 }): JSX.Element {
   const [models, setModels] = useState<LocalModelSummary[] | null>(null)
   const [retrying, setRetrying] = useState(false)
+  const [appleEngine, setAppleEngine] = useState<AppleEngineStatus>('unsupported')
+  useEffect(() => {
+    let mounted = true
+    void window.toto.localAppleEngineStatus().then(
+      (status) => { if (mounted) setAppleEngine(status) },
+      () => {}
+    )
+    return () => { mounted = false }
+  }, [])
   // Optional models may still be downloading when this card opens. Poll while one is running OR has not
   // started yet so a late boot fetch (or a fetch that failed before the first read) cannot freeze the
   // card on "Not downloaded yet" (MQA-187).
@@ -2103,6 +2130,8 @@ export function LocalAiSection({
                             ? 'Unavailable: the on-device model stopped responding this session. Restart Métis to re-enable it.'
                             : 'Ready: starts automatically on the next local request.'}
         </div>
+
+        <AppleEngineNotice status={appleEngine} />
 
         {models === null ? (
           <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
@@ -7456,16 +7485,6 @@ function CalendarTab({
   )
 }
 
-function PermissionDot({ status }: { status: string }): JSX.Element {
-  const color =
-    status === 'granted'
-      ? 'bg-[var(--cl-success)]'
-      : status === 'denied'
-        ? 'bg-[var(--cl-destructive)]'
-        : 'bg-white/30'
-  return <span className={`inline-block h-2 w-2 rounded-full ${color}`} aria-hidden="true" />
-}
-
 /**
  * True exactly on the rising edge: screen recording just flipped to 'granted' after this component had
  * already observed it as something else. `prev === null` means "first observation since mount" and must
@@ -7569,6 +7588,12 @@ function PermissionsSection(): JSX.Element {
         const notYetAsked = !isWin && (r.status === 'not-determined' || r.status === 'unknown')
         const showFix = denied || notYetAsked || (isWin && r.fixLabel)
         const showRestart = r.kind === 'screenRecording' && needsRestart
+        // M2-0429: on macOS the raw status cannot tell "never asked" from "on in System Settings but held by
+        // another build or copy"; the diagnosis can, and owns this row's copy and actions.
+        const screenDiagnosis = r.kind === 'screenRecording' && !isWin ? permissions.screenDiagnosis : undefined
+        if (screenDiagnosis) {
+          return <ScreenPermissionRow key={r.label} status={r.status} diagnosis={screenDiagnosis} restarting={restarting} onRestart={restart} />
+        }
         return (
           <div key={r.label} className="cl-card flex items-start gap-2 px-2.5 py-2">
             <PermissionDot status={r.status} />

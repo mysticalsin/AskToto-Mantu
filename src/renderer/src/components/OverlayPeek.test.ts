@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 
 const peek = readFileSync(join(__dirname, './OverlayPeek.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
 
 describe('OverlayPeek hide rest is invisible', () => {

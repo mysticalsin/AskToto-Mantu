@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import { overlayWindowChrome } from '../../../main/island/geometry'
 import { canMarkOnboardingDone } from './onboarding-flow'
@@ -23,7 +24,7 @@ const kineticHost = readFileSync(join(root, 'components/onboarding/KineticGrid.t
 const experience = readFileSync(join(root, 'components/OnboardingExperience.tsx'), 'utf8')
 const demo = readFileSync(join(root, 'components/OnboardingDemoScene.tsx'), 'utf8')
 const settings = readFileSync(join(root, 'components/Settings.tsx'), 'utf8')
-const css = readFileSync(join(root, 'styles.css'), 'utf8')
+const css = readAppCss()
 const engine = readFileSync(join(__dirname, './onboarding-starfield-engine.ts'), 'utf8')
 const flow = readFileSync(join(__dirname, './onboarding-flow.ts'), 'utf8')
 const live = [experience, demo].join('\n')

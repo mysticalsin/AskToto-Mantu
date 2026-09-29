@@ -8,7 +8,9 @@ import { describe, expect, it } from 'vitest'
 const BOOT_PATH_FILES = [
   'infra/process/reaper',
   'infra/observability/sidecar-events',
-  'infra/observability/stall-sampler'
+  'infra/observability/stall-sampler',
+  // M2-0430: availableMemoryGB() sizes spawn profiles on the main thread; its vm_stat read must stay async.
+  'infra/process/vm-stat'
 ]
 
 describe('M2-0422 boot path never blocks the main thread on a child process', () => {

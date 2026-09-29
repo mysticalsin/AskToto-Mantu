@@ -164,6 +164,7 @@ export type AuditEvent =
   | 'capture.failed'
   | 'capture.check'
   | 'transcript.saved'
+  | 'writeup.span'
   | 'transcript.deleted'
   | 'transcript.renamed'
   | 'transcript.recap_edited'
@@ -325,6 +326,10 @@ export type AuditEvent =
   | 'local.model.download_ok'
   | 'local.model.download_fail'
   | 'screen.preprocess.describe'
+  // M2-0429: the background screen reader stopped retrying a failing capture (one line per failure streak).
+  | 'screen.preprocess.suspended'
+  // M2-0429: the user ran Repair, which resets only this app's Screen Recording entry ({ ok, exitCode }).
+  | 'permission.repair'
   // Support diagnosability: the user exported the log trail to a folder (metadata only — file count).
   | 'diagnostics.export'
   | 'llm.call'

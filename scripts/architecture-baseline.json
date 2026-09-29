@@ -39,7 +39,7 @@
   "FF-04": {
     "src/main/auth.ts": 999,
     "src/main/brain/corrections.ts": 1637,
-    "src/main/brain/ingest.ts": 3010,
+    "src/main/brain/ingest.ts": 3077,
     "src/main/brain/publish.ts": 990,
     "src/main/brain/store.ts": 1197,
     "src/main/cli.ts": 1690,
@@ -48,18 +48,18 @@
     "src/main/recall.ts": 950,
     "src/main/store.ts": 1367,
     "src/main/transcripts.ts": 1211,
-    "src/renderer/src/App.tsx": 4306,
+    "src/renderer/src/App.tsx": 4341,
     "src/renderer/src/components/Bar.tsx": 898,
     "src/renderer/src/components/BrainRecordPage.tsx": 831,
     "src/renderer/src/components/BrainView.tsx": 1445,
     "src/renderer/src/components/Onboarding.tsx": 1000,
-    "src/renderer/src/components/OnboardingExperience.tsx": 1921,
+    "src/renderer/src/components/OnboardingExperience.tsx": 1910,
     "src/renderer/src/components/RecallView.tsx": 1349,
     "src/renderer/src/components/Review.tsx": 1950,
-    "src/renderer/src/components/Settings.tsx": 8072,
+    "src/renderer/src/components/Settings.tsx": 8097,
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
-    "src/renderer/src/lib/listen.ts": 3153,
-    "src/shared/ipc.ts": 2443
+    "src/renderer/src/lib/listen.ts": 3144,
+    "src/shared/ipc.ts": 2452
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
@@ -135,6 +135,7 @@
     "scripts/check-architecture.test.ts": 114,
     "scripts/check-test-types.test.ts": 4,
     "scripts/ci-secret-scan.contract.test.ts": 1,
+    "scripts/ci/lint-ratchet.contract.test.ts": 21,
     "scripts/ci/packaged-smoke-workflow.contract.test.ts": 2,
     "scripts/ensure-intelligence-bundle.contract.test.ts": 2,
     "scripts/evals/local-recap-safety.test.ts": 3,
@@ -241,6 +242,7 @@
     "src/renderer/src/app-disregard.contract.test.ts": 1,
     "src/renderer/src/app-listen-identity.test.ts": 2,
     "src/renderer/src/app-recap-lifecycle.test.ts": 4,
+    "src/renderer/src/app-transcript-first.test.ts": 1,
     "src/renderer/src/bar-pill.contract.test.ts": 11,
     "src/renderer/src/circle-expand.contract.test.ts": 8,
     "src/renderer/src/components/Bar.test.tsx": 1,
@@ -310,7 +312,7 @@
     "src/shared/reset-time.test.ts": 2
   },
   "FF-09": {
-    "src/main/index.ts": 168
+    "src/main/index.ts": 167
   },
   "FF-10": {
     "src/main/apple-speech.ts": 1,

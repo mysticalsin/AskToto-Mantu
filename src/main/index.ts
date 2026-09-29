@@ -175,10 +175,15 @@ import {
   workingCliOrder
 } from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
+import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
+import * as screenPerm from './capture-permissions/screen-permission-runtime'
+import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
+import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
+import { startAvailableMemorySampler } from './infra/scheduler/memory-sampler'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,
@@ -3820,6 +3825,10 @@ let fatalHandled = false
  * never kills the overlay. No crashReporter upload by design (zero telemetry).
  */
 function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
+  // M2-0429: a refused macOS capture, already audited as capture.failed by its caller — not a crash.
+  if (kind === 'unhandledRejection' && isOrphanScreenSourcesRejection(err, process.platform)) {
+    return void mainLog.warn('[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)')
+  }
   const detail = err instanceof Error ? err.stack || err.message : String(err)
   persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
   if (kind !== 'uncaughtException' || fatalHandled) return
@@ -3892,6 +3901,7 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   // MQA-110: this real capture just proved whether screen recording works right now — fold that back
   // into the readiness cache so a permission revoked after the boot probe stops reporting stale 'granted'.
   noteScreenCaptureOutcome(sources.length > 0)
+  screenPerm.screenPermission().noteOutcome(sources.length > 0)
   const matched = sources.find((s) => String(s.display_id) === String(disp.id))
   if (!matched && sources.length > 1) {
     auditLog('capture.display_mismatch', {
@@ -4933,26 +4943,8 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, reason: 'invalid_confirmation' }
     return commandControl.cancel({ ...parsed.data, webContentsId: e.sender.id })
   })
-  // Deep-link to the relevant macOS Privacy pane once a permission has been denied — getUserMedia never
-  // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it. The
-  // x-apple.systempreferences scheme only exists on macOS; a no-op elsewhere.
-  ipcMain.handle(IPC.permissionsOpenSettings, (e, kind: unknown) => {
-    assertMainWindow(e)
-    if (process.platform === 'darwin') {
-      const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
-      void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
-      return
-    }
-    if (process.platform === 'win32') {
-      // Windows has no single TCC-style "Screen Recording" permission like macOS; the closest deep link
-      // is the App graphics capture privacy page (added in the Windows 10 2004 update). Picked over the
-      // generic 'ms-settings:privacy' page because it's the actual per-capability toggle; on Windows
-      // builds that predate it, an unrecognized ms-settings URI opens the Settings home instead of
-      // erroring, so no separate fallback URI is needed here.
-      const uri = kind === 'screenRecording' ? 'ms-settings:privacy-graphicscaptureprogrammatic' : 'ms-settings:privacy-microphone'
-      void shell.openExternal(uri)
-    }
-  })
+  // Open the Privacy pane, and the M2-0429 Screen Recording Repair / "It's already on" / Show in Finder.
+  registerScreenPermissionIpc(assertMainWindow)
   // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
   // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
   // prompt API; Screen Recording has none, but a 1px desktopCapturer probe registers the app with
@@ -4970,7 +4962,7 @@ function registerIpc(): void {
           await systemPreferences.askForMediaAccess('microphone').catch(() => false)
         }
         if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
-          await probeScreenCapture()
+          await screenPerm.probeScreenWithHistory()
         }
       }
       if (process.platform === 'win32') {
@@ -5109,8 +5101,9 @@ function registerIpc(): void {
     // connection first: mcpSaveConnection, mcpClickupConnect and mcpDisconnect. The renderer's own
     // patch({ mcpConnections }) calls are redundant echoes of what main just persisted, and state.ts's
     // patch() re-seeds React state from this handler's return value, so dropping the key here costs the
-    // UI nothing. clickupClientId is main-owned too (written only by the DCR step).
-    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId']) {
+    // UI nothing. clickupClientId is main-owned too (written only by the DCR step), and so is the M2-0429
+    // Screen Recording history (permissionState): a renderer patch must not fake it to steer the diagnosis.
+    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId', 'permissionState']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
     // Operator entitlement state (PLAN.md P2.2b #2): only a successful heartbeat
@@ -7037,15 +7030,29 @@ function registerIpc(): void {
     const s = getSettings()
     // publicSettings().providerReady is the same "can a cloud/CLI provider actually answer" test the ask
     // path uses — when it is false, local is what will serve the next suggest, so it is worth warming.
-    if (!speculativeLocalWorkAllowed() || !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) return
+    const purpose = parsed.data.purpose ?? 'suggest'
+    if (
+      !speculativeLocalWorkAllowed() ||
+      !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady, undefined, purpose)
+    ) return
     // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
     // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
     // so any future drift between the live suggest path and what prewarm warms fails a test.
     // prewarmLocal (llm/local.ts) is engine-aware: it warms whichever engine pickLocalEngine would give
     // the next real suggest — fm serve on macOS 27+ with Apple Intelligence live, llama-server otherwise.
+    const warmFailed = (err: unknown): void =>
+      mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err))
+    if (purpose === 'summary') {
+      // M2-0430: the Stop-time warm targets the summary slot with the recap's own prefix, so the recap
+      // that follows the drain starts on a loaded model instead of queueing behind a cold start.
+      const summaryMessages = buildPrewarmMessages(parsed.data.text, s, 'summary')
+      void prewarmLocal(s.localLlm.modelId, summaryMessages, speculativeLocalWorkAllowed, 'summary').catch(warmFailed)
+      return
+    }
     void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed)
-      .catch((err) => mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err)))
+      .catch(warmFailed)
   })
+  registerWriteupIpc(assertMainWindow)
 
   // --- Screen capture ---
   ipcMain.handle(IPC.captureScreen, async (event) => {
@@ -9104,6 +9111,7 @@ if (!app.requestSingleInstanceLock()) {
   const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
   configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
   await runBootSidecarReaper(app.getPath('userData'))
+  startAvailableMemorySampler() // M2-0430: background vm_stat reading for the local-model memory gate
   // M2-0033: unattended model work waits for the maintenance gate.
   startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
   app.on('web-contents-created', (_event, contents) => {
@@ -9328,6 +9336,7 @@ if (!app.requestSingleInstanceLock()) {
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
   // hand back the system audio loopback device (the "Them" channel) only.
   // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
+  runStep('initScreenPermission', screenPerm.initScreenPermission)
   runStep('setDisplayMediaHandler', () => {
   session.defaultSession.setDisplayMediaRequestHandler(
     async (request, callback) => {
@@ -9419,24 +9428,14 @@ if (!app.requestSingleInstanceLock()) {
       // saved, or sent. This is the only way to capture the "them" side of a call on macOS.
       //
       // getSources can BOTH return empty transiently (fresh grant) AND reject outright with "Failed to
-      // get sources." (a ScreenCaptureKit hiccup, often right after a content-protection toggle). This
-      // callback is async, so a reject escapes as a fatal unhandledRejection and crashes the app on
-      // Listen start. Guard every path: retry on empty OR throw, then deny gracefully — a callback({})
-      // makes the renderer's getDisplayMedia reject with AbortError, which listen.ts already catches and
-      // surfaces as "couldn't capture system audio" instead of taking the whole app down.
-      const sources: Electron.DesktopCapturerSource[] = await getScreenSourcesWithRetry(
-        () => desktopCapturer.getSources({ types: ['screen'] }),
-        isUsableScreenSource,
-        {
-          onError: (error, attempt) =>
-            mainLog.warn(`[display-media] getSources failed (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`)
-        }
-      )
-      if (!sources.length) {
-        auditLog('capture.failed', { reason: 'loopback_no_screen_source', phase: 'listen' })
-      }
-      const screenSrc = sources[0]
-      callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : {})
+      // get sources." (a ScreenCaptureKit hiccup, or a Screen Recording grant not in effect). M2-0429: a
+      // capture the diagnosis already knows macOS will refuse is denied before any getSources call, and
+      // every other path retries and never rejects (capture-permissions/loopback-grant.ts). A deny is
+      // callback(null), never callback({}): for a request that asked for video, Electron rejects {} with
+      // "Video was requested, but no video stream was provided". The renderer's getDisplayMedia then rejects
+      // and listen.ts falls back to the microphone with the diagnosis-backed note.
+      const screenSrc = await screenPerm.acquireListenScreenSource()
+      callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : screenPerm.DENY_DISPLAY_MEDIA)
   }
   })
 
@@ -9655,6 +9654,7 @@ if (!app.requestSingleInstanceLock()) {
       void probeScreenCapture().catch(() => false)
     })
   }
+  runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(() => win))
   // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
