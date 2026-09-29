@@ -526,7 +526,7 @@ import { createScreenPreprocess, type ScreenPreprocess } from './screen-preproce
 import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
-import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
+import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
