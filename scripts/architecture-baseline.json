@@ -137,6 +137,7 @@
     "scripts/ci-secret-scan.contract.test.ts": 1,
     "scripts/ci/lint-ratchet.contract.test.ts": 21,
     "scripts/ci/packaged-smoke-workflow.contract.test.ts": 2,
+    "scripts/docs/managed-config-docs.test.ts": 9,
     "scripts/ensure-intelligence-bundle.contract.test.ts": 2,
     "scripts/evals/local-recap-safety.test.ts": 3,
     "scripts/mac-chain-gates.contract.test.ts": 2,
