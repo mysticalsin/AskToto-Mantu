@@ -5,8 +5,10 @@ import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { getSettings, setSettings, setApiKey } from '../store'
+import * as brainStore from './store'
 import { canConsolidateToday, recordConsolidationPass, runConsolidationIfDue, resetConsolidationLockForTests } from './consolidate'
 import { brainBackfillProgress } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -27,6 +29,7 @@ let userData: string
 let meetingsFolder: string
 
 beforeEach(() => {
+  useStorageForTests()
   // No consolidation job from a previous case may survive into a fresh profile.
   expect(brainBackfillProgress().running).toBe(false)
   resetConsolidationLockForTests()
@@ -123,9 +126,13 @@ describe('runConsolidationIfDue', () => {
     setSettings({ brainConsolidation: { enabled: true, maxPassesPerDay: 1, preferLocal: true } })
     const s = getSettings()
     await recordConsolidationPass(s)
+    const readJson = vi.spyOn(brainStore, 'readJson')
+    const loadJson = vi.spyOn(brainStore, 'loadJson')
     writeFileSync(join(meetingsFolder, 'meeting-1.md'), '---\ndate: 2026-01-01\n---\nhello', 'utf8')
     const r = await runConsolidationIfDue(getSettings())
     expect(r).toEqual({ ran: false, queued: 0, reason: 'budget-spent' })
+    expect(loadJson).toHaveBeenCalled()
+    expect(readJson).not.toHaveBeenCalled()
   })
 
   it('queues every not-yet-ingested meeting and records exactly one pass when something was found', async () => {

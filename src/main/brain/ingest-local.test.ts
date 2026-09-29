@@ -8,6 +8,7 @@ import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
 import { brainBackfillProgress, enqueueIngest, startBackfill } from './ingest'
 import { readIndex, readMeetingExtraction } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -34,6 +35,7 @@ describe('automatic brain ingest with Métis Local', () => {
   let meetingsFolder: string
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-local-brain-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-local-brain-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -84,7 +86,7 @@ describe('automatic brain ingest with Métis Local', () => {
   })
 
   it('uses the bundled local model to process a saved meeting when no cloud provider is configured', async () => {
-    const result = startBackfill()
+    const result = await startBackfill()
 
     expect(result).toEqual({ queued: 1 })
     await vi.waitFor(() => {
@@ -116,7 +118,7 @@ describe('automatic brain ingest with Métis Local', () => {
       return { abort: () => {} }
     })
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
     }, { timeout: 10_000 })
@@ -133,7 +135,7 @@ describe('automatic brain ingest with Métis Local', () => {
     setSettings({ provider: 'dust', dustWorkspaceId: 'test-workspace' })
     setApiKey('dust', 'test-dust-key')
 
-    expect(startBackfill()).toEqual({ queued: 1 })
+    expect(await startBackfill()).toEqual({ queued: 1 })
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
     }, { timeout: 10_000 })
@@ -146,7 +148,7 @@ describe('automatic brain ingest with Métis Local', () => {
   it('does not treat the meetings README as a transcript candidate', async () => {
     writeFileSync(join(meetingsFolder, 'README.md'), '# Métis meeting folder', 'utf8')
 
-    const result = startBackfill()
+    const result = await startBackfill()
 
     expect(result).toEqual({ queued: 1 })
     await vi.waitFor(() => {

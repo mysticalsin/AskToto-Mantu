@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   exitCodeForReportResult,
+  removeTempDir,
   reportResultForRows,
   runtimeRoleVerdict,
   scenarioEvidence,
@@ -9,7 +10,33 @@ import {
   UNRELATED_FIXTURE_LIFETIME_MS
 } from './hk-m.mjs'
 
-const modelSidecar = { pid: 101, ppid: 100, startedMs: 1001, exe: '/tmp/llama-server', role: 'llama-server' }
+describe('HK-M temp directory cleanup', () => {
+  it('requests retries and does not turn a one-off ENOTEMPTY into a failure', () => {
+    const warnings: { code: string; message: string }[] = []
+    let calls = 0
+    const options: unknown[] = []
+    const remove = (_dir: unknown, opts?: unknown) => {
+      options.push(opts)
+      calls += 1
+      if (calls === 1) throw Object.assign(new Error('ENOTEMPTY: directory not empty'), { code: 'ENOTEMPTY' })
+    }
+
+    expect(removeTempDir('/tmp/metis-hk-m-x', warnings, remove)).toBe(false)
+    expect(removeTempDir('/tmp/metis-hk-m-x', warnings, remove)).toBe(true)
+    expect(options[0]).toEqual({ recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    expect(warnings).toEqual([{ code: 'ENOTEMPTY', message: 'ENOTEMPTY: directory not empty' }])
+
+    const rows = [{ scenario: 'idle', cycle: 1, status: 'PASS' }]
+    expect(reportResultForRows(rows)).toBe('pass')
+  })
+
+  it('still reports a real survivor as a failure', () => {
+    const rows = [{ scenario: 'idle', cycle: 1, status: 'FAIL', failure: 'owned_processes_survived' }]
+    expect(reportResultForRows(rows)).toBe('fail')
+  })
+})
+
+const modelSidecar ={ pid: 101, ppid: 100, startedMs: 1001, exe: '/tmp/llama-server', role: 'llama-server' }
 const renderer = { pid: 102, ppid: 100, startedMs: 1002, exe: '/tmp/Metis Helper', role: 'Metis Helper (Renderer)' }
 const ffmpeg = { pid: 103, ppid: 100, startedMs: 1003, exe: '/tmp/ffmpeg', role: 'ffmpeg' }
 
