@@ -3,6 +3,8 @@ import { describe, it, expect, vi } from 'vitest'
 // fm-runtime.ts imports auditLog/mainLog from ../logger, which imports `app` from electron — mock the
 // logger (mirrors local-runtime.test.ts's mocking style for the same import chain).
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
+// The sidecar registry (statically imported for supervised launches) pulls in mac-helper, which imports electron.
+vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 
 import {
   buildServeArgs,
