@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "ticket_id": "M2-0213",
+  "register": "media/launch-film/CLAIMS.json",
+  "format": { "width": 3840, "height": 2160, "fps": 30 },
+  "non_product_scenes": [
+    {
+      "id": "NP-01",
+      "title": "Opening title",
+      "composition": "film/scenes/NP-01-opening-title/index.html",
+      "duration_seconds": 4,
+      "purpose": "Wordmark and one-line description that open the film."
+    },
+    {
+      "id": "NP-02",
+      "title": "Abstract bridge",
+      "composition": "film/scenes/NP-02-abstract-bridge/index.html",
+      "duration_seconds": 3,
+      "purpose": "Abstract title footage that replaces LF-01 when it is cut."
+    },
+    {
+      "id": "NP-03",
+      "title": "Neutral title card",
+      "composition": "film/scenes/NP-03-neutral-title-card/index.html",
+      "duration_seconds": 3,
+      "purpose": "Neutral card that replaces LF-02 when it is cut."
+    },
+    {
+      "id": "NP-04",
+      "title": "Closing card",
+      "composition": "film/scenes/NP-04-closing-card/index.html",
+      "duration_seconds": 4,
+      "purpose": "Wordmark and platform line that close the film."
+    },
+    {
+      "id": "NP-05",
+      "title": "Render-path proof card",
+      "composition": "film/scenes/NP-05-render-path-card/index.html",
+      "duration_seconds": 4,
+      "purpose": "Process diagram of the pinned render path (LF-06). Render-path proof only, never product verification."
+    }
+  ],
+  "scenes": [
+    {
+      "scene_id": "LF-01",
+      "active_variant": "concept",
+      "variants": {
+        "live": {
+          "available": true,
+          "treatment": "Rc1 capture of the slim overlay beside a synthetic meeting workspace; used only after a packaged-app QA receipt proves the exact captured state.",
+          "source": { "kind": "shot", "ref": "SH-01L" }
+        },
+        "concept": {
+          "available": true,
+          "treatment": "Designed overlay sequence beside a synthetic meeting workspace, carrying the visible concept label for the whole scene.",
+          "label": "Concept UI sequence",
+          "source": { "kind": "shot", "ref": "SH-01C" }
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Remove the scene and bridge with abstract title footage.",
+          "bridge": "NP-02"
+        }
+      }
+    },
+    {
+      "scene_id": "LF-02",
+      "active_variant": "concept",
+      "variants": {
+        "live": {
+          "available": true,
+          "treatment": "Rc1 capture of a meeting with approved sample dialogue producing notes; used only with a live verified receipt for the exact capture, transcript and note output.",
+          "source": { "kind": "shot", "ref": "SH-02L" }
+        },
+        "concept": {
+          "available": true,
+          "treatment": "Reconstructed meeting beat with synthetic dialogue and notes forming beside it, carrying the visible reconstruction label.",
+          "label": "Reconstruction",
+          "source": { "kind": "shot", "ref": "SH-02C" }
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Replace the scene with a neutral title card.",
+          "bridge": "NP-03"
+        }
+      }
+    },
+    {
+      "scene_id": "LF-03",
+      "active_variant": "concept",
+      "variants": {
+        "live": {
+          "available": true,
+          "treatment": "Rc1 capture of the user asking for prior context and receiving a bounded answer; used only if the memory proof evidence record is LIVE_VERIFIED.",
+          "source": { "kind": "shot", "ref": "SH-03L" }
+        },
+        "concept": {
+          "available": true,
+          "treatment": "Designed sequence of the same question and a bounded answer, carrying the visible concept memory label.",
+          "label": "Concept memory sequence",
+          "source": { "kind": "shot", "ref": "SH-03C" }
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Remove the memory beat entirely; the edit closes the gap with no bridge.",
+          "bridge": null
+        }
+      }
+    },
+    {
+      "scene_id": "LF-04",
+      "active_variant": "cut",
+      "variants": {
+        "live": {
+          "available": false,
+          "reason": "The exact verified privacy sentence and its evidence do not exist yet; the live form is written only after they do."
+        },
+        "concept": {
+          "available": false,
+          "reason": "No concept privacy line is allowed."
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Cut the privacy line; the edit closes the gap with no bridge.",
+          "bridge": null
+        }
+      }
+    },
+    {
+      "scene_id": "LF-05",
+      "active_variant": "cut",
+      "variants": {
+        "live": {
+          "available": false,
+          "reason": "Comparative slices need M2-0185 qualification with final signed Windows and native Mac QA receipts, which are absent."
+        },
+        "concept": {
+          "available": false,
+          "reason": "No comparative concept line is allowed."
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Cut the comparative beat; the edit closes the gap with no bridge.",
+          "bridge": null
+        }
+      }
+    },
+    {
+      "scene_id": "LF-06",
+      "active_variant": "live",
+      "variants": {
+        "live": {
+          "available": true,
+          "treatment": "Process diagram of the pinned render path, shown as render-path proof only.",
+          "source": { "kind": "scene", "ref": "NP-05" }
+        },
+        "concept": {
+          "available": false,
+          "reason": "The card is already a process diagram and makes no product claim, so a concept form would add nothing."
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Remove the card; the edit closes the gap with no bridge.",
+          "bridge": null
+        }
+      }
+    }
+  ]
+}
