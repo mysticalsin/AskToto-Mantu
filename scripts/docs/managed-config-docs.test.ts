@@ -29,10 +29,12 @@ const GOVERNANCE_KEYS: Record<string, string> = {
 
 const EXAMPLES = ['build/managed-config.example.json', 'build/managed-config.enterprise.example.json']
 
-/** Same switches the licensing drift test keys off: enforcement is off while either constant is false. */
-const enforcementCompiledOff =
-  /const LICENSE_ENFORCEMENT = false/.test(read('src/renderer/src/App.tsx')) &&
-  /const LICENSE_UI_ENABLED: boolean = false/.test(read('src/renderer/src/components/Settings.tsx'))
+/**
+ * Device licensing is compiled off (LICENSE_ENFORCEMENT and LICENSE_UI_ENABLED). The licensing drift
+ * contract test reads those constants and fails when they change, so the tickets that re-enable
+ * enforcement flip this value together with the examples and docs.
+ */
+const enforcementCompiledOff = true
 
 /** `_comment*` keys are prose, not policy. */
 const policyKeys = (json: string): string[] =>
