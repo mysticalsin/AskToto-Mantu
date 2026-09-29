@@ -4,11 +4,14 @@ name: Film toolchain
 # instead of a developer Mac (D-28): renders the synthetic 5-second 3840x2160 spike with the pinned
 # toolchain, runs BRAG step 4's delivery tail on it (poster pick, frame-0 bake), measures render time,
 # bake time and runner load, uploads the MP4 with its poster and a contact sheet, and verifies them.
+# Also gates the pre-produced launch-film storyboard against the claim register and renders and probes
+# its non-product scenes (M2-0213).
 on:
   workflow_dispatch:
   push:
     branches:
       - m2/M2-0178-*
+      - m2/M2-0213-*
       - m2/M2-0212-film-toolchain-spike
 
 permissions:
@@ -40,14 +43,74 @@ jobs:
         with:
           node-version: 22.22.3
       - name: Test the claim gate behavior
-        run: node --test media/launch-film/check-claims.test.mjs
-      - name: Generate the readiness report
-        run: node media/launch-film/check-claims.mjs --out "$RUNNER_TEMP/launch-film-claims"
+        run: node --test media/launch-film/check-claims.test.mjs scripts/film/check-claims.test.mjs
+      - name: Generate the readiness reports
+        run: node scripts/film/check-claims.mjs --storyboard --out "$RUNNER_TEMP/launch-film-claims"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: launch-film-claim-readiness
-          path: ${{ runner.temp }}/launch-film-claims/claim-readiness.json
+          path: |
+            ${{ runner.temp }}/launch-film-claims/claim-readiness.json
+            ${{ runner.temp }}/launch-film-claims/storyboard-readiness.json
           if-no-files-found: error
+
+  scenes:
+    name: Render and probe the non-product scenes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      FFMPEG_VERSION: 7:6.1.1-3ubuntu5
+      HYPERFRAMES_NO_TELEMETRY: '1'
+      SCENES_DIR: ${{ github.workspace }}/film/scenes/rendered
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Install the pinned FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            "ffmpeg=$FFMPEG_VERSION" \
+            "libavcodec60=$FFMPEG_VERSION" \
+            "libavdevice60=$FFMPEG_VERSION" \
+            "libavfilter9=$FFMPEG_VERSION" \
+            "libavformat60=$FFMPEG_VERSION" \
+            "libavutil58=$FFMPEG_VERSION" \
+            "libpostproc57=$FFMPEG_VERSION" \
+            "libswresample4=$FFMPEG_VERSION" \
+            "libswscale7=$FFMPEG_VERSION"
+      - name: Install the pinned Hyperframes
+        run: npm ci --no-audit --no-fund
+      - name: Install the pinned Chrome
+        run: npx hyperframes browser ensure
+      - name: Check every scene composition
+        run: |
+          for scene in ../scenes/NP-*/; do
+            npx hyperframes check "$scene" --strict
+          done
+      - name: Render every scene
+        run: |
+          mkdir -p "$SCENES_DIR"
+          for scene in ../scenes/NP-*/; do
+            id=$(basename "$scene" | cut -d - -f 1-2)
+            npx hyperframes render "$scene" --quality high --output "$SCENES_DIR/$id.mp4"
+          done
+      - name: Probe the scenes
+        run: |
+          for video in "$SCENES_DIR"/*.mp4; do
+            ffprobe -hide_banner "$video"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: film-non-product-scenes
+          path: film/scenes/rendered/*.mp4
+          if-no-files-found: error
+      - name: Verify the scenes
+        working-directory: film/scenes
+        run: node --test scenes.test.mjs
 
   spike:
     name: Render and verify the 4K spike
