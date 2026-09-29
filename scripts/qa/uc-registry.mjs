@@ -9,7 +9,11 @@
 // Row fields: id, tickets (M2-#### ids), tests ([{ id, file }]), evidence (an EVIDENCE_LEVELS value, or null
 // while unmapped), externalBlocker (null, or the exact outside step when the row needs an outside account, a
 // real cloud-file provider or a physical QA machine; such a row reports BLOCKED_EXTERNAL and is not faked).
-// Results file: JSON array of { uc, testId, status: 'pass' | 'fail' }.
+// A row that is still unmapped (no test, ticket or evidence level) must say why in `note`, as
+// `LEAD_ACTION: <exact step>`, so an empty row is never unexplained; it still fails the gate.
+// Results file: JSON array of { uc, testId, status: 'pass' | 'fail' }. `--vitest <report.json>` derives it from a
+// vitest JSON report: a test id is the test's full name and `file` is its repo-relative path, so each row is
+// judged only by its own tests. A named --results/--vitest file that is missing is an error, not an empty run.
 //
 // Under D-28 this runs only in GitHub Actions (.github/workflows/uc-regression.yml).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -22,6 +26,7 @@ export const UC_COUNT = 112
 export const EXPECTED_IDS = Object.freeze(Array.from({ length: UC_COUNT }, (_, i) => `UC-${String(i + 1).padStart(3, '0')}`))
 const UC_ID_RE = /^UC-\d{3}$/
 const TICKET_RE = /^M2-\d{4}$/
+const LEAD_ACTION_RE = /^LEAD_ACTION: \S/
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
 
@@ -50,6 +55,13 @@ export function registryShapeProblems(registry) {
     }
     if (row.externalBlocker !== null && (typeof row.externalBlocker !== 'string' || row.externalBlocker === '')) {
       problems.push(`${id}: externalBlocker must be null or the exact unblock step`)
+    }
+    if (row.note !== undefined && row.note !== null && (typeof row.note !== 'string' || row.note === '')) {
+      problems.push(`${id}: note must be a non-empty string when present`)
+    }
+    const unmapped = !Array.isArray(row.tests) || row.tests.length === 0 || !Array.isArray(row.tickets) || row.tickets.length === 0 || row.evidence === null
+    if (unmapped && row.externalBlocker === null && !(typeof row.note === 'string' && LEAD_ACTION_RE.test(row.note))) {
+      problems.push(`${id}: an unmapped row needs a "LEAD_ACTION: <exact step>" note`)
     }
   }
   for (const id of EXPECTED_IDS) if (!seen.has(id)) problems.push(`${id}: missing row`)
@@ -110,6 +122,30 @@ export function regressionReport(registry, results) {
   return { rows, problems, ok }
 }
 
+/** The distinct test files the registry names, so a CI lane runs exactly the tests the rows depend on. */
+export function registryTestFiles(registry) {
+  return [...new Set(registry.rows.flatMap((row) => row.tests.map((t) => t.file)))].sort()
+}
+
+/**
+ * Per-row results from a vitest JSON report. A registry test matches the assertion whose full name equals its id
+ * in the report file ending with its `file`; a test the report does not contain yields no result (NOT_RUN).
+ * A skipped or todo test is not a pass.
+ */
+export function resultsFromVitest(registry, report) {
+  const files = Array.isArray(report?.testResults) ? report.testResults : []
+  const results = []
+  for (const row of registry.rows) {
+    for (const test of row.tests) {
+      const file = files.find((f) => typeof f?.name === 'string' && f.name.replaceAll('\\', '/').endsWith(`/${test.file}`))
+      const found = file?.assertionResults?.find((a) => a.fullName === test.id)
+      if (!found) continue
+      results.push({ uc: row.id, testId: test.id, status: found.status === 'passed' ? 'pass' : 'fail' })
+    }
+  }
+  return results
+}
+
 export function reportMarkdown(report) {
   const counts = {}
   for (const row of report.rows) counts[row.status] = (counts[row.status] ?? 0) + 1
@@ -127,11 +163,29 @@ export function reportMarkdown(report) {
 
 function main() {
   const { values } = parseArgs({
-    options: { registry: { type: 'string' }, results: { type: 'string' }, out: { type: 'string' } }
+    options: {
+      registry: { type: 'string' },
+      results: { type: 'string' },
+      vitest: { type: 'string' },
+      'list-files': { type: 'boolean' },
+      out: { type: 'string' }
+    }
   })
   const here = dirname(fileURLToPath(import.meta.url))
   const registry = JSON.parse(readFileSync(resolve(values.registry ?? join(here, 'uc-registry.json')), 'utf8'))
-  const results = values.results && existsSync(values.results) ? JSON.parse(readFileSync(values.results, 'utf8')) : []
+  if (values['list-files']) {
+    console.log(registryTestFiles(registry).join('\n'))
+    return
+  }
+  for (const named of [values.results, values.vitest]) {
+    if (named !== undefined && !existsSync(named)) {
+      console.error(`uc-registry: results file not found: ${named}`)
+      process.exit(2)
+    }
+  }
+  let results = []
+  if (values.results) results = JSON.parse(readFileSync(values.results, 'utf8'))
+  else if (values.vitest) results = resultsFromVitest(registry, JSON.parse(readFileSync(values.vitest, 'utf8')))
   const report = regressionReport(registry, results)
   const outDir = resolve(values.out ?? 'out/uc-regression')
   mkdirSync(outDir, { recursive: true })

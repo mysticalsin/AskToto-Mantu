@@ -1,7 +1,17 @@
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { EXPECTED_IDS, regressionReport, registryMappingProblems, registryShapeProblems, resultProblems } from './uc-registry.mjs'
+import {
+  EXPECTED_IDS,
+  regressionReport,
+  registryMappingProblems,
+  registryShapeProblems,
+  registryTestFiles,
+  resultProblems,
+  resultsFromVitest
+} from './uc-registry.mjs'
 
 const shipped = JSON.parse(readFileSync(join(__dirname, 'uc-registry.json'), 'utf8'))
 
@@ -36,7 +46,7 @@ describe('UC acceptance registry (M2-0441)', () => {
   })
 
   it('fails a row that has no test, ticket or evidence level', () => {
-    const registry = fullRegistry({ 'UC-007': { tests: [], tickets: [], evidence: null } })
+    const registry = fullRegistry({ 'UC-007': { tests: [], tickets: [], evidence: null, note: 'LEAD_ACTION: map from the tracker' } })
     expect(registryMappingProblems(registry)).toEqual(['UC-007: no test', 'UC-007: no owning ticket', 'UC-007: no evidence level'])
     const report = regressionReport(registry, passAll(registry))
     expect(statusOf(report, 'UC-007')).toBe('UNMAPPED')
@@ -68,6 +78,58 @@ describe('UC acceptance registry (M2-0441)', () => {
     const failing = regressionReport(registry, [...results.slice(1), { ...results[0], status: 'fail' }])
     expect(statusOf(failing, 'UC-001')).toBe('FAIL')
     expect(failing.ok).toBe(false)
+  })
+
+  it('refuses an unmapped row that carries no LEAD_ACTION note', () => {
+    const bare = fullRegistry({ 'UC-007': { tests: [], tickets: [], evidence: null } })
+    expect(registryShapeProblems(bare)).toEqual(['UC-007: an unmapped row needs a "LEAD_ACTION: <exact step>" note'])
+    expect(regressionReport(bare, []).ok).toBe(false)
+    const vague = fullRegistry({ 'UC-007': { tests: [], tickets: [], evidence: null, note: 'todo' } })
+    expect(registryShapeProblems(vague)).toHaveLength(1)
+  })
+
+  it('derives per-row results from a vitest report, keyed by test id and file', () => {
+    const registry = fullRegistry()
+    const report = {
+      testResults: [
+        {
+          name: '/work/repo/scripts/qa/x.test.mjs',
+          assertionResults: [
+            { fullName: 't-UC-001', status: 'passed' },
+            { fullName: 't-UC-002', status: 'failed' },
+            { fullName: 't-UC-003', status: 'skipped' }
+          ]
+        }
+      ]
+    }
+    const results = resultsFromVitest(registry, report)
+    expect(results).toEqual([
+      { uc: 'UC-001', testId: 't-UC-001', status: 'pass' },
+      { uc: 'UC-002', testId: 't-UC-002', status: 'fail' },
+      { uc: 'UC-003', testId: 't-UC-003', status: 'fail' }
+    ])
+    const rows = regressionReport(registry, results)
+    expect(statusOf(rows, 'UC-001')).toBe('PASS')
+    expect(statusOf(rows, 'UC-002')).toBe('FAIL')
+    expect(statusOf(rows, 'UC-004')).toBe('NOT_RUN')
+    expect(resultsFromVitest(registry, { testResults: [{ name: '/w/other/x.test.mjs', assertionResults: [{ fullName: 't-UC-001', status: 'passed' }] }] })).toEqual([])
+  })
+
+  it('lists each test file the registry names once, sorted', () => {
+    const registry = fullRegistry({ 'UC-002': { tests: [{ id: 'a', file: 'scripts/qa/a.test.ts' }] } })
+    expect(registryTestFiles(registry)).toEqual(['scripts/qa/a.test.ts', 'scripts/qa/x.test.mjs'])
+  })
+
+  it('exits non-zero when --results names a file that does not exist', () => {
+    const run = spawnSync(process.execPath, [join(__dirname, 'uc-registry.mjs'), '--results', join(tmpdir(), 'uc-missing-results.json'), '--out', mkdtempSync(join(tmpdir(), 'uc-'))], { encoding: 'utf8' })
+    expect(run.status).toBe(2)
+    expect(run.stderr).toMatch(/results file not found/)
+  })
+
+  it('explains every shipped unmapped row with a LEAD_ACTION note', () => {
+    for (const row of shipped.rows) {
+      if (row.tests.length === 0) expect(row.note).toMatch(/^LEAD_ACTION: \S/)
+    }
   })
 
   it('fails the shipped, still-unmapped registry rather than passing it', () => {

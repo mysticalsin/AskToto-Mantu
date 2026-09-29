@@ -14,7 +14,7 @@ jobs:
   uc-regression:
     name: UC-001..UC-112 per-row report
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -22,8 +22,20 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
+      - run: npm ci
+      # Runs exactly the test files the registry names; a failing test is recorded as that row's FAIL by the
+      # report step below, so vitest's own exit status is not the gate.
+      - name: Run the registry's tests (vitest JSON report)
+        run: |
+          mkdir -p out/uc-regression
+          files=$(node scripts/qa/uc-registry.mjs --list-files)
+          if [ -z "$files" ]; then
+            echo '{"testResults":[]}' > out/uc-regression/vitest.json
+          else
+            npx vitest run --reporter=json --outputFile=out/uc-regression/vitest.json $files || true
+          fi
       - name: Report every registry row (no subset mode)
-        run: node scripts/qa/uc-registry.mjs --out out/uc-regression
+        run: node scripts/qa/uc-registry.mjs --vitest out/uc-regression/vitest.json --out out/uc-regression
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
