@@ -33,6 +33,17 @@ jobs:
             -c "SELECT '[1,2,3]'::vector <-> '[1,2,4]'::vector AS distance;"
       - name: Hindsight answers its health contract
         run: curl --fail --silent --show-error --retry 5 --retry-delay 3 http://127.0.0.1:8888/health
+      - name: Hindsight persists a bank in Postgres
+        run: |
+          curl --fail --silent --show-error -X PUT \
+            -H 'Content-Type: application/json' -d '{"name":"compose-contract"}' \
+            http://127.0.0.1:8888/v1/default/banks/compose-contract
+          curl --fail --silent --show-error http://127.0.0.1:8888/v1/default/banks \
+            | grep --quiet compose-contract
+          docker compose -f services/compose.yml exec -T postgres \
+            psql -U metis -d hindsight -v ON_ERROR_STOP=1 -tA \
+            -c "SELECT count(*) FROM banks WHERE bank_id = 'compose-contract';" \
+            | grep --quiet '^1$'
       - name: Record resolved images and logs
         if: always()
         run: |
