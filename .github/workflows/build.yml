@@ -188,6 +188,8 @@ jobs:
         run: npx tsc --noEmit -p operator/tsconfig.json
       - name: Typecheck operator (client)
         run: npx tsc --noEmit -p operator/client/tsconfig.json
+      - name: Operator Worker bundle carries no in-memory store
+        run: npm run check:operator-bundle
       - name: Install Playwright Chromium for Operator layout tests
         run: npx playwright install --with-deps chromium
       - name: Operator test suite
