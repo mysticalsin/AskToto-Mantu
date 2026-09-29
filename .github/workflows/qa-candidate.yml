@@ -24,6 +24,7 @@ on:
       - build/qa-identity.electron-builder.yml
       - scripts/qa/provenance.mjs
       - scripts/qa/st-1.mjs
+      - scripts/qa/lib/st-1-core.mjs
 
 permissions:
   contents: read
@@ -387,7 +388,7 @@ jobs:
             --minutes 5 \
             --out st1-report/st-1-macos-fifo.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ !cancelled() }}
+        if: always()
         with:
           name: st-1-macos-fifo
           path: st1-report/
@@ -435,7 +436,7 @@ jobs:
             --minutes 5 \
             --out st1-report/st-1-macos-none.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ !cancelled() }}
+        if: always()
         with:
           name: st-1-macos-control
           path: st1-report/

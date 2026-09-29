@@ -24,7 +24,12 @@
  *       [--exe <installed executable>] [--profile-template <userData dir>] [--minutes 5] [--out <report.json>]
  *       [--report-dir <dir>]
  *
- * Exit codes: 0 PASS, 1 FAIL or NOT_EXERCISED, 2 usage.
+ * Every in-app wait is bounded and every failure to answer is recorded in the report's `errors` (step, tMs,
+ * message) while the run continues: only the criteria decide PASS or FAIL. The report is rewritten every
+ * 30 s while the run lasts and once more however it ends, so the report directory always holds one; a run
+ * that stopped early says INCOMPLETE.
+ *
+ * Exit codes: 0 PASS, 1 FAIL, NOT_EXERCISED or INCOMPLETE, 2 usage.
  */
 import { execFileSync, spawn } from 'node:child_process'
 import {
@@ -44,6 +49,17 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import { sha256File } from './provenance.mjs'
 import { createFifo, releaseFifo } from './fixtures/fifo.mjs'
+import {
+  buildLaunchFailureReport,
+  buildReport,
+  emptyRun,
+  failureRecord,
+  historyEntry,
+  pinnedExpression,
+  recordSample,
+  releaseExpression,
+  withTimeout
+} from './lib/st-1-core.mjs'
 
 const MIN_FIFO_COUNT = 3
 const DEFAULT_FIFO_COUNT = 6
@@ -51,7 +67,14 @@ const DEFAULT_MINUTES = 5
 const LOOP_RESOLUTION_MS = 10
 const INSPECTOR_WAIT_MS = 60_000
 const SAMPLE_INTERVAL_MS = 1_000
+/** A sample answered later than this is late (the no-late-samples criterion). */
 const EVALUATE_TIMEOUT_MS = 1_000
+/** In-app bounds: an evaluation that has not settled by then is recorded as timed out. */
+const SETUP_TIMEOUT_MS = 10_000
+const SAMPLE_TIMEOUT_MS = 5_000
+/** The harness's own wait beyond an in-app bound, for a main loop too blocked to fire the in-app timer. */
+const EVALUATE_MARGIN_MS = 2_000
+const PARTIAL_REPORT_EVERY_MS = 30_000
 /** The CPU profile covers boot: it starts at SETUP and stops this long after spawn. */
 const PROFILE_UNTIL_MS = 90_000
 const PROFILE_SAMPLING_US = 1_000
@@ -59,7 +82,7 @@ const PROFILE_STOP_TIMEOUT_MS = 30_000
 /** History's IPC round trip is measured from this long after spawn, this often. */
 const HISTORY_FROM_MS = 20_000
 const HISTORY_EVERY_MS = 5_000
-const HISTORY_TIMEOUT_MS = 15_000
+const HISTORY_TIMEOUT_MS = 10_000
 const MAIN_LOG_QUERY_TIMEOUT_MS = 10_000
 
 /** `--cloud-dir` etc. become `args.cloudDir`, matching every camelCase read below. */
@@ -277,6 +300,8 @@ function cdpClient(wsUrl) {
     socket.addEventListener('open', () => resolve())
     socket.addEventListener('error', () => reject(new Error('inspector socket failed to connect')))
   })
+  // Every send awaits `ready`; this only keeps a failure before the first send from being unhandled.
+  ready.catch(() => {})
   /** The method's result, or `{ late: true }` when it did not answer within `timeoutMs`. Throws on a
    *  protocol error. */
   async function send(method, params, timeoutMs) {
@@ -284,13 +309,12 @@ function cdpClient(wsUrl) {
     const id = nextId++
     const answer = new Promise((resolve) => pending.set(id, resolve))
     socket.send(JSON.stringify({ id, method, params }))
-    let timer
-    const timeout = new Promise((resolve) => {
-      timer = setTimeout(() => resolve(undefined), timeoutMs)
-    })
-    const message = await Promise.race([answer, timeout])
-    clearTimeout(timer)
-    if (message === undefined) return { late: true }
+    const outcome = await withTimeout(answer, timeoutMs)
+    if (!outcome.ok) {
+      pending.delete(id)
+      return { late: true }
+    }
+    const message = outcome.value
     if (message.error) throw new Error(`${method}: ${message.error.message}`)
     return { late: false, result: message.result }
   }
@@ -301,6 +325,27 @@ function cdpClient(wsUrl) {
     return { late: false, value: answer.result.result?.value }
   }
   return { send, evaluate, close: () => socket.close() }
+}
+
+let nextEvaluationKey = 0
+
+/**
+ * Evaluates `expression` in the candidate, bounded by `ms` there (pinnedExpression keeps the awaited
+ * promise reachable) and by `ms` plus a margin here. Never throws: the outcome (lib/st-1-core.mjs) carries
+ * `elapsedMs`, the harness-side round trip.
+ */
+async function evaluateBounded(cdp, step, expression, ms) {
+  const key = `${step}-${nextEvaluationKey++}`
+  const started = performance.now()
+  let outcome
+  try {
+    const answer = await cdp.evaluate(pinnedExpression(key, expression, ms), ms + EVALUATE_MARGIN_MS)
+    outcome = answer.late ? { ok: false, timedOut: true } : answer.value
+  } catch (error) {
+    outcome = { ok: false, error: error.message }
+  }
+  cdp.send('Runtime.evaluate', { expression: releaseExpression(key) }, EVALUATE_TIMEOUT_MS).catch(() => {})
+  return { ...outcome, elapsedMs: performance.now() - started }
 }
 
 /** `__st1` covers the whole run for the criteria; `__st1since` is read and reset at every sample. */
@@ -398,54 +443,42 @@ async function stopProfiler(cdp, profiler, path, tMs) {
 
 /** One History probe; never throws. */
 async function probeHistory(cdp, tMs) {
-  try {
-    const answer = await cdp.evaluate(HISTORY_PROBE, HISTORY_TIMEOUT_MS)
-    return answer.late ? { tMs, late: true } : { tMs, ...answer.value }
-  } catch (error) {
-    return { tMs, error: error.message }
-  }
+  return historyEntry(tMs, await evaluateBounded(cdp, 'history', HISTORY_PROBE, HISTORY_TIMEOUT_MS))
 }
 
-async function measure(cdp, { profile, minutes, spawnedAt, cpuProfilePath }) {
+/** Fills `run` (lib/st-1-core.mjs emptyRun) in place, so a partial report can be written at any moment.
+ *  Never throws on a probe that fails or hangs: each is recorded in `run.errors` and the run goes on. */
+async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath }) {
   const sinceSpawn = () => Math.round(performance.now() - spawnedAt)
-  const setupAtMs = sinceSpawn()
-  const poolSize = (await cdp.evaluate(SETUP)).value
-  const profiler = { startedAtMs: sinceSpawn(), ...(await startProfiler(cdp)) }
+  run.setupAtMs = sinceSpawn()
+  const setup = await evaluateBounded(cdp, 'setup', SETUP, SETUP_TIMEOUT_MS)
+  if (setup.ok) run.poolSize = setup.value
+  else run.errors.push(failureRecord('setup', run.setupAtMs, setup, SETUP_TIMEOUT_MS))
+  run.profiler = { startedAtMs: sinceSpawn(), ...(await startProfiler(cdp)) }
   const probeFile = join(profile, 'st1-probe.txt')
-  const samples = []
-  const late = []
-  const history = []
   let historyRunning = null
   let historyLastMs = -Infinity
   const deadline = Date.now() + minutes * 60_000
   while (Date.now() < deadline) {
     const tMs = sinceSpawn()
-    if (profiler.running && tMs >= PROFILE_UNTIL_MS) await stopProfiler(cdp, profiler, cpuProfilePath, tMs)
+    if (run.profiler.running && tMs >= PROFILE_UNTIL_MS) await stopProfiler(cdp, run.profiler, cpuProfilePath, tMs)
     if (!historyRunning && tMs >= HISTORY_FROM_MS && tMs - historyLastMs >= HISTORY_EVERY_MS) {
       historyLastMs = tMs
       historyRunning = probeHistory(cdp, tMs).then((probe) => {
-        history.push(probe)
+        run.history.push(probe)
         historyRunning = null
       })
     }
-    const result = await cdp.evaluate(sample(probeFile))
-    if (result.late) late.push({ tMs })
-    else samples.push({ tMs, ...result.value })
+    const outcome = await evaluateBounded(cdp, 'sample', sample(probeFile), SAMPLE_TIMEOUT_MS)
+    recordSample(run, tMs, outcome, { lateAfterMs: EVALUATE_TIMEOUT_MS, boundMs: SAMPLE_TIMEOUT_MS })
     await new Promise((resolve) => setTimeout(resolve, SAMPLE_INTERVAL_MS))
   }
-  if (profiler.running) await stopProfiler(cdp, profiler, cpuProfilePath, sinceSpawn())
+  if (run.profiler.running) await stopProfiler(cdp, run.profiler, cpuProfilePath, sinceSpawn())
   await historyRunning
-  const summary = await cdp.evaluate(SUMMARY)
-  return {
-    poolSize,
-    setupAtMs,
-    samples,
-    late,
-    lateSamples: late.length,
-    history,
-    profiler,
-    loop: summary.late ? { p99Ms: Infinity, maxMs: Infinity } : summary.value
-  }
+  const summaryAtMs = sinceSpawn()
+  const summary = await evaluateBounded(cdp, 'summary', SUMMARY, SETUP_TIMEOUT_MS)
+  if (!summary.ok) run.errors.push(failureRecord('summary', summaryAtMs, summary, SETUP_TIMEOUT_MS))
+  run.loop = summary.ok ? summary.value : { p99Ms: Infinity, maxMs: Infinity }
 }
 
 /** Where this launch's main.log is, and the byte it starts at. The file's own birth time tells whether
@@ -540,73 +573,6 @@ function cleanup({ kind, root, profile, unzipDir }) {
   if (unzipDir) rmSync(unzipDir, { recursive: true, force: true })
 }
 
-/** The launch itself never reached a candidate to measure: report it as a genuine FAIL (inspector: false)
- *  rather than skip the row or, worse, claim the always-true criterion the report used to hard-code. */
-function buildLaunchFailureReport({ row, args, candidate, fixtures, reason }) {
-  return {
-    harness: 'ST-1',
-    row,
-    platform: process.platform,
-    arch: process.arch,
-    installer: basename(args.installer),
-    build_run_id: candidate.build_run_id,
-    artifact_sha256: candidate.artifact_sha256,
-    fixtures: fixtures.length,
-    exercised: false,
-    criteria: [{ name: 'inspector', pass: false }],
-    reason,
-    verdict: 'FAIL'
-  }
-}
-
-function buildReport({ row, args, candidate, measured, evidence, fixtures, attribution }) {
-  const criteria = [
-    { name: 'inspector', pass: true }, // only reached once inspectorUrl() actually produced a working inspector
-    { name: 'has-samples', pass: measured.samples.length > 0 },
-    { name: 'no-late-samples', pass: measured.lateSamples === 0 },
-    { name: 'loop-p99 < 50', pass: measured.loop.p99Ms < 50 },
-    { name: 'loop-max < 250', pass: measured.loop.maxMs < 250 },
-    { name: 'async-write < 250', pass: measured.samples.every((s) => s.writeMs < 250) },
-    { name: 'dns-lookup < 250', pass: measured.samples.every((s) => s.lookupMs < 250) }
-  ]
-  if (row === 'dataless') criteria.push({ name: 'still-dataless', pass: evidence.stillDataless === true })
-
-  // The control row has nothing to exercise: its verdict is the criteria alone.
-  const exercised = row === 'none' || evidence.exercised
-  const verdict = !exercised ? 'NOT_EXERCISED' : criteria.every((c) => c.pass) ? 'PASS' : 'FAIL'
-  return {
-    harness: 'ST-1',
-    row,
-    platform: process.platform,
-    arch: process.arch,
-    installer: basename(args.installer),
-    build_run_id: candidate.build_run_id,
-    artifact_sha256: candidate.artifact_sha256,
-    poolSize: measured.poolSize,
-    fixtures: fixtures.length,
-    minutes: Number(args.minutes),
-    samples: measured.samples.length,
-    lateSamples: measured.lateSamples,
-    loop: measured.loop,
-    write: { maxMs: Math.max(0, ...measured.samples.map((s) => s.writeMs)) },
-    lookup: { maxMs: Math.max(0, ...measured.samples.map((s) => s.lookupMs)) },
-    exercised: evidence.exercised,
-    ...(row === 'fifo' ? { fixturesOpened: evidence.fixturesOpened } : {}),
-    ...(row === 'dataless' ? { stillDataless: evidence.stillDataless } : {}),
-    criteria,
-    verdict,
-    // Report-only attribution evidence (see the header); no criterion reads it.
-    setupAtMs: measured.setupAtMs,
-    timeline: [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs),
-    history: measured.history,
-    cpuProfile: measured.profiler,
-    mainLog: attribution.mainLog.error
-      ? { error: attribution.mainLog.error }
-      : { fromByte: attribution.mainLog.fromByte, exactLaunchOffset: attribution.mainLog.exactLaunchOffset },
-    appEvidence: attribution.appEvidence
-  }
-}
-
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (!args.installer || !args.provenance || !args.fixtures) {
@@ -652,10 +618,40 @@ async function main() {
   let root = null
   let child = null
   let cdp = null
-  let report
-  /** A finished measurement, turned into the report once the app evidence is copied. */
-  let measuredRun = null
+  let fixtures = []
+  let mainLogOffset = 0
+  let mainLogLocated = null
+  // The report's inputs, filled in as the run goes; currentReport() turns them into the report at any time.
+  const run = emptyRun()
+  let launchFailure = null
+  let evidence = null
+  let mainLog = null
   let appEvidence = null
+  let complete = false
+  let harnessError = null
+  const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
+  const currentReport = () => {
+    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures }
+    if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
+    return buildReport({
+      ...common,
+      minutes,
+      measured: run,
+      evidence,
+      attribution: { mainLog, appEvidence },
+      complete,
+      harnessError
+    })
+  }
+  /** Never throws: a report that cannot be written must not end the measurement. */
+  const writeReport = () => {
+    try {
+      writeFileSync(reportPath, JSON.stringify(currentReport(), null, 2))
+    } catch (error) {
+      console.error(`[st-1] could not write ${reportPath}: ${error.message}`)
+    }
+  }
+  const partialReports = setInterval(writeReport, PARTIAL_REPORT_EVERY_MS)
   try {
     const resolved = resolveExecutable(args.installer, args.exe)
     unzipDir = resolved.unzipDir
@@ -663,8 +659,8 @@ async function main() {
     root = join(profile, 'Métis Meetings')
 
     const count = args.fixtures === 'fifo' ? Number(args.count ?? DEFAULT_FIFO_COUNT) : undefined
-    const mainLogOffset = args.mainLog && existsSync(args.mainLog) ? statSync(args.mainLog).size : 0
-    const fixtures =
+    mainLogOffset = args.mainLog && existsSync(args.mainLog) ? statSync(args.mainLog).size : 0
+    fixtures =
       args.fixtures === 'fifo' ? placeFifoFixtures(root, count) : args.fixtures === 'dataless' ? placeDatalessFixtures(root, args.cloudDir) : []
 
     // `child` is assigned before anything can fail waiting for it, so the shared `finally` below always
@@ -678,7 +674,7 @@ async function main() {
     try {
       wsUrl = await inspectorUrl(child)
     } catch (error) {
-      report = buildLaunchFailureReport({ row: args.fixtures, args, candidate, fixtures, reason: error.message })
+      launchFailure = error.message
     }
 
     if (wsUrl) {
@@ -686,27 +682,46 @@ async function main() {
       const cpuProfilePath = join(reportDir, `${reportBase}.cpuprofile`)
       // Asked alongside SETUP, not after the run: when this launch did not create main.log, the size now
       // is the offset.
-      const mainLogLocated = args.mainLog
+      mainLogLocated = args.mainLog
         ? Promise.resolve({ path: args.mainLog, fromByte: mainLogOffset, exactLaunchOffset: true })
         : locateMainLog(cdp, spawnedWallMs)
-      const measured = await measure(cdp, { profile, minutes, spawnedAt, cpuProfilePath })
-      const mainLog = await mainLogLocated
-      const evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset, root)
-      measuredRun = { measured, evidence, fixtures, mainLog }
+      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath })
+      mainLog = await mainLogLocated
+      evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset, root)
+      complete = true
     }
+  } catch (error) {
+    harnessError = error.message
+    throw error
   } finally {
+    clearInterval(partialReports)
+    // A run the harness could not finish still reports every piece of evidence it can reach.
+    if (!complete && mainLogLocated && !mainLog) {
+      const located = await withTimeout(mainLogLocated, MAIN_LOG_QUERY_TIMEOUT_MS)
+      mainLog = located.ok ? located.value : { error: 'the main.log path query did not answer' }
+    }
+    if (!complete && child && !launchFailure && !evidence) {
+      try {
+        evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset, root)
+      } catch {
+        /* evidence stays unknown */
+      }
+    }
     cdp?.close()
     if (child) stopChild(child)
-    if (measuredRun && profile) appEvidence = copyAppEvidence(profile, measuredRun.mainLog, join(reportDir, `${reportBase}-app`))
-    cleanup({ kind: args.fixtures, root, profile, unzipDir })
-  }
-  if (measuredRun) {
-    const { measured, evidence, fixtures, mainLog } = measuredRun
-    report = buildReport({ row: args.fixtures, args, candidate, measured, evidence, fixtures, attribution: { mainLog, appEvidence } })
+    if (child && profile && !launchFailure) appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
+    try {
+      cleanup({ kind: args.fixtures, root, profile, unzipDir })
+    } catch (error) {
+      harnessError ??= error.message
+      throw error
+    } finally {
+      writeReport()
+    }
   }
 
+  const report = currentReport()
   console.log(JSON.stringify(report, null, 2))
-  if (args.out) writeFileSync(args.out, JSON.stringify(report, null, 2))
   return report.verdict === 'PASS' ? 0 : 1
 }
 
