@@ -641,18 +641,7 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
-import {
-  attachMenuOnFirstOpen,
-  buildTrayInStages,
-  createSingleFlight,
-  formatTrayAccelerator,
-  loadPresizedTrayIcon,
-  scheduleTrayAfterFirstPaint,
-  trayIconPaths,
-  yieldToEventLoop,
-  type LazyTrayMenu,
-  type TrayPhaseTimer
-} from './boot-tray'
+import { attachMenuOnFirstOpen, buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop, type LazyTrayMenu, type TrayPhaseTimer } from './boot-tray'
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
@@ -4691,12 +4680,9 @@ function createTray(): void {
   const timeStage: TrayPhaseTimer = (label, fn) => timeBootStage(observability, label, fn)
   startTrayBuild(() => buildTrayInStages<Electron.NativeImage>({
     loadIcon: (time) => loadPresizedTrayIcon(nativeImage, iconPaths, process.platform, time),
-    // M2-0433: the status item is created bare and given its image in the next task, so neither native step
-    // shares a task with the other.
+    // M2-0433: the status item is created bare and gets its image in the next task (one native step per task).
     create: () => { tray = new Tray(nativeImage.createEmpty()) },
-    setImage(img) {
-      if (tray && !tray.isDestroyed() && !img.isEmpty()) tray.setImage(img)
-    },
+    setImage: (img) => { if (tray && !tray.isDestroyed() && !img.isEmpty()) tray.setImage(img) },
     decorate(img) {
       if (!tray || tray.isDestroyed()) return
       const emptyIcon = img.isEmpty()
@@ -4719,11 +4705,7 @@ function createTray(): void {
  *  showing stale accelerators for the rest of the process life after settingsSet's registerShortcuts()
  *  re-registers the new bindings. No-op if the tray was never created or never opened (optional feature). */
 function rebuildTrayMenu(): void {
-  try {
-    trayMenu?.rebuild()
-  } catch {
-    /* tray optional */
-  }
+  try { trayMenu?.rebuild() } catch { /* tray optional */ }
 }
 
 // macOS App Nap (and equivalent OS-level suspension elsewhere) can throttle a minimized/occluded window's
