@@ -116,8 +116,8 @@ describe('UC acceptance registry (M2-0441)', () => {
   })
 
   it('lists each test file the registry names once, sorted', () => {
-    const registry = fullRegistry({ 'UC-002': { tests: [{ id: 'a', file: 'scripts/qa/a.test.ts' }] } })
-    expect(registryTestFiles(registry)).toEqual(['scripts/qa/a.test.ts', 'scripts/qa/x.test.mjs'])
+    const registry = fullRegistry({ 'UC-002': { tests: [{ id: 'a', file: 'scripts/qa/a.test.mjs' }] } })
+    expect(registryTestFiles(registry)).toEqual(['scripts/qa/a.test.mjs','scripts/qa/x.test.mjs'])
   })
 
   it('exits non-zero when --results names a file that does not exist', () => {
