@@ -153,3 +153,47 @@ describe('CI secret scan — must stay green on a clean checkout', () => {
     expect(hits).toEqual([])
   })
 })
+
+describe('gitleaks config — no whole-path exemptions, canary per file class (M2-0259)', () => {
+  const config = readFileSync(join(root, '.gitleaks.toml'), 'utf8')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n')
+
+  it('has no path-scoped allowlist: tests, QA scripts and docs are scanned like source', () => {
+    expect(config).not.toMatch(/^\s*paths\s*=/m)
+    expect(config).not.toMatch(/\.test\./)
+    expect(config).not.toMatch(/scripts\/qa/)
+  })
+
+  it('allowlists only exact fake values, each anchored on both ends', () => {
+    const block = /^regexes\s*=\s*\[([\s\S]*?)^\]/m.exec(config)
+    expect(block, 'no regexes allowlist in .gitleaks.toml').not.toBeNull()
+    const entries = [...block![1].matchAll(/'''(.*?)'''/g)].map((m) => m[1])
+    expect(entries.length).toBeGreaterThan(0)
+    for (const entry of entries) {
+      expect(entry, `unanchored allowlist entry: ${entry}`).toMatch(/^\^.*\$$/)
+      expect(entry, `wildcard allowlist entry: ${entry}`).not.toMatch(/\.\*|\.\+/)
+      expect(entry, `quantified character class in allowlist entry: ${entry}`).not.toMatch(/\][*+]/)
+    }
+    // A fake fixture passes; a real-looking token beside it does not.
+    const compiled = entries.map((entry) => new RegExp(entry))
+    expect(compiled.some((re) => re.test('ABCDEF123456'))).toBe(true)
+    expect(compiled.some((re) => re.test('ghp_' + 'aB3dE5gH7jK9mN1pQ3sT5vW7yZ2bD4fH6jL8'))).toBe(false)
+  })
+
+  it('build.yml plants a redacted canary in a test file, QA script, doc, fixture and generated asset', () => {
+    const step = workflow.slice(workflow.indexOf('- name: Gitleaks canaries (one per file class)'))
+    const body = step.slice(0, step.indexOf('# Blocks a committed absolute per-user path'))
+    expect(body.length).toBeGreaterThan(0)
+    for (const klass of ['test:', 'qa:', 'doc:', 'fixture:', 'generated:']) {
+      expect(body, `no ${klass} canary`).toContain(klass)
+    }
+    expect(body).toContain('--config=/cfg/.gitleaks.toml')
+    expect(body).toContain('--redact')
+    expect(body).toContain('grep -qF "$canary"')
+    // The canary value itself must never be a literal in the workflow.
+    expect(workflow).not.toMatch(/ghp_[A-Za-z0-9]{20,}/)
+  })
+})
