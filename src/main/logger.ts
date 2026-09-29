@@ -319,6 +319,9 @@ export type AuditEvent =
   | 'hk-m.active-inference'
   | 'hk-m.ffmpeg-import'
   | 'hk-m.registry-write'
+  // M2-0494: the packaged QA build is feeding a WAV from its isolated profile as the microphone
+  // (main/qa-capture-source.ts). { active: true } only — never the path or file name.
+  | 'qa.capture.file_source'
   | 'local.model.checksum_fail'
   // First-run weight download (local-model-download.ts). The weights are no longer bundled, so these
   // are the audit trail for the only network fetch installed code makes for model files.

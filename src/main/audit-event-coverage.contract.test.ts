@@ -85,6 +85,13 @@ describe('AuditEvent coverage — every declared event has a real call site', ()
     expect(DECLARED_EVENTS.length).toBeGreaterThanOrEqual(73)
   })
 
+  it('M2-0494: the QA capture-source event is declared and fired from its own module, never excepted', () => {
+    expect(DECLARED_EVENTS).toContain('qa.capture.file_source')
+    expect(KNOWN_EXCEPTIONS.has('qa.capture.file_source')).toBe(false)
+    const qaCaptureSrc = readFileSync(join(root, 'src', 'main', 'qa-capture-source.ts'), 'utf8')
+    expect(qaCaptureSrc).toMatch(/audit\(\s*'qa\.capture\.file_source',\s*\{\s*active:\s*true\s*\}\s*\)/)
+  })
+
   it('every KNOWN_EXCEPTIONS entry is actually declared (no stale entries)', () => {
     for (const ev of KNOWN_EXCEPTIONS) {
       expect(DECLARED_EVENTS, `KNOWN_EXCEPTIONS lists '${ev}', which is not in AuditEvent any more`).toContain(ev)

@@ -532,6 +532,7 @@ import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
+import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
@@ -996,6 +997,9 @@ crashReporter.start({ uploadToServer: false })
 // Belt-and-braces with the per-meeting powerSaveBlocker below: keep Chromium itself from ever
 // deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
+// QA-identity builds only (compiled out of every other bundle): a packaged QA profile may feed a WAV inside
+// that profile as the microphone through Chromium's fake capture. Must run before app ready.
+if (QA_IDENTITY_BUILD) installQaCaptureSource(app, auditLog)
 
 const BAR_WIDTH = 880
 const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
