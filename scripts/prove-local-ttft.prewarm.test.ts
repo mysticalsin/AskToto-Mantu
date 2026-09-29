@@ -37,7 +37,6 @@ describe('prove-local-ttft prewarm', () => {
 
     const result = (await prewarmCall(baseUrl, 'key', [], 5_000)) as Record<string, unknown>
 
-
     expect(result.timedOut).toBeUndefined()
     expect(result.timings).toEqual({ prompt_n: 12 })
   })

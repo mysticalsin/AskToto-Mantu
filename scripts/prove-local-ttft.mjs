@@ -67,6 +67,7 @@ const WARM_TTFT_BUDGET_MS = 1500
 // The pre-warm is a cold prefill; CPU-only hosted runners need far longer than a laptop's few seconds.
 // A pre-warm that exceeds this is reported as a measured FAIL, never an unhandled exception.
 const PREWARM_TIMEOUT_MS = 240_000
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000
 
 function buildSpawnArgs({ gguf, mmproj }) {
   return [
@@ -249,6 +250,10 @@ function fetchStream(url) {
       }
       resolve(res)
     })
+    // Socket-idle limit: a stalled download ends with a logged FAILED line instead of the step timeout.
+    req.setTimeout(DOWNLOAD_IDLE_TIMEOUT_MS, () =>
+      req.destroy(new Error(`no data for ${DOWNLOAD_IDLE_TIMEOUT_MS}ms from ${url}`))
+    )
     req.on('error', reject)
   })
 }

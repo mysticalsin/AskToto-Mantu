@@ -129,10 +129,19 @@ export function parseProveLocalTtftOutcome(text) {
   }
   const timeout = /prewarm timed out after (\d+)ms \(limit (\d+)ms\)/.exec(output)
   if (timeout) return { outcome: 'TIMEOUT', prewarmElapsedMs: Number(timeout[1]), prewarmTimeoutMs: Number(timeout[2]) }
+  const warm = /^warm TTFT:\s*(\d+)\s*ms\s*$/im.exec(output)
   if (/\[prove-local-ttft\]\s+FAIL|FAILED:/i.test(output)) {
-    const warm = /^warm TTFT:\s*(\d+)\s*ms\s*$/im.exec(output)
-    return { outcome: 'FAIL', ...(warm ? { warmTtftMs: Number(warm[1]) } : {}) }
+    const health = /healthy on \S+ after (\d+)ms/.exec(output)
+    const prewarm = /prewarm \(cold prefill\):\s*(\d+)\s*ms/.exec(output)
+    return {
+      outcome: 'FAIL',
+      ...(health ? { healthMs: Number(health[1]) } : {}),
+      ...(prewarm ? { prewarmColdPrefillMs: Number(prewarm[1]) } : {}),
+      ...(warm ? { warmTtftMs: Number(warm[1]) } : {})
+    }
   }
+  // A run cut off before any verdict (no warm TTFT, no FAIL line) is still a measured non-PASS outcome.
+  if (!warm) return { outcome: 'INCOMPLETE' }
   return { outcome: 'PASS', warmTtftMs: parseProveLocalTtftOutput(output) }
 }
 
