@@ -7,12 +7,18 @@
  */
 
 import { desktopCapturer, systemPreferences } from 'electron'
+import type { PermissionStatus, PlatformPermissions } from '@shared/ipc'
 
-export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-required'
+export type { PermissionStatus, PlatformPermissions }
 
-export interface PlatformPermissions {
-  microphone: PermissionStatus
-  screenRecording: PermissionStatus
+/** M2-0429: the Screen Recording diagnosis and this build's identity, supplied by main once it has built
+ *  them (capture-permissions/screen-permission.ts). Registered rather than imported so every existing
+ *  getPlatformPermissions() caller reports the diagnosis with no change of its own. */
+type ScreenDiagnosisProvider = () => Pick<PlatformPermissions, 'screenDiagnosis' | 'identity'>
+let screenDiagnosisProvider: ScreenDiagnosisProvider | null = null
+
+export function setScreenDiagnosisProvider(provider: ScreenDiagnosisProvider | null): void {
+  screenDiagnosisProvider = provider
 }
 
 /**
@@ -83,7 +89,7 @@ function windowsMicStatus(): PermissionStatus {
   return macStatus('microphone')
 }
 
-function windowsScreenStatus(): PermissionStatus {
+export function windowsScreenStatus(): PermissionStatus {
   // Windows exposes no queryable screen-capture permission, so the only honest answer is whatever an
   // actual capture attempt produced (probeScreenCapture, run at startup). Unprobed stays 'unknown' —
   // never assume 'granted', or the readiness UI would promise a capability it has not demonstrated.
@@ -91,6 +97,11 @@ function windowsScreenStatus(): PermissionStatus {
 }
 
 export function getPlatformPermissions(): PlatformPermissions {
+  const base = basePlatformPermissions()
+  return screenDiagnosisProvider ? { ...base, ...screenDiagnosisProvider() } : base
+}
+
+function basePlatformPermissions(): PlatformPermissions {
   if (process.platform === 'darwin') {
     // The TCC status is authoritative on macOS. Fall back to probe evidence only when TCC is
     // non-committal ('not-determined' → 'unknown'), so a successful capture still reads as ready.

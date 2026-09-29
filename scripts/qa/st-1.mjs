@@ -629,6 +629,7 @@ async function main() {
   let appEvidence = null
   let complete = false
   let harnessError = null
+  let cleanupError = null
   const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
   const currentReport = () => {
     const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures }
@@ -710,15 +711,18 @@ async function main() {
     cdp?.close()
     if (child) stopChild(child)
     if (child && profile && !launchFailure) appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
+    // A cleanup failure is rethrown after this block, never from it: a throw inside `finally` would replace
+    // the error that is already propagating.
     try {
       cleanup({ kind: args.fixtures, root, profile, unzipDir })
     } catch (error) {
+      cleanupError = error
       harnessError ??= error.message
-      throw error
-    } finally {
-      writeReport()
+      console.error(`[st-1] cleanup failed: ${error.message}`)
     }
+    writeReport()
   }
+  if (cleanupError) throw cleanupError
 
   const report = currentReport()
   console.log(JSON.stringify(report, null, 2))

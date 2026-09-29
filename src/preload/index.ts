@@ -73,6 +73,7 @@ import {
   type MetisCommandConfirmation,
   type PreservedBrainIndexListResult
 } from '@shared/ipc'
+import type { ScreenRepairResult } from '@shared/screen-permission'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
 
@@ -94,6 +95,12 @@ const api = {
     ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
   requestPermissionsUpfront: (): Promise<PlatformPermissions> =>
     ipcRenderer.invoke(IPC.permissionsRequestUpfront),
+  /** M2-0429: reset only Métis's own Screen Recording entry, then relaunch (macOS). */
+  repairScreenPermission: (): Promise<ScreenRepairResult> => ipcRenderer.invoke(IPC.permissionsRepairScreen),
+  /** M2-0429: "It's already on" — record it and relaunch (macOS). */
+  attestScreenPermission: (): Promise<void> => ipcRenderer.invoke(IPC.permissionsAttestScreen),
+  /** M2-0429: show a duplicate copy listed by the diagnosis in Finder. */
+  revealAppCopy: (path: string): Promise<void> => ipcRenderer.invoke(IPC.permissionsRevealCopy, path),
   screenCaptureCheck: (pass: 'probe' | 'vision'): Promise<ScreenCaptureCheckResult> =>
     ipcRenderer.invoke(IPC.screenCaptureCheck, { pass }),
   setSettings: (patch: Partial<Settings> | import('@shared/ipc').SettingsPatch): Promise<PublicSettings> =>

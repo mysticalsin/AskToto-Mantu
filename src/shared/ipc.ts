@@ -5,6 +5,9 @@ import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
+import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
+export type { PermissionStatus, PlatformPermissions, ScreenCaptureCheckResult } from './screen-permission'
+export { ScreenCaptureCheckPassSchema, ScreenCaptureCheckPayloadSchema, ScreenCaptureCheckResultSchema } from './screen-permission'
 
 /** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
 export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
@@ -244,6 +247,10 @@ export const IPC = {
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
   permissionsRequestUpfront: 'permissions:requestUpfront',
+  // M2-0429 (main/ipc/screen-permission-ipc.ts): Repair, "It's already on", Show a duplicate copy in Finder.
+  permissionsRepairScreen: 'permissions:repairScreen',
+  permissionsAttestScreen: 'permissions:attestScreen',
+  permissionsRevealCopy: 'permissions:revealCopy',
   // Settings / overlay self-check: first pass is the OS probe; second pass is a real vision ask.
   // Result stays on this device — never forwarded to a teammate, CRM, or askStart overlay chat.
   screenCaptureCheck: 'permissions:screenCaptureCheck',
@@ -1520,7 +1527,9 @@ export const BaseSettingsSchema = z.object({
   operatorIntegrationsVersion: z.number().default(0),
   /** Epoch ms of the last successful heartbeat that carried entitlements. 0 = never — grace window
    *  (operator-entitlements.ts) treats this the same as "no snapshot at all". */
-  operatorEntitlementsAt: z.number().default(0)
+  operatorEntitlementsAt: z.number().default(0),
+  /** Main-owned Screen Recording history (M2-0429); see shared/screen-permission.ts. */
+  permissionState: PermissionStateSchema.default(DEFAULT_PERMISSION_STATE)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -1789,7 +1798,8 @@ export const DEFAULT_SETTINGS: Settings = {
   operatorTier: null,
   operatorEntitlements: null,
   operatorIntegrationsVersion: 0,
-  operatorEntitlementsAt: 0
+  operatorEntitlementsAt: 0,
+  permissionState: DEFAULT_PERMISSION_STATE
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [
@@ -1885,12 +1895,6 @@ export interface ShortcutFailure {
   accel: string
 }
 
-export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-required'
-export interface PlatformPermissions {
-  microphone: PermissionStatus
-  screenRecording: PermissionStatus
-}
-
 export interface MeetingSummary {
   file: string
   title: string
@@ -1924,21 +1928,6 @@ export const TestApiKeyPayloadSchema = z.object({
   provider: ProviderIdSchema,
   key: z.string()
 })
-
-export const ScreenCaptureCheckPassSchema = z.enum(['probe', 'vision'])
-export const ScreenCaptureCheckPayloadSchema = z.object({
-  pass: ScreenCaptureCheckPassSchema
-})
-export const ScreenCaptureCheckResultSchema = z.object({
-  ok: z.boolean(),
-  pass: ScreenCaptureCheckPassSchema,
-  backend: z.enum(['probe', 'local', 'api']).optional(),
-  backendLabel: z.string().max(200).optional(),
-  failedOver: z.boolean().optional(),
-  message: z.string().max(2000),
-  preview: z.string().max(200).optional()
-})
-export type ScreenCaptureCheckResult = z.infer<typeof ScreenCaptureCheckResultSchema>
 
 export interface TestKeyResponse {
   ok: boolean

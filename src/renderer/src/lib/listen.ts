@@ -26,6 +26,9 @@ import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
 import { transcriptToText } from './transcript'
 import { shouldUseBundledAsr } from './asr-offline'
+import { withDiagnosedThemNote } from './screen-permission-copy'
+import { sysRetryDelayMs } from './loopback-retry'
+export { sysRetryDelayMs }
 
 const SR = 16000
 const NO_SPEECH_WARNING_MS = 30_000
@@ -427,6 +430,7 @@ export interface CaptureDegraded {
   note: string
   /** True when the cause is the macOS Screen Recording permission ('them' only). */
   permission: boolean
+  repair?: boolean // M2-0429: the grant belongs to another build or copy, so the Bar chip offers Repair
 }
 
 export type CaptureSelectionOutcome = 'system-default' | 'requested-device' | 'fallback-default' | 'unavailable'
@@ -581,22 +585,6 @@ export function degradedAfterMicRecovery(
 }
 
 /**
- * Delay before the next Windows system-audio retry, given how many have already failed back-to-back.
- * Doubles from the watcher's 3 s tick and holds at a 30 s ceiling — bounded work, but NEVER terminal.
- *
- * Both halves matter. A machine where WASAPI loopback cannot start at all (VDI/RDP with no render
- * endpoint, every output disabled, an app holding the endpoint exclusively) used to pay a full
- * getDisplayMedia acquisition every 3 s for the whole meeting — and each attempt that falls through to
- * the video-bound form runs up to 3 desktopCapturer.getSources screen enumerations, which is the exact
- * screen-grabbing path the audio-only attempt exists to avoid. Giving up entirely is not the answer
- * either: the headline case in the watcher's own comment (another app holding the render endpoint) emits
- * no 'devicechange', so nothing else would ever re-arm and the meeting stays mic-only — MQA-041.
- */
-export function sysRetryDelayMs(consecutiveFailures: number): number {
-  return Math.min(3000 * 2 ** consecutiveFailures, 30_000)
-}
-
-/**
  * A failed 'them' re-acquire only ever RAISES: the sticky note when there is none, and the degradation
  * entry when there is none (an existing one carries the more specific start-time cause, e.g. the
  * Screen-Recording copy, and must survive). So once both are set the write is a no-op — and it must then
@@ -737,7 +725,7 @@ async function stripLoopbackProcessing(sys: MediaStream): Promise<void> {
 /** The one way a loopback stream is acquired. Windows tries audio-only first so no genuine screen
  *  source is grabbed (and no OS/EDR screen-recording indicator fires) for what the user intended as
  *  system audio; macOS must bind to a 1fps ScreenCaptureKit video stream or the audio never starts. */
-async function acquireLoopback(): Promise<MediaStream> {
+export async function acquireLoopback(): Promise<MediaStream> {
   let sys: MediaStream
   if (isWindows) {
     try {
@@ -2123,6 +2111,9 @@ export function useListen(
             !channels.current.them
           ) {
             void recoverSystemAudioRef.current?.()
+          } else if (captureAdmissionIsOpen(originEpoch) && !channels.current.them) {
+            // M2-0429: say WHY the other side is missing, from main's diagnosis (names the holder, offers Repair).
+            setState((s) => withDiagnosedThemNote(s, p?.screenDiagnosis, themDegradedRef))
           }
         })
         .catch(() => {})
