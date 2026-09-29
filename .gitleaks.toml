@@ -26,7 +26,7 @@ useDefault = true
 # scan's own exclusions (--exclude='*.test.ts' --exclude-dir=qa in build.yml) so the two secret gates stay
 # in the same policy rather than drifting: a real secret pasted into product source still fails both.
 [allowlist]
-description = "Test fixtures, the physical QA harness, and documentation examples — deliberately fake or invalid credentials, never real ones."
+description = "Test fixtures and the physical QA harness — deliberately fake or invalid credentials, never real ones."
 paths = [
   # Unit/contract test fixtures across the repo (src/, scripts/, license-server/) — same class of file
   # the narrow scan already excludes via --exclude='*.test.ts' --exclude='*.test.tsx'.
@@ -34,7 +34,13 @@ paths = [
   '''.*\.test\.mjs$''',
   # The physical QA harness (scripts/qa/**) plants deliberately-invalid keys (e.g. 'qa-proxy-key') to
   # exercise degrade/redaction paths — same directory the narrow scan already excludes via --exclude-dir=qa.
-  '''^scripts/qa/.*''',
-  # Documentation examples (API key formats, sample config snippets) are illustrative, never live keys.
-  '''^docs/.*\.md$'''
+  '''^scripts/qa/.*'''
+]
+# Known false positives, matched by the exact fake value so a real secret pasted beside them still
+# fails. Documentation is deliberately NOT path-exempt: docs/**.md is scanned like any other file (M2-0049).
+regexes = [
+  # The fixture the redaction unit tests use, when a doc quotes it.
+  '''^['"]?ABCDEF123456['"]?$''',
+  # The license-server test fixture key, when a doc quotes it.
+  '''^ATK-HY2JVMZ3P3JF8CGAQWPR$'''
 ]

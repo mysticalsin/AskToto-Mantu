@@ -992,7 +992,7 @@ export const Review = memo(function Review({
               <span
                 className="rounded-full bg-white/[0.06] px-2 py-0.5"
                 title={`${s.youWords} of ${s.youWords + s.themWords} words · longest monologue ${formatDuration(s.longestMonologueSec)} · they asked ${s.themQuestions} question${s.themQuestions === 1 ? '' : 's'}`}
-                style={pct >= 70 ? { color: 'var(--color-warn, #fac775)' } : undefined}
+                style={pct >= 70 ? { color: 'var(--color-warn)' } : undefined}
               >
                 You spoke {pct}%
               </span>

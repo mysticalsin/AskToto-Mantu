@@ -56,6 +56,8 @@ issues_to_fix.md
 # Multi-agent handoff scratch (never commit — carries AI-tool session identifiers, not app source)
 Relay Baton/
 _agent_state/
+.forge/
+.scratch/
 
 # Windows packaging output dirs (electron-builder -c.directories.output overrides) — multi-GB, never commit
 release-win*/
