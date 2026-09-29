@@ -17,6 +17,7 @@ import {
 import { writeDeal, writeAccount, writePerson, writeMeetingExtraction, writeIndex, slugify } from './store'
 import { readAliasMap } from './corrections'
 import { ingestExtraction } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import {
   publishEntity,
@@ -160,6 +161,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
   let s: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-publish-test-'))
     s = settingsFor(folder)
     readFaults.throwOn.clear()

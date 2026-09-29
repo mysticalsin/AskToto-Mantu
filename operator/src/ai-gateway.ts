@@ -17,6 +17,7 @@ export type GatewayPrivacyErrorCode =
   | 'GATEWAY_CHECK_UNAVAILABLE'
   | 'GATEWAY_RESPONSE_UNVERIFIED'
   | 'GATEWAY_CONFIGURATION_UNSAFE'
+  | 'GATEWAY_TRANSPORT_BLOCKED'
 
 /** Only content-free, stable errors leave this boundary. Never attach an upstream
  * response, token, account identifier, response URL, or original exception cause.
@@ -25,6 +26,34 @@ export class GatewayPrivacyError extends Error {
   constructor(readonly code: GatewayPrivacyErrorCode) {
     super(code)
     this.name = 'GatewayPrivacyError'
+  }
+}
+
+/** Per-route readiness. UNREVIEWED: no reviewed gateway exists (never auto-created). CONFIGURED: the
+ * configuration readback passed. VERIFIED: CONFIGURED plus the independent sink tests passed; only a
+ * release gate records it, this module never claims it. BLOCKED: the readback or the transport is unsafe.
+ */
+export type RouteReadiness = 'UNREVIEWED' | 'CONFIGURED' | 'VERIFIED' | 'BLOCKED'
+
+export function readinessForError(error: unknown): RouteReadiness {
+  return error instanceof GatewayPrivacyError && error.code === 'GATEWAY_REVIEW_REQUIRED' ? 'UNREVIEWED' : 'BLOCKED'
+}
+
+/** How a request reaches the gateway. `rest` is the account REST route whose metadata-only result is
+ * the owner-approved default; `binding` (a Worker AI binding) and `unproven` have no proven
+ * metadata-only result, so `binding` suppresses the log entry entirely and `unproven` is refused.
+ */
+export type GatewayTransport = 'rest' | 'binding' | 'unproven'
+
+/** Request headers for a protected inference call: never payload logging, never a cached answer, and
+ * a log entry only where metadata-only logging is proven for the transport.
+ */
+export function gatewayPrivacyHeaders(transport: GatewayTransport = 'rest'): Record<string, string> {
+  if (transport === 'unproven') throw new GatewayPrivacyError('GATEWAY_TRANSPORT_BLOCKED')
+  return {
+    'cf-aig-collect-log': transport === 'rest' ? 'true' : 'false',
+    'cf-aig-collect-log-payload': 'false',
+    'cf-aig-skip-cache': 'true'
   }
 }
 
@@ -115,7 +144,7 @@ export async function verifyDefaultGatewayPrivacy(
   accountId: string,
   fetchImpl: typeof fetch,
   options: { timeoutMs?: number } = {}
-): Promise<void> {
+): Promise<'CONFIGURED'> {
   const id = accountId.trim()
   const secret = token.trim()
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(id) || !secret || /[\r\n]/.test(secret)) {
@@ -184,6 +213,7 @@ export async function verifyDefaultGatewayPrivacy(
     }
     const data = await readBoundedJsonBody(response, race)
     assertSensitiveRouteConfiguration(data)
+    return 'CONFIGURED'
   } catch (error) {
     if (error instanceof GatewayPrivacyError) throw error
     if (controller.signal.aborted) throw new GatewayPrivacyError('GATEWAY_CHECK_TIMEOUT')
