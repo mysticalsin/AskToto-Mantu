@@ -2,7 +2,7 @@
  * POST /v1/ask — streaming Operator proxy (FRAME G5/G7/G10).
  * Same seat + vault rules as /v1/use. SSE to the seat. Never returns a vault secret.
  */
-import { operatorCallableProvider } from './keys'
+import { operatorCallableProvider } from './provider-guard'
 import { PORTAL_CF_DEEPSEEK_PRO, resolvePortalCloudflareModel } from '../../src/shared/ask-routing'
 import { persistProxyAsk } from './ask-meter'
 import { GatewayPrivacyError, verifyDefaultGatewayPrivacy } from './ai-gateway'

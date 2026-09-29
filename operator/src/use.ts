@@ -7,7 +7,7 @@ import { looksLikeSecret, providerRefusedPayload } from './redact'
 import type { OperatorStore, VaultKeyRow } from './store'
 import { persistProxyAsk, proxyTokenCount } from './ask-meter'
 import { seatHasEntitlement } from './tiers'
-import { operatorCallableProvider } from './keys'
+import { operatorCallableProvider } from './provider-guard'
 import { decodeVaultPlaintext, isForbiddenVaultProvider, isVaultLlmProvider } from './vault'
 
 const SYSTEM_CAP = 32_000

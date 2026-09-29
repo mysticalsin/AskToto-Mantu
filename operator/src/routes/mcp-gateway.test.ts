@@ -135,7 +135,7 @@ describe('POST /v1/mcp/:id (brokered gateway)', () => {
 
   it('403s a seat that is no longer approved', async () => {
     const store = await setup()
-    await store.upsertSeat(seat({ approval: 'revoked' }))
+    await store.updateSeatApproval(DEVICE, 'revoked')
     const token = await mintGatewayToken(TEST_INGEST_SECRET, DEVICE, 'int-1', NOW)
     expect((await post(store, '/v1/mcp/int-1', token)).status).toBe(403)
   })
