@@ -13,9 +13,11 @@ on:
 permissions:
   contents: read
 
+# Superseded PR runs are cancelled by the next push; dispatch runs have a run-unique group and are never
+# cancelled.
 concurrency:
-  group: m2-0092-ui-deps-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   qualify:
