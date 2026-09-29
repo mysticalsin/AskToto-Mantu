@@ -266,6 +266,9 @@ export const IPC = {
   // Live-meeting pre-warm (PLAN.md §4.4): a debounced transcript tail, fire-and-forget, so the sidecar's
   // per-slot KV cache stays hot between real suggest requests. See LocalPrewarmPayloadSchema.
   localPrewarm: 'local:prewarm',
+  // M2-0430: Apple engine status for Settings, and the renderer's content-free post-meeting spans.
+  localAppleEngineStatus: 'local:appleEngineStatus',
+  writeupSpan: 'writeup:span',
   cliDetect: 'cli:detect',
   cliSetup: 'cli:setup',
   cliTest: 'cli:test',
@@ -2333,9 +2336,26 @@ export type LocalModelSummary = z.infer<typeof LocalModelSummarySchema>
  *  sent fire-and-forget from the renderer's instant-suggestions effect so the sidecar's per-slot KV cache
  *  stays hot between real suggest requests. The renderer already clips this to the same ~6000-char tail
  *  the suggest mode itself sends (llm/shared.ts's `.slice(-6000)`) before it ever reaches IPC; the 24000
- *  cap here is defense-in-depth against a compromised/malfunctioning renderer, not the real bound. */
-export const LocalPrewarmPayloadSchema = z.object({ text: z.string().min(1).max(24_000) })
+ *  cap here is defense-in-depth against a compromised/malfunctioning renderer, not the real bound.
+ *  M2-0430: `purpose: 'summary'` is the Stop-time warm of the summary slot. It carries the whole meeting
+ *  so far (the recap's own prefix), bounded by the 80,000-char local summary transcript cap. */
+export const LocalPrewarmPayloadSchema = z.union([
+  z.object({ text: z.string().min(1).max(24_000), purpose: z.literal('suggest').optional() }),
+  z.object({ text: z.string().min(1).max(80_000), purpose: z.literal('summary') })
+])
 export type LocalPrewarmPayload = z.infer<typeof LocalPrewarmPayloadSchema>
+
+/** Content-free post-meeting latency spans (M2-0430), measured in the renderer from the Stop click. */
+export const WRITEUP_SPANS = ['stop_to_transcript_saved', 'stop_to_first_recap_token', 'stop_to_recap_done'] as const
+export type WriteupSpan = typeof WRITEUP_SPANS[number]
+export const WriteupSpanPayloadSchema = z
+  .object({ span: z.enum(WRITEUP_SPANS), ms: z.number().int().min(0).max(24 * 60 * 60_000) })
+  .strict()
+export type WriteupSpanPayload = z.infer<typeof WriteupSpanPayloadSchema>
+
+/** Settings' view of Apple's on-device engine. 'unlicensed' needs the owner to accept the CLI terms. */
+export const APPLE_ENGINE_STATUSES = ['unsupported', 'disabled', 'available', 'unlicensed', 'unavailable'] as const
+export type AppleEngineStatus = typeof APPLE_ENGINE_STATUSES[number]
 
 
 // ─── Licensing (phone-home activation against a self-hosted license server; see main/license.ts) ──────

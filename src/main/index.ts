@@ -86,6 +86,7 @@ import {
   ImportDecoderCompleteSchema,
   ImportDecoderFailedSchema,
   LocalPrewarmPayloadSchema,
+  WriteupSpanPayloadSchema,
   ProviderIdSchema,
   DEFAULT_SHORTCUTS,
   ASK_MEMORY_IDLE_MS,
@@ -174,7 +175,7 @@ import {
   portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
-import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
+import { appleEngineStatus, ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
@@ -7050,14 +7051,37 @@ function registerIpc(): void {
     const s = getSettings()
     // publicSettings().providerReady is the same "can a cloud/CLI provider actually answer" test the ask
     // path uses — when it is false, local is what will serve the next suggest, so it is worth warming.
-    if (!speculativeLocalWorkAllowed() || !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) return
+    const purpose = parsed.data.purpose ?? 'suggest'
+    if (
+      !speculativeLocalWorkAllowed() ||
+      !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady, undefined, purpose)
+    ) return
     // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
     // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
     // so any future drift between the live suggest path and what prewarm warms fails a test.
     // prewarmLocal (llm/local.ts) is engine-aware: it warms whichever engine pickLocalEngine would give
     // the next real suggest — fm serve on macOS 27+ with Apple Intelligence live, llama-server otherwise.
+    const warmFailed = (err: unknown): void =>
+      mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err))
+    if (purpose === 'summary') {
+      // M2-0430: the Stop-time warm targets the summary slot with the recap's own prefix, so the recap
+      // that follows the drain starts on a loaded model instead of queueing behind a cold start.
+      const summaryMessages = buildPrewarmMessages(parsed.data.text, s, 'summary')
+      void prewarmLocal(s.localLlm.modelId, summaryMessages, speculativeLocalWorkAllowed, 'summary').catch(warmFailed)
+      return
+    }
     void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed)
-      .catch((err) => mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err)))
+      .catch(warmFailed)
+  })
+  ipcMain.handle(IPC.localAppleEngineStatus, (e) => {
+    assertMainWindow(e)
+    return appleEngineStatus()
+  })
+  ipcMain.handle(IPC.writeupSpan, (e, report: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return
+    const parsed = WriteupSpanPayloadSchema.safeParse(report)
+    if (parsed.success) auditLog('writeup.span', { span: parsed.data.span, ms: parsed.data.ms })
   })
 
   // --- Screen capture ---

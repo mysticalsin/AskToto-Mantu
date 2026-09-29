@@ -61,15 +61,18 @@ export function reviveExhausted(record: AttemptRecord): void {
   delete record.retryAfter
 }
 
-/** The retry fields of the record a failed job leaves. A source this device could not read spends no attempt. */
+/** The retry fields of the record a failed job leaves. A source this device could not read spends no attempt.
+ *  A permanent failure (the source cannot fit the model's context) is exhausted at once: retrying the same
+ *  bytes against the same window can only fail again, so only an explicit Retry may spend another model call. */
 export function retryStateAfterFailure(
   previous: AttemptRecord | undefined,
-  failure: { unreadable: boolean; source: SourceObservation },
+  failure: { unreadable: boolean; permanent?: boolean; source: SourceObservation },
   now: number
 ): Pick<AttemptRecord, 'attempts' | 'retryAfter' | 'exhausted' | 'unreadable'> {
   const spent = previous?.attempts ?? 0
   if (failure.unreadable) return { attempts: spent, unreadable: { changedAtMs: failure.source.changedAtMs } }
   const attempts = spent + 1
+  if (failure.permanent) return { attempts, exhausted: true }
   return {
     attempts,
     retryAfter: now + retryDelayMs(attempts),
