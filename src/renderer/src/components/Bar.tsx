@@ -496,36 +496,36 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               className={[
                 'flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px]',
                 !props.paused && (props.captureDegraded || props.noSpeechWarning || props.captureHealth?.selectionOutcome === 'fallback-default' || props.captureHealth?.selectionOutcome === 'unavailable')
-                  ? 'text-[color:var(--color-warn,#fac775)]'
+                  ? 'text-[color:var(--color-warn)]'
                   : 'text-[color:var(--color-ink-2)]'
               ].join(' ')}
             >
               {props.paused ? (
                 <>
-                  <Pause size={11} strokeWidth={ICON_STROKE} className="text-[color:var(--color-warn,#fac775)]" />
+                  <Pause size={11} strokeWidth={ICON_STROKE} className="text-[color:var(--color-warn)]" />
                   Paused
                 </>
               ) : props.captureDegraded ? (
                 <>
-                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn,#fac775)]" />
+                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn)]" />
                   <AudioLines size={11} strokeWidth={ICON_STROKE} />
                   {props.captureDegraded.side === 'them' ? 'Mic only' : 'No mic'}
                 </>
               ) : props.captureHealth?.selectionOutcome === 'unavailable' ? (
                 <>
-                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn,#fac775)]" />
+                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn)]" />
                   <AudioLines size={11} strokeWidth={ICON_STROKE} />
                   No mic
                 </>
               ) : props.noSpeechWarning ? (
                 <>
-                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn,#fac775)]" />
+                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn)]" />
                   <AudioLines size={11} strokeWidth={ICON_STROKE} />
                   No speech detected
                 </>
               ) : props.captureHealth?.selectionOutcome === 'fallback-default' ? (
                 <>
-                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn,#fac775)]" />
+                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn)]" />
                   <AudioLines size={11} strokeWidth={ICON_STROKE} />
                   Mic fallback
                 </>

@@ -17,9 +17,11 @@ on:
 permissions:
   contents: read
 
+# Superseded runs of a ticket branch are cancelled by the next push; dispatch runs have a run-unique group
+# and are never cancelled.
 concurrency:
-  group: film-toolchain-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ (github.event_name == 'push' && github.ref) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 defaults:
   run:

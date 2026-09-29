@@ -668,6 +668,23 @@ export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
   }
 }
 
+/** Refusal copy for an explicit rebuild while the existing index is unavailable; null when it is usable. */
+export function rebuildUnavailableError(s: Settings): string | null {
+  const cause = indexUnavailable(s)
+  if (!cause) return null
+  const kept = 'The index was kept, so no data was lost.'
+  switch (cause) {
+    case 'undecryptable':
+    case 'io':
+      return `Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. ${kept} Nothing was changed.`
+    case 'unsupported':
+      return `${indexUnavailableMessage(cause)} ${kept} Update Métis, then retry.`
+    case 'corrupt-kept':
+      // The bytes may not have been set aside (rename failed) or the copy cap was hit: never purge them.
+      return `${indexUnavailableMessage(cause)} ${kept} Remove older damaged-index copies (index.corrupt-auto-*) from the .brain folder or fix its permissions, then retry.`
+  }
+}
+
 /** Fail-closed write: never replaces bytes this process could not fully decode. */
 export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
   const blocked = indexUnavailable(s)

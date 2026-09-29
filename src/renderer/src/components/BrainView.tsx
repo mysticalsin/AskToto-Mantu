@@ -53,9 +53,9 @@ import { NO_PROVIDER_INDEX_COPY, runIntelligenceUpdateClick } from '../lib/intel
  * (with icon + label, never color alone), thin marks, text in ink tokens.
  */
 
-// 'mixed' status amber — contrast ≥3:1 on the dark glass surface (validated); success/danger reuse
-// the app's semantic tokens so the dashboard stays inside the frozen visual language.
-const MIXED_COLOR = '#e0af68'
+// 'mixed' status amber reuses the shared warning token; success/danger reuse the app's semantic
+// tokens so the dashboard stays inside the frozen visual language.
+const MIXED_COLOR = 'var(--color-warn)'
 
 const BAND_META: Record<Band, { label: string; color: string; Icon: typeof TrendingUp }> = {
   good: { label: 'On track', color: 'var(--color-success)', Icon: TrendingUp },

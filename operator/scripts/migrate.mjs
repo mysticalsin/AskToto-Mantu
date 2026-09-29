@@ -12,13 +12,16 @@
  *   node operator/scripts/migrate.mjs --local                     Apply to the local wrangler dev D1.
  *   node operator/scripts/migrate.mjs --remote --env staging      Apply to the staging D1 (section 9d).
  *   node operator/scripts/migrate.mjs --dry-run                   Print statements, run nothing.
+ *   node operator/scripts/migrate.mjs --local --env staging --persist-to <dir>
+ *                                                                 Apply to a local D1 kept in <dir>, the
+ *                                                                 directory `wrangler dev --persist-to` reads.
  *
  * `--env <name>` resolves the database name from `wrangler.jsonc`'s `env.<name>.d1_databases[0]`
  * (falling back to the top-level `d1_databases[0]` with no `--env`) and appends `--env <name>` to
  * every `wrangler d1 execute` call, so the statements land on that environment's own D1, not
  * production's. A database whose id is still the placeholder from `wrangler.jsonc` (the environment's
  * D1 was never created) refuses to run rather than silently doing nothing against a database that
- * doesn't exist.
+ * doesn't exist. `--local` never reaches a remote database, so it runs against the placeholder too.
  */
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -155,6 +158,7 @@ function transientTransportFailure(result) {
 export async function runStatement(stmt, target, databaseName, envName, options = {}) {
   const args = ['d1', 'execute', databaseName, '--command', stmt, target === 'remote' ? '--remote' : '--local']
   if (envName) args.push('--env', envName)
+  if (target === 'local' && options.persistTo) args.push('--persist-to', options.persistTo)
   const command = localNodeCommand('wrangler', args)
   const execute = options.spawn ?? spawnSync
   const wait = options.sleep ?? sleep
@@ -180,6 +184,25 @@ export async function runStatement(stmt, target, databaseName, envName, options 
     const delayMs = attempt * 1000
     onRetry(attempt + 1, delayMs)
     await wait(delayMs)
+  }
+}
+
+/** Local-only fast path: one wrangler process per schema file instead of one per statement (about 110
+ *  spawns otherwise, minutes on a CI runner). A non-zero exit is not a verdict; the caller falls back to
+ *  the per-statement runner, which knows which failures are already-applied no-ops. */
+export function runLocalFile(path, databaseName, envName, options = {}) {
+  const args = ['d1', 'execute', databaseName, '--file', path, '--local']
+  if (envName) args.push('--env', envName)
+  if (options.persistTo) args.push('--persist-to', options.persistTo)
+  const command = localNodeCommand('wrangler', args)
+  const execute = options.spawn ?? spawnSync
+  try {
+    const result = execute(command.cmd, command.args, {
+      cwd: OPERATOR_ROOT, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8'
+    })
+    return result.status === 0 && !result.signal && !result.error
+  } catch {
+    return false
   }
 }
 
@@ -216,12 +239,12 @@ export async function seedDefaultTiers(target, databaseName, envName, execute = 
   }
 }
 
-function envFlagValue(args) {
-  const i = args.indexOf('--env')
+function flagValue(args, flag, example) {
+  const i = args.indexOf(flag)
   if (i < 0) return null
   const value = args[i + 1]
   if (!value || value.startsWith('--')) {
-    console.error('Usage: --env <name> requires a value (e.g. --env staging)')
+    console.error(`Usage: ${flag} requires a value (e.g. ${flag} ${example})`)
     process.exit(1)
   }
   return value
@@ -231,7 +254,12 @@ async function main() {
   const args = process.argv.slice(2)
   const dryRun = args.includes('--dry-run')
   const target = args.includes('--remote') ? 'remote' : args.includes('--local') ? 'local' : null
-  const envName = envFlagValue(args)
+  const envName = flagValue(args, '--env', 'staging')
+  const persistTo = flagValue(args, '--persist-to', './state')
+  if (persistTo && target !== 'local') {
+    console.error('Usage: --persist-to only applies to --local')
+    process.exit(1)
+  }
   if (!dryRun && !target) {
     console.error('Usage: node operator/scripts/migrate.mjs --remote | --local | --dry-run [--env <name>]')
     process.exit(1)
@@ -239,7 +267,7 @@ async function main() {
 
   const wranglerJsoncText = readFileSync(join(OPERATOR_ROOT, 'wrangler.jsonc'), 'utf8')
   const { databaseName, databaseId } = resolveDatabaseName(wranglerJsoncText, envName)
-  if (isPlaceholderDatabaseId(databaseId)) {
+  if (target !== 'local' && isPlaceholderDatabaseId(databaseId)) {
     console.error(
       `Métis Operator migration: env "${envName}" still has the placeholder database id (${PLACEHOLDER_DATABASE_ID}). ` +
         `Run "npx wrangler@4 d1 create ${databaseName}" and paste the printed id into wrangler.jsonc first.`
@@ -258,10 +286,14 @@ async function main() {
       for (const stmt of statements) console.log(shortStmt(stmt))
       continue
     }
+    if (target === 'local' && runLocalFile(join(OPERATOR_ROOT, file), databaseName, envName, { persistTo })) {
+      console.log(`--- Applied ${file} (${statements.length} statement(s)) to local in one call (database: ${databaseName}${envName ? `, env: ${envName}` : ''}) ---`)
+      continue
+    }
     console.log(`--- Applying ${file} (${statements.length} statement(s)) to ${target} (database: ${databaseName}${envName ? `, env: ${envName}` : ''}) ---`)
     const results = []
     for (const stmt of statements) {
-      const result = await runStatement(stmt, target, databaseName, envName)
+      const result = await runStatement(stmt, target, databaseName, envName, { persistTo })
       results.push(result)
       console.log(`[${result.status}] ${shortStmt(stmt)}`)
       if (result.status === 'failed') console.error(result.message)
@@ -271,7 +303,7 @@ async function main() {
   }
 
   if (!dryRun && !anyFailed) {
-    await seedDefaultTiers(target, databaseName, envName)
+    await seedDefaultTiers(target, databaseName, envName, (sql, t, d, e) => runStatement(sql, t, d, e, { persistTo }))
   }
 
   if (anyFailed) {
