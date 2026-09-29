@@ -134,6 +134,21 @@ describe('maintenance gate', () => {
     expect(listener).not.toHaveBeenCalled()
   })
 
+  it('maintenance listeners can be explicitly removed between isolated tests', async () => {
+    startOpen()
+    const listener = vi.fn()
+    const removeListener = onMaintenanceMayBegin(listener)
+
+    removeListener()
+    resetMaintenanceGateForTests()
+    startOpen()
+    const release = beginMaintenance()
+    release()
+    await Promise.resolve()
+
+    expect(listener).not.toHaveBeenCalled()
+  })
+
   it('interactive re-check is scheduled only while waiters exist', async () => {
     uptime = 121_000
     interactive = true

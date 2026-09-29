@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=3840, height=2160" />
+    <title>NP-02 Abstract bridge</title>
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"
+      integrity="sha256-wXS/zlOnKUGNV6ithiXnJHx5OiL++OKFHjz6PenNgoA="
+      crossorigin="anonymous"
+    ></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #0a0a0a;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      .ring {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 1200px;
+        height: 1200px;
+        margin: -600px 0 0 -600px;
+        border-radius: 50%;
+        border: 8px solid #6366f1;
+        opacity: 0;
+      }
+      #core {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 280px;
+        height: 280px;
+        margin: -140px 0 0 -140px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(99, 102, 241, 0.9), rgba(99, 102, 241, 0) 70%);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="np-02-abstract-bridge"
+      data-start="0"
+      data-duration="3"
+      data-fps="30"
+      data-width="3840"
+      data-height="2160"
+    >
+      <div id="core"></div>
+      <div class="ring" id="ring-a"></div>
+      <div class="ring" id="ring-b"></div>
+      <div class="ring" id="ring-c"></div>
+    </div>
+    <script>
+      const tl = gsap.timeline({ paused: true })
+      tl.fromTo('#core', { scale: 0.5 }, { scale: 3, duration: 2.9, ease: 'power1.inOut' }, 0)
+      for (const [index, id] of ['#ring-a', '#ring-b', '#ring-c'].entries()) {
+        tl.fromTo(id, { scale: 0.1, opacity: 0.9 }, { scale: 1.6, opacity: 0, duration: 1.9, ease: 'power2.out' }, index * 0.4)
+      }
+      window.__timelines = window.__timelines || {}
+      window.__timelines['np-02-abstract-bridge'] = tl
+    </script>
+  </body>
+</html>
