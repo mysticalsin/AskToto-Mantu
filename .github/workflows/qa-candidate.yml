@@ -25,6 +25,7 @@ on:
       - scripts/qa/provenance.mjs
       - scripts/qa/st-1.mjs
       - scripts/qa/lib/st-1-core.mjs
+      - scripts/qa/stat-flags-fixture.sh
 
 permissions:
   contents: read
@@ -395,6 +396,132 @@ jobs:
         with:
           name: st-1-macos-fifo
           path: st1-report/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+  # OD-36: the candidate itself carries ST-1 with synthetic dataless fixtures. Hosted runners have no
+  # cloud-file provider, so a kernel-blocking FIFO stands at every path a mostly-evicted cloud folder would
+  # present, in the representative-profile shape, with History idle. That proves the main-thread and
+  # threadpool guarantees on candidate bytes; SF_DATALESS detection on real evicted files is measured in the
+  # owner's field soak (st-1-macos-real-dataless.json says so and never reads as PASS). The job also runs the
+  # promotable DMG's own metis-mac-helper stat-flags on the paths that need no cloud account. Its
+  # continue-on-error equals st1-mac-fifo's: report-only while that job is, blocking once M2-0433 makes the
+  # ST-1 jobs blocking.
+  st1-mac-dataless-synthetic:
+    name: ST-1 synthetic dataless row and stat-flags (macOS)
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac
+          path: assets-mac
+      - name: Verify every byte against the provenance
+        run: |
+          node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+          node scripts/qa/provenance.mjs verify provenance/provenance.json assets-mac mac
+      - name: Measure packaged stall resilience on the synthetic dataless profile
+        continue-on-error: true
+        run: |
+          mkdir -p st1-report
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          if [ -z "$installer" ]; then
+            echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
+            exit 1
+          fi
+          node scripts/qa/st-1.mjs \
+            --installer "$installer" \
+            --provenance provenance/provenance.json \
+            --fixtures synthetic-dataless \
+            --history off \
+            --minutes 5 \
+            --out st1-report/st-1-macos-synthetic-dataless.json
+      - name: Record the real-cloud dataless row as not run on hosted runners
+        if: always()
+        run: |
+          mkdir -p st1-report
+          scratch=$(mktemp "$RUNNER_TEMP/sf-dataless-probe.XXXXXX")
+          # SF_DATALESS (0x40000000) can only be set by the kernel for a file a cloud-file provider manages.
+          # This records whether even root can set it on a scratch file, so the row's reason is measured.
+          set +e
+          probe=$(sudo python3 -c 'import os, sys; os.chflags(sys.argv[1], 0x40000000)' "$scratch" 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            settable=true
+            errno=null
+          else
+            settable=false
+            errno=$(sed -n 's/.*Errno \([0-9]*\).*/\1/p' <<<"$probe" | head -n 1)
+            errno=${errno:-null}
+          fi
+          sudo chflags 0 "$scratch" 2>/dev/null || true
+          sudo rm -f "$scratch"
+          jq -n --argjson settable "$settable" --argjson errno "$errno" --arg probe "$probe" '{
+            harness: "ST-1",
+            row: "dataless-real-cloud",
+            verdict: "NOT_RUN_ON_HOSTED",
+            reason: "Hosted runners have no cloud-file provider account, so no file can be evicted to a real dataless placeholder.",
+            measuredBy: "post-release field soak diagnostics",
+            sfDatalessProbe: { settable: $settable, errno: $errno, output: $probe }
+          }' > st1-report/st-1-macos-real-dataless.json
+          cat st1-report/st-1-macos-real-dataless.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: st-1-macos-synthetic-dataless
+          path: st1-report/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+      - name: Check the DMG's own stat-flags helper on local paths
+        run: |
+          mkdir -p stat-flags-report
+          dmg=$(find assets-mac -maxdepth 1 -name '*.dmg' -print -quit)
+          if [ -z "$dmg" ]; then
+            echo "::error::candidate-mac did not contain a dmg."
+            exit 1
+          fi
+          volume="$RUNNER_TEMP/dmg-volume"
+          hdiutil attach -nobrowse -readonly -mountpoint "$volume" "$dmg" > /dev/null
+          bundle=$(cd "$volume" && ls -d *.app)
+          ditto "$volume/$bundle" "$RUNNER_TEMP/dmg-app"
+          hdiutil detach "$volume" > /dev/null
+          helper="$RUNNER_TEMP/dmg-app/Contents/Resources/mac-helper/metis-mac-helper"
+          set +e
+          bash scripts/qa/stat-flags-fixture.sh "$helper" --local-only 2>&1 | tee stat-flags-report/stat-flags-output.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then verdict=PASS; else verdict=FAIL; fi
+          jq -n --arg verdict "$verdict" --rawfile output stat-flags-report/stat-flags-output.txt '{
+            harness: "stat-flags",
+            mode: "local-only",
+            helper: "candidate-mac DMG: Contents/Resources/mac-helper/metis-mac-helper",
+            verdict: $verdict,
+            datalessFileCheck: "NOT_RUN_ON_HOSTED",
+            output: $output
+          }' > stat-flags-report/stat-flags-macos.json
+          exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: stat-flags-macos
+          path: stat-flags-report/stat-flags-macos.json
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 

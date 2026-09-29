@@ -3,12 +3,16 @@
 # never on an owner account.
 #
 #   scripts/qa/stat-flags-fixture.sh <helper> <dataless-file> [--cycle]
+#   scripts/qa/stat-flags-fixture.sh <helper> --local-only
 #
 #   <helper>         the metis-mac-helper binary under test (the packaged candidate's
 #                    Contents/Resources/mac-helper/metis-mac-helper, or resources/mac-helper/ after
 #                    `node scripts/build-mac-helper.mjs`)
 #   <dataless-file>  a cloud-only file on the QA cloud account (iCloud Drive: `brctl evict <file>`;
 #                    OneDrive: Finder > Free up space)
+#   --local-only     for hosted runners, which have no cloud-file provider: check the local,
+#                    APFS-compressed, non-ASCII and unstat-able paths only, require SF_DATALESS on none of
+#                    the files, and report the dataless-file check as not run
 #   --cycle          also hydrate the file, evict it again with brctl (iCloud Drive only) and print
 #                    mtime, ctime, size and flags at each step: evidence for the detector's cache key
 #
@@ -25,11 +29,18 @@ flags_of() { stat -f %Uf "$1"; }
 has_flag() { (( ($1 & $2) != 0 )); }
 
 [[ "$(uname)" == Darwin ]] || fail 'macOS only'
-[[ $# -ge 2 ]] || fail 'usage: stat-flags-fixture.sh <helper> <dataless-file> [--cycle]'
+[[ $# -ge 2 ]] || fail 'usage: stat-flags-fixture.sh <helper> <dataless-file> [--cycle] | <helper> --local-only'
 helper=$1 dataless=$2 mode=${3:-}
+local_only=false
+if [[ "$dataless" == --local-only ]]; then
+  local_only=true
+  dataless=
+fi
 [[ -x "$helper" ]] || fail "helper is not executable: $helper"
-[[ -f "$dataless" ]] || fail "dataless fixture not found: $dataless"
-has_flag "$(flags_of "$dataless")" "$SF_DATALESS" || fail "$dataless is not dataless; evict it first"
+if ! $local_only; then
+  [[ -f "$dataless" ]] || fail "dataless fixture not found: $dataless"
+  has_flag "$(flags_of "$dataless")" "$SF_DATALESS" || fail "$dataless is not dataless; evict it first"
+fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/stat-flags-fixture.XXXXXX")
 trap 'rm -rf "$work"' EXIT
@@ -43,19 +54,33 @@ head -c 200000 /dev/zero | tr '\0' 'a' >"$work/plain.md"
 ditto --hfsCompression "$work/plain.md" "$compressed"
 has_flag "$(flags_of "$compressed")" "$UF_COMPRESSED" || fail 'fixture: ditto did not compress the file'
 
-answer=$(printf '%s\0' "$local_file" "$compressed" "$dataless" "$missing" "$unicode" | "$helper" stat-flags)
+# --local-only leaves the dataless path out; its slot in words stays empty so the indices below hold.
+if $local_only; then
+  answer=$(printf '%s\0' "$local_file" "$compressed" "$missing" "$unicode" | "$helper" stat-flags)
+  expected_words=4
+else
+  answer=$(printf '%s\0' "$local_file" "$compressed" "$dataless" "$missing" "$unicode" | "$helper" stat-flags)
+  expected_words=5
+fi
 list=${answer#\[}; list=${list%\]}
 IFS=, read -r -a words <<<"$list"
-[[ ${#words[@]} -eq 5 ]] || fail "expected 5 words, got: $answer"
+[[ ${#words[@]} -eq $expected_words ]] || fail "expected $expected_words words, got: $answer"
+if $local_only; then words=("${words[0]}" "${words[1]}" "" "${words[2]}" "${words[3]}"); fi
 
 expect_stat() { [[ "$2" == "$(flags_of "$1")" ]] || fail "$1: helper said $2, stat(1) says $(flags_of "$1")"; }
 expect_stat "$local_file" "${words[0]}"
 expect_stat "$compressed" "${words[1]}"
-expect_stat "$dataless" "${words[2]}"
+if ! $local_only; then expect_stat "$dataless" "${words[2]}"; fi
 [[ "${words[3]}" == null ]] || fail "unstat-able path: expected null, got ${words[3]}"
 expect_stat "$unicode" "${words[4]}"
 if has_flag "${words[0]}" "$SF_DATALESS"; then fail 'local file reported dataless'; fi
 if has_flag "${words[1]}" "$SF_DATALESS"; then fail 'compressed local file reported dataless'; fi
+if $local_only; then
+  if has_flag "${words[4]}" "$SF_DATALESS"; then fail 'non-ASCII local file reported dataless'; fi
+  echo "PASS stat-flags (local only): local=${words[0]} compressed=${words[1]} missing=null unicode=${words[4]}"
+  echo 'dataless-file check: NOT_RUN_ON_HOSTED (no cloud-file provider account on hosted runners)'
+  exit 0
+fi
 has_flag "${words[2]}" "$SF_DATALESS" || fail 'dataless file not reported dataless'
 has_flag "$(flags_of "$dataless")" "$SF_DATALESS" || fail 'the probe hydrated the dataless file'
 echo "PASS stat-flags: local=${words[0]} compressed=${words[1]} dataless=${words[2]} missing=null unicode=${words[4]}"

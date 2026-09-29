@@ -88,6 +88,34 @@ export function historyEntry(tMs, outcome) {
   return { tMs, ...outcome.value }
 }
 
+/** The representative profile of ARCHITECTURE 6.1: 59 meetings, 6 of them cloud-only, and a mostly
+ *  cloud-only `.brain`. */
+export const SYNTHETIC_LOCAL_MEETINGS = 53
+export const SYNTHETIC_FIFO_MEETINGS = 6
+export const SYNTHETIC_BRAIN_ENTITY_FIFOS = 4
+
+/**
+ * Where `--fixtures synthetic-dataless` places things, relative to the meetings root. Hosted runners have
+ * no cloud-file provider, so a kernel-blocking FIFO stands at every path a mostly-evicted cloud folder
+ * would present as unreadable: `local` are content-free placeholder meeting files, `fifos` the paths that
+ * block a reader. Pure: st-1.mjs materializes it.
+ */
+export function syntheticDatalessPlan() {
+  const pad = (n) => String(n).padStart(2, '0')
+  const meeting = (i, tag) => `2026-${pad(1 + Math.floor(i / 28))}-${pad((i % 28) + 1)}_090000-st1-${tag}.md`
+  const local = Array.from({ length: SYNTHETIC_LOCAL_MEETINGS }, (_, i) => meeting(i, 'local'))
+  const meetingFifos = Array.from({ length: SYNTHETIC_FIFO_MEETINGS }, (_, i) => meeting(SYNTHETIC_LOCAL_MEETINGS + i, 'cloud-only'))
+  const brainFifos = [
+    '.brain/index.json',
+    ...Array.from({ length: SYNTHETIC_BRAIN_ENTITY_FIFOS }, (_, i) => `.brain/entities/${i % 2 === 0 ? 'person' : 'org'}/st1-cloud-only-${i + 1}.json`)
+  ]
+  return {
+    local,
+    fifos: [...meetingFifos, ...brainFifos],
+    counts: { localMeetings: local.length, fifoMeetings: meetingFifos.length, brainFifos: brainFifos.length }
+  }
+}
+
 /** The pass/fail criteria. They read only the measurement, never the attribution evidence. */
 export function evaluateCriteria(row, measured, evidence) {
   const criteria = [
@@ -114,7 +142,20 @@ export function emptyRun() {
  * could not finish (`harnessError`); either has verdict INCOMPLETE, because a measurement that stopped
  * early proves nothing either way. A complete run's verdict comes from the criteria alone.
  */
-export function buildReport({ row, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError }) {
+export function buildReport({
+  row,
+  installer,
+  candidate,
+  minutes,
+  measured,
+  evidence,
+  fixtures,
+  attribution,
+  complete,
+  harnessError,
+  historyMode = 'on',
+  fixtureCounts = null
+}) {
   const criteria = evaluateCriteria(row, measured, evidence)
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = row === 'none' || evidence?.exercised
@@ -136,7 +177,10 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
     write: { maxMs: Math.max(0, ...measured.samples.map((s) => s.writeMs)) },
     lookup: { maxMs: Math.max(0, ...measured.samples.map((s) => s.lookupMs)) },
     exercised: evidence?.exercised ?? null,
-    ...(row === 'fifo' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
+    ...(row === 'fifo' || row === 'synthetic-dataless' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
+    ...(row === 'synthetic-dataless'
+      ? { fixtureKind: 'synthetic-dataless', fixtureCounts, sfDatalessSet: evidence?.sfDatalessSet ?? null }
+      : {}),
     ...(row === 'dataless' ? { stillDataless: evidence?.stillDataless ?? null } : {}),
     criteria,
     verdict,
@@ -146,6 +190,7 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
     errors: measured.errors,
     setupAtMs: measured.setupAtMs,
     timeline: [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs),
+    historyMode,
     history: measured.history,
     cpuProfile: measured.profiler,
     mainLog: !attribution.mainLog

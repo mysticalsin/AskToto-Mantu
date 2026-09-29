@@ -9,6 +9,7 @@ import {
   pinnedExpression,
   recordSample,
   releaseExpression,
+  syntheticDatalessPlan,
   withTimeout
 } from './lib/st-1-core.mjs'
 
@@ -231,5 +232,55 @@ describe('buildLaunchFailureReport', () => {
     expect(built.verdict).toBe('FAIL')
     expect(built.criteria).toEqual([{ name: 'inspector', pass: false }])
     expect(built.fixtures).toBe(3)
+  })
+})
+
+describe('syntheticDatalessPlan', () => {
+  const plan = syntheticDatalessPlan()
+
+  it('has the representative-profile shape: 59 meetings, 6 of them blocking, a blocking index and 3+ entity files', () => {
+    expect(plan.local).toHaveLength(53)
+    expect(plan.fifos.filter((path) => path.endsWith('.md'))).toHaveLength(6)
+    expect(plan.fifos).toContain('.brain/index.json')
+    expect(plan.fifos.filter((path) => path.startsWith('.brain/entities/')).length).toBeGreaterThanOrEqual(3)
+    expect(plan.counts).toEqual({ localMeetings: 53, fifoMeetings: 6, brainFifos: 5 })
+  })
+
+  it('never places two files at one path', () => {
+    const all = [...plan.local, ...plan.fifos]
+    expect(new Set(all).size).toBe(all.length)
+  })
+})
+
+describe('synthetic-dataless and history reports', () => {
+  const synthetic = (overrides: Record<string, unknown> = {}) =>
+    report({
+      row: 'synthetic-dataless',
+      fixtures: Array.from({ length: 11 }, (_, i) => `fifo-${i}`),
+      fixtureCounts: syntheticDatalessPlan().counts,
+      evidence: { exercised: true, fixturesOpened: ['a.md'], sfDatalessSet: false },
+      ...overrides
+    })
+
+  it('records the fixture kind, the counts and that SF_DATALESS was set on none', () => {
+    const built = synthetic()
+    expect(built.fixtureKind).toBe('synthetic-dataless')
+    expect(built.fixtureCounts).toEqual({ localMeetings: 53, fifoMeetings: 6, brainFifos: 5 })
+    expect(built.sfDatalessSet).toBe(false)
+    expect(built.verdict).toBe('PASS')
+  })
+
+  it('uses the fifo row exercised rule and the same criteria', () => {
+    expect(synthetic({ evidence: { exercised: false, fixturesOpened: [], sfDatalessSet: false } }).verdict).toBe('NOT_EXERCISED')
+    expect(synthetic().criteria).toEqual(report().criteria)
+    expect(synthetic({ measured: { ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms: 12, maxMs: 460 } } }).verdict).toBe('FAIL')
+  })
+
+  it('reports historyMode on by default and off when asked, and adds nothing to other rows', () => {
+    expect(report().historyMode).toBe('on')
+    expect(report({ historyMode: 'off' }).historyMode).toBe('off')
+    expect(report({ historyMode: 'off' }).history).toEqual([])
+    expect(report({ row: 'fifo', evidence: { exercised: true, fixturesOpened: [] } })).not.toHaveProperty('fixtureKind')
+    expect(report()).not.toHaveProperty('sfDatalessSet')
   })
 })
