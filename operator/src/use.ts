@@ -1,6 +1,6 @@
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '../../src/shared/providers'
 import { operatorVisionModel, parseOperatorImage, type OperatorImage } from '../../src/shared/operator-vision'
-import { GatewayPrivacyError, verifyDefaultGatewayPrivacy } from './ai-gateway'
+import { GatewayPrivacyError, gatewayPrivacyHeaders, readinessForError, verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { decryptVault } from './crypto'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { looksLikeSecret, providerRefusedPayload } from './redact'
@@ -80,7 +80,7 @@ async function providerRefused(res: Response, secrets: readonly string[], screen
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8' }
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
   })
 }
 
@@ -237,7 +237,7 @@ export function anthropicMessages(req: UseRequest): unknown[] {
 export function screenshotGatewayHeaders(req: UseRequest): Record<string, string> {
   // Enterprise-live F05: text asks are also sensitive; suppress payload logs + cache for all managed uses.
   void req
-  return { 'cf-aig-collect-log-payload': 'false', 'cf-aig-skip-cache': 'true' }
+  return gatewayPrivacyHeaders('rest')
 }
 
 export async function decryptActiveLlmSecret(
@@ -418,7 +418,10 @@ export async function handleUse(
           : await callOpenAICompat(unlocked.secret, parsed.req, def.baseUrl, timedFetch)
   } catch (error) {
     if (error instanceof GatewayPrivacyError) {
-      return fail('Cloudflare gateway privacy is not verified.', 503, { code: error.code })
+      return fail('Cloudflare gateway privacy is not verified.', 503, {
+        code: error.code,
+        readiness: readinessForError(error)
+      })
     }
     return fail('Operator cannot issue a use', 503)
   }

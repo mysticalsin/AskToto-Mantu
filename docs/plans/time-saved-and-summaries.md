@@ -1,5 +1,8 @@
 # DESIGN — Time Saved + Meeting/Email-ready Summaries
 
+> **Historical design note (2026-08-09).** The current visual and behavioural contract for Time Saved is
+> [`../design/TIME-SAVED.md`](../design/TIME-SAVED.md). Read this only for the reasoning behind the original estimate.
+
 Date: 2026-08-09. Branch: fix/windows-audit-and-release-gate.
 
 ## Outcome
