@@ -87,6 +87,8 @@
     "test:refactor:move": "node scripts/refactor/verify-move.test.mjs",
     "check:build-host": "node scripts/check-build-host.mjs",
     "typecheck:tests": "node scripts/check-test-types.mjs",
+    "lint:changed": "node scripts/ci/lint-ratchet.mjs lint",
+    "format:changed": "node scripts/ci/lint-ratchet.mjs format",
     "check:skips": "node scripts/check-skipped-tests.mjs",
     "check:cf-key": "node scripts/check-cloudflare-key-valid.mjs",
     "check:scratch-paths": "node operator/scripts/check-no-scratch-paths.mjs",

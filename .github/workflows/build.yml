@@ -119,6 +119,29 @@ jobs:
           xcodebuild -project Metis.xcodeproj -scheme Metis -configuration Debug \
             -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build
 
+  lint:
+    # Minimal correctness lint plus a format check, on the files this branch changes (M2-0052). Biome comes
+    # from npx at the exact version scripts/ci/lint-ratchet.mjs pins, so this job needs no `npm ci`.
+    # fetch-depth 0: the ratchet compares each changed file with its merge-base revision.
+    name: Lint and format (changed files)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      # Blocking. A changed file may not gain lint diagnostics; the ones already in it are the baseline.
+      - name: Lint ratchet (changed files)
+        run: npm run lint:changed
+      # Report-only for its first week (2026-09-29 to 2026-10-05): no file has ever been formatted, so a
+      # first red may be old style rather than a regression. From 2026-10-06 the script itself exits 1 for
+      # an unformatted changed file (FORMAT_BLOCKING_FROM in lint-ratchet.mjs), so this step needs no edit.
+      - name: Format check (changed files)
+        run: npm run format:changed
+
   license-server:
     # license-server is a separate npm project (own package-lock) that neither `quality` nor `operator`
     # reaches, so its `node --test` suite had no CI coverage (M2-0051). `npm test` there is the hermetic
