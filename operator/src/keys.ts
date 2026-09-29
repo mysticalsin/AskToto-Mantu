@@ -4,6 +4,7 @@ import {
   verifyDefaultGatewayPrivacy,
   type GatewayPrivacyErrorCode
 } from './ai-gateway'
+import { PROVIDERS, type ProviderDef, type ProviderId } from '../../src/shared/providers'
 import { decryptVault, encryptVault } from './crypto'
 import { looksLikeSecret } from './redact'
 import { seatAuthorizedForKeys } from './fleet'
@@ -278,6 +279,14 @@ export async function revokeVaultKey(
     detail: `revoke ${existing.provider}`
   })
   return { ok: true, id: existing.id, status: 'revoked' }
+}
+
+/** The one "provider not allowed for an Operator-funded call" guard shared by `/v1/ask` and `/v1/use`:
+ *  only a catalogued HTTP provider can be called with a vaulted key, never a CLI, Dust or local one. */
+export function operatorCallableProvider(provider: string): ProviderDef | null {
+  const def = provider in PROVIDERS ? PROVIDERS[provider as ProviderId] : null
+  if (!def || def.kind === 'cli' || def.kind === 'dust' || def.kind === 'local') return null
+  return def
 }
 
 export async function fundedProviders(

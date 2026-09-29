@@ -7,6 +7,9 @@ import type { IssuedLicenseRow, OperatorStore, SeatRow } from './store'
 export type VerifiedDeviceLicense = { jti: string; last4: string }
 type DeviceAuth = HmacCheck & { license?: VerifiedDeviceLicense }
 
+/** 2027-06-30T00:00:00Z: from this instant the legacy fleet-secret HMAC path refuses every request. */
+export const LEGACY_FLEET_HMAC_SUNSET_MS = Date.UTC(2027, 5, 30)
+
 function refused(code: string, error: string, status = 403): HmacFail {
   return { ok: false, status, error, code }
 }
@@ -47,6 +50,11 @@ export async function verifyDeviceRequest(
 ): Promise<DeviceAuth | HmacFail> {
   const licenseHeader = request.headers.get(OPERATOR_LICENSE_HEADER)
   if (licenseHeader === null) {
+    // The no-licence path proves knowledge of the fleet-wide secret, not a device. It is retired on a
+    // fixed date so every seat has moved to a per-device licence signature before it stops working.
+    if (now >= LEGACY_FLEET_HMAC_SUNSET_MS) {
+      return refused('legacy-hmac-retired', 'Unlicensed device requests are no longer accepted. Activate a Métis licence.', 401)
+    }
     return verifyIngestHmac(request, bodyText, serverSecret, now, (nonce) => store.takeNonce(nonce, now))
   }
   const token = licenseHeader.trim()

@@ -223,8 +223,12 @@ export async function fetchOperatorIntegrations(
       }
       const parsed = parseOperatorIntegrationsResponse(json)
       if (!parsed) return null
-      applyIntegrations(parsed.version, parsed.integrations, now)
-      return parsed.integrations
+      // A brokered endpoint is a path on the Operator (`/v1/mcp/:id`); make it an absolute URL.
+      const integrations = parsed.integrations.map((it) =>
+        it.baseUrl?.startsWith('/') ? { ...it, baseUrl: `${url}${it.baseUrl}` } : it
+      )
+      applyIntegrations(parsed.version, integrations, now)
+      return integrations
     } catch (e) {
       if (generation === connectionGeneration) mainLog.warn('[operator-integrations] fetch threw:', e)
       return null
