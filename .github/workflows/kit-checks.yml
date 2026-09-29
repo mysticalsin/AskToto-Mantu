@@ -1,12 +1,18 @@
 name: Kit checks
 
-# Runs the skill-registry check against a kit registry file. The kit itself lives outside this
-# repository; the program repository copies this workflow and adds a path filter for its kit folder.
+# Runs the skill-registry check and the Hindsight package validator against a kit copy. The kit itself
+# lives outside this repository. The program repository copies this workflow and must add a `push` and
+# `pull_request` trigger with a `paths:` filter on its kit v5 folder (defaulting both inputs to the kit
+# registry file and the kit skill folder), then confirm both steps pass.
 on:
   workflow_dispatch:
     inputs:
       registry:
         description: Path to the kit skill registry JSON, relative to the repository root
+        required: true
+        type: string
+      kit_dir:
+        description: Path to the Hindsight kit package directory, relative to the repository root
         required: true
         type: string
 
@@ -33,3 +39,10 @@ jobs:
         env:
           REGISTRY: ${{ inputs.registry }}
         run: node scripts/kit/check-skill-registry.mjs --registry "$REGISTRY"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Hindsight package validator
+        env:
+          KIT_DIR: ${{ inputs.kit_dir }}
+        run: python3 "$KIT_DIR/check_hindsight_package.py" "$KIT_DIR"
