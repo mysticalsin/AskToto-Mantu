@@ -115,12 +115,15 @@ export interface LazyTrayMenu {
  *  and Windows the menu is built and attached on the tray's first open (right-click everywhere, and the macOS
  *  left click, which opens an attached menu natively) and popped up in that same task; every later open is
  *  native. Platforms that emit no open event get the menu at once. The build and the attach are timed as
- *  'createTray.buildMenu' and 'createTray.attachMenu' whenever they run. */
+ *  'createTray.buildMenu' and 'createTray.attachMenu' whenever they run. `onClick` is the tray's left-click
+ *  handler: the macOS left click that opens the menu for the first time runs the menu only, as a click on an
+ *  attached menu does; every other left click runs `onClick`. */
 export function attachMenuOnFirstOpen<Menu>(
   tray: LazyMenuTray<Menu>,
   platform: NodeJS.Platform,
   buildMenu: () => Menu,
-  time: TrayPhaseTimer = untimed
+  time: TrayPhaseTimer = untimed,
+  onClick?: () => void
 ): LazyTrayMenu {
   let attached = false
   const attach = (): Menu => {
@@ -135,10 +138,13 @@ export function attachMenuOnFirstOpen<Menu>(
   }
   if (platform === 'darwin' || platform === 'win32') {
     tray.on('right-click', openFirst)
-    if (platform === 'darwin') tray.on('click', openFirst)
   } else {
     attach()
   }
+  tray.on('click', () => {
+    if (platform === 'darwin' && !attached) openFirst()
+    else onClick?.()
+  })
   return {
     rebuild() {
       if (attached && !tray.isDestroyed()) tray.setContextMenu(buildMenu())

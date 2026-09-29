@@ -439,6 +439,38 @@ describe('attachMenuOnFirstOpen (M2-0433)', () => {
     expect(windows.popUpContextMenu).not.toHaveBeenCalled()
   })
 
+  it('runs only the menu on the first macOS left click and only the click handler on a Windows left click', () => {
+    const macClick = vi.fn()
+    const mac = fakeTray()
+    attachMenuOnFirstOpen(mac, 'darwin', () => 'menu', undefined, macClick)
+    mac.emit('click')
+    expect(mac.popUpContextMenu).toHaveBeenCalledExactlyOnceWith('menu')
+    expect(macClick).not.toHaveBeenCalled()
+    // Once attached, a click Electron still emits reaches the handler, as it did with the menu attached at boot.
+    mac.emit('click')
+    expect(macClick).toHaveBeenCalledTimes(1)
+    expect(mac.popUpContextMenu).toHaveBeenCalledTimes(1)
+
+    const windowsClick = vi.fn()
+    const windows = fakeTray()
+    attachMenuOnFirstOpen(windows, 'win32', () => 'menu', undefined, windowsClick)
+    windows.emit('click')
+    windows.emit('click')
+    expect(windowsClick).toHaveBeenCalledTimes(2)
+    expect(windows.popUpContextMenu).not.toHaveBeenCalled()
+  })
+
+  it('builds the first menu from the settings current at the first open, so a rebind before it is not lost', () => {
+    const tray = fakeTray()
+    let shortcut = 'CommandOrControl+Shift+M'
+    const menu = attachMenuOnFirstOpen(tray, 'win32', () => `menu(${shortcut})`)
+    shortcut = 'CommandOrControl+Shift+K'
+    menu.rebuild()
+    tray.emit('right-click')
+    expect(tray.setContextMenu).toHaveBeenCalledExactlyOnceWith('menu(CommandOrControl+Shift+K)')
+    expect(tray.popUpContextMenu).toHaveBeenCalledExactlyOnceWith('menu(CommandOrControl+Shift+K)')
+  })
+
   it('attaches at once where the tray emits no open event', () => {
     const tray = fakeTray()
     attachMenuOnFirstOpen(tray, 'linux', () => 'menu')
