@@ -4,7 +4,7 @@ import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { saveMeeting, isEncryptedFile } from './transcripts'
-import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk, meetingTextNeedsRecap } from './recall'
+import { listMeetings, deleteMeeting, recallRead, searchMeetings, searchMeetingsLatest, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk, meetingTextNeedsRecap } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 
@@ -1095,11 +1095,13 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
   let folder: string
   let reads: string[]
   let cloudOnly: Set<string>
+  let notRegular: Set<string>
 
   beforeEach(async () => {
     const { readdir, readFile, realpath, stat, lstat } = await import('node:fs/promises')
     reads = []
     cloudOnly = new Set()
+    notRegular = new Set()
     useStorageForTests({
       detector: { classify: async (files) => new Map(files.map((f) => [f.path, cloudOnly.has(f.path) ? 'dataless' : 'local'] as const)) },
       fs: {
@@ -1109,7 +1111,10 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
           return readFile(p)
         },
         realpath: (p) => realpath(p),
-        stat: (p) => stat(p),
+        stat: async (p) => {
+          const s = await stat(p)
+          return notRegular.has(p) ? { mtimeMs: s.mtimeMs, ctimeMs: s.ctimeMs, size: s.size, isFile: () => false } : s
+        },
         lstat: (p) => lstat(p).then((s) => ({ isSymbolicLink: s.isSymbolicLink() }))
       }
     })
@@ -1152,6 +1157,46 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
     expect(await searchMeetings('march')).toHaveLength(0)
     expect(await searchMeetings('marc')).toHaveLength(0)
     expect(reads).toEqual([])
+  })
+
+  it('an explicit open hydrates the one dataless file, reports progress, and list and search still do not', async () => {
+    const remote = await saveMeeting(testSettings, meeting('Cloud sync', 1_700_100_000_000))
+    cloudOnly.add(remote)
+    reads.length = 0
+
+    await listMeetings()
+    await searchMeetings('march')
+    expect(reads).toEqual([])
+
+    const progress: string[] = []
+    const opened = await recallRead(basename(remote), (p) => progress.push(p.state))
+    expect(opened.ok).toBe(true)
+    expect(reads).toEqual([remote])
+    expect(progress).toEqual(['hydrating', 'done'])
+
+    reads.length = 0
+    await listMeetings()
+    expect(reads).toEqual([])
+  })
+
+  it('never reads a non-regular entry on list, search or open, and lists it as unavailable', async () => {
+    const odd = await saveMeeting(testSettings, meeting('Pipe sync', 1_700_200_000_000))
+    notRegular.add(odd)
+    reads.length = 0
+
+    const row = (await listMeetings()).find((m) => m.file === basename(odd))
+    expect(row?.title).toContain('Unavailable')
+    expect(await searchMeetings('march')).toHaveLength(0)
+    expect(await recallRead(basename(odd))).toEqual({ ok: false, error: 'Could not read the meeting file.' })
+    expect(reads).toEqual([])
+  })
+
+  it('a search superseded by a newer one returns nothing while the newer one answers', async () => {
+    await saveMeeting(testSettings, meeting('Local sync', 1_700_000_000_000))
+    const first = searchMeetingsLatest('march')
+    const second = searchMeetingsLatest('march')
+    expect(await first).toEqual([])
+    expect(await second).toHaveLength(1)
   })
 
   it('an aborted search returns nothing and reads nothing', async () => {

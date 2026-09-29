@@ -421,6 +421,32 @@ describe('classify-before-read (D1-D6)', () => {
     expect(fs.calls.some((call) => call.startsWith('realpath') || call.startsWith('readFile'))).toBe(false)
   })
 
+  it('classify and read refuse a non-regular file without probing or reading it', async () => {
+    const memory = memoryFs({ 'pipe.md': 'P' })
+    const fs = { ...memory, stat: async (path: string) => ({ ...(await memory.stat(path)), isFile: () => false }) }
+    const detector = fakeDetector()
+    const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
+
+    expect((await gateway.classify(['pipe.md'])).get('pipe.md')).toMatchObject({ isRegular: false })
+    await expect(gateway.read('pipe.md')).resolves.toEqual({ status: 'unavailable', code: 'NOT_REGULAR' })
+    await expect(gateway.read('pipe.md', { hydrate: true })).resolves.toEqual({ status: 'unavailable', code: 'NOT_REGULAR' })
+    expect(detector.classify).not.toHaveBeenCalled()
+    expect(memory.calls.some((call) => call.startsWith('readFile'))).toBe(false)
+  })
+
+  it('a hydrate read opens a dataless file once, under a permit, reporting progress; a plain read still refuses it', async () => {
+    const fs = memoryFs({ 'cloud.md': 'CC' })
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 4 })
+    const progress: unknown[] = []
+
+    await expect(gateway.read('cloud.md')).resolves.toMatchObject({ status: 'dataless' })
+    const opened = await gateway.read('cloud.md', { hydrate: true, onProgress: (p) => progress.push(p) })
+
+    expect(opened.status).toBe('ok')
+    expect(progress).toEqual([{ state: 'hydrating' }, { state: 'done', bytes: 2 }])
+    expect(fs.calls.filter((call) => call.startsWith('readFile'))).toHaveLength(1)
+  })
+
   it("read returns a local file's bytes and version", async () => {
     const fs = memoryFs({ 'a.md': 'hello' })
     const detector = fakeDetector()

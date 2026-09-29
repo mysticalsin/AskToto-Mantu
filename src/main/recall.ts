@@ -4,7 +4,7 @@ import { join, basename } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
-import type { FileClass } from './infra/storage/gateway'
+import type { FileClass, HydrationProgress } from './infra/storage/gateway'
 import { getSettings } from './store'
 import { detectLanguage } from '@shared/lang-id'
 import { measuredDurationMs } from '@shared/meeting-duration'
@@ -149,6 +149,10 @@ interface CacheEntry {
 }
 // Least-recently-used, so a pathological folder (or repeated folder switches) cannot grow it without
 // limit and a full cache drops one cold entry instead of every warm one.
+// Root cause of the measured ~2 s first History call (DERIVED, not yet re-measured): the listing used to
+// read every file, so reads of blocked or cloud-only files filled the shared admission permits and the rest
+// waited on them until the gateway's 2 s metadata deadline. Now the listing is one batched classify and
+// only files classified local are read.
 const READ_CACHE_MAX = 2000
 const NOT_LOCAL_TTL_MS = 30_000
 const readCache = new Lru<CacheEntry>(READ_CACHE_MAX)
@@ -186,6 +190,11 @@ async function readMeeting(folder: string, file: string, fileClass: FileClass | 
     readCache.delete(path)
     return unavailableRow(file)
   }
+  if (!fileClass.isRegular) {
+    // A FIFO, socket or device is never opened by a listing or a search: it would pin a pool thread.
+    readCache.delete(path)
+    return unavailableRow(file)
+  }
   const { mtimeMs, size } = fileClass.version
   const hit = readCache.get(path)
   if (hit && hit.mtimeMs === mtimeMs && hit.size === size && (hit.expiresAt === undefined || hit.expiresAt > performance.now())) return hit.read
@@ -213,7 +222,9 @@ async function readMeeting(folder: string, file: string, fileClass: FileClass | 
 async function readMeetings(folder: string, files: readonly string[], signal?: AbortSignal): Promise<Array<Read | null>> {
   const classes = await classifyAll(storageAt(folder), files, signal)
   if (signal?.aborted) return []
-  return Promise.all(files.map((f) => readMeeting(folder, f, classes.get(f), signal)))
+  const read = await Promise.all(files.map((f) => readMeeting(folder, f, classes.get(f), signal)))
+  // Reads cut short by a superseding search answer 'Unavailable'; those rows are not a listing.
+  return signal?.aborted ? [] : read
 }
 
 /** The gateway says this file's bytes are not on this device (or would not arrive in time). */
@@ -303,14 +314,18 @@ export async function listMeetings(): Promise<MeetingSummary[]> {
  * Parses frontmatter (title, mode, date → startedAt), the recap section, and the transcript lines.
  * Constrained to the meetings folder (same basename guard as recallOpen in index.ts — no traversal).
  */
-export async function recallRead(file: string): Promise<RecallReadResult> {
+export async function recallRead(file: string, onProgress?: (progress: HydrationProgress) => void): Promise<RecallReadResult> {
   const folder = resolveMeetingsFolder(getSettings())
   // basename blocks path traversal (mirrors the recallOpen guard in index.ts).
   const safeName = safeMeetingBasename(file)
   if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
-  const read = await storageAt(folder).read(safeName)
+  const gateway = storageAt(folder)
+  let read = await gateway.read(safeName)
+  // An explicit open is the one place a cloud-only file is hydrated: this one file, under a content
+  // permit, reporting progress. Listing and search never do.
+  if (read.status === 'dataless' || read.status === 'unknown') read = await gateway.read(safeName, { hydrate: true, onProgress })
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
@@ -981,4 +996,16 @@ export async function searchMeetings(query: string, signal?: AbortSignal): Promi
     hits.push({ ...sum, snippet, score })
   }
   return hits.sort((a, b) => b.score - a.score).slice(0, 25)
+}
+
+let activeSearch: AbortController | null = null
+
+/** The IPC search: a newer keystroke aborts the search still queued at the storage gateway, whose caller
+ *  gets `[]`. */
+export function searchMeetingsLatest(query: string): Promise<RecallHit[]> {
+  activeSearch?.abort()
+  const search = (activeSearch = new AbortController())
+  return searchMeetings(query, search.signal).finally(() => {
+    if (activeSearch === search) activeSearch = null
+  })
 }

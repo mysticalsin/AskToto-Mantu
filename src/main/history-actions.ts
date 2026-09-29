@@ -9,6 +9,7 @@
  */
 import { join } from 'node:path'
 import { storageAt } from './infra/storage/meetings-storage'
+import type { ReadOptions } from './infra/storage/gateway'
 import { decodeSaved, decryptToTemp, isEncryptedBytes } from './transcripts'
 
 /** Shown on the History row when the gateway could not read the meeting (cloud-only, locked, slow). */
@@ -19,9 +20,16 @@ export type OpenTarget = { ok: true; path: string; encrypted: boolean } | { ok: 
 
 /** What History's "Open" hands to the OS: the meeting itself, or a decrypted temp copy when it is
  *  encrypted at rest. A missing file is handed over as-is, so the OS reports it as before. */
-export async function meetingOpenTarget(folder: string, safeName: string): Promise<OpenTarget> {
+export async function meetingOpenTarget(
+  folder: string,
+  safeName: string,
+  { hydrate = false, onProgress }: Pick<ReadOptions, 'hydrate' | 'onProgress'> = {}
+): Promise<OpenTarget> {
   const path = join(folder, safeName)
-  const read = await storageAt(folder).read(safeName)
+  const gateway = storageAt(folder)
+  let read = await gateway.read(safeName)
+  // The user's explicit Open hydrates this one cloud-only file (under a content permit, with progress).
+  if (hydrate && (read.status === 'dataless' || read.status === 'unknown')) read = await gateway.read(safeName, { hydrate, onProgress })
   if (read.status === 'missing') return { ok: true, path, encrypted: false }
   if (read.status !== 'ok') return { ok: false, error: MEETING_NOT_READABLE_MSG }
   if (!isEncryptedBytes(read.bytes)) return { ok: true, path, encrypted: false }

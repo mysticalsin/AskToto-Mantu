@@ -753,7 +753,7 @@ import {
 import {
   listMeetings,
   listMeetingsNeedingRecap,
-  searchMeetings,
+  searchMeetingsLatest,
   recallRead,
   deleteMeeting,
   renameMeeting,
@@ -8839,16 +8839,9 @@ function registerIpc(): void {
     assertMainWindow(e)
     return history.traceList(trace, () => (requireAuth() ? listMeetings() : Promise.resolve([])))
   })
-  // A newer keystroke supersedes the search still queued at the storage gateway.
-  let activeSearch: AbortController | null = null
   ipcMain.handle(IPC.recallSearch, (e, q: string) => {
     assertMainWindow(e)
-    if (!requireAuth()) return []
-    activeSearch?.abort()
-    const search = (activeSearch = new AbortController())
-    return searchMeetings(String(q ?? ''), search.signal).finally(() => {
-      if (activeSearch === search) activeSearch = null
-    })
+    return requireAuth() ? searchMeetingsLatest(String(q ?? '')) : []
   })
   ipcMain.handle(IPC.recallOpen, async (e, file: string) => {
     assertMainWindow(e)
@@ -8860,7 +8853,7 @@ function registerIpc(): void {
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
     if (!safeName) return ''
     // Encrypted transcripts are unreadable in an editor — the target is a decrypted temp copy instead.
-    const target = await meetingOpenTarget(folder, safeName)
+    const target = await meetingOpenTarget(folder, safeName, { hydrate: true })
     if (!target.ok) return target.error
     auditLog('recall.open', { encrypted: target.encrypted })
     return shell.openPath(target.path)
