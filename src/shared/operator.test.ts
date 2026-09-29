@@ -283,7 +283,7 @@ describe('projectOperatorIngestMetadata', () => {
     }
   })
 
-  it('maps graph and compaction events to null so they are never sent', () => {
+  it('maps graph, compaction, index, search and dev events to null so they are never sent', () => {
     for (const event of ['graph', 'compaction', 'index', 'search', 'dev']) {
       expect(projectOperatorIngestMetadata({ event, id: `${event}-1`, graphTokens: 1, compactionTokens: 1 })).toBeNull()
     }
@@ -332,6 +332,42 @@ describe('projectOperatorIngestMetadata', () => {
         'cacheTtl', 'outcome', 'questionType', 'error', 'seatHash', 'os', 'appVersion', 'hostname',
         'ssoEmail', 'license', 'licenseId', 'licenseLast4', 'lastIndexAt'
       ].sort()
+    )
+  })
+
+  /** Keys the projector reads from its input, so a new projected field cannot be added silently. */
+  function readKeys(source: Record<string, unknown>): string[] {
+    const read = new Set<string>()
+    const spy = new Proxy(source, {
+      get(target, key, receiver) {
+        if (typeof key === 'string') read.add(key)
+        return Reflect.get(target, key, receiver)
+      }
+    })
+    projectOperatorIngestMetadata(spy)
+    return [...read].sort()
+  }
+
+  const SEAT_READ_KEYS = ['seatHash', 'os', 'appVersion', 'hostname', 'ssoEmail', 'license', 'licenseId', 'licenseLast4', 'lastIndexAt']
+
+  it('freezes the input keys the ask path reads: a new projected field needs an explicit change here', () => {
+    const frozen = [
+      'id', 'ts', 'mode', 'skillId', 'skillVersion', 'provider', 'model', 'ttftMs', 'totalMs',
+      'inputTokens', 'outputTokens', 'cacheRead', 'cacheWrite', 'cacheUncached', 'cacheStatus',
+      'cacheTtl', 'outcome', 'questionType', 'error', ...SEAT_READ_KEYS
+    ]
+    expect(readKeys({ id: 'ask-reads', ts: 1, graphTokens: 1, devTokens: 1 })).toEqual([...frozen, 'event'].sort())
+  })
+
+  it('freezes the input keys the rating, listen, recap and crm paths read', () => {
+    expect(readKeys({ event: 'rating', id: 'r-1', rating: 'up' })).toEqual(
+      ['event', 'id', 'ts', 'rating', ...SEAT_READ_KEYS].sort()
+    )
+    for (const event of ['listen', 'recap']) {
+      expect(readKeys({ event, id: `${event}-1` })).toEqual(['event', 'id', 'ts', 'minutes', ...SEAT_READ_KEYS].sort())
+    }
+    expect(readKeys({ event: 'crm', id: 'c-1', status: 'failed' })).toEqual(
+      ['event', 'id', 'ts', 'status', 'connector', 'attempt', 'latencyMs', 'credentialSource', 'error', ...SEAT_READ_KEYS].sort()
     )
   })
 
