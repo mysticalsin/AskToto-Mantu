@@ -223,7 +223,9 @@ const deadline = Date.now() + timeoutSeconds * 1000
 while (Date.now() < deadline) {
   await sleep(5000)
   titles = windowTitles()
-  if (titles.length) break
+  // The window carries the page title ("asktoto") before the app sets its own; only the app's
+  // title or an error dialog ends the wait.
+  if (titles.some((t) => /M.tis/i.test(t) || /^Error$/i.test(t))) break
   if (exited) break
 }
 
