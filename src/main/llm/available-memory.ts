@@ -35,7 +35,7 @@ export function parseVmStatAvailableBytes(output: string): number | null {
 
 // Settings polls model readiness, and each poll sizes the spawn profile. One vm_stat per window is plenty:
 // the reading only chooses between profiles whose thresholds sit gigabytes apart.
-const READING_TTL_MS = 10_000
+export const READING_TTL_MS = 10_000
 let lastVmStat: { output: string; at: number } | null = null
 let refreshing: Promise<void> | null = null
 
@@ -49,15 +49,6 @@ export function refreshVmStatReading(): Promise<void> {
     )
     .finally(() => { refreshing = null })
   return refreshing
-}
-
-/** Boot: take the first reading now and keep it fresh every READING_TTL_MS. darwin only; returns a stop. */
-export function startAvailableMemorySampler(platform: NodeJS.Platform = process.platform): () => void {
-  if (platform !== 'darwin') return () => {}
-  void refreshVmStatReading()
-  const timer = setInterval(() => void refreshVmStatReading(), READING_TTL_MS)
-  timer.unref()
-  return () => clearInterval(timer)
 }
 
 const defaultDeps: MemoryReadingDeps = {

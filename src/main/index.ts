@@ -180,7 +180,7 @@ import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
-import { startAvailableMemorySampler } from './llm/available-memory'
+import { startAvailableMemorySampler } from './infra/scheduler/memory-sampler'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,

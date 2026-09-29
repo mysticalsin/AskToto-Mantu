@@ -28,7 +28,8 @@ vi.mock('node:os', async (importOriginal) => ({
   freemem: () => 0.45 * GB
 }))
 
-import { availableMemoryGB, refreshVmStatReading, startAvailableMemorySampler } from './available-memory'
+import { availableMemoryGB, refreshVmStatReading } from './available-memory'
+import { startAvailableMemorySampler } from '../infra/scheduler/memory-sampler'
 
 afterEach(() => vi.useRealTimers())
 
