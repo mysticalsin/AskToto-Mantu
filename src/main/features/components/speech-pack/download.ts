@@ -185,6 +185,7 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
     }
 
     let append = false
+    let declaredWrong = false
     if (res.status === 206) {
       const range = /^bytes (\d+)-(\d+)\/(\d+|\*)$/.exec(res.headers.get('content-range') ?? '')
       if (!range || Number(range[1]) !== offset || (range[3] !== '*' && Number(range[3]) !== req.bytes)) {
@@ -195,11 +196,9 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
       append = true
     } else {
       // A 200 to a ranged request means the server ignored Range or the validator changed: this file restarts.
+      // A wrong declared length is only reported after the first chunk, so a login page served as binary stays 'captive'.
       const declared = res.headers.get('content-length')
-      if (declared !== null && Number(declared) !== req.bytes) {
-        await res.body?.cancel().catch(() => undefined)
-        throw new SpeechPackError('http', 'server declared an unexpected length')
-      }
+      declaredWrong = declared !== null && Number(declared) !== req.bytes
       discard()
       offset = 0
     }
@@ -223,6 +222,7 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
         if (first) {
           first = false
           if (looksLikeHtmlBytes(value)) throw new SpeechPackError('captive', 'received a web page instead of the file')
+          if (declaredWrong) throw new SpeechPackError('http', 'server declared an unexpected length')
         }
         arm(timing.idleTimeoutMs)
         await handle.write(value)
