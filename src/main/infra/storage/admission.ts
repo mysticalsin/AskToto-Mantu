@@ -11,6 +11,8 @@
  *     the free count. Metadata calls are short and drive listings and degraded rows.
  *   - Waiting is bounded: a waiter leaves when its signal aborts, and acquire() refuses at once when
  *     MAX_QUEUED requests wait or every permit is held by a call running STUCK_AFTER_MS or more.
+ *   - inUse() counts the permits out, stuck ones included. Every onFree listener runs each time a permit
+ *     goes back to the free count, so another pool user (boot work) can share the cap without a permit.
  */
 import { mainLog } from '../../logger'
 
@@ -32,12 +34,17 @@ export interface Admission {
   run<T>(call: () => Promise<T>): Promise<T>
   /** Returns the permit the caller holds without running anything. */
   release(): void
+  /** How many permits are out now. */
+  inUse(): number
+  /** Calls `listener` each time a permit goes back to the free count. */
+  onFree(listener: () => void): void
 }
 
 export function createAdmission(capacity: number): Admission {
   let free = capacity
   const running = new Set<{ startedAt: number }>()
   const waiting: Record<Lane, Array<() => void>> = { metadata: [], content: [] }
+  const freeListeners: Array<() => void> = []
   /** performance.now() when acquire() first refused because every permit was stuck; null otherwise. */
   let refusingSince: number | null = null
 
@@ -57,8 +64,12 @@ export function createAdmission(capacity: number): Admission {
 
   function release(): void {
     const next = waiting.metadata.shift() ?? waiting.content.shift()
-    if (next) next()
-    else free += 1
+    if (next) {
+      next()
+      return
+    }
+    free += 1
+    for (const listener of freeListeners) listener()
   }
 
   function acquire(lane: Lane, signal: AbortSignal): Promise<AcquireResult> {
@@ -100,5 +111,11 @@ export function createAdmission(capacity: number): Admission {
     })
   }
 
-  return { acquire, run, release }
+  return {
+    acquire,
+    run,
+    release,
+    inUse: () => capacity - free,
+    onFree: (listener) => void freeListeners.push(listener)
+  }
 }

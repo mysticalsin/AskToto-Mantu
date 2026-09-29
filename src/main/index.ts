@@ -642,6 +642,7 @@ import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { attachMenuOnFirstOpen, buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop, type LazyTrayMenu, type TrayPhaseTimer } from './boot-tray'
+import { constructBootWindow } from './boot-window-rendering' // M2-0433: ST-1 reports the constructor's cost per run
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
@@ -2649,8 +2650,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   const chrome = overlayWindowChrome(onboardingLive)
   overlayWindowTransparent = chrome.transparent
   const deferFirstShow = isBootFirstShowDeferred()
-  const constructStartedMs = performance.now() // M2-0433: ST-1 reports the native constructor's cost per run
-  win = new BrowserWindow({
+  win = constructBootWindow(observability, chrome.transparent, (rendering) => new BrowserWindow({
     title: 'Métis', // Electron otherwise titles the window with the package name until the renderer's <title> loads
     width: firstPaint.width,
     height: firstPaint.height,
@@ -2678,7 +2678,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // the window off-screen ~5s (WINDOW_AT≈5s) — Ultron stamp bar FAIL: Act1 ≤300ms from
     // PROCESS START. Shell (CSS poster + Métis + Next) is in first HTML parse; never wait.
     show: !deferFirstShow, // M2-0031: the boot window is built hidden and shown next task, never gated on 'ready-to-show'
-    paintWhenInitiallyHidden: false, // M2-0031: its first frame is painted in the show task, not the constructor's
+    paintWhenInitiallyHidden: rendering.paintWhenInitiallyHidden, // M2-0031: false, the first frame is painted in the show task
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2687,11 +2687,10 @@ function createWindow(targetDisplay?: Electron.Display): void {
       contextIsolation: true,
       nodeIntegration: false,
       devTools: DEVTOOLS_ENABLED,
-      backgroundThrottling: false,
+      backgroundThrottling: rendering.backgroundThrottling,
       webSecurity: true
     }
-  })
-  observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs)
+  }))
   ensureMetisCommandRuntime({
     getSettings,
     commandControl,

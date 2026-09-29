@@ -5,6 +5,7 @@ vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLo
 vi.mock('../mac-helper', () => ({ macStatFlagsSpawnSpec: vi.fn(() => null) }))
 
 import { mainLog } from '../logger'
+import { createAdmission } from '../infra/storage/admission'
 import { createBootWork, type BootWorkWindow } from './boot-work'
 
 function fakeWindow(opts: { visible?: boolean; destroyed?: boolean } = {}): EventEmitter & BootWorkWindow & { show(): void } {
@@ -92,6 +93,44 @@ describe('createBootWork (M2-0031)', () => {
       if (saved === undefined) delete process.env.UV_THREADPOOL_SIZE
       else process.env.UV_THREADPOOL_SIZE = saved
     }
+  })
+
+  it('counts the storage gateway permits against the cap: no job starts while pinned reads hold it, and the next starts once a permit returns (M2-0433)', async () => {
+    const pool = createAdmission(2)
+    const work = createBootWork({ limit: 2, holdMs: 60_000, pool })
+    // A FIFO-pinned read holds one permit for the whole run.
+    await expect(pool.acquire('content', new AbortController().signal)).resolves.toBe('admitted')
+    void pool.run(() => new Promise<void>(() => {}))
+    await expect(pool.acquire('content', new AbortController().signal)).resolves.toBe('admitted')
+    let finishRead: () => void = () => {}
+    const read = pool.run(() => new Promise<void>((resolve) => (finishRead = resolve)))
+
+    const started: number[] = []
+    const never = new Promise<void>(() => {})
+    for (let i = 0; i < 3; i++) work.run(`job${i}`, () => (started.push(i), never))
+    work.releaseAfterFirstShow(null)
+    await settle()
+    expect(started).toEqual([])
+
+    finishRead()
+    await read
+    await settle()
+    expect(started).toEqual([0]) // one pinned permit + one job: the cap, never more
+  })
+
+  it('does not start a job the gateway took the room for between the pump and its task (M2-0433)', async () => {
+    const pool = createAdmission(1)
+    const work = createBootWork({ limit: 1, holdMs: 60_000, pool })
+    const job = vi.fn()
+    work.run('recoverImports', job)
+    work.releaseAfterFirstShow(null) // schedules the start for the next task
+    await expect(pool.acquire('content', new AbortController().signal)).resolves.toBe('admitted')
+    await settle()
+    expect(job).not.toHaveBeenCalled()
+
+    pool.release()
+    await settle()
+    expect(job).toHaveBeenCalledTimes(1)
   })
 
   it('starts each job in a task of its own', async () => {

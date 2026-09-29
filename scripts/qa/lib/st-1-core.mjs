@@ -90,8 +90,10 @@ export function historyEntry(tMs, outcome) {
 
 /** The app's own native boot stage timings (tray stages, window construction and first show): every
  *  `app.boot.stage` record of an audit log's text, in order, so each run names its long stretches without a
- *  CPU profile. Lines that are not a complete JSON record are skipped. */
-export function bootStagesFromAudit(auditText) {
+ *  CPU profile. Lines that are not a complete JSON record are skipped. A window stage keeps the chrome and
+ *  rendering variant it built; with the launch's wall-clock spawn time, each stage also says when it ended since
+ *  the spawn (`sinceSpawnMs`, an upper bound on its time since process start: FITO-185-Z Act1 is <= 300 ms). */
+export function bootStagesFromAudit(auditText, spawnedWallMs) {
   const stages = []
   for (const line of auditText.split('\n')) {
     if (!line.includes('"app.boot.stage"')) continue
@@ -102,7 +104,15 @@ export function bootStagesFromAudit(auditText) {
       continue
     }
     if (record.event !== 'app.boot.stage') continue
-    stages.push({ stage: record.stage, ms: typeof record.ms === 'number' ? Math.round(record.ms * 10) / 10 : null, ts: record.ts })
+    const endedAt = Date.parse(record.ts)
+    stages.push({
+      stage: record.stage,
+      ms: typeof record.ms === 'number' ? Math.round(record.ms * 10) / 10 : null,
+      ts: record.ts,
+      ...(typeof record.transparent === 'boolean' ? { transparent: record.transparent } : {}),
+      ...(typeof record.windowVariant === 'string' ? { windowVariant: record.windowVariant } : {}),
+      ...(typeof spawnedWallMs === 'number' && Number.isFinite(endedAt) ? { sinceSpawnMs: endedAt - spawnedWallMs } : {})
+    })
   }
   return stages
 }
@@ -131,15 +141,18 @@ export function emptyRun() {
 /**
  * The ST-1 report. `complete` is false for the periodic partial report and for a run the harness itself
  * could not finish (`harnessError`); either has verdict INCOMPLETE, because a measurement that stopped
- * early proves nothing either way. A complete run's verdict comes from the criteria alone.
+ * early proves nothing either way. A complete run's verdict comes from the criteria alone. A run made for
+ * `purpose: 'window-construction'` (a short launch that measures the window constructor) says so and is never
+ * ST-1 evidence, whatever its verdict.
  */
-export function buildReport({ row, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError }) {
+export function buildReport({ row, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError, purpose = 'st-1' }) {
   const criteria = evaluateCriteria(row, measured, evidence)
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = row === 'none' || evidence?.exercised
   const verdict = !complete ? 'INCOMPLETE' : !exercised ? 'NOT_EXERCISED' : criteria.every((c) => c.pass) ? 'PASS' : 'FAIL'
   return {
     harness: 'ST-1',
+    ...(purpose === 'window-construction' ? { purpose, st1Evidence: false } : {}),
     row,
     platform: process.platform,
     arch: process.arch,

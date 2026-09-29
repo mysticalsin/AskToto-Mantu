@@ -442,15 +442,17 @@ jobs:
           if-no-files-found: warn
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
-  # Report-only measurement (M2-0433), never a gate: the window constructor's cost per chrome configuration, both
-  # launches on one runner so the numbers compare. A first-run profile builds the opaque exclusive onboarding
-  # window; an onboarded bar profile builds the transparent overlay. Each report's bootStages carries
-  # createWindow.construct and createWindow.firstShow for its launch.
+  # Report-only measurement (M2-0433), never a gate and never ST-1 evidence: short launches (--purpose
+  # window-construction, st1Evidence: false) that measure the window constructor per chrome and rendering variant,
+  # all on one runner so the numbers compare. A first-run profile builds the opaque exclusive onboarding window
+  # (FITO-185-Z: Act1 <= 300 ms); an onboarded bar profile builds the transparent overlay. Each report's bootStages
+  # carries createWindow.construct (with the chrome and variant actually built) and createWindow.firstShow, each
+  # with its end time since the spawn.
   st1-mac-window:
-    name: ST-1 window construction per chrome (report-only)
+    name: ST-1 window construction per chrome and variant (report-only)
     needs: provenance
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -469,29 +471,27 @@ jobs:
           path: assets
       - name: Verify every byte against the provenance
         run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
-      - name: Measure the opaque first-run window
+      - name: Measure the window constructor per chrome and rendering variant
         continue-on-error: true
         run: |
-          mkdir -p st1-report
-          node scripts/qa/st-1.mjs \
-            --installer "$(find assets -maxdepth 1 -name '*.zip' -print -quit)" \
-            --provenance provenance/provenance.json \
-            --fixtures none \
-            --minutes 1 \
-            --out st1-report/st-1-macos-window-opaque.json
-      - name: Measure the transparent overlay window
-        continue-on-error: true
-        run: |
-          mkdir -p st1-report onboarded-profile
+          mkdir -p st1-report onboarded-profile first-run-profile
           # The durable settings of a user who finished onboarding with the bar layout (plain JSON is a supported read path).
           printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
-          node scripts/qa/st-1.mjs \
-            --installer "$(find assets -maxdepth 1 -name '*.zip' -print -quit)" \
-            --provenance provenance/provenance.json \
-            --fixtures none \
-            --profile-template onboarded-profile \
-            --minutes 1 \
-            --out st1-report/st-1-macos-window-transparent.json
+          installer="$(find assets -maxdepth 1 -name '*.zip' -print -quit)"
+          for variant in shipped paint-when-hidden background-throttling; do
+            for chrome in opaque transparent; do
+              template=first-run-profile
+              if [ "$chrome" = transparent ]; then template=onboarded-profile; fi
+              ASKTOTO_QA_WINDOW_VARIANT="$variant" node scripts/qa/st-1.mjs \
+                --installer "$installer" \
+                --provenance provenance/provenance.json \
+                --fixtures none \
+                --profile-template "$template" \
+                --minutes 1 \
+                --purpose window-construction \
+                --out "st1-report/window-construction-macos-$chrome-$variant.json" || true
+            done
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

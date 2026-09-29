@@ -91,6 +91,35 @@ describe('createAdmission', () => {
     await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
   })
 
+  it('inUse() counts the permits out, and onFree fires only when a permit goes back to the free count (M2-0433)', async () => {
+    const admission = createAdmission(2)
+    const freed = vi.fn()
+    admission.onFree(freed)
+    expect(admission.inUse()).toBe(0)
+
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    expect(admission.inUse()).toBe(2)
+    const waiter = admission.acquire('metadata', signal())
+
+    admission.release() // handed straight to the waiter: still two out, nothing freed
+    await expect(waiter).resolves.toBe('admitted')
+    expect(admission.inUse()).toBe(2)
+    expect(freed).not.toHaveBeenCalled()
+
+    let finish: () => void = () => {}
+    const running = admission.run(() => new Promise<void>((resolve) => (finish = resolve)))
+    expect(admission.inUse()).toBe(2)
+    finish()
+    await running
+    expect(admission.inUse()).toBe(1)
+    expect(freed).toHaveBeenCalledTimes(1)
+
+    admission.release()
+    expect(admission.inUse()).toBe(0)
+    expect(freed).toHaveBeenCalledTimes(2)
+  })
+
   it('run() keeps the permit until the call settles, whether it resolves or rejects', async () => {
     const admission = createAdmission(1)
     await expect(admission.acquire('content', signal())).resolves.toBe('admitted')

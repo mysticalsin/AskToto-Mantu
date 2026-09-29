@@ -60,6 +60,10 @@ export const BOOT_STAGES = [
   'createWindow.firstShow'
 ] as const
 export type BootStage = (typeof BOOT_STAGES)[number]
+/** The boot window's rendering configuration: the shipped one, or a QA-only variant the ST-1 window job measures
+ *  the constructor under (boot-window-rendering.ts). */
+export const BOOT_WINDOW_VARIANTS = ['shipped', 'paint-when-hidden', 'background-throttling'] as const
+export type BootWindowVariant = (typeof BOOT_WINDOW_VARIANTS)[number]
 export const HISTORY_STAGES = ['received', 'served', 'settled'] as const
 export const HISTORY_OUTCOMES = ['ok', 'failed', 'discarded'] as const
 const RENDER_GONE_REASONS = [
@@ -190,7 +194,10 @@ export const OBSERVABILITY_EVENTS = {
   'app.boot.stage': {
     bootId: 'id',
     stage: BOOT_STAGES,
-    ms: 'ms'
+    ms: 'ms',
+    /** createWindow.construct only: which chrome and rendering configuration the constructor built. */
+    transparent: 'flag',
+    windowVariant: BOOT_WINDOW_VARIANTS
   },
   /** Overlay renderer stopped answering Chromium. */
   'app.unresponsive': {

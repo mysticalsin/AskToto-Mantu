@@ -6,12 +6,17 @@
  * Invariants:
  *   - No job starts before the gate opens: the boot window's first show, or `fallbackMs` if it never shows.
  *   - Every job starts in a task of its own, never in the task that queued it or opened the gate.
- *   - At most `limit` jobs are in flight (poolSize - 2 by default, the storage gateway's cap), so two pool
- *     threads stay free for userData writes, dns.lookup and crypto. A job leaves the count when its promise
- *     settles, or after `holdMs`, so one long job (a model pass) never starves the ones queued behind it.
+ *   - Jobs in flight plus the storage gateway's permits out stay under `limit` (poolSize - 2 by default, the
+ *     gateway's cap) whenever a job starts, so boot work and meetings-root reads pinned by a cloud file or a FIFO
+ *     together leave two pool threads free for userData writes, dns.lookup and crypto (M2-0433). While the
+ *     gateway holds the whole cap, no job starts; the next one starts once a permit returns. A job leaves the
+ *     count when its promise settles, or after `holdMs`, so one long job (a model pass) never starves the ones
+ *     queued behind it.
  *   - Jobs start in the order they were queued. A job that throws or rejects is logged and the queue goes on.
  */
+import type { Admission } from '../infra/storage/admission'
 import { reservedPoolCapacity } from '../infra/storage/gateway'
+import { storageAdmission } from '../infra/storage/meetings-storage'
 import { mainLog } from '../logger'
 
 /** The slice of BrowserWindow the gate reads. */
@@ -25,6 +30,8 @@ export interface BootWorkOptions {
   limit?: number
   holdMs?: number
   fallbackMs?: number
+  /** The admission whose permits count against `limit`; the meetings-storage admission by default. */
+  pool?: Pick<Admission, 'inUse' | 'onFree'>
 }
 
 export interface BootWork {
@@ -43,6 +50,7 @@ export function createBootWork(options: BootWorkOptions = {}): BootWork {
   const limit = Math.max(1, options.limit ?? reservedPoolCapacity())
   const holdMs = options.holdMs ?? HOLD_MS
   const fallbackMs = options.fallbackMs ?? FALLBACK_MS
+  const pool = options.pool ?? storageAdmission()
   const queue: Array<{ name: string; job: () => unknown }> = []
   let released = false
   let inFlight = 0
@@ -53,8 +61,12 @@ export function createBootWork(options: BootWorkOptions = {}): BootWork {
     mainLog.warn(`[boot] ${name} failed:`, error)
   }
 
+  const hasRoom = (): boolean => inFlight + pool.inUse() < limit
+
   const startNext = (): void => {
     startScheduled = false
+    // The gateway may have taken a permit since pump(); its next return pumps again.
+    if (!hasRoom()) return
     const next = queue.shift()
     if (!next) return
     inFlight++
@@ -80,10 +92,12 @@ export function createBootWork(options: BootWorkOptions = {}): BootWork {
   }
 
   function pump(): void {
-    if (!released || startScheduled || inFlight >= limit || queue.length === 0) return
+    if (!released || startScheduled || !hasRoom() || queue.length === 0) return
     startScheduled = true
     setImmediate(startNext)
   }
+
+  pool.onFree(pump)
 
   const release = (): void => {
     if (released) return

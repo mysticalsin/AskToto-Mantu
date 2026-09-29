@@ -17,15 +17,19 @@
  * main-thread block, not on the libuv pool) and the active libuv resources; a CPU profile of the first 90 s; the profile's
  * audit logs, stall bundles and this launch's main.log; which FIFOs had a reader; and, from +20 s,
  * History's own IPC round trip (recallList + brainStatus) measured in the main window; and the app's own
- * native boot stage timings (`bootStages`: tray loadIcon/newTray/decorate/buildMenu/attachMenu, window
- * construct/firstShow), read from the profile's audit trail. All of it lands in
+ * native boot stage timings (`bootStages`: tray loadIcon/newTray/setImage/decorate/buildMenu/attachMenu, window
+ * construct with the chrome and variant built, firstShow; each with its end time since the spawn), read from the profile's audit trail. All of it lands in
  * the report directory (`--report-dir`, else the `--out` file's directory, else out/st-1).
  *
  * Usage:
  *   node scripts/qa/st-1.mjs --installer <Metis-QA-<v>.zip | Metis-Setup-<v>.exe> --provenance <provenance.json>
  *       --fixtures fifo|dataless|none [--count 6] [--cloud-dir <folder of evicted files>] [--main-log <main.log>]
  *       [--exe <installed executable>] [--profile-template <userData dir>] [--minutes 5] [--out <report.json>]
- *       [--report-dir <dir>]
+ *       [--report-dir <dir>] [--purpose window-construction]
+ *
+ * `--purpose window-construction` marks a short launch made only to measure the window constructor (the
+ * report says `st1Evidence: false`); such a report is never ST-1 evidence. The launch inherits this
+ * environment, so a QA-only rendering variant (ASKTOTO_QA_WINDOW_VARIANT) reaches the candidate.
  *
  * Every in-app wait is bounded and every failure to answer is recorded in the report's `errors` (step, tMs,
  * message) while the run continues: only the criteria decide PASS or FAIL. The report is rewritten every
@@ -541,13 +545,13 @@ function copyAppEvidence(profile, mainLog, dir) {
 }
 
 /** The app's boot stage timings from the profile's audit logs (rotated generations first, the live audit.log
- *  last). Never throws: an unreadable trail is reported as `{ error }`. */
-function readBootStages(profile) {
+ *  last), each with its end time since `spawnedWallMs`. Never throws: an unreadable trail is reported as `{ error }`. */
+function readBootStages(profile, spawnedWallMs) {
   try {
     const logs = join(profile, 'logs')
     const names = existsSync(logs) ? readdirSync(logs).filter((entry) => /^audit.*\.log$/.test(entry)) : []
     names.sort((a, b) => (a === 'audit.log') - (b === 'audit.log') || a.localeCompare(b))
-    return { stages: names.flatMap((name) => bootStagesFromAudit(readFileSync(join(logs, name), 'utf8'))) }
+    return { stages: names.flatMap((name) => bootStagesFromAudit(readFileSync(join(logs, name), 'utf8'), spawnedWallMs)) }
   } catch (error) {
     return { error: error.message }
   }
@@ -610,6 +614,10 @@ async function main() {
     console.error('[st-1] FAIL — --fixtures dataless needs --cloud-dir and --main-log')
     return 2
   }
+  if (args.purpose !== undefined && args.purpose !== 'window-construction') {
+    console.error(`[st-1] FAIL — --purpose must be window-construction, got ${JSON.stringify(args.purpose)}`)
+    return 2
+  }
   const minutes = Number(args.minutes)
   if (!Number.isFinite(minutes) || minutes <= 0) {
     console.error(`[st-1] FAIL — --minutes must be a positive number, got ${JSON.stringify(args.minutes)}`)
@@ -647,6 +655,7 @@ async function main() {
   let mainLog = null
   let appEvidence = null
   let bootStages = null
+  let spawnedWallMs = null
   let complete = false
   let harnessError = null
   const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
@@ -660,7 +669,8 @@ async function main() {
       evidence,
       attribution: { mainLog, appEvidence, bootStages },
       complete,
-      harnessError
+      harnessError,
+      purpose: args.purpose
     })
   }
   /** Never throws: a report that cannot be written must not end the measurement. */
@@ -687,7 +697,7 @@ async function main() {
     // owns a child to stop — including when the inspector never answers (fuse off), the exe is bad
     // ('error') or the candidate dies early ('exit'): every one of those becomes a launch-failure report
     // instead of a detached, unkillable process.
-    const spawnedWallMs = Date.now()
+    spawnedWallMs = Date.now()
     const spawnedAt = performance.now()
     child = spawnCandidate(resolved.exe, profile)
     let wsUrl
@@ -731,7 +741,7 @@ async function main() {
     if (child) stopChild(child)
     if (child && profile && !launchFailure) {
       appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
-      bootStages = readBootStages(profile)
+      bootStages = readBootStages(profile, spawnedWallMs)
     }
     try {
       cleanup({ kind: args.fixtures, root, profile, unzipDir })

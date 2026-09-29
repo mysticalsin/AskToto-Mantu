@@ -13,7 +13,13 @@
 import { performance } from 'node:perf_hooks'
 import { beginRunWatch, markAlive, markShutdownClean, type PriorShutdown } from '../../boot-sentinel'
 import type { AuditSink } from '../../logger'
-import type { BootStage } from './projection'
+import type { BootStage, BootWindowVariant } from './projection'
+
+/** What a window stage built: its chrome and its rendering configuration. */
+export interface BootStageDetail {
+  transparent?: boolean
+  windowVariant?: BootWindowVariant
+}
 import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from './stall-monitor'
 import { startStallSampler, type StallSampler, type StallSamplerOptions } from './stall-sampler'
 
@@ -68,8 +74,8 @@ export interface RunObservability {
    *  without a CPU profile. The audit write is outside the measured time. */
   timeBootStage<T>(stage: BootStage, fn: () => T): T
   /** Audits `app.boot.stage` for a stage the caller timed itself (a constructor whose assignment must stay
-   *  in place). */
-  recordBootStage(stage: BootStage, ms: number): void
+   *  in place), with what the stage built. */
+  recordBootStage(stage: BootStage, ms: number, detail?: BootStageDetail): void
   /** Stop the heartbeat and the stall monitor and audit `app.shutdown.clean`. Call once, last, from
    *  `will-quit`. Idempotent. */
   shutdownClean(uptimeS: number): void
@@ -146,7 +152,8 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   powerMonitor.on('resume', onWake)
   powerMonitor.on('unlock-screen', onWake)
 
-  const recordBootStage = (stage: BootStage, ms: number): void => opts.audit('app.boot.stage', { bootId, stage, ms })
+  const recordBootStage = (stage: BootStage, ms: number, detail?: BootStageDetail): void =>
+    opts.audit('app.boot.stage', { bootId, stage, ms, ...detail })
 
   let stopped = false
   return {

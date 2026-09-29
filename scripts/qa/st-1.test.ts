@@ -241,6 +241,33 @@ describe('bootStagesFromAudit', () => {
     ])
   })
 
+  it('keeps the chrome and variant a window stage built, and each stage end since the spawn when given the spawn time (M2-0433)', () => {
+    const text = [
+      JSON.stringify({
+        ts: '2026-09-29T10:00:00.400Z',
+        event: 'app.boot.stage',
+        stage: 'createWindow.construct',
+        ms: 760,
+        transparent: true,
+        windowVariant: 'paint-when-hidden'
+      }),
+      JSON.stringify({ ts: '2026-09-29T10:00:00.520Z', event: 'app.boot.stage', stage: 'createWindow.firstShow', ms: 12 })
+    ].join('\n')
+    expect(bootStagesFromAudit(text, Date.parse('2026-09-29T10:00:00.000Z'))).toEqual([
+      { stage: 'createWindow.construct', ms: 760, ts: '2026-09-29T10:00:00.400Z', transparent: true, windowVariant: 'paint-when-hidden', sinceSpawnMs: 400 },
+      { stage: 'createWindow.firstShow', ms: 12, ts: '2026-09-29T10:00:00.520Z', sinceSpawnMs: 520 }
+    ])
+  })
+
+  it('a window-construction run says it is not ST-1 evidence, whatever its verdict; an ST-1 run carries no purpose (M2-0433)', () => {
+    const construction = report({ purpose: 'window-construction' })
+    expect(construction.purpose).toBe('window-construction')
+    expect(construction.st1Evidence).toBe(false)
+    expect(construction.verdict).toBe('PASS')
+    expect(report()).not.toHaveProperty('purpose')
+    expect(report()).not.toHaveProperty('st1Evidence')
+  })
+
   it('reports the stages it is given without judging them: no criterion reads them', () => {
     const bootStages = { stages: [{ stage: 'createTray.newTray', ms: 319, ts: 't' }] }
     const built = report({ attribution: { mainLog: null, appEvidence: null, bootStages } })

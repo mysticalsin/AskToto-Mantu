@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
 import type { ContentPresence, DatalessDetector } from './dataless'
+import type { Admission } from './admission'
 import { createStorageGateway, poolAdmission, type FileClass, type StorageFs, type StorageGateway } from './gateway'
 
 const CLASSIFY_BATCH = 1_000
@@ -9,6 +10,11 @@ let gateways = new Map<string, StorageGateway>()
 let testStorageOptions: { detector?: DatalessDetector; fs?: StorageFs; poolSize?: number } | undefined
 /** Every gateway's fs calls run under this one cap: the roots share the process's libuv pool. */
 let admission = poolAdmission()
+
+/** The admission every meetings-root fs call runs under, so another pool user (boot work) can share its cap. */
+export function storageAdmission(): Admission {
+  return admission
+}
 
 export function storageAt(root: string): StorageGateway {
   const key = resolve(root)

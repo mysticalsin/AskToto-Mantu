@@ -247,6 +247,15 @@ describe('startRunObservability', () => {
 
     observability.recordBootStage('createWindow.construct', 170)
     expect(audit).toHaveBeenLastCalledWith('app.boot.stage', { bootId: 'boot-7', stage: 'createWindow.construct', ms: 170 })
+
+    observability.recordBootStage('createWindow.construct', 760, { transparent: true, windowVariant: 'paint-when-hidden' })
+    expect(audit).toHaveBeenLastCalledWith('app.boot.stage', {
+      bootId: 'boot-7',
+      stage: 'createWindow.construct',
+      ms: 760,
+      transparent: true,
+      windowVariant: 'paint-when-hidden'
+    })
   })
 
   it('the free timeBootStage runs the stage untimed before observability starts and through it after (M2-0433)', () => {
