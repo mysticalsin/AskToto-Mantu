@@ -1,0 +1,35 @@
+name: Kit checks
+
+# Runs the skill-registry check against a kit registry file. The kit itself lives outside this
+# repository; the program repository copies this workflow and adds a path filter for its kit folder.
+on:
+  workflow_dispatch:
+    inputs:
+      registry:
+        description: Path to the kit skill registry JSON, relative to the repository root
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kit-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  skill-registry:
+    name: Skill registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: One entry, auto_install and auto_capture false
+        env:
+          REGISTRY: ${{ inputs.registry }}
+        run: node scripts/kit/check-skill-registry.mjs --registry "$REGISTRY"
