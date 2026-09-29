@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { RECORD_SCHEMA } from './record.mjs'
+import { RECORD_SCHEMA, recordProblems } from './record.mjs'
 import { TEST_WORKFLOW, ledgerProblems, outputProblems, prProblems, githubApi, m2_0008BundleProblems } from './check.mjs'
 
 const SHA1_A = '1'.repeat(40)
@@ -592,8 +592,10 @@ test('H1 a LIVE_VERIFIED requirement closes on a hosted-runner record and not on
   const hosted = liveRecord({ kind: 'hosted-runner', host: 'macos-latest' })
   assert.deepEqual(ledgerProblems(ledger({ tickets: [t] }), new Map([['M2-0001', [hosted]]])), [])
 
+  // The record store drops a record that fails recordProblems, so a ci record never reaches the ledger check.
   const ci = liveRecord({ kind: 'ci', host: 'ubuntu-latest' })
-  assertProblem(ledgerProblems(ledger({ tickets: [t] }), new Map([['M2-0001', [ci]]])), 'M2-0001', 'LIVE_VERIFIED')
+  assertProblem(recordProblems(ci), "must not be 'ci'", 'LIVE_VERIFIED')
+  assertProblem(ledgerProblems(ledger({ tickets: [t] }), new Map()), 'M2-0001', 'LIVE_VERIFIED')
 })
 
 test('H2 --pr-event accepts a hosted-runner LIVE_VERIFIED block without resolving ci_run_id as a Build & Test run', async () => {
