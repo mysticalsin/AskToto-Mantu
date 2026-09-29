@@ -7,8 +7,8 @@
  *
  * Anchors are function/branch names, never line numbers, so reordering unrelated code doesn't break this.
  */
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join, relative } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { pickReadyProvider, detectHint, licenseErrorMessage, SETTINGS_CONTENT_SCROLL_CLASS, settingsScrollClipsOverflowX } from './Settings'
 import { licenseErrorMessage as onboardingLicenseErrorMessage } from './OnboardingExperience'
@@ -17,7 +17,29 @@ import { licenseErrorMessage as gateLicenseErrorMessage } from './LicenseGate'
 // Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
 // newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
 // Normalizing keeps every anchor line-ending-independent without weakening what each one pins.
-const source = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8').replace(/\r\n/g, '\n')
+//
+// Settings is being split into ui/ primitives and features/settings sections (M2-0071), so the anchors are
+// resolved over Settings.tsx plus every .ts/.tsx under those two directories: a section keeps its contract
+// wherever it lives. Each file is preceded by a "// FILE:" line so a moved block stays attributable.
+function listSources(dir: string): string[] {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir, { withFileTypes: true })
+    .flatMap((entry) => {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) return listSources(full)
+      return /\.tsx?$/.test(entry.name) ? [full] : []
+    })
+    .sort()
+}
+const rendererSrc = join(__dirname, '..')
+const sourceFiles = [
+  join(__dirname, 'Settings.tsx'),
+  ...listSources(join(rendererSrc, 'features', 'settings')),
+  ...listSources(join(rendererSrc, 'ui'))
+]
+const source = sourceFiles
+  .map((file) => `// FILE: ${relative(rendererSrc, file).replace(/\\/g, '/')}\n${readFileSync(file, 'utf8').replace(/\r\n/g, '\n')}`)
+  .join('\n')
 
 describe('legacy licence activation errors', () => {
   it('explains a non-persistent device setup without blaming the network', () => {

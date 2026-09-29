@@ -3916,7 +3916,7 @@ function OperatorLicenseCard({ refreshSettings, showIdentity = false }: {
  * picker's "same as base" state, `defaultId` tags one row " (default)" for the base picker's Métis
  * agent. Dismiss-on-outside-click/Escape mirrors the "Mode options" overflow menu elsewhere in this file.
  */
-function AgentPicker({
+export function AgentPicker({
   id,
   label,
   value,
@@ -4129,7 +4129,7 @@ function AgentPicker({
   )
 }
 
-function DustSetup({
+export function DustSetup({
   settings,
   patch,
   saveKey,
