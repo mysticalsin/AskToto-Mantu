@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import {
   compareMultisets,
   normalizeImportPaths,
+  normalizedTokenSequence,
   parseNameStatus,
   tokenMultiset,
   verifyPureMove
