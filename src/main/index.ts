@@ -4691,7 +4691,8 @@ function createTray(): void {
       if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
       tray.setToolTip('Métis')
       // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
-      trayMenu = attachMenuOnFirstOpen(tray, process.platform, buildTrayMenu, timeStage, () => sendHotkey('settings'))
+      tray.on('click', () => sendHotkey('settings'))
+      trayMenu = attachMenuOnFirstOpen(tray, process.platform, buildTrayMenu, timeStage)
       auditLog('tray.created', { emptyIcon })
     },
     time: timeStage,

@@ -99,8 +99,7 @@ export async function buildTrayInStages<Icon, Menu = unknown>(stages: TrayStages
 /** The slice of Electron's Tray the lazy context menu uses. */
 export interface LazyMenuTray<Menu> {
   isDestroyed(): boolean
-  on(event: 'click', listener: () => void): unknown
-  on(event: 'right-click', listener: () => void): unknown
+  on(event: 'mouse-enter' | 'right-click', listener: () => void): unknown
   setContextMenu(menu: Menu | null): void
   popUpContextMenu(menu?: Menu): void
 }
@@ -112,18 +111,17 @@ export interface LazyTrayMenu {
 }
 
 /** M2-0433: building and attaching the context menu held the main thread for hundreds of ms at boot, so on macOS
- *  and Windows the menu is built and attached on the tray's first open (right-click everywhere, and the macOS
- *  left click, which opens an attached menu natively) and popped up in that same task; every later open is
- *  native. Platforms that emit no open event get the menu at once. The build and the attach are timed as
- *  'createTray.buildMenu' and 'createTray.attachMenu' whenever they run. `onClick` is the tray's left-click
- *  handler: the macOS left click that opens the menu for the first time runs the menu only, as a click on an
- *  attached menu does; every other left click runs `onClick`. */
+ *  and Windows the menu is built and attached when the user first reaches for the tray, never at boot. The first
+ *  right-click builds, attaches and pops it up in that same task; on macOS the pointer entering the item attaches
+ *  it without a pop-up, so the left click that follows opens the attached menu natively, as it did when the menu
+ *  was attached at boot. Every later open is native. Platforms that emit no such event get the menu at once. The
+ *  build and the attach are timed as 'createTray.buildMenu' and 'createTray.attachMenu' whenever they run. The
+ *  tray's left-click handler stays the caller's. */
 export function attachMenuOnFirstOpen<Menu>(
   tray: LazyMenuTray<Menu>,
   platform: NodeJS.Platform,
   buildMenu: () => Menu,
-  time: TrayPhaseTimer = untimed,
-  onClick?: () => void
+  time: TrayPhaseTimer = untimed
 ): LazyTrayMenu {
   let attached = false
   const attach = (): Menu => {
@@ -132,19 +130,16 @@ export function attachMenuOnFirstOpen<Menu>(
     attached = true
     return menu
   }
-  const openFirst = (): void => {
-    if (attached || tray.isDestroyed()) return
-    tray.popUpContextMenu(attach())
-  }
+  const attachFirst = (): Menu | undefined => (attached || tray.isDestroyed() ? undefined : attach())
   if (platform === 'darwin' || platform === 'win32') {
-    tray.on('right-click', openFirst)
+    tray.on('right-click', () => {
+      const menu = attachFirst()
+      if (menu !== undefined) tray.popUpContextMenu(menu)
+    })
+    if (platform === 'darwin') tray.on('mouse-enter', () => void attachFirst())
   } else {
     attach()
   }
-  tray.on('click', () => {
-    if (platform === 'darwin' && !attached) openFirst()
-    else onClick?.()
-  })
   return {
     rebuild() {
       if (attached && !tray.isDestroyed()) tray.setContextMenu(buildMenu())

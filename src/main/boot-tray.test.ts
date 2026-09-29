@@ -426,38 +426,48 @@ describe('attachMenuOnFirstOpen (M2-0433)', () => {
     expect(tray.popUpContextMenu).toHaveBeenCalledTimes(1)
   })
 
-  it('opens the menu on the first macOS left click (an attached menu opens on it natively) but not on a Windows left click', () => {
+  it('on macOS attaches the menu without a pop-up when the pointer enters the item, so the next left click opens it natively', () => {
     const mac = fakeTray()
-    attachMenuOnFirstOpen(mac, 'darwin', () => 'menu')
-    mac.emit('click')
-    expect(mac.popUpContextMenu).toHaveBeenCalledExactlyOnceWith('menu')
+    const buildMenu = vi.fn(() => 'menu')
+    const labels: string[] = []
+    attachMenuOnFirstOpen(mac, 'darwin', buildMenu, (label, fn) => {
+      labels.push(label)
+      return fn()
+    })
+    mac.emit('mouse-enter')
+    expect(mac.setContextMenu).toHaveBeenCalledExactlyOnceWith('menu')
+    expect(mac.popUpContextMenu).not.toHaveBeenCalled()
+    expect(labels).toEqual(['createTray.buildMenu', 'createTray.attachMenu'])
 
+    mac.emit('mouse-enter')
+    mac.emit('right-click')
+    expect(buildMenu).toHaveBeenCalledTimes(1)
+    expect(mac.popUpContextMenu).not.toHaveBeenCalled()
+  })
+
+  it('leaves the left click to the caller: a Windows pointer or click attaches nothing and pops nothing up', () => {
     const windows = fakeTray()
     attachMenuOnFirstOpen(windows, 'win32', () => 'menu')
+    windows.emit('mouse-enter')
     windows.emit('click')
     expect(windows.setContextMenu).not.toHaveBeenCalled()
     expect(windows.popUpContextMenu).not.toHaveBeenCalled()
+
+    const mac = fakeTray()
+    attachMenuOnFirstOpen(mac, 'darwin', () => 'menu')
+    mac.emit('click')
+    expect(mac.setContextMenu).not.toHaveBeenCalled()
+    expect(mac.popUpContextMenu).not.toHaveBeenCalled()
   })
 
-  it('runs only the menu on the first macOS left click and only the click handler on a Windows left click', () => {
-    const macClick = vi.fn()
+  it('attaches nothing when the pointer enters a destroyed macOS item', () => {
     const mac = fakeTray()
-    attachMenuOnFirstOpen(mac, 'darwin', () => 'menu', undefined, macClick)
-    mac.emit('click')
-    expect(mac.popUpContextMenu).toHaveBeenCalledExactlyOnceWith('menu')
-    expect(macClick).not.toHaveBeenCalled()
-    // Once attached, a click Electron still emits reaches the handler, as it did with the menu attached at boot.
-    mac.emit('click')
-    expect(macClick).toHaveBeenCalledTimes(1)
-    expect(mac.popUpContextMenu).toHaveBeenCalledTimes(1)
-
-    const windowsClick = vi.fn()
-    const windows = fakeTray()
-    attachMenuOnFirstOpen(windows, 'win32', () => 'menu', undefined, windowsClick)
-    windows.emit('click')
-    windows.emit('click')
-    expect(windowsClick).toHaveBeenCalledTimes(2)
-    expect(windows.popUpContextMenu).not.toHaveBeenCalled()
+    const buildMenu = vi.fn(() => 'menu')
+    attachMenuOnFirstOpen(mac, 'darwin', buildMenu)
+    mac.state.destroyed = true
+    mac.emit('mouse-enter')
+    expect(buildMenu).not.toHaveBeenCalled()
+    expect(mac.setContextMenu).not.toHaveBeenCalled()
   })
 
   it('builds the first menu from the settings current at the first open, so a rebind before it is not lost', () => {
