@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import {
   buildTrayInStages,
   createSingleFlight,
+  formatTrayAccelerator,
   loadPresizedTrayIcon,
   loadTrayIcon,
   scheduleTrayAfterFirstPaint,
@@ -295,5 +296,24 @@ describe('loadPresizedTrayIcon (M2-0031)', () => {
 
     expect(icon.name).toBe('thumb')
     expect(images.createThumbnailFromPath).toHaveBeenCalledExactlyOnceWith(PATHS.fullSize, TRAY_ICON_SIZE)
+  })
+})
+
+describe('formatTrayAccelerator (M2-0515)', () => {
+  it('names Windows keys on win32', () => {
+    expect(formatTrayAccelerator('CommandOrControl+Shift+Return', 'win32')).toBe('Ctrl+Shift+Enter')
+    expect(formatTrayAccelerator('Control+Alt+L', 'win32')).toBe('Ctrl+Alt+L')
+    expect(formatTrayAccelerator('Super+Space', 'win32')).toBe('Win+Space')
+  })
+
+  it('uses macOS modifier symbols with no separators on darwin', () => {
+    expect(formatTrayAccelerator('CommandOrControl+Shift+Return', 'darwin')).toBe('⌘⇧↵')
+    expect(formatTrayAccelerator('Alt+Control+L', 'darwin')).toBe('⌥CtrlL')
+    expect(formatTrayAccelerator('CmdOrCtrl+Shift+H', 'darwin')).toBe('⌘⇧H')
+  })
+
+  it('gives an empty label for an unbound shortcut on every platform', () => {
+    expect(formatTrayAccelerator('', 'win32')).toBe('')
+    expect(formatTrayAccelerator('', 'darwin')).toBe('')
   })
 })

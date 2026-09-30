@@ -110,6 +110,7 @@
     "src/main/operator-queue.ts": 7,
     "src/main/operator-skill-key.ts": 2,
     "src/main/parakeet.ts": 2,
+    "src/main/qa-capture-source.ts": 1,
     "src/main/secrets.ts": 13,
     "src/main/selftest.ts": 16,
     "src/main/speaker-id.ts": 6,
