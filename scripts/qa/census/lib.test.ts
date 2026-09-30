@@ -11,8 +11,12 @@ import {
   classifyProcess,
   collectCensus,
   missingStates,
+  normalizeWin32ResourceRows,
   oneCoreCpuPercent,
+  openNdjsonWriter,
   parseProveLocalTtftOutcome,
+  sanitizeProcessSample,
+  streamCensus,
   parseProveLocalTtftOutput,
   proveLocalTtftEvidenceFromArtifact,
   rendererScenarioProbeSource,
@@ -134,6 +138,7 @@ describe('resource census process classification', () => {
       'speaker-utility',
       'llama-server',
       'fm-serve',
+      'sidecar-supervisor',
       'crashpad'
     ])
   })
@@ -153,6 +158,51 @@ describe('resource census process classification', () => {
     ['main', { pid: 1, startedMs, role: 'Metis', exe: '/Applications/Metis.app/Contents/MacOS/Metis' }]
   ])('classifies %s without relying on pid alone', (expected, entry) => {
     expect(classifyProcess(entry)).toBe(expected)
+  })
+
+  const helperExe = '/Applications/Metis.app/Contents/Resources/metis-mac-helper'
+  const bundledLlama = '/Applications/Metis.app/Contents/Resources/llama-server'
+
+  it.each([
+    [
+      'a wrapper around llama-server',
+      `${helperExe} supervise --parent 100 -- ${bundledLlama} --port 8080`
+    ],
+    ['a wrapper around fm serve', `${helperExe} supervise --parent 100 -- /usr/bin/fm serve --port 54321`]
+  ])('classifies %s as sidecar-supervisor, not the sidecar it wraps', (_label, commandLine) => {
+    expect(
+      classifyProcess({ pid: 20, startedMs, role: 'metis-mac-helper', exe: helperExe, commandLine })
+    ).toBe('sidecar-supervisor')
+  })
+
+  it('keeps the wrapped bare llama-server and a Windows llama-server row as llama-server', () => {
+    expect(
+      classifyProcess({ pid: 21, startedMs, role: 'llama-server', exe: bundledLlama, commandLine: `${bundledLlama} --port 8080` })
+    ).toBe('llama-server')
+    expect(
+      classifyProcess({
+        pid: 22,
+        startedMs,
+        role: 'llama-server.exe',
+        exe: 'C:\\Program Files\\Metis\\resources\\llama-server.exe',
+        commandLine: 'C:\\Program Files\\Metis\\resources\\llama-server.exe --port 8080'
+      })
+    ).toBe('llama-server')
+  })
+
+  it('leaves a non-supervise metis-mac-helper process on its previous classification', () => {
+    expect(
+      classifyProcess({ pid: 23, startedMs, role: 'metis-mac-helper', exe: helperExe, commandLine: `${helperExe} doctor` })
+    ).toBe('other')
+    expect(
+      classifyProcess({
+        pid: 24,
+        startedMs,
+        role: 'metis-mac-helper',
+        exe: helperExe,
+        commandLine: `${helperExe} probe --path ${bundledLlama}`
+      })
+    ).toBe('llama-server')
   })
 })
 
@@ -348,6 +398,27 @@ describe('resource census CPU formula', () => {
       measured: true,
       metric: 'Win32_Process.WorkingSetSize',
       lane: 'windows-qa'
+    })
+  })
+
+  it('normalizes Windows private bytes from the same resource row as working set', () => {
+    const rows = normalizeWin32ResourceRows([
+      {
+        pid: 100,
+        ws: '123456',
+        priv: '654321',
+        user: 20_000_000,
+        kernel: 10_000_000,
+        cmd: 'Metis.exe --type=browser'
+      }
+    ])
+
+    expect(rows.get(100)).toEqual({
+      workingSetBytes: 123456,
+      rssBytes: 123456,
+      privateBytes: 654321,
+      cpuSeconds: 3,
+      commandLine: 'Metis.exe --type=browser'
     })
   })
 })
@@ -660,5 +731,215 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow.lastIndexOf('verify-sha256sums.mjs')).toBeLessThan(workflow.indexOf('$setup.FullName /S'))
     expect(workflow.match(/if: github\.ref == 'refs\/heads\/main'/g)).toHaveLength(2)
     expect(workflow).not.toContain('secrets.')
+  })
+})
+
+describe('resource census long-run stream', () => {
+  const mainEntry = {
+    pid: 100,
+    ppid: 1,
+    startedMs,
+    exe: '/Applications/Metis.app/Contents/MacOS/Metis',
+    role: 'Metis'
+  }
+  const mainSample = (extra: Record<string, unknown> = {}) => ({
+    pid: 100,
+    startedMs,
+    role: 'Metis',
+    kind: 'main',
+    rssBytes: 100,
+    physFootprintBytes: 80,
+    workingSetBytes: null,
+    cpuSeconds: 1,
+    ...extra
+  })
+  const base = {
+    state: 'settled-idle',
+    platform: 'darwin' as NodeJS.Platform,
+    installRoot: '/Applications/Metis.app',
+    mainPid: 100,
+    productVersion: '1.9.7',
+    profileKind: 'representative-synthetic'
+  }
+
+  it('writes the header and one flushed line per sample, and no trailer when stopped', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'census-stream-'))
+    try {
+      const path = join(dir, 'run.ndjson')
+      const controller = new AbortController()
+      let clockMs = 1_000
+      let taken = 0
+      let checkpoints = 0
+      const result = await streamCensus({
+        ...base,
+        seconds: 3600,
+        intervalMs: 5_000,
+        writeLine: openNdjsonWriter(path),
+        signal: controller.signal,
+        listProcesses: () => [mainEntry],
+        sampleOwnedProcesses: () => {
+          taken += 1
+          if (taken === 3) controller.abort()
+          return [mainSample({ privateBytes: 7 })]
+        },
+        afterSample: async () => {
+          checkpoints += 1
+        },
+        now: () => clockMs,
+        sleep: async (ms: number) => {
+          clockMs += ms
+        }
+      })
+
+      const lines = readFileSync(path, 'utf8')
+        .trimEnd()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      expect(result).toMatchObject({ outcome: 'aborted', samples: 3 })
+      expect(checkpoints).toBe(3)
+      expect(lines).toHaveLength(4)
+      expect(lines[0]).toEqual({
+        record: 'header',
+        schema: 'census-stream/1',
+        state: 'settled-idle',
+        platform: 'darwin',
+        productVersion: '1.9.7',
+        mainPid: 100,
+        intervalMs: 5_000,
+        startedAt: new Date(1_000).toISOString(),
+        profileKind: 'representative-synthetic'
+      })
+      expect(lines.slice(1).map((line) => line.record)).toEqual(['sample', 'sample', 'sample'])
+      expect(lines[1]).toEqual({
+        record: 'sample',
+        tMs: 0,
+        processes: [
+          {
+            pid: 100,
+            startedMs,
+            kind: 'main',
+            rssBytes: 100,
+            physFootprintBytes: 80,
+            workingSetBytes: null,
+            privateBytes: 7,
+            cpuSeconds: 1
+          }
+        ],
+        mainAlive: true,
+        sampleDurationMs: 0
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('records mainAlive:false, ends with a main-exited trailer and stops sampling', async () => {
+    const lines: Array<Record<string, unknown>> = []
+    let clockMs = 0
+    let taken = 0
+    const result = await streamCensus({
+      ...base,
+      seconds: 3600,
+      intervalMs: 1_000,
+      writeLine: (record: Record<string, unknown>) => lines.push(record),
+      listProcesses: () => [mainEntry],
+      sampleOwnedProcesses: () => {
+        taken += 1
+        return taken < 3 ? [mainSample()] : []
+      },
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    expect(result.outcome).toBe('main-exited')
+    expect(taken).toBe(3)
+    expect(lines.filter((line) => line.record === 'sample').map((line) => line.mainAlive)).toEqual([true, true, false])
+    expect(lines.at(-1)).toMatchObject({ record: 'trailer', outcome: 'main-exited', samples: 3 })
+  })
+
+  it('schedules each sample from the previous sample start and records how long each took', async () => {
+    const lines: Array<Record<string, any>> = []
+    let clockMs = 0
+    await streamCensus({
+      ...base,
+      seconds: 20,
+      intervalMs: 5_000,
+      writeLine: (record: Record<string, unknown>) => lines.push(record),
+      listProcesses: () => [mainEntry],
+      sampleOwnedProcesses: () => {
+        clockMs += 2_000
+        return [mainSample()]
+      },
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    const samples = lines.filter((line) => line.record === 'sample')
+    expect(samples.map((line) => line.tMs)).toEqual([0, 5_000, 10_000, 15_000, 20_000])
+    expect(samples.every((line) => line.sampleDurationMs === 2_000)).toBe(true)
+    expect(lines.at(-1)).toMatchObject({ record: 'trailer', outcome: 'completed', samples: 5 })
+  })
+})
+
+describe('resource census private bytes and default report shape', () => {
+  it('carries privateBytes through the sanitized process sample, null when absent', () => {
+    expect(sanitizeProcessSample({ pid: 1, startedMs, role: 'x', kind: 'main', privateBytes: 42 }).privateBytes).toBe(42)
+    expect(sanitizeProcessSample({ pid: 1, startedMs, role: 'x', kind: 'main' }).privateBytes).toBeNull()
+  })
+
+  it('keeps the schemaVersion 1 report key set unchanged without the long-run flags', async () => {
+    let clockMs = 0
+    const report = await collectCensus({
+      state: 'settled-idle',
+      seconds: 1,
+      intervalMs: 1,
+      platform: 'darwin',
+      installRoot: '/Applications/Metis.app',
+      mainPid: 100,
+      productVersion: '1.9.7',
+      listProcesses: () => [
+        { pid: 100, ppid: 1, startedMs, exe: '/Applications/Metis.app/Contents/MacOS/Metis', role: 'Metis' }
+      ],
+      sampleOwnedProcesses: () => [{ pid: 100, startedMs, role: 'Metis', kind: 'main', rssBytes: 1, cpuSeconds: 0 }],
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    expect(report.schemaVersion).toBe(1)
+    expect(Object.keys(report).sort()).toEqual(
+      [
+        'schemaVersion',
+        'generatedAt',
+        'ticket',
+        'evidenceLevel',
+        'productVersion',
+        'platform',
+        'state',
+        'seconds',
+        'intervalMs',
+        'accountingBoundary',
+        'accountingContract',
+        'cpuFormula',
+        'attributableProcessKinds',
+        'mainPid',
+        'installRootKind',
+        'profileKind',
+        'stateCoverage',
+        'processIdentities',
+        'samples',
+        'summary',
+        'statePrecondition',
+        'rendererTrace',
+        'proveLocalTtft',
+        'windowsWorkingSet'
+      ].sort()
+    )
+    expect(Object.keys(report.samples[0]).sort()).toEqual(['processes', 'tMs'])
   })
 })

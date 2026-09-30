@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, fsyncSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -24,6 +24,7 @@ export const ATTRIBUTABLE_PROCESS_KINDS = [
   'speaker-utility',
   'llama-server',
   'fm-serve',
+  'sidecar-supervisor',
   'crashpad'
 ]
 
@@ -91,6 +92,10 @@ export function classifyProcess(entry) {
   const role = baseRole(entry)
   const cmd = commandText(entry)
   if (role.includes('crashpad')) return 'crashpad'
+  // The supervise wrapper carries its sidecar's path in argv; it must not be counted as that sidecar.
+  if (/^metis-mac-helper(\.exe)?$/.test(role) && /metis-mac-helper(\.exe)?\s+supervise(\s|$)/.test(cmd)) {
+    return 'sidecar-supervisor'
+  }
   if (role === 'llama-server' || role === 'llama-server.exe' || cmd.includes('llama-server')) return 'llama-server'
   if (cmd.includes('fm serve') || (role === 'fm' && cmd.includes(' serve'))) return 'fm-serve'
   if (cmd.includes('--type=gpu-process') || role.includes('helper (gpu)')) return 'gpu'
@@ -265,6 +270,7 @@ export function sanitizeProcessSample(sample) {
     rssBytes: sample.rssBytes ?? null,
     physFootprintBytes: sample.physFootprintBytes ?? null,
     workingSetBytes: sample.workingSetBytes ?? null,
+    privateBytes: sample.privateBytes ?? null,
     cpuSeconds: sample.cpuSeconds ?? null
   }
 }
@@ -468,6 +474,7 @@ $pids = @(${pids.join(',')});
 Get-CimInstance Win32_Process | Where-Object { $pids -contains $_.ProcessId } | ForEach-Object { [pscustomobject]@{
   pid = $_.ProcessId;
   ws = $_.WorkingSetSize;
+  priv = $_.PrivatePageCount;
   user = $_.UserModeTime;
   kernel = $_.KernelModeTime;
   cmd = $_.CommandLine
@@ -489,12 +496,17 @@ function win32ResourceRows(pids) {
     parsed = []
   }
   const rows = Array.isArray(parsed) ? parsed : [parsed]
+  return normalizeWin32ResourceRows(rows)
+}
+
+export function normalizeWin32ResourceRows(rows) {
   const result = new Map()
   for (const row of rows) {
     if (!row || typeof row.pid !== 'number') continue
     result.set(row.pid, {
       workingSetBytes: Number(row.ws) || 0,
       rssBytes: Number(row.ws) || 0,
+      privateBytes: row.priv == null || !Number.isFinite(Number(row.priv)) ? null : Number(row.priv),
       cpuSeconds: ((Number(row.user) || 0) + (Number(row.kernel) || 0)) / 10_000_000,
       commandLine: typeof row.cmd === 'string' ? row.cmd : ''
     })
@@ -513,6 +525,7 @@ function processIdentity(entry, resource = {}) {
     rssBytes: resource.rssBytes ?? null,
     physFootprintBytes: resource.physFootprintBytes ?? null,
     workingSetBytes: resource.workingSetBytes ?? null,
+    privateBytes: resource.privateBytes ?? null,
     cpuSeconds: resource.cpuSeconds ?? 0
   }
 }
@@ -674,6 +687,97 @@ export async function collectCensus(options) {
     windowsWorkingSet: options.windowsWorkingSet ?? windowsWorkingSetEvidenceFromSamples(platform, samples)
   }
   return sanitizeReport(report)
+}
+
+export const STREAM_SCHEMA = 'census-stream/1'
+
+/** Truncates `path`, then returns a writer that appends one JSON line per call and flushes it at once,
+ *  so a run that is killed keeps every line written so far. */
+export function openNdjsonWriter(path) {
+  mkdirSync(dirname(path), { recursive: true })
+  const fd = openSync(path, 'w')
+  return (record) => {
+    writeSync(fd, `${JSON.stringify(record)}\n`, undefined, 'utf8')
+    fsyncSync(fd)
+  }
+}
+
+function streamProcess(sample) {
+  return {
+    pid: sample.pid,
+    startedMs: sample.startedMs,
+    kind: sample.kind,
+    rssBytes: sample.rssBytes ?? null,
+    physFootprintBytes: sample.physFootprintBytes ?? null,
+    workingSetBytes: sample.workingSetBytes ?? null,
+    privateBytes: sample.privateBytes ?? null,
+    cpuSeconds: sample.cpuSeconds ?? null
+  }
+}
+
+/**
+ * Long-run census: one header line, one line per sample written as it is taken, and a trailer only on a
+ * normal end ('completed', or 'main-exited' once the main pid is gone). Aborting `signal` stops the run
+ * with no trailer, as a killed process would. Samples are scheduled from the previous sample's start.
+ * Nothing is retained in memory. `afterSample` runs after each written sample line.
+ */
+export async function streamCensus(options) {
+  const platform = options.platform ?? process.platform
+  const state = validateState(options.state)
+  const seconds = Number(options.seconds ?? DEFAULT_SECONDS)
+  const intervalMs = Number(options.intervalMs ?? DEFAULT_INTERVAL_MS)
+  if (!(seconds > 0)) throw new Error('--seconds must be positive')
+  if (!(intervalMs > 0)) throw new Error('--interval-ms must be positive')
+  if (!options.installRoot) throw new Error('installRoot is required')
+  if (!Number.isInteger(options.mainPid)) throw new Error('mainPid is required')
+  const productVersion = cleanProductVersion(options.productVersion)
+  if (!productVersion) throw new Error('productVersion is required')
+  if (typeof options.writeLine !== 'function') throw new Error('writeLine is required')
+
+  const now = options.now ?? Date.now
+  const sleepFn = options.sleep ?? sleep
+  const listProcessesFn = options.listProcesses ?? listProcesses
+  const sampleOwnedProcessesFn = options.sampleOwnedProcesses ?? sampleOwnedProcesses
+  const started = now()
+  const endMs = seconds * 1000
+  options.writeLine({
+    record: 'header',
+    schema: STREAM_SCHEMA,
+    state,
+    platform,
+    productVersion,
+    mainPid: options.mainPid,
+    intervalMs,
+    startedAt: new Date(started).toISOString(),
+    profileKind: options.profileKind ?? 'representative-synthetic'
+  })
+
+  let count = 0
+  while (true) {
+    if (options.signal?.aborted) return { outcome: 'aborted', samples: count, startedAt: started }
+    const sampleStart = now()
+    const table = listProcessesFn(platform)
+    const owned = ownedProcessPopulation({ mainPid: options.mainPid, installRoot: options.installRoot, platform, table })
+    const processes = sampleOwnedProcessesFn(owned, platform)
+    const mainAlive = processes.some((process) => process.pid === options.mainPid && process.kind === 'main')
+    count += 1
+    options.writeLine({
+      record: 'sample',
+      tMs: sampleStart - started,
+      processes: processes.map(streamProcess),
+      mainAlive,
+      sampleDurationMs: now() - sampleStart
+    })
+    await options.afterSample?.({ samples: count, tMs: sampleStart - started })
+    if (options.signal?.aborted) return { outcome: 'aborted', samples: count, startedAt: started }
+    const outcome = !mainAlive ? 'main-exited' : sampleStart - started >= endMs ? 'completed' : null
+    if (outcome) {
+      options.writeLine({ record: 'trailer', outcome, samples: count, endedAt: new Date(now()).toISOString() })
+      return { outcome, samples: count, startedAt: started }
+    }
+    const nextAt = Math.min(sampleStart + intervalMs, started + endMs)
+    await sleepFn(Math.max(0, nextAt - now()))
+  }
 }
 
 export function writeJson(path, value) {
