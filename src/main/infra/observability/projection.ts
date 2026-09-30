@@ -55,9 +55,14 @@ export const BOOT_STAGES = [
   'createTray.buildMenu',
   'createTray.attachMenu',
   'createWindow.construct',
+  'createWindow.navigate',
   'createWindow.firstShow'
 ] as const
 export type BootStage = (typeof BOOT_STAGES)[number]
+/** The boot window's rendering configuration: the shipped one, or a QA-only variant the ST-1 window job builds it
+ *  under (boot-window-rendering.ts, M2-0516). */
+export const BOOT_WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'prewarm-view'] as const
+export type BootWindowVariant = (typeof BOOT_WINDOW_VARIANTS)[number]
 export const HISTORY_STAGES = ['received', 'served', 'settled'] as const
 export const HISTORY_OUTCOMES = ['ok', 'failed', 'discarded'] as const
 const RENDER_GONE_REASONS = [
@@ -189,8 +194,9 @@ export const OBSERVABILITY_EVENTS = {
     bootId: 'id',
     stage: BOOT_STAGES,
     ms: 'ms',
-    /** createWindow.construct only: whether the constructor built a transparent window. */
-    transparent: 'flag'
+    /** createWindow.construct only: whether the constructor built a transparent window, and under which variant. */
+    transparent: 'flag',
+    windowVariant: BOOT_WINDOW_VARIANTS
   },
   /** Overlay renderer stopped answering Chromium. */
   'app.unresponsive': {
