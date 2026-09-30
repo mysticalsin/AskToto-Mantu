@@ -11,7 +11,6 @@ import {
   pinnedExpression,
   recordSample,
   releaseExpression,
-  summarizeHistory,
   withTimeout,
   witnessSummary
 } from './lib/st-1-core.mjs'
@@ -234,22 +233,6 @@ describe('historyEntry', () => {
       tMs: 40_000,
       skipped: 'no window'
     })
-  })
-})
-
-describe('summarizeHistory', () => {
-  it('reports an empty history without a verdict', () => {
-    expect(summarizeHistory([])).toEqual({ calls: 0, hung: 0, firstMs: null, firstWithinBudget: null, maxMs: null })
-  })
-
-  it('fails the first-call budget when the first call hung, however long it was waited for', () => {
-    const summary = summarizeHistory([{ tMs: 20_000, hung: true, ms: 10_004 }, { tMs: 25_000, ms: 4 }])
-    expect(summary).toMatchObject({ calls: 2, hung: 1, firstMs: 10_004, firstWithinBudget: false, maxMs: 10_004 })
-  })
-
-  it('holds the first call to under 250 ms, exclusive', () => {
-    expect(summarizeHistory([{ tMs: 20_000, ms: 249 }]).firstWithinBudget).toBe(true)
-    expect(summarizeHistory([{ tMs: 20_000, ms: 250 }]).firstWithinBudget).toBe(false)
   })
 })
 

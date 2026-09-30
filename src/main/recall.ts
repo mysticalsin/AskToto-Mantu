@@ -1,4 +1,4 @@
-import { Lru, removeFile, writeTextFile } from './recall-io'
+import { unlink, writeFile } from 'node:fs/promises'
 import { exciseDeletedMeeting } from './brain/ingest'
 import { join, basename } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
@@ -83,8 +83,13 @@ async function readFolderText(folder: string, file: string): Promise<string | nu
   return read.status === 'ok' ? read.bytes.toString('utf8') : null
 }
 
+/** A History row. `notDownloaded` marks a file whose bytes are not on this device (a cloud-only
+ *  placeholder): listed from its name, never read; opening it hydrates it explicitly. Like `locked`
+ *  below, it is not yet declared on the shared MeetingSummary type and flows through as an own property. */
+export type HistoryRow = MeetingSummary & { notDownloaded?: true }
+
 interface Read {
-  sum: MeetingSummary
+  sum: HistoryRow
   text: string
 }
 
@@ -148,13 +153,25 @@ interface CacheEntry {
   read: Read | null
 }
 // Least-recently-used, so a pathological folder (or repeated folder switches) cannot grow it without
-// limit and a full cache drops one cold entry instead of every warm one.
-// Root cause of the measured ~2 s first History call (DERIVED, not yet re-measured): the listing used to
-// read every file, so reads of blocked or cloud-only files filled the shared admission permits and the rest
-// waited on them until the gateway's 2 s metadata deadline. Now the listing is one batched classify and
-// only files classified local are read.
+// limit and a full cache drops one cold entry instead of every warm one. A Map iterates in insertion
+// order, so re-inserting on every hit keeps the coldest entry first.
 const READ_CACHE_MAX = 2000
-const readCache = new Lru<CacheEntry>(READ_CACHE_MAX)
+const readCache = new Map<string, CacheEntry>()
+
+function cachedRead(path: string): CacheEntry | undefined {
+  const entry = readCache.get(path)
+  if (entry) {
+    readCache.delete(path)
+    readCache.set(path, entry)
+  }
+  return entry
+}
+
+function cacheRead(path: string, entry: CacheEntry): void {
+  readCache.delete(path)
+  readCache.set(path, entry)
+  if (readCache.size > READ_CACHE_MAX) readCache.delete(readCache.keys().next().value as string)
+}
 
 /** Sentinel for "this file could not be READ at all" — an unhydrated OneDrive Files-On-Demand
  *  placeholder while offline, or an AV/EDR share-lock (the same transient conditions writeSaved
@@ -200,7 +217,7 @@ async function readMeeting(folder: string, file: string, fileClass: FileClass | 
     return notDownloadedRow(file)
   }
   if (fileClass.status !== 'ok') return notLocal()
-  const hit = readCache.get(path)
+  const hit = cachedRead(path)
   if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.read
   const read = await readMeetingUncached(folder, file, signal)
   if (read === NOT_LOCAL) return notLocal()
@@ -211,14 +228,14 @@ async function readMeeting(folder: string, file: string, fileClass: FileClass | 
     readCache.delete(path)
     return unavailableRow(file)
   }
-  readCache.set(path, { mtimeMs, size, read })
+  cacheRead(path, { mtimeMs, size, read })
   return read
 }
 
 /** Reads one listing's files: a single batched classify, then a read of each file classified local. Aborting
- *  `signal` ends the classify and every queued read at the gateway, and the listing comes back empty. */
+ *  `signal` ends every queued read at the gateway, and the listing comes back empty. */
 async function readMeetings(folder: string, files: readonly string[], signal?: AbortSignal): Promise<Array<Read | null>> {
-  const classes = await classifyAll(storageAt(folder), files, signal)
+  const classes = await classifyAll(storageAt(folder), files)
   if (signal?.aborted) return []
   const read = await Promise.all(files.map((f) => readMeeting(folder, f, classes.get(f), signal)))
   // Reads cut short by a superseding search answer 'Unavailable'; those rows are not a listing.
@@ -298,7 +315,7 @@ export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; 
 }
 
 /** Newest-first list of saved meetings. */
-export async function listMeetings(): Promise<MeetingSummary[]> {
+export async function listMeetings(): Promise<HistoryRow[]> {
   const folder = resolveMeetingsFolder(getSettings())
   const read = await readMeetings(folder, await meetingFiles(folder))
   return read
@@ -451,7 +468,7 @@ export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?
   }
   const fullPath = join(folder, safeName)
   try {
-    await removeFile(fullPath)
+    await unlink(fullPath)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
@@ -468,7 +485,7 @@ export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?
       .split('\n')
       .filter((line) => !new RegExp(`\\(${escaped}\\)`).test(line))
       .join('\n')
-    if (filtered !== raw) await writeTextFile(indexPath, filtered)
+    if (filtered !== raw) await writeFile(indexPath, filtered, 'utf8')
   } catch {
     /* index update is best-effort; never fail the delete because of it */
   }
@@ -565,7 +582,7 @@ export async function renameMeeting(
           return cells.join('|')
         })
         .join('\n')
-      if (changed) await writeTextFile(indexPath, updatedIndex)
+      if (changed) await writeFile(indexPath, updatedIndex, 'utf8')
     } catch {
       /* index update is best-effort; never fail the rename because of it */
     }
@@ -922,14 +939,14 @@ export async function deleteAllMeetings(): Promise<{
       continue
     }
     try {
-      await removeFile(join(folder, file))
+      await unlink(join(folder, file))
       deleted++
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') failed.push(file)
     }
   }
   try {
-    await removeFile(join(folder, 'index.md')) // recreated fresh (header-only) on the next save
+    await unlink(join(folder, 'index.md')) // recreated fresh (header-only) on the next save
   } catch {
     /* best-effort — a missing/unwritable index doesn't fail the overall wipe */
   }
