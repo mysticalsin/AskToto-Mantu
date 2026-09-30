@@ -66,6 +66,9 @@ const SURVIVOR_BOUND_MS = 5_000 // owned processes must be gone within 5s of mai
 const AUDIT_POLL_MS = 250
 const CENSUS_POLL_MS = 500
 const RV_TIMEOUT_MS = 15_000
+// How long RE-HIDE-3-meeting-hide holds a parked band before re-reading it, so a late native frame change
+// (AppKit re-deriving a titled frame after the park, M2-0526) lands inside the assertion. Empirical.
+const LATE_NATIVE_FRAME_HOLD_MS = 500
 // The budget a direct relaunch's run() gives the relaunched instance to boot, hand off to the running app
 // and exit. A detached relaunch (the Windows shortcut's `start`) resolves run() before that boot, so its
 // reveal window adds this budget on top of RV_TIMEOUT_MS instead of spending the boot inside it.
@@ -1425,8 +1428,8 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await hideControl().click({ timeout: 5_000 })
     const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
     // Held: the band is still the park after a late native frame change (M2-0526). A stricter assertion,
-    // not a retry. The 500 ms window is empirical: long enough for a late native frame change to land.
-    await wait(500)
+    // not a retry.
+    await wait(LATE_NATIVE_FRAME_HOLD_MS)
     const held = await observe()
     const heldOk = rightEdgeStateMatches(held, 'parked', 'hide')
     const geometry = await main(mainReHideGeometrySince(clickedAt))

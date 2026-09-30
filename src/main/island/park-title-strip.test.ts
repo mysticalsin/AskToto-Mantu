@@ -18,6 +18,11 @@
  *   call, so the synchronous park and its readback cannot see it. It lands after the park only sometimes:
  *   during a live meeting the Hide control parks immediately from the click (auto-hide is off while a
  *   capture runs, so no exit spring precedes it), while the drawer is still painting.
+ * - LEAD_ACTION: before merge, dispatch the macOS packaged-smoke lane on this branch, file the
+ *   RE-HIDE-3-meeting-hide 'geometry' evidence (write/minimum/frame trace), and confirm no 'frame' entry with
+ *   y=29/h=592 follows the park; if one appears, name its preceding write and reopen. If the trace shows the
+ *   frame change comes from Chromium's size-constraint update (a style-mask change) rather than the
+ *   minimum-size write itself, the same guard applies and this mechanism is reworded.
  *
  * Fix: the park releases the minimum size through `releaseParkMinimumSize`, which never re-writes an unchanged
  * minimum, so no native constraint change follows the park. The window below models the assumed AppKit
