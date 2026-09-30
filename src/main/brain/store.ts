@@ -38,6 +38,12 @@ import {
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
+import {
+  activeIngestLedgerPath,
+  classifyIngestLedgerBytes,
+  ingestLedgerMode,
+  writeIngestLedger
+} from '../infra/storage/ingest-ledger'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
 
@@ -550,20 +556,7 @@ export class BrainIndexRebuildError extends Error {
 
 /** Pure classification of index.json bytes. No filesystem writes. */
 export function classifyIndexBytes(buf: Buffer): IndexLoad {
-  if (buf.length === 0) return { kind: 'absent' } // torn to zero bytes: nothing to preserve (unchanged)
-  const decoded = decodeSavedResult(buf)
-  if (!decoded.ok) return { kind: 'unavailable', cause: 'undecryptable', detail: decoded.reason }
-  let raw: unknown
-  try {
-    raw = JSON.parse(decoded.text)
-  } catch {
-    return { kind: 'corrupt' }
-  }
-  const v = (raw as { schema_version?: unknown } | null)?.schema_version
-  if (typeof v === 'number' && v > BRAIN_SCHEMA_VERSION) return { kind: 'unavailable', cause: 'unsupported' }
-  const parsed = BrainIndexSchema.safeParse(raw)
-  if (parsed.success) return { kind: 'ready', index: parsed.data }
-  return { kind: 'corrupt' }
+  return classifyIngestLedgerBytes(buf) as IndexLoad
 }
 
 // Stat-keyed memo, one entry per `.brain` dir's index.json. NOT session state: an entry is used only
@@ -632,7 +625,7 @@ function setAsideCorruptIndex(p: string): ResolvedIndex {
 }
 
 function loadIndex(s: Settings): ResolvedIndex {
-  const p = join(brainDir(s), INDEX_REL)
+  const p = activeIngestLedgerPath(join(brainDir(s), INDEX_REL))
   const hit = indexCache.get(p)
 
   let mtimeMs: number
@@ -677,7 +670,9 @@ function loadIndex(s: Settings): ResolvedIndex {
 }
 
 async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
-  const p = join(brainDir(s), INDEX_REL)
+  const legacyPath = join(brainDir(s), INDEX_REL)
+  const p = activeIngestLedgerPath(legacyPath)
+  if (ingestLedgerMode() === 'switch') return loadIndex(s)
   const hit = indexCache.get(p)
   const gateway = storageAt(resolveMeetingsFolder(s))
   const fileClass = (await classifyAll(gateway, [join('.brain', INDEX_REL)])).get(join('.brain', INDEX_REL))
@@ -781,8 +776,9 @@ export async function rebuildUnavailableError(s: Settings): Promise<string | nul
 export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
   const blocked = indexUnavailable(s)
   if (blocked) throw new BrainIndexUnavailableError(blocked)
-  await writeJson(s, INDEX_REL, v)
-  indexCache.delete(join(brainDir(s), INDEX_REL))
+  const legacyPath = join(brainDir(s), INDEX_REL)
+  await writeIngestLedger(s, legacyPath, v)
+  indexCache.delete(activeIngestLedgerPath(legacyPath))
 }
 
 // ── Typed accessors ──────────────────────────────────────────────────────────
