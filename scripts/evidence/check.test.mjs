@@ -1462,6 +1462,19 @@ test('C32 CLI --release: a met tree exits 0, an unmet row exits 1 one line per p
   })
   writeFileSync(notesPath, releaseNotes())
 
+  // A later hosted-runner record without ci_run_id is malformed input, not skipped for the older PASS.
+  const censusPath = join(root, 'evidence', 'records', 'M2-0489.jsonl')
+  const censusRecords = readFileSync(censusPath, 'utf8')
+  const { ci_run_id: _dropped, ...unrun } = boundRecord('M2-0489', 'macos-latest', SHA_MAC, { evidence_level: 'MEASURED' })
+  writeFileSync(censusPath, `${censusRecords}${JSON.stringify(unrun)}\n`)
+  assert.throws(() => run(releaseArgs), (error) => {
+    assert.equal(error.status, 2)
+    assert.match(error.stderr, /records\/M2-0489\.jsonl:\d+: ci_run_id: required for a hosted-runner MEASURED record/)
+    return true
+  })
+  writeFileSync(censusPath, censusRecords)
+  assert.match(run(releaseArgs), /release 1\.9\.7: OK/)
+
   for (const args of [
     releaseArgs.slice(0, -2),
     [...releaseArgs, '--pr-event', gatesPath],

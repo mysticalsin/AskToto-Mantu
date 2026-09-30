@@ -1187,7 +1187,9 @@ function releaseMain(values) {
   } catch (error) {
     return usageExit(`could not read the release inputs: ${error.message}`)
   }
-  const inputProblems = releaseInputProblems(gates, provenance, program.ledger)
+  // A record the store rejects (record.mjs recordProblems) is malformed input, never skipped: dropping
+  // an invalid latest record would let an older PASS meet its row.
+  const inputProblems = [...program.problems, ...releaseInputProblems(gates, provenance, program.ledger)]
   if (inputProblems.length > 0) {
     for (const problem of inputProblems) console.error(`- ${problem}`)
     process.exit(2)
