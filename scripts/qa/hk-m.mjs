@@ -3,7 +3,7 @@
  * HK-M packaged sidecar supervision proof. Runs only against an installed macOS app on hosted QA.
  *
  * Usage:
- *   node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20] [--budget-ms N]
+ *   node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20] [--budget-ms N] [--supervision shipped|forced-on]
  *
  * --budget-ms is a total wall-clock budget: no wait starts or continues past it, and every row not reached is
  * reported NOT_RUN (a failure). One progress line per row goes to stdout, and the report is written even when
@@ -54,8 +54,30 @@ const HK_M_MODEL_MIN_TOTAL_RAM_GB = 8
 export const PREWARM_MIN_FREE_RAM_GB = 4
 
 function usage() {
-  console.error('usage: node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20] [--budget-ms N]')
+  console.error(
+    'usage: node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20] [--budget-ms N] [--supervision shipped|forced-on]'
+  )
   process.exit(2)
+}
+
+const SUPERVISION_MODES = ['shipped', 'forced-on']
+
+/**
+ * Environment for a launched app. `shipped` strips both supervision variables so the build's own default decides
+ * (and no supervision argv is ever passed); `forced-on` sets METIS_SUPERVISION=on regardless of the default.
+ */
+export function launchEnv({ baseEnv, profile, scenario, supervisionMode }) {
+  const env = {
+    ...baseEnv,
+    ASKTOTO_USERDATA: profile,
+    METIS_DISABLE_APPLE_FM: '1',
+    METIS_HK_M_SCENARIO: scenario
+  }
+  delete env.METIS_SUPERVISION
+  delete env.METIS_SIDECAR_SUPERVISION
+  if (supervisionMode === 'forced-on') env.METIS_SUPERVISION = 'on'
+  for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
+  return env
 }
 
 function sleep(ms) {
@@ -70,7 +92,10 @@ function parseArgs(argv) {
   const budgetIndex = argv.indexOf('--budget-ms')
   const budgetMs = budgetIndex === -1 ? null : Number(argv[budgetIndex + 1])
   if (budgetMs !== null && (!Number.isInteger(budgetMs) || budgetMs < 1)) usage()
-  return { appPath: argv[0], reportPath: argv[1], cycles, budgetMs }
+  const supervisionIndex = argv.indexOf('--supervision')
+  const supervisionMode = supervisionIndex === -1 ? 'shipped' : argv[supervisionIndex + 1]
+  if (!SUPERVISION_MODES.includes(supervisionMode)) usage()
+  return { appPath: argv[0], reportPath: argv[1], cycles, budgetMs, supervisionMode }
 }
 
 // Wall-clock end of the run's budget; Infinity when no budget was given.
@@ -528,7 +553,7 @@ async function relaunchAndCountRuntimes({ executable, installRoot, profile, env,
   }
 }
 
-async function runCycle({ executable, installRoot, scenario, cycle, timings }) {
+async function runCycle({ executable, installRoot, scenario, cycle, timings, supervisionMode }) {
   const rootResidents = ownedProcesses(listProcesses('darwin'), { mainPid: null, installRoot, platform: 'darwin' })
   if (rootResidents.length > 0) {
     return terminalRow(scenario, cycle, 'FAIL', { failure: 'install_root_busy', before: roleCounts(rootResidents) })
@@ -545,14 +570,7 @@ async function runCycle({ executable, installRoot, scenario, cycle, timings }) {
   }
 
   const profile = mkdtempSync(join(tmpdir(), 'metis-hk-m-'))
-  const env = {
-    ...process.env,
-    ASKTOTO_USERDATA: profile,
-    METIS_SUPERVISION: 'on',
-    METIS_DISABLE_APPLE_FM: '1',
-    METIS_HK_M_SCENARIO: scenario
-  }
-  for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
+  const env = launchEnv({ baseEnv: process.env, profile, scenario, supervisionMode })
 
   const child = spawn(executable, [], { env, stdio: 'ignore' })
   const exitInfo = { settled: false, code: null, signal: null }
@@ -717,7 +735,7 @@ function progressLine(row) {
 }
 
 async function main() {
-  const { appPath, reportPath, cycles, budgetMs } = parseArgs(process.argv.slice(2))
+  const { appPath, reportPath, cycles, budgetMs, supervisionMode } = parseArgs(process.argv.slice(2))
   mkdirSync(dirname(reportPath), { recursive: true })
   if (budgetMs !== null) budgetEnd = Date.now() + budgetMs
   const report = {
@@ -725,6 +743,7 @@ async function main() {
     ticket: 'M2-0028',
     platform: process.platform,
     cycles,
+    supervisionMode,
     ...(budgetMs !== null ? { budgetMs } : {}),
     scenarios: SCENARIOS,
     host: process.platform === 'darwin' ? hostFacts() : null,
@@ -769,7 +788,7 @@ async function main() {
         if (budgetSpent()) break
         const timings = {}
         const memoryAtStart = rowStartMemory()
-        const row = await runCycle({ executable, installRoot, scenario, cycle, timings })
+        const row = await runCycle({ executable, installRoot, scenario, cycle, timings, supervisionMode })
         if (timings.ready !== undefined) row.timingsMs = { ...timings, ...row.timingsMs }
         row.memoryAtStart = memoryAtStart
         report.rows.push(row)
