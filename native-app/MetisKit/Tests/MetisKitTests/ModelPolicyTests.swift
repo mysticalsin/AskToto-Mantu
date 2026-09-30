@@ -169,7 +169,8 @@ final class ModelPolicyClientTests: XCTestCase {
             }
             return Self.jsonResponse(Self.encodableJson(SignedModelPolicy(policy: doc, signature: signature)), url: url)
         }
-        XCTAssertEqual(await client.refresh(url: url, secret: "shared-secret"), .applied)
+        let initialOutcome = await client.refresh(url: url, secret: "shared-secret")
+        XCTAssertEqual(initialOutcome, .applied)
         failSwitch.shouldFail = true
         let outcome = await client.refresh(url: url, secret: "shared-secret")
         if case .rejected = outcome {} else { XCTFail("expected .rejected, got \(outcome)") }
@@ -193,9 +194,11 @@ final class ModelPolicyClientTests: XCTestCase {
             }
             return Self.jsonResponse(Self.encodableJson(SignedModelPolicy(policy: doc, signature: signature)), url: url)
         }
-        XCTAssertEqual(await client.refresh(url: url, secret: "shared-secret"), .applied)
+        let initialOutcome = await client.refresh(url: url, secret: "shared-secret")
+        XCTAssertEqual(initialOutcome, .applied)
         failSwitch.shouldFail = true
-        XCTAssertEqual(await client.refresh(url: url, secret: "shared-secret"), .notManaged)
+        let replayOutcome = await client.refresh(url: url, secret: "shared-secret")
+        XCTAssertEqual(replayOutcome, .notManaged)
         let active = await client.activePolicy()
         XCTAssertEqual(active?.version, 1000)
     }
