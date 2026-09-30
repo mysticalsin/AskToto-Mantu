@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import {
   VARIANTS,
   PROMOTABLE_VARIANTS,
+  RESIDUALS_MAX_LENGTH,
   promotableAssets,
   stageBuild,
   assembleProvenance,
@@ -706,12 +707,97 @@ test('release notes state version, commit, candidate run, promotion run, not-Lat
     assert.ok(!notes.includes(qaAsset.name), 'the QA-identity asset is never promoted, so it must not appear')
 
     assert.ok(notes.includes('ad-hoc signed and not notarized'))
+    assert.ok(notes.includes('grant Screen Recording and Microphone again once in System Settings'))
+    assert.ok(notes.includes('treats an ad-hoc build as a new app'))
 
     const qaSigned = JSON.parse(JSON.stringify(provenance))
     qaSigned.builds.find((b) => b.variant === 'mac').signing = { mode: 'qa-identity', certificate_sha1: 'a'.repeat(40) }
     const qaNotes = releaseNotes({ provenance: qaSigned, evidence, promotionRunUrl })
     assert.ok(qaNotes.includes('self-signed QA certificate'))
     assert.ok(qaNotes.includes('a'.repeat(40)))
+    assert.ok(!qaNotes.includes('Screen Recording'), 'the qa-identity branch keeps its text: no re-grant instruction')
+  } finally {
+    cleanup(root)
+  }
+})
+
+test('release notes render the residuals verbatim between the evidence line and the sha256 table, in both signing modes', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    const { records, env: e } = await stageAll(root, releaseDir)
+    const provenance = assembleProvenance(records, e)
+    const promotionRunUrl = 'https://github.com/owner/repo/actions/runs/99'
+    const evidence = { count: 1, tickets: ['M2-0028'], sha256: sha256('evidence bytes') }
+    const residuals = '- **First** limit, `code` and | pipes\n- Second limit\n\n  indented <b>html</b>'
+    const heading = '## Residual risks and known limits'
+
+    const qaSigned = JSON.parse(JSON.stringify(provenance))
+    qaSigned.builds.find((b) => b.variant === 'mac').signing = { mode: 'qa-identity', certificate_sha1: 'a'.repeat(40) }
+    for (const p of [provenance, qaSigned]) {
+      const notes = releaseNotes({ provenance: p, evidence, promotionRunUrl, residuals })
+      assert.equal(notes.split(heading).length, 2)
+      assert.ok(notes.includes(`${heading}\n\n${residuals}\n\n`))
+      const evidenceAt = notes.indexOf('**Evidence:**')
+      const headingAt = notes.indexOf(heading)
+      const tableAt = notes.indexOf('| File | SHA-256 |')
+      assert.ok(evidenceAt !== -1 && evidenceAt < headingAt && headingAt < tableAt)
+    }
+
+    // A dry run may omit the residuals: no section at all.
+    assert.ok(!releaseNotes({ provenance, evidence, promotionRunUrl }).includes(heading))
+  } finally {
+    cleanup(root)
+  }
+})
+
+test('prepare-release renders the residuals into notes.md and refuses empty, oversized, home-path and email residuals', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    const { records, env: e } = await stageAll(root, releaseDir)
+    const provenance = assembleProvenance(records, e)
+    const provenancePath = join(root, 'provenance.json')
+    writeFileSync(provenancePath, `${JSON.stringify(provenance, null, 2)}\n`)
+    const downloadsDir = join(root, 'downloads')
+    mkdirSync(downloadsDir, { recursive: true })
+    copyPromotableAssetsToDownloads(root, provenance, downloadsDir)
+    const evidencePath = join(root, 'evidence.jsonl')
+    writeFileSync(evidencePath, passEvidenceFor(provenance, promotableAssets(provenance)))
+    const prepare = (name, residuals) =>
+      prepareRelease({
+        provenancePath,
+        evidencePath,
+        downloadsDir,
+        outDir: join(root, name),
+        candidateRun: String(provenance.run.id),
+        candidateCommit: provenance.commit,
+        residuals,
+        env: e
+      })
+
+    const refused = [
+      ['empty', '', /residuals is empty/],
+      ['blank', ' \n\t\n', /residuals is empty/],
+      ['long', 'x'.repeat(RESIDUALS_MAX_LENGTH + 1), /limit is 10000/],
+      ['mac-home', 'see /Users/someone/notes', /user-home path \(INV-7\)/],
+      ['linux-home', 'see /home/someone/notes', /user-home path \(INV-7\)/],
+      ['win-home', 'see C:\\Users\\someone\\notes', /user-home path \(INV-7\)/],
+      ['email', 'ask someone@example.com', /email address \(INV-7\)/]
+    ]
+    for (const [name, residuals, rule] of refused) {
+      await assert.rejects(prepare(`refused-${name}`, residuals), (error) => rule.test(error.message), name)
+      assert.equal(existsSync(join(root, `refused-${name}`, 'upload')), false, name)
+    }
+
+    // The limit itself is accepted.
+    await prepare('at-limit', 'x'.repeat(RESIDUALS_MAX_LENGTH))
+    assert.ok(existsSync(join(root, 'at-limit', 'upload')))
+    for (const asset of promotableAssets(provenance)) {
+      renameSync(join(root, 'at-limit', 'upload', asset.name), join(downloadsDir, asset.name))
+    }
+
+    const { notes } = await prepare('ok', 'Known limit: the idle soak is extrapolated.')
+    assert.ok(notes.includes('## Residual risks and known limits\n\nKnown limit: the idle soak is extrapolated.\n\n'))
+    assert.equal(readFileSync(join(root, 'ok', 'notes.md'), 'utf8'), notes)
   } finally {
     cleanup(root)
   }

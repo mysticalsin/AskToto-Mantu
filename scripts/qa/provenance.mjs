@@ -380,16 +380,38 @@ export function evidenceProblems(evidenceText, provenance) {
   return problems
 }
 
+/** The longest residuals text a release body accepts. */
+export const RESIDUALS_MAX_LENGTH = 10000
+// A user home path or an email address must never reach the public release body (INV-7).
+const USER_PATH_RE = /(?:\/Users\/|\/home\/|[A-Za-z]:\\Users\\)[^\s/\\]+/i
+const EMAIL_RE = /[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}/
+
+/** Why a residuals text cannot be published; empty means OK. `undefined` means none was given. */
+export function residualsProblems(residuals) {
+  if (residuals === undefined) return []
+  const problems = []
+  if (residuals.trim() === '') problems.push('residuals is empty; give the residual risks or omit it')
+  if (residuals.length > RESIDUALS_MAX_LENGTH) {
+    problems.push(`residuals is ${residuals.length} characters; the limit is ${RESIDUALS_MAX_LENGTH}`)
+  }
+  if (USER_PATH_RE.test(residuals)) problems.push('residuals contains a user-home path (INV-7)')
+  if (EMAIL_RE.test(residuals)) problems.push('residuals contains an email address (INV-7)')
+  return problems
+}
+
 /**
  * releaseNotes' shape is normative: version, commit, candidate run, promotion run, owner-channel/
- * hand-install framing (never Latest), signing mode and the evidence summary.
+ * hand-install framing (never Latest), signing mode, the evidence summary, the residuals section when
+ * given (rendered verbatim) and the sha256 table.
  */
-export function releaseNotes({ provenance, evidence, promotionRunUrl }) {
+export function releaseNotes({ provenance, evidence, promotionRunUrl, residuals }) {
   const macBuild = provenance.builds.find((build) => build.variant === 'mac')
   const macSigning =
     macBuild.signing.mode === 'qa-identity'
       ? `The macOS app is signed with the program's self-signed QA certificate (SHA-1 \`${macBuild.signing.certificate_sha1}\`), not a Developer ID, and it is not notarized.`
-      : 'The macOS app is ad-hoc signed and not notarized.'
+      : 'The macOS app is ad-hoc signed and not notarized. After installing, grant Screen Recording and Microphone again once in System Settings → Privacy & Security, because macOS treats an ad-hoc build as a new app (Métis Settings → Repair helps).'
+
+  const residualsSection = residuals === undefined ? '' : `## Residual risks and known limits\n\n${residuals}\n\n`
 
   const assets = promotableAssets(provenance).sort((a, b) => a.name.localeCompare(b.name))
   const rows = assets.map((asset) => `| \`${asset.name}\` | \`${asset.sha256}\` |`).join('\n')
@@ -400,7 +422,7 @@ export function releaseNotes({ provenance, evidence, promotionRunUrl }) {
 
 **Evidence:** ${evidence.count} passing record(s) (${evidence.tickets.join(', ')}) bound to these bytes. Evidence file SHA-256: \`${evidence.sha256}\`.
 
-| File | SHA-256 |
+${residualsSection}| File | SHA-256 |
 |---|---|
 ${rows}
 
@@ -412,7 +434,7 @@ ${rows}
  * Never builds. Proves the candidate's provenance and the promotion evidence, then stages exactly the
  * promotable bytes plus SHA256SUMS.txt and the original provenance.json bytes for upload.
  */
-export async function prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, env }) {
+export async function prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, residuals, env }) {
   const provenanceBytes = readFileSync(provenancePath)
   const provenance = JSON.parse(provenanceBytes.toString('utf8'))
   const evidenceBytes = readFileSync(evidencePath)
@@ -426,6 +448,7 @@ export async function prepareRelease({ provenancePath, evidencePath, downloadsDi
     problems.push(`provenance commit ${provenance.commit} does not match the candidate commit ${candidateCommit}`)
   }
   problems.push(...evidenceProblems(evidenceText, provenance))
+  problems.push(...residualsProblems(residuals))
   problems.push(...(await directoryProblems(provenance, downloadsDir, PROMOTABLE_VARIANTS)))
 
   if (problems.length) throw new Error(problems.join('\n'))
@@ -454,7 +477,7 @@ export async function prepareRelease({ provenancePath, evidencePath, downloadsDi
   const evidence = { count: evidenceRecords.length, tickets, sha256: sha256Bytes(evidenceBytes) }
   const promotionRunUrl = `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`
 
-  const notes = releaseNotes({ provenance, evidence, promotionRunUrl })
+  const notes = releaseNotes({ provenance, evidence, promotionRunUrl, residuals })
   writeFileSync(join(outDir, 'notes.md'), notes)
 
   return { manifest, notes }
@@ -499,7 +522,7 @@ function usage() {
       '  stage <variant> <release-dir> <out-dir>\n' +
       '  assemble <records-dir> <out-dir>\n' +
       '  verify <provenance.json> <dir> <variant>...\n' +
-      '  prepare-release <provenance.json> <evidence.jsonl> <downloads-dir> <out-dir> --candidate-run <id> --candidate-commit <sha>\n' +
+      '  prepare-release <provenance.json> <evidence.jsonl> <downloads-dir> <out-dir> --candidate-run <id> --candidate-commit <sha> [--residuals-file <file>]\n' +
       '  check-release <manifest.json> <uploaded.json>'
   )
   process.exitCode = 2
@@ -540,7 +563,9 @@ async function main(argv) {
         const candidateRun = flagValue(flags, '--candidate-run')
         const candidateCommit = flagValue(flags, '--candidate-commit')
         if (!candidateRun || !candidateCommit) return usage()
-        await prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, env: process.env })
+        const residualsFile = flagValue(flags, '--residuals-file')
+        const residuals = residualsFile === undefined ? undefined : readFileSync(residualsFile, 'utf8')
+        await prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, residuals, env: process.env })
         break
       }
       case 'check-release': {
