@@ -34,8 +34,48 @@ export type BootRecord = { startedAt: string; pid: number; version: string; cons
  *  that most likely belongs to it. */
 export type EarlyDeath = BootRecord & { crashDump: string | null }
 
-function sentinelPath(userData: string): string {
-  return join(userData, SENTINEL)
+function markerPath(userData: string, marker: string): string {
+  return join(userData, marker)
+}
+
+export function readDurableWatchRecord(userData: string, marker: string): BootRecord | null {
+  try {
+    const raw = JSON.parse(readFileSync(markerPath(userData, marker), 'utf8')) as Partial<BootRecord>
+    if (typeof raw?.startedAt !== 'string' || raw.startedAt === '') return null
+    return {
+      startedAt: raw.startedAt,
+      pid: typeof raw.pid === 'number' ? raw.pid : -1,
+      version: typeof raw.version === 'string' ? raw.version : 'unknown',
+      consecutive: typeof raw.consecutive === 'number' && raw.consecutive >= 0 ? raw.consecutive : 0
+    }
+  } catch {
+    return null
+  }
+}
+
+export function beginDurableWatch(
+  userData: string,
+  marker: string,
+  version: string,
+  now: () => string = () => new Date().toISOString()
+): BootRecord | null {
+  const previous = readDurableWatchRecord(userData, marker)
+  const consecutive = previous ? previous.consecutive + 1 : 0
+  try {
+    mkdirSync(userData, { recursive: true })
+    writeFileSync(markerPath(userData, marker), JSON.stringify({ startedAt: now(), pid: process.pid, version, consecutive }), { mode: 0o600 })
+  } catch {
+    /* best-effort: a profile we cannot write costs us the next launch's diagnosis, never this boot */
+  }
+  return previous ? { ...previous, consecutive } : null
+}
+
+export function endDurableWatch(userData: string, marker: string): void {
+  try {
+    rmSync(markerPath(userData, marker), { force: true })
+  } catch {
+    /* best-effort */
+  }
 }
 
 /** Newest `.dmp` in the Crashpad database under `<userData>/Crashpad`, by mtime. Null when there is none
@@ -92,41 +132,14 @@ export function beginBootWatch(
   version: string,
   now: () => string = () => new Date().toISOString()
 ): EarlyDeath | null {
-  const p = sentinelPath(userData)
-  let previous: BootRecord | null = null
-  try {
-    const raw = JSON.parse(readFileSync(p, 'utf8')) as Partial<BootRecord>
-    // Only a record with a real start time proves a previous run got as far as claiming the sentinel; a
-    // truncated or hand-edited file is not evidence of a death and must not strand the app in safe start.
-    if (typeof raw?.startedAt === 'string' && raw.startedAt !== '') {
-      previous = {
-        startedAt: raw.startedAt,
-        pid: typeof raw.pid === 'number' ? raw.pid : -1,
-        version: typeof raw.version === 'string' ? raw.version : 'unknown',
-        consecutive: typeof raw.consecutive === 'number' && raw.consecutive >= 0 ? raw.consecutive : 0
-      }
-    }
-  } catch {
-    /* absent (the normal case) or unreadable — either way, no evidence of an early death */
-  }
-  const consecutive = previous ? previous.consecutive + 1 : 0
-  try {
-    mkdirSync(userData, { recursive: true })
-    writeFileSync(p, JSON.stringify({ startedAt: now(), pid: process.pid, version, consecutive }), { mode: 0o600 })
-  } catch {
-    /* best-effort: a profile we cannot write costs us the next launch's diagnosis, never this boot */
-  }
-  return previous ? { ...previous, consecutive, crashDump: newestCrashDump(userData) } : null
+  const previous = beginDurableWatch(userData, SENTINEL, version, now)
+  return previous ? { ...previous, crashDump: newestCrashDump(userData) } : null
 }
 
 /** Close the early boot watch: this run got past IPC/window readiness. Idempotent — also called on a
  *  graceful quit, so quitting inside the watch window is never mistaken for a death. */
 export function endBootWatch(userData: string): void {
-  try {
-    rmSync(sentinelPath(userData), { force: true })
-  } catch {
-    /* best-effort */
-  }
+  endDurableWatch(userData, SENTINEL)
 }
 
 /** One line for the crash log / audit trail: what died, when, on which build, and which dump to open. */

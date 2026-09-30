@@ -1,33 +1,12 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { newestCrashDump, type BootRecord } from './boot-sentinel'
+import { beginDurableWatch, endDurableWatch, newestCrashDump, readDurableWatchRecord, type BootRecord } from './boot-sentinel'
 
 const BRAIN_RESUME_SENTINEL = 'brain-resume-incomplete.json'
 
 export type BrainResumeDeath = BootRecord & { crashDump: string | null }
 
-function brainResumeSentinelPath(userData: string): string {
-  return join(userData, BRAIN_RESUME_SENTINEL)
-}
-
-function readBrainResumeRecord(userData: string): BootRecord | null {
-  try {
-    const raw = JSON.parse(readFileSync(brainResumeSentinelPath(userData), 'utf8')) as Partial<BootRecord>
-    if (typeof raw?.startedAt !== 'string' || raw.startedAt === '') return null
-    return {
-      startedAt: raw.startedAt,
-      pid: typeof raw.pid === 'number' ? raw.pid : -1,
-      version: typeof raw.version === 'string' ? raw.version : 'unknown',
-      consecutive: typeof raw.consecutive === 'number' && raw.consecutive >= 0 ? raw.consecutive : 0
-    }
-  } catch {
-    return null
-  }
-}
-
 /** Read a stale brain-resume marker without claiming the current run's resume window. */
 export function readBrainResumeDeath(userData: string): BrainResumeDeath | null {
-  const previous = readBrainResumeRecord(userData)
+  const previous = readDurableWatchRecord(userData, BRAIN_RESUME_SENTINEL)
   return previous ? { ...previous, consecutive: previous.consecutive + 1, crashDump: newestCrashDump(userData) } : null
 }
 
@@ -40,28 +19,13 @@ export function beginBrainResumeWatch(
   version: string,
   now: () => string = () => new Date().toISOString()
 ): BrainResumeDeath | null {
-  const previous = readBrainResumeDeath(userData)
-  const consecutive = previous?.consecutive ?? 0
-  try {
-    mkdirSync(userData, { recursive: true })
-    writeFileSync(
-      brainResumeSentinelPath(userData),
-      JSON.stringify({ startedAt: now(), pid: process.pid, version, consecutive } satisfies BootRecord),
-      { mode: 0o600 }
-    )
-  } catch {
-    /* best-effort: losing this marker costs only the next launch's diagnosis, never this boot */
-  }
-  return previous
+  const previous = beginDurableWatch(userData, BRAIN_RESUME_SENTINEL, version, now)
+  return previous ? { ...previous, crashDump: newestCrashDump(userData) } : null
 }
 
 /** Clear the delayed brain-resume marker. Idempotent for finally/will-quit/forced-exit paths. */
 export function endBrainResumeWatch(userData: string): void {
-  try {
-    rmSync(brainResumeSentinelPath(userData), { force: true })
-  } catch {
-    /* best-effort */
-  }
+  endDurableWatch(userData, BRAIN_RESUME_SENTINEL)
 }
 
 export function describeBrainResumeDeath(d: BrainResumeDeath): string {

@@ -9300,17 +9300,12 @@ if (!app.requestSingleInstanceLock()) {
       try { unlinkSync(join(ud, f)) } catch { /* ignore */ }
     }
   } catch { /* best-effort — never block startup */ }
-  // MQA-175: the JS-level handlers below cannot see every death. A native C++ exception — Chromium's
-  // OSCrypt raising std::out_of_range on a sync-mangled encrypted file, the shape that killed six
-  // consecutive launches of the shipped 1.5.4 Windows build — unwinds past V8 entirely, so nothing in
-  // this process ever runs again: no crash-*.log, no audit line, no window, no dialog. Only the NEXT
-  // launch can report it, and only if this one left a mark before doing the dangerous work.
+  // MQA-175: a native C++ exception can unwind past V8, so only the next launch can report it.
+  // Claim the early sentinel before risky boot work, then clear it after IPC/window readiness.
   const earlyDeath = beginBootWatch(app.getPath('userData'), app.getVersion())
-  // Keep the process unsuspended until the delayed brain-resume marker clears.
+  // Keep the process unsuspended until the delayed brain-resume window closes.
   setBootPowerSaveBlock(true)
-  // FITO-185-G-SHOW / G-TIMER: idempotent sentinel clear. Purpose of boot-incomplete is early death
-  // before IPC/window readiness; once createWindow+registerIpc completed we are past that kill zone.
-  // The 15s brain-resume step has its own marker. Multiple callers race safely.
+  // The early boot sentinel covers only the IPC/window kill zone; the 15s brain resume has its own marker.
   let bootWatchClosed = false
   const clearBootWatchOnce = (reason: string): void => {
     if (bootWatchClosed) return
@@ -9670,10 +9665,9 @@ if (!app.requestSingleInstanceLock()) {
   scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
   bootWork.releaseAfterFirstShow(win)
   revealController.markBootComplete()
-  // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
+  // createWindow completed the early kill zone; brain resume remains protected by its own marker.
   clearBootWatchOnce('createWindow')
-  // Also setImmediate + unlock-screen so App Nap / locked-screen cannot leave the early boot sentinel
-  // stuck after IPC/window readiness.
+  // Belt-and-suspenders clears for App Nap / locked-screen deferral after IPC/window readiness.
   setImmediate(() => clearBootWatchOnce('setImmediate'))
   try {
     powerMonitor.on('unlock-screen', () => clearBootWatchOnce('unlock-screen'))
@@ -9724,25 +9718,20 @@ if (!app.requestSingleInstanceLock()) {
   runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(() => win))
-  // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
-  // Directory scans, rather than fs.watch, are deliberate: Files On-Demand and Windows sync do not
-  // reliably emit every watcher event. A one-minute cadence keeps Intelligence current without
-  // depending on cloud-sync events; provider-free runs only repair already-saved local extractions.
+  // Resume durable live/backfill work after first paint. Directory scans beat fs.watch for synced files.
   const BRAIN_RECONCILE_MS = 60 * 1000
   setTimeout(() => {
-    // This timer is the first launch step that can decrypt the brain index. It owns a separate resume
-    // marker because the early boot sentinel is already cleared once IPC/window readiness is established.
-    // A stale resume marker safe-starts this session only; the marker is cleared in finally when JS keeps
-    // control, but a native death inside the resume leaves it for the next launch.
+    // First launch step that can decrypt the brain index: use a marker separate from the early sentinel.
     const brainResumeDeath = readBrainResumeDeath(app.getPath('userData'))
+    const safeStartBrainResume = (death: string, consecutive: number): void => {
+      mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${death}`)
+      auditLog('app.error.early_death', { consecutive, recoveryStatus: 'safe_start' })
+    }
     try {
-      if (earlyDeath || brainResumeDeath) {
-        const death = brainResumeDeath ? describeBrainResumeDeath(brainResumeDeath) : describeEarlyDeath(earlyDeath!)
-        mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${death}`)
-        auditLog('app.error.early_death', {
-          consecutive: brainResumeDeath?.consecutive ?? earlyDeath!.consecutive,
-          recoveryStatus: 'safe_start'
-        })
+      if (brainResumeDeath) {
+        safeStartBrainResume(describeBrainResumeDeath(brainResumeDeath), brainResumeDeath.consecutive)
+      } else if (earlyDeath) {
+        safeStartBrainResume(describeEarlyDeath(earlyDeath), earlyDeath.consecutive)
       } else {
         // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
         try {
@@ -9764,13 +9753,11 @@ if (!app.requestSingleInstanceLock()) {
         } catch (e) {
           mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
         }
-        // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
-        // not just the single resume — the reconcile tick reads the same index.json.
+        // Register here so safe start skips recurring brain work too; the reconcile tick reads index.json.
         trackTimer(setInterval(() => {
           void reconcileMeetingsInBackground().catch((e) => mainLog.warn('[brain] reconcile tick failed:', e))
         }, BRAIN_RECONCILE_MS))
-        // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
-        // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
+        // Product cadence is three named slots, not an hourly poll; catch up, then arm the next timeout.
         try {
           wireIntelligenceIndexWork()
         } catch (e) {
@@ -9786,7 +9773,7 @@ if (!app.requestSingleInstanceLock()) {
         } catch (e) {
           mainLog.warn('[boot] scheduleIntelligenceIndex failed:', e)
         }
-        // Consolidation runs once per launch; the named slots own the recurring pass. Both are automatic triggers (infra/scheduler/policy.ts).
+        // Consolidation runs once per launch; named slots own the recurring pass.
         try {
           bootWork.run('runConsolidationIfDue', () => runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e)))
         } catch (e) {
@@ -9794,8 +9781,7 @@ if (!app.requestSingleInstanceLock()) {
         }
       }
     } finally {
-      // Power-save stays until the 15s brain work has been admitted; the early boot sentinel may already
-      // have been cleared earlier, while the brain-resume marker is owned by the resume job above.
+      // Power-save stays until the 15s brain work has been admitted.
       setBootPowerSaveBlock(false)
       if (brainResumeDeath) endBrainResumeWatch(app.getPath('userData'))
     }
