@@ -1,7 +1,7 @@
 // Onboarding, right-edge and top-center Bar verification flows shared by the e2e smoke (M2-0410).
 // The mutable app/window handles live on `ctx` (ctx.app, ctx.win) because finishing or replaying
 // onboarding replaces the Electron window; every function reads them at call time.
-import { overlayGeometry, sleep as delay, waitFor, withTimeout } from '../lib/app-driver.mjs'
+import { overlayChromeGeometry, overlayGeometry, sleep as delay, waitFor, withTimeout } from '../lib/app-driver.mjs'
 import { initialRightEdgeHideRows, runRightEdgeHideRows } from './right-edge-hide-rows.mjs'
 import { createSidecarFlow } from './sidecar-flow.mjs'
 
@@ -10,6 +10,7 @@ const RIGHT_EDGE_TAB = { width: 52, height: 52 }
 const RIGHT_EDGE_DRAWER = { width: 360, height: 560 }
 const TOP_CENTER_MARGIN_PX = 8
 const TOP_CENTER_BAR_WIDTH = 880
+const TOP_CENTER_BAR_HEIGHT = overlayChromeGeometry().barIdleHeightPx
 
 /**
  * @param ctx `{ app, win, ok, fail, screenshot, watchPage, latestMétisWindow }`; `app` and `win` are mutable.
@@ -740,7 +741,10 @@ export function createOnboardingFlows(ctx) {
       if (!candidate) return null
       const expectedX = Math.round(candidate.workArea.x + (candidate.workArea.width - candidate.bounds.width) / 2)
       const expectedY = candidate.workArea.y + TOP_CENTER_MARGIN_PX
-      return candidate.bounds.width === TOP_CENTER_BAR_WIDTH && Math.abs(candidate.bounds.x - expectedX) <= 2 && Math.abs(candidate.bounds.y - expectedY) <= 2
+      return candidate.bounds.width === TOP_CENTER_BAR_WIDTH &&
+        candidate.bounds.height === TOP_CENTER_BAR_HEIGHT &&
+        Math.abs(candidate.bounds.x - expectedX) <= 2 &&
+        Math.abs(candidate.bounds.y - expectedY) <= 2
         ? candidate
         : null
     }, 'Top-center Bar did not occupy its native centered placement.')

@@ -70,7 +70,7 @@ export async function launch({ executablePath = null, root, env, timeout = 30_00
 
 /** Attach to an already-running app over CDP (`http://127.0.0.1:<port>`). */
 export async function attach(endpoint, timeout = 30_000) {
-  const { chromium } = await import('playwright-core')
+  const { chromium } = await import('playwright')
   return chromium.connectOverCDP(endpoint, { timeout })
 }
 

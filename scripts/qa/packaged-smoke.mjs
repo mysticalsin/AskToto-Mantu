@@ -66,9 +66,12 @@ import { listProcesses, ownedProcesses, roleCounts, survivors as computeSurvivor
 export { NAVIGATION_GUARD_BOOTSTRAP_PATCH, NAVIGATION_GUARD_SCENARIOS, initialNavigationGuardRows } from './golden-flows/navigation-guard-rows.mjs'
 export {
   RIGHT_EDGE_HIDE_SCENARIOS,
+  LATE_NATIVE_FRAME_HOLD_MS,
+  framesAboveWorkArea,
   initialRightEdgeHideRows,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
+  rightEdgeMeetingHideVerdict,
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
   runRightEdgeHideRows

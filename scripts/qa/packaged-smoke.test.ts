@@ -16,8 +16,10 @@ import {
   bootLaunchActivateVerdict,
   buildWindowsShortcutLauncher,
   NAVIGATION_GUARD_BOOTSTRAP_PATCH,
+  LATE_NATIVE_FRAME_HOLD_MS,
   childPidReserved,
   computeCleanupTargets,
+  framesAboveWorkArea,
   isOverlayUrl,
   isPassingRevealEvidence,
   waitUntilParked,
@@ -28,6 +30,7 @@ import {
   initialRightEdgeHideRows,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
+  rightEdgeMeetingHideVerdict,
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
   runRevealRow,
@@ -745,6 +748,45 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     expect(rightEdgeStateMismatches({ win: win(0, null), page }, 'parked', 'hide')).toEqual(['clickThrough'])
     expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'island')).toEqual(['bounds', 'opacity', 'clickThrough'])
     expect(rightEdgeStateMismatches(null, 'parked', 'hide')).toEqual(['observation'])
+  })
+
+  it('keeps RE-HIDE-3 meeting Hide held for late native frames and carries geometry evidence', () => {
+    expect(LATE_NATIVE_FRAME_HOLD_MS).toBe(500)
+    const { band } = rightEdgeExpectedRects(windows.workArea)
+    const parkedWin = {
+      bounds: { x: 992, y: band.y, width: 32, height: band.height },
+      opacity: 0,
+      clickThrough: true,
+      visible: true,
+      displayBounds: windows.bounds,
+      workArea: windows.workArea
+    }
+    const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: true, composerFocused: false, draft: '' }
+    const parked = { ok: true, observed: { win: parkedWin, page } }
+    const held = { win: parkedWin, page }
+    const geometry = [
+      { ms: 1, kind: 'write', bounds: band },
+      { ms: 50, kind: 'frame', bounds: parkedWin.bounds },
+      { ms: 100, kind: 'call', bounds: parkedWin.bounds, call: { name: 'setOpacity', args: [0] } }
+    ]
+
+    expect(framesAboveWorkArea(geometry, windows.workArea.y)).toEqual([])
+    expect(rightEdgeMeetingHideVerdict({ meetingLive: true, hideVisible: true, parked, held, geometry })).toEqual({
+      pass: true,
+      evidence: {
+        meetingLive: true,
+        hideVisible: true,
+        parked: expect.objectContaining({ kind: 'hide-band' }),
+        after500ms: expect.objectContaining({ kind: 'hide-band' }),
+        framesAboveWorkArea: [],
+        geometry
+      }
+    })
+
+    const badFrame = { ms: 75, kind: 'frame', bounds: { ...parkedWin.bounds, y: windows.workArea.y - 1 } }
+    const failed = rightEdgeMeetingHideVerdict({ meetingLive: true, hideVisible: true, parked, held, geometry: [...geometry, badFrame] })
+    expect(failed.pass).toBe(false)
+    expect(failed.evidence.framesAboveWorkArea).toEqual([badFrame])
   })
 })
 

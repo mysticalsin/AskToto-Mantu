@@ -24,6 +24,8 @@ export const RIGHT_EDGE_HIDE_SCENARIOS = Object.freeze([
 const RIGHT_EDGE = Object.freeze({ margin: 12, tab: 52, drawerWidth: 360, drawerHeight: 560, band: 4, normalizedY: 0.2 })
 /** Right-edge only (src/main/island/cursor-watch.ts RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS). */
 const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = 3000
+// Hold the parked band long enough for a late native frame change to land inside RE-HIDE-3's assertion.
+export const LATE_NATIVE_FRAME_HOLD_MS = 500
 const MEETING_UNBLOCK =
   'Run the RE-HIDE meeting rows on the QA Mac or a Windows QA machine with a working, permitted microphone: ' +
   'the hosted runner could not start a live meeting.'
@@ -109,25 +111,89 @@ export function rightEdgeStateMismatches(observation, state, layout) {
   return Object.keys(checks).filter((key) => !checks[key])
 }
 
-/** Installs (idempotently) the cursor stub and the click-through capture on every live window. */
+/**
+ * Installs (idempotently) the cursor stub, the click-through capture and the geometry trace on every live
+ * window. The trace records only primitive geometry and call names; it never captures page content.
+ */
 const MAIN_RE_HIDE_SHIM = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
-  const state = (globalThis.__metisReHide ??= { cursor: null, clickThrough: new WeakMap() })
+  const state = (globalThis.__metisReHide ??= { cursor: null, clickThrough: new WeakMap(), geometry: [] })
   if (!state.realCursor) {
     state.realCursor = screen.getCursorScreenPoint.bind(screen)
     screen.getCursorScreenPoint = () => state.cursor ?? state.realCursor()
   }
+  const trace = (w, kind, bounds, call) => {
+    try {
+      if (!/\\/renderer\\/index\\.html/.test(w.webContents.getURL())) return
+      state.geometry.push(call ? { t: Date.now(), kind, bounds, call } : { t: Date.now(), kind, bounds })
+      if (state.geometry.length > 80) state.geometry.shift()
+    } catch {
+      /* a closing window: the trace is evidence only */
+    }
+  }
+  const primitive = (value) => typeof value !== 'object' && typeof value !== 'function'
+  const traceArgs = (args) =>
+    args.map((arg) =>
+      arg && typeof arg === 'object' ? Object.fromEntries(Object.entries(arg).filter(([, value]) => primitive(value))) : arg
+    )
+  const TRACED_CALLS = [
+    'setOpacity',
+    'setBackgroundColor',
+    'setHasShadow',
+    'setResizable',
+    'setMovable',
+    'setAlwaysOnTop',
+    'setVisibleOnAllWorkspaces',
+    'setContentProtection',
+    'setSize',
+    'setContentSize',
+    'setContentBounds',
+    'setMaximumSize',
+    'show',
+    'showInactive',
+    'hide'
+  ]
   for (const w of BrowserWindow.getAllWindows()) {
     if (w.isDestroyed() || w.__metisReHideWrapped) continue
     const setIgnoreMouseEvents = w.setIgnoreMouseEvents.bind(w)
+    const setBounds = w.setBounds.bind(w)
+    const setPosition = w.setPosition.bind(w)
+    const setMinimumSize = w.setMinimumSize.bind(w)
     w.__metisReHideWrapped = true
+    for (const name of TRACED_CALLS) {
+      if (typeof w[name] !== 'function') continue
+      const original = w[name].bind(w)
+      w[name] = (...args) => {
+        trace(w, 'call', w.getBounds(), { name, args: traceArgs(args) })
+        return original(...args)
+      }
+    }
     w.setIgnoreMouseEvents = (ignore, options) => {
       state.clickThrough.set(w, ignore === true)
+      trace(w, 'call', w.getBounds(), { name: 'setIgnoreMouseEvents', args: traceArgs([ignore, options]) })
       return setIgnoreMouseEvents(ignore, options)
     }
+    w.setBounds = (bounds, animate) => {
+      trace(w, 'write', { ...w.getBounds(), ...bounds })
+      return setBounds(bounds, animate)
+    }
+    w.setPosition = (x, y, animate) => {
+      trace(w, 'write', { ...w.getBounds(), x, y })
+      return setPosition(x, y, animate)
+    }
+    w.setMinimumSize = (width, height) => {
+      trace(w, 'minimum', { width, height })
+      return setMinimumSize(width, height)
+    }
+    w.on('move', () => trace(w, 'frame', w.getBounds()))
+    w.on('resize', () => trace(w, 'frame', w.getBounds()))
   }
   return true
 })()`
+
+/** The overlay geometry trace since `since` (ms epoch): rects and call names only, never page content. */
+const mainReHideGeometrySince = (since) =>
+  `(() => globalThis.__metisReHide.geometry.filter((entry) => entry.t >= ${Number(since)}).map(({ t, ...entry }) => ({ ms: t - ${Number(since)}, ...entry })))()`
 
 const MAIN_RE_HIDE_SNAPSHOT = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
@@ -188,6 +254,26 @@ function summarize(observation) {
     drawerRendered: observation.page?.drawer ?? null,
     railRendered: observation.page?.rail ?? null,
     dockRendered: observation.page?.dock ?? null
+  }
+}
+
+export function framesAboveWorkArea(geometry, workAreaY) {
+  return geometry.filter((entry) => entry.kind === 'frame' && !(entry.bounds.y >= workAreaY))
+}
+
+export function rightEdgeMeetingHideVerdict({ meetingLive, hideVisible, parked, held, geometry }) {
+  const heldOk = rightEdgeStateMatches(held, 'parked', 'hide')
+  const above = framesAboveWorkArea(geometry, held.win?.workArea?.y)
+  return {
+    pass: hideVisible && parked.ok && heldOk && above.length === 0,
+    evidence: {
+      meetingLive,
+      hideVisible,
+      parked: summarize(parked.observed),
+      after500ms: summarize(held),
+      framesAboveWorkArea: above,
+      geometry
+    }
   }
 }
 
@@ -390,9 +476,14 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     meetingLive = live.ok
     if (!meetingLive) return { status: 'BLOCKED_EXTERNAL', evidence: { meetingLive: false }, unblock: MEETING_UNBLOCK }
     const hideVisible = await hideControl().isVisible()
+    const clickedAt = await main('Date.now()')
     await hideControl().click({ timeout: 5_000 })
     const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    return { pass: hideVisible && parked.ok, evidence: { meetingLive: true, hideVisible, parked: summarize(parked.observed) } }
+    // Held: this is a stricter assertion that catches native frame changes after the first parked read.
+    await wait(LATE_NATIVE_FRAME_HOLD_MS)
+    const held = await observe()
+    const geometry = await main(mainReHideGeometrySince(clickedAt))
+    return rightEdgeMeetingHideVerdict({ meetingLive: true, hideVisible, parked, held, geometry })
   })
 
   await step('RE-HIDE-4-island-meeting-leave-parks', async () => {
