@@ -45,7 +45,7 @@
     "src/main/brain/store.ts": 1197,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 9884,
+    "src/main/index.ts": 9883,
     "src/main/recall.ts": 950,
     "src/main/store.ts": 1367,
     "src/main/transcripts.ts": 1211,
@@ -352,7 +352,6 @@
     "src/main/index.ts": 10,
     "src/main/operator-ingest.ts": 1,
     "src/main/operator-overlay.ts": 1,
-    "src/main/screen-preprocess.ts": 1,
     "src/main/updater.ts": 1
   }
 }
