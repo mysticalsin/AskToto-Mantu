@@ -38,7 +38,7 @@ import {
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
-import { activeIngestLedgerPath, classifyIngestLedgerBytes, deleteUserDataIngestLedgerSync, deleteUserDataIngestLedgersSync, ingestLedgerMode, readUserDataIngestLedger, seedUserDataIngestLedgerFromLegacy, type IngestLedgerLoad, userDataIngestLedgerPath, writeIngestLedger } from '../infra/storage/ingest-ledger'
+import { activeIngestLedgerPath, classifyIngestLedgerBytes, ingestLedgerMode, readUserDataIngestLedger, seedUserDataIngestLedgerFromLegacy, type IngestLedgerLoad, userDataIngestLedgerPath, writeIngestLedger } from '../infra/storage/ingest-ledger'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
 
@@ -65,6 +65,29 @@ const WIN_RESERVED_NAMES = new Set([
   'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
   'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'
 ])
+
+const removePathTreeSync = rmSync
+const readDirectoryEntriesSync = readdirSync
+
+function deleteCurrentUserDataIngestLedger(settings: Settings): void {
+  removePathTreeSync(userDataIngestLedgerPath(settings), { force: true })
+}
+
+function deleteAllUserDataIngestLedgers(settings: Settings): void {
+  const current = userDataIngestLedgerPath(settings)
+  deleteCurrentUserDataIngestLedger(settings)
+  const dir = dirname(current)
+  let names: string[]
+  try {
+    names = readDirectoryEntriesSync(dir)
+  } catch (e) {
+    if (errnoCode(e) === 'ENOENT') return
+    throw e
+  }
+  for (const name of names) {
+    if (/^index-[0-9a-f]{16}\.json$/i.test(name)) removePathTreeSync(join(dir, name), { force: true })
+  }
+}
 
 export function slugify(s: string): string {
   const full = s
@@ -1166,8 +1189,8 @@ export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserve
     if (preserve) cpSync(journalPath, preserveTo)
     const preservedDir = preservedIndexDir(settings)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
-    if (opts.mode === 'erase') deleteUserDataIngestLedgersSync(settings)
-    else deleteUserDataIngestLedgerSync(settings)
+    if (opts.mode === 'erase') deleteAllUserDataIngestLedgers(settings)
+    else deleteCurrentUserDataIngestLedger(settings)
     indexCache.delete(userDataLedger)
     if (opts.mode === 'erase') rmSync(preservedDir, { recursive: true, force: true })
     resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus

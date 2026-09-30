@@ -1140,11 +1140,13 @@ describe('writeSaved', () => {
 describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-healing rewrap', () => {
   let folder: string
   let tempDir: string
+  let userDataDir: string
   let settings: Settings
 
   beforeEach(() => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recovery-test-'))
     tempDir = mkdtempSync(join(tmpdir(), 'asktoto-recovery-temp-'))
+    userDataDir = mkdtempSync(join(tmpdir(), 'asktoto-recovery-userdata-'))
     settings = { ...baseSettings(), meetingsFolder: folder }
     // The 'writeSaved' suite above leaves a permanent ENOENT mockImplementation on the shared
     // node:fs/promises.rename mock (vi.restoreAllMocks() doesn't undo .mockImplementation() on a
@@ -1159,7 +1161,7 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     const sandbox = process.env.ASKTOTO_TEST_SANDBOX_ROOT ?? '/tmp/asktoto-test-fallback'
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
       if (name === 'temp') return tempDir
-      if (name === 'userData') return join(sandbox, 'userdata')
+      if (name === 'userData') return userDataDir
       if (name === 'documents') return join(sandbox, 'documents')
       return join(sandbox, name)
     })
@@ -1170,6 +1172,7 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     delete (app as unknown as { isPackaged?: boolean }).isPackaged
     rmSync(folder, { recursive: true, force: true })
     rmSync(tempDir, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
     vi.restoreAllMocks()
   })
 

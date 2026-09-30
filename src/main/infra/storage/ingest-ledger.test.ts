@@ -232,17 +232,17 @@ describe('ingest ledger userData rollout', () => {
     const cases: Array<{
       mode: IngestLedgerMode
       legacy: 'ready' | 'missing' | 'unreadable'
-      rollbackReady: boolean
+      rollbackKey: string | null
     }> = [
-      { mode: 'legacy', legacy: 'ready', rollbackReady: true },
-      { mode: 'legacy', legacy: 'missing', rollbackReady: false },
-      { mode: 'legacy', legacy: 'unreadable', rollbackReady: false },
-      { mode: 'expand', legacy: 'ready', rollbackReady: true },
-      { mode: 'expand', legacy: 'missing', rollbackReady: true },
-      { mode: 'expand', legacy: 'unreadable', rollbackReady: false },
-      { mode: 'switch', legacy: 'ready', rollbackReady: true },
-      { mode: 'switch', legacy: 'missing', rollbackReady: false },
-      { mode: 'switch', legacy: 'unreadable', rollbackReady: false }
+      { mode: 'legacy', legacy: 'ready', rollbackKey: 'rollback.md' },
+      { mode: 'legacy', legacy: 'missing', rollbackKey: null },
+      { mode: 'legacy', legacy: 'unreadable', rollbackKey: null },
+      { mode: 'expand', legacy: 'ready', rollbackKey: 'rollout-write.md' },
+      { mode: 'expand', legacy: 'missing', rollbackKey: 'rollout-write.md' },
+      { mode: 'expand', legacy: 'unreadable', rollbackKey: null },
+      { mode: 'switch', legacy: 'ready', rollbackKey: 'rollback.md' },
+      { mode: 'switch', legacy: 'missing', rollbackKey: null },
+      { mode: 'switch', legacy: 'unreadable', rollbackKey: null }
     ]
 
     for (const row of cases) {
@@ -263,7 +263,8 @@ describe('ingest ledger userData rollout', () => {
       }
 
       process.env.ASKTOTO_LEDGER_USERDATA = 'legacy'
-      expect(store.indexUnavailable(settings) === null && !!store.readIndex(settings).ingested['rollback.md']).toBe(row.rollbackReady)
+      const rollback = store.indexUnavailable(settings) === null ? store.readIndex(settings) : BrainIndexSchema.parse({})
+      expect(row.rollbackKey === null ? Object.keys(rollback.ingested).length === 0 : !!rollback.ingested[row.rollbackKey]).toBe(true)
     }
   })
 
