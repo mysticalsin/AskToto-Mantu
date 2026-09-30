@@ -384,19 +384,33 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     // early death. M2-0038: the early boot sentinel may clear earlier (past createWindow/registerIpc
     // kill zone); the 15s brain work is protected by a separate resume marker.
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const helperSource = readFileSync(join(__dirname, 'brain-resume-watch.ts'), 'utf8')
     expect(source).toMatch(/const earlyDeath = beginBootWatch\(/)
     const resume = source.indexOf('resumeBackfillIfPending()')
-    const guard = source.lastIndexOf('if (earlyDeath)', resume)
+    const decision = source.lastIndexOf('const safeStart = brainResumeSafeStartDecision(', resume)
+    const safeStartBranch = source.lastIndexOf('if (safeStart)', resume)
+    const queue = source.lastIndexOf('queueBrainResumeBackfill(', resume)
+    expect(decision).toBeGreaterThan(-1)
+    expect(safeStartBranch).toBeGreaterThan(decision)
+    expect(queue).toBeGreaterThan(safeStartBranch)
+    expect(resume).toBeGreaterThan(queue)
+    const brainResumeDeath = helperSource.indexOf('const brainResumeDeath = readBrainResumeDeath(userData)')
+    const guard = helperSource.indexOf('if (brainResumeDeath)', brainResumeDeath)
+    const earlyGuard = helperSource.indexOf('if (earlyDeath)', guard)
+    const helperResume = helperSource.indexOf('resumeBackfillIfPending()')
+    expect(brainResumeDeath).toBeGreaterThan(-1)
     expect(guard).toBeGreaterThan(-1)
-    expect(resume).toBeGreaterThan(guard) // the resume sits inside the combined safe-start branch
+    expect(earlyGuard).toBeGreaterThan(guard)
+    expect(helperResume).toBeGreaterThan(guard)
     const timer = source.lastIndexOf('setTimeout(() => {', resume)
     const slice = source.slice(timer, source.indexOf('}, 15_000)', resume) + '}, 15_000)'.length)
-    expect(slice).toMatch(/beginBrainResumeWatch\(/)
-    expect(slice).toMatch(/endBrainResumeWatch\(/)
+    expect(slice).toMatch(/finally\s*\{[\s\S]*?finishBrainResumeTimer\(userData, safeStart\)/)
+    expect(helperSource).toMatch(/function finishBrainResumeTimer[\s\S]*endBrainResumeWatch\(/)
   })
 
-  it('FITO-185-B: boot holds prevent-app-suspension until the 15s brain marker clear', () => {
+  it('FITO-185-B: boot holds prevent-app-suspension until the 15s brain work is admitted', () => {
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const helperSource = readFileSync(join(__dirname, 'brain-resume-watch.ts'), 'utf8')
     const begin = source.indexOf('const earlyDeath = beginBootWatch(')
     expect(begin).toBeGreaterThan(-1)
     const start = source.indexOf('setBootPowerSaveBlock(true)', begin)
@@ -408,11 +422,13 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     const timer = source.lastIndexOf('setTimeout(() => {', resume)
     const slice = source.slice(timer, source.indexOf('}, 15_000)', resume) + '}, 15_000)'.length)
     const stop = slice.indexOf('setBootPowerSaveBlock(false)')
-    const claim = slice.indexOf('beginBrainResumeWatch(')
-    const clear = slice.indexOf('endBrainResumeWatch(')
+    const queue = slice.indexOf('queueBrainResumeBackfill(')
+    const finish = slice.indexOf('finishBrainResumeTimer(userData, safeStart)')
     expect(stop).toBeGreaterThan(-1)
-    expect(claim).toBeGreaterThan(-1)
-    expect(clear).toBeGreaterThan(claim) // the marker wraps the queued brain-resume job
+    expect(queue).toBeGreaterThan(-1)
+    expect(finish).toBeGreaterThan(stop)
+    expect(helperSource).toMatch(/beginBrainResumeWatch\(/)
+    expect(helperSource).toMatch(/finally\s*\{[\s\S]*?endBrainResumeWatch\(/)
     // Brain resume still inside the 15s timer (MQA-175).
     expect(slice.indexOf('resumeBackfillIfPending()')).toBeGreaterThan(-1)
     const willQuit = source.indexOf("app.on('will-quit'")
@@ -429,6 +445,7 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     // control. Contract: try/finally around the 15s body, per-step try/catch on each brain call, and
     // endBrainResumeWatch in finally.
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const helperSource = readFileSync(join(__dirname, 'brain-resume-watch.ts'), 'utf8')
     const resume = source.indexOf('resumeBackfillIfPending()')
     expect(resume).toBeGreaterThan(-1)
     // Walk back to the setTimeout that owns this resume (the 15s MQA-175 timer).
@@ -437,12 +454,17 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     const slice = source.slice(timer, source.indexOf('}, 15_000)', resume) + '}, 15_000)'.length)
     expect(slice).toMatch(/try\s*\{/)
     expect(slice).toMatch(/finally\s*\{/)
-    expect(slice).toMatch(/beginBrainResumeWatch\(/)
-    expect(slice).toMatch(/finally\s*\{[\s\S]*?endBrainResumeWatch\(/)
-    // Power-save stop lives in the timer finally; the marker clear lives in the resume job finally.
+    expect(slice).toMatch(/queueBrainResumeBackfill\(/)
+    expect(slice).toMatch(/finally\s*\{[\s\S]*?finishBrainResumeTimer\(userData, safeStart\)/)
+    expect(helperSource).toMatch(/function withBrainResumeWatch[\s\S]*beginBrainResumeWatch\(/)
+    expect(helperSource).toMatch(/function withBrainResumeWatch[\s\S]*finally\s*\{[\s\S]*?endBrainResumeWatch\(/)
+    expect(helperSource).toMatch(/function finishBrainResumeTimer[\s\S]*endBrainResumeWatch\(/)
+    // Power-save stop and stale marker cleanup both live in the timer finally; the active resume marker
+    // clear lives in the queued resume job finally.
     const finallyIdx = slice.lastIndexOf('finally')
     const finallyBody = slice.slice(finallyIdx)
     expect(finallyBody).toMatch(/setBootPowerSaveBlock\(false\)/)
+    expect(finallyBody).toMatch(/finishBrainResumeTimer\(userData, safeStart\)/)
     // Per-step isolation around the brain resume calls (sync throws must not skip finally or siblings).
     for (const step of [
       'resumeBackfillIfPending',
@@ -452,11 +474,12 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
       'scheduleIntelligenceIndex',
       'runConsolidationIfDue'
     ]) {
-      expect(slice, step).toMatch(new RegExp(`try\\s*\\{[\\s\\S]*?${step}`))
+      const owningSource = step === 'resumeBackfillIfPending' ? helperSource : slice
+      expect(owningSource, step).toMatch(new RegExp(`try\\s*\\{[\\s\\S]*?${step}`))
     }
     // earlyDeath safe-start skip preserved (MQA-175).
-    expect(slice).toMatch(/if \(earlyDeath\)/)
-    expect(slice).toMatch(/safe start/)
+    expect(helperSource).toMatch(/if \(earlyDeath\)/)
+    expect(helperSource).toMatch(/safe start/)
   })
 
   it('FITO-185-G-SHOW+G-TIMER: early sentinel clear past kill zone + exclusive 2s reveal', () => {

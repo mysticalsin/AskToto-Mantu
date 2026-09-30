@@ -652,7 +652,13 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
-import { beginBrainResumeWatch, endBrainResumeWatch, describeBrainResumeDeath, readBrainResumeDeath } from './brain-resume-watch'
+import {
+  brainResumeSafeStartDecision,
+  endBrainResumeWatch,
+  finishBrainResumeTimer,
+  queueBrainResumeBackfill,
+  recordBrainResumeSafeStart
+} from './brain-resume-watch'
 import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
@@ -4800,8 +4806,8 @@ function rebuildTrayMenu(): void {
 // power-save blocker for the duration of a meeting keeps the process at normal priority regardless of
 // window visibility. Module-level id: only one meeting can be active at a time.
 let recordingPowerSaveBlockerId: number | null = null
-// Hold prevent-app-suspension until the delayed brain resume window closes, so App Nap cannot defer the
-// marker clear. Separate id from the meeting blocker — boot ends long before a meeting starts.
+// Hold prevent-app-suspension until the delayed brain work is queued, so App Nap cannot defer the launch
+// task that decides whether resume work is safe to admit.
 let bootPowerSaveBlockerId: number | null = null
 function setBootPowerSaveBlock(on: boolean): void {
   if (on) {
@@ -9303,7 +9309,7 @@ if (!app.requestSingleInstanceLock()) {
   // MQA-175: a native C++ exception can unwind past V8, so only the next launch can report it.
   // Claim the early sentinel before risky boot work, then clear it after IPC/window readiness.
   const earlyDeath = beginBootWatch(app.getPath('userData'), app.getVersion())
-  // Keep the process unsuspended until the delayed brain-resume window closes.
+  // Keep the process unsuspended until the delayed brain work has been admitted or safe-started.
   setBootPowerSaveBlock(true)
   // The early boot sentinel covers only the IPC/window kill zone; the 15s brain resume has its own marker.
   let bootWatchClosed = false
@@ -9722,32 +9728,22 @@ if (!app.requestSingleInstanceLock()) {
   const BRAIN_RECONCILE_MS = 60 * 1000
   setTimeout(() => {
     // First launch step that can decrypt the brain index: use a marker separate from the early sentinel.
-    const brainResumeDeath = readBrainResumeDeath(app.getPath('userData'))
-    const safeStartBrainResume = (death: string, consecutive: number): void => {
-      mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${death}`)
-      auditLog('app.error.early_death', { consecutive, recoveryStatus: 'safe_start' })
-    }
+    const userData = app.getPath('userData')
+    const safeStart = brainResumeSafeStartDecision(userData, earlyDeath)
     try {
-      if (brainResumeDeath) {
-        safeStartBrainResume(describeBrainResumeDeath(brainResumeDeath), brainResumeDeath.consecutive)
-      } else if (earlyDeath) {
-        safeStartBrainResume(describeEarlyDeath(earlyDeath), earlyDeath.consecutive)
+      if (safeStart) {
+        recordBrainResumeSafeStart(safeStart, {
+          warn: (message) => mainLog.warn(message),
+          audit: (event, detail) => auditLog(event, detail)
+        })
       } else {
-        // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
-        try {
-          bootWork.run('resumeBackfillIfPending', async () => {
-            beginBrainResumeWatch(app.getPath('userData'), app.getVersion())
-            try {
-              await resumeBackfillIfPending()
-            } catch (e) {
-              mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
-            } finally {
-              endBrainResumeWatch(app.getPath('userData'))
-            }
-          })
-        } catch (e) {
-          mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
-        }
+        queueBrainResumeBackfill({
+          bootWork,
+          userData,
+          version: app.getVersion(),
+          resumeBackfillIfPending: () => resumeBackfillIfPending(),
+          warn: (message, error) => mainLog.warn(message, error)
+        })
         try {
           bootWork.run('reconcileMeetingsInBackground', () => reconcileMeetingsInBackground().catch((e) => mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)))
         } catch (e) {
@@ -9783,7 +9779,7 @@ if (!app.requestSingleInstanceLock()) {
     } finally {
       // Power-save stays until the 15s brain work has been admitted.
       setBootPowerSaveBlock(false)
-      if (brainResumeDeath) endBrainResumeWatch(app.getPath('userData'))
+      finishBrainResumeTimer(userData, safeStart)
     }
   }, 15_000)
 

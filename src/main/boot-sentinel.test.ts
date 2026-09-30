@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { beginBootWatch, endBootWatch } from './boot-sentinel'
-import { beginBrainResumeWatch, describeBrainResumeDeath, endBrainResumeWatch } from './brain-resume-watch'
+import { beginBrainResumeWatch, describeBrainResumeDeath, endBrainResumeWatch, readBrainResumeDeath } from './brain-resume-watch'
 
 describe('M2-0038 — boot sentinel and delayed brain-resume marker are separate', () => {
   let userData: string
@@ -60,5 +60,25 @@ describe('M2-0038 — boot sentinel and delayed brain-resume marker are separate
       version: '2.0.0',
       consecutive: 1
     })
+  })
+
+  it('readBrainResumeDeath reports an injected marker without clearing it', () => {
+    const marker = join(userData, 'brain-resume-incomplete.json')
+    mkdirSync(userData, { recursive: true })
+    writeFileSync(
+      marker,
+      JSON.stringify({ startedAt: '2026-09-30T10:00:15.000Z', pid: 123, version: '2.0.0', consecutive: 0 }),
+      'utf8'
+    )
+
+    const death = readBrainResumeDeath(userData)
+
+    expect(death).toMatchObject({
+      startedAt: '2026-09-30T10:00:15.000Z',
+      pid: 123,
+      version: '2.0.0',
+      consecutive: 1
+    })
+    expect(existsSync(marker)).toBe(true)
   })
 })

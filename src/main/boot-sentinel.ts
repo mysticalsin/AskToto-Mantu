@@ -41,6 +41,8 @@ function markerPath(userData: string, marker: string): string {
 export function readDurableWatchRecord(userData: string, marker: string): BootRecord | null {
   try {
     const raw = JSON.parse(readFileSync(markerPath(userData, marker), 'utf8')) as Partial<BootRecord>
+    // Only a record with a real start time counts as evidence. A truncated or hand-edited marker must
+    // read as "no durable death evidence", never as a guessed safe-start trigger.
     if (typeof raw?.startedAt !== 'string' || raw.startedAt === '') return null
     return {
       startedAt: raw.startedAt,
