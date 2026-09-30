@@ -105,7 +105,7 @@ jobs:
       # trigger live ('blocked', e.g. a row whose bundled model or ffmpeg sidecar is missing on the
       # runner) — only the former should ever red the smoke lane. The gate step below
       # reads smoke-report/hk-m.json (not just the step outcome, since 'blocked' also exits non-zero) to
-      # make that distinction; supervision's default-on decision still requires a genuine 20/20 'pass'.
+      # make that distinction. HK-M runs in its default 'shipped' supervision mode: the app's own default decides.
       - name: Prove HK-M supervised sidecar cleanup after SIGKILL
         id: hk-m
         continue-on-error: true
@@ -139,7 +139,7 @@ jobs:
             echo "HK-M reported a genuine owned-process cleanup failure (see smoke-report/hk-m.json)" >&2
             exit 1
           fi
-          echo "::warning title=HK-M blocked::HK-M result=$result — not a live 20/20 pass, so supervision stays off by default; see smoke-report/hk-m.json for the exact unblock steps."
+          echo "::warning title=HK-M blocked::HK-M result=$result — not a live pass of every row; see smoke-report/hk-m.json for the exact unblock steps."
 
   windows:
     name: Packaged smoke (Windows)

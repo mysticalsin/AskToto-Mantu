@@ -34,6 +34,11 @@ import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@share
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
 import { parseMeetingDocument } from '../features/meetings/meeting-document'
+import { isLocalPreemption, localSlotTokens, whenLocalInteractiveIdle } from '../llm/local'
+import {
+  EXTRACTION_REMINDER, ExtractionDoesNotFitError, LOCAL_EXTRACTION_OUTPUT_TOKENS, MIN_LOCAL_WINDOW_CHARS,
+  assertLocalWindowsFit, fitWindowChars, isContextOverflow
+} from './local-extraction-fit'
 import {
   scanMeetingSources,
   sourceVersions,
@@ -292,7 +297,9 @@ function runCompletionOnce(
       model,
       temperature: 0, // extraction wants determinism, not creativity
       idleMs: 120_000,
-      maxOutputTokens: isLocal ? 1536 : undefined,
+      maxOutputTokens: isLocal ? LOCAL_EXTRACTION_OUTPUT_TOKENS : undefined,
+      // A meeting recap pre-empts this call; runCompletionYielding resends it once the recap is done.
+      background: isLocal ? true : undefined,
       // MQA-100: force syntactically valid JSON out of the small bundled model. Extraction parses the
       // reply as JSON, and the 0.8B model intermittently returns an unterminated object — observed live
       // as "No complete JSON object in model output" on a real meeting, which leaves that meeting
@@ -313,6 +320,25 @@ function runCompletionOnce(
       }
     })
   })
+}
+
+/** runCompletionOnce, resent after a recap pre-empts it. Each resend first waits for the recap to finish,
+ *  so a pre-empted extraction costs one request per recap, never a retry loop of its own. */
+async function runCompletionYielding(
+  s: Settings,
+  picked: IntelligencePassCandidate,
+  system: string,
+  userText: string,
+  id: string
+): Promise<string> {
+  for (;;) {
+    if (picked.provider === 'local') await whenLocalInteractiveIdle()
+    try {
+      return await runCompletionOnce(s, picked, system, userText, id)
+    } catch (e) {
+      if (picked.provider !== 'local' || !isLocalPreemption(e)) throw e
+    }
+  }
 }
 
 /** Run one extraction completion, walking the ordered eligible candidates (pickProviderCandidates) on a
@@ -336,7 +362,7 @@ async function runCompletion(
   for (let i = 0; i < pool.length; i++) {
     const picked = pool[i]
     try {
-      const text = await runCompletionOnce(s, picked, system, userText, id)
+      const text = await runCompletionYielding(s, picked, system, userText, id)
       return { text, provider: picked.provider }
     } catch (e) {
       const hasNext = i < pool.length - 1
@@ -398,6 +424,27 @@ const WINDOW_SIZE = 24000
 // number stated in one line, its supporting clause in the next) still has a chance to align in EITHER
 // window — small relative to WINDOW_SIZE, so it never meaningfully multiplies completion-call volume.
 const WINDOW_OVERLAP = 1000
+
+/** The largest window (chars) whose local extraction request fits a slot of `slotTokens` (INV-FIT in
+ *  local-extraction-fit.ts), capped at WINDOW_SIZE. */
+export function localExtractionWindowChars(slotTokens: number): number {
+  return fitWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
+}
+
+/** Window size for this route: fitted to the local slot when Métis Local is asked first, else WINDOW_SIZE.
+ *  `local` says whether the size came from the slot, which is what makes a context overflow permanent. */
+function extractionWindowSize(s: Settings, route: IngestRoute): { size: number; local: boolean } {
+  const first = pickProviderCandidates(s, route)[0]
+  if (first?.provider !== 'local') return { size: WINDOW_SIZE, local: false }
+  let slotTokens: number
+  try {
+    slotTokens = localSlotTokens(first.model)
+  } catch {
+    // An unknown persisted model id: the local call itself reports that, so size as before.
+    return { size: WINDOW_SIZE, local: false }
+  }
+  return { size: localExtractionWindowChars(slotTokens), local: true }
+}
 
 /** Split `text` into sequential windows of at most `size` chars, cut at line boundaries so a window
  *  never splits a transcript line, with `overlap` chars of trailing context carried into the next
@@ -659,7 +706,10 @@ async function extractMeeting(
   // Same redaction discipline as the live ask path (index.ts's askStart handler): the locally-saved
   // transcript file keeps the verbatim original on disk — only the copy sent to the cloud model for
   // extraction is stripped of high-confidence secrets, and only when the user has redaction enabled.
-  const windows = prepareMeetingWindows(s, transcriptMd)
+  const fit = extractionWindowSize(s, route)
+  if (fit.local && fit.size < MIN_LOCAL_WINDOW_CHARS) throw new ExtractionDoesNotFitError()
+  const windows = prepareMeetingWindows(s, transcriptMd, fit.size)
+  if (fit.local) assertLocalWindowsFit(fit.size, windows)
 
   const runWindow = async (window: string): Promise<MeetingExtraction> => {
     const user = `Meeting transcript (file: ${basename(sourceFile)}):\n\n"""\n${window}\n"""`
@@ -684,19 +734,30 @@ async function extractMeeting(
     try {
       return await attempt('')
     } catch (e) {
+      // A request the model's context cannot hold fails identically with a reminder appended.
+      if (isContextOverflow(e)) throw e
       // One reinforcement retry — malformed JSON is the dominant failure mode, not content. Cross-
       // provider failover for TRANSPORT failures already happened inside runCompletion; this retry is
       // deliberately same-provider (servedBy) so a parse-failure reminder never turns into an accidental
       // provider switch — that's the failover walk's job, not this one's.
       mainLog.warn('[brain] first extraction attempt failed, retrying once:', e instanceof Error ? e.message : e)
-      return attempt('\n\nREMINDER: your ENTIRE reply must be one valid JSON object. No fences, no prose.', servedBy)
+      return attempt(EXTRACTION_REMINDER, servedBy)
     }
   }
 
   // Sequential, not concurrent — see the module doc / windowing comments: EXTRACT_CONCURRENCY governs
   // how many DIFFERENT FILES extract at once, never how many windows of the SAME file run at once.
   const results: MeetingExtraction[] = []
-  for (const w of windows) results.push(await runWindow(w))
+  for (const w of windows) {
+    try {
+      results.push(await runWindow(w))
+    } catch (e) {
+      // The estimate fitted the slot but the tokenizer did not (dense non-Latin text): same outcome as a
+      // meeting that never fitted. Overflow on a cloud-sized window stays an ordinary, backed-off failure.
+      if (fit.local && isContextOverflow(e)) throw new ExtractionDoesNotFitError()
+      throw e
+    }
+  }
 
   const combined = combineWindowExtractions(results)
   // For a single window this is `windows[0]` unchanged (Array.prototype.join on a 1-element array
@@ -707,13 +768,15 @@ async function extractMeeting(
 }
 
 /** The exact redacted/windowed transcript representation used for extraction-grounding checks. */
-function prepareMeetingWindows(s: Settings, transcriptMd: string): string[] {
-  return splitIntoWindows(s.redactSensitive ? redactSecrets(transcriptMd) : transcriptMd)
+function prepareMeetingWindows(s: Settings, transcriptMd: string, size: number): string[] {
+  // Overlap scales down with a small local window so the carried context never dominates it.
+  const overlap = Math.min(WINDOW_OVERLAP, Math.floor(size / 8))
+  return splitIntoWindows(s.redactSensitive ? redactSecrets(transcriptMd) : transcriptMd, size, overlap)
 }
 
 /** Exported for checkpoint repair: it must verify against the same text a normal extraction receives. */
 export function prepareMeetingText(s: Settings, transcriptMd: string): string {
-  return prepareMeetingWindows(s, transcriptMd).join('\n')
+  return prepareMeetingWindows(s, transcriptMd, extractionWindowSize(s, 'default').size).join('\n')
 }
 
 // ── Deterministic merge ──────────────────────────────────────────────────────
@@ -1843,7 +1906,11 @@ async function finishJob(result: JobResult): Promise<void> {
           ok: false,
           error: e instanceof Error ? e.message : String(e),
           ...(version ? { sourceVersion: version } : {}),
-          ...retryStateAfterFailure(previous, { unreadable: !result.ok && result.unreadable, source }, now)
+          ...retryStateAfterFailure(previous, {
+            unreadable: !result.ok && result.unreadable,
+            permanent: !result.ok && result.error instanceof ExtractionDoesNotFitError,
+            source
+          }, now)
         }
         idx.revision += 1
       })
