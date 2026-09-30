@@ -17,7 +17,6 @@ import { detectLanguage } from '@shared/lang-id'
 import { measuredDurationMs } from '@shared/meeting-duration'
 import { readRecapStatus, recapStatusValidationError, type RecapStatus } from '@shared/recap-status'
 import type { MeetingSummary, RecallHit, RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
-
 // Independent meeting-history backend (own implementation, no third-party source). Reads the saved
 // transcript markdown files and provides list + keyword search so managers (and Dust agents) can
 // recall past meetings. Reads are ASYNC (off the main-process event loop) and each file is read once.
