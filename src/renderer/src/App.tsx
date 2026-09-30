@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
@@ -804,7 +804,12 @@ export function App(): JSX.Element {
   const wasRevealedRef = useRef(overlaySurfaceRevealed)
   const overlayRevealedRef = useRef(overlaySurfaceRevealed)
   overlayRevealedRef.current = overlaySurfaceRevealed
-  useEffect(() => {
+  // A parked top-center Hide paints nothing, so the bar never shows at full opacity after its exit fade or
+  // before a main-driven reveal. The spring runs in a layout effect so it starts in the same commit as the
+  // reveal: the first painted frame is the in-spring at opacity 0.
+  const overlayHideParked =
+    overlayIdle && !rightEdgePresentation && overlayRestsHidden(overlayLayout) && overlaySpring === 'rest' && !overlaySurfaceRevealed
+  useLayoutEffect(() => {
     if (!overlayIdle) {
       setOverlaySpring('rest')
       springIdleRef.current = false
@@ -901,7 +906,10 @@ export function App(): JSX.Element {
         // ordinary pointer-enter path here so a deliberately parked edge dock cannot leave a
         // full-size transparent window behind a renderer-only rail.
         setRightEdgeDockDismissed(false)
-        dispatchAutoHide({ type: 'reveal-now' })
+        // Top center: main owns this hover until it reports the leave (a pointer in the notch zone is
+        // outside the window). The right-edge dock keeps its page-owned leave (M2-0428).
+        if (rightEdgePresentation) dispatchAutoHide({ type: 'reveal-now' })
+        else dispatchAutoHide({ type: 'reveal-now', native: true })
       } else {
         // Main parked the dock: always render the rail (draft kept); every reveal path clears the dismissal.
         if (d.parked && rightEdgePresentation) {
@@ -909,7 +917,7 @@ export function App(): JSX.Element {
           setRightEdgeDockDismissed(true)
           setOverlaySpring('rest')
         }
-        dispatchAutoHide({ type: 'pointer-leave' })
+        dispatchAutoHide({ type: 'pointer-leave', native: true })
       }
     })
   }, [rightEdgePresentation])
@@ -4076,6 +4084,7 @@ export function App(): JSX.Element {
           <div
             className={[
               overlayIdle ? overlaySpringClassName(overlaySpring, rightEdgePresentation ? 'right' : 'top') : circleRestSpringClassName(circleRestSpring),
+              overlayHideParked ? 'overlay-spring--parked' : '',
               // The drawer's own position is absolute. Keep this animation host full-height too so
               // percentage heights resolve to the 360×560 native sidecar rather than its empty flow box.
               rightEdgeDockVisible ? 'h-full' : ''

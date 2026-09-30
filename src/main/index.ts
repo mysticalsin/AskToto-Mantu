@@ -231,10 +231,10 @@ import {
 } from '@shared/settings-bounds'
 import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 import {
-  CURSOR_REVEAL_DWELL_MS,
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
   RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS,
+  cursorRevealDwellMs,
   decideCursorWatch,
   overlayWatchStep,
   pointInRect,
@@ -1182,6 +1182,7 @@ let settingsSurfaceOpen = false
 let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
 let overlayCursorWatchEnteredAt: number | null = null
 let overlayCursorWatchHovering = false
+let overlayCursorWatchHeldCursor: { x: number; y: number } | null = null // latched pointer on the last tick that kept the bar open
 let overlayParkLatched = false // explicit Hide: no reopen from the zone the pointer is in until it leaves
 let rightEdgeUnhoveredRevealAt: number | null = null // right-edge reveal the pointer has not visited yet
 // Electron can accept an onboarding setBounds request and then let the compositor clamp it into a
@@ -2304,13 +2305,25 @@ function replaceTransparentOverlayWithExclusiveOnboarding(): void {
   }
 }
 
-/** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */
+/** True when `w` already paints `color`. getBackgroundColor drops alpha; every colour this file applies has a
+ *  distinct RGB, so comparing RGB is exact here. */
+function windowBackgroundIs(w: BrowserWindow, color: string): boolean {
+  try {
+    return w.getBackgroundColor().toLowerCase() === color.slice(0, 7).toLowerCase()
+  } catch {
+    return false
+  }
+}
+
+/** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. Runs on every reveal,
+ *  park and surface change, so a value the window already has is never re-applied: a repeated
+ *  setBackgroundColor/setOpacity repaints the whole native surface. */
 function applyOverlaySurfaceChrome(): void {
   if (!win || win.isDestroyed()) return
   if (onboardingExclusiveLive()) {
     try {
-      win.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
-      win.setOpacity(1)
+      if (!windowBackgroundIs(win, EXCLUSIVE_ONBOARDING_BACKGROUND)) win.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+      if (win.getOpacity() !== 1) win.setOpacity(1)
     } catch {
       /* headless */
     }
@@ -2318,21 +2331,22 @@ function applyOverlaySurfaceChrome(): void {
   }
   if (settingsSurfaceOpen) {
     try {
-      win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
-      win.setOpacity(1)
+      if (!windowBackgroundIs(win, SETTINGS_SURFACE_BACKGROUND)) win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
+      if (win.getOpacity() !== 1) win.setOpacity(1)
     } catch {
       /* headless */
     }
     return
   }
   try {
-    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+    if (!windowBackgroundIs(win, OVERLAY_REST_BACKGROUND)) win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
   } catch {
     /* headless */
   }
   try {
     const layout = parkLayoutForDisplay(liveOverlayLayout(), screen.getDisplayMatching(win.getBounds()))
-    win.setOpacity(hideParkWindowOpacity(layout, islandResting && !isMinimized))
+    const opacity = hideParkWindowOpacity(layout, islandResting && !isMinimized)
+    if (win.getOpacity() !== opacity) win.setOpacity(opacity)
   } catch {
     /* headless */
   }
@@ -3242,6 +3256,7 @@ function stopOverlayCursorWatch(): void {
     overlayCursorWatchTimer = null
   }
   overlayCursorWatchHovering = false
+  overlayCursorWatchHeldCursor = null
   overlayCursorWatchEnteredAt = null
   cancelOverlayLeavePark()
 }
@@ -3286,16 +3301,18 @@ function tickOverlayCursorWatch(): void {
     windowVisible,
     osHoverSeen: overlayCursorWatchHovering,
     hugStub: isIncompleteAskReveal(bounds),
-    placement
+    placement,
+    heldCursor: overlayCursorWatchHeldCursor
   })
   if (islandResting || step.osHoverSeen) rightEdgeUnhoveredRevealAt = null
   // Polling previously bypassed the renderer's 150ms dwell and sent reveal-now on the first tick.
   // A quick menu-bar crossing therefore flashed the whole bar open. Measure continuous native
   // hover before latching it; a leave resets this below. Already-visible reentry stays immediate.
+  // Top-center rests longer in the notch zone than the right-edge band (OD-23).
   if (step.action === 'restore' && (islandResting || !windowVisible)) {
     const now = performance.now()
     overlayCursorWatchEnteredAt ??= now
-    if (now - overlayCursorWatchEnteredAt < CURSOR_REVEAL_DWELL_MS) return
+    if (now - overlayCursorWatchEnteredAt < cursorRevealDwellMs(placement)) return
   }
   overlayCursorWatchEnteredAt = null
   overlayCursorWatchHovering = step.osHoverSeen
@@ -3328,6 +3345,7 @@ function tickOverlayCursorWatch(): void {
     rightEdgeUnhoveredRevealAt = null
     notifyOverlayCursorHover(false)
   }
+  overlayCursorWatchHeldCursor = overlayCursorWatchHovering && !islandResting ? cursor : null
   /* stay / leave-ignored: never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
 }
 
@@ -3523,14 +3541,6 @@ function restoreBarWidth(): void {
   overlayParkLatched = false
   islandResting = false
   applyHideClickThrough()
-  applyOverlaySurfaceChrome()
-  // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
-  // showInactive (never show+focus) so the top-edge path works without hunting the menu.
-  try {
-    if (!win.isVisible()) win.showInactive()
-  } catch {
-    /* headless */
-  }
   try {
     win.setAlwaysOnTop(true, 'screen-saver')
   } catch {
@@ -3540,32 +3550,41 @@ function restoreBarWidth(): void {
   const b = win.getBounds()
   const layout = liveOverlayLayout()
   const placement = resolvedOverlayPlacementForDisplay(display)
+  let next: Electron.Rectangle
   if (placement === 'right-edge') {
-    const sidecar = rightEdgeSidecarBounds(getDisplayMetrics(display), {
+    next = rightEdgeSidecarBounds(getDisplayMetrics(display), {
       open: true,
       normalizedY: rightEdgeYForDisplay(display)
     })
-    currentWidth = sidecar.width
-    if (b.x === sidecar.x && b.y === sidecar.y && b.width === sidecar.width && b.height === sidecar.height) return
-    win.setBounds(sidecar, false)
-    return
+    currentWidth = next.width
+  } else {
+    // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
+    // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
+    let revealedHeight = overlayUsesHover(layout)
+      ? askRevealHeight({ currentHeight: b.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX })
+      : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
+    if (isSettingsTallHeight(revealedHeight)) {
+      revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
+    }
+    const wasBarWidth = currentWidth === BAR_WIDTH
+    currentWidth = BAR_WIDTH
+    // Preserve the historic top-center path verbatim.
+    const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+    const x = wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
+    next = { x, y, width: BAR_WIDTH, height: revealedHeight }
   }
-  // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
-  // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
-  let revealedHeight = overlayUsesHover(layout)
-    ? askRevealHeight({ currentHeight: b.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX })
-    : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
-  if (isSettingsTallHeight(revealedHeight)) {
-    revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
+  // Already the revealed bounds (below the notch, or the open drawer): do not setBounds and fight the OS clamp.
+  if (b.x !== next.x || b.y !== next.y || b.width !== next.width || b.height !== next.height) win.setBounds(next, false)
+  // Bounds before visibility: the window keeps its parked opacity (0 for Hide) and stays hidden until it has
+  // its revealed bounds, so the parked frame is never shown and then resized as a second hard cut.
+  // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
+  // showInactive (never show+focus) so the top-edge path works without hunting the menu.
+  try {
+    if (!win.isVisible()) win.showInactive()
+  } catch {
+    /* headless */
   }
-  const wasBarWidth = currentWidth === BAR_WIDTH
-  currentWidth = BAR_WIDTH
-  // Preserve the historic top-center path verbatim.
-  const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-  const x = wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
-  // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
-  if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
-  win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
+  applyOverlaySurfaceChrome()
 }
 
 function repairOverlayBoundsForReveal(): void {
@@ -3602,10 +3621,12 @@ function applySettingsSurface(): void {
   } catch {
     /* headless */
   }
-  applyOverlaySurfaceChrome()
   const display = screen.getDisplayMatching(win.getBounds())
   const rect = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   win.setBounds(rect, false)
+  // The opaque Settings background only after the resize: applied first, it painted the old bar or park
+  // bounds as a dark slab for a frame.
+  applyOverlaySurfaceChrome()
   applyHideClickThrough()
 }
 
@@ -4340,6 +4361,10 @@ function moveBy(dx: number, dy: number): void {
     w.setBounds(next)
     return
   }
+  // Top-center Hide/Island is anchored under the notch: resizeTo and every reveal pin it back to topClamp.
+  // A drag only moved it until the next resize (while the cursor watch parked it mid-drag), then kept
+  // moving the parked window away from the notch.
+  if (!settingsSurfaceOpen && overlayUsesHover(liveOverlayLayout())) return
   const x = b.x + dx
   const y = b.y + dy
   // Free movement anywhere that keeps the window reachable on SOME display — covers dragging clean

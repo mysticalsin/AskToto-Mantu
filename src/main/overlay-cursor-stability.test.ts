@@ -2,9 +2,26 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import * as cursorWatch from './island/cursor-watch'
-import { RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS } from './island/cursor-watch'
-import { hoverWatchRestRect, rightEdgeSidecarBounds, type DisplayMetrics, type Rect } from './island/geometry'
-import { isIncompleteAskReveal, overlayUsesHover } from '@shared/overlay-chrome'
+import { RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS, TOP_CENTER_REVEAL_DWELL_MS } from './island/cursor-watch'
+import {
+  clampHeight as islandClampHeight,
+  hoverRestTop,
+  hoverWatchRestRect,
+  overlayRestSize,
+  recenterXForWidth,
+  rightEdgeSidecarBounds,
+  shouldIgnoreResizeWhilePeekResting,
+  topClamp,
+  type DisplayMetrics,
+  type Rect
+} from './island/geometry'
+import {
+  ASK_REVEAL_MIN_HEIGHT_PX,
+  isIncompleteAskReveal,
+  overlayRevealedContentHeight,
+  overlayUsesHover,
+  rememberBarContentHeight
+} from '@shared/overlay-chrome'
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
@@ -36,9 +53,22 @@ function nativeHover(options: {
   let parkPending = false
   let restoreCount = 0
   const notifications: boolean[] = []
+  /** Every bounds write the lifted moveBy / resizeTo make. */
+  const setBoundsCalls: Rect[] = []
+  const win = {
+    isDestroyed: () => false,
+    isVisible: () => true,
+    getBounds: () => bounds,
+    setBounds: (next: Rect) => {
+      bounds = { ...next }
+      setBoundsCalls.push({ ...next })
+    },
+    setMinimumSize: () => {},
+    showInactive: () => {}
+  }
   const deps = {
     ...cursorWatch,
-    win: { isDestroyed: () => false, isVisible: () => true, getBounds: () => bounds, setMinimumSize: () => {}, showInactive: () => {} },
+    win,
     screen: { getDisplayMatching: () => display, getCursorScreenPoint: () => cursor },
     performance: { now: () => now },
     overlayCursorWatchWanted: () => true,
@@ -55,8 +85,25 @@ function nativeHover(options: {
     cancelOverlayLeavePark: () => { parkPending = false },
     scheduleOverlayLeavePark: () => { parkPending = true },
     notifyOverlayCursorHover: (hovering: boolean) => { notifications.push(hovering) },
-    restoreWindow: () => { bounds = revealed; restoreCount++ },
+    restoreWindow: () => { bounds = revealed; restoreCount++; return revealed.width },
     mainLog: { info: () => {} },
+    // The lifted moveBy / resizeTo (a drag and the renderer's content resize) substitute the same OS side
+    // effects; their placement math is the shipped geometry.
+    ensureWindow: () => win,
+    clampHeight: (height: number, areaHeight: number) => islandClampHeight(height, areaHeight, 44),
+    isReachable: () => true,
+    refitToDisplay: (next: Rect) => next,
+    queueRightEdgeYForDisplay: () => {},
+    overlayRestSize,
+    shouldIgnoreResizeWhilePeekResting,
+    overlayRevealedContentHeight,
+    ASK_REVEAL_MIN_HEIGHT_PX,
+    rememberBarContentHeight,
+    hoverRestTop,
+    topClamp,
+    recenterXForWidth,
+    ISLAND_TOP_MARGIN: 8,
+    RESIZE_EDGE_MARGIN: 8,
     // The lifted park handler (an explicit Hide) substitutes the same OS side effects.
     onboardingExclusiveLive: () => false,
     pointerInIslandOrBar: () => false,
@@ -66,33 +113,46 @@ function nativeHover(options: {
     commitParkedOverlayBounds: (park: Rect) => { bounds = park },
     applyHideClickThrough: () => {}
   }
-  // Lifts one shipped function, dropping only its TypeScript return annotation.
-  const lift = (signature: string, stop: string): string => {
+  // Lifts one shipped function, dropping only its TypeScript parameter and return annotations.
+  const lift = (signature: string, stop: string, jsSignature = signature.replace(/\): \w+ \{$/, ') {')): string => {
     const begin = source.indexOf(signature)
     const end = source.indexOf(stop, begin)
     expect(begin).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(begin)
-    return source.slice(begin, end).replace(signature, signature.replace(/\): \w+ \{$/, ') {'))
+    return source.slice(begin, end).replace(signature, jsSignature)
   }
   const handler = lift('function tickOverlayCursorWatch(): void {', 'function notifyOverlayCursorHover')
   const parkHandler = lift('function parkOverlayAfterHideSpring(force = false): boolean {', 'function applyHideClickThrough')
   const layoutChangeHandler = lift('function parkOverlayForLayoutChange(): void {', '/** Pin the overlay')
+  const moveHandler = lift('function moveBy(dx: number, dy: number): void {', '/**\n * Keep the overlay reachable', 'function moveBy(dx, dy) {')
+  const resizeHandler = lift('function resizeTo(height: number): void {', '/** Collapse to / expand', 'function resizeTo(height) {')
   const build = new Function(...Object.keys(deps), `
     let islandResting = ${rightEdge ? rightEdge.resting : true};
     let settingsSurfaceOpen = false;
+    let isMinimized = false;
     let overlayCursorWatchHovering = false;
+    let overlayCursorWatchHeldCursor = null;
     let overlayCursorWatchEnteredAt = null;
     let overlayParkLatched = ${rightEdge?.latched === true};
     let rightEdgeUnhoveredRevealAt = ${rightEdge?.unhoveredRevealAt ?? null};
     let currentWidth = 0;
+    let lastBarHeight = 120;
     let userAnchorY = 0;
-    function restoreBarWidth() { overlayParkLatched = false; islandResting = false; restoreWindow(); }
+    function restoreBarWidth() { overlayParkLatched = false; islandResting = false; currentWidth = restoreWindow(); }
     ${handler}
     ${parkHandler}
     ${layoutChangeHandler}
-    return { tick: tickOverlayCursorWatch, park: parkOverlayAfterHideSpring, layoutChangePark: parkOverlayForLayoutChange };
-  `) as (...args: unknown[]) => { tick: () => void; park: (force?: boolean) => boolean; layoutChangePark: () => void }
-  const { tick, park, layoutChangePark } = build(...Object.values(deps))
+    ${moveHandler}
+    ${resizeHandler}
+    return { tick: tickOverlayCursorWatch, park: parkOverlayAfterHideSpring, layoutChangePark: parkOverlayForLayoutChange, moveBy, resizeTo };
+  `) as (...args: unknown[]) => {
+    tick: () => void
+    park: (force?: boolean) => boolean
+    layoutChangePark: () => void
+    moveBy: (dx: number, dy: number) => void
+    resizeTo: (height: number) => void
+  }
+  const { tick, park, layoutChangePark, moveBy, resizeTo } = build(...Object.values(deps))
   return {
     tick(at: number, y: number): void {
       now = at
@@ -116,9 +176,17 @@ function nativeHover(options: {
       cursor = point
       layoutChangePark()
     },
+    /** A drag step (the renderer's windowMoveBy). */
+    moveBy(dx: number, dy: number): void {
+      moveBy(dx, dy)
+    },
+    /** The renderer's content-height report (windowResize). */
+    resizeTo(height: number): void {
+      resizeTo(height)
+    },
     band,
     revealed,
-    state: () => ({ bounds, parkPending, restoreCount, notifications: [...notifications] })
+    state: () => ({ bounds, parkPending, restoreCount, notifications: [...notifications], setBoundsCalls: [...setBoundsCalls] })
   }
 }
 
@@ -143,6 +211,7 @@ describe('MQA-298 native overlay hover stability', () => {
     expect(hover.state().notifications).toEqual([true])
   })
 
+  // Dwell times follow the top-center notch-zone dwell (owner decision OD-23: 250 ms).
   it('leaving before reveal restarts the dwell on the next approach', () => {
     const hover = nativeHover()
     hover.tick(0, 12)
@@ -152,22 +221,104 @@ describe('MQA-298 native overlay hover stability', () => {
     hover.tick(288, 12)
     expect(hover.state().restoreCount).toBe(0)
     hover.tick(336, 12)
+    expect(hover.state().restoreCount).toBe(0)
+    hover.tick(168 + TOP_CENTER_REVEAL_DWELL_MS, 12)
     expect(hover.state().restoreCount).toBe(1)
   })
 
   it('returning to the menu-bar strip during leave grace cancels collapse immediately', () => {
     const hover = nativeHover()
+    const at = TOP_CENTER_REVEAL_DWELL_MS
     hover.tick(0, 12)
-    hover.tick(168, 12)
-    hover.tick(192, 600)
+    hover.tick(at, 12)
+    hover.tick(at + 24, 600)
     expect(hover.state().parkPending).toBe(true)
     expect(hover.state().notifications).toEqual([true, false])
-    hover.tick(216, 12)
+    hover.tick(at + 48, 12)
     expect(hover.state().parkPending).toBe(false)
     expect(hover.state().notifications).toEqual([true, false, true])
     expect(hover.state().restoreCount).toBe(1)
-    hover.tick(240, 12)
+    hover.tick(at + 72, 12)
     expect(hover.state().notifications).toEqual([true, false, true])
+  })
+})
+
+describe('M2-0431 top-center Hide stability (owner decision OD-23: the notch area only)', () => {
+  /** Rest `ms` at `point`, one 24 ms watch tick at a time, starting at `from`. Returns the next tick time. */
+  const dwell = (hover: ReturnType<typeof nativeHover>, from: number, point: { x: number; y: number }, ms: number): number => {
+    let at = from
+    for (; at <= from + ms; at += 24) hover.tickAt(at, point)
+    return at
+  }
+  /** Rest in the notch until the dwell has elapsed (ticks 0..264 ms); the bar is revealed. */
+  const revealFromNotch = (hover: ReturnType<typeof nativeHover>): void => {
+    for (let at = 0; at <= TOP_CENTER_REVEAL_DWELL_MS + 24; at += 24) hover.tickAt(at, { x: 900, y: 12 })
+  }
+
+  it('400 ms stops on menu-bar items outside the notch area never reveal, notify or move the window', () => {
+    const hover = nativeHover()
+    let at = 0
+    for (const stop of [{ x: 24, y: 12 }, { x: 1253, y: 27 }, { x: 1770, y: 8 }, { x: 24, y: 38 }, { x: 1770, y: 0 }]) {
+      at = dwell(hover, at, stop, 400)
+      at = dwell(hover, at, { x: 900, y: 600 }, 48)
+    }
+    expect(hover.state().restoreCount).toBe(0)
+    expect(hover.state().notifications).toEqual([])
+    expect(hover.state().bounds).toEqual({ x: 896, y: 0, width: 8, height: 2 })
+    expect(hover.state().setBoundsCalls).toEqual([])
+  })
+
+  it('the notch area reveals exactly once, only after the 250 ms dwell', () => {
+    const hover = nativeHover()
+    for (let at = 0; at < TOP_CENTER_REVEAL_DWELL_MS; at += 24) hover.tickAt(at, { x: 900, y: 12 })
+    expect(hover.state().restoreCount).toBe(0)
+    for (let at = TOP_CENTER_REVEAL_DWELL_MS; at <= 600; at += 24) hover.tickAt(at, { x: 900, y: 12 })
+    expect(hover.state().restoreCount).toBe(1)
+    expect(hover.state().notifications).toEqual([true])
+  })
+
+  it('a height collapse under a still pointer does not park; the pointer moving off the bar does', () => {
+    const hover = nativeHover()
+    revealFromNotch(hover)
+    expect(hover.state().restoreCount).toBe(1)
+    hover.resizeTo(576)
+    // The owner's 09-29 park: the pointer on a 576 px answer, which then shrank to 144 px under it.
+    const onAnswer = { x: 524, y: 194 }
+    hover.tickAt(300, onAnswer)
+    expect(hover.state().parkPending).toBe(false)
+    hover.resizeTo(144)
+    expect(hover.state().bounds.height).toBe(144)
+    hover.tickAt(324, onAnswer)
+    hover.tickAt(348, onAnswer)
+    expect(hover.state().parkPending).toBe(false)
+    expect(hover.state().notifications).toEqual([true])
+    hover.tickAt(372, { x: 524, y: 260 })
+    expect(hover.state().parkPending).toBe(true)
+    expect(hover.state().notifications).toEqual([true, false])
+  })
+
+  it('a drag while revealed does not move the bar, and the resize and tick after it do not park', () => {
+    const hover = nativeHover()
+    revealFromNotch(hover)
+    const top = hover.state().bounds.y
+    expect(top).toBe(39)
+    hover.tickAt(300, { x: 900, y: top + 30 })
+    hover.moveBy(0, 150)
+    hover.resizeTo(144)
+    hover.tickAt(324, { x: 900, y: top + 60 })
+    expect(hover.state().parkPending).toBe(false)
+    expect(hover.state().bounds.y).toBe(top)
+    expect(hover.state().setBoundsCalls.map((b) => b.y)).toEqual([top])
+  })
+
+  it('a drag never moves the parked Hide window away from the notch', () => {
+    const hover = nativeHover()
+    hover.moveBy(0, 150)
+    hover.moveBy(-60, 0)
+    expect(hover.state().bounds).toEqual({ x: 896, y: 0, width: 8, height: 2 })
+    expect(hover.state().setBoundsCalls).toEqual([])
+    revealFromNotch(hover)
+    expect(hover.state().restoreCount).toBe(1)
   })
 })
 

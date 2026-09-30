@@ -11,8 +11,8 @@ import { overlayUsesHover } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
 import { HOVER_ISLAND_HEIGHT_MAX_PX, type Rect } from './geometry'
 
-/** Cap leftover 44px slabs so Teams mute at Y=40 still misses. Width stays full top edge. Top edge only:
- *  the right-edge reveal band spans the drawer's height and must never be cut to 40 px. */
+/** Cap leftover 44px slabs so Teams mute at Y=40 still misses. Top edge only: the right-edge reveal band
+ *  spans the drawer's height and must never be cut to 40 px. */
 export function clampHoverRestRect(rect: Rect): Rect {
   const height = Math.min(rect.height, HOVER_ISLAND_HEIGHT_MAX_PX)
   if (height === rect.height) return rect
@@ -46,8 +46,15 @@ export function overlayWatchNeedsRestore(input: {
 
 /** Poll while hide/island is resting. 16–32ms — one frame-ish, no Accessibility tap. */
 export const CURSOR_WATCH_INTERVAL_MS = 24
-/** Same 150ms intentional-hover threshold as the renderer peek. Native polling must dwell too. */
+/** Same 150ms intentional-hover threshold as the renderer peek. Native polling must dwell too. Right-edge band. */
 export const CURSOR_REVEAL_DWELL_MS = 150
+/** OD-23: the top-center notch zone sits under the menu bar the pointer crosses all day, so it needs a
+ *  longer rest than the right-edge band before it opens the bar. */
+export const TOP_CENTER_REVEAL_DWELL_MS = 250
+
+export function cursorRevealDwellMs(placement: OverlayPlacement): number {
+  return placement === 'right-edge' ? CURSOR_REVEAL_DWELL_MS : TOP_CENTER_REVEAL_DWELL_MS
+}
 /** Extra pixels around the revealed bar before we treat the pointer as gone. */
 export const CURSOR_LEAVE_GRACE_PX = 8
 /**
@@ -89,6 +96,9 @@ export type OverlayWatchAction = 'restore' | 'hover-enter' | 'stay' | 'park' | '
  * park; it is what makes leave → park legitimate. `restore` = restoreBarWidth +
  * hover-true; `hover-enter` = cancel leave + hover-true without changing bounds;
  * `park` = hover-false + schedule the OVERLAY_LEAVE_PARK_MS park.
+ * `heldCursor` is where the latched pointer was on the last tick that kept the bar
+ * open. A pointer still exactly there has not left: the bar collapsed (or moved)
+ * out from under it, so that is a stay, not a leave.
  */
 export function overlayWatchStep(input: {
   cursor: { x: number; y: number }
@@ -99,15 +109,24 @@ export function overlayWatchStep(input: {
   osHoverSeen: boolean
   hugStub?: boolean
   placement?: OverlayPlacement
+  heldCursor?: { x: number; y: number } | null
 }): { action: OverlayWatchAction; osHoverSeen: boolean } {
   const revealed = overlayWatchTreatAsRevealed(input.islandResting, input.windowVisible)
-  const decision = decideCursorWatch({
+  const measured = decideCursorWatch({
     cursor: input.cursor,
     restRect: input.restRect,
     revealedRect: input.revealedRect,
     revealed,
     placement: input.placement
   })
+  const held =
+    measured === 'hide' &&
+    revealed &&
+    input.osHoverSeen &&
+    input.heldCursor != null &&
+    input.heldCursor.x === input.cursor.x &&
+    input.heldCursor.y === input.cursor.y
+  const decision: CursorWatchDecision = held ? 'stay' : measured
   if (
     overlayWatchNeedsRestore({
       decision,
@@ -151,8 +170,8 @@ export function inflateRect(rect: Rect, pad: number): Rect {
 }
 
 /**
- * Resting: cursor in the top-edge approach strip → reveal.
- * Revealed: stay if the cursor is still in that strip OR the inflated bar.
+ * Resting: cursor in the reveal zone (top-center notch area, or the right-edge band) → reveal.
+ * Revealed: stay if the cursor is still in that zone OR the inflated bar.
  * Hide only when it is in neither. macOS clamps the bar to workArea.y (~39);
  * a cursor on the top edge (Y≈12) must not oscillate hide/reveal.
  */
