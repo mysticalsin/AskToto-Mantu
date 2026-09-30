@@ -12,10 +12,10 @@ import { randomUUID } from 'node:crypto'
  * consecutive launches of the shipped 1.5.4 Windows build died exactly that way and left nothing behind
  * except six Crashpad minidumps the app never looked at.
  *
- * Nothing inside a dying process can report on it, so the record has to be written BEFORE the risky work
- * and removed AFTER it: a file that is still there on the next launch IS the report. That one fact
- * drives both halves of the recovery — the durable trace (what died, when, and which minidump belongs to
- * it) and the routing decision (skip the boot step that did the killing).
+ * Nothing inside a dying process can report on it, so the record has to be written before early boot
+ * work and removed after IPC/window readiness: a file that is still there on the next launch IS the
+ * report. That one fact drives both halves of the recovery — the durable trace (what died, when, and
+ * which minidump belongs to it) and the routing decision (skip the boot step that did the killing).
  *
  * Deliberately dependency-free (node built-ins only): this runs before anything else can be trusted, and
  * must never be the reason a boot fails.
@@ -26,17 +26,58 @@ const SENTINEL = 'boot-incomplete.json'
 /** One minidump found in the Crashpad database, with the mtime that decides which one is newest. */
 type CrashDump = { name: string; mtimeMs: number }
 
-/** The run currently in progress, as recorded on disk. `consecutive` counts the early deaths that
- *  immediately preceded it, so a repeat offender is distinguishable from a one-off. */
+/** The run currently in progress, as recorded on disk. `consecutive` counts the deaths for this marker
+ *  that immediately preceded it, so a repeat offender is distinguishable from a one-off. */
 export type BootRecord = { startedAt: string; pid: number; version: string; consecutive: number }
 
-/** A previous run that started and never reached the end of boot, plus the Crashpad minidump that most
- *  likely belongs to it — the app already writes those (crashReporter.start in index.ts) and has never
- *  once read one. */
+/** A previous run that started and never reached this marker's clear point, plus the Crashpad minidump
+ *  that most likely belongs to it. */
 export type EarlyDeath = BootRecord & { crashDump: string | null }
 
-function sentinelPath(userData: string): string {
-  return join(userData, SENTINEL)
+function markerPath(userData: string, marker: string): string {
+  return join(userData, marker)
+}
+
+export function readDurableWatchRecord(userData: string, marker: string): BootRecord | null {
+  try {
+    const raw = JSON.parse(readFileSync(markerPath(userData, marker), 'utf8')) as Partial<BootRecord>
+    // Only a record with a real start time counts as evidence. A truncated or hand-edited marker must
+    // read as "no durable death evidence", never as a guessed safe-start trigger.
+    if (typeof raw?.startedAt !== 'string' || raw.startedAt === '') return null
+    return {
+      startedAt: raw.startedAt,
+      pid: typeof raw.pid === 'number' ? raw.pid : -1,
+      version: typeof raw.version === 'string' ? raw.version : 'unknown',
+      consecutive: typeof raw.consecutive === 'number' && raw.consecutive >= 0 ? raw.consecutive : 0
+    }
+  } catch {
+    return null
+  }
+}
+
+export function beginDurableWatch(
+  userData: string,
+  marker: string,
+  version: string,
+  now: () => string = () => new Date().toISOString()
+): BootRecord | null {
+  const previous = readDurableWatchRecord(userData, marker)
+  const consecutive = previous ? previous.consecutive + 1 : 0
+  try {
+    mkdirSync(userData, { recursive: true })
+    writeFileSync(markerPath(userData, marker), JSON.stringify({ startedAt: now(), pid: process.pid, version, consecutive }), { mode: 0o600 })
+  } catch {
+    /* best-effort: a profile we cannot write costs us the next launch's diagnosis, never this boot */
+  }
+  return previous ? { ...previous, consecutive } : null
+}
+
+export function endDurableWatch(userData: string, marker: string): void {
+  try {
+    rmSync(markerPath(userData, marker), { force: true })
+  } catch {
+    /* best-effort */
+  }
 }
 
 /** Newest `.dmp` in the Crashpad database under `<userData>/Crashpad`, by mtime. Null when there is none
@@ -85,49 +126,22 @@ export function newestCrashDump(userData: string): string | null {
 }
 
 /**
- * Open a boot watch: claim the sentinel for this run and report the previous run if it never closed one.
- * Call once, as early in the ready sequence as the userData path is settled.
+ * Open the early boot watch: claim the sentinel for this run and report the previous run if it never
+ * closed one. Call once, as early in the ready sequence as the userData path is settled.
  */
 export function beginBootWatch(
   userData: string,
   version: string,
   now: () => string = () => new Date().toISOString()
 ): EarlyDeath | null {
-  const p = sentinelPath(userData)
-  let previous: BootRecord | null = null
-  try {
-    const raw = JSON.parse(readFileSync(p, 'utf8')) as Partial<BootRecord>
-    // Only a record with a real start time proves a previous run got as far as claiming the sentinel; a
-    // truncated or hand-edited file is not evidence of a death and must not strand the app in safe start.
-    if (typeof raw?.startedAt === 'string' && raw.startedAt !== '') {
-      previous = {
-        startedAt: raw.startedAt,
-        pid: typeof raw.pid === 'number' ? raw.pid : -1,
-        version: typeof raw.version === 'string' ? raw.version : 'unknown',
-        consecutive: typeof raw.consecutive === 'number' && raw.consecutive >= 0 ? raw.consecutive : 0
-      }
-    }
-  } catch {
-    /* absent (the normal case) or unreadable — either way, no evidence of an early death */
-  }
-  const consecutive = previous ? previous.consecutive + 1 : 0
-  try {
-    mkdirSync(userData, { recursive: true })
-    writeFileSync(p, JSON.stringify({ startedAt: now(), pid: process.pid, version, consecutive }), { mode: 0o600 })
-  } catch {
-    /* best-effort: a profile we cannot write costs us the next launch's diagnosis, never this boot */
-  }
-  return previous ? { ...previous, consecutive, crashDump: newestCrashDump(userData) } : null
+  const previous = beginDurableWatch(userData, SENTINEL, version, now)
+  return previous ? { ...previous, crashDump: newestCrashDump(userData) } : null
 }
 
-/** Close the boot watch: this run got past the step that kills. Idempotent — also called on a graceful
- *  quit, so quitting inside the watch window is never mistaken for a death. */
+/** Close the early boot watch: this run got past IPC/window readiness. Idempotent — also called on a
+ *  graceful quit, so quitting inside the watch window is never mistaken for a death. */
 export function endBootWatch(userData: string): void {
-  try {
-    rmSync(sentinelPath(userData), { force: true })
-  } catch {
-    /* best-effort */
-  }
+  endDurableWatch(userData, SENTINEL)
 }
 
 /** One line for the crash log / audit trail: what died, when, on which build, and which dump to open. */
