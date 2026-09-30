@@ -63,6 +63,23 @@ export const SCENARIOS = Object.freeze({
       })
     })
   }),
+  // M2-0471: on promotable macOS bytes, SIGSTOP main for 15 s, then require exactly one sanitized stall
+  // bundle and one app.stall.sampled audit event. The long idle plus sleep/wake row is reported as
+  // BLOCKED_EXTERNAL by the scenario because hosted runners cannot provide that physical-host setup.
+  'stall-sampler': Object.freeze({
+    ticket: 'M2-0471',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        script: 'scripts/qa/stall-sampler-hosted.mjs',
+        args: ({ app, report }) => [app, report, '--stop-seconds', '15'],
+        report: 'stall-sampler.json'
+      })
+    })
+  }),
   // M2-0027 acceptance[4] via M2-0468: SIGKILL main with a live sidecar, relaunch, orphan reaped within 5 s of
   // boot. The legacy rule is off in QA-identity bytes, so both platforms install promotable bytes. macOS
   // requires the real llama-server and legacy-orphan rows (a BLOCKED_EXTERNAL there is a PRECONDITION, not a PASS).

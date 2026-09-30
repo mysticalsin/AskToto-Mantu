@@ -7,13 +7,20 @@ name: Candidate scenarios
 # the app, signs, publishes, or pushes a tag. Runs only from main, on a qa-candidate.yml dispatch on main.
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=fault-fatal-relaunch -f mac_sha256=<Metis-QA zip sha256 from SHA256SUMS.txt>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
+#     -f scenario=stall-sampler -f mac_sha256=<Metis dmg sha256 from SHA256SUMS.txt>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=sidecar-boot-reaper \
 #     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>
-run-name: Candidate scenario ${{ inputs.scenario }} on ${{ inputs.candidate_run }}
+# The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
+# run it creates skips every job, uses no runner minutes and reaches no secret.
+run-name: ${{ github.event_name == 'pull_request' && 'Candidate scenarios (registration)' || format('Candidate scenario {0} on {1}', inputs.scenario, inputs.candidate_run) }}
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/candidate-scenarios.yml
   workflow_dispatch:
     inputs:
       candidate_run:
@@ -26,6 +33,7 @@ on:
         type: choice
         options:
           - fault-fatal-relaunch
+          - stall-sampler
           - sidecar-boot-reaper
           - renderer-kill
       mac_sha256:
@@ -54,7 +62,7 @@ defaults:
 jobs:
   guard:
     name: Check the scenario and the candidate run
-    if: github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -95,7 +103,7 @@ jobs:
   mac:
     name: ${{ inputs.scenario }} (macOS)
     needs: guard
-    if: needs.guard.outputs.mac == 'true'
+    if: github.event_name == 'workflow_dispatch' && needs.guard.outputs.mac == 'true'
     runs-on: macos-latest
     timeout-minutes: 60
     env:
@@ -136,7 +144,8 @@ jobs:
         env:
           INSTALLER: ${{ steps.installer.outputs.path }}
         run: |
-          target="$RUNNER_TEMP/candidate-install"
+          target="candidate-install"
+          rm -rf "$target"
           mkdir "$target"
           case "$INSTALLER" in
             *.dmg)
@@ -151,6 +160,7 @@ jobs:
           app=$(find "$target" -maxdepth 1 -name '*.app' -print -quit)
           [ -n "$app" ] || { echo "::error::The installer holds no .app bundle."; exit 1; }
           codesign --verify --deep --strict "$app"
+          echo "path=$app" >> "$GITHUB_OUTPUT"
           echo "app=$app" >> "$GITHUB_OUTPUT"
       - name: Start from a fresh profile seeded only with the scenario's settings
         run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform mac
@@ -193,7 +203,7 @@ jobs:
   win:
     name: ${{ inputs.scenario }} (Windows)
     needs: guard
-    if: needs.guard.outputs.win == 'true'
+    if: github.event_name == 'workflow_dispatch' && needs.guard.outputs.win == 'true'
     runs-on: windows-latest
     timeout-minutes: 60
     env:
