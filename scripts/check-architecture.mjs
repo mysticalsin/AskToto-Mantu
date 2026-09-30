@@ -12,6 +12,22 @@
  * To update scripts/architecture-baseline.json: when counts fall, paste the lowered JSON printed by the
  * failure. When counts rise, edit the baseline only after review, such as for a pure move that relocates
  * existing violations. With no baseline yet, CI prints the seed JSON to commit.
+ *
+ * FF-15 is a per-file flag (1 for each production module directly under src/main or src/renderer/src/lib), so
+ * the top-level module count is the sum of the FF-15 entries in the baseline. It can only fall (a moved file's
+ * entry must be deleted) and a new top-level file has no entry, so it fails.
+ *
+ * Each group below moves as its own pure-move PR that scripts/refactor/verify-move.mjs passes: move the files
+ * with their tests, rewrite only import specifiers, delete the moved files' FF-15 entries (and re-home their
+ * FF-07 / FF-05 entries), then push and read the CI run. The moves are not applied here because they cannot be
+ * verified without running the suite, which runs only in CI.
+ * LEAD_ACTION: move src/main/operator-* (incl. operator-skill-*, operator-test-keypair) to src/main/features/operator/
+ * LEAD_ACTION: move src/main/dust-* and dustcli* to src/main/features/dust/
+ * LEAD_ACTION: move src/main/speaker-* to src/main/features/speaker/
+ * LEAD_ACTION: move src/main/asr-* to src/main/features/asr/
+ * LEAD_ACTION: move src/main/parakeet* to src/main/features/parakeet/
+ * LEAD_ACTION: move src/main/license*.ts plus src/main/license/ (incl. license-lease-key.ts) to src/main/features/license/
+ * LEAD_ACTION: move src/renderer/src/lib/onboarding-*.ts and onboarding-*.test.ts to src/renderer/src/features/onboarding/, keeping FF-01 at 0 production violations
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
