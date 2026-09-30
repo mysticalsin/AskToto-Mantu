@@ -3431,7 +3431,9 @@ function parkOverlayAfterHideSpring(force = false): boolean {
   commitParkedOverlayBounds(park)
   overlayCursorWatchHovering = false
   rightEdgeUnhoveredRevealAt = null
-  overlayParkLatched = force // a forced park is an explicit Hide
+  // A forced park is an explicit Hide. It latches only while the pointer is in the reveal band: a pointer
+  // already elsewhere has left the band, so its next approach reveals at once.
+  overlayParkLatched = force && pointInRect(screen.getCursorScreenPoint(), overlayHoverRestRect(layout, display))
   applyHideClickThrough()
   // Hide rest is an always-on invisible hairline. Tray hide() must not leave
   // the LSUIElement window gone — hover still needs a live window + watch.

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import * as cursorWatch from './island/cursor-watch'
 import { RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS } from './island/cursor-watch'
 import { hoverWatchRestRect, rightEdgeSidecarBounds, type DisplayMetrics, type Rect } from './island/geometry'
-import { isIncompleteAskReveal } from '@shared/overlay-chrome'
+import { isIncompleteAskReveal, overlayUsesHover } from '@shared/overlay-chrome'
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
@@ -38,7 +38,7 @@ function nativeHover(options: {
   const notifications: boolean[] = []
   const deps = {
     ...cursorWatch,
-    win: { isDestroyed: () => false, isVisible: () => true, getBounds: () => bounds },
+    win: { isDestroyed: () => false, isVisible: () => true, getBounds: () => bounds, setMinimumSize: () => {}, showInactive: () => {} },
     screen: { getDisplayMatching: () => display, getCursorScreenPoint: () => cursor },
     performance: { now: () => now },
     overlayCursorWatchWanted: () => true,
@@ -56,13 +56,26 @@ function nativeHover(options: {
     scheduleOverlayLeavePark: () => { parkPending = true },
     notifyOverlayCursorHover: (hovering: boolean) => { notifications.push(hovering) },
     restoreWindow: () => { bounds = revealed; restoreCount++ },
-    mainLog: { info: () => {} }
+    mainLog: { info: () => {} },
+    // The lifted park handler (an explicit Hide) substitutes the same OS side effects.
+    onboardingExclusiveLive: () => false,
+    pointerInIslandOrBar: () => false,
+    overlayUsesHover,
+    parkedOverlayBounds: () => parked,
+    applyOverlaySurfaceChrome: () => {},
+    commitParkedOverlayBounds: (park: Rect) => { bounds = park },
+    applyHideClickThrough: () => {}
   }
-  const begin = source.indexOf('function tickOverlayCursorWatch(): void {')
-  const end = source.indexOf('function notifyOverlayCursorHover', begin)
-  expect(begin).toBeGreaterThan(-1)
-  expect(end).toBeGreaterThan(begin)
-  const handler = source.slice(begin, end).replace('(): void {', '() {')
+  // Lifts one shipped function, dropping only its TypeScript return annotation.
+  const lift = (signature: string, stop: string): string => {
+    const begin = source.indexOf(signature)
+    const end = source.indexOf(stop, begin)
+    expect(begin).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(begin)
+    return source.slice(begin, end).replace(signature, signature.replace(/\): \w+ \{$/, ') {'))
+  }
+  const handler = lift('function tickOverlayCursorWatch(): void {', 'function notifyOverlayCursorHover')
+  const parkHandler = lift('function parkOverlayAfterHideSpring(force = false): boolean {', 'function applyHideClickThrough')
   const build = new Function(...Object.keys(deps), `
     let islandResting = ${rightEdge ? rightEdge.resting : true};
     let settingsSurfaceOpen = false;
@@ -70,11 +83,14 @@ function nativeHover(options: {
     let overlayCursorWatchEnteredAt = null;
     let overlayParkLatched = ${rightEdge?.latched === true};
     let rightEdgeUnhoveredRevealAt = ${rightEdge?.unhoveredRevealAt ?? null};
+    let currentWidth = 0;
+    let userAnchorY = 0;
     function restoreBarWidth() { overlayParkLatched = false; islandResting = false; restoreWindow(); }
     ${handler}
-    return tickOverlayCursorWatch;
-  `) as (...args: unknown[]) => () => void
-  const tick = build(...Object.values(deps))
+    ${parkHandler}
+    return { tick: tickOverlayCursorWatch, park: parkOverlayAfterHideSpring };
+  `) as (...args: unknown[]) => { tick: () => void; park: (force?: boolean) => boolean }
+  const { tick, park } = build(...Object.values(deps))
   return {
     tick(at: number, y: number): void {
       now = at
@@ -85,6 +101,12 @@ function nativeHover(options: {
       now = at
       cursor = point
       tick()
+    },
+    /** An explicit Hide (a forced park: the Hide control, Escape, the hotkey or tray) with the pointer at `point`. */
+    hideAt(at: number, point: { x: number; y: number }): void {
+      now = at
+      cursor = point
+      expect(park(true)).toBe(true)
     },
     band,
     revealed,
@@ -178,6 +200,30 @@ describe('right-edge Hide native watch', () => {
     hover.tickAt(624, { x: 600, y: 500 })
     for (let at = 648; at <= 1000; at += 24) hover.tickAt(at, inBand)
     expect(hover.state().restoreCount).toBe(1)
+  })
+
+  it('RE-HIDE-5: an explicit Hide issued with the pointer in the band latches the park until the pointer leaves', () => {
+    const hover = nativeHover({ rightEdge: { resting: false } })
+    const inBand = { x: edge, y: hover.band.y + 40 }
+    hover.hideAt(0, inBand)
+    expect(hover.state().bounds).toEqual(hover.band)
+    for (let at = 24; at <= 624; at += 24) hover.tickAt(at, inBand)
+    expect(hover.state().restoreCount).toBe(0)
+    hover.tickAt(648, { x: 600, y: 500 })
+    for (let at = 672; at <= 1000; at += 24) hover.tickAt(at, inBand)
+    expect(hover.state().restoreCount).toBe(1)
+  })
+
+  it('an explicit Hide issued with the pointer away from the band never latches: the next edge approach reveals', () => {
+    // Windows packaged smoke: the pointer was already away at Hide time, then reached the edge before any
+    // 24 ms tick sampled it away, so a latch armed regardless of the pointer blocked every later reveal.
+    const hover = nativeHover({ rightEdge: { resting: false } })
+    hover.hideAt(0, { x: 400, y: 500 })
+    expect(hover.state().bounds).toEqual(hover.band)
+    const inBand = { x: edge, y: hover.band.y + Math.round(hover.band.height / 2) }
+    for (let at = 24; at <= 400; at += 24) hover.tickAt(at, inBand)
+    expect(hover.state().restoreCount).toBe(1)
+    expect(hover.state().bounds).toEqual(hover.revealed)
   })
 
   it('RE-HIDE-6: a reveal the pointer never visited reports a leave once, after the right-edge grace', () => {
