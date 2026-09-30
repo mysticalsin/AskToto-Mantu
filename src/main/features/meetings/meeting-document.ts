@@ -34,6 +34,8 @@ export function parse(text: string): MeetingDocument | null {
 }
 
 export function serialize(doc: MeetingDocument): string {
+  // Rewrites canonicalize delimiter lines to bare `---`; the codec preserves frontmatter data, body,
+  // and line endings, but not harmless trailing whitespace on the delimiters.
   return `---${doc.eol}${doc.lines.join(doc.eol)}${doc.eol}---${doc.body}`
 }
 

@@ -1083,6 +1083,15 @@ describe('isMeetingConfidentialOnDisk — MCP push defense-in-depth', () => {
     await expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).resolves.toBe(true)
   })
 
+  it('fails closed when a duplicated confidential field has any true value', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const name = basename(file)
+    const text = readFileSync(file, 'utf8').replace('\n---\n', '\nconfidential: true\nconfidential: false\n---\n')
+    writeFileSync(file, text, 'utf8')
+
+    await expect(isMeetingConfidentialOnDisk(testSettings, name)).resolves.toBe(true)
+  })
+
   it('fails closed on a missing or path-traversal file name', async () => {
     await expect(isMeetingConfidentialOnDisk(testSettings, 'no-such-meeting.md')).resolves.toBe(true)
     await expect(isMeetingConfidentialOnDisk(testSettings, '../escape.md')).resolves.toBe(true)

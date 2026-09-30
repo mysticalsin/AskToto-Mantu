@@ -3,6 +3,7 @@ import { exciseDeletedMeeting } from './brain/ingest'
 import { join, basename } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
 import {
+  hasMeetingFlag,
   parse,
   readMeetingFields as frontmatter,
   serialize,
@@ -755,7 +756,7 @@ export async function isMeetingConfidentialOnDisk(settings: Settings, file: stri
   const text = decodeSaved(read.bytes)
   if (!text) return true
   if (!parse(text)) return true
-  return /^true$/i.test(frontmatter(text).confidential ?? '')
+  return hasMeetingFlag(text, 'confidential')
 }
 
 // Every file Métis itself writes into the meetings folder carries one of these frontmatter types (see
