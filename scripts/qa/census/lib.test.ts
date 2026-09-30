@@ -30,6 +30,7 @@ import {
   validateState,
   windowsWorkingSetEvidenceFromArtifact
 } from './lib.mjs'
+import { PARKED_BOUNDS, parkVerdict } from './park.mjs'
 import { isMainModule, representativeSettings, writeRepresentativeProfile } from './profile.mjs'
 
 const startedMs = Date.UTC(2026, 8, 27, 12)
@@ -451,7 +452,78 @@ describe('resource census CPU formula', () => {
       budgetOneCorePercent: 1,
       overBudget: true
     })
-    expect((report as any).parkedIdle.summary).toEqual({ checks: 1, parked: 1, notParked: 0, parkedCoverage: 1 })
+    expect((report as any).parkedIdle.summary).toEqual({
+      checks: 1,
+      parked: 1,
+      notParked: 0,
+      parkedCoverage: 1,
+      sampleSummary: { samples: 2, parked: 2, notParked: 0, parkedCoverage: 1 }
+    })
+    expect((report as any).samples.map((sample: { parked?: boolean }) => sample.parked)).toEqual([true, true])
+  })
+
+  it('checks parked-idle every 60s and at the end, then marks samples from the latest verdict', async () => {
+    let clockMs = 0
+    const checkTimes: number[] = []
+    const report = await collectCensus({
+      state: 'parked-idle',
+      seconds: 180,
+      intervalMs: 120_000,
+      platform: 'darwin',
+      installRoot: '/Applications/Metis.app',
+      mainPid: 100,
+      productVersion: '1.9.6',
+      parkedIdle: {
+        boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+        expectedBounds: PARKED_BOUNDS,
+        checks: [parkVerdict(PARKED_BOUNDS, 0)]
+      },
+      checkPark: async (observedAtMs: number) => {
+        checkTimes.push(observedAtMs)
+        return parkVerdict(checkTimes.length < 2 ? PARKED_BOUNDS : { width: 880, height: 120 }, observedAtMs)
+      },
+      listProcesses: () => [
+        {
+          pid: 100,
+          ppid: 1,
+          startedMs,
+          exe: '/Applications/Metis.app/Contents/MacOS/Metis',
+          role: 'Metis'
+        }
+      ],
+      sampleOwnedProcesses: () => [
+        {
+          pid: 100,
+          startedMs,
+          role: 'Metis',
+          kind: 'main',
+          rssBytes: 100,
+          physFootprintBytes: 80,
+          workingSetBytes: null,
+          cpuSeconds: clockMs / 1000
+        }
+      ],
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    expect(checkTimes).toEqual([60_000, 120_000, 180_000])
+    expect((report as any).parkedIdle.checks.map((check: { parked: boolean }) => check.parked)).toEqual([true, true, false, false])
+    expect((report as any).samples.map((sample: { tMs: number; parked?: boolean }) => [sample.tMs, sample.parked])).toEqual([
+      [0, true],
+      [60_000, true],
+      [120_000, false],
+      [180_000, false]
+    ])
+    expect((report as any).parkedIdle.summary).toEqual({
+      checks: 4,
+      parked: 2,
+      notParked: 2,
+      parkedCoverage: 0.5,
+      sampleSummary: { samples: 4, parked: 2, notParked: 2, parkedCoverage: 0.5 }
+    })
   })
 
   it('normalizes Windows private bytes from the same resource row as working set', () => {

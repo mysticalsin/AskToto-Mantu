@@ -4,6 +4,7 @@ import { existsSync, fsyncSync, mkdirSync, openSync, readFileSync, statSync, wri
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { summarizeParkChecks } from './park.mjs'
 import { listProcesses, ownedProcesses } from '../owned-processes.mjs'
 
 export const STATES = [
@@ -298,6 +299,7 @@ export function sanitizeReport(report) {
     processIdentities: report.processIdentities.map(sanitizeProcessSample),
     samples: report.samples.map((sample) => ({
       tMs: sample.tMs,
+      ...(typeof sample.parked === 'boolean' ? { parked: sample.parked } : {}),
       processes: sample.processes.map(sanitizeProcessSample)
     })),
     summary: report.summary,
@@ -369,17 +371,6 @@ export function summarize(samples, wallSeconds) {
   }
 }
 
-function summarizeParkChecks(checks) {
-  const total = checks.length
-  const parked = checks.filter((check) => check.parked).length
-  return {
-    checks: total,
-    parked,
-    notParked: total - parked,
-    parkedCoverage: total === 0 ? 0 : parked / total
-  }
-}
-
 function windowsWorkingSetEvidenceFromSamples(platform, samples) {
   if (platform !== 'win32') {
     return {
@@ -395,6 +386,18 @@ function windowsWorkingSetEvidenceFromSamples(platform, samples) {
     measured,
     metric: 'Win32_Process.WorkingSetSize',
     lane: 'windows-qa'
+  }
+}
+
+function summarizeParkedSamples(samples) {
+  const tracked = samples.filter((sample) => typeof sample.parked === 'boolean')
+  const total = tracked.length
+  const parked = tracked.filter((sample) => sample.parked).length
+  return {
+    samples: total,
+    parked,
+    notParked: total - parked,
+    parkedCoverage: total === 0 ? 0 : parked / total
   }
 }
 
@@ -669,19 +672,29 @@ export async function collectCensus(options) {
   const end = started + seconds * 1000
   const samples = []
   const parkChecks = [...(options.parkedIdle?.checks ?? [])]
+  let latestParkCheck = parkChecks.at(-1) ?? null
   let nextParkCheck = started + 60_000
   while (true) {
+    const sampledAt = now()
+    if (state === 'parked-idle' && typeof options.checkPark === 'function' && (sampledAt >= nextParkCheck || sampledAt >= end)) {
+      latestParkCheck = await options.checkPark(sampledAt)
+      parkChecks.push(latestParkCheck)
+      while (nextParkCheck <= sampledAt) nextParkCheck += 60_000
+    }
     const table = listProcessesFn(platform)
     const owned = ownedProcessPopulation({ mainPid: options.mainPid, installRoot: options.installRoot, platform, table })
     const processes = sampleOwnedProcessesFn(owned, platform)
-    const sampledAt = now()
-    samples.push({ tMs: sampledAt - started, processes })
-    if (state === 'parked-idle' && typeof options.checkPark === 'function' && (sampledAt >= nextParkCheck || sampledAt >= end)) {
-      parkChecks.push(await options.checkPark(sampledAt))
-      while (nextParkCheck <= sampledAt) nextParkCheck += 60_000
-    }
+    samples.push({
+      tMs: sampledAt - started,
+      ...(state === 'parked-idle' && latestParkCheck ? { parked: Boolean(latestParkCheck.parked) } : {}),
+      processes
+    })
     if (sampledAt >= end) break
-    await sleepFn(Math.min(intervalMs, Math.max(1, end - sampledAt)))
+    const nextAt =
+      state === 'parked-idle' && typeof options.checkPark === 'function'
+        ? Math.min(sampledAt + intervalMs, nextParkCheck, end)
+        : Math.min(sampledAt + intervalMs, end)
+    await sleepFn(Math.max(1, nextAt - sampledAt))
   }
 
   const processIdentities = validateCensusIdentity(samples, options.mainPid)
@@ -715,7 +728,10 @@ export async function collectCensus(options) {
     report.parkedIdle = {
       ...(options.parkedIdle ?? {}),
       checks: parkChecks,
-      summary: summarizeParkChecks(parkChecks)
+      summary: {
+        ...summarizeParkChecks(parkChecks),
+        sampleSummary: summarizeParkedSamples(samples)
+      }
     }
   }
   return sanitizeReport(report)

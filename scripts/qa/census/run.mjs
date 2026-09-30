@@ -181,6 +181,43 @@ export function launchOptions({ env, profile, port }) {
   }
 }
 
+export function parkedIdlePreconditionFailureReport({
+  parkedIdle,
+  firstCheck,
+  productVersion,
+  platform,
+  state,
+  seconds,
+  mainPid
+}) {
+  const failedParkedIdle = {
+    ...(parkedIdle ?? {}),
+    boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+    expectedBounds: PARKED_BOUNDS,
+    checks: [firstCheck],
+    summary: summarizeParkChecks([firstCheck])
+  }
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    ticket: 'M2-0009',
+    evidenceLevel: 'PRECONDITION',
+    productVersion,
+    platform,
+    state,
+    seconds,
+    mainPid,
+    profileKind: 'representative-synthetic',
+    statePrecondition: {
+      required: true,
+      kind: 'parked-idle',
+      status: 'PRECONDITION',
+      observedBounds: firstCheck.bounds
+    },
+    parkedIdle: failedParkedIdle
+  }
+}
+
 async function findOverlayPage(browser) {
   for (const context of browser.contexts()) {
     for (const page of context.pages()) {
@@ -274,6 +311,9 @@ async function main() {
   if (args.auditCounts && !args.ndjson) throw new Error('--audit-counts requires --ndjson')
   if (args.auditCounts && !profile) throw new Error('--audit-counts requires --profile or METIS_QA_PROFILE')
   if (!(checkpointMinutes > 0)) throw new Error('--checkpoint-minutes must be positive')
+  if (state === 'parked-idle' && args.ndjson) {
+    throw new Error('parked-idle does not support --ndjson; use JSON output so park checks are recorded')
+  }
   if (state === 'parked-idle') validateParkedIdleProfile(profile)
 
   validateStatePrecondition({
@@ -326,32 +366,10 @@ async function main() {
       checker = await createCdpParkChecker(cdpUrl)
       const firstCheck = await checker.check()
       if (!firstCheck.parked) {
-        const failedParkedIdle = {
-          ...(parkedIdle ?? {}),
-          boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
-          expectedBounds: PARKED_BOUNDS,
-          checks: [firstCheck],
-          summary: summarizeParkChecks([firstCheck])
-        }
-        writeJson(output, {
-          schemaVersion: 1,
-          generatedAt: new Date().toISOString(),
-          ticket: 'M2-0009',
-          evidenceLevel: 'PRECONDITION',
-          productVersion,
-          platform,
-          state,
-          seconds,
-          mainPid,
-          profileKind: 'representative-synthetic',
-          statePrecondition: {
-            required: true,
-            kind: 'parked-idle',
-            status: 'PRECONDITION',
-            observedBounds: firstCheck.bounds
-          },
-          parkedIdle: failedParkedIdle
-        })
+        writeJson(
+          output,
+          parkedIdlePreconditionFailureReport({ parkedIdle, firstCheck, productVersion, platform, state, seconds, mainPid })
+        )
         await checker.close()
         checker = null
         throw new ParkPreconditionError('parked-idle precondition failed: overlay window is not parked', {

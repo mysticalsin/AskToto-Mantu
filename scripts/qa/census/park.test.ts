@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PARKED_BOUNDS, ParkPreconditionError, isParkedBounds, monitorParkedIdle, parkVerdict } from './park.mjs'
-import { launchOptions, pointerMoveCommand, validateParkedIdleProfile } from './run.mjs'
+import { launchOptions, parkedIdlePreconditionFailureReport, pointerMoveCommand, validateParkedIdleProfile } from './run.mjs'
 
 function fakeSleep(advance: (ms: number) => void) {
   return async <T = void>(delay?: number, value?: T): Promise<T> => {
@@ -40,6 +40,39 @@ describe('parked-idle window-bounds proof', () => {
       exitCode: 2,
       details: {
         observedBounds: { width: 880, height: 120 }
+      }
+    })
+  })
+
+  it('builds the run.mjs PRECONDITION report for a failed first check with observed bounds', () => {
+    const firstCheck = parkVerdict({ left: 0, top: 0, width: 880, height: 120 }, 0)
+
+    const report = parkedIdlePreconditionFailureReport({
+      parkedIdle: { pointerMovedOffTopEdge: { x: 32, y: 200, method: 'CGWarpMouseCursorPosition' } },
+      firstCheck,
+      productVersion: '1.9.7',
+      platform: 'darwin',
+      state: 'parked-idle',
+      seconds: 300,
+      mainPid: 123
+    })
+
+    expect(report).toMatchObject({
+      evidenceLevel: 'PRECONDITION',
+      state: 'parked-idle',
+      mainPid: 123,
+      statePrecondition: {
+        required: true,
+        kind: 'parked-idle',
+        status: 'PRECONDITION',
+        observedBounds: { left: 0, top: 0, width: 880, height: 120 }
+      },
+      parkedIdle: {
+        pointerMovedOffTopEdge: { x: 32, y: 200, method: 'CGWarpMouseCursorPosition' },
+        boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+        expectedBounds: PARKED_BOUNDS,
+        checks: [firstCheck],
+        summary: { checks: 1, parked: 0, notParked: 1, parkedCoverage: 0 }
       }
     })
   })
