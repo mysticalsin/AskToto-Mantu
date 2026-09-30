@@ -14,6 +14,12 @@
  *   NSWindowStyleMaskTitled unless `roundedCorners: false`, which makes it NSWindowStyleMaskBorderless. The
  *   overlay was built with `roundedCorners: true`, so its content rect is the whole frame and any re-derive
  *   adds a 32 px strip it never drew.
+ * - ASSUMED until the packaged app runs on the macOS smoke lane: the borderless chrome removes the only source
+ *   of the native reframe. The row now fails on any overlay `frame` entry above the work area
+ *   (`framesAboveWorkArea`), and its trace records every `write`, `minimum`, `call` and `frame` of the Hide.
+ *   LEAD_ACTION: dispatch the macOS packaged-smoke lane on this branch, file the RE-HIDE-3-meeting-hide
+ *   `geometry` evidence from its artifact, and confirm that no `frame` entry with y=29/h=592 follows the park.
+ *   If one appears, reopen M2-0526 and name the `write`, `minimum` or `call` entry that precedes it.
  *
  * Fix at the cause: the overlay chrome is borderless (`roundedCorners: false`). Frame and content rect are
  * then the same rect, so no later native pass, whatever triggers it, can move a parked band. The window below
