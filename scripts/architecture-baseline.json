@@ -6,8 +6,7 @@
   "FF-02": {
     "src/main/brain/ingest.ts": 2,
     "src/main/infra/observability/crash-taxonomy.ts": 1,
-    "src/main/infra/observability/projection.ts": 1,
-    "src/renderer/src/components/Settings.tsx": 1
+    "src/main/infra/observability/projection.ts": 1
   },
   "FF-03": {
     "src/main/application-catalog-view.ts": 1,
@@ -56,7 +55,8 @@
     "src/renderer/src/components/OnboardingExperience.tsx": 1910,
     "src/renderer/src/components/RecallView.tsx": 1349,
     "src/renderer/src/components/Review.tsx": 1950,
-    "src/renderer/src/components/Settings.tsx": 9507,
+    "src/renderer/src/components/Settings.tsx": 8098,
+    "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/lib/listen.ts": 3144,
     "src/shared/ipc.ts": 2452
   },
@@ -226,7 +226,7 @@
     "src/main/speaker-id.test.ts": 6,
     "src/main/speaker-session-wiring.test.ts": 2,
     "src/main/sync-fs-meetings-root.contract.test.ts": 21,
-    "src/main/tonight-1.8.5-kinetic-checklist.contract.test.ts": 16,
+    "src/main/tonight-1.8.5-kinetic-checklist.contract.test.ts": 17,
     "src/main/transcripts.test.ts": 2,
     "src/main/whisper-asr-host.test.ts": 6,
     "src/main/will-quit-guard.test.ts": 1,
