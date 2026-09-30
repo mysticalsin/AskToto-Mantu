@@ -133,6 +133,7 @@ describe('resource census process classification', () => {
       'speaker-utility',
       'llama-server',
       'fm-serve',
+      'sidecar-supervisor',
       'crashpad'
     ])
   })
@@ -152,6 +153,51 @@ describe('resource census process classification', () => {
     ['main', { pid: 1, startedMs, role: 'Metis', exe: '/Applications/Metis.app/Contents/MacOS/Metis' }]
   ])('classifies %s without relying on pid alone', (expected, entry) => {
     expect(classifyProcess(entry)).toBe(expected)
+  })
+
+  const helperExe = '/Applications/Metis.app/Contents/Resources/metis-mac-helper'
+  const bundledLlama = '/Applications/Metis.app/Contents/Resources/llama-server'
+
+  it.each([
+    [
+      'a wrapper around llama-server',
+      `${helperExe} supervise --parent 100 -- ${bundledLlama} --port 8080`
+    ],
+    ['a wrapper around fm serve', `${helperExe} supervise --parent 100 -- /usr/bin/fm serve --port 54321`]
+  ])('classifies %s as sidecar-supervisor, not the sidecar it wraps', (_label, commandLine) => {
+    expect(
+      classifyProcess({ pid: 20, startedMs, role: 'metis-mac-helper', exe: helperExe, commandLine })
+    ).toBe('sidecar-supervisor')
+  })
+
+  it('keeps the wrapped bare llama-server and a Windows llama-server row as llama-server', () => {
+    expect(
+      classifyProcess({ pid: 21, startedMs, role: 'llama-server', exe: bundledLlama, commandLine: `${bundledLlama} --port 8080` })
+    ).toBe('llama-server')
+    expect(
+      classifyProcess({
+        pid: 22,
+        startedMs,
+        role: 'llama-server.exe',
+        exe: 'C:\\Program Files\\Metis\\resources\\llama-server.exe',
+        commandLine: 'C:\\Program Files\\Metis\\resources\\llama-server.exe --port 8080'
+      })
+    ).toBe('llama-server')
+  })
+
+  it('leaves a non-supervise metis-mac-helper process on its previous classification', () => {
+    expect(
+      classifyProcess({ pid: 23, startedMs, role: 'metis-mac-helper', exe: helperExe, commandLine: `${helperExe} doctor` })
+    ).toBe('other')
+    expect(
+      classifyProcess({
+        pid: 24,
+        startedMs,
+        role: 'metis-mac-helper',
+        exe: helperExe,
+        commandLine: `${helperExe} probe --path ${bundledLlama}`
+      })
+    ).toBe('llama-server')
   })
 })
 
