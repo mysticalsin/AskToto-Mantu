@@ -62,7 +62,7 @@ function decide(dir: string, event: string, ref: string): string {
 
 describe('M2-0525 native surface gate', () => {
   it('skips a TypeScript-only push to a ticket branch', () => {
-    const dir = repoWithChange(['src/renderer/app.tsx', 'docs/readme.md'])
+    const dir = repoWithChange(['src/renderer/app.css', 'docs/readme.md'])
     expect(decide(dir, 'push', 'refs/heads/m2/M2-0525-x')).toBe('native=false')
   })
 
@@ -88,12 +88,12 @@ describe('M2-0525 native surface gate', () => {
     ['workflow_dispatch', 'refs/heads/m2/M2-0525-x'],
     ['pull_request', 'refs/pull/1/merge'],
   ])('is always full for %s on %s, even with no native change', (event, ref) => {
-    const dir = repoWithChange(['src/renderer/app.tsx'])
+    const dir = repoWithChange(['src/renderer/app.css'])
     expect(decide(dir, event, ref)).toBe('native=true')
   })
 
   it('fails open when there is no merge-base with origin/m2/integration', () => {
-    const dir = repoWithChange(['src/renderer/app.tsx'])
+    const dir = repoWithChange(['src/renderer/app.css'])
     git(dir, 'update-ref', '-d', 'refs/remotes/origin/m2/integration')
     expect(decide(dir, 'push', 'refs/heads/m2/M2-0525-x')).toBe('native=true')
   })
