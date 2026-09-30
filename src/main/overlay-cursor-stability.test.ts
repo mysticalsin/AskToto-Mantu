@@ -76,6 +76,7 @@ function nativeHover(options: {
   }
   const handler = lift('function tickOverlayCursorWatch(): void {', 'function notifyOverlayCursorHover')
   const parkHandler = lift('function parkOverlayAfterHideSpring(force = false): boolean {', 'function applyHideClickThrough')
+  const layoutChangeHandler = lift('function parkOverlayForLayoutChange(): void {', '/** Pin the overlay')
   const build = new Function(...Object.keys(deps), `
     let islandResting = ${rightEdge ? rightEdge.resting : true};
     let settingsSurfaceOpen = false;
@@ -88,9 +89,10 @@ function nativeHover(options: {
     function restoreBarWidth() { overlayParkLatched = false; islandResting = false; restoreWindow(); }
     ${handler}
     ${parkHandler}
-    return { tick: tickOverlayCursorWatch, park: parkOverlayAfterHideSpring };
-  `) as (...args: unknown[]) => { tick: () => void; park: (force?: boolean) => boolean }
-  const { tick, park } = build(...Object.values(deps))
+    ${layoutChangeHandler}
+    return { tick: tickOverlayCursorWatch, park: parkOverlayAfterHideSpring, layoutChangePark: parkOverlayForLayoutChange };
+  `) as (...args: unknown[]) => { tick: () => void; park: (force?: boolean) => boolean; layoutChangePark: () => void }
+  const { tick, park, layoutChangePark } = build(...Object.values(deps))
   return {
     tick(at: number, y: number): void {
       now = at
@@ -107,6 +109,12 @@ function nativeHover(options: {
       now = at
       cursor = point
       expect(park(true)).toBe(true)
+    },
+    /** The settings-driven re-park after a layout switch (Hide ↔ Island), with the pointer at `point`. */
+    layoutChangeAt(at: number, point: { x: number; y: number }): void {
+      now = at
+      cursor = point
+      layoutChangePark()
     },
     band,
     revealed,
@@ -221,6 +229,20 @@ describe('right-edge Hide native watch', () => {
     hover.hideAt(0, { x: 400, y: 500 })
     expect(hover.state().bounds).toEqual(hover.band)
     const inBand = { x: edge, y: hover.band.y + Math.round(hover.band.height / 2) }
+    for (let at = 24; at <= 400; at += 24) hover.tickAt(at, inBand)
+    expect(hover.state().restoreCount).toBe(1)
+    expect(hover.state().bounds).toEqual(hover.revealed)
+  })
+
+  it('a layout switch re-parks without an earlier Hide latch: the next edge approach reveals', () => {
+    // Windows packaged smoke RE-HIDE-4: an explicit Hide during a meeting latched with the pointer in the
+    // band; the switch to Island re-parked and the pointer returned to the edge before any tick sampled it
+    // away, so the stale latch blocked every edge reveal of the Island.
+    const hover = nativeHover({ rightEdge: { resting: false } })
+    const inBand = { x: edge, y: hover.band.y + Math.round(hover.band.height / 2) }
+    hover.hideAt(0, inBand)
+    hover.layoutChangeAt(10, { x: 400, y: 500 })
+    expect(hover.state().bounds).toEqual(hover.band)
     for (let at = 24; at <= 400; at += 24) hover.tickAt(at, inBand)
     expect(hover.state().restoreCount).toBe(1)
     expect(hover.state().bounds).toEqual(hover.revealed)

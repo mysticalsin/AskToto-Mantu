@@ -3467,6 +3467,23 @@ function applyHideClickThrough(): void {
   }
 }
 
+/**
+ * Re-park after a layout switch. It is not an explicit Hide, so it never carries an earlier Hide's park
+ * latch: a pointer that reaches the new park's reveal band before any watch tick sampled it away reveals.
+ */
+function parkOverlayForLayoutChange(): void {
+  if (!win || win.isDestroyed()) return
+  const display = screen.getDisplayMatching(win.getBounds())
+  const park = parkedOverlayBounds(liveOverlayLayout(), display)
+  overlayCursorWatchHovering = false
+  overlayParkLatched = false
+  currentWidth = park.width
+  islandResting = true
+  userAnchorY = park.y
+  commitParkedOverlayBounds(park)
+  notifyOverlayCursorHover(false, false, resolvedOverlayPlacementForDisplay(display) === 'right-edge')
+}
+
 /** Pin the overlay to its selected physical placement on its current display. The historic IPC name
  * remains for renderer compatibility; top-center preserves the existing notch-aware behavior. */
 function anchorTopCenter(): void {
@@ -5258,7 +5275,6 @@ function registerIpc(): void {
           // Switching to Hide/Island must park. A leftover Circle pill or Settings-tall
           // ghost was Ultron 880×1017 + Expand Métis. Keep a real Settings panel open.
           isMinimized = false
-          const display = screen.getDisplayMatching(win.getBounds())
           if (
             !settingsSurfaceOpen &&
             shouldParkHoverRestAfterLeavingSurface({
@@ -5266,13 +5282,7 @@ function registerIpc(): void {
               pointerInIslandOrBar: pointerInIslandOrBar({ ignoreWindow: true })
             })
           ) {
-            overlayCursorWatchHovering = false
-            const park = parkedOverlayBounds(layout, display)
-            currentWidth = park.width
-            islandResting = true
-            userAnchorY = park.y
-            commitParkedOverlayBounds(park)
-            notifyOverlayCursorHover(false, false, resolvedOverlayPlacementForDisplay(display) === 'right-edge')
+            parkOverlayForLayoutChange()
           }
           // Re-apply the new layout's opacity and click-through whether or not it parked here.
           applyOverlaySurfaceChrome()
@@ -5286,6 +5296,7 @@ function registerIpc(): void {
             currentWidth = park.width
             userAnchorY = park.y
             overlayCursorWatchHovering = false
+            overlayParkLatched = false // the band moved: an earlier Hide's latch no longer applies
             applyOverlaySurfaceChrome()
             commitParkedOverlayBounds(park)
             applyHideClickThrough()
