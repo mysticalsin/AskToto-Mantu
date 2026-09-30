@@ -36,16 +36,9 @@ import {
   type ProvenantField,
   type IndexUnavailableCause
 } from '@shared/brain'
-import { resolveMeetingsFolder, readSavedFile, writeSaved, writeSavedSync, decodeSavedResult, envelopeKeyKind } from '../transcripts'
+import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
-import {
-  activeIngestLedgerPath,
-  classifyIngestLedgerBytes,
-  ingestLedgerMode,
-  type IngestLedgerLoad,
-  userDataIngestLedgerPath,
-  writeIngestLedger
-} from '../infra/storage/ingest-ledger'
+import { activeIngestLedgerPath, classifyIngestLedgerBytes, deleteUserDataIngestLedger, ingestLedgerMode, readUserDataIngestLedger, seedUserDataIngestLedgerFromLegacy, type IngestLedgerLoad, userDataIngestLedgerPath, writeIngestLedger } from '../infra/storage/ingest-ledger'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
 
@@ -621,34 +614,6 @@ function setAsideCorruptIndex(p: string): ResolvedIndex {
   auditLog('brain.index.quarantined', { kept: kept + 1, cap: INDEX_AUTO_SNAPSHOT_CAP })
   return { kind: 'absent' }
 }
-
-function seedSwitchIndexFromLegacy(s: Settings, activePath: string): ResolvedIndex {
-  const legacyPath = join(brainDir(s), INDEX_REL)
-  let legacyBytes: Buffer
-  try {
-    legacyBytes = readFileSync(legacyPath)
-  } catch (e) {
-    if (errnoCode(e) === 'ENOENT') return { kind: 'absent' }
-    return { kind: 'unavailable', cause: 'io', detail: errnoCode(e) }
-  }
-  const legacyLoad = classifyIndexBytes(legacyBytes)
-  if (legacyLoad.kind === 'ready') {
-    try {
-      mkdirSync(dirname(activePath), { recursive: true })
-      writeSavedSync(activePath, JSON.stringify(legacyLoad.index, null, 2), !!s.encryptTranscripts)
-      const st = statSync(activePath)
-      const load: ResolvedIndex = { kind: 'ready', index: legacyLoad.index }
-      indexCache.set(activePath, { mtimeMs: st.mtimeMs, size: st.size, at: Date.now(), load })
-      return load
-    } catch (e) {
-      return { kind: 'unavailable', cause: 'io', detail: errnoCode(e) }
-    }
-  }
-  if (legacyLoad.kind === 'absent') return { kind: 'absent' }
-  if (legacyLoad.kind === 'corrupt') return { kind: 'unavailable', cause: 'corrupt-kept' }
-  return legacyLoad
-}
-
 function loadIndex(s: Settings): ResolvedIndex {
   const p = activeIngestLedgerPath(s, join(brainDir(s), INDEX_REL))
   const hit = indexCache.get(p)
@@ -662,11 +627,6 @@ function loadIndex(s: Settings): ResolvedIndex {
   } catch (e) {
     if (errnoCode(e) === 'ENOENT') {
       indexCache.delete(p)
-      if (ingestLedgerMode() === 'switch') {
-        const seeded = seedSwitchIndexFromLegacy(s, p)
-        if (seeded.kind === 'unavailable') return recordUnavailable(p, hit, -1, -1, seeded)
-        return seeded
-      }
       return { kind: 'absent' }
     }
     return recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: errnoCode(e) })
@@ -700,9 +660,17 @@ function loadIndex(s: Settings): ResolvedIndex {
 }
 
 async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
-  const legacyPath = join(brainDir(s), INDEX_REL)
-  const p = activeIngestLedgerPath(s, legacyPath)
-  if (ingestLedgerMode() === 'switch') return loadIndex(s)
+  const legacyPath = join(brainDir(s), INDEX_REL), p = activeIngestLedgerPath(s, legacyPath)
+  if (ingestLedgerMode() === 'switch') {
+    const hit = indexCache.get(p)
+    const current = await readUserDataIngestLedger(s)
+    const resolved = current.load.kind === 'absent' ? await seedUserDataIngestLedgerFromLegacy(s, legacyPath) : current
+    const load: ResolvedIndex = resolved.load.kind === 'corrupt' ? setAsideCorruptIndex(p) : resolved.load
+    if (load.kind === 'absent') { indexCache.delete(p); return load }
+    if (load.kind === 'unavailable') return recordUnavailable(p, hit, resolved.mtimeMs, resolved.size, load)
+    indexCache.set(p, { mtimeMs: resolved.mtimeMs, size: resolved.size, at: Date.now(), load })
+    return load
+  }
   const hit = indexCache.get(p)
   const gateway = storageAt(resolveMeetingsFolder(s))
   const fileClass = (await classifyAll(gateway, [join('.brain', INDEX_REL)])).get(join('.brain', INDEX_REL))
@@ -804,7 +772,7 @@ export async function rebuildUnavailableError(s: Settings): Promise<string | nul
 
 /** Fail-closed write: never replaces bytes this process could not fully decode. */
 export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
-  const blocked = indexUnavailable(s)
+  const blocked = await indexUnavailableAsync(s)
   if (blocked) throw new BrainIndexUnavailableError(blocked)
   const legacyPath = join(brainDir(s), INDEX_REL)
   await writeIngestLedger(s, legacyPath, v)
@@ -1187,7 +1155,7 @@ export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserve
     if (preserve) cpSync(journalPath, preserveTo)
     const preservedDir = preservedIndexDir(settings)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
-    rmSync(userDataLedger, { force: true })
+    void deleteUserDataIngestLedger(settings).catch((e) => console.warn('[brain] purgeBrain: could not remove userData ingest ledger', e))
     indexCache.delete(userDataLedger)
     if (opts.mode === 'erase') rmSync(preservedDir, { recursive: true, force: true })
     resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus
@@ -1200,7 +1168,7 @@ export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserve
       const remaining = readdirSync(root)
       return { ok: remaining.length === 1 && remaining[0] === 'corrections.json' }
     }
-    return { ok: !existsSync(root) && !existsSync(userDataLedger) && (opts.mode !== 'erase' || !existsSync(preservedDir)) }
+    return { ok: !existsSync(root) && (opts.mode !== 'erase' || !existsSync(preservedDir)) }
   } catch (e) {
     console.warn('[brain] purgeBrain: could not remove', root, e)
     // MI-2.5 Fix F: a mid-wipe failure (OneDrive/AV holding a file open partway through the recursive

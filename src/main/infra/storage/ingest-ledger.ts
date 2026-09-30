@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { app } from 'electron'
@@ -19,6 +19,12 @@ export type IngestLedgerLoad =
   | { kind: 'absent' }
   | { kind: 'corrupt' }
   | { kind: 'unavailable'; cause: IndexUnavailableCause; detail?: string }
+
+export type IngestLedgerResolved = {
+  load: IngestLedgerLoad
+  mtimeMs: number
+  size: number
+}
 
 const FLAG_VALUES = new Map<string, IngestLedgerMode>([
   ['legacy', 'legacy'],
@@ -63,6 +69,62 @@ export function classifyIngestLedgerBytes(buf: Buffer): IngestLedgerLoad {
   const parsed = BrainIndexSchema.safeParse(raw)
   if (parsed.success) return { kind: 'ready', index: parsed.data }
   return { kind: 'corrupt' }
+}
+
+function errnoCode(e: unknown): string | undefined {
+  return (e as NodeJS.ErrnoException).code
+}
+
+export async function readUserDataIngestLedger(settings: Settings): Promise<IngestLedgerResolved> {
+  const p = userDataIngestLedgerPath(settings)
+  let current: Awaited<ReturnType<typeof stat>>
+  try {
+    current = await stat(p)
+  } catch (e) {
+    if (errnoCode(e) === 'ENOENT') return { load: { kind: 'absent' }, mtimeMs: -1, size: -1 }
+    return { load: { kind: 'unavailable', cause: 'io', detail: errnoCode(e) }, mtimeMs: -1, size: -1 }
+  }
+  try {
+    return {
+      load: classifyIngestLedgerBytes(await readFile(p)),
+      mtimeMs: current.mtimeMs,
+      size: current.size
+    }
+  } catch (e) {
+    if (errnoCode(e) === 'ENOENT') return { load: { kind: 'absent' }, mtimeMs: -1, size: -1 }
+    return { load: { kind: 'unavailable', cause: 'io', detail: errnoCode(e) }, mtimeMs: current.mtimeMs, size: current.size }
+  }
+}
+
+export async function seedUserDataIngestLedgerFromLegacy(
+  settings: Settings,
+  legacyPath: string
+): Promise<IngestLedgerResolved> {
+  let legacyBytes: Buffer
+  try {
+    legacyBytes = await readFile(legacyPath)
+  } catch (e) {
+    if (errnoCode(e) === 'ENOENT') return { load: { kind: 'absent' }, mtimeMs: -1, size: -1 }
+    return { load: { kind: 'unavailable', cause: 'io', detail: errnoCode(e) }, mtimeMs: -1, size: -1 }
+  }
+  const legacyLoad = classifyIngestLedgerBytes(legacyBytes)
+  if (legacyLoad.kind !== 'ready') {
+    const load = legacyLoad.kind === 'corrupt' ? { kind: 'unavailable', cause: 'corrupt-kept' } as const : legacyLoad
+    return { load, mtimeMs: -1, size: -1 }
+  }
+  const userDataPath = userDataIngestLedgerPath(settings)
+  try {
+    await mkdir(dirname(userDataPath), { recursive: true })
+    await writeSaved(userDataPath, JSON.stringify(legacyLoad.index, null, 2), !!settings.encryptTranscripts)
+    const current = await stat(userDataPath)
+    return { load: { kind: 'ready', index: legacyLoad.index }, mtimeMs: current.mtimeMs, size: current.size }
+  } catch (e) {
+    return { load: { kind: 'unavailable', cause: 'io', detail: errnoCode(e) }, mtimeMs: -1, size: -1 }
+  }
+}
+
+export async function deleteUserDataIngestLedger(settings: Settings): Promise<void> {
+  await rm(userDataIngestLedgerPath(settings), { force: true })
 }
 
 export async function writeIngestLedger(settings: Settings, legacyPath: string, value: BrainIndex): Promise<void> {

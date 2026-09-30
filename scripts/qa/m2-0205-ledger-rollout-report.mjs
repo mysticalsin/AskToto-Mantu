@@ -65,8 +65,8 @@ const report = {
     },
     {
       id: 'packaged-expand-switch-rollback-qa-account',
-      status: 'LEAD_ACTION',
-      unblock: 'Run the packaged candidate on the QA account for legacy, expand and switch modes, then attach the produced report artifact with this candidate sha256.'
+      status: 'BLOCKED_EXTERNAL',
+      unblock: 'Run this packaged candidate on the QA account for legacy, expand and switch modes, then file the private evidence from this report artifact and candidate sha256.'
     }
   ]
 }

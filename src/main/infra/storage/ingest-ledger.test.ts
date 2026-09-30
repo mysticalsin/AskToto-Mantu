@@ -181,7 +181,7 @@ describe('ingest ledger userData rollout', () => {
     const userDataPath = ledger.userDataIngestLedgerPath(settings)
     process.env.ASKTOTO_LEDGER_USERDATA = 'switch'
 
-    expect(store.readIndex(settings).ingested['legacy-seeded.md']?.sourceVersion).toBe('meeting-a:v1')
+    expect((await store.readIndexAsync(settings)).ingested['legacy-seeded.md']?.sourceVersion).toBe('meeting-a:v1')
 
     expect(await readBytes(legacyPath)).toEqual(beforeLegacy)
     expect(BrainIndexSchema.parse(readIndexJson(userDataPath)).ingested['legacy-seeded.md']?.sourceVersion).toBe('meeting-a:v1')
@@ -202,7 +202,7 @@ describe('ingest ledger userData rollout', () => {
     expect(await exists(expandMirror)).toBe(true)
 
     expect(store.purgeBrain(settings, { mode: 'rebuild', preserveCorrections: false }).ok).toBe(true)
-    expect(await exists(expandMirror)).toBe(false)
+    await vi.waitFor(async () => expect(await exists(expandMirror)).toBe(false))
 
     await mkdir(store.brainDir(settings), { recursive: true })
     process.env.ASKTOTO_LEDGER_USERDATA = 'switch'
@@ -211,7 +211,7 @@ describe('ingest ledger userData rollout', () => {
     expect(await exists(switchLedger)).toBe(true)
 
     expect(store.purgeBrain(settings, { mode: 'erase' }).ok).toBe(true)
-    expect(await exists(switchLedger)).toBe(false)
+    await vi.waitFor(async () => expect(await exists(switchLedger)).toBe(false))
   })
 
   it('restores rollback truth table: legacy file remains the only 1.9.6 ledger across rollout modes', async () => {
@@ -262,7 +262,7 @@ describe('ingest ledger userData rollout', () => {
     })
     process.env.ASKTOTO_LEDGER_USERDATA = 'switch'
     try {
-      expect(store.readIndex(settings).ingested['same-meeting.md']?.sourceVersion).toBe('meeting-123:v1')
+      expect((await store.readIndexAsync(settings)).ingested['same-meeting.md']?.sourceVersion).toBe('meeting-123:v1')
       const deviceTwoPath = ledger.userDataIngestLedgerPath(settings)
       expect(deviceTwoPath).not.toBe(deviceOnePath)
       expect(BrainIndexSchema.parse(readIndexJson(deviceTwoPath)).ingested['same-meeting.md']?.sourceVersion).toBe('meeting-123:v1')

@@ -214,11 +214,10 @@ function encryptEnvelopeV2(content: string): Buffer {
  *
  *  `allowKeychainRecovery` (default false, the boot/bulk-read behavior — see index.ts's forced local
  *  keystore note) lets an explicit single-file user read reach an 'S:'-wrapped envelope anyway when this
- *  device's Keychain can still unwrap it: the forced keystore stops the boot-time Keychain PROMPT, but the
+ *  device's Keychain can still unwrap it: the forced keystore stops the boot-time Keychain prompt, but the
  *  'asktoto Safe Storage' Keychain item itself still exists on a device that recorded before the forced
- *  keystore shipped, so refusing the read there was throwing away recoverable meetings, not protecting them.
- *  `filePath`, when given, lets a successful recovery self-heal (see the rewrap below). */
-function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?: string): string {
+ *  keystore shipped, so refusing the read there was throwing away recoverable meetings. */
+function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false): string {
   const env = JSON.parse(buf.subarray(MARKER_LEN).toString('utf8')) as EnvelopeV2
   let contentKeyB64: string
   if (env.kLocal.startsWith('F:')) {
@@ -232,33 +231,6 @@ function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?
     }
     const raw = env.kLocal.startsWith('S:') ? env.kLocal.slice(2) : env.kLocal
     contentKeyB64 = unwrapWithKeychain(Buffer.from(raw, 'base64'))
-    // Self-healing: this device's Keychain just proved it can still unwrap the SAME content key —
-    // rewrap it under the current file-backend key so every later read (bulk list/search included)
-    // converges to 'F:' without ever touching the Keychain again. iv/tag/ct are untouched; only kLocal
-    // changes. Atomic tmp+rename (mirrors writeSaved above), done synchronously like store.ts's own
-    // legacy-format migration since this runs inside an otherwise-synchronous read. Best-effort: a
-    // rewrap failure must never fail this read — the caller already has the decrypted content either way.
-    //
-    // Only converge when the file backend is the ACTIVE write backend. On packaged Windows it is not:
-    // safeStorage (DPAPI) is the writer, so every new transcript is 'S:', and safeStorage.isEncryptionAvailable()
-    // is always true there — which made canRecover true and rewrapped every meeting to 'F:' the moment it was
-    // opened, silently materialising a secret-key.bin the profile never needed and moving the meeting off DPAPI.
-    // Gating on useFileBackend() keeps the convergence for the macOS forced-keystore case it was written for
-    // and makes it a no-op wherever safeStorage is the writer.
-    if (canRecover && filePath && useFileBackend()) {
-      const tmp = `${filePath}.${randomBytes(6).toString('hex')}.tmp`
-      try {
-        const updated: EnvelopeV2 = { ...env, kLocal: 'F:' + encryptSecret(contentKeyB64).toString('base64') }
-        writeFileSync(tmp, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(updated), 'utf8')]), { mode: 0o600 })
-        renameSync(tmp, filePath)
-      } catch {
-        try {
-          if (existsSync(tmp)) unlinkSync(tmp) // don't leave an orphaned .tmp behind on a failed rewrap
-        } catch {
-          /* best-effort cleanup */
-        }
-      }
-    }
   }
   const contentKey = Buffer.from(contentKeyB64, 'base64')
   const decipher = createDecipheriv('aes-256-gcm', contentKey, Buffer.from(env.iv, 'base64'))
@@ -297,13 +269,13 @@ export function envelopeKeyKind(buf: Buffer): 'plain' | 'keychain' | 'file' | 'm
 }
 
 /** Decode saved bytes, decrypting if the at-rest marker is present.
- *  `allowKeychainRecovery`/`filePath` are forwarded to decryptEnvelopeV2 — see its doc comment; the v1
+ *  `allowKeychainRecovery` is forwarded to decryptEnvelopeV2 — see its doc comment; the v1
  *  legacy branch below gets the same recovery bypass but never self-heals (no envelope kLocal to rewrap). */
-function tryDecodeSaved(buf: Buffer, allowKeychainRecovery = false, filePath?: string): SavedDecode {
+function tryDecodeSaved(buf: Buffer, allowKeychainRecovery = false): SavedDecode {
   // v2 envelope: AES-256-GCM content key wrapped by safeStorage (+ optional org escrow).
   if (buf.length >= MARKER_LEN && buf.subarray(0, MARKER_LEN).equals(ENC_MARKER_V2)) {
     try {
-      return { ok: true, text: decryptEnvelopeV2(buf, allowKeychainRecovery, filePath) }
+      return { ok: true, text: decryptEnvelopeV2(buf, allowKeychainRecovery) }
     } catch (e) {
       // malformed, auth-tag failure, or foreign keychain — never throw out of a read path
       return { ok: false, reason: e instanceof Error ? e.message : String(e) }
@@ -435,7 +407,7 @@ export function decryptToTemp(path: string, bytes?: Buffer): string {
   // leaving the user with a dead "Open" click.
   let content: string
   try {
-    const decoded = tryDecodeSaved(bytes ?? readFileSync(path), true, path)
+    const decoded = tryDecodeSaved(bytes ?? readFileSync(path), true)
     content = decoded.ok ? decoded.text : UNDECRYPTABLE_MSG
   } catch {
     content = UNDECRYPTABLE_MSG
