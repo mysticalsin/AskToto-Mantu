@@ -110,6 +110,27 @@ describe('closure-rule-1', () => {
     expect(problemsFor((s) => { s.schema = 1 }).join('\n')).toMatch(/schema/)
     expect(evaluateClosure(null).problems).toEqual(['summary: expected a JSON object'])
   })
+
+  it('refuses a summary whose per-day stalls or reveal no-ops exceed the soak totals, instead of closing on it', () => {
+    const stalled = summary()
+    stalled.scope.days['2026-10-07'].stallsOver5s = 1
+    expect(evaluateClosure(stalled).verdict).toBeUndefined()
+    expect(evaluateClosure(stalled).problems.join('\n')).toMatch(/stallsOver5s per day sum to 1, more than scope\.soak\.stallsOver5s \(0\)/)
+
+    const noOp = summary()
+    noOp.scope.days['2026-10-14'].revealNoOps = 2
+    expect(evaluateClosure(noOp).verdict).toBeUndefined()
+    expect(evaluateClosure(noOp).problems.join('\n')).toMatch(/revealNoOps per day sum to 2, more than scope\.soak\.revealNoOps \(0\)/)
+
+    const malformed = summary()
+    malformed.scope.days['2026-10-05'].revealNoOps = -1
+    expect(evaluateClosure(malformed).problems.join('\n')).toMatch(/scope\.days\.2026-10-05\.revealNoOps/)
+
+    // Consistent per-day evidence of a violation still reopens.
+    const consistent = withSoak({ stallsOver5s: 1 })
+    consistent.scope.days['2026-10-07'].stallsOver5s = 1
+    expect(evaluateClosure(consistent)).toMatchObject({ problems: [], verdict: 'REOPEN', reopens: ['B1'] })
+  })
 })
 
 describe('closure directory and the M2-0199 validator', () => {

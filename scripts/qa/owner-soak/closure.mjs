@@ -96,6 +96,27 @@ export function verdictFor(counts, workingDayCount) {
 }
 
 /**
+ * The summary counts every in-scope stall over 5 s and reveal no-op in scope.soak, and in its day bucket
+ * only when the record carries a timestamp, so each soak total is at least the sum of its per-day counts.
+ * A summary that breaks this cannot be trusted to show zero violations.
+ */
+function dayTotalProblems(days, soak) {
+  const problems = []
+  for (const field of ['stallsOver5s', 'revealNoOps']) {
+    let sum = 0
+    for (const [key, day] of Object.entries(days)) {
+      const value = day?.[field] ?? 0
+      if (!isCount(value)) problems.push(`scope.days.${key}.${field}: must be a non-negative integer`)
+      else sum += value
+    }
+    if (isCount(soak?.[field]) && sum > soak[field]) {
+      problems.push(`scope.days: ${field} per day sum to ${sum}, more than scope.soak.${field} (${soak[field]})`)
+    }
+  }
+  return problems
+}
+
+/**
  * Applies closure-rule-1 to a parsed summary. `problems` lists why the summary is ineligible; when it is
  * empty the result carries the version, counts, working days and verdict.
  */
@@ -123,6 +144,7 @@ export function evaluateClosure(summary) {
     if (!isCount(value)) problems.push(`scope.soak: ${key} must be a non-negative integer`)
   }
   if (!isPlainObject(scope.days)) problems.push('scope.days: expected an object')
+  else problems.push(...dayTotalProblems(scope.days, soak))
   if (problems.length > 0) return { problems }
 
   const days = workingDays(scope.days)
