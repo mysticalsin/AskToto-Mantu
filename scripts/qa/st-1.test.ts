@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   PENDING_GLOBAL,
+  bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
+  cpuBusyPct,
   emptyRun,
   evaluateCriteria,
   historyEntry,
@@ -10,7 +12,8 @@ import {
   recordSample,
   releaseExpression,
   syntheticDatalessPlan,
-  withTimeout
+  withTimeout,
+  witnessSummary
 } from './lib/st-1-core.mjs'
 
 /** Runs an expression the way Runtime.evaluate does: in global scope. */
@@ -139,6 +142,81 @@ describe('recordSample', () => {
     expect(run.late).toEqual([])
     expect(run.errors).toEqual([{ step: 'sample', tMs: 5_000, message: 'Runtime.evaluate: Promise was collected' }])
   })
+
+  it('gives every timeline entry it files, late and hung ones included, the runner witness (M2-0515)', () => {
+    const witness = { loopMaxSinceLastMs: 310, writeMs: 4, cpuBusyPct: 97.5 }
+    const run = emptyRun()
+    recordSample(run, 1_000, { ok: true, value: { writeMs: 2, lookupMs: 1 }, elapsedMs: 40 }, { ...bounds, witness })
+    recordSample(run, 2_000, { ok: true, value: { writeMs: 900, lookupMs: 1 }, elapsedMs: 1_600 }, { ...bounds, witness })
+    recordSample(run, 3_000, { ok: false, timedOut: true, elapsedMs: 7_000 }, { ...bounds, witness })
+    expect(run.samples).toEqual([{ tMs: 1_000, writeMs: 2, lookupMs: 1, answeredMs: 40, witness }])
+    expect(run.late).toEqual([
+      { tMs: 2_000, writeMs: 900, lookupMs: 1, answeredMs: 1_600, witness },
+      { tMs: 3_000, hung: true, witness }
+    ])
+  })
+})
+
+describe('bootStagesFromAudit (M2-0515)', () => {
+  it('lifts every app.boot.stage record out of the audit trail in order, rounds ms and skips other events and torn lines', () => {
+    const text = [
+      JSON.stringify({ ts: '2026-09-29T10:00:00.000Z', seq: 1, event: 'app.started', bootId: 'b' }),
+      JSON.stringify({ ts: '2026-09-29T10:00:00.400Z', seq: 2, event: 'app.boot.stage', bootId: 'b', stage: 'createWindow.construct', ms: 170.26, transparent: true }),
+      JSON.stringify({ ts: '2026-09-29T10:00:00.520Z', seq: 3, event: 'app.boot.stage', bootId: 'b', stage: 'createWindow.firstShow', ms: 12 }),
+      // A foreign record that only mentions the event name, and a torn last line.
+      JSON.stringify({ ts: '2026-09-29T10:00:00.600Z', seq: 4, event: 'app.stall', phase: 'app.boot.stage' }),
+      JSON.stringify({ ts: '2026-09-29T10:00:01.000Z', seq: 5, event: 'app.boot.stage', bootId: 'b', stage: 'createTray.newTray', ms: 312 }),
+      '{"ts":"2026-09-29T10:00:01.100Z","event":"app.boot.stage","stage":"createTray.attach',
+      ''
+    ].join('\n')
+    expect(bootStagesFromAudit(text, Date.parse('2026-09-29T10:00:00.000Z'))).toEqual([
+      { stage: 'createWindow.construct', ms: 170.3, ts: '2026-09-29T10:00:00.400Z', transparent: true, sinceSpawnMs: 400 },
+      { stage: 'createWindow.firstShow', ms: 12, ts: '2026-09-29T10:00:00.520Z', sinceSpawnMs: 520 },
+      { stage: 'createTray.newTray', ms: 312, ts: '2026-09-29T10:00:01.000Z', sinceSpawnMs: 1_000 }
+    ])
+  })
+
+  it('leaves sinceSpawnMs out without a spawn time, and ms null when the record has none', () => {
+    const text = JSON.stringify({ ts: '2026-09-29T10:00:00.400Z', event: 'app.boot.stage', stage: 'createTray.loadIcon' })
+    expect(bootStagesFromAudit(text)).toEqual([{ stage: 'createTray.loadIcon', ms: null, ts: '2026-09-29T10:00:00.400Z' }])
+  })
+})
+
+describe('cpuBusyPct (M2-0515)', () => {
+  const core = (user: number, nice: number, sys: number, idle: number, irq: number) => ({ model: 'x', speed: 1, times: { user, nice, sys, idle, irq } })
+
+  it('is user + nice + sys + irq over all time since the previous snapshot, summed over every core', () => {
+    const previous = [core(100, 0, 50, 850, 0), core(200, 0, 0, 800, 0)]
+    // Core 1: +300 busy, +100 idle. Core 2: +10 user, +5 nice, +5 irq busy, +180 idle. 320 busy of 600.
+    const current = [core(300, 0, 150, 950, 0), core(210, 5, 0, 980, 5)]
+    expect(cpuBusyPct(previous, current)).toBe(53.3)
+  })
+
+  it('is null without a previous snapshot or elapsed time', () => {
+    const snapshot = [core(100, 0, 50, 850, 0)]
+    expect(cpuBusyPct(null, snapshot)).toBeNull()
+    expect(cpuBusyPct(snapshot, snapshot)).toBeNull()
+  })
+})
+
+describe('witnessSummary (M2-0515)', () => {
+  it("sums up the timeline's witnesses and the harness's own loop delay, skipping entries without a value", () => {
+    const timeline = [
+      { tMs: 1_000, witness: { loopMaxSinceLastMs: 20, writeMs: 3, cpuBusyPct: 40 } },
+      { tMs: 2_000, hung: true, witness: { loopMaxSinceLastMs: 300, writeMs: null, cpuBusyPct: 99.5 } },
+      { tMs: 3_000, witness: { loopMaxSinceLastMs: 15, writeMs: 180, cpuBusyPct: null } },
+      { tMs: 4_000 }
+    ]
+    expect(witnessSummary(timeline, { p99Ms: 21, maxMs: 300 })).toEqual({
+      loop: { p99Ms: 21, maxMs: 300 },
+      write: { maxMs: 180 },
+      cpuBusyMaxPct: 99.5
+    })
+  })
+
+  it('reports null for what nothing measured', () => {
+    expect(witnessSummary([], null)).toEqual({ loop: null, write: { maxMs: null }, cpuBusyMaxPct: null })
+  })
 })
 
 describe('historyEntry', () => {
@@ -223,6 +301,35 @@ describe('buildReport', () => {
       exactLaunchOffset: false
     })
     expect(report({ attribution: { mainLog: { error: 'no require' }, appEvidence: null } }).mainLog).toEqual({ error: 'no require' })
+  })
+
+  it('returns identical criteria and verdict with and without witness data, and carries bootStages and witness (M2-0515)', () => {
+    // A machine that stalled everywhere: the witness alone must never change the verdict either way.
+    const witness = { loopMaxSinceLastMs: 2_500, writeMs: 900, cpuBusyPct: 100 }
+    const verdicts: string[] = []
+    for (const { loop, late } of [
+      { loop: { p99Ms: 12, maxMs: 40 }, late: [] as { tMs: number; hung: boolean }[] },
+      { loop: { p99Ms: 12, maxMs: 460 }, late: [{ tMs: 3_000, hung: true }] }
+    ]) {
+      const plain = { ...emptyRun(), samples: [goodSample(1_000), goodSample(2_000)], loop }
+      const witnessed = {
+        ...plain,
+        samples: plain.samples.map((sample) => ({ ...sample, witness })),
+        late: late.map((entry) => ({ ...entry, witness })),
+        witnessLoop: { p99Ms: 30, maxMs: 2_500 }
+      }
+      const bootStages = { stages: [{ stage: 'createWindow.construct', ms: 1_663, ts: 't', sinceSpawnMs: 1_900 }] }
+      const without = report({ measured: { ...plain, late } })
+      const withWitness = report({ measured: witnessed, attribution: { mainLog: null, appEvidence: null, bootStages } })
+      expect(withWitness.criteria).toEqual(without.criteria)
+      expect(withWitness.verdict).toBe(without.verdict)
+      expect(withWitness.bootStages).toEqual(bootStages)
+      expect(withWitness.witness).toEqual({ loop: { p99Ms: 30, maxMs: 2_500 }, write: { maxMs: 900 }, cpuBusyMaxPct: 100 })
+      expect(withWitness.timeline.every((entry: { witness?: unknown }) => entry.witness === witness)).toBe(true)
+      expect(without.bootStages).toBeNull()
+      verdicts.push(withWitness.verdict)
+    }
+    expect(verdicts).toEqual(['PASS', 'FAIL'])
   })
 })
 

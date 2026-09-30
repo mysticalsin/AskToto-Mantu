@@ -27,6 +27,11 @@ on:
       - scripts/qa/st-1.mjs
       - scripts/qa/lib/st-1-core.mjs
       - scripts/qa/stat-flags-fixture.sh
+      # The boot path ST-1 measures (M2-0433), so every fix slice on it gets a QA self-test.
+      - src/main/boot-tray.ts
+      - src/main/boot-window-rendering.ts
+      - src/main/lifecycle/first-show.ts
+      - src/main/lifecycle/boot-work.ts
 
 permissions:
   contents: read
