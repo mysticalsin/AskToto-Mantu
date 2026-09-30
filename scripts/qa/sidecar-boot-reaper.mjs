@@ -5,7 +5,8 @@
  * same append-only identity contract as llama-server, hard-kills the app, relaunches, and requires the
  * old sidecar pid to disappear within 5 s of boot with a sidecar.reaped safe-ownership audit. A real
  * llama-server variant is also reported; missing model assets are BLOCKED_EXTERNAL evidence, not a red
- * smoke lane.
+ * smoke lane. The real llama-server launches set METIS_QA_HOST_FLOOR_OVERRIDE=1 (M2-0482) so a 7 GiB hosted runner
+ * is not refused by the bundled model's RAM floors; the report records that and the host memory figures.
  *
  * Usage:
  *   node scripts/qa/sidecar-boot-reaper.mjs <installed app> <report.json>
@@ -19,7 +20,7 @@ import { createHash } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { appendFileSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { freemem, tmpdir, totalmem } from 'node:os'
 import { basename, dirname, join, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
@@ -304,10 +305,51 @@ function processAlive(pid) {
   }
 }
 
-function launch(executable, profile, port) {
-  const env = { ...process.env, ASKTOTO_USERDATA: profile, METIS_DISABLE_APPLE_FM: '1' }
+// The real llama-server proof needs the sidecar to become a launchd orphan after SIGKILL of main. With supervision
+// on (the shipped default) the helper kills it within about 2 s, so that proof asks for supervision off, which
+// also emulates a legacy unsupervised orphan.
+const REAL_LLAMA_SUPERVISION = 'off'
+
+/**
+ * The app's launch env. Only the real llama-server proof asks for the QA RAM-floor override (M2-0482): a 7 GiB hosted
+ * runner otherwise sits under the bundled model's advertised-RAM floor. The app honours it only when packaged and on
+ * this isolated profile; any inherited value is dropped so the stand-in launch never carries it.
+ */
+export function launchEnv(baseEnv, profile, { hostFloorOverride = false, extraEnv = {} } = {}) {
+  const env = { ...baseEnv, ASKTOTO_USERDATA: profile, METIS_DISABLE_APPLE_FM: '1', ...extraEnv }
   for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
-  return spawn(executable, [`--remote-debugging-port=${port}`], { env, stdio: 'ignore' })
+  delete env.METIS_QA_HOST_FLOOR_OVERRIDE
+  if (hostFloorOverride) env.METIS_QA_HOST_FLOOR_OVERRIDE = '1'
+  return env
+}
+
+function launch(executable, profile, port, options) {
+  return spawn(executable, [`--remote-debugging-port=${port}`], { env: launchEnv(process.env, profile, options), stdio: 'ignore' })
+}
+
+/** Host memory as the runner reports it: hw.memsize (macOS), os.totalmem and os.freemem, in bytes. */
+function hostMemoryFacts() {
+  let hwMemsizeBytes = null
+  if (process.platform === 'darwin') {
+    try {
+      const value = Number(execFileSync('/usr/sbin/sysctl', ['-n', 'hw.memsize'], { encoding: 'utf8' }).trim())
+      hwMemsizeBytes = Number.isSafeInteger(value) ? value : null
+    } catch {
+      /* unreadable: reported as null */
+    }
+  }
+  return { hwMemsizeBytes, totalmemBytes: totalmem(), freememBytes: freemem() }
+}
+
+/** The app's content-free local.host-floor-override records: floor and host figures only, never other fields. */
+export function hostFloorOverrides(records) {
+  return records
+    .filter((record) => record.event === 'local.host-floor-override')
+    .map(({ floor, hostTotalBytes, hostAvailableBytes }) => ({
+      floor: floor === 'prewarm-available-ram' || floor === 'advertised-ram' ? floor : 'unknown',
+      hostTotalBytes: Number.isFinite(hostTotalBytes) ? hostTotalBytes : null,
+      hostAvailableBytes: Number.isFinite(hostAvailableBytes) ? hostAvailableBytes : null
+    }))
 }
 
 function seedLocalLlmSettings(profile) {
@@ -421,12 +463,16 @@ function initialObservation(kind) {
     events: {},
     reapedReason: null,
     processes: { beforeKill: null, afterReaper: null },
-    unblock: null
+    unblock: null,
+    hostFloorOverride: false,
+    hostMemory: null,
+    hostFloorOverrides: []
   }
 }
 
 function initialRealLlamaObservation() {
   const observation = initialObservation('real-llama-server')
+  observation.supervision = REAL_LLAMA_SUPERVISION
   observation.timingsMs.llamaStarted = null
   observation.pids.orphan = null
   return observation
@@ -437,6 +483,7 @@ export function summarizeProof(report) {
     schema: 1,
     ticket: 'M2-0233',
     kind: report.kind,
+    ...(report.supervision ? { supervision: report.supervision } : {}),
     result: report.result,
     failures: report.failures,
     unblock: report.unblock,
@@ -444,7 +491,12 @@ export function summarizeProof(report) {
     pids: report.pids,
     reapedReason: report.reapedReason,
     events: report.events,
-    processes: report.processes
+    processes: report.processes,
+    // M2-0482: whether this launch asked for the QA RAM-floor override, the runner's memory, and the floors the
+    // app reports it lifted.
+    hostFloorOverride: report.hostFloorOverride === true,
+    hostMemory: report.hostMemory ?? null,
+    hostFloorOverrides: report.hostFloorOverrides ?? []
   }
 }
 
@@ -552,7 +604,8 @@ async function runRealLlamaProof({ installRoot, executable }) {
         ...initialRealLlamaObservation(),
         result: 'BLOCKED_EXTERNAL',
         failures: ['real llama-server proof runs on macOS packaged smoke only'],
-        unblock: REAL_LLAMA_UNBLOCK
+        unblock: REAL_LLAMA_UNBLOCK,
+        hostMemory: hostMemoryFacts()
       })
     }
   }
@@ -562,6 +615,10 @@ async function runRealLlamaProof({ installRoot, executable }) {
   let first = null
   let second = null
   const observation = initialRealLlamaObservation()
+  // M2-0482: both launches of this proof ask for the QA RAM-floor override; the report records it and the host.
+  const launchOptions = { hostFloorOverride: true, extraEnv: { METIS_SUPERVISION: REAL_LLAMA_SUPERVISION } }
+  observation.hostFloorOverride = true
+  observation.hostMemory = hostMemoryFacts()
 
   try {
     const busy = ownedProcesses(listProcesses(process.platform), { mainPid: null, installRoot, platform: process.platform })
@@ -569,7 +626,7 @@ async function runRealLlamaProof({ installRoot, executable }) {
 
     const firstPort = await freeLoopbackPort()
     const firstStartedAt = Date.now()
-    first = launch(executable, profile, firstPort)
+    first = launch(executable, profile, firstPort, launchOptions)
     observation.pids.firstMain = first.pid ?? null
     if (!first.pid) throw new Failure('first main pid was unavailable')
     if (!(await waitForRendererReady(profile))) throw new Failure('first launch did not reach renderer ready')
@@ -594,7 +651,7 @@ async function runRealLlamaProof({ installRoot, executable }) {
     if (!orphaned) throw new Failure('llama-server did not become a launchd orphan after SIGKILL')
 
     const secondPort = await freeLoopbackPort()
-    second = launch(executable, profile, secondPort)
+    second = launch(executable, profile, secondPort, launchOptions)
     observation.pids.secondMain = second.pid ?? null
     if (!second.pid) throw new Failure('second main pid was unavailable')
 
@@ -635,6 +692,7 @@ async function runRealLlamaProof({ installRoot, executable }) {
     cleanOwned(second, installRoot)
     await waitFor(() => !first?.pid || !processAlive(first.pid), 5_000, POLL_MS)
     await waitFor(() => !second?.pid || !processAlive(second.pid), 5_000, POLL_MS)
+    observation.hostFloorOverrides = hostFloorOverrides(readAudit(profile))
     rmSync(profile, { recursive: true, force: true })
   }
   return summarizeProof(observation)

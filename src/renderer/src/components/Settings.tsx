@@ -65,7 +65,7 @@ import {
 } from 'lucide-react'
 import { timeSavedFromTotals } from '@shared/time-saved'
 import { TimeSavedView } from './TimeSavedView'
-import { autoHideOverlayForLayout } from '@shared/overlay-chrome'
+import { autoHideOverlayForLayout, overlayLayoutCopy } from '@shared/overlay-chrome'
 import { overlayShowsBarRestPicker } from '@shared/overlay-orb'
 import type { OverlayPlacement } from '@shared/overlay-placement'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
@@ -5264,6 +5264,7 @@ export function Settings({
                     <OverlayChromePicker
                       value={settings.overlayLayout}
                       placement={settings.overlayPlacement}
+                      copy={overlayLayoutCopy(settings.overlayPlacement)}
                       locked={settings.managedKeys.includes('overlayLayout')}
                       onChange={(id) =>
                         patch({
