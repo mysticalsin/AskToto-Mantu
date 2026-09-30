@@ -1,4 +1,4 @@
-import type { Rect } from './geometry'
+import { clampHeight, type Rect } from './geometry'
 
 /** The native calls the overlay surface makes; an Electron BrowserWindow satisfies it. */
 export interface OverlaySurfaceWindow {
@@ -62,6 +62,15 @@ export function revealOverlaySurface(w: OverlaySurfaceWindow, next: Rect, applyC
     /* headless */
   }
   applyChrome()
+}
+
+/** The Settings surface: the settingsOpenRect `open` at its content height (normalised by the caller with
+ *  settingsContentHeight; the open rect's 800 px by default), capped to the work area like every overlay
+ *  height. Opening Settings and every later content resize use it, so the two agree: on a display shorter
+ *  than 800 px (a 1024×768 Windows screen) Settings opened at 800 and the renderer's first resize then cut it
+ *  to the work-area height at opacity 1. */
+export function fitSettingsSurface(open: Rect, workAreaHeight: number, minHeight: number, contentHeight = open.height): Rect {
+  return { ...open, height: clampHeight(contentHeight, workAreaHeight, minHeight) }
 }
 
 /** Settings resizes before its opaque chrome: applied first, the Settings background painted the old bar or

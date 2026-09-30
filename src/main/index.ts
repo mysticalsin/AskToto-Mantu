@@ -223,7 +223,13 @@ import {
   topClamp
 } from './island/geometry'
 import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
-import { applyRestChrome, openOverlaySettingsSurface, revealOverlaySurface, skipUnchangedChrome } from './island/overlay-surface'
+import {
+  applyRestChrome,
+  fitSettingsSurface,
+  openOverlaySettingsSurface,
+  revealOverlaySurface,
+  skipUnchangedChrome
+} from './island/overlay-surface'
 import { createOverlayRevealLog, type OverlayTransitionCause } from './island/overlay-reveal-log'
 import {
   OVERLAY_REST_BACKGROUND,
@@ -3025,12 +3031,12 @@ function resizeTo(height: number): void {
   // 880×1017 gray Settings sheet under the Ask bar.
   if (settingsSurfaceOpen && !isMinimized) {
     const display = screen.getDisplayMatching(win.getBounds())
-    const metrics = getDisplayMetrics(display)
-    const rect = settingsOpenRect(metrics, ISLAND_TOP_MARGIN)
-    const h = clampHeight(settingsContentHeight(height), display.workArea.height)
+    const open = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+    const rect = fitSettingsSurface(open, display.workArea.height, BAR_MIN_HEIGHT, settingsContentHeight(height))
     currentWidth = SETTINGS_WINDOW_MIN.width
-    if (win.getBounds().width === rect.width && win.getBounds().height === h && win.getBounds().y === rect.y) return
-    win.setBounds({ x: rect.x, y: rect.y, width: rect.width, height: h }, false)
+    const b = win.getBounds()
+    if (b.width === rect.width && b.height === rect.height && b.y === rect.y) return
+    win.setBounds(rect, false)
     return
   }
   const display = screen.getDisplayMatching(win.getBounds())
@@ -3596,7 +3602,7 @@ function applySettingsSurface(): void {
     /* headless */
   }
   const display = screen.getDisplayMatching(win.getBounds())
-  const rect = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  const rect = fitSettingsSurface(settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN), display.workArea.height, BAR_MIN_HEIGHT)
   openOverlaySettingsSurface(win, rect, applyOverlaySurfaceChrome)
   applyHideClickThrough()
 }

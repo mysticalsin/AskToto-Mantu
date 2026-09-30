@@ -1908,7 +1908,8 @@ export async function runOverlayStabilityRows({ page, main, openSettings, rows, 
     await sections.waitFor({ state: 'hidden', timeout: 10_000 })
     await wait(1_000)
     const after = await main(MAIN_OV_BACKGROUND)
-    const surface = overlaySurfaceChanges(await main(mainOvRecording(false)))
+    const events = await main(mainOvRecording(false))
+    const surface = overlaySurfaceChanges(events)
     return {
       pass:
         OV_TRANSPARENT_READBACK.has(before?.readback) &&
@@ -1917,7 +1918,15 @@ export async function runOverlayStabilityRows({ page, main, openSettings, rows, 
         surface.slabBeforeResize === 0 &&
         surface.opacityBeforeTarget === 0,
       // While Settings is open its own dark glass is the product's design (settings-bounds.ts); it is evidence here.
-      evidence: { afterOnboarding: before, settingsOpen: open, afterSettingsClose: after, slabBeforeResize: surface.slabBeforeResize, opacityBeforeTarget: surface.opacityBeforeTarget }
+      evidence: {
+        afterOnboarding: before,
+        settingsOpen: open,
+        afterSettingsClose: after,
+        slabBeforeResize: surface.slabBeforeResize,
+        opacityBeforeTarget: surface.opacityBeforeTarget,
+        // The recorded native calls (geometry and chrome only), so a failing count names its call and turn.
+        calls: events.slice(0, 60).map((e) => ({ turn: e.turn, call: e.call, arg: e.arg, bounds: e.after.bounds, opacity: e.after.opacity }))
+      }
     }
   })
 

@@ -2,12 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { hideParkWindowOpacity, rightEdgeSidecarBounds, settingsOpenRect, type DisplayMetrics, type Rect } from './geometry'
 import {
   applyRestChrome,
+  fitSettingsSurface,
   openOverlaySettingsSurface,
   revealOverlaySurface,
   skipUnchangedChrome,
   type OverlaySurfaceWindow
 } from './overlay-surface'
-import { OVERLAY_REST_BACKGROUND, SETTINGS_SURFACE_BACKGROUND } from '@shared/settings-bounds'
+import {
+  OVERLAY_REST_BACKGROUND,
+  SETTINGS_SURFACE_BACKGROUND,
+  SETTINGS_WINDOW_MIN,
+  settingsContentHeight
+} from '@shared/settings-bounds'
 
 /**
  * M2-0431 — no hard cuts on reveal, park or Settings. A mock window records every native call in order: a
@@ -189,5 +195,52 @@ describe('M2-0431 leaving Settings for the Hide park is never shown at the Setti
     const { w, calls } = mockWindow({ bounds: REVEALED_BAR, opacity: 1, background: SETTINGS_SURFACE_BACKGROUND })
     applyRestChrome(skipUnchangedChrome(w), OVERLAY_REST_BACKGROUND, hideParkWindowOpacity('hide', false))
     expect(calls).toEqual([`setBackgroundColor:${OVERLAY_REST_BACKGROUND}`])
+  })
+})
+
+describe('M2-0431 Settings opens at the height its content resize keeps (no size cut at opacity 1)', () => {
+  // Packaged OV-BG (Windows, 1024×768 runner): Settings opened at 880×800 on a 720 px work area, then the
+  // renderer's first content resize hugged it to the work-area cap while it was already at opacity 1.
+  const WINDOWS_RUNNER: DisplayMetrics = {
+    bounds: { x: 0, y: 0, width: 1024, height: 768 },
+    workArea: { x: 0, y: 0, width: 1024, height: 720 },
+    hasNotch: false,
+    notchWidth: 0,
+    menuBarHeight: 0,
+    source: 'heuristic'
+  }
+  const BAR_MIN_HEIGHT = 44 // main's resize floor
+
+  /** Tray Settings, then the renderer's windowMode('settings') and its content resize, as main runs them. */
+  function openAndHug(display: DisplayMetrics, reportedHeight: number): { resizedAtOpacity1: Rect[]; state: MockState } {
+    const open = settingsOpenRect(display, 8)
+    const wa = display.workArea.height
+    const { w, state } = mockWindow()
+    const resizedAtOpacity1: Rect[] = []
+    const setBounds = w.setBounds
+    w.setBounds = (next, animate) => {
+      const changed = next.width !== state.bounds.width || next.height !== state.bounds.height
+      if (changed && state.opacity === 1) resizedAtOpacity1.push({ ...next })
+      setBounds(next, animate)
+    }
+    openOverlaySettingsSurface(w, fitSettingsSurface(open, wa, BAR_MIN_HEIGHT), chromeFor(w, SETTINGS)) // applySettingsSurface
+    openOverlaySettingsSurface(w, fitSettingsSurface(open, wa, BAR_MIN_HEIGHT), chromeFor(w, SETTINGS)) // windowMode('settings')
+    const hug = fitSettingsSurface(open, wa, BAR_MIN_HEIGHT, settingsContentHeight(reportedHeight)) // resizeTo
+    if (hug.height !== state.bounds.height) w.setBounds(hug, false)
+    return { resizedAtOpacity1, state }
+  }
+
+  it('a display shorter than 800 px opens Settings at the work-area cap and never resizes it while shown', () => {
+    const { resizedAtOpacity1, state } = openAndHug(WINDOWS_RUNNER, 325)
+    expect(resizedAtOpacity1).toEqual([])
+    expect(state.bounds.height).toBeLessThan(SETTINGS_WINDOW_MIN.height)
+    expect(state.bounds.y + state.bounds.height).toBeLessThanOrEqual(WINDOWS_RUNNER.workArea.y + WINDOWS_RUNNER.workArea.height)
+    expect(state.opacity).toBe(1)
+  })
+
+  it('a tall display keeps the 880×800 Settings open rect', () => {
+    const { resizedAtOpacity1, state } = openAndHug(DISPLAY, 325)
+    expect(resizedAtOpacity1).toEqual([])
+    expect(state.bounds).toEqual(settingsOpenRect(DISPLAY, 8))
   })
 })
