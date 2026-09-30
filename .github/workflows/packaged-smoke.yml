@@ -22,6 +22,14 @@ on:
     tags-ignore:
       - '**'
   workflow_dispatch:
+    inputs:
+      hk_m_cycles:
+        description: 'HK-M cycles: 1 is the per-PR smoke, 20 rehearses the candidate proof (fails unless every row passes)'
+        type: choice
+        options:
+          - '1'
+          - '20'
+        default: '1'
 
 permissions:
   contents: read
@@ -38,7 +46,8 @@ jobs:
   mac:
     name: Packaged smoke (macOS)
     runs-on: macos-latest
-    timeout-minutes: 120
+    # Only the 20-cycle rehearsal (140 min HK-M step) needs more than the default 120 min.
+    timeout-minutes: ${{ inputs.hk_m_cycles == '20' && 180 || 120 }}
     if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/')
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -109,15 +118,110 @@ jobs:
       - name: Prove HK-M supervised sidecar cleanup after SIGKILL
         id: hk-m
         continue-on-error: true
-        timeout-minutes: 25
+        timeout-minutes: ${{ inputs.hk_m_cycles == '20' && 140 || 25 }}
         # One SIGKILL per scenario under a 20 min wall-clock budget: hk-m.mjs prints a line per row and writes
-        # its report (unreached rows NOT_RUN) even when cut off. The 20-cycle proof runs on the candidate in
-        # hk-m-candidate.yml.
-        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles 1 --budget-ms 1200000
+        # its report (unreached rows NOT_RUN) even when cut off. The 20-cycle proof on the candidate runs in
+        # hk-m-candidate.yml; a manual dispatch with hk_m_cycles=20 rehearses it on this run's own build with
+        # the same 8100000 ms budget, below the 140 min step timeout so the report is still written.
+        env:
+          HK_M_CYCLES: ${{ inputs.hk_m_cycles == '20' && '20' || '1' }}
+          HK_M_BUDGET_MS: ${{ inputs.hk_m_cycles == '20' && '8100000' || '1200000' }}
+        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles "$HK_M_CYCLES" --budget-ms "$HK_M_BUDGET_MS"
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         timeout-minutes: 10
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/packaged-smoke.json
+      # Report-only probe (M2-0472): does the one-click Repair command, /usr/bin/tccutil reset ScreenCapture
+      # <own bundle id>, succeed as the runner user without sudo? Row A measures the installed app as it is;
+      # row B (workflow_dispatch only) seeds a ScreenCapture row into this throwaway runner's system TCC
+      # database with sudo first. The seed is test setup only: sudo never touches the tccutil call, and no
+      # other service or bundle id is ever reset. The step cannot fail the job; the report is content-free.
+      - name: Probe tccutil reset ScreenCapture without sudo (report only)
+        id: tccutil-probe
+        if: ${{ always() && !cancelled() && steps.smoke.outcome != 'skipped' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set +eo pipefail
+          rows="$RUNNER_TEMP/tccutil-rows.ndjson"
+          : > "$rows"
+          tcc_db="/Library/Application Support/com.apple.TCC/TCC.db"
+          uid=$(id -u)
+          bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$RUNNER_TEMP/smoke/Metis.app/Contents/Info.plist" 2>/dev/null)
+
+          emit() {
+            ROW="$1" STATUS="$2" BEFORE="$3" AFTER="$4" CODE="$5" CLASS="$6" ERR="$7" REASON="$8" node -e '
+              const e = process.env
+              console.log(JSON.stringify({
+                row: e.ROW,
+                status: e.STATUS,
+                entry_before: e.BEFORE || null,
+                entry_after: e.AFTER || null,
+                exit_code: e.CODE === "" ? null : Number(e.CODE),
+                stderr_class: e.CLASS || null,
+                stderr: e.ERR,
+                reason: e.REASON || null
+              }))' >> "$rows"
+          }
+
+          # true, false or unknown; an unreadable database is unknown, never false.
+          tcc_has() {
+            n=$($1 sqlite3 -readonly "$tcc_db" "SELECT count(*) FROM access WHERE service='kTCCServiceScreenCapture' AND client='$bundle';" 2>/dev/null)
+            case "$n" in 0) echo false ;; [1-9]*) echo true ;; *) echo unknown ;; esac
+          }
+
+          reset_once() {
+            err=$(/usr/bin/tccutil reset ScreenCapture "$bundle" 2>&1 >/dev/null)
+            code=$?
+            if [ "$code" -eq 0 ]; then class=success
+            elif printf '%s' "$err" | grep -q 'No such bundle'; then class=no-such-bundle
+            elif printf '%s' "$err" | grep -q 'Failed to reset'; then class=failed
+            else class=other; fi
+            err=$(printf '%s' "$err" | sed -e "s|$bundle|<bundle>|g" -e 's|/[^ ]*|<path>|g' | tr '\n' ' ' | cut -c1-200)
+          }
+
+          sip_status=$(csrutil status 2>/dev/null)
+          case "$sip_status" in *enabled*) sip=enabled ;; *disabled*) sip=disabled ;; *) sip=unknown ;; esac
+
+          if ! printf '%s' "$bundle" | grep -Eq '^[A-Za-z0-9.-]+$'; then
+            emit A BLOCKED_EXTERNAL '' '' '' '' '' 'bundle id unreadable from the installed Info.plist'
+          elif [ "$uid" -eq 0 ]; then
+            emit A BLOCKED_EXTERNAL '' '' '' '' '' 'runner user is root, so a non-sudo reset cannot be measured'
+          else
+            before=$(tcc_has)
+            reset_once
+            emit A MEASURED "$before" "$(tcc_has)" "$code" "$class" "$err" ''
+
+            if [ "$EVENT_NAME" != "workflow_dispatch" ]; then
+              emit B NOT_RUN '' '' '' '' '' 'seeded row runs on workflow_dispatch only'
+            else
+              sudo sqlite3 "$tcc_db" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version) VALUES ('kTCCServiceScreenCapture','$bundle',0,2,4,1);" 2>/dev/null
+              if [ "$(tcc_has sudo)" != "true" ]; then
+                emit B BLOCKED_EXTERNAL '' '' '' '' '' "system TCC database not writable (csrutil: $sip)"
+              else
+                reset_once
+                emit B MEASURED true "$(tcc_has sudo)" "$code" "$class" "$err" ''
+                sudo sqlite3 "$tcc_db" "DELETE FROM access WHERE service='kTCCServiceScreenCapture' AND client='$bundle';" 2>/dev/null
+              fi
+            fi
+          fi
+
+          MACOS=$(sw_vers -productVersion) SIP="$sip" UID_IS_ROOT=$([ "$uid" -eq 0 ] && echo true || echo false) ROWS_FILE="$rows" node -e '
+            const fs = require("fs")
+            const e = process.env
+            const rows = fs.readFileSync(e.ROWS_FILE, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))
+            fs.writeFileSync("smoke-report/tccutil-probe.json", JSON.stringify({
+              schema: "metis.tccutil-probe.v1",
+              macos: e.MACOS,
+              sip: e.SIP,
+              uid_is_root: e.UID_IS_ROOT === "true",
+              rows
+            }, null, 2) + "\n")
+            console.log(rows.map((r) => `${r.row}=${r.status} before=${r.entry_before} after=${r.entry_after} exit=${r.exit_code} class=${r.stderr_class}`).join("; "))' > "$RUNNER_TEMP/tccutil-summary.txt"
+          echo "::notice title=tccutil probe::$(cat "$RUNNER_TEMP/tccutil-summary.txt")"
+          exit 0
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.supervise-helper.outcome != 'skipped' || steps.hk-m.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
         with:
@@ -140,6 +244,20 @@ jobs:
             exit 1
           fi
           echo "::warning title=HK-M blocked::HK-M result=$result — not a live pass of every row; see smoke-report/hk-m.json for the exact unblock steps."
+      # A rehearsal must be 100/100: fails on result=fail, result=blocked and any NOT_RUN row, and the job
+      # summary names the cycle count. (bash runs with pipefail, so a failing node fails the step.)
+      - name: Fail the HK-M rehearsal unless every row passed
+        if: always() && inputs.hk_m_cycles == '20'
+        run: |
+          echo "### HK-M rehearsal: 20 cycles" >> "$GITHUB_STEP_SUMMARY"
+          node -e "
+            const r = JSON.parse(require('fs').readFileSync('smoke-report/hk-m.json', 'utf8'))
+            const rows = r.rows || []
+            const passed = rows.filter((row) => row.status === 'PASS').length
+            const notRun = rows.filter((row) => row.status === 'NOT_RUN').length
+            console.log('result=' + r.result + ', ' + passed + '/' + rows.length + ' rows PASS, ' + notRun + ' NOT_RUN')
+            process.exit(r.result === 'pass' && notRun === 0 ? 0 : 1)
+          " | tee -a "$GITHUB_STEP_SUMMARY"
 
   windows:
     name: Packaged smoke (Windows)

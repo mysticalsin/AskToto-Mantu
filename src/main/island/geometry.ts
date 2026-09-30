@@ -309,9 +309,51 @@ export function normalizeRightEdgeY(
   return clampNormalized((y - range.min) / (range.max - range.min))
 }
 
-/** Compact side-edge target for Hide/Island that reuses the cursor-watch dwell/leave state machine. */
+/** Width (px) of the right-edge reveal band: the pointer pushed against the edge always lands inside it. */
+export const RIGHT_EDGE_REVEAL_BAND_PX = 4
+
+/**
+ * Right-edge reveal band for Hide/Island: flush with the right edge the pointer stops at (the display
+ * edge, or the work-area edge when the Dock or taskbar sits on the right) and exactly as tall as the
+ * drawer it opens. Never the inset tab square: that sat 12 px inside the work area within the drawer's
+ * own footprint, so pushing the pointer to the edge missed it while a pause over empty desktop opened it.
+ * It is also the parked Hide window, which is invisible and click-through.
+ */
 export function rightEdgeHoverRestRect(normalizedY: number | undefined, m: DisplayMetrics): Rect {
-  return rightEdgeSidecarBounds(m, { open: false, normalizedY })
+  const drawer = rightEdgeSidecarBounds(m, { open: true, normalizedY })
+  const edge = m.workArea.x + m.workArea.width
+  return { x: edge - RIGHT_EDGE_REVEAL_BAND_PX, y: drawer.y, width: RIGHT_EDGE_REVEAL_BAND_PX, height: drawer.height }
+}
+
+/**
+ * Position for a right-edge park the OS widened past `requested` (Windows enforces a minimum width on
+ * frameless windows, so the 4 px Hide band reads back 32 px wide): the right edge stays where requested,
+ * so the parked window never crosses the work-area edge. The window is invisible and click-through, and
+ * the cursor watch uses the computed band, so the extra width is harmless.
+ */
+export function rightAnchoredParkPosition(requested: Rect, actualWidth: number): { x: number; y: number } {
+  if (actualWidth <= requested.width) return { x: requested.x, y: requested.y }
+  return { x: requested.x + requested.width - actualWidth, y: requested.y }
+}
+
+/**
+ * Hide parks invisibly at the right edge only where the pointer can stop there. When another display
+ * continues past this display's right edge beside the drawer, a pushed pointer crosses into it instead,
+ * so Hide parks as the visible Island rail on that display. Every other layout is unchanged.
+ */
+export function rightEdgeParkLayout(
+  layout: OverlayLayout,
+  m: DisplayMetrics,
+  otherDisplays: readonly Rect[],
+  normalizedY?: number
+): OverlayLayout {
+  if (layout !== 'hide') return layout
+  const band = rightEdgeHoverRestRect(normalizedY, m)
+  const edge = m.bounds.x + m.bounds.width
+  const continues = otherDisplays.some(
+    (other) => other.x === edge && Math.min(band.y + band.height, other.y + other.height) > Math.max(band.y, other.y)
+  )
+  return continues ? 'island' : layout
 }
 
 /** One placement-aware bounds resolver. Top-center remains on its established path. */
@@ -599,6 +641,8 @@ export function parkAfterExclusiveOnboarding(
   if (effectivePlacement === 'top-center' && layout === 'hide') return hideParkRect(m)
   const size = overlayRestSize(layout, m)
   if (effectivePlacement === 'right-edge') {
+    // Hide parks as the invisible reveal band; Island keeps its visible tab rail.
+    if (layout === 'hide') return rightEdgeHoverRestRect(normalizedY, m)
     return rightEdgeSidecarBounds(m, { open: false, normalizedY })
   }
   if (layout === 'island') {
