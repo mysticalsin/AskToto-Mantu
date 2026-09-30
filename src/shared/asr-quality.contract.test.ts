@@ -51,7 +51,7 @@ describe('ASR quality ship — stored preference and truthful runtime reporting'
 describe('ASR quality ship — languages, switch, echo, meaning', () => {
   it('detects 60+ spoken languages from one shared list', () => {
     expect(LANGUAGE_NAMES.length).toBeGreaterThanOrEqual(60)
-    expect(read('src/renderer/src/components/Settings.tsx')).toMatch(
+    expect(read('src/renderer/src/features/settings/AudioTab.tsx')).toMatch(
       /import \{ LANGUAGE_OPTIONS \} from '@shared\/lang-id'/
     )
     expect(read('src/main/apple-speech.ts')).toMatch(/import \{ APPLE_LOCALES \} from '@shared\/lang-id'/)
