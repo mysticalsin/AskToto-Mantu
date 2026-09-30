@@ -5,9 +5,14 @@ name: HK-M candidate
 # 20/20 evidence that decides whether supervision ships default-on. Dispatch it on the release candidate:
 # gh workflow run hk-m-candidate.yml -f candidate_run=<qa-candidate run id> -f dmg_sha256=<sha256>
 # It never signs, publishes, or pushes a tag.
-run-name: HK-M candidate ${{ inputs.candidate_run }}
+# The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
+# run it creates skips every job, uses no runner minutes and reaches no secret.
+run-name: ${{ github.event_name == 'pull_request' && 'HK-M candidate (registration)' || format('HK-M candidate {0}', inputs.candidate_run) }}
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/hk-m-candidate.yml
   workflow_dispatch:
     inputs:
       candidate_run:
@@ -30,6 +35,7 @@ defaults:
 jobs:
   hk-m:
     name: HK-M 20 cycles (macOS)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 150
     steps:
