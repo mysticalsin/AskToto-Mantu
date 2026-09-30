@@ -51,13 +51,13 @@ export function theilSenSlope(points) {
   return median(slopes) ?? 0
 }
 
-/** PASS only when every validity clause and every required check family was evaluated and passed. */
+/** PASS only when at least one check ran and every validity clause and every required check family was evaluated and passed. */
 export function decideOutcome({ validity, checks, required }) {
   if (validity.some((clause) => clause.id === 'V-MAIN' && clause.pass === false)) return 'FAIL'
   if (validity.length === 0 || validity.some((clause) => clause.pass !== true)) return 'INCOMPLETE'
   if (checks.some((check) => check.pass === false)) return 'FAIL'
   const families = new Set(checks.map((check) => check.id))
-  if (checks.some((check) => check.pass !== true) || required.some((id) => !families.has(id))) return 'INCOMPLETE'
+  if (checks.length === 0 || checks.some((check) => check.pass !== true) || required.some((id) => !families.has(id))) return 'INCOMPLETE'
   return 'PASS'
 }
 
