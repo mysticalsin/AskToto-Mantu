@@ -4758,20 +4758,20 @@ function createTray(): void {
   // menu-bar item and orphans the first Tray. A build still in flight counts as created (startTrayBuild ignores it).
   if (tray && !tray.isDestroyed()) return
   const iconPaths = trayIconPaths(app.isPackaged ? process.resourcesPath : join(__dirname, '../../build'))
-  startTrayBuild(() => buildTrayInStages<Electron.NativeImage>({
+  startTrayBuild(() => buildTrayInStages<Electron.NativeImage, Menu>({
     loadIcon: (time) => loadPresizedTrayIcon(nativeImage, iconPaths, process.platform, time),
-    create(img) {
+    create: (img) => { tray = new Tray(img) },
+    decorate(img) {
+      if (!tray) return
       const emptyIcon = img.isEmpty()
-      tray = new Tray(emptyIcon ? nativeImage.createEmpty() : img)
-      // FITO-185-F: always give AXExtrasMenuBar a title on darwin (empty-icon fallback used to be the
-      // only path; hardprove saw kAXErrorCannotComplete with a title-less LSUIElement status item).
+      // FITO-185-F: darwin always gets a title (a title-less LSUIElement item gave kAXErrorCannotComplete).
       if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
       tray.setToolTip('Métis')
       // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
       tray.on('click', () => sendHotkey('settings'))
       auditLog('tray.created', { emptyIcon })
     },
-    attachMenu: () => tray?.setContextMenu(buildTrayMenu()),
+    buildMenu: buildTrayMenu, attachMenu: (menu) => tray?.setContextMenu(menu),
     time: (label, fn) => timeBootStage(observability, label, fn),
     fail: (e) => auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
   }))
