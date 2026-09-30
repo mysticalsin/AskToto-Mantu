@@ -105,6 +105,10 @@ describe('Windows QA workflow', () => {
     expect(capabilities).toContain('CTRL+ALT+F24')
   })
 
+  it('declares the SendInput INPUT struct at its 40-byte x64 size', () => {
+    expect(capabilities).toMatch(/LayoutKind\.Explicit, Size = 40\)\] public struct INPUT/)
+  })
+
   it('uploads capabilities.txt, SHA256SUMS.txt and dxdiag.txt as windows-qa-capabilities', () => {
     expect(capabilities).toContain("'capabilities.txt'")
     expect(capabilities).toContain("'SHA256SUMS.txt'")
