@@ -3,7 +3,9 @@ import { parseVmStatAvailableBytes } from '../../src/main/llm/available-memory'
 import {
   advertisedRamFloorRefuses,
   availableBytesFromVmStat,
+  createProfilePlan,
   exitCodeForReportResult,
+  finalSigtermVerdict,
   keepWaitingForScenario,
   launchEnv,
   PREWARM_MIN_FREE_RAM_GB,
@@ -13,9 +15,11 @@ import {
   runMemorySummary,
   runtimeRoleVerdict,
   scenarioEvidence,
+  sharedProfileRelaunchVerdict,
   scenarioStillStarting,
   setupFailure,
   supervisedColdStartVerdict,
+  unreapedDeadRegistryCount,
   UNRELATED_FIXTURE_LIFETIME_MS
 } from './hk-m.mjs'
 
@@ -42,6 +46,47 @@ describe('HK-M temp directory cleanup', () => {
   it('still reports a real survivor as a failure', () => {
     const rows = [{ scenario: 'idle', cycle: 1, status: 'FAIL', failure: 'owned_processes_survived' }]
     expect(reportResultForRows(rows)).toBe('fail')
+  })
+})
+
+describe('HK-M profile modes', () => {
+  it('keeps fresh mode on a per-row profile marked for immediate cleanup', () => {
+    const removed: string[] = []
+    let next = 0
+    const plan = createProfilePlan({
+      profileMode: 'fresh',
+      makeProfile: () => `/tmp/profile-${++next}`,
+      remove: (dir: string) => {
+        removed.push(dir)
+        return true
+      }
+    })
+
+    const first = plan.profileForRow()
+    expect(first).toEqual({ profile: '/tmp/profile-1', removeAfterRow: true })
+    expect(plan.profileForRow()).toEqual({ profile: '/tmp/profile-2', removeAfterRow: true })
+    expect(plan.cleanup()).toBe(false)
+    expect(removed).toEqual([])
+  })
+
+  it('reuses one shared profile across rows and removes it only at the end', () => {
+    const removed: string[] = []
+    let next = 0
+    const plan = createProfilePlan({
+      profileMode: 'shared',
+      makeProfile: () => `/tmp/shared-${++next}`,
+      remove: (dir: string) => {
+        removed.push(dir)
+        return true
+      }
+    })
+
+    expect(plan.profileForRow()).toEqual({ profile: '/tmp/shared-1', removeAfterRow: false })
+    expect(plan.profileForRow()).toEqual({ profile: '/tmp/shared-1', removeAfterRow: false })
+    expect(removed).toEqual([])
+    expect(plan.cleanup()).toBe(true)
+    expect(removed).toEqual(['/tmp/shared-1'])
+    expect(plan.cleanup()).toBe(false)
   })
 })
 
@@ -173,6 +218,92 @@ describe('HK-M relaunch runtime counts', () => {
     expect(runtimeRoleVerdict([modelSidecar, fm], true)).toMatchObject({
       ok: false,
       failure: 'multiple_runtime_roles_after_relaunch'
+    })
+  })
+})
+
+describe('HK-M shared-profile relaunch checks', () => {
+  const main = { pid: 100, ppid: 50, startedMs: 1000, exe: '/tmp/Metis', role: 'Metis' }
+  const orphan = { ...modelSidecar, pid: 404, ppid: 1 }
+
+  it('fails a shared-profile row when an owned process is orphaned after relaunch', () => {
+    expect(
+      sharedProfileRelaunchVerdict({
+        owned: [main, orphan],
+        registry: [],
+        records: [],
+        table: [main, orphan],
+        previousDeadRegistryCount: 0
+      })
+    ).toMatchObject({
+      ok: false,
+      failure: 'shared_profile_orphan_after_relaunch',
+      evidence: { orphans: { 'llama-server': 1 } }
+    })
+  })
+
+  it('fails when more than one local runtime role is alive after relaunch', () => {
+    const fm = { pid: 105, ppid: 100, startedMs: 1005, exe: '/tmp/fm', role: 'fm' }
+    expect(
+      sharedProfileRelaunchVerdict({
+        owned: [main, modelSidecar, fm],
+        registry: [],
+        records: [],
+        table: [main, modelSidecar, fm],
+        previousDeadRegistryCount: 0
+      })
+    ).toMatchObject({
+      ok: false,
+      failure: 'shared_profile_multiple_runtimes_after_relaunch',
+      evidence: { runtimeTotal: 2 }
+    })
+  })
+
+  it('counts unreaped dead-pid registry entries and fails when the count rises across cycles', () => {
+    const registry = [
+      { kind: 'spawned', name: 'llama-server', pid: 201 },
+      { kind: 'spawned', name: 'llama-server', pid: 202 },
+      { kind: 'spawned', name: 'llama-server', pid: 203 }
+    ]
+    const records = [{ event: 'sidecar.reaped', pid: 202, reason: 'registry' }]
+    const table = [{ pid: 203, ppid: 100, startedMs: 1003, exe: '/tmp/llama-server', role: 'llama-server' }]
+
+    expect(unreapedDeadRegistryCount({ registry, records, table })).toBe(1)
+    expect(
+      sharedProfileRelaunchVerdict({
+        owned: [main],
+        registry,
+        records,
+        table,
+        previousDeadRegistryCount: 0
+      })
+    ).toMatchObject({
+      ok: false,
+      failure: 'shared_profile_unreaped_dead_registry_entries_grew',
+      evidence: { deadRegistry: 1 }
+    })
+  })
+
+  it('records the dead registry count when the shared-profile relaunch is clean', () => {
+    expect(
+      sharedProfileRelaunchVerdict({
+        owned: [main],
+        registry: [{ kind: 'spawned', name: 'llama-server', pid: 201 }],
+        records: [],
+        table: [main],
+        previousDeadRegistryCount: null
+      })
+    ).toMatchObject({ ok: true, deadRegistry: 1, evidence: { deadRegistry: 1, runtimeTotal: 0 } })
+  })
+})
+
+describe('HK-M shared-profile final SIGTERM check', () => {
+  it('passes only when the final SIGTERM launch leaves no owned survivors', () => {
+    expect(finalSigtermVerdict([])).toEqual({ ok: true, survivors: {} })
+    expect(finalSigtermVerdict([modelSidecar])).toEqual({
+      ok: false,
+      failure: 'final_sigterm_owned_processes_survived',
+      survivors: { 'llama-server': 1 }
     })
   })
 })

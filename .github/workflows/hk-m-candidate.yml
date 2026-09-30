@@ -33,8 +33,38 @@ defaults:
     shell: bash
 
 jobs:
+  guard:
+    name: Check the candidate run
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: This lane runs only from main in the canonical repository
+        run: |
+          if [ "$GITHUB_REPOSITORY" != "mysticalsin/AskToto-Mantu" ]; then
+            echo "::error::HK-M candidate evidence must run in mysticalsin/AskToto-Mantu."
+            exit 1
+          fi
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::HK-M candidate evidence must be dispatched from refs/heads/main."
+            exit 1
+          fi
+      - name: The candidate is a successful qa-candidate.yml dispatch on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          if ! [[ "$CANDIDATE_RUN" =~ ^[0-9]+$ ]]; then
+            echo "::error::candidate_run must be a numeric run id."
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN" > candidate-run.json
+          jq -e '.path == ".github/workflows/qa-candidate.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .status == "completed" and .conclusion == "success"' candidate-run.json > /dev/null \
+            || { echo "::error::candidate_run must be a completed, successful workflow_dispatch run of .github/workflows/qa-candidate.yml on main."; exit 1; }
+
   hk-m:
-    name: HK-M 20 cycles (macOS)
+    name: HK-M 20 cycles fresh profile (macOS)
+    needs: guard
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 150
@@ -88,5 +118,64 @@ jobs:
       - name: Fail unless HK-M passed 20 of 20
         if: always() && steps.hk-m.outcome != 'success'
         run: |
-          echo "::error::HK-M did not pass every row; supervision must not ship default-on (see hk-m-report/hk-m.json)."
+          echo "::error::HK-M did not pass every row; this requires a fix and a new candidate (see hk-m-report/hk-m.json)."
+          exit 1
+
+  hk-m-shared:
+    name: HK-M 20 cycles shared profile (macOS)
+    needs: guard
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Download the candidate installer and its provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-provenance --dir provenance
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-mac --dir assets
+      - name: Verify the installer against the provenance and the requested sha256
+        env:
+          DMG_SHA256: ${{ inputs.dmg_sha256 }}
+        run: |
+          node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac
+          dmg=$(ls assets/*.dmg)
+          [ "$(shasum -a 256 "$dmg" | cut -d' ' -f1)" = "$DMG_SHA256" ] \
+            || { echo "::error::The candidate DMG does not match the requested sha256."; exit 1; }
+      - name: Install from the DMG into a fresh directory
+        run: |
+          mkdir -p hk-m-report
+          shasum -a 256 assets/*.dmg > hk-m-report/SHA256SUMS.txt
+          volume="$RUNNER_TEMP/volume"
+          hdiutil attach -nobrowse -readonly -mountpoint "$volume" assets/*.dmg > /dev/null
+          bundle=$(cd "$volume" && ls -d *.app)
+          mkdir -p "$RUNNER_TEMP/hk-m"
+          ditto "$volume/$bundle" "$RUNNER_TEMP/hk-m/Metis.app"
+          hdiutil detach "$volume" > /dev/null
+      - name: Verify the installed app signature
+        run: codesign --verify --deep --strict "$RUNNER_TEMP/hk-m/Metis.app"
+      # The budget ends the run below the step timeout so the report is written and uploaded.
+      - name: Prove HK-M supervised sidecar cleanup after SIGKILL (20 cycles, shared profile)
+        id: hk-m
+        continue-on-error: true
+        timeout-minutes: 140
+        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/hk-m/Metis.app" hk-m-report/hk-m.json --cycles 20 --profile shared --budget-ms 8100000
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: hk-m-candidate-shared
+          path: hk-m-report/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Fail unless HK-M shared profile passed 20 of 20 plus final SIGTERM
+        if: always() && steps.hk-m.outcome != 'success'
+        run: |
+          echo "::error::HK-M shared profile did not pass every row; this requires a fix and a new candidate (see hk-m-report/hk-m.json)."
           exit 1
