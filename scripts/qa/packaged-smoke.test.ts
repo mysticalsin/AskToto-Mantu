@@ -13,6 +13,7 @@ import {
 import {
   LIFECYCLE_EVENTS,
   auditDiagnostic,
+  bootLaunchActivateVerdict,
   buildWindowsShortcutLauncher,
   NAVIGATION_GUARD_BOOTSTRAP_PATCH,
   childPidReserved,
@@ -750,7 +751,8 @@ describe('initialRvRows', () => {
       'RV-2-macos-open-new-instance',
       'RV-4-tray-show',
       'RV-4-global-hotkey',
-      'RV-1-macos-finder-spotlight-launchpad'
+      'RV-1-macos-finder-spotlight-launchpad',
+      'RV-boot-launch-activate-stays-parked'
     ])
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
@@ -969,5 +971,53 @@ describe('computeCleanupTargets', () => {
     )
 
     expect(targets.map((t) => t.pid).sort((a, b) => a - b)).toEqual([100, 101])
+  })
+})
+
+describe('bootLaunchActivateVerdict', () => {
+  const passing = { precondition: null, rendererReady: true, activateReveals: 0, parked: true, settingsOpened: false }
+
+  it('passes only when the launch activate revealed nothing, the overlay is parked and Settings stayed closed', () => {
+    expect(bootLaunchActivateVerdict(passing)).toEqual({ status: 'PASS', failures: [], reason: null })
+  })
+
+  it('fails when an activate reveal was honoured during boot', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, activateReveals: 1 })).toMatchObject({
+      status: 'FAIL',
+      failures: ['activate_reveal_during_boot']
+    })
+  })
+
+  it('fails when the overlay is not parked after boot, or parked was never observed', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, parked: false })).toMatchObject({
+      status: 'FAIL',
+      failures: ['not_parked_after_boot']
+    })
+    expect(bootLaunchActivateVerdict({ ...passing, parked: null }).status).toBe('FAIL')
+  })
+
+  it('fails when Settings opened, or its state was never observed', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, settingsOpened: true })).toMatchObject({
+      status: 'FAIL',
+      failures: ['settings_opened_on_boot']
+    })
+    expect(bootLaunchActivateVerdict({ ...passing, settingsOpened: null }).status).toBe('FAIL')
+  })
+
+  it('reports every defect at once', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, activateReveals: 2, parked: false, settingsOpened: true }).failures).toEqual([
+      'activate_reveal_during_boot',
+      'not_parked_after_boot',
+      'settings_opened_on_boot'
+    ])
+  })
+
+  it('is PRECONDITION, never PASS, when the env or CDP port could not be delivered', () => {
+    const verdict = bootLaunchActivateVerdict({ ...passing, precondition: 'the CDP port did not reach the app' })
+    expect(verdict).toEqual({ status: 'PRECONDITION', failures: [], reason: 'the CDP port did not reach the app' })
+  })
+
+  it('is PRECONDITION when the renderer never became ready', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, rendererReady: false }).status).toBe('PRECONDITION')
   })
 })
