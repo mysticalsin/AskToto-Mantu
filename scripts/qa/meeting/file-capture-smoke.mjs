@@ -26,6 +26,7 @@ export function judge(observed) {
     liveLines: observed.linesReachedMs !== null && observed.linesReachedMs <= LINES_TIMEOUT_MS,
     savedMeeting: observed.meetingFilesAfter > observed.meetingFilesBefore && observed.savedBytes > 0,
     tokens: observed.tokenMatches >= TOKENS_NEEDED,
+    driverCompleted: observed.driverError !== true,
     withinDeadline: observed.totalMs <= DEADLINE_MS
   }
   const pass = Object.values(checks).every(Boolean)
@@ -47,6 +48,7 @@ export function buildReport(observed, { verdict, checks }) {
       savedBytes: observed.savedBytes,
       tokenMatches: observed.tokenMatches,
       tokenTotal: observed.tokenTotal,
+      pageStoppedAnswering: observed.pageStoppedAnswering === true,
       totalMs: observed.totalMs
     }
   }

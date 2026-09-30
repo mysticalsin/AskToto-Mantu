@@ -161,9 +161,16 @@ describe('verdicts', () => {
     ['no saved meeting', { meetingFilesAfter: 2, savedBytes: 0 }],
     ['an empty saved meeting', { savedBytes: 0 }],
     ['fewer than 3 tokens', { tokenMatches: 2 }],
+    ['a driver error after the app was ready', { driverError: true }],
     ['over 180 s', { totalMs: 180_001 }]
   ])('FAIL on %s', (_name, over) => {
     expect(judge(observed(over))).toMatchObject({ verdict: 'FAIL', exitCode: 1 })
+  })
+
+  it('a post-ready driver error is FAIL, never PRECONDITION', () => {
+    const outcome = judge(observed({ driverError: true, auditEvent: false, linesReachedMs: null }))
+    expect(outcome).toMatchObject({ verdict: 'FAIL', exitCode: 1 })
+    expect(outcome.checks?.driverCompleted).toBe(false)
   })
 
   it('PRECONDITION (exit 2) when the app never became ready', () => {

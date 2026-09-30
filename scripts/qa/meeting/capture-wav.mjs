@@ -5,7 +5,8 @@
  * converted by /usr/bin/afconvert, with silent pauses between them. macOS only.
  *
  * The file is 16-bit PCM mono at CAPTURE_SAMPLE_RATE (Chromium's fake capture device resamples whatever it
- * is given; 48 kHz is the rate its own capture pipeline runs at) and is MIN_SECONDS..MAX_SECONDS long.
+ * is given; 48 kHz is the rate its own capture pipeline runs at; ASSUMED, as src/main/qa-capture-source.ts
+ * documents no rate) and is MIN_SECONDS..MAX_SECONDS long.
  *
  * Usage: node scripts/qa/meeting/capture-wav.mjs <profile-dir>
  * Prints only the WAV's sha256 and duration. The sentences never reach stdout.

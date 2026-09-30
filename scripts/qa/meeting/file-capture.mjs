@@ -199,7 +199,8 @@ async function overlayPage(port, timeoutMs) {
 }
 
 /**
- * One file-fed capture. Returns counts and booleans only (`ready: false` when the app never became usable).
+ * One file-fed capture. Returns counts and booleans only (`ready: false` when the app never became usable;
+ * `driverError` when a step failed after it was ready; `pageStoppedAnswering` when a live-line probe failed).
  * `timings` are milliseconds since the launch.
  */
 export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmpdir(), 'metis-file-capture-')), listenMs = LISTEN_MS }) {
@@ -227,6 +228,8 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
     tokenMatches: 0,
     tokenTotal: 0,
     auditEvent: false,
+    driverError: false,
+    pageStoppedAnswering: false,
     totalMs: 0
   }
   let page = null
@@ -238,7 +241,13 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
     if (!(await page.evaluate(LISTEN_CLICK))) throw new Error('Listen control vanished before the click')
     const listenStarted = Date.now()
     await waitFor(async () => {
-      const count = Number(await page.evaluate(LINE_COUNT))
+      let count
+      try {
+        count = Number(await page.evaluate(LINE_COUNT))
+      } catch (error) {
+        observed.pageStoppedAnswering = true
+        throw error
+      }
       observed.maxLines = Math.max(observed.maxLines, count)
       if (count >= LIVE_LINES_NEEDED && observed.linesReachedMs === null) observed.linesReachedMs = Date.now() - listenStarted
       return observed.linesReachedMs !== null && Date.now() - listenStarted >= listenMs
@@ -256,6 +265,11 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
       observed.tokenMatches = countTokenMatches(readFileSync(saved[0], 'utf8'), tokens)
     }
     observed.auditEvent = auditHasEvent(profileDir)
+    return observed
+  } catch (error) {
+    // Only a failure before the app was ready is a precondition; once ready, a driver error is a failed run.
+    if (!observed.ready) throw error
+    observed.driverError = true
     return observed
   } finally {
     page?.close()
