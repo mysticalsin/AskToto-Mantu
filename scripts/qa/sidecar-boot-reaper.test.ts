@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   combinedReport,
   hasAtLeastEvent,
+  hostFloorOverrides,
+  launchEnv,
   observedReapedOrphan,
   parseMacHelperProcInfo,
   parseSidecarRegistry,
@@ -84,6 +86,31 @@ describe('sidecar boot reaper proof helpers', () => {
     expect(realLlama.pids).toMatchObject({ sidecar: 11, orphan: 11 })
   })
 
+  it('passes the requested supervision through to the launch env and leaves it to the build default otherwise', () => {
+    expect(launchEnv(process.env, '/tmp/p', { extraEnv: { METIS_SUPERVISION: 'off' } })).toMatchObject({
+      ASKTOTO_USERDATA: '/tmp/p',
+      METIS_DISABLE_APPLE_FM: '1',
+      METIS_SUPERVISION: 'off'
+    })
+    expect((launchEnv(process.env, '/tmp/p') as NodeJS.ProcessEnv).METIS_SUPERVISION).toBe(process.env.METIS_SUPERVISION)
+  })
+
+  it('records the requested supervision in a proof summary that carries one, and omits it otherwise', () => {
+    const base = {
+      kind: 'real-llama-server',
+      result: 'pass',
+      failures: [],
+      unblock: null,
+      timingsMs: {},
+      pids: {},
+      reapedReason: 'registry',
+      events: {},
+      processes: {}
+    }
+    expect(summarizeProof({ ...base, supervision: 'off' }).supervision).toBe('off')
+    expect('supervision' in summarizeProof(base)).toBe(false)
+  })
+
   it('preserves a stand-in argv element containing spaces exactly, the way KERN_PROCARGS2 does but a re-split ps command column cannot', () => {
     const stdout = `${JSON.stringify({
       pid: 4242,
@@ -99,6 +126,55 @@ describe('sidecar boot reaper proof helpers', () => {
 
     expect(identity).toMatchObject({ pid: 4242, ppid: 1, pgid: 4242, exeRealpath: '/usr/local/bin/node' })
     expect(identity.args).toEqual(['/usr/local/bin/node', '-e', 'setInterval(() => {}, 1000)'])
+  })
+
+  it('sets METIS_QA_HOST_FLOOR_OVERRIDE=1 only for the real llama-server launch, on the isolated profile, without keys', () => {
+    const base = { PATH: '/usr/bin', OPENAI_API_KEY: 'k', METIS_QA_HOST_FLOOR_OVERRIDE: '1' }
+    const real = launchEnv(base, '/tmp/profile', { hostFloorOverride: true })
+    expect(real).toMatchObject({ ASKTOTO_USERDATA: '/tmp/profile', METIS_DISABLE_APPLE_FM: '1', METIS_QA_HOST_FLOOR_OVERRIDE: '1' })
+    expect(real).not.toHaveProperty('OPENAI_API_KEY')
+
+    // The stand-in launch never carries it, even when the runner's own env does.
+    expect(launchEnv(base, '/tmp/profile')).not.toHaveProperty('METIS_QA_HOST_FLOOR_OVERRIDE')
+    expect(launchEnv(base, '/tmp/profile', { hostFloorOverride: false })).not.toHaveProperty('METIS_QA_HOST_FLOOR_OVERRIDE')
+  })
+
+  it('records hostFloorOverride, the host memory and only the floor figures from the app audit', () => {
+    const records = [
+      { event: 'app.started' },
+      { event: 'local.host-floor-override', floor: 'advertised-ram', hostTotalBytes: 7516192768, hostAvailableBytes: 3221225472, actor: 'someone' },
+      { event: 'local.host-floor-override', floor: 'model.gguf',hostTotalBytes: 'n', hostAvailableBytes: 1 }
+    ]
+    expect(hostFloorOverrides(records)).toEqual([
+      { floor: 'advertised-ram', hostTotalBytes: 7516192768, hostAvailableBytes: 3221225472 },
+      { floor: 'unknown', hostTotalBytes: null, hostAvailableBytes: 1 }
+    ])
+
+    const hostMemory = { hwMemsizeBytes: 7516192768, totalmemBytes: 7516192768, freememBytes: 1 }
+    const realLlama = summarizeProof({
+      kind: 'real-llama-server',
+      result: 'pass',
+      failures: [],
+      unblock: null,
+      timingsMs: { firstReady: 1, sidecarStarted: 2, llamaStarted: 2, reaped: 3 },
+      pids: { firstMain: 10, sidecar: 11, orphan: 11, secondMain: 12 },
+      reapedReason: 'registry',
+      events: {},
+      processes: { beforeKill: {}, afterReaper: {} },
+      hostFloorOverride: true,
+      hostMemory,
+      hostFloorOverrides: hostFloorOverrides(records).slice(0, 1)
+    })
+    expect(realLlama).toMatchObject({
+      hostFloorOverride: true,
+      hostMemory,
+      hostFloorOverrides: [{ floor: 'advertised-ram', hostTotalBytes: 7516192768, hostAvailableBytes: 3221225472 }]
+    })
+    expect(summarizeProof({ kind: 'stand-in-registry', result: 'pass' })).toMatchObject({
+      hostFloorOverride: false,
+      hostMemory: null,
+      hostFloorOverrides: []
+    })
   })
 
   it('rejects proc-info output that is not JSON or is missing a required identity field', () => {
