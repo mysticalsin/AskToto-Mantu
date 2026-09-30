@@ -128,11 +128,12 @@ test('V9 verdictFor is PROCEED only when every count is zero', () => {
 
 test('V10 the record validator rejects a contradicted verdict, a short window, a path and a missing field', () => {
   const good = soakRecordContent(evaluateSoak(summary()))
+  const syntheticUserPath = ['', 'Users', 'example', 'x'].join('/')
   assert.match(soakRecordProblems(good.replace('verdict: PROCEED', 'verdict: HOLD')).join('\n'), /contradicts the counts/)
   assert.match(soakRecordProblems(good.replace('stalls_over_5s: 0', 'stalls_over_5s: 2')).join('\n'), /contradicts the counts/)
   assert.match(soakRecordProblems(good.replace('last_day: 2026-10-05', 'last_day: 2026-10-04')).join('\n'), /consecutive_active_days/)
   assert.match(soakRecordProblems(good.replace('evidence_level: MEASURED', 'evidence_level: DESIGNED')).join('\n'), /MEASURED/)
-  assert.match(soakRecordProblems(`${good}\nnote: /Users/someone/x\n`).join('\n'), /user path/)
+  assert.match(soakRecordProblems(`${good}\nnote: ${syntheticUserPath}\n`).join('\n'), /user path/)
   assert.match(soakRecordProblems(good.replace(/^verdict: .*\n/m, '')).join('\n'), /missing verdict/)
   assert.match(soakRecordProblems(`${good}\nverdict: HOLD\n`).join('\n'), /more than once/)
 })

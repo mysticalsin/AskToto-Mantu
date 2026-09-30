@@ -12,6 +12,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { DEFAULT_OUT_DIR as SOAK_OUT_DIR, RECORD_FILE as SOAK_RECORD_FILE, soakRecordProblems } from '../qa/owner-soak/verdict.mjs'
+import { EXCERPT_FILES, STALL_BUNDLE_NAMES_FILE, STALL_BUNDLE_NAME, excerptOf } from '../qa/freeze-repro/attribution-bundle.mjs'
 import { EVIDENCE_LEVELS, latestByLevel, readRecordStore, recordsInPrBody, recordProblems, sha256Hex } from './record.mjs'
 
 export const TICKET_STATUSES = Object.freeze([
@@ -20,6 +21,18 @@ export const TICKET_STATUSES = Object.freeze([
 export const DECISION_STATES = Object.freeze(['OPEN', 'ANSWERED_AS_DEFAULT', 'ANSWERED_CHANGED'])
 export const TEST_WORKFLOW = '.github/workflows/build.yml'
 export const M2_0008_DEFAULT_BUNDLE = 'out/m2-0008-freeze-repro'
+export const M2_0194_DEFAULT_BUNDLE = 'out/m2-0194-freeze-repro'
+
+// Rows and interrupt checks every freeze-repro matrix records, whichever ticket's bundle carries it.
+const REQUIRED_MATRIX_ROWS = Object.freeze([
+  'row-1-history-open',
+  'row-2-brain-status-blocked-brain',
+  'row-3-macos-activate',
+  'row-4-second-instance-reopen',
+  'row-5-dataless-brain-idle',
+  'row-9-network-off-flapping'
+])
+const REQUIRED_INTERRUPTS = Object.freeze(['network-off', 'file-provider-cancel', 'process-signal'])
 
 const READY_DEP = new Set(['ENGINEERING_COMPLETE', 'DONE', 'DEFERRED', 'BLOCKED_EXTERNAL'])
 // The evidence levels ENGINEERING_COMPLETE can prove without an external party (§ ENGINEERING_COMPLETE
@@ -762,19 +775,12 @@ export function m2_0008BundleProblems(bundlePath) {
     const problem = fixtureLabelProblem(row)
     if (problem) problems.push(problem)
   }
-  for (const row of [
-    'row-1-history-open',
-    'row-2-brain-status-blocked-brain',
-    'row-3-macos-activate',
-    'row-4-second-instance-reopen',
-    'row-5-dataless-brain-idle',
-    'row-9-network-off-flapping'
-  ]) {
+  for (const row of REQUIRED_MATRIX_ROWS) {
     if (!rowIds.has(row)) problems.push(`matrix.jsonl: missing ${row}`)
   }
 
   const interruptIds = new Set(interrupts.map((row) => row.interrupt))
-  for (const interrupt of ['network-off', 'file-provider-cancel', 'process-signal']) {
+  for (const interrupt of REQUIRED_INTERRUPTS) {
     if (!interruptIds.has(interrupt)) problems.push(`interrupt-results.jsonl: missing ${interrupt}`)
   }
 
@@ -796,6 +802,91 @@ export function m2_0008BundleProblems(bundlePath) {
   return problems
 }
 
+/** M2-0194 attribution bundle: the freeze-repro matrix run against an exact QA candidate, plus content-free
+ *  audit excerpts and the names (never the contents) of the stall bundles the sampler wrote. */
+export function m2_0194BundleProblems(bundlePath) {
+  const root = resolve(bundlePath)
+  const problems = []
+  const requiredFiles = [
+    'README.md',
+    'environment.json',
+    'external-blockers.json',
+    'matrix.jsonl',
+    'interrupt-results.jsonl',
+    ...Object.values(EXCERPT_FILES),
+    STALL_BUNDLE_NAMES_FILE,
+    'M2-0194.lead-action.md'
+  ]
+  for (const file of requiredFiles) {
+    if (!existsSync(join(root, file))) problems.push(`${file}: missing from M2-0194 bundle`)
+  }
+  if (problems.length > 0) return problems
+
+  const environment = readJsonFile(join(root, 'environment.json'), problems, 'environment.json')
+  const blockers = readJsonFile(join(root, 'external-blockers.json'), problems, 'external-blockers.json')
+  const names = readJsonFile(join(root, STALL_BUNDLE_NAMES_FILE), problems, STALL_BUNDLE_NAMES_FILE)
+  const rows = jsonlRows(join(root, 'matrix.jsonl'), problems, 'matrix.jsonl')
+  const interrupts = jsonlRows(join(root, 'interrupt-results.jsonl'), problems, 'interrupt-results.jsonl')
+  const leadAction = readFileSync(join(root, 'M2-0194.lead-action.md'), 'utf8')
+
+  if (environment?.ticket !== 'M2-0194') problems.push('environment.json: ticket must be M2-0194')
+  if (typeof environment?.artifact_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(environment.artifact_sha256)) {
+    problems.push('environment.json: artifact_sha256 must be a lowercase sha256')
+  }
+  if (!/^[1-9]\d*$/.test(String(environment?.candidate_run ?? ''))) {
+    problems.push('environment.json: candidate_run must be the qa-candidate run id')
+  }
+  if (blockers?.ticket !== 'M2-0194') problems.push('external-blockers.json: ticket must be M2-0194')
+  if (!Array.isArray(blockers?.blockers)) {
+    problems.push('external-blockers.json: blockers array is required')
+  } else {
+    for (const blocker of blockers.blockers) {
+      if (blocker.status !== 'BLOCKED_EXTERNAL') problems.push('external-blockers.json: blockers must be BLOCKED_EXTERNAL')
+      if (typeof blocker.unblock_step !== 'string' || blocker.unblock_step.trim() === '') {
+        problems.push('external-blockers.json: every blocker needs an unblock_step')
+      }
+    }
+  }
+
+  const rowIds = new Set(rows.map((row) => row.row))
+  for (const row of rows) {
+    const problem = fixtureLabelProblem(row)
+    if (problem) problems.push(problem)
+  }
+  for (const row of REQUIRED_MATRIX_ROWS) {
+    if (!rowIds.has(row)) problems.push(`matrix.jsonl: missing ${row}`)
+  }
+  const interruptIds = new Set(interrupts.map((row) => row.interrupt))
+  for (const interrupt of REQUIRED_INTERRUPTS) {
+    if (!interruptIds.has(interrupt)) problems.push(`interrupt-results.jsonl: missing ${interrupt}`)
+  }
+
+  for (const [excerpt, file] of Object.entries(EXCERPT_FILES)) {
+    for (const row of jsonlRows(join(root, file), problems, file)) {
+      if (excerptOf(row.event) !== excerpt) problems.push(`${file}: event ${JSON.stringify(row.event)} does not belong in the ${excerpt} excerpt`)
+    }
+  }
+  if (!Array.isArray(names?.names)) {
+    problems.push(`${STALL_BUNDLE_NAMES_FILE}: names array is required`)
+  } else if (!names.names.every((name) => typeof name === 'string' && STALL_BUNDLE_NAME.test(name))) {
+    problems.push(`${STALL_BUNDLE_NAMES_FILE}: entries must be stall bundle file names only`)
+  }
+
+  if (!leadAction.includes('LEAD_ACTION:')) problems.push('M2-0194.lead-action.md: missing LEAD_ACTION handoff')
+  const dryRun = environment?.dry_run === 1 || environment?.dry_run === true || environment?.mode === 'dry-run'
+  const liveHandoff = leadAction.includes('LIVE_VERIFIED')
+  if (!leadAction.includes('M2-0194')) {
+    problems.push('M2-0194.lead-action.md: must name M2-0194')
+  }
+  if (dryRun && liveHandoff) {
+    problems.push('M2-0194.lead-action.md: dry-run bundles must not hand off a LIVE_VERIFIED filing')
+  } else if (!dryRun && !liveHandoff) {
+    problems.push('M2-0194.lead-action.md: must hand off filing the M2-0194 LIVE_VERIFIED record')
+  }
+
+  return problems
+}
+
 async function main() {
   const { values } = parseArgs({
     options: {
@@ -810,7 +901,7 @@ async function main() {
   const hasPrEvent = typeof values['pr-event'] === 'string'
   const hasTicket = typeof values.ticket === 'string'
   if ([hasLedger, hasPrEvent, hasTicket].filter(Boolean).length !== 1) {
-    return usageExit('usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008 [--bundle <path>]  |  check.mjs --ticket M2-0198 [--record <path>]')
+    return usageExit('usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194 [--bundle <path>]  |  check.mjs --ticket M2-0198 [--record <path>]')
   }
 
   if (hasLedger) {
@@ -851,13 +942,18 @@ async function main() {
       console.log(`M2-0198 soak record: OK (${recordPath})`)
       return
     }
-    if (values.ticket !== 'M2-0008') return usageExit('only --ticket M2-0008 and --ticket M2-0198 are supported in this public-repo checker')
-    const problems = m2_0008BundleProblems(resolve(values.bundle ?? M2_0008_DEFAULT_BUNDLE))
+    const checker = {
+      'M2-0008': { check: m2_0008BundleProblems, defaultBundle: M2_0008_DEFAULT_BUNDLE },
+      'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE }
+    }[values.ticket]
+    if (!checker) return usageExit('only --ticket M2-0008, M2-0194 and M2-0198 are supported in this public-repo checker')
+    const bundle = values.bundle ?? checker.defaultBundle
+    const problems = checker.check(resolve(bundle))
     if (problems.length > 0) {
       for (const problem of problems) console.error(`- ${problem}`)
       process.exit(1)
     }
-    console.log(`M2-0008 bundle: OK (${values.bundle ?? M2_0008_DEFAULT_BUNDLE})`)
+    console.log(`${values.ticket} bundle: OK (${bundle})`)
     return
   }
 
