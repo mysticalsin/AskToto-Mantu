@@ -4,6 +4,7 @@ import { modelPaths as resolveLocalModelPaths, verifyIntegrity } from './local-m
 import * as localRuntime from './local-runtime'
 import * as fmRuntime from './fm-runtime'
 import { streamOpenAI } from './openai'
+import type { HkMRamFloorOverride } from '../qa-hk-m'
 import { type StreamOptions, type StreamHandle, errMsg } from './shared'
 
 // Local completions are task-shaped, not generic 4k-token chat turns. These bounds preserve the current
@@ -107,7 +108,9 @@ function boundedLocalSystem(system: string): string {
 export async function ensureLocalRuntimeStarted(
   modelId: string,
   vision = false,
-  canStartSpeculatively?: () => boolean
+  canStartSpeculatively?: () => boolean,
+  // M2-0460: only the packaged HK-M proof holds a token that verifyIntegrity honours (qa-hk-m.ts).
+  ramFloorOverride?: HkMRamFloorOverride
 ): Promise<void> {
   // Only unattended callers pass this gate. A real user request deliberately omits it, so an import
   // cannot turn a requested local answer into a silent no-op. Check both before costly verification and
@@ -115,7 +118,8 @@ export async function ensureLocalRuntimeStarted(
   if (canStartSpeculatively?.() === false) return
   const paths = resolveLocalModelPaths(modelId)
   if (localRuntime.getState() === 'stopped' || localRuntime.getActiveModelKey() !== paths.gguf) {
-    await verifyIntegrity(modelId)
+    // Passed only when present, so every other caller's verification call is unchanged.
+    await (ramFloorOverride ? verifyIntegrity(modelId, ramFloorOverride) : verifyIntegrity(modelId))
   }
   if (canStartSpeculatively?.() === false) return
   // MQA-270 (B1): the multimodal projector loads at server START, never lazily, and costs 1.03 GB

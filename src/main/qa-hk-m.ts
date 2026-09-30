@@ -13,7 +13,6 @@ import { access, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AuditEvent } from './logger'
 import type { bundledFfmpegPath, startFfmpegDecode } from './ffmpeg-decoder'
-import type { ensureLocalRuntimeStarted } from './llm/local'
 import type * as localRuntime from './llm/local-runtime'
 import type { recordSidecarIntent } from './infra/process/registry'
 
@@ -26,6 +25,29 @@ export function hkMScenarioFromEnv(env: NodeJS.ProcessEnv, packaged: boolean): H
   if (!packaged || !env.ASKTOTO_USERDATA?.trim()) return null
   const value = env.METIS_HK_M_SCENARIO
   return HK_M_SCENARIOS.find((scenario) => scenario === value) ?? null
+}
+
+/**
+ * M2-0460: the HK-M-only lift of the bundled model's advertised-RAM floor (local-models.ts assertRamOk). A hosted
+ * runner that exposes 7 GiB reads as 7 against the 0.8B model's floor of 8, so the user-facing gate refuses the start
+ * before the runtime is reached. Tokens are minted only inside productionHkMDeps' model start (the set below is
+ * module-private), and a minted token is honoured only while hkMScenarioFromEnv names a row. Any other value, caller
+ * or process gets the unchanged gate.
+ */
+export interface HkMRamFloorOverride {
+  readonly kind: 'hk-m-ram-floor'
+}
+const mintedRamFloorOverrides = new WeakSet<object>()
+
+export function hkMRamFloorOverrideActive(override: unknown, env: NodeJS.ProcessEnv, packaged: boolean): boolean {
+  if (typeof override !== 'object' || override === null || !mintedRamFloorOverrides.has(override)) return false
+  return hkMScenarioFromEnv(env, packaged) !== null
+}
+
+/** Content-free detail for hk-m.setup-failed: the row and the error's class name, never its message. */
+export function hkMSetupFailedDetail(row: HkMScenario, error: unknown): { row: HkMScenario; error: string } {
+  if (!(error instanceof Error)) return { row, error: 'NonError' }
+  return { row, error: /^[A-Za-z_$][\w$]{0,63}$/.test(error.name) ? error.name : 'Error' }
 }
 
 export interface HkMDeps {
@@ -78,7 +100,14 @@ const REGISTRY_WRITE_INTERVAL_MS = 2
  * cannot load modules lazily, and importing them here would drag the Electron-bound modules into this file's unit test.
  */
 export interface HkMModules {
-  readonly ensureLocalRuntimeStarted: typeof ensureLocalRuntimeStarted
+  // Spelled out rather than `typeof` llm/local: local-models.ts and local.ts import the override from this file, so
+  // importing llm/local here would close an import cycle. qa-hooks.ts passes the real function, which tsc checks.
+  readonly ensureLocalRuntimeStarted: (
+    modelId: string,
+    vision?: boolean,
+    canStartSpeculatively?: () => boolean,
+    ramFloorOverride?: HkMRamFloorOverride
+  ) => Promise<void>
   readonly localRuntime: Pick<typeof localRuntime, 'markActivity' | 'baseURL' | 'sessionKey'>
   readonly bundledFfmpegPath: typeof bundledFfmpegPath
   readonly startFfmpegDecode: typeof startFfmpegDecode
@@ -92,11 +121,13 @@ export function productionHkMDeps(
   profileDir: string,
   resourcesDir: string
 ): HkMDeps {
+  const ramFloorOverride: HkMRamFloorOverride = Object.freeze({ kind: 'hk-m-ram-floor' })
+  mintedRamFloorOverrides.add(ramFloorOverride)
   return {
     audit,
     onError,
     startLocalModel: async () => {
-      await modules.ensureLocalRuntimeStarted(HK_M_MODEL_ID)
+      await modules.ensureLocalRuntimeStarted(HK_M_MODEL_ID, false, undefined, ramFloorOverride)
     },
     beginInference: () => {
       void (async () => {
