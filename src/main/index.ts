@@ -997,8 +997,7 @@ crashReporter.start({ uploadToServer: false })
 // Belt-and-braces with the per-meeting powerSaveBlocker below: keep Chromium itself from ever
 // deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
-// QA-identity builds only (compiled out of every other bundle): a packaged QA profile may feed a WAV inside
-// that profile as the microphone through Chromium's fake capture. Must run before app ready.
+// QA-identity builds only (compiled out of shipping bytes): a profile WAV may feed Chromium's fake mic. Before ready.
 if (QA_IDENTITY_BUILD) installQaCaptureSource(app, auditLog)
 
 const BAR_WIDTH = 880

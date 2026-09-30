@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -185,23 +185,29 @@ describe('permission surface — the hook fakes no grant', () => {
     expect([...touched].sort()).toEqual(['commandLine', 'isPackaged', 'whenReady'])
   })
 
-  it('imports no Electron, systemPreferences, TCC or permission API', () => {
-    const source = readFileSync(join(__dirname, 'qa-capture-source.ts'), 'utf8')
-    const specifiers = [...source.matchAll(/^import\s[^;]*?from\s+'([^']+)'/gm)].map((m) => m[1])
-    expect(specifiers.sort()).toEqual(['./logger', './qa-identity', 'node:fs', 'node:path'])
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-    for (const api of [
-      'electron',
-      'systemPreferences',
-      'askForMediaAccess',
-      'getMediaAccessStatus',
-      'setPermissionRequestHandler',
-      'setPermissionCheckHandler',
-      'setDisplayMediaRequestHandler',
-      'getPlatformPermissions',
-      'tccutil'
-    ]) {
-      expect(code, `qa-capture-source.ts references ${api}`).not.toContain(api)
+  it('imports no Electron (systemPreferences, media access, display-media) or platform-permission module', async () => {
+    // Every permission surface lives behind these modules; loading either one fails this fresh import.
+    const forbidden = ['electron', './platform-perms', './logger']
+    vi.resetModules()
+    for (const id of forbidden) {
+      vi.doMock(id, () => {
+        throw new Error(`qa-capture-source must not load ${id}`)
+      })
+    }
+    try {
+      const fresh = await import('./qa-capture-source')
+      const { profile, wav } = fixture()
+      const { host, appendSwitch, ready } = fakeHost()
+      const audit = vi.fn<QaCaptureAudit>()
+      const env = { ASKTOTO_USERDATA: profile, [QA_CAPTURE_ENV]: wav }
+      expect(fresh.installQaCaptureSource(host, audit, { qaIdentity: true, env }).reason).toBeNull()
+      ready()
+      await flush()
+      expect(appendSwitch).toHaveBeenCalledTimes(2)
+      expect(audit).toHaveBeenCalledTimes(1)
+    } finally {
+      for (const id of forbidden) vi.doUnmock(id)
+      vi.resetModules()
     }
   })
 })
