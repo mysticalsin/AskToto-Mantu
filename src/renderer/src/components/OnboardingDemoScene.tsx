@@ -448,8 +448,8 @@ export function OnboardingDemoScene({
           aria-describedby={statusId}
           disabled={!stepComplete}
           onClick={() => {
-            if (!stepComplete) return
             onPlayVideo?.()
+            if (!stepComplete) return
             if (demoNextLeavesTour(beat)) onContinue()
             else advance()
           }}

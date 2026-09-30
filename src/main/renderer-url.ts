@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export interface OverlayRendererUrlOptions {
@@ -20,8 +20,21 @@ export interface DecoderRendererUrl {
   filePath: string
 }
 
+function isPosixAbsolutePath(dirname: string): boolean {
+  return dirname.startsWith('/') && !dirname.startsWith('//')
+}
+
+function rendererFileUrl(dirname: string, fileName: string): { url: string; filePath: string } {
+  if (isPosixAbsolutePath(dirname)) {
+    const filePath = posix.join(dirname, '../renderer', fileName)
+    return { url: new URL(`file://${filePath}`).href, filePath }
+  }
+  const filePath = join(dirname, '../renderer', fileName)
+  return { url: pathToFileURL(filePath).toString(), filePath }
+}
+
 export function buildOverlayRendererUrl(options: OverlayRendererUrlOptions): string {
-  const fallback = pathToFileURL(join(options.dirname, '../renderer/index.html')).href
+  const fallback = rendererFileUrl(options.dirname, 'index.html').url
   const params = new URLSearchParams()
   if (options.onboardingLive) params.set('exclusiveOnboarding', '1')
   if (!options.onboardingLive && options.postOnboardingDestination === 'settings') {
@@ -37,9 +50,9 @@ export function buildOverlayRendererUrl(options: OverlayRendererUrlOptions): str
 }
 
 export function buildDecoderRendererUrl(options: DecoderRendererUrlOptions): DecoderRendererUrl {
-  const filePath = join(options.dirname, '../renderer/decoder.html')
+  const fallback = rendererFileUrl(options.dirname, 'decoder.html')
   if (options.devRendererUrl) {
-    return { url: new URL('/decoder.html', options.devRendererUrl).toString(), dev: true, filePath }
+    return { url: new URL('/decoder.html', options.devRendererUrl).toString(), dev: true, filePath: fallback.filePath }
   }
-  return { url: pathToFileURL(filePath).toString(), dev: false, filePath }
+  return { url: fallback.url, dev: false, filePath: fallback.filePath }
 }
