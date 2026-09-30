@@ -10,7 +10,7 @@
  * most one sidecar per process, so a singleton closure is simpler than an instance nobody ever
  * constructs twice.
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
@@ -19,7 +19,8 @@ import { app } from 'electron'
 import { auditLog, mainLog } from '../logger'
 import { observeSidecar } from '../infra/observability/sidecar-events'
 import { errMsg } from './shared'
-import { recordSidecarIntent, recordSidecarSpawned } from '../infra/process/registry'
+import { recordSidecarIntent, recordSidecarSpawned, recordSidecarSupervisedSpawned } from '../infra/process/registry'
+import { markSidecarProcessUsable, spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
 
 export type LlamaPlatform = 'mac' | 'win'
 export type WinVariant = 'vulkan' | 'cpu'
@@ -288,6 +289,13 @@ export function getActiveModelKey(): string | null {
   return lastModelPaths?.gguf ?? null
 }
 
+/** Tokens one slot of the running sidecar holds, or null when none is up. start() keeps a same-model
+ *  sidecar even when the machine's profile has since changed, so this, not the profile, bounds a request. */
+export function activeSlotTokens(): number | null {
+  if (state === 'stopped' || !lastModelPaths) return null
+  return Math.floor(lastModelPaths.ctxSize / lastModelPaths.parallel)
+}
+
 function clearIdleTimer(): void {
   if (idleTimer) {
     clearTimeout(idleTimer)
@@ -358,17 +366,36 @@ function spawnAndWaitHealthy(
       gpuLayers: modelPaths.gpuLayers
     })
     let proc: ChildProcess
-    let spawnRecorded: Promise<void> = Promise.resolve()
+    let waitForSpawnRecorded = (): Promise<void> => Promise.resolve()
     try {
       // The per-session api key travels via env, never argv (see module doc comment) — `ps`/the process
       // table can see the flag list of every local process but not another process's environment.
       recordSidecarIntent('llama-server', args)
-      proc = spawn(binaryPath, args, {
+      const launched = spawnSidecarProcess('llama-server', binaryPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         env: { ...process.env, LLAMA_API_KEY: apiKey }
+      }, auditLog, process.env, process.platform, {
+        onUnsupervisedFallbackSpawned: (fallback) => recordSidecarSpawned('llama-server', fallback, binaryPath, args)
       })
-      spawnRecorded = recordSidecarSpawned('llama-server', proc, binaryPath, args)
+      proc = launched.child
+      if (launched.supervised) {
+        // Both the wrapper and the sidecar it spawns are registered, so the next-launch reaper still finds
+        // them if the wrapper itself dies; a later direct fallback registers its own spawn via the hook.
+        const supervisedRecorded = launched.wrapperLaunch
+          ? recordSidecarSupervisedSpawned('llama-server', proc, launched.wrapperLaunch, {
+              executable: binaryPath,
+              args
+            })
+          : Promise.resolve()
+        waitForSpawnRecorded = async () => {
+          await supervisedRecorded
+          await launched.waitForUnsupervisedFallback?.()
+        }
+      } else {
+        const spawnRecorded = recordSidecarSpawned('llama-server', proc, binaryPath, args)
+        waitForSpawnRecorded = () => spawnRecorded
+      }
     } catch (err) {
       reject(err instanceof Error ? err : new Error(String(err)))
       return
@@ -390,7 +417,7 @@ function spawnAndWaitHealthy(
       // still the module's CURRENT one, so a superseded/cancelled attempt would otherwise leave a live
       // llama-server.exe behind holding the model's RAM. The 'exit' handler below clears child/port once
       // the kill lands; a stale proc's exit is already ignored by its `child !== proc` guard.
-      if (!proc.killed) proc.kill('SIGKILL')
+      stopSidecarProcess(proc)
       const tail = outputBuffer.trim()
       const detail = tail ? ` — last output: ${tail.slice(-800)}` : ''
       mainLog.warn('local runtime: sidecar never reported a listening port', { platform, variant })
@@ -431,13 +458,14 @@ function spawnAndWaitHealthy(
               reject(new StartCancelledError())
               return
             }
-            await spawnRecorded
+            await waitForSpawnRecorded()
             if (settled) return
             if (generation !== startGeneration || child !== proc) {
               settled = true
               reject(new StartCancelledError())
               return
             }
+            markSidecarProcessUsable(proc)
             port = parsed
             settled = true
             resolve()
@@ -636,7 +664,7 @@ export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = de
 }
 
 function stopChildProcess(): void {
-  if (child && !child.killed) child.kill('SIGKILL')
+  if (child && !child.killed) stopSidecarProcess(child)
   child = null
   port = null
 }
@@ -660,8 +688,9 @@ export function stop(): void {
  * Pins id_slot 0 (the same slot suggest/prewarm always use) and cache_prompt so the server's per-slot cache
  * actually reuses the prefix. Never throws — a failed prewarm just means the next real request pays full
  * cost, which is why it carries its own short timeout independent of any caller's budget.
+ * `slot` 1 is the summary slot: the Stop-time warm targets it so the recap reuses the meeting's prefix.
  */
-export function prewarm(messages: Array<{ role: string; content: string }>): void {
+export function prewarm(messages: Array<{ role: string; content: string }>, slot: 0 | 1 = 0): void {
   if (state !== 'running' || port === null) return
   markActivity()
   const url = `http://127.0.0.1:${port}/v1/chat/completions`
@@ -673,7 +702,7 @@ export function prewarm(messages: Array<{ role: string; content: string }>): voi
       model: 'local',
       messages,
       max_tokens: 1,
-      id_slot: 0,
+      id_slot: slot,
       cache_prompt: true,
       stream: false
     }),

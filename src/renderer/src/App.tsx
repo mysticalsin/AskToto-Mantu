@@ -87,6 +87,7 @@ import { freshMeetingPauseClock, setMeetingPaused } from './lib/meeting-clock'
 import { shouldUseCloudSttEngine } from '@shared/cloud-stt-provider'
 import { resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { transcriptToText, recapPersistAction, type RecapPersistTarget } from './lib/transcript'
+import { WriteupSpans } from './lib/writeup-spans'
 import {
   OwnedOperationGate,
   RecapWriteCoordinator,
@@ -631,6 +632,9 @@ export function App(): JSX.Element {
   // before the first await, and released only when a save definitively gives up so a retry stays possible.
   const claimedSavesRef = useRef<Set<string>>(new Set())
   const [savedPath, setSavedPath] = useState<string | null>(null)
+  // M2-0430: content-free Stop -> transcript saved / first recap token / recap done spans, audited by main.
+  const writeupSpansRef = useRef(new WriteupSpans((report) => void window.toto.reportWriteupSpan(report)))
+  const recapBaselineRef = useRef<{ runId: string; text: string } | null>(null)
   // Refresh the entity-casing name list once on mount, and again whenever a meeting finishes saving —
   // the best available "the brain might have new names" signal (extraction itself runs async in main
   // after the save, so this is a best-effort refresh, not a guarantee the very latest meeting is in it).
@@ -1137,7 +1141,10 @@ export function App(): JSX.Element {
         })
       return
     }
-    if (savedRef.current === id || meetingSaveGateRef.current.isActive(id)) return
+    // M2-0430: the transcript-first save (maybeFireRecap) may still be in flight when the recap ends. Its
+    // claim holds this create back; when it lands, savedPath re-runs this effect and the recap updates that
+    // file instead of writing a second one. A definitive failure releases the claim so this save can run.
+    if (savedRef.current === id || meetingSaveGateRef.current.isActive(id) || claimedSavesRef.current.has(id)) return
 
     const startedAt = meetingStartRef.current
     const lines = [...listen.lines]
@@ -1211,6 +1218,22 @@ export function App(): JSX.Element {
     mode,
     saveAttempts
   ])
+
+  // M2-0430: the live recap's first token and its terminal state, as spans from the Stop click. Only the
+  // run this meeting owns counts; WriteupSpans reports each span once per Stop. The answer hook keeps the
+  // previous answer's text until the run's first chunk, which arrives over IPC after the render that
+  // starts the run; so the text first seen for this run id is the baseline and the first change from it
+  // is the first token.
+  useEffect(() => {
+    const target = liveRecapTargetRef.current
+    if (!target || target.runId !== answerId || target.ownerId !== String(meetingStartRef.current)) return
+    const baseline = recapBaselineRef.current
+    if (baseline?.runId !== answerId) recapBaselineRef.current = { runId: answerId, text: answerText }
+    else if (answerText !== baseline.text) writeupSpansRef.current.mark('stop_to_first_recap_token')
+    if (!answerStreaming && answerCompletion && answerCompletion !== 'pending') {
+      writeupSpansRef.current.mark('stop_to_recap_done')
+    }
+  }, [answerId, answerText, answerStreaming, answerCompletion])
 
   // record a completed Ask turn into conversation memory (for follow-ups)
   useEffect(() => {
@@ -2209,6 +2232,7 @@ export function App(): JSX.Element {
       return
     }
     stoppingRef.current = false // a fresh session can be stopped again — clear any latch left by the last one
+    writeupSpansRef.current.reset() // spans belong to the Stop of the session being left, never the next one
     // A rapid Stop -> New meeting can start a fresh session while the previous endReview's recap is still
     // waiting on that old session's drain (pendingRecapRef) — drop it so it can't fire into (or read the
     // transcript of) the session that's about to start.
@@ -2332,6 +2356,10 @@ export function App(): JSX.Element {
     // live stop used to skip and leave Notes empty when only Métis Local was ready.
     const canSummarize =
       !!settings?.providerReady || !!settings?.localSummaryReady || !!settings?.localFallbackReady
+    const spans = writeupSpansRef.current
+    const markSaved = (path: string | null): void => {
+      if (path) spans.mark('stop_to_transcript_saved')
+    }
     if (!canSummarize) {
       setRecapSkipped(true)
       ask.clear()
@@ -2341,9 +2369,13 @@ export function App(): JSX.Element {
       // it silently kept a meeting the user threw away. Idempotent via savedRef (which the live saver pins),
       // so the later leave-Review rescue won't double-save. (Matches the onboarding promise that
       // transcripts are saved either way.)
-      void saveLiveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')
+      void saveLiveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')?.then(markSaved)
       return
     }
+    // M2-0430: the transcript is saved the moment the drain completes, BEFORE the recap is requested, so
+    // History shows the meeting without waiting on a model. The same live saver as the keyless branch pins
+    // savedPath, which turns the recap's terminal write in the auto-save effect into an update of this file.
+    void saveLiveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')?.then(markSaved)
     setRecapSkipped(false)
     // Prefer mode:'summary' (base tier, local-eligible) when Métis Local should win — live stop used to
     // always fire mode:'recap' (think tier, out of local scope), so Routing mode → Local / Local summaries
@@ -2407,7 +2439,10 @@ export function App(): JSX.Element {
     // MQA-285: recap/write must not block the Stop click. Warm the on-device sidecar in the background
     // with the transcript we have now so drain + recap do not pay a cold model load. listen.stop() is
     // itself a sync kickoff (drain is async); never await it here.
-    void window.toto.localPrewarm(listen.text().trim().slice(-6000) || 'warm')
+    // M2-0430: warm the SUMMARY slot with the recap's own prefix (the meeting from its start), so the
+    // recap after the drain reuses it; 80,000 chars is the local summary transcript cap.
+    writeupSpansRef.current.stop()
+    void window.toto.localPrewarm(listen.text().trim().slice(0, 80_000) || 'warm', 'summary')
     listen.stop()
     setView('review')
     setCollapsed(false)
@@ -4187,7 +4222,7 @@ export function App(): JSX.Element {
           {/* Desk Tap Control is calibrated but won't arm on this microphone. Not dismissible: it isn't a
               one-off event, it's a standing state that lasts until the user recalibrates. */}
           {tapMismatch && view !== 'settings' && (
-            <div className="fade-up rounded-xl border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-1.5 text-[11px] leading-snug text-[color:var(--color-warn,#fac775)]">
+            <div className="fade-up rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-1.5 text-[11px] leading-snug text-[color:var(--color-warn)]">
               Desk Tap Control is paused. It was calibrated on a different microphone. Recalibrate it in
               Settings → Audio.
             </div>
@@ -4221,7 +4256,7 @@ export function App(): JSX.Element {
               <button
                 type="button"
                 onClick={() => openSettings('ai', `${what}. Métis is answering with another provider meanwhile.`)}
-                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-warn,#fac775)]"
+                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-warn)]"
               >
                 {what}. Métis is using another provider. {remedy} in Settings → AI.
               </button>

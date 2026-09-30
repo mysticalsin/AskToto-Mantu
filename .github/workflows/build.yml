@@ -18,6 +18,18 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Least privilege: every job only checks out, tests and packages. The ffmpeg sidecar download uses the
+# built-in token read-only, so no job needs a write scope.
+permissions:
+  contents: read
+
+# Superseded runs of a ticket branch or PR are cancelled by the next push; every other run (main,
+# m2/integration, tags, dispatch, schedule) has a run-unique group and is never cancelled, so each head keeps
+# its own complete run.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'push' && !contains(fromJSON('["refs/heads/main","refs/heads/master","refs/heads/m2/integration"]'), github.ref) && startsWith(github.ref, 'refs/heads/') && github.ref) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && !contains(fromJSON('["refs/heads/main","refs/heads/master","refs/heads/m2/integration"]'), github.ref)) }}
+
 jobs:
   quality:
     # Matrix over both host platforms is LOAD-BEARING. This job was ubuntu-only for the app's whole
@@ -35,6 +47,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # scripts/check-color-literals.test.ts reads the pre-split styles.css from history (M2-0411).
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
@@ -76,6 +91,81 @@ jobs:
       # (scripts/check-skipped-tests.mjs collects a fresh JSON report) against the same checkout npm test
       # just verified.
       - run: npm run check:skips
+      # M2-0411: hex colour literals in renderer .css/.tsx may only ratchet down from
+      # scripts/color-literal-baseline.json, and design tokens live only in tokens.css.
+      - run: npm run check:colors
+
+  native:
+    # The two Swift halves of the product that no Node job can reach (M2-0050): the MetisKit package's
+    # tests, the native SwiftUI shell, and the shipped metis-mac-helper sidecar. Until this job existed the
+    # README's "26 tests green" was a claim nothing executed and the helper had no behavioural test at all.
+    name: Native (MetisKit, App, mac-helper)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Never bare `swift test` (M2-0190): the wrapper provides the sandboxed HOME that HermeticHomeTests asserts.
+      - name: MetisKit swift test
+        run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
+      - name: mac-helper behavioural tests
+        run: bash native/mac-helper/Tests/run-helper-tests.sh
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Generate the Xcode project
+        working-directory: native-app
+        run: xcodegen generate
+      # Report-only for its first week (2026-09-28 to 2026-10-05): the SwiftUI shell has never been built in
+      # CI, so a first red here may be a pre-existing break rather than a regression. After 2026-10-05
+      # delete `continue-on-error` so a failing App build blocks the merge. Same flags as
+      # scripts/build-native-mac.mjs, minus signing: CI only needs the compile to succeed.
+      - name: Build the native App (macOS)
+        continue-on-error: true
+        working-directory: native-app
+        run: |
+          xcodebuild -project Metis.xcodeproj -scheme Metis -configuration Debug \
+            -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build
+
+  lint:
+    # Minimal correctness lint plus a format check, on the files this branch changes (M2-0052). Biome comes
+    # from npx at the exact version scripts/ci/lint-ratchet.mjs pins, so this job needs no `npm ci`.
+    # fetch-depth 0: the ratchet compares each changed file with its merge-base revision.
+    name: Lint and format (changed files)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      # Blocking. A changed file may not gain lint diagnostics; the ones already in it are the baseline.
+      - name: Lint ratchet (changed files)
+        run: npm run lint:changed
+      # Report-only for its first week (2026-09-29 to 2026-10-05): no file has ever been formatted, so a
+      # first red may be old style rather than a regression. From 2026-10-06 the script itself exits 1 for
+      # an unformatted changed file (FORMAT_BLOCKING_FROM in lint-ratchet.mjs), so this step needs no edit.
+      - name: Format check (changed files)
+        run: npm run format:changed
+
+  license-server:
+    # license-server is a separate npm project (own package-lock) that neither `quality` nor `operator`
+    # reaches, so its `node --test` suite had no CI coverage (M2-0051). `npm test` there is the hermetic
+    # wrapper around `node --test`: it runs the suite in a sandboxed HOME, never the runner's real one.
+    name: License server (node --test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: license-server/package-lock.json
+      - run: npm ci
+        working-directory: license-server
+      - run: npm test
+        working-directory: license-server
 
   operator:
     # Métis Operator (the fleet control-plane Worker under operator/) is a separate deployable with
@@ -127,12 +217,22 @@ jobs:
         run: npx tsc --noEmit -p operator/tsconfig.json
       - name: Typecheck operator (client)
         run: npx tsc --noEmit -p operator/client/tsconfig.json
+      - name: Operator Worker bundle carries no in-memory store
+        run: npm run check:operator-bundle
       - name: Install Playwright Chromium for Operator layout tests
         run: npx playwright install --with-deps chromium
       - name: Operator test suite
         run: npx vitest run --config operator/vitest.config.ts
-      - name: Operator scripts contract tests (deploy/smoke/backup/dev-session)
+      - name: Operator scripts contract tests (deploy/smoke/backup/dev-session/local staging lane)
         run: npx vitest run --config operator/scripts/vitest.config.ts
+      - name: Staging deploy plan targets staging only (dry run, nothing executes)
+        run: |
+          node operator/scripts/deploy.mjs --env staging --dry-run | tee staging-plan.txt
+          grep -q 'worker:        metis-operator-staging' staging-plan.txt
+          grep -q 'd1 database:   metis-operator-staging' staging-plan.txt
+          grep -q 'migrate.mjs --remote --env staging' staging-plan.txt
+          grep -Eq 'wrangler.js deploy .*--env staging' staging-plan.txt
+          if grep -q 'metis-operator$' staging-plan.txt; then echo "plan names the production Worker or D1"; exit 1; fi
 
   security:
     name: Security & supply chain
@@ -232,6 +332,36 @@ jobs:
           docker run --rm -v "$PWD:/repo" -w /repo \
             zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             detect --source=/repo --config=/repo/.gitleaks.toml --redact -v --no-banner --exit-code=1
+      # Canary per file class (M2-0259). .gitleaks.toml carries no path exemptions, so a secret in a test
+      # file, QA script, doc, fixture or generated asset must fail the scan. This step proves it: it plants
+      # one synthetic GitHub-token-shaped canary per class in a throwaway directory (never in the tree, so
+      # the real scan stays green), runs the pinned gitleaks image with the repo's own config, and requires
+      # a github-pat finding for each. The value is assembled at run time and the scan runs with --redact,
+      # so neither the workflow text nor any report ever holds the value; the step also fails if the
+      # value shows up in gitleaks's output.
+      - name: Gitleaks canaries (one per file class)
+        run: |
+          canary="ghp_$(printf '%s' aB3dE5gH7jK9 mN1pQ3sT5vW7 yZ2bD4fH6jL8)"
+          for entry in test:src/canary.test.ts qa:scripts/qa/canary.mjs doc:docs/canary.md \
+                       fixture:src/fixtures/canary.json generated:out/generated/canary.js; do
+            class="${entry%%:*}"; rel="${entry#*:}"
+            dir="$(mktemp -d)"
+            mkdir -p "$dir/$(dirname "$rel")"
+            printf 'const token = "%s"\n' "$canary" > "$dir/$rel"
+            set +e
+            report="$(docker run --rm -v "$PWD/.gitleaks.toml:/cfg/.gitleaks.toml:ro" -v "$dir:/canary" \
+              zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+              detect --no-git --source=/canary --config=/cfg/.gitleaks.toml --redact -v --no-banner --exit-code=1 2>&1)"
+            status=$?
+            set -e
+            if [ "$status" -ne 1 ] || ! grep -q 'RuleID:[[:space:]]*github-pat' <<<"$report"; then
+              echo "::error::Gitleaks did not flag the $class canary ($rel)"; exit 1
+            fi
+            if grep -qF "$canary" <<<"$report"; then
+              echo "::error::Gitleaks output printed the canary value ($class)"; exit 1
+            fi
+            echo "$class canary flagged, value redacted."
+          done
       # Blocks a committed absolute per-user path or agent scratch-session path in tracked source.
       # Scans every tracked file git ls-files reports for the globs check-no-scratch-paths.mjs
       # declares; a pre-existing hit outside this gate's own scope is grandfathered in that

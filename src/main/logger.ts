@@ -164,6 +164,7 @@ export type AuditEvent =
   | 'capture.failed'
   | 'capture.check'
   | 'transcript.saved'
+  | 'writeup.span'
   | 'transcript.deleted'
   | 'transcript.renamed'
   | 'transcript.recap_edited'
@@ -262,6 +263,8 @@ export type AuditEvent =
   | 'sidecar.spawn'
   // M2-0215: long-lived local sidecar process exited.
   | 'sidecar.exit'
+  // M2-0028: a supervised sidecar launch fell back to direct spawn because the wrapper was unavailable.
+  | 'sidecar.unsupervised'
   // M2-0215: History list request timing across renderer and main.
   | 'history.request'
   // M2-0037 (B3-RC2): render-process-gone's reload budget was exhausted (>=3 reloads within 60s with no
@@ -311,6 +314,15 @@ export type AuditEvent =
   | 'local.runtime.missing'
   | 'sidecar.reaped'
   | 'sidecar.reap.skipped'
+  // M2-0028: content-free markers from the packaged HK-M proof (main/qa-hk-m.ts), written only when
+  // METIS_HK_M_SCENARIO selects a row on an isolated QA profile.
+  | 'hk-m.active-inference'
+  | 'hk-m.ffmpeg-import'
+  | 'hk-m.registry-write'
+  // M2-0460: a row's setup threw ({ row, error: <Error class name> }, never the message), and the HK-M-only
+  // lift of the advertised-RAM floor was applied ({ modelId, advertisedGB, requiredGB, totalmemBytes }).
+  | 'hk-m.setup-failed'
+  | 'hk-m.ram-floor-override'
   | 'local.model.checksum_fail'
   // First-run weight download (local-model-download.ts). The weights are no longer bundled, so these
   // are the audit trail for the only network fetch installed code makes for model files.
@@ -318,6 +330,10 @@ export type AuditEvent =
   | 'local.model.download_ok'
   | 'local.model.download_fail'
   | 'screen.preprocess.describe'
+  // M2-0429: the background screen reader stopped retrying a failing capture (one line per failure streak).
+  | 'screen.preprocess.suspended'
+  // M2-0429: the user ran Repair, which resets only this app's Screen Recording entry ({ ok, exitCode }).
+  | 'permission.repair'
   // Support diagnosability: the user exported the log trail to a folder (metadata only — file count).
   | 'diagnostics.export'
   | 'llm.call'

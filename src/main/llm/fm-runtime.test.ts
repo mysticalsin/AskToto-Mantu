@@ -3,6 +3,8 @@ import { describe, it, expect, vi } from 'vitest'
 // fm-runtime.ts imports auditLog/mainLog from ../logger, which imports `app` from electron — mock the
 // logger (mirrors local-runtime.test.ts's mocking style for the same import chain).
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
+// The sidecar registry (statically imported for supervised launches) pulls in mac-helper, which imports electron.
+vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 
 import {
   buildServeArgs,
@@ -20,7 +22,8 @@ import {
   endStream,
   activeStreams,
   FM_BINARY_PATH,
-  FM_SYSTEM_MODEL
+  FM_SYSTEM_MODEL,
+  FM_UNLICENSED_REASON
 } from './fm-runtime'
 
 describe('buildServeArgs', () => {
@@ -71,6 +74,14 @@ describe('parseAvailability', () => {
 
   it('an unavailable line without a reason still parses as unavailable', () => {
     expect(parseAvailability('System model unavailable:')).toEqual({ available: false, reason: 'unknown' })
+  })
+
+  it('M2-0430: the not-yet-accepted CLI licence notice parses to the unlicensed reason, not probe-unparsed', () => {
+    // Shape of the notice `fm available` prints until the owner runs `sudo fm license`.
+    const out =
+      'YOU HAVE NOT AGREED TO THE FOUNDATION MODELS CLI LEGAL NOTICE & TERMS.\n' +
+      'To review and accept them, run: sudo fm license\n'
+    expect(parseAvailability(out)).toEqual({ available: false, reason: FM_UNLICENSED_REASON })
   })
 
   it('unrecognized output is conservatively unavailable (probe-unparsed), never a crash', () => {

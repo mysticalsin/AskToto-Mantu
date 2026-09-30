@@ -1,15 +1,21 @@
 name: Resource census
 
-# Manual evidence lane for M2-0009. It downloads an existing packaged release artifact, installs it on
+# Manual evidence lane for M2-0009. It downloads an existing packaged release artifact, verifies it against the
+# release's published SHA256SUMS (a mismatch fails the job before install), installs it on
 # hosted macOS and Windows runners, measures the reusable process census, and uploads only content-free
 # JSON/log artifacts. It never builds, signs, publishes, tags, or changes release.yml.
 on:
   workflow_dispatch:
     inputs:
+      release_repo:
+        description: Repository that publishes the packaged artifacts and SHA256SUMS
+        required: true
+        default: mysticalsin/Metis-Releases
+        type: string
       release_tag:
         description: Release tag to measure
         required: true
-        default: v1.9.6
+        default: v1.9.6-unsigned
         type: string
 
 permissions:
@@ -28,6 +34,7 @@ jobs:
     name: Resource census (macOS)
     runs-on: macos-latest
     timeout-minutes: 80
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -40,21 +47,43 @@ jobs:
       - name: Download the packaged release artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ inputs.release_repo }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          mkdir -p release-artifact census-output
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-*.dmg' --dir release-artifact --clobber
-          shasum -a 256 release-artifact/* > census-output/SHA256SUMS.txt
+          mkdir -p release-artifact release-sums census-output
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-*.dmg' --dir release-artifact --clobber
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir release-sums --clobber
+          node scripts/qa/verify-sha256sums.mjs release-artifact release-sums/SHA256SUMS* | tee census-output/SHA256SUMS.txt
       - name: Install into runner temp
         run: |
           volume="$RUNNER_TEMP/resource-census-volume"
           target="$RUNNER_TEMP/resource-census-install"
-          rm -rf "$volume" "$target"
+          rm -rf "$volume" "$target" "$RUNNER_TEMP/resource-census-install-tmp"
           mkdir -p "$target"
-          hdiutil attach -nobrowse -readonly -mountpoint "$volume" release-artifact/Metis-*.dmg > /dev/null
-          app=$(find "$volume" -maxdepth 1 -name '*.app' -print -quit)
-          ditto "$app" "$target/Metis.app"
-          hdiutil detach "$volume" > /dev/null
+          # The mount-and-copy runs with TMPDIR pointed at a dedicated directory whose peak size is the
+          # temporary install footprint (macOS copies straight into the target, so this may be near zero).
+          node scripts/qa/census/measure-install.mjs \
+            --temp-dir "$RUNNER_TEMP/resource-census-install-tmp" \
+            --output census-output/darwin-temp-peak.json \
+            -- bash -c '
+              set -e
+              hdiutil attach -nobrowse -readonly -mountpoint "$1" "$3" > /dev/null
+              app=$(find "$1" -maxdepth 1 -name "*.app" -print -quit)
+              ditto "$app" "$2/Metis.app"
+              hdiutil detach "$1" > /dev/null
+            ' _ "$volume" "$target" release-artifact/Metis-*.dmg
+      - name: Measure install footprint
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          node scripts/bench-asr-ttfc.mjs > census-output/bench-asr-ttfc.log 2>&1
+          node scripts/qa/census/footprint.mjs \
+            --artifact release-artifact/Metis-*.dmg \
+            --install-root "$RUNNER_TEMP/resource-census-install/Metis.app" \
+            --temp-peak census-output/darwin-temp-peak.json \
+            --release-tag "$RELEASE_TAG" \
+            --ttfc-output census-output/bench-asr-ttfc.log \
+            --output census-output/darwin-footprint.json
       - name: Build representative synthetic profile
         run: |
           node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
@@ -85,6 +114,16 @@ jobs:
             fi
             node "${args[@]}"
           done
+      - name: Record run identity and file digests
+        if: always()
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          printf '{"runId":"%s","runAttempt":"%s","commit":"%s","releaseTag":"%s"}\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$RELEASE_TAG" > census-output/run-identity.json
+          (cd census-output && shasum -a 256 $(ls | grep -v '^FILES.sha256$') > FILES.sha256)
+          cat census-output/run-identity.json census-output/FILES.sha256
+          echo "LEAD_ACTION: file resource-baseline.md in the program tracker from this run ID and the artifact sha256 above; the managed-laptop, NPU, audio-device and live capture-to-caption rows stay BLOCKED_EXTERNAL."
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -97,6 +136,7 @@ jobs:
     name: Resource census (Windows)
     runs-on: windows-latest
     timeout-minutes: 80
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -109,21 +149,38 @@ jobs:
       - name: Download the packaged release artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ inputs.release_repo }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          mkdir -p release-artifact census-output
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'Metis-Setup-*.exe' --dir release-artifact --clobber
-          sha256sum release-artifact/* > census-output/SHA256SUMS.txt
+          mkdir -p release-artifact release-sums census-output
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-Setup-*.exe' --dir release-artifact --clobber
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir release-sums --clobber
+          node scripts/qa/verify-sha256sums.mjs release-artifact release-sums/SHA256SUMS* | tee census-output/SHA256SUMS.txt
       - name: Install into runner temp
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $target = Join-Path $env:RUNNER_TEMP 'resource-census-install'
-          if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+          $scratch = Join-Path $env:RUNNER_TEMP 'resource-census-install-tmp'
+          foreach ($path in $target, $scratch) { if (Test-Path $path) { Remove-Item $path -Recurse -Force } }
           New-Item -ItemType Directory -Path $target | Out-Null
           $setup = Get-Item release-artifact/Metis-Setup-*.exe
-          $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+          # NSIS unpacks into %TEMP% and deletes it before exiting, so TEMP/TMP point at a dedicated
+          # directory whose peak size, polled during the install, is the temporary install footprint.
+          node scripts/qa/census/measure-install.mjs --temp-dir $scratch --output census-output/win32-temp-peak.json -- $setup.FullName /S "/D=$target"
+          if ($LASTEXITCODE -ne 0) { throw "Setup exited with $LASTEXITCODE." }
+      - name: Measure install footprint
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          node scripts/bench-asr-ttfc.mjs > census-output/bench-asr-ttfc.log 2>&1
+          node scripts/qa/census/footprint.mjs \
+            --artifact release-artifact/Metis-Setup-*.exe \
+            --install-root "$RUNNER_TEMP/resource-census-install" \
+            --temp-peak census-output/win32-temp-peak.json \
+            --release-tag "$RELEASE_TAG" \
+            --ttfc-output census-output/bench-asr-ttfc.log \
+            --output census-output/win32-footprint.json
       - name: Build representative synthetic profile
         run: |
           node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
@@ -139,6 +196,16 @@ jobs:
               --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
               --output "census-output/win32-$state.json"
           done
+      - name: Record run identity and file digests
+        if: always()
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          printf '{"runId":"%s","runAttempt":"%s","commit":"%s","releaseTag":"%s"}\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$RELEASE_TAG" > census-output/run-identity.json
+          (cd census-output && sha256sum $(ls | grep -v '^FILES.sha256$') > FILES.sha256)
+          cat census-output/run-identity.json census-output/FILES.sha256
+          echo "LEAD_ACTION: file resource-baseline.md in the program tracker from this run ID and the artifact sha256 above; the managed-laptop, NPU, audio-device and live capture-to-caption rows stay BLOCKED_EXTERNAL."
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

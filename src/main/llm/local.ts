@@ -1,9 +1,10 @@
-import type { AskMode } from '@shared/ipc'
+import type { AppleEngineStatus, AskMode } from '@shared/ipc'
 import { mainLog } from '../logger'
 import { modelPaths as resolveLocalModelPaths, verifyIntegrity } from './local-models'
 import * as localRuntime from './local-runtime'
 import * as fmRuntime from './fm-runtime'
 import { streamOpenAI } from './openai'
+import type { HkMRamFloorOverride } from '../qa-hk-m'
 import { type StreamOptions, type StreamHandle, errMsg } from './shared'
 
 // Local completions are task-shaped, not generic 4k-token chat turns. These bounds preserve the current
@@ -13,6 +14,57 @@ import { type StreamOptions, type StreamHandle, errMsg } from './shared'
 export const LOCAL_OUTPUT_TOKEN_BUDGETS = Object.freeze({ suggest: 96, summary: 512, vision: 384 })
 const LOCAL_SYSTEM_CHAR_CAP = 40_000 // matches personas.ts contextBlock's existing imported-context cap
 const LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP = 80_000
+
+/** Conservative characters per token for sizing a request against a context window. English transcripts
+ *  run about four; three leaves room for names, numbers and accented text. */
+export const LOCAL_CHARS_PER_TOKEN = 3
+
+/** Apple's on-device model context window (prompt plus answer). */
+export const FM_CONTEXT_TOKENS = 4096
+
+/** Tokens one llama-server slot holds for `modelId`: the running sidecar's when it is up, else what the
+ *  next start would get on this machine. Every local request must fit one slot. */
+export function localSlotTokens(modelId: string): number {
+  const paths = resolveLocalModelPaths(modelId)
+  const running = localRuntime.getActiveModelKey() === paths.gguf ? localRuntime.activeSlotTokens() : null
+  return running ?? Math.floor(paths.ctxSize / paths.parallel)
+}
+
+// ── Recap pre-emption ────────────────────────────────────────────────────────────────────────────────
+// INV-PREEMPT: while a user-facing summary is in flight, no background local stream runs. Starting one
+// fails every background stream at once with LOCAL_PREEMPTED_MESSAGE, and a background stream started
+// meanwhile fails the same way before any engine work. Background callers wait for
+// whenLocalInteractiveIdle() and resend; they never retry on their own schedule.
+export const LOCAL_PREEMPTED_MESSAGE = 'Background on-device work paused for a meeting recap.'
+let interactiveSummaries = 0
+let idleWaiters: Array<() => void> = []
+const backgroundPreemptions = new Set<() => void>()
+
+export function isLocalPreemption(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message === LOCAL_PREEMPTED_MESSAGE
+}
+
+/** Resolves once no user-facing local summary is in flight (immediately when none is). */
+export function whenLocalInteractiveIdle(): Promise<void> {
+  if (interactiveSummaries === 0) return Promise.resolve()
+  return new Promise((resolve) => idleWaiters.push(resolve))
+}
+
+function beginInteractiveSummary(): () => void {
+  interactiveSummaries++
+  for (const preempt of [...backgroundPreemptions]) preempt()
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    interactiveSummaries--
+    if (interactiveSummaries > 0) return
+    const waiters = idleWaiters
+    idleWaiters = []
+    for (const resolve of waiters) resolve()
+  }
+}
 
 function boundedLocalSystem(system: string): string {
   if (system.length <= LOCAL_SYSTEM_CHAR_CAP) return system
@@ -56,7 +108,9 @@ function boundedLocalSystem(system: string): string {
 export async function ensureLocalRuntimeStarted(
   modelId: string,
   vision = false,
-  canStartSpeculatively?: () => boolean
+  canStartSpeculatively?: () => boolean,
+  // M2-0460: only the packaged HK-M proof holds a token that verifyIntegrity honours (qa-hk-m.ts).
+  ramFloorOverride?: HkMRamFloorOverride
 ): Promise<void> {
   // Only unattended callers pass this gate. A real user request deliberately omits it, so an import
   // cannot turn a requested local answer into a silent no-op. Check both before costly verification and
@@ -64,7 +118,8 @@ export async function ensureLocalRuntimeStarted(
   if (canStartSpeculatively?.() === false) return
   const paths = resolveLocalModelPaths(modelId)
   if (localRuntime.getState() === 'stopped' || localRuntime.getActiveModelKey() !== paths.gguf) {
-    await verifyIntegrity(modelId)
+    // Passed only when present, so every other caller's verification call is unchanged.
+    await (ramFloorOverride ? verifyIntegrity(modelId, ramFloorOverride) : verifyIntegrity(modelId))
   }
   if (canStartSpeculatively?.() === false) return
   // MQA-270 (B1): the multimodal projector loads at server START, never lazily, and costs 1.03 GB
@@ -93,12 +148,23 @@ export type LocalEngine = 'llama' | 'apple'
  * Apple Intelligence off, crash budget exhausted, METIS_DISABLE_APPLE_FM=1 — lands on 'llama', so
  * Windows and macOS 26 behavior is byte-identical to before this engine existed.
  */
-export async function pickLocalEngine(mode: AskMode): Promise<LocalEngine> {
+export async function pickLocalEngine(mode: AskMode, promptChars = 0, outputTokens = 0): Promise<LocalEngine> {
   if (mode === 'vision') return 'llama'
+  // Qualification: a request Apple's window cannot hold goes to llama-server rather than failing there.
+  if (Math.ceil(promptChars / LOCAL_CHARS_PER_TOKEN) + outputTokens > FM_CONTEXT_TOKENS) return 'llama'
   if (fmRuntime.disabledByEnv() || !fmRuntime.supported()) return 'llama'
   if (fmRuntime.getState() === 'unavailable') return 'llama'
   const availability = await fmRuntime.probeAvailability()
   return availability.available ? 'apple' : 'llama'
+}
+
+/** What Settings says about the Apple engine. 'unlicensed' is the one state only the owner can fix. */
+export async function appleEngineStatus(): Promise<AppleEngineStatus> {
+  if (!fmRuntime.supported()) return 'unsupported'
+  if (fmRuntime.disabledByEnv()) return 'disabled'
+  const availability = await fmRuntime.probeAvailability()
+  if (availability.available) return 'available'
+  return availability.reason === fmRuntime.FM_UNLICENSED_REASON ? 'unlicensed' : 'unavailable'
 }
 
 /**
@@ -110,9 +176,15 @@ export async function pickLocalEngine(mode: AskMode): Promise<LocalEngine> {
 export async function prewarmLocal(
   modelId: string,
   messages: Array<{ role: string; content: string }>,
-  canStartSpeculatively?: () => boolean
+  canStartSpeculatively?: () => boolean,
+  purpose: 'suggest' | 'summary' = 'suggest'
 ): Promise<void> {
-  if ((await pickLocalEngine('suggest')) === 'apple') {
+  // A summary warm must land on the engine and slot the recap itself will use, so it is qualified with
+  // the same prompt size and answer budget the recap request carries.
+  const engine = purpose === 'summary'
+    ? await pickLocalEngine('summary', messages.reduce((n, m) => n + m.content.length, 0), LOCAL_OUTPUT_TOKEN_BUDGETS.summary)
+    : await pickLocalEngine('suggest')
+  if (engine === 'apple') {
     // Engine selection is async. Recheck after it, directly before loading fm serve, so a concurrent
     // import can defer this best-effort warm without affecting the later user-initiated request.
     if (canStartSpeculatively?.() === false) return
@@ -126,7 +198,8 @@ export async function prewarmLocal(
   localRuntime.markActivity()
   await ensureLocalRuntimeStarted(modelId, false, canStartSpeculatively)
   if (canStartSpeculatively?.() === false) return
-  localRuntime.prewarm(messages)
+  if (purpose === 'summary') localRuntime.prewarm(messages, 1)
+  else localRuntime.prewarm(messages)
 }
 
 export function streamLocal(opts: StreamOptions): StreamHandle {
@@ -144,6 +217,14 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
     })
     return { abort: () => { aborted = true } }
   }
+  const background = opts.background === true
+  if (background && interactiveSummaries > 0) {
+    queueMicrotask(() => {
+      if (!aborted) opts.handlers.onError(LOCAL_PREEMPTED_MESSAGE)
+    })
+    return { abort: () => { aborted = true } }
+  }
+  const releaseInteractive = !background && opts.req.mode === 'summary' ? beginInteractiveSummary() : () => {}
   let inner: StreamHandle | null = null
   // Engine-owned release for the beginStream()/endStream() pairing (switch-kill hardening on llama;
   // idle/teardown accounting on fm). Set by whichever engine actually attaches a stream, fired exactly
@@ -155,6 +236,24 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
     const r = release
     release = null
     r()
+  }
+  // Terminal release of everything this request holds: its engine stream, its interactive-summary hold
+  // and its pre-emption registration. Fired by onDone/onError/abort/start failure.
+  let preempt: (() => void) | null = null
+  const settle = (): void => {
+    releaseStream()
+    releaseInteractive()
+    if (preempt) backgroundPreemptions.delete(preempt)
+  }
+  if (background) {
+    preempt = () => {
+      if (aborted) return
+      aborted = true
+      inner?.abort()
+      settle()
+      opts.handlers.onError(LOCAL_PREEMPTED_MESSAGE)
+    }
+    backgroundPreemptions.add(preempt)
   }
 
   // These local modes carry all current context in transcript/screenshot + prompt. Generic chat history
@@ -176,7 +275,7 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
   const wrapHandlers = (markActivity: () => void): StreamOptions['handlers'] => ({
     ...opts.handlers,
     onDone: (u, completion) => {
-      releaseStream()
+      settle()
       markActivity()
       opts.handlers.onDone(
         { ...u, cacheStatus: 'n/a', cacheRead: undefined, cacheWrite: undefined, cacheUncached: undefined },
@@ -184,7 +283,7 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
       )
     },
     onError: (message) => {
-      releaseStream()
+      settle()
       markActivity()
       opts.handlers.onError(message)
     }
@@ -242,7 +341,11 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
 
   void (async () => {
     try {
-      if ((await pickLocalEngine(opts.req.mode)) === 'apple') {
+      // Only a summary is qualified against Apple's window: it is the request that can outgrow it, and
+      // suggest keeps its established engine choice.
+      const summary = opts.req.mode === 'summary'
+      const promptChars = summary ? localSystem.length + (localReq.transcript?.length ?? 0) : 0
+      if ((await pickLocalEngine(opts.req.mode, promptChars, summary ? maxOutputTokens : 0)) === 'apple') {
         try {
           await runApple()
           return
@@ -257,7 +360,7 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
       }
       await runLlama()
     } catch (err) {
-      releaseStream()
+      settle()
       if (!aborted) opts.handlers.onError(errMsg(err))
     }
   })()
@@ -269,7 +372,7 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
       // openai.ts's onError is suppressed once controller.signal.aborted is true, so it will never call
       // releaseStream() for us on this path — release here so a Cancel/superseded-ask abort doesn't leave
       // the sidecar permanently marked busy and block every future model switch.
-      releaseStream()
+      settle()
       // Accepted behavior (audit risk, by design): if the sidecar is still starting when this fires, the
       // in-flight ensureLocalRuntimeStarted()/start() call is NOT cancelled — it runs to completion and the
       // sidecar stays up, reclaimed later by the normal 15-minute idle-stop rather than torn down here.

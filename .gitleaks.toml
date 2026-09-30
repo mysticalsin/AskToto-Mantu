@@ -22,19 +22,43 @@ useDefault = true
 # Cloudflare key — see MISTAKES/QA harness notes) did not trip gitleaks's default ruleset directly, but is
 # allowlisted below on the same basis: it must never be treated as a real credential either.
 #
-# The allowlist below is PATH-scoped, not string-scoped, and deliberately mirrors the existing narrow
-# scan's own exclusions (--exclude='*.test.ts' --exclude-dir=qa in build.yml) so the two secret gates stay
-# in the same policy rather than drifting: a real secret pasted into product source still fails both.
+# The allowlist below is VALUE-scoped, never path-scoped (M2-0259). Test files, the QA harness, docs,
+# fixtures and generated assets are all scanned like product source: a real secret pasted into any of
+# them fails this gate. Each entry matches ONE exact fake value (gitleaks matches `regexes` against the
+# secret itself), so a real secret pasted beside a fixture still fails. The Security job plants one
+# synthetic canary per file class and requires this config to flag each of them (build.yml).
 [allowlist]
-description = "Test fixtures, the physical QA harness, and documentation examples — deliberately fake or invalid credentials, never real ones."
-paths = [
-  # Unit/contract test fixtures across the repo (src/, scripts/, license-server/) — same class of file
-  # the narrow scan already excludes via --exclude='*.test.ts' --exclude='*.test.tsx'.
-  '''.*\.test\.tsx?$''',
-  '''.*\.test\.mjs$''',
-  # The physical QA harness (scripts/qa/**) plants deliberately-invalid keys (e.g. 'qa-proxy-key') to
-  # exercise degrade/redaction paths — same directory the narrow scan already excludes via --exclude-dir=qa.
-  '''^scripts/qa/.*''',
-  # Documentation examples (API key formats, sample config snippets) are illustrative, never live keys.
-  '''^docs/.*\.md$'''
+description = "Known deliberately-fake credentials, matched by exact value."
+regexes = [
+  # The fixture the redaction unit tests use (src/shared/redact.test.ts), and when a doc quotes it.
+  '''^['"]?ABCDEF123456['"]?$''',
+  # The license-server test fixture key (license-server/ops.test.mjs), and when a doc quotes it.
+  '''^ATK-(HY2JVMZ3P3JF8CGAQWPR|7QHM2K9X3VBN8ZC1FGJ0)$''',
+  # Operator seat-token fixtures: the fixed "METIS-OP-1.<word>" placeholders and the one long sample token
+  # the HMAC/transport tests share. Anchored to the whole value; a real seat token has a different shape.
+  '''^METIS-OP-1\.(fixture|test|old|new|replacement|licensed-seat)$''',
+  '''^METIS-OP-1\.abcdef0123456789\.100\.200\.abcdefghijklmnopqrstuv$''',
+  # Test-only placeholders that name themselves as synthetic: the exact strings the tests feed to the code under
+  # test, each anchored whole so a real high-entropy secret never matches.
+  '''^(METIS-OP-1\.fixture|synthetic-seat-license|synthetic-upstream-key|synthetic-license|synthetic-no-credential|synthetic-secret|synthetic-password-never-log|synthetic-environment-credential)$''',
+  '''^(shared-secret-for-tests|operator-ingest-secret-for-tests|metis-proxy-key-for-tests|account-token-for-tests|test-admin-token|test-mcp-key-123|qa-only-invalid-token)$''',
+  '''^(placeholder-not-a-real-key|sk-test-not-a-real-key-0123456789abcdef|sk-proj-not-a-real-key-0123456789|sk-synthetic-example-credential-abcdefghijklmnop)$''',
+  '''^cf-api-token-TESTKEYONLY-not-a-real-secret-(66fd|99zz|77ab)$''',
+  # Fixtures of the redaction, provider-detection and operator tests: each value is exactly the fake string
+  # the test feeds to the code under test, anchored whole so a real key of the same shape does not match.
+  '''^(ghp_0123456789abcdefghijABCDEFG|AKIAIOSFODNN7EXAMPLE|sk-proj-AbCdEf0123456789xyzQWERTY|sk-0123456789abcdefghijklmno)$''',
+  '''^(sk-ant-api03-abcdefghijklmnop|sk-ant-api03-verylongsecretkeyvalue|sk-ant-api03-SUPERSECRETTOKEN1234|sk-ant-abc123DEF456ghi789|sk-abc123DEF456ghi789)$''',
+  '''^(sk-proj-abcdefghijklmnopqrstuvwxyz123456|sk-dead0000000000000000000000000000000000|sk-cf-OPERATOR-VAULT-TEST-only-xx99|sk-OPENAI-OPERATOR-VAULT-TEST-only-xx99)$''',
+  '''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0In0(\.signaturexx)?$''',
+  '''^(ingest-secret|shared-secret|old-shared-secret|secret-token|fresh-token|test-token|tok-rotated|plane-tok-1|tok_(eu|us)_123|clickup-(at|rt)-1|plane-(at|rt)-(1|A|B|B2)|plane-secret-(1|xyz)|fresh-ported-secret)$''',
+  # Source identifiers (SCREAMING_SNAKE constant names, e.g. `promptKey: PROMPT_KEY_B64`) captured as the value
+  # of a key-like property: variable references, not literals. Each name is listed exactly.
+  '''^(PROMPT_KEY_B64|DUMMY_TOKEN|ADMIN_TOKEN|WEBHOOK_SECRET|TEST_INGEST_SECRET|IMPORT_RECAP_CACHE_KEY|DESCRIBE_MAX_TOKENS|SETTINGS_KEYS|SECTION_ALIASES|SECRET_SUBMITTED_TEXT|METIS_PROXY_KEY|HTTPS_PROXY)$''',
+  '''^OAUTH_(ZOHO|SHAREPOINT|SALESFORCE|MICROSOFTTEAMS|GOOGLEDRIVE|DYNAMICS365)_CLIENT_SECRET$''',
+  # Exact fake credentials of the operator connector probe test and the CLI/MCP tests.
+  '''^(close-api-key-abcdef123456|sk-secret-should-not-leak|sk-ant-veryprivate-88123|sk-bidstack-abc|operator-ingest-test-secret|test-operator-secret)$''',
+  # The lease-signing fixture: the PEM private half of DEV_LEASE_PUBLIC_KEY, base64-embedded in the two lease
+  # tests so they can sign a genuine lease. Gitleaks reports the decoded PEM, so the entry is the whole decoded
+  # PEM, exact key body included; any other private key still fails.
+  '''^-----BEGIN PRIVATE KEY-----\s*MC4CAQAwBQYDK2VwBCIEINB0UK4UXSLn6mXIOdhN9Ig5Yn7C1cVZG1Jow2Ur62xM\s*-----END PRIVATE KEY-----\s*$'''
 ]

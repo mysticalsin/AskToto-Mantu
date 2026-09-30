@@ -32,6 +32,8 @@ import { safeMeetingBasename } from './meeting-path'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
 import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-duration'
+import { classifyAll, storageAt } from './infra/storage/meetings-storage'
+import type { FileClass } from './infra/storage/gateway'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -305,11 +307,15 @@ export function readSavedFile(path: string): string {
   return decodeSaved(readFileSync(path))
 }
 
+export function isEncryptedBytes(bytes: Buffer): boolean {
+  const head = bytes.subarray(0, MARKER_LEN)
+  return head.equals(ENC_MARKER) || head.equals(ENC_MARKER_V2)
+}
+
 /** True if the file on disk is one of Métis's encrypted transcripts. */
 export function isEncryptedFile(path: string): boolean {
   try {
-    const head = readFileSync(path).subarray(0, MARKER_LEN)
-    return head.equals(ENC_MARKER) || head.equals(ENC_MARKER_V2)
+    return isEncryptedBytes(readFileSync(path))
   } catch {
     return false
   }
@@ -346,13 +352,14 @@ let tempCleanupHooked = false
  *  This is an explicit single-file user read (the only caller is recallOpen's "Open" click), so it opts
  *  into Keychain recovery for an old 'S:'-wrapped meeting despite the forced local keystore — see
  *  decryptEnvelopeV2's doc comment. Bulk list/search paths (recall.ts) go through decodeSaved instead and
- *  never set this, so they stay exactly as boot-prompt-free as commit 486227d intended. */
-export function decryptToTemp(path: string): string {
+ *  never set this, so they stay exactly as boot-prompt-free as commit 486227d intended. Given `bytes` (read
+ *  through the storage gateway by History's Open, history-actions.ts), the file is never read here. */
+export function decryptToTemp(path: string, bytes?: Buffer): string {
   // Read + decrypt defensively: a foreign-keychain file yields the notice instead of throwing and
   // leaving the user with a dead "Open" click.
   let content: string
   try {
-    const decoded = tryDecodeSaved(readFileSync(path), true, path)
+    const decoded = tryDecodeSaved(bytes ?? readFileSync(path), true, path)
     content = decoded.ok ? decoded.text : UNDECRYPTABLE_MSG
   } catch {
     content = UNDECRYPTABLE_MSG
@@ -706,13 +713,13 @@ export async function appendDebrief(
   const safeName = safeMeetingBasename(file)
   if (!safeName) return { ok: false, error: 'Invalid meeting file name.' }
   const path = join(folder, safeName)
-  if (!existsSync(path)) return { ok: false, error: 'Meeting file not found.' }
-  let md: string
-  try {
-    md = readSavedFile(path)
-  } catch {
+  const read = await storageAt(folder).read(safeName)
+  if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
+  if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
   }
+  const md = decodeSaved(read.bytes)
+  if (!md) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
   if (!/^type: meeting-transcript$/m.test(md)) return { ok: false, error: 'Not a meeting transcript.' }
   const safeText = escapeHeadingLines(text.trim())
   const section =
@@ -738,7 +745,7 @@ export async function appendDebrief(
   // renameMeeting), NOT the live encryptTranscripts toggle. Otherwise appending a debrief to a file
   // that was saved while encryption was on would rewrite the whole transcript as plaintext once the
   // toggle is later turned off — a silent at-rest downgrade of already-recorded third-party speech.
-  const wasEncrypted = isEncryptedFile(path)
+  const wasEncrypted = isEncryptedBytes(read.bytes)
   await writeSaved(path, updated, wasEncrypted)
   return { ok: true }
 }
@@ -837,6 +844,13 @@ export async function clearDraftTranscript(settings: Settings, startedAt: number
 
 const IN_PROGRESS_SUFFIX = ' (in progress — autosaved draft)'
 
+// Never follow a symlink planted with a draft-shaped name: `FileClass.isSymlink` is the directory
+// entry's own type (from lstat), not the target's, so a symlink to another meeting already inside the
+// folder is rejected here even though the gateway's `read()` would otherwise follow it.
+function isFile(fileClass: FileClass | undefined): boolean {
+  return !!fileClass && 'isSymlink' in fileClass && !fileClass.isSymlink
+}
+
 /**
  * Promote orphaned autosave drafts into real, visible meetings (run once at launch). A draft only
  * survives on disk when its meeting never reached a normal save — a crash or force-quit — so leaving
@@ -855,25 +869,26 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
   let recovered = 0
   try {
     const folder = resolveMeetingsFolder(settings)
-    if (!existsSync(folder)) return { recovered }
-    for (const dirent of readdirSync(folder, { withFileTypes: true })) {
-      const f = dirent.name
-      if (!f.startsWith('.autosave-draft-') || !f.endsWith('.md')) continue
-      if (!dirent.isFile()) continue // never follow a symlink planted with a draft-shaped name
+    const gateway = storageAt(folder)
+    const listing = await gateway.list('')
+    if (listing.status !== 'ok') return { recovered }
+    const draftNames = listing.names.filter((name) => name.startsWith('.autosave-draft-') && name.endsWith('.md'))
+    const draftClasses = await classifyAll(gateway, draftNames)
+    const occupied = new Set(listing.names)
+    for (const f of draftNames) {
+      if (!isFile(draftClasses.get(f))) continue
       const draftPath = join(folder, f)
       try {
         const stampPart = f.slice('.autosave-draft-'.length, -'.md'.length)
         const primaryOut = join(folder, `${stampPart}-recovered.md`)
-        if (existsSync(primaryOut)) {
+        if (occupied.has(basename(primaryOut))) {
           // Already promoted by a previous run — this draft only still exists because that run's
           // unlink below failed afterward (transient EBUSY/EPERM; this folder is often OneDrive-synced).
           // Re-promoting would write a second, fully duplicate "-recovered-2.md" copy of the same
           // meeting, so just retry the cleanup and move on without touching `recovered`.
-          try {
-            unlinkSync(draftPath)
-          } catch {
-            /* still stale for the next run — harmless; the existsSync(primaryOut) guard prevents a dupe */
-          }
+          await unlink(draftPath).catch(() => {
+            /* still stale for the next run — harmless; the occupied-name guard prevents a dupe */
+          })
           continue
         }
         // Preserve the DRAFT's own at-rest encryption exactly as found (mirrors appendDebrief /
@@ -881,18 +896,21 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
         // on holds recorded third-party speech; promoting it under a since-disabled toggle would rewrite
         // it as unmarked cleartext into the (OneDrive-synced) meetings folder — a silent at-rest
         // downgrade, with no prompt and no way back.
-        const wasEncrypted = isEncryptedFile(draftPath)
-        const text = decodeSaved(readFileSync(draftPath))
+        const read = await gateway.read(f)
+        if (read.status !== 'ok') continue
+        const wasEncrypted = isEncryptedBytes(read.bytes)
+        const text = decodeSaved(read.bytes)
         if (!text) continue // undecryptable on this device — leave it alone
         const promoted = text
           .replace('type: meeting-transcript-draft', 'type: meeting-transcript')
           .replace('status: interrupted', 'status: recovered')
           .replace(IN_PROGRESS_SUFFIX, ' (recovered)')
         let out = primaryOut
-        for (let n = 2; existsSync(out); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
+        for (let n = 2; occupied.has(basename(out)); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
         await writeSaved(out, promoted, wasEncrypted)
+        occupied.add(basename(out))
         try {
-          unlinkSync(draftPath)
+          await unlink(draftPath)
         } catch {
           // The promoted copy is already safely on disk; a future run will see primaryOut exists and
           // skip re-promoting this same stale draft (see the guard above), only retrying its cleanup.

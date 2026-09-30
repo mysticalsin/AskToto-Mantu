@@ -1,6 +1,13 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { desktopCapturer, systemPreferences } from 'electron'
-import { clearScreenProbe, getPlatformPermissions, noteScreenCaptureOutcome, probeScreenCapture } from './platform-perms'
+import {
+  clearScreenProbe,
+  getPlatformPermissions,
+  noteScreenCaptureOutcome,
+  probeScreenCapture,
+  setScreenDiagnosisProvider,
+  windowsScreenStatus
+} from './platform-perms'
 
 vi.mock('electron', () => ({
   systemPreferences: { getMediaAccessStatus: vi.fn() },
@@ -149,5 +156,37 @@ describe('non-desktop platforms', () => {
   it('reports not-required rather than pretending a permission model exists', () => {
     setPlatform('linux')
     expect(getPlatformPermissions()).toEqual({ microphone: 'not-required', screenRecording: 'not-required' })
+  })
+})
+
+// M2-0429: every permissions:get / requestUpfront answer carries the Screen Recording diagnosis, so the UI
+// can tell "never asked" from "on in System Settings but held by another build".
+describe('screen diagnosis provider', () => {
+  afterEach(() => setScreenDiagnosisProvider(null))
+
+  it('adds the registered diagnosis and identity to the snapshot, and leaves the raw statuses alone', () => {
+    setPlatform('darwin')
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('denied')
+    const screenDiagnosis = {
+      state: 'not-effective' as const,
+      reasons: ['identity-changed' as const],
+      action: 'repair' as const,
+      duplicates: [],
+      grantedFor: { version: '1.9.6', cdhash: 'b'.repeat(40) },
+      repairFailed: false
+    }
+    const identity = { version: '1.9.7', cdhash: 'a'.repeat(40), teamId: '', adhoc: true }
+    setScreenDiagnosisProvider(() => ({ screenDiagnosis, identity }))
+    expect(getPlatformPermissions()).toEqual({ microphone: 'denied', screenRecording: 'denied', screenDiagnosis, identity })
+  })
+
+  it('windowsScreenStatus reads the probe verdict without consulting the provider', () => {
+    const provider = vi.fn(() => ({}))
+    setScreenDiagnosisProvider(provider)
+    expect(windowsScreenStatus()).toBe('unknown')
+    setPlatform('win32')
+    noteScreenCaptureOutcome(true)
+    expect(windowsScreenStatus()).toBe('granted')
+    expect(provider).not.toHaveBeenCalled()
   })
 })
