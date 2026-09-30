@@ -12,21 +12,23 @@
  *
  *   1. every file in staging re-verified (length + sha256)
  *   2. the injected self-test decodes the pinned fixture to non-empty text
- *   3. rename staging -> <id>/<version>      (atomic: the directory is whole or absent)
- *   4. write active.json.tmp, rename to active.json
+ *   3. an existing <id>/<version> is renamed aside to <version>.old-<ts>   (never deleted first)
+ *   4. rename staging -> <id>/<version>      (atomic: the directory is whole or absent)
+ *   5. write active.json.tmp, rename to active.json, then delete the aside directory
  *
- * A marker exists only after step 3 completed, and step 3 only runs on a fully verified, self-tested set,
+ * A marker exists only after step 4 completed, and step 4 only runs on a fully verified, self-tested set,
  * so no crash can leave a marker without a complete directory or a half-filled directory behind a marker.
- * A crash between 3 and 4 leaves a complete but unmarked directory; the next start re-verifies it and
- * writes the marker, or removes it.
+ * A crash between 4 and 5 leaves a complete but unmarked directory; the next start re-verifies it and
+ * writes the marker, or removes it. initialise() deletes any aside directory a crash left behind.
+ * Cancel is checked before the self-test and again before step 3, so a cancelled pack never ends 'ready'.
  *
  * State and events carry component ids, byte counts and error kinds only — no path, transcript, audio or
  * user text ever enters a state, an event or a log line.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs'
+import { mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { adoptExtracted, type ExtractArchive } from './archive'
-import { DEFAULT_TIMING, downloadVerified, sha256File, type DownloadDeps, type DownloadTiming } from './download'
+import { adoptExtracted, createArchiveSink, type ExtractArchive } from './archive'
+import { DEFAULT_TIMING, downloadVerified, sha256File, sizeOf, type DownloadDeps, type DownloadTiming } from './download'
 import { SpeechPackError, type SpeechPackErrorKind } from './errors'
 import {
   SELF_TEST_FIXTURE,
@@ -50,7 +52,13 @@ export type SpeechPackState =
   | { status: 'paused' }
   | { status: 'error'; kind: SpeechPackErrorKind; requiredBytes?: number; freeBytes?: number }
 
-export type ActivationStep = 'staged-verified' | 'self-tested' | 'renamed' | 'marker-tmp-written' | 'marker-written'
+export type ActivationStep =
+  | 'staged-verified'
+  | 'self-tested'
+  | 'old-moved-aside'
+  | 'renamed'
+  | 'marker-tmp-written'
+  | 'marker-written'
 
 export interface SpeechPackEngineOptions {
   rootDir: string
@@ -67,7 +75,7 @@ export interface SpeechPackEngineOptions {
   sleep?: (ms: number) => Promise<void>
   random?: () => number
   timing?: Partial<DownloadTiming>
-  freeBytes?: (path: string) => number
+  freeBytes?: (path: string) => number | Promise<number>
   emitIntervalMs?: number
   /** Test seam: called after each activation step, so a test can stop the process there. */
   onActivationStep?: (step: ActivationStep) => void | Promise<void>
@@ -93,23 +101,28 @@ interface Marker {
   version: string
 }
 
-function sizeOf(path: string): number {
+async function exists(path: string): Promise<boolean> {
   try {
-    return statSync(path).size
+    await stat(path)
+    return true
   } catch {
-    return 0
+    return false
   }
 }
 
-function nearestExisting(path: string): string {
+async function nearestExisting(path: string): Promise<string> {
   let current = path
-  while (!existsSync(current) && dirname(current) !== current) current = dirname(current)
+  while (!(await exists(current)) && dirname(current) !== current) current = dirname(current)
   return current
 }
 
-function defaultFreeBytes(path: string): number {
-  const fs = statfsSync(path)
+async function defaultFreeBytes(path: string): Promise<number> {
+  const fs = await statfs(path)
   return fs.bavail * fs.bsize
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw signal.reason
 }
 
 export function createSpeechPackEngine(options: SpeechPackEngineOptions): SpeechPackEngine {
@@ -130,6 +143,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   const listeners = new Set<(event: { id: SpeechPackComponentId; state: SpeechPackState }) => void>()
   const queue: SpeechPackComponentId[] = []
   const controllers = new Map<SpeechPackComponentId, AbortController>()
+  const cleanups = new Map<SpeechPackComponentId, Promise<void>>()
   let running: SpeechPackComponentId | null = null
   let idleWaiters: Array<() => void> = []
 
@@ -167,46 +181,66 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   async function dirVerified(c: SpeechPackComponent, dir: string): Promise<boolean> {
     for (const file of c.files) {
       const path = fileAt(dir, file.path)
-      if (sizeOf(path) !== file.bytes || (await sha256File(path)) !== file.sha256) return false
+      if ((await sizeOf(path)) !== file.bytes || (await sha256File(path)) !== file.sha256) return false
     }
     return true
   }
 
   async function writeMarker(c: SpeechPackComponent): Promise<void> {
     const marker: Marker = { schema: 1, component: c.id, version: c.version }
-    mkdirSync(dirname(markerPath(c)), { recursive: true })
-    writeFileSync(`${markerPath(c)}.tmp`, JSON.stringify(marker))
+    await mkdir(dirname(markerPath(c)), { recursive: true })
+    await writeFile(`${markerPath(c)}.tmp`, JSON.stringify(marker))
     await options.onActivationStep?.('marker-tmp-written')
-    renameSync(`${markerPath(c)}.tmp`, markerPath(c))
+    await rename(`${markerPath(c)}.tmp`, markerPath(c))
     await options.onActivationStep?.('marker-written')
   }
 
-  function hasMarker(c: SpeechPackComponent): boolean {
+  async function hasMarker(c: SpeechPackComponent): Promise<boolean> {
     try {
-      const marker = JSON.parse(readFileSync(markerPath(c), 'utf8')) as Partial<Marker>
+      const marker = JSON.parse(await readFile(markerPath(c), 'utf8')) as Partial<Marker>
       return marker.schema === 1 && marker.component === c.id && marker.version === c.version
     } catch {
       return false
     }
   }
 
+  /** Pack directories renamed aside by an activation that did not get to delete them. */
+  async function removeAsideDirs(c: SpeechPackComponent): Promise<void> {
+    let names: string[] = []
+    try {
+      names = await readdir(join(rootDir, c.id))
+    } catch {
+      return
+    }
+    for (const name of names) {
+      if (name.startsWith(`${c.version}.old-`)) await rm(join(rootDir, c.id, name), { recursive: true, force: true })
+    }
+  }
+
   async function initialise(): Promise<void> {
     for (const c of components) {
+      await removeAsideDirs(c)
       const dir = finalDir(c)
-      if (!existsSync(dir)) continue
+      if (!(await exists(dir))) continue
       if (!(await dirVerified(c, dir))) {
-        rmSync(markerPath(c), { force: true })
-        rmSync(dir, { recursive: true, force: true })
+        await rm(markerPath(c), { force: true })
+        await rm(dir, { recursive: true, force: true })
         continue
       }
-      if (!hasMarker(c)) await writeMarker(c)
+      if (!(await hasMarker(c))) await writeMarker(c)
       set(c.id, { status: 'ready' })
     }
   }
 
+  // A cancel that lands after its pack is already active must still win: the pack is taken back out.
+  async function deactivate(c: SpeechPackComponent): Promise<void> {
+    await rm(markerPath(c), { force: true })
+    await rm(finalDir(c), { recursive: true, force: true })
+  }
+
   // --- one install ---
   async function install(c: SpeechPackComponent, signal: AbortSignal): Promise<void> {
-    if (hasMarker(c) && existsSync(finalDir(c))) {
+    if ((await hasMarker(c)) && (await exists(finalDir(c)))) {
       set(c.id, { status: 'ready' })
       return
     }
@@ -214,7 +248,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     const work = workDir(c)
     const source = c.source
     const archiveDest = join(work, 'archive.download')
-    const missing = c.files.filter((f) => sizeOf(fileAt(staging, f.path)) !== f.bytes)
+    const missing: SpeechPackComponent['files'][number][] = []
+    for (const f of c.files) if ((await sizeOf(fileAt(staging, f.path))) !== f.bytes) missing.push(f)
 
     // Everything below the disk check writes to disk; nothing above it does.
     let bytesTotal = 0
@@ -223,21 +258,21 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       if (source.kind === 'files') {
         if (source.baseUrl === null) throw new SpeechPackError('http', 'source is not pinned')
         bytesTotal = componentBytes(c)
-        required += missing.reduce((n, f) => n + Math.max(0, f.bytes - sizeOf(`${fileAt(staging, f.path)}.partial`)), 0)
+        for (const f of missing) required += Math.max(0, f.bytes - (await sizeOf(`${fileAt(staging, f.path)}.partial`)))
       } else {
         if (source.archive === null) throw new SpeechPackError('http', 'source is not pinned')
         if (!options.extractArchive) throw new SpeechPackError('http', 'no archive extractor available')
         bytesTotal = source.archive.bytes
-        const held = sizeOf(archiveDest) === source.archive.bytes ? source.archive.bytes : sizeOf(`${archiveDest}.partial`)
+        const held = (await sizeOf(archiveDest)) === source.archive.bytes ? source.archive.bytes : await sizeOf(`${archiveDest}.partial`)
         // Download remainder, plus the extracted files while the archive still exists.
         required += Math.max(0, source.archive.bytes - held) + componentBytes(c)
       }
-      const free = freeBytes(nearestExisting(staging))
+      const free = await freeBytes(await nearestExisting(staging))
       if (free < required) throw new SpeechPackError('disk', 'not enough free disk space', required, free)
     }
 
     if (missing.length > 0 && source.kind === 'files') {
-      let done = c.files.reduce((n, f) => n + (sizeOf(fileAt(staging, f.path)) === f.bytes ? f.bytes : 0), 0)
+      let done = c.files.reduce((n, f) => n + (missing.includes(f) ? 0 : f.bytes), 0)
       for (const file of missing) {
         const url = speechPackFileUrl(c, file) as string
         await downloadVerified(
@@ -269,25 +304,27 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       )
       set(c.id, { status: 'verifying' })
       const extractDir = join(work, 'extract')
-      rmSync(extractDir, { recursive: true, force: true })
-      mkdirSync(extractDir, { recursive: true })
-      await (options.extractArchive as ExtractArchive)(archiveDest, extractDir)
+      await rm(extractDir, { recursive: true, force: true })
+      await mkdir(extractDir, { recursive: true })
+      await (options.extractArchive as ExtractArchive)(archiveDest, createArchiveSink(extractDir, source.extractCapBytes), signal)
       await adoptExtracted(extractDir, source.entryPrefix, c.files, staging, source.extractCapBytes)
     }
-    rmSync(work, { recursive: true, force: true })
+    await rm(work, { recursive: true, force: true })
 
     set(c.id, { status: 'verifying' })
     for (const file of c.files) {
       const path = fileAt(staging, file.path)
-      if (sizeOf(path) !== file.bytes || (await sha256File(path)) !== file.sha256) {
-        rmSync(path, { force: true })
+      if ((await sizeOf(path)) !== file.bytes || (await sha256File(path)) !== file.sha256) {
+        await rm(path, { force: true })
         throw new SpeechPackError('tamper', 'staged file does not match its pin')
       }
     }
     await options.onActivationStep?.('staged-verified')
 
+    // Cancel wins at every step: it is checked again before the self-test and before the activation rename.
+    throwIfAborted(signal)
     set(c.id, { status: 'self-testing' })
-    if (sizeOf(options.fixtureWavPath) !== fixture.bytes || (await sha256File(options.fixtureWavPath)) !== fixture.sha256) {
+    if ((await sizeOf(options.fixtureWavPath)) !== fixture.bytes || (await sha256File(options.fixtureWavPath)) !== fixture.sha256) {
       throw new SpeechPackError('tamper', 'self-test fixture does not match its pin')
     }
     let decoded = ''
@@ -296,17 +333,30 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     } catch {
       decoded = ''
     }
+    throwIfAborted(signal)
     // A verified set that cannot decode the fixture is not a usable pack.
     if (decoded.trim() === '') throw new SpeechPackError('tamper', 'self-test decoded no text')
     await options.onActivationStep?.('self-tested')
 
+    throwIfAborted(signal)
     const dest = finalDir(c)
-    mkdirSync(dirname(dest), { recursive: true })
-    rmSync(markerPath(c), { force: true })
-    rmSync(dest, { recursive: true, force: true })
-    renameSync(staging, dest)
+    const aside = `${dest}.old-${Date.now()}`
+    await mkdir(dirname(dest), { recursive: true })
+    await rm(markerPath(c), { force: true })
+    // An existing pack is renamed aside, never deleted first, so the swap has no moment without a whole directory.
+    if (await exists(dest)) {
+      await rename(dest, aside)
+      await options.onActivationStep?.('old-moved-aside')
+    }
+    await rename(staging, dest)
     await options.onActivationStep?.('renamed')
     await writeMarker(c)
+    await removeAsideDirs(c)
+    // A cancel that arrived after the last check above has no step left to stop, so it takes the pack back out.
+    if (signal.aborted && signal.reason === 'cancel') {
+      await deactivate(c)
+      throw signal.reason
+    }
     set(c.id, { status: 'ready' })
   }
 
@@ -316,11 +366,13 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     controllers.set(id, controller)
     set(id, { status: 'downloading', bytesDone: 0, bytesTotal: componentBytes(c) })
     try {
+      // A cancel of this pack's previous run may still be deleting its staging directory.
+      await cleanups.get(id)
       await install(c, controller.signal)
     } catch (err) {
       if (controller.signal.aborted) {
         if (controller.signal.reason === 'cancel') {
-          rmSync(join(rootDir, '.staging', c.id), { recursive: true, force: true })
+          await rm(join(rootDir, '.staging', c.id), { recursive: true, force: true })
           set(id, { status: 'error', kind: 'cancelled' })
         } else {
           set(id, { status: 'paused' })
@@ -390,7 +442,10 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       if (id === running) controllers.get(id)?.abort('cancel')
       else if (status === 'queued' || status === 'paused') {
         dequeue(id)
-        rmSync(join(rootDir, '.staging', id), { recursive: true, force: true })
+        cleanups.set(
+          id,
+          rm(join(rootDir, '.staging', id), { recursive: true, force: true }).catch(() => undefined)
+        )
         set(id, { status: 'error', kind: 'cancelled' })
       }
     },

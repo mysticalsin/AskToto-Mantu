@@ -1,12 +1,13 @@
 import { randomBytes } from 'node:crypto'
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isSafeEntryName } from './archive'
 import { DISK_HEADROOM_BYTES, createSpeechPackEngine, type ActivationStep, type SpeechPackEngineOptions, type SpeechPackState } from './engine'
 import type { SpeechPackComponent, SpeechPackComponentId } from './manifest'
-import { rangeHandler, serve, sha256Hex, type FixtureServer } from './test-server'
+import { rangeHandler, serve, sha256Hex, type FixtureServer } from './test-server.fixture'
 
 const WHISPER: SpeechPackComponentId = 'asr.whisper-base-q8'
 const PARAKEET: SpeechPackComponentId = 'asr.parakeet-tdt-0.6b-v3-int8'
@@ -272,12 +273,100 @@ describe('speech-pack engine', () => {
       expect(engine.getState(WHISPER)).toEqual({ status: 'ready' })
       expect(server.requests[1].headers.range).toMatch(/^bytes=\d+-$/)
     })
+
+    describe('cancel wins over activation', () => {
+      const cancelled = async (opts: (cancel: () => void) => Partial<SpeechPackEngineOptions>) => {
+        server = await serveFiles()
+        const c = whisper(server.base)
+        const selfTest = vi.fn(async () => 'hello')
+        const engine: ReturnType<typeof make> = make([c], {
+          selfTest,
+          ...opts(() => engine.cancel(WHISPER))
+        })
+        engine.enqueue([WHISPER])
+        await engine.whenIdle()
+        expect(engine.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
+        expect(existsSync(marker(WHISPER))).toBe(false)
+        expect(existsSync(join(root, WHISPER, '1'))).toBe(false)
+        expect(existsSync(join(root, '.staging', WHISPER))).toBe(false)
+        return selfTest
+      }
+
+      it('a cancel during verifying never reaches the self-test', async () => {
+        const selfTest = await cancelled((cancel) => ({
+          onActivationStep: (step) => {
+            if (step === 'staged-verified') cancel()
+          }
+        }))
+        expect(selfTest).not.toHaveBeenCalled()
+      })
+
+      it('a cancel during the self-test never activates the pack', async () => {
+        await cancelled((cancel) => ({
+          selfTest: async () => {
+            cancel()
+            return 'hello'
+          }
+        }))
+      })
+
+      it('a cancel after the self-test never renames the pack into place', async () => {
+        await cancelled((cancel) => ({
+          onActivationStep: (step) => {
+            if (step === 'self-tested') cancel()
+          }
+        }))
+      })
+    })
   })
 
   describe('activation kill points', () => {
     const STEPS: ActivationStep[] = ['staged-verified', 'self-tested', 'renamed', 'marker-tmp-written', 'marker-written']
+    const asideDirs = (): string[] => readdirSync(join(root, WHISPER)).filter((name) => name.includes('.old-'))
 
-    it.each(STEPS)('a crash after %s never leaves a marker without a whole pack, or a half-filled pack', async (step) => {
+    it.each([...STEPS, 'old-moved-aside' as const])(
+      'killed after %s while replacing an existing pack: no marker over a missing or partial pack, and the next start recovers',
+      async (step) => {
+        server = await serveFiles()
+        const c = whisper(server.base)
+        const first = make([c])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        // An unmarked pack directory forces the next install to replace it.
+        rmSync(marker(WHISPER))
+
+        const killed = make([c], {
+          onActivationStep: (at) => {
+            if (at === step) throw new Error('killed')
+          }
+        })
+        killed.enqueue([WHISPER])
+        await killed.whenIdle()
+
+        const active = join(root, WHISPER, '1')
+        if (existsSync(marker(WHISPER))) expect(packMatches(c, active)).toBe(true)
+        if (existsSync(active)) expect(packMatches(c, active)).toBe(true)
+        if (step === 'old-moved-aside') {
+          expect(existsSync(active)).toBe(false)
+          expect(asideDirs()).toHaveLength(1)
+        }
+        if (step !== 'marker-written') expect(existsSync(marker(WHISPER))).toBe(false)
+
+        const before = server.requests.length
+        const next = make([c])
+        await next.initialise()
+        expect(asideDirs()).toEqual([])
+        next.enqueue([WHISPER])
+        await next.whenIdle()
+        expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
+        expect(packMatches(c, active)).toBe(true)
+        expect(existsSync(marker(WHISPER))).toBe(true)
+        expect(asideDirs()).toEqual([])
+        expect(server.requests.length).toBe(before)
+      }
+    )
+
+    it.each(STEPS)('killed after %s: no marker without a whole pack, no half-filled pack, and the next start recovers without refetching', async (step) => {
       server = await serveFiles()
       const c = whisper(server.base)
       const killed = make([c], {
@@ -367,17 +456,15 @@ describe('speech-pack engine', () => {
       }
     })
     const serveArchive = (): Promise<FixtureServer> => serve((req, res, i) => rangeHandler(archiveBytes)(req, res, i))
-    const write = (dest: string, data: Buffer): void => {
-      mkdirSync(dirname(dest), { recursive: true })
-      writeFileSync(dest, data)
-    }
+    const one = (data: Buffer): Readable => Readable.from([data])
+    const extractDir = join('.staging', PARAKEET, 'work', 'extract')
 
     it('extracts, checks each file against its own pin and activates', async () => {
       server = await serveArchive()
       const engine = make([archiveComponent(server.base)], {
-        extractArchive: async (_archive, dest) => {
-          write(join(dest, prefix, 'p.bin'), contents['p.bin'])
-          write(join(dest, prefix, 'test_wavs', 'en.wav'), wav)
+        extractArchive: async (_archive, sink) => {
+          await sink.addFile(`${prefix}/p.bin`, one(contents['p.bin']))
+          await sink.addFile(`${prefix}/test_wavs/en.wav`, one(wav))
         }
       })
       engine.enqueue([PARAKEET])
@@ -390,7 +477,7 @@ describe('speech-pack engine', () => {
     it('reports tamper when an extracted file does not match its pin', async () => {
       server = await serveArchive()
       const engine = make([archiveComponent(server.base)], {
-        extractArchive: async (_archive, dest) => write(join(dest, prefix, 'p.bin'), randomBytes(20_000))
+        extractArchive: (_archive, sink) => sink.addFile(`${prefix}/p.bin`, one(randomBytes(20_000)))
       })
       engine.enqueue([PARAKEET])
       await engine.whenIdle()
@@ -401,9 +488,9 @@ describe('speech-pack engine', () => {
     it('caps the extracted size', async () => {
       server = await serveArchive()
       const engine = make([archiveComponent(server.base)], {
-        extractArchive: async (_archive, dest) => {
-          write(join(dest, prefix, 'p.bin'), contents['p.bin'])
-          write(join(dest, prefix, 'bomb.bin'), Buffer.alloc(200_000))
+        extractArchive: async (_archive, sink) => {
+          await sink.addFile(`${prefix}/p.bin`, one(contents['p.bin']))
+          await sink.addFile(`${prefix}/bomb.bin`, one(Buffer.alloc(200_000)))
         }
       })
       engine.enqueue([PARAKEET])
@@ -414,14 +501,74 @@ describe('speech-pack engine', () => {
     it('rejects an extracted link', async () => {
       server = await serveArchive()
       const engine = make([archiveComponent(server.base)], {
-        extractArchive: async (_archive, dest) => {
-          write(join(dest, prefix, 'p.bin'), contents['p.bin'])
-          linkSync(join(dest, prefix, 'p.bin'), join(dest, prefix, 'alias.bin'))
+        extractArchive: async (_archive, sink) => {
+          await sink.addFile(`${prefix}/p.bin`, one(contents['p.bin']))
+          linkSync(join(root, extractDir, prefix, 'p.bin'), join(root, extractDir, prefix, 'alias.bin'))
         }
       })
       engine.enqueue([PARAKEET])
       await engine.whenIdle()
       expect(engine.getState(PARAKEET)).toEqual({ status: 'error', kind: 'tamper' })
+    })
+
+    describe('a hostile archive', () => {
+      const hostile = async (entries: Array<[string, Buffer]>, cap = 100_000) => {
+        server = await serveArchive()
+        const base = archiveComponent(server.base)
+        const c: SpeechPackComponent =
+          base.source.kind === 'archive' ? { ...base, source: { ...base.source, extractCapBytes: cap } } : base
+        const engine = make([c], {
+          extractArchive: async (_archive, sink) => {
+            for (const [name, data] of entries) await sink.addFile(name, one(data))
+          }
+        })
+        engine.enqueue([PARAKEET])
+        await engine.whenIdle()
+        return engine
+      }
+      const outside = (): string[] => readdirSync(dir).filter((name) => name !== 'packs' && name !== 'en.wav')
+
+      it('refuses a ../ entry before writing anything', async () => {
+        const engine = await hostile([['../../../evil.bin', Buffer.from('x')]])
+        expect(engine.getState(PARAKEET)).toEqual({ status: 'error', kind: 'tamper' })
+        expect(outside()).toEqual([])
+        expect(existsSync(join(root, 'evil.bin'))).toBe(false)
+        expect(existsSync(marker(PARAKEET))).toBe(false)
+      })
+
+      it('refuses an absolute entry before writing anything', async () => {
+        const target = join(dir, 'absolute.bin')
+        const engine = await hostile([[target, Buffer.from('x')]])
+        expect(engine.getState(PARAKEET)).toEqual({ status: 'error', kind: 'tamper' })
+        expect(existsSync(target)).toBe(false)
+      })
+
+      it('refuses a Windows drive or backslash entry', async () => {
+        const engine = await hostile([['C:/evil.bin', Buffer.from('x')]])
+        expect(engine.getState(PARAKEET)).toEqual({ status: 'error', kind: 'tamper' })
+        expect(outside()).toEqual([])
+      })
+
+      it('aborts an oversize entry as soon as the running total passes the cap', async () => {
+        server = await serveArchive()
+        const c = archiveComponent(server.base)
+        let produced = 0
+        const endless = async function* (): AsyncGenerator<Uint8Array> {
+          for (let i = 0; i < 1_000; i++) {
+            produced++
+            yield Buffer.alloc(10_000)
+          }
+        }
+        const engine = make([c], {
+          extractArchive: (_archive, sink) => sink.addFile(`${prefix}/bomb.bin`, endless())
+        })
+        engine.enqueue([PARAKEET])
+        await engine.whenIdle()
+        expect(engine.getState(PARAKEET)).toEqual({ status: 'error', kind: 'tamper' })
+        expect(produced).toBeLessThanOrEqual(11)
+        expect(outside()).toEqual([])
+        expect(existsSync(marker(PARAKEET))).toBe(false)
+      })
     })
 
     it('counts the archive and the extraction peak in the disk check', async () => {

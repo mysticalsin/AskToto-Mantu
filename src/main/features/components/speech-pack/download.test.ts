@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_TIMING, downloadVerified, type DownloadDeps } from './download'
 import { SpeechPackError } from './errors'
-import { rangeHandler, serve, sha256Hex, type FixtureServer } from './test-server'
+import { rangeHandler, serve, sha256Hex, type FixtureServer } from './test-server.fixture'
 
 const body = randomBytes(200_000)
 const pin = { bytes: body.length, sha256: sha256Hex(body) }

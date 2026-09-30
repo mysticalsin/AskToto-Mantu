@@ -12,8 +12,8 @@
  *     exponential backoff and jitter.
  */
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { isHtmlContentType, looksLikeAccessRedirect, looksLikeHtmlBytes } from '../../../../shared/bundle-response'
 import { SpeechPackError } from './errors'
@@ -78,9 +78,10 @@ export function sha256File(path: string): Promise<string> {
   })
 }
 
-function sizeOf(path: string): number {
+/** Size of the file at `path`, or 0 when it does not exist. */
+export async function sizeOf(path: string): Promise<number> {
   try {
-    return statSync(path).size
+    return (await stat(path)).size
   } catch {
     return 0
   }
@@ -125,22 +126,20 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
   const partial = `${req.dest}.partial`
   const meta = `${req.dest}.partial.json`
   const { timing } = deps
-  const discard = (): void => {
-    rmSync(partial, { force: true })
-    rmSync(meta, { force: true })
+  const discard = async (): Promise<void> => {
+    await rm(partial, { force: true })
+    await rm(meta, { force: true })
   }
 
-  let offset = sizeOf(partial)
+  let offset = await sizeOf(partial)
   let validator: string | null = null
-  if (existsSync(meta)) {
-    try {
-      validator = (JSON.parse(readFileSync(meta, 'utf8')) as { validator?: string }).validator ?? null
-    } catch {
-      validator = null
-    }
+  try {
+    validator = (JSON.parse(await readFile(meta, 'utf8')) as { validator?: string }).validator ?? null
+  } catch {
+    validator = null
   }
   if (offset > req.bytes || (offset > 0 && !validator)) {
-    discard()
+    await discard()
     offset = 0
   }
   if (offset === req.bytes) return
@@ -168,7 +167,7 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
 
     if (res.status === 416) {
       await res.body?.cancel().catch(() => undefined)
-      discard()
+      await discard()
       throw new Transient('http', 0, true)
     }
     if (isHtmlContentType(contentType)) {
@@ -190,7 +189,7 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
       const range = /^bytes (\d+)-(\d+)\/(\d+|\*)$/.exec(res.headers.get('content-range') ?? '')
       if (!range || Number(range[1]) !== offset || (range[3] !== '*' && Number(range[3]) !== req.bytes)) {
         await res.body?.cancel().catch(() => undefined)
-        discard()
+        await discard()
         throw new Transient('http', 0, true)
       }
       append = true
@@ -199,15 +198,15 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
       // A wrong declared length is only reported after the first chunk, so a login page served as binary stays 'captive'.
       const declared = res.headers.get('content-length')
       declaredWrong = declared !== null && Number(declared) !== req.bytes
-      discard()
+      await discard()
       offset = 0
     }
     if (!res.body) throw new SpeechPackError('http', 'response carried no body')
 
-    mkdirSync(dirname(req.dest), { recursive: true })
+    await mkdir(dirname(req.dest), { recursive: true })
     const fresh = validatorOf(res.headers)
-    if (!append && fresh) writeFileSync(meta, JSON.stringify({ validator: fresh }))
-    if (!append && !fresh) rmSync(meta, { force: true })
+    if (!append && fresh) await writeFile(meta, JSON.stringify({ validator: fresh }))
+    if (!append && !fresh) await rm(meta, { force: true })
 
     const handle = await open(partial, append ? 'a' : 'w')
     try {
@@ -234,9 +233,9 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
       await handle.close()
     }
 
-    const size = sizeOf(partial)
+    const size = await sizeOf(partial)
     if (size > req.bytes) {
-      discard()
+      await discard()
       throw new Transient('http', 0, true)
     }
     if (size < req.bytes) throw new Transient('offline')
@@ -257,7 +256,7 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
  */
 export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps): Promise<void> {
   if (!isImmutableUrl(req.url)) throw new SpeechPackError('http', 'source is not pinned to an immutable reference')
-  if (sizeOf(req.dest) === req.bytes) {
+  if ((await sizeOf(req.dest)) === req.bytes) {
     req.onProgress(req.bytes)
     return
   }
@@ -268,23 +267,23 @@ export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps)
 
   for (;;) {
     if (req.signal.aborted) throw req.signal.reason
-    const before = sizeOf(partial)
+    const before = await sizeOf(partial)
     req.onProgress(before)
     try {
       await transferOnce(req, deps)
       if ((await sha256File(partial)) === req.sha256) {
-        rmSync(`${partial}.json`, { force: true })
-        renameSync(partial, req.dest)
+        await rm(`${partial}.json`, { force: true })
+        await rename(partial, req.dest)
         req.onProgress(req.bytes)
         return
       }
-      rmSync(partial, { force: true })
-      rmSync(`${partial}.json`, { force: true })
+      await rm(partial, { force: true })
+      await rm(`${partial}.json`, { force: true })
       if (++mismatches > 1) throw new SpeechPackError('tamper', 'downloaded file does not match its pin')
     } catch (err) {
       if (!(err instanceof Transient)) throw err
       // Progress resets the budget: a flaky link that keeps advancing is not a failing one.
-      if (sizeOf(partial) > before) attempts = 0
+      if ((await sizeOf(partial)) > before) attempts = 0
       if (++attempts >= timing.maxAttempts) throw new SpeechPackError(err.kind, 'transfer failed')
       if (err.restart) continue
       const backoff = Math.min(timing.backoffCapMs, timing.backoffBaseMs * 2 ** (attempts - 1)) * (0.5 + deps.random() / 2)
