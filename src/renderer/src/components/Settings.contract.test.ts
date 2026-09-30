@@ -376,7 +376,7 @@ describe('CLI Integration copy — managed install, not npm i -g', () => {
 })
 
 describe('Set up automatically shows an honest status chip', () => {
-  const cli = (): string => blockAfter('function CliIntegration(', '\nfunction McpConnectionCard(')
+  const cli = (): string => blockAfter('function CliIntegration(', '\n// End CLI Integration section.')
   const install = (): string =>
     blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = async')
 
