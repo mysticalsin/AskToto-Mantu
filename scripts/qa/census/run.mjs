@@ -10,15 +10,18 @@ import {
   STATES,
   collectCensus,
   defaultOutputPath,
+  openNdjsonWriter,
   proveLocalTtftEvidenceFromArtifact,
   rendererScenarioProbeSource,
   resolveInstallTarget,
   resolveProductVersion,
+  streamCensus,
   validateState,
   validateStatePrecondition,
   windowsWorkingSetEvidenceFromArtifact,
   writeJson
 } from './lib.mjs'
+import { writeAuditCounts } from './audit-counts.mjs'
 
 function usage() {
   return `Usage:
@@ -29,7 +32,14 @@ Inputs:
   --profile <path>         Representative synthetic QA profile from M2-0007. Defaults to METIS_QA_PROFILE.
   --main-pid <pid>         Attach instead of launch. Requires --install-root.
   --install-root <path>    Installed app root when attaching.
-  --interval-ms <ms>       Sampling interval. Defaults to 5000.
+  --interval-ms <ms>       Sampling period, scheduled from the previous sample's start. Defaults to 5000.
+  --ndjson <path>          Long-run mode: stream a census-stream/1 header, one line per sample (flushed as
+                           taken) and a trailer on a normal end. No JSON report is written in this mode.
+  --audit-counts <out.json>
+                           With --ndjson: per-bucket audit event counts from the profile's audit trail
+                           (--profile or METIS_QA_PROFILE), refreshed every checkpoint and at the end.
+  --checkpoint-minutes <n> Audit-count refresh period. Defaults to 10.
+  --bucket-minutes <n>     Audit-count bucket width. Defaults to 10.
   --settle-ms <ms>         Wait after launch before non-cold-start states. Defaults to 15000.
   --output <path>          JSON output. Defaults under metis-census-output/.
   --cdp-url <url>          Existing Chromium DevTools endpoint for renderer traces.
@@ -60,6 +70,10 @@ function readArgs(argv) {
     else if (arg === '--seconds') args.seconds = Number(next())
     else if (arg === '--interval-ms') args.intervalMs = Number(next())
     else if (arg === '--settle-ms') args.settleMs = Number(next())
+    else if (arg === '--ndjson') args.ndjson = next()
+    else if (arg === '--audit-counts') args.auditCounts = next()
+    else if (arg === '--checkpoint-minutes') args.checkpointMinutes = Number(next())
+    else if (arg === '--bucket-minutes') args.bucketMinutes = Number(next())
     else if (arg === '--app') args.app = next()
     else if (arg === '--profile') args.profile = next()
     else if (arg === '--main-pid') args.mainPid = Number(next())
@@ -189,6 +203,12 @@ async function main() {
   let child = null
   let cdpUrl = args.cdpUrl ?? null
   const attachMode = mainPid !== null
+  const checkpointMinutes = args.checkpointMinutes ?? 10
+  const bucketMinutes = args.bucketMinutes ?? 10
+
+  if (args.auditCounts && !args.ndjson) throw new Error('--audit-counts requires --ndjson')
+  if (args.auditCounts && !profile) throw new Error('--audit-counts requires --profile or METIS_QA_PROFILE')
+  if (!(checkpointMinutes > 0)) throw new Error('--checkpoint-minutes must be positive')
 
   validateStatePrecondition({
     state,
@@ -234,6 +254,32 @@ async function main() {
       scenarios: args.traceScenarios,
       outputDir
     })
+    if (args.ndjson) {
+      const writeCounts = (from) =>
+        writeAuditCounts(args.auditCounts, { userData: profile, from: new Date(from).toISOString(), bucketMinutes })
+      const countsFrom = Date.now()
+      let lastCheckpoint = 0
+      const result = await streamCensus({
+        state,
+        seconds,
+        intervalMs: args.intervalMs,
+        platform,
+        installRoot,
+        mainPid,
+        productVersion,
+        profileKind: 'representative-synthetic',
+        writeLine: openNdjsonWriter(args.ndjson),
+        afterSample: async () => {
+          if (!args.auditCounts) return
+          if (Date.now() - lastCheckpoint < checkpointMinutes * 60_000) return
+          lastCheckpoint = Date.now()
+          writeCounts(countsFrom)
+        }
+      })
+      if (args.auditCounts) writeCounts(countsFrom)
+      console.log(`[census] streamed ${result.samples} samples (${result.outcome}) to ${args.ndjson}`)
+      return
+    }
     const report = await collectCensus({
       state,
       seconds,

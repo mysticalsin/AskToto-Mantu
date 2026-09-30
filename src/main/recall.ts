@@ -4,6 +4,7 @@ import { join, basename } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
+import type { FileClass, HydrationProgress } from './infra/storage/gateway'
 import { getSettings } from './store'
 import { detectLanguage } from '@shared/lang-id'
 import { measuredDurationMs } from '@shared/meeting-duration'
@@ -56,8 +57,8 @@ function recapSectionEndIndex(afterNotesHeading: string, type: string | undefine
   return afterNotesHeading.search(recapSectionEndRe(type))
 }
 
-async function meetingFiles(folder: string): Promise<string[]> {
-  const listing = await storageAt(folder).list('')
+async function meetingFiles(folder: string, signal?: AbortSignal): Promise<string[]> {
+  const listing = await storageAt(folder).list('', { signal })
   if (listing.status !== 'ok') return []
   return listing.names.filter((name) => name.endsWith('.md') && name !== 'README.md' && name !== 'index.md')
 }
@@ -82,8 +83,13 @@ async function readFolderText(folder: string, file: string): Promise<string | nu
   return read.status === 'ok' ? read.bytes.toString('utf8') : null
 }
 
+/** A History row. `notDownloaded` marks a file whose bytes are not on this device (a cloud-only
+ *  placeholder): listed from its name, never read; opening it hydrates it explicitly. Like `locked`
+ *  below, it is not yet declared on the shared MeetingSummary type and flows through as an own property. */
+export type HistoryRow = MeetingSummary & { notDownloaded?: true }
+
 interface Read {
-  sum: MeetingSummary
+  sum: HistoryRow
   text: string
 }
 
@@ -135,12 +141,37 @@ function lockedStub(file: string, label = 'Locked'): LockedMeetingSummary | null
 // that degrades linearly as the library grows, with decryption work on the main process. A stat()
 // replaces the full read+decode when the file is unchanged; any mtime/size change re-reads, and a
 // vanished file drops its entry. Saved meetings are immutable-after-write, so hits are the norm.
-// Null results (non-meeting or undecryptable files) are cached too, so they stop costing reads — but
-// a file that could not be READ at all is deliberately never cached (see UNREADABLE below).
-const readCache = new Map<string, { mtimeMs: number; size: number; read: Read | null }>()
-// Safety valve: the cache is bounded by the meetings folder size in practice, but never let a
-// pathological folder (or repeated folder switches) grow it without limit.
+// Null results (non-meeting or undecryptable files) are cached too, so they stop costing reads. A file
+// whose bytes are not on this device is answered with a fresh 'Not downloaded' row and never cached here:
+// hydration changes neither mtimeMs nor size, so a cached stub would outlive the download. A keystroke
+// still never re-reads such a file: the gateway remembers a dataless, unknown or timed-out read for
+// FAILURE_TTL_MS, and forgets it when an explicit open hydrates the file. Any other failed read (a
+// share-lock, a transient error) is deliberately never cached (see UNREADABLE below).
+interface CacheEntry {
+  mtimeMs: number
+  size: number
+  read: Read | null
+}
+// Least-recently-used, so a pathological folder (or repeated folder switches) cannot grow it without
+// limit and a full cache drops one cold entry instead of every warm one. A Map iterates in insertion
+// order, so re-inserting on every hit keeps the coldest entry first.
 const READ_CACHE_MAX = 2000
+const readCache = new Map<string, CacheEntry>()
+
+function cachedRead(path: string): CacheEntry | undefined {
+  const entry = readCache.get(path)
+  if (entry) {
+    readCache.delete(path)
+    readCache.set(path, entry)
+  }
+  return entry
+}
+
+function cacheRead(path: string, entry: CacheEntry): void {
+  readCache.delete(path)
+  readCache.set(path, entry)
+  if (readCache.size > READ_CACHE_MAX) readCache.delete(readCache.keys().next().value as string)
+}
 
 /** Sentinel for "this file could not be READ at all" — an unhydrated OneDrive Files-On-Demand
  *  placeholder while offline, or an AV/EDR share-lock (the same transient conditions writeSaved
@@ -150,45 +181,75 @@ const READ_CACHE_MAX = 2000
  *  to a value nothing invalidates and the meeting would stay invisible until the app restarts. */
 const UNREADABLE = Symbol('unreadable')
 
+/** The row for a file whose bytes are not on this device: listed, never read. */
+function notDownloadedRow(file: string): Read | null {
+  const stub = lockedStub(file, 'Not downloaded')
+  return stub ? { text: '', sum: { ...stub, notDownloaded: true } } : null
+}
+
+function unavailableRow(file: string): Read | null {
+  const stub = lockedStub(file, 'Unavailable')
+  return stub ? { text: '', sum: stub } : null
+}
+
 /** Read + decode one file (async), parse its frontmatter. Null if it isn't a saved meeting.
- *  Served from readCache when the file is unchanged since the last read. */
-async function readMeeting(folder: string, file: string): Promise<Read | null> {
+ *  `fileClass` comes from the listing's one batched classify, so a file classified dataless or unknown is
+ *  answered as a 'Not downloaded' row without ever being read. Served from readCache when the file is
+ *  unchanged since the last read. */
+async function readMeeting(folder: string, file: string, fileClass: FileClass | undefined, signal?: AbortSignal): Promise<Read | null> {
   const path = join(folder, file)
-  const fileClass = (await classifyAll(storageAt(folder), [file])).get(file)
   if (!fileClass || fileClass.status === 'missing') {
     readCache.delete(path)
     return null
   }
   if (!('version' in fileClass)) {
     readCache.delete(path)
-    const stub = lockedStub(file, 'Unavailable')
-    return stub ? { text: '', sum: stub } : null
+    return unavailableRow(file)
+  }
+  if (!fileClass.isRegular) {
+    // A FIFO, socket or device is never opened by a listing or a search: it would pin a pool thread.
+    readCache.delete(path)
+    return unavailableRow(file)
   }
   const { mtimeMs, size } = fileClass.version
-  const hit = readCache.get(path)
-  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.read
-  if (fileClass.status !== 'ok') {
+  const notLocal = (): Read | null => {
     readCache.delete(path)
-    const stub = lockedStub(file, 'Unavailable')
-    return stub ? { text: '', sum: stub } : null
+    return notDownloadedRow(file)
   }
-  const read = await readMeetingUncached(folder, file)
+  if (fileClass.status !== 'ok') return notLocal()
+  const hit = cachedRead(path)
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.read
+  const read = await readMeetingUncached(folder, file, signal)
+  if (read === NOT_LOCAL) return notLocal()
   if (read === UNREADABLE) {
     // Drop any stale entry and cache nothing, so the next list/search retries the read instead of
     // serving a transient failure the user has no way to invalidate. The meeting keeps its row as a
     // stub rather than disappearing from History and search with no signal at all.
     readCache.delete(path)
-    const stub = lockedStub(file, 'Unavailable')
-    return stub ? { text: '', sum: stub } : null
+    return unavailableRow(file)
   }
-  if (readCache.size >= READ_CACHE_MAX) readCache.clear()
-  readCache.set(path, { mtimeMs, size, read })
+  cacheRead(path, { mtimeMs, size, read })
   return read
 }
 
-async function readMeetingUncached(folder: string, file: string): Promise<Read | null | typeof UNREADABLE> {
-  const raw = await storageAt(folder).read(file)
+/** Reads one listing's files: a single batched classify, then a read of each file classified local. Aborting
+ *  `signal` ends the queued classify and every queued read at the gateway, and the listing comes back empty. */
+async function readMeetings(folder: string, files: readonly string[], signal?: AbortSignal): Promise<Array<Read | null>> {
+  const gateway = storageAt(folder)
+  const classes = await classifyAll({ ...gateway, classify: (paths) => gateway.classify(paths, { signal }) }, files)
+  if (signal?.aborted) return []
+  const read = await Promise.all(files.map((f) => readMeeting(folder, f, classes.get(f), signal)))
+  // Reads cut short by a superseding search answer 'Unavailable'; those rows are not a listing.
+  return signal?.aborted ? [] : read
+}
+
+/** The gateway says this file's bytes are not on this device (or would not arrive in time). */
+const NOT_LOCAL = Symbol('not-local')
+
+async function readMeetingUncached(folder: string, file: string, signal?: AbortSignal): Promise<Read | null | typeof UNREADABLE | typeof NOT_LOCAL> {
+  const raw = await storageAt(folder).read(file, { signal })
   if (raw.status !== 'ok') {
+    if (raw.status === 'dataless' || raw.status === 'unknown' || raw.status === 'timeout') return NOT_LOCAL
     // A THROWN read means "can't read it right now", which is not the same verdict as "not a meeting
     // file" — the caller must not cache it, and must not drop the meeting. Split out from the catch
     // below so only the read itself can produce it: decodeSaved never throws (see transcripts.ts).
@@ -242,8 +303,9 @@ export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; 
   const folder = resolveMeetingsFolder(getSettings())
   const files = await meetingFiles(folder)
   const out: Array<{ file: string; mode: string; lines: TranscriptLine[] }> = []
-  for (const f of files) {
-    const read = await readMeeting(folder, f)
+  const reads = await readMeetings(folder, files)
+  for (const [i, f] of files.entries()) {
+    const read = reads[i]
     if (!read || read.sum.locked) continue
     if (!meetingTextNeedsRecap(read.text)) continue
     const parsed = await recallRead(f)
@@ -254,10 +316,9 @@ export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; 
 }
 
 /** Newest-first list of saved meetings. */
-export async function listMeetings(): Promise<MeetingSummary[]> {
+export async function listMeetings(): Promise<HistoryRow[]> {
   const folder = resolveMeetingsFolder(getSettings())
-  const read: Array<Read | null> = []
-  for (const f of await meetingFiles(folder)) read.push(await readMeeting(folder, f))
+  const read = await readMeetings(folder, await meetingFiles(folder))
   return read
     .filter((r): r is Read => r !== null)
     .map((r) => r.sum)
@@ -269,14 +330,27 @@ export async function listMeetings(): Promise<MeetingSummary[]> {
  * Parses frontmatter (title, mode, date → startedAt), the recap section, and the transcript lines.
  * Constrained to the meetings folder (same basename guard as recallOpen in index.ts — no traversal).
  */
-export async function recallRead(file: string): Promise<RecallReadResult> {
+export async function recallRead(
+  file: string,
+  { hydrate = false, onProgress }: { hydrate?: boolean; onProgress?: (progress: HydrationProgress) => void } = {}
+): Promise<RecallReadResult> {
   const folder = resolveMeetingsFolder(getSettings())
   // basename blocks path traversal (mirrors the recallOpen guard in index.ts).
   const safeName = safeMeetingBasename(file)
   if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
-  const read = await storageAt(folder).read(safeName)
+  const gateway = storageAt(folder)
+  // Classify decides only two things: a vanished file, and a FIFO, socket or device, which is refused
+  // before any read (a plain gateway read would still open it once the detector answers). Its other
+  // verdicts never skip a read: its deadline is shorter than a read's, so 'unknown' can name a local file.
+  const fileClass = (await gateway.classify([safeName])).get(safeName)
+  if (fileClass?.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
+  if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular) return { ok: false, error: 'Could not read the meeting file.' }
+  let read = await gateway.read(safeName)
+  // An explicit open (`hydrate`) is the one place a cloud-only file is hydrated: this one file, under a
+  // content permit, reporting progress. Listing, search and background passes never do.
+  if (hydrate && (read.status === 'dataless' || read.status === 'unknown')) read = await gateway.read(safeName, { hydrate: true, onProgress })
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
@@ -917,11 +991,11 @@ export async function sweepExpiredMeetings(retentionDays: number): Promise<{ del
 }
 
 /** Keyword search across saved meetings; returns scored hits with a snippet. */
-export async function searchMeetings(query: string): Promise<RecallHit[]> {
+export async function searchMeetings(query: string, signal?: AbortSignal): Promise<RecallHit[]> {
   const folder = resolveMeetingsFolder(getSettings())
   const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 1)
   if (!terms.length) return []
-  const read = await Promise.all((await meetingFiles(folder)).map((f) => readMeeting(folder, f)))
+  const read = await readMeetings(folder, await meetingFiles(folder, signal), signal)
   const hits: RecallHit[] = []
   for (const r of read) {
     if (!r) continue
@@ -947,4 +1021,16 @@ export async function searchMeetings(query: string): Promise<RecallHit[]> {
     hits.push({ ...sum, snippet, score })
   }
   return hits.sort((a, b) => b.score - a.score).slice(0, 25)
+}
+
+let activeSearch: AbortController | null = null
+
+/** The IPC search: a newer keystroke aborts the search still queued at the storage gateway, whose caller
+ *  gets `[]`. */
+export function searchMeetingsLatest(query: string): Promise<RecallHit[]> {
+  activeSearch?.abort()
+  const search = (activeSearch = new AbortController())
+  return searchMeetings(query, search.signal).finally(() => {
+    if (activeSearch === search) activeSearch = null
+  })
 }

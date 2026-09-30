@@ -129,23 +129,12 @@ describe('candidate-scenarios.yml', () => {
     expect(job('mac')).toContain('      ARTIFACT: ${{ needs.guard.outputs.mac_artifact }}')
   })
 
-  it('hands the scenario the installed app from the install step', () => {
-    const mac = steps('mac')
-    const install = mac[stepIndex(mac, 'codesign')]
-    expect(install).toContain('        id: install')
-    expect(install).toContain('echo "app=$app" >> "$GITHUB_OUTPUT"')
-    expect(install.indexOf('echo "app=$app"')).toBeGreaterThan(install.indexOf('codesign --verify --deep --strict'))
-    const scenario = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
-    expect(scenario).toContain('          INSTALLED_APP: ${{ steps.install.outputs.app }}')
-    expect(scenario).toContain('--installed "$INSTALLED_APP"')
-  })
-
   it('gives ex-suite a scenario step and job timeout that cover its 3 launches of at least 130 s plus boot, quit and the control', () => {
     const minutes = (text: string) => Number(text.match(/timeout-minutes: (\d+)/)?.[1])
     const mac = steps('mac')
     const stepMs = minutes(mac[stepIndex(mac, 'candidate-scenarios.mjs run')]) * 60_000
     const jobMs = minutes(job('mac').find((line) => /^ {4}timeout-minutes:/.test(line)) ?? '') * 60_000
-    expect(SCENARIOS['ex-suite'].platforms.mac.args({ installed: 'Metis.app', report: 'r.json' })).toContain('3')
+    expect(SCENARIOS['ex-suite'].platforms.mac.args({ app: 'Metis.app', report: 'r.json' })).toContain('3')
     expect(worstCaseRunMs(3)).toBeGreaterThanOrEqual(3 * LAUNCH_MIN_MS)
     expect(stepMs).toBeGreaterThanOrEqual(worstCaseRunMs(3))
     expect(jobMs).toBeGreaterThan(stepMs)
@@ -174,5 +163,76 @@ describe('candidate-scenarios.yml', () => {
     const verdict = mac[upload + 1]
     expect(verdict).toContain("if: always() && (steps.scenario.outcome != 'success' || steps.scan.outcome != 'success')")
     expect(verdict).toContain('exit 1')
+  })
+
+  it('offers sidecar-boot-reaper, which runs on both the macOS and the Windows job', () => {
+    const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- sidecar-boot-reaper')
+    expect(Object.keys(SCENARIOS['sidecar-boot-reaper'].platforms)).toEqual(['mac', 'win'])
+    expect(job('win')).toContain('    runs-on: windows-latest')
+  })
+
+  it('hands the installed app to the scenario on macOS, after the signature check', () => {
+    const mac = steps('mac')
+    const install = mac[stepIndex(mac, 'codesign --verify --deep --strict')]
+    expect(install).toContain('        id: install')
+    expect(install).toContain('echo "app=$app" >> "$GITHUB_OUTPUT"')
+    expect(install.indexOf('echo "app=$app"')).toBeGreaterThan(install.indexOf('codesign --verify --deep --strict'))
+    const scenario = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
+    expect(scenario).toContain('          APP: ${{ steps.install.outputs.app }}')
+    expect(scenario).toContain('--app "$APP"')
+  })
+
+  it('installs the verified Setup selected by win_sha256 silently into a fresh directory before the scenario on Windows', () => {
+    const win = steps('win')
+    const order = [
+      '--name candidate-provenance',
+      'node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"',
+      "require('./provenance/provenance.json').run.id",
+      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" win',
+      "'/S', \"/D=$target\"",
+      'candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform win',
+      'candidate-scenarios.mjs run'
+    ].map((fragment) => stepIndex(win, fragment))
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect(job('win')).toContain('      INSTALLER_SHA256: ${{ needs.guard.outputs.win_sha256 }}')
+    expect(job('win')).toContain('      ARTIFACT: ${{ needs.guard.outputs.win_artifact }}')
+    expect(win[stepIndex(win, '--name "$ARTIFACT"')]).toContain('gh run download "$CANDIDATE_RUN"')
+
+    const install = win[stepIndex(win, "'/S', \"/D=$target\"")]
+    expect(install).toContain('id: install')
+    expect(install).toContain('shell: pwsh')
+    expect(install).toContain("$target = Join-Path $env:RUNNER_TEMP 'candidate-install'")
+    expect(install).toContain('New-Item -ItemType Directory -Path $target')
+    expect(install).toContain('-Wait -PassThru')
+    expect(install).toContain('if ($install.ExitCode -ne 0)')
+    expect(install).toContain("$app = Join-Path $target 'Metis.exe'")
+    expect(install).toContain('Add-Content -Path $env:GITHUB_OUTPUT -Value "app=$app"')
+
+    const scenario = win[stepIndex(win, 'candidate-scenarios.mjs run')]
+    expect(scenario).toContain('--platform win')
+    expect(scenario).toContain('APP: ${{ steps.install.outputs.app }}')
+    expect(scenario).toContain('--app "$APP"')
+  })
+
+  it('uploads the Windows lane artifact on every run and fails only after the upload', () => {
+    const win = steps('win')
+    const scenario = win[stepIndex(win, 'candidate-scenarios.mjs run')]
+    expect(scenario).toContain('id: scenario')
+    expect(scenario).toContain('continue-on-error: true')
+    const scan = win[stepIndex(win, 'candidate-scenarios.mjs scan')]
+    expect(scan).toContain('id: scan')
+    expect(scan).toContain('if: always()')
+    expect(scan).toContain('continue-on-error: true')
+
+    const upload = stepIndex(win, 'actions/upload-artifact@')
+    expect(win[upload]).toContain('if: always()')
+    expect(win[upload]).toContain('name: candidate-scenario-${{ inputs.scenario }}-win')
+    expect(win[upload]).toContain('path: candidate-scenario/')
+    expect(job('win')).toContain('      OUT: candidate-scenario')
+    expect(stepIndex(win, 'candidate-scenarios.mjs scan')).toBeGreaterThan(stepIndex(win, 'candidate-scenarios.mjs run'))
+    expect(upload).toBeGreaterThan(stepIndex(win, 'candidate-scenarios.mjs scan'))
+    expect(win).toHaveLength(upload + 2)
+    expect(win[upload + 1]).toContain("if: always() && (steps.scenario.outcome != 'success' || steps.scan.outcome != 'success')")
   })
 })

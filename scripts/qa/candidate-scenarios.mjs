@@ -11,7 +11,7 @@
 //   node scripts/qa/candidate-scenarios.mjs guard <run.json> <candidate_run>
 //   node scripts/qa/candidate-scenarios.mjs profile --scenario <s> --platform <p>
 //   node scripts/qa/candidate-scenarios.mjs run --scenario <s> --platform <p> --installer <relative path>
-//       --sha256 <hex> --provenance <provenance.json> --candidate-run <id> --out <relative dir> [--installed <.app>]
+//       --sha256 <hex> --provenance <provenance.json> --candidate-run <id> --out <relative dir> [--app <installed app>]
 //   node scripts/qa/candidate-scenarios.mjs scan <dir> --account <runner account>
 // Node builtins only, so the guard job needs no npm ci.
 import { spawnSync } from 'node:child_process'
@@ -34,11 +34,14 @@ export const PROFILE_DIRS = Object.freeze({ mac: 'asktoto', 'mac-qa-identity': '
 
 /**
  * A scenario runs on each platform it declares. A platform entry names the qa-candidate variant and
- * artifact it installs, the script and arguments it runs, the report file the script writes, and the
- * settings it seeds into the fresh profile. qaOnlyHook marks a scenario that needs a hook compiled only
- * into QA-identity bytes; every other scenario installs a promotable variant so its records bind to bytes
- * that can ship. installerSuffix, when set, is the only installer kind the scenario accepts. args receives
- * `installed`, the installed .app relative to the repository, for a script that drives the installed app.
+ * artifact it installs, the script and arguments it runs (args receives the installer, its sha256, the
+ * report path and the installed app, relative to the repository), the report file the script writes, and the
+ * settings it seeds into the fresh profile. isolatedProfiles marks a script that runs the app only on its own
+ * throwaway ASKTOTO_USERDATA profiles, so the default profile is never touched. notCovered lists report rows
+ * the platform cannot prove, each with the reason; lane.json carries them as a residual. qaOnlyHook marks a
+ * scenario that needs a hook compiled only into QA-identity bytes; every other scenario installs a
+ * promotable variant so its records bind to bytes that can ship. installerSuffix, when set, is the only
+ * installer kind the scenario accepts.
  */
 export const SCENARIOS = Object.freeze({
   // M2-0026: onFatal "Relaunch Métis", then a census 10 s later with no orphaned owned sidecar. The
@@ -71,11 +74,41 @@ export const SCENARIOS = Object.freeze({
         artifact: 'candidate-mac',
         installerSuffix: '.dmg',
         script: 'scripts/qa/ex-suite.mjs',
-        args: ({ installed, report }) => {
-          if (!installed) throw new Error('ex-suite needs the installed app (--installed).')
-          return ['--packaged', installed, report, '--relaunches', '3']
+        args: ({ app, report }) => {
+          if (!app) throw new Error('ex-suite needs the installed app (--app).')
+          return ['--packaged', app, report, '--relaunches', '3']
         },
         report: 'ex-suite.json'
+      })
+    })
+  }),
+  // M2-0027 acceptance[4] via M2-0468: SIGKILL main with a live sidecar, relaunch, orphan reaped within 5 s of
+  // boot. The legacy rule is off in QA-identity bytes, so both platforms install promotable bytes. macOS
+  // requires the real llama-server and legacy-orphan rows (a BLOCKED_EXTERNAL there is a PRECONDITION, not a PASS).
+  'sidecar-boot-reaper': Object.freeze({
+    ticket: 'M2-0027',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        script: 'scripts/qa/sidecar-boot-reaper.mjs',
+        args: ({ app, report }) => [app, report, '--require-real-llama'],
+        report: 'sidecar-boot-reaper.json',
+        isolatedProfiles: true
+      }),
+      win: Object.freeze({
+        variant: 'win',
+        artifact: 'candidate-win',
+        script: 'scripts/qa/sidecar-boot-reaper.mjs',
+        args: ({ app, report }) => [app, report],
+        report: 'sidecar-boot-reaper.json',
+        isolatedProfiles: true,
+        notCovered: Object.freeze([
+          Object.freeze({ row: 'realLlama', reason: 'The real llama-server proof runs on macOS only; the report marks it BLOCKED_EXTERNAL.' }),
+          Object.freeze({ row: 'legacyOrphan', reason: 'The legacy-orphan proof runs on macOS only; the report marks it BLOCKED_EXTERNAL.' })
+        ])
       })
     })
   })
@@ -161,10 +194,13 @@ export function candidateRunProblems(run, candidateRun) {
 /**
  * Makes the fresh profile a scenario runs on: the variant's userData directory must not exist yet (any
  * earlier state would make the run measure something other than a first install), and only the settings the
- * scenario declares are written. Returns the settings path.
+ * scenario declares are written. Returns the settings path. A scenario with isolatedProfiles never opens the
+ * default profile, so nothing is written and null is returned.
  */
 export function prepareProfile({ scenario, platform, appDataDir }) {
   const target = platformEntry(scenario, platform)
+  if (target.isolatedProfiles) return null
+  if (!appDataDir) throw new Error(`No fresh-profile location is declared for ${platform}.`)
   const name = PROFILE_DIRS[target.variant]
   if (!name) throw new Error(`No userData directory is declared for variant ${target.variant}.`)
   const profile = join(appDataDir, name)
@@ -183,18 +219,18 @@ export function outcomeForExit(scenario, exitCode) {
   return Number.isInteger(exitCode) && Object.hasOwn(exits, exitCode) ? exits[exitCode] : 'FAIL'
 }
 
-/**
- * The argv (after `node`) that runs a scenario. Every argument is repository-relative, so the recorded
- * command never names the runner's home or temp directory.
- * @param {{ scenario: string, platform: string, installer: string, sha256: string, outDir: string, installed?: string }} options
- */
-export function scenarioCommand({ scenario, platform, installer, sha256, outDir, installed }) {
+/** The argv (after `node`) that runs a scenario. Every argument is repository-relative, so the recorded
+ *  command never names the runner's home or temp directory.
+ *  @param {{ scenario: string, platform: string, installer: string, sha256: string, outDir: string, app?: string }} options */
+export function scenarioCommand({ scenario, platform, installer, sha256, outDir, app }) {
   const target = platformEntry(scenario, platform)
   if (target.installerSuffix && !installer.toLowerCase().endsWith(target.installerSuffix)) {
     throw new Error(`${scenario} installs a ${target.installerSuffix} installer; the selected installer is ${basename(installer)}.`)
   }
-  const report = join(outDir, target.report).replaceAll('\\', '/')
-  const argv = [target.script, ...target.args({ installer, sha256, report, installed })]
+  const argv = [target.script, ...target.args({ installer, sha256, report: join(outDir, target.report).replaceAll('\\', '/'), app })]
+  if (argv.some((arg) => typeof arg !== 'string' || arg === '')) {
+    throw new Error(`The ${scenario} command is missing an argument; pass the installed app with --app.`)
+  }
   const absolute = argv.filter((arg) => isAbsolute(arg) || /^[A-Za-z]:[\\/]/.test(arg))
   if (absolute.length) throw new Error(`The scenario command must use repository-relative paths; got ${absolute.length} absolute.`)
   return argv
@@ -210,7 +246,8 @@ export function assertCandidateProvenance(provenance, candidateRun) {
 /**
  * lane.json: what ran, on which bytes and host, and how it ended. Field names match the evidence record
  * (build_run_id, commit, artifact_sha256, ci_run_id, environment, command, exit_code) so the lead copies
- * them into a LIVE_VERIFIED record as they are.
+ * them into a LIVE_VERIFIED record as they are. A platform that cannot prove some report rows adds
+ * not_covered, so a PASS there is never read as covering them.
  */
 export function laneRecord({ scenario, platform, env, provenance, candidateRun, installer, sha256, argv, exitCode, detail, reportWritten }) {
   const target = platformEntry(scenario, platform)
@@ -234,7 +271,8 @@ export function laneRecord({ scenario, platform, env, provenance, candidateRun, 
     exit_code: exitCode,
     outcome,
     report: reportWritten ? target.report : null,
-    detail: outcome === 'PASS' ? null : detail || null
+    detail: outcome === 'PASS' ? null : detail || null,
+    ...(target.notCovered ? { not_covered: target.notCovered.map(({ row, reason }) => ({ row, reason })) } : {})
   }
 }
 
@@ -257,6 +295,7 @@ export function laneSummary(lane) {
     ['report', lane.report ?? 'none']
   ]
   if (lane.detail) rows.push(['detail', lane.detail])
+  for (const { row, reason } of lane.not_covered ?? []) rows.push([`not covered: ${row}`, reason])
   const cell = (value) => String(value).replaceAll('|', '\\|').replaceAll('`', "'")
   return [
     `### Candidate scenario ${lane.scenario} (${lane.platform}): ${lane.outcome}`,
@@ -350,10 +389,11 @@ function run(values) {
   const provenance = JSON.parse(readFileSync(required(values, 'provenance'), 'utf8'))
   const target = platformEntry(scenario, platform)
   assertCandidateProvenance(provenance, candidateRun)
+  // The installed app sits outside the checkout (under the runner's temp directory); it is recorded relative
+  // to the working directory so the command stays free of absolute paths.
+  const app = values.app ? relative(process.cwd(), values.app).replaceAll('\\', '/') : undefined
 
-  // The install step's .app lives under the runner temp; the command names it relative to the checkout.
-  const installed = values.installed ? relative(process.cwd(), values.installed).replaceAll('\\', '/') : undefined
-  const argv = scenarioCommand({ scenario, platform, installer, sha256, outDir, installed })
+  const argv = scenarioCommand({ scenario, platform, installer, sha256, outDir, app })
   mkdirSync(outDir, { recursive: true })
   const child = spawnSync(process.execPath, argv, { stdio: ['ignore', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   process.stderr.write(child.stderr ?? '')
@@ -401,14 +441,15 @@ function main(argv) {
       return 0
     }
     case 'profile': {
+      const scenario = required(values, 'scenario')
       const platform = required(values, 'platform')
-      if (platform !== 'mac') throw new Error(`No fresh-profile location is declared for ${platform}.`)
       const settings = prepareProfile({
-        scenario: required(values, 'scenario'),
+        scenario,
         platform,
-        appDataDir: join(homedir(), 'Library', 'Application Support')
+        appDataDir: platform === 'mac' ? join(homedir(), 'Library', 'Application Support') : null
       })
-      console.log(settings ? 'Fresh profile seeded with the scenario settings.' : 'Fresh profile; the scenario seeds no settings.')
+      if (platformEntry(scenario, platform).isolatedProfiles) console.log('The scenario runs the app only on its own isolated profiles.')
+      else console.log(settings ? 'Fresh profile seeded with the scenario settings.' : 'Fresh profile; the scenario seeds no settings.')
       return 0
     }
     case 'run':
