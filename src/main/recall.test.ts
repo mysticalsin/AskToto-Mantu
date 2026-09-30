@@ -4,7 +4,7 @@ import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { saveMeeting, isEncryptedFile } from './transcripts'
-import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk, meetingTextNeedsRecap } from './recall'
+import { listMeetings, deleteMeeting, recallRead, searchMeetings, searchMeetingsLatest, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk, meetingTextNeedsRecap } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 
@@ -1095,5 +1095,173 @@ describe('isMeetingConfidentialOnDisk — MCP push defense-in-depth', () => {
   it('fails closed on a missing or path-traversal file name', async () => {
     await expect(isMeetingConfidentialOnDisk(testSettings, 'no-such-meeting.md')).resolves.toBe(true)
     await expect(isMeetingConfidentialOnDisk(testSettings, '../escape.md')).resolves.toBe(true)
+  })
+})
+
+// M2-0193 — History list and search classify the listing once and never read a file whose bytes are not
+// on this device; a cloud-only meeting is a 'Not downloaded' row, not a hydration.
+describe('recall — dataless files are listed, never read (M2-0193)', () => {
+  let folder: string
+  let reads: string[]
+  let cloudOnly: Set<string>
+  let notRegular: Set<string>
+  let probes: number
+  let hold: Promise<void> | undefined
+
+  beforeEach(async () => {
+    const { readdir, readFile, realpath, stat, lstat } = await import('node:fs/promises')
+    reads = []
+    cloudOnly = new Set()
+    notRegular = new Set()
+    probes = 0
+    hold = undefined
+    useStorageForTests({
+      detector: {
+        classify: async (files) => {
+          probes += 1
+          await hold
+          return new Map(files.map((f) => [f.path, cloudOnly.has(f.path) ? 'dataless' : 'local'] as const))
+        }
+      },
+      fs: {
+        readdir: (p) => readdir(p),
+        readFile: (p) => {
+          reads.push(p)
+          return readFile(p)
+        },
+        realpath: (p) => realpath(p),
+        stat: async (p) => {
+          const s = await stat(p)
+          return notRegular.has(p) ? { mtimeMs: s.mtimeMs, ctimeMs: s.ctimeMs, size: s.size, isFile: () => false } : s
+        },
+        lstat: (p) => lstat(p).then((s) => ({ isSymbolicLink: s.isSymbolicLink() }))
+      }
+    })
+    folder = realpathSync.native(mkdtempSync(join(tmpdir(), 'asktoto-recall-dataless-')))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const meeting = (title: string, startedAt: number): SaveMeeting => ({
+    title,
+    mode: 'meeting',
+    startedAt,
+    lines: [{ speaker: 'them', text: 'Pilot goes live in March', t: startedAt }],
+    recap: 'Pilot in March.'
+  })
+
+  it('lists a dataless meeting as a not-downloaded row without reading it, and keeps the local one whole', async () => {
+    const local = await saveMeeting(testSettings, meeting('Local sync', 1_700_000_000_000))
+    const remote = await saveMeeting(testSettings, meeting('Cloud sync', 1_700_100_000_000))
+    cloudOnly.add(remote)
+    reads.length = 0
+
+    const list = await listMeetings()
+    expect(reads).toEqual([local])
+    const row = list.find((m) => m.file === basename(remote))
+    expect(row?.notDownloaded).toBe(true)
+    expect(row?.title).toContain('Not downloaded')
+    expect(list.find((m) => m.file === basename(local))?.title).toBe('Local sync')
+  })
+
+  it('searches without reading the dataless meeting', async () => {
+    const remote = await saveMeeting(testSettings, meeting('Cloud sync', 1_700_100_000_000))
+    cloudOnly.add(remote)
+    reads.length = 0
+
+    expect(await searchMeetings('march')).toHaveLength(0)
+    expect(await searchMeetings('marc')).toHaveLength(0)
+    expect(reads).toEqual([])
+  })
+
+  it('an explicit open hydrates the one dataless file, reports progress, and list and search still do not', async () => {
+    const remote = await saveMeeting(testSettings, meeting('Cloud sync', 1_700_100_000_000))
+    cloudOnly.add(remote)
+    reads.length = 0
+
+    await listMeetings()
+    await searchMeetings('march')
+    expect(reads).toEqual([])
+
+    const progress: string[] = []
+    const opened = await recallRead(basename(remote), { hydrate: true, onProgress: (p) => progress.push(p.state) })
+    expect(opened.ok).toBe(true)
+    expect(reads).toEqual([remote])
+    expect(progress).toEqual(['hydrating', 'done'])
+
+    reads.length = 0
+    await listMeetings()
+    expect(reads).toEqual([])
+  })
+
+  it('never reads a non-regular entry on list, search or open, and lists it as unavailable', async () => {
+    const odd = await saveMeeting(testSettings, meeting('Pipe sync', 1_700_200_000_000))
+    notRegular.add(odd)
+    reads.length = 0
+
+    const row = (await listMeetings()).find((m) => m.file === basename(odd))
+    expect(row?.title).toContain('Unavailable')
+    expect(await searchMeetings('march')).toHaveLength(0)
+    expect(await recallRead(basename(odd))).toEqual({ ok: false, error: 'Could not read the meeting file.' })
+    expect(reads).toEqual([])
+  })
+
+  it('a background read (no hydrate) never hydrates a dataless meeting', async () => {
+    const remote = await saveMeeting(testSettings, meeting('Cloud sync', 1_700_100_000_000))
+    cloudOnly.add(remote)
+    reads.length = 0
+
+    expect(await recallRead(basename(remote))).toEqual({ ok: false, error: 'Could not read the meeting file.' })
+    expect(reads).toEqual([])
+  })
+
+  it('after an explicit open hydrates a meeting, the next listing shows its real row', async () => {
+    const remote = await saveMeeting(testSettings, meeting('Cloud sync', 1_700_100_000_000))
+    cloudOnly.add(remote)
+
+    expect((await listMeetings()).find((m) => m.file === basename(remote))?.notDownloaded).toBe(true)
+    expect((await recallRead(basename(remote), { hydrate: true })).ok).toBe(true)
+    cloudOnly.delete(remote)
+
+    const row = (await listMeetings()).find((m) => m.file === basename(remote))
+    expect(row?.title).toBe('Cloud sync')
+    expect(row?.notDownloaded).toBeUndefined()
+  })
+
+  it('a search superseded by a newer one returns nothing while the newer one answers', async () => {
+    await saveMeeting(testSettings, meeting('Local sync', 1_700_000_000_000))
+    const first = searchMeetingsLatest('march')
+    const second = searchMeetingsLatest('march')
+    expect(await first).toEqual([])
+    expect(await second).toHaveLength(1)
+  })
+
+  it('an aborted search returns nothing and reads nothing', async () => {
+    await saveMeeting(testSettings, meeting('Local sync', 1_700_000_000_000))
+    reads.length = 0
+    const controller = new AbortController()
+    controller.abort()
+    expect(await searchMeetings('march', controller.signal)).toEqual([])
+    expect(reads).toEqual([])
+  })
+
+  it('a search aborted while its classify waits on the detector answers at once and reads nothing', async () => {
+    await saveMeeting(testSettings, meeting('Local sync', 1_700_000_000_000))
+    reads.length = 0
+    probes = 0
+    let release!: () => void
+    hold = new Promise((resolve) => (release = resolve))
+    const controller = new AbortController()
+    const search = searchMeetings('march', controller.signal)
+    await vi.waitFor(() => expect(probes).toBeGreaterThan(0))
+    controller.abort()
+    const settled = await Promise.race([search, new Promise((resolve) => setTimeout(() => resolve('still classifying'), 1_000))])
+    release()
+    expect(settled).toEqual([])
+    expect(reads).toEqual([])
   })
 })
