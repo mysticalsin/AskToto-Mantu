@@ -2,7 +2,14 @@ name: Owner soak verdict
 
 # Manual evaluator for the schema-2 diagnostics summary pasted after the five-day 1.9.7 soak.
 # It uploads only the content-free MEASURED record: UTC dates, aggregate counts, rule id and verdict.
+# The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501):
+# the run it creates skips the job, uses no runner minutes and reaches no pasted summary.
+run-name: ${{ github.event_name == 'pull_request' && 'Owner soak verdict (registration)' || 'Owner soak verdict' }}
+
 on:
+  pull_request:
+    paths:
+      - .github/workflows/owner-soak.yml
   workflow_dispatch:
     inputs:
       summary_json:
@@ -23,6 +30,7 @@ defaults:
 jobs:
   evaluate:
     name: Evaluate pasted soak summary
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
