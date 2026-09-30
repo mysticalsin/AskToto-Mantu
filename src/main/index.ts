@@ -761,10 +761,9 @@ import {
   VISION_CHECK_SYSTEM,
   isApiVisionCandidate
 } from '@shared/screen-capture-check'
+import { listMeetings, searchMeetingsLatest } from './history-read'
 import {
-  listMeetings,
   listMeetingsNeedingRecap,
-  searchMeetings,
   recallRead,
   deleteMeeting,
   renameMeeting,
@@ -6472,7 +6471,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.recallRead, async (e, file: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return recallRead(String(file ?? ''))
+    return recallRead(String(file ?? ''), { hydrate: true })
   })
 
   // Recall export: a user-initiated DECRYPTED markdown copy of ONE saved meeting, so an external tool —
@@ -8914,7 +8913,7 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.recallSearch, (e, q: string) => {
     assertMainWindow(e)
-    return requireAuth() ? searchMeetings(String(q ?? '')) : []
+    return requireAuth() ? searchMeetingsLatest(String(q ?? '')) : []
   })
   ipcMain.handle(IPC.recallOpen, async (e, file: string) => {
     assertMainWindow(e)
@@ -8926,7 +8925,7 @@ function registerIpc(): void {
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
     if (!safeName) return ''
     // Encrypted transcripts are unreadable in an editor — the target is a decrypted temp copy instead.
-    const target = await meetingOpenTarget(folder, safeName)
+    const target = await meetingOpenTarget(folder, safeName, { hydrate: true })
     if (!target.ok) return target.error
     auditLog('recall.open', { encrypted: target.encrypted })
     return shell.openPath(target.path)

@@ -42,7 +42,7 @@ describe('MQA-146/319 — local-model provenance follows the actual installer', 
 describe('MQA-188/191 — the in-app copy may not out-run what the installer actually ships', () => {
   const localAi = (): string => {
     const start = settingsUi.indexOf('function LocalAiSection(')
-    const end = settingsUi.indexOf('\nfunction StepBadge(', start)
+    const end = settingsUi.indexOf('\n// CLI Integration section', start)
     expect(start).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(start)
     // Strip `//` comments: they quote the old wording to explain why it was wrong, and no user reads them.

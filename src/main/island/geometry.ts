@@ -462,7 +462,13 @@ export interface OverlayWindowChrome {
   transparent: boolean
   backgroundColor: string
   fullscreenable: boolean
-  roundedCorners: boolean
+  /**
+   * Always false. On macOS a `frame: false` window keeps NSWindowStyleMaskTitled unless roundedCorners is
+   * false, and AppKit re-deriving that window's frame from its content rect adds the hidden title strip above
+   * it: a parked Hide band moved 32 px up, above the work area (M2-0526). Borderless, frame and content rect
+   * are the same rect. The renderer paints its own rounded panels and shadow on a transparent window.
+   */
+  roundedCorners: false
 }
 
 export function overlayWindowChrome(onboardingLive: boolean): OverlayWindowChrome {
@@ -478,7 +484,7 @@ export function overlayWindowChrome(onboardingLive: boolean): OverlayWindowChrom
     transparent: true,
     backgroundColor: OVERLAY_TRANSPARENT_BACKGROUND,
     fullscreenable: false,
-    roundedCorners: true
+    roundedCorners: false
   }
 }
 

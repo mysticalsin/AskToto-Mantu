@@ -66,6 +66,9 @@ const SURVIVOR_BOUND_MS = 5_000 // owned processes must be gone within 5s of mai
 const AUDIT_POLL_MS = 250
 const CENSUS_POLL_MS = 500
 const RV_TIMEOUT_MS = 15_000
+// How long RE-HIDE-3-meeting-hide holds a parked band before re-reading it, so a late native frame change
+// (AppKit re-deriving a titled frame after the park, M2-0526) lands inside the assertion. Empirical.
+const LATE_NATIVE_FRAME_HOLD_MS = 500
 // The budget a direct relaunch's run() gives the relaunched instance to boot, hand off to the running app
 // and exit. A detached relaunch (the Windows shortcut's `start`) resolves run() before that boot, so its
 // reveal window adds this budget on top of RV_TIMEOUT_MS instead of spending the boot inside it.
@@ -1105,25 +1108,93 @@ export function rightEdgeStateMismatches(observation, state, layout) {
   return Object.keys(checks).filter((key) => !checks[key])
 }
 
-/** Installs (idempotently) the cursor stub and the click-through capture on every live window. */
+/**
+ * Installs (idempotently) the cursor stub, the click-through capture and the geometry trace on every live
+ * window. The trace keeps the last frames of the overlay: each app write ('write', the requested rect), each
+ * minimum-size write ('minimum', its size), each window call that can change the native style mask or trigger
+ * a reframe ('call', its name and primitive arguments, with the frame at the call; applyOverlaySurfaceChrome
+ * shows as its setBackgroundColor/setOpacity calls) and each native move/resize ('frame', the resulting rect),
+ * so a frame no write asked for shows as native, next to the call that preceded it.
+ */
 const MAIN_RE_HIDE_SHIM = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
-  const state = (globalThis.__metisReHide ??= { cursor: null, clickThrough: new WeakMap() })
+  const state = (globalThis.__metisReHide ??= { cursor: null, clickThrough: new WeakMap(), geometry: [] })
   if (!state.realCursor) {
     state.realCursor = screen.getCursorScreenPoint.bind(screen)
     screen.getCursorScreenPoint = () => state.cursor ?? state.realCursor()
   }
+  const trace = (w, kind, bounds, call) => {
+    try {
+      if (!/\\/renderer\\/index\\.html/.test(w.webContents.getURL())) return
+      state.geometry.push(call ? { t: Date.now(), kind, bounds, call } : { t: Date.now(), kind, bounds })
+      if (state.geometry.length > 80) state.geometry.shift()
+    } catch {
+      /* a closing window: the trace is evidence only */
+    }
+  }
+  const primitive = (value) => typeof value !== 'object' && typeof value !== 'function'
+  const traceArgs = (args) =>
+    args.map((arg) =>
+      arg && typeof arg === 'object' ? Object.fromEntries(Object.entries(arg).filter(([, value]) => primitive(value))) : arg
+    )
+  const TRACED_CALLS = [
+    'setOpacity',
+    'setBackgroundColor',
+    'setHasShadow',
+    'setResizable',
+    'setMovable',
+    'setAlwaysOnTop',
+    'setVisibleOnAllWorkspaces',
+    'setContentProtection',
+    'setSize',
+    'setContentSize',
+    'setContentBounds',
+    'setMaximumSize',
+    'show',
+    'showInactive',
+    'hide'
+  ]
   for (const w of BrowserWindow.getAllWindows()) {
     if (w.isDestroyed() || w.__metisReHideWrapped) continue
     const setIgnoreMouseEvents = w.setIgnoreMouseEvents.bind(w)
+    const setBounds = w.setBounds.bind(w)
+    const setPosition = w.setPosition.bind(w)
+    const setMinimumSize = w.setMinimumSize.bind(w)
     w.__metisReHideWrapped = true
+    for (const name of TRACED_CALLS) {
+      if (typeof w[name] !== 'function') continue
+      const original = w[name].bind(w)
+      w[name] = (...args) => {
+        trace(w, 'call', w.getBounds(), { name, args: traceArgs(args) })
+        return original(...args)
+      }
+    }
     w.setIgnoreMouseEvents = (ignore, options) => {
       state.clickThrough.set(w, ignore === true)
+      trace(w, 'call', w.getBounds(), { name: 'setIgnoreMouseEvents', args: traceArgs([ignore, options]) })
       return setIgnoreMouseEvents(ignore, options)
     }
+    w.setBounds = (bounds, animate) => {
+      trace(w, 'write', { ...w.getBounds(), ...bounds })
+      return setBounds(bounds, animate)
+    }
+    w.setPosition = (x, y, animate) => {
+      trace(w, 'write', { ...w.getBounds(), x, y })
+      return setPosition(x, y, animate)
+    }
+    w.setMinimumSize = (width, height) => {
+      trace(w, 'minimum', { width, height })
+      return setMinimumSize(width, height)
+    }
+    w.on('move', () => trace(w, 'frame', w.getBounds()))
+    w.on('resize', () => trace(w, 'frame', w.getBounds()))
   }
   return true
 })()`
+
+/** The overlay geometry trace since `since` (ms epoch): rects and call names only, never page content. */
+const mainReHideGeometrySince = (since) =>
+  `(() => globalThis.__metisReHide.geometry.filter((entry) => entry.t >= ${Number(since)}).map(({ t, ...entry }) => ({ ms: t - ${Number(since)}, ...entry })))()`
 
 const MAIN_RE_HIDE_SNAPSHOT = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
@@ -1386,9 +1457,23 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     meetingLive = live.ok
     if (!meetingLive) return { status: 'BLOCKED_EXTERNAL', evidence: { meetingLive: false }, unblock: MEETING_UNBLOCK }
     const hideVisible = await hideControl().isVisible()
+    const clickedAt = await main('Date.now()')
     await hideControl().click({ timeout: 5_000 })
     const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    return { pass: hideVisible && parked.ok, evidence: { meetingLive: true, hideVisible, parked: summarize(parked.observed) } }
+    // Held: the band is still the park after a late native frame change (M2-0526). A stricter assertion,
+    // not a retry.
+    await wait(LATE_NATIVE_FRAME_HOLD_MS)
+    const held = await observe()
+    const heldOk = rightEdgeStateMatches(held, 'parked', 'hide')
+    const geometry = await main(mainReHideGeometrySince(clickedAt))
+    // No native frame of the overlay may leave the work area at any point of the Hide, even one reverted
+    // before the held read: drawer, band and tab all lie inside it.
+    const workAreaY = held.win?.workArea?.y
+    const framesAboveWorkArea = geometry.filter((entry) => entry.kind === 'frame' && !(entry.bounds.y >= workAreaY))
+    return {
+      pass: hideVisible && parked.ok && heldOk && framesAboveWorkArea.length === 0,
+      evidence: { meetingLive: true, hideVisible, parked: summarize(parked.observed), after500ms: summarize(held), framesAboveWorkArea, geometry }
+    }
   })
 
   await step('RE-HIDE-4-island-meeting-leave-parks', async () => {
