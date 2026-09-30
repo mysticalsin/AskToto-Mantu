@@ -16,6 +16,10 @@
  * Automation, so CI shows the actual stack instead of "no window appeared".
  *
  * Usage: node scripts/check-packaged-launch.mjs <path-to-exe-or-app> [--timeout-seconds 120]
+ *          [--report <file> [--installer <name>] [--artifact-sha256 <hex>] [--candidate-run <id>] [--signature <state>]]
+ *
+ * With --report the gate also writes one content-free JSON report of the launch (see launch-report.mjs).
+ * Without it the gate behaves exactly as before.
  *
  * macOS uses an opt-in renderer-ready audit signal and short survival check, without TCC Automation.
  * The audit lives under the isolated userData override, unlike electron-log's macOS main.log.
@@ -37,10 +41,39 @@ import { mkdtempSync, existsSync, readFileSync, readdirSync, writeFileSync, rmSy
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { launchVerdict } from './launch-window-verdict.mjs'
+import { buildLaunchReport } from './launch-report.mjs'
 
 const target = process.argv[2]
 const timeoutIndex = process.argv.indexOf('--timeout-seconds')
 const timeoutSeconds = timeoutIndex === -1 ? 150 : Number(process.argv[timeoutIndex + 1])
+const flag = (name) => {
+  const index = process.argv.indexOf(name)
+  return index === -1 ? undefined : process.argv[index + 1]
+}
+const reportPath = flag('--report')
+const startedAt = Date.now()
+
+/** Writes the --report file, if one was asked for. An invalid report fails the gate: evidence must not be guessed. */
+function writeReport({ passed, productWindowObserved, errorDialogSeen }) {
+  if (reportPath === undefined) return
+  try {
+    const report = buildLaunchReport({
+      installer: flag('--installer') ?? target,
+      artifactSha256: flag('--artifact-sha256'),
+      candidateRun: flag('--candidate-run'),
+      signature: flag('--signature'),
+      platform: process.platform,
+      verdict: passed ? 'PASS' : 'FAIL',
+      productWindowObserved,
+      errorDialogSeen,
+      elapsedMs: Date.now() - startedAt
+    })
+    writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)
+  } catch (error) {
+    console.error(`[check:launch] FAIL — could not write the launch report: ${error.message}`)
+    process.exit(1)
+  }
+}
 
 if (!target) {
   console.error('usage: node scripts/check-packaged-launch.mjs <path-to-packaged-executable>')
@@ -100,6 +133,8 @@ if (process.platform === 'darwin' && process.env.ASKTOTO_MAC_LAUNCH_GATE === '1'
     try { if (Number.isInteger(proc.pid)) process.kill(-proc.pid, 'SIGKILL') } catch {}
     try { rmSync(profile, { recursive: true, force: true }) } catch {}
   }
+  // The macOS gate cannot inspect native dialogs, so it reports that as unknown rather than absent.
+  writeReport({ passed: verified && !failure, productWindowObserved: readyAt !== null, errorDialogSeen: null })
   if (!verified || failure) {
     console.error(`[check:launch] FAIL — ${appPath}: ${failure || `no renderer-ready signal with 3s survival within ${timeoutSeconds}s`}.`)
     process.exit(1)
@@ -250,6 +285,12 @@ console.log(`[check:launch] window titles : ${JSON.stringify(titles)}`)
 if (exited) console.log(`[check:launch] exited early  : ${JSON.stringify(exited)}`)
 
 killApp()
+
+writeReport({
+  passed: healthy && !bytecodeDoa && !mainProcessError,
+  productWindowObserved: healthy,
+  errorDialogSeen: verdict === 'error-dialog' || dialogText !== ''
+})
 
 if (healthy && !bytecodeDoa && !mainProcessError) {
   console.log(`[check:launch] OK — the packaged app started and showed its window`)

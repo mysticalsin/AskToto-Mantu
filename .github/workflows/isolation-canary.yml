@@ -30,6 +30,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && !contains(fromJSON('["refs/heads/main","refs/heads/master","refs/heads/m2/integration"]'), github.ref)) }}
 
 jobs:
+  # M2-0525 — decides whether the native-only macOS jobs below run (scripts/ci/native-changes.sh: always on
+  # m2/integration, main, master, release/*, pull requests and dispatch; on a ticket-branch push only when it
+  # touches the native surface). Skipped jobs leave the run green.
+  changes:
+    name: Native surface changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.native.outputs.native }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - id: native
+        run: bash scripts/ci/native-changes.sh
+
   license-server:
     name: license-server node --test (hermetic)
     runs-on: ubuntu-latest
@@ -60,6 +76,8 @@ jobs:
           bash scripts/hermetic/honeypot.sh check "$HOME/OneDrive"
 
   metiskit-swift-test:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     name: MetisKit swift test (hermetic)
     runs-on: macos-latest
     timeout-minutes: 15
@@ -137,6 +155,8 @@ jobs:
       - run: node --test scripts/hermetic/deny-non-loopback.test.mjs
 
   owner-sandbox-profile:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     name: owner-account.sb denies real user state (hermetic)
     runs-on: macos-latest
     timeout-minutes: 10
