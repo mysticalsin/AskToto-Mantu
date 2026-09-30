@@ -185,6 +185,10 @@ export function demoPlaybackStatus(
   return 'Playing. Pause at any time.'
 }
 
+export function demoStepComplete(phase: DemoPlaybackPhase, reducedMotion: boolean): boolean {
+  return reducedMotion || phase === 'held'
+}
+
 /**
  * Cold orchestration state: which step is showing, which "take" of it (a fresh replayKey
  * tells the caller to recreate its clock), and the user's own pause choice. The hot,

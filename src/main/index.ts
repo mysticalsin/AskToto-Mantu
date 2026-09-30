@@ -31,10 +31,10 @@ import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, creat
 // Shared with intelligence.ts so every window in src/main gates on ONE decision — see
 // dev-env.ts's devToolsEnabled() for why this moved out of this file.
 const DEVTOOLS_ENABLED = devToolsEnabled()
-import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
+import { buildDecoderRendererUrl, buildOverlayRendererUrl } from './renderer-url'
 import {
   createRevealController,
   legacyRevealWindow,
@@ -1557,18 +1557,17 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
   })
 
   try {
-    // Packaged imports must ignore a stale user-level Vite URL.
-    const viteDev = devEnv('ELECTRON_RENDERER_URL')
-    const decoderUrl = viteDev
-      ? new URL('/decoder.html', viteDev).toString()
-      : pathToFileURL(join(__dirname, '../renderer/decoder.html')).toString()
-    decoderExpectedUrl = decoderUrl
+    const decoder = buildDecoderRendererUrl({
+      dirname: __dirname,
+      devRendererUrl: devEnv('ELECTRON_RENDERER_URL')
+    })
+    decoderExpectedUrl = decoder.url
     const ready = waitForDecoderReady()
     // Observe the rejection immediately so a loadURL/loadFile failure below can't surface as an
     // unhandled rejection before `await ready` runs; the real error still propagates at that await.
     ready.catch(() => {})
-    if (viteDev) await active.loadURL(decoderUrl)
-    else await active.loadFile(join(__dirname, '../renderer/decoder.html'))
+    if (decoder.dev) await active.loadURL(decoder.url)
+    else await active.loadFile(decoder.filePath)
     if (active.isDestroyed() || decoderWin !== active) throw new Error('Import decoder closed before it started.')
     await ready
     active.webContents.send('import-decoder:source-start', { jobId: job.jobId, skipThrough })
@@ -2131,22 +2130,14 @@ function onboardingExclusiveLive(): boolean {
  * tour before a later crash must still return to the ordinary overlay.
  */
 function overlayRendererUrl(): string {
-  let rendererUrl = devEnv('ELECTRON_RENDERER_URL') ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
-  const params = new URLSearchParams()
   const onboardingLive = onboardingExclusiveLive()
-  if (onboardingLive) params.set('exclusiveOnboarding', '1')
-  if (!onboardingLive && postOnboardingDestination === 'settings') {
-    params.set('view', 'settings')
-    params.set('tab', 'ai')
-  }
-  const demo = devEnv('ASKTOTO_DEMO')
-  if (demo) params.set('demo', demo)
-  if (!params.size) return rendererUrl
-
-  const url = new URL(rendererUrl)
-  for (const [key, value] of params) url.searchParams.set(key, value)
-  rendererUrl = url.href
-  return rendererUrl
+  return buildOverlayRendererUrl({
+    dirname: __dirname,
+    devRendererUrl: devEnv('ELECTRON_RENDERER_URL'),
+    onboardingLive,
+    postOnboardingDestination,
+    demo: devEnv('ASKTOTO_DEMO')
+  })
 }
 
 /**

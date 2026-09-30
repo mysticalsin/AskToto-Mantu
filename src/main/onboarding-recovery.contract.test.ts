@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
@@ -7,6 +8,7 @@ import { redactSecrets } from '@shared/redact'
 import { crashDetail } from './infra/observability/crash-taxonomy'
 import { createReloadBudget } from './lifecycle/reload-budget'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
+import { buildOverlayRendererUrl } from './renderer-url'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
@@ -85,16 +87,18 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
 
 describe('exclusive onboarding renderer recovery', () => {
   it('reloads an exclusive onboarding renderer with the parser-time shell flag', () => {
-    const recoveryUrl = actualFunction('overlayRendererUrl', {
+    const overlayRendererUrl = actualFunction('overlayRendererUrl', {
       __dirname: '/fixture',
-      join: (...parts: string[]) => parts.join('/'),
-      pathToFileURL: (path: string) => ({ href: `file://${path}` }),
-      onboardingExclusiveLive: () => true,
+      buildOverlayRendererUrl,
       devEnv: () => undefined,
-      process: { env: {} }
-    })()
+      onboardingExclusiveLive: () => true,
+      postOnboardingDestination: 'answer'
+    })
+    const recoveryUrl = overlayRendererUrl()
 
-    expect(recoveryUrl).toBe('file:///renderer/index.html?exclusiveOnboarding=1')
+    const expectedUrl = new URL(pathToFileURL(join('/fixture', '../renderer/index.html')).toString())
+    expectedUrl.searchParams.set('exclusiveOnboarding', '1')
+    expect(recoveryUrl).toBe(expectedUrl.href)
 
     // Real BrowserWindow#loadURL returns a Promise; M2-0037 now observes it (`.catch(...)` on the result).
     const loadURL = vi.fn(() => Promise.resolve())
@@ -120,7 +124,7 @@ describe('exclusive onboarding renderer recovery', () => {
       applyExclusiveOnboardingStage,
       showForExclusiveOnboarding,
       onboardingExclusiveLive: () => true,
-      overlayRendererUrl: () => recoveryUrl,
+      overlayRendererUrl,
       redactSecrets,
       listeningActive: true,
       lastPlainAskAt: 1,

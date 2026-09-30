@@ -379,7 +379,7 @@ jobs:
               [ "$(shasum -a 1 "$RUNNER_TEMP/certificate/c0" | cut -d' ' -f1)" = "$expected" ] \
                 || { echo "::error::$installer is not signed with the QA certificate its provenance records."; exit 1; }
             fi
-            ASKTOTO_MAC_LAUNCH_GATE=1 node scripts/check-packaged-launch.mjs "$app" \
+            ELECTRON_RENDERER_URL=http://127.0.0.1:9/stale-vite/ ASKTOTO_MAC_LAUNCH_GATE=1 node scripts/check-packaged-launch.mjs "$app" \
               --report "launch-reports/$name.launch.json" \
               --installer "$name" \
               --artifact-sha256 "$sha" \
@@ -456,7 +456,9 @@ jobs:
           foreach ($launch in $launches) {
             $name = $launch.Installer.Name
             $sha = ($assets | Where-Object { $_.name -eq $name }).sha256
+            $env:ELECTRON_RENDERER_URL = 'http://127.0.0.1:9/stale-vite/'
             node scripts/check-packaged-launch.mjs $launch.Exe --report "launch-reports/$name.launch.json" --installer $name --artifact-sha256 $sha --candidate-run $runId --signature ($signatures[$name])
+            Remove-Item Env:\ELECTRON_RENDERER_URL -ErrorAction SilentlyContinue
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Require a PASS report per installer, bound to the provenance sha256

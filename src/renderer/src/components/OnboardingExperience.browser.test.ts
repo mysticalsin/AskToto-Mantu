@@ -153,11 +153,14 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
         await page.getByRole('button', { name: 'Continue' }).click()
         await page.getByRole('heading', { name: 'Here’s what that looks like.' }).waitFor({ state: 'visible', timeout: 5_000 })
 
-        // Both motion preferences retain the same four user-controlled stages.
+        // Both motion preferences retain the same four user-controlled stages. Normal motion waits for
+        // each clip's completion condition; reduced motion settles each step immediately.
         for (let i = 0; i < 3; i++) {
+          await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeEnabled({ timeout: 15_000 })
           await page.getByRole('button', { name: 'Next', exact: true }).click()
           expect(await page.getByRole('heading', { name: 'Here’s what that looks like.' }).count()).toBe(1)
         }
+        await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeEnabled({ timeout: 15_000 })
         await page.getByRole('button', { name: 'Next', exact: true }).click()
         await page.getByRole('heading', { name: 'Where should Métis sit?' }).waitFor({ state: 'visible', timeout: 5_000 })
       } finally {
@@ -185,7 +188,10 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
         HTMLMediaElement.prototype.play = () => { throw new Error('media decoder unavailable') }
       })
 
-      for (let i = 0; i < 4; i++) await page.getByRole('button', { name: 'Next', exact: true }).click()
+      for (let i = 0; i < 4; i++) {
+        await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeEnabled({ timeout: 15_000 })
+        await page.getByRole('button', { name: 'Next', exact: true }).click()
+      }
       await page.getByRole('heading', { name: 'Where should Métis sit?' }).waitFor({ state: 'visible', timeout: 5_000 })
     } finally {
       await page.close()
