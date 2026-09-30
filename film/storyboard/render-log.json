@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "ticket_id": "M2-0389",
+  "route": {
+    "invocation": "/brag --full",
+    "note": "Without --full, /brag drops to brag-slim on Opus 5.5; the route check rejects that route."
+  },
+  "signoffs": {
+    "contact_sheet": { "status": "PENDING", "artifact": "film-preproduction-review", "reviewer": null },
+    "animatic": { "status": "PENDING", "artifact": "film-preproduction-review", "reviewer": null }
+  },
+  "reference_clip": {
+    "attempted": true,
+    "result": "not viewed",
+    "reason": "The pipeline that prepared this set has no network access, so the X reference clip could not be opened. The hook was chosen from the claim register alone; view the clip before the hook is locked."
+  }
+}

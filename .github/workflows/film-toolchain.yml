@@ -12,6 +12,7 @@ on:
     branches:
       - m2/M2-0178-*
       - m2/M2-0213-*
+      - m2/M2-0389-*
       - m2/M2-0212-film-toolchain-spike
 
 permissions:
@@ -46,6 +47,8 @@ jobs:
           node-version: 22.22.3
       - name: Test the claim gate behavior
         run: node --test media/launch-film/check-claims.test.mjs scripts/film/check-claims.test.mjs
+      - name: Test the pre-production set
+        run: node --test film/storyboard/preproduction.test.mjs
       - name: Generate the readiness reports
         run: node scripts/film/check-claims.mjs --storyboard --out "$RUNNER_TEMP/launch-film-claims"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -109,6 +112,26 @@ jobs:
         with:
           name: film-non-product-scenes
           path: film/scenes/rendered/*.mp4
+          if-no-files-found: error
+      # The pre-production review set (M2-0389): a contact sheet (one frame from the middle of each
+      # non-product scene) and a low-resolution animatic of the scenes in order, for sign-off in
+      # film/storyboard/render-log.json before the /brag --full render.
+      - name: Draw the contact sheet and animatic
+        run: |
+          mkdir -p "$SCENES_DIR/review"
+          for video in "$SCENES_DIR"/NP-*.mp4; do
+            id=$(basename "$video" .mp4)
+            ffmpeg -v error -y -ss 1.5 -i "$video" -frames:v 1 -vf scale=960:-2 "$SCENES_DIR/review/$id.png"
+            printf "file '%s'\n" "$video" >> "$SCENES_DIR/review/list.txt"
+          done
+          ffmpeg -v error -y -pattern_type glob -i "$SCENES_DIR/review/NP-*.png" -vf 'tile=3x2' -frames:v 1 "$SCENES_DIR/review/contact-sheet.png"
+          ffmpeg -v error -y -f concat -safe 0 -i "$SCENES_DIR/review/list.txt" -vf scale=960:-2 -c:v libx264 -pix_fmt yuv420p "$SCENES_DIR/review/animatic.mp4"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: film-preproduction-review
+          path: |
+            film/scenes/rendered/review/contact-sheet.png
+            film/scenes/rendered/review/animatic.mp4
           if-no-files-found: error
       - name: Verify the scenes
         working-directory: film/scenes
