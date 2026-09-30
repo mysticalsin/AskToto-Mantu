@@ -544,12 +544,12 @@ test('C28 CLI --ticket M2-0008 validates a freeze repro bundle path', () => {
 
 const STALL_BUNDLE = '0f8fad5b-d9cb-469f-a165-70867728950e.1700000000000.31000.txt'
 
-function writeM2_0194Bundle(root) {
+function writeM2_0194Bundle(root, { environment = {}, leadAction } = {}) {
   const writeJson = (name, value) => writeFileSync(join(root, name), `${JSON.stringify(value)}\n`)
   const writeRows = (name, rows) => writeFileSync(join(root, name), rows.map((row) => JSON.stringify(row)).join('\n') + '\n')
   writeFileSync(join(root, 'README.md'), '# M2-0194\n')
-  writeFileSync(join(root, 'M2-0194.lead-action.md'), 'LEAD_ACTION: File the M2-0194 LIVE_VERIFIED record from this bundle.\n')
-  writeJson('environment.json', { ticket: 'M2-0194', artifact_sha256: 'a'.repeat(64), candidate_run: '123456' })
+  writeFileSync(join(root, 'M2-0194.lead-action.md'), leadAction ?? 'LEAD_ACTION: File the M2-0194 LIVE_VERIFIED record from this bundle.\n')
+  writeJson('environment.json', { ticket: 'M2-0194', artifact_sha256: 'a'.repeat(64), candidate_run: '123456', ...environment })
   writeJson('external-blockers.json', { ticket: 'M2-0194', blockers: [{ status: 'BLOCKED_EXTERNAL', unblock_step: 'Run on QA account.' }] })
   writeJson('stall-bundle-names.json', { names: [STALL_BUNDLE] })
   writeRows('matrix.jsonl', [
@@ -595,6 +595,15 @@ test('C29 M2-0194 bundle check requires the matrix, the four excerpts and stall 
   const leadProblems = m2_0194BundleProblems(root)
   assertProblem(leadProblems, 'missing LEAD_ACTION handoff')
   assertProblem(leadProblems, 'LIVE_VERIFIED')
+
+  writeM2_0194Bundle(root, { environment: { dry_run: 1, mode: 'dry-run' } })
+  assertProblem(m2_0194BundleProblems(root), 'dry-run bundles', 'LIVE_VERIFIED')
+
+  writeM2_0194Bundle(root, {
+    environment: { dry_run: 1, mode: 'dry-run' },
+    leadAction: 'LEAD_ACTION: File M2-0194 LOCALLY_TESTED support only; do not file live evidence from this dry run.\n'
+  })
+  assert.deepEqual(m2_0194BundleProblems(root), [])
 
   rmSync(join(root, 'sampler-excerpt.jsonl'))
   assertProblem(m2_0194BundleProblems(root), 'sampler-excerpt.jsonl: missing from M2-0194 bundle')

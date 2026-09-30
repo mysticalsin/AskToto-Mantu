@@ -1,4 +1,4 @@
-name: M2-0008 freeze repro
+name: Freeze repro and candidate attribution
 
 # With candidate_run set (M2-0424) the same matrix runs against the installers of that qa-candidate.yml run,
 # after they are verified against that run's provenance and the sha256 inputs, and the job emits and checks
@@ -39,7 +39,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: m2-0008-freeze-repro-${{ github.ref }}
+  group: freeze-repro-${{ github.ref }}-${{ inputs.candidate_run || 'm2-0008' }}
   cancel-in-progress: true
 
 defaults:
@@ -48,7 +48,7 @@ defaults:
 
 jobs:
   macos:
-    name: M2-0008 hosted bundle (macOS)
+    name: ${{ inputs.candidate_run == '' && 'M2-0008 hosted bundle (macOS)' || 'M2-0194 attribution bundle (macOS)' }}
     runs-on: macos-latest
     timeout-minutes: 45
     if: github.ref == 'refs/heads/main'
@@ -109,12 +109,12 @@ jobs:
           CANDIDATE_RUN: ${{ inputs.candidate_run }}
         run: |
           bash scripts/qa/freeze-repro/run-matrix.sh \
+            --hosted-live \
             --artifact "$ARTIFACT_SHA256" \
             --build-run-id "$GITHUB_RUN_ID" \
             --candidate-run "$CANDIDATE_RUN" \
             --app "$RUNNER_TEMP/m2-0008-app/Metis.app" \
-            --out out/m2-0194-freeze-repro \
-            --dry-run
+            --out out/m2-0194-freeze-repro
           node scripts/evidence/check.mjs --ticket M2-0194 --bundle out/m2-0194-freeze-repro
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() && inputs.candidate_run == '' }}
@@ -132,7 +132,7 @@ jobs:
           retention-days: 14
 
   windows:
-    name: M2-0008 hosted bundle (Windows)
+    name: ${{ inputs.candidate_run == '' && 'M2-0008 hosted bundle (Windows)' || 'M2-0194 attribution dry-run (Windows)' }}
     runs-on: windows-latest
     timeout-minutes: 45
     if: github.ref == 'refs/heads/main'

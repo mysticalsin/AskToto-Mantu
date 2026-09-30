@@ -872,7 +872,14 @@ export function m2_0194BundleProblems(bundlePath) {
   }
 
   if (!leadAction.includes('LEAD_ACTION:')) problems.push('M2-0194.lead-action.md: missing LEAD_ACTION handoff')
-  if (!leadAction.includes('M2-0194') || !leadAction.includes('LIVE_VERIFIED')) {
+  const dryRun = environment?.dry_run === 1 || environment?.dry_run === true || environment?.mode === 'dry-run'
+  const liveHandoff = leadAction.includes('LIVE_VERIFIED')
+  if (!leadAction.includes('M2-0194')) {
+    problems.push('M2-0194.lead-action.md: must name M2-0194')
+  }
+  if (dryRun && liveHandoff) {
+    problems.push('M2-0194.lead-action.md: dry-run bundles must not hand off a LIVE_VERIFIED filing')
+  } else if (!dryRun && !liveHandoff) {
     problems.push('M2-0194.lead-action.md: must hand off filing the M2-0194 LIVE_VERIFIED record')
   }
 

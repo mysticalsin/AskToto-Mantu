@@ -483,7 +483,7 @@ write_external_blockers() {
   if [[ "$HOSTED_LIVE" == 1 ]]; then
     cat > "$OUT/external-blockers.json" <<EOF_HOSTED_BLOCKERS
 {
-  "ticket": "M2-0008",
+  "ticket": "$TICKET",
   "mode": "hosted-live",
   "blockers": [
     {
@@ -852,6 +852,12 @@ EOF_LEAD_ACTION
 write_attribution_bundle() {
   stop_app
   node "$SCRIPT_DIR/attribution-bundle.mjs" --out "$OUT" --profile "$PROFILE" --profile "$IDLE_PROFILE"
+  if [[ "$DRY_RUN" == 1 ]]; then
+    cat > "$OUT/M2-0194.lead-action.md" <<EOF_LEAD_ACTION_0194_DRY
+LEAD_ACTION: Import this public dry-run bundle into the controlled program evidence chain only as M2-0194 LOCALLY_TESTED support for qa-candidate run $CANDIDATE_RUN (artifact sha256 $ARTIFACT). Do not file a live evidence record from this dry run; dispatch freeze-repro from main on macos-latest with --hosted-live for the live attribution record.
+EOF_LEAD_ACTION_0194_DRY
+    return
+  fi
   cat > "$OUT/M2-0194.lead-action.md" <<EOF_LEAD_ACTION_0194
 LEAD_ACTION: Import this public bundle into the controlled program evidence chain: file the M2-0194 LIVE_VERIFIED record for qa-candidate run $CANDIDATE_RUN (artifact sha256 $ARTIFACT) from matrix.jsonl, interrupt-results.jsonl, the stall, sampler, reveal and sidecar excerpts, and stall-bundle-names.json. Rows listed in external-blockers.json are BLOCKED_EXTERNAL until they are run on the QA account.
 EOF_LEAD_ACTION_0194
@@ -1066,6 +1072,29 @@ if [[ "$HOSTED_LIVE" == 1 ]]; then
   write_fixture_manifest
   copy_diagnostic_reports "$STAMP"
   RESULT=$(live_result)
+  if [[ -n "$CANDIDATE_RUN" ]]; then
+    write_attribution_bundle
+    cat > "$OUT/README.md" <<EOF_HOSTED_ATTRIBUTION_README
+# M2-0194 Freeze Repro Attribution Bundle (hosted-live)
+
+- Mode: \`hosted-live\` on \`$QA_HOST_LABEL\`
+- Result: \`$RESULT\`
+- QA candidate run: \`$CANDIDATE_RUN\`
+- Artifact sha256: \`$ARTIFACT\`
+- Build run id: \`$BUILD_RUN_ID\`
+- Matrix rows (rows 1-4 automatic, rows 5 and 9 BLOCKED_EXTERNAL): \`matrix.jsonl\`
+- Attribution excerpts: \`stall-excerpt.jsonl\`, \`sampler-excerpt.jsonl\`, \`reveal-excerpt.jsonl\`, \`sidecar-excerpt.jsonl\`
+- Stall bundle file names only: \`stall-bundle-names.json\`
+- Interrupt checks for ADR-021/C10: \`interrupt-results.jsonl\`
+- Cloud-account blockers and their unblock step: \`external-blockers.json\`
+- Main/renderer samples: \`samples/\`
+- DiagnosticReports consent/filter manifest: \`diagnostic-reports.json\`
+- Lead filing handoff: \`M2-0194.lead-action.md\`
+EOF_HOSTED_ATTRIBUTION_README
+    printf '[M2-0194] wrote content-free attribution bundle: %s\n' "$OUT"
+    [[ "$RESULT" == PASS ]] || fail "live run did not produce PASS evidence: $(live_failure_summary)"
+    exit 0
+  fi
   write_hosted_summary
   write_evidence_records "$RESULT"
   write_lead_action
