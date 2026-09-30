@@ -46,11 +46,13 @@ export const SIDECAR_REAP_SKIP_REASONS = [
   'kill-failed',
   'ambiguous-entry'
 ] as const
-/** The native tray and window boot stages, each timed on its own (M2-0515). */
+/** The native tray and window boot stages, each timed on its own (M2-0515, M2-0517). */
 export const BOOT_STAGES = [
   'createTray.loadIcon',
   'createTray.loadIcon.fallback',
   'createTray.newTray',
+  'createTray.decorate',
+  'createTray.buildMenu',
   'createTray.attachMenu',
   'createWindow.construct',
   'createWindow.navigate',

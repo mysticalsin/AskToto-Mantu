@@ -78,6 +78,7 @@ import {
 import type { ScreenRepairResult } from '@shared/screen-permission'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
+import type { RecallHydration } from '@shared/recall-hydration'
 
 type Unsub = () => void
 function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
@@ -335,6 +336,8 @@ const api = {
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
   recallRead: (file: string): Promise<RecallReadResult> => ipcRenderer.invoke(IPC.recallRead, file),
+  // An explicit recallRead/recallOpen downloading one cloud-only meeting: hydrating, then done or failed.
+  onRecallHydration: (cb: (d: RecallHydration) => void): Unsub => sub(IPC.recallHydration, cb),
   // User-initiated decrypted markdown copy of ONE saved meeting (native save dialog in main). Exists so
   // external tools (e.g. Claude local ingesting into the second brain) can read a meeting even when
   // at-rest encryption is on.
