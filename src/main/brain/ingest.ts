@@ -33,7 +33,15 @@ import { resolvePortalCloudflareModel } from '@shared/ask-routing'
 import { localBaseReady } from '../llm/local-routing'
 import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@shared/intelligence-pass'
 import { verifyIntegrity } from '../llm/local-models'
-import { getState as localRuntimeState, activeStreams as localActiveStreams, assertLocalExtractionWindowsFit, fitLocalExtractionWindowChars, isLocalContextOverflow, LocalContextOverflowError, LOCAL_EXTRACTION_OUTPUT_TOKENS } from '../llm/local-runtime'
+import {
+  getState as localRuntimeState,
+  activeStreams as localActiveStreams,
+  assertLocalExtractionWindowsFit as assertRuntimeLocalExtractionWindowsFit,
+  fitLocalExtractionWindowChars,
+  isLocalContextOverflow,
+  LocalContextOverflowError,
+  LOCAL_EXTRACTION_OUTPUT_TOKENS
+} from '../llm/local-runtime'
 import { isLocalPreemption, localSlotTokens, whenLocalInteractiveIdle } from '../llm/local'
 import {
   scanMeetingSources,
@@ -422,9 +430,36 @@ const EXTRACTION_REMINDER = '\n\nREMINDER: your ENTIRE reply must be one valid J
 const MIN_LOCAL_WINDOW_CHARS = 1000
 const MAX_LOCAL_WINDOWS = 12
 
+/** A meeting whose extraction cannot fit the local model's context on this machine. */
+export class ExtractionDoesNotFitError extends LocalContextOverflowError {
+  constructor() {
+    super()
+    this.name = 'ExtractionDoesNotFitError'
+  }
+}
+
+/** The largest window (chars) whose local extraction request fits `slotTokens`, capped at `maxChars`. */
+export function fitWindowChars(slotTokens: number, systemChars: number, maxChars: number): number {
+  return fitLocalExtractionWindowChars(slotTokens, systemChars, maxChars)
+}
+
+/** Throws unless every local extraction window fits the route's fitted size and bounded call budget. */
+export function assertLocalWindowsFit(size: number, windows: readonly string[]): void {
+  try {
+    assertRuntimeLocalExtractionWindowsFit(size, MIN_LOCAL_WINDOW_CHARS, MAX_LOCAL_WINDOWS, windows)
+  } catch (error) {
+    if (error instanceof LocalContextOverflowError) throw new ExtractionDoesNotFitError()
+    throw error
+  }
+}
+
+export function isContextOverflow(error: unknown): boolean {
+  return error instanceof LocalContextOverflowError || isLocalContextOverflow(error)
+}
+
 /** Largest local extraction window that fits one runtime slot, capped at WINDOW_SIZE. */
 export function localExtractionWindowChars(slotTokens: number): number {
-  return fitLocalExtractionWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
+  return fitWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
 }
 
 /** Window size for this route; `local` means overflow is permanent for the current runtime slot. */
@@ -442,7 +477,7 @@ function extractionWindowSize(s: Settings, route: IngestRoute): { size: number; 
 
 function classifyIngestFailure(error: unknown, unreadable: boolean): BrainIngestFailureReason {
   if (unreadable) return 'unavailable'
-  if (error instanceof LocalContextOverflowError || isLocalContextOverflow(error)) return 'context_overflow'
+  if (isContextOverflow(error)) return 'context_overflow'
   const message = error instanceof Error ? error.message : String(error)
   if (/no configured ai provider|unavailable|not available|missing|not found/i.test(message)) return 'unavailable'
   return 'provider_error'
@@ -698,9 +733,9 @@ async function extractMeeting(
   // transcript file keeps the verbatim original on disk — only the copy sent to the cloud model for
   // extraction is stripped of high-confidence secrets, and only when the user has redaction enabled.
   const fit = extractionWindowSize(s, route)
-  if (fit.local && fit.size < MIN_LOCAL_WINDOW_CHARS) throw new LocalContextOverflowError()
+  if (fit.local && fit.size < MIN_LOCAL_WINDOW_CHARS) throw new ExtractionDoesNotFitError()
   const windows = prepareMeetingWindows(s, transcriptMd, fit.size)
-  if (fit.local) assertLocalExtractionWindowsFit(fit.size, MIN_LOCAL_WINDOW_CHARS, MAX_LOCAL_WINDOWS, windows)
+  if (fit.local) assertLocalWindowsFit(fit.size, windows)
 
   const runWindow = async (window: string): Promise<MeetingExtraction> => {
     const user = `Meeting transcript (file: ${basename(sourceFile)}):\n\n"""\n${window}\n"""`
@@ -726,7 +761,7 @@ async function extractMeeting(
       return await attempt('')
     } catch (e) {
       // A request the model's context cannot hold fails identically with a reminder appended.
-      if (isLocalContextOverflow(e)) throw e
+      if (isContextOverflow(e)) throw e
       // One reinforcement retry — malformed JSON is the dominant failure mode, not content. Cross-
       // provider failover for TRANSPORT failures already happened inside runCompletion; this retry is
       // deliberately same-provider (servedBy) so a parse-failure reminder never turns into an accidental
@@ -745,7 +780,7 @@ async function extractMeeting(
     } catch (e) {
       // The estimate fitted the slot but the tokenizer did not (dense non-Latin text): same outcome as a
       // meeting that never fitted. Overflow on a cloud-sized window stays an ordinary, backed-off failure.
-      if (fit.local && isLocalContextOverflow(e)) throw new LocalContextOverflowError()
+      if (fit.local && isContextOverflow(e)) throw new ExtractionDoesNotFitError()
       throw e
     }
   }
@@ -1901,7 +1936,7 @@ async function finishJob(result: JobResult): Promise<void> {
           ...(version ? { sourceVersion: version } : {}),
           ...retryStateAfterFailure(previous, {
             unreadable: !result.ok && result.unreadable,
-            permanent: !result.ok && result.error instanceof LocalContextOverflowError,
+            permanent: !result.ok && result.error instanceof ExtractionDoesNotFitError,
             source
           }, now)
         }
