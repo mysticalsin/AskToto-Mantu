@@ -903,8 +903,10 @@ export function App(): JSX.Element {
         setRightEdgeDockDismissed(false)
         dispatchAutoHide({ type: 'reveal-now' })
       } else {
-        // Main parked a dock the page still shows open: render the rail now (draft kept), not a clipped drawer.
-        if (d.parked && rightEdgePresentation && overlayRevealedRef.current) {
+        // Main parked the dock: render the rail now (draft kept), never a drawer inside the parked window.
+        // Hide keeps its drawer mounted while the page is collapsed, so this must not depend on whether
+        // the page still thought it was revealed; every reveal path clears the dismissal again.
+        if (d.parked && rightEdgePresentation) {
           wasRevealedRef.current = false
           setRightEdgeDockDismissed(true)
           setOverlaySpring('rest')

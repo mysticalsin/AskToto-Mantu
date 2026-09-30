@@ -1030,18 +1030,22 @@ function insideWorkArea(bounds, workArea) {
  * click-through off, the rail rendered with no open drawer. Every park sits inside the work area.
  */
 export function rightEdgeStateMatches(observation, state, layout) {
+  return rightEdgeStateMismatches(observation, state, layout).length === 0
+}
+
+/** The criteria of `rightEdgeStateMatches` that `observation` misses, by name; empty when it matches. */
+export function rightEdgeStateMismatches(observation, state, layout) {
   const win = observation?.win
   const page = observation?.page
-  if (!win || !page) return false
+  if (!win || !page) return ['observation']
   const expected = rightEdgeExpectedRects(win.workArea)
-  if (state === 'revealed') {
-    return rectMatches(win.bounds, expected.drawer) && win.opacity === 1 && win.clickThrough === false && page.drawer === true
-  }
-  if (!insideWorkArea(win.bounds, win.workArea) || page.drawer) return false
-  if (layout === 'hide') {
-    return rightEdgeHideParkMatches(win.bounds, expected.band) && win.opacity === 0 && win.clickThrough === true
-  }
-  return rectMatches(win.bounds, expected.tab) && win.opacity === 1 && win.clickThrough === false && page.rail === true
+  const checks =
+    state === 'revealed'
+      ? { bounds: rectMatches(win.bounds, expected.drawer), opacity: win.opacity === 1, clickThrough: win.clickThrough === false, drawer: page.drawer === true }
+      : layout === 'hide'
+        ? { insideWorkArea: insideWorkArea(win.bounds, win.workArea), drawer: !page.drawer, bounds: rightEdgeHideParkMatches(win.bounds, expected.band), opacity: win.opacity === 0, clickThrough: win.clickThrough === true }
+        : { insideWorkArea: insideWorkArea(win.bounds, win.workArea), drawer: !page.drawer, bounds: rectMatches(win.bounds, expected.tab), opacity: win.opacity === 1, clickThrough: win.clickThrough === false, rail: page.rail === true }
+  return Object.keys(checks).filter((key) => !checks[key])
 }
 
 /** Installs (idempotently) the cursor stub and the click-through capture on every live window. */
@@ -1182,14 +1186,20 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
       await page.evaluate(() => window.toto.parkAfterHide(true))
     }
     const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', layout), 5_000)
-    if (!parked.ok) throw new Error(`could not park right-edge ${layout}: ${JSON.stringify(summarize(parked.observed))}`)
+    if (!parked.ok) {
+      const missed = rightEdgeStateMismatches(parked.observed, 'parked', layout).join(',')
+      throw new Error(`could not park right-edge ${layout} (missed: ${missed}): ${JSON.stringify(summarize(parked.observed))}`)
+    }
     return parked.observed
   }
   const revealAtEdge = async () => {
     const current = await observe()
     await setCursor(edgePoint(current.win))
     const revealed = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed'), 3_000)
-    if (!revealed.ok) throw new Error(`the right-edge band did not reveal the drawer: ${JSON.stringify(summarize(revealed.observed))}`)
+    if (!revealed.ok) {
+      const missed = rightEdgeStateMismatches(revealed.observed, 'revealed').join(',')
+      throw new Error(`the right-edge band did not reveal the drawer (missed: ${missed}): ${JSON.stringify(summarize(revealed.observed))}`)
+    }
     return revealed.observed
   }
   const composer = () => page.getByRole('textbox', { name: 'Ask Métis anything' })

@@ -333,6 +333,25 @@ describe('right-edge reveal band (owner report: right-edge Hide never revealed f
     expect(step.action).toBe('stay')
   })
 
+  it('reveals only from the 4 px band when Windows widens the parked Hide window to its 32 px minimum', () => {
+    const right = display.bounds.x + display.bounds.width
+    const widened = { x: right - 32, y: band.y, width: 32, height: band.height }
+    const run = (x: number): ReturnType<typeof overlayWatchStep> =>
+      overlayWatchStep({
+        cursor: { x, y: band.y + Math.round(band.height / 2) },
+        restRect: band,
+        revealedRect: widened,
+        islandResting: true,
+        windowVisible: true,
+        osHoverSeen: false,
+        placement: 'right-edge'
+      })
+    expect(band.width).toBe(4)
+    expect(run(right - 1).action).toBe('restore')
+    // The extra 28 px of the widened invisible window is not a reveal zone.
+    for (let x = widened.x; x < band.x; x += 1) expect(run(x).action).toBe('stay')
+  })
+
   it('keeps the revealed drawer open from the band through its inflated edge, and parks once the pointer leaves both', () => {
     const run = (cursor: { x: number; y: number }, osHoverSeen: boolean): ReturnType<typeof overlayWatchStep> =>
       overlayWatchStep({ cursor, restRect: band, revealedRect: drawer, islandResting: false, windowVisible: true, osHoverSeen, placement: 'right-edge' })

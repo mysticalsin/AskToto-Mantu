@@ -27,6 +27,7 @@ import {
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
   rightEdgeStateMatches,
+  rightEdgeStateMismatches,
   runRevealRow,
   seedOnboardedProfile,
   smokeReport,
@@ -587,6 +588,19 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     // Inset from the edge, or the old tab square, is still not a Hide park.
     expect(rightEdgeHideParkMatches({ ...flush, x: flush.x - 12 }, band)).toBe(false)
     expect(rightEdgeHideParkMatches(rightEdgeExpectedRects(windows.workArea).tab, band)).toBe(false)
+  })
+
+  it('names the parked criteria a Windows readback misses, so a failing row says which one', () => {
+    // Run 36645827157 readback: the widened band flush at the edge is a bounds match.
+    const bounds = { x: 992, y: 39, width: 32, height: 560 }
+    const win = (opacity: number, clickThrough: boolean | null) => ({ bounds, opacity, clickThrough, visible: true, displayBounds: windows.bounds, workArea: windows.workArea })
+    const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
+    expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'hide')).toEqual([])
+    expect(rightEdgeStateMismatches({ win: win(0, true), page: { ...page, drawer: true, rail: false } }, 'parked', 'hide')).toEqual(['drawer'])
+    expect(rightEdgeStateMismatches({ win: win(1, false), page }, 'parked', 'hide')).toEqual(['opacity', 'clickThrough'])
+    expect(rightEdgeStateMismatches({ win: win(0, null), page }, 'parked', 'hide')).toEqual(['clickThrough'])
+    expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'island')).toEqual(['bounds', 'opacity', 'clickThrough'])
+    expect(rightEdgeStateMismatches(null, 'parked', 'hide')).toEqual(['observation'])
   })
 })
 

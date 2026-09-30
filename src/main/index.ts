@@ -5270,7 +5270,7 @@ function registerIpc(): void {
             islandResting = true
             userAnchorY = park.y
             commitParkedOverlayBounds(park)
-            notifyOverlayCursorHover(false)
+            notifyOverlayCursorHover(false, false, resolvedOverlayPlacementForDisplay(display) === 'right-edge')
           }
           // Re-apply the new layout's opacity and click-through whether or not it parked here.
           applyOverlaySurfaceChrome()

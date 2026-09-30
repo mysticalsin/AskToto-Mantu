@@ -446,7 +446,10 @@ describe('right-edge dock', () => {
     // this pins the wiring those rows depend on.
     const cursorHoverAt = app.indexOf('window.toto.onOverlayCursorHover?.((d) => {')
     const cursorHover = app.slice(cursorHoverAt, cursorHoverAt + 2400)
-    expect(cursorHover).toMatch(/if \(d\.parked && rightEdgePresentation && overlayRevealedRef\.current\) \{\s*wasRevealedRef\.current = false\s*setRightEdgeDockDismissed\(true\)\s*setOverlaySpring\('rest'\)/)
+    // Hide keeps its drawer mounted while the page is collapsed: a main park must render the rail even when
+    // the page had already collapsed, or the parked window holds an open drawer.
+    expect(cursorHover).toMatch(/if \(d\.parked && rightEdgePresentation\) \{\s*wasRevealedRef\.current = false\s*setRightEdgeDockDismissed\(true\)\s*setOverlaySpring\('rest'\)/)
+    expect(cursorHover).not.toContain('d.parked && rightEdgePresentation && overlayRevealedRef.current')
     const askAt = app.indexOf("if (a === 'ask') {")
     const ask = app.slice(askAt, askAt + 800)
     expect(ask).toContain('setFocusSignal((x) => x + 1)')
