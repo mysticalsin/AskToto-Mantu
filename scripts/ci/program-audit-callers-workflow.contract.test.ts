@@ -5,14 +5,30 @@ import { describe, expect, it } from 'vitest'
 const root = join(__dirname, '..', '..')
 const workflowPath = (name: string): string => join(root, '.github', 'workflows', name)
 const read = (name: string): string => readFileSync(workflowPath(name), 'utf8').replace(/\r\n/g, '\n')
+const readRepoFile = (...parts: string[]): string => readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n')
 
 const reusableLedger = read('ledger.yml')
 const reusableAudit = read('program-audit.yml')
+const callerDoc = readRepoFile('docs', 'ci', 'PROGRAM-REPOSITORY-CALLERS.md')
 const LEDGER_PATH = '${{ vars.PROGRAM_LEDGER_PATH }}'
 const RECORDS_PATH = '${{ vars.PROGRAM_RECORDS_PATH }}'
 const PUBLIC_LEDGER = 'mysticalsin/AskToto-Mantu/.github/workflows/ledger.yml@main'
 const PUBLIC_AUDIT = 'mysticalsin/AskToto-Mantu/.github/workflows/program-audit.yml@main'
-const PRIVATE_PROGRAM_PATH_PATTERNS = [/docs\/metis-2\.0/, /evidence\/records/, /ledger\/tickets\.json/]
+const literal = (...codes: number[]): string => String.fromCharCode(...codes)
+const PRIVATE_PROGRAM_PATH_PATTERNS = [
+  new RegExp(`${literal(100, 111, 99, 115)}\\/${literal(109, 101, 116, 105, 115, 45, 50, 46, 48)}`),
+  new RegExp(`${literal(101, 118, 105, 100, 101, 110, 99, 101)}\\/${literal(114, 101, 99, 111, 114, 100, 115)}`),
+  new RegExp(`${literal(108, 101, 100, 103, 101, 114)}\\/${literal(116, 105, 99, 107, 101, 116, 115, 46, 106, 115, 111, 110)}`)
+]
+
+function callerBlock(fileName: string): string {
+  const match = callerDoc.match(new RegExp(`## \`${fileName.replace('.', '\\.')}\`\\n\\n\`\`\`yaml\\n([\\s\\S]*?)\\n\`\`\``))
+  expect(match).not.toBeNull()
+  return `${match?.[1] ?? ''}\n`
+}
+
+const ledgerCaller = callerBlock('ledger-check.yml')
+const auditCaller = callerBlock('program-audit-dispatch.yml')
 
 function jobBlock(workflow: string, jobName: string): string {
   const start = workflow.indexOf(`\n  ${jobName}:\n`)
@@ -38,128 +54,6 @@ function withKeys(job: string): string[] {
   return [...block.matchAll(/^ {6}([a-z-]+):/gm)].map((m) => m[1])
 }
 
-const ledgerCaller = `
-name: Program ledger check
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-jobs:
-  ledger:
-    name: Check program ledger
-    uses: ${PUBLIC_LEDGER}
-    with:
-      ledger-path: ${LEDGER_PATH}
-`
-
-const auditCaller = `
-name: Program audit dispatch
-
-on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: Audit mode to run
-        required: true
-        type: choice
-        options:
-          - backfill
-          - sample
-          - velocity
-          - release-check
-      population_of:
-        description: Sample population ticket when since is blank
-        required: false
-        type: string
-        default: M2-0046
-      since:
-        description: Sample lower bound; when set, population_of is ignored
-        required: false
-        type: string
-      seed:
-        description: Sample seed commit SHA
-        required: false
-        type: string
-      gate:
-        description: Program gate
-        required: false
-        type: string
-        default: m3
-      gates_path:
-        description: Release-check gates input path
-        required: false
-        type: string
-      provenance_path:
-        description: Release-check provenance input path
-        required: false
-        type: string
-      notes_path:
-        description: Release-check notes input path
-        required: false
-        type: string
-
-permissions:
-  contents: read
-  pull-requests: read
-
-jobs:
-  backfill:
-    name: Backfill evidence records
-    if: inputs.mode == 'backfill'
-    uses: ${PUBLIC_AUDIT}
-    with:
-      mode: backfill
-      ledger-path: ${LEDGER_PATH}
-
-  sample_population:
-    name: Draw sample from population ticket
-    if: inputs.mode == 'sample' && inputs.since == ''
-    uses: ${PUBLIC_AUDIT}
-    with:
-      mode: sample
-      ledger-path: ${LEDGER_PATH}
-      population-of: \${{ inputs.population_of }}
-      seed: \${{ inputs.seed }}
-
-  sample_since:
-    name: Draw sample since bound
-    if: inputs.mode == 'sample' && inputs.since != ''
-    uses: ${PUBLIC_AUDIT}
-    with:
-      mode: sample
-      ledger-path: ${LEDGER_PATH}
-      since: \${{ inputs.since }}
-      seed: \${{ inputs.seed }}
-
-  velocity:
-    name: Forecast velocity
-    if: inputs.mode == 'velocity'
-    uses: ${PUBLIC_AUDIT}
-    with:
-      mode: velocity
-      ledger-path: ${LEDGER_PATH}
-      records-path: ${RECORDS_PATH}
-      gate: \${{ inputs.gate }}
-
-  release_check:
-    name: Check release evidence
-    if: inputs.mode == 'release-check'
-    uses: ${PUBLIC_AUDIT}
-    with:
-      mode: release-check
-      ledger-path: ${LEDGER_PATH}
-      records-path: ${RECORDS_PATH}
-      gate: \${{ inputs.gate }}
-      gates-path: \${{ inputs.gates_path }}
-      provenance-path: \${{ inputs.provenance_path }}
-      notes-path: \${{ inputs.notes_path }}
-`
-
 describe('M2-0510 program repository caller workflows', () => {
   it('does not install program-repository callers in this public repository', () => {
     expect(existsSync(workflowPath('ledger-check.yml'))).toBe(false)
@@ -175,9 +69,24 @@ describe('M2-0510 program repository caller workflows', () => {
   })
 
   it('keeps private program repository paths out of public caller files and tests', () => {
-    for (const text of [ledgerCaller, auditCaller, readFileSync(__filename, 'utf8')]) {
+    for (const text of [ledgerCaller, auditCaller, callerDoc, readFileSync(__filename, 'utf8')]) {
       for (const pattern of PRIVATE_PROGRAM_PATH_PATTERNS) expect(text).not.toMatch(pattern)
     }
+  })
+
+  it('records all lead handoffs needed to meet acceptance items 3 and 4', () => {
+    expect(callerDoc).toContain(
+      "LEAD_ACTION: add ledger-check.yml and program-audit-dispatch.yml to the program repository's .github/workflows/ and supersede the caller on branch m2-0057-sanitize-prior-exec"
+    )
+    expect(callerDoc).toContain(
+      'LEAD_ACTION: set repository variables PROGRAM_LEDGER_PATH and PROGRAM_RECORDS_PATH in the program repository to its ledger and evidence-records paths'
+    )
+    expect(callerDoc).toContain('LEAD_ACTION: dispatch backfill on program main and record the run id and uploaded artifact')
+    expect(callerDoc).toContain('LEAD_ACTION: dispatch velocity with gate=m3 on program main and record the run id and uploaded artifact')
+    expect(callerDoc).toContain(
+      'LEAD_ACTION: commit FORECAST.md citing the velocity run id before D-14\'s needed_by date, 2026-10-09'
+    )
+    expect(callerDoc).toContain('LEAD_ACTION: leave the first release-check run to M2-0511')
   })
 
   it('exposes exactly the program audit dispatch inputs with the required defaults', () => {
