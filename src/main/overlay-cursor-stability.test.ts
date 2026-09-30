@@ -140,7 +140,7 @@ function nativeHover(options: {
     let currentWidth = 0;
     let lastBarHeight = 120;
     let userAnchorY = 0;
-    const overlayCursorWatch = { running: () => true };
+    let overlayCursorWatchTimer = 1;
     function restoreBarWidth() { overlayParkLatched = false; islandResting = false; currentWidth = restoreWindow(); }
     ${handler}
     ${parkHandler}

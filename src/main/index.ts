@@ -242,7 +242,12 @@ import {
   pointInRect,
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
-import { createAdaptiveCursorWatch, createPresenterIdleSignal, cursorWatchIntervalMs } from './island/idle-throttle'
+import {
+  type AdaptiveCursorWatch,
+  createAdaptiveCursorWatch,
+  createPresenterIdleSignal,
+  cursorWatchIntervalMs
+} from './island/idle-throttle'
 import { pinWindowOnAllWorkspaces } from './overlay-workspace-pinning'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import {
@@ -1185,13 +1190,7 @@ let isMinimized = false
 let islandResting = false
 // Settings is a full surface, not Hide 8×2 / Island peek. Cursor watch and park must not crush it.
 let settingsSurfaceOpen = false
-const overlayCursorWatch = createAdaptiveCursorWatch({
-  tick: () => {
-    tickOverlayCursorWatch()
-    syncPresenterIdle()
-  },
-  intervalMs: () => overlayCursorWatchIntervalMs()
-})
+let overlayCursorWatchTimer: AdaptiveCursorWatch | null = null
 // ADR-018: main tells the page when it is parked or long blurred; visibilityState never does (backgroundThrottling:false).
 const presenterIdle = createPresenterIdleSignal({
   publish: (state) => {
@@ -3283,7 +3282,10 @@ function overlayCursorWatchWanted(): boolean {
 }
 
 function stopOverlayCursorWatch(): void {
-  overlayCursorWatch.stop()
+  if (overlayCursorWatchTimer) {
+    overlayCursorWatchTimer.stop()
+    overlayCursorWatchTimer = null
+  }
   overlayCursorWatchHovering = false
   overlayCursorWatchHeldCursor = null
   overlayCursorWatchEnteredAt = null
@@ -3293,7 +3295,14 @@ function stopOverlayCursorWatch(): void {
 function startOverlayCursorWatch(): void {
   stopOverlayCursorWatch()
   if (!overlayCursorWatchWanted() || !win || win.isDestroyed()) return
-  overlayCursorWatch.start()
+  overlayCursorWatchTimer = createAdaptiveCursorWatch({
+    tick: () => {
+      tickOverlayCursorWatch()
+      syncPresenterIdle()
+    },
+    intervalMs: () => overlayCursorWatchIntervalMs()
+  })
+  overlayCursorWatchTimer.start()
 }
 
 /** Fast only near the reveal zone or the revealed bar, or while a reveal dwell or leave → park is pending. */
@@ -3850,7 +3859,7 @@ function legacyReveal(reason: RevealReason, options: { focus: boolean }): void {
 function revealRightEdgeDockInPage(): void {
   if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
   if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) !== 'right-edge') return
-  if (!overlayCursorWatch.running()) startOverlayCursorWatch()
+  if (!overlayCursorWatchTimer) startOverlayCursorWatch()
   overlayCursorWatchHovering = false
   rightEdgeUnhoveredRevealAt = performance.now()
   notifyOverlayCursorHover(true, true)
@@ -3860,7 +3869,7 @@ function revealRightEdgeDockInPage(): void {
 function revealTopCenterHoverInPage(): void {
   if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
   if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) === 'right-edge') return
-  if (!overlayCursorWatch.running()) startOverlayCursorWatch()
+  if (!overlayCursorWatchTimer) startOverlayCursorWatch()
   notifyOverlayCursorHover(true)
 }
 
