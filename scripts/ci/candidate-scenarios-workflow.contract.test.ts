@@ -81,7 +81,12 @@ describe('candidate-scenarios.yml', () => {
     const repositoryGuard = "if: github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'"
     expect(guard).toContain(`    ${repositoryGuard}`)
     expect(read('qa-candidate.yml')).toContain("github.repository == 'mysticalsin/AskToto-Mantu'")
-    expect(read('qa-candidate.yml')).toContain("github.ref == 'refs/heads/main'")
+    // qa-candidate.yml builds on main and release/1.9.x only; this lane stays narrower and takes main candidates only.
+    const qaCandidate = read('qa-candidate.yml')
+    const refGuard = qaCandidate.slice(qaCandidate.indexOf('case "$GITHUB_REF" in'), qaCandidate.indexOf('esac'))
+    const refArms = refGuard.split('\n').map((line) => line.trim()).filter((line) => /^[^\s]+\)/.test(line))
+    expect(refArms).toEqual(['refs/heads/main|refs/heads/release/1.9.x) ;;', '*)'])
+    expect(refGuard.slice(refGuard.indexOf('*)'))).toMatch(/echo "::error::[^\n]*"\s+exit 1 ;;/)
     expect(guard).toContain('    runs-on: ubuntu-latest')
     const guardSteps = steps('guard')
     expect(guardSteps[stepIndex(guardSteps, 'candidate-scenarios.mjs resolve')]).toContain('>> "$GITHUB_OUTPUT"')
