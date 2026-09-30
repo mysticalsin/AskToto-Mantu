@@ -1554,20 +1554,14 @@ const MAIN_OV_BACKGROUND = `(() => {
   return w ? { readback: w.getBackgroundColor().toLowerCase(), requested: globalThis.__metisOv?.requestedBackground ?? null } : null
 })()`
 
-/** Opens Settings exactly as the Settings hotkey does: main sends the page its 'hotkey' IPC (src/shared/ipc.ts). */
-const MAIN_OV_OPEN_SETTINGS = `(() => {
-  const { BrowserWindow } = globalThis.__metisReHideElectron
-  const w = BrowserWindow.getAllWindows().find((c) => !c.isDestroyed() && /\\/renderer\\/index\\.html/.test(c.webContents.getURL()))
-  if (!w) return false
-  w.webContents.send('hotkey', 'settings')
-  return true
-})()`
-
 /**
  * Runs the OV rows against a live overlay (same `main`/`page` contract as runRightEdgeHideRows). `flashCount`
- * reads how many `overlay.flash` audit records the app has written so far. Rows never throw.
+ * reads how many `overlay.flash` audit records the app has written so far. `openSettings` drives the app's own
+ * main-process Settings entry (the tray click → sendHotkey('settings') in src/main/index.ts), so OV-BG covers
+ * applySettingsSurface's resize and background order, not only the renderer's view switch; it resolves false
+ * when that entry is unavailable. Rows never throw.
  */
-export async function runOverlayStabilityRows({ page, main, rows, flashCount = () => 0, wait = sleep, pathMs = OV_STABLE_PATH_MS }) {
+export async function runOverlayStabilityRows({ page, main, openSettings, rows, flashCount = () => 0, wait = sleep, pathMs = OV_STABLE_PATH_MS }) {
   const complete = (id, patch) => {
     const row = rows.find((entry) => entry.id === id)
     if (row) Object.assign(row, patch)
@@ -1664,7 +1658,7 @@ export async function runOverlayStabilityRows({ page, main, rows, flashCount = (
     await main(MAIN_OV_RECORDER)
     const before = await main(MAIN_OV_BACKGROUND)
     await main(mainOvRecording(true))
-    if (!(await main(MAIN_OV_OPEN_SETTINGS))) throw new Error('overlay window not found to open Settings')
+    if (!(await openSettings())) throw new Error('the Métis tray was not found to open Settings through the main process')
     const sections = page.locator('[aria-label="Settings sections"]')
     await sections.waitFor({ state: 'visible', timeout: 10_000 })
     await wait(500)
@@ -1701,7 +1695,9 @@ async function runPackagedOverlayStabilityRows({ port, inspectPort, auditLogPath
   }
   const flashCount = () => parseAuditLog(readAuditLog(auditLogPath)).filter((record) => record.event === 'overlay.flash').length
   try {
-    await withOverlayPage(port, (page) => runOverlayStabilityRows({ page, main: inspector.evaluate, rows, flashCount }))
+    await withOverlayPage(port, (page) =>
+      runOverlayStabilityRows({ page, main: inspector.evaluate, openSettings: inspector.clickTray, rows, flashCount })
+    )
   } finally {
     inspector.close()
   }
@@ -1735,18 +1731,33 @@ async function mainInspector(inspectPort) {
     socket.addEventListener('open', () => resolve())
     socket.addEventListener('error', () => reject(new Error('main-process inspector socket failed to connect')))
   })
-  const evaluate = async (expression) => {
+  const send = async (method, params) => {
     const id = nextId++
     const answer = new Promise((resolve) => pending.set(id, resolve))
-    socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }))
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('main-process evaluate timed out')), 10_000))
+    socket.send(JSON.stringify({ id, method, params }))
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error(`main-process ${method} timed out`)), 10_000))
     const message = await Promise.race([answer, timeout])
     if (message.error) throw new Error(message.error.message)
     if (message.result?.exceptionDetails) throw new Error(message.result.exceptionDetails.exception?.description ?? message.result.exceptionDetails.text)
-    return message.result?.result?.value
+    return message.result
+  }
+  const evaluate = async (expression) =>
+    (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }))?.result?.value
+  // The app holds its Tray in a module-local binding, so find the live instance on the heap and emit the same
+  // 'click' the OS delivers: its listener is the product's own Settings entry (sendHotkey('settings')).
+  const clickTray = async () => {
+    const prototype = await send('Runtime.evaluate', { expression: 'globalThis.__metisReHideElectron.Tray.prototype' })
+    const trays = await send('Runtime.queryObjects', { prototypeObjectId: prototype.result.objectId })
+    const clicked = await send('Runtime.callFunctionOn', {
+      objectId: trays.objects.objectId,
+      functionDeclaration:
+        "function () { const tray = this.find((t) => !t.isDestroyed()); if (!tray) return false; tray.emit('click', {}, tray.getBounds()); return true }",
+      returnByValue: true
+    })
+    return clicked?.result?.value === true
   }
   await evaluate("globalThis.__metisReHideElectron = process.mainModule.require('electron'); true")
-  return { evaluate, close: () => socket.close() }
+  return { evaluate, clickTray, close: () => socket.close() }
 }
 
 async function runPackagedRightEdgeHideRows({ port, inspectPort, rows }) {
