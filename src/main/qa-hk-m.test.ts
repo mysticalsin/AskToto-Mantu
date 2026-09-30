@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   HK_M_SCENARIOS,
   armQaHostFloorOverride,
+  hkMRamFloorOverrideActive,
   hkMScenarioFromEnv,
   hostFloorOverridden,
   qaHostFloorOverride,
@@ -132,29 +133,56 @@ describe('HK-M RAM-floor override', () => {
     armQaHostFloorOverride({}, false, DEFAULT_USER_DATA)
   })
 
-  it('starts the bundled model through ensureLocalRuntimeStarted text-only and ungated, lifted by the shared gate', async () => {
-    const args = await modelStartArgs()
-    const [modelId, vision, canStartSpeculatively] = args
+  it('starts the bundled model through ensureLocalRuntimeStarted with a minted override, text-only and ungated', async () => {
+    const [modelId, vision, canStartSpeculatively, override] = await modelStartArgs()
     expect(modelId).toBe('qwen3.5-0.8b')
     expect(vision).toBe(false)
     expect(canStartSpeculatively).toBeUndefined()
-    // The start carries no override of its own: the one gate decides, and it holds for an HK-M row.
-    expect(args).toHaveLength(2)
+    // The token counts only through the one gate: never before it is armed, and once it holds for an HK-M row.
+    expect(hkMRamFloorOverrideActive(override, HK_M_ENV, true)).toBe(false)
+    expect(armQaHostFloorOverride(HK_M_ENV, true, DEFAULT_USER_DATA)).toBe(true)
     expect(qaHostFloorOverride(HK_M_ENV, true, DEFAULT_USER_DATA)).toBe(true)
+    expect(hkMRamFloorOverrideActive(override, HK_M_ENV, true)).toBe(true)
   })
 
-  it('is inert unless packaged, on an isolated profile, and naming a known row', () => {
-    expect(qaHostFloorOverride(HK_M_ENV, false, DEFAULT_USER_DATA)).toBe(false)
-    expect(qaHostFloorOverride({ METIS_HK_M_SCENARIO: 'model-starting' }, true, DEFAULT_USER_DATA)).toBe(false)
-    expect(qaHostFloorOverride({ ...HK_M_ENV, METIS_HK_M_SCENARIO: 'other' }, true, DEFAULT_USER_DATA)).toBe(false)
-    expect(qaHostFloorOverride({}, true, DEFAULT_USER_DATA)).toBe(false)
+  it('is inert unless packaged, on an isolated profile, and naming a known row', async () => {
+    const [, , , override] = await modelStartArgs()
+    const cases: Array<[NodeJS.ProcessEnv, boolean]> = [
+      [HK_M_ENV, false],
+      [{ METIS_HK_M_SCENARIO: 'model-starting' }, true],
+      [{ ...HK_M_ENV, METIS_HK_M_SCENARIO: 'other' }, true],
+      [{}, true]
+    ]
+    for (const [env, packaged] of cases) {
+      armQaHostFloorOverride(env, packaged, DEFAULT_USER_DATA)
+      expect(qaHostFloorOverride(env, packaged, DEFAULT_USER_DATA)).toBe(false)
+      expect(hkMRamFloorOverrideActive(override, env, packaged)).toBe(false)
+    }
   })
 
-  it('cannot be passed by any other caller: without the armed gate no floor is lifted, whatever the env says', () => {
+  it('counts no token outside an HK-M row, even with the gate armed by the explicit override env', async () => {
+    const [, , , override] = await modelStartArgs()
+    const env = { ASKTOTO_USERDATA: '/qa-profile', METIS_QA_HOST_FLOOR_OVERRIDE: '1' }
+    expect(armQaHostFloorOverride(env, true, DEFAULT_USER_DATA)).toBe(true)
+    expect(hkMRamFloorOverrideActive(override, env, true)).toBe(false)
+  })
+
+  it('cannot be passed by any other caller: a look-alike or missing token is ignored even inside the HK-M gate', async () => {
+    const [, , , minted] = await modelStartArgs()
+    armQaHostFloorOverride(HK_M_ENV, true, DEFAULT_USER_DATA)
+    expect(hkMRamFloorOverrideActive({ ...(minted as object) }, HK_M_ENV, true)).toBe(false)
+    expect(hkMRamFloorOverrideActive({ kind: 'hk-m-ram-floor' }, HK_M_ENV, true)).toBe(false)
+    expect(hkMRamFloorOverrideActive(undefined, HK_M_ENV, true)).toBe(false)
+    expect(hkMRamFloorOverrideActive(null, HK_M_ENV, true)).toBe(false)
+  })
+
+  it('cannot be passed by any other caller: without the armed gate no floor is lifted, whatever the env says', async () => {
+    const [, , , minted] = await modelStartArgs()
     const audit = vi.fn()
     armQaHostFloorOverride({ ...HK_M_ENV, METIS_QA_HOST_FLOOR_OVERRIDE: '1' }, false, DEFAULT_USER_DATA)
     expect(hostFloorOverridden('advertised-ram', audit, HOST)).toBe(false)
     expect(hostFloorOverridden('prewarm-available-ram', audit, HOST)).toBe(false)
+    expect(hkMRamFloorOverrideActive(minted, HK_M_ENV, true)).toBe(false)
     expect(audit).not.toHaveBeenCalled()
   })
 })

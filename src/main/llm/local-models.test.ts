@@ -67,16 +67,21 @@ import {
   type LocalModelFile
 } from './local-models'
 import { auditLog } from '../logger'
-import { armQaHostFloorOverride, productionHkMDeps, type HkMModules } from '../qa-hk-m'
+import { armQaHostFloorOverride, productionHkMDeps, type HkMModules, type HkMRamFloorOverride } from '../qa-hk-m'
 
 const mockAppGetPath = app.getPath as ReturnType<typeof vi.fn>
 
-/** The HK-M hook's model start passes nothing that could lift a floor: only the model id and text-only. */
-async function hkMModelStart(): Promise<void> {
-  const ensureLocalRuntimeStarted = vi.fn(async () => {})
-  const modules = { ensureLocalRuntimeStarted } as unknown as HkMModules
+/** The only way to obtain a counted token: the one the HK-M hook's model start passes along. */
+async function hkMRamFloorOverride(): Promise<HkMRamFloorOverride> {
+  let override: HkMRamFloorOverride | undefined
+  const modules = {
+    ensureLocalRuntimeStarted: async (_id: string, _vision?: boolean, _gate?: () => boolean, token?: HkMRamFloorOverride) => {
+      override = token
+    }
+  } as unknown as HkMModules
   await productionHkMDeps(modules, vi.fn(), vi.fn(), '/qa-profile', '/resources').startLocalModel()
-  expect(ensureLocalRuntimeStarted.mock.calls).toEqual([['qwen3.5-0.8b', false]])
+  if (!override) throw new Error('the HK-M model start passed no override')
+  return override
 }
 
 /** What index.ts does once at boot, against this test's default userData path. */
@@ -248,10 +253,12 @@ describe('bundled local model runtime', () => {
       })
 
       it('lets the HK-M model start past the floor on a 7 GiB packaged QA host, and records it', async () => {
-        await hkMModelStart()
+        const override = await hkMRamFloorOverride()
         expect(() => assertRamOk('qwen3.5-0.8b')).toThrow(InsufficientRamError)
+        // The token alone lifts nothing: only the armed gate does.
+        expect(() => assertRamOk('qwen3.5-0.8b', override)).toThrow(InsufficientRamError)
         armGateFromProcess()
-        expect(() => assertRamOk('qwen3.5-0.8b')).not.toThrow()
+        expect(() => assertRamOk('qwen3.5-0.8b', override)).not.toThrow()
         expect(auditLog).toHaveBeenCalledWith('hk-m.ram-floor-override', {
           modelId: 'qwen3.5-0.8b',
           advertisedGB: 7,
@@ -267,33 +274,44 @@ describe('bundled local model runtime', () => {
         // not on the RAM floor.
         armQaHostFloorOverride({}, false, userData)
         await expect(verifyIntegrity('qwen3.5-0.8b')).rejects.toBeInstanceOf(InsufficientRamError)
+        await expect(verifyIntegrity('qwen3.5-0.8b', override)).rejects.toBeInstanceOf(InsufficientRamError)
         armGateFromProcess()
-        await expect(verifyIntegrity('qwen3.5-0.8b')).rejects.toBeInstanceOf(InvalidBundledModelError)
+        await expect(verifyIntegrity('qwen3.5-0.8b', override)).rejects.toBeInstanceOf(InvalidBundledModelError)
       })
 
-      it('refuses outside the gate: unpackaged, no row, no isolated profile, or the default profile', () => {
+      it('lifts any start of an armed HK-M process, but marks only the hook\'s own start', () => {
+        armGateFromProcess()
+        expect(() => assertRamOk('qwen3.5-0.8b')).not.toThrow()
+        expect(() => assertRamOk('qwen3.5-0.8b', { kind: 'hk-m-ram-floor' })).not.toThrow()
+        expect(auditLog).not.toHaveBeenCalledWith('hk-m.ram-floor-override', expect.anything())
+      })
+
+      it('refuses a look-alike token, and the real one outside the HK-M gate', async () => {
+        const override = await hkMRamFloorOverride()
+        expect(() => assertRamOk('qwen3.5-0.8b', { kind: 'hk-m-ram-floor' })).toThrow(InsufficientRamError)
         Object.defineProperty(app, 'isPackaged', { configurable: true, value: false })
         armGateFromProcess()
-        expect(() => assertRamOk('qwen3.5-0.8b')).toThrow(InsufficientRamError)
+        expect(() => assertRamOk('qwen3.5-0.8b', override)).toThrow(InsufficientRamError)
         Object.defineProperty(app, 'isPackaged', { configurable: true, value: true })
         vi.stubEnv('METIS_HK_M_SCENARIO', '')
         armGateFromProcess()
-        expect(() => assertRamOk('qwen3.5-0.8b')).toThrow(InsufficientRamError)
+        expect(() => assertRamOk('qwen3.5-0.8b', override)).toThrow(InsufficientRamError)
         vi.stubEnv('METIS_HK_M_SCENARIO', 'model-starting')
         vi.stubEnv('ASKTOTO_USERDATA', '')
         armGateFromProcess()
-        expect(() => assertRamOk('qwen3.5-0.8b')).toThrow(InsufficientRamError)
+        expect(() => assertRamOk('qwen3.5-0.8b', override)).toThrow(InsufficientRamError)
         vi.stubEnv('ASKTOTO_USERDATA', userData)
         armGateFromProcess()
-        expect(() => assertRamOk('qwen3.5-0.8b')).toThrow(InsufficientRamError)
+        expect(() => assertRamOk('qwen3.5-0.8b', override)).toThrow(InsufficientRamError)
         expect(auditLog).not.toHaveBeenCalledWith('hk-m.ram-floor-override', expect.anything())
         expect(auditLog).not.toHaveBeenCalledWith('local.host-floor-override', expect.anything())
       })
 
-      it('changes nothing on a machine that already meets the floor', () => {
+      it('changes nothing on a machine that already meets the floor', async () => {
         setTotalMemGB(8)
+        const override = await hkMRamFloorOverride()
         armGateFromProcess()
-        expect(() => assertRamOk('qwen3.5-0.8b')).not.toThrow()
+        expect(() => assertRamOk('qwen3.5-0.8b', override)).not.toThrow()
         expect(auditLog).not.toHaveBeenCalledWith('hk-m.ram-floor-override', expect.anything())
         expect(auditLog).not.toHaveBeenCalledWith('local.host-floor-override', expect.anything())
       })
