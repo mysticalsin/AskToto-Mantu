@@ -15,9 +15,7 @@ export const LOCAL_OUTPUT_TOKEN_BUDGETS = Object.freeze({ suggest: 96, summary: 
 const LOCAL_SYSTEM_CHAR_CAP = 40_000 // matches personas.ts contextBlock's existing imported-context cap
 const LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP = 80_000
 
-/** Conservative characters per token for sizing a request against a context window. English transcripts
- *  run about four; three leaves room for names, numbers and accented text. */
-export const LOCAL_CHARS_PER_TOKEN = 3
+export const LOCAL_CHARS_PER_TOKEN = localRuntime.LOCAL_CHARS_PER_TOKEN
 
 /** Apple's on-device model context window (prompt plus answer). */
 export const FM_CONTEXT_TOKENS = 4096

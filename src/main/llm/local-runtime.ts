@@ -159,6 +159,41 @@ export interface SpawnArgsInput {
  */
 export const LOCAL_PARALLEL_SLOTS = 2
 
+// Conservative characters per token for sizing local requests. English transcripts run about four;
+// three leaves room for names, numbers and accented text.
+export const LOCAL_CHARS_PER_TOKEN = 3
+export const LOCAL_EXTRACTION_OUTPUT_TOKENS = 1536
+const EXTRACTION_USER_OVERHEAD_CHARS = 512
+const CONTEXT_MARGIN_TOKENS = 256
+
+/** Largest extraction window whose prompt, transcript window and reserved answer fit one runtime slot. */
+export function fitLocalExtractionWindowChars(slotTokens: number, systemChars: number, maxChars: number): number {
+  const promptTokens = Math.ceil((systemChars + EXTRACTION_USER_OVERHEAD_CHARS) / LOCAL_CHARS_PER_TOKEN)
+  const windowTokens = slotTokens - LOCAL_EXTRACTION_OUTPUT_TOKENS - CONTEXT_MARGIN_TOKENS - promptTokens
+  return Math.min(maxChars, Math.max(0, windowTokens * LOCAL_CHARS_PER_TOKEN))
+}
+
+export class LocalContextOverflowError extends Error {
+  constructor() {
+    super(
+      'This meeting does not fit the on-device model\'s context on this Mac, so it was not indexed. ' +
+      'Select Retry after closing other apps, or index it with a cloud provider.'
+    )
+    this.name = 'LocalContextOverflowError'
+  }
+}
+
+export function assertLocalExtractionWindowsFit(size: number, minSize: number, maxWindows: number, windows: readonly string[]): void {
+  if (size < minSize || windows.length > maxWindows || windows.some((w) => w.length > size)) {
+    throw new LocalContextOverflowError()
+  }
+}
+
+export function isLocalContextOverflow(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /exceeds the available context size/i.test(message)
+}
+
 /** True when every sidecar slot is already serving a stream, so a new one would only queue. */
 export function atCapacity(): boolean {
   return activeStreamCount >= LOCAL_PARALLEL_SLOTS
