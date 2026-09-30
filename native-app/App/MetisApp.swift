@@ -101,8 +101,9 @@ struct RootView: View {
             // M2-0412: start the fleet model policy poller for the app's lifetime. It fetches at launch
             // and re-polls every <=60s once the existing Operator URL/secret values are provisioned.
             guard let urlString = UserDefaults.standard.string(forKey: MetisApp.operatorURLDefaultsKey),
-                  let url = URL(string: urlString)
+                  let operatorURL = URL(string: urlString)
             else { return }
+            let url = ModelPolicy.endpointURL(operatorBaseURL: operatorURL)
             await modelPolicyRuntime.start(url: url) {
                 UserDefaults.standard.string(forKey: MetisApp.operatorIngestSecretDefaultsKey)
             }

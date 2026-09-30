@@ -87,6 +87,22 @@ public struct SignedModelPolicy: Codable, Equatable, Sendable {
 }
 
 public enum ModelPolicy {
+    /// Device-facing Operator endpoint for fleet policy fetches. The app stores the Operator base URL
+    /// (matching Electron's `operatorUrl` setting), so native launch must append the route before it
+    /// starts the poller.
+    public static func endpointURL(operatorBaseURL: URL) -> URL {
+        var components = URLComponents(url: operatorBaseURL, resolvingAgainstBaseURL: false)
+        var path = components?.percentEncodedPath ?? ""
+        while path.hasSuffix("/") { path.removeLast() }
+        if !path.hasSuffix("/v1/model-policy") {
+            path = path.isEmpty ? "/v1/model-policy" : "\(path)/v1/model-policy"
+        }
+        components?.percentEncodedPath = path
+        components?.percentEncodedQuery = nil
+        components?.percentEncodedFragment = nil
+        return components?.url ?? operatorBaseURL.appendingPathComponent("v1/model-policy")
+    }
+
     /// Byte-for-byte identical to `canonicalModelPolicyPayload` in src/shared/model-policy.ts — the
     /// single source of truth both sides must never drift from independently.
     public static func canonicalPayload(_ policy: ModelPolicyDocument) -> String {

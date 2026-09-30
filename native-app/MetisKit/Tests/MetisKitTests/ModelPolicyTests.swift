@@ -32,6 +32,21 @@ final class ModelPolicyTests: XCTestCase {
         XCTAssertEqual(ModelPolicy.canonicalPayload(doc), expected)
     }
 
+    func testEndpointURLAppendsTheDevicePolicyRouteToTheOperatorBaseURL() {
+        XCTAssertEqual(
+            ModelPolicy.endpointURL(operatorBaseURL: URL(string: "https://operator.example.test")!).absoluteString,
+            "https://operator.example.test/v1/model-policy"
+        )
+        XCTAssertEqual(
+            ModelPolicy.endpointURL(operatorBaseURL: URL(string: "https://operator.example.test/")!).absoluteString,
+            "https://operator.example.test/v1/model-policy"
+        )
+        XCTAssertEqual(
+            ModelPolicy.endpointURL(operatorBaseURL: URL(string: "https://operator.example.test/v1/model-policy")!).absoluteString,
+            "https://operator.example.test/v1/model-policy"
+        )
+    }
+
     func testCanonicalPayloadChangesWithFallbacks() {
         let withFallback = fullDocument(overrides: [
             .askChat: ModelPolicyEntry(provider: "anthropic", model: "x", fallbacks: [ModelPolicyFallback(provider: "openai", model: "gpt-5")])
