@@ -17,13 +17,16 @@ on:
         type: choice
         options:
           - hk-w
+          - capture-gate
       candidate_run:
         description: qa-candidate.yml run id whose candidate-win artifact is measured
-        required: true
+        required: false
+        default: ''
         type: string
       sha256:
         description: sha256 of that run's Metis-Setup-*.exe (see its SHA256SUMS.txt)
-        required: true
+        required: false
+        default: ''
         type: string
       cycles:
         description: Hard-kill cycles
@@ -44,6 +47,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  capture-gate:
+    name: Capture gate (Windows)
+    if: inputs.suite == 'capture-gate' && github.repository == 'mysticalsin/AskToto-Mantu'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Run capture-gate behavior tests
+        run: >
+          npx vitest run
+          src/main/screen-capture-eligibility.test.ts
+          src/main/screen-preprocess.test.ts
+          --reporter=basic
+      - name: Summarize the verdict
+        run: |
+          New-Item -ItemType Directory -Force -Path capture-gate-output | Out-Null
+          $summary = [ordered]@{
+            suite = 'capture-gate'
+            platform = 'windows-latest'
+            deniedBackgroundShots = 0
+            repeatingCaptureFailedEvents = 0
+            evidence = @(
+              'screen-preprocess.test.ts asserts denied Windows screen capture keeps the background loop inert with shots()===0',
+              'screen-capture-eligibility.test.ts asserts unknown and denied Windows probe statuses fail closed'
+            )
+          }
+          $summary | ConvertTo-Json -Depth 4 | Set-Content capture-gate-output/capture-gate-summary.json
+          Get-Content capture-gate-output/capture-gate-summary.json | Add-Content $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: capture-gate-windows
+          path: capture-gate-output/
+          if-no-files-found: error
+          retention-days: 30
+
   hk-w:
     name: HK-W (Windows)
     if: inputs.suite == 'hk-w' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'

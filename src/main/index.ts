@@ -533,6 +533,7 @@ import { listModels as listLocalModels, isDownloaded as localModelDownloaded } f
 import { ensureLocalModel, localModelDownloadState } from './llm/local-model-download'
 import { provisionLocalModel } from './local-model-provisioning'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
+import { createScreenCaptureGrantGate } from './screen-capture-eligibility'
 import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
@@ -754,7 +755,7 @@ import {
   sweepStaleTempFiles
 } from './transcripts'
 import { meetingOpenTarget, readSavedMeeting } from './history-actions'
-import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
+import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome, windowsScreenStatus } from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
 import {
   VISION_CHECK_PROMPT,
@@ -4231,15 +4232,11 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   // Windows keeps the VLM-only path (extractScreenText returns null without a helper anyway, but gating
   // here keeps the win32 wiring visibly identical to before).
   extractScreenText: process.platform === 'darwin' ? extractScreenText : undefined,
-  // macOS: never let this background loop be the thing that asks for Screen Recording. captureScreenshotOnce
-  // deliberately lets a `not-determined` status reach desktopCapturer because that is what registers the app
-  // with TCC and raises the system dialog — fine for a user-initiated capture, wrong for a loop armed at boot
-  // (MQA-178), which would pop an unexplained prompt seconds after launch (MQA-209). Undefined off darwin:
-  // Windows has no queryable screen grant and its capture prompts nothing.
-  screenCaptureGranted:
-    process.platform === 'darwin'
-      ? () => systemPreferences.getMediaAccessStatus('screen') === 'granted'
-      : undefined,
+  screenCaptureGranted: createScreenCaptureGrantGate({
+    platform: process.platform,
+    macScreenStatus: () => systemPreferences.getMediaAccessStatus('screen') === 'granted' ? 'granted' : 'unknown',
+    windowsScreenStatus
+  }),
   log: (level, message) => (level === 'warn' ? mainLog.warn(message) : mainLog.info(message)),
   audit: (event, data) => auditLog(event as Parameters<typeof auditLog>[0], data)
 })
@@ -9717,7 +9714,9 @@ if (!app.requestSingleInstanceLock()) {
   // unattended pop-up seconds after launch. Fire-and-forget: readiness reporting must never delay boot.
   if (process.platform === 'win32') {
     runStep('probeScreenCapture', () => {
-      void probeScreenCapture().catch(() => false)
+      void probeScreenCapture()
+        .catch(() => false)
+        .finally(refreshScreenPreprocess)
     })
   }
   runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair

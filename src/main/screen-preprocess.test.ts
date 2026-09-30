@@ -17,9 +17,9 @@ function makeHarness(init?: {
   authorized?: boolean
   /** Foreground-watcher health at start(): false is linux / a mac install with no bundled helper. */
   watcherHealthy?: boolean
-  /** macOS Screen Recording (TCC) grant. Omit entirely for the Windows wiring, where index.ts leaves the
-   *  dep undefined because there is no queryable screen grant and a capture raises no prompt. */
+  /** Platform screen-capture grant. macOS reads TCC; Windows reads the live probe/outcome cache. */
   screenCaptureGranted?: boolean
+  platform?: NodeJS.Platform | string
 }) {
   let clock = 1_000_000
   const state = {
@@ -113,7 +113,7 @@ function makeHarness(init?: {
     audit: (event: string, data?: Record<string, unknown>) => {
       audits.push({ event, data })
     },
-    platform: 'darwin'
+    platform: init?.platform ?? 'darwin'
   } as ScreenPreprocessDeps & { allowSpeculativeLocalWork?: () => boolean }
 
   const sp = createScreenPreprocess(deps)
@@ -475,11 +475,27 @@ describe('createScreenPreprocess — the boot arm must not raise the macOS TCC p
     expect(h.sp.isActive()).toBe(true) // no relaunch needed — that would be MQA-178 all over again
   })
 
-  it('MQA-209 — Windows is untouched: no screen-grant dep, the engine arms exactly as before', () => {
-    const h = makeHarness() // the dep index.ts leaves undefined off darwin
-    expect(h.sp.canRun()).toBe(true)
+  it('M2-0044 — Windows denied screen capture keeps the background loop inert: shots()===0', async () => {
+    const h = makeHarness({ screenCaptureGranted: false, platform: 'win32' })
+    expect(h.sp.canRun()).toBe(false)
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(false)
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.shots()).toBe(0)
+    expect(h.peek()).toBeNull()
+  })
+
+  it('M2-0044 — a Windows grant that lands mid-session arms the engine on the next reconcile', async () => {
+    const h = makeHarness({ screenCaptureGranted: false, platform: 'win32' })
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(false)
+    h.state.screenCaptureGranted = true
     h.sp.refresh()
     expect(h.sp.isActive()).toBe(true)
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.shots()).toBe(1)
   })
 })
 
