@@ -318,6 +318,32 @@ describe('MEETING-GROWTH-1', () => {
     expect(find(verdict, 'POST', 'sidecar-supervisor')).toMatchObject({ measured: 1, bound: 1, pass: true })
   })
 
+  it('passes a wrapper that appears before minute 5 for a llama-server already running before capture', () => {
+    const verdict = meeting((t) => [
+      ...meetingBase(t),
+      { pid: 700, kind: 'llama-server', mib: 150 },
+      ...(t >= CAPTURE_START + 1 ? [{ pid: 701, kind: 'sidecar-supervisor', mib: 5 }] : [])
+    ])
+    expect(verdict.failed).toEqual([])
+    expect(verdict.outcome).toBe('PASS')
+    expect(find(verdict, 'P0', 'sidecar-supervisor')).toMatchObject({ measured: 1, bound: 1, pass: true })
+  })
+
+  it('fails a second wrapper before minute 5 for one supervised runtime', () => {
+    const verdict = meeting((t) => [
+      ...meetingBase(t),
+      { pid: 700, kind: 'llama-server', mib: 150 },
+      ...(t >= CAPTURE_START + 1
+        ? [
+            { pid: 701, kind: 'sidecar-supervisor', mib: 5 },
+            { pid: 702, kind: 'sidecar-supervisor', mib: 5 }
+          ]
+        : [])
+    ])
+    expect(verdict.outcome).toBe('FAIL')
+    expect(find(verdict, 'P0', 'sidecar-supervisor')).toMatchObject({ measured: 2, bound: 1, pass: false })
+  })
+
   it('fails an ASR utility leaked after Stop', () => {
     // The capture's ASR utility is never reaped, and a second one spawned after Stop stays alive beside it.
     const verdict = meeting((t) => [

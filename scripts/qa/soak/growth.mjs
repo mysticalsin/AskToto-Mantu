@@ -335,10 +335,11 @@ function meetingChecks({ rule, samples, audit, offsetMs, captureStartMs, stopMs 
   if (preCapture.length > 0) {
     const pre = { samples: preCapture }
     const preCounts = referenceCounts(pre, rule)
-    const runtimeRise = Math.max(0, bucketMedian(reference, (sample) => sample.runtimes) - bucketMedian(pre, (sample) => sample.runtimes))
+    // One wrapper per supervised runtime present at minute 5, whether that runtime started before or during capture.
+    const runtimes = bucketMedian(reference, (sample) => sample.runtimes)
     for (const kind of rule.kinds) {
       if (rule.p0.mayAppearBeforeSettleEnd.includes(kind)) continue
-      const bound = kind === rule.supervisorKind ? preCounts[kind] + runtimeRise : preCounts[kind]
+      const bound = kind === rule.supervisorKind ? Math.max(preCounts[kind], runtimes) : preCounts[kind]
       checks.push({ id: 'P0', subject: kind, unit: 'processes', measured: refCounts[kind], bound, pass: refCounts[kind] <= bound })
     }
   }
