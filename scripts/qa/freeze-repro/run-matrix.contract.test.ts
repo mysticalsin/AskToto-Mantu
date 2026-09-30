@@ -6,7 +6,7 @@ import { delimiter, dirname, join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { WebSocketServer } from 'ws'
 import { describe, expect, it } from 'vitest'
-import { PAGE_PROBE, deriveRowResult } from './cdp-observe.mjs'
+import { DRIVE_EXPRESSIONS, PAGE_PROBE, deriveRowResult } from './cdp-observe.mjs'
 import { recordProblems } from '../../evidence/record.mjs'
 import { m2_0008BundleProblems } from '../../evidence/check.mjs'
 
@@ -44,7 +44,8 @@ async function fakeDevTools({ hangHistory = false, visible = true } = {}): Promi
   sockets.on('connection', (socket) => {
     socket.on('message', (data) => {
       const { id, params } = JSON.parse(String(data)) as { id: number; params: { expression: string } }
-      if (hangHistory && params.expression.includes('recallList')) return
+      // Only the drive hangs: the page probe also names recallList (to detect the bridge) and must answer.
+      if (hangHistory && params.expression === DRIVE_EXPRESSIONS.history) return
       const value = params.expression === PAGE_PROBE ? { bridge: true, visible } : true
       socket.send(JSON.stringify({ id, result: { result: { type: typeof value, value } } }))
     })
