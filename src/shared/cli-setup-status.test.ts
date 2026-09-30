@@ -126,10 +126,7 @@ describe('cli setup status machine — Installing → Waiting for login → Conn
 describe('CLI setup never stores tokens in the Operator vault', () => {
   it('the walk module and Settings CLI card do not write vault secrets', () => {
     const walk = readFileSync(join(__dirname, './cli-setup-status.ts'), 'utf8')
-    const settings = [
-      readFileSync(join(__dirname, '../renderer/src/components/Settings.tsx'), 'utf8'),
-      readFileSync(join(__dirname, '../renderer/src/features/settings/AiSection.tsx'), 'utf8')
-    ].join('\n')
+    const settings = readFileSync(join(__dirname, '../renderer/src/features/settings/AiSection.tsx'), 'utf8')
     const cardStart = settings.indexOf('function CliIntegration(')
     expect(cardStart).toBeGreaterThan(-1)
     const card = settings.slice(cardStart)

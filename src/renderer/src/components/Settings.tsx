@@ -167,6 +167,8 @@ export {
   WhisperQualityRow
 }
 
+export { OFFICIAL_METIS_INSTALLER_URL } from '../features/settings/AiSection'
+
 declare const __METIS_FEEDBACK_EMAIL__: string
 
 export const METIS_FEEDBACK_EMAIL =
@@ -204,8 +206,6 @@ const LICENSE_UI_ENABLED: boolean = false
 // local extension — scoped to Settings.tsx only — so today's type still checks and the note below picks
 // up the real field once @shared/ipc catches up, with no edit needed here.
 type SettingsWithAsrWebgpuFallback = PublicSettings & { asrWebgpuFallbackAt?: number | null }
-
-
 
 
 type AsrCorrection = PublicSettings['asrCorrections'][number]

@@ -227,7 +227,7 @@
     "src/main/speaker-id.test.ts": 6,
     "src/main/speaker-session-wiring.test.ts": 2,
     "src/main/sync-fs-meetings-root.contract.test.ts": 21,
-    "src/main/tonight-1.8.5-kinetic-checklist.contract.test.ts": 17,
+    "src/main/tonight-1.8.5-kinetic-checklist.contract.test.ts": 18,
     "src/main/transcripts.test.ts": 2,
     "src/main/whisper-asr-host.test.ts": 6,
     "src/main/will-quit-guard.test.ts": 1,

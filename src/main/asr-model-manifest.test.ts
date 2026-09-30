@@ -74,10 +74,7 @@ describe('MQA-247 — the fetch is reachable and explicit', () => {
   const REPO = join(__dirname, '..', '..')
   const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8')
   const readSettings = (): string =>
-    [
-      'src/renderer/src/components/Settings.tsx',
-      'src/renderer/src/features/settings/AiSection.tsx'
-    ].map(read).join('\n')
+    read('src/renderer/src/features/settings/AiSection.tsx')
 
   it('is exposed end to end: channel, handler, preload, UI', () => {
     expect(read('src/shared/ipc.ts')).toMatch(/asrModelFetch: 'asrModel:fetch'/)

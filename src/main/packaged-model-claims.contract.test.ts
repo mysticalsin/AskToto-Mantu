@@ -14,10 +14,7 @@ const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8').repl
 
 const builder = read('electron-builder.yml')
 const manifest = read('src/main/llm/local-models.ts')
-const settingsUi = [
-  'src/renderer/src/components/Settings.tsx',
-  'src/renderer/src/features/settings/AiSection.tsx'
-].map(read).join('\n')
+const settingsUi = read('src/renderer/src/features/settings/AiSection.tsx')
 
 /** True when the builder copies the weights directory rather than only the licence file. */
 const weightsArePackaged = /^\s*-\s*from:\s*resources\/local-llm\/models\s*$/m.test(builder)
