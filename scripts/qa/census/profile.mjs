@@ -30,7 +30,7 @@ const SYNTHETIC_MEETINGS = [
   }
 ]
 
-export function representativeSettings(profileDir, now = Date.now()) {
+export function representativeSettings(profileDir, now = Date.now(), { overlayLayout = 'bar' } = {}) {
   const root = resolve(profileDir)
   const meetingsFolder = join(root, 'meetings')
   return {
@@ -41,7 +41,7 @@ export function representativeSettings(profileDir, now = Date.now()) {
     teamTranscriptFolders: [],
     autoSaveTranscripts: true,
     showLiveTranscript: true,
-    overlayLayout: 'bar',
+    overlayLayout,
     overlayOrbStyle: 'obsidian',
     overlayPlacement: 'right-edge',
     instantSuggestions: true,
@@ -113,9 +113,9 @@ function brainIndex(meetingsFolder, now) {
   }
 }
 
-export function writeRepresentativeProfile(profileDir, now = Date.now()) {
+export function writeRepresentativeProfile(profileDir, now = Date.now(), options = {}) {
   const root = resolve(profileDir)
-  const settings = representativeSettings(root, now)
+  const settings = representativeSettings(root, now, options)
   const brainDir = join(settings.meetingsFolder, '.brain')
   mkdirSync(brainDir, { recursive: true })
   writeFileSync(join(root, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 })
@@ -142,7 +142,16 @@ export function writeRepresentativeProfile(profileDir, now = Date.now()) {
 }
 
 function usage() {
-  return 'Usage: node scripts/qa/census/profile.mjs <profile-dir>'
+  return 'Usage: node scripts/qa/census/profile.mjs <profile-dir> [--overlay-layout bar|hide|island]'
+}
+
+/** `<profile-dir> [--overlay-layout <layout>]`; null when the arguments do not match. */
+export function readProfileArgs(argv) {
+  const [profileDir, flag, overlayLayout, ...rest] = argv
+  if (!profileDir || rest.length > 0) return null
+  if (flag === undefined) return { profileDir, options: {} }
+  if (flag !== '--overlay-layout' || !['bar', 'hide', 'island'].includes(overlayLayout)) return null
+  return { profileDir, options: { overlayLayout } }
 }
 
 /** True when this module is the process entry point. `pathToFileURL` yields `file:///D:/...` for a Windows
@@ -152,12 +161,12 @@ export function isMainModule(metaUrl, argv1, pathOptions) {
 }
 
 if (isMainModule(import.meta.url, process.argv[1])) {
-  const profileDir = process.argv[2]
-  if (!profileDir) {
+  const args = readProfileArgs(process.argv.slice(2))
+  if (!args) {
     console.error(usage())
     process.exit(2)
   }
-  const profile = writeRepresentativeProfile(profileDir)
+  const profile = writeRepresentativeProfile(args.profileDir, Date.now(), args.options)
   console.log(`[census-profile] wrote ${profile.profileDir}`)
   console.log(`[census-profile] manifest ${join(profile.profileDir, 'resource-census-profile.json')}`)
 }

@@ -8,6 +8,7 @@ import {
   REQUIRED_TRACE_SCENARIOS,
   STATES_REQUIRING_ATTACH_PRECONDITION,
   STATES,
+  SUPPLEMENTARY_STATES,
   classifyProcess,
   collectCensus,
   missingStates,
@@ -22,11 +23,12 @@ import {
   stateCoverageForRun,
   stateRequiresAttachPrecondition,
   summarize,
+  validateProfileForState,
   validateStatePrecondition,
   validateState,
   windowsWorkingSetEvidenceFromArtifact
 } from './lib.mjs'
-import { isMainModule, representativeSettings, writeRepresentativeProfile } from './profile.mjs'
+import { isMainModule, readProfileArgs, representativeSettings, writeRepresentativeProfile } from './profile.mjs'
 
 const startedMs = Date.UTC(2026, 8, 27, 12)
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -706,5 +708,68 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow.lastIndexOf('verify-sha256sums.mjs')).toBeLessThan(workflow.indexOf('$setup.FullName /S'))
     expect(workflow.match(/if: github\.ref == 'refs\/heads\/main'/g)).toHaveLength(2)
     expect(workflow).not.toContain('secrets.')
+  })
+
+  it('measures parked-idle on both OSes from a Hide-layout profile with the pointer moved away', () => {
+    expect(workflow.match(/- name: Measure parked-idle census \(ADR-018\)/g)).toHaveLength(2)
+    expect(workflow.match(/profile\.mjs "\$RUNNER_TEMP\/metis-census-parked-profile" --overlay-layout hide/g)).toHaveLength(2)
+    expect(workflow.match(/--state parked-idle/g)).toHaveLength(2)
+    expect(workflow).toContain('census-output/darwin-parked-idle.json')
+    expect(workflow).toContain('census-output/win32-parked-idle.json')
+    expect(workflow).toContain('CGWarpMouseCursorPosition')
+    expect(workflow).toContain('[System.Windows.Forms.Cursor]::Position')
+    const parked = workflow.indexOf('- name: Measure parked-idle census')
+    expect(parked).toBeGreaterThan(workflow.indexOf('- name: Measure hosted census states'))
+    expect(parked).toBeLessThan(workflow.indexOf('- name: Record run identity and file digests'))
+  })
+})
+
+describe('parked-idle census state (ADR-018)', () => {
+  it('is accepted on demand without joining the release-gate state set', () => {
+    expect(SUPPLEMENTARY_STATES).toEqual(['parked-idle'])
+    expect(validateState('parked-idle')).toBe('parked-idle')
+    expect(STATES).not.toContain('parked-idle')
+    expect(missingStates([...STATES])).toEqual([])
+    expect(stateRequiresAttachPrecondition('parked-idle')).toBe(false)
+    expect(() => validateState('parked')).toThrow(/parked-idle/)
+  })
+
+  it('reports parked-idle as the measured state and every gated state as not run', () => {
+    const coverage = stateCoverageForRun('parked-idle')
+    expect(coverage.at(-1)).toEqual({ state: 'parked-idle', status: 'MEASURED' })
+    expect(coverage.slice(0, -1).map((row) => row.state)).toEqual(STATES)
+    expect(coverage.slice(0, -1).some((row) => row.status === 'MEASURED')).toBe(false)
+    expect(stateCoverageForRun('settled-idle').map((row) => row.state)).toEqual(STATES)
+  })
+
+  it('refuses a parked-idle run on a profile whose layout never parks', () => {
+    expect(() => validateProfileForState('parked-idle', representativeSettings('/tmp/p', 1))).toThrow(/--overlay-layout hide/)
+    expect(() => validateProfileForState('parked-idle', {})).toThrow(/overlayLayout/)
+    expect(() =>
+      validateProfileForState('parked-idle', representativeSettings('/tmp/p', 1, { overlayLayout: 'hide' }))
+    ).not.toThrow()
+    expect(() => validateProfileForState('parked-idle', { overlayLayout: 'island' })).not.toThrow()
+    expect(() => validateProfileForState('settled-idle', representativeSettings('/tmp/p', 1))).not.toThrow()
+  })
+
+  it('builds a Hide-layout profile from the CLI flag and rejects anything else', () => {
+    expect(readProfileArgs(['/tmp/p'])).toEqual({ profileDir: '/tmp/p', options: {} })
+    expect(readProfileArgs(['/tmp/p', '--overlay-layout', 'hide'])).toEqual({
+      profileDir: '/tmp/p',
+      options: { overlayLayout: 'hide' }
+    })
+    expect(readProfileArgs([])).toBeNull()
+    expect(readProfileArgs(['/tmp/p', '--overlay-layout', 'pill'])).toBeNull()
+    expect(readProfileArgs(['/tmp/p', '--layout', 'hide'])).toBeNull()
+    expect(readProfileArgs(['/tmp/p', '--overlay-layout', 'hide', 'extra'])).toBeNull()
+    const root = mkdtempSync(join(tmpdir(), 'metis-census-parked-'))
+    try {
+      const profile = writeRepresentativeProfile(root, 1, { overlayLayout: 'hide' })
+      const written = JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8'))
+      expect(written.overlayLayout).toBe('hide')
+      expect(profile.settings.overlayOrbStyle).toBe('obsidian')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

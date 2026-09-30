@@ -238,9 +238,11 @@ import {
   cursorRevealDwellMs,
   decideCursorWatch,
   overlayWatchStep,
+  overlayWatchTreatAsRevealed,
   pointInRect,
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
+import { createAdaptiveCursorWatch, createPresenterIdleSignal, cursorWatchIntervalMs } from './island/idle-throttle'
 import { pinWindowOnAllWorkspaces } from './overlay-workspace-pinning'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import {
@@ -1183,7 +1185,24 @@ let isMinimized = false
 let islandResting = false
 // Settings is a full surface, not Hide 8×2 / Island peek. Cursor watch and park must not crush it.
 let settingsSurfaceOpen = false
-let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
+const overlayCursorWatch = createAdaptiveCursorWatch({
+  tick: () => {
+    tickOverlayCursorWatch()
+    syncPresenterIdle()
+  },
+  intervalMs: () => overlayCursorWatchIntervalMs()
+})
+// ADR-018: main tells the page when it is parked or long blurred; visibilityState never does (backgroundThrottling:false).
+const presenterIdle = createPresenterIdleSignal({
+  publish: (state) => {
+    if (!win || win.isDestroyed()) return
+    try {
+      win.webContents.send(IPC.presenterIdle, state)
+    } catch {
+      /* renderer gone */
+    }
+  }
+})
 let overlayCursorWatchEnteredAt: number | null = null
 let overlayCursorWatchHovering = false
 let overlayCursorWatchHeldCursor: { x: number; y: number } | null = null // latched pointer on the last tick that kept the bar open
@@ -2312,6 +2331,7 @@ function replaceTransparentOverlayWithExclusiveOnboarding(): void {
 /** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */
 function applyOverlaySurfaceChrome(): void {
   if (!win || win.isDestroyed()) return
+  syncPresenterIdle()
   const chrome = skipUnchangedChrome(win) // runs on every reveal, park and surface change
   if (onboardingExclusiveLive()) {
     try {
@@ -2842,6 +2862,24 @@ function createWindow(targetDisplay?: Electron.Display): void {
     if (win !== self) return
     reloadBudget.onDidFinishLoad()
   })
+  // ADR-018 idle signal: focus/blur drive the blur clock, show/hide the park state, and a (re)loaded page
+  // receives the current state because it missed earlier sends.
+  presenterIdle.setFocused(self.isFocused())
+  self.on('focus', () => {
+    if (win === self) presenterIdle.setFocused(true)
+  })
+  self.on('blur', () => {
+    if (win === self) presenterIdle.setFocused(false)
+  })
+  self.on('show', () => {
+    if (win === self) syncPresenterIdle()
+  })
+  self.on('hide', () => {
+    if (win === self) syncPresenterIdle()
+  })
+  self.webContents.on('dom-ready', () => {
+    if (win === self) presenterIdle.republish()
+  })
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
   // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
   // dead renderer and the overlay sits permanently blank. Previously this was only logged via
@@ -3245,10 +3283,7 @@ function overlayCursorWatchWanted(): boolean {
 }
 
 function stopOverlayCursorWatch(): void {
-  if (overlayCursorWatchTimer) {
-    clearInterval(overlayCursorWatchTimer)
-    overlayCursorWatchTimer = null
-  }
+  overlayCursorWatch.stop()
   overlayCursorWatchHovering = false
   overlayCursorWatchHeldCursor = null
   overlayCursorWatchEnteredAt = null
@@ -3258,8 +3293,24 @@ function stopOverlayCursorWatch(): void {
 function startOverlayCursorWatch(): void {
   stopOverlayCursorWatch()
   if (!overlayCursorWatchWanted() || !win || win.isDestroyed()) return
-  overlayCursorWatchTimer = setInterval(() => tickOverlayCursorWatch(), CURSOR_WATCH_INTERVAL_MS)
-  overlayCursorWatchTimer.unref?.()
+  overlayCursorWatch.start()
+}
+
+/** Fast only near the reveal zone or the revealed bar, or while a reveal dwell or leave → park is pending. */
+function overlayCursorWatchIntervalMs(): number {
+  if (!win || win.isDestroyed()) return CURSOR_WATCH_INTERVAL_MS // the next tick stops the watch
+  const bounds = win.getBounds()
+  return cursorWatchIntervalMs({
+    cursor: screen.getCursorScreenPoint(),
+    restRect: overlayHoverRestRect(liveOverlayLayout(), screen.getDisplayMatching(bounds)),
+    revealedRect: overlayWatchTreatAsRevealed(islandResting, win.isVisible()) ? bounds : null,
+    transitioning: overlayCursorWatchEnteredAt !== null || overlayLeaveParkTimer !== null
+  })
+}
+
+/** Parked or hidden counts as idle for the page's animation loops; see presenterState(). */
+function syncPresenterIdle(): void {
+  presenterIdle.setParked(presenterState().kind !== 'REVEALED')
 }
 
 function tickOverlayCursorWatch(): void {
@@ -3799,7 +3850,7 @@ function legacyReveal(reason: RevealReason, options: { focus: boolean }): void {
 function revealRightEdgeDockInPage(): void {
   if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
   if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) !== 'right-edge') return
-  if (!overlayCursorWatchTimer) startOverlayCursorWatch()
+  if (!overlayCursorWatch.running()) startOverlayCursorWatch()
   overlayCursorWatchHovering = false
   rightEdgeUnhoveredRevealAt = performance.now()
   notifyOverlayCursorHover(true, true)
@@ -3809,7 +3860,7 @@ function revealRightEdgeDockInPage(): void {
 function revealTopCenterHoverInPage(): void {
   if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
   if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) === 'right-edge') return
-  if (!overlayCursorWatchTimer) startOverlayCursorWatch()
+  if (!overlayCursorWatch.running()) startOverlayCursorWatch()
   notifyOverlayCursorHover(true)
 }
 

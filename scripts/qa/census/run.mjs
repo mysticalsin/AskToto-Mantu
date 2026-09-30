@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { createServer } from 'node:net'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -8,12 +8,14 @@ import {
   DEFAULT_SECONDS,
   REQUIRED_TRACE_SCENARIOS,
   STATES,
+  SUPPLEMENTARY_STATES,
   collectCensus,
   defaultOutputPath,
   proveLocalTtftEvidenceFromArtifact,
   rendererScenarioProbeSource,
   resolveInstallTarget,
   resolveProductVersion,
+  validateProfileForState,
   validateState,
   validateStatePrecondition,
   windowsWorkingSetEvidenceFromArtifact,
@@ -22,11 +24,12 @@ import {
 
 function usage() {
   return `Usage:
-  node scripts/qa/census/run.mjs --state <${STATES.join('|')}> [--seconds 300]
+  node scripts/qa/census/run.mjs --state <${[...STATES, ...SUPPLEMENTARY_STATES].join('|')}> [--seconds 300]
 
 Inputs:
   --app <path>             Installed Metis.app or Metis.exe. Defaults to METIS_CENSUS_APP, then the OS install path.
   --profile <path>         Representative synthetic QA profile from M2-0007. Defaults to METIS_QA_PROFILE.
+                           parked-idle needs one built with profile.mjs --overlay-layout hide.
   --main-pid <pid>         Attach instead of launch. Requires --install-root.
   --install-root <path>    Installed app root when attaching.
   --interval-ms <ms>       Sampling interval. Defaults to 5000.
@@ -200,6 +203,7 @@ async function main() {
     if (!profile) {
       throw new Error('--profile or METIS_QA_PROFILE is required; a fresh profile is not representative for M2-0009')
     }
+    validateProfileForState(state, JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')))
     const target = resolveInstallTarget(args.app ?? process.env.METIS_CENSUS_APP ?? defaultAppPath(platform), platform)
     installRoot = target.installRoot
     executable = target.executable

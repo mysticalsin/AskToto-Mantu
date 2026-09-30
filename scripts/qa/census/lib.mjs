@@ -15,6 +15,11 @@ export const STATES = [
   'post-recovery'
 ]
 
+/** Measured on demand, outside the release-gate set above: parked-idle is the Hide/Island rest with the pointer
+ *  away from the reveal zone (ADR-018, M2-0039), launched from a profile whose layout parks. */
+export const SUPPLEMENTARY_STATES = ['parked-idle']
+const PARKING_LAYOUTS = ['hide', 'island']
+
 export const ATTRIBUTABLE_PROCESS_KINDS = [
   'main',
   'renderer',
@@ -223,10 +228,20 @@ function observedProcessIdentities(samples) {
 }
 
 export function validateState(state) {
-  if (!STATES.includes(state)) {
-    throw new Error(`state must be one of: ${STATES.join(', ')}`)
+  if (!STATES.includes(state) && !SUPPLEMENTARY_STATES.includes(state)) {
+    throw new Error(`state must be one of: ${[...STATES, ...SUPPLEMENTARY_STATES].join(', ')}`)
   }
   return state
+}
+
+/** A parked-idle census of a Bar-layout profile would measure a window that never parks, so refuse it. */
+export function validateProfileForState(state, settings) {
+  if (validateState(state) !== 'parked-idle') return
+  if (!PARKING_LAYOUTS.includes(settings?.overlayLayout)) {
+    throw new Error(
+      `parked-idle needs a profile whose overlayLayout parks (${PARKING_LAYOUTS.join(' or ')}); build one with profile.mjs --overlay-layout hide`
+    )
+  }
 }
 
 export function stateRequiresAttachPrecondition(state) {
@@ -385,7 +400,8 @@ function windowsWorkingSetEvidenceFromSamples(platform, samples) {
 
 export function stateCoverageForRun(measuredState) {
   validateState(measuredState)
-  return STATES.map((state) => {
+  const supplementary = SUPPLEMENTARY_STATES.includes(measuredState) ? [{ state: measuredState, status: 'MEASURED' }] : []
+  const gated = STATES.map((state) => {
     if (state === measuredState) return { state, status: 'MEASURED' }
     if (stateRequiresAttachPrecondition(state)) {
       return {
@@ -396,6 +412,7 @@ export function stateCoverageForRun(measuredState) {
     }
     return { state, status: 'SUPPORTED_NOT_RUN', unblockStep: `Run node scripts/qa/census/run.mjs --state ${state} --seconds 300.` }
   })
+  return [...gated, ...supplementary]
 }
 
 export function validateCensusIdentity(samples, mainPid) {

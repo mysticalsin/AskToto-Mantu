@@ -125,6 +125,18 @@ jobs:
             fi
             node "${args[@]}"
           done
+      - name: Measure parked-idle census (ADR-018)
+        # A Hide-layout profile parks at launch; the pointer goes to mid-screen, away from every reveal zone.
+        run: |
+          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-parked-profile" --overlay-layout hide | tee census-output/parked-profile.log
+          osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); $.CGWarpMouseCursorPosition({ x: 400, y: 400 }); ""' \
+            || echo "pointer warp unavailable: parked-idle ran with the runner's own pointer position" | tee census-output/parked-pointer.log
+          node scripts/qa/census/run.mjs \
+            --state parked-idle \
+            --seconds 300 \
+            --profile "$RUNNER_TEMP/metis-census-parked-profile" \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.app" \
+            --output census-output/darwin-parked-idle.json
       - name: Record run identity and file digests
         if: always()
         env:
@@ -211,6 +223,18 @@ jobs:
               --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
               --output "census-output/win32-$state.json"
           done
+      - name: Measure parked-idle census (ADR-018)
+        # A Hide-layout profile parks at launch; the pointer goes to mid-screen, away from every reveal zone.
+        run: |
+          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-parked-profile" --overlay-layout hide | tee census-output/parked-profile.log
+          powershell -NoProfile -Command 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(400, 400)' \
+            || echo "pointer warp unavailable: parked-idle ran with the runner's own pointer position" | tee census-output/parked-pointer.log
+          node scripts/qa/census/run.mjs \
+            --state parked-idle \
+            --seconds 300 \
+            --profile "$RUNNER_TEMP/metis-census-parked-profile" \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
+            --output census-output/win32-parked-idle.json
       - name: Record run identity and file digests
         if: always()
         env:
