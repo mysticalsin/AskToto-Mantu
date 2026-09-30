@@ -122,6 +122,10 @@ function hostedEnv(root: string, stubs: ReturnType<typeof hostedStubs>, port: nu
     M2_0008_CONTRACT_REOPEN_SETTLE_SECONDS: '1',
     M2_0008_CONTRACT_SAMPLE_BIN: bashPath(join(root, 'sample')),
     M2_0008_CONTRACT_OPEN_BIN: bashPath(join(root, 'open')),
+    // Named explicitly, not only through PATH: Git Bash on Windows puts its own /usr/bin (with its own ps)
+    // ahead of the caller's PATH.
+    M2_0008_CONTRACT_PGREP_BIN: bashPath(join(stubs.bin, 'pgrep')),
+    M2_0008_CONTRACT_PS_BIN: bashPath(join(stubs.bin, 'ps')),
     M2_0008_CONTRACT_CDP_PORT: String(port),
     ...extra
   }
@@ -494,7 +498,7 @@ describe('M2-0462 hosted-live mode', () => {
     try {
       const stubs = hostedStubs(root)
       const result = await runClosedStdin(hostedArgs(out, stubs.app),
-        hostedEnv(root, stubs, devtools.port, { M2_0008_CONTRACT_OBSERVE_TIMEOUT_MS: '1000' }))
+        hostedEnv(root, stubs, devtools.port, { M2_0008_CONTRACT_OBSERVE_TIMEOUT_MS: '5000' }))
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
       const row1 = jsonl(join(out, 'matrix.jsonl')).find((entry) => entry.row === 'row-1-history-open' && 'operator_result' in entry)

@@ -68,20 +68,23 @@ rel_to_profile() {
 redact_to_file() {
   local src=$1
   local dest=$2
-  sed "s#${HOME}#\$HOME#g" "$src" > "$dest"
+  # $HOME is matched literally: a Windows-style home holds backslashes and dots that a regex would misread.
+  perl -pe 'BEGIN { $home = shift @ARGV } s/\Q$home\E/\$HOME/g if length $home' "$HOME" "$src" > "$dest"
 }
 
 redact_string() {
   printf '%s' "${1/#$HOME/\$HOME}"
 }
 
+# Hashes stdin, never a named file: GNU sha256sum prefixes the digest with "\" when the file name holds a
+# backslash (every Windows path), which would corrupt the hex digest and the JSON it is written into.
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{print $1}'
+    shasum -a 256 < "$1" | awk '{print $1}'
     return
   fi
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
+    sha256sum < "$1" | awk '{print $1}'
     return
   fi
   fail "no sha256 tool available"
@@ -231,9 +234,9 @@ stop_app() {
 renderer_pids() {
   local main_pid=$1
   local pid
-  for pid in $(pgrep -P "$main_pid" 2>/dev/null || true); do
+  for pid in $("$PGREP_BIN" -P "$main_pid" 2>/dev/null || true); do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
-    case " $(ps -ww -o command= -p "$pid" 2>/dev/null || true) " in
+    case " $("$PS_BIN" -ww -o command= -p "$pid" 2>/dev/null || true) " in
       *" --type=renderer "*) printf '%s\n' "$pid" ;;
     esac
   done
@@ -891,6 +894,8 @@ LAUNCH_SETTLE_SECONDS="${M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS:-10}"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SAMPLE_BIN=/usr/bin/sample
 OPEN_BIN=/usr/bin/open
+PGREP_BIN=pgrep
+PS_BIN=ps
 CDP_PORT=9334
 OBSERVE_TIMEOUT_MS=10000
 BRAIN_POLL_WAIT_SECONDS=5
@@ -899,6 +904,8 @@ REOPEN_SETTLE_SECONDS=5
 if [[ "${M2_0008_CONTRACT_ALLOW_NON_DARWIN:-0}" == 1 ]]; then
   SAMPLE_BIN=${M2_0008_CONTRACT_SAMPLE_BIN:-$SAMPLE_BIN}
   OPEN_BIN=${M2_0008_CONTRACT_OPEN_BIN:-$OPEN_BIN}
+  PGREP_BIN=${M2_0008_CONTRACT_PGREP_BIN:-$PGREP_BIN}
+  PS_BIN=${M2_0008_CONTRACT_PS_BIN:-$PS_BIN}
   CDP_PORT=${M2_0008_CONTRACT_CDP_PORT:-$CDP_PORT}
   OBSERVE_TIMEOUT_MS=${M2_0008_CONTRACT_OBSERVE_TIMEOUT_MS:-$OBSERVE_TIMEOUT_MS}
   BRAIN_POLL_WAIT_SECONDS=${M2_0008_CONTRACT_POLL_WAIT_SECONDS:-$BRAIN_POLL_WAIT_SECONDS}
