@@ -446,6 +446,23 @@ describe('classify-before-read (D1-D6)', () => {
     expect(fs.calls.filter((call) => call.startsWith('readFile'))).toHaveLength(1)
   })
 
+  it('a successful hydrate read forgets the remembered dataless answer, so the next plain read returns the bytes', async () => {
+    const fs = memoryFs({ 'cloud.md': 'CC' })
+    let local = false
+    const detector: DatalessDetector = {
+      classify: async (files) => new Map(files.map((file): [string, ContentPresence] => [file.path, local ? 'local' : 'dataless'])),
+    }
+    const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
+
+    await expect(gateway.read('cloud.md')).resolves.toMatchObject({ status: 'dataless' })
+    await expect(gateway.read('cloud.md', { hydrate: true })).resolves.toMatchObject({ status: 'ok' })
+    local = true
+    const next = await gateway.read('cloud.md')
+
+    expect(next.status).toBe('ok')
+    expect(next.status === 'ok' && next.bytes.toString()).toBe('CC')
+  })
+
   it("read returns a local file's bytes and version", async () => {
     const fs = memoryFs({ 'a.md': 'hello' })
     const detector = fakeDetector()

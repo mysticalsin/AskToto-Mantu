@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ONBOARDING_MUSIC_CLOSE_EVENTS,
@@ -15,7 +16,7 @@ import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
 const settings = readFileSync(join(__dirname, '../components/Settings.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8').replace(/\r\n/g, '\n')
+const css = readAppCss().replace(/\r\n/g, '\n')
 const production = readFileSync(join(__dirname, './onboarding-music.ts'), 'utf8')
 
 function FakeAudio(this: {

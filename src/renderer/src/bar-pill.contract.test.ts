@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import { overlayAllowsMinimize, overlayDocksBarCircle, overlayShowsBarOrb, shouldForceParkOnBecameIdle } from '@shared/overlay-chrome'
 import {
@@ -21,7 +22,7 @@ const orbBtn = readFileSync(join(root, 'components', 'JarvisOrbButton.tsx'), 'ut
 const brandOrb = readFileSync(join(root, 'components', 'BrandThinkingOrb.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const jarvisCircle = readFileSync(join(root, 'components', 'ObsidianOrb.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const bar = readFileSync(join(root, 'components', 'Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
-const css = readFileSync(join(root, 'styles.css'), 'utf8').replace(/\r\n/g, '\n')
+const css = readAppCss().replace(/\r\n/g, '\n')
 const peek = readFileSync(join(root, 'components', 'OverlayPeek.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const index = readFileSync(join(__dirname, '../../main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
 const geometry = readFileSync(join(__dirname, '../../main/island/geometry.ts'), 'utf8').replace(/\r\n/g, '\n')

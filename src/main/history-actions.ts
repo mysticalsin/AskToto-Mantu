@@ -27,6 +27,10 @@ export async function meetingOpenTarget(
 ): Promise<OpenTarget> {
   const path = join(folder, safeName)
   const gateway = storageAt(folder)
+  // A FIFO, socket or device is refused before any read: a plain gateway read would still open it once
+  // the detector answers. Classify's other verdicts never skip the read below.
+  const fileClass = (await gateway.classify([safeName])).get(safeName)
+  if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular) return { ok: false, error: MEETING_NOT_READABLE_MSG }
   let read = await gateway.read(safeName)
   // The user's explicit Open hydrates this one cloud-only file (under a content permit, with progress).
   if (hydrate && (read.status === 'dataless' || read.status === 'unknown')) read = await gateway.read(safeName, { hydrate, onProgress })

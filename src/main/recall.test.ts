@@ -1169,7 +1169,7 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
     expect(reads).toEqual([])
 
     const progress: string[] = []
-    const opened = await recallRead(basename(remote), (p) => progress.push(p.state))
+    const opened = await recallRead(basename(remote), { hydrate: true, onProgress: (p) => progress.push(p.state) })
     expect(opened.ok).toBe(true)
     expect(reads).toEqual([remote])
     expect(progress).toEqual(['hydrating', 'done'])
@@ -1189,6 +1189,28 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
     expect(await searchMeetings('march')).toHaveLength(0)
     expect(await recallRead(basename(odd))).toEqual({ ok: false, error: 'Could not read the meeting file.' })
     expect(reads).toEqual([])
+  })
+
+  it('a background read (no hydrate) never hydrates a dataless meeting', async () => {
+    const remote = await saveMeeting(testSettings, meeting('Cloud sync', 1_700_100_000_000))
+    cloudOnly.add(remote)
+    reads.length = 0
+
+    expect(await recallRead(basename(remote))).toEqual({ ok: false, error: 'Could not read the meeting file.' })
+    expect(reads).toEqual([])
+  })
+
+  it('after an explicit open hydrates a meeting, the next listing shows its real row', async () => {
+    const remote = await saveMeeting(testSettings, meeting('Cloud sync', 1_700_100_000_000))
+    cloudOnly.add(remote)
+
+    expect((await listMeetings()).find((m) => m.file === basename(remote))?.notDownloaded).toBe(true)
+    expect((await recallRead(basename(remote), { hydrate: true })).ok).toBe(true)
+    cloudOnly.delete(remote)
+
+    const row = (await listMeetings()).find((m) => m.file === basename(remote))
+    expect(row?.title).toBe('Cloud sync')
+    expect(row?.notDownloaded).toBeUndefined()
   })
 
   it('a search superseded by a newer one returns nothing while the newer one answers', async () => {

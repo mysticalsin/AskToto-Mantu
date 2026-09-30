@@ -364,8 +364,11 @@ export function createStorageGateway({
   async function readLocal(base: string, path: string, request: Request, { hydrate, onProgress }: ReadOptions): Promise<LocalRead> {
     const stated = await statFile(path, request)
     if (stated.status !== 'ok') return { result: stated, rememberUnavailable: stated.status === 'unavailable' }
-    // No read, plain or explicit, ever waits on a FIFO, socket or device: no peer may ever appear.
-    if (!stated.value.regular) return { result: { status: 'unavailable', code: 'NOT_REGULAR' }, rememberUnavailable: false }
+    // Only an explicit hydrate read refuses a FIFO, socket or device: it skips the detector, so nothing
+    // else stands between it and an open that no peer may ever answer. A plain read keeps the
+    // detector-first order (the K0-K2 tests and ST-1's FIFO row rely on it). Callers that must never open
+    // a non-regular file classify first and refuse it before they read.
+    if (hydrate && !stated.value.regular) return { result: { status: 'unavailable', code: 'NOT_REGULAR' }, rememberUnavailable: false }
     const version = versionOf(stated.value.file)
     if (!hydrate) {
       const presence = (await presenceWithin([stated.value.file], request)).get(path)
@@ -447,7 +450,9 @@ export function createStorageGateway({
       const request = openRequest(hydrate ? HYDRATE_DEADLINE_MS : CONTENT_DEADLINE_MS, signal)
       try {
         const { result, rememberUnavailable } = await readLocal(base, path, request, options)
-        // An explicit open answers for itself: its timeout says nothing about a later listing.
+        // An explicit open answers for itself: its timeout says nothing about a later listing. Its success
+        // does: the bytes are now here, so a remembered 'dataless' must stop answering for this file.
+        if (hydrate && result.status === 'ok') failures.delete(path)
         if (!hydrate && result.status !== 'ok' && (REMEMBERED.has(result.status) || (rememberUnavailable && result.status === 'unavailable'))) remember(path, result)
         return result
       } finally {

@@ -57,8 +57,8 @@ function recapSectionEndIndex(afterNotesHeading: string, type: string | undefine
   return afterNotesHeading.search(recapSectionEndRe(type))
 }
 
-async function meetingFiles(folder: string): Promise<string[]> {
-  const listing = await storageAt(folder).list('')
+async function meetingFiles(folder: string, signal?: AbortSignal): Promise<string[]> {
+  const listing = await storageAt(folder).list('', { signal })
   if (listing.status !== 'ok') return []
   return listing.names.filter((name) => name.endsWith('.md') && name !== 'README.md' && name !== 'index.md')
 }
@@ -137,15 +137,15 @@ function lockedStub(file: string, label = 'Locked'): LockedMeetingSummary | null
 // replaces the full read+decode when the file is unchanged; any mtime/size change re-reads, and a
 // vanished file drops its entry. Saved meetings are immutable-after-write, so hits are the norm.
 // Null results (non-meeting or undecryptable files) are cached too, so they stop costing reads. A file
-// whose bytes are not on this device (dataless, unknown, or a read that timed out) is cached as its
-// 'Not downloaded' stub for NOT_LOCAL_TTL_MS, so a keystroke does not retry every such file. Any other
-// failed read (a share-lock, a transient error) is deliberately never cached (see UNREADABLE below).
+// whose bytes are not on this device is answered with a fresh 'Not downloaded' row and never cached here:
+// hydration changes neither mtimeMs nor size, so a cached stub would outlive the download. A keystroke
+// still never re-reads such a file: the gateway remembers a dataless, unknown or timed-out read for
+// FAILURE_TTL_MS, and forgets it when an explicit open hydrates the file. Any other failed read (a
+// share-lock, a transient error) is deliberately never cached (see UNREADABLE below).
 interface CacheEntry {
   mtimeMs: number
   size: number
   read: Read | null
-  /** Set on a not-downloaded stub only: it lapses then, because hydration changes neither mtimeMs nor size. */
-  expiresAt?: number
 }
 // Least-recently-used, so a pathological folder (or repeated folder switches) cannot grow it without
 // limit and a full cache drops one cold entry instead of every warm one.
@@ -154,7 +154,6 @@ interface CacheEntry {
 // waited on them until the gateway's 2 s metadata deadline. Now the listing is one batched classify and
 // only files classified local are read.
 const READ_CACHE_MAX = 2000
-const NOT_LOCAL_TTL_MS = 30_000
 const readCache = new Lru<CacheEntry>(READ_CACHE_MAX)
 
 /** Sentinel for "this file could not be READ at all" — an unhydrated OneDrive Files-On-Demand
@@ -196,14 +195,13 @@ async function readMeeting(folder: string, file: string, fileClass: FileClass | 
     return unavailableRow(file)
   }
   const { mtimeMs, size } = fileClass.version
-  const hit = readCache.get(path)
-  if (hit && hit.mtimeMs === mtimeMs && hit.size === size && (hit.expiresAt === undefined || hit.expiresAt > performance.now())) return hit.read
   const notLocal = (): Read | null => {
-    const read = notDownloadedRow(file)
-    readCache.set(path, { mtimeMs, size, read, expiresAt: performance.now() + NOT_LOCAL_TTL_MS })
-    return read
+    readCache.delete(path)
+    return notDownloadedRow(file)
   }
   if (fileClass.status !== 'ok') return notLocal()
+  const hit = readCache.get(path)
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.read
   const read = await readMeetingUncached(folder, file, signal)
   if (read === NOT_LOCAL) return notLocal()
   if (read === UNREADABLE) {
@@ -314,7 +312,10 @@ export async function listMeetings(): Promise<MeetingSummary[]> {
  * Parses frontmatter (title, mode, date → startedAt), the recap section, and the transcript lines.
  * Constrained to the meetings folder (same basename guard as recallOpen in index.ts — no traversal).
  */
-export async function recallRead(file: string, onProgress?: (progress: HydrationProgress) => void): Promise<RecallReadResult> {
+export async function recallRead(
+  file: string,
+  { hydrate = false, onProgress }: { hydrate?: boolean; onProgress?: (progress: HydrationProgress) => void } = {}
+): Promise<RecallReadResult> {
   const folder = resolveMeetingsFolder(getSettings())
   // basename blocks path traversal (mirrors the recallOpen guard in index.ts).
   const safeName = safeMeetingBasename(file)
@@ -322,10 +323,16 @@ export async function recallRead(file: string, onProgress?: (progress: Hydration
     return { ok: false, error: 'Invalid meeting file name.' }
   }
   const gateway = storageAt(folder)
+  // Classify decides only two things: a vanished file, and a FIFO, socket or device, which is refused
+  // before any read (a plain gateway read would still open it once the detector answers). Its other
+  // verdicts never skip a read: its deadline is shorter than a read's, so 'unknown' can name a local file.
+  const fileClass = (await gateway.classify([safeName])).get(safeName)
+  if (fileClass?.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
+  if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular) return { ok: false, error: 'Could not read the meeting file.' }
   let read = await gateway.read(safeName)
-  // An explicit open is the one place a cloud-only file is hydrated: this one file, under a content
-  // permit, reporting progress. Listing and search never do.
-  if (read.status === 'dataless' || read.status === 'unknown') read = await gateway.read(safeName, { hydrate: true, onProgress })
+  // An explicit open (`hydrate`) is the one place a cloud-only file is hydrated: this one file, under a
+  // content permit, reporting progress. Listing, search and background passes never do.
+  if (hydrate && (read.status === 'dataless' || read.status === 'unknown')) read = await gateway.read(safeName, { hydrate: true, onProgress })
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
@@ -970,7 +977,7 @@ export async function searchMeetings(query: string, signal?: AbortSignal): Promi
   const folder = resolveMeetingsFolder(getSettings())
   const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 1)
   if (!terms.length) return []
-  const read = await readMeetings(folder, await meetingFiles(folder), signal)
+  const read = await readMeetings(folder, await meetingFiles(folder, signal), signal)
   const hits: RecallHit[] = []
   for (const r of read) {
     if (!r) continue

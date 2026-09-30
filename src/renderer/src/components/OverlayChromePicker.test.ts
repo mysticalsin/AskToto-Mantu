@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
@@ -8,7 +9,7 @@ import { OverlayChromePicker } from './OverlayChromePicker'
 
 const picker = readFileSync(join(__dirname, './OverlayChromePicker.tsx'), 'utf8')
 const settings = readFileSync(join(__dirname, './Settings.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 
 describe('Settings overlay chrome cards', () => {
   it('filters Bar at right edge while preserving accessible radio navigation', () => {

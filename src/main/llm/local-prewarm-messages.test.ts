@@ -66,6 +66,18 @@ describe('buildPrewarmMessages — must match the EXACT prefix a real HISTORY-FR
     expect(messages[1].content).toContain('[redacted private key]')
   })
 
+  it('M2-0430: the summary warm builds the recap request\'s own [system, user] prefix for the summary slot', () => {
+    const text = 'THEM: we agreed to ship on Friday.'
+    const req: AskStart = { id: 'prewarm', mode: 'summary', prompt: '', transcript: text, history: [] }
+    const s = DEFAULT_SETTINGS
+    const system = buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt)
+    expect(buildPrewarmMessages(text, s, 'summary')).toEqual([
+      { role: 'system', content: system },
+      { role: 'user', content: userText(req) }
+    ])
+    expect(buildPrewarmMessages(text, s, 'summary')[1].content).toContain('Summarize it as instructed.')
+  })
+
   it('does NOT redact when settings.redactSensitive is off — mirrors askStart’s own conditional exactly', () => {
     const s: Settings = { ...DEFAULT_SETTINGS, redactSensitive: false }
     const secretText = '-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG\n-----END PRIVATE KEY-----'

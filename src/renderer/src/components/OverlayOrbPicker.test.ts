@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import { OVERLAY_ORB_COPY, OVERLAY_ORB_PICKER_CARDS, OVERLAY_ORB_STYLES } from '@shared/overlay-orb'
 
 const picker = readFileSync(join(__dirname, './OverlayOrbPicker.tsx'), 'utf8')
 const settings = readFileSync(join(__dirname, './Settings.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 const thinking = readFileSync(join(__dirname, './JarvisOrbButton.tsx'), 'utf8')
 const orb = readFileSync(join(__dirname, './ObsidianOrb.tsx'), 'utf8')
 const bar = readFileSync(join(__dirname, './Bar.tsx'), 'utf8')

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS, OPERATOR_LICENSE_HEADER } from '../../src/shared/operator-hmac'
 import { generateOperatorLicense } from '../../src/shared/operator-license'
 import { encryptVault, sha256Hex } from './crypto'
+import { LEGACY_FLEET_HMAC_SUNSET_MS } from './device-auth'
 import { hmacHex } from './hmac'
 import { handleRequest, type Env } from './index'
 import { memoryStore, type IssuedLicenseRow, type OperatorStore } from './store'
@@ -65,6 +66,21 @@ async function signed(token: string | null, opts: {
     ...(method === 'GET' ? {} : { body })
   })
 }
+
+describe('legacy fleet-secret HMAC retirement', () => {
+  it('accepts the legacy path before the sunset date and refuses it from that instant', async () => {
+    const store = memoryStore()
+    const before = await handleRequest(await signed(null, { timestamp: LEGACY_FLEET_HMAC_SUNSET_MS - 1 }), env, {}, {
+      store, now: LEGACY_FLEET_HMAC_SUNSET_MS - 1
+    })
+    expect(before.status).toBe(200)
+    const after = await handleRequest(await signed(null, { timestamp: LEGACY_FLEET_HMAC_SUNSET_MS }), env, {}, {
+      store, now: LEGACY_FLEET_HMAC_SUNSET_MS
+    })
+    expect(after.status).toBe(401)
+    expect(await after.json()).toMatchObject({ code: 'legacy-hmac-retired' })
+  })
+})
 
 describe('licence-authenticated device requests', () => {
   let store: OperatorStore
