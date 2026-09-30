@@ -125,6 +125,27 @@ jobs:
             fi
             node "${args[@]}"
           done
+      - name: Measure parked-idle census (ADR-018)
+        # A Hide-layout profile parks at launch. run.mjs moves the pointer to mid-screen, away from every reveal
+        # zone, and reads it back; a pointer it cannot move writes a BLOCKED_EXTERNAL report and fails the step.
+        run: |
+          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-parked-profile" --overlay-layout hide | tee census-output/parked-profile.log
+          node scripts/qa/census/run.mjs \
+            --state parked-idle \
+            --seconds 300 \
+            --pointer-away 400,400 \
+            --profile "$RUNNER_TEMP/metis-census-parked-profile" \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.app" \
+            --output census-output/darwin-parked-idle.json
+      - name: Measure parked reveal latency (ADR-018)
+        # Real pointer from rest into the right-edge band; fails on a net p95 over 150 ms, a missed reveal, or a
+        # pointer the runner cannot move (reported BLOCKED_EXTERNAL in the JSON). Runs even after a blocked census.
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/qa/census/reveal-latency.mjs \
+            --profile "$RUNNER_TEMP/metis-census-parked-profile" \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.app" \
+            --output census-output/darwin-reveal-latency.json
       - name: Record run identity and file digests
         if: always()
         env:
@@ -211,6 +232,27 @@ jobs:
               --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
               --output "census-output/win32-$state.json"
           done
+      - name: Measure parked-idle census (ADR-018)
+        # A Hide-layout profile parks at launch. run.mjs moves the pointer to mid-screen, away from every reveal
+        # zone, and reads it back; a pointer it cannot move writes a BLOCKED_EXTERNAL report and fails the step.
+        run: |
+          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-parked-profile" --overlay-layout hide | tee census-output/parked-profile.log
+          node scripts/qa/census/run.mjs \
+            --state parked-idle \
+            --seconds 300 \
+            --pointer-away 400,400 \
+            --profile "$RUNNER_TEMP/metis-census-parked-profile" \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
+            --output census-output/win32-parked-idle.json
+      - name: Measure parked reveal latency (ADR-018)
+        # Real pointer from rest into the right-edge band; fails on a net p95 over 150 ms, a missed reveal, or a
+        # pointer the runner cannot move (reported BLOCKED_EXTERNAL in the JSON). Runs even after a blocked census.
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/qa/census/reveal-latency.mjs \
+            --profile "$RUNNER_TEMP/metis-census-parked-profile" \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
+            --output census-output/win32-reveal-latency.json
       - name: Record run identity and file digests
         if: always()
         env:

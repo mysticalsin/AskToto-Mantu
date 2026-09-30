@@ -1,32 +1,41 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { createServer } from 'node:net'
 import { setTimeout as sleep } from 'node:timers/promises'
 import {
   DEFAULT_SECONDS,
   REQUIRED_TRACE_SCENARIOS,
   STATES,
+  SUPPLEMENTARY_STATES,
   collectCensus,
   defaultOutputPath,
+  freeLoopbackPort,
+  parkedIdleBlockedReport,
   proveLocalTtftEvidenceFromArtifact,
   rendererScenarioProbeSource,
   resolveInstallTarget,
   resolveProductVersion,
+  stripSecretEnv,
+  validatePointerAwayForState,
+  validateProfileForState,
   validateState,
   validateStatePrecondition,
   windowsWorkingSetEvidenceFromArtifact,
   writeJson
 } from './lib.mjs'
+import { movePointer, parsePoint, stationaryMove } from './pointer.mjs'
 
 function usage() {
   return `Usage:
-  node scripts/qa/census/run.mjs --state <${STATES.join('|')}> [--seconds 300]
+  node scripts/qa/census/run.mjs --state <${[...STATES, ...SUPPLEMENTARY_STATES].join('|')}> [--seconds 300]
 
 Inputs:
   --app <path>             Installed Metis.app or Metis.exe. Defaults to METIS_CENSUS_APP, then the OS install path.
   --profile <path>         Representative synthetic QA profile from M2-0007. Defaults to METIS_QA_PROFILE.
+                           parked-idle needs one built with profile.mjs --overlay-layout hide.
+  --pointer-away <x,y>     Required for parked-idle: the pointer is moved here, and read back there, before
+                           sampling. A pointer that cannot be moved writes a BLOCKED_EXTERNAL report and fails.
   --main-pid <pid>         Attach instead of launch. Requires --install-root.
   --install-root <path>    Installed app root when attaching.
   --interval-ms <ms>       Sampling interval. Defaults to 5000.
@@ -72,35 +81,16 @@ function readArgs(argv) {
     else if (arg === '--windows-working-set-artifact') args.windowsWorkingSetArtifact = next()
     else if (arg === '--product-version') args.productVersion = next()
     else if (arg === '--precondition-evidence') args.preconditionEvidence = next()
+    else if (arg === '--pointer-away') args.pointerAway = parsePoint(next())
     else throw new Error(`unknown argument: ${arg}`)
   }
   return args
-}
-
-async function freeLoopbackPort() {
-  const server = createServer()
-  await new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  await new Promise((resolve) => server.close(resolve))
-  if (!address || typeof address === 'string') throw new Error('could not allocate a loopback port')
-  return address.port
 }
 
 function defaultAppPath(platform) {
   if (platform === 'darwin') return '/Applications/Metis.app'
   if (platform === 'win32') return 'C:\\Program Files\\Metis\\Metis.exe'
   return ''
-}
-
-function stripSecretEnv(env) {
-  const next = { ...env }
-  for (const key of Object.keys(next)) {
-    if (/_API_KEY$/i.test(key) || /TOKEN/i.test(key) || /SECRET/i.test(key)) delete next[key]
-  }
-  return next
 }
 
 async function findOverlayPage(browser) {
@@ -195,11 +185,21 @@ async function main() {
     attachMode,
     evidence: args.preconditionEvidence
   })
+  validatePointerAwayForState(state, args.pointerAway)
+  if (args.pointerAway) {
+    try {
+      await movePointer(stationaryMove(args.pointerAway), { platform })
+    } catch (error) {
+      writeJson(output, parkedIdleBlockedReport({ platform, reason: error?.message ?? String(error) }))
+      throw new Error(`the pointer could not be moved away, so ${output} records BLOCKED_EXTERNAL, not a census`)
+    }
+  }
 
   if (mainPid === null) {
     if (!profile) {
       throw new Error('--profile or METIS_QA_PROFILE is required; a fresh profile is not representative for M2-0009')
     }
+    validateProfileForState(state, JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')))
     const target = resolveInstallTarget(args.app ?? process.env.METIS_CENSUS_APP ?? defaultAppPath(platform), platform)
     installRoot = target.installRoot
     executable = target.executable

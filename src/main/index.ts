@@ -241,6 +241,12 @@ import {
   pointInRect,
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
+import {
+  type AdaptiveCursorWatch,
+  createAdaptiveCursorWatch,
+  createOverlayIdleSignal,
+  overlayCursorWatchIntervalMs
+} from './island/idle-throttle'
 import { pinWindowOnAllWorkspaces } from './overlay-workspace-pinning'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import {
@@ -1183,7 +1189,9 @@ let isMinimized = false
 let islandResting = false
 // Settings is a full surface, not Hide 8×2 / Island peek. Cursor watch and park must not crush it.
 let settingsSurfaceOpen = false
-let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
+let overlayCursorWatchTimer: AdaptiveCursorWatch | null = null
+// ADR-018: main tells the page when it is parked or long blurred; visibilityState never does (backgroundThrottling:false).
+const overlayIdle = createOverlayIdleSignal({ window: () => win, parked: () => presenterState().kind !== 'REVEALED' })
 let overlayCursorWatchEnteredAt: number | null = null
 let overlayCursorWatchHovering = false
 let overlayCursorWatchHeldCursor: { x: number; y: number } | null = null // latched pointer on the last tick that kept the bar open
@@ -2312,6 +2320,7 @@ function replaceTransparentOverlayWithExclusiveOnboarding(): void {
 /** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */
 function applyOverlaySurfaceChrome(): void {
   if (!win || win.isDestroyed()) return
+  overlayIdle.sync()
   const chrome = skipUnchangedChrome(win) // runs on every reveal, park and surface change
   if (onboardingExclusiveLive()) {
     try {
@@ -2842,6 +2851,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     if (win !== self) return
     reloadBudget.onDidFinishLoad()
   })
+  overlayIdle.attach(self)
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
   // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
   // dead renderer and the overlay sits permanently blank. Previously this was only logged via
@@ -3246,7 +3256,7 @@ function overlayCursorWatchWanted(): boolean {
 
 function stopOverlayCursorWatch(): void {
   if (overlayCursorWatchTimer) {
-    clearInterval(overlayCursorWatchTimer)
+    overlayCursorWatchTimer.stop()
     overlayCursorWatchTimer = null
   }
   overlayCursorWatchHovering = false
@@ -3258,8 +3268,25 @@ function stopOverlayCursorWatch(): void {
 function startOverlayCursorWatch(): void {
   stopOverlayCursorWatch()
   if (!overlayCursorWatchWanted() || !win || win.isDestroyed()) return
-  overlayCursorWatchTimer = setInterval(() => tickOverlayCursorWatch(), CURSOR_WATCH_INTERVAL_MS)
-  overlayCursorWatchTimer.unref?.()
+  overlayCursorWatchTimer = createAdaptiveCursorWatch({
+    tick: () => {
+      tickOverlayCursorWatch()
+      overlayIdle.sync()
+    },
+    intervalMs: () => {
+      if (!win || win.isDestroyed()) return CURSOR_WATCH_INTERVAL_MS // the next tick stops the watch
+      const bounds = win.getBounds()
+      return overlayCursorWatchIntervalMs({
+        cursor: screen.getCursorScreenPoint(),
+        restRect: overlayHoverRestRect(liveOverlayLayout(), screen.getDisplayMatching(bounds)),
+        bounds,
+        islandResting,
+        windowVisible: win.isVisible(),
+        transitioning: overlayCursorWatchEnteredAt !== null || overlayLeaveParkTimer !== null
+      })
+    }
+  })
+  overlayCursorWatchTimer.start()
 }
 
 function tickOverlayCursorWatch(): void {

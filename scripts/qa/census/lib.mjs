@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -14,6 +15,11 @@ export const STATES = [
   'post-meeting',
   'post-recovery'
 ]
+
+/** Measured on demand, outside the release-gate set above: parked-idle is the Hide/Island rest with the pointer
+ *  away from the reveal zone (ADR-018, M2-0039), launched from a profile whose layout parks. */
+export const SUPPLEMENTARY_STATES = ['parked-idle']
+const PARKING_LAYOUTS = ['hide', 'island']
 
 export const ATTRIBUTABLE_PROCESS_KINDS = [
   'main',
@@ -223,10 +229,38 @@ function observedProcessIdentities(samples) {
 }
 
 export function validateState(state) {
-  if (!STATES.includes(state)) {
-    throw new Error(`state must be one of: ${STATES.join(', ')}`)
+  if (!STATES.includes(state) && !SUPPLEMENTARY_STATES.includes(state)) {
+    throw new Error(`state must be one of: ${[...STATES, ...SUPPLEMENTARY_STATES].join(', ')}`)
   }
   return state
+}
+
+/** A parked-idle census of a Bar-layout profile would measure a window that never parks, so refuse it. */
+export function validateProfileForState(state, settings) {
+  if (validateState(state) !== 'parked-idle') return
+  if (!PARKING_LAYOUTS.includes(settings?.overlayLayout)) {
+    throw new Error(
+      `parked-idle needs a profile whose overlayLayout parks (${PARKING_LAYOUTS.join(' or ')}); build one with profile.mjs --overlay-layout hide`
+    )
+  }
+}
+
+/** parked-idle is only parked idle with the pointer proven away from every reveal zone, so it needs a point to move it to. */
+export function validatePointerAwayForState(state, pointerAway) {
+  if (validateState(state) !== 'parked-idle') return
+  if (!pointerAway) throw new Error('parked-idle needs --pointer-away <x,y>, a point away from every reveal zone')
+}
+
+/** Written in place of a parked-idle census when the runner cannot move the pointer: never a measurement. */
+export function parkedIdleBlockedReport({ platform, reason }) {
+  return {
+    state: 'parked-idle',
+    platform,
+    status: 'BLOCKED_EXTERNAL',
+    reason,
+    unblockStep:
+      'Run node scripts/qa/census/run.mjs --state parked-idle --pointer-away <x,y> on a session that can move the pointer (an interactive desktop).'
+  }
 }
 
 export function stateRequiresAttachPrecondition(state) {
@@ -385,7 +419,8 @@ function windowsWorkingSetEvidenceFromSamples(platform, samples) {
 
 export function stateCoverageForRun(measuredState) {
   validateState(measuredState)
-  return STATES.map((state) => {
+  const supplementary = SUPPLEMENTARY_STATES.includes(measuredState) ? [{ state: measuredState, status: 'MEASURED' }] : []
+  const gated = STATES.map((state) => {
     if (state === measuredState) return { state, status: 'MEASURED' }
     if (stateRequiresAttachPrecondition(state)) {
       return {
@@ -396,6 +431,7 @@ export function stateCoverageForRun(measuredState) {
     }
     return { state, status: 'SUPPORTED_NOT_RUN', unblockStep: `Run node scripts/qa/census/run.mjs --state ${state} --seconds 300.` }
   })
+  return [...gated, ...supplementary]
 }
 
 export function validateCensusIdentity(samples, mainPid) {
@@ -478,7 +514,7 @@ Get-CimInstance Win32_Process | Where-Object { $pids -contains $_.ProcessId } | 
   cmd = $_.CommandLine
 } } | ConvertTo-Json -Compress`
 
-function win32PowerShell() {
+export function win32PowerShell() {
   return join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 }
 
@@ -679,6 +715,27 @@ export async function collectCensus(options) {
     windowsWorkingSet: options.windowsWorkingSet ?? windowsWorkingSetEvidenceFromSamples(platform, samples)
   }
   return sanitizeReport(report)
+}
+
+/** Drops provider keys and tokens from the environment a measured app is launched with. */
+export function stripSecretEnv(env) {
+  const next = { ...env }
+  for (const key of Object.keys(next)) {
+    if (/_API_KEY$/i.test(key) || /TOKEN/i.test(key) || /SECRET/i.test(key)) delete next[key]
+  }
+  return next
+}
+
+export async function freeLoopbackPort() {
+  const server = createServer()
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  await new Promise((resolve) => server.close(resolve))
+  if (!address || typeof address === 'string') throw new Error('could not allocate a loopback port')
+  return address.port
 }
 
 export function writeJson(path, value) {

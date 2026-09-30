@@ -235,6 +235,8 @@ export const IPC = {
   overlayCursorHover: 'overlay:cursorHover',
   // Renderer finished the hide spring (or 400ms fallback) — now park the rest rect.
   overlayParkAfterHide: 'overlay:parkAfterHide',
+  // Main → overlay page (ADR-018): { idle } — parked/hidden, or blurred for PRESENTER_IDLE_BLUR_MS.
+  presenterIdle: 'presenter:idle',
   // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's
   // main-process crashes. Distinct from render-process-gone (whole renderer dies): this is a caught JS
   // exception the renderer survives, previously visible only via ASKTOTO_DEBUG_RENDERER console mirroring.
