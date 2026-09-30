@@ -460,7 +460,8 @@ const api = {
   anchorTop: (): Promise<void> => ipcRenderer.invoke(IPC.windowAnchorTop),
   // Auto-hide reveal: widen the window back to the full bar width after the peek narrowed it.
   revealWidth: (): Promise<void> => ipcRenderer.invoke(IPC.windowRevealWidth),
-  onOverlayCursorHover: (cb: (d: { hovering: boolean; restoredFromParkedRail?: boolean }) => void): Unsub =>
+  // `parked`: main already parked the window itself, so the page must render its rest surface.
+  onOverlayCursorHover: (cb: (d: { hovering: boolean; restoredFromParkedRail?: boolean; parked?: boolean }) => void): Unsub =>
     sub(IPC.overlayCursorHover, cb),
   // `force` is limited to a user-initiated edge-dock dismissal. It only bypasses the main process's
   // cursor-in-drawer deferment after the renderer has completed its exit spring.

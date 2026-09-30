@@ -127,13 +127,14 @@ async function screenshot(name) {
   await driverScreenshot(ctx.win, SHOT_DIR, name)
 }
 
-Object.assign(ctx, { ok, screenshot, watchPage, latestMétisWindow })
+Object.assign(ctx, { ok, fail, screenshot, watchPage, latestMétisWindow })
 const {
   assertExclusiveOnboardingNativeBounds,
   simulateNativeOnboardingClampAndRequireRecovery,
   finishOnboarding,
   verifyRightEdgeGeometry,
   verifyRightEdgeSurface,
+  verifyRightEdgeHideScenario,
   replayOnboardingAndVerifyFullDisplay,
   verifyBarSurface
 } = createOnboardingFlows(ctx)
@@ -217,6 +218,13 @@ try {
   await replayOnboardingAndVerifyFullDisplay()
   if (rendererDiagnostics.length === 0) ok('right-edge: no renderer console errors')
   else fail('right-edge: renderer console errors', new Error(rendererDiagnostics.slice(0, 3).join(' | ')))
+
+  // A fresh right-edge profile for Hide, so the replayed onboarding above cannot leak into these rows.
+  await beginFreshProfile()
+  await launchFreshProfile('right-edge-hide')
+  await verifyRightEdgeHideScenario()
+  if (rendererDiagnostics.length === 0) ok('right-edge Hide: no renderer console errors')
+  else fail('right-edge Hide: renderer console errors', new Error(rendererDiagnostics.slice(0, 3).join(' | ')))
 
   await beginFreshProfile()
   const topCenterSettings = await launchFreshProfile('top-center-bar')

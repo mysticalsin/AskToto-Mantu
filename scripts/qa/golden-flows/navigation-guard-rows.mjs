@@ -59,7 +59,7 @@ function findOverlayPage(browser, timeout = 15_000) {
   return findPage(browser, (page) => isOverlayUrl(page.url()), 'overlay page not found', timeout, 100)
 }
 
-async function withOverlayPage(port, fn) {
+export async function withOverlayPage(port, fn) {
   const browser = await attach(`http://127.0.0.1:${port}`, 30_000)
   try {
     const overlay = await findOverlayPage(browser)

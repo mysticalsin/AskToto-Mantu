@@ -2,6 +2,7 @@
 // The mutable app/window handles live on `ctx` (ctx.app, ctx.win) because finishing or replaying
 // onboarding replaces the Electron window; every function reads them at call time.
 import { overlayGeometry, sleep as delay, waitFor, withTimeout } from '../lib/app-driver.mjs'
+import { initialRightEdgeHideRows, runRightEdgeHideRows } from './right-edge-hide-rows.mjs'
 import { createSidecarFlow } from './sidecar-flow.mjs'
 
 const RIGHT_EDGE_MARGIN_PX = 12
@@ -11,7 +12,7 @@ const TOP_CENTER_MARGIN_PX = 8
 const TOP_CENTER_BAR_WIDTH = 880
 
 /**
- * @param ctx `{ app, win, ok, screenshot, watchPage, latestMétisWindow }`; `app` and `win` are mutable.
+ * @param ctx `{ app, win, ok, fail, screenshot, watchPage, latestMétisWindow }`; `app` and `win` are mutable.
  */
 export function createOnboardingFlows(ctx) {
   const { ok, screenshot, watchPage, latestMétisWindow } = ctx
@@ -416,7 +417,7 @@ export function createOnboardingFlows(ctx) {
       // the future Appearance card before its controls are actionable, so use its rendered visibility
       // to decide when this scenario may select its presentation.
       if (!testedAppearance && await rightEdge.isVisible().catch(() => false)) {
-        if (presentation === 'right-edge') await selectAppearanceAndRightEdge()
+        if (presentation.startsWith('right-edge')) await selectAppearanceAndRightEdge()
         else await selectAppearanceAndBar()
         testedAppearance = true
         continue
@@ -611,11 +612,20 @@ export function createOnboardingFlows(ctx) {
     if (await composer.inputValue() !== 'Draft without sending') {
       throw new Error('Right-edge composer did not retain typed text.')
     }
-    if (await ctx.win.getByRole('button', { name: 'Close Métis' }).count()) {
-      throw new Error('Right-edge dock exposed a Close control while a draft keeps the overlay intentionally open.')
-    }
-    await composer.fill('')
     ok('right-edge sidecar exposes a compact editable composer')
+    // A draft keeps the dock open on pointer leave, but the user can always Hide it: the draft survives.
+    const hideWithDraft = ctx.win.getByRole('button', { name: 'Hide Métis' })
+    await hideWithDraft.waitFor({ state: 'visible', timeout: 5_000 })
+    await hideWithDraft.click({ timeout: 5_000 })
+    await ctx.win.getByRole('complementary', { name: 'Métis' }).waitFor({ state: 'detached', timeout: 8_000 })
+    await verifyNativeRightEdgeBounds(false, 'hiding the dock with a draft')
+    await tab.click({ timeout: 5_000 })
+    await composer.waitFor({ state: 'visible', timeout: 8_000 })
+    if (await composer.inputValue() !== 'Draft without sending') {
+      throw new Error('Hiding the right-edge dock discarded the draft.')
+    }
+    ok('right-edge Hide control parks the dock and keeps the draft')
+    await composer.fill('')
     await screenshot('03-right-edge-sidecar-expanded')
     await verifyLongSidecarResponse(composer)
     for (const label of ['Start listening', 'Capture screen', 'Mantu Intelligence', 'Spotlight Ref', 'Open settings', 'Open History']) {
@@ -644,15 +654,15 @@ export function createOnboardingFlows(ctx) {
     }
     ok('closing Settings restores the right-edge dock or its accessible rail')
 
-    // Re-enter the drawer before testing its Close affordance. The sidecar intentionally has a short
+    // Re-enter the drawer before testing its Hide affordance. The sidecar intentionally has a short
     // entrance spring, so this models a user moving onto the visible control rather than racing its mount.
-    const closeDock = ctx.win.getByRole('button', { name: 'Close Métis' })
+    const closeDock = ctx.win.getByRole('button', { name: 'Hide Métis' })
     await closeDock.hover({ timeout: 5_000 })
     await delay(250)
     await closeDock.click({ timeout: 5_000 })
     await ctx.win.getByRole('complementary', { name: 'Métis' }).waitFor({ state: 'detached', timeout: 8_000 })
     if ((await tab.getAttribute('aria-expanded')) !== 'false') {
-      throw new Error('Right-edge tab did not return to its collapsed state after Close.')
+      throw new Error('Right-edge tab did not return to its collapsed state after Hide.')
     }
     await verifyNativeRightEdgeBounds(false, 'closing the dock')
     ok('right-edge sidecar closes back to its tab')
@@ -666,6 +676,26 @@ export function createOnboardingFlows(ctx) {
     await ctx.win.getByRole('complementary', { name: 'Métis' }).waitFor({ state: 'visible', timeout: 8_000 })
     await verifyNativeRightEdgeBounds(true, 'clicking the parked rail')
     ok('right-edge rail click restores matching native and rendered drawer surfaces')
+  }
+
+  /**
+   * Right-edge Hide (M2-0428): the same RE-HIDE rows the packaged smoke runs, here through Playwright's
+   * main-process evaluate. The cursor watch is driven by stubbing screen.getCursorScreenPoint, and the
+   * click-through flag is captured by wrapping setIgnoreMouseEvents.
+   */
+  async function verifyRightEdgeHideScenario() {
+    const rows = initialRightEdgeHideRows()
+    const main = (expression) =>
+      ctx.app.evaluate((electron, source) => {
+        globalThis.__metisReHideElectron = electron
+        return (0, eval)(source)
+      }, expression)
+    await runRightEdgeHideRows({ page: ctx.win, main, rows })
+    for (const row of rows) {
+      if (row.status === 'PASS') ok(`${row.id} ${JSON.stringify(row.evidence)}`)
+      else if (row.status === 'BLOCKED_EXTERNAL') console.log(`  ~ ${row.id} BLOCKED_EXTERNAL — ${row.unblock}`)
+      else ctx.fail(row.id, new Error(row.unblock ?? 'no evidence recorded'))
+    }
   }
 
   async function replayOnboardingAndVerifyFullDisplay() {
@@ -732,6 +762,7 @@ export function createOnboardingFlows(ctx) {
     finishOnboarding,
     verifyRightEdgeGeometry,
     verifyRightEdgeSurface,
+    verifyRightEdgeHideScenario,
     replayOnboardingAndVerifyFullDisplay,
     verifyBarSurface
   }

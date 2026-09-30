@@ -41,6 +41,13 @@
  * (`restoreHoverParkableLayout`) before the RV-* rows run. Those rows live in
  * golden-flows/navigation-guard-rows.mjs and golden-flows/reveal-rows.mjs (M2-0410).
  *
+ * After the RV-* rows, the RE-HIDE-* rows (M2-0428, golden-flows/right-edge-hide-rows.mjs) switch the live
+ * app to the right-edge placement and prove Hide/Island park and reveal from the screen edge
+ * (`runRightEdgeHideRows`). They drive main's cursor watch by stubbing `screen.getCursorScreenPoint` in the
+ * main process, reached through the Node inspector the launch opens on a loopback port
+ * (`--inspect=127.0.0.1:<port>`), and capture click-through by wrapping `setIgnoreMouseEvents`. Rows that
+ * need a live meeting report BLOCKED_EXTERNAL when the hosted runner cannot start one.
+ *
  * Usage: node scripts/qa/packaged-smoke.mjs <installed app> <report.json>
  */
 
@@ -51,11 +58,21 @@ import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { attach, freeLoopbackPort, killOwned, ownedCensus, sleep } from './lib/app-driver.mjs'
 import { initialNavigationGuardRows, runPackagedNavigationGuardRows } from './golden-flows/navigation-guard-rows.mjs'
+import { initialRightEdgeHideRows, runPackagedRightEdgeHideRows } from './golden-flows/right-edge-hide-rows.mjs'
 import { initialRvRows, runPackagedRvRows } from './golden-flows/reveal-rows.mjs'
 import { AUDIT_POLL_MS, isOverlayUrl, parseAuditLog, readAuditLog } from './golden-flows/smoke-support.mjs'
 import { listProcesses, ownedProcesses, roleCounts, survivors as computeSurvivors } from './owned-processes.mjs'
 
 export { NAVIGATION_GUARD_BOOTSTRAP_PATCH, NAVIGATION_GUARD_SCENARIOS, initialNavigationGuardRows } from './golden-flows/navigation-guard-rows.mjs'
+export {
+  RIGHT_EDGE_HIDE_SCENARIOS,
+  initialRightEdgeHideRows,
+  rightEdgeExpectedRects,
+  rightEdgeHideParkMatches,
+  rightEdgeStateMatches,
+  rightEdgeStateMismatches,
+  runRightEdgeHideRows
+} from './golden-flows/right-edge-hide-rows.mjs'
 export { RV_SCENARIOS, auditDiagnostic, buildWindowsShortcutLauncher, initialRvRows, isPassingRevealEvidence, runRevealRow } from './golden-flows/reveal-rows.mjs'
 export { isOverlayUrl, parseAuditLog, waitUntilParked } from './golden-flows/smoke-support.mjs'
 
@@ -135,6 +152,17 @@ export function smokeVerdict(observation) {
       Array.isArray(observation.navigationGuard) &&
       observation.navigationGuard.some((row) => !rowIsTerminal(row))
   )
+  fail(
+    'right_edge_hide_failed',
+    Array.isArray(observation.rightEdgeHide) && observation.rightEdgeHide.some((row) => row.status === 'FAIL')
+  )
+  fail(
+    'right_edge_hide_incomplete',
+    observation.readyMs !== null &&
+      !observation.exitedEarly &&
+      Array.isArray(observation.rightEdgeHide) &&
+      observation.rightEdgeHide.some((row) => !rowIsTerminal(row))
+  )
   fail('smoke_incomplete', failures.length === 0 && observation.survivors === null)
 
   return { result: failures.length === 0 ? 'pass' : 'fail', failures }
@@ -166,6 +194,7 @@ export function smokeReport(observation) {
     },
     rv: observation.rv,
     navigationGuard: observation.navigationGuard,
+    rightEdgeHide: observation.rightEdgeHide ?? null,
     processes: {
       atQuit: observation.ownedAtQuit === null ? null : roleCounts(observation.ownedAtQuit),
       survivors: observation.survivors === null ? null : roleCounts(observation.survivors)
@@ -280,6 +309,7 @@ async function main() {
     marker: null,
     rv: initialRvRows(platform),
     navigationGuard: initialNavigationGuardRows(),
+    rightEdgeHide: initialRightEdgeHideRows(),
     survivors: null,
     survivorsGoneMs: null
   }
@@ -298,6 +328,8 @@ async function main() {
     profile = mkdtempSync(join(tmpdir(), 'metis-smoke-'))
     seedOnboardedProfile(profile)
     const port = await freeLoopbackPort()
+    // The RE-HIDE rows evaluate in the main process through its Node inspector (loopback only).
+    const inspectPort = await freeLoopbackPort()
     const auditLogPath = join(profile, 'logs', 'audit.log')
 
     const env = { ...process.env, ASKTOTO_USERDATA: profile, ASKTOTO_SMOKE_REOPEN_PROBE: '1' }
@@ -305,7 +337,7 @@ async function main() {
 
     const exitInfo = { settled: false, code: null, signal: null }
     const launchStartMs = Date.now()
-    child = spawn(executable, [`--remote-debugging-port=${port}`], { env, stdio: 'ignore' })
+    child = spawn(executable, [`--remote-debugging-port=${port}`, `--inspect=127.0.0.1:${inspectPort}`], { env, stdio: 'ignore' })
     child.once('error', (err) => {
       observation.launchFailed = true
       console.error(`[packaged-smoke] spawn error: ${err?.message ?? err}`)
@@ -340,6 +372,7 @@ async function main() {
     if (observation.readyMs !== null && !observation.exitedEarly) {
       await runPackagedNavigationGuardRows({ port, rows: observation.navigationGuard, executable, env })
       await runPackagedRvRows({ platform, target, executable, auditLogPath, rows: observation.rv, env })
+      await runPackagedRightEdgeHideRows({ port, inspectPort, rows: observation.rightEdgeHide })
 
       const survivalDeadline = Date.now() + SURVIVAL_MS
       while (Date.now() < survivalDeadline) {
