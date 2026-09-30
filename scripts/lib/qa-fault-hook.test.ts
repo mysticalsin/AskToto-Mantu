@@ -6,7 +6,8 @@ import { createPackage, getRawHeader, uncache } from '@electron/asar'
 import type { Writable } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
 import { installQaFaultHook } from '../../src/main/qa-identity'
-import { assertQaFaultHookMatchesIdentity, QA_FAULT_MARKER, QA_IDENTITY_PACKAGE_NAME } from './qa-fault-hook.mjs'
+import { QA_CAPTURE_ENV } from '../../src/main/qa-capture-source'
+import { assertQaFaultHookMatchesIdentity, QA_CAPTURE_MARKER, QA_FAULT_MARKER, QA_IDENTITY_PACKAGE_NAME } from './qa-fault-hook.mjs'
 
 type AsarHeaderEntry = {
   files?: Record<string, AsarHeaderEntry>
@@ -77,7 +78,8 @@ describe('assertQaFaultHookMatchesIdentity', () => {
   })
 
   it('Q3: the QA-identity package with the hook passes', async () => {
-    const archive = await buildArchive(QA_IDENTITY_PACKAGE_NAME, `/* ${QA_FAULT_MARKER} */\n`)
+    // M2-0494: a QA-identity main bundle carries both QA hooks, the fault hook and the capture source.
+    const archive = await buildArchive(QA_IDENTITY_PACKAGE_NAME, `/* ${QA_FAULT_MARKER} ${QA_CAPTURE_MARKER} */\n`)
     expect(assertQaFaultHookMatchesIdentity(archive)).toEqual({ qaIdentity: true })
   })
 
@@ -124,5 +126,19 @@ describe('assertQaFaultHookMatchesIdentity', () => {
     await truncate(archive, 8 + headerSize)
 
     expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/app\.asar is incomplete/)
+  })
+
+  it('Q9 (M2-0494): a shipping package whose main bundle carries the capture hook fails', async () => {
+    const archive = await buildArchive('asktoto', `process.env.${QA_CAPTURE_MARKER}\n`)
+    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/shipping package carries the QA capture hook/)
+  })
+
+  it('Q10 (M2-0494): a QA-identity package with the fault hook but without the capture hook fails', async () => {
+    const archive = await buildArchive(QA_IDENTITY_PACKAGE_NAME, `/* ${QA_FAULT_MARKER} */\n`)
+    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/QA-identity package lacks the QA capture hook/)
+  })
+
+  it('Q11 (M2-0494): the gate looks for the env name the capture hook compiles in', () => {
+    expect(QA_CAPTURE_MARKER).toBe(QA_CAPTURE_ENV)
   })
 })
