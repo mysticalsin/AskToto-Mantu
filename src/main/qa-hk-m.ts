@@ -57,7 +57,7 @@ function currentHostMemory(): HostMemory {
   return { hostTotalBytes: totalmem(), hostAvailableBytes: Math.round(availableMemoryGB() * 1024 ** 3) }
 }
 
-// Decided once per process by armQaHostFloorOverride (index.ts, right after the profile is selected): the launch env
+// Decided once per process by armQaHostFloorOverride (qa-hooks.ts, as index.ts imports it): the launch env
 // and packaging never change while the process runs, and not every floor's module can read Electron's app object.
 let hostFloorOverrideArmed = false
 const reportedHostFloors = new Set<HostFloor>()

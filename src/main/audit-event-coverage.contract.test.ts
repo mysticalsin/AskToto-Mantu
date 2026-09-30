@@ -44,8 +44,8 @@ if (unionEnd === -1 || unionEnd <= unionStart) {
 }
 const unionBlock = loggerSrc.slice(unionStart, unionEnd)
 
-/** Every event name declared in the AuditEvent union, in source order. */
-const DECLARED_EVENTS = [...unionBlock.matchAll(/'([a-zA-Z0-9._]+)'/g)].map((m) => m[1])
+/** Every event name declared in the AuditEvent union, in source order. Names may contain hyphens ('hk-m.*'). */
+const DECLARED_EVENTS = [...unionBlock.matchAll(/'([a-zA-Z0-9._-]+)'/g)].map((m) => m[1])
 
 /**
  * Declared, never fired anywhere in src/main (production code or tests). Confirmed by direct grep, not

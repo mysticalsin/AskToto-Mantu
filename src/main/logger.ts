@@ -324,7 +324,7 @@ export type AuditEvent =
   | 'hk-m.setup-failed'
   | 'hk-m.ram-floor-override'
   // M2-0482: the packaged, isolated-profile QA gate (qa-hk-m.ts qaHostFloorOverride) first lifted a RAM floor in this
-  // process. Once per floor: { floor: 'prewarm-available-ram' | 'advertised-ram', hostTotalBytes, hostAvailableBytes }.
+  // process. Once per floor: { floor: "prewarm-available-ram" | "advertised-ram", hostTotalBytes, hostAvailableBytes }.
   | 'local.host-floor-override'
   | 'local.model.checksum_fail'
   // First-run weight download (local-model-download.ts). The weights are no longer bundled, so these
