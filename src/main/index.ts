@@ -613,6 +613,7 @@ import {
 } from './brain/store'
 import { brainStatusCounts, readBrainDashboard } from './brain/dashboard-read'
 import { buildBrainContext } from './brain/context'
+import { registerPendingAskCancellation } from './ask-start-cancel'
 import { buildSystem, buildSystemParts } from './personas'
 import { applyCaveman } from '@shared/caveman-ask'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
@@ -7148,19 +7149,14 @@ function registerIpc(): void {
   // array (replayed verbatim into the model's message list) and the server-side Dust conversation (reused
   // for up to 2h regardless of topic) — and clearing only one leaks through the other. Enforced at main's
   // single ask choke point so every renderer surface (typed ask, screen ask, fact-check) gets the same rule.
-  ipcMain.handle(IPC.askStart, (e, raw) => {
+  ipcMain.handle(IPC.askStart, async (e, raw) => {
     assertMainWindow(e)
-    const id =
-      raw && typeof raw === 'object' && 'id' in (raw as object)
-        ? String((raw as { id: unknown }).id)
-        : ''
+    const id = raw && typeof raw === 'object' && 'id' in (raw as object) ? String((raw as { id: unknown }).id) : ''
     if (!requireAuth()) {
-      win?.webContents.send(IPC.streamError, {
-        id,
-        message: 'Sign in with your Mantu account to use Métis.'
-      })
+      win?.webContents.send(IPC.streamError, { id, message: 'Sign in with your Mantu account to use Métis.' })
       return
     }
+    let pendingAsk: ReturnType<typeof registerPendingAskCancellation> | null = null
     try {
     const req = AskStartSchema.parse(raw)
     // MQA-182: Private View means Métis does not look at OR SEND your screen — and an already-captured
@@ -7235,6 +7231,7 @@ function registerIpc(): void {
         mainLog.warn('[local] early ensure failed', err instanceof Error ? err.message : String(err))
       )
     }
+    pendingAsk = registerPendingAskCancellation(streams, req.id)
     // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
     // question (which already carries the live transcript tail via the renderer's withContext) and inject
     // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
@@ -7244,12 +7241,13 @@ function registerIpc(): void {
     // material with no citation/anti-fabrication guardrail attached — gate identically to the rail.
     if (req.mode === 'answer' && req.kind !== 'factcheck') {
       try {
-        const hit = buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
+        const hit = await buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
         req.brainContext = hit.block || undefined
       } catch (err) {
         console.warn('[brain] context assembly failed', err)
       }
     }
+    if (!pendingAsk.stillPending()) return pendingAsk.releaseIfPending()
     // Screen fast-path (M13): the renderer asked to answer from the pre-analyzed on-device screen context.
     // Inject main's OWN cached description (re-validated for freshness/window match), plus a short recent-
     // conversation tail so the answer fuses what's on screen with what's being said. Best-effort: if the
@@ -8147,6 +8145,7 @@ function registerIpc(): void {
       attempt(skipDeadPrimary ?? primary, skipDeadPrimary ? [primary] : [])
     }
     } catch (err) {
+      pendingAsk?.releaseIfPending()
       win?.webContents.send(IPC.streamError, {
         id,
         message: isModeSkillIntegrityError(err)

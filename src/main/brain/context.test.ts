@@ -82,21 +82,21 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
-  it('MQA-010 — a question that names no entity opens no entity file at all', () => {
-    buildBrainContext(s, 'what is the weather in Paris today') // first ask builds the match index
+  it('MQA-010 — a question that names no entity opens no entity file at all', async () => {
+    await buildBrainContext(s, 'what is the weather in Paris today') // first ask builds the match index
     opened.length = 0
 
-    const { block, matched } = buildBrainContext(s, 'what is the weather in Paris today')
+    const { block, matched } = await buildBrainContext(s, 'what is the weather in Paris today')
     expect(matched).toBe(false)
     expect(block).toBe('')
     expect(opened).toEqual([])
   })
 
-  it('MQA-010 — a question naming one person opens only that person, not the corpus', () => {
-    buildBrainContext(s, 'what is the weather in Paris today')
+  it('MQA-010 — a question naming one person opens only that person, not the corpus', async () => {
+    await buildBrainContext(s, 'what is the weather in Paris today')
     opened.length = 0
 
-    const { block, matched } = buildBrainContext(s, 'what did Maria Silva promise on pricing?')
+    const { block, matched } = await buildBrainContext(s, 'what did Maria Silva promise on pricing?')
     expect(matched).toBe(true)
     expect(block).toContain('Maria Silva')
     expect(opened).toEqual(['person/maria-silva'])
@@ -106,30 +106,30 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     // The pre-filter must not shrink what CAN match: aliases[] live inside the entity file, so a
     // slug-only filter would silently drop this hit (Task MI-5's corrected-away surface form).
     await writePerson(s, 'acme-co', personFor('acme-co', ['Acme Corp']))
-    buildBrainContext(s, 'what is the weather in Paris today')
+    await buildBrainContext(s, 'what is the weather in Paris today')
     opened.length = 0
 
-    const { block, matched } = buildBrainContext(s, 'what did Acme Corp say on the renewal call?')
+    const { block, matched } = await buildBrainContext(s, 'what did Acme Corp say on the renewal call?')
     expect(matched).toBe(true)
     expect(block).toContain('Acme Co') // the CURRENT canonical name, not the alias itself
     expect(opened).toEqual(['person/acme-co'])
   })
 
   it('MQA-010 — an alias added to an existing entity after the index was built still matches', async () => {
-    expect(buildBrainContext(s, 'what did Globex Holdings say?').matched).toBe(false)
+    expect((await buildBrainContext(s, 'what did Globex Holdings say?')).matched).toBe(false)
 
     await writePerson(s, 'nadia-haddad', personFor('nadia-haddad', ['Globex Holdings']))
 
-    const { block, matched } = buildBrainContext(s, 'what did Globex Holdings say?')
+    const { block, matched } = await buildBrainContext(s, 'what did Globex Holdings say?')
     expect(matched).toBe(true)
     expect(block).toContain('Nadia Haddad')
   })
 
-  it('MQA-010 — a question naming an account and a deal opens only those two files', () => {
-    buildBrainContext(s, 'what is the weather in Paris today')
+  it('MQA-010 — a question naming an account and a deal opens only those two files', async () => {
+    await buildBrainContext(s, 'what is the weather in Paris today')
     opened.length = 0
 
-    const { block, matched } = buildBrainContext(s, 'where is the Initech Nordics Rollout heading?')
+    const { block, matched } = await buildBrainContext(s, 'where is the Initech Nordics Rollout heading?')
     expect(matched).toBe(true)
     expect(block).toContain('Initech')
     expect(block).toContain('Nordics Rollout')

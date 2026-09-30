@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs'
+import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { EvalMetrics } from '@shared/ipc'
@@ -103,13 +103,39 @@ export function aggregateMetrics(records: AuditRecord[]): EvalMetrics {
   }
 }
 
+const AUDIT_TAIL_CHUNK_BYTES = 64 * 1024
+
+async function tailAuditLog(path: string, maxLines: number): Promise<string[]> {
+  if (maxLines <= 0) return []
+  const file = await open(path, 'r')
+  try {
+    const { size } = await file.stat()
+    const chunks: Buffer[] = []
+    let position = size
+    let newlineCount = 0
+    while (position > 0 && newlineCount <= maxLines) {
+      const length = Math.min(AUDIT_TAIL_CHUNK_BYTES, position)
+      position -= length
+      const buffer = Buffer.allocUnsafe(length)
+      const { bytesRead } = await file.read(buffer, 0, length, position)
+      if (bytesRead <= 0) break
+      const slice = bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead)
+      for (let i = 0; i < slice.length; i++) {
+        if (slice[i] === 10) newlineCount++
+      }
+      chunks.unshift(slice)
+    }
+    return Buffer.concat(chunks).toString('utf8').trim().split('\n').slice(-maxLines)
+  } finally {
+    await file.close()
+  }
+}
+
 /** Read + parse the audit log (last `maxLines` lines) and aggregate. Best-effort; never throws. */
-export function readEvalMetrics(maxLines = 10_000): EvalMetrics {
+export async function readEvalMetrics(maxLines = 10_000): Promise<EvalMetrics> {
   try {
     const path = join(app.getPath('userData'), 'logs', 'audit.log')
-    if (!existsSync(path)) return aggregateMetrics([])
-    const lines = readFileSync(path, 'utf8').trim().split('\n')
-    const recent = lines.slice(-maxLines)
+    const recent = await tailAuditLog(path, maxLines)
     const records: AuditRecord[] = []
     for (const line of recent) {
       if (!line) continue

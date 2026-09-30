@@ -1,8 +1,8 @@
 import { app } from 'electron'
-import { existsSync, mkdirSync, readdirSync, statSync, unlink } from 'node:fs'
+import { mkdir, readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Settings } from '@shared/ipc'
-import { readSavedFile, writeSaved } from './transcripts'
+import { decodeSaved, writeSaved } from './transcripts'
 import type { ImportJob, ImportJobStore } from './import-jobs'
 
 /**
@@ -17,19 +17,26 @@ export class EncryptedImportJobStore implements ImportJobStore {
   ) {}
 
   async save(job: ImportJob): Promise<void> {
-    this.ensureRoot()
+    await this.ensureRoot()
     await writeSaved(this.path(job.jobId), JSON.stringify(job), this.getSettings().encryptTranscripts)
   }
 
   async list(): Promise<ImportJob[]> {
-    if (!existsSync(this.root)) return []
     const jobs: ImportJob[] = []
-    for (const name of readdirSync(this.root)) {
+    let entries
+    try {
+      entries = await readdir(this.root, { withFileTypes: true })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+    for (const entry of entries) {
+      const name = entry.name
       if (!/^job-[a-zA-Z0-9_-]+\.json$/.test(name)) continue
+      if (!entry.isFile()) continue
       const path = join(this.root, name)
       try {
-        if (!statSync(path).isFile()) continue
-        const raw = readSavedFile(path)
+        const raw = decodeSaved(await readFile(path))
         const parsed = JSON.parse(raw) as Partial<ImportJob>
         if (
           typeof parsed.jobId !== 'string' ||
@@ -49,16 +56,15 @@ export class EncryptedImportJobStore implements ImportJobStore {
   }
 
   async remove(jobId: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      unlink(this.path(jobId), (error) => {
-        if (!error || (error as NodeJS.ErrnoException).code === 'ENOENT') resolve()
-        else reject(error)
-      })
-    })
+    try {
+      await unlink(this.path(jobId))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
   }
 
-  private ensureRoot(): void {
-    if (!existsSync(this.root)) mkdirSync(this.root, { recursive: true, mode: 0o700 })
+  private async ensureRoot(): Promise<void> {
+    await mkdir(this.root, { recursive: true, mode: 0o700 })
   }
 
   private path(jobId: string): string {

@@ -1,9 +1,57 @@
 import { describe, it, expect, vi } from 'vitest'
-import { aggregateMetrics, type AuditRecord } from './metrics'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { app } from 'electron'
+import { aggregateMetrics, readEvalMetrics, type AuditRecord } from './metrics'
+
+const auditReadStats = vi.hoisted(() => ({ bytesRequested: 0 }))
 
 // metrics.ts imports `app` from electron for readEvalMetrics; aggregateMetrics is pure and never touches
 // it, so the auto-mock just keeps the top-level import from throwing in the node test environment.
 vi.mock('electron')
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const syncReadBlocked = () => {
+    throw new Error('sync fs read should not be used by readEvalMetrics')
+  }
+  return {
+    ...actual,
+    default: { ...actual, existsSync: syncReadBlocked, readFileSync: syncReadBlocked },
+    existsSync: syncReadBlocked,
+    readFileSync: syncReadBlocked
+  }
+})
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  const asyncFullReadBlocked = () => {
+    throw new Error('readEvalMetrics must not use async full-file reads')
+  }
+  return {
+    ...actual,
+    readFile: asyncFullReadBlocked,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const file = await actual.open(...args)
+      return new Proxy(file, {
+        get(target, prop, receiver) {
+          if (prop === 'read') {
+            return async (
+              buffer: Buffer,
+              offset?: number | null,
+              length?: number | null,
+              position?: number | bigint | null
+            ) => {
+              auditReadStats.bytesRequested += typeof length === 'number' ? length : 0
+              return target.read(buffer, offset, length, position)
+            }
+          }
+          const value = Reflect.get(target, prop, receiver)
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+      })
+    }
+  }
+})
 
 describe('aggregateMetrics', () => {
   it('computes latency percentiles, acceptance, failures, fallbacks, and per-provider counts', () => {
@@ -91,5 +139,39 @@ describe('aggregateMetrics', () => {
       { event: 'brain.consolidation' }
     ]
     expect(aggregateMetrics(records).brainConsolidationPasses).toBe(2)
+  })
+})
+
+describe('readEvalMetrics', () => {
+  it('tails only the end of a large audit log through async fs instead of full-file reads', async () => {
+    const userData = await mkdtemp(join(tmpdir(), 'asktoto-metrics-'))
+    try {
+      auditReadStats.bytesRequested = 0
+      vi.mocked(app.getPath).mockReturnValue(userData)
+      await mkdir(join(userData, 'logs'), { recursive: true })
+      const oldRecords = Array.from({ length: 2500 }, (_, i): AuditRecord => ({
+        event: 'provider.request',
+        provider: `older-${i.toString().padStart(4, '0')}`
+      }))
+      const records: AuditRecord[] = [
+        { event: 'provider.request', provider: 'older' },
+        { event: 'provider.request', phase: 'done', totalMs: 100, ttftMs: 10 },
+        { event: 'provider.request', provider: 'kept' },
+        { event: 'provider.request', phase: 'done', totalMs: 200, ttftMs: 20 },
+        { event: 'answer.feedback', rating: 'up' }
+      ]
+      const log = [...oldRecords, ...records].map((record) => JSON.stringify(record)).join('\n')
+      expect(Buffer.byteLength(log, 'utf8')).toBeGreaterThan(64 * 1024)
+      await writeFile(join(userData, 'logs', 'audit.log'), log, 'utf8')
+
+      const metrics = await readEvalMetrics(3)
+      expect(metrics.answers).toBe(1)
+      expect(metrics.answerP50Ms).toBe(200)
+      expect(metrics.byProvider).toEqual({ kept: 1 })
+      expect(metrics.acceptance).toEqual({ up: 1, down: 0, rate: 1 })
+      expect(auditReadStats.bytesRequested).toBeLessThan(Buffer.byteLength(log, 'utf8'))
+    } finally {
+      await rm(userData, { recursive: true, force: true })
+    }
   })
 })
