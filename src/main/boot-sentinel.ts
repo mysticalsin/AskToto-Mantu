@@ -12,10 +12,10 @@ import { randomUUID } from 'node:crypto'
  * consecutive launches of the shipped 1.5.4 Windows build died exactly that way and left nothing behind
  * except six Crashpad minidumps the app never looked at.
  *
- * Nothing inside a dying process can report on it, so the record has to be written before early boot
- * work and removed after IPC/window readiness: a file that is still there on the next launch IS the
- * report. That one fact drives both halves of the recovery — the durable trace (what died, when, and
- * which minidump belongs to it) and the routing decision (skip the boot step that did the killing).
+ * Nothing inside a dying process can report on it, so the record has to be written before the early
+ * IPC/window kill zone and removed after readiness: a file that is still there on the next launch IS the
+ * report. Delayed brain-resume work uses a separate marker so this one can clear as soon as early boot is
+ * healthy while the resume window remains watched.
  *
  * Deliberately dependency-free (node built-ins only): this runs before anything else can be trusted, and
  * must never be the reason a boot fails.

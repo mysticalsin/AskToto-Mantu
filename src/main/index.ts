@@ -9300,12 +9300,10 @@ if (!app.requestSingleInstanceLock()) {
       try { unlinkSync(join(ud, f)) } catch { /* ignore */ }
     }
   } catch { /* best-effort — never block startup */ }
-  // MQA-175: a native C++ exception can unwind past V8, so only the next launch can report it.
-  // Claim the early sentinel before risky boot work, then clear it after IPC/window readiness.
+  // MQA-175: native death can unwind past V8; the next launch reports it from this early marker.
   const earlyDeath = beginBootWatch(app.getPath('userData'), app.getVersion())
-  // Keep the process unsuspended until the delayed brain work has been admitted or safe-started.
   setBootPowerSaveBlock(true)
-  // The early boot sentinel covers only the IPC/window kill zone; the 15s brain resume has its own marker.
+  // The 15s brain resume has its own marker.
   let bootWatchClosed = false
   const clearBootWatchOnce = (reason: string): void => {
     if (bootWatchClosed) return
@@ -9665,7 +9663,7 @@ if (!app.requestSingleInstanceLock()) {
   scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
   bootWork.releaseAfterFirstShow(win)
   revealController.markBootComplete()
-  // createWindow completed the early kill zone; brain resume remains protected by its own marker.
+  // createWindow completed the early kill zone.
   clearBootWatchOnce('createWindow')
   // Belt-and-suspenders clears for App Nap / locked-screen deferral after IPC/window readiness.
   setImmediate(() => clearBootWatchOnce('setImmediate'))
