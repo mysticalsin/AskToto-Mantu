@@ -1,15 +1,40 @@
 import { describe, expect, it } from 'vitest'
 import {
   combinedReport,
+  exitCodeFor,
   hasAtLeastEvent,
   hostFloorOverrides,
   launchEnv,
+  legacyOrphanVerdict,
+  observedLegacyReap,
   observedReapedOrphan,
+  parseCliArgs,
   parseMacHelperProcInfo,
   parseSidecarRegistry,
   registryHasSpawnedPid,
   summarizeProof
 } from './sidecar-boot-reaper.mjs'
+
+function proof(kind: string, result: string, unblock: string | null = null) {
+  return summarizeProof({
+    kind,
+    result,
+    failures: result === 'pass' ? [] : [unblock ?? 'a failure'],
+    unblock,
+    timingsMs: {},
+    pids: {},
+    reapedReason: null,
+    events: {},
+    processes: { beforeKill: null, afterReaper: null }
+  })
+}
+
+const ORPHAN = 4242
+const CONTROL = 5151
+const legacyReaped = [
+  { event: 'app.started' },
+  { event: 'sidecar.reaped', name: 'llama-server', pid: ORPHAN, reason: 'legacy-orphan' }
+]
 
 describe('sidecar boot reaper proof helpers', () => {
   it('waits for the spawned identity record for the exact orphan pid before hard-killing main', () => {
@@ -175,6 +200,118 @@ describe('sidecar boot reaper proof helpers', () => {
       hostMemory: null,
       hostFloorOverrides: []
     })
+  })
+
+  it('exits 2 for a BLOCKED_EXTERNAL real llama-server row only under --require-real-llama', () => {
+    const blocked = combinedReport(
+      proof('stand-in-registry', 'pass'),
+      proof('real-llama-server', 'BLOCKED_EXTERNAL', 'Seed the packaged local model assets.'),
+      proof('legacy-orphan', 'pass')
+    )
+    expect(blocked.result).toBe('pass')
+    expect(exitCodeFor(blocked)).toBe(0)
+    expect(exitCodeFor(blocked, { requireRealLlama: false })).toBe(0)
+    expect(exitCodeFor(blocked, { requireRealLlama: true })).toBe(2)
+
+    const allPass = combinedReport(proof('stand-in-registry', 'pass'), proof('real-llama-server', 'pass'), proof('legacy-orphan', 'pass'))
+    expect(exitCodeFor(allPass, { requireRealLlama: true })).toBe(0)
+
+    // A failing row is a FAIL with or without the flag, never a PRECONDITION.
+    const failed = combinedReport(
+      proof('stand-in-registry', 'pass'),
+      proof('real-llama-server', 'BLOCKED_EXTERNAL', 'Seed the packaged local model assets.'),
+      proof('legacy-orphan', 'fail')
+    )
+    expect(exitCodeFor(failed, { requireRealLlama: true })).toBe(1)
+    expect(exitCodeFor(failed)).toBe(1)
+  })
+
+  it('reads --require-real-llama from the command line and refuses anything else', () => {
+    expect(parseCliArgs(['Metis.app', 'out/report.json'])).toEqual({
+      target: 'Metis.app',
+      reportPath: 'out/report.json',
+      requireRealLlama: false
+    })
+    expect(parseCliArgs(['Metis.app', 'out/report.json', '--require-real-llama'])).toEqual({
+      target: 'Metis.app',
+      reportPath: 'out/report.json',
+      requireRealLlama: true
+    })
+    expect(() => parseCliArgs(['Metis.app'])).toThrow(/usage/)
+    expect(() => parseCliArgs(['Metis.app', 'r.json', '--require-real'])).toThrow(/usage/)
+  })
+
+  it('passes the legacy-orphan row only for a legacy-orphan reap of the seeded pid within 5 s while the control survives', () => {
+    const observation = { records: legacyReaped, orphanPid: ORPHAN, controlPid: CONTROL, reapedMs: 1200, orphanAlive: false, controlAlive: true }
+    expect(legacyOrphanVerdict(observation)).toEqual({ result: 'pass', failures: [] })
+    expect(legacyOrphanVerdict({ ...observation, reapedMs: 0 }).result).toBe('pass')
+
+    const notReaped = 'seeded llama-server orphan was not reaped as legacy-orphan within 5 s of boot'
+    // A registry reap of the same pid does not isolate the legacy rule.
+    const registry = [{ event: 'sidecar.reaped', name: 'llama-server', pid: ORPHAN, reason: 'registry' }]
+    expect(legacyOrphanVerdict({ ...observation, records: registry })).toEqual({ result: 'fail', failures: [notReaped] })
+    expect(legacyOrphanVerdict({ ...observation, records: [{ event: 'app.started' }] }).failures).toEqual([notReaped])
+    expect(legacyOrphanVerdict({ ...observation, reapedMs: 5001 }).failures).toEqual([notReaped])
+    expect(legacyOrphanVerdict({ ...observation, reapedMs: null }).failures).toEqual([notReaped])
+    expect(legacyOrphanVerdict({ ...observation, orphanAlive: true }).failures).toEqual([notReaped])
+    const otherPid = [{ event: 'sidecar.reaped', name: 'llama-server', pid: 9999, reason: 'legacy-orphan' }]
+    expect(legacyOrphanVerdict({ ...observation, records: otherPid }).failures).toEqual([notReaped])
+  })
+
+  it('fails the legacy-orphan row when the negative control is reaped or gone', () => {
+    const observation = { records: legacyReaped, orphanPid: ORPHAN, controlPid: CONTROL, reapedMs: 800, orphanAlive: false, controlAlive: true }
+    const controlReaped = [...legacyReaped, { event: 'sidecar.reaped', name: 'llama-server', pid: CONTROL, reason: 'legacy-orphan' }]
+    expect(legacyOrphanVerdict({ ...observation, records: controlReaped, controlAlive: false })).toEqual({
+      result: 'fail',
+      failures: ['negative control llama-server was reaped although its model is outside the profile local-llm']
+    })
+    expect(legacyOrphanVerdict({ ...observation, controlAlive: false })).toEqual({
+      result: 'fail',
+      failures: ['negative control llama-server was not alive after the boot reaper ran']
+    })
+  })
+
+  it('observes a legacy reap only for a dead pid audited by name llama-server with reason legacy-orphan', () => {
+    expect(observedLegacyReap(legacyReaped, ORPHAN, () => false)).toBe(true)
+    expect(observedLegacyReap(legacyReaped, ORPHAN, () => true)).toBe(false)
+    expect(observedLegacyReap([{ event: 'sidecar.reaped', name: 'fm-serve', pid: ORPHAN, reason: 'legacy-orphan' }], ORPHAN, () => false)).toBe(false)
+  })
+
+  it('reports the Windows shape as PASS exactly when the stand-in passes, listing both macOS-only rows as blockers', () => {
+    const realLlama = proof('real-llama-server', 'BLOCKED_EXTERNAL', 'Seed the packaged local model assets.')
+    const legacy = proof('legacy-orphan', 'BLOCKED_EXTERNAL', 'Run the legacy-orphan proof on a macOS hosted runner; it is macOS-only.')
+    const passing = combinedReport(proof('stand-in-registry', 'pass'), realLlama, legacy)
+    expect(passing).toMatchObject({
+      schema: 3,
+      result: 'pass',
+      proofs: { legacyOrphan: { kind: 'legacy-orphan', result: 'BLOCKED_EXTERNAL' } },
+      externalBlockers: [
+        { kind: 'real-llama-server', unblock: 'Seed the packaged local model assets.' },
+        { kind: 'legacy-orphan', unblock: 'Run the legacy-orphan proof on a macOS hosted runner; it is macOS-only.' }
+      ]
+    })
+    expect(exitCodeFor(passing)).toBe(0)
+    const failing = combinedReport(proof('stand-in-registry', 'fail'), realLlama, legacy)
+    expect(failing.result).toBe('fail')
+    expect(exitCodeFor(failing)).toBe(1)
+  })
+
+  it('keeps the legacy-orphan summary content-free: pids, timings, counts and the control verdict only', () => {
+    const summary = summarizeProof({
+      kind: 'legacy-orphan',
+      result: 'pass',
+      failures: [],
+      unblock: null,
+      timingsMs: { modelSeeded: 4000, orphansHealthy: 3000, appStarted: 9000, reaped: 400 },
+      pids: { orphan: ORPHAN, control: CONTROL, main: 7000 },
+      reapedReason: 'legacy-orphan',
+      events: { 'sidecar.reaped': 1 },
+      processes: { beforeKill: null, afterReaper: {} },
+      negativeControl: { alive: true, reaped: false }
+    })
+    expect(summary).toMatchObject({ negativeControl: { alive: true, reaped: false }, pids: { orphan: ORPHAN, control: CONTROL } })
+    expect(JSON.stringify(summary)).not.toMatch(/[\\/]/)
+    expect('negativeControl' in summarizeProof({ kind: 'stand-in-registry', result: 'pass' })).toBe(false)
   })
 
   it('rejects proc-info output that is not JSON or is missing a required identity field', () => {
