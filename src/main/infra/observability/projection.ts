@@ -1,6 +1,8 @@
 import type { RenderProcessGoneDetails } from 'electron'
 import type { AuditEvent } from '../../logger'
 import { OVERLAY_LAYOUTS } from '@shared/overlay-chrome'
+import { OVERLAY_PLACEMENTS } from '@shared/overlay-placement'
+import { OVERLAY_FLASH_ZONES } from '../../island/overlay-reveal-log'
 import { RENDERER_VIEWS } from '@shared/renderer-view'
 import { redactSecrets } from '@shared/redact'
 import { CRASH_KINDS, RECOVERY_STATUSES } from './crash-taxonomy'
@@ -9,7 +11,10 @@ import { CRASH_KINDS, RECOVERY_STATUSES } from './crash-taxonomy'
  * INV-PROJECTED: observability events pass through an event-specific allowlist.
  * INV-CONTENT-FREE: values are kind-checked, and error text is scrubbed before persistence.
  */
-export type ObservabilityEvent = Extract<AuditEvent, `app.${string}` | `sidecar.${string}` | `history.${string}` | 'reveal'>
+export type ObservabilityEvent = Extract<
+  AuditEvent,
+  `app.${string}` | `sidecar.${string}` | `history.${string}` | 'reveal' | 'overlay.flash'
+>
 export type FieldKind =
   | 'flag'
   | 'int'
@@ -189,6 +194,13 @@ export const OBSERVABILITY_EVENTS = {
     layout: OVERLAY_LAYOUTS,
     outcome: REVEAL_OUTCOMES,
     ms: 'ms'
+  },
+  /** M2-0431: a reveal that parked within 2 s with no click or keypress (island/overlay-reveal-log.ts). */
+  'overlay.flash': {
+    visibleMs: 'ms',
+    zone: OVERLAY_FLASH_ZONES,
+    placement: OVERLAY_PLACEMENTS,
+    layout: OVERLAY_LAYOUTS
   },
   /** Long-lived local sidecar spawned. */
   'sidecar.spawn': {

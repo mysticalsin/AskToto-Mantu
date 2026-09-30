@@ -58,6 +58,12 @@
   opacity: 0;
   pointer-events: none;
 }
+/* Parked: the drawer stays mounted so its answer never re-mounts, but it paints nothing and takes no
+   input. visibility (not display) keeps a reveal from restarting the answer's entrance animation. */
+.right-edge-sidecar:not(.right-edge-sidecar--open) .right-edge-sidecar__drawer {
+  visibility: hidden;
+  pointer-events: none;
+}
 .right-edge-sidecar__drawer {
   position: relative;
   z-index: 2;

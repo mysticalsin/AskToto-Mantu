@@ -846,7 +846,8 @@ async function verifyRightEdgeSurface() {
   const hideWithDraft = win.getByRole('button', { name: 'Hide Métis' })
   await hideWithDraft.waitFor({ state: 'visible', timeout: 5_000 })
   await hideWithDraft.click({ timeout: 5_000 })
-  await win.getByRole('complementary', { name: 'Métis' }).waitFor({ state: 'detached', timeout: 8_000 })
+  // The parked drawer stays mounted (M2-0431) but hidden and out of the accessibility tree.
+  await win.getByRole('complementary', { name: 'Métis' }).waitFor({ state: 'hidden', timeout: 8_000 })
   await verifyNativeRightEdgeBounds(false, 'hiding the dock with a draft')
   await tab.click({ timeout: 5_000 })
   await composer.waitFor({ state: 'visible', timeout: 8_000 })
@@ -889,7 +890,7 @@ async function verifyRightEdgeSurface() {
   await closeDock.hover({ timeout: 5_000 })
   await delay(250)
   await closeDock.click({ timeout: 5_000 })
-  await win.getByRole('complementary', { name: 'Métis' }).waitFor({ state: 'detached', timeout: 8_000 })
+  await win.getByRole('complementary', { name: 'Métis' }).waitFor({ state: 'hidden', timeout: 8_000 })
   if ((await tab.getAttribute('aria-expanded')) !== 'false') {
     throw new Error('Right-edge tab did not return to its collapsed state after Hide.')
   }

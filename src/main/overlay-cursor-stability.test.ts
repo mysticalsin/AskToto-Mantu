@@ -53,6 +53,8 @@ function nativeHover(options: {
   let parkPending = false
   let restoreCount = 0
   const notifications: boolean[] = []
+  /** Every reveal/park cause the lifted handlers report to noteOverlay (M2-0431). */
+  const noted: string[] = []
   /** Every bounds write the lifted moveBy / resizeTo make. */
   const setBoundsCalls: Rect[] = []
   const win = {
@@ -87,6 +89,8 @@ function nativeHover(options: {
     notifyOverlayCursorHover: (hovering: boolean) => { notifications.push(hovering) },
     restoreWindow: () => { bounds = revealed; restoreCount++; return revealed.width },
     mainLog: { info: () => {} },
+    // Reveal/park cause logging (M2-0431) has no OS side effect; overlay-reveal-log.test.ts covers the log itself.
+    noteOverlay: (cause: string) => { noted.push(cause) },
     // The lifted moveBy / resizeTo (a drag and the renderer's content resize) substitute the same OS side
     // effects; their placement math is the shipped geometry.
     ensureWindow: () => win,
@@ -199,7 +203,7 @@ function nativeHover(options: {
     },
     band,
     revealed,
-    state: () => ({ bounds, parkPending, restoreCount, notifications: [...notifications], setBoundsCalls: [...setBoundsCalls] })
+    state: () => ({ bounds, parkPending, restoreCount, notifications: [...notifications], setBoundsCalls: [...setBoundsCalls], noted: [...noted] })
   }
 }
 
@@ -288,6 +292,15 @@ describe('M2-0431 top-center Hide stability (owner decision OD-23: the notch are
     for (let at = TOP_CENTER_REVEAL_DWELL_MS; at <= 600; at += 24) hover.tickAt(at, { x: 900, y: 12 })
     expect(hover.state().restoreCount).toBe(1)
     expect(hover.state().notifications).toEqual([true])
+  })
+
+  it('M2-0431: the cursor watch reports its reveal with cause cursor-watch, and a menu-bar stop reports nothing', () => {
+    const hover = nativeHover()
+    const next = dwell(hover, 0, { x: 1770, y: 8 }, 400)
+    expect(hover.state().noted).toEqual([])
+    dwell(hover, next, { x: 900, y: 12 }, TOP_CENTER_REVEAL_DWELL_MS + 48)
+    expect(hover.state().restoreCount).toBe(1)
+    expect(hover.state().noted).toEqual(['cursor-watch'])
   })
 
   it('a height collapse under a still pointer does not park; the pointer moving off the bar does', () => {

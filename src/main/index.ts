@@ -224,6 +224,7 @@ import {
 } from './island/geometry'
 import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
 import { openOverlaySettingsSurface, revealOverlaySurface, skipUnchangedChrome } from './island/overlay-surface'
+import { createOverlayRevealLog, type OverlayTransitionCause } from './island/overlay-reveal-log'
 import {
   OVERLAY_REST_BACKGROUND,
   SETTINGS_SURFACE_BACKGROUND,
@@ -3268,7 +3269,7 @@ function tickOverlayCursorWatch(): void {
   // A parked Settings-tall ghost heals here. If the heal was refused because the
   // pointer is in the top-edge strip, fall through: that pointer is a hover, so
   // reveal instead of stalling on the ghost until the mouse leaves.
-  if (healHideGhostSlab()) return
+  if (healHideGhostSlab()) return noteOverlay('cursor-watch')
   if (settingsSurfaceOpen) {
     overlayCursorWatchEnteredAt = null
     return
@@ -3312,13 +3313,7 @@ function tickOverlayCursorWatch(): void {
     cancelOverlayLeavePark()
     restoreBarWidth()
     notifyOverlayCursorHover(true, restoredFromParkedRail)
-    const after = win.getBounds()
-    // Transition log only (a hug-stub restore can repeat per tick until the bar settles).
-    if (after.width !== bounds.width || after.height !== bounds.height || !windowVisible) {
-      mainLog.info(
-        `[overlay-watch] reveal cursor=(${cursor.x},${cursor.y}) from=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) to=${after.width}x${after.height}@(${after.x},${after.y}) visible=${windowVisible}`
-      )
-    }
+    noteOverlay('cursor-watch') // transition log only: a hug-stub restore can repeat per tick until the bar settles
   } else if (step.action === 'hover-enter') {
     cancelOverlayLeavePark()
     notifyOverlayCursorHover(true)
@@ -3363,6 +3358,7 @@ function scheduleOverlayLeavePark(): void {
     if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen) return
     if (pointerInIslandOrBar()) return
     parkOverlayAfterHideSpring()
+    noteOverlay('cursor-watch')
   }, OVERLAY_LEAVE_PARK_MS)
   overlayLeaveParkTimer.unref?.()
 }
@@ -3426,7 +3422,6 @@ function parkOverlayAfterHideSpring(force = false): boolean {
   const layout = liveOverlayLayout()
   if (!overlayUsesHover(layout)) return false
   const display = screen.getDisplayMatching(win.getBounds())
-  const before = win.getBounds()
   const park = parkedOverlayBounds(layout, display)
   currentWidth = park.width
   islandResting = true
@@ -3452,11 +3447,6 @@ function parkOverlayAfterHideSpring(force = false): boolean {
     /* headless */
   }
   if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') notifyOverlayCursorHover(false, false, true)
-  if (before.width !== park.width || before.height !== park.height || before.y !== park.y) {
-    mainLog.info(
-      `[overlay-watch] park ${layout} from=${before.width}x${before.height}@(${before.x},${before.y}) to=${park.width}x${park.height}@(${park.x},${park.y})`
-    )
-  }
   return true
 }
 
@@ -3664,6 +3654,20 @@ function setWindowMode(): void {
 }
 
 const reveals = createRevealTrace({ audit: auditLog, window: () => win, layout: liveOverlayLayout, parked: () => islandResting })
+const overlayRevealLog = createOverlayRevealLog({ now: () => performance.now(), log: (line) => mainLog.info(line), audit: auditLog })
+
+/** M2-0431: called after anything that may reveal or park the overlay. It reads the window's actual state, so
+ *  a refused or repeated action logs nothing; a transition is logged with its cause, and a reveal that parks
+ *  within 2 s with no click or keypress is audited as overlay.flash. */
+function noteOverlay(cause: OverlayTransitionCause): void {
+  if (!win || win.isDestroyed()) return
+  const b = win.getBounds()
+  const c = screen.getCursorScreenPoint()
+  const context = { placement: resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(b)), layout: liveOverlayLayout() }
+  const detail = `bounds=${b.width}x${b.height}@(${b.x},${b.y}) cursor=(${c.x},${c.y})`
+  if (islandResting || !win.isVisible()) overlayRevealLog.parked(cause, context, detail)
+  else overlayRevealLog.revealed(cause, context, detail)
+}
 
 /** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
  *  creation once at call time, instead of leaving window-dependent hotkeys dead for the process
@@ -3721,6 +3725,7 @@ function sendHotkey(action: HotkeyAction): void {
   if (action === 'settings') applySettingsSurface()
   if (action === 'settings') {
     if (!w.isVisible()) w.showInactive()
+    noteOverlay('settings')
     w.webContents.send(IPC.hotkey, action)
     return
   }
@@ -3838,6 +3843,7 @@ function reveal(reason: RevealReason, options: { focus?: boolean } = {}): void {
   reveals.trace(reason, () => {
     revealController.reveal(reason, options)
   })
+  noteOverlay(reason === 'hotkey' ? 'hotkey' : 'toggle') // tray, relaunch, activate, notification: a show request
 }
 
 function writeSmokeParkState(w: Electron.BrowserWindow): void {
@@ -3871,6 +3877,7 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   if (settingsSurfaceOpen) leaveSettingsSurface()
   if (action === 'park-window' || action === 'hide-window') {
     if (!parkOverlayAfterHideSpring(true)) w.hide()
+    noteOverlay('toggle')
     // Hosted macOS keeps the pointer in the top-edge strip; cursor watch would otherwise
     // restore the bar before the reopen probe snapshots parked===true.
     stopOverlayCursorWatch()
@@ -3879,6 +3886,7 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   }
 
   if (!parkOverlayAfterHideSpring(true)) w.hide()
+  noteOverlay('toggle')
   stopOverlayCursorWatch()
   writeSmokeParkState(w)
   toggleVisible('tray')
@@ -4449,7 +4457,13 @@ function registerScreenListeners(): void {
   screen.on('display-metrics-changed', reanchor)
 }
 
+/** The show/hide toggle (hotkey, tray, the page's toggle). reveal() logs its reveal; this logs its park or hide. */
 function toggleVisible(reason: Extract<RevealReason, 'hotkey' | 'tray'> = 'hotkey'): void {
+  toggleOverlayVisibility(reason)
+  noteOverlay('toggle')
+}
+
+function toggleOverlayVisibility(reason: Extract<RevealReason, 'hotkey' | 'tray'>): void {
   // ensureWindow() silently CREATES a new window when `win` is null/destroyed (e.g. after a boot-time
   // createWindow() failure) — and a freshly created window starts visible. Without this check, the
   // isVisible() branch below would immediately re-hide the just-recovered window, so the first Ctrl+\
@@ -5314,6 +5328,7 @@ function registerIpc(): void {
         stopOverlayCursorWatch()
         restoreBarWidth()
       }
+      if (layoutChanged || placementChanged) noteOverlay('settings')
     }
     if (
       cur.onboardingDone === false &&
@@ -9040,23 +9055,28 @@ function registerIpc(): void {
       if (settingsSurfaceOpen) leaveSettingsSurface()
       setWindowMode()
     }
+    noteOverlay('settings')
   })
   ipcMain.handle(IPC.windowMinimize, (e, narrow: unknown) => {
     assertMainWindow(e)
     setMinimizedWidth(!!narrow)
+    noteOverlay('renderer')
   })
   ipcMain.handle(IPC.windowAnchorTop, (e) => {
     assertMainWindow(e)
     anchorTopCenter()
+    noteOverlay('renderer')
   })
   ipcMain.handle(IPC.windowRevealWidth, (e) => {
     assertMainWindow(e)
     restoreBarWidth()
+    noteOverlay('renderer')
   })
   ipcMain.handle(IPC.overlayParkAfterHide, (e, force?: unknown) => {
     if (isRecentlyRetiredOverlaySender(e)) return
     assertMainWindow(e)
     parkOverlayAfterHideSpring(force === true)
+    noteOverlay('renderer')
   })
   // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
   // caught render-throw survives to disk instead of only reaching console (gated behind
@@ -9088,6 +9108,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.windowHide, (e) => {
     assertMainWindow(e)
     win?.hide()
+    noteOverlay('renderer')
   })
   ipcMain.handle(IPC.windowToggle, (e) => {
     assertMainWindow(e)
@@ -9184,7 +9205,11 @@ if (!app.requestSingleInstanceLock()) {
   // M2-0033: unattended model work waits for the maintenance gate.
   startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
   app.on('web-contents-created', (_event, contents) => {
-    contents.on('input-event', (_inputEvent, input) => noteUserInput(input.type))
+    contents.on('input-event', (_inputEvent, input) => {
+      noteUserInput(input.type)
+      // M2-0431: a click or keypress in the overlay makes its reveal deliberate, never an overlay.flash.
+      if (win && !win.isDestroyed() && contents === win.webContents) overlayRevealLog.input(input.type)
+    })
   })
   // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
   // proxy/CLI/key seeding before first paint — hoist IPC+window for wiped-profile exclusive (tray: M2-0422).

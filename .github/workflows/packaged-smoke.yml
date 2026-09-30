@@ -129,7 +129,8 @@ jobs:
         run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles "$HK_M_CYCLES" --budget-ms "$HK_M_BUDGET_MS"
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
-        timeout-minutes: 10
+        # The OV-STABLE row (M2-0431) walks a scripted 3-minute cursor path on top of the other rows.
+        timeout-minutes: 15
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/packaged-smoke.json
       # Report-only probe (M2-0472): does the one-click Repair command, /usr/bin/tccutil reset ScreenCapture
       # <own bundle id>, succeed as the runner user without sudo? Row A measures the installed app as it is;
@@ -313,7 +314,8 @@ jobs:
         run: node scripts/qa/sidecar-boot-reaper.mjs "$RUNNER_TEMP/smoke/Metis.exe" smoke-report/sidecar-boot-reaper.json
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
-        timeout-minutes: 10
+        # The OV-STABLE row (M2-0431) walks a scripted 3-minute cursor path on top of the other rows.
+        timeout-minutes: 15
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.exe" smoke-report/packaged-smoke.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}

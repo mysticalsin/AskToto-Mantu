@@ -323,6 +323,9 @@ export type AuditEvent =
   // floor was lifted during an HK-M row ({ modelId, advertisedGB, requiredGB, totalmemBytes }).
   | 'hk-m.setup-failed'
   | 'hk-m.ram-floor-override'
+  // M2-0431: an overlay reveal parked within 2 s with no click or keypress (island/overlay-reveal-log.ts).
+  // Projected to { visibleMs, zone, placement, layout } only (infra/observability/projection.ts).
+  | 'overlay.flash'
   // M2-0494: the packaged QA build is feeding a WAV from its isolated profile as the microphone
   // (main/qa-capture-source.ts). { active: true } only — never the path or file name.
   | 'qa.capture.file_source'
