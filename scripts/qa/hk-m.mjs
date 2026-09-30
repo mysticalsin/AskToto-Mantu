@@ -263,13 +263,19 @@ function runtimeRoleTotal(sidecars) {
 
 export function unreapedDeadRegistryCount({ registry, records, table }) {
   const livePids = new Set(table.map((entry) => entry.pid))
-  const reapedPids = new Set(
+  const accountedDeadPids = new Set(
     records
-      .filter((record) => record.event === 'sidecar.reaped' && typeof record.pid === 'number')
+      .filter(
+        (record) =>
+          typeof record.pid === 'number' &&
+          (record.event === 'sidecar.reaped' ||
+            (record.event === 'sidecar.reap.skipped' && record.reason === 'pid-not-alive'))
+      )
       .map((record) => record.pid)
   )
   return registry.filter(
-    (record) => record.kind === 'spawned' && typeof record.pid === 'number' && !livePids.has(record.pid) && !reapedPids.has(record.pid)
+    (record) =>
+      record.kind === 'spawned' && typeof record.pid === 'number' && !livePids.has(record.pid) && !accountedDeadPids.has(record.pid)
   ).length
 }
 
@@ -365,6 +371,13 @@ export function reportResultForRows(rows) {
 
 export function exitCodeForReportResult(result) {
   return result === 'pass' ? 0 : 1
+}
+
+export function ensureSharedFinalSigtermRow(rows, profileMode, reason) {
+  if (profileMode !== 'shared') return rows
+  if (rows.some((row) => row.scenario === 'final-sigterm')) return rows
+  rows.push(terminalRow('final-sigterm', 0, 'NOT_RUN', { failure: reason }))
+  return rows
 }
 
 // A killed app can still land a late write in its temp dir while it is removed. That is a cleanup problem, not an
@@ -892,6 +905,7 @@ async function main() {
         }
       }
     }
+    ensureSharedFinalSigtermRow(report.rows, profileMode, reason)
     report.result = reportResultForRows(report.rows)
     Object.assign(report, runMemorySummary(report.host, report.rows))
     writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)

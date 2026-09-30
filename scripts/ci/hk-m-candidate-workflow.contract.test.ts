@@ -91,7 +91,7 @@ describe('hk-m-candidate.yml contract', () => {
   it('uploads distinct artifacts and says failures require a fix and a new candidate', () => {
     expect(stepText('hk-m', 'actions/upload-artifact@')).toContain('name: hk-m-candidate')
     expect(stepText('hk-m-shared', 'actions/upload-artifact@')).toContain('name: hk-m-candidate-shared')
-    expect(stepText('hk-m', 'did not pass every row')).toContain('requires a fix and a new candidate')
-    expect(stepText('hk-m-shared', 'did not pass every row')).toContain('requires a fix and a new candidate')
+    expect(stepText('hk-m', 'did not pass every row')).toContain('per OD-34 this requires a fix and a new candidate')
+    expect(stepText('hk-m-shared', 'did not pass every row')).toContain('per OD-34 this requires a fix and a new candidate')
   })
 })

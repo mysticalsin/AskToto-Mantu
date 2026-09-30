@@ -118,7 +118,7 @@ jobs:
       - name: Fail unless HK-M passed 20 of 20
         if: always() && steps.hk-m.outcome != 'success'
         run: |
-          echo "::error::HK-M did not pass every row; this requires a fix and a new candidate (see hk-m-report/hk-m.json)."
+          echo "::error::HK-M did not pass every row; per OD-34 this requires a fix and a new candidate (see hk-m-report/hk-m.json)."
           exit 1
 
   hk-m-shared:
@@ -177,5 +177,5 @@ jobs:
       - name: Fail unless HK-M shared profile passed 20 of 20 plus final SIGTERM
         if: always() && steps.hk-m.outcome != 'success'
         run: |
-          echo "::error::HK-M shared profile did not pass every row; this requires a fix and a new candidate (see hk-m-report/hk-m.json)."
+          echo "::error::HK-M shared profile did not pass every row; per OD-34 this requires a fix and a new candidate (see hk-m-report/hk-m.json)."
           exit 1

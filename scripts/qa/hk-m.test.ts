@@ -4,6 +4,7 @@ import {
   advertisedRamFloorRefuses,
   availableBytesFromVmStat,
   createProfilePlan,
+  ensureSharedFinalSigtermRow,
   exitCodeForReportResult,
   finalSigtermVerdict,
   keepWaitingForScenario,
@@ -259,13 +260,40 @@ describe('HK-M shared-profile relaunch checks', () => {
     })
   })
 
-  it('counts unreaped dead-pid registry entries and fails when the count rises across cycles', () => {
+  it('keeps the dead registry count flat when boot reaper accounts for killed pids', () => {
     const registry = [
       { kind: 'spawned', name: 'llama-server', pid: 201 },
       { kind: 'spawned', name: 'llama-server', pid: 202 },
       { kind: 'spawned', name: 'llama-server', pid: 203 }
     ]
-    const records = [{ event: 'sidecar.reaped', pid: 202, reason: 'registry' }]
+    const records = [
+      { event: 'sidecar.reaped', pid: 201, reason: 'registry' },
+      { event: 'sidecar.reap.skipped', pid: 202, reason: 'pid-not-alive' }
+    ]
+    const table = [{ pid: 203, ppid: 100, startedMs: 1003, exe: '/tmp/llama-server', role: 'llama-server' }]
+
+    expect(unreapedDeadRegistryCount({ registry, records, table })).toBe(0)
+    expect(
+      sharedProfileRelaunchVerdict({
+        owned: [main],
+        registry,
+        records,
+        table,
+        previousDeadRegistryCount: 0
+      })
+    ).toMatchObject({ ok: true, deadRegistry: 0, evidence: { deadRegistry: 0 } })
+  })
+
+  it('counts only dead registry entries no boot has accounted for and fails when they rise', () => {
+    const registry = [
+      { kind: 'spawned', name: 'llama-server', pid: 201 },
+      { kind: 'spawned', name: 'llama-server', pid: 202 },
+      { kind: 'spawned', name: 'llama-server', pid: 203 }
+    ]
+    const records = [
+      { event: 'sidecar.reaped', pid: 201, reason: 'registry' },
+      { event: 'sidecar.reap.skipped', pid: 202, reason: 'permission-denied' }
+    ]
     const table = [{ pid: 203, ppid: 100, startedMs: 1003, exe: '/tmp/llama-server', role: 'llama-server' }]
 
     expect(unreapedDeadRegistryCount({ registry, records, table })).toBe(1)
@@ -305,6 +333,24 @@ describe('HK-M shared-profile final SIGTERM check', () => {
       failure: 'final_sigterm_owned_processes_survived',
       survivors: { 'llama-server': 1 }
     })
+  })
+
+  it('records NOT_RUN during finalize when shared mode ends before the final SIGTERM row', () => {
+    const rows = [{ scenario: 'idle', cycle: 1, status: 'PASS' }]
+
+    expect(ensureSharedFinalSigtermRow(rows, 'shared', 'budget_exhausted')).toEqual([
+      { scenario: 'idle', cycle: 1, status: 'PASS' },
+      { scenario: 'final-sigterm', cycle: 0, status: 'NOT_RUN', failure: 'budget_exhausted' }
+    ])
+    expect(reportResultForRows(rows)).toBe('fail')
+  })
+
+  it('does not duplicate an existing final SIGTERM row or affect fresh mode', () => {
+    const sharedRows = [{ scenario: 'final-sigterm', cycle: 0, status: 'FAIL', failure: 'final_sigterm_not_ready' }]
+    const freshRows = [{ scenario: 'idle', cycle: 1, status: 'PASS' }]
+
+    expect(ensureSharedFinalSigtermRow(sharedRows, 'shared', 'aborted')).toEqual(sharedRows)
+    expect(ensureSharedFinalSigtermRow(freshRows, 'fresh', 'aborted')).toEqual(freshRows)
   })
 })
 
