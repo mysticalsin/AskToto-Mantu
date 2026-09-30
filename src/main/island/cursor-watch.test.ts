@@ -184,6 +184,9 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
     expect(overlayWatchShouldParkOnLeave({ decision: 'hide', islandResting: false, osHoverSeen: false })).toBe(false)
     expect(OVERLAY_LEAVE_PARK_MS).toBeGreaterThanOrEqual(400)
     expect(OVERLAY_LEAVE_PARK_MS).toBeLessThanOrEqual(2000)
+    // M2-0431: the backstop outlasts the page's leave (AUTO_HIDE_GRACE_MS 500 + OVERLAY_HIDE_MS 320) plus a
+    // frame, so it never cuts the fade-out short.
+    expect(OVERLAY_LEAVE_PARK_MS).toBeGreaterThan(500 + 320 + 34)
     expect(pointInRect({ x: 900, y: 600 }, rest)).toBe(false)
     expect(pointInRect({ x: 900, y: 600 }, revealed)).toBe(false)
   })

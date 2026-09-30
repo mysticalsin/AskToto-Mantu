@@ -3807,6 +3807,16 @@ function revealRightEdgeDockInPage(): void {
   notifyOverlayCursorHover(true, true)
 }
 
+/** A keyboard/tray/relaunch reveal of a top-center Hide/Island tells the page it is revealed. Otherwise the page
+ *  still believes it is parked and paints nothing over the restored window. Main holds this reveal like a hover
+ *  it saw: only a pointer that visits the bar and leaves parks it again. */
+function revealTopCenterHoverInPage(): void {
+  if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
+  if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) === 'right-edge') return
+  if (!overlayCursorWatchTimer) startOverlayCursorWatch()
+  notifyOverlayCursorHover(true)
+}
+
 const revealController = createRevealController({
   ensureWindow,
   legacyRevealEnabled: revealLegacyEnabled,
@@ -3818,6 +3828,7 @@ const revealController = createRevealController({
     isMinimized = false
     restoreBarWidth()
     revealRightEdgeDockInPage()
+    revealTopCenterHoverInPage()
   },
   repairOffscreenBounds: repairOverlayBoundsForReveal,
   disableClickThrough: () => {

@@ -111,7 +111,8 @@ function nativeHover(options: {
     parkedOverlayBounds: () => parked,
     applyOverlaySurfaceChrome: () => {},
     commitParkedOverlayBounds: (park: Rect) => { bounds = park },
-    applyHideClickThrough: () => {}
+    applyHideClickThrough: () => {},
+    startOverlayCursorWatch: () => {}
   }
   // Lifts one shipped function, dropping only its TypeScript parameter and return annotations.
   const lift = (signature: string, stop: string, jsSignature = signature.replace(/\): \w+ \{$/, ') {')): string => {
@@ -126,6 +127,7 @@ function nativeHover(options: {
   const layoutChangeHandler = lift('function parkOverlayForLayoutChange(): void {', '/** Pin the overlay')
   const moveHandler = lift('function moveBy(dx: number, dy: number): void {', '/**\n * Keep the overlay reachable', 'function moveBy(dx, dy) {')
   const resizeHandler = lift('function resizeTo(height: number): void {', '/** Collapse to / expand', 'function resizeTo(height) {')
+  const pageRevealHandler = lift('function revealTopCenterHoverInPage(): void {', 'const revealController')
   const build = new Function(...Object.keys(deps), `
     let islandResting = ${rightEdge ? rightEdge.resting : true};
     let settingsSurfaceOpen = false;
@@ -138,21 +140,26 @@ function nativeHover(options: {
     let currentWidth = 0;
     let lastBarHeight = 120;
     let userAnchorY = 0;
+    let overlayCursorWatchTimer = 1;
     function restoreBarWidth() { overlayParkLatched = false; islandResting = false; currentWidth = restoreWindow(); }
     ${handler}
     ${parkHandler}
     ${layoutChangeHandler}
     ${moveHandler}
     ${resizeHandler}
-    return { tick: tickOverlayCursorWatch, park: parkOverlayAfterHideSpring, layoutChangePark: parkOverlayForLayoutChange, moveBy, resizeTo };
+    ${pageRevealHandler}
+    // The reveal controller's restoreInteractiveLayout (a hotkey, tray or relaunch reveal) for this placement.
+    function summon() { restoreBarWidth(); revealTopCenterHoverInPage(); }
+    return { tick: tickOverlayCursorWatch, park: parkOverlayAfterHideSpring, layoutChangePark: parkOverlayForLayoutChange, moveBy, resizeTo, summon };
   `) as (...args: unknown[]) => {
     tick: () => void
     park: (force?: boolean) => boolean
     layoutChangePark: () => void
     moveBy: (dx: number, dy: number) => void
     resizeTo: (height: number) => void
+    summon: () => void
   }
-  const { tick, park, layoutChangePark, moveBy, resizeTo } = build(...Object.values(deps))
+  const { tick, park, layoutChangePark, moveBy, resizeTo, summon } = build(...Object.values(deps))
   return {
     tick(at: number, y: number): void {
       now = at
@@ -179,6 +186,12 @@ function nativeHover(options: {
     /** A drag step (the renderer's windowMoveBy). */
     moveBy(dx: number, dy: number): void {
       moveBy(dx, dy)
+    },
+    /** A hotkey, tray or relaunch reveal through the reveal controller, with the pointer at `point`. */
+    summonAt(at: number, point: { x: number; y: number }): void {
+      now = at
+      cursor = point
+      summon()
     },
     /** The renderer's content-height report (windowResize). */
     resizeTo(height: number): void {
@@ -309,6 +322,30 @@ describe('M2-0431 top-center Hide stability (owner decision OD-23: the notch are
     expect(hover.state().parkPending).toBe(false)
     expect(hover.state().bounds.y).toBe(top)
     expect(hover.state().setBoundsCalls.map((b) => b.y)).toEqual([top])
+  })
+
+  it('a hotkey or tray reveal of the parked Hide tells the page it is revealed; the pointer staying away never parks it', () => {
+    const hover = nativeHover()
+    const away = { x: 900, y: 600 }
+    hover.summonAt(0, away)
+    expect(hover.state().restoreCount).toBe(1)
+    expect(hover.state().bounds).toEqual(hover.revealed)
+    // Without this the page still believed it was parked and painted the restored bar at opacity 0.
+    expect(hover.state().notifications).toEqual([true])
+    const at = dwell(hover, 24, away, 2000)
+    expect(hover.state().parkPending).toBe(false)
+    expect(hover.state().notifications).toEqual([true])
+    // A pointer that visits the bar and leaves parks it as usual.
+    hover.tickAt(at, { x: 900, y: 80 })
+    hover.tickAt(at + 24, away)
+    expect(hover.state().parkPending).toBe(true)
+    expect(hover.state().notifications).toEqual([true, true, false])
+  })
+
+  it('a hotkey or tray reveal leaves the right-edge dock to its own page reveal (M2-0428)', () => {
+    const hover = nativeHover({ rightEdge: { resting: true } })
+    hover.summonAt(0, { x: 900, y: 600 })
+    expect(hover.state().notifications).toEqual([])
   })
 
   it('a drag never moves the parked Hide window away from the notch', () => {

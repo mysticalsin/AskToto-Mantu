@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { initialAutoHideState, isRevealed, reduceAutoHide } from './overlay-autohide'
 import {
   OVERLAY_HIDE_MS,
   OVERLAY_PARK_FALLBACK_MS,
@@ -56,6 +59,35 @@ describe('overlay hide/reveal spring timings', () => {
     expect(overlayHideParkedClassName('out', false, true)).toBe('')
     expect(overlayHideParkedClassName('rest', true, true)).toBe('')
     expect(overlayHideParkedClassName('rest', false, false)).toBe('')
+  })
+
+  it("M2-0431: main's hotkey/tray reveal notification un-parks the page, and the pointer staying away keeps it painted", () => {
+    // Main sends { hovering: true } after it restores a parked top-center Hide; the page maps it to a native reveal-now.
+    let s = reduceAutoHide(initialAutoHideState(true), { type: 'reveal-now', native: true })
+    expect(overlayHideParkedClassName('rest', isRevealed(s), true)).toBe('')
+    // No pointer ever entered, so no page leave; a stray one does not end main's hold either.
+    s = reduceAutoHide(s, { type: 'pointer-leave' })
+    expect(isRevealed(s)).toBe(true)
+    expect(overlayHideParkedClassName('rest', isRevealed(s), true)).toBe('')
+  })
+
+  it('M2-0431: the Hide/Island spring fades opacity (no hard cuts); reduced motion zeroes its duration', () => {
+    const css = readFileSync(join(__dirname, '../styles/overlay-motion.css'), 'utf8').replace(/\r\n/g, '\n')
+    const frame = (name: string, stop: 'from' | 'to'): string => {
+      const body = css.slice(css.indexOf(`@keyframes ${name} {`))
+      const at = body.indexOf(`${stop} {`)
+      return body.slice(at, body.indexOf('}', at))
+    }
+    for (const name of ['overlay-spring-in', 'overlay-spring-in-right']) {
+      expect(frame(name, 'from')).toMatch(/opacity: 0;/)
+      expect(frame(name, 'to')).toMatch(/opacity: 1;/)
+    }
+    for (const name of ['overlay-spring-out', 'overlay-spring-out-right']) {
+      expect(frame(name, 'from')).toMatch(/opacity: 1;/)
+      expect(frame(name, 'to')).toMatch(/opacity: 0;/)
+    }
+    const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
+    expect(reduced).toMatch(/animation-duration: 0ms !important;/)
   })
 
   it('Circle/Jarvis expand is a spring, not a hard cut; reduced-motion skips it', () => {

@@ -60,9 +60,10 @@ export const CURSOR_LEAVE_GRACE_PX = 8
 /**
  * After cursor-watch hide, main parks Hide/Island even if the renderer never
  * calls overlayParkAfterHide. Ultron c74e389: 5s at ~(900,600) left 880×120 up.
- * Must land inside 1–2s. Do not reset this timer on every hide tick.
+ * Must land inside 1–2s. Do not reset this timer on every hide tick. It is a backstop, so it outlasts the
+ * page's own leave (its 500 ms grace plus the 320 ms fade-out) and never cuts the fade short.
  */
-export const OVERLAY_LEAVE_PARK_MS = 800
+export const OVERLAY_LEAVE_PARK_MS = 900
 /**
  * Right edge only. A keyboard, tray or relaunch reveal of the right-edge dock opens it without the pointer
  * ever visiting it, so the OS-hover latch never arms leave → park. Once the pointer has stayed away from
