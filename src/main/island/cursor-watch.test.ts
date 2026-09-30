@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   CURSOR_LEAVE_GRACE_PX,
+  CURSOR_REVEAL_DWELL_MS,
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
+  RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS,
   decideCursorWatch,
   overlayWatchNeedsRestore,
   overlayWatchShouldParkOnLeave,
@@ -11,7 +13,13 @@ import {
   pointInRect,
   shouldWatchOverlayCursor
 } from './cursor-watch'
-import { hoverWatchRestRect, islandSafeTop, type DisplayMetrics } from './geometry'
+import {
+  HOVER_ISLAND_HEIGHT_MAX_PX,
+  hoverWatchRestRect,
+  islandSafeTop,
+  rightEdgeSidecarBounds,
+  type DisplayMetrics
+} from './geometry'
 
 const tonyMac: DisplayMetrics = {
   bounds: { x: 0, y: 0, width: 1800, height: 1169 },
@@ -270,5 +278,95 @@ describe('Hide top-edge hover: main-process step sequence (Ultron re-check)', ()
     const stub = { x: 460, y: 39, width: 880, height: 44 }
     const t = overlayWatchStep({ cursor: { x: 900, y: 12 }, restRect: rest, revealedRect: stub, islandResting: false, windowVisible: true, osHoverSeen: true, hugStub: true })
     expect(t.action).toBe('restore')
+  })
+})
+
+describe('right-edge reveal band (owner report: right-edge Hide never revealed from the screen edge)', () => {
+  const display: DisplayMetrics = {
+    bounds: { x: 0, y: 0, width: 1440, height: 900 },
+    workArea: { x: 0, y: 25, width: 1440, height: 875 },
+    hasNotch: false,
+    notchWidth: 0,
+    menuBarHeight: 25,
+    source: 'helper'
+  }
+  const band = hoverWatchRestRect('hide', display, 'right-edge')
+  const drawer = rightEdgeSidecarBounds(display, { open: true })
+  const tab = rightEdgeSidecarBounds(display, { open: false })
+  const AWAY = { x: 600, y: 450 }
+
+  it('does not clamp a right-edge zone to the 40 px top-edge strip', () => {
+    const middle = { x: display.bounds.width - 1, y: band.y + Math.round(band.height / 2) }
+    expect(band.height).toBeGreaterThan(HOVER_ISLAND_HEIGHT_MAX_PX)
+    expect(decideCursorWatch({ cursor: middle, restRect: band, revealedRect: band, revealed: false, placement: 'right-edge' })).toBe('reveal')
+    // The top-edge rule still caps a leftover top-center slab (Teams mute at Y=40 must miss).
+    const slab = { x: 0, y: 0, width: 1440, height: 44 }
+    expect(decideCursorWatch({ cursor: { x: 700, y: 41 }, restRect: slab, revealedRect: slab, revealed: false })).toBe('stay')
+    expect(decideCursorWatch({ cursor: { x: 700, y: 41 }, restRect: slab, revealedRect: slab, revealed: false, placement: 'top-center' })).toBe('stay')
+  })
+
+  it('RE-HIDE-1: a parked Hide restores when the pointer rests against the physical right edge beside the drawer', () => {
+    for (const y of [drawer.y, drawer.y + Math.round(drawer.height / 2), drawer.y + drawer.height - 1]) {
+      const step = overlayWatchStep({
+        cursor: { x: display.bounds.x + display.bounds.width - 1, y },
+        restRect: band,
+        revealedRect: band,
+        islandResting: true,
+        windowVisible: true,
+        osHoverSeen: false,
+        placement: 'right-edge'
+      })
+      expect(step.action).toBe('restore')
+    }
+  })
+
+  it('RE-HIDE-2: a parked Hide stays parked with the pointer 40 px inside the work area at the old tab position', () => {
+    const step = overlayWatchStep({
+      cursor: { x: display.workArea.x + display.workArea.width - 40, y: tab.y + 20 },
+      restRect: band,
+      revealedRect: band,
+      islandResting: true,
+      windowVisible: true,
+      osHoverSeen: false,
+      placement: 'right-edge'
+    })
+    expect(step.action).toBe('stay')
+  })
+
+  it('reveals only from the 4 px band when Windows widens the parked Hide window to its 32 px minimum', () => {
+    const right = display.bounds.x + display.bounds.width
+    const widened = { x: right - 32, y: band.y, width: 32, height: band.height }
+    const run = (x: number): ReturnType<typeof overlayWatchStep> =>
+      overlayWatchStep({
+        cursor: { x, y: band.y + Math.round(band.height / 2) },
+        restRect: band,
+        revealedRect: widened,
+        islandResting: true,
+        windowVisible: true,
+        osHoverSeen: false,
+        placement: 'right-edge'
+      })
+    expect(band.width).toBe(4)
+    expect(run(right - 1).action).toBe('restore')
+    // The extra 28 px of the widened invisible window is not a reveal zone.
+    for (let x = widened.x; x < band.x; x += 1) expect(run(x).action).toBe('stay')
+  })
+
+  it('keeps the revealed drawer open from the band through its inflated edge, and parks once the pointer leaves both', () => {
+    const run = (cursor: { x: number; y: number }, osHoverSeen: boolean): ReturnType<typeof overlayWatchStep> =>
+      overlayWatchStep({ cursor, restRect: band, revealedRect: drawer, islandResting: false, windowVisible: true, osHoverSeen, placement: 'right-edge' })
+    // Between the drawer's right side and the band there is no gap the leave rule can fall into.
+    for (let x = drawer.x; x < display.bounds.width; x += 1) {
+      expect(run({ x, y: drawer.y + 10 }, true).action).not.toBe('park')
+    }
+    expect(run({ x: drawer.x - 200, y: drawer.y + 10 }, true).action).toBe('park')
+    // A reveal the pointer never visited (keyboard, tray) is not parked by the OS-hover latch.
+    expect(run(AWAY, false).action).toBe('leave-ignored')
+  })
+
+  it('scopes right-edge timing to the right edge and leaves the top-center constants unchanged', () => {
+    expect(OVERLAY_LEAVE_PARK_MS).toBe(800)
+    expect(CURSOR_REVEAL_DWELL_MS).toBe(150)
+    expect(RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS).toBeGreaterThan(OVERLAY_LEAVE_PARK_MS)
   })
 })

@@ -319,13 +319,16 @@ export type AuditEvent =
   | 'hk-m.active-inference'
   | 'hk-m.ffmpeg-import'
   | 'hk-m.registry-write'
-  // M2-0460: a row's setup threw ({ row, error: <Error class name> }, never the message), and the HK-M-only
-  // lift of the advertised-RAM floor was applied ({ modelId, advertisedGB, requiredGB, totalmemBytes }).
+  // M2-0460: a row's setup threw ({ row, error: <Error class name> }, never the message), and the advertised-RAM
+  // floor was lifted during an HK-M row ({ modelId, advertisedGB, requiredGB, totalmemBytes }).
   | 'hk-m.setup-failed'
   | 'hk-m.ram-floor-override'
   // M2-0494: the packaged QA build is feeding a WAV from its isolated profile as the microphone
   // (main/qa-capture-source.ts). { active: true } only — never the path or file name.
   | 'qa.capture.file_source'
+  // M2-0482: the packaged, isolated-profile QA gate (qa-hk-m.ts qaHostFloorOverride) first lifted a RAM floor in this
+  // process. Once per floor: { floor: "prewarm-available-ram" | "advertised-ram", hostTotalBytes, hostAvailableBytes }.
+  | 'local.host-floor-override'
   | 'local.model.checksum_fail'
   // First-run weight download (local-model-download.ts). The weights are no longer bundled, so these
   // are the audit trail for the only network fetch installed code makes for model files.
