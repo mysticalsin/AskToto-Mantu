@@ -33,3 +33,31 @@ describe('selectCandidateInstaller', () => {
     await expect(selectCandidateInstaller(dir, sha('setup bytes'))).rejects.toThrow(/No Metis-Setup/)
   })
 })
+
+describe('selectCandidateInstaller on macOS', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'candidate-installer-mac-'))
+    writeFileSync(join(dir, 'Metis-1.0.0.dmg'), 'dmg bytes')
+    writeFileSync(join(dir, 'Metis-1.0.0.zip'), 'zip bytes')
+    writeFileSync(join(dir, 'Metis-Setup-1.0.0.exe'), 'setup bytes')
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('returns the DMG or the zip whose sha256 matches', async () => {
+    expect(await selectCandidateInstaller(dir, sha('dmg bytes'), 'mac')).toBe(join(dir, 'Metis-1.0.0.dmg'))
+    expect(await selectCandidateInstaller(dir, sha('zip bytes'), 'mac')).toBe(join(dir, 'Metis-1.0.0.zip'))
+  })
+
+  it('never selects a Windows installer, and never falls back when nothing matches', async () => {
+    await expect(selectCandidateInstaller(dir, sha('setup bytes'), 'mac')).rejects.toThrow(/No installer matches/)
+    await expect(selectCandidateInstaller(dir, sha('other bytes'), 'mac')).rejects.toThrow(/No installer matches/)
+  })
+
+  it('refuses a directory with no DMG or zip, and an unknown platform', async () => {
+    rmSync(join(dir, 'Metis-1.0.0.dmg'))
+    rmSync(join(dir, 'Metis-1.0.0.zip'))
+    await expect(selectCandidateInstaller(dir, sha('zip bytes'), 'mac')).rejects.toThrow(/No \*\.dmg or \*\.zip/)
+    await expect(selectCandidateInstaller(dir, sha('zip bytes'), 'linux')).rejects.toThrow(/Unknown installer platform/)
+  })
+})
