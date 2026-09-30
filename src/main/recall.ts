@@ -79,7 +79,7 @@ export const HYDRATION_BUSY_MSG = 'Another meeting is still downloading. Open th
 /** An explicit open whose download started and did not finish (offline, provider error, a minute passed). */
 export const HYDRATION_FAILED_MSG = 'Could not download this meeting. Check your connection and try again.'
 
-/** True while an explicit open holds the one hydration slot. */
+/** True while an explicit open of a file that may need a download holds the one hydration slot. */
 let hydrating = false
 
 /**
@@ -87,9 +87,11 @@ let hydrating = false
  * renderer through `send`. `open` is the read itself (recallRead or meetingOpenTarget) given the options.
  *
  * Invariants:
- *   - At most one explicit open may hydrate at a time: the slot is taken when an open starts and freed
- *     when it settles. An open that finds it taken never hydrates: a file classified dataless or unknown
- *     answers HYDRATION_BUSY_MSG unread, any other file opens from what is on this device.
+ *   - At most one explicit open may hydrate at a time. The open classifies its file first: a file whose
+ *     classify does not show it on this device (dataless, unknown, timed out, unavailable) is the only
+ *     kind that takes the slot, from its classify until it settles; any other file opens without a
+ *     download and never takes or waits on the slot. A may-download open that finds the slot taken
+ *     answers HYDRATION_BUSY_MSG unread.
  *   - A download that starts sends 'hydrating', then exactly one 'done' or 'failed' once the open settles;
  *     an open that needed no download sends nothing. A failed download answers HYDRATION_FAILED_MSG.
  *   - `send` throwing (a closed window) never fails the open.
@@ -106,13 +108,10 @@ export async function openExplicitly<T extends { ok: boolean; error?: string }>(
       // the renderer went away; the open still answers its caller
     }
   }
-  if (hydrating) {
-    const safeName = safeMeetingBasename(file)
-    const folder = resolveMeetingsFolder(getSettings())
-    const fileClass = safeName ? (await storageAt(folder).classify([safeName])).get(safeName) : undefined
-    if (fileClass?.status === 'dataless' || fileClass?.status === 'unknown') return { ok: false, error: HYDRATION_BUSY_MSG }
-    return open({ hydrate: false })
-  }
+  const safeName = safeMeetingBasename(file)
+  const fileClass = safeName ? (await storageAt(resolveMeetingsFolder(getSettings())).classify([safeName])).get(safeName) : undefined
+  if (!fileClass || fileClass.status === 'ok' || fileClass.status === 'missing') return open({ hydrate: false })
+  if (hydrating) return { ok: false, error: HYDRATION_BUSY_MSG }
   hydrating = true
   let progress = null as HydrationProgress['state'] | null
   try {

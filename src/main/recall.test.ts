@@ -1332,5 +1332,26 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
         { file: second, state: 'done' }
       ])
     })
+
+    it('an open of a meeting already on this device never holds the download slot', async () => {
+      const localPath = await saveMeeting(testSettings, meeting('Local sync', 1_700_000_000_000))
+      const remotePath = await saveMeeting(testSettings, meeting('Cloud sync', 1_700_100_000_000))
+      cloudOnly.add(remotePath)
+      let finishLocalRead!: () => void
+      heldRead = { path: localPath, until: new Promise((resolve) => (finishLocalRead = resolve)) }
+      const events: RecallHydration[] = []
+      const send = (event: RecallHydration): void => void events.push(event)
+
+      const localOpen = openRead(basename(localPath), send)
+      await vi.waitFor(() => expect(reads).toContain(localPath))
+
+      expect((await openRead(basename(remotePath), send)).ok).toBe(true)
+      finishLocalRead()
+      expect((await localOpen).ok).toBe(true)
+      expect(events).toEqual([
+        { file: basename(remotePath), state: 'hydrating' },
+        { file: basename(remotePath), state: 'done' }
+      ])
+    })
   })
 })
