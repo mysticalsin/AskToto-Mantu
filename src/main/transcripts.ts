@@ -562,10 +562,12 @@ const isClusterLabel = (name: string): boolean => CLUSTER_LABEL_RE.test(name)
 const yamlSafeTitle = (s: string): string =>
   s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')
 
-// Speaker Intelligence names can come from third-party VTT. Keep them inside the single-line
-// "**[HH:MM:SS] Label (Name):**" shape that recall.ts parses.
-// Parentheses are parser delimiters, so strip them before writing.
-// Control characters and newlines are collapsed for the same reason.
+// Speaker Intelligence: `name` can come from a THIRD PARTY (a Teams VTT transcript — see
+// main/graph-transcript.ts), not just the trusted signed-in account, so it must be sanitized before it
+// ever reaches the saved markdown. Strips control/newline characters (would break the single-line
+// "**[HH:MM:SS] Label (Name):**" shape below) and parentheses specifically — they're the round-trip
+// delimiter recall.ts's parser depends on, so a name containing one would corrupt the parse — then caps
+// length in line with the other name-shaped fields in this codebase (see ipc.ts's AsrCorrectionPairSchema).
 function sanitizeSpeakerName(name: string | undefined): string {
   if (!name) return ''
   return name
@@ -576,11 +578,9 @@ function sanitizeSpeakerName(name: string | undefined): string {
     .slice(0, 80)
 }
 
-function sanitizeTranscriptText(text: string): string {
-  return text.replace(/[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ').replace(/\s+/g, ' ').trim()
-}
-
-/** Render one transcript line in the fixed on-disk shape recall.ts's parser reads back. */
+/** Render one transcript line in the fixed on-disk shape recall.ts's parser reads back:
+ *  `**[HH:MM:SS] Label:** text`, or `**[HH:MM:SS] Label (Name):** text` once Speaker Intelligence has
+ *  resolved a display name for that line (see shared/transcript-align.ts). */
 function formatTranscriptLine(l: TranscriptLine): string {
   const d = new Date(l.t)
   const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
@@ -591,7 +591,7 @@ function formatTranscriptLine(l: TranscriptLine): string {
   // the name, so the round trip is unchanged. Only the generic role collapses — "Them (Jane Doe)" says
   // two different things and keeps both.
   const label = isClusterLabel(name) && speakerLabel(l.speaker) === 'Speaker' ? name : name ? `${speakerLabel(l.speaker)} (${name})` : speakerLabel(l.speaker)
-  return `**[${t}] ${label}:** ${sanitizeTranscriptText(l.text)}`
+  return `**[${t}] ${label}:** ${l.text}`
 }
 
 /** Render a full transcript body. saveMeeting and saveDraftTranscript share this exact shape so a

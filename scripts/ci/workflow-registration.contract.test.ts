@@ -93,8 +93,14 @@ function ownPathOnly(file: string, block: string[] | undefined): boolean {
 function registrationViolations(file: string, source: string): string[] {
   const triggers = triggerBlocks(source)
   const names = [...triggers.keys()]
+  if (triggers.has('workflow_call')) return []
   if (names.length === 1 && names[0] === 'workflow_dispatch') {
     return FROZEN_LEGACY.has(file) ? [] : [`${file}: dispatch-only without a pull_request trigger on its own path`]
+  }
+  if (triggers.has('workflow_dispatch') && triggers.has('pull_request') && names.every((name) => name === 'workflow_dispatch' || name === 'pull_request')) {
+    if (!ownPathOnly(file, triggers.get('pull_request'))) {
+      return [`${file}: pull_request registration trigger is not limited to its own workflow path`]
+    }
   }
   if (!ownPathOnly(file, triggers.get('pull_request'))) return []
   const problems: string[] = []
@@ -149,6 +155,11 @@ describe('registration rule checker', () => {
   it('rejects a registration trigger with no (registration) run-name', () => {
     const source = compliant.replace(/^run-name:.*\n/m, '')
     expect(registrationViolations('sample.yml', source)).toEqual(['sample.yml: run-name has no (registration) title'])
+  })
+
+  it('rejects a pull_request registration trigger on another path', () => {
+    const source = compliant.replace('.github/workflows/sample.yml', '.github/workflows/other.yml')
+    expect(registrationViolations('sample.yml', source)).toEqual(['sample.yml: pull_request registration trigger is not limited to its own workflow path'])
   })
 
   it('exempts a workflow_call file', () => {
