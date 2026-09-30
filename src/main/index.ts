@@ -4208,9 +4208,7 @@ function askVisionForScreenCheck(
 }
 
 // --- Background screen preprocessing (M13) ---------------------------------------------------------------
-// On-device pre-analysis of the screen on window/content change, so a "what's on my screen" ask answers from
-// a pre-computed description instead of a cold capture + image round trip. All the privacy/cost guardrails
-// live in screen-preprocess.ts; this just wires it to the app's real capture, settings, and local runtime.
+// On-device pre-analysis of the screen; screen-preprocess.ts owns the privacy/cost guardrails.
 const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   getScreenshot,
   getSettings: () => {
@@ -4236,8 +4234,6 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
       onError: (message) => mainLog.warn(`[screen-preprocess] watcher: ${message}`)
     }),
   // macOS: Vision-framework OCR via the bundled metis-mac-helper — tried before the VLM caption.
-  // Windows keeps the VLM-only path (extractScreenText returns null without a helper anyway, but gating
-  // here keeps the win32 wiring visibly identical to before).
   extractScreenText: process.platform === 'darwin' ? extractScreenText : undefined,
   screenCaptureGranted: createScreenCaptureGrantGate({
     platform: process.platform,
@@ -4250,13 +4246,7 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
 
 /**
  * The ONE place that reconciles background screen preprocessing with reality. Call it from every event
- * that can change canRun(): boot, a settings write, sign-in, session clear, the local-model download
- * landing, and the onboarding permission request (on macOS the Screen Recording grant is part of
- * eligibility — MQA-209). Safe to call repeatedly — it's a no-op when the running state already matches.
- *
- * Auth is not re-checked here: it is a dep of the engine's own eligibility (screen-preprocess.ts), so the
- * lifecycle and the `backgroundScreenReady` flag Settings renders read one expression instead of two that
- * drifted apart (MQA-178/MQA-179).
+ * that can change canRun(); safe to call repeatedly.
  */
 function refreshScreenPreprocess(): void {
   screenPreprocess.refresh()
