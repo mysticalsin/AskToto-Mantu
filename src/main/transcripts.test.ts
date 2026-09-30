@@ -1167,6 +1167,7 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
 
   afterEach(() => {
     delete process.env.ASKTOTO_LOCAL_KEYSTORE
+    delete (app as unknown as { isPackaged?: boolean }).isPackaged
     rmSync(folder, { recursive: true, force: true })
     rmSync(tempDir, { recursive: true, force: true })
     vi.restoreAllMocks()
@@ -1218,6 +1219,23 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     expect(after.ct).toBe(before.ct)
     // Converged: a later BULK read (allowKeychainRecovery=false) now succeeds without touching the Keychain.
     expect(readSavedFile(file)).toContain('OLD-KEYCHAIN-SECRET')
+  })
+
+  it('does not rewrap a recovered "S:" meeting while packaged safeStorage is the active backend', async () => {
+    const file = await writeOldKeychainMeeting()
+    const before = parseEnvelope(file)
+    ;(app as unknown as { isPackaged: boolean }).isPackaged = true
+
+    const tmp = decryptToTemp(file)
+    const after = parseEnvelope(file)
+
+    expect(readFileSync(tmp, 'utf8')).toContain('OLD-KEYCHAIN-SECRET')
+    expect((before.kLocal as string).startsWith('S:')).toBe(true)
+    expect(after.kLocal).toBe(before.kLocal)
+    expect(after.iv).toBe(before.iv)
+    expect(after.tag).toBe(before.tag)
+    expect(after.ct).toBe(before.ct)
+    expect(existsSync(join(app.getPath('userData'), 'secret-key.bin'))).toBe(false)
   })
 })
 

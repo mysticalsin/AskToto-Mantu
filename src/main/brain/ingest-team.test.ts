@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import { PROVIDER_IDS } from '@shared/providers'
-import { MeetingExtractionSchema } from '@shared/brain'
+import { BrainIndexSchema, MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
 import { brainBackfillProgress, extractionSlug, startBackfill } from './ingest'
 import { readIndex, readMeetingExtraction, writeIndex, writeMeetingExtraction } from './store'
@@ -57,6 +57,7 @@ describe('team-transcript ingest', () => {
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(sharedRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    delete process.env.ASKTOTO_LEDGER_USERDATA
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })
@@ -103,6 +104,31 @@ describe('team-transcript ingest', () => {
     // The own meeting carries no team tag; only the shared-folder file is attributed to bob.
     expect(readMeetingExtraction(getSettings(), extractionSlug(file))?.source_team).toBe('')
     expect(readMeetingExtraction(getSettings(), extractionSlug(`team/bob/${file}`))?.source_team).toBe('bob')
+  })
+
+  it('switch-mode devices reuse a shared saved extraction instead of requiring model work for the same sourceVersion', async () => {
+    process.env.ASKTOTO_LEDGER_USERDATA = 'switch'
+    const file = 'same-meeting.md'
+    writeFileSync(join(meetingsFolder, file), '---\ndate: 2026-02-03\n---\nShared meeting text.', 'utf8')
+    setSettings({ meetingsFolder })
+    await writeMeetingExtraction(getSettings(), extractionSlug(file), MeetingExtractionSchema.parse({ title24: 'Shared meeting' }))
+    await writeIndex(getSettings(), BrainIndexSchema.parse({ ingested: { [file]: { at: 1, ok: true, sourceVersion: 'device-one:v1' } } }))
+
+    const deviceTwoUserData = mkdtempSync(join(tmpdir(), 'asktoto-team-device-two-'))
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+      name === 'userData' ? deviceTwoUserData : join(deviceTwoUserData, name)
+    )
+    try {
+      expect((await startBackfill()).queued).toBe(1)
+      await vi.waitFor(() => {
+        expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
+      }, { timeout: 10_000 })
+    } finally {
+      ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+        name === 'userData' ? userData : join(userData, name)
+      )
+      rmSync(deviceTwoUserData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    }
   })
 
   it('ignores an unavailable team folder without failing the own-meeting scan', async () => {

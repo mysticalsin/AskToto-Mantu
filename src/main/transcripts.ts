@@ -385,13 +385,6 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
   }
 }
 
-/** Synchronous twin for main-process paths that must preserve writeSaved's encryption contract. */
-export function writeSavedSync(file: string, content: string, encrypt: boolean): void {
-  let data: Buffer = Buffer.from(content, 'utf8')
-  if (encrypt) data = encryptEnvelopeV2(content)
-  replaceFileSync(file, data)
-}
-
 // Decrypted temp copies are tracked and deleted on quit so an encrypted transcript never leaves a
 // permanent cleartext file behind (the name is randomized so it isn't a predictable target either).
 const decryptedTemps = new Set<string>()
@@ -412,7 +405,7 @@ export function decryptToTemp(path: string, bytes?: Buffer): string {
   let content: string
   try {
     const sourceBytes = bytes ?? readFileSync(path)
-    const decoded = tryDecodeSaved(sourceBytes, true, bytes ? undefined : (env, contentKeyB64) => {
+    const decoded = tryDecodeSaved(sourceBytes, true, bytes || !useFileBackend() ? undefined : (env, contentKeyB64) => {
       env.kLocal = 'F:' + encryptSecret(contentKeyB64).toString('base64')
       replaceFileSync(path, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(env), 'utf8')]))
     })

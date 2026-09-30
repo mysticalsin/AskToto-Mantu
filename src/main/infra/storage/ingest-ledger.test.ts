@@ -195,23 +195,37 @@ describe('ingest ledger userData rollout', () => {
     expect(await exists(ledger.userDataIngestLedgerPath(settings))).toBe(false)
   })
 
-  it('purge clears the userData mirror in expand mode and the active ledger in switch mode', async () => {
+  it('switch treats a corrupt legacy fallback as read-only when the userData ledger is missing', async () => {
+    await writeFile(legacyPath, '{not-json', 'utf8')
+    const beforeLegacy = await readBytes(legacyPath)
+    process.env.ASKTOTO_LEDGER_USERDATA = 'switch'
+
+    expect(store.indexUnavailable(settings)).toBe('corrupt-kept')
+    expect(await exists(ledger.userDataIngestLedgerPath(settings))).toBe(false)
+    expect(await readBytes(legacyPath)).toEqual(beforeLegacy)
+  })
+
+  it('purge clears the userData mirror in expand mode and every userData ledger in erase mode', async () => {
     process.env.ASKTOTO_LEDGER_USERDATA = 'expand'
     await store.writeIndex(settings, BrainIndexSchema.parse({ ingested: { 'expand.md': { at: 1, ok: true } } }))
     const expandMirror = ledger.userDataIngestLedgerPath(settings)
     expect(await exists(expandMirror)).toBe(true)
 
     expect(store.purgeBrain(settings, { mode: 'rebuild', preserveCorrections: false }).ok).toBe(true)
-    await vi.waitFor(async () => expect(await exists(expandMirror)).toBe(false))
+    expect(await exists(expandMirror)).toBe(false)
 
     await mkdir(store.brainDir(settings), { recursive: true })
     process.env.ASKTOTO_LEDGER_USERDATA = 'switch'
     await store.writeIndex(settings, BrainIndexSchema.parse({ ingested: { 'switch.md': { at: 2, ok: true } } }))
     const switchLedger = ledger.userDataIngestLedgerPath(settings)
+    const staleLedger = join(dirname(switchLedger), 'index-0123456789abcdef.json')
+    await writeFile(staleLedger, JSON.stringify(BrainIndexSchema.parse({ ingested: { stale: { at: 3, ok: true } } })), 'utf8')
     expect(await exists(switchLedger)).toBe(true)
+    expect(await exists(staleLedger)).toBe(true)
 
     expect(store.purgeBrain(settings, { mode: 'erase' }).ok).toBe(true)
-    await vi.waitFor(async () => expect(await exists(switchLedger)).toBe(false))
+    expect(await exists(switchLedger)).toBe(false)
+    expect(await exists(staleLedger)).toBe(false)
   })
 
   it('restores rollback truth table: legacy file remains the only 1.9.6 ledger across rollout modes', async () => {
@@ -224,7 +238,7 @@ describe('ingest ledger userData rollout', () => {
       { mode: 'legacy', legacy: 'missing', rollbackReady: false },
       { mode: 'legacy', legacy: 'unreadable', rollbackReady: false },
       { mode: 'expand', legacy: 'ready', rollbackReady: true },
-      { mode: 'expand', legacy: 'missing', rollbackReady: false },
+      { mode: 'expand', legacy: 'missing', rollbackReady: true },
       { mode: 'expand', legacy: 'unreadable', rollbackReady: false },
       { mode: 'switch', legacy: 'ready', rollbackReady: true },
       { mode: 'switch', legacy: 'missing', rollbackReady: false },
@@ -238,8 +252,14 @@ describe('ingest ledger userData rollout', () => {
       if (row.legacy === 'ready') await writeBrainIndex(legacyPath, { 'rollback.md': { at: 1, ok: true, sourceVersion: `${row.mode}:v1` } })
       if (row.legacy === 'unreadable') await writeFile(legacyPath, foreignKeyIndexBytes())
       process.env.ASKTOTO_LEDGER_USERDATA = row.mode
-      if (row.mode === 'switch') {
-        await writeBrainIndex(ledger.userDataIngestLedgerPath(settings), { 'switch-only.md': { at: 2, ok: true, sourceVersion: 'switch:v2' } })
+      if (row.mode === 'expand' || row.mode === 'switch') {
+        const rollout = BrainIndexSchema.parse({ ingested: { 'rollout-write.md': { at: 2, ok: true, sourceVersion: `${row.mode}:v2` } } })
+        try {
+          await store.writeIndex(settings, rollout)
+        } catch (e) {
+          expect(row.legacy).toBe('unreadable')
+          expect(e).toBeTruthy()
+        }
       }
 
       process.env.ASKTOTO_LEDGER_USERDATA = 'legacy'

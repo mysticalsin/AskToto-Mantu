@@ -38,7 +38,7 @@ import {
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
-import { activeIngestLedgerPath, classifyIngestLedgerBytes, deleteUserDataIngestLedger, ingestLedgerMode, readUserDataIngestLedger, seedUserDataIngestLedgerFromLegacy, type IngestLedgerLoad, userDataIngestLedgerPath, writeIngestLedger } from '../infra/storage/ingest-ledger'
+import { activeIngestLedgerPath, classifyIngestLedgerBytes, deleteUserDataIngestLedgerSync, deleteUserDataIngestLedgersSync, ingestLedgerMode, readUserDataIngestLedger, seedUserDataIngestLedgerFromLegacy, type IngestLedgerLoad, userDataIngestLedgerPath, writeIngestLedger } from '../infra/storage/ingest-ledger'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
 
@@ -651,12 +651,23 @@ function finishIndexLoad(p: string, read: ReturnType<typeof readIndexPathSync>):
   return load
 }
 
+function finishReadOnlyIndexLoad(p: string, read: ReturnType<typeof readIndexPathSync>): ResolvedIndex {
+  const { load: classified, mtimeMs, size, hit } = read
+  const load: ResolvedIndex = classified.kind === 'corrupt' ? { kind: 'unavailable', cause: 'corrupt-kept' } : classified
+  if (load.kind === 'absent') {
+    indexCache.delete(p); return load
+  }
+  if (load.kind === 'unavailable') return recordUnavailable(p, hit, mtimeMs, size, load)
+  indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
+  return load
+}
+
 function loadIndex(s: Settings): ResolvedIndex {
   const legacyPath = join(brainDir(s), INDEX_REL)
   const p = activeIngestLedgerPath(s, legacyPath)
   const current = finishIndexLoad(p, readIndexPathSync(p))
   if (current.kind !== 'absent' || ingestLedgerMode() !== 'switch') return current
-  return finishIndexLoad(legacyPath, readIndexPathSync(legacyPath))
+  return finishReadOnlyIndexLoad(legacyPath, readIndexPathSync(legacyPath))
 }
 
 async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
@@ -1155,7 +1166,8 @@ export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserve
     if (preserve) cpSync(journalPath, preserveTo)
     const preservedDir = preservedIndexDir(settings)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
-    void deleteUserDataIngestLedger(settings).catch((e) => console.warn('[brain] purgeBrain: could not remove userData ingest ledger', e))
+    if (opts.mode === 'erase') deleteUserDataIngestLedgersSync(settings)
+    else deleteUserDataIngestLedgerSync(settings)
     indexCache.delete(userDataLedger)
     if (opts.mode === 'erase') rmSync(preservedDir, { recursive: true, force: true })
     resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus

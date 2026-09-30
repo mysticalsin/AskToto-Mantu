@@ -1,4 +1,5 @@
 import { mkdir, readFile, rm, stat } from 'node:fs/promises'
+import { readdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { app } from 'electron'
@@ -125,6 +126,27 @@ export async function seedUserDataIngestLedgerFromLegacy(
 
 export async function deleteUserDataIngestLedger(settings: Settings): Promise<void> {
   await rm(userDataIngestLedgerPath(settings), { force: true })
+}
+
+export function deleteUserDataIngestLedgerSync(settings: Settings): void {
+  const current = userDataIngestLedgerPath(settings)
+  rmSync(current, { force: true })
+}
+
+export function deleteUserDataIngestLedgersSync(settings: Settings): void {
+  const current = userDataIngestLedgerPath(settings)
+  deleteUserDataIngestLedgerSync(settings)
+  const dir = dirname(current)
+  let names: string[]
+  try {
+    names = readdirSync(dir)
+  } catch (e) {
+    if (errnoCode(e) === 'ENOENT') return
+    throw e
+  }
+  for (const name of names) {
+    if (/^index-[0-9a-f]{16}\.json$/i.test(name)) rmSync(join(dir, name), { force: true })
+  }
 }
 
 export async function writeIngestLedger(settings: Settings, legacyPath: string, value: BrainIndex): Promise<void> {
