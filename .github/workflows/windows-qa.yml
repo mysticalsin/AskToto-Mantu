@@ -66,26 +66,28 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
+      - name: Prepare capture-gate evidence
+        run: New-Item -ItemType Directory -Force -Path capture-gate-output | Out-Null
       - name: Run capture-gate behavior tests
+        env:
+          CAPTURE_GATE_EVIDENCE: capture-gate-output/capture-gate-summary.json
         run: >
           npx vitest run
           src/main/screen-capture-eligibility.test.ts
           src/main/screen-preprocess.test.ts
+          src/main/screen-capture-gate.evidence.test.ts
           --reporter=basic
       - name: Summarize the verdict
         run: |
-          New-Item -ItemType Directory -Force -Path capture-gate-output | Out-Null
-          $summary = [ordered]@{
-            suite = 'capture-gate'
-            platform = 'windows-latest'
-            deniedBackgroundShots = 0
-            repeatingCaptureFailedEvents = 0
-            evidence = @(
-              'screen-preprocess.test.ts asserts denied Windows screen capture keeps the background loop inert with shots()===0',
-              'screen-capture-eligibility.test.ts asserts unknown and denied Windows probe statuses fail closed'
-            )
+          $path = 'capture-gate-output/capture-gate-summary.json'
+          if (!(Test-Path $path)) { throw 'capture-gate evidence file was not produced by the behavior test.' }
+          $summary = Get-Content $path -Raw | ConvertFrom-Json
+          if ($summary.deniedBackgroundShots -ne 0) {
+            throw "Denied Windows background gate still took $($summary.deniedBackgroundShots) screenshot(s)."
           }
-          $summary | ConvertTo-Json -Depth 4 | Set-Content capture-gate-output/capture-gate-summary.json
+          if ($summary.repeatingCaptureFailedEvents -ne 0) {
+            throw "Denied Windows background gate still emitted $($summary.repeatingCaptureFailedEvents) repeating capture.failed event(s)."
+          }
           Get-Content capture-gate-output/capture-gate-summary.json | Add-Content $env:GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()

@@ -497,6 +497,16 @@ describe('createScreenPreprocess — the boot arm must not raise the macOS TCC p
     await h.sp._test.describeForWindow('w1')
     expect(h.shots()).toBe(1)
   })
+
+  it('M2-0044 — platforms without a capture gate still arm when the other dependencies are ready', async () => {
+    const h = makeHarness({ screenCaptureGranted: undefined, platform: 'linux' })
+    expect(h.sp.canRun()).toBe(true)
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(true)
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.shots()).toBe(1)
+  })
 })
 
 /**

@@ -3956,14 +3956,21 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   if (process.platform === 'darwin' && accessStatus !== 'granted' && accessStatus !== 'not-determined') {
     throw new Error(screenCaptureUnavailableMessage(process.platform, accessStatus))
   }
-  const sources = await getScreenSourcesWithRetry(
-    () => desktopCapturer.getSources({ types: ['screen'], thumbnailSize }),
-    isUsableScreenSource,
-    {
-      onError: (error, attempt) =>
-        mainLog.warn(`[capture] getSources failed (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`)
-    }
-  )
+  let sources: Electron.DesktopCapturerSource[]
+  try {
+    sources = await getScreenSourcesWithRetry(
+      () => desktopCapturer.getSources({ types: ['screen'], thumbnailSize }),
+      isUsableScreenSource,
+      {
+        onError: (error, attempt) =>
+          mainLog.warn(`[capture] getSources failed (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`)
+      }
+    )
+  } catch (e) {
+    noteScreenCaptureOutcome(false)
+    screenPerm.screenPermission().noteOutcome(false)
+    throw e
+  }
   // Match the source to the display under the cursor. With one available source it is necessarily the
   // requested display. With several, never fall back to an arbitrary one: sending another monitor to a
   // provider is worse than asking the user to retry after a display-topology change.
