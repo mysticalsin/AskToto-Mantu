@@ -16,6 +16,7 @@ import {
   type MeetingRef,
   type BrainGraph,
   type BrainIndex,
+  type BrainIngestFailureReason,
   type Confidence,
   type ProvenanceState,
   type ProvenantField,
@@ -443,6 +444,14 @@ function extractionWindowSize(s: Settings, route: IngestRoute): { size: number; 
     return { size: WINDOW_SIZE, local: false }
   }
   return { size: localExtractionWindowChars(slotTokens), local: true }
+}
+
+function classifyIngestFailure(error: unknown, unreadable: boolean): BrainIngestFailureReason {
+  if (unreadable) return 'unavailable'
+  if (error instanceof ExtractionDoesNotFitError || isContextOverflow(error)) return 'context_overflow'
+  const message = error instanceof Error ? error.message : String(error)
+  if (/no configured ai provider|unavailable|not available|missing|not found/i.test(message)) return 'unavailable'
+  return 'provider_error'
 }
 
 /** Split `text` into sequential windows of at most `size` chars, cut at line boundaries so a window
@@ -1690,7 +1699,7 @@ function redactPathsInError(error: string): string {
 export function ingestFailureDetails(
   idx: BrainIndex,
   limit = 20
-): { file: string; error: string; exhausted: boolean }[] {
+): { file: string; error: string; exhausted: boolean; reason?: BrainIngestFailureReason }[] {
   return Object.entries(idx.ingested)
     .filter(([, record]) => !record.ok && !isPendingIngestRecord(record))
     .sort(([, a], [, b]) => b.at - a.at)
@@ -1698,7 +1707,8 @@ export function ingestFailureDetails(
     .map(([file, record]) => ({
       file,
       error: redactPathsInError(record.error ?? 'Unknown error'),
-      exhausted: !!record.exhausted
+      exhausted: !!record.exhausted,
+      ...(record.reason ? { reason: record.reason } : {})
     }))
 }
 
@@ -1904,6 +1914,7 @@ async function finishJob(result: JobResult): Promise<void> {
           at: now,
           ok: false,
           error: e instanceof Error ? e.message : String(e),
+          reason: classifyIngestFailure(e, !result.ok && result.unreadable),
           ...(version ? { sourceVersion: version } : {}),
           ...retryStateAfterFailure(previous, {
             unreadable: !result.ok && result.unreadable,

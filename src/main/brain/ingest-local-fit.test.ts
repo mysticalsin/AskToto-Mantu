@@ -16,8 +16,9 @@ vi.mock('electron')
 /** The 4,096-token slot the CPU profile gives llama-server: the machine state behind the reported bursts. */
 const SLOT_TOKENS = 4096
 
+const localBaseReadyMock = vi.hoisted(() => vi.fn(() => true))
 vi.mock('../llm/local-routing', () => ({
-  localBaseReady: () => true,
+  localBaseReady: localBaseReadyMock,
   resolveRoutingMode: (s: { routingMode?: string }) => s.routingMode ?? 'auto'
 }))
 vi.mock('../llm/local', async (orig) => ({
@@ -56,7 +57,7 @@ vi.mock('../llm', () => ({ createStream: createStreamMock }))
 const failedIngests = (): number =>
   auditLogMock.mock.calls.filter(([event, detail]) => event === 'brain.ingest' && detail?.ok === false).length
 
-describe('M2-0430: background extraction fits a 4,096-token local slot and never retries in a burst', () => {
+describe('M2-0034: background extraction fits a 4,096-token local slot and classifies failures', () => {
   let userData: string
   let meetingsFolder: string
 
@@ -87,6 +88,7 @@ describe('M2-0430: background extraction fits a 4,096-token local slot and never
     })
     requests.length = 0
     vi.clearAllMocks()
+    localBaseReadyMock.mockReturnValue(true)
     createStreamMock.mockImplementation(slotModel)
   })
 
@@ -119,7 +121,7 @@ describe('M2-0430: background extraction fits a 4,096-token local slot and never
     await drain()
 
     const record = readIndex(getSettings()).ingested['one-line.md']
-    expect(record).toMatchObject({ ok: false, exhausted: true, attempts: 1 })
+    expect(record).toMatchObject({ ok: false, exhausted: true, attempts: 1, reason: 'context_overflow' })
     expect(createStreamMock).not.toHaveBeenCalled()
     expect(failedIngests()).toBe(1)
 
@@ -145,9 +147,39 @@ describe('M2-0430: background extraction fits a 4,096-token local slot and never
     expect(await startBackfill()).toEqual({ queued: 0 })
     await drain()
 
-    expect(readIndex(getSettings()).ingested['dense.md']).toMatchObject({ ok: false, exhausted: true })
+    expect(readIndex(getSettings()).ingested['dense.md']).toMatchObject({ ok: false, exhausted: true, reason: 'context_overflow' })
     expect(createStreamMock).toHaveBeenCalledTimes(1)
     expect(failedIngests()).toBe(1)
+  })
+
+  it('classifies provider errors that are not context overflows', async () => {
+    writeFileSync(join(meetingsFolder, 'provider-error.md'), '---\ndate: 2026-09-29\n---\nTHEM: Short synthetic meeting.', 'utf8')
+    createStreamMock.mockImplementation((opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      queueMicrotask(() => opts.handlers.onError('HTTP 503 provider failed'))
+      return { abort: () => {} }
+    })
+
+    expect(await startBackfill()).toEqual({ queued: 1 })
+    await drain()
+
+    expect(readIndex(getSettings()).ingested['provider-error.md']).toMatchObject({
+      ok: false,
+      reason: 'provider_error'
+    })
+  })
+
+  it('classifies an unavailable extraction path before any model call', async () => {
+    localBaseReadyMock.mockReturnValue(false)
+    writeFileSync(join(meetingsFolder, 'unavailable.md'), '---\ndate: 2026-09-29\n---\nTHEM: Short synthetic meeting.', 'utf8')
+
+    expect(await startBackfill()).toEqual({ queued: 1 })
+    await drain()
+
+    expect(readIndex(getSettings()).ingested['unavailable.md']).toMatchObject({
+      ok: false,
+      reason: 'unavailable'
+    })
+    expect(createStreamMock).not.toHaveBeenCalled()
   })
 
   it('marks the local extraction as background work and resends it after a recap pre-empts it, without a failure', async () => {

@@ -296,6 +296,12 @@ export function activeSlotTokens(): number | null {
   return Math.floor(lastModelPaths.ctxSize / lastModelPaths.parallel)
 }
 
+/** The live llama-server context per request slot. Named for callers that size work to the running
+ *  runtime rather than to a model's ideal profile. */
+export function activeContextPerSlotTokens(): number | null {
+  return activeSlotTokens()
+}
+
 function clearIdleTimer(): void {
   if (idleTimer) {
     clearTimeout(idleTimer)
