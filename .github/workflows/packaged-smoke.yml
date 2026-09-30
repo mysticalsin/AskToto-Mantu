@@ -22,6 +22,14 @@ on:
     tags-ignore:
       - '**'
   workflow_dispatch:
+    inputs:
+      hk_m_cycles:
+        description: 'HK-M cycles: 1 is the per-PR smoke, 20 rehearses the candidate proof (fails unless every row passes)'
+        type: choice
+        options:
+          - '1'
+          - '20'
+        default: '1'
 
 permissions:
   contents: read
@@ -38,7 +46,8 @@ jobs:
   mac:
     name: Packaged smoke (macOS)
     runs-on: macos-latest
-    timeout-minutes: 120
+    # Only the 20-cycle rehearsal (140 min HK-M step) needs more than the default 120 min.
+    timeout-minutes: ${{ inputs.hk_m_cycles == '20' && 180 || 120 }}
     if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/')
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -109,11 +118,15 @@ jobs:
       - name: Prove HK-M supervised sidecar cleanup after SIGKILL
         id: hk-m
         continue-on-error: true
-        timeout-minutes: 25
+        timeout-minutes: ${{ inputs.hk_m_cycles == '20' && 140 || 25 }}
         # One SIGKILL per scenario under a 20 min wall-clock budget: hk-m.mjs prints a line per row and writes
-        # its report (unreached rows NOT_RUN) even when cut off. The 20-cycle proof runs on the candidate in
-        # hk-m-candidate.yml.
-        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles 1 --budget-ms 1200000
+        # its report (unreached rows NOT_RUN) even when cut off. The 20-cycle proof on the candidate runs in
+        # hk-m-candidate.yml; a manual dispatch with hk_m_cycles=20 rehearses it on this run's own build with
+        # the same 8100000 ms budget, below the 140 min step timeout so the report is still written.
+        env:
+          HK_M_CYCLES: ${{ inputs.hk_m_cycles == '20' && '20' || '1' }}
+          HK_M_BUDGET_MS: ${{ inputs.hk_m_cycles == '20' && '8100000' || '1200000' }}
+        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles "$HK_M_CYCLES" --budget-ms "$HK_M_BUDGET_MS"
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         timeout-minutes: 10
@@ -140,6 +153,20 @@ jobs:
             exit 1
           fi
           echo "::warning title=HK-M blocked::HK-M result=$result — not a live pass of every row; see smoke-report/hk-m.json for the exact unblock steps."
+      # A rehearsal must be 100/100: fails on result=fail, result=blocked and any NOT_RUN row, and the job
+      # summary names the cycle count. (bash runs with pipefail, so a failing node fails the step.)
+      - name: Fail the HK-M rehearsal unless every row passed
+        if: always() && inputs.hk_m_cycles == '20'
+        run: |
+          echo "### HK-M rehearsal: 20 cycles" >> "$GITHUB_STEP_SUMMARY"
+          node -e "
+            const r = JSON.parse(require('fs').readFileSync('smoke-report/hk-m.json', 'utf8'))
+            const rows = r.rows || []
+            const passed = rows.filter((row) => row.status === 'PASS').length
+            const notRun = rows.filter((row) => row.status === 'NOT_RUN').length
+            console.log('result=' + r.result + ', ' + passed + '/' + rows.length + ' rows PASS, ' + notRun + ' NOT_RUN')
+            process.exit(r.result === 'pass' && notRun === 0 ? 0 : 1)
+          " | tee -a "$GITHUB_STEP_SUMMARY"
       # A BLOCKED_EXTERNAL row is non-failing above, so a row that passes on the m2/integration baseline and
       # now falls to BLOCKED_EXTERNAL, NOT_RUN or missing would leave the job green. Reads only the named
       # row reports in smoke-report/; no network, no secrets.
