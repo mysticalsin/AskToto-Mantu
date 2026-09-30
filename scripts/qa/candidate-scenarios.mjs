@@ -32,6 +32,22 @@ export const RUNNER_LABELS = Object.freeze({ mac: 'macos-latest', win: 'windows-
  *  which build/qa-identity.electron-builder.yml sets to asktoto-qa for the QA identity. */
 export const PROFILE_DIRS = Object.freeze({ 'mac-qa-identity': 'asktoto-qa' })
 
+export const PACKAGED_LIFECYCLE_RV_ROWS = Object.freeze({
+  mac: Object.freeze([
+    'RV-1-macos-open-activate',
+    'RV-1-macos-finder-spotlight-launchpad',
+    'RV-2-macos-open-new-instance',
+    'RV-4-tray-show',
+    'RV-4-global-hotkey'
+  ]),
+  win: Object.freeze([
+    'RV-3-windows-exe-relaunch',
+    'RV-3-windows-shortcut-relaunch',
+    'RV-4-tray-show',
+    'RV-4-global-hotkey'
+  ])
+})
+
 /**
  * A scenario runs on each platform it declares. A platform entry names the qa-candidate variant and
  * artifact it installs, the script and arguments it runs (args receives the installer, its sha256, the
@@ -87,6 +103,33 @@ export const SCENARIOS = Object.freeze({
           Object.freeze({ row: 'realLlama', reason: 'The real llama-server proof runs on macOS only; the report marks it BLOCKED_EXTERNAL.' }),
           Object.freeze({ row: 'legacyOrphan', reason: 'The legacy-orphan proof runs on macOS only; the report marks it BLOCKED_EXTERNAL.' })
         ])
+      })
+    })
+  }),
+  // M2-0506: the packaged lifecycle scenario runs packaged-smoke.mjs on the exact promotable candidate
+  // installer bytes, selected by sha256. The report rows stay content-free and lane.json records their
+  // verdicts so RV/HIST/RE-HIDE evidence is bound to the candidate DMG/Setup instead of self-built bytes.
+  'packaged-lifecycle': Object.freeze({
+    ticket: 'M2-0506',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL' }),
+    reportAssessment: 'packaged-smoke',
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        script: 'scripts/qa/packaged-smoke.mjs',
+        args: ({ app, report }) => [app, report],
+        report: 'packaged-smoke.json',
+        isolatedProfiles: true
+      }),
+      win: Object.freeze({
+        variant: 'win',
+        artifact: 'candidate-win',
+        script: 'scripts/qa/packaged-smoke.mjs',
+        args: ({ app, report }) => [app, report],
+        report: 'packaged-smoke.json',
+        isolatedProfiles: true
       })
     })
   })
@@ -197,6 +240,60 @@ export function outcomeForExit(scenario, exitCode) {
   return Number.isInteger(exitCode) && Object.hasOwn(exits, exitCode) ? exits[exitCode] : 'FAIL'
 }
 
+const REPORT_SECTIONS = Object.freeze([
+  ['rv', 'rv'],
+  ['navigationGuard', 'hist'],
+  ['rightEdgeHide', 're_hide']
+])
+
+function rowVerdict(row) {
+  return {
+    id: String(row?.id ?? ''),
+    status: String(row?.status ?? 'MISSING'),
+    ...(row?.unblock ? { unblock: String(row.unblock) } : {})
+  }
+}
+
+function collectRowVerdicts(report) {
+  return Object.fromEntries(
+    REPORT_SECTIONS.map(([source, target]) => [
+      target,
+      Array.isArray(report?.[source]) ? report[source].map(rowVerdict) : []
+    ])
+  )
+}
+
+/** Extracts content-free verdict rows from packaged-smoke's report and decides whether they prove this
+ *  platform's RV acceptance rows. BLOCKED_EXTERNAL rows are residual not-covered evidence, never PASS. */
+export function assessPackagedSmokeReport(report, platform) {
+  const row_verdicts = collectRowVerdicts(report)
+  const problems = []
+  if (report?.result !== 'pass') problems.push(`packaged-smoke result is ${report?.result ?? 'missing'}, not pass.`)
+
+  const rvById = new Map(row_verdicts.rv.map((row) => [row.id, row]))
+  for (const id of PACKAGED_LIFECYCLE_RV_ROWS[platform] ?? []) {
+    const row = rvById.get(id)
+    if (!row) problems.push(`${id} is missing from packaged-smoke rv rows.`)
+    else if (row.status !== 'PASS') problems.push(`${id} is ${row.status}, not PASS.`)
+  }
+
+  const notCovered = []
+  for (const rows of Object.values(row_verdicts)) {
+    for (const row of rows) {
+      if (row.status === 'BLOCKED_EXTERNAL') {
+        notCovered.push({ row: row.id, reason: row.unblock || 'The packaged-smoke row reported BLOCKED_EXTERNAL.' })
+      }
+    }
+  }
+  return { problems, row_verdicts, notCovered }
+}
+
+function assessScenarioReport({ scenario, platform, report }) {
+  const entry = scenarioEntry(scenario)
+  if (entry.reportAssessment === 'packaged-smoke') return assessPackagedSmokeReport(report, platform)
+  return { problems: [], row_verdicts: undefined, notCovered: [] }
+}
+
 /** The argv (after `node`) that runs a scenario. Every argument is repository-relative, so the recorded
  *  command never names the runner's home or temp directory.
  *  @param {{ scenario: string, platform: string, installer: string, sha256: string, outDir: string, app?: string }} options */
@@ -223,12 +320,31 @@ export function assertCandidateProvenance(provenance, candidateRun) {
  * (build_run_id, commit, artifact_sha256, ci_run_id, environment, command, exit_code) so the lead copies
  * them into a LIVE_VERIFIED record as they are. A platform that cannot prove some report rows adds
  * not_covered, so a PASS there is never read as covering them.
+ * @param {{
+ *   scenario: string,
+ *   platform: string,
+ *   env: Record<string, string | undefined>,
+ *   provenance: any,
+ *   candidateRun: string | number,
+ *   installer: string,
+ *   sha256: string,
+ *   argv: string[],
+ *   exitCode: number | null,
+ *   detail: string,
+ *   reportWritten: boolean,
+ *   reportAssessment?: any
+ * }} input
  */
-export function laneRecord({ scenario, platform, env, provenance, candidateRun, installer, sha256, argv, exitCode, detail, reportWritten }) {
+export function laneRecord({ scenario, platform, env, provenance, candidateRun, installer, sha256, argv, exitCode, detail, reportWritten, reportAssessment = undefined }) {
   const target = platformEntry(scenario, platform)
   assertCandidateProvenance(provenance, candidateRun)
-  const outcome = outcomeForExit(scenario, exitCode)
+  const assessmentProblems = reportAssessment?.problems ?? []
+  const outcome = outcomeForExit(scenario, exitCode) === 'PASS' && assessmentProblems.length ? 'FAIL' : outcomeForExit(scenario, exitCode)
   const host = RUNNER_LABELS[platform]
+  const notCovered = [
+    ...(target.notCovered ?? []).map(({ row, reason }) => ({ row, reason })),
+    ...(reportAssessment?.notCovered ?? [])
+  ]
   return {
     schema: LANE_SCHEMA,
     scenario,
@@ -246,8 +362,9 @@ export function laneRecord({ scenario, platform, env, provenance, candidateRun, 
     exit_code: exitCode,
     outcome,
     report: reportWritten ? target.report : null,
-    detail: outcome === 'PASS' ? null : detail || null,
-    ...(target.notCovered ? { not_covered: target.notCovered.map(({ row, reason }) => ({ row, reason })) } : {})
+    detail: outcome === 'PASS' ? null : assessmentProblems.join('\n') || detail || null,
+    ...(reportAssessment?.row_verdicts ? { row_verdicts: reportAssessment.row_verdicts } : {}),
+    ...(notCovered.length ? { not_covered: notCovered } : {})
   }
 }
 
@@ -271,6 +388,9 @@ export function laneSummary(lane) {
   ]
   if (lane.detail) rows.push(['detail', lane.detail])
   for (const { row, reason } of lane.not_covered ?? []) rows.push([`not covered: ${row}`, reason])
+  for (const [group, verdicts] of Object.entries(lane.row_verdicts ?? {})) {
+    for (const row of verdicts) rows.push([`${group}: ${row.id}`, row.status])
+  }
   const cell = (value) => String(value).replaceAll('|', '\\|').replaceAll('`', "'")
   return [
     `### Candidate scenario ${lane.scenario} (${lane.platform}): ${lane.outcome}`,
@@ -373,6 +493,16 @@ function run(values) {
   const child = spawnSync(process.execPath, argv, { stdio: ['ignore', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   process.stderr.write(child.stderr ?? '')
   const detail = child.signal ? `terminated by ${child.signal}` : child.error ? child.error.message : lastLine(child.stderr)
+  const reportPath = join(outDir, target.report)
+  const reportWritten = existsSync(reportPath)
+  let reportAssessment
+  if (reportWritten) {
+    try {
+      reportAssessment = assessScenarioReport({ scenario, platform, report: JSON.parse(readFileSync(reportPath, 'utf8')) })
+    } catch (error) {
+      reportAssessment = { problems: [`${target.report} could not be parsed: ${error.message}`], row_verdicts: undefined, notCovered: [] }
+    }
+  }
 
   const lane = laneRecord({
     scenario,
@@ -385,7 +515,8 @@ function run(values) {
     argv,
     exitCode: child.status,
     detail,
-    reportWritten: existsSync(join(outDir, target.report))
+    reportWritten,
+    reportAssessment
   })
   writeFileSync(join(outDir, 'lane.json'), `${JSON.stringify(lane, null, 2)}\n`)
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, laneSummary(lane))

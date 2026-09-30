@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { recordProblems } from '../evidence/record.mjs'
 import { selectCandidateInstaller } from './candidate-installer.mjs'
 import {
+  PACKAGED_LIFECYCLE_RV_ROWS,
   SCENARIOS,
+  assessPackagedSmokeReport,
   assertCandidateProvenance,
   candidateRunProblems,
   contentProblems,
@@ -68,7 +70,7 @@ describe('candidateRunProblems (the run guard)', () => {
 
 describe('the scenario registry', () => {
   it('declares fault-fatal-relaunch on macOS, installing the Metis-QA zip variant', () => {
-    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch', 'sidecar-boot-reaper'])
+    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch', 'sidecar-boot-reaper', 'packaged-lifecycle'])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
     expect(mac.variant).toBe('mac-qa-identity')
@@ -164,6 +166,41 @@ describe('the scenario registry', () => {
     expect(outcomeForExit('sidecar-boot-reaper', 2)).toBe('PRECONDITION')
     expect(outcomeForExit('sidecar-boot-reaper', 0)).toBe('PASS')
   })
+
+  it('declares packaged-lifecycle on the promotable mac DMG and Windows Setup', () => {
+    const scenario = SCENARIOS['packaged-lifecycle']
+    expect(scenario.ticket).toBe('M2-0506')
+    expect(scenario.qaOnlyHook).toBe(false)
+    expect(scenario.exits).toEqual({ 0: 'PASS', 1: 'FAIL' })
+    expect(Object.keys(scenario.platforms)).toEqual(['mac', 'win'])
+    expect(scenario.reportAssessment).toBe('packaged-smoke')
+    const { mac, win } = scenario.platforms
+    expect(mac).toMatchObject({ variant: 'mac', artifact: 'candidate-mac', report: 'packaged-smoke.json', isolatedProfiles: true })
+    expect(win).toMatchObject({ variant: 'win', artifact: 'candidate-win', report: 'packaged-smoke.json', isolatedProfiles: true })
+    for (const target of [mac, win]) {
+      expect(target.script).toBe('scripts/qa/packaged-smoke.mjs')
+      expect(existsSync(join(root, target.script))).toBe(true)
+    }
+    expect(resolveScenario({ scenario: 'packaged-lifecycle', sha256: { mac: MAC_SHA, win: WIN_SHA } })).toEqual({
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA },
+      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA }
+    })
+  })
+
+  it('runs packaged-lifecycle through packaged-smoke on the installed app', () => {
+    const base = { scenario: 'packaged-lifecycle', sha256: MAC_SHA, outDir: 'candidate-scenario' }
+    expect(scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-1.0.0.dmg', app: '../../_temp/candidate-install/Metis.app' })).toEqual([
+      'scripts/qa/packaged-smoke.mjs',
+      '../../_temp/candidate-install/Metis.app',
+      'candidate-scenario/packaged-smoke.json'
+    ])
+    expect(scenarioCommand({ ...base, platform: 'win', installer: 'assets/Metis-Setup-1.0.0.exe', app: '../../_temp/candidate-install/Metis.exe' })).toEqual([
+      'scripts/qa/packaged-smoke.mjs',
+      '../../_temp/candidate-install/Metis.exe',
+      'candidate-scenario/packaged-smoke.json'
+    ])
+    expect(() => scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-1.0.0.dmg' })).toThrow(/pass the installed app with --app/)
+  })
 })
 
 describe('installer selection through candidate-installer', () => {
@@ -213,10 +250,74 @@ describe('the fresh profile', () => {
   it('writes nothing for a scenario that runs only on its own isolated profiles, on either platform', () => {
     expect(prepareProfile({ scenario: 'sidecar-boot-reaper', platform: 'mac', appDataDir: appData })).toBeNull()
     expect(prepareProfile({ scenario: 'sidecar-boot-reaper', platform: 'win', appDataDir: null })).toBeNull()
+    expect(prepareProfile({ scenario: 'packaged-lifecycle', platform: 'mac', appDataDir: appData })).toBeNull()
+    expect(prepareProfile({ scenario: 'packaged-lifecycle', platform: 'win', appDataDir: null })).toBeNull()
     expect(readdirSync(appData)).toEqual([])
     expect(() => prepareProfile({ scenario: 'fault-fatal-relaunch', platform: 'mac', appDataDir: null })).toThrow(
       /No fresh-profile location is declared for mac/
     )
+  })
+})
+
+describe('packaged-smoke row verdict extraction', () => {
+  const passRows = (ids: readonly string[]) =>
+    ids.map((id) => ({ id, status: 'PASS' as string, evidence: { observed: true } as { observed: boolean } | null, unblock: null as string | null }))
+  const macPassReport = () => ({
+    schema: 1,
+    result: 'pass',
+    rv: passRows(PACKAGED_LIFECYCLE_RV_ROWS.mac),
+    navigationGuard: passRows(['HIST-clean-bar-open', 'HIST-dirty-save-recent']),
+    rightEdgeHide: passRows(['RE-HIDE-1-edge-reveals', 'RE-HIDE-2-inset-stays-parked'])
+  })
+
+  it('returns row verdict tables with no problems when required RV rows pass', () => {
+    expect(assessPackagedSmokeReport(macPassReport(), 'mac')).toEqual({
+      problems: [],
+      row_verdicts: {
+        rv: passRows(PACKAGED_LIFECYCLE_RV_ROWS.mac).map(({ id, status }) => ({ id, status })),
+        hist: [
+          { id: 'HIST-clean-bar-open', status: 'PASS' },
+          { id: 'HIST-dirty-save-recent', status: 'PASS' }
+        ],
+        re_hide: [
+          { id: 'RE-HIDE-1-edge-reveals', status: 'PASS' },
+          { id: 'RE-HIDE-2-inset-stays-parked', status: 'PASS' }
+        ]
+      },
+      notCovered: []
+    })
+  })
+
+  it('fails the lane assessment when a required RV row fails', () => {
+    const report = macPassReport()
+    report.rv[1] = { ...report.rv[1], status: 'FAIL', unblock: 'Inspect the packaged-smoke artifact.' }
+    expect(assessPackagedSmokeReport(report, 'mac')).toMatchObject({
+      problems: ['RV-1-macos-finder-spotlight-launchpad is FAIL, not PASS.']
+    })
+  })
+
+  it('fails the lane assessment and lists not-covered evidence when a required RV row is BLOCKED_EXTERNAL', () => {
+    const report = macPassReport()
+    report.rv[0] = { ...report.rv[0], status: 'BLOCKED_EXTERNAL', unblock: 'Run on a permitted hosted runner.' }
+    expect(assessPackagedSmokeReport(report, 'mac')).toMatchObject({
+      problems: ['RV-1-macos-open-activate is BLOCKED_EXTERNAL, not PASS.'],
+      notCovered: [{ row: 'RV-1-macos-open-activate', reason: 'Run on a permitted hosted runner.' }]
+    })
+  })
+
+  it('fails the lane assessment when a required RV row is missing', () => {
+    const report = macPassReport()
+    report.rv = report.rv.filter((row) => row.id !== 'RV-2-macos-open-new-instance')
+    expect(assessPackagedSmokeReport(report, 'mac').problems).toContain('RV-2-macos-open-new-instance is missing from packaged-smoke rv rows.')
+  })
+
+  it('keeps BLOCKED_EXTERNAL non-RV rows as not-covered residuals without failing RV coverage', () => {
+    const report = macPassReport()
+    report.rightEdgeHide.push({ id: 'RE-HIDE-3-meeting-hide', status: 'BLOCKED_EXTERNAL', evidence: null, unblock: 'Run with a permitted microphone.' })
+    expect(assessPackagedSmokeReport(report, 'mac')).toMatchObject({
+      problems: [],
+      notCovered: [{ row: 'RE-HIDE-3-meeting-hide', reason: 'Run with a permitted microphone.' }]
+    })
   })
 })
 
@@ -417,6 +518,60 @@ describe('lane.json', () => {
     expect(summary).toContain('| not covered: legacyOrphan |')
     expect(contentProblems(JSON.stringify(win), { account: 'runneradmin' })).toEqual([])
     expect('not_covered' in lane(0)).toBe(false)
+  })
+
+  it('records packaged-lifecycle row verdicts and fails when a required RV row is not PASS', () => {
+    const packagedArgv = scenarioCommand({
+      scenario: 'packaged-lifecycle',
+      platform: 'mac',
+      installer: 'assets/Metis-1.0.0.dmg',
+      sha256: MAC_SHA,
+      outDir: 'candidate-scenario',
+      app: '../../_temp/candidate-install/Metis.app'
+    })
+    const packaged = laneRecord({
+      scenario: 'packaged-lifecycle',
+      platform: 'mac',
+      env,
+      provenance,
+      candidateRun: '4242',
+      installer: 'assets/Metis-1.0.0.dmg',
+      sha256: MAC_SHA,
+      argv: packagedArgv,
+      exitCode: 0,
+      detail: '',
+      reportWritten: true,
+      reportAssessment: {
+        problems: ['RV-2-macos-open-new-instance is FAIL, not PASS.'],
+        row_verdicts: {
+          rv: [{ id: 'RV-2-macos-open-new-instance', status: 'FAIL' }],
+          hist: [{ id: 'HIST-clean-bar-open', status: 'PASS' }],
+          re_hide: [{ id: 'RE-HIDE-3-meeting-hide', status: 'BLOCKED_EXTERNAL', unblock: 'Run with a permitted microphone.' }]
+        },
+        notCovered: [{ row: 'RE-HIDE-3-meeting-hide', reason: 'Run with a permitted microphone.' }]
+      }
+    })
+    expect(packaged).toMatchObject({
+      ticket: 'M2-0506',
+      variant: 'mac',
+      installer: 'Metis-1.0.0.dmg',
+      artifact_sha256: MAC_SHA,
+      outcome: 'FAIL',
+      report: 'packaged-smoke.json',
+      detail: 'RV-2-macos-open-new-instance is FAIL, not PASS.',
+      environment: { kind: 'hosted-runner', host: 'macos-latest' },
+      row_verdicts: {
+        rv: [{ id: 'RV-2-macos-open-new-instance', status: 'FAIL' }],
+        hist: [{ id: 'HIST-clean-bar-open', status: 'PASS' }],
+        re_hide: [{ id: 'RE-HIDE-3-meeting-hide', status: 'BLOCKED_EXTERNAL', unblock: 'Run with a permitted microphone.' }]
+      },
+      not_covered: [{ row: 'RE-HIDE-3-meeting-hide', reason: 'Run with a permitted microphone.' }]
+    })
+    const summary = laneSummary(packaged)
+    expect(summary).toContain('| rv: RV-2-macos-open-new-instance | `FAIL` |')
+    expect(summary).toContain('| hist: HIST-clean-bar-open | `PASS` |')
+    expect(summary).toContain('| re_hide: RE-HIDE-3-meeting-hide | `BLOCKED_EXTERNAL` |')
+    expect(contentProblems(JSON.stringify(packaged), { account: 'runner' })).toEqual([])
   })
 
   it('refuses a provenance from another run than candidate_run', () => {

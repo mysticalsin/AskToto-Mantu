@@ -9,6 +9,8 @@ name: Candidate scenarios
 #     -f scenario=fault-fatal-relaunch -f mac_sha256=<Metis-QA zip sha256 from SHA256SUMS.txt>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=sidecar-boot-reaper \
 #     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=packaged-lifecycle \
+#     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
 run-name: Candidate scenario ${{ inputs.scenario }} on ${{ inputs.candidate_run }}
 
 on:
@@ -25,6 +27,7 @@ on:
         options:
           - fault-fatal-relaunch
           - sidecar-boot-reaper
+          - packaged-lifecycle
       mac_sha256:
         description: sha256 of the macOS installer the scenario installs (empty when it does not run on macOS)
         required: false

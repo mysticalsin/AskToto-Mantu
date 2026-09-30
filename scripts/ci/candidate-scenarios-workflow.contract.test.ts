@@ -160,6 +160,14 @@ describe('candidate-scenarios.yml', () => {
     expect(job('win')).toContain('    runs-on: windows-latest')
   })
 
+  it('offers packaged-lifecycle, which runs on both hosted platform jobs', () => {
+    const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- packaged-lifecycle')
+    expect(Object.keys(SCENARIOS['packaged-lifecycle'].platforms)).toEqual(['mac', 'win'])
+    expect(job('mac')).toContain('    runs-on: macos-latest')
+    expect(job('win')).toContain('    runs-on: windows-latest')
+  })
+
   it('hands the installed app to the scenario on macOS', () => {
     const mac = steps('mac')
     const install = mac[stepIndex(mac, 'codesign --verify --deep --strict')]
