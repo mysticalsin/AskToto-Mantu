@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "seededFromRun": "36572749687",
+  "platforms": {
+    "darwin": {
+      "rows": {
+        "hk-m/idle": { "status": "PASS" },
+        "hk-m/model-starting": { "status": "PASS" },
+        "hk-m/active-inference": { "status": "PASS" },
+        "hk-m/ffmpeg-import": { "status": "PASS" },
+        "hk-m/registry-write": { "status": "PASS" },
+        "sidecar-boot-reaper/standIn": { "status": "PASS" },
+        "sidecar-boot-reaper/realLlama": {
+          "status": "BLOCKED_EXTERNAL",
+          "reason": "Seed the packaged local model assets.",
+          "ticket": "M2-0461"
+        },
+        "mac-helper-supervise": { "status": "PASS" },
+        "packaged-smoke/RV-1-macos-open-activate": { "status": "PASS" },
+        "packaged-smoke/RV-2-macos-open-new-instance": { "status": "PASS" },
+        "packaged-smoke/RV-4-tray-show": { "status": "PASS" },
+        "packaged-smoke/RV-4-global-hotkey": { "status": "PASS" },
+        "packaged-smoke/RV-1-macos-finder-spotlight-launchpad": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-bar-open": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-settings-open": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-row-doubleclick": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-bottom-open": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-back": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-recent-meeting": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-cancel-bar": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-discard-bar": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-save-bar": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-cancel-settings-open": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-discard-settings-open": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-save-settings-open": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-cancel-back": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-discard-back": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-save-back": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-cancel-recent": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-discard-recent": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-save-recent": { "status": "PASS" }
+      }
+    },
+    "win32": {
+      "rows": {
+        "sidecar-boot-reaper/standIn": { "status": "PASS" },
+        "sidecar-boot-reaper/realLlama": {
+          "status": "BLOCKED_EXTERNAL",
+          "reason": "The real llama-server proof runs on macOS packaged smoke only.",
+          "ticket": "M2-0461"
+        },
+        "packaged-smoke/RV-3-windows-exe-relaunch": { "status": "PASS" },
+        "packaged-smoke/RV-4-tray-show": { "status": "PASS" },
+        "packaged-smoke/RV-4-global-hotkey": { "status": "PASS" },
+        "packaged-smoke/RV-3-windows-shortcut-relaunch": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-bar-open": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-settings-open": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-row-doubleclick": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-bottom-open": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-back": { "status": "PASS" },
+        "packaged-smoke/HIST-clean-recent-meeting": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-cancel-bar": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-discard-bar": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-save-bar": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-cancel-settings-open": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-discard-settings-open": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-save-settings-open": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-cancel-back": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-discard-back": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-save-back": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-cancel-recent": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-discard-recent": { "status": "PASS" },
+        "packaged-smoke/HIST-dirty-save-recent": { "status": "PASS" }
+      }
+    }
+  }
+}

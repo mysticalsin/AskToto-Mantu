@@ -140,6 +140,12 @@ jobs:
             exit 1
           fi
           echo "::warning title=HK-M blocked::HK-M result=$result — not a live pass of every row; see smoke-report/hk-m.json for the exact unblock steps."
+      # A BLOCKED_EXTERNAL row is non-failing above, so a row that passes on the m2/integration baseline and
+      # now falls to BLOCKED_EXTERNAL, NOT_RUN or missing would leave the job green. Reads only the named
+      # row reports in smoke-report/; no network, no secrets.
+      - name: Fail the job if a baseline-PASS smoke row is no longer PASS
+        if: always() && !cancelled()
+        run: node scripts/qa/smoke-baseline.mjs smoke-report darwin
 
   windows:
     name: Packaged smoke (Windows)
@@ -207,3 +213,7 @@ jobs:
       - name: Fail the job if the sidecar boot reaper proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.sidecar-reaper.outcome == 'failure'
         run: exit 1
+      # Same regression gate as the macOS job: only the named row reports in smoke-report/ are read.
+      - name: Fail the job if a baseline-PASS smoke row is no longer PASS
+        if: always() && !cancelled()
+        run: node scripts/qa/smoke-baseline.mjs smoke-report win32
