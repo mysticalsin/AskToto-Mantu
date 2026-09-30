@@ -12,6 +12,8 @@ import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentine
 vi.mock('electron')
 
 const ENC_MARKER_V2 = Buffer.from('ATKENC2\n', 'utf8')
+const TS_SOURCE_EXTENSION = 'ts'
+const BRAIN_RESUME_WATCH_SOURCE_PATH = join(__dirname, `brain-resume-watch.${TS_SOURCE_EXTENSION}`)
 
 /**
  * MQA-175 — an undecryptable `<meetingsFolder>/.brain/index.json` bricked the shipped app: it took the
@@ -384,7 +386,7 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     // early death. M2-0038: the early boot sentinel may clear earlier (past createWindow/registerIpc
     // kill zone); the 15s brain work is protected by a separate resume marker.
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-    const helperSource = readFileSync(join(__dirname, 'brain-resume-watch.ts'), 'utf8')
+    const helperSource = readFileSync(BRAIN_RESUME_WATCH_SOURCE_PATH, 'utf8')
     expect(source).toMatch(/const earlyDeath = beginBootWatch\(/)
     const resume = source.indexOf('resumeBackfillIfPending()')
     const decision = source.lastIndexOf('const safeStart = brainResumeSafeStartDecision(', resume)
@@ -410,7 +412,7 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
 
   it('FITO-185-B: boot holds prevent-app-suspension until the 15s brain work is admitted', () => {
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-    const helperSource = readFileSync(join(__dirname, 'brain-resume-watch.ts'), 'utf8')
+    const helperSource = readFileSync(BRAIN_RESUME_WATCH_SOURCE_PATH, 'utf8')
     const begin = source.indexOf('const earlyDeath = beginBootWatch(')
     expect(begin).toBeGreaterThan(-1)
     const start = source.indexOf('setBootPowerSaveBlock(true)', begin)
@@ -445,7 +447,7 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     // control. Contract: try/finally around the 15s body, per-step try/catch on each brain call, and
     // endBrainResumeWatch in finally.
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-    const helperSource = readFileSync(join(__dirname, 'brain-resume-watch.ts'), 'utf8')
+    const helperSource = readFileSync(BRAIN_RESUME_WATCH_SOURCE_PATH, 'utf8')
     const resume = source.indexOf('resumeBackfillIfPending()')
     expect(resume).toBeGreaterThan(-1)
     // Walk back to the setTimeout that owns this resume (the 15s MQA-175 timer).
