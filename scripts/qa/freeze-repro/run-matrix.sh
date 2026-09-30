@@ -30,6 +30,8 @@ Options:
                                macos-latest or windows-latest, default macos-latest)
   --implementer-model <id>     implementer model label for the evidence record
   --validator-model <id>       validator model label for the evidence record
+  --candidate-run <id>         qa-candidate.yml run id that built the app under test; switches the bundle to the
+                               M2-0194 attribution shape (adds audit excerpts and stall-bundle names)
   --collect-diagnostic-reports explicit consent to collect matching Metis/AskToto .spin/.hang reports
   --dry-run                    create fixtures and reports without launching or sampling; if --app is provided,
                                record the app executable hash and NODE_OPTIONS fuse state
@@ -37,6 +39,8 @@ Options:
                                only --artifact, --build-run-id and --app
 USAGE
 }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 fail() {
   echo "[M2-0008] FAIL: $*" >&2
@@ -432,9 +436,10 @@ make_fifo_fixtures() {
 write_environment() {
   {
     printf '{\n'
-    printf '  "ticket": "M2-0008",\n'
+    printf '  "ticket": "%s",\n' "$TICKET"
     printf '  "artifact_sha256": %s,\n' "$(json_string "$ARTIFACT")"
     printf '  "build_run_id": %s,\n' "$(json_string "$BUILD_RUN_ID")"
+    [[ -z "$CANDIDATE_RUN" ]] || printf '  "candidate_run": %s,\n' "$(json_string "$CANDIDATE_RUN")"
     printf '  "qa_account_asserted": %s,\n' "$QA_ACCOUNT"
     printf '  "dry_run": %s,\n' "$DRY_RUN"
     printf '  "app_executable_sha256": %s,\n' "$(json_string "${APP_EXE_SHA:-not-recorded}")"
@@ -478,7 +483,7 @@ write_external_blockers() {
   if [[ "$HOSTED_LIVE" == 1 ]]; then
     cat > "$OUT/external-blockers.json" <<EOF_HOSTED_BLOCKERS
 {
-  "ticket": "M2-0008",
+  "ticket": "$TICKET",
   "mode": "hosted-live",
   "blockers": [
     {
@@ -494,12 +499,12 @@ EOF_HOSTED_BLOCKERS
     return
   fi
   if [[ "$DRY_RUN" == 0 ]]; then
-    printf '{"ticket":"M2-0008","blockers":[]}\n' > "$OUT/external-blockers.json"
+    printf '{"ticket":"%s","blockers":[]}\n' "$TICKET" > "$OUT/external-blockers.json"
     return
   fi
-  cat > "$OUT/external-blockers.json" <<'EOF_BLOCKERS'
+  cat > "$OUT/external-blockers.json" <<EOF_BLOCKERS
 {
-  "ticket": "M2-0008",
+  "ticket": "$TICKET",
   "blockers": [
     {
       "status": "BLOCKED_EXTERNAL",
@@ -844,6 +849,20 @@ LEAD_ACTION: Import this public bundle into the controlled program evidence chai
 EOF_LEAD_ACTION
 }
 
+write_attribution_bundle() {
+  stop_app
+  node "$SCRIPT_DIR/attribution-bundle.mjs" --out "$OUT" --profile "$PROFILE" --profile "$IDLE_PROFILE"
+  if [[ "$DRY_RUN" == 1 ]]; then
+    cat > "$OUT/M2-0194.lead-action.md" <<EOF_LEAD_ACTION_0194_DRY
+LEAD_ACTION: Import this public dry-run bundle into the controlled program evidence chain only as M2-0194 LOCALLY_TESTED support for qa-candidate run $CANDIDATE_RUN (artifact sha256 $ARTIFACT). Do not file a live evidence record from this dry run; dispatch freeze-repro from main on macos-latest with --hosted-live for the live attribution record.
+EOF_LEAD_ACTION_0194_DRY
+    return
+  fi
+  cat > "$OUT/M2-0194.lead-action.md" <<EOF_LEAD_ACTION_0194
+LEAD_ACTION: Import this public bundle into the controlled program evidence chain: file the M2-0194 LIVE_VERIFIED record for qa-candidate run $CANDIDATE_RUN (artifact sha256 $ARTIFACT) from matrix.jsonl, interrupt-results.jsonl, the stall, sampler, reveal and sidecar excerpts, and stall-bundle-names.json. Rows listed in external-blockers.json are BLOCKED_EXTERNAL until they are run on the QA account.
+EOF_LEAD_ACTION_0194
+}
+
 live_result() {
   [[ "$DRY_RUN" == 1 ]] && {
     printf 'PASS'
@@ -872,6 +891,7 @@ live_failure_summary() {
 
 ARTIFACT=""
 BUILD_RUN_ID=""
+CANDIDATE_RUN=""
 APP=""
 PROFILE_TEMPLATE=""
 OUT=""
@@ -924,6 +944,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --artifact) ARTIFACT=${2:-}; shift 2 ;;
     --build-run-id) BUILD_RUN_ID=${2:-}; shift 2 ;;
+    --candidate-run) CANDIDATE_RUN=${2:-}; shift 2 ;;
     --app) APP=${2:-}; shift 2 ;;
     --profile-template) PROFILE_TEMPLATE=${2:-}; shift 2 ;;
     --out) OUT=${2:-}; shift 2 ;;
@@ -958,7 +979,10 @@ fi
 
 [[ "$ARTIFACT" =~ ^[0-9a-f]{64}$ ]] || fail "--artifact must be a lowercase sha256"
 [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]] || fail "--build-run-id must be a positive integer"
+[[ -z "$CANDIDATE_RUN" || "$CANDIDATE_RUN" =~ ^[1-9][0-9]*$ ]] || fail "--candidate-run must be a positive integer run id"
 [[ "$MINUTES" =~ ^[0-9]+$ && "$MINUTES" -gt 0 ]] || fail "--minutes must be a positive integer"
+TICKET=M2-0008
+[[ -z "$CANDIDATE_RUN" ]] || TICKET=M2-0194
 [[ "$QA_LIVE" == 0 || "$QA_ACCOUNT" == 1 ]] || fail "--qa-account is required for live runs"
 [[ "$DRY_RUN" == 1 || -n "$APP" ]] || fail "--app is required for live runs"
 [[ "$QA_LIVE" == 0 || -d "$PROFILE_TEMPLATE" ]] || fail "--profile-template must exist for live runs"
@@ -1048,6 +1072,29 @@ if [[ "$HOSTED_LIVE" == 1 ]]; then
   write_fixture_manifest
   copy_diagnostic_reports "$STAMP"
   RESULT=$(live_result)
+  if [[ -n "$CANDIDATE_RUN" ]]; then
+    write_attribution_bundle
+    cat > "$OUT/README.md" <<EOF_HOSTED_ATTRIBUTION_README
+# M2-0194 Freeze Repro Attribution Bundle (hosted-live)
+
+- Mode: \`hosted-live\` on \`$QA_HOST_LABEL\`
+- Result: \`$RESULT\`
+- QA candidate run: \`$CANDIDATE_RUN\`
+- Artifact sha256: \`$ARTIFACT\`
+- Build run id: \`$BUILD_RUN_ID\`
+- Matrix rows (rows 1-4 automatic, rows 5 and 9 BLOCKED_EXTERNAL): \`matrix.jsonl\`
+- Attribution excerpts: \`stall-excerpt.jsonl\`, \`sampler-excerpt.jsonl\`, \`reveal-excerpt.jsonl\`, \`sidecar-excerpt.jsonl\`
+- Stall bundle file names only: \`stall-bundle-names.json\`
+- Interrupt checks for ADR-021/C10: \`interrupt-results.jsonl\`
+- Cloud-account blockers and their unblock step: \`external-blockers.json\`
+- Main/renderer samples: \`samples/\`
+- DiagnosticReports consent/filter manifest: \`diagnostic-reports.json\`
+- Lead filing handoff: \`M2-0194.lead-action.md\`
+EOF_HOSTED_ATTRIBUTION_README
+    printf '[M2-0194] wrote content-free attribution bundle: %s\n' "$OUT"
+    [[ "$RESULT" == PASS ]] || fail "live run did not produce PASS evidence: $(live_failure_summary)"
+    exit 0
+  fi
   write_hosted_summary
   write_evidence_records "$RESULT"
   write_lead_action
@@ -1120,11 +1167,17 @@ record_interrupt_result "process-signal" "$interrupt"
 write_fixture_manifest
 copy_diagnostic_reports "$STAMP"
 RESULT=$(live_result)
-write_evidence_records "$RESULT"
-write_lead_action
+if [[ -n "$CANDIDATE_RUN" ]]; then
+  write_attribution_bundle
+else
+  write_evidence_records "$RESULT"
+  write_lead_action
+fi
 
 cat > "$OUT/README.md" <<EOF_README
-# M2-0008 Freeze Repro Bundle
+# $TICKET Freeze Repro Bundle
+
+$([[ -z "$CANDIDATE_RUN" ]] || printf -- '- QA candidate run: `%s`\n- Attribution excerpts: `stall-excerpt.jsonl`, `sampler-excerpt.jsonl`, `reveal-excerpt.jsonl`, `sidecar-excerpt.jsonl`\n- Stall bundle file names only: `stall-bundle-names.json`\n- Lead filing handoff: `M2-0194.lead-action.md`\n' "$CANDIDATE_RUN")
 
 - Artifact sha256: \`$ARTIFACT\`
 - Build run id: \`$BUILD_RUN_ID\`
@@ -1136,10 +1189,8 @@ cat > "$OUT/README.md" <<EOF_README
 - Main/renderer samples: \`samples/\`
 - DiagnosticReports .spin/.hang copies, if any: \`diagnostic-reports/\`
 - DiagnosticReports consent/filter manifest: \`diagnostic-reports.json\`
-- Evidence import manifest: \`M2-0008.evidence-import.json\`
-- Owner-bug record summary: \`owner-bug-records.json\`
-- Lead filing handoff: \`M2-0008.lead-action.md\`
+$([[ -z "$CANDIDATE_RUN" ]] && printf -- '- Evidence import manifest: `M2-0008.evidence-import.json`\n- Owner-bug record summary: `owner-bug-records.json`\n- Lead filing handoff: `M2-0008.lead-action.md`\n')
 EOF_README
 
-printf '[M2-0008] wrote content-free bundle: %s\n' "$OUT"
+printf '[%s] wrote content-free bundle: %s\n' "$TICKET" "$OUT"
 [[ "$RESULT" == PASS ]] || fail "live run did not produce PASS evidence: $(live_failure_summary)"
