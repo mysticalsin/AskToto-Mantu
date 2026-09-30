@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { totalmem } from 'node:os'
 import { auditLog, type AuditEvent } from '../logger'
 import { availableMemoryGB } from './available-memory'
+import { hkMRamFloorOverrideActive, type HkMRamFloorOverride } from '../qa-hk-m'
 
 /**
  * Code-reviewed metadata for the Métis Local model payload.
@@ -258,13 +259,24 @@ function totalRamGBValue(): number {
   return totalRamGB()
 }
 
-/** Refuse a load when the machine cannot safely run the bundled model. */
-export function assertRamOk(id: string): void {
+/**
+ * Refuse a load when the machine cannot safely run the bundled model. `ramFloorOverride` is honoured only for a
+ * token minted by the packaged HK-M proof while its env gate holds (qa-hk-m.ts); it never changes the user-facing gate.
+ */
+export function assertRamOk(id: string, ramFloorOverride?: HkMRamFloorOverride): void {
   const entry = getModel(id)
   const available = advertisedRamGB()
-  if (available < entry.minTotalRamGB) {
-    throw new InsufficientRamError(id, entry.minTotalRamGB, totalRamGB())
+  if (available >= entry.minTotalRamGB) return
+  if (hkMRamFloorOverrideActive(ramFloorOverride, process.env, app.isPackaged)) {
+    auditLog('hk-m.ram-floor-override', {
+      modelId: id,
+      advertisedGB: available,
+      requiredGB: entry.minTotalRamGB,
+      totalmemBytes: totalmem()
+    })
+    return
   }
+  throw new InsufficientRamError(id, entry.minTotalRamGB, totalRamGB())
 }
 
 /**
@@ -523,8 +535,8 @@ async function verifyFileChecksum(
  * Verify both model files before a cold llama-server start, re-hashing only when a file's on-disk
  * identity is not already cached as verified (see `verifiedFileIdentity`).
  */
-export async function verifyIntegrity(id: string): Promise<void> {
-  assertRamOk(id)
+export async function verifyIntegrity(id: string, ramFloorOverride?: HkMRamFloorOverride): Promise<void> {
+  assertRamOk(id, ramFloorOverride)
   const entry = getModel(id)
   const paths = modelPaths(id)
   const bundled = modelSource(id) === 'bundled'

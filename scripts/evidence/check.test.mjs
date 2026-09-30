@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RECORD_SCHEMA } from './record.mjs'
-import { TEST_WORKFLOW, ledgerProblems, outputProblems, prProblems, githubApi, m2_0008BundleProblems } from './check.mjs'
+import { TEST_WORKFLOW, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems } from './check.mjs'
 
 const SHA1_A = '1'.repeat(40)
 const SHA1_B = '2'.repeat(40)
@@ -571,6 +571,55 @@ test('P2 a valid LOCALLY_TESTED block with a green run on the head SHA passes', 
   const problems = await prProblems({
     body: evidenceBody(rec), headSha: SHA1_A, prNumber: 42,
     github: fakeGithub({ runs: { 101: greenRun } }), fileExists: () => true
+  })
+  assert.deepEqual(problems, [])
+})
+
+const liveRecord = (environment, overrides = {}) => {
+  const { pr, ...withoutPr } = record({
+    evidence_level: 'LIVE_VERIFIED',
+    ci_run_id: 303,
+    artifact_sha256: 'a'.repeat(64),
+    build_run_id: 303,
+    environment,
+    command: 'npm run check:packaged-launch',
+    output: { path: 'evidence/raw/M2-0001/launch.json', sha256: 'a'.repeat(64) },
+    ...overrides
+  })
+  return withoutPr
+}
+
+// Writes the records as the program's JSONL store and loads them the way the CLI does.
+function programWithRecords(records, ticketOverrides) {
+  const root = mkdtempSync(join(tmpdir(), 'evidence-hosted-'))
+  mkdirSync(join(root, 'ledger'), { recursive: true })
+  mkdirSync(join(root, 'evidence', 'records'), { recursive: true })
+  const ledgerPath = join(root, 'ledger', 'tickets.json')
+  writeFileSync(ledgerPath, JSON.stringify({ tickets: [ticket(ticketOverrides)] }))
+  writeFileSync(join(root, 'evidence', 'records', 'M2-0001.jsonl'), records.map((r) => `${JSON.stringify(r)}\n`).join(''))
+  return loadProgram(ledgerPath)
+}
+
+test('H1 a LIVE_VERIFIED requirement closes on a hosted-runner record and not on a ci record', () => {
+  const requirement = { id: 'M2-0001', status: 'DONE', required_evidence: ['LIVE_VERIFIED'] }
+
+  const hosted = programWithRecords([liveRecord({ kind: 'hosted-runner', host: 'macos-latest' })], requirement)
+  assert.deepEqual(hosted.problems, [])
+  assert.equal(hosted.recordsByTicket.get('M2-0001')?.length, 1)
+  assert.deepEqual(ledgerProblems(hosted.ledger, hosted.recordsByTicket), [])
+
+  // The record store drops a ci LIVE_VERIFIED record, so the ticket has no evidence and stays open.
+  const ci = programWithRecords([liveRecord({ kind: 'ci', host: 'ubuntu-latest' })], requirement)
+  assertProblem(ci.problems, "must not be 'ci'", 'LIVE_VERIFIED')
+  assert.equal(ci.recordsByTicket.has('M2-0001'), false)
+  assertProblem(ledgerProblems(ci.ledger, ci.recordsByTicket), 'M2-0001', 'LIVE_VERIFIED')
+})
+
+test('H2 --pr-event accepts a hosted-runner LIVE_VERIFIED block without resolving ci_run_id as a Build & Test run', async () => {
+  const rec = liveRecord({ kind: 'hosted-runner', host: 'windows-latest' })
+  const problems = await prProblems({
+    body: evidenceBody(rec), headSha: SHA1_A, prNumber: 42,
+    github: fakeGithub({ throwOnRun: true }), fileExists: () => true
   })
   assert.deepEqual(problems, [])
 })
