@@ -86,6 +86,10 @@ const REASONS = [
     why: 'Plants a real file symlink with a draft-shaped name to prove recovery never follows it. File symlinks need elevation or Developer Mode on Windows; the gateway isSymlink classification itself runs on every platform in gateway.test.ts.'
   },
   {
+    match: 'stall-bundle.test.ts',
+    why: 'Plants real file symlinks with bundle-shaped names to prove Export diagnostics never lists or follows one (M2-0199). File symlinks need elevation or Developer Mode on Windows, and Windows has no stall sampler writing bundles; the header, content and regular-file checks run on every platform in the same file.'
+  },
+  {
     match: 'meetings-storage.test.ts',
     why: 'Pins libuv pool threads with real FIFOs under several root spellings to prove every storageAt gateway shares one admission. Windows has no FIFOs; the per-root gateway keying runs on every platform in the same file, and the admission cap itself in gateway.test.ts through an in-memory fs.'
   },
@@ -117,7 +121,7 @@ const REASONS = [
 
 /** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
  *  Lower it when a skip is retired; never raise it for an undeclared skip. */
-const BASELINE = { win32: 34, darwin: 2, linux: 28 }
+const BASELINE = { win32: 35, darwin: 2, linux: 28 }
 
 const platform = process.platform
 const allowed = BASELINE[platform]
