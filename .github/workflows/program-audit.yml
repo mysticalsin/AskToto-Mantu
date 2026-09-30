@@ -1,0 +1,187 @@
+name: Program audit
+
+# Reusable audit lane for a program ledger (M2-0509): the evidence back-fill (M2-0238), the
+# re-execution draw (ADR-017, M2-0002) and the velocity forecast (M2-0197), run in CI only (D-28).
+# The ledger and its evidence records live in a private repository that never appears here (AGENTS.md
+# #1), so this is a `workflow_call` workflow in the same shape as ledger.yml: the caller's own workflow
+#   jobs:
+#     audit:
+#       uses: mysticalsin/AskToto-Mantu/.github/workflows/program-audit.yml@main
+#       with:
+#         mode: sample
+#         ledger-path: ledger/tickets.json
+#         population-of: M2-0046
+#         seed: <40-hex gate commit>
+# runs this job in the caller's context. The first checkout (no `repository:` input) is the caller's
+# tree, so no cross-repository credential exists anywhere; the second fetches this repository's scripts
+# at `checker-ref` into a separate path. `workflow_dispatch` (same inputs) smoke-runs a fixture ledger
+# inside this repository. Each mode uploads a content-free artifact (ticket ids, hours, hashes) and
+# writes its result to the job summary; the lead files any evidence from the artifact.
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: backfill, sample or velocity
+        required: true
+        type: string
+      ledger-path:
+        description: Path to ledger/tickets.json in the caller's own checkout
+        required: true
+        type: string
+      records-path:
+        description: Evidence-record directory in the caller's checkout (velocity; default is next to the ledger)
+        required: false
+        type: string
+        default: ''
+      population-of:
+        description: sample mode, ticket whose closed dependencies are the population (exclusive with since)
+        required: false
+        type: string
+        default: ''
+      since:
+        description: sample mode, closed since this date or instant (exclusive with population-of)
+        required: false
+        type: string
+        default: ''
+      seed:
+        description: sample mode, 40-hex gate commit SHA
+        required: false
+        type: string
+        default: ''
+      gate:
+        description: velocity mode, gate label for the forecast
+        required: false
+        type: string
+        default: m3
+      checker-ref:
+        description: Ref of this repository to fetch the audit scripts from
+        required: false
+        type: string
+        default: main
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: backfill, sample or velocity
+        required: true
+        type: string
+      ledger-path:
+        description: Path to a ledger/tickets.json for a manual smoke run (for example a fixture)
+        required: true
+        type: string
+      records-path:
+        description: Evidence-record directory (velocity; default is next to the ledger)
+        required: false
+        type: string
+        default: ''
+      population-of:
+        description: sample mode, ticket whose closed dependencies are the population (exclusive with since)
+        required: false
+        type: string
+        default: ''
+      since:
+        description: sample mode, closed since this date or instant (exclusive with population-of)
+        required: false
+        type: string
+        default: ''
+      seed:
+        description: sample mode, 40-hex gate commit SHA
+        required: false
+        type: string
+        default: ''
+      gate:
+        description: velocity mode, gate label for the forecast
+        required: false
+        type: string
+        default: m3
+      checker-ref:
+        description: Ref of this repository to fetch the audit scripts from
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  audit:
+    name: Program audit (${{ inputs.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODE: ${{ inputs.mode }}
+      LEDGER_PATH: ${{ inputs.ledger-path }}
+      RECORDS_PATH: ${{ inputs.records-path }}
+      POPULATION_OF: ${{ inputs.population-of }}
+      SINCE: ${{ inputs.since }}
+      SEED: ${{ inputs.seed }}
+      GATE: ${{ inputs.gate }}
+      OUT_DIR: out/program-audit
+    steps:
+      - name: Validate the inputs
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            backfill | sample | velocity) ;;
+            *) echo "mode must be backfill, sample or velocity" >&2; exit 2 ;;
+          esac
+          if [ "$MODE" = "sample" ]; then
+            if ! printf '%s' "$SEED" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "sample mode requires a 40-hex seed" >&2; exit 2
+            fi
+            if { [ -n "$POPULATION_OF" ] && [ -n "$SINCE" ]; } || { [ -z "$POPULATION_OF" ] && [ -z "$SINCE" ]; }; then
+              echo "sample mode requires exactly one of population-of or since" >&2; exit 2
+            fi
+          fi
+      - name: Checkout the caller's ledger and evidence records
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Fetch the public audit scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: mysticalsin/AskToto-Mantu
+          ref: ${{ inputs.checker-ref }}
+          path: .program-audit-scripts
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Back-fill the evidence records
+        if: inputs.mode == 'backfill'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node .program-audit-scripts/scripts/evidence/backfill.mjs --repo mysticalsin/AskToto-Mantu --ledger "$LEDGER_PATH" --out "$OUT_DIR"
+          cat "$OUT_DIR/README.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Draw the re-execution sample
+        if: inputs.mode == 'sample'
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT_DIR"
+          args=(--ledger "$LEDGER_PATH" --seed "$SEED")
+          if [ -n "$POPULATION_OF" ]; then
+            args+=(--population-of "$POPULATION_OF")
+          else
+            args+=(--since "$SINCE")
+          fi
+          node .program-audit-scripts/scripts/evidence/sample.mjs "${args[@]}" | jq --arg sha "$GITHUB_SHA" '. + {ledger_commit: $sha}' > "$OUT_DIR/sample.json"
+          { echo '```json'; cat "$OUT_DIR/sample.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Forecast the velocity
+        if: inputs.mode == 'velocity'
+        run: |
+          set -euo pipefail
+          args=(--ledger "$LEDGER_PATH" --gate "$GATE" --out-dir "$OUT_DIR")
+          if [ -n "$RECORDS_PATH" ]; then
+            args+=(--records "$RECORDS_PATH")
+          fi
+          node .program-audit-scripts/scripts/program/velocity.mjs "${args[@]}"
+          cat "$OUT_DIR/FORECAST.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && hashFiles('out/program-audit/**') != ''
+        with:
+          name: program-audit-${{ inputs.mode }}
+          path: out/program-audit/
+          if-no-files-found: error
+          retention-days: 30

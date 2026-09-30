@@ -4,6 +4,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 
 const root = join(__dirname, '../..')
@@ -18,7 +19,10 @@ const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')) a
 const experience = readFileSync(join(root, 'src/renderer/src/components/OnboardingExperience.tsx'), 'utf8')
 const app = readFileSync(join(root, 'src/renderer/src/App.tsx'), 'utf8')
 const index = readFileSync(join(root, 'src/main/index.ts'), 'utf8')
-const settings = readFileSync(join(root, 'src/renderer/src/components/Settings.tsx'), 'utf8')
+// Settings is being split (M2-0071): the connected-state proof lives in the moved DustSetup section.
+const settings = ['components/Settings.tsx', 'features/settings/DustSetup.tsx']
+  .map((file) => readFileSync(join(root, 'src/renderer/src', file), 'utf8'))
+  .join('\n')
 const intel = readFileSync(join(root, 'src/main/intelligence.ts'), 'utf8')
 const intelButton = readFileSync(join(root, 'intelligence/src/components/IntelligenceUpdateButton.tsx'), 'utf8')
 const orb = readFileSync(join(root, 'src/shared/overlay-orb.ts'), 'utf8')
@@ -27,7 +31,7 @@ const geometry = readFileSync(join(root, 'src/main/island/geometry.ts'), 'utf8')
 const jarvis = readFileSync(join(root, 'src/renderer/src/lib/jarvis-orb.ts'), 'utf8')
 const flow = readFileSync(join(root, 'src/renderer/src/lib/onboarding-flow.ts'), 'utf8')
 const kinetic = readFileSync(join(root, 'src/renderer/src/lib/onboarding-kinetic-grid.ts'), 'utf8')
-const css = readFileSync(join(root, 'src/renderer/src/styles.css'), 'utf8')
+const css = readAppCss()
 
 describe('KineticGrid release checklist', () => {
   it('1 KineticGrid after lady, no Skip, Ready-only done, no rotating stripe wash', () => {

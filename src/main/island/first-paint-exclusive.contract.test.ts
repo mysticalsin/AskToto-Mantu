@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import {
   exclusiveMayUseSimpleFullScreen,
@@ -106,7 +107,8 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(parked.backgroundColor).toBe(OVERLAY_TRANSPARENT_BACKGROUND)
     expect(parked.backgroundColor).toBe('#00000000')
     expect(parked.fullscreenable).toBe(false)
-    expect(parked.roundedCorners).toBe(true)
+    // M2-0526: borderless on macOS, so no hidden title strip can grow a parked frame.
+    expect(parked.roundedCorners).toBe(false)
     expect(exclusiveMayUseSimpleFullScreen(parked.transparent)).toBe(false)
   })
 
@@ -214,7 +216,7 @@ describe('exclusive onboarding cannot be dragged off-screen', () => {
   it('onboard root has no windowDrag and main ignores move while exclusive', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
-    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    const css = readAppCss()
     const gate = app.slice(
       app.indexOf('Onboarding gate FIRST'),
       app.indexOf('Post-onboarding only:')
@@ -308,7 +310,7 @@ describe('MQA-338 exclusive Act 1 privacy + bounded diagnostics', () => {
   })
 
   it('portal-open CSS unlock includes onboard-cta / Next (FITO-185-V)', () => {
-    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    const css = readAppCss()
     expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open[\s\S]*\.onboard-cta/)
     expect(css).toMatch(/FITO-185-V/)
   })

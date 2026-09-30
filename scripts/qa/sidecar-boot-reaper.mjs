@@ -5,31 +5,61 @@
  * same append-only identity contract as llama-server, hard-kills the app, relaunches, and requires the
  * old sidecar pid to disappear within 5 s of boot with a sidecar.reaped safe-ownership audit. A real
  * llama-server variant is also reported; missing model assets are BLOCKED_EXTERNAL evidence, not a red
- * smoke lane.
+ * smoke lane. The real llama-server launches set METIS_QA_HOST_FLOOR_OVERRIDE=1 (M2-0482) so a 7 GiB hosted runner
+ * is not refused by the bundled model's RAM floors; the report records that and the host memory figures.
+ *
+ * On macOS a third row (M2-0468) isolates the reaper's legacy rule: the harness seeds a sha256-verified copy of
+ * the bundled pinned model into <profile>/local-llm, starts the bundle's own llama-server on it as a launchd
+ * orphan before the app, and requires sidecar.reaped {reason: 'legacy-orphan'} for that pid within 5 s of boot.
+ * A second orphan of the same binary whose -m stays on the bundled model is the negative control: it must
+ * survive, so the rule never matches by name or executable alone.
  *
  * Usage:
- *   node scripts/qa/sidecar-boot-reaper.mjs <installed app> <report.json>
+ *   node scripts/qa/sidecar-boot-reaper.mjs <installed app> <report.json> [--require-real-llama]
  *
- * Exit 0 PASS or PASS-with-BLOCKED_EXTERNAL · 1 FAIL · 2 usage/precondition. The report is
- * content-free: pids, counts, timings and audit event counts only; no paths, command lines, profile
- * locations or user content.
+ * Exit 0 PASS or PASS-with-BLOCKED_EXTERNAL · 1 FAIL · 2 usage/precondition, and with --require-real-llama
+ * also 2 when the real llama-server or legacy-orphan row is BLOCKED_EXTERNAL. The report is content-free: pids, counts,
+ * timings and audit event counts only; no paths, command lines, profile locations or user content.
  */
 
 import { createHash } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { appendFileSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
+import { freemem, tmpdir, totalmem } from 'node:os'
 import { basename, dirname, join, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
+import { LOCAL_MODEL_ASSETS, LOCAL_MODEL_ID } from '../local-model-assets.mjs'
+import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { listProcesses, ownedProcesses, roleCounts } from './owned-processes.mjs'
+import { sha256File } from './provenance.mjs'
 
 const READY_TIMEOUT_MS = 150_000
 const LLAMA_TIMEOUT_MS = 120_000
 const REAPER_BOUND_MS = 5_000
 const POLL_MS = 250
 const REAL_LLAMA_UNBLOCK = 'Seed the packaged local model assets.'
+const LEGACY_ORPHAN_UNBLOCK = 'Seed the packaged llama-server and local model assets.'
+const LEGACY_ORPHAN_OFF_MAC_UNBLOCK = 'Run the legacy-orphan proof on a macOS hosted runner; it is macOS-only.'
+// The reaper reads process start times from ps lstart, which has one-second resolution, and requires the
+// orphan to start strictly before the current main.
+const START_ORDER_GAP_MS = 2_000
+// The boot reaper checks every process in one pass; this lets it finish that pass after the orphan's reap.
+const REAPER_PASS_SETTLE_MS = 1_000
+
+export const REQUIRE_REAL_LLAMA_FLAG = '--require-real-llama'
 
 const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/
 
@@ -128,6 +158,32 @@ export function observedReapedOrphan(records, pid, alive = processAlive) {
   const reason = sidecarReapReason(records, pid)
   if (!reason || alive(pid)) return null
   return reason
+}
+
+/** The legacy rule's own audit for `pid`: a registry reap of the same pid never counts for this row. */
+export function observedLegacyReap(records, pid, alive = processAlive) {
+  const reaped = records.some(
+    (entry) => entry.event === 'sidecar.reaped' && entry.name === 'llama-server' && entry.reason === 'legacy-orphan' && entry.pid === pid
+  )
+  return reaped && !alive(pid)
+}
+
+/**
+ * The legacy-orphan row's verdict from its observations: the seeded orphan was reaped by the legacy rule within
+ * 5 s of boot, and the negative control (same binary, -m outside <userData>/local-llm) was neither reaped nor gone.
+ */
+export function legacyOrphanVerdict({ records, orphanPid, controlPid, reapedMs, orphanAlive, controlAlive }) {
+  const failures = []
+  const reapedInBound = typeof reapedMs === 'number' && reapedMs <= REAPER_BOUND_MS
+  if (!observedLegacyReap(records, orphanPid, () => orphanAlive) || !reapedInBound) {
+    failures.push('seeded llama-server orphan was not reaped as legacy-orphan within 5 s of boot')
+  }
+  if (records.some((entry) => entry.event === 'sidecar.reaped' && entry.pid === controlPid)) {
+    failures.push('negative control llama-server was reaped although its model is outside the profile local-llm')
+  } else if (!controlAlive) {
+    failures.push('negative control llama-server was not alive after the boot reaper ran')
+  }
+  return { result: failures.length === 0 ? 'pass' : 'fail', failures }
 }
 
 function psRows() {
@@ -304,29 +360,56 @@ function processAlive(pid) {
   }
 }
 
-function launch(executable, profile, port) {
-  const env = { ...process.env, ASKTOTO_USERDATA: profile, METIS_DISABLE_APPLE_FM: '1' }
+// The real llama-server proof needs the sidecar to become a launchd orphan after SIGKILL of main. With supervision
+// on (the shipped default) the helper kills it within about 2 s, so that proof asks for supervision off, which
+// also emulates a legacy unsupervised orphan.
+const REAL_LLAMA_SUPERVISION = 'off'
+
+/**
+ * The app's launch env. Only the real llama-server proof asks for the QA RAM-floor override (M2-0482): a 7 GiB hosted
+ * runner otherwise sits under the bundled model's advertised-RAM floor. The app honours it only when packaged and on
+ * this isolated profile; any inherited value is dropped so the stand-in launch never carries it.
+ */
+export function launchEnv(baseEnv, profile, { hostFloorOverride = false, extraEnv = {} } = {}) {
+  const env = { ...baseEnv, ASKTOTO_USERDATA: profile, METIS_DISABLE_APPLE_FM: '1', ...extraEnv }
   for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
-  return spawn(executable, [`--remote-debugging-port=${port}`], { env, stdio: 'ignore' })
+  delete env.METIS_QA_HOST_FLOOR_OVERRIDE
+  if (hostFloorOverride) env.METIS_QA_HOST_FLOOR_OVERRIDE = '1'
+  return env
+}
+
+function launch(executable, profile, port, options) {
+  return spawn(executable, [`--remote-debugging-port=${port}`], { env: launchEnv(process.env, profile, options), stdio: 'ignore' })
+}
+
+/** Host memory as the runner reports it: hw.memsize (macOS), os.totalmem and os.freemem, in bytes. */
+function hostMemoryFacts() {
+  let hwMemsizeBytes = null
+  if (process.platform === 'darwin') {
+    try {
+      const value = Number(execFileSync('/usr/sbin/sysctl', ['-n', 'hw.memsize'], { encoding: 'utf8' }).trim())
+      hwMemsizeBytes = Number.isSafeInteger(value) ? value : null
+    } catch {
+      /* unreadable: reported as null */
+    }
+  }
+  return { hwMemsizeBytes, totalmemBytes: totalmem(), freememBytes: freemem() }
+}
+
+/** The app's content-free local.host-floor-override records: floor and host figures only, never other fields. */
+export function hostFloorOverrides(records) {
+  return records
+    .filter((record) => record.event === 'local.host-floor-override')
+    .map(({ floor, hostTotalBytes, hostAvailableBytes }) => ({
+      floor: floor === 'prewarm-available-ram' || floor === 'advertised-ram' ? floor : 'unknown',
+      hostTotalBytes: Number.isFinite(hostTotalBytes) ? hostTotalBytes : null,
+      hostAvailableBytes: Number.isFinite(hostAvailableBytes) ? hostAvailableBytes : null
+    }))
 }
 
 function seedLocalLlmSettings(profile) {
   mkdirSync(profile, { recursive: true, mode: 0o700 })
-  writeFileSync(
-    join(profile, 'settings.json'),
-    JSON.stringify(
-      {
-        localLlm: {
-          enabled: true,
-          modelId: 'qwen3.5-0.8b',
-          useFor: { suggest: true, summary: false, vision: false },
-          fallback: true
-        }
-      },
-      null,
-      2
-    )
-  )
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify(LOCAL_LLM_SETTINGS, null, 2))
 }
 
 async function waitFor(predicate, timeoutMs, intervalMs = POLL_MS) {
@@ -421,12 +504,16 @@ function initialObservation(kind) {
     events: {},
     reapedReason: null,
     processes: { beforeKill: null, afterReaper: null },
-    unblock: null
+    unblock: null,
+    hostFloorOverride: false,
+    hostMemory: null,
+    hostFloorOverrides: []
   }
 }
 
 function initialRealLlamaObservation() {
   const observation = initialObservation('real-llama-server')
+  observation.supervision = REAL_LLAMA_SUPERVISION
   observation.timingsMs.llamaStarted = null
   observation.pids.orphan = null
   return observation
@@ -437,6 +524,7 @@ export function summarizeProof(report) {
     schema: 1,
     ticket: 'M2-0233',
     kind: report.kind,
+    ...(report.supervision ? { supervision: report.supervision } : {}),
     result: report.result,
     failures: report.failures,
     unblock: report.unblock,
@@ -444,7 +532,13 @@ export function summarizeProof(report) {
     pids: report.pids,
     reapedReason: report.reapedReason,
     events: report.events,
-    processes: report.processes
+    processes: report.processes,
+    // M2-0482: whether this launch asked for the QA RAM-floor override, the runner's memory, and the floors the
+    // app reports it lifted.
+    hostFloorOverride: report.hostFloorOverride === true,
+    hostMemory: report.hostMemory ?? null,
+    hostFloorOverrides: report.hostFloorOverrides ?? [],
+    ...(report.negativeControl ? { negativeControl: report.negativeControl } : {})
   }
 }
 
@@ -552,7 +646,8 @@ async function runRealLlamaProof({ installRoot, executable }) {
         ...initialRealLlamaObservation(),
         result: 'BLOCKED_EXTERNAL',
         failures: ['real llama-server proof runs on macOS packaged smoke only'],
-        unblock: REAL_LLAMA_UNBLOCK
+        unblock: REAL_LLAMA_UNBLOCK,
+        hostMemory: hostMemoryFacts()
       })
     }
   }
@@ -562,6 +657,10 @@ async function runRealLlamaProof({ installRoot, executable }) {
   let first = null
   let second = null
   const observation = initialRealLlamaObservation()
+  // M2-0482: both launches of this proof ask for the QA RAM-floor override; the report records it and the host.
+  const launchOptions = { hostFloorOverride: true, extraEnv: { METIS_SUPERVISION: REAL_LLAMA_SUPERVISION } }
+  observation.hostFloorOverride = true
+  observation.hostMemory = hostMemoryFacts()
 
   try {
     const busy = ownedProcesses(listProcesses(process.platform), { mainPid: null, installRoot, platform: process.platform })
@@ -569,7 +668,7 @@ async function runRealLlamaProof({ installRoot, executable }) {
 
     const firstPort = await freeLoopbackPort()
     const firstStartedAt = Date.now()
-    first = launch(executable, profile, firstPort)
+    first = launch(executable, profile, firstPort, launchOptions)
     observation.pids.firstMain = first.pid ?? null
     if (!first.pid) throw new Failure('first main pid was unavailable')
     if (!(await waitForRendererReady(profile))) throw new Failure('first launch did not reach renderer ready')
@@ -594,7 +693,7 @@ async function runRealLlamaProof({ installRoot, executable }) {
     if (!orphaned) throw new Failure('llama-server did not become a launchd orphan after SIGKILL')
 
     const secondPort = await freeLoopbackPort()
-    second = launch(executable, profile, secondPort)
+    second = launch(executable, profile, secondPort, launchOptions)
     observation.pids.secondMain = second.pid ?? null
     if (!second.pid) throw new Failure('second main pid was unavailable')
 
@@ -635,22 +734,204 @@ async function runRealLlamaProof({ installRoot, executable }) {
     cleanOwned(second, installRoot)
     await waitFor(() => !first?.pid || !processAlive(first.pid), 5_000, POLL_MS)
     await waitFor(() => !second?.pid || !processAlive(second.pid), 5_000, POLL_MS)
+    observation.hostFloorOverrides = hostFloorOverrides(readAudit(profile))
     rmSync(profile, { recursive: true, force: true })
   }
   return summarizeProof(observation)
 }
 
-export function combinedReport(standIn, realLlama) {
-  const failed = [standIn, realLlama].filter((proof) => proof.result === 'fail')
+function initialLegacyOrphanObservation() {
+  const observation = initialObservation('legacy-orphan')
+  observation.timingsMs = { modelSeeded: null, orphansHealthy: null, appStarted: null, reaped: null }
+  observation.pids = { orphan: null, control: null, main: null }
+  observation.negativeControl = { alive: null, reaped: null }
+  return observation
+}
+
+/** Copies every pinned local-model file from the bundle into `dir`, each copy verified against the manifest. */
+async function seedPinnedModel(bundledDir, dir) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  for (const asset of LOCAL_MODEL_ASSETS) {
+    const source = join(bundledDir, asset.file)
+    if (!existsSync(source)) throw new Precondition(LEGACY_ORPHAN_UNBLOCK)
+    const copy = join(dir, asset.file)
+    copyFileSync(source, copy)
+    if ((await sha256File(copy)) !== asset.sha256) throw new Failure('seeded model copy does not match the local-model manifest')
+  }
+}
+
+/**
+ * Starts `executable` through a shell that exits at once, so the process is reparented to launchd (ppid 1)
+ * exactly like a llama-server whose Métis main died. Returns its pid.
+ */
+function spawnLaunchdOrphan(executable, args) {
+  const stdout = execFileSync('/bin/sh', ['-c', '"$0" "$@" </dev/null >/dev/null 2>&1 & echo $!', executable, ...args], {
+    encoding: 'utf8',
+    timeout: 5_000
+  })
+  const pid = Number(stdout.trim())
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Failure('harness llama-server pid was unavailable')
+  return pid
+}
+
+function harnessLlamaArgs(model, port) {
+  return ['-m', model, '--host', '127.0.0.1', '--port', String(port), '-c', '512', '-ngl', '0']
+}
+
+async function llamaHealthy(port) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2_000) })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+async function runLegacyOrphanProof({ installRoot, executable }) {
+  if (process.platform !== 'darwin') {
+    return summarizeProof({
+      ...initialLegacyOrphanObservation(),
+      result: 'BLOCKED_EXTERNAL',
+      failures: ['legacy-orphan proof runs on macOS only'],
+      unblock: LEGACY_ORPHAN_OFF_MAC_UNBLOCK
+    })
+  }
+
+  // Realpath so the -m argument and ASKTOTO_USERDATA name the profile with the same string.
+  const profile = realpathSync.native(mkdtempSync(join(tmpdir(), 'metis-sidecar-reaper-legacy-')))
+  const observation = initialLegacyOrphanObservation()
+  let app = null
+  let orphanPid = null
+  let controlPid = null
+
+  try {
+    const busy = ownedProcesses(listProcesses(process.platform), { mainPid: null, installRoot, platform: process.platform })
+    if (busy.length > 0) throw new Precondition('install root already has resident processes')
+
+    const llamaServer = join(installRoot, 'Contents', 'Resources', 'llama', 'mac', process.arch, 'llama-server')
+    const bundledModelDir = join(installRoot, 'Contents', 'Resources', 'local-llm', 'models', LOCAL_MODEL_ID)
+    const seededModelDir = join(profile, 'local-llm', 'models', LOCAL_MODEL_ID)
+    if (!existsSync(llamaServer)) throw new Precondition(LEGACY_ORPHAN_UNBLOCK)
+    // The product reads orphan argv from the ps command column, split on whitespace.
+    if (/\s/.test(`${llamaServer}${bundledModelDir}${seededModelDir}`)) {
+      throw new Precondition('install and profile paths must not contain whitespace')
+    }
+
+    const seedStartedAt = Date.now()
+    await seedPinnedModel(bundledModelDir, seededModelDir)
+    observation.timingsMs.modelSeeded = Date.now() - seedStartedAt
+
+    const orphanPort = await freeLoopbackPort()
+    const controlPort = await freeLoopbackPort()
+    const orphansStartedAt = Date.now()
+    orphanPid = spawnLaunchdOrphan(llamaServer, harnessLlamaArgs(join(seededModelDir, 'model.gguf'), orphanPort))
+    observation.pids.orphan = orphanPid
+    controlPid = spawnLaunchdOrphan(llamaServer, harnessLlamaArgs(join(bundledModelDir, 'model.gguf'), controlPort))
+    observation.pids.control = controlPid
+
+    const orphaned = await waitFor(() => {
+      const rows = psRows()
+      return [orphanPid, controlPid].every((pid) => rows.some((proc) => proc.pid === pid && proc.ppid === 1))
+    }, 5_000, POLL_MS)
+    if (!orphaned) throw new Failure('harness llama-server processes did not become launchd orphans')
+    const healthy = await waitFor(async () => (await llamaHealthy(orphanPort)) && (await llamaHealthy(controlPort)), LLAMA_TIMEOUT_MS, 500)
+    if (!healthy) throw new Failure('harness llama-server processes did not become healthy')
+    observation.timingsMs.orphansHealthy = Date.now() - orphansStartedAt
+    await sleep(START_ORDER_GAP_MS)
+
+    const port = await freeLoopbackPort()
+    const appStartedAt = Date.now()
+    app = launch(executable, profile, port)
+    observation.pids.main = app.pid ?? null
+    if (!app.pid) throw new Failure('main pid was unavailable')
+
+    const boot = await waitFor(() => {
+      const audit = readAudit(profile)
+      if (observedLegacyReap(audit, orphanPid)) return { alreadyReaped: true }
+      if (hasAtLeastEvent(audit, 'app.started', 1)) return { alreadyReaped: false }
+      return false
+    }, READY_TIMEOUT_MS, POLL_MS)
+    if (!boot) throw new Failure('launch did not record app.started before the boot timeout')
+    observation.timingsMs.appStarted = Date.now() - appStartedAt
+
+    const reaperStartedAt = Date.now()
+    const reaped = boot.alreadyReaped || await waitFor(() => observedLegacyReap(readAudit(profile), orphanPid), REAPER_BOUND_MS, POLL_MS)
+    const reapedMs = reaped ? (boot.alreadyReaped ? 0 : Date.now() - reaperStartedAt) : null
+    await sleep(REAPER_PASS_SETTLE_MS)
+
+    const audit = readAudit(profile)
+    const verdict = legacyOrphanVerdict({
+      records: audit,
+      orphanPid,
+      controlPid,
+      reapedMs,
+      orphanAlive: processAlive(orphanPid),
+      controlAlive: processAlive(controlPid)
+    })
+    observation.timingsMs.reaped = reapedMs
+    observation.reapedReason = observedLegacyReap(audit, orphanPid) ? 'legacy-orphan' : null
+    observation.negativeControl = {
+      alive: processAlive(controlPid),
+      reaped: audit.some((entry) => entry.event === 'sidecar.reaped' && entry.pid === controlPid)
+    }
+    observation.events = eventCounts(audit)
+    observation.processes.afterReaper = roleCounts(
+      ownedProcesses(listProcesses(process.platform), { mainPid: app.pid, installRoot, platform: process.platform })
+    )
+    observation.result = verdict.result
+    observation.failures.push(...verdict.failures)
+  } catch (error) {
+    observation.result = error instanceof Precondition ? 'BLOCKED_EXTERNAL' : 'fail'
+    observation.failures.push(failureLabel(error))
+    if (error instanceof Precondition) observation.unblock = error.message
+    observation.events = eventCounts(readAudit(profile))
+  } finally {
+    cleanOwned(app, installRoot)
+    for (const pid of [orphanPid, controlPid]) if (pid && processAlive(pid)) killBestEffort(pid)
+    await waitFor(() => !app?.pid || !processAlive(app.pid), 5_000, POLL_MS)
+    await waitFor(() => [orphanPid, controlPid].every((pid) => !pid || !processAlive(pid)), 5_000, POLL_MS)
+    rmSync(profile, { recursive: true, force: true })
+  }
+  return summarizeProof(observation)
+}
+
+export function combinedReport(standIn, realLlama, legacyOrphan) {
+  const proofs = [standIn, realLlama, ...(legacyOrphan ? [legacyOrphan] : [])]
+  const failed = proofs.filter((proof) => proof.result === 'fail')
   return {
-    schema: 2,
+    schema: 3,
     ticket: 'M2-0233',
     result: failed.length === 0 && standIn.result === 'pass' ? 'pass' : 'fail',
-    proofs: { standIn, realLlama },
-    externalBlockers: [standIn, realLlama]
+    proofs: { standIn, realLlama, ...(legacyOrphan ? { legacyOrphan } : {}) },
+    externalBlockers: proofs
       .filter((proof) => proof.result === 'BLOCKED_EXTERNAL')
       .map((proof) => ({ kind: proof.kind, unblock: proof.unblock }))
   }
+}
+
+/** Rows that run the bundle's real llama-server and are required under --require-real-llama. */
+export function requiredRealLlamaRows(report) {
+  return [report.proofs.realLlama, report.proofs.legacyOrphan ?? { kind: 'legacy-orphan', result: 'BLOCKED_EXTERNAL' }]
+}
+
+/**
+ * 0 PASS · 1 FAIL · 2 PRECONDITION: only --require-real-llama turns a BLOCKED_EXTERNAL real-llama or
+ * legacy-orphan row (or a missing legacy-orphan row) into 2, so a macOS candidate exits 0 only when both pass.
+ */
+export function exitCodeFor(report, { requireRealLlama = false } = {}) {
+  if (report.result !== 'pass') return 1
+  if (requireRealLlama && requiredRealLlamaRows(report).some((proof) => proof.result !== 'pass')) return 2
+  return 0
+}
+
+export function parseCliArgs(argv) {
+  const positional = argv.filter((arg) => !arg.startsWith('--'))
+  const flags = argv.filter((arg) => arg.startsWith('--'))
+  const unknown = flags.filter((flag) => flag !== REQUIRE_REAL_LLAMA_FLAG)
+  if (positional.length !== 2 || unknown.length > 0) {
+    throw new Precondition(`usage: node scripts/qa/sidecar-boot-reaper.mjs <installed app> <report.json> [${REQUIRE_REAL_LLAMA_FLAG}]`)
+  }
+  return { target: positional[0], reportPath: positional[1], requireRealLlama: flags.includes(REQUIRE_REAL_LLAMA_FLAG) }
 }
 
 function emitExternalBlockerWarnings(report) {
@@ -673,18 +954,24 @@ function emitExternalBlockerWarnings(report) {
 }
 
 async function main() {
-  const [target, reportPath] = process.argv.slice(2)
-  if (!target || !reportPath) throw new Precondition('usage: node scripts/qa/sidecar-boot-reaper.mjs <installed app> <report.json>')
+  const { target, reportPath, requireRealLlama } = parseCliArgs(process.argv.slice(2))
 
   const targetInfo = resolveTarget(target)
   const standIn = await runStandInProof(targetInfo)
   const realLlama = await runRealLlamaProof(targetInfo)
-  const report = combinedReport(standIn, realLlama)
+  const legacyOrphan = await runLegacyOrphanProof(targetInfo)
+  const report = combinedReport(standIn, realLlama, legacyOrphan)
   mkdirSync(dirname(reportPath), { recursive: true })
   writeFileSync(reportPath, JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
   emitExternalBlockerWarnings(report)
-  process.exit(report.result === 'pass' ? 0 : 1)
+  const code = exitCodeFor(report, { requireRealLlama })
+  if (code === 2) {
+    for (const proof of requiredRealLlamaRows(report).filter((row) => row.result !== 'pass')) {
+      console.error(`[sidecar-boot-reaper] ${proof.kind} proof is BLOCKED_EXTERNAL under ${REQUIRE_REAL_LLAMA_FLAG}: ${proof.unblock}`)
+    }
+  }
+  process.exit(code)
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
