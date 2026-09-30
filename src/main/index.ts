@@ -7151,15 +7151,9 @@ function registerIpc(): void {
   // single ask choke point so every renderer surface (typed ask, screen ask, fact-check) gets the same rule.
   ipcMain.handle(IPC.askStart, async (e, raw) => {
     assertMainWindow(e)
-    const id =
-      raw && typeof raw === 'object' && 'id' in (raw as object)
-        ? String((raw as { id: unknown }).id)
-        : ''
+    const id = raw && typeof raw === 'object' && 'id' in (raw as object) ? String((raw as { id: unknown }).id) : ''
     if (!requireAuth()) {
-      win?.webContents.send(IPC.streamError, {
-        id,
-        message: 'Sign in with your Mantu account to use Métis.'
-      })
+      win?.webContents.send(IPC.streamError, { id, message: 'Sign in with your Mantu account to use Métis.' })
       return
     }
     let pendingAsk: ReturnType<typeof registerPendingAskCancellation> | null = null
@@ -7253,10 +7247,7 @@ function registerIpc(): void {
         console.warn('[brain] context assembly failed', err)
       }
     }
-    if (!pendingAsk.stillPending()) {
-      pendingAsk.releaseIfPending()
-      return
-    }
+    if (!pendingAsk.stillPending()) return pendingAsk.releaseIfPending()
     // Screen fast-path (M13): the renderer asked to answer from the pre-analyzed on-device screen context.
     // Inject main's OWN cached description (re-validated for freshness/window match), plus a short recent-
     // conversation tail so the answer fuses what's on screen with what's being said. Best-effort: if the
@@ -7292,10 +7283,6 @@ function registerIpc(): void {
     // the renderer keeps what run() set (a vision ask carries its own image).
     const screenGrounded =
       req.mode === 'answer' && req.wantsScreenContext ? !!req.screenContext : undefined
-    if (!pendingAsk.stillPending()) {
-      pendingAsk.releaseIfPending()
-      return
-    }
     const allowed = getAllowedProviders() // org allowlist (null = unrestricted)
 
     // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
