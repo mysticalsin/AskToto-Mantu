@@ -217,9 +217,17 @@ export function hoverRestHeight(m: DisplayMetrics): number {
   return hoverHitBandHeight(m)
 }
 
-/** Full-width top-edge approach strip. Camera island is included; left/right top edge also hits. */
+/**
+ * Owner decision OD-23 (2026-09-29): top-center Hide/Island opens only from the notch area, this many px
+ * either side of the bar's centre. The full-width strip opened the bar on every pause over a menu or a
+ * status icon, which read as Métis flashing.
+ */
+export const TOP_CENTER_HOVER_HALF_WIDTH_PX = 150
+
+/** Top-center reveal zone width: ±TOP_CENTER_HOVER_HALF_WIDTH_PX around the bar's centre, never narrower
+ *  than the physical notch and never wider than the work area. */
 export function hoverRestWidth(m: DisplayMetrics): number {
-  return Math.max(1, m.workArea.width)
+  return Math.max(1, Math.min(m.workArea.width, Math.max(TOP_CENTER_HOVER_HALF_WIDTH_PX * 2, m.notchWidth)))
 }
 
 /** Breathing room between a sidecar overlay and the usable display edge. */
@@ -372,7 +380,8 @@ export function overlayPlacementPosition(input: {
   return topCenterPosition(input.width, input.layout, input.metrics, input.topMargin)
 }
 
-/** Placement-aware hover rest. Top-center preserves the existing top-edge band. */
+/** Placement-aware hover rest. Top-center is the notch area (OD-23), centred where the bar and its park
+ *  are centred (`topCenterPosition`, `hideParkRect`). */
 export function hoverWatchRestRect(
   _layout: OverlayLayout,
   m: DisplayMetrics,
@@ -382,7 +391,8 @@ export function hoverWatchRestRect(
   if (resolveOverlayPlacement(placement, m) === 'right-edge') return rightEdgeHoverRestRect(normalizedY, m)
   const height = hoverRestHeight(m)
   const width = hoverRestWidth(m)
-  return { x: m.workArea.x, y: hoverRestTop(m), width, height }
+  const x = clampAxis(Math.round(m.workArea.x + (m.workArea.width - width) / 2), width, m.workArea.x, m.workArea.width)
+  return { x, y: hoverRestTop(m), width, height }
 }
 
 /**
