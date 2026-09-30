@@ -64,7 +64,8 @@ export type AutoHideEvent =
   | { type: 'pointer-leave'; native?: boolean }
   | { type: 'grace-elapsed' }
   | { type: 'dwell-elapsed' }
-  /** `native`: main's cursor watch reports the pointer on the bar or in its reveal zone. */
+  /** `native`: main's cursor watch reports the pointer on the bar or in its reveal zone. Top center only: main
+   *  owns that hover until it reports the leave; the right-edge dock keeps its page-owned leave (M2-0428). */
   | { type: 'reveal-now'; native?: boolean }
   | { type: 'collapse-now' }
 

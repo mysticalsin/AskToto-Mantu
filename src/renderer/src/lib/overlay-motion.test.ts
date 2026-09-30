@@ -3,6 +3,7 @@ import {
   OVERLAY_HIDE_MS,
   OVERLAY_PARK_FALLBACK_MS,
   OVERLAY_REVEAL_MS,
+  overlayHideParkedClassName,
   overlayShouldParkNow,
   overlayShowPeek,
   overlaySpringAfterHide,
@@ -47,6 +48,14 @@ describe('overlay hide/reveal spring timings', () => {
     expect(overlaySpringClassName('in', 'right')).toMatch(/overlay-spring--edge-right/)
     expect(overlaySpringClassName('out', 'right')).toMatch(/overlay-spring--edge-right/)
     expect(overlaySpringClassName('settled', 'right')).toMatch(/overlay-spring--edge-right/)
+  })
+
+  it('M2-0431: a parked Hide paints nothing, and only while it rests parked', () => {
+    expect(overlayHideParkedClassName('rest', false, true)).toBe('overlay-spring--parked')
+    expect(overlayHideParkedClassName('in', false, true)).toBe('')
+    expect(overlayHideParkedClassName('out', false, true)).toBe('')
+    expect(overlayHideParkedClassName('rest', true, true)).toBe('')
+    expect(overlayHideParkedClassName('rest', false, false)).toBe('')
   })
 
   it('Circle/Jarvis expand is a spring, not a hard cut; reduced-motion skips it', () => {

@@ -74,6 +74,7 @@ import {
   circleRestSpringAfterCollapse,
   circleRestSpringAfterExpand,
   circleRestSpringClassName,
+  overlayHideParkedClassName,
   overlayShowPeek,
   overlaySpringAfterHide,
   overlaySpringAfterReveal,
@@ -804,12 +805,7 @@ export function App(): JSX.Element {
   const wasRevealedRef = useRef(overlaySurfaceRevealed)
   const overlayRevealedRef = useRef(overlaySurfaceRevealed)
   overlayRevealedRef.current = overlaySurfaceRevealed
-  // A parked top-center Hide paints nothing, so the bar never shows at full opacity after its exit fade or
-  // before a main-driven reveal. The spring runs in a layout effect so it starts in the same commit as the
-  // reveal: the first painted frame is the in-spring at opacity 0.
-  const overlayHideParked =
-    overlayIdle && !rightEdgePresentation && overlayRestsHidden(overlayLayout) && overlaySpring === 'rest' && !overlaySurfaceRevealed
-  useLayoutEffect(() => {
+  useLayoutEffect(() => { // in the reveal's own commit: the first painted frame is the in-spring at opacity 0
     if (!overlayIdle) {
       setOverlaySpring('rest')
       springIdleRef.current = false
@@ -897,17 +893,12 @@ export function App(): JSX.Element {
         // message as a new enter produces the visible close → reopen flash reported in device QA.
         if (rightEdgePresentation && shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)) return
         if (rightEdgePresentation && d.restoredFromParkedRail) {
-          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(
-            rightEdgeDismissalLockRef.current,
-            { type: 'native-hover-restored' }
-          )
+          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'native-hover-restored' })
         }
         // Main restores the native drawer before it emits this fallback hover signal. Mirror the
         // ordinary pointer-enter path here so a deliberately parked edge dock cannot leave a
         // full-size transparent window behind a renderer-only rail.
         setRightEdgeDockDismissed(false)
-        // Top center: main owns this hover until it reports the leave (a pointer in the notch zone is
-        // outside the window). The right-edge dock keeps its page-owned leave (M2-0428).
         if (rightEdgePresentation) dispatchAutoHide({ type: 'reveal-now' })
         else dispatchAutoHide({ type: 'reveal-now', native: true })
       } else {
@@ -4084,7 +4075,7 @@ export function App(): JSX.Element {
           <div
             className={[
               overlayIdle ? overlaySpringClassName(overlaySpring, rightEdgePresentation ? 'right' : 'top') : circleRestSpringClassName(circleRestSpring),
-              overlayHideParked ? 'overlay-spring--parked' : '',
+              overlayIdle && !rightEdgePresentation ? overlayHideParkedClassName(overlaySpring, overlaySurfaceRevealed, overlayRestsHidden(overlayLayout)) : '',
               // The drawer's own position is absolute. Keep this animation host full-height too so
               // percentage heights resolve to the 360×560 native sidecar rather than its empty flow box.
               rightEdgeDockVisible ? 'h-full' : ''

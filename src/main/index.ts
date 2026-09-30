@@ -223,6 +223,7 @@ import {
   topClamp
 } from './island/geometry'
 import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
+import { openOverlaySettingsSurface, revealOverlaySurface, skipUnchangedChrome } from './island/overlay-surface'
 import {
   OVERLAY_REST_BACKGROUND,
   SETTINGS_SURFACE_BACKGROUND,
@@ -2305,25 +2306,14 @@ function replaceTransparentOverlayWithExclusiveOnboarding(): void {
   }
 }
 
-/** True when `w` already paints `color`. getBackgroundColor drops alpha; every colour this file applies has a
- *  distinct RGB, so comparing RGB is exact here. */
-function windowBackgroundIs(w: BrowserWindow, color: string): boolean {
-  try {
-    return w.getBackgroundColor().toLowerCase() === color.slice(0, 7).toLowerCase()
-  } catch {
-    return false
-  }
-}
-
-/** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. Runs on every reveal,
- *  park and surface change, so a value the window already has is never re-applied: a repeated
- *  setBackgroundColor/setOpacity repaints the whole native surface. */
+/** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */
 function applyOverlaySurfaceChrome(): void {
   if (!win || win.isDestroyed()) return
+  const chrome = skipUnchangedChrome(win) // runs on every reveal, park and surface change
   if (onboardingExclusiveLive()) {
     try {
-      if (!windowBackgroundIs(win, EXCLUSIVE_ONBOARDING_BACKGROUND)) win.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
-      if (win.getOpacity() !== 1) win.setOpacity(1)
+      chrome.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+      chrome.setOpacity(1)
     } catch {
       /* headless */
     }
@@ -2331,22 +2321,21 @@ function applyOverlaySurfaceChrome(): void {
   }
   if (settingsSurfaceOpen) {
     try {
-      if (!windowBackgroundIs(win, SETTINGS_SURFACE_BACKGROUND)) win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
-      if (win.getOpacity() !== 1) win.setOpacity(1)
+      chrome.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
+      chrome.setOpacity(1)
     } catch {
       /* headless */
     }
     return
   }
   try {
-    if (!windowBackgroundIs(win, OVERLAY_REST_BACKGROUND)) win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+    chrome.setBackgroundColor(OVERLAY_REST_BACKGROUND)
   } catch {
     /* headless */
   }
   try {
     const layout = parkLayoutForDisplay(liveOverlayLayout(), screen.getDisplayMatching(win.getBounds()))
-    const opacity = hideParkWindowOpacity(layout, islandResting && !isMinimized)
-    if (win.getOpacity() !== opacity) win.setOpacity(opacity)
+    chrome.setOpacity(hideParkWindowOpacity(layout, islandResting && !isMinimized))
   } catch {
     /* headless */
   }
@@ -3301,8 +3290,8 @@ function tickOverlayCursorWatch(): void {
     windowVisible,
     osHoverSeen: overlayCursorWatchHovering,
     hugStub: isIncompleteAskReveal(bounds),
-    placement,
-    heldCursor: overlayCursorWatchHeldCursor
+    heldCursor: overlayCursorWatchHeldCursor,
+    placement
   })
   if (islandResting || step.osHoverSeen) rightEdgeUnhoveredRevealAt = null
   // Polling previously bypassed the renderer's 150ms dwell and sent reveal-now on the first tick.
@@ -3573,18 +3562,7 @@ function restoreBarWidth(): void {
     const x = wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
     next = { x, y, width: BAR_WIDTH, height: revealedHeight }
   }
-  // Already the revealed bounds (below the notch, or the open drawer): do not setBounds and fight the OS clamp.
-  if (b.x !== next.x || b.y !== next.y || b.width !== next.width || b.height !== next.height) win.setBounds(next, false)
-  // Bounds before visibility: the window keeps its parked opacity (0 for Hide) and stays hidden until it has
-  // its revealed bounds, so the parked frame is never shown and then resized as a second hard cut.
-  // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
-  // showInactive (never show+focus) so the top-edge path works without hunting the menu.
-  try {
-    if (!win.isVisible()) win.showInactive()
-  } catch {
-    /* headless */
-  }
-  applyOverlaySurfaceChrome()
+  revealOverlaySurface(win, next, applyOverlaySurfaceChrome)
 }
 
 function repairOverlayBoundsForReveal(): void {
@@ -3623,10 +3601,7 @@ function applySettingsSurface(): void {
   }
   const display = screen.getDisplayMatching(win.getBounds())
   const rect = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-  win.setBounds(rect, false)
-  // The opaque Settings background only after the resize: applied first, it painted the old bar or park
-  // bounds as a dark slab for a frame.
-  applyOverlaySurfaceChrome()
+  openOverlaySettingsSurface(win, rect, applyOverlaySurfaceChrome)
   applyHideClickThrough()
 }
 

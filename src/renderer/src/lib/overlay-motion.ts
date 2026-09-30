@@ -55,6 +55,13 @@ export function overlaySpringClassName(spring: OverlaySpring, edge: OverlayEdge 
   return 'w-full'
 }
 
+/** A parked top-center Hide paints nothing (`overlay-spring--parked`, opacity 0): the frame between the exit
+ *  fade and the park, or between a main-driven restore and the in spring, stays empty instead of showing the
+ *  bar at full opacity. The right-edge dock renders its rail instead and never takes this class. */
+export function overlayHideParkedClassName(spring: OverlaySpring, revealed: boolean, restsHidden: boolean): string {
+  return restsHidden && !revealed && spring === 'rest' ? 'overlay-spring--parked' : ''
+}
+
 /** Circle/Jarvis expand to the Ask bar. Bar-circle ease-spring only. Not Hide/Island overlay-spring. */
 export type CircleRestSpring = 'idle' | 'expand' | 'collapse'
 export const CIRCLE_REST_EXPAND_MS = 420
