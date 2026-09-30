@@ -9718,9 +9718,10 @@ if (!app.requestSingleInstanceLock()) {
   runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(() => win))
-  // Resume durable live/backfill work after first paint. Directory scans beat fs.watch for synced files:
-  // cloud providers often deliver existing files before watcher events, and the reconcile tick is the
-  // cheap catch-all for changes the initial boot/backfill pass did not observe.
+  // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
+  // Directory scans, rather than fs.watch, are deliberate: Files On-Demand and Windows sync do not
+  // reliably emit every watcher event. A one-minute cadence keeps Intelligence current without depending
+  // on cloud-sync events; provider-free runs only repair already-saved local extractions.
   const BRAIN_RECONCILE_MS = 60 * 1000
   setTimeout(() => {
     // First launch step that can decrypt the brain index: use a marker separate from the early sentinel.
@@ -9745,12 +9746,13 @@ if (!app.requestSingleInstanceLock()) {
         } catch (e) {
           mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
         }
-        // Registered here rather than alongside the timer setup so safe start skips recurring brain work
-        // too; the reconcile tick reads index.json and must not run after a poisoned-index early death.
+        // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
+        // not just the single resume — the reconcile tick reads the same index.json.
         trackTimer(setInterval(() => {
           void reconcileMeetingsInBackground().catch((e) => mainLog.warn('[brain] reconcile tick failed:', e))
         }, BRAIN_RECONCILE_MS))
-        // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto); catch up, then arm the next timeout.
+        // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly consolidation poll.
+        // Catch up if Métis was closed across a slot; then arm the next timeout.
         try {
           wireIntelligenceIndexWork()
         } catch (e) {
@@ -9766,7 +9768,7 @@ if (!app.requestSingleInstanceLock()) {
         } catch (e) {
           mainLog.warn('[boot] scheduleIntelligenceIndex failed:', e)
         }
-        // Consolidation runs once per launch; named slots own the recurring pass (infra/scheduler/policy.ts).
+        // Consolidation runs once per launch; the named slots own the recurring pass. Both are automatic triggers (infra/scheduler/policy.ts).
         try {
           bootWork.run('runConsolidationIfDue', () => runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e)))
         } catch (e) {
