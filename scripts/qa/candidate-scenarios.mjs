@@ -62,7 +62,7 @@ export const SCENARIOS = Object.freeze({
   }),
   // M2-0027 acceptance[4] via M2-0468: SIGKILL main with a live sidecar, relaunch, orphan reaped within 5 s of
   // boot. The legacy rule is off in QA-identity bytes, so both platforms install promotable bytes. macOS
-  // requires the real llama-server row (a BLOCKED_EXTERNAL there is a PRECONDITION, not a PASS).
+  // requires the real llama-server and legacy-orphan rows (a BLOCKED_EXTERNAL there is a PRECONDITION, not a PASS).
   'sidecar-boot-reaper': Object.freeze({
     ticket: 'M2-0027',
     qaOnlyHook: false,

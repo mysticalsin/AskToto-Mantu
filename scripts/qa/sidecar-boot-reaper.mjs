@@ -18,7 +18,7 @@
  *   node scripts/qa/sidecar-boot-reaper.mjs <installed app> <report.json> [--require-real-llama]
  *
  * Exit 0 PASS or PASS-with-BLOCKED_EXTERNAL · 1 FAIL · 2 usage/precondition, and with --require-real-llama
- * also 2 when the real llama-server row is BLOCKED_EXTERNAL. The report is content-free: pids, counts,
+ * also 2 when the real llama-server or legacy-orphan row is BLOCKED_EXTERNAL. The report is content-free: pids, counts,
  * timings and audit event counts only; no paths, command lines, profile locations or user content.
  */
 
@@ -909,10 +909,18 @@ export function combinedReport(standIn, realLlama, legacyOrphan) {
   }
 }
 
-/** 0 PASS · 1 FAIL · 2 PRECONDITION: only --require-real-llama turns a BLOCKED_EXTERNAL real-llama row into 2. */
+/** Rows that run the bundle's real llama-server and are required under --require-real-llama. */
+export function requiredRealLlamaRows(report) {
+  return [report.proofs.realLlama, report.proofs.legacyOrphan ?? { kind: 'legacy-orphan', result: 'BLOCKED_EXTERNAL' }]
+}
+
+/**
+ * 0 PASS · 1 FAIL · 2 PRECONDITION: only --require-real-llama turns a BLOCKED_EXTERNAL real-llama or
+ * legacy-orphan row (or a missing legacy-orphan row) into 2, so a macOS candidate exits 0 only when both pass.
+ */
 export function exitCodeFor(report, { requireRealLlama = false } = {}) {
   if (report.result !== 'pass') return 1
-  if (requireRealLlama && report.proofs.realLlama.result === 'BLOCKED_EXTERNAL') return 2
+  if (requireRealLlama && requiredRealLlamaRows(report).some((proof) => proof.result !== 'pass')) return 2
   return 0
 }
 
@@ -958,7 +966,11 @@ async function main() {
   console.log(JSON.stringify(report, null, 2))
   emitExternalBlockerWarnings(report)
   const code = exitCodeFor(report, { requireRealLlama })
-  if (code === 2) console.error(`[sidecar-boot-reaper] real llama-server proof is BLOCKED_EXTERNAL under ${REQUIRE_REAL_LLAMA_FLAG}: ${realLlama.unblock}`)
+  if (code === 2) {
+    for (const proof of requiredRealLlamaRows(report).filter((row) => row.result !== 'pass')) {
+      console.error(`[sidecar-boot-reaper] ${proof.kind} proof is BLOCKED_EXTERNAL under ${REQUIRE_REAL_LLAMA_FLAG}: ${proof.unblock}`)
+    }
+  }
   process.exit(code)
 }
 

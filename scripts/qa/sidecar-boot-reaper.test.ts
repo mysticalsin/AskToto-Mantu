@@ -226,6 +226,25 @@ describe('sidecar boot reaper proof helpers', () => {
     expect(exitCodeFor(failed)).toBe(1)
   })
 
+  it('keeps the macOS candidate lane non-zero unless the legacy-orphan row also passes under --require-real-llama', () => {
+    const standIn = proof('stand-in-registry', 'pass')
+    const realLlama = proof('real-llama-server', 'pass')
+
+    const legacyBlocked = combinedReport(standIn, realLlama, proof('legacy-orphan', 'BLOCKED_EXTERNAL', 'Seed the packaged llama-server and local model assets.'))
+    expect(legacyBlocked.result).toBe('pass')
+    expect(exitCodeFor(legacyBlocked, { requireRealLlama: true })).toBe(2)
+    // Without the flag (packaged-smoke) the blocked row stays PASS-with-BLOCKED_EXTERNAL.
+    expect(exitCodeFor(legacyBlocked)).toBe(0)
+
+    const legacyFailed = combinedReport(standIn, realLlama, proof('legacy-orphan', 'fail'))
+    expect(legacyFailed.result).toBe('fail')
+    expect(exitCodeFor(legacyFailed, { requireRealLlama: true })).toBe(1)
+
+    const legacyMissing = combinedReport(standIn, realLlama)
+    expect(exitCodeFor(legacyMissing, { requireRealLlama: true })).toBe(2)
+    expect(exitCodeFor(legacyMissing)).toBe(0)
+  })
+
   it('reads --require-real-llama from the command line and refuses anything else', () => {
     expect(parseCliArgs(['Metis.app', 'out/report.json'])).toEqual({
       target: 'Metis.app',
