@@ -434,8 +434,7 @@ function assertLocalWindowsFit(size: number, windows: readonly string[]): void {
   try {
     assertRuntimeLocalExtractionWindowsFit(size, MIN_LOCAL_WINDOW_CHARS, MAX_LOCAL_WINDOWS, windows)
   } catch (error) {
-    if (error instanceof LocalContextOverflowError) throw new ExtractionDoesNotFitError()
-    throw error
+    throw error instanceof LocalContextOverflowError ? new ExtractionDoesNotFitError() : error
   }
 }
 
@@ -443,13 +442,11 @@ function isContextOverflow(error: unknown): boolean {
   return error instanceof LocalContextOverflowError || isLocalContextOverflow(error)
 }
 
-export function fitWindowChars(slotTokens: number, systemChars: number, maxChars: number): number {
-  return fitLocalExtractionWindowChars(slotTokens, systemChars, maxChars)
-}
+export const fitWindowChars = (slotTokens: number, systemChars: number, maxChars: number): number =>
+  fitLocalExtractionWindowChars(slotTokens, systemChars, maxChars)
 
-export function localExtractionWindowChars(slotTokens: number): number {
-  return fitWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
-}
+export const localExtractionWindowChars = (slotTokens: number): number =>
+  fitWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
 
 function extractionWindowSize(s: Settings, route: IngestRoute): { size: number; local: boolean } {
   const first = pickProviderCandidates(s, route)[0]
@@ -742,7 +739,6 @@ async function extractMeeting(
     try {
       return await attempt('')
     } catch (e) {
-      // A request the model's context cannot hold fails identically with a reminder appended.
       if (isContextOverflow(e)) throw e
       // One same-provider reinforcement retry; transport failover already happened inside runCompletion.
       mainLog.warn('[brain] first extraction attempt failed, retrying once:', e instanceof Error ? e.message : e)
