@@ -345,7 +345,11 @@ jobs:
           VARIANT: ${{ matrix.variant }}
         run: |
           expected=$(jq -r --arg v "$VARIANT" '.builds[] | select(.variant == $v) | .signing.certificate_sha1 // "ad-hoc"' provenance/provenance.json)
+          run_id=$(jq -r '.run.id' provenance/provenance.json)
+          mkdir -p launch-reports
           for installer in assets/*; do
+            name=$(basename "$installer")
+            sha=$(jq -r --arg v "$VARIANT" --arg n "$name" '.builds[] | select(.variant == $v) | .assets[] | select(.name == $n) | .sha256' provenance/provenance.json)
             target="$RUNNER_TEMP/installed"
             rm -rf "$target" && mkdir -p "$target"
             case "$installer" in
@@ -371,8 +375,33 @@ jobs:
               [ "$(shasum -a 1 "$RUNNER_TEMP/certificate/c0" | cut -d' ' -f1)" = "$expected" ] \
                 || { echo "::error::$installer is not signed with the QA certificate its provenance records."; exit 1; }
             fi
-            ASKTOTO_MAC_LAUNCH_GATE=1 node scripts/check-packaged-launch.mjs "$app"
+            ASKTOTO_MAC_LAUNCH_GATE=1 node scripts/check-packaged-launch.mjs "$app" \
+              --report "launch-reports/$name.launch.json" \
+              --installer "$name" \
+              --artifact-sha256 "$sha" \
+              --candidate-run "$run_id" \
+              --signature "$expected"
           done
+      - name: Require a PASS report per installer, bound to the provenance sha256
+        if: always()
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          status=0
+          for installer in assets/*; do
+            name=$(basename "$installer")
+            sha=$(jq -r --arg v "$VARIANT" --arg n "$name" '.builds[] | select(.variant == $v) | .assets[] | select(.name == $n) | .sha256' provenance/provenance.json)
+            jq -e --arg n "$name" --arg h "$sha" '.installer == $n and .verdict == "PASS" and .artifact_sha256 == $h' "launch-reports/$name.launch.json" > /dev/null \
+              || { echo "::error::$name has no PASS launch report bound to its provenance sha256."; status=1; }
+          done
+          exit $status
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: candidate-launch-${{ matrix.variant }}
+          path: launch-reports/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   smoke-win:
     name: Install and launch win by sha256
@@ -400,17 +429,55 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $provenance = Get-Content provenance/provenance.json -Raw | ConvertFrom-Json
+          $runId = $provenance.run.id
+          $assets = ($provenance.builds | Where-Object { $_.variant -eq 'win' }).assets
+          New-Item -ItemType Directory -Force launch-reports | Out-Null
+          $signatures = @{}
           foreach ($exe in Get-ChildItem assets -Filter *.exe) {
-            if ((Get-AuthenticodeSignature $exe.FullName).Status -ne 'NotSigned') { throw "$($exe.Name) is signed; Windows candidates are unsigned." }
+            $status = (Get-AuthenticodeSignature $exe.FullName).Status
+            if ($status -ne 'NotSigned') { throw "$($exe.Name) is signed; Windows candidates are unsigned." }
+            $signatures[$exe.Name] = [string]$status
           }
           $target = Join-Path $env:RUNNER_TEMP 'installed'
           $setup = Get-Item assets/Metis-Setup-*.exe
           $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
-          node scripts/check-packaged-launch.mjs (Join-Path $target 'Metis.exe')
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/check-packaged-launch.mjs (Get-Item assets/Metis-Portable-*.exe).FullName
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # One report per promotable installer: the Setup's is the launch of what it installed.
+          $portable = Get-Item assets/Metis-Portable-*.exe
+          $launches = @(
+            @{ Installer = $setup; Exe = (Join-Path $target 'Metis.exe') },
+            @{ Installer = $portable; Exe = $portable.FullName }
+          )
+          foreach ($launch in $launches) {
+            $name = $launch.Installer.Name
+            $sha = ($assets | Where-Object { $_.name -eq $name }).sha256
+            node scripts/check-packaged-launch.mjs $launch.Exe --report "launch-reports/$name.launch.json" --installer $name --artifact-sha256 $sha --candidate-run $runId --signature ($signatures[$name])
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Require a PASS report per installer, bound to the provenance sha256
+        if: always()
+        shell: pwsh
+        run: |
+          $provenance = Get-Content provenance/provenance.json -Raw | ConvertFrom-Json
+          $assets = ($provenance.builds | Where-Object { $_.variant -eq 'win' }).assets
+          $failed = $false
+          foreach ($asset in $assets) {
+            $path = "launch-reports/$($asset.name).launch.json"
+            $report = if (Test-Path $path) { Get-Content $path -Raw | ConvertFrom-Json } else { $null }
+            if ($null -eq $report -or $report.installer -ne $asset.name -or $report.verdict -ne 'PASS' -or $report.artifact_sha256 -ne $asset.sha256) {
+              Write-Output "::error::$($asset.name) has no PASS launch report bound to its provenance sha256."
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: candidate-launch-win
+          path: launch-reports/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   # Report-only per owner decision OD-24; M2-0433 makes it blocking again once ST-1 passes strictly (OD-21).
   st1-mac-fifo:
