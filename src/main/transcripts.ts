@@ -208,16 +208,27 @@ function encryptEnvelopeV2(content: string): Buffer {
   return Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(env), 'utf8')])
 }
 
+function replaceFileSync(file: string, data: string | Buffer): void {
+  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
+  try {
+    writeFileSync(tmp, data, { mode: 0o600 })
+    renameSync(tmp, file)
+  } catch (e) {
+    try { if (existsSync(tmp)) unlinkSync(tmp) } catch { /* ignore */ }
+    throw e
+  }
+}
+
 /** Decrypt a v2 envelope. Handles the 'S:' (safeStorage), 'F:' (file-backend), and legacy (bare
- *  base64) kLocal encodings. Throws on malformed/foreign-keychain input so tryDecodeSaved can turn it
- *  into a typed failure (SavedDecode) instead of crashing a read.
+ *  base64) kLocal encodings. Throws on malformed/foreign-keychain input so tryDecodeSaved can turn it into a typed failure.
  *
  *  `allowKeychainRecovery` (default false, the boot/bulk-read behavior — see index.ts's forced local
- *  keystore note) lets an explicit single-file user read reach an 'S:'-wrapped envelope anyway when this
- *  device's Keychain can still unwrap it: the forced keystore stops the boot-time Keychain prompt, but the
- *  'asktoto Safe Storage' Keychain item itself still exists on a device that recorded before the forced
- *  keystore shipped, so refusing the read there was throwing away recoverable meetings. */
-function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false): string {
+ *  keystore note) lets an explicit single-file user read reach an 'S:'-wrapped envelope when this device's Keychain can still unwrap it. */
+function decryptEnvelopeV2(
+  buf: Buffer,
+  allowKeychainRecovery = false,
+  onRecoveredKey?: (env: EnvelopeV2, contentKeyB64: string) => void
+): string {
   const env = JSON.parse(buf.subarray(MARKER_LEN).toString('utf8')) as EnvelopeV2
   let contentKeyB64: string
   if (env.kLocal.startsWith('F:')) {
@@ -231,6 +242,7 @@ function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false): string {
     }
     const raw = env.kLocal.startsWith('S:') ? env.kLocal.slice(2) : env.kLocal
     contentKeyB64 = unwrapWithKeychain(Buffer.from(raw, 'base64'))
+    if (canRecover && onRecoveredKey) try { onRecoveredKey(env, contentKeyB64) } catch { /* best-effort */ }
   }
   const contentKey = Buffer.from(contentKeyB64, 'base64')
   const decipher = createDecipheriv('aes-256-gcm', contentKey, Buffer.from(env.iv, 'base64'))
@@ -271,11 +283,15 @@ export function envelopeKeyKind(buf: Buffer): 'plain' | 'keychain' | 'file' | 'm
 /** Decode saved bytes, decrypting if the at-rest marker is present.
  *  `allowKeychainRecovery` is forwarded to decryptEnvelopeV2 — see its doc comment; the v1
  *  legacy branch below gets the same recovery bypass but never self-heals (no envelope kLocal to rewrap). */
-function tryDecodeSaved(buf: Buffer, allowKeychainRecovery = false): SavedDecode {
+function tryDecodeSaved(
+  buf: Buffer,
+  allowKeychainRecovery = false,
+  onRecoveredKey?: (env: EnvelopeV2, contentKeyB64: string) => void
+): SavedDecode {
   // v2 envelope: AES-256-GCM content key wrapped by safeStorage (+ optional org escrow).
   if (buf.length >= MARKER_LEN && buf.subarray(0, MARKER_LEN).equals(ENC_MARKER_V2)) {
     try {
-      return { ok: true, text: decryptEnvelopeV2(buf, allowKeychainRecovery) }
+      return { ok: true, text: decryptEnvelopeV2(buf, allowKeychainRecovery, onRecoveredKey) }
     } catch (e) {
       // malformed, auth-tag failure, or foreign keychain — never throw out of a read path
       return { ok: false, reason: e instanceof Error ? e.message : String(e) }
@@ -373,18 +389,7 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
 export function writeSavedSync(file: string, content: string, encrypt: boolean): void {
   let data: Buffer = Buffer.from(content, 'utf8')
   if (encrypt) data = encryptEnvelopeV2(content)
-  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
-  try {
-    writeFileSync(tmp, data, { mode: 0o600 })
-    renameSync(tmp, file)
-  } catch (e) {
-    try {
-      if (existsSync(tmp)) unlinkSync(tmp)
-    } catch {
-      /* ignore */
-    }
-    throw e
-  }
+  replaceFileSync(file, data)
 }
 
 // Decrypted temp copies are tracked and deleted on quit so an encrypted transcript never leaves a
@@ -400,14 +405,17 @@ let tempCleanupHooked = false
  *  This is an explicit single-file user read (the only caller is recallOpen's "Open" click), so it opts
  *  into Keychain recovery for an old 'S:'-wrapped meeting despite the forced local keystore — see
  *  decryptEnvelopeV2's doc comment. Bulk list/search paths (recall.ts) go through decodeSaved instead and
- *  never set this, so they stay exactly as boot-prompt-free as commit 486227d intended. Given `bytes` (read
- *  through the storage gateway by History's Open, history-actions.ts), the file is never read here. */
+ *  never set this, so they stay exactly as boot-prompt-free as commit 486227d intended. */
 export function decryptToTemp(path: string, bytes?: Buffer): string {
   // Read + decrypt defensively: a foreign-keychain file yields the notice instead of throwing and
   // leaving the user with a dead "Open" click.
   let content: string
   try {
-    const decoded = tryDecodeSaved(bytes ?? readFileSync(path), true)
+    const sourceBytes = bytes ?? readFileSync(path)
+    const decoded = tryDecodeSaved(sourceBytes, true, bytes ? undefined : (env, contentKeyB64) => {
+      env.kLocal = 'F:' + encryptSecret(contentKeyB64).toString('base64')
+      replaceFileSync(path, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(env), 'utf8')]))
+    })
     content = decoded.ok ? decoded.text : UNDECRYPTABLE_MSG
   } catch {
     content = UNDECRYPTABLE_MSG
@@ -416,7 +424,7 @@ export function decryptToTemp(path: string, bytes?: Buffer): string {
     app.getPath('temp'),
     `asktoto-${randomBytes(6).toString('hex')}-${basename(path).replace(/\.md$/, '')}.md`
   )
-  writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 })
+  writeFileSync(tmp, content, { mode: 0o600 })
   lockPathToCurrentUserWin32(tmp) // mode bits are ignored on Windows; enforce owner-only via DACL
   decryptedTemps.add(tmp)
   if (!tempCleanupHooked) {

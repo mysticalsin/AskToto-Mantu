@@ -614,10 +614,8 @@ function setAsideCorruptIndex(p: string): ResolvedIndex {
   auditLog('brain.index.quarantined', { kept: kept + 1, cap: INDEX_AUTO_SNAPSHOT_CAP })
   return { kind: 'absent' }
 }
-function loadIndex(s: Settings): ResolvedIndex {
-  const p = activeIngestLedgerPath(s, join(brainDir(s), INDEX_REL))
+function readIndexPathSync(p: string): { load: IndexLoad; mtimeMs: number; size: number; hit: IndexCacheEntry | undefined } {
   const hit = indexCache.get(p)
-
   let mtimeMs: number
   let size: number
   try {
@@ -625,38 +623,40 @@ function loadIndex(s: Settings): ResolvedIndex {
     mtimeMs = st.mtimeMs
     size = st.size
   } catch (e) {
-    if (errnoCode(e) === 'ENOENT') {
-      indexCache.delete(p)
-      return { kind: 'absent' }
-    }
-    return recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: errnoCode(e) })
+    if (errnoCode(e) === 'ENOENT') { indexCache.delete(p); return { load: { kind: 'absent' }, mtimeMs: -1, size: -1, hit } }
+    const load = recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: errnoCode(e) })
+    return { load, mtimeMs: -1, size: -1, hit }
   }
-
-  if (hit && hit.mtimeMs === mtimeMs && hit.size === size && !ioRetryDue(hit)) return hit.load
-
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size && !ioRetryDue(hit)) return { load: hit.load, mtimeMs, size, hit }
   let buf: Buffer
   try {
     buf = readFileSync(p)
   } catch (e) {
     const code = errnoCode(e)
-    if (code === 'ENOENT') {
-      indexCache.delete(p)
-      return { kind: 'absent' }
-    }
-    return recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: code })
+    if (code === 'ENOENT') { indexCache.delete(p); return { load: { kind: 'absent' }, mtimeMs: -1, size: -1, hit } }
+    const load = recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: code })
+    return { load, mtimeMs, size, hit }
   }
+  return { load: classifyIndexBytes(buf), mtimeMs, size, hit }
+}
 
-  const classified = classifyIndexBytes(buf)
+function finishIndexLoad(p: string, read: ReturnType<typeof readIndexPathSync>): ResolvedIndex {
+  const { load: classified, mtimeMs, size, hit } = read
   const load: ResolvedIndex = classified.kind === 'corrupt' ? setAsideCorruptIndex(p) : classified
-
   if (load.kind === 'absent') {
-    indexCache.delete(p)
-    return load
+    indexCache.delete(p); return load
   }
   if (load.kind === 'unavailable') return recordUnavailable(p, hit, mtimeMs, size, load)
-
   indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
   return load
+}
+
+function loadIndex(s: Settings): ResolvedIndex {
+  const legacyPath = join(brainDir(s), INDEX_REL)
+  const p = activeIngestLedgerPath(s, legacyPath)
+  const current = finishIndexLoad(p, readIndexPathSync(p))
+  if (current.kind !== 'absent' || ingestLedgerMode() !== 'switch') return current
+  return finishIndexLoad(legacyPath, readIndexPathSync(legacyPath))
 }
 
 async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
