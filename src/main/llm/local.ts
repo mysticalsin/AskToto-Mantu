@@ -15,7 +15,8 @@ export const LOCAL_OUTPUT_TOKEN_BUDGETS = Object.freeze({ suggest: 96, summary: 
 const LOCAL_SYSTEM_CHAR_CAP = 40_000 // matches personas.ts contextBlock's existing imported-context cap
 const LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP = 80_000
 
-export const LOCAL_CHARS_PER_TOKEN = localRuntime.LOCAL_CHARS_PER_TOKEN
+// Keep this local to avoid forcing every local-runtime test mock to mirror sizing internals.
+export const LOCAL_CHARS_PER_TOKEN = 3
 
 /** Apple's on-device model context window (prompt plus answer). */
 export const FM_CONTEXT_TOKENS = 4096

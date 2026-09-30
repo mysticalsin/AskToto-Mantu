@@ -419,32 +419,18 @@ export function extractJsonObject(raw: string): string {
 export const buildExtractionSystem = (extra = ''): string =>
   INJECTION_GUARD.trimStart() + '\n\n' + BRAIN_EXTRACTION_PROMPT + extra
 
-// ── Windowed extraction (Task MI-4, kills D2 — the old hard 24k truncation) ──────────────────────────
+// ── Windowed extraction ─────────────────────────────────────────────────────
 
-// Same size as the old hardcoded `.slice(0, 24000)`; transcripts at or under it keep the exact
-// single-completion path.
 const WINDOW_SIZE = 24000
-// Trailing context for boundary-split facts; small enough not to meaningfully multiply calls.
 const WINDOW_OVERLAP = 1000
 const EXTRACTION_REMINDER = '\n\nREMINDER: your ENTIRE reply must be one valid JSON object. No fences, no prose.'
-const MIN_LOCAL_WINDOW_CHARS = 1000
-const MAX_LOCAL_WINDOWS = 12
+const MIN_LOCAL_WINDOW_CHARS = 1000, MAX_LOCAL_WINDOWS = 12
 
-/** A meeting whose extraction cannot fit the local model's context on this machine. */
 export class ExtractionDoesNotFitError extends LocalContextOverflowError {
-  constructor() {
-    super()
-    this.name = 'ExtractionDoesNotFitError'
-  }
+  constructor() { super(); this.name = 'ExtractionDoesNotFitError' }
 }
 
-/** The largest window (chars) whose local extraction request fits `slotTokens`, capped at `maxChars`. */
-export function fitWindowChars(slotTokens: number, systemChars: number, maxChars: number): number {
-  return fitLocalExtractionWindowChars(slotTokens, systemChars, maxChars)
-}
-
-/** Throws unless every local extraction window fits the route's fitted size and bounded call budget. */
-export function assertLocalWindowsFit(size: number, windows: readonly string[]): void {
+function assertLocalWindowsFit(size: number, windows: readonly string[]): void {
   try {
     assertRuntimeLocalExtractionWindowsFit(size, MIN_LOCAL_WINDOW_CHARS, MAX_LOCAL_WINDOWS, windows)
   } catch (error) {
@@ -453,26 +439,22 @@ export function assertLocalWindowsFit(size: number, windows: readonly string[]):
   }
 }
 
-export function isContextOverflow(error: unknown): boolean {
+function isContextOverflow(error: unknown): boolean {
   return error instanceof LocalContextOverflowError || isLocalContextOverflow(error)
 }
 
-/** Largest local extraction window that fits one runtime slot, capped at WINDOW_SIZE. */
 export function localExtractionWindowChars(slotTokens: number): number {
-  return fitWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
+  return fitLocalExtractionWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
 }
 
-/** Window size for this route; `local` means overflow is permanent for the current runtime slot. */
 function extractionWindowSize(s: Settings, route: IngestRoute): { size: number; local: boolean } {
   const first = pickProviderCandidates(s, route)[0]
   if (first?.provider !== 'local') return { size: WINDOW_SIZE, local: false }
-  let slotTokens: number
   try {
-    slotTokens = localSlotTokens(first.model)
+    return { size: localExtractionWindowChars(localSlotTokens(first.model)), local: true }
   } catch {
     return { size: WINDOW_SIZE, local: false }
   }
-  return { size: localExtractionWindowChars(slotTokens), local: true }
 }
 
 function classifyIngestFailure(error: unknown, unreadable: boolean): BrainIngestFailureReason {
@@ -739,11 +721,7 @@ async function extractMeeting(
 
   const runWindow = async (window: string): Promise<MeetingExtraction> => {
     const user = `Meeting transcript (file: ${basename(sourceFile)}):\n\n"""\n${window}\n"""`
-    // Set by attempt() the moment runCompletion returns text, independent of whether that text then
-    // parses — so a parse failure's reinforcement retry (below) can pin itself to the SAME provider that
-    // produced the bad output. Stays undefined only when runCompletion itself never got any text back
-    // (every eligible candidate failed on transport), in which case the retry falls through to a fresh
-    // failover walk instead — same as a first attempt.
+    // Set once text returns so a parse retry stays on the same provider; transport failures keep failover.
     let servedBy: ProviderId | undefined
     const attempt = async (extra: string, pin?: ProviderId): Promise<MeetingExtraction> => {
       const { text, provider } = await runCompletion(
@@ -762,33 +740,26 @@ async function extractMeeting(
     } catch (e) {
       // A request the model's context cannot hold fails identically with a reminder appended.
       if (isContextOverflow(e)) throw e
-      // One reinforcement retry — malformed JSON is the dominant failure mode, not content. Cross-
-      // provider failover for TRANSPORT failures already happened inside runCompletion; this retry is
-      // deliberately same-provider (servedBy) so a parse-failure reminder never turns into an accidental
-      // provider switch — that's the failover walk's job, not this one's.
+      // One same-provider reinforcement retry; transport failover already happened inside runCompletion.
       mainLog.warn('[brain] first extraction attempt failed, retrying once:', e instanceof Error ? e.message : e)
       return attempt(EXTRACTION_REMINDER, servedBy)
     }
   }
 
-  // Sequential, not concurrent — see the module doc / windowing comments: EXTRACT_CONCURRENCY governs
-  // how many DIFFERENT FILES extract at once, never how many windows of the SAME file run at once.
+  // Sequential per file; EXTRACT_CONCURRENCY is for different files, not windows of one meeting.
   const results: MeetingExtraction[] = []
   for (const w of windows) {
     try {
       results.push(await runWindow(w))
     } catch (e) {
-      // The estimate fitted the slot but the tokenizer did not (dense non-Latin text): same outcome as a
-      // meeting that never fitted. Overflow on a cloud-sized window stays an ordinary, backed-off failure.
+      // Dense text can still beat the estimate; local overflow is permanent for this runtime slot.
       if (fit.local && isContextOverflow(e)) throw new ExtractionDoesNotFitError()
       throw e
     }
   }
 
   const combined = combineWindowExtractions(results)
-  // For a single window this is `windows[0]` unchanged (Array.prototype.join on a 1-element array
-  // returns that element verbatim, no separator inserted) — the exact text the (sole) completion call
-  // saw, preserving byte-identical single-window verification behavior.
+  // A one-window join returns the exact text the single completion saw.
   const preparedText = windows.join('\n')
   return { extraction: verifyExtraction(combined, preparedText), preparedText }
 }
