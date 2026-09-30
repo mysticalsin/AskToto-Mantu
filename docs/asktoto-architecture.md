@@ -11,6 +11,38 @@ _Author: principal RT-AI engineer / product architect. Grounded in the live Mét
 
 ---
 
+## 2.0 shape: a modular monolith
+
+The product is one installed Electron app. It is a modular monolith, not a set of services: the three processes share one
+codebase, and the seams between them are typed contracts rather than network calls.
+
+| Layer | Path | Rule (enforced by `npm run check:layering`, `.dependency-cruiser.cjs`) |
+|---|---|---|
+| Main process | `src/main/` (`brain/`, `cloud-stt/`, `infra/`, `island/`, `license/`, `lifecycle/`, `llm/`, `mcp/`, `net/`) | Never imports renderer or preload code. The feature rules are already in force for `src/main/features/`, which does not exist yet: `infra/` will never import it, and one feature reaches another only through its `index.ts` |
+| Preload bridge | `src/preload/` | Imports only `src/shared`, Electron and Node; exposes `window.toto` |
+| Renderer | `src/renderer/src/` | Reaches main only through the bridge and `src/shared` |
+| Shared contracts | `src/shared/`, `src/shared/contracts/` | Imports no process; contracts import only zod and each other |
+
+Boundary debt that predates the rules is held by a ratchet, `npm run check:architecture` against
+`scripts/architecture-baseline.json`: counts may only fall, and a fall must be committed. Import cycles and modules no entry point
+reaches are reported the same way. `npm run check:main-imports` keeps dynamic `import()` out of the bytecode-compiled main bundle.
+
+Outside the monolith are the few things that run elsewhere, each with its own contract and runbook:
+
+| Component | Path | Role |
+|---|---|---|
+| Operator | `operator/` | Cloudflare Worker + D1 fleet control plane behind Cloudflare Access ([runbook](operator/RUNBOOKS.md)) |
+| Cloudflare proxy | `cloudflare-proxy/` | Worker that keeps provider account tokens out of the app ([CLOUDFLARE.md](CLOUDFLARE.md)) |
+| License service | `license-server/` | Activation service; enforcement is compiled off in the app ([plan](license-platform-plan.md)) |
+| Mantu Intelligence | `intelligence/` | Separate Vite/React bundle the main process opens in its own window |
+| Native macOS | `native-app/`, `native/` | Swift MetisKit and helper; the native app ships separately ([PLATFORM-MAP.md](PLATFORM-MAP.md)) |
+| Server intelligence plane | `services/` | Local compose profile only; nothing is deployed until the owner approves a host |
+
+Operational procedures for all of the above are in [`docs/runbooks/`](runbooks/qa.md); the docs map is [`docs/README.md`](README.md).
+Sections A onward were written before this shape was named and describe the app from the inside.
+
+---
+
 ## A. Product definition
 
 **Positioning (one sentence).** Métis is a permission-based, on-device-first real-time copilot that hears your calls and sees your screen — and hands you a grounded, citable answer in under two seconds — while always showing that it's active and never hiding anything.

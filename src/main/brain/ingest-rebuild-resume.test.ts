@@ -16,6 +16,7 @@ import {
 } from './ingest'
 import { readIndex, writeIndex, readAccount, writeAccount, brainDir, slugify } from './store'
 import { renameEntity } from './corrections'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -62,6 +63,7 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
   let meetingsFolder: string
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-resume-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-resume-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -146,6 +148,7 @@ describe('rebuild refuses / surfaces a corrupt-journal replay failure (review Fi
   let meetingsFolder: string
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-blocked-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-blocked-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {

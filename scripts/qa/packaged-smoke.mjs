@@ -59,6 +59,14 @@ const SURVIVOR_BOUND_MS = 5_000 // owned processes must be gone within 5s of mai
 const AUDIT_POLL_MS = 250
 const CENSUS_POLL_MS = 500
 const RV_TIMEOUT_MS = 15_000
+// The budget a direct relaunch's run() gives the relaunched instance to boot, hand off to the running app
+// and exit. A detached relaunch (the Windows shortcut's `start`) resolves run() before that boot, so its
+// reveal window adds this budget on top of RV_TIMEOUT_MS instead of spending the boot inside it.
+const RELAUNCH_BOOT_MS = 10_000
+// Content-free audit context a failing RV row carries: this many records before the relaunch baseline,
+// and at most RV_AUDIT_AFTER after it.
+const RV_AUDIT_BEFORE = 3
+const RV_AUDIT_AFTER = 40
 
 // The same patch `appearanceSettingsPatch('bar')` (onboarding-appearance.ts) writes when a real user
 // picks the bar layout, plus the `persistOnboardingCompletion` fields (onboarding-completion.ts) that
@@ -741,8 +749,8 @@ async function runPowerShell(script, timeoutMs) {
   return runProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], timeoutMs)
 }
 
-async function waitForReveal(auditLogPath, reason, seenCount) {
-  const deadline = Date.now() + RV_TIMEOUT_MS
+async function waitForReveal(auditLogPath, reason, seenCount, timeoutMs = RV_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const records = parseAuditLog(readAuditLog(auditLogPath))
     const matches = records.filter((record) => record.event === 'reveal' && record.reason === reason)
@@ -756,8 +764,29 @@ function revealCount(auditLogPath, reason) {
   return parseAuditLog(readAuditLog(auditLogPath)).filter((r) => r.event === 'reveal' && r.reason === reason).length
 }
 
+function auditRecords(auditLogPath) {
+  return parseAuditLog(readAuditLog(auditLogPath))
+}
+
 export function isPassingRevealEvidence(reveal) {
   return reveal !== null && reveal.parked === true && (reveal.outcome === 'created' || reveal.outcome === 'shown')
+}
+
+const REVEAL_DIAGNOSTIC_FIELDS = ['reason', 'outcome', 'isVisible', 'parked', 'layout', 'ms']
+
+/** An audit record reduced to its event name; a `reveal` keeps only its enum/boolean/number projection fields. */
+export function auditDiagnostic(record) {
+  const out = { event: typeof record?.event === 'string' ? record.event : null }
+  if (out.event !== 'reveal') return out
+  for (const field of REVEAL_DIAGNOSTIC_FIELDS) {
+    const value = record[field]
+    if (typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') out[field] = value
+  }
+  return out
+}
+
+function processOutcome(result) {
+  return { code: result?.code ?? null, signal: result?.signal ?? null, error: result?.error === true }
 }
 
 export async function runRevealRow({
@@ -768,14 +797,32 @@ export async function runRevealRow({
   prepare,
   run,
   failure,
+  revealTimeoutMs = RV_TIMEOUT_MS,
   countReveals = revealCount,
   waitForRevealRecord = waitForReveal
 }) {
   const prepared = prepare ? await prepare() : { error: false }
+  const baseline = auditRecords(auditLogPath).length
   const seen = countReveals(auditLogPath, reason)
+  const launchedAt = Date.now()
   const launched = prepared.error ? prepared : await run()
-  const reveal = launched.error ? null : await waitForRevealRecord(auditLogPath, reason, seen)
+  const reveal = launched.error ? null : await waitForRevealRecord(auditLogPath, reason, seen, revealTimeoutMs)
   const pass = isPassingRevealEvidence(reveal)
+  let diagnostics = null
+  if (!pass) {
+    // A rotated log restarts shorter than the baseline; every record in it is then after the relaunch.
+    const records = auditRecords(auditLogPath)
+    const split = records.length >= baseline ? baseline : 0
+    diagnostics = {
+      stage: prepared.error ? 'prepare' : launched.error ? 'launch' : reveal === null ? 'no-reveal' : 'reveal-not-passing',
+      prepare: processOutcome(prepared),
+      launch: prepared.error ? null : processOutcome(launched),
+      waitedMs: Date.now() - launchedAt,
+      auditBefore: records.slice(Math.max(0, split - RV_AUDIT_BEFORE), split).map(auditDiagnostic),
+      auditAfter: records.slice(split, split + RV_AUDIT_AFTER).map(auditDiagnostic)
+    }
+    console.error(`[packaged-smoke] ${id} FAIL ${JSON.stringify(diagnostics)}`)
+  }
   completeRvRow(rows, id, {
     status: pass ? 'PASS' : 'FAIL',
     evidence: reveal ? {
@@ -785,7 +832,8 @@ export async function runRevealRow({
       parked: reveal.parked === true,
       layout: typeof reveal.layout === 'string' ? reveal.layout : null
     } : null,
-    unblock: pass ? null : failure
+    unblock: pass ? null : failure,
+    ...(diagnostics ? { diagnostics } : {})
   })
 }
 
@@ -796,6 +844,10 @@ export async function runRevealRow({
  * isolated env, so the relaunch resolves the real default profile instead of colliding with this run's
  * single-instance lock: it never reveals the window under test, and it is never quit, leaving an
  * unmanaged orphan under the install root after quit.
+ *
+ * `shortcutScript` only creates the .lnk (a WScript.Shell COM activation, seconds on a cold hosted runner);
+ * `launchScript` only opens it, the way a user's double-click does. They run as separate steps so the COM
+ * activation never spends the relaunch's own budget.
  */
 export function buildWindowsShortcutLauncher({ auditLogDir, executable, userData, reopenProbe = '' }) {
   if (typeof userData !== 'string' || userData.length === 0) {
@@ -814,10 +866,10 @@ export function buildWindowsShortcutLauncher({ auditLogDir, executable, userData
     `$shortcut = $shell.CreateShortcut(${JSON.stringify(shortcutPath)})`,
     `$shortcut.TargetPath = ${JSON.stringify(launcherPath)}`,
     `$shortcut.WorkingDirectory = ${JSON.stringify(dirname(executable))}`,
-    '$shortcut.Save()',
-    `Start-Process -FilePath ${JSON.stringify(shortcutPath)}`
+    '$shortcut.Save()'
   ].join('; ')
-  return { shortcutPath, launcherPath, launcherBody, shortcutScript }
+  const launchScript = `Start-Process -FilePath ${JSON.stringify(shortcutPath)}`
+  return { shortcutPath, launcherPath, launcherBody, shortcutScript, launchScript }
 }
 
 async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows, env }) {
@@ -872,30 +924,38 @@ async function runPackagedRvRows({ platform, target, executable, auditLogPath, r
   }
 
   if (platform === 'win32') {
+    // A cold hosted runner can spend more than the 10 s row budget just starting PowerShell, which kills
+    // the shortcut script before it launches anything. Warm it once, outside every row's budget.
+    await runPowerShell('exit 0', 120_000)
     await runRevealRow({
       auditLogPath,
       rows,
       id: 'RV-3-windows-exe-relaunch',
       reason: 'second-instance',
       prepare: hideBeforeReveal,
-      run: () => runProcess(executable, [], 10_000, { env }),
+      run: () => runProcess(executable, [], RELAUNCH_BOOT_MS, { env }),
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing second-instance reveal event.'
     })
 
-    const { launcherPath, launcherBody, shortcutScript } = buildWindowsShortcutLauncher({
+    const { launcherPath, launcherBody, shortcutScript, launchScript } = buildWindowsShortcutLauncher({
       auditLogDir: dirname(auditLogPath),
       executable,
       userData: env.ASKTOTO_USERDATA,
       reopenProbe: env.ASKTOTO_SMOKE_REOPEN_PROBE
     })
     writeFileSync(launcherPath, launcherBody, 'utf8')
+    // Created once, outside the row's launch budget, like the PowerShell warm-up above.
+    const shortcutCreated = await runPowerShell(shortcutScript, 120_000)
     await runRevealRow({
       auditLogPath,
       rows,
       id: 'RV-3-windows-shortcut-relaunch',
       reason: 'second-instance',
-      prepare: hideBeforeReveal,
-      run: () => runPowerShell(shortcutScript, 10_000),
+      prepare: async () => (shortcutCreated.code === 0 ? hideBeforeReveal() : { ...shortcutCreated, error: true }),
+      // Start-Process returns once ShellExecute has started the .cmd, whose `start` detaches Metis.exe, so
+      // the relaunched instance boots after run() resolves: its boot budget is part of the reveal window.
+      run: () => runPowerShell(launchScript, 30_000),
+      revealTimeoutMs: RELAUNCH_BOOT_MS + RV_TIMEOUT_MS,
       failure: 'Inspect the packaged-smoke artifact and the app audit log for the missing Windows shortcut reveal event.'
     })
 

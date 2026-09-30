@@ -62,6 +62,8 @@ import {
   type ImportAudioProgress,
   type ImportAssetsProgress,
   type HistorySettled,
+  type AppleEngineStatus,
+  type WriteupSpanPayload,
   type HistoryTrace,
   type RendererCrashReport,
   type AsrAssetsStatus,
@@ -73,6 +75,7 @@ import {
   type MetisCommandConfirmation,
   type PreservedBrainIndexListResult
 } from '@shared/ipc'
+import type { ScreenRepairResult } from '@shared/screen-permission'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
 
@@ -94,6 +97,12 @@ const api = {
     ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
   requestPermissionsUpfront: (): Promise<PlatformPermissions> =>
     ipcRenderer.invoke(IPC.permissionsRequestUpfront),
+  /** M2-0429: reset only Métis's own Screen Recording entry, then relaunch (macOS). */
+  repairScreenPermission: (): Promise<ScreenRepairResult> => ipcRenderer.invoke(IPC.permissionsRepairScreen),
+  /** M2-0429: "It's already on" — record it and relaunch (macOS). */
+  attestScreenPermission: (): Promise<void> => ipcRenderer.invoke(IPC.permissionsAttestScreen),
+  /** M2-0429: show a duplicate copy listed by the diagnosis in Finder. */
+  revealAppCopy: (path: string): Promise<void> => ipcRenderer.invoke(IPC.permissionsRevealCopy, path),
   screenCaptureCheck: (pass: 'probe' | 'vision'): Promise<ScreenCaptureCheckResult> =>
     ipcRenderer.invoke(IPC.screenCaptureCheck, { pass }),
   setSettings: (patch: Partial<Settings> | import('@shared/ipc').SettingsPatch): Promise<PublicSettings> =>
@@ -433,7 +442,11 @@ const api = {
   // Fire-and-forget: keep the local sidecar's per-slot KV cache hot while a meeting is live (PLAN.md
   // §4.4's pre-warm path). The renderer never learns the sidecar's port/key — this only ever sends
   // transcript text; main resolves the runtime/model/session key on its own.
-  localPrewarm: (text: string): Promise<void> => ipcRenderer.invoke(IPC.localPrewarm, { text }),
+  localPrewarm: (text: string, purpose?: 'summary'): Promise<void> =>
+    ipcRenderer.invoke(IPC.localPrewarm, purpose ? { text, purpose } : { text }),
+  localAppleEngineStatus: (): Promise<AppleEngineStatus> => ipcRenderer.invoke(IPC.localAppleEngineStatus),
+  // Content-free post-meeting latency span (M2-0430): a span name and a millisecond count, nothing else.
+  reportWriteupSpan: (report: WriteupSpanPayload): Promise<void> => ipcRenderer.invoke(IPC.writeupSpan, report),
 
   resize: (height: number, width?: number): Promise<void> =>
     ipcRenderer.invoke(IPC.windowResize, { height, width }),

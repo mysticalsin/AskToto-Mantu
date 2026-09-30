@@ -13,7 +13,7 @@ interface IntelligenceWorkDependencies {
   list(): Promise<MissingSummary[]>
   generate(meeting: MissingSummary): Promise<string | undefined>
   save(file: string, recap: string, recapStatus: 'complete'): Promise<{ ok: boolean }>
-  backfill(options: BackfillStartOptions, beforeComplete: Promise<unknown>): BackfillRun
+  backfill(options: BackfillStartOptions, beforeComplete: Promise<unknown>): BackfillRun | Promise<BackfillRun>
   logFailure(error: unknown): void
 }
 
@@ -52,12 +52,25 @@ export function startIntelligenceWork(deps: IntelligenceWorkDependencies, reason
   const recaps = recapMissingMeetings({ ...deps, generate })
   // Recaps rewrite the source Markdown. Extraction can start immediately, but its final source-version
   // verification must wait for these writes so a later recap cannot invalidate a claimed success.
-  const backfill = deps.backfill({ force: true, trigger }, recaps)
-  return {
-    result: { ...backfill.result, ran: !backfill.result.deferred, recapped: 0 },
-    completion: Promise.all([backfill.completion, recaps]).then(([index, summaries]) => {
-      const error = backfillCompletionError(index) || (summaries.failed > 0 ? SUMMARY_INDEX_RETRY_COPY : undefined)
-      return { ok: !error, recapped: summaries.recapped, ...(error ? { error } : {}) }
-    })
+  const started = deps.backfill({ force: true, trigger }, recaps)
+  const initial: IntelligenceIndexRun = {
+    result: { queued: 0, preparing: true, ran: true, recapped: 0 },
+    completion: Promise.resolve(started)
+      .then((run) => run.completion)
+      .then((completion) => Promise.all([completion, recaps]))
+      .then(([indexCompletion, summaries]) => Promise.all([indexCompletion, Promise.resolve(summaries)]))
+      .then(([index, summaries]) => {
+        const error = backfillCompletionError(index) || (summaries.failed > 0 ? SUMMARY_INDEX_RETRY_COPY : undefined)
+        return { ok: !error, recapped: summaries.recapped, ...(error ? { error } : {}) }
+      })
   }
+  if ('then' in Object(started) && typeof (started as Promise<BackfillRun>).then === 'function') {
+    void (started as Promise<BackfillRun>).then((run) => {
+      initial.result = { ...run.result, ran: !run.result.deferred, recapped: 0 }
+    })
+  } else {
+    const run = started as BackfillRun
+    initial.result = { ...run.result, ran: !run.result.deferred, recapped: 0 }
+  }
+  return initial
 }

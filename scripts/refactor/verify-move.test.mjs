@@ -13,6 +13,8 @@ import {
   verifyPureMove
 } from './verify-move.mjs'
 import { refactorClassification } from './check-pr-classification.mjs'
+import { checkPrKind } from './check-pr-kind.mjs'
+import { compareInventories, countGuardCalls, countTestCases, parseRemovals } from './guard-test-inventory.mjs'
 
 test('normalizes only module specifiers that are import paths', () => {
   const source = [
@@ -242,4 +244,92 @@ test('PR classification requires exactly one refactor type', () => {
   })
   assert.equal(refactorClassification('- [x] Pure move\n- [x] Behaviour change\n').ok, false)
   assert.equal(refactorClassification('- [ ] Pure move\n- [ ] Behaviour change\n').ok, false)
+})
+
+const moveEntries = [
+  { status: 'D', code: 'D', path: 'src/old/thing.ts' },
+  { status: 'A', code: 'A', path: 'src/new/thing.ts' },
+  { status: 'M', code: 'M', path: 'src/old/thing.test.ts' }
+]
+const bigBody = Array.from({ length: 60 }, (_, index) => `export const value${index} = ${index}`).join('\n')
+
+function verifyWithTest(testBefore, testAfter) {
+  const contents = new Map([
+    ['base:src/old/thing.ts', 'export const answer = 42\n'],
+    ['head:src/new/thing.ts', 'export const answer = 42\n'],
+    ['base:src/old/thing.test.ts', testBefore],
+    ['head:src/old/thing.test.ts', testAfter]
+  ])
+  return verifyPureMove({ entries: moveEntries, readAtRevision: (side, path) => contents.get(`${side}:${path}`) })
+}
+
+test('accepts a test string literal rewritten from the moved file old path to its new path', () => {
+  assert.equal(verifyWithTest("read('src/old/thing.ts')\n", "read('src/new/thing.ts')\n").ok, true)
+  assert.equal(verifyWithTest('load("src/old/thing")\n', 'load("src/new/thing")\n').ok, true)
+})
+
+test('rejects a test string literal rewritten to anything but the moved file new path', () => {
+  const wrongTarget = verifyWithTest("read('src/old/thing.ts')\n", "read('src/other/thing.ts')\n")
+  assert.equal(wrongTarget.ok, false)
+  assert.deepEqual(wrongTarget.modifiedProblems, ['src/old/thing.test.ts'])
+  assert.equal(verifyWithTest("read('src/old/other.ts')\n", "read('src/new/other.ts')\n").ok, false)
+  assert.equal(verifyWithTest("read('src/old/thing.ts')\n", "read('src/new/thing.ts', 1)\n").ok, false)
+})
+
+function kindFixture(body, entries, contents) {
+  return checkPrKind({ body, entries, readAtRevision: (side, path) => contents.get(`${side}:${path}`) ?? '' })
+}
+
+const sourceMapEdit = { status: 'M', code: 'M', path: 'docs/PLATFORM-MAP.md' }
+const bigMove = [
+  { status: 'D', code: 'D', path: 'src/old/big.ts' },
+  { status: 'A', code: 'A', path: 'src/new/big.ts' }
+]
+const bigContents = new Map([['base:src/old/big.ts', bigBody], ['head:src/new/big.ts', bigBody]])
+
+test('PR kind fails when the kind field is missing or both kinds are ticked', () => {
+  assert.equal(kindFixture('no checklist', [], new Map()).ok, false)
+  assert.equal(kindFixture('- [x] Pure move\n- [x] Behaviour change\n', [], new Map()).ok, false)
+  assert.equal(kindFixture('- [ ] Pure move\n- [x] Behaviour change\n', [], new Map()).ok, true)
+})
+
+test('PR kind fails a behaviour change that carries a relocated block above the threshold', () => {
+  const behaviour = '- [ ] Pure move\n- [x] Behaviour change\n'
+  const result = kindFixture(behaviour, [...bigMove, sourceMapEdit], bigContents)
+  assert.equal(result.ok, false)
+  assert.match(result.problems[0], /relocates \d+ tokens/)
+
+  const small = new Map([['base:src/old/big.ts', 'export const a = 1\n'], ['head:src/new/big.ts', 'export const a = 1\n']])
+  assert.equal(kindFixture(behaviour, [...bigMove, sourceMapEdit], small).ok, true)
+  assert.equal(kindFixture('- [x] Pure move\n- [ ] Behaviour change\n', [...bigMove, sourceMapEdit], bigContents).ok, true)
+})
+
+test('PR kind fails a refactor that moved files without touching the source map', () => {
+  const pure = '- [x] Pure move\n- [ ] Behaviour change\n'
+  const result = kindFixture(pure, bigMove, bigContents)
+  assert.equal(result.ok, false)
+  assert.match(result.problems[0], /source map/)
+  assert.equal(kindFixture(pure, [...bigMove, sourceMapEdit], bigContents).ok, true)
+})
+
+test('inventory counts test cases and guard call sites but not guard definitions', () => {
+  assert.equal(countTestCases("test('a', () => {})\nit.skip('b', () => {})\nconst latest = 1\nlatest('x')\n"), 2)
+  const source = 'function assertMainWindow(e) {}\nassertMainWindow(e)\nif (denyIfLimited()) return\nobj.requireAuth()\n'
+  assert.equal(countGuardCalls(source), 2)
+})
+
+test('inventory fails a drop unless each removal is listed with its replacement', () => {
+  const base = { tests: 10, guards: 5 }
+  const head = { tests: 9, guards: 4 }
+  assert.equal(compareInventories({ base, head, body: '## Removed guards and tests\n' }).ok, false)
+  assert.equal(compareInventories({ base, head, body: '## Removed guards and tests\n- a.test.ts case => b.test.ts case\n' }).ok, false)
+  const listed = '## Removed guards and tests\n\n- a.test.ts case => b.test.ts case\n- old handler guard => shared registerHandler guard\n\n## Evidence\n'
+  assert.equal(compareInventories({ base, head, body: listed }).ok, true)
+  assert.equal(compareInventories({ base, head: base, body: '' }).ok, true)
+  assert.equal(compareInventories({ base, head: { tests: 12, guards: 6 }, body: '' }).ok, true)
+})
+
+test('inventory ignores removals commented out in the template', () => {
+  const body = '## Removed guards and tests\n<!--\n- example => example\n-->\n'
+  assert.deepEqual(parseRemovals(body), [])
 })
