@@ -305,13 +305,18 @@ function processAlive(pid) {
   }
 }
 
+// The real llama-server proof needs the sidecar to become a launchd orphan after SIGKILL of main. With supervision
+// on (the shipped default) the helper kills it within about 2 s, so that proof asks for supervision off, which
+// also emulates a legacy unsupervised orphan.
+const REAL_LLAMA_SUPERVISION = 'off'
+
 /**
  * The app's launch env. Only the real llama-server proof asks for the QA RAM-floor override (M2-0482): a 7 GiB hosted
  * runner otherwise sits under the bundled model's advertised-RAM floor. The app honours it only when packaged and on
  * this isolated profile; any inherited value is dropped so the stand-in launch never carries it.
  */
-export function launchEnv(baseEnv, profile, { hostFloorOverride = false } = {}) {
-  const env = { ...baseEnv, ASKTOTO_USERDATA: profile, METIS_DISABLE_APPLE_FM: '1' }
+export function launchEnv(baseEnv, profile, { hostFloorOverride = false, extraEnv = {} } = {}) {
+  const env = { ...baseEnv, ASKTOTO_USERDATA: profile, METIS_DISABLE_APPLE_FM: '1', ...extraEnv }
   for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
   delete env.METIS_QA_HOST_FLOOR_OVERRIDE
   if (hostFloorOverride) env.METIS_QA_HOST_FLOOR_OVERRIDE = '1'
@@ -467,6 +472,7 @@ function initialObservation(kind) {
 
 function initialRealLlamaObservation() {
   const observation = initialObservation('real-llama-server')
+  observation.supervision = REAL_LLAMA_SUPERVISION
   observation.timingsMs.llamaStarted = null
   observation.pids.orphan = null
   return observation
@@ -477,6 +483,7 @@ export function summarizeProof(report) {
     schema: 1,
     ticket: 'M2-0233',
     kind: report.kind,
+    ...(report.supervision ? { supervision: report.supervision } : {}),
     result: report.result,
     failures: report.failures,
     unblock: report.unblock,
@@ -609,7 +616,7 @@ async function runRealLlamaProof({ installRoot, executable }) {
   let second = null
   const observation = initialRealLlamaObservation()
   // M2-0482: both launches of this proof ask for the QA RAM-floor override; the report records it and the host.
-  const launchOptions = { hostFloorOverride: true }
+  const launchOptions = { hostFloorOverride: true, extraEnv: { METIS_SUPERVISION: REAL_LLAMA_SUPERVISION } }
   observation.hostFloorOverride = true
   observation.hostMemory = hostMemoryFacts()
 
