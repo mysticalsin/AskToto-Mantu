@@ -18,7 +18,7 @@
 param(
   [string]$App = '',
   [string]$QaProfile = $env:METIS_QA_PROFILE,
-  [Parameter(Mandatory = $true)][string]$OutDir,
+  [string]$OutDir = '',
   [int]$Seconds = 300,
   [switch]$PlanOnly
 )
@@ -26,6 +26,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $census = Join-Path $repoRoot 'scripts/qa/census/run.mjs'
+if (-not $OutDir) { $OutDir = Join-Path $repoRoot 'out/windows-baseline' }
 
 $measuredStates = @('cold-start', 'settled-idle')
 $attachStates = @('first-inference', 'active-transcription', 'post-meeting', 'post-recovery')

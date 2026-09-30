@@ -33,6 +33,7 @@ import type { AskRow, OperatorStore, SeatRow } from './store'
 import { resolveTierAndEntitlements } from './tiers'
 import { binaryAssetResponse, isBinaryAssetPath, isPublicAssetPath, publicAssetResponse } from './assets'
 import { handleAsk } from './ask'
+import { handleMcpGateway, mcpGatewayConnectionId } from './routes/mcp-gateway'
 import { parseAskPathTag } from './ask-meter'
 import { projectAskMode, projectAskModel, projectAskTelemetry } from './privacy'
 import { handleUse, readUseBody } from './use'
@@ -265,6 +266,11 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
       return unauthorized()
     }
     return redirectToAccess(request, env)
+  }
+
+  const mcpConnectionId = mcpGatewayConnectionId(url.pathname)
+  if (mcpConnectionId !== null) {
+    return handleMcpGateway(request, store, env, mcpConnectionId, now, opts.providerFetch ?? opts.cfFetch ?? fetch)
   }
 
   if (

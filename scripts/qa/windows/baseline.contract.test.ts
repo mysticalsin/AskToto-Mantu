@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 
 const SCRIPT = 'scripts/qa/windows/baseline.ps1'
+const workflow = readFileSync('.github/workflows/windows-baseline.yml', 'utf8').replace(/\r\n/g, '\n')
 
 interface Row {
   id: string
@@ -80,5 +81,53 @@ describe('M2-0415 Windows 1.9.6 baseline harness', () => {
       rmSync(out, { recursive: true, force: true })
       rmSync(blank, { recursive: true, force: true })
     }
+  })
+})
+
+function workflowEvents(): string[] {
+  const lines = workflow.split('\n')
+  const on = lines.findIndex((line) => line === 'on:')
+  expect(on, 'workflow on: block missing').toBeGreaterThan(-1)
+  const events: string[] = []
+  for (const line of lines.slice(on + 1)) {
+    if (/^[A-Za-z_][A-Za-z0-9_-]*:/.test(line)) break
+    const event = /^ {2}([A-Za-z_][A-Za-z0-9_-]*):/.exec(line)?.[1]
+    if (event) events.push(event)
+  }
+  return events
+}
+
+function jobBlock(name: string): string {
+  const lines = workflow.split('\n')
+  const start = lines.findIndex((line) => line === `  ${name}:`)
+  expect(start, `job not found: ${name}`).toBeGreaterThan(-1)
+  const end = lines.findIndex((line, index) => index > start && /^ {2}[A-Za-z_][A-Za-z0-9_-]*:/.test(line))
+  return lines.slice(start, end === -1 ? undefined : end).join('\n')
+}
+
+describe('M2-0415 Windows baseline workflow lane', () => {
+  it('is manual-only and guarded to main on a hosted Windows runner', () => {
+    expect(workflowEvents()).toEqual(['workflow_dispatch'])
+    const baseline = jobBlock('baseline')
+    expect(baseline).toContain("runs-on: windows-latest")
+    expect(baseline).toContain("if: github.ref == 'refs/heads/main'")
+    expect(baseline).not.toContain('pull_request')
+  })
+
+  it('installs the published 1.9.6 artifact before measuring with the baseline harness', () => {
+    const baseline = jobBlock('baseline')
+    expect(workflow).toContain("default: v1.9.6-unsigned")
+    expect(baseline).toContain("gh release download $env:RELEASE_TAG")
+    expect(baseline).toContain("node scripts/qa/verify-sha256sums.mjs release-artifact $sums")
+    expect(baseline).toContain("Start-Process -FilePath $setup.FullName")
+    expect(baseline).toContain("./scripts/qa/windows/baseline.ps1")
+    expect(baseline).toContain("-App \"$env:RUNNER_TEMP\\windows-baseline-install\\Metis.exe\"")
+  })
+
+  it('uploads the content-free baseline rows for the lead to file as private evidence', () => {
+    const baseline = jobBlock('baseline')
+    expect(baseline).toContain('path: baseline-output/')
+    expect(baseline).toContain('if-no-files-found: error')
+    expect(baseline).toContain('Get-Content baseline-output/baseline.json')
   })
 })

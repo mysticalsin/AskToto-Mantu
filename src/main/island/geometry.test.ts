@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../scripts/lib/read-app-css.mjs'
 import { describe, it, expect } from 'vitest'
 import {
   clampAxis,
@@ -349,7 +350,9 @@ describe('MQA-275 — clamp primitives (moved verbatim from index.ts)', () => {
     expect(island!.y).toBe(second.bounds.y)
     const watch = hoverWatchRestRect('island', second)
     expect(watch.y).toBe(second.bounds.y)
-    expect(watch.width).toBe(second.workArea.width)
+    // Owner decision OD-23 (M2-0431): the notch area of the NEW display, centred on its bar.
+    expect(watch.width).toBe(300)
+    expect(watch.x + watch.width / 2).toBe(second.workArea.x + second.workArea.width / 2)
     expect(watch.height).toBeLessThan(44)
     expect(watch.height).toBe(second.workArea.y - second.bounds.y + 1)
   })
@@ -439,8 +442,9 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     expect(isVisibleHideSlab({ width: 560, height: 103 })).toBe(true)
     expect(isForbiddenMidFlowCard(park)).toBe(false)
     expect(isForbiddenMidFlowCard({ width: 880, height: 816 })).toBe(true)
-    expect(watch.width).toBe(tonyMac.workArea.width)
-    expect(watch.width).toBeGreaterThan(OVERLAY_HIDE_TARGET.width)
+    // Owner decision OD-23 (M2-0431): the notch area (±150 px), never the 560 slab or the full menu bar.
+    expect(watch.width).toBe(300)
+    expect(watch.width).toBeLessThan(OVERLAY_HIDE_TARGET.width)
     expect(watch.height).toBe(tonyMac.workArea.y - tonyMac.bounds.y + 1)
     expect(watch.height).toBeLessThan(44)
     expect(watch.y).toBe(0)
@@ -476,7 +480,9 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     expect(park.height).toBeLessThanOrEqual(8)
     expect(watch.height).toBeLessThan(ISLAND_NOTCH_STRUT_PX)
     expect(watch.height).toBeLessThan(44)
-    expect(watch.width).toBe(flush.workArea.width)
+    // OD-23: the notch area, centred on the flush work area.
+    expect(watch.width).toBe(300)
+    expect(watch.x).toBe((flush.workArea.width - 300) / 2)
     expect(watch.y).toBe(0)
   })
 
@@ -502,7 +508,7 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
   })
 
   it('peek constants match the CSS hide-target and island capsule', () => {
-    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    const css = readAppCss()
     const hide = css.slice(css.indexOf('.overlay-hide-target {'), css.indexOf('.overlay-peek {'))
     const peek = css.slice(css.indexOf('.overlay-peek {'), css.indexOf('.overlay-peek:hover'))
     expect(hide).toMatch(/width:\s*8px/)
@@ -732,7 +738,7 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
   it('primary onboarding CTAs use onboard-cta (min 52×220) and Act 2 is full-bar Métis + Intelligence', () => {
     const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')
     const demo = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingDemoScene.tsx'), 'utf8')
-    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    const css = readAppCss()
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     expect(css).toMatch(/\.onboard-cta\s*\{/)
     expect(css).toMatch(/min-height:\s*52px/)
@@ -814,7 +820,7 @@ describe('overlay chrome modes resolve through placement', () => {
     const picker = readFileSync(join(__dirname, '../../renderer/src/components/OverlayChromePicker.tsx'), 'utf8')
     const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
     const peek = readFileSync(join(__dirname, '../../renderer/src/components/OverlayPeek.tsx'), 'utf8')
-    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    const css = readAppCss()
     const autohide = readFileSync(join(__dirname, '../../renderer/src/lib/overlay-autohide.ts'), 'utf8')
     expect(ipc).toMatch(/overlayLayout: z\.enum\(\['hide', 'island', 'bar'\]\)\.default\('hide'\)/)
     expect(ipc).toMatch(/overlayLayout: 'hide'/)

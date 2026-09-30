@@ -1,15 +1,51 @@
 import { describe, expect, it } from 'vitest'
+import { parseVmStatAvailableBytes } from '../../src/main/llm/available-memory'
 import {
+  advertisedRamFloorRefuses,
+  availableBytesFromVmStat,
   exitCodeForReportResult,
+  keepWaitingForScenario,
+  launchEnv,
+  PREWARM_MIN_FREE_RAM_GB,
+  prewarmFreeRamFloorPasses,
+  removeTempDir,
   reportResultForRows,
+  runMemorySummary,
   runtimeRoleVerdict,
   scenarioEvidence,
   scenarioStillStarting,
+  setupFailure,
   supervisedColdStartVerdict,
   UNRELATED_FIXTURE_LIFETIME_MS
 } from './hk-m.mjs'
 
-const modelSidecar = { pid: 101, ppid: 100, startedMs: 1001, exe: '/tmp/llama-server', role: 'llama-server' }
+describe('HK-M temp directory cleanup', () => {
+  it('requests retries and does not turn a one-off ENOTEMPTY into a failure', () => {
+    const warnings: { code: string; message: string }[] = []
+    let calls = 0
+    const options: unknown[] = []
+    const remove = (_dir: unknown, opts?: unknown) => {
+      options.push(opts)
+      calls += 1
+      if (calls === 1) throw Object.assign(new Error('ENOTEMPTY: directory not empty'), { code: 'ENOTEMPTY' })
+    }
+
+    expect(removeTempDir('/tmp/metis-hk-m-x', warnings, remove)).toBe(false)
+    expect(removeTempDir('/tmp/metis-hk-m-x', warnings, remove)).toBe(true)
+    expect(options[0]).toEqual({ recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    expect(warnings).toEqual([{ code: 'ENOTEMPTY', message: 'ENOTEMPTY: directory not empty' }])
+
+    const rows = [{ scenario: 'idle', cycle: 1, status: 'PASS' }]
+    expect(reportResultForRows(rows)).toBe('pass')
+  })
+
+  it('still reports a real survivor as a failure', () => {
+    const rows = [{ scenario: 'idle', cycle: 1, status: 'FAIL', failure: 'owned_processes_survived' }]
+    expect(reportResultForRows(rows)).toBe('fail')
+  })
+})
+
+const modelSidecar ={ pid: 101, ppid: 100, startedMs: 1001, exe: '/tmp/llama-server', role: 'llama-server' }
 const renderer = { pid: 102, ppid: 100, startedMs: 1002, exe: '/tmp/Metis Helper', role: 'Metis Helper (Renderer)' }
 const ffmpeg = { pid: 103, ppid: 100, startedMs: 1003, exe: '/tmp/ffmpeg', role: 'ffmpeg' }
 
@@ -141,6 +177,34 @@ describe('HK-M relaunch runtime counts', () => {
   })
 })
 
+describe('HK-M launch environment', () => {
+  const baseEnv = {
+    PATH: '/usr/bin',
+    METIS_SUPERVISION: 'off',
+    METIS_SIDECAR_SUPERVISION: '0',
+    OPENAI_API_KEY: 'k'
+  }
+
+  it('shipped mode strips both supervision variables so the build default decides', () => {
+    const env = launchEnv({ baseEnv, profile: '/tmp/p', scenario: 'idle', supervisionMode: 'shipped' })
+    expect('METIS_SUPERVISION' in env).toBe(false)
+    expect('METIS_SIDECAR_SUPERVISION' in env).toBe(false)
+    expect(env).toMatchObject({
+      PATH: '/usr/bin',
+      ASKTOTO_USERDATA: '/tmp/p',
+      METIS_DISABLE_APPLE_FM: '1',
+      METIS_HK_M_SCENARIO: 'idle'
+    })
+    expect('OPENAI_API_KEY' in env).toBe(false)
+  })
+
+  it('forced-on mode sets METIS_SUPERVISION=on and drops the legacy variable', () => {
+    const env = launchEnv({ baseEnv, profile: '/tmp/p', scenario: 'idle', supervisionMode: 'forced-on' })
+    expect(env.METIS_SUPERVISION).toBe('on')
+    expect('METIS_SIDECAR_SUPERVISION' in env).toBe(false)
+  })
+})
+
 describe('HK-M supervised cold start', () => {
   const healthy = [{ event: 'local.runtime.start' }]
 
@@ -158,6 +222,21 @@ describe('HK-M supervised cold start', () => {
   it('fails a llama-server that was spawned directly by main', () => {
     const main = { pid: 50, ppid: 1, startedMs: 900, exe: '/tmp/Metis', role: 'Metis' }
     const direct = { ...supervisedModel, ppid: 50 }
+    expect(
+      supervisedColdStartVerdict({ records: healthy, sidecars: [direct], table: [main, direct], requireHealthy: true })
+    ).toEqual({ ok: false, failure: 'runtime_not_supervised' })
+  })
+
+  it('fails a default-off build in shipped mode with runtime_not_supervised', () => {
+    const main = { pid: 50, ppid: 1, startedMs: 900, exe: '/tmp/Metis', role: 'Metis' }
+    const direct = { ...supervisedModel, ppid: 50 }
+    const env = launchEnv({
+      baseEnv: { METIS_SUPERVISION: 'on' },
+      profile: '/tmp/p',
+      scenario: 'idle',
+      supervisionMode: 'shipped'
+    })
+    expect(env.METIS_SUPERVISION).toBeUndefined()
     expect(
       supervisedColdStartVerdict({ records: healthy, sidecars: [direct], table: [main, direct], requireHealthy: true })
     ).toEqual({ ok: false, failure: 'runtime_not_supervised' })
@@ -190,6 +269,93 @@ describe('HK-M scenario waiting', () => {
     expect(scenarioStillStarting({ ok: false, status: 'FAIL', failure: 'expected_model_sidecar_absent' })).toBe(true)
     expect(scenarioStillStarting({ ok: false, status: 'FAIL', failure: 'expected_ffmpeg_sidecar_absent' })).toBe(false)
     expect(scenarioStillStarting({ ok: true })).toBe(false)
+  })
+})
+
+describe('HK-M setup failure', () => {
+  const blocked = { ok: false, status: 'BLOCKED_EXTERNAL', failure: 'scenario_not_triggered' }
+  const refused = [{ event: 'app.renderer.ready' }, { event: 'hk-m.setup-failed', row: 'model-starting', error: 'InsufficientRamError' }]
+
+  it('ends a waiting row as soon as the app reports its setup failed, naming only the Error class', () => {
+    expect(setupFailure(refused)).toBe('setup_failed:InsufficientRamError')
+    expect(keepWaitingForScenario(blocked, refused)).toBe(false)
+    expect(keepWaitingForScenario(blocked, [{ event: 'app.renderer.ready' }])).toBe(true)
+  })
+
+  it('never copies anything but an identifier into the failure', () => {
+    expect(setupFailure([{ event: 'hk-m.setup-failed', error: '/private/tmp/model.gguf missing' }])).toBe('setup_failed:Error')
+    expect(setupFailure([{ event: 'hk-m.setup-failed' }])).toBe('setup_failed:Error')
+    expect(setupFailure([{ event: 'local.runtime.start' }])).toBeNull()
+  })
+
+  it('does not end a row whose proof already holds', () => {
+    expect(keepWaitingForScenario({ ok: true }, refused)).toBe(false)
+    expect(scenarioStillStarting({ ok: true })).toBe(false)
+  })
+
+  it('counts the refused-start evidence per row', () => {
+    const records = [
+      ...refused,
+      { event: 'local.runtime.missing' },
+      { event: 'hk-m.ram-floor-override' }
+    ]
+    const proof = scenarioEvidence('model-starting', { records, registry: [], sidecars: [renderer] })
+    expect(proof.evidence.audit).toMatchObject({ localRuntimeMissing: 1, hkSetupFailed: 1, hkRamFloorOverride: 1 })
+  })
+
+  it('no longer blames the bundle in the model-row unblock text', () => {
+    for (const scenario of ['model-starting', 'active-inference']) {
+      const proof = scenarioEvidence(scenario, { records: [], registry: [], sidecars: [] })
+      expect(proof.status).toBe('BLOCKED_EXTERNAL')
+      expect(proof.unblock).not.toMatch(/packaged and intact|bundled local model/)
+      expect(proof.unblock).toMatch(/hk-m\.setup-failed/)
+    }
+  })
+})
+
+describe('HK-M host memory evidence', () => {
+  const GIB = 1024 ** 3
+  const vmStat = [
+    'Mach Virtual Memory Statistics: (page size of 16384 bytes)',
+    'Pages free:                               10000.',
+    'Pages active:                             90000.',
+    'Pages inactive:                           80000.',
+    'Pages speculative:                         5000.',
+    'Pages throttled:                              0.',
+    'Pages wired down:                         70000.',
+    'Pages purgeable:                           1000.'
+  ].join('\n')
+
+  it('reads available memory from vm_stat exactly as the app does', () => {
+    expect(availableBytesFromVmStat(vmStat)).toBe(96_000 * 16384)
+    expect(availableBytesFromVmStat(vmStat)).toBe(parseVmStatAvailableBytes(vmStat))
+    expect(availableBytesFromVmStat('garbage')).toBeNull()
+  })
+
+  it('flags the advertised-RAM floor on a 7 GiB runner and not on an 8 GB-class one', () => {
+    expect(advertisedRamFloorRefuses(7 * GIB)).toBe(true)
+    expect(advertisedRamFloorRefuses(8e9)).toBe(false)
+    expect(advertisedRamFloorRefuses(8 * GIB)).toBe(false)
+  })
+
+  it('applies the localPrewarm free-memory floor', () => {
+    expect(PREWARM_MIN_FREE_RAM_GB).toBe(4)
+    expect(prewarmFreeRamFloorPasses(3.9 * GIB)).toBe(false)
+    expect(prewarmFreeRamFloorPasses(4 * GIB)).toBe(true)
+  })
+
+  it('summarizes override rows with the host memory and the rows the prewarm floor refused', () => {
+    const host = { totalmemBytes: 7 * GIB, hwMemsizeBytes: 7 * GIB, advertisedRamGB: 7 }
+    const rows = [
+      { scenario: 'idle', memoryAtStart: { prewarmFreeRamFloorPasses: true } },
+      { scenario: 'model-starting', memoryAtStart: { prewarmFreeRamFloorPasses: false }, evidence: { audit: { hkRamFloorOverride: 1 } } },
+      { scenario: 'active-inference', memoryAtStart: { prewarmFreeRamFloorPasses: false }, evidence: { audit: { hkRamFloorOverride: 1 } } },
+      { scenario: 'ffmpeg-import', status: 'NOT_RUN' }
+    ]
+    expect(runMemorySummary(host, rows)).toEqual({
+      ramFloorOverride: { rows: 2, totalmemBytes: 7 * GIB, hwMemsizeBytes: 7 * GIB, advertisedRamGB: 7 },
+      prewarmFloor: { minFreeRamGB: 4, rowsSampled: 3, rowsRefused: 2 }
+    })
   })
 })
 

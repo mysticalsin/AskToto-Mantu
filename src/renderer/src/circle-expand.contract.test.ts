@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import {
   CIRCLE_REST_HOST_PX,
@@ -87,7 +88,7 @@ describe('circle-expand: click Expand Métis must not snap back', () => {
     expect(app).toMatch(/circleRestSpringAfterExpand/)
     expect(app).toMatch(/circleRestSpringClassName/)
     expect(app).toMatch(/commitCircleRestMinimize/)
-    const css = readFileSync(join(root, 'styles.css'), 'utf8')
+    const css = readAppCss()
     expect(css).toMatch(/@keyframes circle-rest-expand/)
     expect(css).toMatch(/circle-rest-spring--expand/)
     expect(css).toMatch(/var\(--ease-spring\)/)
@@ -105,7 +106,7 @@ describe('circle-expand: click Expand Métis must not snap back', () => {
   it('Settings picker mounts the same Bar orbs, not a 22px CSS disc or Full Bar card', () => {
     const picker = readFileSync(join(root, 'components', 'OverlayOrbPicker.tsx'), 'utf8')
     const thinking = readFileSync(join(root, 'components', 'JarvisOrbButton.tsx'), 'utf8')
-    const css = readFileSync(join(root, 'styles.css'), 'utf8')
+    const css = readAppCss()
     expect(picker).toMatch(/<JarvisOrbButton/)
     expect(picker).toMatch(/<ObsidianOrb/)
     expect(picker).toMatch(/preview/)

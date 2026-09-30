@@ -1,0 +1,310 @@
+
+@keyframes onboard-mark-land {
+  0% {
+    opacity: 0;
+    transform: scale(0.9) translateY(8px);
+  }
+  62% {
+    opacity: 1;
+    transform: scale(1.03) translateY(-2px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.onboard-mark-land {
+  animation: onboard-mark-land 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes onboard-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.onboard-pop-in {
+  animation: onboard-pop-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Onboarding act transition — each scene remounts keyed by name. Opacity + translate only
+   (~300ms ease-out). No scale-down — compositor-only motion budget (DESIGN.md). */
+@keyframes scene-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.scene-enter {
+  animation: scene-enter 300ms ease-out;
+}
+
+/* Act 1 (Welcome) hero — the Métis mark lands as a top-center "island" capsule (MQA-276). Three staged
+   beats, each its own keyframe so they can be tuned independently:
+     1. island-descend — the capsule drops in from above and settles, like the notch capsule reference
+        that inspired the FEEL of this moment (own timing/shape, not its assets or copy).
+     2. island-draw-sweep — a single comet sweeps the capsule's rim once, as if the outline is being
+        drawn on, using the same masked-conic-gradient + stepped-timing trick as `.rainbow-ring` /
+        `.aw-hidden-rainbow` above (cheap: ~24 repaints over the whole sweep, not one per frame), then
+        fades out — it never loops, so it costs nothing after the capsule has landed.
+     3. island-fill — the capsule's own background/border settle to a soft accent tint once the sweep
+        finishes, so there is a shape for the mark to sit inside before it fades in.
+   `--island-draw-angle` needs `@property` so the conic gradient's rotation is itself an interpolable,
+   compositable value (same reasoning as `--rainbow-angle` above). */
+@keyframes island-descend {
+  0% {
+    opacity: 0;
+    transform: translateY(-22px) scale(0.62);
+  }
+  62% {
+    opacity: 1;
+    transform: translateY(2px) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@property --island-draw-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes island-draw-sweep {
+  from {
+    --island-draw-angle: 0deg;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  to {
+    --island-draw-angle: 360deg;
+    opacity: 0;
+  }
+}
+@keyframes island-fill {
+  from {
+    background-color: transparent;
+    border-color: transparent;
+  }
+  to {
+    background-color: var(--color-accent-soft);
+    border-color: var(--color-hair-strong);
+  }
+}
+.island-capsule {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  animation:
+    island-descend 560ms var(--ease-spring) both,
+    island-fill 360ms ease-out 440ms both;
+}
+.island-capsule::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(from var(--island-draw-angle), transparent 0deg, var(--color-accent-2) 28deg, transparent 68deg);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: island-draw-sweep 620ms steps(30, end) 160ms both;
+}
+.island-capsule-mark {
+  display: inline-flex;
+  animation: fade-up 260ms var(--ease-spring) 560ms both;
+}
+/* Static end state for anyone whose OS asks for reduced motion — see the blanket
+   `prefers-reduced-motion` rule further down for why this needs an explicit override: that rule zeroes
+   animation-duration, and a 0ms animation driving an `@property`-typed custom value is not guaranteed by
+   spec to land on the keyframe's END value the way a plain opacity/transform animation reliably does. */
+@media (prefers-reduced-motion: reduce) {
+  .island-capsule {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    background-color: var(--color-accent-soft);
+    border-color: var(--color-hair-strong);
+  }
+  .island-capsule::before {
+    animation: none;
+    opacity: 0;
+  }
+  .island-capsule-mark {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Act 1's wordmark — the one custom-face moment in this scene (Geist, already bundled/offline, the
+   app's one non-system face). Fixed min-height keeps the scramble from jittering the layout as glyph
+   widths change frame to frame while it resolves; everything else in the hero (tagline, byline, CTA)
+   stays on the system font stack per the "one custom face, rest system" brief. */
+.hero-wordmark {
+  font-weight: 650;
+  font-size: 30px;
+  letter-spacing: 0.01em;
+  color: var(--color-ink);
+  min-height: 1.2em;
+  line-height: 1.2em;
+}
+.hero-tagline,
+.hero-byline {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+
+/* Welcome byline name only — system browser via target=_blank → setWindowOpenHandler → openExternal. */
+.hero-byline-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px;
+  margin: 0 -4px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.hero-byline-link:hover {
+  color: #f4f4f5;
+  background: color-mix(in srgb, #9a2bf0 32%, transparent);
+}
+
+/* Exclusive onboarding stage — hero/universe hold, never amber, never a purple wash, never a black void (DESIGN.md).
+ Viewport-fixed so simple-fullscreen + % height cannot collapse the paint to a brand stripe.
+ Keep this bed opaque at every frame. A former radial-mask "portal" effect exposed the desktop while
+ growing, which looked like the onboarding zooming and flashing between the placement and appearance cards. */
+.onboard-stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  min-height: 100vh;
+  min-width: 100vw;
+  flex-direction: column;
+  overflow: hidden;
+  isolation: isolate;
+  -webkit-app-region: no-drag;
+  background: #05010a;
+}
+.onboard-stage--portal-close {
+  background: #05010a;
+}
+.onboard-portal-content {
+  opacity: 1;
+  transform: none;
+}
+.onboard-stage--portal-close .onboard-portal-content {
+  animation: onboard-portal-content-out 1220ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+@keyframes onboard-portal-content-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboard-stage,
+  .onboard-stage--portal-close {
+    animation: none;
+  }
+  .onboard-portal-content,
+  .onboard-stage--portal-close .onboard-portal-content {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .onboard-stage .scene-enter,
+  .onboard-stage .fade-up {
+    animation: none;
+  }
+  .onboard-hero-video video,
+  .onboard-hero-poster {
+    animation: none;
+    transform: none;
+  }
+  /* FITO-185-V: reduced-motion portal-open — still unlock opacity, kill motion only here */
+  .onboard-stage.onboard-stage--portal-open .scene-enter,
+  .onboard-stage.onboard-stage--portal-open .fade-up,
+  .onboard-stage.onboard-stage--portal-open .hero-wordmark,
+  .onboard-stage.onboard-stage--portal-open .hero-tagline,
+  .onboard-stage.onboard-stage--portal-open .hero-byline,
+  .onboard-stage.onboard-stage--portal-open .onboard-cta,
+  .onboard-stage.onboard-stage--portal-open .hero-welcome,
+  .onboard-stage.onboard-stage--portal-open .hero-welcome button,
+  .onboard-stage.onboard-stage--portal-open button.onboard-cta {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    visibility: visible !important;
+  }
+}
+
+/* Act 1 welcome atmosphere — full viewport, under the UI. Hero hold remains if this is absent. */
+.onboard-hero-video {
+  /* Absolute to .onboard-stage — fixed inside overflow-hidden clipped the lady bed. */
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.onboard-hero-poster,
+.onboard-hero-video video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+/* Poster must sit above the #05010A stage slab; never invisible under a closed portal alone. */
+.onboard-hero-poster {
+  z-index: 1;
+  opacity: 1;
+  /* FITO-185-W: kenburns on poster so Act 1 still moves if <video> stays pending (asar decode). */
+  animation: onboard-hero-kenburns 28s ease-in-out infinite alternate;
+}
+.onboard-hero-video video {
+  z-index: 2;
+}
+.onboard-hero-video video {
+  animation: onboard-hero-kenburns 28s ease-in-out infinite alternate;
+  /* No CSS filter on the <video> — compositor-only motion budget. */
+}
+@keyframes onboard-hero-kenburns {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.045);
+  }
+}
