@@ -94,6 +94,14 @@ describe('findUnpinnedUses — classifies a single uses: reference', () => {
     ])
   })
 
+  it('allows the program-repository callers to follow the public reusable workflow main contracts', () => {
+    const yaml = [
+      '  uses: mysticalsin/AskToto-Mantu/.github/workflows/ledger.yml@main',
+      '  uses: mysticalsin/AskToto-Mantu/.github/workflows/program-audit.yml@main'
+    ].join('\n')
+    expect(findUnpinnedUses(yaml)).toEqual([])
+  })
+
   it('reports every violation with its own line number, across multiple lines', () => {
     const yaml = [
       'jobs:',

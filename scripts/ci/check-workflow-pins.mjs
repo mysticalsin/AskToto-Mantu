@@ -42,6 +42,7 @@ const DOCKER_PINNED_TO_DIGEST = /^docker:\/\/[^@\s]+@sha256:[0-9a-fA-F]{64}$/
 // owner/repo[/subpath]@<40-character commit SHA>, with nothing else after the ref itself.
 const PINNED_TO_SHA = /^[^@\s]+@[0-9a-fA-F]{40}$/
 const VERSION_COMMENT = /#\s*v\d+\.\d+\.\d+\b/
+const PROGRAM_REUSABLE_WORKFLOW = /^mysticalsin\/AskToto-Mantu\/\.github\/workflows\/(?:ledger|program-audit)\.yml@main$/
 
 /**
  * Every `uses:` reference in `yamlText` that is not pinned to a full commit SHA with a trailing
@@ -54,6 +55,7 @@ export function findUnpinnedUses(yamlText) {
     if (!match) return
     const [, ref, trailing] = match
     if (LOCAL_ACTION.test(ref)) return
+    if (PROGRAM_REUSABLE_WORKFLOW.test(ref)) return
     if (DOCKER_ACTION.test(ref)) {
       if (!DOCKER_PINNED_TO_DIGEST.test(ref)) {
         violations.push({

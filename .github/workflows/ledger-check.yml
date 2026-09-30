@@ -1,0 +1,16 @@
+name: Program ledger check
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ledger:
+    name: Check program ledger
+    uses: mysticalsin/AskToto-Mantu/.github/workflows/ledger.yml@main
+    with:
+      ledger-path: ${{ vars.PROGRAM_LEDGER_PATH }}

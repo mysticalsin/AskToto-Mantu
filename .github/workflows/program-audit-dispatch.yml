@@ -1,0 +1,100 @@
+name: Program audit dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Audit mode to run
+        required: true
+        type: choice
+        options:
+          - backfill
+          - sample
+          - velocity
+          - release-check
+      population_of:
+        description: Sample population ticket when since is blank
+        required: false
+        type: string
+        default: M2-0046
+      since:
+        description: Sample lower bound; when set, population_of is ignored
+        required: false
+        type: string
+      seed:
+        description: Sample seed commit SHA
+        required: false
+        type: string
+      gate:
+        description: Program gate
+        required: false
+        type: string
+        default: m3
+      gates_path:
+        description: Release-check gates input path
+        required: false
+        type: string
+      provenance_path:
+        description: Release-check provenance input path
+        required: false
+        type: string
+      notes_path:
+        description: Release-check notes input path
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  backfill:
+    name: Backfill evidence records
+    if: inputs.mode == 'backfill'
+    uses: mysticalsin/AskToto-Mantu/.github/workflows/program-audit.yml@main
+    with:
+      mode: backfill
+      ledger-path: ${{ vars.PROGRAM_LEDGER_PATH }}
+
+  sample_population:
+    name: Draw sample from population ticket
+    if: inputs.mode == 'sample' && inputs.since == ''
+    uses: mysticalsin/AskToto-Mantu/.github/workflows/program-audit.yml@main
+    with:
+      mode: sample
+      ledger-path: ${{ vars.PROGRAM_LEDGER_PATH }}
+      population-of: ${{ inputs.population_of }}
+      seed: ${{ inputs.seed }}
+
+  sample_since:
+    name: Draw sample since bound
+    if: inputs.mode == 'sample' && inputs.since != ''
+    uses: mysticalsin/AskToto-Mantu/.github/workflows/program-audit.yml@main
+    with:
+      mode: sample
+      ledger-path: ${{ vars.PROGRAM_LEDGER_PATH }}
+      since: ${{ inputs.since }}
+      seed: ${{ inputs.seed }}
+
+  velocity:
+    name: Forecast velocity
+    if: inputs.mode == 'velocity'
+    uses: mysticalsin/AskToto-Mantu/.github/workflows/program-audit.yml@main
+    with:
+      mode: velocity
+      ledger-path: ${{ vars.PROGRAM_LEDGER_PATH }}
+      records-path: ${{ vars.PROGRAM_RECORDS_PATH }}
+      gate: ${{ inputs.gate }}
+
+  release_check:
+    name: Check release evidence
+    if: inputs.mode == 'release-check'
+    uses: mysticalsin/AskToto-Mantu/.github/workflows/program-audit.yml@main
+    with:
+      mode: release-check
+      ledger-path: ${{ vars.PROGRAM_LEDGER_PATH }}
+      records-path: ${{ vars.PROGRAM_RECORDS_PATH }}
+      gate: ${{ inputs.gate }}
+      gates-path: ${{ inputs.gates_path }}
+      provenance-path: ${{ inputs.provenance_path }}
+      notes-path: ${{ inputs.notes_path }}
