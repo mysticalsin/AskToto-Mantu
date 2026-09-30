@@ -211,6 +211,8 @@ import {
   normalizeRightEdgeY,
   overlayPlacementPosition,
   rightEdgeSidecarBounds,
+  rightEdgeParkLayout,
+  rightAnchoredParkPosition,
   resolveOverlayPlacement,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
@@ -232,6 +234,7 @@ import {
   CURSOR_REVEAL_DWELL_MS,
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
+  RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS,
   decideCursorWatch,
   overlayWatchStep,
   pointInRect,
@@ -250,6 +253,7 @@ import {
   overlayAllowsMinimize,
   overlayHugNextWidth,
   overlayRevealedContentHeight,
+  overlaySurfaceSettingsChanged,
   overlayUsesHover,
   parseOverlayLayout,
   rememberBarContentHeight,
@@ -1178,6 +1182,8 @@ let settingsSurfaceOpen = false
 let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
 let overlayCursorWatchEnteredAt: number | null = null
 let overlayCursorWatchHovering = false
+let overlayParkLatched = false // explicit Hide: no reopen from the zone the pointer is in until it leaves
+let rightEdgeUnhoveredRevealAt: number | null = null // right-edge reveal the pointer has not visited yet
 // Electron can accept an onboarding setBounds request and then let the compositor clamp it into a
 // normal-window card. Keep this narrowly scoped to the opaque onboarding owner; normal overlay layouts
 // must remain free to resize and park themselves.
@@ -2325,7 +2331,8 @@ function applyOverlaySurfaceChrome(): void {
     /* headless */
   }
   try {
-    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+    const layout = parkLayoutForDisplay(liveOverlayLayout(), screen.getDisplayMatching(win.getBounds()))
+    win.setOpacity(hideParkWindowOpacity(layout, islandResting && !isMinimized))
   } catch {
     /* headless */
   }
@@ -2337,7 +2344,10 @@ function commitParkedOverlayBounds(park: { x: number; y: number; width: number; 
   win.setBounds(park, false)
   try {
     const after = win.getBounds()
-    if (after.x !== park.x || after.y !== park.y) win.setPosition(park.x, park.y, false)
+    // A right-edge park the OS widened (Windows minimum width) keeps its right edge at the work-area edge.
+    const rightEdge = resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(park)) === 'right-edge'
+    const target = rightEdge ? rightAnchoredParkPosition(park, after.width) : park
+    if (after.x !== target.x || after.y !== target.y) win.setPosition(target.x, target.y, false)
   } catch {
     /* headless */
   }
@@ -2518,7 +2528,7 @@ function exitExclusiveOnboardingStage(): void {
   const display = screen.getDisplayMatching(win.getBounds())
   const layout = liveOverlayLayout()
   const park = parkAfterExclusiveOnboarding(
-    layout,
+    parkLayoutForDisplay(layout, display),
     getDisplayMetrics(display),
     ISLAND_TOP_MARGIN,
     liveOverlayPlacement(),
@@ -2635,7 +2645,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     onboardingDone: !onboardingLive,
     bounds: placementDisplay.bounds,
     workArea: placementDisplay.workArea,
-    layout,
+    layout: parkLayoutForDisplay(layout, placementDisplay),
     metrics: placementMetrics,
     topMargin: ISLAND_TOP_MARGIN,
     placement,
@@ -3167,9 +3177,16 @@ function overlayPositionForDisplay(
   })
 }
 
+/** Parked chrome on `display`: Hide shows the Island rail where a display continues past the right edge. */
+function parkLayoutForDisplay(layout: OverlayLayout, display: Electron.Display): OverlayLayout {
+  if (layout !== 'hide' || resolvedOverlayPlacementForDisplay(display) !== 'right-edge') return layout
+  const others = screen.getAllDisplays().filter((other) => other.id !== display.id).map((other) => other.bounds)
+  return rightEdgeParkLayout(layout, getDisplayMetrics(display), others, rightEdgeYForDisplay(display))
+}
+
 function parkedOverlayBounds(layout: OverlayLayout, display: Electron.Display): Electron.Rectangle {
   return parkAfterExclusiveOnboarding(
-    layout,
+    parkLayoutForDisplay(layout, display),
     getDisplayMetrics(display),
     ISLAND_TOP_MARGIN,
     liveOverlayPlacement(),
@@ -3253,10 +3270,14 @@ function tickOverlayCursorWatch(): void {
   }
   const display = screen.getDisplayMatching(win.getBounds())
   const layout = liveOverlayLayout()
+  const placement = resolvedOverlayPlacementForDisplay(display)
   const rest = overlayHoverRestRect(layout, display)
   const windowVisible = win.isVisible()
   const bounds = win.getBounds()
   const cursor = screen.getCursorScreenPoint()
+  // An explicit Hide parks under the pointer. Reopening from the zone it is still in would undo the Hide.
+  if (overlayParkLatched && islandResting && pointInRect(cursor, rest)) return
+  overlayParkLatched = false
   // overlayCursorWatchHovering is the OS-hover latch: main saw the cursor in the
   // strip or on the bar since the last park. Only a latched reveal parks on leave.
   const step = overlayWatchStep({
@@ -3266,8 +3287,10 @@ function tickOverlayCursorWatch(): void {
     islandResting,
     windowVisible,
     osHoverSeen: overlayCursorWatchHovering,
-    hugStub: isIncompleteAskReveal(bounds)
+    hugStub: isIncompleteAskReveal(bounds),
+    placement
   })
+  if (islandResting || step.osHoverSeen) rightEdgeUnhoveredRevealAt = null
   // Polling previously bypassed the renderer's 150ms dwell and sent reveal-now on the first tick.
   // A quick menu-bar crossing therefore flashed the whole bar open. Measure continuous native
   // hover before latching it; a leave resets this below. Already-visible reentry stays immediate.
@@ -3301,14 +3324,20 @@ function tickOverlayCursorWatch(): void {
     mainLog.info(
       `[overlay-watch] leave cursor=(${cursor.x},${cursor.y}) bar=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) park in ${OVERLAY_LEAVE_PARK_MS}ms`
     )
+  } else if (step.action === 'leave-ignored' && rightEdgeUnhoveredRevealAt !== null &&
+    performance.now() - rightEdgeUnhoveredRevealAt >= RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS) {
+    // Revealed without the pointer, which stayed away: report a leave; the page's grace parks unless forced.
+    rightEdgeUnhoveredRevealAt = null
+    notifyOverlayCursorHover(false)
   }
   /* stay / leave-ignored: never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
 }
 
-function notifyOverlayCursorHover(hovering: boolean, restoredFromParkedRail = false): void {
+/** `parked`: main already parked the window, so the page renders its rail, not a clipped open drawer. */
+function notifyOverlayCursorHover(hovering: boolean, restoredFromParkedRail = false, parked = false): void {
   if (!win || win.isDestroyed()) return
   try {
-    win.webContents.send(IPC.overlayCursorHover, { hovering, restoredFromParkedRail })
+    win.webContents.send(IPC.overlayCursorHover, { hovering, restoredFromParkedRail, parked })
   } catch {
     /* renderer gone */
   }
@@ -3349,7 +3378,8 @@ function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
       cursor,
       restRect: rest,
       revealedRect: bounds,
-      revealed: true
+      revealed: true,
+      placement: resolvedOverlayPlacementForDisplay(display)
     }) === 'stay'
   )
 }
@@ -3402,6 +3432,10 @@ function parkOverlayAfterHideSpring(force = false): boolean {
   applyOverlaySurfaceChrome()
   commitParkedOverlayBounds(park)
   overlayCursorWatchHovering = false
+  rightEdgeUnhoveredRevealAt = null
+  // A forced park is an explicit Hide. It latches only while the pointer is in the reveal band: a pointer
+  // already elsewhere has left the band, so its next approach reveals at once.
+  overlayParkLatched = force && pointInRect(screen.getCursorScreenPoint(), overlayHoverRestRect(layout, display))
   applyHideClickThrough()
   // Hide rest is an always-on invisible hairline. Tray hide() must not leave
   // the LSUIElement window gone — hover still needs a live window + watch.
@@ -3410,6 +3444,7 @@ function parkOverlayAfterHideSpring(force = false): boolean {
   } catch {
     /* headless */
   }
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') notifyOverlayCursorHover(false, false, true)
   if (before.width !== park.width || before.height !== park.height || before.y !== park.y) {
     mainLog.info(
       `[overlay-watch] park ${layout} from=${before.width}x${before.height}@(${before.x},${before.y}) to=${park.width}x${park.height}@(${park.x},${park.y})`
@@ -3421,17 +3456,34 @@ function parkOverlayAfterHideSpring(force = false): boolean {
 /** Hide rest is click-through so the menu bar stays usable. Island peek and the bar must receive clicks. */
 function applyHideClickThrough(): void {
   if (!win || win.isDestroyed()) return
-  const clickThrough =
-    !settingsSurfaceOpen &&
-    islandResting &&
-    liveOverlayLayout() === 'hide' &&
-    !isMinimized &&
-    !onboardingExclusiveLive()
   try {
+    const clickThrough =
+      !settingsSurfaceOpen &&
+      islandResting &&
+      parkLayoutForDisplay(liveOverlayLayout(), screen.getDisplayMatching(win.getBounds())) === 'hide' &&
+      !isMinimized &&
+      !onboardingExclusiveLive()
     win.setIgnoreMouseEvents(clickThrough)
   } catch {
     /* headless */
   }
+}
+
+/**
+ * Re-park after a layout switch. It is not an explicit Hide, so it never carries an earlier Hide's park
+ * latch: a pointer that reaches the new park's reveal band before any watch tick sampled it away reveals.
+ */
+function parkOverlayForLayoutChange(): void {
+  if (!win || win.isDestroyed()) return
+  const display = screen.getDisplayMatching(win.getBounds())
+  const park = parkedOverlayBounds(liveOverlayLayout(), display)
+  overlayCursorWatchHovering = false
+  overlayParkLatched = false
+  currentWidth = park.width
+  islandResting = true
+  userAnchorY = park.y
+  commitParkedOverlayBounds(park)
+  notifyOverlayCursorHover(false, false, resolvedOverlayPlacementForDisplay(display) === 'right-edge')
 }
 
 /** Pin the overlay to its selected physical placement on its current display. The historic IPC name
@@ -3470,6 +3522,7 @@ function restoreBarWidth(): void {
   // false on a 880×1017 slab so mouse-away could not park 8×2.
   if (settingsSurfaceOpen) return
   cancelOverlayLeavePark()
+  overlayParkLatched = false
   islandResting = false
   applyHideClickThrough()
   applyOverlaySurfaceChrome()
@@ -3749,6 +3802,17 @@ function legacyReveal(reason: RevealReason, options: { focus: boolean }): void {
   legacyRevealWindow(reason, options, w, (target) => showForAsk(target as BrowserWindow))
 }
 
+/** A keyboard/tray/relaunch reveal of the right-edge dock opens the page's drawer too (never a stretched
+ *  rail) and parks again once the pointer stays away. Top-center reveals are unchanged. */
+function revealRightEdgeDockInPage(): void {
+  if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
+  if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) !== 'right-edge') return
+  if (!overlayCursorWatchTimer) startOverlayCursorWatch()
+  overlayCursorWatchHovering = false
+  rightEdgeUnhoveredRevealAt = performance.now()
+  notifyOverlayCursorHover(true, true)
+}
+
 const revealController = createRevealController({
   ensureWindow,
   legacyRevealEnabled: revealLegacyEnabled,
@@ -3759,6 +3823,7 @@ const revealController = createRevealController({
     if (settingsSurfaceOpen) leaveSettingsSurface()
     isMinimized = false
     restoreBarWidth()
+    revealRightEdgeDockInPage()
   },
   repairOffscreenBounds: repairOverlayBoundsForReveal,
   disableClickThrough: () => {
@@ -4332,10 +4397,11 @@ function registerScreenListeners(): void {
       if (park) {
         overlayCursorWatchHovering = false
         if (placement === 'right-edge') {
-          currentWidth = park.width
-          userAnchorY = park.y
+          const rest = parkedOverlayBounds(layout, display) // honors a right edge shared with a new display
+          currentWidth = rest.width
+          userAnchorY = rest.y
           applyOverlaySurfaceChrome()
-          commitParkedOverlayBounds(park)
+          commitParkedOverlayBounds(rest)
           applyHideClickThrough()
         } else {
           parkOverlayAfterHideSpring()
@@ -4391,6 +4457,10 @@ function toggleVisible(reason: Extract<RevealReason, 'hotkey' | 'tray'> = 'hotke
   const w = ensureWindow()
   if (!w) return
   if (!hadNoWindow && w.isVisible() && !islandResting) {
+    // A hidden right-edge window reopens from the band on the next dwell. Park it instead: the forced park
+    // latches until the pointer leaves the band.
+    const rightEdge = resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(w.getBounds())) === 'right-edge'
+    if (overlayUsesHover(liveOverlayLayout()) && rightEdge && parkOverlayAfterHideSpring(true)) return startOverlayCursorWatch()
     w.hide()
     // Tray Hide is not the rest sensor. Keep the top-edge watch armed so
     // mouse-at-top can showInactive without hunting Show Métis.
@@ -5202,7 +5272,6 @@ function registerIpc(): void {
           // Switching to Hide/Island must park. A leftover Circle pill or Settings-tall
           // ghost was Ultron 880×1017 + Expand Métis. Keep a real Settings panel open.
           isMinimized = false
-          const display = screen.getDisplayMatching(win.getBounds())
           if (
             !settingsSurfaceOpen &&
             shouldParkHoverRestAfterLeavingSurface({
@@ -5210,15 +5279,11 @@ function registerIpc(): void {
               pointerInIslandOrBar: pointerInIslandOrBar({ ignoreWindow: true })
             })
           ) {
-            overlayCursorWatchHovering = false
-            const park = parkedOverlayBounds(layout, display)
-            currentWidth = park.width
-            islandResting = true
-            userAnchorY = park.y
-            commitParkedOverlayBounds(park)
-            applyHideClickThrough()
-            notifyOverlayCursorHover(false)
+            parkOverlayForLayoutChange()
           }
+          // Re-apply the new layout's opacity and click-through whether or not it parked here.
+          applyOverlaySurfaceChrome()
+          applyHideClickThrough()
         } else if (placementChanged && !settingsSurfaceOpen) {
           // Physical placement changes do not imply a chrome change. Preserve whether the overlay is
           // parked or revealed, but move it immediately to its valid position.
@@ -5228,6 +5293,7 @@ function registerIpc(): void {
             currentWidth = park.width
             userAnchorY = park.y
             overlayCursorWatchHovering = false
+            overlayParkLatched = false // the band moved: an earlier Hide's latch no longer applies
             applyOverlaySurfaceChrome()
             commitParkedOverlayBounds(park)
             applyHideClickThrough()
@@ -5312,7 +5378,7 @@ function registerIpc(): void {
       startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
       startOperatorOverlayPoll(() => getSettings())
       notifySettingsChanged()
-    }
+    } else if (overlaySurfaceSettingsChanged(cur, next)) notifySettingsChanged() // the window moved; the page follows
     return publicSettings()
   })
 
