@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   HERMETIC_TEST_FILES,
@@ -273,7 +273,9 @@ describe('command line', () => {
   it('runs the two hermetic EX vitest files without --packaged', () => {
     expect(parseArgs([])).toEqual({ mode: 'hermetic' })
     const argv = hermeticArgv(root)
-    expect(argv.slice(1)).toEqual(['run', 'src/main/brain/ingest-retry-policy.test.ts', 'src/main/brain/ingest-maintenance-gate.test.ts'])
+    expect(argv.slice(1)).toEqual(['run', ...HERMETIC_TEST_FILES])
+    expect(HERMETIC_TEST_FILES.map((file) => posix.dirname(file))).toEqual(['src/main/brain', 'src/main/brain'])
+    expect(HERMETIC_TEST_FILES.map((file) => posix.basename(file).replace(/\.test\.ts$/, ''))).toEqual(['ingest-retry-policy', 'ingest-maintenance-gate'])
     expect(argv[0]).toBe(join(root, 'node_modules', 'vitest', 'vitest.mjs'))
     for (const file of HERMETIC_TEST_FILES) expect(existsSync(join(root, file))).toBe(true)
   })
