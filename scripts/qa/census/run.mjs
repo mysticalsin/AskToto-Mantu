@@ -311,9 +311,6 @@ async function main() {
   if (args.auditCounts && !args.ndjson) throw new Error('--audit-counts requires --ndjson')
   if (args.auditCounts && !profile) throw new Error('--audit-counts requires --profile or METIS_QA_PROFILE')
   if (!(checkpointMinutes > 0)) throw new Error('--checkpoint-minutes must be positive')
-  if (state === 'parked-idle' && args.ndjson) {
-    throw new Error('parked-idle does not support --ndjson; use JSON output so park checks are recorded')
-  }
   if (state === 'parked-idle') validateParkedIdleProfile(profile)
 
   validateStatePrecondition({

@@ -106,6 +106,10 @@ describe('candidate-scenarios.yml', () => {
       expect(body).toContain(`    if: github.event_name == 'workflow_dispatch' && needs.guard.outputs.${platform} == 'true'`)
       expect(body).toContain(`    runs-on: ${RUNNER_LABELS[platform as keyof typeof RUNNER_LABELS]}`)
       expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(`${platform}_sha256: \${{ steps.resolve.outputs.${platform}_sha256 }}`)
+      expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(`${platform}_timeout_minutes: \${{ steps.resolve.outputs.${platform}_timeout_minutes }}`)
+      expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(
+        `${platform}_step_timeout_minutes: \${{ steps.resolve.outputs.${platform}_step_timeout_minutes }}`
+      )
     }
   })
 
@@ -133,10 +137,22 @@ describe('candidate-scenarios.yml', () => {
     expect(install).toContain('echo "app=$app" >> "$GITHUB_OUTPUT"')
     expect(mac[stepIndex(mac, '--name "$ARTIFACT"')]).toContain('gh run download "$CANDIDATE_RUN"')
     expect(job('mac')).toContain('      ARTIFACT: ${{ needs.guard.outputs.mac_artifact }}')
+    expect(job('mac')).toContain('    timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_timeout_minutes) }}')
     const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
+    expect(run).toContain('timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_step_timeout_minutes) }}')
     expect(run).toContain('INSTALLER: ${{ steps.installer.outputs.path }}')
     expect(run).toContain('APP: ${{ steps.install.outputs.app }}')
     expect(run).toContain('--app "$APP"')
+  })
+
+  it('sets an upload-safe idle-soak deadline before running the mac scenario', () => {
+    const mac = steps('mac')
+    const deadline = mac[stepIndex(mac, 'Set the soak deadline')]
+    expect(deadline).toContain('id: soak-deadline')
+    expect(deadline).toContain('Date.now() + 330 * 60 * 1000')
+    const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
+    expect(run).toContain('SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}')
+    expect(stepIndex(mac, 'Set the soak deadline')).toBeLessThan(stepIndex(mac, 'candidate-scenarios.mjs run'))
   })
 
   it('uploads the lane artifact on every run and fails only after the upload', () => {
@@ -164,11 +180,26 @@ describe('candidate-scenarios.yml', () => {
     expect(verdict).toContain('exit 1')
   })
 
-  it('offers sidecar-boot-reaper, which runs on both the macOS and the Windows job', () => {
+  it('offers idle-soak and sidecar-boot-reaper from the registry', () => {
     const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- idle-soak')
     expect(options).toContain('- sidecar-boot-reaper')
+    expect(Object.keys(SCENARIOS['idle-soak'].platforms)).toEqual(['mac'])
     expect(Object.keys(SCENARIOS['sidecar-boot-reaper'].platforms)).toEqual(['mac', 'win'])
     expect(job('win')).toContain('    runs-on: windows-latest')
+  })
+
+  it('keeps per-scenario timeouts in the registry and gives only idle-soak the long mac job', () => {
+    expect(SCENARIOS['idle-soak'].platforms.mac.timeoutMinutes).toBe(355)
+    expect(SCENARIOS['idle-soak'].platforms.mac.stepTimeoutMinutes).toBe(340)
+    expect('timeoutMinutes' in SCENARIOS['stall-sampler'].platforms.mac ? SCENARIOS['stall-sampler'].platforms.mac.timeoutMinutes : 60).toBe(60)
+    expect('stepTimeoutMinutes' in SCENARIOS['stall-sampler'].platforms.mac ? SCENARIOS['stall-sampler'].platforms.mac.stepTimeoutMinutes : 40).toBe(40)
+    expect('timeoutMinutes' in SCENARIOS['sidecar-boot-reaper'].platforms.win ? SCENARIOS['sidecar-boot-reaper'].platforms.win.timeoutMinutes : 60).toBe(60)
+    expect(job('win')).toContain('    timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_timeout_minutes) }}')
+    const win = steps('win')
+    expect(win[stepIndex(win, 'candidate-scenarios.mjs run')]).toContain(
+      'timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_step_timeout_minutes) }}'
+    )
   })
 
   it('hands the installed app to the scenario on macOS', () => {

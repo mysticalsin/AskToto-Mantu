@@ -1,0 +1,88 @@
+import { describe, expect, it } from 'vitest'
+import {
+  DEFAULT_HOURS,
+  EXIT_CODES,
+  MIN_PARKED_COVERAGE,
+  UPLOAD_RESERVE_MINUTES,
+  exitCodeForOutcome,
+  jobSafeDeadlineEpochMs,
+  launchEnv,
+  soakSeconds,
+  summarizeModelStateFromStream
+} from './idle-soak.mjs'
+
+describe('idle-soak deadline arithmetic', () => {
+  it('leaves upload reserve inside a 355-minute hosted job while allowing the 5.5 h leg', () => {
+    const jobStartedAtMs = Date.parse('2026-10-01T08:00:00.000Z')
+    const deadline = jobSafeDeadlineEpochMs({ jobStartedAtMs, timeoutMinutes: 355 })
+    expect(deadline - jobStartedAtMs).toBe((355 - UPLOAD_RESERVE_MINUTES) * 60_000)
+
+    const afterSetup = jobStartedAtMs + 15 * 60_000
+    expect(soakSeconds({ hours: DEFAULT_HOURS, nowMs: afterSetup, deadlineEpochMs: deadline })).toBe(330 * 60)
+    const jobEndsAtMs = jobStartedAtMs + 355 * 60_000
+    expect(jobEndsAtMs - (afterSetup + soakSeconds({ hours: DEFAULT_HOURS, nowMs: afterSetup, deadlineEpochMs: deadline }) * 1000)).toBe(
+      UPLOAD_RESERVE_MINUTES * 60_000
+    )
+  })
+
+  it('shortens the leg at the deadline instead of overrunning the upload window', () => {
+    const nowMs = Date.parse('2026-10-01T08:00:00.000Z')
+    expect(soakSeconds({ hours: DEFAULT_HOURS, nowMs, deadlineEpochMs: nowMs + 42_000 })).toBe(42)
+    expect(soakSeconds({ hours: 1, nowMs })).toBe(3600)
+    expect(() => soakSeconds({ hours: 6, nowMs })).toThrow(/at most 5.5/)
+  })
+})
+
+describe('idle-soak outcome mapping', () => {
+  it('maps PASS to 0 only when parked coverage meets the 95% floor', () => {
+    expect(exitCodeForOutcome({ growthOutcome: 'PASS', parkedCoverage: MIN_PARKED_COVERAGE })).toBe(EXIT_CODES.PASS)
+    expect(exitCodeForOutcome({ growthOutcome: 'PASS', parkedCoverage: 0.949 })).toBe(EXIT_CODES.FAIL_OR_INCOMPLETE)
+  })
+
+  it('maps growth FAIL or INCOMPLETE to 1 and launch/park preconditions to 2', () => {
+    expect(exitCodeForOutcome({ growthOutcome: 'FAIL', parkedCoverage: 1 })).toBe(EXIT_CODES.FAIL_OR_INCOMPLETE)
+    expect(exitCodeForOutcome({ growthOutcome: 'INCOMPLETE', parkedCoverage: 1 })).toBe(EXIT_CODES.FAIL_OR_INCOMPLETE)
+    expect(exitCodeForOutcome({ launchPrecondition: true, growthOutcome: 'PASS', parkedCoverage: 1 })).toBe(EXIT_CODES.PRECONDITION)
+    expect(exitCodeForOutcome({ parkPrecondition: true, growthOutcome: 'PASS', parkedCoverage: 1 })).toBe(EXIT_CODES.PRECONDITION)
+  })
+})
+
+describe('idle-soak launch environment and model state', () => {
+  it('sets the host floor override for the app launch while dropping secret-looking variables', () => {
+    const env = launchEnv(
+      {
+        PATH: '/usr/bin',
+        OPENAI_API_KEY: 'redacted',
+        GH_TOKEN: 'redacted',
+        METIS_QA_HOST_FLOOR_OVERRIDE: '0'
+      },
+      'candidate-scenario/profile'
+    )
+    expect(env).toMatchObject({
+      PATH: '/usr/bin',
+      ASKTOTO_USERDATA: 'candidate-scenario/profile',
+      METIS_QA_HOST_FLOOR_OVERRIDE: '1'
+    })
+    expect(env).not.toHaveProperty('OPENAI_API_KEY')
+    expect(env).not.toHaveProperty('GH_TOKEN')
+  })
+
+  it('can launch without the override when explicitly disabled', () => {
+    expect(launchEnv({}, 'profile', { hostFloorOverride: false })).toEqual({ ASKTOTO_USERDATA: 'profile' })
+  })
+
+  it('records whether llama-server and the sidecar-supervisor wrapper ran', () => {
+    const line = (tMs: number, kind: string) =>
+      JSON.stringify({ record: 'sample', tMs, processes: [{ pid: tMs + 1, startedMs: 1, kind }], mainAlive: true })
+    expect(summarizeModelStateFromStream(`${line(0, 'main')}\n${line(30_000, 'llama-server')}\n${line(60_000, 'sidecar-supervisor')}\n`)).toMatchObject({
+      llamaServerRan: true,
+      sidecarSupervisorRan: true,
+      sampleCount: 3,
+      hoursMeasured: 60_000 / 3_600_000
+    })
+    expect(summarizeModelStateFromStream(`${line(0, 'main')}\n`)).toMatchObject({
+      llamaServerRan: false,
+      sidecarSupervisorRan: false
+    })
+  })
+})

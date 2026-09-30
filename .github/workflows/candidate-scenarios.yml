@@ -9,6 +9,8 @@ name: Candidate scenarios
 #     -f scenario=fault-fatal-relaunch -f mac_sha256=<Metis-QA zip sha256 from SHA256SUMS.txt>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=stall-sampler -f mac_sha256=<Metis dmg sha256 from SHA256SUMS.txt>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
+#     -f scenario=idle-soak -f mac_sha256=<Metis dmg sha256 from SHA256SUMS.txt>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=sidecar-boot-reaper \
 #     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
 # The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
@@ -32,6 +34,7 @@ on:
         options:
           - fault-fatal-relaunch
           - stall-sampler
+          - idle-soak
           - sidecar-boot-reaper
       mac_sha256:
         description: sha256 of the macOS installer the scenario installs (empty when it does not run on macOS)
@@ -67,10 +70,14 @@ jobs:
       mac_variant: ${{ steps.resolve.outputs.mac_variant }}
       mac_artifact: ${{ steps.resolve.outputs.mac_artifact }}
       mac_sha256: ${{ steps.resolve.outputs.mac_sha256 }}
+      mac_timeout_minutes: ${{ steps.resolve.outputs.mac_timeout_minutes }}
+      mac_step_timeout_minutes: ${{ steps.resolve.outputs.mac_step_timeout_minutes }}
       win: ${{ steps.resolve.outputs.win }}
       win_variant: ${{ steps.resolve.outputs.win_variant }}
       win_artifact: ${{ steps.resolve.outputs.win_artifact }}
       win_sha256: ${{ steps.resolve.outputs.win_sha256 }}
+      win_timeout_minutes: ${{ steps.resolve.outputs.win_timeout_minutes }}
+      win_step_timeout_minutes: ${{ steps.resolve.outputs.win_step_timeout_minutes }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -102,7 +109,7 @@ jobs:
     needs: guard
     if: github.event_name == 'workflow_dispatch' && needs.guard.outputs.mac == 'true'
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_timeout_minutes) }}
     env:
       SCENARIO: ${{ inputs.scenario }}
       CANDIDATE_RUN: ${{ inputs.candidate_run }}
@@ -161,13 +168,17 @@ jobs:
           echo "app=$app" >> "$GITHUB_OUTPUT"
       - name: Start from a fresh profile seeded only with the scenario's settings
         run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform mac
+      - name: Set the soak deadline
+        id: soak-deadline
+        run: node -e "require('fs').appendFileSync(process.env.GITHUB_OUTPUT, 'epoch_ms=' + (Date.now() + 330 * 60 * 1000) + '\n')"
       - name: Run the scenario
         id: scenario
         continue-on-error: true
-        timeout-minutes: 40
+        timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_step_timeout_minutes) }}
         env:
           INSTALLER: ${{ steps.installer.outputs.path }}
           APP: ${{ steps.install.outputs.app }}
+          SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}
         run: >
           node scripts/qa/candidate-scenarios.mjs run
           --scenario "$SCENARIO" --platform mac
@@ -197,7 +208,7 @@ jobs:
     needs: guard
     if: github.event_name == 'workflow_dispatch' && needs.guard.outputs.win == 'true'
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_timeout_minutes) }}
     env:
       SCENARIO: ${{ inputs.scenario }}
       CANDIDATE_RUN: ${{ inputs.candidate_run }}
@@ -252,7 +263,7 @@ jobs:
       - name: Run the scenario
         id: scenario
         continue-on-error: true
-        timeout-minutes: 40
+        timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_step_timeout_minutes) }}
         env:
           INSTALLER: ${{ steps.installer.outputs.path }}
           APP: ${{ steps.install.outputs.app }}
