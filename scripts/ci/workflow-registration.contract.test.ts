@@ -167,9 +167,12 @@ describe('every workflow in the repository', () => {
     })
   }
 
-  it.each(['hk-m-candidate.yml', 'windows-qa.yml', 'm2-0238-backfill.yml'])('%s has the pull_request self-registration trigger', (file) => {
-    const source = readFileSync(join(workflowsDir, file), 'utf8').replace(/\r\n/g, '\n')
-    expect(ownPathOnly(file, triggerBlocks(source).get('pull_request'))).toBe(true)
-    expect(triggerBlocks(source).has('workflow_dispatch')).toBe(true)
-  })
+  it.each(['hk-m-candidate.yml', 'windows-qa.yml', 'm2-0238-backfill.yml', 'candidate-scenarios.yml'])(
+    '%s has the pull_request self-registration trigger',
+    (file) => {
+      const source = readFileSync(join(workflowsDir, file), 'utf8').replace(/\r\n/g, '\n')
+      expect(ownPathOnly(file, triggerBlocks(source).get('pull_request'))).toBe(true)
+      expect(triggerBlocks(source).has('workflow_dispatch')).toBe(true)
+    }
+  )
 })
