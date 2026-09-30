@@ -13,7 +13,6 @@ import { access, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AuditEvent } from './logger'
 import type { bundledFfmpegPath, startFfmpegDecode } from './ffmpeg-decoder'
-import type { ensureLocalRuntimeStarted } from './llm/local'
 import type * as localRuntime from './llm/local-runtime'
 import type { recordSidecarIntent } from './infra/process/registry'
 
@@ -101,7 +100,14 @@ const REGISTRY_WRITE_INTERVAL_MS = 2
  * cannot load modules lazily, and importing them here would drag the Electron-bound modules into this file's unit test.
  */
 export interface HkMModules {
-  readonly ensureLocalRuntimeStarted: typeof ensureLocalRuntimeStarted
+  // Spelled out rather than `typeof` llm/local: local-models.ts and local.ts import the override from this file, so
+  // importing llm/local here would close an import cycle. qa-hooks.ts passes the real function, which tsc checks.
+  readonly ensureLocalRuntimeStarted: (
+    modelId: string,
+    vision?: boolean,
+    canStartSpeculatively?: () => boolean,
+    ramFloorOverride?: HkMRamFloorOverride
+  ) => Promise<void>
   readonly localRuntime: Pick<typeof localRuntime, 'markActivity' | 'baseURL' | 'sessionKey'>
   readonly bundledFfmpegPath: typeof bundledFfmpegPath
   readonly startFfmpegDecode: typeof startFfmpegDecode
