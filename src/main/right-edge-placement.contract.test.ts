@@ -63,6 +63,30 @@ describe('right-edge placement main-process contract', () => {
     expect(settings).toMatch(/overlayPositionForDisplay\(/)
   })
 
+  it('wires right-edge Hide: toggle parks and latches, reveals tell the page, parks tell the page, layout changes re-apply chrome', () => {
+    // Behavior is proven live by the RE-HIDE rows in scripts/qa/packaged-smoke.mjs; these pin the wiring.
+    const toggle = section(index, 'function toggleVisible(', 'const shortcutActions')
+    expect(toggle).toMatch(/=== 'right-edge'\n[^\n]*rightEdge && parkOverlayAfterHideSpring\(true\)\) return startOverlayCursorWatch\(\)/)
+    expect(toggle.indexOf('parkOverlayAfterHideSpring(true)')).toBeLessThan(toggle.indexOf('w.hide()'))
+    const park = section(index, 'function parkOverlayAfterHideSpring', 'function applyHideClickThrough')
+    expect(park).toMatch(/overlayParkLatched = force/)
+    expect(park).toMatch(/=== 'right-edge'\) notifyOverlayCursorHover\(false, false, true\)/)
+    const tick = section(index, 'function tickOverlayCursorWatch()', 'function notifyOverlayCursorHover')
+    expect(tick).toMatch(/if \(overlayParkLatched && islandResting && pointInRect\(cursor, rest\)\)/)
+    expect(tick).toMatch(/placement\n\s*\}\)/)
+    const restore = section(index, 'function restoreBarWidth()', 'function repairOverlayBoundsForReveal')
+    expect(restore).toMatch(/overlayParkLatched = false/)
+    const controller = section(index, 'const revealController = createRevealController({', 'function reveal(')
+    expect(controller).toMatch(/restoreBarWidth\(\)\s*revealRightEdgeDockInPage\(\)/)
+    const pageReveal = section(index, 'function revealRightEdgeDockInPage()', 'const revealController')
+    expect(pageReveal).toMatch(/!== 'right-edge'\) return/)
+    expect(pageReveal).toMatch(/rightEdgeUnhoveredRevealAt = performance\.now\(\)/)
+    expect(pageReveal).toMatch(/notifyOverlayCursorHover\(true, true\)/)
+    const settings = section(index, 'const layoutChanged = cur.overlayLayout', '// Flipping follow-up memory')
+    const layoutSwitch = settings.slice(settings.indexOf('if (layoutChanged) {'), settings.indexOf('} else if (placementChanged'))
+    expect(layoutSwitch).toMatch(/applyOverlaySurfaceChrome\(\)\s*applyHideClickThrough\(\)/)
+  })
+
   it('does not resize native sidecar bounds for streaming renderer content', () => {
     const resize = section(index, 'function resizeTo(height: number): void', '/** Collapse to / expand')
     expect(resize).toMatch(/if \(placement === 'right-edge'\) return/)
