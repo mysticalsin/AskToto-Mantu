@@ -19,7 +19,7 @@
   animation: overlay-spring-in 360ms var(--ease-spring) both;
 }
 .overlay-spring--out {
-  animation: overlay-spring-out 320ms var(--ease-spring) both;
+  animation: overlay-spring-out 280ms var(--ease-spring) both;
 }
 .overlay-spring--settled {
   transform: none;

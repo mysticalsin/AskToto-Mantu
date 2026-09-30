@@ -3296,8 +3296,7 @@ function tickOverlayCursorWatch(): void {
   if (islandResting || step.osHoverSeen) rightEdgeUnhoveredRevealAt = null
   // Polling previously bypassed the renderer's 150ms dwell and sent reveal-now on the first tick.
   // A quick menu-bar crossing therefore flashed the whole bar open. Measure continuous native
-  // hover before latching it; a leave resets this below. Already-visible reentry stays immediate.
-  // Top-center rests longer in the notch zone than the right-edge band (OD-23).
+  // hover before latching it; a leave resets this below. Already-visible reentry stays immediate. OD-23 dwell.
   if (step.action === 'restore' && (islandResting || !windowVisible)) {
     const now = performance.now()
     overlayCursorWatchEnteredAt ??= now
@@ -3541,10 +3540,7 @@ function restoreBarWidth(): void {
   const placement = resolvedOverlayPlacementForDisplay(display)
   let next: Electron.Rectangle
   if (placement === 'right-edge') {
-    next = rightEdgeSidecarBounds(getDisplayMetrics(display), {
-      open: true,
-      normalizedY: rightEdgeYForDisplay(display)
-    })
+    next = rightEdgeSidecarBounds(getDisplayMetrics(display), { open: true, normalizedY: rightEdgeYForDisplay(display) })
     currentWidth = next.width
   } else {
     // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
@@ -3552,12 +3548,9 @@ function restoreBarWidth(): void {
     let revealedHeight = overlayUsesHover(layout)
       ? askRevealHeight({ currentHeight: b.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX })
       : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
-    if (isSettingsTallHeight(revealedHeight)) {
-      revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
-    }
+    if (isSettingsTallHeight(revealedHeight)) revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
     const wasBarWidth = currentWidth === BAR_WIDTH
     currentWidth = BAR_WIDTH
-    // Preserve the historic top-center path verbatim.
     const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
     const x = wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
     next = { x, y, width: BAR_WIDTH, height: revealedHeight }
@@ -3807,9 +3800,7 @@ function revealRightEdgeDockInPage(): void {
   notifyOverlayCursorHover(true, true)
 }
 
-/** A keyboard/tray/relaunch reveal of a top-center Hide/Island tells the page it is revealed. Otherwise the page
- *  still believes it is parked and paints nothing over the restored window. Main holds this reveal like a hover
- *  it saw: only a pointer that visits the bar and leaves parks it again. */
+/** Keyboard/tray/relaunch reveal of top-center Hide/Island: the page paints it; main holds it until a pointer visits and leaves. */
 function revealTopCenterHoverInPage(): void {
   if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
   if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) === 'right-edge') return
@@ -4347,9 +4338,7 @@ function moveBy(dx: number, dy: number): void {
     w.setBounds(next)
     return
   }
-  // Top-center Hide/Island is anchored under the notch: resizeTo and every reveal pin it back to topClamp.
-  // A drag only moved it until the next resize (while the cursor watch parked it mid-drag), then kept
-  // moving the parked window away from the notch.
+  // Top-center Hide/Island stays anchored under the notch; a drag would move its park position (M2-0431).
   if (!settingsSurfaceOpen && overlayUsesHover(liveOverlayLayout())) return
   const x = b.x + dx
   const y = b.y + dy

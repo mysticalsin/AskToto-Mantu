@@ -5,8 +5,9 @@
 
 /** Reveal spring (ms). Window is already at islandSafeTop before this plays. */
 export const OVERLAY_REVEAL_MS = 360
-/** Hide reverse spring (ms). Park happens after this, not on the hide tick. */
-export const OVERLAY_HIDE_MS = 320
+/** Hide reverse spring (ms). Park happens after this, not on the hide tick. With the 500 ms leave grace it
+ *  ends before main's 800 ms leave-park backstop, so the backstop never cuts the fade short. */
+export const OVERLAY_HIDE_MS = 280
 /** If animationend is missed, park anyway so the bar cannot stick open. */
 export const OVERLAY_PARK_FALLBACK_MS = 400
 
