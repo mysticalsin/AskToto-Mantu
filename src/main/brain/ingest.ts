@@ -286,7 +286,7 @@ function runCompletionOnce(
   const isLocal = provider === 'local'
   const req: AskStart = isLocal
     ? ({ id, mode: 'summary', prompt: '', transcript: userText, history: [] } as AskStart)
-    : ({ id, mode: 'answer', prompt: userText, history: [] } as AskStart)
+    : ({ id, mode: 'recap', prompt: userText, history: [] } as AskStart)
   return new Promise<string>((resolve, reject) => {
     let out = ''
     createStream({
@@ -295,7 +295,6 @@ function runCompletionOnce(
       apiKey: picked.operatorTransport ? '' : key,
       viaOperator: !!picked.operatorTransport,
       operatorTransport: picked.operatorTransport,
-      capability: 'recap',
       baseURL: picked.operatorTransport ? undefined : providerBaseUrl(provider, s),
       workspaceId: s.dustWorkspaceId,
       refreshDustAuth: provider === 'dust' ? refreshDustAuthForIngest : undefined,

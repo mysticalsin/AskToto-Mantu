@@ -268,6 +268,7 @@ public actor ModelPolicyRuntime {
         pollTask = Task {
             while !Task.isCancelled {
                 if let secret = secretProvider() {
+                    await client.loadCached(secret: secret)
                     _ = await client.refresh(url: url, secret: secret)
                 }
                 do {

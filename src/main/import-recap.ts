@@ -226,7 +226,6 @@ export async function runImportedRecap(
           apiKey: viaOperator ? '' : key,
           viaOperator,
           operatorTransport: operatorTransport ?? undefined,
-          capability: 'recap',
           baseURL: local || viaOperator ? undefined : deps.providerBaseUrl(provider, settings),
           workspaceId: settings.dustWorkspaceId,
           refreshDustAuth: provider === 'dust' ? deps.refreshDustAuth?.(settings) : undefined,

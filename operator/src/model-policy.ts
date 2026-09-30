@@ -140,10 +140,8 @@ export interface ModelPolicyRefusal {
  * provider+model the request named is one of the capability's declared candidates (primary or a
  * fallback); the MDM `allowedProviders` narrowing is a desktop-only precedence step and is
  * deliberately not re-applied here — this check only ever needs to answer "did the owner actually
- * approve this provider+model for this capability at all". `capability` is client-supplied, so a modified
- * client can label a request with whichever capability lists the model it wants; the boundary this
- * guarantees is therefore "the model is one the owner approved for some capability the caller names",
- * never a per-route guarantee, and the model must still be an exact provider+model match.
+ * approve this provider+model for this route-derived capability at all". Callers must derive
+ * `capability` from server-owned route semantics before calling; it is not a client authority.
  */
 export async function enforceModelPolicy(
   db: D1DatabaseLike | undefined,

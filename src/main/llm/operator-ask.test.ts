@@ -62,8 +62,8 @@ describe('streamOperatorAsk', () => {
     })
   })
 
-  it('labels the request with the fleet policy capability, defaulting to askChat', async () => {
-    const send = async (capability?: 'recap'): Promise<Record<string, unknown>> => {
+  it('sends the Ask mode, not a client-selected fleet policy capability', async () => {
+    const send = async (mode: typeof req.mode): Promise<Record<string, unknown>> => {
       const fetcher = vi.fn(async (_url: Parameters<typeof fetch>[0], _init?: RequestInit) => new Response('data: {"t":"done"}\n\n', {
         headers: { 'content-type': 'text/event-stream' }
       }))
@@ -72,14 +72,14 @@ describe('streamOperatorAsk', () => {
       streamOperatorAsk({
         providerId: 'openai', kind: 'openai', apiKey: '', viaOperator: true,
         operatorTransport: { url: 'https://operator.test', secret: 'METIS-OP-1.fixture' },
-        model: 'gpt-4o-mini', temperature: 0.2, system: 'sys', req, handlers: h,
-        ...(capability ? { capability } : {})
+        model: 'gpt-4o-mini', temperature: 0.2, system: 'sys', req: { ...req, mode }, handlers: h
       })
       await vi.waitFor(() => expect(h.onDone).toHaveBeenCalled())
       return JSON.parse(String((fetcher.mock.calls[0]?.[1] as RequestInit).body)) as Record<string, unknown>
     }
-    expect((await send('recap')).capability).toBe('recap')
-    expect((await send()).capability).toBe('askChat')
+    expect(await send('recap')).toMatchObject({ mode: 'recap' })
+    expect(await send('answer')).toMatchObject({ mode: 'answer' })
+    expect(await send('answer')).not.toHaveProperty('capability')
   })
 
   it.each([

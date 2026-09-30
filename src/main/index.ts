@@ -766,11 +766,11 @@ import {
   VISION_CHECK_SYSTEM,
   isApiVisionCandidate
 } from '@shared/screen-capture-check'
+import { listMeetings, searchMeetingsLatest } from './history-read'
 import {
-  listMeetings,
   listMeetingsNeedingRecap,
-  searchMeetings,
   recallRead,
+  openExplicitly,
   deleteMeeting,
   renameMeeting,
   updateMeetingRecap,
@@ -4780,20 +4780,20 @@ function createTray(): void {
   // menu-bar item and orphans the first Tray. A build still in flight counts as created (startTrayBuild ignores it).
   if (tray && !tray.isDestroyed()) return
   const iconPaths = trayIconPaths(app.isPackaged ? process.resourcesPath : join(__dirname, '../../build'))
-  startTrayBuild(() => buildTrayInStages<Electron.NativeImage>({
+  startTrayBuild(() => buildTrayInStages<Electron.NativeImage, Menu>({
     loadIcon: (time) => loadPresizedTrayIcon(nativeImage, iconPaths, process.platform, time),
-    create(img) {
+    create: (img) => { tray = new Tray(img) },
+    decorate(img) {
+      if (!tray) return
       const emptyIcon = img.isEmpty()
-      tray = new Tray(emptyIcon ? nativeImage.createEmpty() : img)
-      // FITO-185-F: always give AXExtrasMenuBar a title on darwin (empty-icon fallback used to be the
-      // only path; hardprove saw kAXErrorCannotComplete with a title-less LSUIElement status item).
+      // FITO-185-F: darwin always gets a title (a title-less LSUIElement item gave kAXErrorCannotComplete).
       if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
       tray.setToolTip('Métis')
       // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
       tray.on('click', () => sendHotkey('settings'))
       auditLog('tray.created', { emptyIcon })
     },
-    attachMenu: () => tray?.setContextMenu(buildTrayMenu()),
+    buildMenu: buildTrayMenu, attachMenu: (menu) => tray?.setContextMenu(menu),
     time: (label, fn) => timeBootStage(observability, label, fn),
     fail: (e) => auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
   }))
@@ -6494,7 +6494,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.recallRead, async (e, file: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return recallRead(String(file ?? ''))
+    return openExplicitly(String(file ?? ''), (event) => e.sender.send(IPC.recallHydration, event), (options) => recallRead(String(file ?? ''), options))
   })
 
   // Recall export: a user-initiated DECRYPTED markdown copy of ONE saved meeting, so an external tool —
@@ -6910,7 +6910,6 @@ function registerIpc(): void {
     }
     return { text }
   })
-
 
   // M2-0412: every on-device readiness decision consults the fleet policy's `localModel` entry.
   setLocalModelGate((modelId) => localModelAllowedByPolicy(getActiveModelPolicy(getSettings()), modelId))
@@ -7921,7 +7920,6 @@ function registerIpc(): void {
         apiKey: viaOperator ? '' : key,
         viaOperator,
         operatorTransport: operatorTransport ?? undefined,
-        capability: 'askChat',
         baseURL,
         workspaceId: s.dustWorkspaceId,
         // Dust OAuth tokens (imported from the local CLI) expire after ~1h. On a pre-token 401 the
@@ -8952,7 +8950,7 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.recallSearch, (e, q: string) => {
     assertMainWindow(e)
-    return requireAuth() ? searchMeetings(String(q ?? '')) : []
+    return requireAuth() ? searchMeetingsLatest(String(q ?? '')) : []
   })
   ipcMain.handle(IPC.recallOpen, async (e, file: string) => {
     assertMainWindow(e)
@@ -8964,7 +8962,7 @@ function registerIpc(): void {
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
     if (!safeName) return ''
     // Encrypted transcripts are unreadable in an editor — the target is a decrypted temp copy instead.
-    const target = await meetingOpenTarget(folder, safeName)
+    const target = await openExplicitly(safeName, (event) => e.sender.send(IPC.recallHydration, event), (options) => meetingOpenTarget(folder, safeName, options))
     if (!target.ok) return target.error
     auditLog('recall.open', { encrypted: target.encrypted })
     return shell.openPath(target.path)

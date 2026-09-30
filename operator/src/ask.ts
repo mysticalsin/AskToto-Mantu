@@ -35,6 +35,10 @@ function fail(error: string, status: number, extra?: Record<string, unknown>): R
   return json({ ok: false, error, ...extra }, status)
 }
 
+function policyCapabilityForAsk(req: UseRequest): 'askChat' | 'recap' {
+  return req.mode === 'recap' ? 'recap' : 'askChat'
+}
+
 async function providerRefusedResponse(upstream: Response, secrets: readonly string[], screenshot = false): Promise<Response> {
   const raw = screenshot ? '' : await upstream.text().catch(() => '')
   if (screenshot) await upstream.body?.cancel().catch(() => undefined)
@@ -524,7 +528,7 @@ export async function handleAsk(
       }
     }
   }
-  const refusal = await enforceModelPolicy(env.DB, req.capability ?? 'askChat', req.provider, req.model)
+  const refusal = await enforceModelPolicy(env.DB, policyCapabilityForAsk(req), req.provider, req.model)
   if (refusal) {
     await store.audit(crypto.randomUUID(), now, deviceId, 'model-policy.blocked', null, `${req.provider}/${req.model}`)
     return fail(refusal.error, refusal.status, { code: refusal.code })

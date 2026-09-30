@@ -296,6 +296,31 @@ final class ModelPolicyRuntimeTests: XCTestCase {
         XCTAssertEqual(counter.refreshCalls, 1)
     }
 
+    func testStartLoadsVerifiedCacheBeforeARefreshFailure() async {
+        let counter = Counter()
+        var capabilities: [String: ModelPolicyEntry] = [:]
+        for capability in modelPolicyCapabilityOrder {
+            capabilities[capability.rawValue] = ModelPolicyEntry(provider: "anthropic", model: "claude-sonnet-4-6")
+        }
+        let doc = ModelPolicyDocument(version: 42, updatedAt: 42, updatedBy: "owner@example.com", capabilities: capabilities)
+        let signature = ModelPolicy.sign(doc, secret: "shared-secret")
+        let cacheURL = Self.tempCacheURL()
+        let encoded = try! JSONEncoder().encode(SignedModelPolicy(policy: doc, signature: signature))
+        try! encoded.write(to: cacheURL, options: .atomic)
+        let url = URL(string: "https://operator.test/v1/model-policy")!
+        let client = ModelPolicyClient(cacheURL: cacheURL) { _ in
+            counter.refreshCalls += 1
+            throw URLError(.notConnectedToInternet)
+        }
+        let runtime = ModelPolicyRuntime(client: client) { _ in throw CancellationError() }
+        await runtime.start(url: url) { "shared-secret" }
+        await Self.letLoopRunOnce()
+        await runtime.stop()
+        let active = await runtime.activePolicy()
+        XCTAssertEqual(counter.refreshCalls, 1)
+        XCTAssertEqual(active?.version, 42)
+    }
+
     func testStopCancelsTheLoopSoAPendingSleepNeverFiresAnotherRefresh() async {
         let counter = Counter()
         let url = URL(string: "https://operator.test/v1/model-policy")!

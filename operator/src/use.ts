@@ -1,6 +1,5 @@
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '../../src/shared/providers'
 import { operatorVisionModel, parseOperatorImage, type OperatorImage } from '../../src/shared/operator-vision'
-import { isModelPolicyCapability, type ModelPolicyCapability } from '../../src/shared/model-policy'
 import { GatewayPrivacyError, gatewayPrivacyHeaders, readinessForError, verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { decryptVault } from './crypto'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
@@ -44,14 +43,11 @@ export type UseMessage = { role: 'user' | 'assistant'; content: string }
 export type UseRequest = {
   provider: string
   model: string
+  mode?: 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
   /** Managed Portal CF intent. Server authorizes deep; client cannot self-entitle. */
   tier?: 'base' | 'deep'
   /** Seat AskStart.id — stable metering key (F10 dedupe). */
   clientAskId?: string
-  /** M2-0412: which fleet model policy capability this request belongs to. Absent (an older client, or
-   *  a request the client did not label) defaults to 'askChat' at the enforcement call site — the
-   *  safest default, since it is the most commonly and most tightly configured capability. */
-  capability?: ModelPolicyCapability
   system: string
   messages: UseMessage[]
   image?: OperatorImage
@@ -216,20 +212,22 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
     const id = String((body as { clientAskId: string }).clientAskId).trim()
     if (id.length >= 8 && id.length <= 128) clientAskId = id
   }
-  const capability = isModelPolicyCapability((body as { capability?: unknown }).capability)
-    ? (body as { capability: ModelPolicyCapability }).capability
-    : undefined
+  const rawMode = typeof body.mode === 'string' ? body.mode : ''
+  const mode =
+    rawMode === 'answer' || rawMode === 'vision' || rawMode === 'suggest' || rawMode === 'summary' || rawMode === 'recap'
+      ? rawMode
+      : undefined
   return {
     ok: true,
     req: {
       provider,
       model,
+      ...(mode ? { mode } : {}),
       system,
       messages,
       ...(image ? { image } : {}),
       ...(tier ? { tier } : {}),
       ...(clientAskId ? { clientAskId } : {}),
-      ...(capability ? { capability } : {}),
       temperature,
       maxTokens
     }
@@ -425,7 +423,7 @@ export async function handleUse(
   if (!(await seatHasEntitlement(store, seat, now, 'operator_keys'))) {
     return fail(OPERATOR_KEYS_NOT_ENTITLED, 403, { code: 'not-entitled' })
   }
-  const refusal = await enforceModelPolicy(env.DB, parsed.req.capability ?? 'askChat', parsed.req.provider, parsed.req.model)
+  const refusal = await enforceModelPolicy(env.DB, 'askChat', parsed.req.provider, parsed.req.model)
   if (refusal) {
     await store.audit(crypto.randomUUID(), now, deviceId, 'model-policy.blocked', null, `${parsed.req.provider}/${parsed.req.model}`)
     return fail(refusal.error, refusal.status, { code: refusal.code })

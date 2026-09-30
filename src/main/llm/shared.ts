@@ -1,7 +1,6 @@
 import type { AskStart } from '@shared/ipc'
 import type { ProviderKind, ProviderId } from '@shared/providers'
 import type { StreamCacheUsage } from '@shared/operator'
-import type { ModelPolicyCapability } from '@shared/model-policy'
 import { AUTO_CLARITY_DIRECTIVE, autoClarityDropCaveman } from '@shared/caveman-ask'
 
 export type { StreamCacheUsage }
@@ -37,9 +36,6 @@ export interface StreamOptions {
   viaOperator?: boolean
   /** HMAC target for viaOperator. URL + ingest secret only — never an LLM key. */
   operatorTransport?: { url: string; secret: string }
-  /** M2-0412: fleet model policy capability this call belongs to; sent to the Operator so it enforces
-   *  the matching entry. Absent = 'askChat'. Only read when viaOperator. */
-  capability?: ModelPolicyCapability
   baseURL?: string
   /** Dust workspace id (only used when kind === 'dust'). */
   workspaceId?: string

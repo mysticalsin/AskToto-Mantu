@@ -16,6 +16,7 @@ import { MODEL_POLICY_CAPABILITIES } from '../../src/shared/model-policy'
 
 const NOW = 1_725_000_000_000
 const SECRET = syntheticProviderKey('anthropic')
+const OPENAI_SECRET = syntheticProviderKey('openai')
 const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 function env(): Env {
@@ -73,6 +74,20 @@ async function addAnthropicKey(store: ReturnType<typeof memoryStore>) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider: 'anthropic', secret: SECRET })
+    }),
+    env(),
+    { access: ownerAccess },
+    { store, now: NOW }
+  )
+  expect(res.status).toBe(200)
+}
+
+async function addOpenAIKey(store: ReturnType<typeof memoryStore>) {
+  const res = await handleRequest(
+    new Request('https://operator.test/v1/admin/keys', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'openai', secret: OPENAI_SECRET })
     }),
     env(),
     { access: ownerAccess },
@@ -537,6 +552,27 @@ describe('M2-0412 fleet model policy enforcement on /v1/use (server-side, cannot
     expect(responseBody.code).toBe('model_not_allowed')
     const audited = await store.listAudit(10, { action: 'model-policy.blocked' })
     expect(audited.length).toBeGreaterThan(0)
+  })
+
+  it('ignores a client-supplied capability label on /v1/use', async () => {
+    const store = memoryStore()
+    await addOpenAIKey(store)
+    await approveDevice(store)
+    const db = await dbWithPolicy({ recap: { provider: 'openai', model: 'gpt-4o-mini' } }) // askChat stays anthropic/haiku
+    const body = JSON.stringify({
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      capability: 'recap',
+      messages: [{ role: 'user', content: 'hi' }]
+    })
+    const providerFetch: typeof fetch = async () => new Response('should never be reached', { status: 500 })
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-policy-forged-capability'), { ...env(), DB: db }, {}, {
+      store,
+      now: NOW,
+      providerFetch
+    })
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { code: string }).code).toBe('model_not_allowed')
   })
 
   it('does not enforce anything on /v1/use when no fleet policy has ever been set (not managed = today defaults)', async () => {
