@@ -18,7 +18,7 @@ in [`README.md`](../../README.md)):
 
 Settings → About → Diagnostics offers **Export diagnostics bundle**. It asks where to save, then copies the logs, the crash records, the boot
 sentinel, the newest ten stall bundles from `diagnostics/stalls/` (thread stacks and symbol names only; the raw `sample`
-captures beside them are never copied) and a `MANIFEST.txt` listing exactly which files made it. A locked or missing file is skipped and the manifest shows
+captures beside them are never copied, and neither is a symlink, a directory or a file that is not a well-formed bundle the app wrote) and a `MANIFEST.txt` listing exactly which files made it. A locked or missing file is skipped and the manifest shows
 that. The export is gated like every privileged channel (sender check and sign-in). A user sends the folder; nobody asks
 for a transcript.
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { bundleDir, captureDir, collectStallCaptures, exportableStallBundles, projectSample, MAX_BUNDLES, MAX_BUNDLE_BYTES } from './stall-bundle'
@@ -277,15 +277,63 @@ describe('exportableStallBundles', () => {
     expect(await exportableStallBundles(userData)).toEqual([`${BOOT_ID}.1790000000000.23456.txt`])
   })
 
+  // Exactly what the collector writes for a capture named <BOOT_ID>.<capturedAtMs>.<stalledMs>.
+  const bundleText = (capturedAtMs: number, stalledMs: number): string =>
+    [
+      'metis stall bundle v1',
+      `bootId: ${BOOT_ID}`,
+      `capturedAt: ${new Date(capturedAtMs).toISOString()}`,
+      `stalledMs: ${stalledMs}`,
+      'source: sample(1), 5 s at 10 ms; thread stacks and symbol names only',
+      '',
+      ...EXPECTED,
+      ''
+    ].join('\n')
+
   it('returns at most MAX_BUNDLES names, newest capture first', async () => {
     mkdirSync(bundleDir(userData), { recursive: true })
     for (let i = 0; i < 12; i++) {
-      writeFileSync(join(bundleDir(userData), `${BOOT_ID}.${1_790_000_000_000 + i}.6000.txt`), 'bundle', { mode: 0o600 })
+      const capturedAtMs = 1_790_000_000_000 + i
+      writeFileSync(join(bundleDir(userData), `${BOOT_ID}.${capturedAtMs}.6000.txt`), bundleText(capturedAtMs, 6000), { mode: 0o600 })
     }
     const names = await exportableStallBundles(userData)
     expect(names).toHaveLength(MAX_BUNDLES)
     expect(names[0]).toBe(`${BOOT_ID}.1790000000011.6000.txt`)
     expect(names[names.length - 1]).toBe(`${BOOT_ID}.1790000000002.6000.txt`)
+  })
+
+  it('never lists a bundle-named file whose content is not a collector bundle', async () => {
+    mkdirSync(bundleDir(userData), { recursive: true })
+    const good = `${BOOT_ID}.1790000000000.6000.txt`
+    writeFileSync(join(bundleDir(userData), good), bundleText(1_790_000_000_000, 6000))
+    const planted: Record<string, string> = {
+      // arbitrary text
+      [`${BOOT_ID}.1790000000001.6000.txt`]: `${TRANSCRIPT}\n${EMAIL}\n`,
+      // a real bundle under another capture's name: the header no longer matches
+      [`${BOOT_ID}.1790000000002.6000.txt`]: bundleText(1_790_000_000_000, 6000),
+      // the right header, then a path and an email appended
+      [`${BOOT_ID}.1790000000003.6000.txt`]: `${bundleText(1_790_000_000_003, 6000)}+ 1 open  (in libfoo.dylib) + 4\n/Users/${USER}/Meetings/${FILE}\n`,
+      // the right header, then prose shaped like a frame line
+      [`${BOOT_ID}.1790000000004.6000.txt`]: `${bundleText(1_790_000_000_004, 6000)}+ 1 ${TRANSCRIPT}\n`,
+      // the right header and no stacks
+      [`${BOOT_ID}.1790000000005.6000.txt`]: bundleText(1_790_000_000_005, 6000).split('Thread 1')[0]
+    }
+    for (const [name, text] of Object.entries(planted)) writeFileSync(join(bundleDir(userData), name), text)
+    mkdirSync(join(bundleDir(userData), `${BOOT_ID}.1790000000006.6000.txt`))
+
+    expect(await exportableStallBundles(userData)).toEqual([good])
+  })
+
+  it.skipIf(!POSIX)('never lists a bundle-named symlink, even to a well-formed bundle or to a file outside the bundle directory', async () => {
+    mkdirSync(bundleDir(userData), { recursive: true })
+    const outside = join(userData, 'settings.json')
+    writeFileSync(outside, `{"email":"${EMAIL}"}`)
+    const elsewhere = join(userData, `${BOOT_ID}.1790000000002.6000.txt`)
+    writeFileSync(elsewhere, bundleText(1_790_000_000_002, 6000))
+    symlinkSync(outside, join(bundleDir(userData), `${BOOT_ID}.1790000000001.6000.txt`))
+    symlinkSync(elsewhere, join(bundleDir(userData), `${BOOT_ID}.1790000000002.6000.txt`))
+
+    expect(await exportableStallBundles(userData)).toEqual([])
   })
 
   it('resolves to [] when there is no bundle directory, or when userData is a file', async () => {

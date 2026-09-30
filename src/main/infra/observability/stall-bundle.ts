@@ -14,7 +14,7 @@
  * contains any of those characters and no path or email can survive. Symbol and image names come from the
  * symbol tables of loaded code, never from user data.
  */
-import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /** Bundles kept; the oldest capture is dropped first. */
@@ -28,7 +28,7 @@ const REDACTED = '<redacted>'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const CAPTURE_NAME = new RegExp(`^(${UUID})\\.(\\d{1,15})\\.(\\d{1,15})\\.sample$`)
-const BUNDLE_NAME = new RegExp(`^${UUID}\\.(\\d{1,15})\\.\\d{1,15}\\.txt$`)
+const BUNDLE_NAME = new RegExp(`^(${UUID})\\.(\\d{1,15})\\.(\\d{1,15})\\.txt$`)
 
 const THREAD_LINE = /^\s+(\d+)\s+Thread_\d+(.*)$/
 const FRAME_LINE = /^\s+([+!:| ]*)(\d+)\s+(.+)$/
@@ -140,7 +140,7 @@ function bundlesNewestFirst(names: readonly string[]): string[] {
   return names
     .flatMap((name) => {
       const m = BUNDLE_NAME.exec(name)
-      return m ? [{ name, capturedAtMs: Number(m[1]) }] : []
+      return m ? [{ name, capturedAtMs: Number(m[2]) }] : []
     })
     .sort((a, b) => b.capturedAtMs - a.capturedAtMs)
     .map(({ name }) => name)
@@ -153,12 +153,59 @@ async function pruneBundles(userData: string): Promise<void> {
   }
 }
 
+/** Room for the header and the truncation marker beyond MAX_BUNDLE_BYTES of stacks. */
+const MAX_BUNDLE_FILE_BYTES = MAX_BUNDLE_BYTES + 4096
+const BUNDLE_THREAD = /^Thread \d+( \(main\))? {2}\d+$/
+const BUNDLE_FRAME = /^[+!:| ]*\d+ (.+)$/
+/** The four shapes projectFrame() writes after the sample count. */
+const BUNDLE_FRAME_REST = [/^\S.*? {2}\(in [^)]+\) \+ \d+$/, /^\?\?\? {2}\(in [^)]+\) \+ 0x[0-9a-f]+$/, /^\?\?\?$/, /^<redacted>$/]
+
+/** True only when `text` has the shape renderBundle() writes for the capture `name` encodes: that exact
+ *  header, then a thread header first and only thread headers and projected frame lines after it, none
+ *  holding `/`, `\`, `@` or a control character, optionally ending in `[truncated]`. Pure. */
+export function isStallBundle(name: string, text: string): boolean {
+  const m = BUNDLE_NAME.exec(name)
+  if (!m) return false
+  const header = renderBundle({ bootId: m[1], capturedAtMs: Number(m[2]), stalledMs: Number(m[3]) }, []).split('\n').slice(0, -1)
+  const lines = text.split('\n')
+  if (lines.length < header.length + 2 || lines[lines.length - 1] !== '') return false
+  if (header.some((line, i) => lines[i] !== line)) return false
+  const stacks = lines.slice(header.length, -1)
+  if (!BUNDLE_THREAD.test(stacks[0])) return false
+  return stacks.every((line, i) => {
+    if (UNSAFE.test(line)) return false
+    if (line === '[truncated]') return i === stacks.length - 1
+    if (BUNDLE_THREAD.test(line)) return true
+    const frame = BUNDLE_FRAME.exec(line)
+    return frame !== null && BUNDLE_FRAME_REST.some((rest) => rest.test(frame[1]))
+  })
+}
+
+async function isExportableBundle(dir: string, name: string): Promise<boolean> {
+  try {
+    const path = join(dir, name)
+    // lstat, not stat: a symlink is never a regular file here, so its target is never read or exported.
+    const info = await lstat(path)
+    if (!info.isFile() || info.size > MAX_BUNDLE_FILE_BYTES) return false
+    return isStallBundle(name, await readFile(path, 'utf8'))
+  } catch {
+    return false
+  }
+}
+
 /** The bundle file names Export diagnostics bundle copies out of bundleDir() (M2-0199): the newest
- *  MAX_BUNDLES well-formed bundles. raw/ is never listed, because a raw capture holds install and image
- *  paths. Never rejects; a missing directory yields []. */
+ *  MAX_BUNDLES regular files whose content is a bundle the collector wrote (isStallBundle). A symlink, a
+ *  directory or a bundle-named file with other content is never listed, and raw/ is never listed, because
+ *  a raw capture holds install and image paths. Never rejects; a missing directory yields []. */
 export async function exportableStallBundles(userData: string): Promise<string[]> {
-  const names = await readdir(bundleDir(userData)).catch((): string[] => [])
-  return bundlesNewestFirst(names).slice(0, MAX_BUNDLES)
+  const dir = bundleDir(userData)
+  const names = await readdir(dir).catch((): string[] => [])
+  const exportable: string[] = []
+  for (const name of bundlesNewestFirst(names)) {
+    if (exportable.length === MAX_BUNDLES) break
+    if (await isExportableBundle(dir, name)) exportable.push(name)
+  }
+  return exportable
 }
 
 /** Turn every pending capture into a bundle or a failure, delete it either way, then keep the newest
