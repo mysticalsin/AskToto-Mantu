@@ -36,6 +36,7 @@
  */
 import type { ForegroundInfo, ForegroundWatcher } from './foreground-watcher'
 import { createCaptureBackoff, isPermissionTypeCaptureFailure } from './capture-backoff'
+import { startScreenPreprocessRefresh, type ScreenPreprocessRefresh } from './infra/scheduler/screen-preprocess-refresh'
 
 export interface ScreenShot {
   image: string
@@ -183,7 +184,7 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
   let lastDescribeAt = 0
   let started = false
   let debounceTimer: NodeJS.Timeout | null = null
-  let refreshTimer: NodeJS.Timeout | null = null
+  let refreshTimer: ScreenPreprocessRefresh | null = null
   // Latched for the session once the foreground watcher proves it cannot report window changes on this
   // machine. Every invalidation this cache has (drop on focus change, refuse on window mismatch) is fed
   // by that watcher, so without it a cached description is a coin flip on the user's next alt-tab.
@@ -407,7 +408,7 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
       log('warn', '[screen-preprocess] no foreground-window signal — background screen context stays off')
       return
     }
-    refreshTimer = setInterval(onRefreshTick, REFRESH_INTERVAL_MS)
+    refreshTimer = startScreenPreprocessRefresh(onRefreshTick, REFRESH_INTERVAL_MS)
     log('info', '[screen-preprocess] started (on-device background screen context)')
   }
 
@@ -418,7 +419,7 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
       debounceTimer = null
     }
     if (refreshTimer) {
-      clearInterval(refreshTimer)
+      refreshTimer.stop()
       refreshTimer = null
     }
     if (watcher) {
