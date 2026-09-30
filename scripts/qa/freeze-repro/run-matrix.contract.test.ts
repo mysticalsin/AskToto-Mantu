@@ -8,7 +8,7 @@ import { WebSocketServer } from 'ws'
 import { describe, expect, it } from 'vitest'
 import { DRIVE_EXPRESSIONS, PAGE_PROBE, deriveRowResult } from './cdp-observe.mjs'
 import { recordProblems } from '../../evidence/record.mjs'
-import { m2_0008BundleProblems } from '../../evidence/check.mjs'
+import { m2_0008BundleProblems, m2_0194BundleProblems } from '../../evidence/check.mjs'
 
 const SCRIPT = 'scripts/qa/freeze-repro/run-matrix.sh'
 const SHA = 'a'.repeat(64)
@@ -356,6 +356,51 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
     }
   })
 
+  it('--candidate-run emits an M2-0194 attribution bundle that check.mjs accepts', () => {
+    const out = mkdtempSync(join(tmpdir(), 'm2-0194-freeze-contract-'))
+    try {
+      const run = spawnSync('bash', [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--candidate-run', '456', '--out', out, '--dry-run'], {
+        encoding: 'utf8',
+        timeout: 30_000
+      })
+      expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0)
+
+      const environment = JSON.parse(readFileSync(join(out, 'environment.json'), 'utf8')) as { ticket: string; candidate_run: string }
+      expect(environment.ticket).toBe('M2-0194')
+      expect(environment.candidate_run).toBe('456')
+      const leadAction = readFileSync(join(out, 'M2-0194.lead-action.md'), 'utf8')
+      expect(leadAction).toContain('LOCALLY_TESTED')
+      expect(leadAction).not.toContain('LIVE_VERIFIED')
+      for (const file of ['stall-excerpt.jsonl', 'sampler-excerpt.jsonl', 'reveal-excerpt.jsonl', 'sidecar-excerpt.jsonl']) {
+        expect(readFileSync(join(out, file), 'utf8')).toBe('')
+      }
+      expect(JSON.parse(readFileSync(join(out, 'stall-bundle-names.json'), 'utf8'))).toEqual({ names: [] })
+
+      const check = spawnSync(process.execPath, ['scripts/evidence/check.mjs', '--ticket', 'M2-0194', '--bundle', out], {
+        encoding: 'utf8',
+        timeout: 30_000
+      })
+      expect(check.status, `${check.stdout}\n${check.stderr}`).toBe(0)
+      expect(check.stdout).toContain('M2-0194 bundle: OK')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a --candidate-run that is not a run id', () => {
+    const out = mkdtempSync(join(tmpdir(), 'm2-0194-freeze-contract-'))
+    try {
+      const result = spawnSync('bash', [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--candidate-run', 'abc', '--out', out, '--dry-run'], {
+        encoding: 'utf8',
+        timeout: 30_000
+      })
+      expect(result.status).toBe(2)
+      expect(result.stderr).toContain('--candidate-run must be a positive integer')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  })
+
   it('collects DiagnosticReports only with explicit consent and process-scoped matching', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
     try {
@@ -508,6 +553,36 @@ describe('M2-0462 hosted-live mode', () => {
       expect(summary).toMatchObject({ reproduced: true, symptom_rows: ['row-1-history-open'] })
       expect(summary.conclusion).toMatch(/^reproduced:/)
       expect(m2_0008BundleProblems(out)).toEqual([])
+    } finally {
+      await devtools.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('with --candidate-run emits the M2-0194 attribution bundle instead of M2-0008 hosted records', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'm2-0194-hosted-'))
+    const out = join(root, 'bundle')
+    const devtools = await fakeDevTools()
+    try {
+      const stubs = hostedStubs(root)
+      const result = await runClosedStdin(
+        [...hostedArgs(out, stubs.app), '--candidate-run', '789'],
+        hostedEnv(root, stubs, devtools.port)
+      )
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+      expect(JSON.parse(readFileSync(join(out, 'environment.json'), 'utf8'))).toMatchObject({
+        ticket: 'M2-0194',
+        mode: 'hosted-live',
+        dry_run: 0,
+        candidate_run: '789'
+      })
+      expect(JSON.parse(readFileSync(join(out, 'external-blockers.json'), 'utf8')).ticket).toBe('M2-0194')
+      expect(readFileSync(join(out, 'M2-0194.lead-action.md'), 'utf8')).toContain('LIVE_VERIFIED')
+      expect(existsSync(join(out, 'M2-0008.evidence-import.json'))).toBe(false)
+      expect(existsSync(join(out, 'M2-0008.lead-action.md'))).toBe(false)
+      expect(JSON.parse(readFileSync(join(out, 'stall-bundle-names.json'), 'utf8'))).toEqual({ names: [] })
+      expect(m2_0194BundleProblems(out)).toEqual([])
     } finally {
       await devtools.close()
       rmSync(root, { recursive: true, force: true })

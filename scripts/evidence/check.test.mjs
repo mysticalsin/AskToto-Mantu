@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RECORD_SCHEMA } from './record.mjs'
-import { TEST_WORKFLOW, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems } from './check.mjs'
+import { TEST_WORKFLOW, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems, m2_0194BundleProblems } from './check.mjs'
 
 const SHA1_A = '1'.repeat(40)
 const SHA1_B = '2'.repeat(40)
@@ -540,6 +540,85 @@ test('C28 CLI --ticket M2-0008 validates a freeze repro bundle path', () => {
   const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
   const output = execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0008', '--bundle', root], { encoding: 'utf8' })
   assert.match(output, /M2-0008 bundle: OK/)
+})
+
+const STALL_BUNDLE = '0f8fad5b-d9cb-469f-a165-70867728950e.1700000000000.31000.txt'
+
+function writeM2_0194Bundle(root, { environment = {}, leadAction } = {}) {
+  const writeJson = (name, value) => writeFileSync(join(root, name), `${JSON.stringify(value)}\n`)
+  const writeRows = (name, rows) => writeFileSync(join(root, name), rows.map((row) => JSON.stringify(row)).join('\n') + '\n')
+  writeFileSync(join(root, 'README.md'), '# M2-0194\n')
+  writeFileSync(join(root, 'M2-0194.lead-action.md'), leadAction ?? 'LEAD_ACTION: File the M2-0194 LIVE_VERIFIED record from this bundle.\n')
+  writeJson('environment.json', { ticket: 'M2-0194', artifact_sha256: 'a'.repeat(64), candidate_run: '123456', ...environment })
+  writeJson('external-blockers.json', { ticket: 'M2-0194', blockers: [{ status: 'BLOCKED_EXTERNAL', unblock_step: 'Run on QA account.' }] })
+  writeJson('stall-bundle-names.json', { names: [STALL_BUNDLE] })
+  writeRows('matrix.jsonl', [
+    { row: 'row-1-history-open' },
+    { row: 'row-2-brain-status-blocked-brain' },
+    { row: 'row-3-macos-activate' },
+    { row: 'row-4-second-instance-reopen' },
+    { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
+    { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
+  ])
+  writeRows('interrupt-results.jsonl', ['network-off', 'file-provider-cancel', 'process-signal'].map((interrupt) => ({ interrupt })))
+  writeRows('stall-excerpt.jsonl', [{ event: 'app.stall.summary', count: 1 }])
+  writeRows('sampler-excerpt.jsonl', [{ event: 'app.stall.sampled', stalledMs: 31000, bundle: STALL_BUNDLE }])
+  writeRows('reveal-excerpt.jsonl', [{ event: 'reveal', outcome: 'shown' }])
+  writeRows('sidecar-excerpt.jsonl', [{ event: 'sidecar.spawn', name: 'asr' }])
+}
+
+test('C29 M2-0194 bundle check requires the matrix, the four excerpts and stall bundle names only', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0194-bundle-'))
+  writeM2_0194Bundle(root)
+  assert.deepEqual(m2_0194BundleProblems(root), [])
+
+  writeFileSync(join(root, 'reveal-excerpt.jsonl'), `${JSON.stringify({ event: 'sidecar.spawn' })}\n`)
+  assertProblem(m2_0194BundleProblems(root), 'reveal-excerpt.jsonl', 'reveal excerpt')
+
+  writeM2_0194Bundle(root)
+  writeFileSync(join(root, 'stall-bundle-names.json'), `${JSON.stringify({ names: [`${STALL_BUNDLE}`, 'Thread 1 (main)'] })}\n`)
+  assertProblem(m2_0194BundleProblems(root), 'stall bundle file names only')
+
+  writeM2_0194Bundle(root)
+  writeFileSync(join(root, 'environment.json'), `${JSON.stringify({ ticket: 'M2-0008', artifact_sha256: 'A', candidate_run: 'x' })}\n`)
+  const problems = m2_0194BundleProblems(root)
+  assertProblem(problems, 'ticket must be M2-0194')
+  assertProblem(problems, 'lowercase sha256')
+  assertProblem(problems, 'candidate_run')
+
+  writeM2_0194Bundle(root)
+  writeFileSync(join(root, 'matrix.jsonl'), `${JSON.stringify({ row: 'row-1-history-open' })}\n`)
+  assertProblem(m2_0194BundleProblems(root), 'missing row-9-network-off-flapping')
+
+  writeM2_0194Bundle(root)
+  writeFileSync(join(root, 'M2-0194.lead-action.md'), 'File it.\n')
+  const leadProblems = m2_0194BundleProblems(root)
+  assertProblem(leadProblems, 'missing LEAD_ACTION handoff')
+  assertProblem(leadProblems, 'LIVE_VERIFIED')
+
+  writeM2_0194Bundle(root, { environment: { dry_run: 1, mode: 'dry-run' } })
+  assertProblem(m2_0194BundleProblems(root), 'dry-run bundles', 'LIVE_VERIFIED')
+
+  writeM2_0194Bundle(root, {
+    environment: { dry_run: 1, mode: 'dry-run' },
+    leadAction: 'LEAD_ACTION: File M2-0194 LOCALLY_TESTED support only; do not file live evidence from this dry run.\n'
+  })
+  assert.deepEqual(m2_0194BundleProblems(root), [])
+
+  rmSync(join(root, 'sampler-excerpt.jsonl'))
+  assertProblem(m2_0194BundleProblems(root), 'sampler-excerpt.jsonl: missing from M2-0194 bundle')
+})
+
+test('C30 CLI --ticket M2-0194 validates a bundle and rejects an incomplete one; other tickets exit 2', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0194-bundle-cli-'))
+  writeM2_0194Bundle(root)
+  const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
+  const output = execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0194', '--bundle', root], { encoding: 'utf8' })
+  assert.match(output, /M2-0194 bundle: OK/)
+
+  rmSync(join(root, 'stall-bundle-names.json'))
+  assert.throws(() => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0194', '--bundle', root], { stdio: 'pipe' }), (error) => error.status === 1)
+  assert.throws(() => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0001', '--bundle', root], { stdio: 'pipe' }), (error) => error.status === 2)
 })
 
 const HOSTED_AUTOMATIC_ROWS = ['row-1-history-open', 'row-2-brain-status-blocked-brain', 'row-3-macos-activate', 'row-4-second-instance-reopen']
