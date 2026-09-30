@@ -532,6 +532,7 @@ import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
+import { armQaHostFloorOverride } from './qa-hk-m'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
@@ -939,6 +940,10 @@ redirectSelfTestUserData()
 // Select the final user-data profile before crashReporter (or any other Electron service) can resolve
 // a default path. In particular, ASKTOTO_USERDATA must isolate physical QA from a real encrypted profile.
 if (process.env.ASKTOTO_USERDATA) app.setPath('userData', process.env.ASKTOTO_USERDATA)
+
+// M2-0482: decide the QA RAM-floor override once, before any floor is consulted. Electron's default userData is
+// appData/<app name>; the gate stays off unless the packaged app runs on a different, isolated profile.
+armQaHostFloorOverride(process.env, app.isPackaged, join(app.getPath('appData'), app.getName()))
 
 // Unpackaged (npm run dev / QA) runs must never share the packaged app's userData: its settings.json
 // is safeStorage-encrypted under the packaged binary's keychain identity, so a dev process can't

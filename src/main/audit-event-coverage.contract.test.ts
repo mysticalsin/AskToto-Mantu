@@ -98,6 +98,13 @@ describe('AuditEvent coverage — every declared event has a real call site', ()
     }
   )
 
+  // M2-0482: the QA host-floor override's once-per-floor record is declared and fired (qa-hk-m.ts hostFloorOverridden).
+  it("declares and fires 'local.host-floor-override'", () => {
+    expect(DECLARED_EVENTS).toContain('local.host-floor-override')
+    expect(KNOWN_EXCEPTIONS.has('local.host-floor-override')).toBe(false)
+    expect(hasCallSite('local.host-floor-override')).toBe(true)
+  })
+
   it('no KNOWN_EXCEPTIONS entry has quietly grown a real call site (would mean it should be un-excepted)', () => {
     const noLongerOrphaned = [...KNOWN_EXCEPTIONS].filter((ev) => hasCallSite(ev))
     expect(noLongerOrphaned, 'these events now have call sites — remove them from KNOWN_EXCEPTIONS').toEqual([])
