@@ -41,9 +41,11 @@ export function verdictFor(counts) {
   return COUNT_KEYS.every((key) => counts[key] === 0) ? 'PROCEED' : 'HOLD'
 }
 
-/** Longest run of consecutive UTC days among the day keys of `scope.days`; null when there is none. */
+const activeDay = (day) => isPlainObject(day) && isCount(day.records) && day.records > 0
+
+/** Longest run of consecutive UTC days that carry at least one record; null when there is none. */
 export function longestActiveRun(days) {
-  const keys = Object.keys(days).filter((key) => DAY_RE.test(key) && !Number.isNaN(Date.parse(key))).sort()
+  const keys = Object.keys(days).filter((key) => DAY_RE.test(key) && !Number.isNaN(Date.parse(key)) && activeDay(days[key])).sort()
   let best = null
   let start = null
   for (let i = 0; i < keys.length; i++) {

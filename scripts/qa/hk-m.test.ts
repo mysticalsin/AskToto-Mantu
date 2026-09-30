@@ -5,6 +5,7 @@ import {
   availableBytesFromVmStat,
   exitCodeForReportResult,
   keepWaitingForScenario,
+  launchEnv,
   PREWARM_MIN_FREE_RAM_GB,
   prewarmFreeRamFloorPasses,
   removeTempDir,
@@ -176,6 +177,34 @@ describe('HK-M relaunch runtime counts', () => {
   })
 })
 
+describe('HK-M launch environment', () => {
+  const baseEnv = {
+    PATH: '/usr/bin',
+    METIS_SUPERVISION: 'off',
+    METIS_SIDECAR_SUPERVISION: '0',
+    OPENAI_API_KEY: 'k'
+  }
+
+  it('shipped mode strips both supervision variables so the build default decides', () => {
+    const env = launchEnv({ baseEnv, profile: '/tmp/p', scenario: 'idle', supervisionMode: 'shipped' })
+    expect('METIS_SUPERVISION' in env).toBe(false)
+    expect('METIS_SIDECAR_SUPERVISION' in env).toBe(false)
+    expect(env).toMatchObject({
+      PATH: '/usr/bin',
+      ASKTOTO_USERDATA: '/tmp/p',
+      METIS_DISABLE_APPLE_FM: '1',
+      METIS_HK_M_SCENARIO: 'idle'
+    })
+    expect('OPENAI_API_KEY' in env).toBe(false)
+  })
+
+  it('forced-on mode sets METIS_SUPERVISION=on and drops the legacy variable', () => {
+    const env = launchEnv({ baseEnv, profile: '/tmp/p', scenario: 'idle', supervisionMode: 'forced-on' })
+    expect(env.METIS_SUPERVISION).toBe('on')
+    expect('METIS_SIDECAR_SUPERVISION' in env).toBe(false)
+  })
+})
+
 describe('HK-M supervised cold start', () => {
   const healthy = [{ event: 'local.runtime.start' }]
 
@@ -193,6 +222,21 @@ describe('HK-M supervised cold start', () => {
   it('fails a llama-server that was spawned directly by main', () => {
     const main = { pid: 50, ppid: 1, startedMs: 900, exe: '/tmp/Metis', role: 'Metis' }
     const direct = { ...supervisedModel, ppid: 50 }
+    expect(
+      supervisedColdStartVerdict({ records: healthy, sidecars: [direct], table: [main, direct], requireHealthy: true })
+    ).toEqual({ ok: false, failure: 'runtime_not_supervised' })
+  })
+
+  it('fails a default-off build in shipped mode with runtime_not_supervised', () => {
+    const main = { pid: 50, ppid: 1, startedMs: 900, exe: '/tmp/Metis', role: 'Metis' }
+    const direct = { ...supervisedModel, ppid: 50 }
+    const env = launchEnv({
+      baseEnv: { METIS_SUPERVISION: 'on' },
+      profile: '/tmp/p',
+      scenario: 'idle',
+      supervisionMode: 'shipped'
+    })
+    expect(env.METIS_SUPERVISION).toBeUndefined()
     expect(
       supervisedColdStartVerdict({ records: healthy, sidecars: [direct], table: [main, direct], requireHealthy: true })
     ).toEqual({ ok: false, failure: 'runtime_not_supervised' })

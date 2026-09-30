@@ -46,6 +46,18 @@ export const SIDECAR_REAP_SKIP_REASONS = [
   'kill-failed',
   'ambiguous-entry'
 ] as const
+/** The native tray and window boot stages, each timed on its own (M2-0515, M2-0517). */
+export const BOOT_STAGES = [
+  'createTray.loadIcon',
+  'createTray.loadIcon.fallback',
+  'createTray.newTray',
+  'createTray.decorate',
+  'createTray.buildMenu',
+  'createTray.attachMenu',
+  'createWindow.construct',
+  'createWindow.firstShow'
+] as const
+export type BootStage = (typeof BOOT_STAGES)[number]
 export const HISTORY_STAGES = ['received', 'served', 'settled'] as const
 export const HISTORY_OUTCOMES = ['ok', 'failed', 'discarded'] as const
 const RENDER_GONE_REASONS = [
@@ -171,6 +183,14 @@ export const OBSERVABILITY_EVENTS = {
   'app.boot.watch_cleared': {
     earlyDeath: 'flag',
     reason: 'token'
+  },
+  /** One native boot stage and how long it held the main thread. */
+  'app.boot.stage': {
+    bootId: 'id',
+    stage: BOOT_STAGES,
+    ms: 'ms',
+    /** createWindow.construct only: whether the constructor built a transparent window. */
+    transparent: 'flag'
   },
   /** Overlay renderer stopped answering Chromium. */
   'app.unresponsive': {

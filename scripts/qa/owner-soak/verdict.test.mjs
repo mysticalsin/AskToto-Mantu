@@ -72,6 +72,14 @@ test('V4 a missing day breaks the run: two days then three is not five consecuti
   assert.deepEqual(longestActiveRun(days), { first: '2026-10-04', last: '2026-10-06', length: 3 })
 })
 
+test('V4b an idle day with no records breaks the active-day run', () => {
+  const days = daysFrom(FIVE)
+  days['2026-10-03'] = day({ records: 0 })
+  const result = evaluateSoak(summary({ days }))
+  assert.match(result.problems.join('\n'), /at least 5 consecutive active days, found 2/)
+  assert.deepEqual(longestActiveRun(days), { first: '2026-10-01', last: '2026-10-02', length: 2 })
+})
+
 test('V5 six days with a gap early still qualifies on the later five-day run', () => {
   const result = evaluateSoak(summary({ days: daysFrom(['2026-09-28', ...FIVE]) }))
   assert.equal(result.run.length, 5)

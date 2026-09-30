@@ -44,8 +44,8 @@ if (unionEnd === -1 || unionEnd <= unionStart) {
 }
 const unionBlock = loggerSrc.slice(unionStart, unionEnd)
 
-/** Every event name declared in the AuditEvent union, in source order. */
-const DECLARED_EVENTS = [...unionBlock.matchAll(/'([a-zA-Z0-9._]+)'/g)].map((m) => m[1])
+/** Every event name declared in the AuditEvent union, in source order. Names may contain hyphens ('hk-m.*'). */
+const DECLARED_EVENTS = [...unionBlock.matchAll(/'([a-zA-Z0-9._-]+)'/g)].map((m) => m[1])
 
 /**
  * Declared, never fired anywhere in src/main (production code or tests). Confirmed by direct grep, not
@@ -85,6 +85,13 @@ describe('AuditEvent coverage — every declared event has a real call site', ()
     expect(DECLARED_EVENTS.length).toBeGreaterThanOrEqual(73)
   })
 
+  // qa-capture-source.test.ts proves the event fires with { active: true } once the app is ready.
+  it('M2-0494: the QA capture-source event is declared, has a real call site and is never excepted', () => {
+    expect(DECLARED_EVENTS).toContain('qa.capture.file_source')
+    expect(KNOWN_EXCEPTIONS.has('qa.capture.file_source')).toBe(false)
+    expect(hasCallSite('qa.capture.file_source')).toBe(true)
+  })
+
   it('every KNOWN_EXCEPTIONS entry is actually declared (no stale entries)', () => {
     for (const ev of KNOWN_EXCEPTIONS) {
       expect(DECLARED_EVENTS, `KNOWN_EXCEPTIONS lists '${ev}', which is not in AuditEvent any more`).toContain(ev)
@@ -97,6 +104,13 @@ describe('AuditEvent coverage — every declared event has a real call site', ()
       expect(hasCallSite(event), `'${event}' is declared in AuditEvent but no call site fires it — add a call site or move it to KNOWN_EXCEPTIONS with a reason`).toBe(true)
     }
   )
+
+  // M2-0482: the QA host-floor override's once-per-floor record is declared and fired (qa-hk-m.ts hostFloorOverridden).
+  it("declares and fires 'local.host-floor-override'", () => {
+    expect(DECLARED_EVENTS).toContain('local.host-floor-override')
+    expect(KNOWN_EXCEPTIONS.has('local.host-floor-override')).toBe(false)
+    expect(hasCallSite('local.host-floor-override')).toBe(true)
+  })
 
   it('no KNOWN_EXCEPTIONS entry has quietly grown a real call site (would mean it should be un-excepted)', () => {
     const noLongerOrphaned = [...KNOWN_EXCEPTIONS].filter((ev) => hasCallSite(ev))

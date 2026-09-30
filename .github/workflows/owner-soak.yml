@@ -1,0 +1,48 @@
+name: Owner soak verdict
+
+# Manual evaluator for the schema-2 diagnostics summary pasted after the five-day 1.9.7 soak.
+# It uploads only the content-free MEASURED record: UTC dates, aggregate counts, rule id and verdict.
+on:
+  workflow_dispatch:
+    inputs:
+      summary_json:
+        description: Pasted schema-2 diagnostics summary JSON.
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owner-soak-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  evaluate:
+    name: Evaluate pasted soak summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Evaluate and validate the M2-0198 soak record
+        env:
+          SUMMARY_JSON: ${{ inputs.summary_json }}
+        run: |
+          node -e "require('node:fs').writeFileSync(process.argv[1], process.env.SUMMARY_JSON)" "$RUNNER_TEMP/summary.json"
+          node scripts/qa/owner-soak/verdict.mjs --summary "$RUNNER_TEMP/summary.json" --out out/owner-soak
+          node scripts/evidence/check.mjs --ticket M2-0198 --record out/owner-soak/soak-5d.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: owner-soak-record
+          path: out/owner-soak/
+          if-no-files-found: error
+          retention-days: 14
