@@ -1105,25 +1105,54 @@ export function rightEdgeStateMismatches(observation, state, layout) {
   return Object.keys(checks).filter((key) => !checks[key])
 }
 
-/** Installs (idempotently) the cursor stub and the click-through capture on every live window. */
+/**
+ * Installs (idempotently) the cursor stub, the click-through capture and the geometry trace on every live
+ * window. The trace keeps the last frames of the overlay: each app write ('write', the requested rect) and
+ * each native move/resize ('frame', the resulting rect), so a frame no write asked for shows as native.
+ */
 const MAIN_RE_HIDE_SHIM = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
-  const state = (globalThis.__metisReHide ??= { cursor: null, clickThrough: new WeakMap() })
+  const state = (globalThis.__metisReHide ??= { cursor: null, clickThrough: new WeakMap(), geometry: [] })
   if (!state.realCursor) {
     state.realCursor = screen.getCursorScreenPoint.bind(screen)
     screen.getCursorScreenPoint = () => state.cursor ?? state.realCursor()
   }
+  const trace = (w, kind, bounds) => {
+    try {
+      if (!/\\/renderer\\/index\\.html/.test(w.webContents.getURL())) return
+      state.geometry.push({ t: Date.now(), kind, bounds })
+      if (state.geometry.length > 40) state.geometry.shift()
+    } catch {
+      /* a closing window: the trace is evidence only */
+    }
+  }
   for (const w of BrowserWindow.getAllWindows()) {
     if (w.isDestroyed() || w.__metisReHideWrapped) continue
     const setIgnoreMouseEvents = w.setIgnoreMouseEvents.bind(w)
+    const setBounds = w.setBounds.bind(w)
+    const setPosition = w.setPosition.bind(w)
     w.__metisReHideWrapped = true
     w.setIgnoreMouseEvents = (ignore, options) => {
       state.clickThrough.set(w, ignore === true)
       return setIgnoreMouseEvents(ignore, options)
     }
+    w.setBounds = (bounds, animate) => {
+      trace(w, 'write', { ...w.getBounds(), ...bounds })
+      return setBounds(bounds, animate)
+    }
+    w.setPosition = (x, y, animate) => {
+      trace(w, 'write', { ...w.getBounds(), x, y })
+      return setPosition(x, y, animate)
+    }
+    w.on('move', () => trace(w, 'frame', w.getBounds()))
+    w.on('resize', () => trace(w, 'frame', w.getBounds()))
   }
   return true
 })()`
+
+/** The overlay geometry trace since `since` (ms epoch): rects only, never page content. */
+const mainReHideGeometrySince = (since) =>
+  `(() => globalThis.__metisReHide.geometry.filter((entry) => entry.t >= ${Number(since)}).map((entry) => ({ ms: entry.t - ${Number(since)}, kind: entry.kind, bounds: entry.bounds })))()`
 
 const MAIN_RE_HIDE_SNAPSHOT = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
@@ -1386,9 +1415,18 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     meetingLive = live.ok
     if (!meetingLive) return { status: 'BLOCKED_EXTERNAL', evidence: { meetingLive: false }, unblock: MEETING_UNBLOCK }
     const hideVisible = await hideControl().isVisible()
+    const clickedAt = await main('Date.now()')
     await hideControl().click({ timeout: 5_000 })
     const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    return { pass: hideVisible && parked.ok, evidence: { meetingLive: true, hideVisible, parked: summarize(parked.observed) } }
+    // Held: the band is still the park after the window of a late native frame change (M2-0526).
+    await wait(500)
+    const held = await observe()
+    const heldOk = rightEdgeStateMatches(held, 'parked', 'hide')
+    const geometry = await main(mainReHideGeometrySince(clickedAt))
+    return {
+      pass: hideVisible && parked.ok && heldOk,
+      evidence: { meetingLive: true, hideVisible, parked: summarize(parked.observed), after500ms: summarize(held), geometry }
+    }
   })
 
   await step('RE-HIDE-4-island-meeting-leave-parks', async () => {

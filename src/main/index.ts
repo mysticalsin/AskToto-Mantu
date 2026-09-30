@@ -213,6 +213,7 @@ import {
   rightEdgeSidecarBounds,
   rightEdgeParkLayout,
   rightAnchoredParkPosition,
+  rightAnchoredParkHolds,
   resolveOverlayPlacement,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
@@ -223,6 +224,7 @@ import {
   topClamp
 } from './island/geometry'
 import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
+import { observeParkedBounds } from './island/parked-bounds-guard'
 import {
   OVERLAY_REST_BACKGROUND,
   SETTINGS_SURFACE_BACKGROUND,
@@ -1187,6 +1189,8 @@ let overlayCursorWatchEnteredAt: number | null = null
 let overlayCursorWatchHovering = false
 let overlayParkLatched = false // explicit Hide: no reopen from the zone the pointer is in until it leaves
 let rightEdgeUnhoveredRevealAt: number | null = null // right-edge reveal the pointer has not visited yet
+// The right-edge Hide band the last park wrote; null when the last park was anything else.
+let parkedRightEdgeBand: Electron.Rectangle | null = null
 // Electron can accept an onboarding setBounds request and then let the compositor clamp it into a
 // normal-window card. Keep this narrowly scoped to the opaque onboarding owner; normal overlay layouts
 // must remain free to resize and park themselves.
@@ -2345,10 +2349,13 @@ function applyOverlaySurfaceChrome(): void {
 function commitParkedOverlayBounds(park: { x: number; y: number; width: number; height: number }): void {
   if (!win || win.isDestroyed()) return
   win.setBounds(park, false)
+  parkedRightEdgeBand = null
   try {
-    const after = win.getBounds()
+    const display = screen.getDisplayMatching(park)
     // A right-edge park the OS widened (Windows minimum width) keeps its right edge at the work-area edge.
-    const rightEdge = resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(park)) === 'right-edge'
+    const rightEdge = resolvedOverlayPlacementForDisplay(display) === 'right-edge'
+    parkedRightEdgeBand = rightEdge && parkLayoutForDisplay(liveOverlayLayout(), display) === 'hide' ? park : null
+    const after = win.getBounds()
     const target = rightEdge ? rightAnchoredParkPosition(park, after.width) : park
     if (after.x !== target.x || after.y !== target.y) win.setPosition(target.x, target.y, false)
   } catch {
@@ -2663,6 +2670,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     lastBarHeight = BAR_HEIGHT
     islandResting = overlayUsesHover(layout)
   }
+  parkedRightEdgeBand = null // a new window has no park until its first commit
   const chrome = overlayWindowChrome(onboardingLive)
   overlayWindowTransparent = chrome.transparent
   const deferFirstShow = isBootFirstShowDeferred()
@@ -2720,6 +2728,20 @@ function createWindow(targetDisplay?: Electron.Display): void {
   } catch {
     /* headless */
   }
+  // The invisible right-edge Hide band is never dragged (it is click-through), so any frame it moves to
+  // after its park is native, never the user's: re-commit the band.
+  const overlay = win
+  observeParkedBounds(overlay, {
+    parked: () => (win === overlay && islandResting && !settingsSurfaceOpen && !isMinimized ? parkedRightEdgeBand : null),
+    holds: rightAnchoredParkHolds,
+    commit: (band) => {
+      const moved = overlay.getBounds()
+      mainLog.info(
+        `[overlay-watch] re-park band from=${moved.width}x${moved.height}@(${moved.x},${moved.y}) to=${band.width}x${band.height}@(${band.x},${band.y}) after a native frame change`
+      )
+      commitParkedOverlayBounds(band)
+    }
+  })
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   applyOverlayAlwaysOnTop(win)
   // FITO-185-Z: show exclusive NOW (ctor show:true + activating show). The no-JS Act1

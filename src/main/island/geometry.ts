@@ -337,6 +337,19 @@ export function rightAnchoredParkPosition(requested: Rect, actualWidth: number):
 }
 
 /**
+ * A right-edge park still holds `requested`: the same y, height and right edge, at any width the OS
+ * widened it to (see rightAnchoredParkPosition). Anything else is a frame the park did not write.
+ */
+export function rightAnchoredParkHolds(actual: Rect, requested: Rect): boolean {
+  return (
+    actual.y === requested.y &&
+    actual.height === requested.height &&
+    actual.x + actual.width === requested.x + requested.width &&
+    actual.width >= requested.width
+  )
+}
+
+/**
  * Hide parks invisibly at the right edge only where the pointer can stop there. When another display
  * continues past this display's right edge beside the drawer, a pushed pointer crosses into it instead,
  * so Hide parks as the visible Island rail on that display. Every other layout is unchanged.
