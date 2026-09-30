@@ -55,7 +55,10 @@ const RULES = [
   ['FF-10', 'Process spawning outside src/main/infra/process/'],
   ['FF-11', 'BrowserWindow construction outside src/main/windows/'],
   ['FF-14', 'Background timers outside src/main/infra/scheduler/'],
+  ['FF-15', 'Production modules directly under src/main or src/renderer/src/lib'],
 ]
+
+const TOP_LEVEL_MODULE = /^(src\/main|src\/renderer\/src\/lib)\/[^/]+\.tsx?$/
 
 const RULE_IDS = RULES.map(([id]) => id)
 const RULE_TITLES = new Map(RULES)
@@ -116,6 +119,17 @@ export function countSourceFile(file, text) {
   }
 
   return counts
+}
+
+/**
+ * Counts a production module that sits directly under src/main or src/renderer/src/lib instead of a
+ * feature folder. Each such file is one entry in the baseline, so a new top-level file rises from 0 to 1
+ * and fails, while moving one into a folder falls to 0 and must be committed.
+ * @param {string} file Repository-relative POSIX path.
+ * @returns {number} 1 for a top-level production module, otherwise 0.
+ */
+export function countTopLevelModule(file) {
+  return isProductionFile(file) && TOP_LEVEL_MODULE.test(file) ? 1 : 0
 }
 
 /**
@@ -711,7 +725,8 @@ function collectCurrentCounts() {
   const current = {}
   for (const file of walkSourceFiles()) {
     const text = readFileSync(join(repoRoot, file), 'utf8').replace(/\r\n/g, '\n')
-    const fileCounts = countSourceFile(file, text)
+    const fileCounts = { ...countSourceFile(file, text) }
+    if (countTopLevelModule(file) > 0) fileCounts['FF-15'] = 1
     for (const [rule, count] of Object.entries(fileCounts)) {
       current[rule] ??= {}
       current[rule][file] = count

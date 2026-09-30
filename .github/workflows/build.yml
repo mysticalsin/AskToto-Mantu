@@ -65,7 +65,7 @@ jobs:
       - name: Architecture layering
         if: runner.os == 'Linux'
         run: npm run check:layering
-      # FF-01 test crossings and FF-02..FF-14 as per-file counts that may only fall
+      # FF-01 test crossings and FF-02..FF-15 as per-file counts that may only fall
       # (scripts/architecture-baseline.json). Blocking since 2026-09-28 (M2-0237): the report-only period
       # (M2-0047) is over, so a differing count fails the job instead of only showing here.
       - name: Architecture ratchet
