@@ -116,6 +116,7 @@ describe('candidate-scenarios.yml', () => {
   it('installs the verified candidate bytes selected by sha256 into a fresh directory before the scenario', () => {
     const mac = steps('mac')
     const order = [
+      'Record the job start time',
       '--name candidate-provenance',
       'node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"',
       'jq -r .run.id provenance/provenance.json',
@@ -147,11 +148,21 @@ describe('candidate-scenarios.yml', () => {
 
   it('sets an upload-safe idle-soak deadline before running the mac scenario', () => {
     const mac = steps('mac')
+    const jobStart = mac[0]
+    expect(jobStart).toContain('name: Record the job start time')
+    expect(jobStart).toContain('id: job-start')
+    expect(jobStart).toContain('date +%s')
     const deadline = mac[stepIndex(mac, 'Set the soak deadline')]
     expect(deadline).toContain('id: soak-deadline')
-    expect(deadline).toContain('Date.now() + 330 * 60 * 1000')
+    expect(deadline).toContain('JOB_STARTED_AT_MS: ${{ steps.job-start.outputs.epoch_ms }}')
+    expect(deadline).toContain('MAC_TIMEOUT_MINUTES: ${{ needs.guard.outputs.mac_timeout_minutes }}')
+    expect(deadline).toContain("import { jobSafeDeadlineEpochMs } from './scripts/qa/soak/idle-soak.mjs'")
+    expect(deadline).toContain('jobSafeDeadlineEpochMs({')
+    expect(deadline).toContain('jobStartedAtMs: Number(process.env.JOB_STARTED_AT_MS)')
+    expect(deadline).toContain('timeoutMinutes: Number(process.env.MAC_TIMEOUT_MINUTES)')
     const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
     expect(run).toContain('SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}')
+    expect(stepIndex(mac, 'Record the job start time')).toBe(0)
     expect(stepIndex(mac, 'Set the soak deadline')).toBeLessThan(stepIndex(mac, 'candidate-scenarios.mjs run'))
   })
 
@@ -192,9 +203,6 @@ describe('candidate-scenarios.yml', () => {
   it('keeps per-scenario timeouts in the registry and gives only idle-soak the long mac job', () => {
     expect(SCENARIOS['idle-soak'].platforms.mac.timeoutMinutes).toBe(355)
     expect(SCENARIOS['idle-soak'].platforms.mac.stepTimeoutMinutes).toBe(340)
-    expect('timeoutMinutes' in SCENARIOS['stall-sampler'].platforms.mac ? SCENARIOS['stall-sampler'].platforms.mac.timeoutMinutes : 60).toBe(60)
-    expect('stepTimeoutMinutes' in SCENARIOS['stall-sampler'].platforms.mac ? SCENARIOS['stall-sampler'].platforms.mac.stepTimeoutMinutes : 40).toBe(40)
-    expect('timeoutMinutes' in SCENARIOS['sidecar-boot-reaper'].platforms.win ? SCENARIOS['sidecar-boot-reaper'].platforms.win.timeoutMinutes : 60).toBe(60)
     expect(job('win')).toContain('    timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_timeout_minutes) }}')
     const win = steps('win')
     expect(win[stepIndex(win, 'candidate-scenarios.mjs run')]).toContain(

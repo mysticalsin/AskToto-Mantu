@@ -21,6 +21,8 @@ export const DEFAULT_SAMPLE_INTERVAL_MS = 30_000
 export const PARK_RECHECK_INTERVAL_MS = 10 * 60_000
 export const MIN_PARKED_COVERAGE = 0.95
 export const UPLOAD_RESERVE_MINUTES = 10
+export const CDP_READY_TIMEOUT_MS = 30_000
+export const CDP_READY_POLL_MS = 500
 export const EXIT_CODES = Object.freeze({ PASS: 0, FAIL_OR_INCOMPLETE: 1, PRECONDITION: 2 })
 
 const SECRET_ENV = /(_API_KEY|TOKEN|SECRET|PASSWORD|KEY)$/i
@@ -121,14 +123,53 @@ async function freeLoopbackPort() {
   return address.port
 }
 
+export function preconditionError(message) {
+  return Object.assign(new Error(message), { exitCode: EXIT_CODES.PRECONDITION })
+}
+
+export function initialParkPreconditionError(error) {
+  const message = error?.exitCode === EXIT_CODES.PRECONDITION
+    ? error.message
+    : `the park could not be proven at start: ${error?.message ?? error}`
+  return preconditionError(message)
+}
+
+export async function waitForCdpVersion(
+  cdpUrl,
+  { timeoutMs = CDP_READY_TIMEOUT_MS, pollMs = CDP_READY_POLL_MS, fetchFn = globalThis.fetch, now = Date.now, sleepFn = sleep } = {}
+) {
+  const deadline = now() + timeoutMs
+  let lastError = null
+  while (now() < deadline) {
+    try {
+      const response = await fetchFn(`${cdpUrl}/json/version`)
+      if (response?.ok) return true
+      lastError = new Error(`HTTP ${response?.status ?? 'unknown'}`)
+    } catch (error) {
+      lastError = error
+    }
+    await sleepFn(Math.max(0, Math.min(pollMs, deadline - now())))
+  }
+  throw preconditionError(`the app did not expose Chromium DevTools at ${cdpUrl}/json/version: ${lastError?.message ?? 'timed out'}`)
+}
+
 function startCaffeinate(platform = process.platform) {
   if (platform !== 'darwin') return { recorded: false, command: 'caffeinate -d', reason: `unsupported platform ${platform}` }
   const child = spawn('/usr/bin/caffeinate', ['-d'], { stdio: 'ignore' })
+  child.once('error', () => {})
   return { recorded: true, command: 'caffeinate -d', pid: child.pid ?? null, child }
 }
 
 function stopChild(child, signal = 'SIGTERM') {
   if (child && !child.killed) child.kill(signal)
+}
+
+function captureSpawnError(child) {
+  let spawnError = null
+  child.once('error', (error) => {
+    spawnError = error
+  })
+  return () => spawnError
 }
 
 async function monitorPark({ checker, startedChecks, stopWhen, intervalMs = PARK_RECHECK_INTERVAL_MS }) {
@@ -202,18 +243,32 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       env: launchEnv(env, resolve(profile), { hostFloorOverride: true }),
       stdio: 'ignore'
     })
+    const appSpawnError = captureSpawnError(appChild)
+    await sleep(0)
+    if (appSpawnError()) {
+      precondition = `the app did not launch: ${appSpawnError().message}`
+      throw preconditionError(precondition)
+    }
     const mainPid = appChild.pid ?? null
     if (!mainPid) {
       precondition = 'the app did not launch'
-      throw Object.assign(new Error(precondition), { exitCode: EXIT_CODES.PRECONDITION })
+      throw preconditionError(precondition)
     }
 
-    checker = await createCdpParkChecker(cdpUrl)
-    const firstCheck = await checker.check()
+    let firstCheck
+    try {
+      await waitForCdpVersion(cdpUrl)
+      checker = await createCdpParkChecker(cdpUrl)
+      firstCheck = await checker.check()
+    } catch (error) {
+      const parkError = initialParkPreconditionError(error)
+      precondition = parkError.message
+      throw parkError
+    }
     parkChecks.push(firstCheck)
     if (!firstCheck.parked) {
       precondition = 'the park could not be proven at start'
-      throw Object.assign(new Error(precondition), { exitCode: EXIT_CODES.PRECONDITION })
+      throw preconditionError(precondition)
     }
 
     let censusDone = false
@@ -236,6 +291,9 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       { stdio: ['ignore', 'inherit', 'pipe'], env }
     )
     let censusStderr = ''
+    census.once('error', (error) => {
+      censusStderr += `${error.message}\n`
+    })
     census.stderr.on('data', (chunk) => {
       censusStderr += chunk.toString()
       process.stderr.write(chunk)

@@ -118,6 +118,9 @@ jobs:
       INSTALLER_SHA256: ${{ needs.guard.outputs.mac_sha256 }}
       OUT: candidate-scenario
     steps:
+      - name: Record the job start time
+        id: job-start
+        run: echo "epoch_ms=$(($(date +%s) * 1000))" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
@@ -170,7 +173,17 @@ jobs:
         run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform mac
       - name: Set the soak deadline
         id: soak-deadline
-        run: node -e "require('fs').appendFileSync(process.env.GITHUB_OUTPUT, 'epoch_ms=' + (Date.now() + 330 * 60 * 1000) + '\n')"
+        env:
+          JOB_STARTED_AT_MS: ${{ steps.job-start.outputs.epoch_ms }}
+          MAC_TIMEOUT_MINUTES: ${{ needs.guard.outputs.mac_timeout_minutes }}
+        run: >
+          node --input-type=module -e
+          "import { appendFileSync } from 'node:fs';
+          import { jobSafeDeadlineEpochMs } from './scripts/qa/soak/idle-soak.mjs';
+          appendFileSync(process.env.GITHUB_OUTPUT, 'epoch_ms=' + jobSafeDeadlineEpochMs({
+          jobStartedAtMs: Number(process.env.JOB_STARTED_AT_MS),
+          timeoutMinutes: Number(process.env.MAC_TIMEOUT_MINUTES)
+          }) + '\n');"
       - name: Run the scenario
         id: scenario
         continue-on-error: true

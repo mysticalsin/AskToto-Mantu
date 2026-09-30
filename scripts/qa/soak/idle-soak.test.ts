@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CDP_READY_POLL_MS,
+  CDP_READY_TIMEOUT_MS,
   DEFAULT_HOURS,
   EXIT_CODES,
   MIN_PARKED_COVERAGE,
   UPLOAD_RESERVE_MINUTES,
   exitCodeForOutcome,
+  initialParkPreconditionError,
   jobSafeDeadlineEpochMs,
   launchEnv,
   soakSeconds,
-  summarizeModelStateFromStream
+  summarizeModelStateFromStream,
+  waitForCdpVersion
 } from './idle-soak.mjs'
 
 describe('idle-soak deadline arithmetic', () => {
@@ -44,6 +48,32 @@ describe('idle-soak outcome mapping', () => {
     expect(exitCodeForOutcome({ growthOutcome: 'INCOMPLETE', parkedCoverage: 1 })).toBe(EXIT_CODES.FAIL_OR_INCOMPLETE)
     expect(exitCodeForOutcome({ launchPrecondition: true, growthOutcome: 'PASS', parkedCoverage: 1 })).toBe(EXIT_CODES.PRECONDITION)
     expect(exitCodeForOutcome({ parkPrecondition: true, growthOutcome: 'PASS', parkedCoverage: 1 })).toBe(EXIT_CODES.PRECONDITION)
+  })
+
+  it('maps a CDP readiness failure before the first park check to PRECONDITION', async () => {
+    let now = 1_000
+    const sleepFn = async <T = void>(ms = 0, value?: T): Promise<T> => {
+      now += ms
+      return value as T
+    }
+    await expect(
+      waitForCdpVersion('http://127.0.0.1:1', {
+        timeoutMs: CDP_READY_TIMEOUT_MS,
+        pollMs: CDP_READY_POLL_MS,
+        now: () => now,
+        sleepFn,
+        fetchFn: async () => {
+          throw new Error('connection refused')
+        }
+      })
+    ).rejects.toMatchObject({ exitCode: EXIT_CODES.PRECONDITION, message: expect.stringContaining('/json/version') })
+  })
+
+  it('maps checker creation or first park-check failures to PRECONDITION', () => {
+    expect(initialParkPreconditionError(new Error('connect failed'))).toMatchObject({
+      exitCode: EXIT_CODES.PRECONDITION,
+      message: 'the park could not be proven at start: connect failed'
+    })
   })
 })
 
