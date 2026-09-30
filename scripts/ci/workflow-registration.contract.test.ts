@@ -89,6 +89,15 @@ function ownPathOnly(file: string, block: string[] | undefined): boolean {
   return list.length === 1 && list[0] === own
 }
 
+function hasRegistrationRunName(source: string): boolean {
+  return /^run-name:.*\(registration\)/m.test(source)
+}
+
+function everyJobRequiresDispatch(source: string): boolean {
+  const conditions = [...jobConditions(source).values()]
+  return conditions.length > 0 && conditions.every((cond) => cond?.includes(DISPATCH_CLAUSE))
+}
+
 /** Violations of the self-registration rule for one workflow file; empty when compliant. */
 function registrationViolations(file: string, source: string): string[] {
   const triggers = triggerBlocks(source)
@@ -97,19 +106,18 @@ function registrationViolations(file: string, source: string): string[] {
   if (names.length === 1 && names[0] === 'workflow_dispatch') {
     return FROZEN_LEGACY.has(file) ? [] : [`${file}: dispatch-only without a pull_request trigger on its own path`]
   }
-  if (triggers.has('workflow_dispatch') && triggers.has('pull_request') && names.every((name) => name === 'workflow_dispatch' || name === 'pull_request')) {
-    if (!ownPathOnly(file, triggers.get('pull_request'))) {
-      return [`${file}: pull_request registration trigger is not limited to its own workflow path`]
-    }
+  const isRegistrationLane = ownPathOnly(file, triggers.get('pull_request')) || hasRegistrationRunName(source) || everyJobRequiresDispatch(source)
+  if (!isRegistrationLane) return []
+  if (!ownPathOnly(file, triggers.get('pull_request'))) {
+    return [`${file}: pull_request registration trigger is not limited to its own workflow path`]
   }
-  if (!ownPathOnly(file, triggers.get('pull_request'))) return []
   const problems: string[] = []
   for (const [job, cond] of jobConditions(source)) {
     if (!cond || !cond.includes(DISPATCH_CLAUSE)) {
       problems.push(`${file}: job ${job} does not require ${DISPATCH_CLAUSE}`)
     }
   }
-  if (!/^run-name:.*\(registration\)/m.test(source)) problems.push(`${file}: run-name has no (registration) title`)
+  if (!hasRegistrationRunName(source)) problems.push(`${file}: run-name has no (registration) title`)
   return problems
 }
 
@@ -160,6 +168,21 @@ describe('registration rule checker', () => {
   it('rejects a pull_request registration trigger on another path', () => {
     const source = compliant.replace('.github/workflows/sample.yml', '.github/workflows/other.yml')
     expect(registrationViolations('sample.yml', source)).toEqual(['sample.yml: pull_request registration trigger is not limited to its own workflow path'])
+  })
+
+  it('accepts an ordinary pull_request workflow with dispatch support', () => {
+    const source = `name: Regular PR lane
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - docs/**
+      - .github/workflows/sample.yml
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+`
+    expect(registrationViolations('sample.yml', source)).toEqual([])
   })
 
   it('exempts a workflow_call file', () => {
