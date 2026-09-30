@@ -8,8 +8,9 @@
     transform: translateY(0);
   }
 }
-/* One-surface hide/reveal transition. It only translates the already-opaque surface: scaling the full
-   native window made the onboarding placement step and right-edge dock visibly zoom in and out. */
+/* One-surface hide/reveal transition: a short translate plus an opacity fade (0 → 1 in, 1 → 0 out), never
+   a scale, which made the onboarding placement step and right-edge dock visibly zoom in and out. A fully
+   opaque spring turned every reveal and park into a hard cut (M2-0431). Reduced motion skips the spring. */
 .overlay-spring {
   transform-origin: top center;
   will-change: transform, opacity;
@@ -18,11 +19,16 @@
   animation: overlay-spring-in 360ms var(--ease-spring) both;
 }
 .overlay-spring--out {
-  animation: overlay-spring-out 320ms var(--ease-spring) both;
+  animation: overlay-spring-out 280ms var(--ease-spring) both;
 }
 .overlay-spring--settled {
   transform: none;
   opacity: 1;
+}
+/* Parked top-center Hide: the window is parked at opacity 0 and the page paints nothing either, so the
+   frame between the exit fade and the park, or between a restore and the in spring, is empty. */
+.overlay-spring--parked {
+  opacity: 0;
 }
 .overlay-spring--edge-right {
   transform-origin: right center;
@@ -47,7 +53,7 @@
 }
 @keyframes overlay-spring-in {
   from {
-    opacity: 1;
+    opacity: 0;
     transform: translateY(-5px);
   }
   to {
@@ -61,13 +67,13 @@
     transform: translateY(0);
   }
   to {
-    opacity: 1;
+    opacity: 0;
     transform: translateY(-5px);
   }
 }
 @keyframes overlay-spring-in-right {
   from {
-    opacity: 1;
+    opacity: 0;
     transform: translateX(10px);
   }
   to {
@@ -81,7 +87,7 @@
     transform: translateX(0);
   }
   to {
-    opacity: 1;
+    opacity: 0;
     transform: translateX(10px);
   }
 }

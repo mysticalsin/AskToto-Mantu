@@ -11,8 +11,10 @@ import {
   classifyProcess,
   collectCensus,
   missingStates,
+  normalizeWin32ResourceRows,
   oneCoreCpuPercent,
   openNdjsonWriter,
+  parseProveLocalTtftOutcome,
   sanitizeProcessSample,
   streamCensus,
   parseProveLocalTtftOutput,
@@ -28,7 +30,7 @@ import {
   validateState,
   windowsWorkingSetEvidenceFromArtifact
 } from './lib.mjs'
-import { representativeSettings, writeRepresentativeProfile } from './profile.mjs'
+import { isMainModule, representativeSettings, writeRepresentativeProfile } from './profile.mjs'
 
 const startedMs = Date.UTC(2026, 8, 27, 12)
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -352,6 +354,27 @@ describe('resource census CPU formula', () => {
       lane: 'windows-qa'
     })
   })
+
+  it('normalizes Windows private bytes from the same resource row as working set', () => {
+    const rows = normalizeWin32ResourceRows([
+      {
+        pid: 100,
+        ws: '123456',
+        priv: '654321',
+        user: 20_000_000,
+        kernel: 10_000_000,
+        cmd: 'Metis.exe --type=browser'
+      }
+    ])
+
+    expect(rows.get(100)).toEqual({
+      workingSetBytes: 123456,
+      rssBytes: 123456,
+      privateBytes: 654321,
+      cpuSeconds: 3,
+      commandLine: 'Metis.exe --type=browser'
+    })
+  })
 })
 
 describe('resource census report boundary', () => {
@@ -457,6 +480,31 @@ warm TTFT: 2000 ms`)
     ).toThrow(/failed/)
   })
 
+  it('records a failed or timed-out TTFT proof as a measured outcome instead of throwing', () => {
+    const header = '=== prove-local-ttft: Métis Local warm-suggest TTFT proof (PLAN.md §4.4 / Rock 5) ===\n'
+    expect(parseProveLocalTtftOutcome(`${header}warm TTFT: 842 ms\n`)).toEqual({ outcome: 'PASS', warmTtftMs: 842 })
+    expect(
+      parseProveLocalTtftOutcome(
+        `${header}[prove-local-ttft] FAIL — warm TTFT 2000ms exceeds the 1500ms budget.\nwarm TTFT: 2000 ms\n`
+      )
+    ).toEqual({ outcome: 'FAIL', warmTtftMs: 2000 })
+    expect(
+      parseProveLocalTtftOutcome(
+        `${header}[prove-local-ttft] prewarm timeout: 240000 ms\n[prove-local-ttft] FAIL — prewarm timed out after 240012ms (limit 240000ms).\n`
+      )
+    ).toEqual({ outcome: 'TIMEOUT', prewarmElapsedMs: 240012, prewarmTimeoutMs: 240000 })
+    expect(parseProveLocalTtftOutcome(`${header}\n[prove-local-ttft] FAILED: boom\n`)).toEqual({ outcome: 'FAIL' })
+    expect(
+      parseProveLocalTtftOutcome(
+        `${header}[prove-local-ttft] healthy on 127.0.0.1:5 after 23900ms\n[prove-local-ttft] prewarm (cold prefill): 9100 ms (prompt_n=4, cache_n=0)\n[prove-local-ttft] FAIL — warm TTFT 2000ms exceeds the 1500ms budget.\n`
+      )
+    ).toEqual({ outcome: 'FAIL', healthMs: 23900, prewarmColdPrefillMs: 9100 })
+    expect(parseProveLocalTtftOutcome(`${header}[prove-local-ttft] prewarm timeout: 240000 ms\n`)).toEqual({
+      outcome: 'INCOMPLETE'
+    })
+    expect(() => parseProveLocalTtftOutcome('warm TTFT: 842 ms')).toThrow(/not output/)
+  })
+
   it('records TTFT with a checkable artifact path and sha256, not a caller-supplied number', () => {
     const root = mkdtempSync(join(tmpdir(), 'metis-census-ttft-'))
     try {
@@ -474,6 +522,7 @@ warm TTFT: 731 ms
       expect(evidence).toMatchObject({
         recorded: true,
         command: 'node scripts/prove-local-ttft.mjs',
+        outcome: 'PASS',
         warmTtftMs: 731,
         artifact: { path: 'metis-census-output/prove-local-ttft.log' }
       })
@@ -547,6 +596,13 @@ describe('resource census representative profile', () => {
     expect(settings.meetingsFolder).toBe(join(resolve(profileRoot), 'meetings'))
   })
 
+  it('detects the entry point for a Windows-style argv[1] as well as a POSIX one', () => {
+    expect(isMainModule('file:///D:/a/repo/scripts/qa/census/profile.mjs', 'D:\\a\\repo\\scripts\\qa\\census\\profile.mjs', { windows: true })).toBe(true)
+    expect(isMainModule('file:///D:/a/repo/scripts/qa/census/profile.mjs', 'D:\\a\\repo\\other.mjs', { windows: true })).toBe(false)
+    expect(isMainModule('file:///tmp/profile.mjs', '/tmp/profile.mjs', { windows: false })).toBe(true)
+    expect(isMainModule('file:///tmp/profile.mjs', undefined)).toBe(false)
+  })
+
   it('writes only a disposable profile and meetings folder', () => {
     const root = mkdtempSync(join(tmpdir(), 'metis-census-profile-'))
     try {
@@ -601,6 +657,14 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow).toContain('--seconds 300')
     expect(workflow).toContain('node scripts/prove-local-ttft.mjs')
     expect(workflow).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2')
+  })
+
+  it('reads the profile manifest from the path profile.mjs prints and never gates the census on the TTFT proof', () => {
+    expect(workflow.match(/sed -n 's\/\^\\\[census-profile\\\] manifest \/\/p'/g)).toHaveLength(2)
+    expect(workflow).not.toContain('cp "$RUNNER_TEMP/metis-census-profile/resource-census-profile.json"')
+    const ttftStep = workflow.slice(workflow.indexOf('- name: Record local TTFT proof'), workflow.indexOf('- name: Measure hosted census states'))
+    expect(ttftStep).toContain('continue-on-error: true')
+    expect(workflow.slice(workflow.indexOf('- name: Measure hosted census states'))).not.toMatch(/^\s+if:\s.*(success|failure)/m)
   })
 
   it('measures install footprint per OS and records run identity with file digests', () => {
@@ -659,6 +723,7 @@ describe('resource census long-run stream', () => {
       const controller = new AbortController()
       let clockMs = 1_000
       let taken = 0
+      let checkpoints = 0
       const result = await streamCensus({
         ...base,
         seconds: 3600,
@@ -671,6 +736,9 @@ describe('resource census long-run stream', () => {
           if (taken === 3) controller.abort()
           return [mainSample({ privateBytes: 7 })]
         },
+        afterSample: async () => {
+          checkpoints += 1
+        },
         now: () => clockMs,
         sleep: async (ms: number) => {
           clockMs += ms
@@ -682,6 +750,7 @@ describe('resource census long-run stream', () => {
         .split('\n')
         .map((line) => JSON.parse(line))
       expect(result).toMatchObject({ outcome: 'aborted', samples: 3 })
+      expect(checkpoints).toBe(3)
       expect(lines).toHaveLength(4)
       expect(lines[0]).toEqual({
         record: 'header',

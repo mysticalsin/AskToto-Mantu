@@ -1,9 +1,12 @@
 /**
- * Hide / Island hover hit — full top-edge approach strip.
+ * Hide / Island hover hit — the notch area of the top edge.
  *
  * Tony live 2026-09-05: mouse at the top of the screen did not show Métis.
- * Only tray Show/Hide worked. Reveal must hit the top edge (left, camera, right)
+ * Only tray Show/Hide worked. Reveal must hit the top edge at the camera
  * without hunting the menu Show item. Teams mute at Y≈40 still misses.
+ * Owner decision OD-23 (2026-09-29, M2-0431): the reveal zone is the notch area
+ * only (±150 px around the bar's centre). The full-width strip opened the bar
+ * whenever the pointer paused on a menu or status icon, which read as flashing.
  */
 import { describe, expect, it } from 'vitest'
 import { decideCursorWatch, pointInRect } from './cursor-watch'
@@ -12,6 +15,7 @@ import {
   OVERLAY_HIDE_TARGET,
   TEAMS_MEETING_CHROME_Y,
   TEAMS_UNDER_ISLAND_Y,
+  TOP_CENTER_HOVER_HALF_WIDTH_PX,
   hoverHitBandHeight,
   hoverRestWidth,
   hoverWatchRestRect,
@@ -32,14 +36,16 @@ const LEFT_TOP = { x: 24, y: 12 }
 const NOTCH_CENTER = { x: 900, y: 12 }
 const RIGHT_TOP = { x: 1770, y: 8 }
 
-describe('hover hit is the full top-edge approach strip', () => {
-  it('watch rect is work-area-wide and covers the menu bar plus first work-area row', () => {
+describe('hover hit is the notch area of the top edge (OD-23)', () => {
+  it('watch rect is the notch area around the bar centre and covers the menu bar plus first work-area row', () => {
     for (const layout of ['hide', 'island'] as const) {
       const rest = hoverWatchRestRect(layout, TOTOS_MAC)
-      expect(hoverRestWidth(TOTOS_MAC)).toBe(TOTOS_MAC.workArea.width)
-      expect(rest.width).toBe(TOTOS_MAC.workArea.width)
-      expect(rest.x).toBe(TOTOS_MAC.workArea.x)
-      expect(rest.width).toBeGreaterThan(OVERLAY_HIDE_TARGET.width)
+      expect(TOP_CENTER_HOVER_HALF_WIDTH_PX).toBe(150)
+      expect(hoverRestWidth(TOTOS_MAC)).toBe(2 * TOP_CENTER_HOVER_HALF_WIDTH_PX)
+      expect(rest.width).toBe(2 * TOP_CENTER_HOVER_HALF_WIDTH_PX)
+      expect(rest.x).toBe(NOTCH_CENTER.x - TOP_CENTER_HOVER_HALF_WIDTH_PX)
+      expect(rest.width).toBeGreaterThanOrEqual(TOTOS_MAC.notchWidth)
+      expect(rest.width).toBeLessThan(OVERLAY_HIDE_TARGET.width)
       expect(rest.height).toBe(hoverHitBandHeight(TOTOS_MAC))
       expect(rest.height).toBe(TOTOS_MAC.workArea.y - TOTOS_MAC.bounds.y + 1)
       expect(rest.height).toBeLessThanOrEqual(HOVER_ISLAND_HEIGHT_MAX_PX)
@@ -50,10 +56,12 @@ describe('hover hit is the full top-edge approach strip', () => {
     }
   })
 
-  it('top edge left / camera / right reveals hide and island', () => {
+  it('the camera and the notch area reveal hide and island; the left and right top edge never do (OD-23)', () => {
+    const NOTCH_LEFT = { x: NOTCH_CENTER.x - TOP_CENTER_HOVER_HALF_WIDTH_PX, y: 12 }
+    const NOTCH_RIGHT = { x: NOTCH_CENTER.x + TOP_CENTER_HOVER_HALF_WIDTH_PX - 1, y: 12 }
     for (const layout of ['hide', 'island'] as const) {
       const rest = hoverWatchRestRect(layout, TOTOS_MAC)
-      for (const cursor of [LEFT_TOP, NOTCH_CENTER, RIGHT_TOP, { x: 900, y: 0 }]) {
+      for (const cursor of [NOTCH_CENTER, { x: 900, y: 0 }, NOTCH_LEFT, NOTCH_RIGHT]) {
         expect(pointInRect(cursor, rest)).toBe(true)
         expect(
           decideCursorWatch({
@@ -64,6 +72,18 @@ describe('hover hit is the full top-edge approach strip', () => {
           })
         ).toBe('reveal')
       }
+      // Menu-bar items and status icons, including (1253,27) inside the bar's own x-span.
+      for (const cursor of [LEFT_TOP, RIGHT_TOP, { x: 1253, y: 27 }, { x: NOTCH_LEFT.x - 1, y: 12 }, { x: NOTCH_RIGHT.x + 1, y: 12 }]) {
+        expect(pointInRect(cursor, rest)).toBe(false)
+        expect(
+          decideCursorWatch({
+            cursor,
+            restRect: rest,
+            revealedRect: { x: 460, y: 39, width: 880, height: 84 },
+            revealed: false
+          })
+        ).toBe('stay')
+      }
     }
   })
 
@@ -71,15 +91,17 @@ describe('hover hit is the full top-edge approach strip', () => {
     for (const layout of ['hide', 'island'] as const) {
       const rest = hoverWatchRestRect(layout, TOTOS_MAC)
       for (const y of [32, 37, 38, TOTOS_MAC.workArea.y]) {
-        expect(pointInRect({ x: 24, y }, rest)).toBe(true)
+        expect(pointInRect({ x: NOTCH_CENTER.x, y }, rest)).toBe(true)
         expect(
           decideCursorWatch({
-            cursor: { x: 24, y },
+            cursor: { x: NOTCH_CENTER.x, y },
             restRect: rest,
             revealedRect: { x: 460, y: 39, width: 880, height: 84 },
             revealed: false
           })
         ).toBe('reveal')
+        // The same rows outside the notch area are ordinary menu bar (OD-23).
+        expect(pointInRect({ x: 24, y }, rest)).toBe(false)
       }
     }
   })
@@ -87,8 +109,16 @@ describe('hover hit is the full top-edge approach strip', () => {
   it('helper-miss (hasNotch false) still uses the Electron workArea inset', () => {
     const noHelper: DisplayMetrics = { ...TOTOS_MAC, hasNotch: false, notchWidth: 0, source: 'heuristic' }
     const rest = hoverWatchRestRect('hide', noHelper)
-    expect(pointInRect({ x: 24, y: TOTOS_MAC.workArea.y }, rest)).toBe(true)
-    expect(pointInRect({ x: 24, y: TEAMS_UNDER_ISLAND_Y }, rest)).toBe(false)
+    expect(pointInRect({ x: NOTCH_CENTER.x, y: TOTOS_MAC.workArea.y }, rest)).toBe(true)
+    expect(pointInRect({ x: NOTCH_CENTER.x, y: TEAMS_UNDER_ISLAND_Y }, rest)).toBe(false)
+    expect(pointInRect({ x: 24, y: TOTOS_MAC.workArea.y }, rest)).toBe(false)
+  })
+
+  it('a wide notch widens the zone to cover it; a narrow display caps it at the work area', () => {
+    expect(hoverRestWidth({ ...TOTOS_MAC, notchWidth: 360 })).toBe(360)
+    const narrow: DisplayMetrics = { ...TOTOS_MAC, workArea: { x: 0, y: 39, width: 240, height: 1130 } }
+    expect(hoverRestWidth(narrow)).toBe(240)
+    expect(hoverWatchRestRect('hide', narrow).x).toBe(0)
   })
 
   it('center X at TEAMS_MEETING_CHROME_Y 48 misses', () => {
