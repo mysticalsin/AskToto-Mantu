@@ -578,6 +578,10 @@ function sanitizeSpeakerName(name: string | undefined): string {
     .slice(0, 80)
 }
 
+function sanitizeTranscriptText(text: string): string {
+  return text.replace(/[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
 /** Render one transcript line in the fixed on-disk shape recall.ts's parser reads back:
  *  `**[HH:MM:SS] Label:** text`, or `**[HH:MM:SS] Label (Name):** text` once Speaker Intelligence has
  *  resolved a display name for that line (see shared/transcript-align.ts). */
@@ -591,7 +595,7 @@ function formatTranscriptLine(l: TranscriptLine): string {
   // the name, so the round trip is unchanged. Only the generic role collapses — "Them (Jane Doe)" says
   // two different things and keeps both.
   const label = isClusterLabel(name) && speakerLabel(l.speaker) === 'Speaker' ? name : name ? `${speakerLabel(l.speaker)} (${name})` : speakerLabel(l.speaker)
-  return `**[${t}] ${label}:** ${l.text}`
+  return `**[${t}] ${label}:** ${sanitizeTranscriptText(l.text)}`
 }
 
 /** Render a full transcript body. saveMeeting and saveDraftTranscript share this exact shape so a

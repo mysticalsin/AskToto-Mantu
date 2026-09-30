@@ -16,6 +16,13 @@ describe('MQA-306 packaged Windows transcription gate', () => {
     expect(source).toMatch(/assertPackagedAsrEvidence\(engine,/)
   })
 
+  it('forces full-transcript retention so recallRead can verify saved ASR lines', () => {
+    expect(source).toContain("const FULL_TRANSCRIPT_PROFILE = { managed: false, inferenceMode: 'legacy', summaryOnly: false }")
+    expect(source).toMatch(/enterpriseLive: args\.enterpriseLive/)
+    expect(source).toMatch(/confirmedSettings\.enterpriseLive\?\.summaryOnly/)
+    expect(source).toMatch(/managed summary-only retention is active/)
+  })
+
   it('installs passive observation before import and keeps native-dialog coverage explicit', () => {
     expect(source.indexOf('await app.evaluate(installAsrObserver)')).toBeLessThan(source.indexOf('app.firstWindow()'))
     expect(source).toMatch(/MQA-233/)

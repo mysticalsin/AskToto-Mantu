@@ -59,6 +59,7 @@ const timeoutIndex = argv.indexOf('--timeout-seconds')
 const timeoutSeconds = timeoutIndex === -1 ? 180 : Number(argv[timeoutIndex + 1])
 const PHRASE = 'The quarterly revenue target is seven million dollars'
 const ENGINES = ['whisper', 'parakeet']
+const FULL_TRANSCRIPT_PROFILE = { managed: false, inferenceMode: 'legacy', summaryOnly: false }
 
 if (process.platform !== 'win32') {
   console.error(`[check:packaged-asr] FAIL — this gate synthesizes its fixture via Windows SAPI; host is ${process.platform}.`)
@@ -175,11 +176,25 @@ await app.evaluate(async ({ dialog }, pickedFile) => {
 const jobIds = new Set()
 for (const engine of ENGINES) {
   await page.evaluate(
-    (args) => window.toto.setSettings({ asrEngine: args.engine, meetingsFolder: args.folder, encryptTranscripts: false }),
-    { engine, folder: meetingsFolder }
+    (args) => window.toto.setSettings({
+      asrEngine: args.engine,
+      meetingsFolder: args.folder,
+      encryptTranscripts: false,
+      enterpriseLive: args.enterpriseLive
+    }),
+    { engine, folder: meetingsFolder, enterpriseLive: FULL_TRANSCRIPT_PROFILE }
   )
-  const confirmedEngine = await page.evaluate(async () => (await window.toto.getSettings()).asrEngine)
-  if (confirmedEngine !== engine) return fail(`asrEngine did not stick — getSettings() reported "${confirmedEngine}", expected "${engine}".`)
+  const confirmedSettings = await page.evaluate(async () => {
+    const settings = await window.toto.getSettings()
+    return { asrEngine: settings.asrEngine, enterpriseLive: settings.enterpriseLive }
+  })
+  if (confirmedSettings.asrEngine !== engine) return fail(`asrEngine did not stick — getSettings() reported "${confirmedSettings.asrEngine}", expected "${engine}".`)
+  if (confirmedSettings.enterpriseLive?.summaryOnly) {
+    return fail(`${engine}: managed summary-only retention is active, so this packaged ASR gate cannot verify saved transcript lines.`)
+  }
+  if (confirmedSettings.enterpriseLive?.managed || confirmedSettings.enterpriseLive?.inferenceMode !== 'legacy') {
+    return fail(`${engine}: enterprise live profile did not reset to the full-transcript legacy profile.`)
+  }
   const afterSequence = await app.evaluate(() => globalThis.__metisPackagedAsrGate.sequence)
   const logOffset = existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').length : 0
   const picked = await page.evaluate(() => window.toto.importAudioPick())

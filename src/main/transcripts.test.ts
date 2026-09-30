@@ -106,6 +106,24 @@ describe('MQA-245 — a diarization cluster label is not wrapped in the generic 
     expect(matched[1][5]).toBe('Jane Doe')
   })
 
+  it('keeps ASR text with embedded line breaks parseable by recall.ts', () => {
+    const recallSrc = readFileSync(join(__dirname, 'recall.ts'), 'utf8')
+    const m = recallSrc.match(/const lineRe = (\/\^.*\/gm)/)
+    expect(m, "recall.ts's line regex not found — did it move?").toBeTruthy()
+    // eslint-disable-next-line no-eval
+    const lineRe: RegExp = eval(m![1])
+
+    const t = Date.parse('2026-02-02T10:00:00Z')
+    const body = formatTranscript([
+      { t, speaker: 'unknown', text: 'The quarterly revenue target\r\nis seven million dollars.' }
+    ])
+    const matched = [...body.matchAll(lineRe)]
+
+    expect(body).toContain('The quarterly revenue target is seven million dollars.')
+    expect(matched).toHaveLength(1)
+    expect(matched[0][6]).toBe('The quarterly revenue target is seven million dollars.')
+  })
+
   it('the legacy "Speaker (Speaker 1)" form still parses — old meetings do not change meaning', () => {
     const recallSrc = readFileSync(join(__dirname, 'recall.ts'), 'utf8')
     const m = recallSrc.match(/const lineRe = (\/\^.*\/gm)/)
