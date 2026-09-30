@@ -302,7 +302,7 @@
     "src/shared/accelerator.test.ts": 1,
     "src/shared/asr-engine.contract.test.ts": 5,
     "src/shared/asr-latency.test.ts": 1,
-    "src/shared/asr-quality.contract.test.ts": 13,
+    "src/shared/asr-quality.contract.test.ts": 12,
     "src/shared/cli-setup-status.test.ts": 2,
     "src/shared/dust-validate.test.ts": 1,
     "src/shared/license-types.contract.test.ts": 1,
