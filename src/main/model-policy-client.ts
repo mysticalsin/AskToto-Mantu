@@ -129,12 +129,19 @@ export function getActiveModelPolicy(settings: ModelPolicyClientSettings): Model
 }
 
 /**
- * `GET /v1/model-policy`, verify, apply (or reject). Safe to call on every heartbeat tick (<=60s):
+ * `GET /v1/model-policy`, verify, apply (or reject); resolves true only when the effective policy changed,
+ * so callers re-broadcast settings on a real change and never on an idle poll. Safe to call on every heartbeat tick (<=60s):
  * a network failure or an unconfigured Operator leaves the current/cached policy untouched — this
  * only ever changes state on a definite, verified answer.
  */
-export async function refreshModelPolicy(settings: ModelPolicyClientSettings, now: number = Date.now()): Promise<void> {
+export async function refreshModelPolicy(settings: ModelPolicyClientSettings, now: number = Date.now()): Promise<boolean> {
   void now
+  const before = getActiveModelPolicy(settings)
+  await fetchAndApplyModelPolicy(settings)
+  return getActiveModelPolicy(settings)?.version !== before?.version
+}
+
+async function fetchAndApplyModelPolicy(settings: ModelPolicyClientSettings): Promise<void> {
   const url = resolveOperatorBaseUrl(settings)
   const secret = resolveOperatorCredential(settings)
   if (!url || !secret) return

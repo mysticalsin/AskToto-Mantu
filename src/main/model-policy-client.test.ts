@@ -81,6 +81,13 @@ describe('refreshModelPolicy / getActiveModelPolicy', () => {
     expect(getActiveModelPolicy(SETTINGS)?.version).toBe(NOW)
   })
 
+  it('reports a change only when the effective policy changed, never on an idle poll', async () => {
+    const doc = policy()
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign('shared-secret', doc) }))
+    expect(await refreshModelPolicy(SETTINGS, NOW)).toBe(true)
+    expect(await refreshModelPolicy(SETTINGS, NOW + 30_000)).toBe(false)
+  })
+
   it('rejects a policy signed with the wrong secret, keeping the previous state, and audits it', async () => {
     const doc = policy()
     setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign('wrong-secret', doc) }))

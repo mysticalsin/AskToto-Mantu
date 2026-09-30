@@ -381,12 +381,15 @@ export function startOperatorRuntime(
   }
   // M2-0412: the fleet model policy polls on its own timer so a slow queue drain or heartbeat can never
   // push a policy change past the 60 s bound. Best-effort — a failed fetch never blocks the heartbeat.
-  // Broadcast once it settles so Settings' managed/locked display reflects a newly applied policy.
+  // Broadcast only when the policy actually changed, so Settings' managed/locked display updates without
+  // an idle settings-changed churn every 30 s reaching the renderer.
   const policyGeneration = runtimeGeneration
   const pollPolicy = (): void => {
-    void refreshModelPolicy(getSettings()).then(() => {
-      if (policyGeneration === runtimeGeneration) hooks?.onReadinessChanged?.()
-    })
+    void refreshModelPolicy(getSettings())
+      .then((changed) => {
+        if (changed && policyGeneration === runtimeGeneration) hooks?.onReadinessChanged?.()
+      })
+      .catch(() => undefined)
   }
   pollPolicy()
   void tick()
