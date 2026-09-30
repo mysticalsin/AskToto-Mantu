@@ -1,4 +1,4 @@
-import { join, posix } from 'node:path'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export interface OverlayRendererUrlOptions {
@@ -20,15 +20,7 @@ export interface DecoderRendererUrl {
   filePath: string
 }
 
-function isPosixAbsolutePath(dirname: string): boolean {
-  return dirname.startsWith('/') && !dirname.startsWith('//')
-}
-
 function rendererFileUrl(dirname: string, fileName: string): { url: string; filePath: string } {
-  if (isPosixAbsolutePath(dirname)) {
-    const filePath = posix.join(dirname, '../renderer', fileName)
-    return { url: new URL(`file://${filePath}`).href, filePath }
-  }
   const filePath = join(dirname, '../renderer', fileName)
   return { url: pathToFileURL(filePath).toString(), filePath }
 }

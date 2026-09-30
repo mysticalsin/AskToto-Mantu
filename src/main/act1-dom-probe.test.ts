@@ -212,7 +212,7 @@ describe('FITO-185-U wiring in createWindow', () => {
     // Read once into `onboardingLive`: the same verdict also decides the post-onboarding launch route
     // built next to it, and one URL must never be stamped from two different readings.
     expect(index).toMatch(/const onboardingLive = onboardingExclusiveLive\(\)/)
-    expect(index).toMatch(/if \(onboardingLive\) params\.set\('exclusiveOnboarding', '1'\)/)
+    expect(index).toMatch(/onboardingLive,\s*postOnboardingDestination,/)
     expect(create).toMatch(/FITO-185-N/)
   })
 })

@@ -306,7 +306,7 @@ describe('MQA-338 exclusive Act 1 privacy + bounded diagnostics', () => {
     expect(index).toMatch(/function overlayRendererUrl\(\): string/)
     expect(index).toMatch(/buildOverlayRendererUrl\(/)
     expect(index).toMatch(/const onboardingLive = onboardingExclusiveLive\(\)/)
-    expect(index).toMatch(/if \(onboardingLive\) params\.set\('exclusiveOnboarding', '1'\)/)
+    expect(index).toMatch(/onboardingLive,\s*postOnboardingDestination,/)
   })
 
   it('portal-open CSS unlock includes onboard-cta / Next (FITO-185-V)', () => {

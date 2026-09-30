@@ -2131,7 +2131,6 @@ function onboardingExclusiveLive(): boolean {
  */
 function overlayRendererUrl(): string {
   const onboardingLive = onboardingExclusiveLive()
-  // Invariant kept in buildOverlayRendererUrl: if (onboardingLive) params.set('exclusiveOnboarding', '1')
   return buildOverlayRendererUrl({
     dirname: __dirname,
     devRendererUrl: devEnv('ELECTRON_RENDERER_URL'),

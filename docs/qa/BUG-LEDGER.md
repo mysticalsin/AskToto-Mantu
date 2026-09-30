@@ -4636,13 +4636,13 @@ Example live `/Applications/Metis.app` 1.8.3 then shows the red Settings / Intel
 
 **Repro.** Current-source problem Continue skipped the Reveal/demo scene. A synchronous background media playback exception could swallow a user-controlled demo Next transition. The historical installed 1.9.8 freeze has not been reproduced on the exact package.
 
-**Fixed in source; packaged evidence via candidate smoke.** Continue enters the guarded demo, optional music/video failures cannot block scene navigation, and the Act 2 `Next` control advances only after the current demo step is complete. Pure and React first-paint regressions pin the completion condition; the browser regression waits for completion at normal motion and still proves reduced-motion/media-failure navigation. The hosted QA candidate launch jobs are the packaged evidence path; final visual acceptance comes from their artifacts.
+**Fixed in source; LEAD_ACTION: dispatch qa-candidate on the merged commit and file the macOS/Windows launch reports.** Continue enters the guarded demo, optional music/video failures cannot block scene navigation, and the Act 2 `Next` control advances only after the current demo step is complete. Pure and React first-paint regressions pin the completion condition; the browser regression waits for completion at normal motion and still proves reduced-motion/media-failure navigation. The hosted QA candidate launch jobs are the packaged evidence path; final visual acceptance comes from their artifacts.
 
 ### MQA-339 — stale development URL in packaged windows
 
 **Repro.** A process with inherited `ELECTRON_RENDERER_URL` could route packaged onboarding or import-decoder windows to an unavailable Vite server, producing a blank or flashing window.
 
-**Fixed in source; packaged evidence via candidate smoke.** The overlay and decoder URL decisions live in `src/main/renderer-url.ts`; `src/main/index.ts` passes `devEnv('ELECTRON_RENDERER_URL')`, preserving the historical 7d684b24 guard while adding tests for both bracket and dotted raw env bypasses. The hosted macOS and Windows QA candidate launch jobs set a stale `ELECTRON_RENDERER_URL` before launching installed packages, so a package that honors it fails the launch report instead of silently loading Vite.
+**Fixed in source; LEAD_ACTION: dispatch qa-candidate on the merged commit and file the macOS/Windows launch reports.** The overlay and decoder URL decisions live in `src/main/renderer-url.ts`; `src/main/index.ts` passes `devEnv('ELECTRON_RENDERER_URL')`, preserving the historical 7d684b24 guard while adding tests for both bracket and dotted raw env bypasses. The hosted macOS and Windows QA candidate launch jobs set a stale `ELECTRON_RENDERER_URL` before launching installed packages, so a package that honors it fails the launch report instead of silently loading Vite.
 
 ### MQA-340 — Operator Overview layout loses a KPI and usable map space
 

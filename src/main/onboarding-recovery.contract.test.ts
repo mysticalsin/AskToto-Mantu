@@ -86,11 +86,14 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
 
 describe('exclusive onboarding renderer recovery', () => {
   it('reloads an exclusive onboarding renderer with the parser-time shell flag', () => {
-    const recoveryUrl = buildOverlayRendererUrl({
-      dirname: '/fixture',
-      onboardingLive: true,
+    const overlayRendererUrl = actualFunction('overlayRendererUrl', {
+      __dirname: '/fixture',
+      buildOverlayRendererUrl,
+      devEnv: () => undefined,
+      onboardingExclusiveLive: () => true,
       postOnboardingDestination: 'answer'
     })
+    const recoveryUrl = overlayRendererUrl()
 
     expect(recoveryUrl).toBe('file:///renderer/index.html?exclusiveOnboarding=1')
 
@@ -118,7 +121,7 @@ describe('exclusive onboarding renderer recovery', () => {
       applyExclusiveOnboardingStage,
       showForExclusiveOnboarding,
       onboardingExclusiveLive: () => true,
-      overlayRendererUrl: () => recoveryUrl,
+      overlayRendererUrl,
       redactSecrets,
       listeningActive: true,
       lastPlainAskAt: 1,
