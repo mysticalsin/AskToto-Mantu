@@ -58,6 +58,7 @@ const RULES = [
   ['FF-15', 'Production modules directly under src/main or src/renderer/src/lib'],
 ]
 
+// `.tsx` is included on purpose: a top-level component or hook is as much a flat module as a `.ts` helper.
 const TOP_LEVEL_MODULE = /^(src\/main|src\/renderer\/src\/lib)\/[^/]+\.tsx?$/
 
 const RULE_IDS = RULES.map(([id]) => id)
@@ -725,6 +726,7 @@ function collectCurrentCounts() {
   const current = {}
   for (const file of walkSourceFiles()) {
     const text = readFileSync(join(repoRoot, file), 'utf8').replace(/\r\n/g, '\n')
+    // Copy so adding FF-15 does not mutate the object countSourceFile returned.
     const fileCounts = { ...countSourceFile(file, text) }
     if (countTopLevelModule(file) > 0) fileCounts['FF-15'] = 1
     for (const [rule, count] of Object.entries(fileCounts)) {
