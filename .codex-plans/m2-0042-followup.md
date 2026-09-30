@@ -13,7 +13,7 @@
 - Graphify query was attempted first, but `graphify-out/graph.json` and `graphify-out/wiki/index.md` are absent in this worktree, so review proceeded through scoped raw files.
 - `src/main/renderer-url.ts` owns overlay/decoder URL building; `src/main/index.ts` call sites pass `devEnv('ELECTRON_RENDERER_URL')`, matching historical guard `7d684b24`.
 - `src/renderer/src/components/OnboardingDemoScene.tsx` keeps Act 2 `Next` disabled until `demoStepComplete(...)` and rechecks completion in the click handler before `advance()` / `onContinue()`.
-- CI architecture failure was the ratchet's lowered-count case: `scripts/architecture-baseline.json` was already lowered for `src/main/index.ts` line count (`9884` to `9876`), not broadened for FF-14.
+- CI architecture failure was the ratchet's lowered-count case: `scripts/architecture-baseline.json` still allowed `src/main/index.ts` at `9876` lines, while the current file is `9875` lines. Lowered only that `FF-04` entry, bringing the `FF-04` baseline total to `53037`.
 - Allowed checks:
   - `npx tsc --noEmit -p tsconfig.node.json` passed.
   - `npx tsc --noEmit -p tsconfig.web.json` passed.
