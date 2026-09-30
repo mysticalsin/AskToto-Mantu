@@ -1763,9 +1763,8 @@ export async function ingestExtraction(
   // (the meeting's actual start time) is tried when `date:` is missing or unparseable, then the file's
   // own mtime as a last resort, so a blank/garbage date never silently sorts as the oldest thing on
   // the Commitment Ledger.
-  const fields = readMeetingFields(md)
   const readFrontmatterDate = (field: 'date' | 'start'): string | null => {
-    const raw = fields[field]
+    const raw = readMeetingFields(md)[field]
     return raw && !Number.isNaN(Date.parse(raw)) ? raw : null
   }
   let date = readFrontmatterDate('date') ?? readFrontmatterDate('start')
