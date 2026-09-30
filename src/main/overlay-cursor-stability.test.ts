@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import * as cursorWatch from './island/cursor-watch'
 import { RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS } from './island/cursor-watch'
 import { hoverWatchRestRect, rightEdgeSidecarBounds, type DisplayMetrics, type Rect } from './island/geometry'
+import { releaseParkMinimumSize } from './island/park-minimum-size'
 import { isIncompleteAskReveal, overlayUsesHover } from '@shared/overlay-chrome'
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
@@ -38,7 +39,7 @@ function nativeHover(options: {
   const notifications: boolean[] = []
   const deps = {
     ...cursorWatch,
-    win: { isDestroyed: () => false, isVisible: () => true, getBounds: () => bounds, setMinimumSize: () => {}, showInactive: () => {} },
+    win: { isDestroyed: () => false, isVisible: () => true, getBounds: () => bounds, getMinimumSize: () => [1, 1], setMinimumSize: () => {}, showInactive: () => {} },
     screen: { getDisplayMatching: () => display, getCursorScreenPoint: () => cursor },
     performance: { now: () => now },
     overlayCursorWatchWanted: () => true,
@@ -64,6 +65,7 @@ function nativeHover(options: {
     parkedOverlayBounds: () => parked,
     applyOverlaySurfaceChrome: () => {},
     commitParkedOverlayBounds: (park: Rect) => { bounds = park },
+    releaseParkMinimumSize,
     applyHideClickThrough: () => {}
   }
   // Lifts one shipped function, dropping only its TypeScript return annotation.

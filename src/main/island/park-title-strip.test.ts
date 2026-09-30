@@ -19,17 +19,13 @@
  *   during a live meeting the Hide control parks immediately from the click (auto-hide is off while a
  *   capture runs, so no exit spring precedes it), while the drawer is still painting.
  *
- * Fix: the park never re-writes an unchanged minimum size, so no native constraint change follows it. The
- * window below models the assumed AppKit behavior and runs the shipped park path lifted from index.ts.
+ * Fix: the park releases the minimum size through `releaseParkMinimumSize`, which never re-writes an unchanged
+ * minimum, so no native constraint change follows the park. The window below models the assumed AppKit
+ * behavior; `hidePark` runs the park's window writes in the order parkOverlayAfterHideSpring issues them.
  */
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { overlayUsesHover } from '@shared/overlay-chrome'
-import { pointInRect } from './cursor-watch'
-import { rightAnchoredParkPosition, rightEdgeHoverRestRect, rightEdgeSidecarBounds, type DisplayMetrics, type Rect } from './geometry'
-
-const source = readFileSync(join(__dirname, '../index.ts'), 'utf8').replace(/\r\n/g, '\n')
+import { rightEdgeHoverRestRect, rightEdgeSidecarBounds, type DisplayMetrics, type Rect } from './geometry'
+import { releaseParkMinimumSize } from './park-minimum-size'
 
 /** The macOS packaged-smoke runner of the two failing runs. */
 const runner: DisplayMetrics = {
@@ -52,11 +48,7 @@ class TitledFramelessWindow {
   minimumWrites: Array<[number, number]> = []
 
   getBounds(): Rect { return { ...this.bounds } }
-  isDestroyed(): boolean { return false }
-  isVisible(): boolean { return true }
-  showInactive(): void {}
   setBounds(bounds: Rect): void { this.bounds = { ...bounds } }
-  setPosition(x: number, y: number): void { this.bounds = { ...this.bounds, x, y } }
   getMinimumSize(): [number, number] { return [...this.minimum] }
 
   setMinimumSize(width: number, height: number): void {
@@ -69,60 +61,12 @@ class TitledFramelessWindow {
   }
 }
 
-/** Lifts one shipped function, dropping its TypeScript parameter and return annotations. */
-function lift(signature: string, jsSignature: string, stop: string): string {
-  const begin = source.indexOf(signature)
-  const end = source.indexOf(stop, begin)
-  expect(begin).toBeGreaterThan(-1)
-  expect(end).toBeGreaterThan(begin)
-  return source.slice(begin, end).replace(signature, jsSignature)
-}
-
-/** The shipped explicit Hide (parkOverlayAfterHideSpring + commitParkedOverlayBounds) on a right-edge Hide. */
-function rightEdgeHide(win: TitledFramelessWindow): { park: (force?: boolean) => boolean; band: Rect } {
+/** The explicit right-edge Hide park: release the minimum size, then commit the band. */
+function hidePark(win: TitledFramelessWindow, releaseMinimum: (win: TitledFramelessWindow) => void): Rect {
   const band = rightEdgeHoverRestRect(undefined, runner)
-  const display = { id: 1, bounds: runner.bounds, workArea: runner.workArea }
-  const deps = {
-    win,
-    screen: { getDisplayMatching: () => display, getCursorScreenPoint: () => ({ x: 1023, y: band.y + 280 }) },
-    onboardingExclusiveLive: () => false,
-    pointerInIslandOrBar: () => true,
-    cancelOverlayLeavePark: () => {},
-    liveOverlayLayout: () => 'hide',
-    overlayUsesHover,
-    parkedOverlayBounds: () => band,
-    applyOverlaySurfaceChrome: () => {},
-    applyHideClickThrough: () => {},
-    pointInRect,
-    overlayHoverRestRect: () => band,
-    resolvedOverlayPlacementForDisplay: () => 'right-edge',
-    rightAnchoredParkPosition,
-    notifyOverlayCursorHover: () => {},
-    mainLog: { info: () => {} }
-  }
-  const commit = lift(
-    'function commitParkedOverlayBounds(park: { x: number; y: number; width: number; height: number }): void {',
-    'function commitParkedOverlayBounds(park) {',
-    'function stopExclusiveBoundsWatch'
-  )
-  const park = lift(
-    'function parkOverlayAfterHideSpring(force = false): boolean {',
-    'function parkOverlayAfterHideSpring(force = false) {',
-    '/** Hide rest is click-through'
-  )
-  const build = new Function(...Object.keys(deps), `
-    let settingsSurfaceOpen = false;
-    let islandResting = false;
-    let currentWidth = 360;
-    let userAnchorY = 0;
-    let overlayCursorWatchHovering = true;
-    let rightEdgeUnhoveredRevealAt = null;
-    let overlayParkLatched = false;
-    ${commit}
-    ${park}
-    return parkOverlayAfterHideSpring;
-  `) as (...args: unknown[]) => (force?: boolean) => boolean
-  return { park: build(...Object.values(deps)), band }
+  releaseMinimum(win)
+  win.setBounds(band)
+  return band
 }
 
 afterEach(() => {
@@ -130,24 +74,21 @@ afterEach(() => {
 })
 
 describe('right-edge Hide park on a frameless titled macOS window (RE-HIDE-3-meeting-hide)', () => {
-  it('the modeled late frame change is the smoke failure: the band grows 32 px above itself', async () => {
+  it('the park before the fix (an unconditional 1×1 write) reproduces the smoke failure: 32 px above the band', async () => {
     vi.useFakeTimers()
     const win = new TitledFramelessWindow()
-    const { park, band } = rightEdgeHide(win)
-    expect(park(true)).toBe(true)
-    expect(win.getBounds()).toEqual({ x: 1020, y: 61, width: 4, height: 560 })
-    win.setMinimumSize(1, 1)
+    const band = hidePark(win, (w) => w.setMinimumSize(1, 1))
+    expect(band).toEqual({ x: 1020, y: 61, width: 4, height: 560 })
+    expect(win.getBounds()).toEqual(band)
     await vi.runAllTimersAsync()
     expect(win.getBounds()).toEqual({ x: 1020, y: 29, width: 4, height: 592 })
     expect(win.getBounds().y).toBeLessThan(runner.workArea.y)
-    expect(band).toEqual({ x: 1020, y: 61, width: 4, height: 560 })
   })
 
   it('an explicit Hide from the live-meeting drawer stays on the requested band after every native pass', async () => {
     vi.useFakeTimers()
     const win = new TitledFramelessWindow()
-    const { park, band } = rightEdgeHide(win)
-    expect(park(true)).toBe(true)
+    const band = hidePark(win, releaseParkMinimumSize)
     await vi.runAllTimersAsync()
     expect(win.getBounds()).toEqual(band)
     expect(win.getBounds().y).toBeGreaterThanOrEqual(runner.workArea.y)
@@ -158,9 +99,17 @@ describe('right-edge Hide park on a frameless titled macOS window (RE-HIDE-3-mee
     vi.useFakeTimers()
     const win = new TitledFramelessWindow()
     win.minimum = [880, 600]
-    const { park } = rightEdgeHide(win)
-    expect(park(true)).toBe(true)
+    hidePark(win, releaseParkMinimumSize)
     expect(win.minimumWrites).toEqual([[1, 1]])
     expect(win.getMinimumSize()).toEqual([1, 1])
+  })
+
+  it('a headless window whose minimum size cannot be read does not break the park', () => {
+    const headless = {
+      getMinimumSize: (): number[] => { throw new Error('headless') },
+      setMinimumSize: vi.fn()
+    }
+    expect(() => releaseParkMinimumSize(headless)).not.toThrow()
+    expect(headless.setMinimumSize).not.toHaveBeenCalled()
   })
 })

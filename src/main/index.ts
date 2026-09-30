@@ -223,6 +223,7 @@ import {
   topClamp
 } from './island/geometry'
 import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
+import { releaseParkMinimumSize } from './island/park-minimum-size'
 import {
   OVERLAY_REST_BACKGROUND,
   SETTINGS_SURFACE_BACKGROUND,
@@ -3425,15 +3426,7 @@ function parkOverlayAfterHideSpring(force = false): boolean {
   currentWidth = park.width
   islandResting = true
   userAnchorY = park.y
-  try {
-    // Only a leftover larger minimum (Settings) is released here. An unchanged 1×1 is never re-written: every
-    // minimum-size write re-applies the native size constraints of this frameless (still titled) macOS window,
-    // and the frame change that follows can land after the park below, 32 px taller above the band (M2-0526).
-    const [minWidth, minHeight] = win.getMinimumSize()
-    if (minWidth !== 1 || minHeight !== 1) win.setMinimumSize(1, 1)
-  } catch {
-    /* headless */
-  }
+  releaseParkMinimumSize(win)
   applyOverlaySurfaceChrome()
   commitParkedOverlayBounds(park)
   overlayCursorWatchHovering = false
