@@ -5,8 +5,9 @@
 
 /** Reveal spring (ms). Window is already at islandSafeTop before this plays. */
 export const OVERLAY_REVEAL_MS = 360
-/** Hide reverse spring (ms). Park happens after this, not on the hide tick. */
-export const OVERLAY_HIDE_MS = 320
+/** Hide reverse spring (ms). Park happens after this, not on the hide tick. With the 500 ms leave grace it
+ *  ends before main's 800 ms leave-park backstop, so the backstop never cuts the fade short. */
+export const OVERLAY_HIDE_MS = 280
 /** If animationend is missed, park anyway so the bar cannot stick open. */
 export const OVERLAY_PARK_FALLBACK_MS = 400
 
@@ -53,6 +54,13 @@ export function overlaySpringClassName(spring: OverlaySpring, edge: OverlayEdge 
   if (spring === 'out') return `overlay-spring overlay-spring--out${anchor} w-full`
   if (spring === 'settled') return `overlay-spring overlay-spring--settled${anchor} w-full`
   return 'w-full'
+}
+
+/** A parked top-center Hide paints nothing (`overlay-spring--parked`, opacity 0): the frame between the exit
+ *  fade and the park, or between a main-driven restore and the in spring, stays empty instead of showing the
+ *  bar at full opacity. The right-edge dock renders its rail instead and never takes this class. */
+export function overlayHideParkedClassName(spring: OverlaySpring, revealed: boolean, restsHidden: boolean): string {
+  return restsHidden && !revealed && spring === 'rest' ? 'overlay-spring--parked' : ''
 }
 
 /** Circle/Jarvis expand to the Ask bar. Bar-circle ease-spring only. Not Hide/Island overlay-spring. */

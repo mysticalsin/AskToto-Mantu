@@ -4,6 +4,7 @@ import { transformWithEsbuild } from 'vite'
 import { describe, expect, it, vi } from 'vitest'
 import { clampAxis, clampAxisMargin, clampHeight as islandClampHeight, isReachable as islandIsReachable, recenterXForWidth, refitToDisplay as islandRefitToDisplay } from './island/geometry'
 import { crashDetail } from './infra/observability/crash-taxonomy'
+import { overlayUsesHover } from '@shared/overlay-chrome'
 
 /**
  * Source-contract tests for the overlay-placement findings (MQA-196, MQA-197). src/main/index.ts boots
@@ -187,7 +188,7 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       sliceBetween('function clampHeight(height: number, areaHeight: number): number {', 'function toggleVisible(')
     )
     const preamble = [
-      'const { screen, start, BAR_MIN_HEIGHT, DRAG_VISIBLE_MARGIN, islandClampHeight, islandIsReachable, islandRefitToDisplay, clampAxis, clampAxisMargin } = stubs',
+      'const { screen, start, BAR_MIN_HEIGHT, DRAG_VISIBLE_MARGIN, islandClampHeight, islandIsReachable, islandRefitToDisplay, clampAxis, clampAxisMargin, overlayUsesHover } = stubs',
       'let current = { ...start }',
       'let userAnchorY = null',
       'const win = { getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } } }',
@@ -219,7 +220,8 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       islandIsReachable,
       islandRefitToDisplay,
       clampAxis,
-      clampAxisMargin
+      clampAxisMargin,
+      overlayUsesHover
     })
   }
 
