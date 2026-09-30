@@ -7,6 +7,7 @@ import { redactSecrets } from '@shared/redact'
 import { crashDetail } from './infra/observability/crash-taxonomy'
 import { createReloadBudget } from './lifecycle/reload-budget'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
+import { buildOverlayRendererUrl } from './renderer-url'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
@@ -85,14 +86,11 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
 
 describe('exclusive onboarding renderer recovery', () => {
   it('reloads an exclusive onboarding renderer with the parser-time shell flag', () => {
-    const recoveryUrl = actualFunction('overlayRendererUrl', {
-      __dirname: '/fixture',
-      join: (...parts: string[]) => parts.join('/'),
-      pathToFileURL: (path: string) => ({ href: `file://${path}` }),
-      onboardingExclusiveLive: () => true,
-      devEnv: () => undefined,
-      process: { env: {} }
-    })()
+    const recoveryUrl = buildOverlayRendererUrl({
+      dirname: '/fixture',
+      onboardingLive: true,
+      postOnboardingDestination: 'answer'
+    })
 
     expect(recoveryUrl).toBe('file:///renderer/index.html?exclusiveOnboarding=1')
 

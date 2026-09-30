@@ -5,6 +5,7 @@ import {
   demoClockCommand,
   demoOrchestratorSnapshot,
   demoPlaybackStatus,
+  demoStepComplete,
   initialDemoOrchestratorState,
   previousDemoBeat,
   readDemoEnvironment,
@@ -110,6 +111,13 @@ describe('onboarding demo pacing and lifecycle', () => {
     expect(h.pending.size).toBe(0)
     expect(demoPlaybackStatus('held', { hidden: false, reducedMotion: true }, false))
       .toContain('All content')
+  })
+
+  it('MQA-338 treats a demo step as complete only at hold, or immediately under reduced motion', () => {
+    expect(demoStepComplete('paused', false)).toBe(false)
+    expect(demoStepComplete('playing', false)).toBe(false)
+    expect(demoStepComplete('held', false)).toBe(true)
+    expect(demoStepComplete('paused', true)).toBe(true)
   })
 
   it('optional synchronous and rejected media attempts never own navigation', async () => {

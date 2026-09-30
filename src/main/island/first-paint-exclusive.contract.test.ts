@@ -304,6 +304,7 @@ describe('MQA-338 exclusive Act 1 privacy + bounded diagnostics', () => {
     expect(create).toMatch(/if \(process\.env\.ASKTOTO_MAC_LAUNCH_GATE === '1'\)/)
     expect(create).not.toMatch(/ASKTOTO_MAC_LAUNCH_GATE === '1' \|\| onboardingExclusiveLive\(\)/)
     expect(index).toMatch(/function overlayRendererUrl\(\): string/)
+    expect(index).toMatch(/buildOverlayRendererUrl\(/)
     expect(index).toMatch(/const onboardingLive = onboardingExclusiveLive\(\)/)
     expect(index).toMatch(/if \(onboardingLive\) params\.set\('exclusiveOnboarding', '1'\)/)
   })

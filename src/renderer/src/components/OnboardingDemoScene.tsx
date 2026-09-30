@@ -46,6 +46,7 @@ import {
   demoClockCommand,
   demoOrchestratorSnapshot,
   demoPlaybackStatus,
+  demoStepComplete,
   initialDemoOrchestratorState,
   previousDemoBeat,
   readDemoEnvironment,
@@ -249,10 +250,12 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
       commit(next)
     },
     advance: () => {
+      if (!demoStepComplete(phaseRef.current, controlsRef.current.environment.reducedMotion)) return false
       resetPlayback()
       const next = advanceDemoBeat(orchestratorRef.current, DEMO_BEAT_MODEL)
       setLocalMs(next.localMs)
       commit(next.state)
+      return true
     }
   }
 }
@@ -282,6 +285,7 @@ export function OnboardingDemoScene({
     elapsedMs, beat, hasNext, advance, previous, replay, togglePaused,
     paused, phase, status, replayKey, reducedMotion, cursorRef
   } = useDemoPlayback(wrapRef)
+  const stepComplete = demoStepComplete(phase, reducedMotion)
   const statusId = useId()
   const previewId = useId()
   // Keep the optional media attempt synchronous and navigation-independent.
@@ -442,7 +446,9 @@ export function OnboardingDemoScene({
         <button
           type="button"
           aria-describedby={statusId}
+          disabled={!stepComplete}
           onClick={() => {
+            if (!stepComplete) return
             onPlayVideo?.()
             if (demoNextLeavesTour(beat)) onContinue()
             else advance()

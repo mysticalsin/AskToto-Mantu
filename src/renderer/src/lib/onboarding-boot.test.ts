@@ -193,12 +193,13 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
   it('main createWindow stamps exclusiveOnboarding on packaged file URL too', () => {
     const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
     expect(main).toMatch(/function overlayRendererUrl\(\): string/)
+    expect(main).toMatch(/buildOverlayRendererUrl\(/)
+    expect(main).toMatch(/buildDecoderRendererUrl\(/)
     expect(main).toMatch(/const onboardingLive = onboardingExclusiveLive\(\)/)
-    expect(main).toMatch(/if \(onboardingLive\) params\.set\('exclusiveOnboarding'/)
-    // The helper always starts from either the dev URL or the packaged file URL, then adds the flag.
-    expect(main).toMatch(/devEnv\('ELECTRON_RENDERER_URL'\) \?\? pathToFileURL/)
-    // MQA-339: a stale user environment variable must not route packaged onboarding or imports to Vite.
-    expect(main).not.toMatch(/process\.env\[?['"]?ELECTRON_RENDERER_URL/)
+    // The call sites must ask the devEnv gate; packaged devEnv returns undefined.
+    expect(main).toMatch(/devRendererUrl:\s*devEnv\('ELECTRON_RENDERER_URL'\)/)
+    // MQA-339: catch both bracket and dotted raw env reads.
+    expect(main).not.toMatch(/process\.env(?:\[['"]ELECTRON_RENDERER_URL['"]\]|\.ELECTRON_RENDERER_URL)/)
     expect(main).toMatch(/const rendererUrl = overlayRendererUrl\(\)/)
     // createWindow navigates via bindReadinessThenNavigate with this same rendererUrl.
     expect(main).toMatch(/bindReadinessThenNavigate\(win, rendererUrl,/)

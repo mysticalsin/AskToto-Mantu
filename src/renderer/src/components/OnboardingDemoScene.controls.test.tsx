@@ -40,12 +40,13 @@ describe('OnboardingDemoScene — initial controls before any effect has run', (
     while (restoreWindow.length) restoreWindow.pop()?.()
   })
 
-  it('opens on step 1 of 4 with Previous disabled and Pause ready but not pressed', () => {
+  it('MQA-338 opens on step 1 of 4 with Previous and Next disabled until the step completes', () => {
     const html = renderDemo()
     expect(html).toContain('Step 1 of 4')
     const controls = playbackControls(html)
     expect(controls).toMatch(/<button[^>]*disabled=""[^>]*>\s*Previous\s*<\/button>/)
     expect(controls).toMatch(/<button[^>]*aria-pressed="false"[^>]*aria-controls="[^"]+"[^>]*>\s*Pause demo\s*<\/button>/)
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>\s*Next\s*<\/button>/)
   })
 
   it('hides the Pause control entirely under reduced motion', () => {
