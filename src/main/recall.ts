@@ -233,9 +233,10 @@ async function readMeeting(folder: string, file: string, fileClass: FileClass | 
 }
 
 /** Reads one listing's files: a single batched classify, then a read of each file classified local. Aborting
- *  `signal` ends every queued read at the gateway, and the listing comes back empty. */
+ *  `signal` ends the queued classify and every queued read at the gateway, and the listing comes back empty. */
 async function readMeetings(folder: string, files: readonly string[], signal?: AbortSignal): Promise<Array<Read | null>> {
-  const classes = await classifyAll(storageAt(folder), files)
+  const gateway = storageAt(folder)
+  const classes = await classifyAll({ ...gateway, classify: (paths) => gateway.classify(paths, { signal }) }, files)
   if (signal?.aborted) return []
   const read = await Promise.all(files.map((f) => readMeeting(folder, f, classes.get(f), signal)))
   // Reads cut short by a superseding search answer 'Unavailable'; those rows are not a listing.

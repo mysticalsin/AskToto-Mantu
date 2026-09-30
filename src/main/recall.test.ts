@@ -1096,14 +1096,24 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
   let reads: string[]
   let cloudOnly: Set<string>
   let notRegular: Set<string>
+  let probes: number
+  let hold: Promise<void> | undefined
 
   beforeEach(async () => {
     const { readdir, readFile, realpath, stat, lstat } = await import('node:fs/promises')
     reads = []
     cloudOnly = new Set()
     notRegular = new Set()
+    probes = 0
+    hold = undefined
     useStorageForTests({
-      detector: { classify: async (files) => new Map(files.map((f) => [f.path, cloudOnly.has(f.path) ? 'dataless' : 'local'] as const)) },
+      detector: {
+        classify: async (files) => {
+          probes += 1
+          await hold
+          return new Map(files.map((f) => [f.path, cloudOnly.has(f.path) ? 'dataless' : 'local'] as const))
+        }
+      },
       fs: {
         readdir: (p) => readdir(p),
         readFile: (p) => {
@@ -1227,6 +1237,22 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
     const controller = new AbortController()
     controller.abort()
     expect(await searchMeetings('march', controller.signal)).toEqual([])
+    expect(reads).toEqual([])
+  })
+
+  it('a search aborted while its classify waits on the detector answers at once and reads nothing', async () => {
+    await saveMeeting(testSettings, meeting('Local sync', 1_700_000_000_000))
+    reads.length = 0
+    probes = 0
+    let release!: () => void
+    hold = new Promise((resolve) => (release = resolve))
+    const controller = new AbortController()
+    const search = searchMeetings('march', controller.signal)
+    await vi.waitFor(() => expect(probes).toBeGreaterThan(0))
+    controller.abort()
+    const settled = await Promise.race([search, new Promise((resolve) => setTimeout(() => resolve('still classifying'), 1_000))])
+    release()
+    expect(settled).toEqual([])
     expect(reads).toEqual([])
   })
 })
