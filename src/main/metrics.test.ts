@@ -1,9 +1,25 @@
 import { describe, it, expect, vi } from 'vitest'
-import { aggregateMetrics, type AuditRecord } from './metrics'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { app } from 'electron'
+import { aggregateMetrics, readEvalMetrics, type AuditRecord } from './metrics'
 
 // metrics.ts imports `app` from electron for readEvalMetrics; aggregateMetrics is pure and never touches
 // it, so the auto-mock just keeps the top-level import from throwing in the node test environment.
 vi.mock('electron')
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const syncReadBlocked = () => {
+    throw new Error('sync fs read should not be used by readEvalMetrics')
+  }
+  return {
+    ...actual,
+    default: { ...actual, existsSync: syncReadBlocked, readFileSync: syncReadBlocked },
+    existsSync: syncReadBlocked,
+    readFileSync: syncReadBlocked
+  }
+})
 
 describe('aggregateMetrics', () => {
   it('computes latency percentiles, acceptance, failures, fallbacks, and per-provider counts', () => {
@@ -91,5 +107,31 @@ describe('aggregateMetrics', () => {
       { event: 'brain.consolidation' }
     ]
     expect(aggregateMetrics(records).brainConsolidationPasses).toBe(2)
+  })
+})
+
+describe('readEvalMetrics', () => {
+  it('tails the audit log through async fs instead of requiring synchronous full-file reads', async () => {
+    const userData = await mkdtemp(join(tmpdir(), 'asktoto-metrics-'))
+    try {
+      vi.mocked(app.getPath).mockReturnValue(userData)
+      await mkdir(join(userData, 'logs'), { recursive: true })
+      const records: AuditRecord[] = [
+        { event: 'provider.request', provider: 'older' },
+        { event: 'provider.request', phase: 'done', totalMs: 100, ttftMs: 10 },
+        { event: 'provider.request', provider: 'kept' },
+        { event: 'provider.request', phase: 'done', totalMs: 200, ttftMs: 20 },
+        { event: 'answer.feedback', rating: 'up' }
+      ]
+      await writeFile(join(userData, 'logs', 'audit.log'), records.map((record) => JSON.stringify(record)).join('\n'), 'utf8')
+
+      const metrics = await readEvalMetrics(3)
+      expect(metrics.answers).toBe(1)
+      expect(metrics.answerP50Ms).toBe(200)
+      expect(metrics.byProvider).toEqual({ kept: 1 })
+      expect(metrics.acceptance).toEqual({ up: 1, down: 0, rate: 1 })
+    } finally {
+      await rm(userData, { recursive: true, force: true })
+    }
   })
 })

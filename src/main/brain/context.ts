@@ -90,16 +90,16 @@ const ENTITY_READERS: Record<EntityKind, (s: Settings, slug: string) => { id: st
  */
 /** Slugs whose id or one of its aliases appears as a whole-token run in the question, in listEntities'
  *  stable sorted order so the MAX_* caps keep selecting the same entities they always did. */
-function matchedSlugs(s: Settings, kind: EntityKind, hay: string): string[] {
+async function matchedSlugs(s: Settings, kind: EntityKind, hay: string): Promise<string[]> {
   const dir = join(brainDir(s), 'entities', kind)
   const matchKeyCache = getMatchKeyCache()
   const cached = matchKeyCache.get(dir)
-  // Hot path (every answer ask on an unchanged brain): one dir stat. Writers invalidate explicitly, so
-  // a matching mtime is sufficient to reuse — no per-file readdir/stat tax on the ask critical path.
-  if (cached && cached.stamp.mtimeMs === entityDirMtime(dir)) {
+  // Hot path (every answer ask on an unchanged brain): one async dir stat. Writers invalidate explicitly,
+  // so a matching mtime is sufficient to reuse — no per-file readdir/stat tax on the ask critical path.
+  if (cached && cached.stamp.mtimeMs === await entityDirMtime(dir)) {
     return cached.entries.filter((e) => e.keys.some((k) => slugInText(k, hay))).map((e) => e.slug)
   }
-  const stamp = entityDirStamp(dir)
+  const stamp = await entityDirStamp(dir)
   // Rare: cache present but mtime drifted without our writer (external sync) — still compare full stamp
   // so a same-ms size-only change rebuilds rather than serving a stale key list.
   if (cached && stampsEqual(cached.stamp, stamp)) {
@@ -112,7 +112,7 @@ function matchedSlugs(s: Settings, kind: EntityKind, hay: string): string[] {
     const e = read(s, slug)
     if (e) entries.push({ slug, keys: matchKeys(e.id, e.aliases) })
   }
-  matchKeyCache.set(dir, { stamp: entityDirStamp(dir), entries })
+  matchKeyCache.set(dir, { stamp: await entityDirStamp(dir), entries })
   return entries.filter((e) => e.keys.some((k) => slugInText(k, hay))).map((e) => e.slug)
 }
 
@@ -191,23 +191,23 @@ export function formatDeal(d: DealEntity): string {
  * has nothing on what was asked. `matched` is false when no named entity was recognized — the caller
  * still injects the header so the model knows the brain was consulted and can decline honestly.
  */
-export function buildBrainContext(s: Settings, text: string): { block: string; matched: boolean } {
+export async function buildBrainContext(s: Settings, text: string): Promise<{ block: string; matched: boolean }> {
   const hay = tokenString(text)
   if (!hay) return { block: '', matched: false }
 
   const lines: string[] = []
 
-  for (const slug of matchedSlugs(s, 'person', hay).slice(0, MAX_PEOPLE)) {
+  for (const slug of (await matchedSlugs(s, 'person', hay)).slice(0, MAX_PEOPLE)) {
     const p = readPerson(s, slug)
     if (p) lines.push(formatPersonWithCommitments(p))
   }
 
-  for (const slug of matchedSlugs(s, 'account', hay).slice(0, MAX_ACCOUNTS)) {
+  for (const slug of (await matchedSlugs(s, 'account', hay)).slice(0, MAX_ACCOUNTS)) {
     const a = readAccount(s, slug)
     if (a) lines.push(formatAccount(a))
   }
 
-  for (const slug of matchedSlugs(s, 'deal', hay).slice(0, MAX_DEALS)) {
+  for (const slug of (await matchedSlugs(s, 'deal', hay)).slice(0, MAX_DEALS)) {
     const d = readDeal(s, slug)
     if (d) lines.push(formatDeal(d))
   }

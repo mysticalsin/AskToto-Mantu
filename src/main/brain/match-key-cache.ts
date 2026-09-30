@@ -3,10 +3,10 @@
  * invalidate without importing context.ts (which already imports store — a cycle would soft-deadlock
  * module init and leave the cache permanently stale). This module is filesystem-only: no store import.
  *
- * Hot path on every answer ask: one directory `statSync` against the cached mtime. Writers call
+ * Hot path on every answer ask: one async directory stat against the cached mtime. Writers call
  * `invalidateMatchKeyDir` so an alias edit never waits on filesystem mtime resolution.
  */
-import { readdirSync, statSync } from 'node:fs'
+import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export type DirStamp = { mtimeMs: number; count: number; sizeSum: number }
@@ -19,24 +19,24 @@ export function getMatchKeyCache(): Map<string, MatchKeyCacheEntry> {
   return matchKeyCache
 }
 
-export function entityDirMtime(dir: string): number {
+export async function entityDirMtime(dir: string): Promise<number> {
   try {
-    return statSync(dir).mtimeMs
+    return (await stat(dir)).mtimeMs
   } catch {
     return -1
   }
 }
 
-export function entityDirStamp(dir: string): DirStamp {
+export async function entityDirStamp(dir: string): Promise<DirStamp> {
   try {
-    const mtimeMs = statSync(dir).mtimeMs
+    const mtimeMs = (await stat(dir)).mtimeMs
     let count = 0
     let sizeSum = 0
-    for (const f of readdirSync(dir)) {
+    for (const f of await readdir(dir)) {
       if (!f.endsWith('.json')) continue
       count += 1
       try {
-        sizeSum += statSync(join(dir, f)).size
+        sizeSum += (await stat(join(dir, f))).size
       } catch {
         /* file vanished mid-scan */
       }

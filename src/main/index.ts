@@ -7148,7 +7148,7 @@ function registerIpc(): void {
   // array (replayed verbatim into the model's message list) and the server-side Dust conversation (reused
   // for up to 2h regardless of topic) — and clearing only one leaks through the other. Enforced at main's
   // single ask choke point so every renderer surface (typed ask, screen ask, fact-check) gets the same rule.
-  ipcMain.handle(IPC.askStart, (e, raw) => {
+  ipcMain.handle(IPC.askStart, async (e, raw) => {
     assertMainWindow(e)
     const id =
       raw && typeof raw === 'object' && 'id' in (raw as object)
@@ -7244,7 +7244,7 @@ function registerIpc(): void {
     // material with no citation/anti-fabrication guardrail attached — gate identically to the rail.
     if (req.mode === 'answer' && req.kind !== 'factcheck') {
       try {
-        const hit = buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
+        const hit = await buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
         req.brainContext = hit.block || undefined
       } catch (err) {
         console.warn('[brain] context assembly failed', err)
