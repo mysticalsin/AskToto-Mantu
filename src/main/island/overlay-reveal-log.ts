@@ -49,6 +49,10 @@ export interface OverlayRevealLog {
 /** Input types that are a deliberate click or keypress; pointer moves, wheel and key-ups are not. */
 const DELIBERATE_INPUT = new Set(['mouseDown', 'rawKeyDown', 'keyDown', 'char'])
 
+/** Causes that are themselves a click or keypress outside the page (a global hotkey, a tray or notification click,
+ *  a Settings action): a reveal or park they touch is never a flash. */
+const DELIBERATE_CAUSES: ReadonlySet<OverlayTransitionCause> = new Set(['hotkey', 'toggle', 'settings'])
+
 export function overlayRevealZone(cause: OverlayTransitionCause, placement: OverlayPlacement): OverlayFlashZone {
   if (cause !== 'cursor-watch' && cause !== 'renderer') return 'none'
   return placement === 'right-edge' ? 'edge-band' : 'notch'
@@ -65,10 +69,14 @@ export function createOverlayRevealLog(deps: OverlayRevealLogDeps): OverlayRevea
 
   return {
     revealed(cause, context, detail) {
-      if (state === 'revealed') return
+      const deliberate = DELIBERATE_CAUSES.has(cause)
+      if (state === 'revealed') {
+        if (shown && deliberate) shown.interacted = true
+        return
+      }
       state = 'revealed'
       const zone = overlayRevealZone(cause, context.placement)
-      shown = { at: deps.now(), zone, interacted: false }
+      shown = { at: deps.now(), zone, interacted: deliberate }
       deps.log(`[overlay] reveal cause=${cause} zone=${zone} ${chromeTag(context, detail)}`)
     },
     parked(cause, context, detail) {
@@ -81,7 +89,7 @@ export function createOverlayRevealLog(deps: OverlayRevealLogDeps): OverlayRevea
         return
       }
       const visibleMs = Math.max(0, Math.round(deps.now() - reveal.at))
-      const flash = visibleMs < OVERLAY_FLASH_WINDOW_MS && !reveal.interacted
+      const flash = visibleMs < OVERLAY_FLASH_WINDOW_MS && !reveal.interacted && !DELIBERATE_CAUSES.has(cause)
       deps.log(`[overlay] park cause=${cause} visibleMs=${visibleMs}${flash ? ' flash' : ''} ${chromeTag(context, detail)}`)
       if (flash) deps.audit('overlay.flash', { visibleMs, zone: reveal.zone, placement: context.placement, layout: context.layout })
     },

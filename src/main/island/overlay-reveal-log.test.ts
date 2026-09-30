@@ -83,6 +83,36 @@ describe('overlay reveal/park log (M2-0431)', () => {
     expect(long.audits).toEqual([])
   })
 
+  it('does not audit a hotkey, toggle or Settings reveal that parks within 2 s: the reveal itself was a keypress or click', () => {
+    for (const cause of ['hotkey', 'toggle', 'settings'] as const) {
+      const h = harness()
+      h.log.revealed(cause, TOP)
+      h.advance(300)
+      h.log.parked('cursor-watch', TOP)
+      expect(h.audits, cause).toEqual([])
+      expect(h.lines.at(-1), cause).toBe('[overlay] park cause=cursor-watch visibleMs=300 placement=top-center layout=hide')
+    }
+  })
+
+  it('does not audit a hover reveal parked or re-confirmed by a hotkey, toggle or Settings action within 2 s', () => {
+    for (const cause of ['hotkey', 'toggle', 'settings'] as const) {
+      const parkedBy = harness()
+      parkedBy.log.revealed('cursor-watch', TOP)
+      parkedBy.advance(400)
+      parkedBy.log.parked(cause, TOP)
+      expect(parkedBy.audits, cause).toEqual([])
+
+      const touchedBy = harness()
+      touchedBy.log.revealed('cursor-watch', EDGE)
+      touchedBy.advance(200)
+      touchedBy.log.revealed(cause, EDGE) // e.g. tray Settings opened while the hover reveal is up
+      touchedBy.advance(200)
+      touchedBy.log.parked('renderer', EDGE)
+      expect(touchedBy.audits, cause).toEqual([])
+      expect(touchedBy.lines, cause).toHaveLength(2)
+    }
+  })
+
   it('does not count pointer moves, wheel or key-ups, nor input before the reveal, as an interaction', () => {
     const h = harness()
     h.log.input('mouseDown') // lands on the parked window, before this reveal
